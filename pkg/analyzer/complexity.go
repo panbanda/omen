@@ -10,19 +10,41 @@ import (
 
 // ComplexityAnalyzer computes cyclomatic and cognitive complexity.
 type ComplexityAnalyzer struct {
-	parser *parser.Parser
+	parser          *parser.Parser
+	halsteadEnabled bool
+}
+
+// ComplexityOptions configures complexity analysis behavior.
+type ComplexityOptions struct {
+	IncludeHalstead bool // Calculate Halstead software science metrics
 }
 
 // NewComplexityAnalyzer creates a new complexity analyzer.
 func NewComplexityAnalyzer() *ComplexityAnalyzer {
 	return &ComplexityAnalyzer{
-		parser: parser.New(),
+		parser:          parser.New(),
+		halsteadEnabled: false,
+	}
+}
+
+// NewComplexityAnalyzerWithOptions creates a new complexity analyzer with options.
+func NewComplexityAnalyzerWithOptions(opts ComplexityOptions) *ComplexityAnalyzer {
+	return &ComplexityAnalyzer{
+		parser:          parser.New(),
+		halsteadEnabled: opts.IncludeHalstead,
+	}
+}
+
+// DefaultComplexityOptions returns default complexity analysis options.
+func DefaultComplexityOptions() ComplexityOptions {
+	return ComplexityOptions{
+		IncludeHalstead: true,
 	}
 }
 
 // AnalyzeFile analyzes complexity for a single file.
 func (a *ComplexityAnalyzer) AnalyzeFile(path string) (*models.FileComplexity, error) {
-	return analyzeFileComplexity(a.parser, path)
+	return analyzeFileComplexityWithHalstead(a.parser, path, a.halsteadEnabled)
 }
 
 // countDecisionPoints counts branching statements for cyclomatic complexity.
@@ -249,8 +271,9 @@ func (a *ComplexityAnalyzer) AnalyzeProject(files []string) (*models.ComplexityA
 
 // AnalyzeProjectWithProgress analyzes all files with optional progress callback.
 func (a *ComplexityAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress ProgressFunc) (*models.ComplexityAnalysis, error) {
+	includeHalstead := a.halsteadEnabled
 	results := MapFilesWithProgress(files, func(psr *parser.Parser, path string) (models.FileComplexity, error) {
-		fc, err := analyzeFileComplexity(psr, path)
+		fc, err := analyzeFileComplexityWithHalstead(psr, path, includeHalstead)
 		if err != nil {
 			return models.FileComplexity{}, err
 		}
@@ -321,6 +344,11 @@ func percentile(sorted []uint32, p int) uint32 {
 
 // analyzeFileComplexity analyzes a single file with the provided parser.
 func analyzeFileComplexity(psr *parser.Parser, path string) (*models.FileComplexity, error) {
+	return analyzeFileComplexityWithHalstead(psr, path, false)
+}
+
+// analyzeFileComplexityWithHalstead analyzes a single file with optional Halstead metrics.
+func analyzeFileComplexityWithHalstead(psr *parser.Parser, path string, includeHalstead bool) (*models.FileComplexity, error) {
 	result, err := psr.ParseFile(path)
 	if err != nil {
 		return nil, err
@@ -332,9 +360,14 @@ func analyzeFileComplexity(psr *parser.Parser, path string) (*models.FileComplex
 		Functions: make([]models.FunctionComplexity, 0),
 	}
 
+	var halsteadAnalyzer *HalsteadAnalyzer
+	if includeHalstead {
+		halsteadAnalyzer = NewHalsteadAnalyzer()
+	}
+
 	functions := parser.GetFunctions(result)
 	for _, fn := range functions {
-		fnComplexity := analyzeFunctionComplexity(fn, result)
+		fnComplexity := analyzeFunctionComplexityWithHalstead(fn, result, halsteadAnalyzer)
 		fc.Functions = append(fc.Functions, fnComplexity)
 		fc.TotalCyclomatic += fnComplexity.Metrics.Cyclomatic
 		fc.TotalCognitive += fnComplexity.Metrics.Cognitive
@@ -350,6 +383,11 @@ func analyzeFileComplexity(psr *parser.Parser, path string) (*models.FileComplex
 
 // analyzeFunctionComplexity computes complexity metrics for a single function.
 func analyzeFunctionComplexity(fn parser.FunctionNode, result *parser.ParseResult) models.FunctionComplexity {
+	return analyzeFunctionComplexityWithHalstead(fn, result, nil)
+}
+
+// analyzeFunctionComplexityWithHalstead computes complexity metrics with optional Halstead analysis.
+func analyzeFunctionComplexityWithHalstead(fn parser.FunctionNode, result *parser.ParseResult, halsteadAnalyzer *HalsteadAnalyzer) models.FunctionComplexity {
 	fc := models.FunctionComplexity{
 		Name:      fn.Name,
 		StartLine: fn.StartLine,
@@ -366,6 +404,11 @@ func analyzeFunctionComplexity(fn parser.FunctionNode, result *parser.ParseResul
 	fc.Metrics.Cognitive = calculateCognitiveComplexity(fn.Body, result.Source, result.Language, 0)
 	fc.Metrics.Lines = int(fn.EndLine - fn.StartLine + 1)
 	fc.Metrics.MaxNesting = calculateMaxNesting(fn.Body, result.Source, 0)
+
+	// Calculate Halstead metrics if analyzer is provided
+	if halsteadAnalyzer != nil {
+		fc.Metrics.Halstead = halsteadAnalyzer.AnalyzeNode(fn.Body, result.Source, result.Language)
+	}
 
 	return fc
 }
