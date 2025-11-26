@@ -10,8 +10,7 @@ builds:
     env:
       - CGO_ENABLED=1
     goos:
-      - linux
-      - darwin
+      - "{{ .Env.GOOS }}"
     goarch:
       - amd64
       - arm64
@@ -23,7 +22,8 @@ builds:
       - -X main.date={{ .Date }}
 
 archives:
-  - format: tar.gz
+  - formats:
+      - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE*
