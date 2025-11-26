@@ -26,10 +26,19 @@ jobs:
           release-type: go
 
   goreleaser:
-    name: GoReleaser
-    runs-on: ubuntu-latest
+    name: GoReleaser (${{ matrix.os }})
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created }}
+
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+          - os: macos-latest
+            goos: darwin
+
+    runs-on: ${{ matrix.os }}
 
     permissions:
       contents: write
@@ -51,6 +60,7 @@ jobs:
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean
+          args: release --clean --skip=validate
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOOS: ${{ matrix.goos }}
