@@ -5,16 +5,19 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
-    name: Test
+    name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
 
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        go: ["stable", "1.25", "1.24", "1.23"]
 
     steps:
       - name: Checkout repository
@@ -23,10 +26,13 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
         with:
-          go-version: ${{ matrix.go }}
+          go-version: stable
 
       - name: Test
         run: go test -race -v ./...
+
+      - name: Build
+        run: go build -o omen ./cmd/omen
 
   lint:
     name: Lint
