@@ -1,15 +1,12 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
 	"sort"
-	"syscall"
 	"time"
 
 	"github.com/fatih/color"
@@ -19,7 +16,6 @@ import (
 	"github.com/panbanda/omen/pkg/output"
 	"github.com/panbanda/omen/pkg/progress"
 	"github.com/panbanda/omen/pkg/scanner"
-	"github.com/panbanda/omen/pkg/watch"
 	"github.com/urfave/cli/v2"
 )
 
@@ -118,18 +114,8 @@ Supports: Go, Rust, Python, TypeScript, JavaScript, Java, C, C++, Ruby, PHP`,
 			return nil
 		},
 		Commands: []*cli.Command{
-			complexityCmd(),
-			satdCmd(),
-			deadcodeCmd(),
-			churnCmd(),
-			duplicatesCmd(),
-			defectCmd(),
-			tdgCmd(),
-			graphCmd(),
-			lintHotspotCmd(),
-			contextCmd(),
-			watchCmd(),
 			analyzeCmd(),
+			contextCmd(),
 		},
 	}
 
@@ -1299,111 +1285,30 @@ func runContextCmd(c *cli.Context) error {
 	return nil
 }
 
-func watchCmd() *cli.Command {
-	return &cli.Command{
-		Name:      "watch",
-		Usage:     "Watch for file changes and re-analyze",
-		ArgsUsage: "[path...]",
-		Flags: []cli.Flag{
-			&cli.StringSliceFlag{
-				Name:  "analyzers",
-				Value: cli.NewStringSlice("complexity", "satd"),
-				Usage: "Analyzers to run on change",
-			},
-			&cli.DurationFlag{
-				Name:  "debounce",
-				Value: 500,
-				Usage: "Debounce duration in milliseconds",
-			},
-		},
-		Action: runWatchCmd,
-	}
-}
-
-func runWatchCmd(c *cli.Context) error {
-	paths := getPaths(c)
-	analyzers := c.StringSlice("analyzers")
-	debounce := c.Duration("debounce")
-
-	cfg := config.LoadOrDefault()
-
-	absPath, err := filepath.Abs(paths[0])
-	if err != nil {
-		return fmt.Errorf("invalid path: %w", err)
-	}
-
-	watcher, err := watch.NewWatcher(absPath, cfg, debounce, analyzers)
-	if err != nil {
-		return fmt.Errorf("failed to create watcher: %w", err)
-	}
-	defer watcher.Stop()
-
-	// Set up analyzer callback
-	watcher.SetCallback(func(changedPath string) {
-		for _, name := range analyzers {
-			switch name {
-			case "complexity":
-				cxAnalyzer := analyzer.NewComplexityAnalyzer()
-				fc, err := cxAnalyzer.AnalyzeFile(changedPath)
-				cxAnalyzer.Close()
-				if err != nil {
-					color.Red("Complexity error: %v", err)
-					continue
-				}
-				fmt.Printf("Complexity: %d functions, avg cyc: %.1f, avg cog: %.1f\n",
-					len(fc.Functions), fc.AvgCyclomatic, fc.AvgCognitive)
-
-			case "satd":
-				satdAnalyzer := analyzer.NewSATDAnalyzer()
-				debts, err := satdAnalyzer.AnalyzeFile(changedPath)
-				if err != nil {
-					color.Red("SATD error: %v", err)
-					continue
-				}
-				if len(debts) > 0 {
-					color.Yellow("SATD: %d debt markers found", len(debts))
-					for _, d := range debts {
-						fmt.Printf("  Line %d: %s - %s\n", d.Line, d.Marker, truncate(d.Description, 50))
-					}
-				} else {
-					color.Green("SATD: No debt markers found")
-				}
-
-			default:
-				color.Yellow("Unknown analyzer: %s", name)
-			}
-		}
-	})
-
-	// Handle Ctrl+C
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		<-sigChan
-		fmt.Println("\nStopping watch...")
-		cancel()
-	}()
-
-	return watcher.Start(ctx)
-}
-
 func analyzeCmd() *cli.Command {
 	return &cli.Command{
 		Name:      "analyze",
-		Aliases:   []string{"all"},
-		Usage:     "Run all analyzers and generate comprehensive report",
+		Aliases:   []string{"a"},
+		Usage:     "Run code analysis (all analyzers if no subcommand specified)",
 		ArgsUsage: "[path...]",
 		Flags: []cli.Flag{
 			&cli.StringSliceFlag{
 				Name:  "exclude",
-				Usage: "Analyzers to exclude",
+				Usage: "Analyzers to exclude (when running all)",
 			},
 		},
 		Action: runAnalyzeCmd,
+		Subcommands: []*cli.Command{
+			complexityCmd(),
+			satdCmd(),
+			deadcodeCmd(),
+			churnCmd(),
+			duplicatesCmd(),
+			defectCmd(),
+			tdgCmd(),
+			graphCmd(),
+			lintHotspotCmd(),
+		},
 	}
 }
 
