@@ -40,7 +40,7 @@ jobs:
           - os: ubuntu-24.04-arm
             goos: linux
             goarch: arm64
-          - os: macos-15-large
+          - os: macos-15-intel
             goos: darwin
             goarch: amd64
           - os: macos-latest
