@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.0](https://github.com/panbanda/omen/compare/v1.0.8...v1.1.0) (2025-11-26)
+
+
+### Features
+
+* **churn:** add hotspot and stable file detection ([863a6ea](https://github.com/panbanda/omen/commit/863a6ea5950e2399ca69ec527ec2b31008434b68))
+* **churn:** add hotspot and stable file detection ([efe13c4](https://github.com/panbanda/omen/commit/efe13c41ec8f754931a57114d214625afd379dc5))
+
 ## [1.0.8](https://github.com/panbanda/omen/compare/v1.0.7...v1.0.8) (2025-11-26)
 
 
