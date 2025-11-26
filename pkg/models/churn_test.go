@@ -80,6 +80,19 @@ func TestFileChurnMetrics_CalculateChurnScore(t *testing.T) {
 			maxChanges:    1000,
 			expectedScore: 0.8 * 0.4, // 0.32
 		},
+		{
+			// Mirrors PMAT test_churn_score_calculation
+			// Expected: (10/20)*0.6 + (150/300)*0.4 = 0.5
+			name: "pmat reference calculation",
+			metrics: FileChurnMetrics{
+				Commits:      10,
+				LinesAdded:   100,
+				LinesDeleted: 50,
+			},
+			maxCommits:    20,
+			maxChanges:    300,
+			expectedScore: 0.5, // (10/20)*0.6 + (150/300)*0.4 = 0.3 + 0.2 = 0.5
+		},
 	}
 
 	for _, tt := range tests {
@@ -283,9 +296,143 @@ func TestNewChurnSummary(t *testing.T) {
 	if s.TopChurnedFiles == nil {
 		t.Error("TopChurnedFiles should be initialized")
 	}
-
 	if len(s.TopChurnedFiles) != 0 {
 		t.Errorf("TopChurnedFiles should be empty, got %d items", len(s.TopChurnedFiles))
+	}
+
+	if s.HotspotFiles == nil {
+		t.Error("HotspotFiles should be initialized")
+	}
+	if len(s.HotspotFiles) != 0 {
+		t.Errorf("HotspotFiles should be empty, got %d items", len(s.HotspotFiles))
+	}
+
+	if s.StableFiles == nil {
+		t.Error("StableFiles should be initialized")
+	}
+	if len(s.StableFiles) != 0 {
+		t.Errorf("StableFiles should be empty, got %d items", len(s.StableFiles))
+	}
+}
+
+func TestChurnSummary_IdentifyHotspotAndStableFiles(t *testing.T) {
+	tests := []struct {
+		name            string
+		files           []FileChurnMetrics
+		expectedHotspot []string
+		expectedStable  []string
+	}{
+		{
+			name:            "empty files",
+			files:           []FileChurnMetrics{},
+			expectedHotspot: []string{},
+			expectedStable:  []string{},
+		},
+		{
+			name: "hotspots only",
+			files: []FileChurnMetrics{
+				{Path: "hot1.go", ChurnScore: 0.9, Commits: 50},
+				{Path: "hot2.go", ChurnScore: 0.7, Commits: 30},
+				{Path: "hot3.go", ChurnScore: 0.6, Commits: 20},
+				{Path: "mid.go", ChurnScore: 0.4, Commits: 10},
+			},
+			expectedHotspot: []string{"hot1.go", "hot2.go", "hot3.go"},
+			expectedStable:  []string{},
+		},
+		{
+			name: "stable only",
+			files: []FileChurnMetrics{
+				{Path: "mid.go", ChurnScore: 0.3, Commits: 10},
+				{Path: "stable1.go", ChurnScore: 0.05, Commits: 2},
+				{Path: "stable2.go", ChurnScore: 0.02, Commits: 1},
+			},
+			expectedHotspot: []string{},
+			expectedStable:  []string{"stable2.go", "stable1.go"},
+		},
+		{
+			name: "both hotspots and stable",
+			files: []FileChurnMetrics{
+				{Path: "hot.go", ChurnScore: 0.8, Commits: 40},
+				{Path: "mid.go", ChurnScore: 0.3, Commits: 10},
+				{Path: "stable.go", ChurnScore: 0.05, Commits: 3},
+			},
+			expectedHotspot: []string{"hot.go"},
+			expectedStable:  []string{"stable.go"},
+		},
+		{
+			name: "stable file with zero commits excluded",
+			files: []FileChurnMetrics{
+				{Path: "mid.go", ChurnScore: 0.3, Commits: 10},
+				{Path: "stable.go", ChurnScore: 0.05, Commits: 1},
+				{Path: "zero.go", ChurnScore: 0.0, Commits: 0},
+			},
+			expectedHotspot: []string{},
+			expectedStable:  []string{"stable.go"},
+		},
+		{
+			name: "take 10 then filter hotspots",
+			files: func() []FileChurnMetrics {
+				// 15 files, all above threshold, but only first 10 are candidates
+				files := make([]FileChurnMetrics, 15)
+				for i := 0; i < 15; i++ {
+					files[i] = FileChurnMetrics{
+						Path:       "hot" + string(rune('a'+i)) + ".go",
+						ChurnScore: 0.9 - float64(i)*0.01,
+						Commits:    50 - i,
+					}
+				}
+				return files
+			}(),
+			// Only first 10 candidates are checked, all pass threshold
+			expectedHotspot: []string{"hota.go", "hotb.go", "hotc.go", "hotd.go", "hote.go", "hotf.go", "hotg.go", "hoth.go", "hoti.go", "hotj.go"},
+			expectedStable:  []string{},
+		},
+		{
+			name: "take 10 candidates but fewer pass threshold",
+			files: func() []FileChurnMetrics {
+				// 15 files sorted descending
+				// Scores: 0.55, 0.52, 0.49, 0.46... (step of 0.03)
+				// Only first 2 are > 0.5 threshold
+				files := make([]FileChurnMetrics, 15)
+				for i := 0; i < 15; i++ {
+					files[i] = FileChurnMetrics{
+						Path:       "file" + string(rune('a'+i)) + ".go",
+						ChurnScore: 0.55 - float64(i)*0.03, // 0.55, 0.52, 0.49, 0.46... down to 0.13
+						Commits:    50 - i,
+					}
+				}
+				return files
+			}(),
+			// Only first 2 pass threshold (0.55 > 0.5, 0.52 > 0.5, 0.49 not > 0.5)
+			// Bottom files have scores >= 0.13 so none are stable (< 0.1)
+			expectedHotspot: []string{"filea.go", "fileb.go"},
+			expectedStable:  []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &ChurnSummary{}
+			s.IdentifyHotspotAndStableFiles(tt.files)
+
+			if len(s.HotspotFiles) != len(tt.expectedHotspot) {
+				t.Errorf("HotspotFiles count = %d, expected %d", len(s.HotspotFiles), len(tt.expectedHotspot))
+			}
+			for i, path := range tt.expectedHotspot {
+				if i < len(s.HotspotFiles) && s.HotspotFiles[i] != path {
+					t.Errorf("HotspotFiles[%d] = %s, expected %s", i, s.HotspotFiles[i], path)
+				}
+			}
+
+			if len(s.StableFiles) != len(tt.expectedStable) {
+				t.Errorf("StableFiles count = %d, expected %d", len(s.StableFiles), len(tt.expectedStable))
+			}
+			for i, path := range tt.expectedStable {
+				if i < len(s.StableFiles) && s.StableFiles[i] != path {
+					t.Errorf("StableFiles[%d] = %s, expected %s", i, s.StableFiles[i], path)
+				}
+			}
+		})
 	}
 }
 
@@ -300,5 +447,185 @@ func TestFileChurnMetrics_TimePeriod(t *testing.T) {
 
 	if m.FirstCommit.After(m.LastCommit) {
 		t.Error("FirstCommit should be before LastCommit")
+	}
+}
+
+// TestChurnScoreEdgeCases mirrors PMAT test_churn_score_edge_cases
+func TestChurnScoreEdgeCases(t *testing.T) {
+	t.Run("zero max values", func(t *testing.T) {
+		m := FileChurnMetrics{
+			Path:         "test.go",
+			Commits:      0,
+			LinesAdded:   0,
+			LinesDeleted: 0,
+		}
+		m.CalculateChurnScoreWithMax(0, 0)
+		if m.ChurnScore != 0.0 {
+			t.Errorf("ChurnScore = %v, expected 0.0", m.ChurnScore)
+		}
+	})
+
+	t.Run("non-zero values with zero max", func(t *testing.T) {
+		m := FileChurnMetrics{
+			Path:         "test.go",
+			Commits:      5,
+			LinesAdded:   100,
+			LinesDeleted: 50,
+		}
+		m.CalculateChurnScoreWithMax(0, 0)
+		if m.ChurnScore != 0.0 {
+			t.Errorf("ChurnScore = %v, expected 0.0 when max is 0", m.ChurnScore)
+		}
+	})
+
+	t.Run("max values equal to file values", func(t *testing.T) {
+		m := FileChurnMetrics{
+			Path:         "test.go",
+			Commits:      20,
+			LinesAdded:   150,
+			LinesDeleted: 150,
+		}
+		m.CalculateChurnScoreWithMax(20, 300)
+		if m.ChurnScore != 1.0 {
+			t.Errorf("ChurnScore = %v, expected 1.0", m.ChurnScore)
+		}
+	})
+}
+
+// TestChurnSummaryWithData mirrors PMAT test_churn_summary_with_data
+func TestChurnSummaryWithData(t *testing.T) {
+	// Create test data similar to PMAT's create_test_analysis
+	files := []FileChurnMetrics{
+		{
+			Path:         "src/main.go",
+			Commits:      25,
+			LinesAdded:   300,
+			LinesDeleted: 150,
+			ChurnScore:   0.85,
+			Authors:      map[string]int{"alice": 15, "bob": 10},
+		},
+		{
+			Path:         "src/lib.go",
+			Commits:      5,
+			LinesAdded:   50,
+			LinesDeleted: 10,
+			ChurnScore:   0.15,
+			Authors:      map[string]int{"alice": 5},
+		},
+	}
+
+	summary := ChurnSummary{
+		TotalFiles:        2,
+		TotalCommits:      30,
+		TotalLinesAdded:   350,
+		TotalLinesDeleted: 160,
+		UniqueAuthors:     2,
+	}
+	summary.IdentifyHotspotAndStableFiles(files)
+
+	if summary.TotalCommits != 30 {
+		t.Errorf("TotalCommits = %d, expected 30", summary.TotalCommits)
+	}
+
+	// First file (0.85) is a hotspot (> 0.5)
+	if len(summary.HotspotFiles) != 1 {
+		t.Errorf("HotspotFiles count = %d, expected 1", len(summary.HotspotFiles))
+	}
+	if len(summary.HotspotFiles) > 0 && summary.HotspotFiles[0] != "src/main.go" {
+		t.Errorf("HotspotFiles[0] = %s, expected src/main.go", summary.HotspotFiles[0])
+	}
+
+	// Second file (0.15) is NOT stable (>= 0.1 threshold)
+	if len(summary.StableFiles) != 0 {
+		t.Errorf("StableFiles count = %d, expected 0 (0.15 >= 0.1)", len(summary.StableFiles))
+	}
+}
+
+// TestChurnAnalysisCreation mirrors PMAT test_code_churn_analysis_creation
+func TestChurnAnalysisCreation(t *testing.T) {
+	analysis := ChurnAnalysis{
+		Files:    []FileChurnMetrics{},
+		Summary:  NewChurnSummary(),
+		Days:     30,
+		RepoPath: "/test/repo",
+	}
+
+	if analysis.Days != 30 {
+		t.Errorf("Days = %d, expected 30", analysis.Days)
+	}
+
+	if analysis.Summary.TotalCommits != 0 {
+		t.Errorf("TotalCommits = %d, expected 0", analysis.Summary.TotalCommits)
+	}
+
+	if analysis.Summary.TotalFiles != 0 {
+		t.Errorf("TotalFiles = %d, expected 0", analysis.Summary.TotalFiles)
+	}
+}
+
+// TestStatisticsCalculation verifies mean/variance/stddev match PMAT formula
+func TestStatisticsCalculation(t *testing.T) {
+	// Two files with scores 0.85 and 0.15
+	// Mean = (0.85 + 0.15) / 2 = 0.5
+	// Variance = ((0.85-0.5)^2 + (0.15-0.5)^2) / 2 = (0.1225 + 0.1225) / 2 = 0.1225
+	// StdDev = sqrt(0.1225) = 0.35
+	files := []FileChurnMetrics{
+		{ChurnScore: 0.85},
+		{ChurnScore: 0.15},
+	}
+
+	summary := &ChurnSummary{}
+	summary.CalculateStatistics(files)
+
+	if math.Abs(summary.MeanChurnScore-0.5) > 0.001 {
+		t.Errorf("MeanChurnScore = %v, expected 0.5", summary.MeanChurnScore)
+	}
+
+	if math.Abs(summary.VarianceChurn-0.1225) > 0.001 {
+		t.Errorf("VarianceChurn = %v, expected 0.1225", summary.VarianceChurn)
+	}
+
+	if math.Abs(summary.StdDevChurn-0.35) > 0.001 {
+		t.Errorf("StdDevChurn = %v, expected 0.35", summary.StdDevChurn)
+	}
+}
+
+// TestEmptyAnalysis mirrors PMAT test_empty_repository scenario
+func TestEmptyAnalysis(t *testing.T) {
+	files := []FileChurnMetrics{}
+
+	summary := &ChurnSummary{}
+	summary.CalculateStatistics(files)
+	summary.IdentifyHotspotAndStableFiles(files)
+
+	if len(summary.HotspotFiles) != 0 {
+		t.Errorf("HotspotFiles should be empty, got %d", len(summary.HotspotFiles))
+	}
+
+	if len(summary.StableFiles) != 0 {
+		t.Errorf("StableFiles should be empty, got %d", len(summary.StableFiles))
+	}
+
+	if summary.MeanChurnScore != 0 {
+		t.Errorf("MeanChurnScore = %v, expected 0", summary.MeanChurnScore)
+	}
+
+	if summary.VarianceChurn != 0 {
+		t.Errorf("VarianceChurn = %v, expected 0", summary.VarianceChurn)
+	}
+
+	if summary.StdDevChurn != 0 {
+		t.Errorf("StdDevChurn = %v, expected 0", summary.StdDevChurn)
+	}
+}
+
+// TestThresholdConstants verifies thresholds match PMAT
+func TestThresholdConstants(t *testing.T) {
+	if HotspotThreshold != 0.5 {
+		t.Errorf("HotspotThreshold = %v, expected 0.5", HotspotThreshold)
+	}
+
+	if StableThreshold != 0.1 {
+		t.Errorf("StableThreshold = %v, expected 0.1", StableThreshold)
 	}
 }
