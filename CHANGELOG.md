@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.3](https://github.com/panbanda/omen/compare/v1.0.2...v1.0.3) (2025-11-26)
+
+
+### Bug Fixes
+
+* **ci:** use --single-target with per-arch matrix jobs ([0394e6c](https://github.com/panbanda/omen/commit/0394e6c60c7519a5869ec3cca1826b0b2541ac4c))
+
 ## [1.0.2](https://github.com/panbanda/omen/compare/v1.0.1...v1.0.2) (2025-11-26)
 
 
