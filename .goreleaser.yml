@@ -80,7 +80,7 @@ archives:
       - omen.example.toml
 
 checksum:
-  name_template: "checksums.txt"
+  name_template: "checksums_{{ .Env.GOOS }}_{{ .Env.GOARCH }}.txt"
 
 changelog:
   disable: true
