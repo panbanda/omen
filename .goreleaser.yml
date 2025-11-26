@@ -9,11 +9,24 @@ builds:
     binary: omen
     env:
       - CGO_ENABLED=1
-    goos:
-      - "{{ .Env.GOOS }}"
-    goarch:
-      - amd64
-      - arm64
+    targets:
+      - linux_amd64
+      - linux_arm64
+      - darwin_amd64
+      - darwin_arm64
+    ignore:
+      - goos: linux
+        goarch: amd64
+        if: '{{ ne .Runtime.Goos "linux" }}'
+      - goos: linux
+        goarch: arm64
+        if: '{{ ne .Runtime.Goos "linux" }}'
+      - goos: darwin
+        goarch: amd64
+        if: '{{ ne .Runtime.Goos "darwin" }}'
+      - goos: darwin
+        goarch: arm64
+        if: '{{ ne .Runtime.Goos "darwin" }}'
     mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w

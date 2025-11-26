@@ -32,11 +32,7 @@ jobs:
 
     strategy:
       matrix:
-        include:
-          - os: ubuntu-latest
-            goos: linux
-          - os: macos-latest
-            goos: darwin
+        os: [ubuntu-latest, macos-latest]
 
     runs-on: ${{ matrix.os }}
 
@@ -63,4 +59,3 @@ jobs:
           args: release --clean --skip=validate
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GOOS: ${{ matrix.goos }}
