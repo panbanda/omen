@@ -1,13 +1,13 @@
 # Omen
 
-[![Go Version](https://img.shields.io/github/go-mod/go-version/panbanda/omen-cli)](https://go.dev/)
-[![License](https://img.shields.io/github/license/panbanda/omen-cli)](https://github.com/panbanda/omen-cli/blob/main/LICENSE)
-[![CI](https://github.com/panbanda/omen-cli/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/panbanda/omen-cli/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/panbanda/omen-cli/graph/badge.svg)](https://codecov.io/gh/panbanda/omen-cli)
-[![Go Report Card](https://goreportcard.com/badge/github.com/panbanda/omen-cli)](https://goreportcard.com/report/github.com/panbanda/omen-cli)
-[![Release](https://img.shields.io/github/v/release/panbanda/omen-cli)](https://github.com/panbanda/omen-cli/releases)
-[![Go Reference](https://pkg.go.dev/badge/github.com/panbanda/omen-cli.svg)](https://pkg.go.dev/github.com/panbanda/omen-cli)
-[![Snyk Security](https://snyk.io/test/github/panbanda/omen-cli/badge.svg)](https://snyk.io/test/github/panbanda/omen-cli)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/panbanda/omen)](https://go.dev/)
+[![License](https://img.shields.io/github/license/panbanda/omen)](https://github.com/panbanda/omen/blob/main/LICENSE)
+[![CI](https://github.com/panbanda/omen/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/panbanda/omen/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/panbanda/omen/graph/badge.svg)](https://codecov.io/gh/panbanda/omen)
+[![Go Report Card](https://goreportcard.com/badge/github.com/panbanda/omen)](https://goreportcard.com/report/github.com/panbanda/omen)
+[![Release](https://img.shields.io/github/v/release/panbanda/omen)](https://github.com/panbanda/omen/releases)
+[![Go Reference](https://pkg.go.dev/badge/github.com/panbanda/omen.svg)](https://pkg.go.dev/github.com/panbanda/omen)
+[![Snyk Security](https://snyk.io/test/github/panbanda/omen/badge.svg)](https://snyk.io/test/github/panbanda/omen)
 
 A multi-language code analysis CLI built in Go. Omen uses tree-sitter for parsing source code across 13 languages, providing insights into complexity, technical debt, code duplication, and defect prediction.
 
