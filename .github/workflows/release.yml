@@ -40,7 +40,7 @@ jobs:
           - os: ubuntu-24.04-arm
             goos: linux
             goarch: arm64
-          - os: macos-13
+          - os: macos-15-large
             goos: darwin
             goarch: amd64
           - os: macos-latest
@@ -93,12 +93,80 @@ jobs:
         with:
           go-version: stable
 
-      - name: Run GoReleaser (Homebrew only)
-        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
-        with:
-          distribution: goreleaser
-          version: "~> v2"
-          args: release --clean --skip=build,archive,checksum,publish,validate,announce,sbom,docker,ko,nix,winget,aur,nfpm,snapcraft,chocolatey,scoop
+      - name: Download release artifacts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p dist
+          TAG="${{ needs.release-please.outputs.tag_name }}"
+          VERSION="${TAG#v}"
+
+          # Download all archives and checksums from the release
+          gh release download "$TAG" --pattern "*.tar.gz" --dir dist
+          gh release download "$TAG" --pattern "checksums_*.txt" --dir dist
+
+          # Merge all checksum files into one
+          cat dist/checksums_*.txt > dist/checksums.txt
+
+      - name: Generate Homebrew formula
+        env:
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+        run: |
+          TAG="${{ needs.release-please.outputs.tag_name }}"
+          VERSION="${TAG#v}"
+
+          # Calculate SHA256 for each archive
+          DARWIN_AMD64_SHA=$(sha256sum dist/omen_${VERSION}_darwin_amd64.tar.gz | cut -d' ' -f1)
+          DARWIN_ARM64_SHA=$(sha256sum dist/omen_${VERSION}_darwin_arm64.tar.gz | cut -d' ' -f1)
+          LINUX_AMD64_SHA=$(sha256sum dist/omen_${VERSION}_linux_amd64.tar.gz | cut -d' ' -f1)
+          LINUX_ARM64_SHA=$(sha256sum dist/omen_${VERSION}_linux_arm64.tar.gz | cut -d' ' -f1)
+
+          # Generate the formula
+          cat > omen.rb << EOF
+          class Omen < Formula
+            desc "Multi-language code analysis CLI"
+            homepage "https://github.com/panbanda/omen"
+            version "${VERSION}"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/panbanda/omen/releases/download/${TAG}/omen_${VERSION}_darwin_arm64.tar.gz"
+                sha256 "${DARWIN_ARM64_SHA}"
+              else
+                url "https://github.com/panbanda/omen/releases/download/${TAG}/omen_${VERSION}_darwin_amd64.tar.gz"
+                sha256 "${DARWIN_AMD64_SHA}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "https://github.com/panbanda/omen/releases/download/${TAG}/omen_${VERSION}_linux_arm64.tar.gz"
+                sha256 "${LINUX_ARM64_SHA}"
+              else
+                url "https://github.com/panbanda/omen/releases/download/${TAG}/omen_${VERSION}_linux_amd64.tar.gz"
+                sha256 "${LINUX_AMD64_SHA}"
+              end
+            end
+
+            def install
+              bin.install "omen"
+            end
+
+            test do
+              system "#{bin}/omen", "--version"
+            end
+          end
+          EOF
+
+          # Clone the tap repo and update the formula
+          git clone "https://x-access-token:${HOMEBREW_TAP_GITHUB_TOKEN}@github.com/panbanda/homebrew-omen.git" tap
+          mkdir -p tap/Formula
+          cp omen.rb tap/Formula/omen.rb
+
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/omen.rb
+          git commit -m "Update omen to ${VERSION}"
+          git push
