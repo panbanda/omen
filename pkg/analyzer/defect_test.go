@@ -278,6 +278,7 @@ func simple() int {
 }
 
 func TestDefectAnalyzer_RiskLevelCategorization(t *testing.T) {
+	// PMAT-compatible: Low (<0.3), Medium (0.3-0.7), High (>=0.7)
 	tests := []struct {
 		name              string
 		probability       float32
@@ -287,9 +288,9 @@ func TestDefectAnalyzer_RiskLevelCategorization(t *testing.T) {
 		wantInLowCount    bool
 	}{
 		{
-			name:            "Critical risk",
+			name:            "High risk (was critical)",
 			probability:     0.9,
-			wantRisk:        models.RiskCritical,
+			wantRisk:        models.RiskHigh,
 			wantInHighCount: true,
 		},
 		{
@@ -305,8 +306,14 @@ func TestDefectAnalyzer_RiskLevelCategorization(t *testing.T) {
 			wantInMediumCount: true,
 		},
 		{
+			name:              "Medium risk at boundary",
+			probability:       0.3,
+			wantRisk:          models.RiskMedium,
+			wantInMediumCount: true,
+		},
+		{
 			name:           "Low risk",
-			probability:    0.3,
+			probability:    0.29,
 			wantRisk:       models.RiskLow,
 			wantInLowCount: true,
 		},

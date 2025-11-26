@@ -112,19 +112,27 @@ func (a *DefectAnalyzer) AnalyzeProject(repoPath string, files []string) (*model
 			}
 		}
 
-		// Calculate probability
+		// Calculate probability and confidence
 		prob := models.CalculateProbability(metrics, a.weights)
+		conf := models.CalculateConfidence(metrics)
 		risk := models.CalculateRiskLevel(prob)
+
+		// Calculate normalized contributing factors (PMAT-compatible)
+		churnNorm := normalizeChurnFactor(metrics.ChurnScore)
+		complexityNorm := normalizeComplexityFactor(metrics.Complexity)
+		duplicateNorm := normalizeDuplicationFactor(metrics.DuplicateRatio)
+		couplingNorm := normalizeCouplingFactor(metrics.AfferentCoupling)
 
 		score := models.DefectScore{
 			FilePath:    path,
 			Probability: prob,
+			Confidence:  conf,
 			RiskLevel:   risk,
 			ContributingFactors: map[string]float32{
-				"churn":       metrics.ChurnScore * a.weights.Churn,
-				"complexity":  metrics.Complexity / 100 * a.weights.Complexity,
-				"duplication": metrics.DuplicateRatio * a.weights.Duplication,
-				"coupling":    (metrics.AfferentCoupling + metrics.EfferentCoupling) / 100 * a.weights.Coupling,
+				"churn":       churnNorm * a.weights.Churn,
+				"complexity":  complexityNorm * a.weights.Complexity,
+				"duplication": duplicateNorm * a.weights.Duplication,
+				"coupling":    couplingNorm * a.weights.Coupling,
 			},
 			Recommendations: generateRecommendations(metrics, prob),
 		}
@@ -133,7 +141,7 @@ func (a *DefectAnalyzer) AnalyzeProject(repoPath string, files []string) (*model
 		totalProb += prob
 
 		switch risk {
-		case models.RiskHigh, models.RiskCritical:
+		case models.RiskHigh:
 			highCount++
 		case models.RiskMedium:
 			medCount++
@@ -208,6 +216,67 @@ func generateRecommendations(m models.FileMetrics, prob float32) []string {
 	}
 
 	return recs
+}
+
+// PMAT-compatible CDF percentile tables for normalization (duplicated from models for internal use)
+var defectChurnPercentiles = [][2]float32{
+	{0.0, 0.0}, {0.1, 0.05}, {0.2, 0.15}, {0.3, 0.30},
+	{0.4, 0.50}, {0.5, 0.70}, {0.6, 0.85}, {0.7, 0.93},
+	{0.8, 0.97}, {1.0, 1.0},
+}
+
+var defectComplexityPercentiles = [][2]float32{
+	{1.0, 0.1}, {2.0, 0.2}, {3.0, 0.3}, {5.0, 0.5},
+	{7.0, 0.7}, {10.0, 0.8}, {15.0, 0.9}, {20.0, 0.95},
+	{30.0, 0.98}, {50.0, 1.0},
+}
+
+var defectCouplingPercentiles = [][2]float32{
+	{0.0, 0.1}, {1.0, 0.3}, {2.0, 0.5}, {3.0, 0.7},
+	{5.0, 0.8}, {8.0, 0.9}, {12.0, 0.95}, {20.0, 1.0},
+}
+
+// interpolateDefectCDF performs linear interpolation on CDF percentile tables.
+func interpolateDefectCDF(percentiles [][2]float32, value float32) float32 {
+	if value <= percentiles[0][0] {
+		return percentiles[0][1]
+	}
+	if value >= percentiles[len(percentiles)-1][0] {
+		return percentiles[len(percentiles)-1][1]
+	}
+
+	for i := 0; i < len(percentiles)-1; i++ {
+		x1, y1 := percentiles[i][0], percentiles[i][1]
+		x2, y2 := percentiles[i+1][0], percentiles[i+1][1]
+
+		if value >= x1 && value <= x2 {
+			t := (value - x1) / (x2 - x1)
+			return y1 + t*(y2-y1)
+		}
+	}
+	return 0.0
+}
+
+func normalizeChurnFactor(rawScore float32) float32 {
+	return interpolateDefectCDF(defectChurnPercentiles, rawScore)
+}
+
+func normalizeComplexityFactor(rawScore float32) float32 {
+	return interpolateDefectCDF(defectComplexityPercentiles, rawScore)
+}
+
+func normalizeDuplicationFactor(rawScore float32) float32 {
+	if rawScore < 0 {
+		return 0
+	}
+	if rawScore > 1 {
+		return 1
+	}
+	return rawScore
+}
+
+func normalizeCouplingFactor(rawScore float32) float32 {
+	return interpolateDefectCDF(defectCouplingPercentiles, rawScore)
 }
 
 // Close releases analyzer resources.

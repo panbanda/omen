@@ -779,16 +779,13 @@ func runDefectCmd(c *cli.Context) error {
 
 	var rows [][]string
 	for _, ds := range analysis.Files {
-		if highRiskOnly && ds.RiskLevel != models.RiskHigh && ds.RiskLevel != models.RiskCritical {
+		if highRiskOnly && ds.RiskLevel != models.RiskHigh {
 			continue
 		}
 
 		probStr := fmt.Sprintf("%.0f%%", ds.Probability*100)
 		riskStr := string(ds.RiskLevel)
 		switch ds.RiskLevel {
-		case models.RiskCritical:
-			probStr = color.RedString(probStr)
-			riskStr = color.RedString(riskStr)
 		case models.RiskHigh:
 			probStr = color.RedString(probStr)
 			riskStr = color.RedString(riskStr)
