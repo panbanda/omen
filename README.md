@@ -1,9 +1,12 @@
 # Omen
 
-[![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/panbanda/omen/ci.yml?branch=main&style=flat-square)](https://github.com/panbanda/omen/actions?query=workflow%3ACI)
-[![GoDoc](https://pkg.go.dev/badge/github.com/panbanda/omen)](https://pkg.go.dev/github.com/panbanda/omen)
-[![Go Report Card](https://goreportcard.com/badge/github.com/panbanda/omen)](https://goreportcard.com/report/github.com/panbanda/omen)
-![Go Version](https://img.shields.io/badge/go%20version-%3E=1.23-61CFDD.svg?style=flat-square)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/panbanda/omen-cli)](https://go.dev/)
+[![License](https://img.shields.io/github/license/panbanda/omen-cli)](https://github.com/panbanda/omen-cli/blob/main/LICENSE)
+[![CI](https://github.com/panbanda/omen-cli/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/panbanda/omen-cli/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/panbanda/omen-cli/graph/badge.svg)](https://codecov.io/gh/panbanda/omen-cli)
+[![Go Report Card](https://goreportcard.com/badge/github.com/panbanda/omen-cli)](https://goreportcard.com/report/github.com/panbanda/omen-cli)
+[![Release](https://img.shields.io/github/v/release/panbanda/omen-cli)](https://github.com/panbanda/omen-cli/releases)
+[![Go Reference](https://pkg.go.dev/badge/github.com/panbanda/omen-cli.svg)](https://pkg.go.dev/github.com/panbanda/omen-cli)
 [![Snyk Security](https://snyk.io/test/github/panbanda/omen-cli/badge.svg)](https://snyk.io/test/github/panbanda/omen-cli)
 
 A multi-language code analysis CLI built in Go. Omen uses tree-sitter for parsing source code across 13 languages, providing insights into complexity, technical debt, code duplication, and defect prediction.
