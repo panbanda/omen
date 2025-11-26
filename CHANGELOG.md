@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.8](https://github.com/panbanda/omen/compare/v1.0.7...v1.0.8) (2025-11-26)
+
+
+### Bug Fixes
+
+* **ci:** use macos-15-intel instead of macos-15-large ([a65dd86](https://github.com/panbanda/omen/commit/a65dd86d2bad265e2f0e5a21b46b1cf94068f75e))
+
 ## [1.0.7](https://github.com/panbanda/omen/compare/v1.0.6...v1.0.7) (2025-11-26)
 
 
