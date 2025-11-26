@@ -25,8 +25,8 @@ import (
 
 var (
 	version = "dev"
-	commit  = "none"
-	date    = "unknown"
+	commit  = "none"  //nolint:unused // set via ldflags at build time
+	date    = "unknown" //nolint:unused // set via ldflags at build time
 )
 
 // getPaths returns paths from positional args, defaulting to ["."]

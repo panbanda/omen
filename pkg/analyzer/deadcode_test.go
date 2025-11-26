@@ -3,6 +3,7 @@ package analyzer
 import (
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/panbanda/omen/pkg/models"
@@ -708,9 +709,9 @@ func unusedFunc` + string(rune('0'+i)) + `() {
 	a := NewDeadCodeAnalyzer(0.8)
 	defer a.Close()
 
-	progressCount := 0
+	var progressCount atomic.Int32
 	progressFunc := func() {
-		progressCount++
+		progressCount.Add(1)
 	}
 
 	result, err := a.AnalyzeProjectWithProgress(files, progressFunc)
@@ -722,8 +723,8 @@ func unusedFunc` + string(rune('0'+i)) + `() {
 		t.Fatal("AnalyzeProjectWithProgress() returned nil")
 	}
 
-	if progressCount != len(files) {
-		t.Errorf("progress callback called %d times, want %d", progressCount, len(files))
+	if int(progressCount.Load()) != len(files) {
+		t.Errorf("progress callback called %d times, want %d", progressCount.Load(), len(files))
 	}
 
 	if result.Summary.TotalFilesAnalyzed != len(files) {

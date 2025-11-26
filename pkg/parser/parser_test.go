@@ -175,7 +175,7 @@ func TestParse(t *testing.T) {
 
 			root := result.Tree.RootNode()
 			if root == nil {
-				t.Error("root node is nil")
+				t.Fatal("root node is nil")
 			}
 			if root.ChildCount() == 0 {
 				t.Error("root node has no children")

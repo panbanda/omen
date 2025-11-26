@@ -3,6 +3,7 @@ package analyzer
 import (
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/panbanda/omen/pkg/models"
@@ -885,9 +886,9 @@ func TestSATDAnalyzeProject_WithProgress(t *testing.T) {
 	}
 
 	analyzer := NewSATDAnalyzer()
-	progressCount := 0
+	var progressCount atomic.Int32
 	progressFunc := func() {
-		progressCount++
+		progressCount.Add(1)
 	}
 
 	analysis, err := analyzer.AnalyzeProjectWithProgress(files, progressFunc)
@@ -900,8 +901,8 @@ func TestSATDAnalyzeProject_WithProgress(t *testing.T) {
 		t.Errorf("Expected 5 items, got %d", analysis.Summary.TotalItems)
 	}
 
-	if progressCount != 5 {
-		t.Errorf("Expected progress callback to be called 5 times, got %d", progressCount)
+	if progressCount.Load() != 5 {
+		t.Errorf("Expected progress callback to be called 5 times, got %d", progressCount.Load())
 	}
 }
 

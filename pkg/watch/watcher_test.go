@@ -123,9 +123,7 @@ func TestWatcher_WatchedFiles(t *testing.T) {
 
 	// Initially no watched directories
 	files := w.WatchedFiles()
-	if files == nil {
-		files = []string{}
-	}
+	_ = files // initial check
 
 	// Add a directory to watch
 	if err := w.fsWatcher.Add(tmpDir); err != nil {

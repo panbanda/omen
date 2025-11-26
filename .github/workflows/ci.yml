@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        go: ["stable"]
+        go: ["stable", "1.25", "1.24", "1.23"]
 
     steps:
       - name: Checkout repository

@@ -1,0 +1,13 @@
+version: "2"
+
+linters:
+  default: standard
+  disable:
+    - errcheck
+  settings:
+    staticcheck:
+      checks:
+        - all
+        - -QF1003
+        - -ST1000
+        - -ST1020

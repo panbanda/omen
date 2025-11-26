@@ -7,3 +7,14 @@ tasks:
       - go fmt ./...
       - go mod tidy
       - go vet ./...
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run
+
+  test:
+    desc: Run all checks and tests
+    cmds:
+      - task: lint
+      - go test -race ./...
