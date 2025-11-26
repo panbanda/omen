@@ -2,7 +2,10 @@ package analyzer
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -12,7 +15,27 @@ import (
 
 // SATDAnalyzer detects self-admitted technical debt markers.
 type SATDAnalyzer struct {
-	patterns []satdPattern
+	patterns     []satdPattern
+	options      SATDOptions
+	testPatterns []*regexp.Regexp
+}
+
+// SATDOptions configures SATD analysis behavior.
+type SATDOptions struct {
+	IncludeTests      bool // Include test files in analysis
+	IncludeVendor     bool // Include vendor/third-party files
+	AdjustSeverity    bool // Adjust severity based on context
+	GenerateContextID bool // Generate context hash for identity tracking
+}
+
+// DefaultSATDOptions returns the default options.
+func DefaultSATDOptions() SATDOptions {
+	return SATDOptions{
+		IncludeTests:      true,
+		IncludeVendor:     false,
+		AdjustSeverity:    true,
+		GenerateContextID: true,
+	}
 }
 
 type satdPattern struct {
@@ -23,8 +46,32 @@ type satdPattern struct {
 
 // NewSATDAnalyzer creates a new SATD analyzer with default patterns.
 func NewSATDAnalyzer() *SATDAnalyzer {
+	return NewSATDAnalyzerWithOptions(DefaultSATDOptions())
+}
+
+// NewSATDAnalyzerWithOptions creates a SATD analyzer with custom options.
+func NewSATDAnalyzerWithOptions(opts SATDOptions) *SATDAnalyzer {
 	return &SATDAnalyzer{
-		patterns: defaultSATDPatterns(),
+		patterns:     defaultSATDPatterns(),
+		options:      opts,
+		testPatterns: defaultTestPatterns(),
+	}
+}
+
+// defaultTestPatterns returns patterns for detecting test files.
+func defaultTestPatterns() []*regexp.Regexp {
+	return []*regexp.Regexp{
+		regexp.MustCompile(`_test\.go$`),
+		regexp.MustCompile(`test_.*\.py$`),
+		regexp.MustCompile(`.*_test\.py$`),
+		regexp.MustCompile(`.*\.test\.[jt]sx?$`),
+		regexp.MustCompile(`.*\.spec\.[jt]sx?$`),
+		regexp.MustCompile(`__tests__/`),
+		regexp.MustCompile(`tests?/`),
+		regexp.MustCompile(`spec/`),
+		regexp.MustCompile(`Test\.java$`),
+		regexp.MustCompile(`_test\.rs$`),
+		regexp.MustCompile(`_spec\.rb$`),
 	}
 }
 
@@ -79,6 +126,11 @@ func (a *SATDAnalyzer) AddPattern(pattern string, category models.DebtCategory, 
 
 // AnalyzeFile scans a file for SATD markers.
 func (a *SATDAnalyzer) AnalyzeFile(path string) ([]models.TechnicalDebt, error) {
+	// Check exclusion rules
+	if a.shouldExcludeFile(path) {
+		return nil, nil
+	}
+
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -91,6 +143,8 @@ func (a *SATDAnalyzer) AnalyzeFile(path string) ([]models.TechnicalDebt, error) 
 
 	lang := parser.DetectLanguage(path)
 	commentStyle := getCommentStyle(lang)
+	isTestFile := a.isTestFile(path)
+	isSecurityContext := a.isSecurityContext(path)
 
 	for scanner.Scan() {
 		lineNum++
@@ -108,14 +162,24 @@ func (a *SATDAnalyzer) AnalyzeFile(path string) ([]models.TechnicalDebt, error) 
 					description = strings.TrimSpace(matches[1])
 				}
 
+				severity := pattern.severity
+				if a.options.AdjustSeverity {
+					severity = a.adjustSeverity(severity, isTestFile, isSecurityContext, line)
+				}
+
 				debt := models.TechnicalDebt{
 					Category:    pattern.category,
-					Severity:    pattern.severity,
+					Severity:    severity,
 					File:        path,
 					Line:        lineNum,
 					Description: description,
 					Marker:      extractMarker(matches[0]),
 				}
+
+				if a.options.GenerateContextID {
+					debt.ContextHash = generateContextHash(path, lineNum, line)
+				}
+
 				debts = append(debts, debt)
 				break // Only match first pattern per line
 			}
@@ -123,6 +187,120 @@ func (a *SATDAnalyzer) AnalyzeFile(path string) ([]models.TechnicalDebt, error) 
 	}
 
 	return debts, scanner.Err()
+}
+
+// shouldExcludeFile determines if a file should be skipped.
+func (a *SATDAnalyzer) shouldExcludeFile(path string) bool {
+	// Exclude test files if configured
+	if !a.options.IncludeTests && a.isTestFile(path) {
+		return true
+	}
+
+	// Exclude vendor/third-party files
+	if !a.options.IncludeVendor && isVendorFile(path) {
+		return true
+	}
+
+	// Exclude minified files
+	if isMinifiedFile(path) {
+		return true
+	}
+
+	return false
+}
+
+// isTestFile checks if a file is a test file.
+func (a *SATDAnalyzer) isTestFile(path string) bool {
+	for _, pattern := range a.testPatterns {
+		if pattern.MatchString(path) {
+			return true
+		}
+	}
+	return false
+}
+
+// isVendorFile checks if a file is in a vendor directory.
+func isVendorFile(path string) bool {
+	vendorPatterns := []string{
+		"/vendor/",
+		"/node_modules/",
+		"/third_party/",
+		"/external/",
+		"/.cargo/",
+		"/site-packages/",
+	}
+	for _, pattern := range vendorPatterns {
+		if strings.Contains(path, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// isMinifiedFile checks if a file appears to be minified.
+func isMinifiedFile(path string) bool {
+	base := filepath.Base(path)
+	return strings.Contains(base, ".min.") ||
+		strings.HasSuffix(base, ".min.js") ||
+		strings.HasSuffix(base, ".min.css")
+}
+
+// isSecurityContext checks if a file is in a security-sensitive context.
+func (a *SATDAnalyzer) isSecurityContext(path string) bool {
+	securityPatterns := []string{
+		"auth",
+		"security",
+		"crypto",
+		"password",
+		"credential",
+		"token",
+		"session",
+		"permission",
+		"access",
+		"sanitize",
+		"validate",
+		"escape",
+	}
+	lower := strings.ToLower(path)
+	for _, pattern := range securityPatterns {
+		if strings.Contains(lower, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// adjustSeverity modifies severity based on context.
+func (a *SATDAnalyzer) adjustSeverity(base models.Severity, isTest, isSecurity bool, line string) models.Severity {
+	// Reduce severity for test code
+	if isTest {
+		return base.Reduce()
+	}
+
+	// Escalate severity in security contexts
+	if isSecurity {
+		return base.Escalate()
+	}
+
+	// Escalate if line mentions security-related terms
+	lower := strings.ToLower(line)
+	securityTerms := []string{"security", "vuln", "auth", "password", "inject", "xss", "csrf", "sql"}
+	for _, term := range securityTerms {
+		if strings.Contains(lower, term) {
+			return base.Escalate()
+		}
+	}
+
+	return base
+}
+
+// generateContextHash creates a stable identity hash for a debt item.
+func generateContextHash(path string, line uint32, content string) string {
+	h := sha256.New()
+	h.Write([]byte(path))
+	h.Write([]byte{byte(line >> 24), byte(line >> 16), byte(line >> 8), byte(line)})
+	h.Write([]byte(strings.TrimSpace(content)))
+	return hex.EncodeToString(h.Sum(nil)[:16])
 }
 
 // commentStyle defines comment syntax for a language.

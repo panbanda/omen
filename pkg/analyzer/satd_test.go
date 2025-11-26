@@ -960,12 +960,18 @@ func TestAnalyzeFile_SpecialPatterns(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
-			testFile := filepath.Join(tmpDir, "test.go")
+			testFile := filepath.Join(tmpDir, "regular.go")
 			if err := os.WriteFile(testFile, []byte(tt.content), 0644); err != nil {
 				t.Fatal(err)
 			}
 
-			analyzer := NewSATDAnalyzer()
+			// Use no severity adjustment to test raw pattern matching
+			opts := SATDOptions{
+				IncludeTests:      true,
+				AdjustSeverity:    false,
+				GenerateContextID: false,
+			}
+			analyzer := NewSATDAnalyzerWithOptions(opts)
 			debts, err := analyzer.AnalyzeFile(testFile)
 
 			if err != nil {
@@ -987,6 +993,438 @@ func TestAnalyzeFile_SpecialPatterns(t *testing.T) {
 				if debt.Category != tt.category {
 					t.Errorf("Expected category %s, got %s", tt.category, debt.Category)
 				}
+			}
+		})
+	}
+}
+
+func TestNewSATDAnalyzerWithOptions(t *testing.T) {
+	opts := SATDOptions{
+		IncludeTests:      false,
+		IncludeVendor:     false,
+		AdjustSeverity:    true,
+		GenerateContextID: true,
+	}
+
+	analyzer := NewSATDAnalyzerWithOptions(opts)
+	if analyzer == nil {
+		t.Fatal("NewSATDAnalyzerWithOptions returned nil")
+	}
+
+	if analyzer.options.IncludeTests {
+		t.Error("IncludeTests should be false")
+	}
+	if analyzer.options.IncludeVendor {
+		t.Error("IncludeVendor should be false")
+	}
+	if !analyzer.options.AdjustSeverity {
+		t.Error("AdjustSeverity should be true")
+	}
+	if !analyzer.options.GenerateContextID {
+		t.Error("GenerateContextID should be true")
+	}
+}
+
+func TestDefaultSATDOptions(t *testing.T) {
+	opts := DefaultSATDOptions()
+
+	if !opts.IncludeTests {
+		t.Error("IncludeTests should default to true")
+	}
+	if opts.IncludeVendor {
+		t.Error("IncludeVendor should default to false")
+	}
+	if !opts.AdjustSeverity {
+		t.Error("AdjustSeverity should default to true")
+	}
+	if !opts.GenerateContextID {
+		t.Error("GenerateContextID should default to true")
+	}
+}
+
+func TestSATD_TestFileExclusion(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	testFile := filepath.Join(tmpDir, "example_test.go")
+	content := "// TODO: implement test\n"
+	if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// With test exclusion disabled
+	optsWithTests := SATDOptions{
+		IncludeTests:      true,
+		AdjustSeverity:    false,
+		GenerateContextID: false,
+	}
+	analyzerWithTests := NewSATDAnalyzerWithOptions(optsWithTests)
+	debtsWithTests, err := analyzerWithTests.AnalyzeFile(testFile)
+	if err != nil {
+		t.Fatalf("AnalyzeFile failed: %v", err)
+	}
+	if len(debtsWithTests) != 1 {
+		t.Errorf("Expected 1 debt item when including tests, got %d", len(debtsWithTests))
+	}
+
+	// With test exclusion enabled
+	optsNoTests := SATDOptions{
+		IncludeTests:      false,
+		AdjustSeverity:    false,
+		GenerateContextID: false,
+	}
+	analyzerNoTests := NewSATDAnalyzerWithOptions(optsNoTests)
+	debtsNoTests, err := analyzerNoTests.AnalyzeFile(testFile)
+	if err != nil {
+		t.Fatalf("AnalyzeFile failed: %v", err)
+	}
+	if len(debtsNoTests) != 0 {
+		t.Errorf("Expected 0 debt items when excluding tests, got %d", len(debtsNoTests))
+	}
+}
+
+func TestSATD_SeverityAdjustment(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Test file should reduce severity
+	testFile := filepath.Join(tmpDir, "auth_test.go")
+	content := "// FIXME: broken logic\n"
+	if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	optsWithAdjust := SATDOptions{
+		IncludeTests:      true,
+		AdjustSeverity:    true,
+		GenerateContextID: false,
+	}
+	analyzer := NewSATDAnalyzerWithOptions(optsWithAdjust)
+	debts, err := analyzer.AnalyzeFile(testFile)
+	if err != nil {
+		t.Fatalf("AnalyzeFile failed: %v", err)
+	}
+	if len(debts) != 1 {
+		t.Fatalf("Expected 1 debt item, got %d", len(debts))
+	}
+
+	// FIXME is normally High, test file reduces to Medium
+	if debts[0].Severity != models.SeverityMedium {
+		t.Errorf("Expected severity Medium (reduced from High) for test file, got %s", debts[0].Severity)
+	}
+
+	// Security file should escalate severity
+	securityFile := filepath.Join(tmpDir, "auth_handler.go")
+	content2 := "// TODO: add validation\n"
+	if err := os.WriteFile(securityFile, []byte(content2), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	debts2, err := analyzer.AnalyzeFile(securityFile)
+	if err != nil {
+		t.Fatalf("AnalyzeFile failed: %v", err)
+	}
+	if len(debts2) != 1 {
+		t.Fatalf("Expected 1 debt item, got %d", len(debts2))
+	}
+
+	// TODO is normally Low, auth file escalates to Medium
+	if debts2[0].Severity != models.SeverityMedium {
+		t.Errorf("Expected severity Medium (escalated from Low) for security file, got %s", debts2[0].Severity)
+	}
+}
+
+func TestSATD_ContextHashGeneration(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	testFile := filepath.Join(tmpDir, "example.go")
+	content := "// TODO: implement feature\n"
+	if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// With context hash
+	optsWithHash := SATDOptions{
+		IncludeTests:      true,
+		AdjustSeverity:    false,
+		GenerateContextID: true,
+	}
+	analyzer := NewSATDAnalyzerWithOptions(optsWithHash)
+	debts, err := analyzer.AnalyzeFile(testFile)
+	if err != nil {
+		t.Fatalf("AnalyzeFile failed: %v", err)
+	}
+	if len(debts) != 1 {
+		t.Fatalf("Expected 1 debt item, got %d", len(debts))
+	}
+	if debts[0].ContextHash == "" {
+		t.Error("Expected non-empty context hash")
+	}
+	if len(debts[0].ContextHash) != 32 {
+		t.Errorf("Expected 32 char hex hash (16 bytes), got %d chars", len(debts[0].ContextHash))
+	}
+
+	// Without context hash
+	optsNoHash := SATDOptions{
+		IncludeTests:      true,
+		AdjustSeverity:    false,
+		GenerateContextID: false,
+	}
+	analyzerNoHash := NewSATDAnalyzerWithOptions(optsNoHash)
+	debtsNoHash, err := analyzerNoHash.AnalyzeFile(testFile)
+	if err != nil {
+		t.Fatalf("AnalyzeFile failed: %v", err)
+	}
+	if len(debtsNoHash) != 1 {
+		t.Fatalf("Expected 1 debt item, got %d", len(debtsNoHash))
+	}
+	if debtsNoHash[0].ContextHash != "" {
+		t.Error("Expected empty context hash when disabled")
+	}
+}
+
+func TestSATD_VendorExclusion(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create vendor directory
+	vendorDir := filepath.Join(tmpDir, "vendor", "lib")
+	if err := os.MkdirAll(vendorDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	vendorFile := filepath.Join(vendorDir, "lib.go")
+	content := "// TODO: vendor todo\n"
+	if err := os.WriteFile(vendorFile, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// With vendor exclusion (default)
+	opts := SATDOptions{
+		IncludeVendor:     false,
+		AdjustSeverity:    false,
+		GenerateContextID: false,
+	}
+	analyzer := NewSATDAnalyzerWithOptions(opts)
+	debts, err := analyzer.AnalyzeFile(vendorFile)
+	if err != nil {
+		t.Fatalf("AnalyzeFile failed: %v", err)
+	}
+	if len(debts) != 0 {
+		t.Errorf("Expected 0 debt items for vendor file, got %d", len(debts))
+	}
+
+	// With vendor inclusion
+	optsWithVendor := SATDOptions{
+		IncludeVendor:     true,
+		AdjustSeverity:    false,
+		GenerateContextID: false,
+	}
+	analyzerWithVendor := NewSATDAnalyzerWithOptions(optsWithVendor)
+	debtsWithVendor, err := analyzerWithVendor.AnalyzeFile(vendorFile)
+	if err != nil {
+		t.Fatalf("AnalyzeFile failed: %v", err)
+	}
+	if len(debtsWithVendor) != 1 {
+		t.Errorf("Expected 1 debt item when including vendor, got %d", len(debtsWithVendor))
+	}
+}
+
+func TestSATD_MinifiedExclusion(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	minFile := filepath.Join(tmpDir, "app.min.js")
+	content := "// TODO: minified todo\n"
+	if err := os.WriteFile(minFile, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	analyzer := NewSATDAnalyzer()
+	debts, err := analyzer.AnalyzeFile(minFile)
+	if err != nil {
+		t.Fatalf("AnalyzeFile failed: %v", err)
+	}
+	if len(debts) != 0 {
+		t.Errorf("Expected 0 debt items for minified file, got %d", len(debts))
+	}
+}
+
+func TestSATD_SecurityContextEscalation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Test security terms in comment text - use NOTE which has low severity
+	// and doesn't itself contain security keywords
+	normalFile := filepath.Join(tmpDir, "handler.go")
+	content := "// NOTE: check SQL here\n"
+	if err := os.WriteFile(normalFile, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := SATDOptions{
+		IncludeTests:      true,
+		AdjustSeverity:    true,
+		GenerateContextID: false,
+	}
+	analyzer := NewSATDAnalyzerWithOptions(opts)
+	debts, err := analyzer.AnalyzeFile(normalFile)
+	if err != nil {
+		t.Fatalf("AnalyzeFile failed: %v", err)
+	}
+	if len(debts) != 1 {
+		t.Fatalf("Expected 1 debt item, got %d", len(debts))
+	}
+
+	// NOTE is normally Low, mention of "sql" escalates it to Medium
+	if debts[0].Severity != models.SeverityMedium {
+		t.Errorf("Expected severity Medium (escalated due to security terms), got %s", debts[0].Severity)
+	}
+}
+
+func TestIsTestFile(t *testing.T) {
+	analyzer := NewSATDAnalyzer()
+
+	tests := []struct {
+		path     string
+		expected bool
+	}{
+		{"main.go", false},
+		{"main_test.go", true},
+		{"test_main.py", true},
+		{"main_test.py", true},
+		{"app.test.js", true},
+		{"app.spec.ts", true},
+		{"__tests__/app.js", true},
+		{"test/helper.go", true},
+		{"tests/unit/test.py", true},
+		{"spec/model_spec.rb", true},
+		{"UserTest.java", true},
+		{"lib_test.rs", true},
+		{"handler_spec.rb", true},
+		{"utils.js", false},
+		{"validator.py", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			result := analyzer.isTestFile(tt.path)
+			if result != tt.expected {
+				t.Errorf("isTestFile(%q) = %v, expected %v", tt.path, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestIsVendorFile(t *testing.T) {
+	tests := []struct {
+		path     string
+		expected bool
+	}{
+		{"main.go", false},
+		{"/project/vendor/lib/lib.go", true},
+		{"/project/node_modules/pkg/index.js", true},
+		{"/project/third_party/dep/dep.go", true},
+		{"/project/external/lib/lib.c", true},
+		{"/home/user/.cargo/registry/pkg/lib.rs", true},
+		{"/usr/lib/python/site-packages/pkg/mod.py", true},
+		{"/project/src/app.go", false},
+		{"/project/pkg/util/util.go", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			result := isVendorFile(tt.path)
+			if result != tt.expected {
+				t.Errorf("isVendorFile(%q) = %v, expected %v", tt.path, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestIsMinifiedFile(t *testing.T) {
+	tests := []struct {
+		path     string
+		expected bool
+	}{
+		{"app.js", false},
+		{"app.min.js", true},
+		{"style.css", false},
+		{"style.min.css", true},
+		{"bundle.min.js", true},
+		{"jquery.min.js", true},
+		{"app.ts", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			result := isMinifiedFile(tt.path)
+			if result != tt.expected {
+				t.Errorf("isMinifiedFile(%q) = %v, expected %v", tt.path, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGenerateContextHash(t *testing.T) {
+	hash1 := generateContextHash("file.go", 10, "// TODO: fix this")
+	hash2 := generateContextHash("file.go", 10, "// TODO: fix this")
+	hash3 := generateContextHash("file.go", 11, "// TODO: fix this")
+	hash4 := generateContextHash("other.go", 10, "// TODO: fix this")
+
+	// Same inputs should produce same hash
+	if hash1 != hash2 {
+		t.Error("Same inputs should produce same hash")
+	}
+
+	// Different line should produce different hash
+	if hash1 == hash3 {
+		t.Error("Different line should produce different hash")
+	}
+
+	// Different file should produce different hash
+	if hash1 == hash4 {
+		t.Error("Different file should produce different hash")
+	}
+
+	// Hash should be 32 hex chars (16 bytes)
+	if len(hash1) != 32 {
+		t.Errorf("Expected 32 char hash, got %d", len(hash1))
+	}
+}
+
+func TestSeverity_Escalate(t *testing.T) {
+	tests := []struct {
+		input    models.Severity
+		expected models.Severity
+	}{
+		{models.SeverityLow, models.SeverityMedium},
+		{models.SeverityMedium, models.SeverityHigh},
+		{models.SeverityHigh, models.SeverityCritical},
+		{models.SeverityCritical, models.SeverityCritical},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.input), func(t *testing.T) {
+			result := tt.input.Escalate()
+			if result != tt.expected {
+				t.Errorf("Escalate(%s) = %s, expected %s", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestSeverity_Reduce(t *testing.T) {
+	tests := []struct {
+		input    models.Severity
+		expected models.Severity
+	}{
+		{models.SeverityCritical, models.SeverityHigh},
+		{models.SeverityHigh, models.SeverityMedium},
+		{models.SeverityMedium, models.SeverityLow},
+		{models.SeverityLow, models.SeverityLow},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.input), func(t *testing.T) {
+			result := tt.input.Reduce()
+			if result != tt.expected {
+				t.Errorf("Reduce(%s) = %s, expected %s", tt.input, result, tt.expected)
 			}
 		})
 	}
