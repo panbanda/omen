@@ -38,7 +38,6 @@ Omen is a multi-language code analysis CLI built in Go. It uses tree-sitter for 
 - `pkg/config/` - Configuration loading (TOML/YAML/JSON via koanf)
 - `pkg/cache/` - Result caching with Blake3 hashing
 - `pkg/output/` - Output formatting (text/JSON/markdown)
-- `pkg/watch/` - File watching for continuous analysis
 
 ### Key Patterns
 
@@ -54,8 +53,11 @@ Omen is a multi-language code analysis CLI built in Go. It uses tree-sitter for 
 
 ### CLI Commands
 
-All commands support `-p/--path`, `-f/--format` (text/json/markdown), and `-o/--output` flags:
+Top-level commands:
+- `analyze` / `a` - Run analyzers (all if no subcommand, or specific one)
+- `context` / `ctx` - Deep context generation for LLMs
 
+Analyzer subcommands (`omen analyze <subcommand>`):
 - `complexity` / `cx` - Cyclomatic and cognitive complexity
 - `satd` / `debt` - Self-admitted technical debt detection
 - `deadcode` / `dc` - Unused code detection
@@ -65,9 +67,8 @@ All commands support `-p/--path`, `-f/--format` (text/json/markdown), and `-o/--
 - `tdg` - Technical Debt Gradient scores
 - `graph` / `dag` - Dependency graph (Mermaid output)
 - `lint-hotspot` / `lh` - Lint violation density
-- `context` / `ctx` - Deep context generation for LLMs
-- `watch` - Continuous analysis on file changes
-- `analyze` / `all` - Run all analyzers
+
+All commands support `-f/--format` (text/json/markdown) and `-o/--output` flags.
 
 ## Supported Languages
 

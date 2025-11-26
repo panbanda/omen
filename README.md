@@ -39,38 +39,47 @@ go build -o omen ./cmd/omen
 ## Quick Start
 
 ```bash
-# Analyze complexity
-omen complexity ./src
-
-# Detect technical debt
-omen satd ./src
-
-# Find dead code
-omen deadcode ./src
-
-# Analyze git churn (last 90 days)
-omen churn ./
-
-# Detect code clones
-omen duplicates ./src
-
-# Predict defect probability
-omen defect ./src
-
-# Calculate TDG scores
-omen tdg ./src
-
-# Generate dependency graph
-omen graph ./src --metrics
-
 # Run all analyzers
 omen analyze ./src
+
+# Analyze complexity
+omen analyze complexity ./src
+
+# Detect technical debt
+omen analyze satd ./src
+
+# Find dead code
+omen analyze deadcode ./src
+
+# Analyze git churn (last 90 days)
+omen analyze churn ./
+
+# Detect code clones
+omen analyze duplicates ./src
+
+# Predict defect probability
+omen analyze defect ./src
+
+# Calculate TDG scores
+omen analyze tdg ./src
+
+# Generate dependency graph
+omen analyze graph ./src --metrics
 ```
 
 ## Commands
 
+### Top-level Commands
+
 | Command | Alias | Description |
 |---------|-------|-------------|
+| `analyze` | `a` | Run analyzers (all if no subcommand, or specific one) |
+| `context` | `ctx` | Deep context generation for LLMs |
+
+### Analyzer Subcommands (`omen analyze <subcommand>`)
+
+| Subcommand | Alias | Description |
+|------------|-------|-------------|
 | `complexity` | `cx` | Cyclomatic and cognitive complexity analysis |
 | `satd` | `debt` | Self-admitted technical debt detection |
 | `deadcode` | `dc` | Unused code detection |
@@ -80,19 +89,16 @@ omen analyze ./src
 | `tdg` | - | Technical Debt Gradient scores |
 | `graph` | `dag` | Dependency graph (Mermaid output) |
 | `lint-hotspot` | `lh` | Lint violation density |
-| `context` | `ctx` | Deep context generation for LLMs |
-| `watch` | - | Continuous analysis on file changes |
-| `analyze` | `all` | Run all analyzers |
 
 ## Output Formats
 
 All commands support multiple output formats:
 
 ```bash
-omen complexity ./src -f text      # Default, colored terminal output
-omen complexity ./src -f json      # JSON for programmatic use
-omen complexity ./src -f markdown  # Markdown tables
-omen complexity ./src -f toon      # TOON format
+omen analyze complexity ./src -f text      # Default, colored terminal output
+omen analyze complexity ./src -f json      # JSON for programmatic use
+omen analyze complexity ./src -f markdown  # Markdown tables
+omen analyze complexity ./src -f toon      # TOON format
 ```
 
 Write output to a file:
@@ -128,46 +134,25 @@ See [`omen.example.toml`](omen.example.toml) for all options.
 ### Find Complex Functions
 
 ```bash
-omen complexity ./pkg --functions-only --cyclomatic-threshold 15
+omen analyze complexity ./pkg --functions-only --cyclomatic-threshold 15
 ```
 
 ### High-Risk Files Only
 
 ```bash
-omen defect ./src --high-risk-only
+omen analyze defect ./src --high-risk-only
 ```
 
 ### Top 5 TDG Hotspots
 
 ```bash
-omen tdg ./src --hotspots 5
-```
-
-### Watch Mode
-
-```bash
-omen watch ./src --analyzers complexity,satd
+omen analyze tdg ./src --hotspots 5
 ```
 
 ### Generate LLM Context
 
 ```bash
 omen context ./src --include-metrics --include-graph
-```
-
-## Architecture
-
-```
-cmd/omen/          CLI entry point (urfave/cli/v2)
-pkg/
-  parser/          Tree-sitter wrapper for multi-language AST parsing
-  scanner/         File discovery with configurable exclusion patterns
-  analyzer/        Analysis implementations
-  models/          Data structures for analysis results
-  config/          Configuration loading (TOML/YAML/JSON via koanf)
-  cache/           Result caching with Blake3 hashing
-  output/          Output formatting (text/JSON/markdown)
-  watch/           File watching for continuous analysis
 ```
 
 ## Contributing
