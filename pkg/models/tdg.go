@@ -4,10 +4,9 @@ package models
 type TDGSeverity string
 
 const (
-	TDGExcellent TDGSeverity = "excellent" // 90-100
-	TDGGood      TDGSeverity = "good"      // 70-89
-	TDGModerate  TDGSeverity = "moderate"  // 50-69
-	TDGHighRisk  TDGSeverity = "high_risk" // 0-49
+	TDGNormal   TDGSeverity = "normal"   // < 1.5
+	TDGWarning  TDGSeverity = "warning"  // 1.5 - 2.5
+	TDGCritical TDGSeverity = "critical" // > 2.5
 )
 
 // TDGComponents represents the individual factors in TDG calculation.
@@ -22,9 +21,10 @@ type TDGComponents struct {
 // TDGScore represents the Technical Debt Gradient for a file.
 type TDGScore struct {
 	FilePath   string        `json:"file_path"`
-	Value      float64       `json:"value"` // 0-100 scale (higher is better)
+	Value      float64       `json:"value"` // 0-5 scale (higher is more debt)
 	Severity   TDGSeverity   `json:"severity"`
 	Components TDGComponents `json:"components"`
+	Confidence float64       `json:"confidence"` // 0-1, reduced for missing data
 }
 
 // TDGAnalysis represents the full TDG analysis result.
@@ -37,7 +37,7 @@ type TDGAnalysis struct {
 type TDGSummary struct {
 	TotalFiles int            `json:"total_files"`
 	AvgScore   float64        `json:"avg_score"`
-	MaxScore   float64        `json:"min_score"` // Worst (lowest) score in the codebase
+	MaxScore   float64        `json:"max_score"` // Worst (highest debt) score
 	P50Score   float64        `json:"p50_score"`
 	P95Score   float64        `json:"p95_score"`
 	BySeverity map[string]int `json:"by_severity"`
@@ -57,44 +57,40 @@ type TDGWeights struct {
 func DefaultTDGWeights() TDGWeights {
 	return TDGWeights{
 		Complexity:  0.30,
-		Churn:       0.25,
-		Coupling:    0.20,
-		Duplication: 0.15,
+		Churn:       0.35,
+		Coupling:    0.15,
+		Duplication: 0.10,
 		DomainRisk:  0.10,
 	}
 }
 
-// CalculateTDGSeverity determines severity from score (0-100 scale, higher is better).
+// CalculateTDGSeverity determines severity from score (0-5 scale, higher is more debt).
 func CalculateTDGSeverity(score float64) TDGSeverity {
 	switch {
-	case score >= 90:
-		return TDGExcellent
-	case score >= 70:
-		return TDGGood
-	case score >= 50:
-		return TDGModerate
+	case score > 2.5:
+		return TDGCritical
+	case score >= 1.5:
+		return TDGWarning
 	default:
-		return TDGHighRisk
+		return TDGNormal
 	}
 }
 
 // CalculateTDG computes the TDG score from components.
-// Returns a score from 0-100 where higher is better (less debt).
-// Components are penalties (0-1 normalized), so we subtract from 100.
+// Returns a score from 0-5 where higher is more debt.
+// Components are normalized to 0-5 scale individually.
 func CalculateTDG(c TDGComponents, w TDGWeights) float64 {
-	penalty := c.Complexity*w.Complexity +
+	score := c.Complexity*w.Complexity +
 		c.Churn*w.Churn +
 		c.Coupling*w.Coupling +
 		c.Duplication*w.Duplication +
 		c.DomainRisk*w.DomainRisk
 
-	// Convert penalty (0-1) to score (0-100) where higher is better
-	score := (1.0 - penalty) * 100.0
 	if score < 0 {
 		score = 0
 	}
-	if score > 100 {
-		score = 100
+	if score > 5.0 {
+		score = 5.0
 	}
 	return score
 }
@@ -107,16 +103,14 @@ func NewTDGSummary() TDGSummary {
 	}
 }
 
-// SeverityColor returns an ANSI color code for the severity.
+// Color returns an ANSI color code for the severity.
 func (s TDGSeverity) Color() string {
 	switch s {
-	case TDGExcellent:
+	case TDGNormal:
 		return "\033[32m" // Green
-	case TDGGood:
+	case TDGWarning:
 		return "\033[33m" // Yellow
-	case TDGModerate:
-		return "\033[38;5;208m" // Orange
-	case TDGHighRisk:
+	case TDGCritical:
 		return "\033[31m" // Red
 	default:
 		return "\033[0m" // Reset

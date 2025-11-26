@@ -1,7 +1,9 @@
 package analyzer
 
 import (
+	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/panbanda/omen/pkg/models"
 )
@@ -68,29 +70,33 @@ func (a *TDGAnalyzer) AnalyzeProject(repoPath string, files []string) (*models.T
 
 	// Calculate TDG for each file
 	var totalScore float64
-	minScore := 100.0 // Track worst score (lowest)
+	maxScore := 0.0 // Track worst score (highest debt)
 
 	for _, path := range files {
 		components := models.TDGComponents{}
+		confidence := 1.0
 
-		// Complexity component (normalized to 0-1)
+		// Complexity component (normalized to 0-5 scale)
 		if fc, ok := complexityByFile[path]; ok {
-			// Use max complexity, normalized by threshold of 20
 			var maxCyc float64
 			for _, fn := range fc.Functions {
 				if float64(fn.Metrics.Cyclomatic) > maxCyc {
 					maxCyc = float64(fn.Metrics.Cyclomatic)
 				}
 			}
-			components.Complexity = normalize(maxCyc, 20)
+			// Normalize: 20+ cyclomatic = 5.0 (max debt)
+			components.Complexity = clamp(maxCyc/4.0, 0, 5)
 		}
 
-		// Churn component (normalized to 0-1)
+		// Churn component (normalized to 0-5 scale)
 		if cm, ok := churnByFile[path]; ok {
-			components.Churn = cm.ChurnScore
+			components.Churn = clamp(cm.ChurnScore*5.0, 0, 5)
+		} else {
+			confidence *= 0.8 // Reduce confidence when churn data missing
 		}
 
-		// Duplication component (normalized to 0-1)
+		// Duplication component (normalized to 0-5 scale)
+		hasDuplication := false
 		if dupLines, ok := dupByFile[path]; ok {
 			if fc, ok := complexityByFile[path]; ok {
 				totalLines := 0
@@ -98,16 +104,34 @@ func (a *TDGAnalyzer) AnalyzeProject(repoPath string, files []string) (*models.T
 					totalLines += fn.Metrics.Lines
 				}
 				if totalLines > 0 {
-					components.Duplication = normalize(dupLines/float64(totalLines), 0.3)
+					ratio := dupLines / float64(totalLines)
+					components.Duplication = clamp(ratio*5.0/0.3, 0, 5)
+					hasDuplication = true
 				}
 			}
 		}
+		if !hasDuplication {
+			confidence *= 0.95
+		}
 
-		// Coupling component (placeholder - would need graph analysis)
-		components.Coupling = 0
+		// Coupling component: import_count/15 + instability*2 + penalty
+		if fc, ok := complexityByFile[path]; ok {
+			importCount := countImports(fc)
+			importFactor := clamp(float64(importCount)/15.0, 0, 2)
+			// Instability approximated from function count ratio
+			instability := estimateInstability(fc)
+			instabilityFactor := instability * 2.0
+			complexityPenalty := 0.0
+			if importCount > 20 {
+				complexityPenalty = 1.0
+			}
+			components.Coupling = clamp(importFactor+instabilityFactor+complexityPenalty, 0, 5)
+		} else {
+			confidence *= 0.9
+		}
 
-		// Domain risk component (placeholder - would need domain classification)
-		components.DomainRisk = 0
+		// Domain risk based on path patterns
+		components.DomainRisk = calculateDomainRisk(path)
 
 		// Calculate TDG score
 		score := models.CalculateTDG(components, a.weights)
@@ -118,32 +142,34 @@ func (a *TDGAnalyzer) AnalyzeProject(repoPath string, files []string) (*models.T
 			Value:      score,
 			Severity:   severity,
 			Components: components,
+			Confidence: confidence,
 		}
 
 		analysis.Files = append(analysis.Files, tdgScore)
 		totalScore += score
-		if score < minScore {
-			minScore = score
+		if score > maxScore {
+			maxScore = score
 		}
 		analysis.Summary.BySeverity[string(severity)]++
 	}
 
-	// Sort by score (lowest first - worst files at top)
+	// Sort by score (highest first - worst debt at top)
 	sort.Slice(analysis.Files, func(i, j int) bool {
-		return analysis.Files[i].Value < analysis.Files[j].Value
+		return analysis.Files[i].Value > analysis.Files[j].Value
 	})
 
 	// Build summary
 	analysis.Summary.TotalFiles = len(analysis.Files)
-	analysis.Summary.MaxScore = minScore // Store worst (lowest) score
+	analysis.Summary.MaxScore = maxScore
 	if len(analysis.Files) > 0 {
 		analysis.Summary.AvgScore = totalScore / float64(len(analysis.Files))
 
-		// Calculate percentiles (files already sorted ascending by score)
+		// Calculate percentiles (need ascending sort for percentile calculation)
 		scores := make([]float64, len(analysis.Files))
 		for i, f := range analysis.Files {
 			scores[i] = f.Value
 		}
+		sort.Float64s(scores)
 		analysis.Summary.P50Score = percentileFloat64TDG(scores, 50)
 		analysis.Summary.P95Score = percentileFloat64TDG(scores, 95)
 	}
@@ -159,15 +185,66 @@ func (a *TDGAnalyzer) AnalyzeProject(repoPath string, files []string) (*models.T
 	return analysis, nil
 }
 
-// normalize maps a value to 0-1 range based on a threshold.
-func normalize(value, threshold float64) float64 {
-	if value <= 0 {
-		return 0
+// clamp restricts a value to a range.
+func clamp(value, min, max float64) float64 {
+	if value < min {
+		return min
 	}
-	if value >= threshold {
-		return 1
+	if value > max {
+		return max
 	}
-	return value / threshold
+	return value
+}
+
+// countImports estimates import count from file complexity data.
+func countImports(fc *models.FileComplexity) int {
+	// Approximate based on efferent coupling or function dependencies
+	// In a real implementation, this would parse imports directly
+	return len(fc.Functions) / 2
+}
+
+// estimateInstability approximates code instability (0-1).
+// Instability = Ce / (Ca + Ce) where Ce=efferent, Ca=afferent coupling.
+func estimateInstability(fc *models.FileComplexity) float64 {
+	if fc == nil || len(fc.Functions) == 0 {
+		return 0.5 // Default moderate instability
+	}
+	// Approximate: more functions = likely more dependencies = higher instability
+	funcCount := float64(len(fc.Functions))
+	return clamp(funcCount/20.0, 0, 1)
+}
+
+// calculateDomainRisk assigns risk based on file path patterns.
+func calculateDomainRisk(path string) float64 {
+	lower := strings.ToLower(filepath.ToSlash(path))
+	risk := 0.0
+
+	// High-risk domains: auth, crypto, security
+	if strings.Contains(lower, "auth") ||
+		strings.Contains(lower, "crypto") ||
+		strings.Contains(lower, "security") ||
+		strings.Contains(lower, "password") ||
+		strings.Contains(lower, "token") {
+		risk += 2.0
+	}
+
+	// Medium-risk domains: database, migration
+	if strings.Contains(lower, "database") ||
+		strings.Contains(lower, "migration") ||
+		strings.Contains(lower, "schema") ||
+		strings.Contains(lower, "sql") {
+		risk += 1.5
+	}
+
+	// Lower-risk domains: api, integration
+	if strings.Contains(lower, "api") ||
+		strings.Contains(lower, "integration") ||
+		strings.Contains(lower, "client") ||
+		strings.Contains(lower, "handler") {
+		risk += 1.0
+	}
+
+	return clamp(risk, 0, 5)
 }
 
 // percentileFloat64TDG calculates the p-th percentile of a sorted slice.

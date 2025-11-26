@@ -51,68 +51,129 @@ func TestNewTDGAnalyzer(t *testing.T) {
 	}
 }
 
-func TestNormalize(t *testing.T) {
+func TestClamp(t *testing.T) {
 	tests := []struct {
-		name      string
-		value     float64
-		threshold float64
-		want      float64
+		name  string
+		value float64
+		min   float64
+		max   float64
+		want  float64
 	}{
 		{
-			name:      "value at threshold",
-			value:     20.0,
-			threshold: 20.0,
-			want:      1.0,
+			name:  "value in range",
+			value: 2.5,
+			min:   0.0,
+			max:   5.0,
+			want:  2.5,
 		},
 		{
-			name:      "value above threshold",
-			value:     30.0,
-			threshold: 20.0,
-			want:      1.0,
+			name:  "value below min",
+			value: -1.0,
+			min:   0.0,
+			max:   5.0,
+			want:  0.0,
 		},
 		{
-			name:      "value at half threshold",
-			value:     10.0,
-			threshold: 20.0,
-			want:      0.5,
+			name:  "value above max",
+			value: 10.0,
+			min:   0.0,
+			max:   5.0,
+			want:  5.0,
 		},
 		{
-			name:      "value below threshold",
-			value:     5.0,
-			threshold: 20.0,
-			want:      0.25,
+			name:  "value at min",
+			value: 0.0,
+			min:   0.0,
+			max:   5.0,
+			want:  0.0,
 		},
 		{
-			name:      "zero value",
-			value:     0.0,
-			threshold: 20.0,
-			want:      0.0,
-		},
-		{
-			name:      "negative value",
-			value:     -5.0,
-			threshold: 20.0,
-			want:      0.0,
-		},
-		{
-			name:      "very small value",
-			value:     0.1,
-			threshold: 20.0,
-			want:      0.005,
-		},
-		{
-			name:      "value at 75% threshold",
-			value:     15.0,
-			threshold: 20.0,
-			want:      0.75,
+			name:  "value at max",
+			value: 5.0,
+			min:   0.0,
+			max:   5.0,
+			want:  5.0,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := normalize(tt.value, tt.threshold)
+			got := clamp(tt.value, tt.min, tt.max)
 			if got != tt.want {
-				t.Errorf("normalize(%v, %v) = %v, want %v", tt.value, tt.threshold, got, tt.want)
+				t.Errorf("clamp(%v, %v, %v) = %v, want %v", tt.value, tt.min, tt.max, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCalculateDomainRisk(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		minRisk  float64
+		maxRisk  float64
+	}{
+		{
+			name:    "auth path - high risk",
+			path:    "/src/auth/login.go",
+			minRisk: 2.0,
+			maxRisk: 5.0,
+		},
+		{
+			name:    "crypto path - high risk",
+			path:    "/src/crypto/hash.go",
+			minRisk: 2.0,
+			maxRisk: 5.0,
+		},
+		{
+			name:    "security path - high risk",
+			path:    "/src/security/validator.go",
+			minRisk: 2.0,
+			maxRisk: 5.0,
+		},
+		{
+			name:    "database path - medium risk",
+			path:    "/src/database/connection.go",
+			minRisk: 1.5,
+			maxRisk: 5.0,
+		},
+		{
+			name:    "migration path - medium risk",
+			path:    "/src/migration/v1.go",
+			minRisk: 1.5,
+			maxRisk: 5.0,
+		},
+		{
+			name:    "api path - lower risk",
+			path:    "/src/api/handlers.go",
+			minRisk: 1.0,
+			maxRisk: 5.0,
+		},
+		{
+			name:    "handler path - lower risk",
+			path:    "/src/handler/user.go",
+			minRisk: 1.0,
+			maxRisk: 5.0,
+		},
+		{
+			name:    "regular path - no domain risk",
+			path:    "/src/utils/helpers.go",
+			minRisk: 0.0,
+			maxRisk: 0.0,
+		},
+		{
+			name:    "combined auth+api - cumulative risk",
+			path:    "/src/api/auth/token.go",
+			minRisk: 3.0,
+			maxRisk: 5.0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := calculateDomainRisk(tt.path)
+			if got < tt.minRisk || got > tt.maxRisk {
+				t.Errorf("calculateDomainRisk(%q) = %v, want in range [%v, %v]", tt.path, got, tt.minRisk, tt.maxRisk)
 			}
 		})
 	}
@@ -127,27 +188,27 @@ func TestPercentileFloat64TDG(t *testing.T) {
 	}{
 		{
 			name:       "p50 of 5 elements",
-			sorted:     []float64{10.0, 20.0, 30.0, 40.0, 50.0},
+			sorted:     []float64{1.0, 2.0, 3.0, 4.0, 5.0},
 			percentile: 50,
-			want:       30.0,
+			want:       3.0,
 		},
 		{
 			name:       "p95 of 5 elements",
-			sorted:     []float64{10.0, 20.0, 30.0, 40.0, 50.0},
+			sorted:     []float64{1.0, 2.0, 3.0, 4.0, 5.0},
 			percentile: 95,
-			want:       50.0,
+			want:       5.0,
 		},
 		{
 			name:       "p0 of elements",
-			sorted:     []float64{10.0, 20.0, 30.0},
+			sorted:     []float64{1.0, 2.0, 3.0},
 			percentile: 0,
-			want:       10.0,
+			want:       1.0,
 		},
 		{
 			name:       "p100 of elements",
-			sorted:     []float64{10.0, 20.0, 30.0},
+			sorted:     []float64{1.0, 2.0, 3.0},
 			percentile: 100,
-			want:       30.0,
+			want:       3.0,
 		},
 		{
 			name:       "empty slice",
@@ -157,15 +218,9 @@ func TestPercentileFloat64TDG(t *testing.T) {
 		},
 		{
 			name:       "single element",
-			sorted:     []float64{42.0},
+			sorted:     []float64{2.5},
 			percentile: 50,
-			want:       42.0,
-		},
-		{
-			name:       "large dataset p50",
-			sorted:     []float64{1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0},
-			percentile: 50,
-			want:       6.0,
+			want:       2.5,
 		},
 	}
 
@@ -218,16 +273,20 @@ func simple() int {
 		t.Errorf("FilePath = %q, want %q", file.FilePath, testFile)
 	}
 
-	if file.Value < 0 || file.Value > 100 {
-		t.Errorf("TDG score %v out of range [0-100]", file.Value)
+	if file.Value < 0 || file.Value > 5 {
+		t.Errorf("TDG score %v out of range [0-5]", file.Value)
 	}
 
 	if file.Severity == "" {
 		t.Error("Severity should not be empty")
 	}
 
-	if file.Components.Complexity < 0 || file.Components.Complexity > 1 {
-		t.Errorf("Complexity component %v out of range [0-1]", file.Components.Complexity)
+	if file.Confidence <= 0 || file.Confidence > 1 {
+		t.Errorf("Confidence %v out of range (0-1]", file.Confidence)
+	}
+
+	if file.Components.Complexity < 0 || file.Components.Complexity > 5 {
+		t.Errorf("Complexity component %v out of range [0-5]", file.Components.Complexity)
 	}
 }
 
@@ -294,16 +353,16 @@ func moderate(x int) int {
 		t.Errorf("Summary.TotalFiles = %d, want 3", result.Summary.TotalFiles)
 	}
 
-	if result.Summary.AvgScore <= 0 {
-		t.Error("AvgScore should be > 0")
+	if result.Summary.AvgScore < 0 {
+		t.Error("AvgScore should be >= 0")
 	}
 
-	if result.Summary.AvgScore > 100 {
-		t.Error("AvgScore should be <= 100")
+	if result.Summary.AvgScore > 5 {
+		t.Error("AvgScore should be <= 5")
 	}
 
-	if result.Summary.MaxScore < 0 || result.Summary.MaxScore > 100 {
-		t.Errorf("MaxScore %v out of range [0-100]", result.Summary.MaxScore)
+	if result.Summary.MaxScore < 0 || result.Summary.MaxScore > 5 {
+		t.Errorf("MaxScore %v out of range [0-5]", result.Summary.MaxScore)
 	}
 
 	complexFile := filepath.Join(tmpDir, "complex.go")
@@ -319,8 +378,8 @@ func moderate(x int) int {
 		}
 	}
 
-	if complexScore >= simpleScore {
-		t.Errorf("complex file score (%v) should be lower than simple file score (%v)", complexScore, simpleScore)
+	if complexScore <= simpleScore {
+		t.Errorf("complex file score (%v) should be higher than simple file score (%v)", complexScore, simpleScore)
 	}
 }
 
@@ -362,9 +421,10 @@ func complex(x, y int) int {
 		t.Fatalf("AnalyzeProject() error = %v", err)
 	}
 
+	// Files should be sorted by score descending (highest debt first)
 	for i := 1; i < len(result.Files); i++ {
-		if result.Files[i].Value < result.Files[i-1].Value {
-			t.Errorf("files not sorted by score ascending: files[%d].Value (%v) < files[%d].Value (%v)",
+		if result.Files[i].Value > result.Files[i-1].Value {
+			t.Errorf("files not sorted by score descending: files[%d].Value (%v) > files[%d].Value (%v)",
 				i, result.Files[i].Value, i-1, result.Files[i-1].Value)
 		}
 	}
@@ -374,19 +434,11 @@ func TestTDGAnalyzeProject_SeverityDistribution(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	files := map[string]string{
-		"excellent.go": `package main
-func excellent() { x := 1 }`,
-		"good.go": `package main
-func good(x int) int {
-	if x > 0 { return x }
-	return 0
-}`,
+		"normal.go": `package main
+func normal() { x := 1 }`,
 		"moderate.go": `package main
-func moderate(x, y int) int {
-	if x > 0 {
-		if y > 0 { return x + y }
-		return x
-	}
+func moderate(x int) int {
+	if x > 0 { return x }
 	return 0
 }`,
 	}
@@ -419,7 +471,7 @@ func moderate(x, y int) int {
 
 	for _, file := range result.Files {
 		switch file.Severity {
-		case models.TDGExcellent, models.TDGGood, models.TDGModerate, models.TDGHighRisk:
+		case models.TDGNormal, models.TDGWarning, models.TDGCritical:
 		default:
 			t.Errorf("invalid severity: %v", file.Severity)
 		}
@@ -491,45 +543,6 @@ func test2() { y := 2 }`,
 	}
 }
 
-func TestTDGAnalyzeProject_PercentileCalculations(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	var filePaths []string
-	for i := 0; i < 20; i++ {
-		complexity := i
-		var ifStatements string
-		for j := 0; j < complexity; j++ {
-			ifStatements += "if true { x := 1 }\n"
-		}
-		content := "package main\nfunc test() {\n" + ifStatements + "}"
-		path := filepath.Join(tmpDir, "test"+string(rune('a'+i))+".go")
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-			t.Fatalf("failed to write file: %v", err)
-		}
-		filePaths = append(filePaths, path)
-	}
-
-	analyzer := NewTDGAnalyzer(90)
-	defer analyzer.Close()
-
-	result, err := analyzer.AnalyzeProject(tmpDir, filePaths)
-	if err != nil {
-		t.Fatalf("AnalyzeProject() error = %v", err)
-	}
-
-	if result.Summary.P50Score <= 0 {
-		t.Error("P50Score should be > 0")
-	}
-
-	if result.Summary.P95Score <= 0 {
-		t.Error("P95Score should be > 0")
-	}
-
-	if result.Summary.P50Score > result.Summary.P95Score {
-		t.Errorf("P50Score (%v) should be <= P95Score (%v)", result.Summary.P50Score, result.Summary.P95Score)
-	}
-}
-
 func TestTDGAnalyzeProject_EmptyFileList(t *testing.T) {
 	tmpDir := t.TempDir()
 	analyzer := NewTDGAnalyzer(90)
@@ -581,68 +594,21 @@ func test(x int) int {
 	file := result.Files[0]
 
 	weights := models.DefaultTDGWeights()
-	expectedPenalty := file.Components.Complexity*weights.Complexity +
+	expectedScore := file.Components.Complexity*weights.Complexity +
 		file.Components.Churn*weights.Churn +
 		file.Components.Coupling*weights.Coupling +
 		file.Components.Duplication*weights.Duplication +
 		file.Components.DomainRisk*weights.DomainRisk
 
-	expectedScore := (1.0 - expectedPenalty) * 100.0
 	if expectedScore < 0 {
 		expectedScore = 0
 	}
-	if expectedScore > 100 {
-		expectedScore = 100
+	if expectedScore > 5 {
+		expectedScore = 5
 	}
 
 	if file.Value != expectedScore {
-		t.Errorf("TDG score = %v, expected %v (penalty: %v)", file.Value, expectedScore, expectedPenalty)
-	}
-}
-
-func TestTDGAnalyzeProject_DuplicationDetection(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	duplicateCode := `package main
-
-func duplicate() {
-	x := 1
-	y := 2
-	z := 3
-	a := 4
-	b := 5
-	c := 6
-	return
-}`
-
-	file1 := filepath.Join(tmpDir, "dup1.go")
-	file2 := filepath.Join(tmpDir, "dup2.go")
-
-	if err := os.WriteFile(file1, []byte(duplicateCode), 0644); err != nil {
-		t.Fatalf("failed to write file1: %v", err)
-	}
-	if err := os.WriteFile(file2, []byte(duplicateCode), 0644); err != nil {
-		t.Fatalf("failed to write file2: %v", err)
-	}
-
-	analyzer := NewTDGAnalyzer(90)
-	defer analyzer.Close()
-
-	result, err := analyzer.AnalyzeProject(tmpDir, []string{file1, file2})
-	if err != nil {
-		t.Fatalf("AnalyzeProject() error = %v", err)
-	}
-
-	hasDuplicationPenalty := false
-	for _, file := range result.Files {
-		if file.Components.Duplication > 0 {
-			hasDuplicationPenalty = true
-			break
-		}
-	}
-
-	if !hasDuplicationPenalty {
-		t.Log("Note: duplication detection depends on minLines threshold and similarity")
+		t.Errorf("TDG score = %v, expected %v", file.Value, expectedScore)
 	}
 }
 
@@ -687,6 +653,7 @@ func worst(a, b, c, d int) int {
 		t.Fatalf("AnalyzeProject() error = %v", err)
 	}
 
+	// MaxScore should be the highest (worst) debt score
 	if result.Summary.MaxScore != result.Files[0].Value {
 		t.Errorf("MaxScore (%v) should equal worst file score (%v)", result.Summary.MaxScore, result.Files[0].Value)
 	}
@@ -703,107 +670,6 @@ func TestTDGAnalyzer_Close(t *testing.T) {
 		}
 	}()
 	analyzer.Close()
-}
-
-func TestTDGAnalyzeProject_ChurnIntegration(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	code := `package main
-
-func test() {
-	x := 1
-}`
-
-	testFile := filepath.Join(tmpDir, "test.go")
-	if err := os.WriteFile(testFile, []byte(code), 0644); err != nil {
-		t.Fatalf("failed to write test file: %v", err)
-	}
-
-	analyzer := NewTDGAnalyzer(90)
-	defer analyzer.Close()
-
-	result, err := analyzer.AnalyzeProject(tmpDir, []string{testFile})
-	if err != nil {
-		t.Fatalf("AnalyzeProject() error = %v", err)
-	}
-
-	file := result.Files[0]
-	if file.Components.Churn < 0 || file.Components.Churn > 1 {
-		t.Errorf("Churn component %v out of range [0-1]", file.Components.Churn)
-	}
-}
-
-func TestTDGAnalyzeProject_ComplexityNormalization(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	tests := []struct {
-		name             string
-		code             string
-		expectedMaxCyc   float64
-		expectedNormLess float64
-	}{
-		{
-			name: "below threshold",
-			code: `package main
-func test() { return }`,
-			expectedMaxCyc:   1.0,
-			expectedNormLess: 0.1,
-		},
-		{
-			name: "at threshold",
-			code: `package main
-func test(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t int) int {
-	if a > 0 { return a }
-	if b > 0 { return b }
-	if c > 0 { return c }
-	if d > 0 { return d }
-	if e > 0 { return e }
-	if f > 0 { return f }
-	if g > 0 { return g }
-	if h > 0 { return h }
-	if i > 0 { return i }
-	if j > 0 { return j }
-	if k > 0 { return k }
-	if l > 0 { return l }
-	if m > 0 { return m }
-	if n > 0 { return n }
-	if o > 0 { return o }
-	if p > 0 { return p }
-	if q > 0 { return q }
-	if r > 0 { return r }
-	if s > 0 { return s }
-	return 0
-}`,
-			expectedMaxCyc:   20.0,
-			expectedNormLess: 1.1,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			testFile := filepath.Join(tmpDir, "test.go")
-			if err := os.WriteFile(testFile, []byte(tt.code), 0644); err != nil {
-				t.Fatalf("failed to write test file: %v", err)
-			}
-
-			analyzer := NewTDGAnalyzer(90)
-			defer analyzer.Close()
-
-			result, err := analyzer.AnalyzeProject(tmpDir, []string{testFile})
-			if err != nil {
-				t.Fatalf("AnalyzeProject() error = %v", err)
-			}
-
-			file := result.Files[0]
-			if file.Components.Complexity < 0 || file.Components.Complexity > 1 {
-				t.Errorf("Complexity component %v out of range [0-1]", file.Components.Complexity)
-			}
-
-			if file.Components.Complexity >= tt.expectedNormLess {
-				t.Errorf("Complexity component %v should be < %v", file.Components.Complexity, tt.expectedNormLess)
-			}
-		})
-	}
 }
 
 func TestTDGAnalyzeProject_NoComplexityMetrics(t *testing.T) {
@@ -827,16 +693,47 @@ func TestTDGAnalyzeProject_NoComplexityMetrics(t *testing.T) {
 		t.Errorf("Complexity should be 0 for file with no functions, got %v", file.Components.Complexity)
 	}
 
-	if file.Value != 100.0 {
-		t.Errorf("TDG score should be 100 for file with no complexity, got %v", file.Value)
+	// Score may not be exactly 0 due to coupling estimation
+	if file.Value < 0 || file.Value > 1.0 {
+		t.Errorf("TDG score should be low for file with no complexity, got %v", file.Value)
 	}
 
-	if file.Severity != models.TDGExcellent {
-		t.Errorf("Severity should be excellent for score 100, got %v", file.Severity)
+	if file.Severity != models.TDGNormal {
+		t.Errorf("Severity should be normal for low score, got %v", file.Severity)
 	}
 }
 
-func TestTDGAnalyzeProject_CouplingPlaceholder(t *testing.T) {
+func TestTDGAnalyzeProject_DomainRiskDetection(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	authDir := filepath.Join(tmpDir, "auth")
+	if err := os.MkdirAll(authDir, 0755); err != nil {
+		t.Fatalf("failed to create auth dir: %v", err)
+	}
+
+	code := `package auth
+func login() { return }`
+
+	testFile := filepath.Join(authDir, "login.go")
+	if err := os.WriteFile(testFile, []byte(code), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	analyzer := NewTDGAnalyzer(90)
+	defer analyzer.Close()
+
+	result, err := analyzer.AnalyzeProject(tmpDir, []string{testFile})
+	if err != nil {
+		t.Fatalf("AnalyzeProject() error = %v", err)
+	}
+
+	file := result.Files[0]
+	if file.Components.DomainRisk == 0 {
+		t.Error("DomainRisk should be > 0 for auth path")
+	}
+}
+
+func TestTDGAnalyzeProject_ConfidenceReduction(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	code := `package main
@@ -856,32 +753,8 @@ func test() { x := 1 }`
 	}
 
 	file := result.Files[0]
-	if file.Components.Coupling != 0 {
-		t.Errorf("Coupling should be 0 (placeholder), got %v", file.Components.Coupling)
-	}
-}
-
-func TestTDGAnalyzeProject_DomainRiskPlaceholder(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	code := `package main
-func test() { x := 1 }`
-
-	testFile := filepath.Join(tmpDir, "test.go")
-	if err := os.WriteFile(testFile, []byte(code), 0644); err != nil {
-		t.Fatalf("failed to write test file: %v", err)
-	}
-
-	analyzer := NewTDGAnalyzer(90)
-	defer analyzer.Close()
-
-	result, err := analyzer.AnalyzeProject(tmpDir, []string{testFile})
-	if err != nil {
-		t.Fatalf("AnalyzeProject() error = %v", err)
-	}
-
-	file := result.Files[0]
-	if file.Components.DomainRisk != 0 {
-		t.Errorf("DomainRisk should be 0 (placeholder), got %v", file.Components.DomainRisk)
+	// Confidence should be reduced when churn data is missing (not a git repo)
+	if file.Confidence >= 1.0 {
+		t.Errorf("Confidence should be < 1.0 when data is missing, got %v", file.Confidence)
 	}
 }

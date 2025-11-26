@@ -11,14 +11,14 @@ func TestDefaultTDGWeights(t *testing.T) {
 	if weights.Complexity != 0.30 {
 		t.Errorf("Complexity = %v, expected 0.30", weights.Complexity)
 	}
-	if weights.Churn != 0.25 {
-		t.Errorf("Churn = %v, expected 0.25", weights.Churn)
+	if weights.Churn != 0.35 {
+		t.Errorf("Churn = %v, expected 0.35", weights.Churn)
 	}
-	if weights.Coupling != 0.20 {
-		t.Errorf("Coupling = %v, expected 0.20", weights.Coupling)
+	if weights.Coupling != 0.15 {
+		t.Errorf("Coupling = %v, expected 0.15", weights.Coupling)
 	}
-	if weights.Duplication != 0.15 {
-		t.Errorf("Duplication = %v, expected 0.15", weights.Duplication)
+	if weights.Duplication != 0.10 {
+		t.Errorf("Duplication = %v, expected 0.10", weights.Duplication)
 	}
 	if weights.DomainRisk != 0.10 {
 		t.Errorf("DomainRisk = %v, expected 0.10", weights.DomainRisk)
@@ -37,54 +37,44 @@ func TestCalculateTDGSeverity(t *testing.T) {
 		expected TDGSeverity
 	}{
 		{
-			name:     "excellent - 100",
-			score:    100.0,
-			expected: TDGExcellent,
+			name:     "critical - 4.0",
+			score:    4.0,
+			expected: TDGCritical,
 		},
 		{
-			name:     "excellent - 95",
-			score:    95.0,
-			expected: TDGExcellent,
+			name:     "critical - just above 2.5",
+			score:    2.51,
+			expected: TDGCritical,
 		},
 		{
-			name:     "excellent boundary",
-			score:    90.0,
-			expected: TDGExcellent,
+			name:     "warning - 2.0",
+			score:    2.0,
+			expected: TDGWarning,
 		},
 		{
-			name:     "good - 85",
-			score:    85.0,
-			expected: TDGGood,
+			name:     "warning - at 1.5",
+			score:    1.5,
+			expected: TDGWarning,
 		},
 		{
-			name:     "good boundary",
-			score:    70.0,
-			expected: TDGGood,
+			name:     "normal - 1.0",
+			score:    1.0,
+			expected: TDGNormal,
 		},
 		{
-			name:     "moderate - 60",
-			score:    60.0,
-			expected: TDGModerate,
-		},
-		{
-			name:     "moderate boundary",
-			score:    50.0,
-			expected: TDGModerate,
-		},
-		{
-			name:     "high risk - 45",
-			score:    45.0,
-			expected: TDGHighRisk,
-		},
-		{
-			name:     "high risk - 0",
+			name:     "normal - 0",
 			score:    0.0,
-			expected: TDGHighRisk,
+			expected: TDGNormal,
 		},
 		{
-			name:     "just below excellent",
-			score:    89.9,
-			expected: TDGGood,
+			name:     "normal - just below 1.5",
+			score:    1.49,
+			expected: TDGNormal,
+		},
+		{
+			name:     "warning - at boundary",
+			score:    2.5,
+			expected: TDGWarning,
 		},
 	}
 
@@ -108,7 +98,7 @@ func TestCalculateTDG(t *testing.T) {
 		tolerance  float64
 	}{
 		{
-			name: "no debt - perfect score",
+			name: "no debt - zero score",
 			components: TDGComponents{
 				Complexity:  0.0,
 				Churn:       0.0,
@@ -116,55 +106,55 @@ func TestCalculateTDG(t *testing.T) {
 				Duplication: 0.0,
 				DomainRisk:  0.0,
 			},
-			expected:  100.0,
+			expected:  0.0,
 			tolerance: 0.01,
 		},
 		{
 			name: "maximum debt",
 			components: TDGComponents{
-				Complexity:  1.0,
-				Churn:       1.0,
-				Coupling:    1.0,
-				Duplication: 1.0,
-				DomainRisk:  1.0,
+				Complexity:  5.0,
+				Churn:       5.0,
+				Coupling:    5.0,
+				Duplication: 5.0,
+				DomainRisk:  5.0,
 			},
-			expected:  0.0,
+			expected:  5.0,
 			tolerance: 0.01,
 		},
 		{
 			name: "moderate debt",
 			components: TDGComponents{
-				Complexity:  0.5,
-				Churn:       0.5,
-				Coupling:    0.5,
-				Duplication: 0.5,
-				DomainRisk:  0.5,
+				Complexity:  2.5,
+				Churn:       2.5,
+				Coupling:    2.5,
+				Duplication: 2.5,
+				DomainRisk:  2.5,
 			},
-			expected:  50.0,
+			expected:  2.5,
 			tolerance: 0.01,
 		},
 		{
 			name: "high complexity only",
 			components: TDGComponents{
-				Complexity:  1.0,
+				Complexity:  5.0,
 				Churn:       0.0,
 				Coupling:    0.0,
 				Duplication: 0.0,
 				DomainRisk:  0.0,
 			},
-			expected:  70.0,
+			expected:  1.5, // 5.0 * 0.30
 			tolerance: 0.01,
 		},
 		{
-			name: "mixed penalties",
+			name: "mixed components",
 			components: TDGComponents{
-				Complexity:  0.8,
-				Churn:       0.3,
-				Coupling:    0.2,
-				Duplication: 0.5,
-				DomainRisk:  0.1,
+				Complexity:  4.0,
+				Churn:       1.5,
+				Coupling:    1.0,
+				Duplication: 2.5,
+				DomainRisk:  0.5,
 			},
-			expected:  (1.0 - (0.8*0.30 + 0.3*0.25 + 0.2*0.20 + 0.5*0.15 + 0.1*0.10)) * 100.0,
+			expected:  4.0*0.30 + 1.5*0.35 + 1.0*0.15 + 2.5*0.10 + 0.5*0.10,
 			tolerance: 0.01,
 		},
 	}
@@ -177,8 +167,8 @@ func TestCalculateTDG(t *testing.T) {
 				t.Errorf("CalculateTDG() = %v, expected %v (±%v)", got, tt.expected, tt.tolerance)
 			}
 
-			if got < 0.0 || got > 100.0 {
-				t.Errorf("TDG score %v is outside valid range [0.0, 100.0]", got)
+			if got < 0.0 || got > 5.0 {
+				t.Errorf("TDG score %v is outside valid range [0.0, 5.0]", got)
 			}
 		})
 	}
@@ -194,7 +184,7 @@ func TestCalculateTDG_CustomWeights(t *testing.T) {
 	}
 
 	components := TDGComponents{
-		Complexity:  1.0,
+		Complexity:  5.0,
 		Churn:       0.0,
 		Coupling:    0.0,
 		Duplication: 0.0,
@@ -202,7 +192,7 @@ func TestCalculateTDG_CustomWeights(t *testing.T) {
 	}
 
 	score := CalculateTDG(components, customWeights)
-	expected := 40.0
+	expected := 3.0 // 5.0 * 0.60
 
 	if math.Abs(score-expected) > 0.01 {
 		t.Errorf("With custom weights, score = %v, expected %v", score, expected)
@@ -216,23 +206,18 @@ func TestTDGSeverity_Color(t *testing.T) {
 		expected string
 	}{
 		{
-			name:     "excellent",
-			severity: TDGExcellent,
+			name:     "normal",
+			severity: TDGNormal,
 			expected: "\033[32m",
 		},
 		{
-			name:     "good",
-			severity: TDGGood,
+			name:     "warning",
+			severity: TDGWarning,
 			expected: "\033[33m",
 		},
 		{
-			name:     "moderate",
-			severity: TDGModerate,
-			expected: "\033[38;5;208m",
-		},
-		{
-			name:     "high risk",
-			severity: TDGHighRisk,
+			name:     "critical",
+			severity: TDGCritical,
 			expected: "\033[31m",
 		},
 		{
@@ -271,24 +256,21 @@ func TestNewTDGSummary(t *testing.T) {
 }
 
 func TestTDGSeverity_Constants(t *testing.T) {
-	if TDGExcellent != "excellent" {
-		t.Errorf("TDGExcellent = %s, expected excellent", TDGExcellent)
+	if TDGNormal != "normal" {
+		t.Errorf("TDGNormal = %s, expected normal", TDGNormal)
 	}
-	if TDGGood != "good" {
-		t.Errorf("TDGGood = %s, expected good", TDGGood)
+	if TDGWarning != "warning" {
+		t.Errorf("TDGWarning = %s, expected warning", TDGWarning)
 	}
-	if TDGModerate != "moderate" {
-		t.Errorf("TDGModerate = %s, expected moderate", TDGModerate)
-	}
-	if TDGHighRisk != "high_risk" {
-		t.Errorf("TDGHighRisk = %s, expected high_risk", TDGHighRisk)
+	if TDGCritical != "critical" {
+		t.Errorf("TDGCritical = %s, expected critical", TDGCritical)
 	}
 }
 
 func TestCalculateTDG_BoundaryConditions(t *testing.T) {
 	weights := DefaultTDGWeights()
 
-	t.Run("negative penalties clamped to 0", func(t *testing.T) {
+	t.Run("negative components clamped to 0", func(t *testing.T) {
 		components := TDGComponents{
 			Complexity:  -0.5,
 			Churn:       0.0,
@@ -298,23 +280,23 @@ func TestCalculateTDG_BoundaryConditions(t *testing.T) {
 		}
 
 		score := CalculateTDG(components, weights)
-		if score < 0 || score > 100 {
+		if score < 0 || score > 5 {
 			t.Errorf("Score %v outside valid range", score)
 		}
 	})
 
-	t.Run("penalties exceeding 1.0", func(t *testing.T) {
+	t.Run("components exceeding 5.0", func(t *testing.T) {
 		components := TDGComponents{
-			Complexity:  2.0,
-			Churn:       2.0,
-			Coupling:    2.0,
-			Duplication: 2.0,
-			DomainRisk:  2.0,
+			Complexity:  10.0,
+			Churn:       10.0,
+			Coupling:    10.0,
+			Duplication: 10.0,
+			DomainRisk:  10.0,
 		}
 
 		score := CalculateTDG(components, weights)
-		if score != 0.0 {
-			t.Errorf("With excessive penalties, score = %v, expected 0.0", score)
+		if score != 5.0 {
+			t.Errorf("With excessive components, score = %v, expected 5.0", score)
 		}
 	})
 }
@@ -330,27 +312,27 @@ func TestCalculateTDG_ScoreIntegration(t *testing.T) {
 	}{
 		{
 			components: TDGComponents{0.0, 0.0, 0.0, 0.0, 0.0},
-			minScore:   90.0,
-			maxScore:   100.0,
-			severity:   TDGExcellent,
-		},
-		{
-			components: TDGComponents{0.3, 0.3, 0.3, 0.3, 0.3},
-			minScore:   70.0,
-			maxScore:   71.0,
-			severity:   TDGGood,
-		},
-		{
-			components: TDGComponents{0.5, 0.5, 0.5, 0.5, 0.5},
-			minScore:   50.0,
-			maxScore:   50.0,
-			severity:   TDGModerate,
-		},
-		{
-			components: TDGComponents{0.8, 0.8, 0.8, 0.8, 0.8},
 			minScore:   0.0,
-			maxScore:   21.0,
-			severity:   TDGHighRisk,
+			maxScore:   0.0,
+			severity:   TDGNormal,
+		},
+		{
+			components: TDGComponents{1.5, 1.5, 1.5, 1.5, 1.5},
+			minScore:   1.4,
+			maxScore:   1.6,
+			severity:   TDGNormal,
+		},
+		{
+			components: TDGComponents{2.5, 2.5, 2.5, 2.5, 2.5},
+			minScore:   2.4,
+			maxScore:   2.6,
+			severity:   TDGWarning,
+		},
+		{
+			components: TDGComponents{4.0, 4.0, 4.0, 4.0, 4.0},
+			minScore:   3.9,
+			maxScore:   4.1,
+			severity:   TDGCritical,
 		},
 	}
 

@@ -895,16 +895,13 @@ func runTDGCmd(c *cli.Context) error {
 		scoreStr := fmt.Sprintf("%.2f", ts.Value)
 		sevStr := string(ts.Severity)
 		switch ts.Severity {
-		case models.TDGHighRisk:
+		case models.TDGCritical:
 			scoreStr = color.RedString(scoreStr)
 			sevStr = color.RedString(sevStr)
-		case models.TDGModerate:
+		case models.TDGWarning:
 			scoreStr = color.YellowString(scoreStr)
 			sevStr = color.YellowString(sevStr)
-		case models.TDGGood:
-			scoreStr = color.CyanString(scoreStr)
-			sevStr = color.CyanString(sevStr)
-		case models.TDGExcellent:
+		case models.TDGNormal:
 			scoreStr = color.GreenString(scoreStr)
 			sevStr = color.GreenString(sevStr)
 		}
