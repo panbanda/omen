@@ -11,6 +11,8 @@
 
 A multi-language code analysis CLI built in Go. Omen uses tree-sitter for parsing source code across 13 languages, providing insights into complexity, technical debt, code duplication, and defect prediction.
 
+**Why "Omen"?** An omen is a sign of things to come - good or bad. Your codebase is full of omens: low complexity and clean architecture signal smooth sailing ahead, while high churn, technical debt, and code clones warn of trouble brewing. Omen surfaces these signals so you can act before they become prophecy.
+
 ## Features
 
 - **Cyclomatic & Cognitive Complexity** - Measure code complexity at function and file levels
