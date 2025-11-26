@@ -1125,3 +1125,323 @@ func TestAnalyzeProject_CloneTypeDistribution(t *testing.T) {
 		t.Errorf("clone type counts (%d) don't match total clones (%d)", totalByType, result.Summary.TotalClones)
 	}
 }
+
+func TestIsKeyword(t *testing.T) {
+	tests := []struct {
+		token    string
+		expected bool
+	}{
+		{"func", true},
+		{"return", true},
+		{"if", true},
+		{"for", true},
+		{"fn", true},
+		{"let", true},
+		{"def", true},
+		{"class", true},
+		{"function", true},
+		{"myVariable", false},
+		{"calculate", false},
+		{"VAR_1", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.token, func(t *testing.T) {
+			got := isKeyword(tt.token)
+			if got != tt.expected {
+				t.Errorf("isKeyword(%q) = %v, want %v", tt.token, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestIsLiteral(t *testing.T) {
+	tests := []struct {
+		token    string
+		expected bool
+	}{
+		{"42", true},
+		{"3.14", true},
+		{"-5", true},
+		{`"hello"`, true},
+		{"'a'", true},
+		{"`template`", true},
+		{"myVar", false},
+		{"func", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.token, func(t *testing.T) {
+			got := isLiteral(tt.token)
+			if got != tt.expected {
+				t.Errorf("isLiteral(%q) = %v, want %v", tt.token, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestIsOperatorOrDelimiter(t *testing.T) {
+	tests := []struct {
+		token    string
+		expected bool
+	}{
+		{"+", true},
+		{"-", true},
+		{"=", true},
+		{"==", true},
+		{"(", true},
+		{")", true},
+		{"{", true},
+		{"}", true},
+		{",", true},
+		{";", true},
+		{"myVar", false},
+		{"func", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.token, func(t *testing.T) {
+			got := isOperatorOrDelimiter(tt.token)
+			if got != tt.expected {
+				t.Errorf("isOperatorOrDelimiter(%q) = %v, want %v", tt.token, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCanonicalizeIdentifier(t *testing.T) {
+	analyzer := NewDuplicateAnalyzer(6, 0.8)
+	defer analyzer.Close()
+
+	id1 := analyzer.canonicalizeIdentifier("myVariable")
+	id2 := analyzer.canonicalizeIdentifier("anotherVar")
+	id3 := analyzer.canonicalizeIdentifier("myVariable")
+
+	if id1 == id2 {
+		t.Error("different identifiers should have different canonical names")
+	}
+
+	if id1 != id3 {
+		t.Error("same identifier should have same canonical name")
+	}
+
+	if id1 != "VAR_1" {
+		t.Errorf("first identifier should be VAR_1, got %s", id1)
+	}
+
+	if id2 != "VAR_2" {
+		t.Errorf("second identifier should be VAR_2, got %s", id2)
+	}
+}
+
+func TestNormalizeToken(t *testing.T) {
+	analyzer := NewDuplicateAnalyzer(6, 0.8)
+	defer analyzer.Close()
+
+	tests := []struct {
+		name     string
+		token    string
+		expected string
+	}{
+		{"keyword stays same", "func", "func"},
+		{"operator stays same", "+", "+"},
+		{"delimiter stays same", "(", "("},
+		{"number becomes LITERAL", "42", "LITERAL"},
+		{"string becomes LITERAL", `"hello"`, "LITERAL"},
+		{"empty stays empty", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := analyzer.normalizeToken(tt.token)
+			if got != tt.expected {
+				t.Errorf("normalizeToken(%q) = %q, want %q", tt.token, got, tt.expected)
+			}
+		})
+	}
+
+	identifier := analyzer.normalizeToken("myVariable")
+	if identifier == "myVariable" {
+		t.Error("identifier should be normalized to VAR_N format")
+	}
+	if identifier[:4] != "VAR_" {
+		t.Errorf("identifier should start with VAR_, got %q", identifier)
+	}
+}
+
+func TestCloneGrouping(t *testing.T) {
+	tmpDir := t.TempDir()
+	analyzer := NewDuplicateAnalyzer(6, 0.8)
+	defer analyzer.Close()
+
+	duplicateCode := `func process() {
+    step1 := initialize()
+    step2 := validate(step1)
+    step3 := transform(step2)
+    step4 := persist(step3)
+    step5 := notify(step4)
+    return step5
+}
+`
+
+	file1 := filepath.Join(tmpDir, "file1.go")
+	file2 := filepath.Join(tmpDir, "file2.go")
+	file3 := filepath.Join(tmpDir, "file3.go")
+
+	for _, f := range []string{file1, file2, file3} {
+		if err := os.WriteFile(f, []byte(duplicateCode), 0644); err != nil {
+			t.Fatalf("failed to write file: %v", err)
+		}
+	}
+
+	result, err := analyzer.AnalyzeProject([]string{file1, file2, file3})
+	if err != nil {
+		t.Fatalf("AnalyzeProject() error = %v", err)
+	}
+
+	if result.Summary.TotalGroups == 0 && len(result.Clones) > 0 {
+		t.Error("expected clone groups to be created when clones are found")
+	}
+
+	for _, group := range result.Groups {
+		if len(group.Instances) < 2 {
+			t.Errorf("group %d has fewer than 2 instances", group.ID)
+		}
+
+		if group.AverageSimilarity <= 0 || group.AverageSimilarity > 1 {
+			t.Errorf("group %d has invalid average similarity: %f", group.ID, group.AverageSimilarity)
+		}
+	}
+}
+
+func TestDuplicationRatio(t *testing.T) {
+	tmpDir := t.TempDir()
+	analyzer := NewDuplicateAnalyzer(6, 0.8)
+	defer analyzer.Close()
+
+	duplicateCode := `func calculate(a, b int) int {
+    x := a + b
+    y := x * 2
+    z := y - 5
+    result := z / 3
+    return result
+}
+`
+
+	file1 := filepath.Join(tmpDir, "file1.go")
+	file2 := filepath.Join(tmpDir, "file2.go")
+
+	if err := os.WriteFile(file1, []byte(duplicateCode), 0644); err != nil {
+		t.Fatalf("failed to write file1: %v", err)
+	}
+	if err := os.WriteFile(file2, []byte(duplicateCode), 0644); err != nil {
+		t.Fatalf("failed to write file2: %v", err)
+	}
+
+	result, err := analyzer.AnalyzeProject([]string{file1, file2})
+	if err != nil {
+		t.Fatalf("AnalyzeProject() error = %v", err)
+	}
+
+	if result.Summary.TotalLines == 0 {
+		t.Error("TotalLines should be calculated")
+	}
+
+	if len(result.Clones) > 0 {
+		if result.Summary.DuplicationRatio <= 0 {
+			t.Error("DuplicationRatio should be > 0 when clones exist")
+		}
+		if result.Summary.DuplicationRatio > 1 {
+			t.Errorf("DuplicationRatio should be <= 1, got %f", result.Summary.DuplicationRatio)
+		}
+	}
+}
+
+func TestDuplicationHotspots(t *testing.T) {
+	tmpDir := t.TempDir()
+	analyzer := NewDuplicateAnalyzer(6, 0.8)
+	defer analyzer.Close()
+
+	duplicateCode := `func handler() {
+    data := fetch()
+    processed := transform(data)
+    validated := check(processed)
+    saved := store(validated)
+    logged := record(saved)
+    return logged
+}
+`
+
+	files := make([]string, 5)
+	for i := range files {
+		files[i] = filepath.Join(tmpDir, "file"+itoa(i+1)+".go")
+		if err := os.WriteFile(files[i], []byte(duplicateCode), 0644); err != nil {
+			t.Fatalf("failed to write file: %v", err)
+		}
+	}
+
+	result, err := analyzer.AnalyzeProject(files)
+	if err != nil {
+		t.Fatalf("AnalyzeProject() error = %v", err)
+	}
+
+	if len(result.Clones) > 0 && len(result.Summary.Hotspots) == 0 {
+		t.Error("expected hotspots to be computed when clones exist")
+	}
+
+	for _, hotspot := range result.Summary.Hotspots {
+		if hotspot.File == "" {
+			t.Error("hotspot file should not be empty")
+		}
+		if hotspot.Severity < 0 {
+			t.Errorf("hotspot severity should be >= 0, got %f", hotspot.Severity)
+		}
+	}
+
+	for i := 1; i < len(result.Summary.Hotspots); i++ {
+		if result.Summary.Hotspots[i].Severity > result.Summary.Hotspots[i-1].Severity {
+			t.Error("hotspots should be sorted by severity descending")
+		}
+	}
+}
+
+func TestCloneGroupID(t *testing.T) {
+	tmpDir := t.TempDir()
+	analyzer := NewDuplicateAnalyzer(6, 0.8)
+	defer analyzer.Close()
+
+	duplicateCode := `func calculate(a, b int) int {
+    x := a + b
+    y := x * 2
+    z := y - 5
+    result := z / 3
+    return result
+}
+`
+
+	file1 := filepath.Join(tmpDir, "file1.go")
+	file2 := filepath.Join(tmpDir, "file2.go")
+
+	if err := os.WriteFile(file1, []byte(duplicateCode), 0644); err != nil {
+		t.Fatalf("failed to write file1: %v", err)
+	}
+	if err := os.WriteFile(file2, []byte(duplicateCode), 0644); err != nil {
+		t.Fatalf("failed to write file2: %v", err)
+	}
+
+	result, err := analyzer.AnalyzeProject([]string{file1, file2})
+	if err != nil {
+		t.Fatalf("AnalyzeProject() error = %v", err)
+	}
+
+	if len(result.Clones) > 0 {
+		for _, clone := range result.Clones {
+			if clone.GroupID == 0 {
+				t.Error("clone should have a GroupID assigned")
+			}
+		}
+	}
+}
