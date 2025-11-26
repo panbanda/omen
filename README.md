@@ -1,7 +1,7 @@
 # Omen
 
 <p align="center">
-  <img src="assets/omen-logo.png" alt="Omen - Code Analysis CLI" width="600">
+  <img src="assets/omen-logo.png" alt="Omen - Code Analysis CLI" width="100%">
 </p>
 
 [![Go Version](https://img.shields.io/github/go-mod/go-version/panbanda/omen)](https://go.dev/)
