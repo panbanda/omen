@@ -90,3 +90,16 @@ release:
     owner: panbanda
     name: omen
   mode: append
+
+brews:
+  - name: omen
+    repository:
+      owner: panbanda
+      name: homebrew-omen
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/panbanda/omen"
+    description: "Multi-language code analysis CLI"
+    license: "MIT"
+    test: |
+      system "#{bin}/omen", "--version"
