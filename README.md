@@ -4,6 +4,7 @@
 [![GoDoc](https://pkg.go.dev/badge/github.com/panbanda/omen)](https://pkg.go.dev/github.com/panbanda/omen)
 [![Go Report Card](https://goreportcard.com/badge/github.com/panbanda/omen)](https://goreportcard.com/report/github.com/panbanda/omen)
 ![Go Version](https://img.shields.io/badge/go%20version-%3E=1.23-61CFDD.svg?style=flat-square)
+[![Snyk Security](https://snyk.io/test/github/panbanda/omen-cli/badge.svg)](https://snyk.io/test/github/panbanda/omen-cli)
 
 A multi-language code analysis CLI built in Go. Omen uses tree-sitter for parsing source code across 13 languages, providing insights into complexity, technical debt, code duplication, and defect prediction.
 
