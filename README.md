@@ -1,5 +1,9 @@
 # Omen
 
+<p align="center">
+  <img src="assets/omen-logo.png" alt="Omen - Code Analysis CLI" width="600">
+</p>
+
 [![Go Version](https://img.shields.io/github/go-mod/go-version/panbanda/omen)](https://go.dev/)
 [![License](https://img.shields.io/github/license/panbanda/omen)](https://github.com/panbanda/omen/blob/main/LICENSE)
 [![CI](https://github.com/panbanda/omen/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/panbanda/omen/actions/workflows/ci.yml)
