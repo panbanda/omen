@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.2](https://github.com/panbanda/omen/compare/v1.0.1...v1.0.2) (2025-11-26)
+
+
+### Bug Fixes
+
+* **ci:** use builds.skip with Runtime.Goos template ([44538de](https://github.com/panbanda/omen/commit/44538de5e712efcf493ad43f2367b6c44e5f0c0a))
+* **ci:** use Runtime.Goos for build filtering ([8c52192](https://github.com/panbanda/omen/commit/8c521924beef9f868b2d0c77d18b6b18260df8a6))
+
 ## [1.0.1](https://github.com/panbanda/omen/compare/v1.0.0...v1.0.1) (2025-11-26)
 
 
