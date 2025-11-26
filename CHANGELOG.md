@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.5](https://github.com/panbanda/omen/compare/v1.0.4...v1.0.5) (2025-11-26)
+
+
+### Bug Fixes
+
+* **ci:** use per-target checksum filenames ([35428d0](https://github.com/panbanda/omen/commit/35428d0eb2f214534983db2275062edb5b2ed08a))
+
 ## [1.0.4](https://github.com/panbanda/omen/compare/v1.0.3...v1.0.4) (2025-11-26)
 
 
