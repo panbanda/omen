@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.4](https://github.com/panbanda/omen/compare/v1.0.3...v1.0.4) (2025-11-26)
+
+
+### Bug Fixes
+
+* **ci:** use per-target builds with skip conditions ([29c617f](https://github.com/panbanda/omen/commit/29c617f40fc5a78b03980bde621f30c1d5fe3500))
+
 ## [1.0.3](https://github.com/panbanda/omen/compare/v1.0.2...v1.0.3) (2025-11-26)
 
 
