@@ -28,13 +28,13 @@ func TestNewSATDSummary(t *testing.T) {
 
 func TestSATDSummary_AddItem(t *testing.T) {
 	tests := []struct {
-		name                 string
-		items                []TechnicalDebt
-		expectedTotal        int
-		expectedSeverityCrit int
-		expectedSeverityHigh int
+		name                   string
+		items                  []TechnicalDebt
+		expectedTotal          int
+		expectedSeverityCrit   int
+		expectedSeverityHigh   int
 		expectedCategoryDefect int
-		expectedFileCount    int
+		expectedFileCount      int
 	}{
 		{
 			name: "single item",
@@ -45,10 +45,10 @@ func TestSATDSummary_AddItem(t *testing.T) {
 					Category: DebtDefect,
 				},
 			},
-			expectedTotal:        1,
-			expectedSeverityHigh: 1,
+			expectedTotal:          1,
+			expectedSeverityHigh:   1,
 			expectedCategoryDefect: 1,
-			expectedFileCount:    1,
+			expectedFileCount:      1,
 		},
 		{
 			name: "multiple items same file",
@@ -68,8 +68,8 @@ func TestSATDSummary_AddItem(t *testing.T) {
 				{File: "file2.go", Severity: SeverityMedium, Category: DebtDesign},
 				{File: "file3.go", Severity: SeverityLow, Category: DebtTest},
 			},
-			expectedTotal:        3,
-			expectedFileCount:    3,
+			expectedTotal:     3,
+			expectedFileCount: 3,
 		},
 	}
 

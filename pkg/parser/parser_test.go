@@ -536,4 +536,3 @@ func TestGetClassNodeTypes(t *testing.T) {
 		})
 	}
 }
-

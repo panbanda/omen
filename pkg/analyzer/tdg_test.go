@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jonathanreyes/omen-cli/pkg/models"
+	"github.com/panbanda/omen/pkg/models"
 )
 
 func TestNewTDGAnalyzer(t *testing.T) {

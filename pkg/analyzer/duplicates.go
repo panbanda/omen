@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/jonathanreyes/omen-cli/pkg/models"
-	"github.com/jonathanreyes/omen-cli/pkg/parser"
+	"github.com/panbanda/omen/pkg/models"
+	"github.com/panbanda/omen/pkg/parser"
 )
 
 // DuplicateAnalyzer detects code clones using MinHash.

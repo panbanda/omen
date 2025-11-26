@@ -12,45 +12,45 @@ func TestMinHashSignature_JaccardSimilarity(t *testing.T) {
 		expected float64
 	}{
 		{
-			name: "identical signatures",
-			sig1: MinHashSignature{Values: []uint64{1, 2, 3, 4, 5}},
-			sig2: MinHashSignature{Values: []uint64{1, 2, 3, 4, 5}},
+			name:     "identical signatures",
+			sig1:     MinHashSignature{Values: []uint64{1, 2, 3, 4, 5}},
+			sig2:     MinHashSignature{Values: []uint64{1, 2, 3, 4, 5}},
 			expected: 1.0,
 		},
 		{
-			name: "completely different signatures",
-			sig1: MinHashSignature{Values: []uint64{1, 2, 3, 4, 5}},
-			sig2: MinHashSignature{Values: []uint64{6, 7, 8, 9, 10}},
+			name:     "completely different signatures",
+			sig1:     MinHashSignature{Values: []uint64{1, 2, 3, 4, 5}},
+			sig2:     MinHashSignature{Values: []uint64{6, 7, 8, 9, 10}},
 			expected: 0.0,
 		},
 		{
-			name: "50% similar",
-			sig1: MinHashSignature{Values: []uint64{1, 2, 3, 4}},
-			sig2: MinHashSignature{Values: []uint64{1, 2, 5, 6}},
+			name:     "50% similar",
+			sig1:     MinHashSignature{Values: []uint64{1, 2, 3, 4}},
+			sig2:     MinHashSignature{Values: []uint64{1, 2, 5, 6}},
 			expected: 0.5,
 		},
 		{
-			name: "25% similar",
-			sig1: MinHashSignature{Values: []uint64{1, 2, 3, 4}},
-			sig2: MinHashSignature{Values: []uint64{1, 5, 6, 7}},
+			name:     "25% similar",
+			sig1:     MinHashSignature{Values: []uint64{1, 2, 3, 4}},
+			sig2:     MinHashSignature{Values: []uint64{1, 5, 6, 7}},
 			expected: 0.25,
 		},
 		{
-			name: "empty signatures",
-			sig1: MinHashSignature{Values: []uint64{}},
-			sig2: MinHashSignature{Values: []uint64{}},
+			name:     "empty signatures",
+			sig1:     MinHashSignature{Values: []uint64{}},
+			sig2:     MinHashSignature{Values: []uint64{}},
 			expected: 0.0,
 		},
 		{
-			name: "different length signatures",
-			sig1: MinHashSignature{Values: []uint64{1, 2, 3}},
-			sig2: MinHashSignature{Values: []uint64{1, 2}},
+			name:     "different length signatures",
+			sig1:     MinHashSignature{Values: []uint64{1, 2, 3}},
+			sig2:     MinHashSignature{Values: []uint64{1, 2}},
 			expected: 0.0,
 		},
 		{
-			name: "nil values",
-			sig1: MinHashSignature{Values: nil},
-			sig2: MinHashSignature{Values: []uint64{1, 2, 3}},
+			name:     "nil values",
+			sig1:     MinHashSignature{Values: nil},
+			sig2:     MinHashSignature{Values: []uint64{1, 2, 3}},
 			expected: 0.0,
 		},
 	}
@@ -67,14 +67,14 @@ func TestMinHashSignature_JaccardSimilarity(t *testing.T) {
 
 func TestCloneSummary_AddClone(t *testing.T) {
 	tests := []struct {
-		name               string
-		clones             []CodeClone
-		expectedTotal      int
-		expectedType1      int
-		expectedType2      int
-		expectedType3      int
-		expectedDupLines   int
-		expectedFileCount  int
+		name              string
+		clones            []CodeClone
+		expectedTotal     int
+		expectedType1     int
+		expectedType2     int
+		expectedType3     int
+		expectedDupLines  int
+		expectedFileCount int
 	}{
 		{
 			name: "single type1 clone",

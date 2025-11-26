@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
-	"github.com/jonathanreyes/omen-cli/pkg/config"
-	"github.com/jonathanreyes/omen-cli/pkg/parser"
+	"github.com/panbanda/omen/pkg/config"
+	"github.com/panbanda/omen/pkg/parser"
 )
 
 // Scanner finds source files in a directory.

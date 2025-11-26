@@ -8,12 +8,12 @@ import (
 
 func TestFileChurnMetrics_CalculateChurnScore(t *testing.T) {
 	tests := []struct {
-		name           string
-		metrics        FileChurnMetrics
-		expectedScore  float64
-		maxCommits     int
-		maxChanges     int
-		useDefaultMax  bool
+		name          string
+		metrics       FileChurnMetrics
+		expectedScore float64
+		maxCommits    int
+		maxChanges    int
+		useDefaultMax bool
 	}{
 		{
 			name: "zero values",
@@ -104,9 +104,9 @@ func TestFileChurnMetrics_CalculateChurnScore(t *testing.T) {
 
 func TestFileChurnMetrics_IsHotspot(t *testing.T) {
 	tests := []struct {
-		name      string
+		name       string
 		churnScore float64
-		threshold float64
+		threshold  float64
 		expected   bool
 	}{
 		{
