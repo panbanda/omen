@@ -25,7 +25,7 @@ import (
 
 var (
 	version = "dev"
-	commit  = "none"  //nolint:unused // set via ldflags at build time
+	commit  = "none"    //nolint:unused // set via ldflags at build time
 	date    = "unknown" //nolint:unused // set via ldflags at build time
 )
 
