@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/jonathanreyes/omen-cli/pkg/parser"
+	"github.com/panbanda/omen/pkg/parser"
 )
 
 func TestMapFiles(t *testing.T) {

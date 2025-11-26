@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jonathanreyes/omen-cli/pkg/models"
+	"github.com/panbanda/omen/pkg/models"
 )
 
 func TestNewDefectAnalyzer(t *testing.T) {

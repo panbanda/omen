@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/jonathanreyes/omen-cli/pkg/models"
+	"github.com/panbanda/omen/pkg/models"
 )
 
 func TestNewChurnAnalyzer(t *testing.T) {

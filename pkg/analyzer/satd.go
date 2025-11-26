@@ -6,8 +6,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/jonathanreyes/omen-cli/pkg/models"
-	"github.com/jonathanreyes/omen-cli/pkg/parser"
+	"github.com/panbanda/omen/pkg/models"
+	"github.com/panbanda/omen/pkg/parser"
 )
 
 // SATDAnalyzer detects self-admitted technical debt markers.

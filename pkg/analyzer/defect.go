@@ -3,7 +3,7 @@ package analyzer
 import (
 	"sort"
 
-	"github.com/jonathanreyes/omen-cli/pkg/models"
+	"github.com/panbanda/omen/pkg/models"
 )
 
 // DefectAnalyzer predicts defect probability using PMAT weights.

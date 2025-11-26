@@ -3,10 +3,11 @@ package analyzer
 import (
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
-	"github.com/jonathanreyes/omen-cli/pkg/models"
-	"github.com/jonathanreyes/omen-cli/pkg/parser"
+	"github.com/panbanda/omen/pkg/models"
+	"github.com/panbanda/omen/pkg/parser"
 )
 
 func TestNewDeadCodeAnalyzer(t *testing.T) {
@@ -75,13 +76,13 @@ func TestNewDeadCodeAnalyzer(t *testing.T) {
 
 func TestAnalyzeFile(t *testing.T) {
 	tests := []struct {
-		name        string
-		content     string
-		filename    string
-		lang        parser.Language
-		wantDefs    int
-		wantUsages  int
-		wantErr     bool
+		name       string
+		content    string
+		filename   string
+		lang       parser.Language
+		wantDefs   int
+		wantUsages int
+		wantErr    bool
 	}{
 		{
 			name: "go file with unused function",
@@ -185,14 +186,14 @@ function main() {
 
 func TestDeadCodeAnalyzeProject(t *testing.T) {
 	tests := []struct {
-		name               string
-		files              map[string]string
-		confidence         float64
-		wantDeadFunctions  int
-		wantDeadVariables  int
-		wantFilesAnalyzed  int
-		skipMainInit       bool
-		skipExported       bool
+		name              string
+		files             map[string]string
+		confidence        float64
+		wantDeadFunctions int
+		wantDeadVariables int
+		wantFilesAnalyzed int
+		skipMainInit      bool
+		skipExported      bool
 	}{
 		{
 			name: "simple go file",
@@ -262,8 +263,8 @@ func main() {
 			wantFilesAnalyzed: 2,
 		},
 		{
-			name: "empty project",
-			files: map[string]string{},
+			name:              "empty project",
+			files:             map[string]string{},
 			confidence:        0.8,
 			wantDeadFunctions: 0,
 			wantDeadVariables: 0,
@@ -355,11 +356,11 @@ func main() {
 
 func TestCollectDefinitions(t *testing.T) {
 	tests := []struct {
-		name         string
-		content      string
-		filename     string
-		wantFuncs    []string
-		wantMinDefs  int
+		name        string
+		content     string
+		filename    string
+		wantFuncs   []string
+		wantMinDefs int
 	}{
 		{
 			name: "go functions",
@@ -708,9 +709,9 @@ func unusedFunc` + string(rune('0'+i)) + `() {
 	a := NewDeadCodeAnalyzer(0.8)
 	defer a.Close()
 
-	progressCount := 0
+	var progressCount atomic.Int32
 	progressFunc := func() {
-		progressCount++
+		progressCount.Add(1)
 	}
 
 	result, err := a.AnalyzeProjectWithProgress(files, progressFunc)
@@ -722,8 +723,8 @@ func unusedFunc` + string(rune('0'+i)) + `() {
 		t.Fatal("AnalyzeProjectWithProgress() returned nil")
 	}
 
-	if progressCount != len(files) {
-		t.Errorf("progress callback called %d times, want %d", progressCount, len(files))
+	if int(progressCount.Load()) != len(files) {
+		t.Errorf("progress callback called %d times, want %d", progressCount.Load(), len(files))
 	}
 
 	if result.Summary.TotalFilesAnalyzed != len(files) {

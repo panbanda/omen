@@ -164,7 +164,7 @@ func TestCalculateTDG(t *testing.T) {
 				Duplication: 0.5,
 				DomainRisk:  0.1,
 			},
-			expected: (1.0 - (0.8*0.30 + 0.3*0.25 + 0.2*0.20 + 0.5*0.15 + 0.1*0.10)) * 100.0,
+			expected:  (1.0 - (0.8*0.30 + 0.3*0.25 + 0.2*0.20 + 0.5*0.15 + 0.1*0.10)) * 100.0,
 			tolerance: 0.01,
 		},
 	}

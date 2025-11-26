@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/jonathanreyes/omen-cli/pkg/config"
+	"github.com/panbanda/omen/pkg/config"
 )
 
 func TestNewWatcher(t *testing.T) {
@@ -123,9 +123,7 @@ func TestWatcher_WatchedFiles(t *testing.T) {
 
 	// Initially no watched directories
 	files := w.WatchedFiles()
-	if files == nil {
-		files = []string{}
-	}
+	_ = files // initial check
 
 	// Add a directory to watch
 	if err := w.fsWatcher.Add(tmpDir); err != nil {
@@ -160,8 +158,8 @@ func TestWatcher_handleEvent(t *testing.T) {
 	defer w.Stop()
 
 	tests := []struct {
-		name       string
-		event      fsnotify.Event
+		name        string
+		event       fsnotify.Event
 		wantPending bool
 	}{
 		{
@@ -245,23 +243,23 @@ func TestWatcher_handleEvent_Excluded(t *testing.T) {
 	defer w.Stop()
 
 	tests := []struct {
-		name  string
-		path  string
+		name        string
+		path        string
 		wantPending bool
 	}{
 		{
-			name:  "test file excluded",
-			path:  filepath.Join(tmpDir, "main_test.go"),
+			name:        "test file excluded",
+			path:        filepath.Join(tmpDir, "main_test.go"),
 			wantPending: false,
 		},
 		{
-			name:  "vendor file excluded",
-			path:  filepath.Join(tmpDir, "vendor", "lib.go"),
+			name:        "vendor file excluded",
+			path:        filepath.Join(tmpDir, "vendor", "lib.go"),
 			wantPending: false,
 		},
 		{
-			name:  "normal file not excluded",
-			path:  filepath.Join(tmpDir, "main.go"),
+			name:        "normal file not excluded",
+			path:        filepath.Join(tmpDir, "main.go"),
 			wantPending: true,
 		},
 	}

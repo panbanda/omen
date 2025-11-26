@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jonathanreyes/omen-cli/pkg/config"
-	"github.com/jonathanreyes/omen-cli/pkg/parser"
+	"github.com/panbanda/omen/pkg/config"
+	"github.com/panbanda/omen/pkg/parser"
 )
 
 func TestNewScanner(t *testing.T) {

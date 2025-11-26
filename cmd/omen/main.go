@@ -13,17 +13,21 @@ import (
 	"time"
 
 	"github.com/fatih/color"
-	"github.com/jonathanreyes/omen-cli/pkg/analyzer"
-	"github.com/jonathanreyes/omen-cli/pkg/config"
-	"github.com/jonathanreyes/omen-cli/pkg/models"
-	"github.com/jonathanreyes/omen-cli/pkg/output"
-	"github.com/jonathanreyes/omen-cli/pkg/progress"
-	"github.com/jonathanreyes/omen-cli/pkg/scanner"
-	"github.com/jonathanreyes/omen-cli/pkg/watch"
+	"github.com/panbanda/omen/pkg/analyzer"
+	"github.com/panbanda/omen/pkg/config"
+	"github.com/panbanda/omen/pkg/models"
+	"github.com/panbanda/omen/pkg/output"
+	"github.com/panbanda/omen/pkg/progress"
+	"github.com/panbanda/omen/pkg/scanner"
+	"github.com/panbanda/omen/pkg/watch"
 	"github.com/urfave/cli/v2"
 )
 
-var version = "0.1.0"
+var (
+	version = "dev"
+	commit  = "none"    //nolint:unused // set via ldflags at build time
+	date    = "unknown" //nolint:unused // set via ldflags at build time
+)
 
 // getPaths returns paths from positional args, defaulting to ["."]
 func getPaths(c *cli.Context) []string {

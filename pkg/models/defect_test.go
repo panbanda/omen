@@ -89,9 +89,9 @@ func TestCalculateProbability(t *testing.T) {
 	weights := DefaultDefectWeights()
 
 	tests := []struct {
-		name     string
-		metrics  FileMetrics
-		expected float32
+		name      string
+		metrics   FileMetrics
+		expected  float32
 		tolerance float32
 	}{
 		{
@@ -103,7 +103,7 @@ func TestCalculateProbability(t *testing.T) {
 				AfferentCoupling: 0.0,
 				EfferentCoupling: 0.0,
 			},
-			expected: 0.0,
+			expected:  0.0,
 			tolerance: 0.01,
 		},
 		{
@@ -115,7 +115,7 @@ func TestCalculateProbability(t *testing.T) {
 				AfferentCoupling: 50.0,
 				EfferentCoupling: 50.0,
 			},
-			expected: 1.0,
+			expected:  1.0,
 			tolerance: 0.01,
 		},
 		{
@@ -127,7 +127,7 @@ func TestCalculateProbability(t *testing.T) {
 				AfferentCoupling: 10.0,
 				EfferentCoupling: 10.0,
 			},
-			expected: 0.35*0.5 + 0.30*0.5 + 0.25*0.3 + 0.10*0.2,
+			expected:  0.35*0.5 + 0.30*0.5 + 0.25*0.3 + 0.10*0.2,
 			tolerance: 0.01,
 		},
 		{
@@ -139,7 +139,7 @@ func TestCalculateProbability(t *testing.T) {
 				AfferentCoupling: 0.0,
 				EfferentCoupling: 0.0,
 			},
-			expected: 0.30 * 0.8,
+			expected:  0.30 * 0.8,
 			tolerance: 0.01,
 		},
 		{
@@ -151,7 +151,7 @@ func TestCalculateProbability(t *testing.T) {
 				AfferentCoupling: 0.0,
 				EfferentCoupling: 0.0,
 			},
-			expected: 0.30,
+			expected:  0.30,
 			tolerance: 0.01,
 		},
 		{
@@ -163,7 +163,7 @@ func TestCalculateProbability(t *testing.T) {
 				AfferentCoupling: 100.0,
 				EfferentCoupling: 100.0,
 			},
-			expected: 0.10,
+			expected:  0.10,
 			tolerance: 0.01,
 		},
 	}
