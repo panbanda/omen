@@ -1,5 +1,9 @@
 # Omen
 
+<p align="center">
+  <img src="assets/omen-logo.png" alt="Omen - Code Analysis CLI" width="100%">
+</p>
+
 [![Go Version](https://img.shields.io/github/go-mod/go-version/panbanda/omen)](https://go.dev/)
 [![License](https://img.shields.io/github/license/panbanda/omen)](https://github.com/panbanda/omen/blob/main/LICENSE)
 [![CI](https://github.com/panbanda/omen/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/panbanda/omen/actions/workflows/ci.yml)
@@ -10,6 +14,8 @@
 [![Snyk Security](https://snyk.io/test/github/panbanda/omen/badge.svg)](https://snyk.io/test/github/panbanda/omen)
 
 A multi-language code analysis CLI built in Go. Omen uses tree-sitter for parsing source code across 13 languages, providing insights into complexity, technical debt, code duplication, and defect prediction.
+
+**Why "Omen"?** An omen is a sign of things to come - good or bad. Your codebase is full of omens: low complexity and clean architecture signal smooth sailing ahead, while high churn, technical debt, and code clones warn of trouble brewing. Omen surfaces these signals so you can act before that "temporary fix" celebrates its third anniversary in production.
 
 ## Features
 
@@ -28,11 +34,23 @@ Go, Rust, Python, TypeScript, JavaScript, TSX/JSX, Java, C, C++, C#, Ruby, PHP, 
 
 ## Installation
 
+### Homebrew (macOS/Linux)
+
+```bash
+brew install panbanda/omen/omen
+```
+
+### Go Install
+
 ```bash
 go install github.com/panbanda/omen/cmd/omen@latest
 ```
 
-Or build from source:
+### Download Binary
+
+Download pre-built binaries from the [releases page](https://github.com/panbanda/omen/releases).
+
+### Build from Source
 
 ```bash
 git clone https://github.com/panbanda/omen.git
