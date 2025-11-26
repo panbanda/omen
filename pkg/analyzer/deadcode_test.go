@@ -1,0 +1,1012 @@
+package analyzer
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/jonathanreyes/omen-cli/pkg/models"
+	"github.com/jonathanreyes/omen-cli/pkg/parser"
+)
+
+func TestNewDeadCodeAnalyzer(t *testing.T) {
+	tests := []struct {
+		name             string
+		confidence       float64
+		wantConfidence   float64
+		wantNonNilParser bool
+	}{
+		{
+			name:             "valid confidence 0.8",
+			confidence:       0.8,
+			wantConfidence:   0.8,
+			wantNonNilParser: true,
+		},
+		{
+			name:             "valid confidence 0.5",
+			confidence:       0.5,
+			wantConfidence:   0.5,
+			wantNonNilParser: true,
+		},
+		{
+			name:             "valid confidence 1.0",
+			confidence:       1.0,
+			wantConfidence:   1.0,
+			wantNonNilParser: true,
+		},
+		{
+			name:             "invalid confidence 0",
+			confidence:       0.0,
+			wantConfidence:   0.8,
+			wantNonNilParser: true,
+		},
+		{
+			name:             "invalid confidence negative",
+			confidence:       -0.5,
+			wantConfidence:   0.8,
+			wantNonNilParser: true,
+		},
+		{
+			name:             "invalid confidence above 1",
+			confidence:       1.5,
+			wantConfidence:   0.8,
+			wantNonNilParser: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := NewDeadCodeAnalyzer(tt.confidence)
+			if a == nil {
+				t.Fatal("NewDeadCodeAnalyzer() returned nil")
+			}
+			defer a.Close()
+
+			if a.confidence != tt.wantConfidence {
+				t.Errorf("confidence = %v, want %v", a.confidence, tt.wantConfidence)
+			}
+
+			if tt.wantNonNilParser && a.parser == nil {
+				t.Error("parser is nil")
+			}
+		})
+	}
+}
+
+func TestAnalyzeFile(t *testing.T) {
+	tests := []struct {
+		name        string
+		content     string
+		filename    string
+		lang        parser.Language
+		wantDefs    int
+		wantUsages  int
+		wantErr     bool
+	}{
+		{
+			name: "go file with unused function",
+			content: `package main
+
+func unusedFunc() {
+	x := 42
+}
+
+func main() {
+	println("hello")
+}
+`,
+			filename:   "test.go",
+			lang:       parser.LangGo,
+			wantDefs:   2, // unusedFunc, main (x is local, might not be collected)
+			wantUsages: 1, // println
+			wantErr:    false,
+		},
+		{
+			name: "python file with unused function",
+			content: `def unused_func():
+    x = 42
+
+def main():
+    print("hello")
+`,
+			filename:   "test.py",
+			lang:       parser.LangPython,
+			wantDefs:   3, // unused_func, x, main
+			wantUsages: 1, // print
+			wantErr:    false,
+		},
+		{
+			name: "rust file with unused function",
+			content: `fn unused_func() {
+    let x = 42;
+}
+
+fn main() {
+    println!("hello");
+}
+`,
+			filename:   "test.rs",
+			lang:       parser.LangRust,
+			wantDefs:   3, // unused_func, x, main
+			wantUsages: 1, // println
+			wantErr:    false,
+		},
+		{
+			name: "javascript file with unused function",
+			content: `function unusedFunc() {
+    const x = 42;
+}
+
+function main() {
+    console.log("hello");
+}
+`,
+			filename:   "test.js",
+			lang:       parser.LangJavaScript,
+			wantDefs:   4, // unusedFunc, x, main, and possibly one more from parsing
+			wantUsages: 3, // console, log, and possibly console.log
+			wantErr:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			testFile := filepath.Join(tmpDir, tt.filename)
+			if err := os.WriteFile(testFile, []byte(tt.content), 0644); err != nil {
+				t.Fatalf("failed to write test file: %v", err)
+			}
+
+			a := NewDeadCodeAnalyzer(0.8)
+			defer a.Close()
+
+			result, err := a.AnalyzeFile(testFile)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("AnalyzeFile() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if err != nil {
+				return
+			}
+
+			if len(result.definitions) != tt.wantDefs {
+				t.Errorf("definitions count = %d, want %d", len(result.definitions), tt.wantDefs)
+				t.Logf("definitions: %+v", result.definitions)
+			}
+
+			if len(result.usages) < 1 {
+				t.Errorf("usages count = %d, want at least 1", len(result.usages))
+				t.Logf("usages: %+v", result.usages)
+			}
+		})
+	}
+}
+
+func TestDeadCodeAnalyzeProject(t *testing.T) {
+	tests := []struct {
+		name               string
+		files              map[string]string
+		confidence         float64
+		wantDeadFunctions  int
+		wantDeadVariables  int
+		wantFilesAnalyzed  int
+		skipMainInit       bool
+		skipExported       bool
+	}{
+		{
+			name: "simple go file",
+			files: map[string]string{
+				"main.go": `package main
+
+func main() {
+	println("hello")
+}
+`,
+			},
+			confidence:        0.8,
+			wantDeadFunctions: 0, // main is skipped
+			wantDeadVariables: 0,
+			wantFilesAnalyzed: 1,
+			skipMainInit:      true,
+		},
+		{
+			name: "exported functions are skipped",
+			files: map[string]string{
+				"lib.go": `package lib
+
+// ExportedFunc is exported
+func ExportedFunc() {
+	x := 42
+	println(x)
+}
+`,
+			},
+			confidence:        0.8,
+			wantDeadFunctions: 0, // Exported functions are skipped
+			wantDeadVariables: 0, // Variables inside are used
+			wantFilesAnalyzed: 1,
+			skipExported:      true,
+		},
+		{
+			name: "python main function",
+			files: map[string]string{
+				"module.py": `def main():
+    print("hello")
+`,
+			},
+			confidence:        0.8,
+			wantDeadFunctions: 0, // main is skipped
+			wantDeadVariables: 0,
+			wantFilesAnalyzed: 1,
+		},
+		{
+			name: "multi-file project with cross-file usage",
+			files: map[string]string{
+				"a.go": `package main
+
+func UsedFunc() {
+	println("used")
+}
+`,
+				"b.go": `package main
+
+func main() {
+	UsedFunc()
+}
+`,
+			},
+			confidence:        0.8,
+			wantDeadFunctions: 0, // UsedFunc is used in main
+			wantDeadVariables: 0,
+			wantFilesAnalyzed: 2,
+		},
+		{
+			name: "empty project",
+			files: map[string]string{},
+			confidence:        0.8,
+			wantDeadFunctions: 0,
+			wantDeadVariables: 0,
+			wantFilesAnalyzed: 0,
+		},
+		{
+			name: "project with main and init",
+			files: map[string]string{
+				"main.go": `package main
+
+func init() {
+	println("init")
+}
+
+func main() {
+	println("main")
+}
+`,
+			},
+			confidence:        0.8,
+			wantDeadFunctions: 0, // main and init should be skipped
+			wantDeadVariables: 0,
+			wantFilesAnalyzed: 1,
+			skipMainInit:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			var files []string
+
+			for filename, content := range tt.files {
+				testFile := filepath.Join(tmpDir, filename)
+				if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
+					t.Fatalf("failed to write test file %s: %v", filename, err)
+				}
+				files = append(files, testFile)
+			}
+
+			a := NewDeadCodeAnalyzer(tt.confidence)
+			defer a.Close()
+
+			result, err := a.AnalyzeProject(files)
+			if err != nil {
+				t.Fatalf("AnalyzeProject() error = %v", err)
+			}
+
+			if result == nil {
+				t.Fatal("AnalyzeProject() returned nil")
+			}
+
+			if len(result.DeadFunctions) != tt.wantDeadFunctions {
+				t.Errorf("dead functions count = %d, want %d", len(result.DeadFunctions), tt.wantDeadFunctions)
+				for _, df := range result.DeadFunctions {
+					t.Logf("dead function: %s (confidence: %.2f)", df.Name, df.Confidence)
+				}
+			}
+
+			if len(result.DeadVariables) != tt.wantDeadVariables {
+				t.Errorf("dead variables count = %d, want %d", len(result.DeadVariables), tt.wantDeadVariables)
+				for _, dv := range result.DeadVariables {
+					t.Logf("dead variable: %s (confidence: %.2f)", dv.Name, dv.Confidence)
+				}
+			}
+
+			if result.Summary.TotalFilesAnalyzed != tt.wantFilesAnalyzed {
+				t.Errorf("files analyzed = %d, want %d", result.Summary.TotalFilesAnalyzed, tt.wantFilesAnalyzed)
+			}
+
+			if tt.skipMainInit {
+				for _, df := range result.DeadFunctions {
+					if df.Name == "main" || df.Name == "init" {
+						t.Errorf("main or init function should not be flagged as dead: %s", df.Name)
+					}
+				}
+			}
+
+			if tt.skipExported {
+				for _, df := range result.DeadFunctions {
+					if df.Name == "UnusedExported" {
+						t.Errorf("exported function should not be flagged as dead: %s", df.Name)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestCollectDefinitions(t *testing.T) {
+	tests := []struct {
+		name         string
+		content      string
+		filename     string
+		wantFuncs    []string
+		wantMinDefs  int
+	}{
+		{
+			name: "go functions",
+			content: `package main
+
+func testFunc() {
+	x := 42
+	var y int = 24
+}
+
+func anotherFunc() {}
+`,
+			filename:    "test.go",
+			wantFuncs:   []string{"testFunc", "anotherFunc"},
+			wantMinDefs: 2,
+		},
+		{
+			name: "python functions",
+			content: `def test_func():
+    x = 42
+    y = 24
+
+def another_func():
+    pass
+
+Z = 100
+`,
+			filename:    "test.py",
+			wantFuncs:   []string{"test_func", "another_func"},
+			wantMinDefs: 2,
+		},
+		{
+			name: "rust functions",
+			content: `fn test_func() {
+    let x = 42;
+    let y = 24;
+}
+
+fn another_func() {}
+`,
+			filename:    "test.rs",
+			wantFuncs:   []string{"test_func", "another_func"},
+			wantMinDefs: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			testFile := filepath.Join(tmpDir, tt.filename)
+			if err := os.WriteFile(testFile, []byte(tt.content), 0644); err != nil {
+				t.Fatalf("failed to write test file: %v", err)
+			}
+
+			psr := parser.New()
+			defer psr.Close()
+
+			result, err := psr.ParseFile(testFile)
+			if err != nil {
+				t.Fatalf("ParseFile() error = %v", err)
+			}
+
+			fdc := &fileDeadCode{
+				path:        testFile,
+				definitions: make(map[string]definition),
+				usages:      make(map[string]bool),
+			}
+
+			collectDefinitions(result, fdc)
+
+			// Check for expected functions
+			for _, fname := range tt.wantFuncs {
+				def, exists := fdc.definitions[fname]
+				if !exists {
+					t.Errorf("function %s not found in definitions", fname)
+					continue
+				}
+
+				if def.kind != "function" {
+					t.Errorf("definition %s kind = %s, want function", fname, def.kind)
+				}
+
+				if def.line == 0 {
+					t.Errorf("definition %s has zero line number", fname)
+				}
+			}
+
+			if len(fdc.definitions) < tt.wantMinDefs {
+				t.Errorf("definitions count = %d, want at least %d", len(fdc.definitions), tt.wantMinDefs)
+				t.Logf("found definitions: %+v", fdc.definitions)
+			}
+		})
+	}
+}
+
+func TestCollectUsages(t *testing.T) {
+	tests := []struct {
+		name       string
+		content    string
+		filename   string
+		wantUsages []string
+	}{
+		{
+			name: "go function calls and identifiers",
+			content: `package main
+
+func main() {
+	x := 42
+	println(x)
+	testFunc()
+}
+
+func testFunc() {
+	y := 24
+}
+`,
+			filename:   "test.go",
+			wantUsages: []string{"println", "testFunc", "x", "y"},
+		},
+		{
+			name: "python function calls",
+			content: `def main():
+    x = 42
+    print(x)
+    test_func()
+
+def test_func():
+    y = 24
+`,
+			filename:   "test.py",
+			wantUsages: []string{"print", "test_func", "x", "y"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			testFile := filepath.Join(tmpDir, tt.filename)
+			if err := os.WriteFile(testFile, []byte(tt.content), 0644); err != nil {
+				t.Fatalf("failed to write test file: %v", err)
+			}
+
+			psr := parser.New()
+			defer psr.Close()
+
+			result, err := psr.ParseFile(testFile)
+			if err != nil {
+				t.Fatalf("ParseFile() error = %v", err)
+			}
+
+			fdc := &fileDeadCode{
+				path:        testFile,
+				definitions: make(map[string]definition),
+				usages:      make(map[string]bool),
+			}
+
+			collectUsages(result, fdc)
+
+			for _, usage := range tt.wantUsages {
+				if !fdc.usages[usage] {
+					t.Errorf("usage %s not found", usage)
+				}
+			}
+
+			if len(fdc.usages) == 0 {
+				t.Error("no usages found")
+			}
+		})
+	}
+}
+
+func TestGetVisibility(t *testing.T) {
+	tests := []struct {
+		name string
+		id   string
+		lang parser.Language
+		want string
+	}{
+		// Go
+		{name: "go exported", id: "ExportedFunc", lang: parser.LangGo, want: "public"},
+		{name: "go private", id: "privateFunc", lang: parser.LangGo, want: "private"},
+		{name: "go empty", id: "", lang: parser.LangGo, want: "private"},
+
+		// Python
+		{name: "python public", id: "public_func", lang: parser.LangPython, want: "public"},
+		{name: "python internal", id: "_internal", lang: parser.LangPython, want: "internal"},
+		{name: "python private", id: "__private", lang: parser.LangPython, want: "private"},
+		{name: "python single underscore", id: "_", lang: parser.LangPython, want: "internal"},
+		{name: "python empty", id: "", lang: parser.LangPython, want: "public"},
+
+		// Ruby
+		{name: "ruby public", id: "public_method", lang: parser.LangRuby, want: "public"},
+		{name: "ruby private", id: "_private", lang: parser.LangRuby, want: "private"},
+		{name: "ruby empty", id: "", lang: parser.LangRuby, want: "public"},
+
+		// Rust (unknown)
+		{name: "rust unknown", id: "some_func", lang: parser.LangRust, want: "unknown"},
+
+		// Unknown language
+		{name: "unknown language", id: "func", lang: parser.LangUnknown, want: "unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := getVisibility(tt.id, tt.lang)
+			if got != tt.want {
+				t.Errorf("getVisibility(%q, %v) = %v, want %v", tt.id, tt.lang, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsExported(t *testing.T) {
+	tests := []struct {
+		name string
+		id   string
+		lang parser.Language
+		want bool
+	}{
+		// Go
+		{name: "go exported", id: "ExportedFunc", lang: parser.LangGo, want: true},
+		{name: "go private", id: "privateFunc", lang: parser.LangGo, want: false},
+		{name: "go uppercase Z", id: "Z", lang: parser.LangGo, want: true},
+		{name: "go lowercase a", id: "a", lang: parser.LangGo, want: false},
+		{name: "go empty", id: "", lang: parser.LangGo, want: false},
+
+		// Python
+		{name: "python public", id: "public_func", lang: parser.LangPython, want: true},
+		{name: "python private", id: "_private", lang: parser.LangPython, want: false},
+		{name: "python dunder", id: "__private", lang: parser.LangPython, want: false},
+		{name: "python empty", id: "", lang: parser.LangPython, want: true},
+
+		// Other languages (default to true)
+		{name: "rust default", id: "some_func", lang: parser.LangRust, want: true},
+		{name: "javascript default", id: "someFunc", lang: parser.LangJavaScript, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isExported(tt.id, tt.lang)
+			if got != tt.want {
+				t.Errorf("isExported(%q, %v) = %v, want %v", tt.id, tt.lang, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCalculateConfidence(t *testing.T) {
+	tests := []struct {
+		name       string
+		def        definition
+		wantMin    float64
+		wantMax    float64
+		wantExact  float64
+		checkExact bool
+	}{
+		{
+			name: "private unused function",
+			def: definition{
+				name:       "privateFunc",
+				kind:       "function",
+				visibility: "private",
+				exported:   false,
+			},
+			wantExact:  0.95, // 0.9 base + 0.05 private
+			checkExact: true,
+		},
+		{
+			name: "exported function",
+			def: definition{
+				name:       "ExportedFunc",
+				kind:       "function",
+				visibility: "public",
+				exported:   true,
+			},
+			wantExact:  0.6, // 0.9 base - 0.3 exported
+			checkExact: true,
+		},
+		{
+			name: "public non-exported function",
+			def: definition{
+				name:       "publicFunc",
+				kind:       "function",
+				visibility: "public",
+				exported:   false,
+			},
+			wantExact:  0.9, // 0.9 base
+			checkExact: true,
+		},
+		{
+			name: "internal function",
+			def: definition{
+				name:       "_internal",
+				kind:       "function",
+				visibility: "internal",
+				exported:   false,
+			},
+			wantExact:  0.9, // 0.9 base (internal doesn't add bonus)
+			checkExact: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := NewDeadCodeAnalyzer(0.8)
+			defer a.Close()
+
+			got := a.calculateConfidence(tt.def)
+
+			if tt.checkExact {
+				diff := got - tt.wantExact
+				if diff < -0.001 || diff > 0.001 {
+					t.Errorf("calculateConfidence() = %v, want %v (diff: %v)", got, tt.wantExact, diff)
+				}
+			} else {
+				if got < tt.wantMin || got > tt.wantMax {
+					t.Errorf("calculateConfidence() = %v, want between %v and %v", got, tt.wantMin, tt.wantMax)
+				}
+			}
+
+			if got < 0.0 || got > 1.0 {
+				t.Errorf("calculateConfidence() = %v, should be between 0.0 and 1.0", got)
+			}
+		})
+	}
+}
+
+func TestDeadCodeAnalyzeProjectWithProgress(t *testing.T) {
+	tmpDir := t.TempDir()
+	files := make([]string, 3)
+
+	for i := 0; i < 3; i++ {
+		filename := filepath.Join(tmpDir, "file"+string(rune('0'+i))+".go")
+		content := `package main
+
+func unusedFunc` + string(rune('0'+i)) + `() {
+	x := 42
+}
+`
+		if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
+			t.Fatalf("failed to write test file: %v", err)
+		}
+		files[i] = filename
+	}
+
+	a := NewDeadCodeAnalyzer(0.8)
+	defer a.Close()
+
+	progressCount := 0
+	progressFunc := func() {
+		progressCount++
+	}
+
+	result, err := a.AnalyzeProjectWithProgress(files, progressFunc)
+	if err != nil {
+		t.Fatalf("AnalyzeProjectWithProgress() error = %v", err)
+	}
+
+	if result == nil {
+		t.Fatal("AnalyzeProjectWithProgress() returned nil")
+	}
+
+	if progressCount != len(files) {
+		t.Errorf("progress callback called %d times, want %d", progressCount, len(files))
+	}
+
+	if result.Summary.TotalFilesAnalyzed != len(files) {
+		t.Errorf("files analyzed = %d, want %d", result.Summary.TotalFilesAnalyzed, len(files))
+	}
+}
+
+func TestGetVariableNodeTypes(t *testing.T) {
+	tests := []struct {
+		name     string
+		lang     parser.Language
+		wantSize int
+		wantType string
+	}{
+		{name: "go", lang: parser.LangGo, wantSize: 3, wantType: "var_declaration"},
+		{name: "rust", lang: parser.LangRust, wantSize: 3, wantType: "let_declaration"},
+		{name: "python", lang: parser.LangPython, wantSize: 2, wantType: "assignment"},
+		{name: "typescript", lang: parser.LangTypeScript, wantSize: 2, wantType: "variable_declaration"},
+		{name: "javascript", lang: parser.LangJavaScript, wantSize: 2, wantType: "variable_declaration"},
+		{name: "tsx", lang: parser.LangTSX, wantSize: 2, wantType: "variable_declaration"},
+		{name: "java", lang: parser.LangJava, wantSize: 2, wantType: "local_variable_declaration"},
+		{name: "csharp", lang: parser.LangCSharp, wantSize: 2, wantType: "local_variable_declaration"},
+		{name: "c", lang: parser.LangC, wantSize: 2, wantType: "declaration"},
+		{name: "cpp", lang: parser.LangCPP, wantSize: 2, wantType: "declaration"},
+		{name: "ruby", lang: parser.LangRuby, wantSize: 1, wantType: "assignment"},
+		{name: "php", lang: parser.LangPHP, wantSize: 2, wantType: "simple_variable"},
+		{name: "unknown", lang: parser.LangUnknown, wantSize: 2, wantType: "variable_declaration"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			types := getVariableNodeTypes(tt.lang)
+			if len(types) != tt.wantSize {
+				t.Errorf("getVariableNodeTypes(%v) returned %d types, want %d", tt.lang, len(types), tt.wantSize)
+			}
+
+			found := false
+			for _, typ := range types {
+				if typ == tt.wantType {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				t.Errorf("getVariableNodeTypes(%v) missing expected type %s, got %v", tt.lang, tt.wantType, types)
+			}
+		})
+	}
+}
+
+func TestDeadCodeAnalysisIntegration(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	files := map[string]string{
+		"main.go": `package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("Hello, World!")
+	helper()
+}
+
+func helper() {
+	x := compute()
+	fmt.Println(x)
+}
+
+func compute() int {
+	return 42
+}
+
+// PublicButUnused is exported but not used
+func PublicButUnused() {
+	y := "also unused"
+	fmt.Println(y)
+}
+`,
+		"lib.go": `package main
+
+// ExportedHelper is exported
+func ExportedHelper() {
+	z := 100
+	println(z)
+}
+`,
+	}
+
+	var filePaths []string
+	for filename, content := range files {
+		testFile := filepath.Join(tmpDir, filename)
+		if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
+			t.Fatalf("failed to write test file %s: %v", filename, err)
+		}
+		filePaths = append(filePaths, testFile)
+	}
+
+	a := NewDeadCodeAnalyzer(0.8)
+	defer a.Close()
+
+	result, err := a.AnalyzeProject(filePaths)
+	if err != nil {
+		t.Fatalf("AnalyzeProject() error = %v", err)
+	}
+
+	if result.Summary.TotalFilesAnalyzed != 2 {
+		t.Errorf("TotalFilesAnalyzed = %d, want 2", result.Summary.TotalFilesAnalyzed)
+	}
+
+	// Should detect 0 dead functions (all are either used or exported)
+	if len(result.DeadFunctions) != 0 {
+		t.Errorf("DeadFunctions count = %d, want 0", len(result.DeadFunctions))
+		for _, df := range result.DeadFunctions {
+			t.Logf("dead function: %s in %s (confidence: %.2f)", df.Name, df.File, df.Confidence)
+		}
+	}
+
+	// Verify exported functions are not flagged
+	for _, df := range result.DeadFunctions {
+		if df.Name == "PublicButUnused" || df.Name == "ExportedHelper" {
+			t.Errorf("exported function %s should not be flagged as dead", df.Name)
+		}
+	}
+
+	// Verify main is not flagged
+	for _, df := range result.DeadFunctions {
+		if df.Name == "main" {
+			t.Error("main function should not be flagged as dead code")
+		}
+	}
+}
+
+func TestClose(t *testing.T) {
+	a := NewDeadCodeAnalyzer(0.8)
+	a.Close()
+}
+
+func TestDeadCodeSummaryAccumulation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	files := map[string]string{
+		"file1.go": `package main
+func main() {}
+`,
+		"file2.go": `package main
+func init() {}
+`,
+		"file3.go": `package main
+// Helper is exported
+func Helper() {}
+`,
+	}
+
+	var filePaths []string
+	for filename, content := range files {
+		testFile := filepath.Join(tmpDir, filename)
+		if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
+			t.Fatalf("failed to write test file %s: %v", filename, err)
+		}
+		filePaths = append(filePaths, testFile)
+	}
+
+	a := NewDeadCodeAnalyzer(0.8)
+	defer a.Close()
+
+	result, err := a.AnalyzeProject(filePaths)
+	if err != nil {
+		t.Fatalf("AnalyzeProject() error = %v", err)
+	}
+
+	// All functions should be skipped (main, init, exported)
+	if result.Summary.TotalDeadFunctions != 0 {
+		t.Errorf("TotalDeadFunctions = %d, want 0", result.Summary.TotalDeadFunctions)
+	}
+
+	if result.Summary.TotalFilesAnalyzed != 3 {
+		t.Errorf("TotalFilesAnalyzed = %d, want 3", result.Summary.TotalFilesAnalyzed)
+	}
+}
+
+func TestMultipleLanguagesDeadCode(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	files := map[string]string{
+		"test.go": `package main
+// ExportedGo is exported
+func ExportedGo() {
+	x := 42
+	println(x)
+}
+func main() {}
+`,
+		"test.py": `def main():
+    x = 42
+    print(x)
+`,
+		"test.rs": `fn main() {
+    let x = 42;
+    println!("{}", x);
+}
+`,
+	}
+
+	var filePaths []string
+	for filename, content := range files {
+		testFile := filepath.Join(tmpDir, filename)
+		if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
+			t.Fatalf("failed to write test file %s: %v", filename, err)
+		}
+		filePaths = append(filePaths, testFile)
+	}
+
+	a := NewDeadCodeAnalyzer(0.8)
+	defer a.Close()
+
+	result, err := a.AnalyzeProject(filePaths)
+	if err != nil {
+		t.Fatalf("AnalyzeProject() error = %v", err)
+	}
+
+	// Should detect 0 dead functions (all are main or exported)
+	if len(result.DeadFunctions) != 0 {
+		t.Errorf("DeadFunctions count = %d, want 0 (all are main or exported)", len(result.DeadFunctions))
+		for _, df := range result.DeadFunctions {
+			t.Logf("dead function: %s in %s", df.Name, df.File)
+		}
+	}
+
+	// Verify no main functions are flagged
+	for _, df := range result.DeadFunctions {
+		if df.Name == "main" {
+			t.Errorf("main function should not be flagged as dead")
+		}
+	}
+
+	// Verify project analyzed all files
+	if result.Summary.TotalFilesAnalyzed != 3 {
+		t.Errorf("TotalFilesAnalyzed = %d, want 3", result.Summary.TotalFilesAnalyzed)
+	}
+}
+
+func TestDeadCodeModelsIntegration(t *testing.T) {
+	summary := models.NewDeadCodeSummary()
+
+	if summary.ByFile == nil {
+		t.Error("NewDeadCodeSummary() ByFile is nil")
+	}
+
+	df := models.DeadFunction{
+		Name:       "test",
+		File:       "test.go",
+		Line:       10,
+		EndLine:    20,
+		Visibility: "private",
+		Confidence: 0.95,
+		Reason:     "No references found",
+	}
+
+	summary.AddDeadFunction(df)
+
+	if summary.TotalDeadFunctions != 1 {
+		t.Errorf("TotalDeadFunctions = %d, want 1", summary.TotalDeadFunctions)
+	}
+
+	if summary.ByFile["test.go"] != 1 {
+		t.Errorf("ByFile[test.go] = %d, want 1", summary.ByFile["test.go"])
+	}
+
+	dv := models.DeadVariable{
+		Name:       "unused",
+		File:       "test.go",
+		Line:       15,
+		Confidence: 0.9,
+	}
+
+	summary.AddDeadVariable(dv)
+
+	if summary.TotalDeadVariables != 1 {
+		t.Errorf("TotalDeadVariables = %d, want 1", summary.TotalDeadVariables)
+	}
+
+	if summary.ByFile["test.go"] != 2 {
+		t.Errorf("ByFile[test.go] = %d, want 2", summary.ByFile["test.go"])
+	}
+}

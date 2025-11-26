@@ -1,0 +1,71 @@
+# Omen CLI Configuration
+# Copy this file to omen.toml or .omen/omen.toml
+
+[analysis]
+complexity = true
+satd = true
+dead_code = true
+churn = true
+duplicates = true
+defect = true
+tdg = true
+graph = true
+lint_hotspot = true
+context = true
+churn_days = 90
+
+[thresholds]
+cyclomatic_complexity = 10
+cognitive_complexity = 15
+duplicate_min_lines = 6
+duplicate_similarity = 0.8
+dead_code_confidence = 0.8
+defect_high_risk = 0.6
+tdg_high_risk = 3.0
+
+[exclude]
+# Respect .gitignore files (default: true)
+gitignore = true
+
+# File patterns to exclude (glob patterns)
+patterns = [
+    "*_test.go",
+    "*_test.ts",
+    "*_test.py",
+    "*.spec.ts",
+    "*.spec.js",
+    "*.min.js",
+    "*.min.css",
+    "*.generated.*",
+]
+
+# File extensions to exclude
+extensions = [
+    ".lock",
+    ".sum",
+    ".map",
+]
+
+# Directories to exclude
+dirs = [
+    "vendor",
+    "node_modules",
+    ".git",
+    ".omen",
+    "dist",
+    "build",
+    "target",
+    "__pycache__",
+    ".pytest_cache",
+    "coverage",
+]
+
+[cache]
+enabled = true
+dir = ".omen/cache"
+ttl = 24  # hours
+
+[output]
+format = "text"  # text, json, markdown
+color = true
+verbose = false

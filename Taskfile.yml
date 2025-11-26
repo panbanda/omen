@@ -1,0 +1,9 @@
+version: '3'
+
+tasks:
+  tidy:
+    desc: Format code and tidy dependencies
+    cmds:
+      - go fmt ./...
+      - go mod tidy
+      - go vet ./...
