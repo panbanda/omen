@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.7](https://github.com/panbanda/omen/compare/v1.0.6...v1.0.7) (2025-11-26)
+
+
+### Bug Fixes
+
+* **ci:** replace goreleaser homebrew with manual formula generation ([b911b13](https://github.com/panbanda/omen/commit/b911b13b57a472e67a5cb0b3f8686ce5b5f30509))
+
 ## [1.0.6](https://github.com/panbanda/omen/compare/v1.0.5...v1.0.6) (2025-11-26)
 
 
