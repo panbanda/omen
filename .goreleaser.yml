@@ -5,16 +5,64 @@ before:
     - go mod tidy
 
 builds:
-  - main: ./cmd/omen
+  - id: linux-amd64
+    main: ./cmd/omen
     binary: omen
     env:
       - CGO_ENABLED=1
     goos:
       - linux
+    goarch:
+      - amd64
+    skip: '{{ and (isEnvSet "GOOS") (or (ne .Env.GOOS "linux") (ne .Env.GOARCH "amd64")) }}'
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .ShortCommit }}
+      - -X main.date={{ .Date }}
+  - id: linux-arm64
+    main: ./cmd/omen
+    binary: omen
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - linux
+    goarch:
+      - arm64
+    skip: '{{ and (isEnvSet "GOOS") (or (ne .Env.GOOS "linux") (ne .Env.GOARCH "arm64")) }}'
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .ShortCommit }}
+      - -X main.date={{ .Date }}
+  - id: darwin-amd64
+    main: ./cmd/omen
+    binary: omen
+    env:
+      - CGO_ENABLED=1
+    goos:
       - darwin
     goarch:
       - amd64
+    skip: '{{ and (isEnvSet "GOOS") (or (ne .Env.GOOS "darwin") (ne .Env.GOARCH "amd64")) }}'
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .ShortCommit }}
+      - -X main.date={{ .Date }}
+  - id: darwin-arm64
+    main: ./cmd/omen
+    binary: omen
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - darwin
+    goarch:
       - arm64
+    skip: '{{ and (isEnvSet "GOOS") (or (ne .Env.GOOS "darwin") (ne .Env.GOARCH "arm64")) }}'
     mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w
