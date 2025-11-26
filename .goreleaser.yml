@@ -5,34 +5,16 @@ before:
     - go mod tidy
 
 builds:
-  - id: linux
-    main: ./cmd/omen
+  - main: ./cmd/omen
     binary: omen
     env:
       - CGO_ENABLED=1
     goos:
       - linux
-    goarch:
-      - amd64
-      - arm64
-    skip: '{{ ne .Runtime.Goos "linux" }}'
-    mod_timestamp: "{{ .CommitTimestamp }}"
-    ldflags:
-      - -s -w
-      - -X main.version={{ .Version }}
-      - -X main.commit={{ .ShortCommit }}
-      - -X main.date={{ .Date }}
-  - id: darwin
-    main: ./cmd/omen
-    binary: omen
-    env:
-      - CGO_ENABLED=1
-    goos:
       - darwin
     goarch:
       - amd64
       - arm64
-    skip: '{{ ne .Runtime.Goos "darwin" }}'
     mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w
