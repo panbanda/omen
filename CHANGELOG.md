@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.1](https://github.com/panbanda/omen/compare/v1.0.0...v1.0.1) (2025-11-26)
+
+
+### Bug Fixes
+
+* **ci:** use matrix builds for CGO cross-compilation ([fae3508](https://github.com/panbanda/omen/commit/fae350885da274bc6de57ef68542e37377cc081a))
+* **ci:** use matrix builds for CGO cross-compilation ([909af82](https://github.com/panbanda/omen/commit/909af82b3a763d580d6fac757e81f8a227d0ceb7))
+
 ## 1.0.0 (2025-11-26)
 
 
