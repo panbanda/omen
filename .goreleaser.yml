@@ -34,19 +34,10 @@ checksum:
   name_template: "checksums.txt"
 
 changelog:
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
-      - "^ci:"
-      - "^chore:"
-      - Merge pull request
-      - Merge branch
+  disable: true
 
 release:
   github:
     owner: panbanda
     name: omen
-  draft: false
-  prerelease: auto
+  mode: append
