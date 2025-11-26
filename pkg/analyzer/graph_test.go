@@ -932,7 +932,7 @@ func TestToMermaid(t *testing.T) {
 				"graph TD",
 				"A",
 				"B",
-				"-->",
+				"imports",
 			},
 		},
 		{
@@ -1264,5 +1264,312 @@ func BenchmarkCalculateBetweenness(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = calculateBetweenness(nodes, edges)
+	}
+}
+
+func TestDetectCycles_TarjanSCC(t *testing.T) {
+	tests := []struct {
+		name       string
+		buildGraph func() *models.DependencyGraph
+		wantCycles int
+		wantNodes  [][]string
+	}{
+		{
+			name: "No cycles - linear chain",
+			buildGraph: func() *models.DependencyGraph {
+				g := models.NewDependencyGraph()
+				g.AddNode(models.GraphNode{ID: "A", Name: "A", Type: models.NodeFile})
+				g.AddNode(models.GraphNode{ID: "B", Name: "B", Type: models.NodeFile})
+				g.AddNode(models.GraphNode{ID: "C", Name: "C", Type: models.NodeFile})
+				g.AddEdge(models.GraphEdge{From: "A", To: "B", Type: models.EdgeImport})
+				g.AddEdge(models.GraphEdge{From: "B", To: "C", Type: models.EdgeImport})
+				return g
+			},
+			wantCycles: 0,
+		},
+		{
+			name: "Simple cycle A->B->A",
+			buildGraph: func() *models.DependencyGraph {
+				g := models.NewDependencyGraph()
+				g.AddNode(models.GraphNode{ID: "A", Name: "A", Type: models.NodeFile})
+				g.AddNode(models.GraphNode{ID: "B", Name: "B", Type: models.NodeFile})
+				g.AddEdge(models.GraphEdge{From: "A", To: "B", Type: models.EdgeImport})
+				g.AddEdge(models.GraphEdge{From: "B", To: "A", Type: models.EdgeImport})
+				return g
+			},
+			wantCycles: 1,
+		},
+		{
+			name: "Three-node cycle A->B->C->A",
+			buildGraph: func() *models.DependencyGraph {
+				g := models.NewDependencyGraph()
+				g.AddNode(models.GraphNode{ID: "A", Name: "A", Type: models.NodeFile})
+				g.AddNode(models.GraphNode{ID: "B", Name: "B", Type: models.NodeFile})
+				g.AddNode(models.GraphNode{ID: "C", Name: "C", Type: models.NodeFile})
+				g.AddEdge(models.GraphEdge{From: "A", To: "B", Type: models.EdgeImport})
+				g.AddEdge(models.GraphEdge{From: "B", To: "C", Type: models.EdgeImport})
+				g.AddEdge(models.GraphEdge{From: "C", To: "A", Type: models.EdgeImport})
+				return g
+			},
+			wantCycles: 1,
+		},
+		{
+			name: "Two separate cycles",
+			buildGraph: func() *models.DependencyGraph {
+				g := models.NewDependencyGraph()
+				g.AddNode(models.GraphNode{ID: "A", Name: "A", Type: models.NodeFile})
+				g.AddNode(models.GraphNode{ID: "B", Name: "B", Type: models.NodeFile})
+				g.AddNode(models.GraphNode{ID: "C", Name: "C", Type: models.NodeFile})
+				g.AddNode(models.GraphNode{ID: "D", Name: "D", Type: models.NodeFile})
+				// First cycle: A->B->A
+				g.AddEdge(models.GraphEdge{From: "A", To: "B", Type: models.EdgeImport})
+				g.AddEdge(models.GraphEdge{From: "B", To: "A", Type: models.EdgeImport})
+				// Second cycle: C->D->C
+				g.AddEdge(models.GraphEdge{From: "C", To: "D", Type: models.EdgeImport})
+				g.AddEdge(models.GraphEdge{From: "D", To: "C", Type: models.EdgeImport})
+				return g
+			},
+			wantCycles: 2,
+		},
+		{
+			name: "Empty graph",
+			buildGraph: func() *models.DependencyGraph {
+				return models.NewDependencyGraph()
+			},
+			wantCycles: 0,
+		},
+		{
+			name: "Self loop not detected as multi-node cycle",
+			buildGraph: func() *models.DependencyGraph {
+				g := models.NewDependencyGraph()
+				g.AddNode(models.GraphNode{ID: "A", Name: "A", Type: models.NodeFile})
+				g.AddEdge(models.GraphEdge{From: "A", To: "A", Type: models.EdgeCall})
+				return g
+			},
+			wantCycles: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			graph := tt.buildGraph()
+			analyzer := NewGraphAnalyzer(ScopeFile)
+			defer analyzer.Close()
+
+			cycles := analyzer.DetectCycles(graph)
+			if len(cycles) != tt.wantCycles {
+				t.Errorf("DetectCycles() found %d cycles, want %d", len(cycles), tt.wantCycles)
+				t.Logf("Cycles: %v", cycles)
+			}
+		})
+	}
+}
+
+func TestPruneGraph(t *testing.T) {
+	tests := []struct {
+		name      string
+		numNodes  int
+		numEdges  int
+		maxNodes  int
+		maxEdges  int
+		wantNodes int
+		wantEdges int
+	}{
+		{
+			name:      "No pruning needed",
+			numNodes:  5,
+			numEdges:  4,
+			maxNodes:  10,
+			maxEdges:  10,
+			wantNodes: 5,
+			wantEdges: 4,
+		},
+		{
+			name:      "Prune nodes",
+			numNodes:  10,
+			numEdges:  9,
+			maxNodes:  5,
+			maxEdges:  100,
+			wantNodes: 5,
+		},
+		{
+			name:      "Prune edges",
+			numNodes:  5,
+			numEdges:  10,
+			maxNodes:  100,
+			maxEdges:  3,
+			wantNodes: 5,
+			wantEdges: 3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := models.NewDependencyGraph()
+
+			// Create nodes
+			for i := 0; i < tt.numNodes; i++ {
+				id := string(rune('A' + i))
+				g.AddNode(models.GraphNode{ID: id, Name: id, Type: models.NodeFile})
+			}
+
+			// Create edges (linear chain)
+			edgeCount := 0
+			for i := 0; i < tt.numNodes-1 && edgeCount < tt.numEdges; i++ {
+				from := string(rune('A' + i))
+				to := string(rune('A' + i + 1))
+				g.AddEdge(models.GraphEdge{From: from, To: to, Type: models.EdgeImport})
+				edgeCount++
+			}
+
+			analyzer := NewGraphAnalyzer(ScopeFile)
+			defer analyzer.Close()
+
+			pruned := analyzer.PruneGraph(g, tt.maxNodes, tt.maxEdges)
+
+			if len(pruned.Nodes) > tt.maxNodes {
+				t.Errorf("PruneGraph() has %d nodes, want <= %d", len(pruned.Nodes), tt.maxNodes)
+			}
+			if len(pruned.Edges) > tt.maxEdges {
+				t.Errorf("PruneGraph() has %d edges, want <= %d", len(pruned.Edges), tt.maxEdges)
+			}
+			if tt.wantNodes > 0 && len(pruned.Nodes) != tt.wantNodes {
+				t.Errorf("PruneGraph() has %d nodes, want %d", len(pruned.Nodes), tt.wantNodes)
+			}
+			if tt.wantEdges > 0 && len(pruned.Edges) > tt.wantEdges {
+				t.Errorf("PruneGraph() has %d edges, want <= %d", len(pruned.Edges), tt.wantEdges)
+			}
+		})
+	}
+}
+
+func TestToMermaidWithOptions(t *testing.T) {
+	tests := []struct {
+		name         string
+		buildGraph   func() *models.DependencyGraph
+		opts         models.MermaidOptions
+		wantContains []string
+	}{
+		{
+			name: "Custom direction LR",
+			buildGraph: func() *models.DependencyGraph {
+				g := models.NewDependencyGraph()
+				g.AddNode(models.GraphNode{ID: "A", Name: "A", Type: models.NodeFile})
+				return g
+			},
+			opts: models.MermaidOptions{
+				Direction: models.DirectionLR,
+			},
+			wantContains: []string{"graph LR"},
+		},
+		{
+			name: "With complexity styling",
+			buildGraph: func() *models.DependencyGraph {
+				g := models.NewDependencyGraph()
+				g.AddNode(models.GraphNode{ID: "low", Name: "Low", Type: models.NodeFunction})
+				g.AddNode(models.GraphNode{ID: "high", Name: "High", Type: models.NodeFunction})
+				return g
+			},
+			opts: models.MermaidOptions{
+				ShowComplexity: true,
+				NodeComplexity: map[string]int{
+					"low":  2,
+					"high": 15,
+				},
+			},
+			wantContains: []string{
+				"#90EE90", // Light green for low complexity
+				"#FF6347", // Tomato red for high complexity
+			},
+		},
+		{
+			name: "Prune to max nodes",
+			buildGraph: func() *models.DependencyGraph {
+				g := models.NewDependencyGraph()
+				for i := 0; i < 10; i++ {
+					id := string(rune('A' + i))
+					g.AddNode(models.GraphNode{ID: id, Name: id, Type: models.NodeFile})
+				}
+				return g
+			},
+			opts: models.MermaidOptions{
+				MaxNodes: 3,
+			},
+			wantContains: []string{"graph TD"},
+		},
+		{
+			name: "Edge type uses",
+			buildGraph: func() *models.DependencyGraph {
+				g := models.NewDependencyGraph()
+				g.AddNode(models.GraphNode{ID: "A", Name: "A", Type: models.NodeFile})
+				g.AddNode(models.GraphNode{ID: "B", Name: "B", Type: models.NodeFile})
+				g.AddEdge(models.GraphEdge{From: "A", To: "B", Type: models.EdgeUses})
+				return g
+			},
+			opts:         models.DefaultMermaidOptions(),
+			wantContains: []string{"---"}, // Uses edge type renders as ---
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			graph := tt.buildGraph()
+			mermaid := graph.ToMermaidWithOptions(tt.opts)
+
+			for _, want := range tt.wantContains {
+				if !strings.Contains(mermaid, want) {
+					t.Errorf("ToMermaidWithOptions() missing %q\nGot:\n%s", want, mermaid)
+				}
+			}
+		})
+	}
+}
+
+func TestSanitizeMermaidID(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"simple", "simple"},
+		{"with spaces", "with_spaces"},
+		{"path/to/file.go", "path_to_file_go"},
+		{"pkg::module::func", "pkg__module__func"},
+		{"123start", "n123start"},
+		{"", "empty"},
+		{"a-b-c", "a_b_c"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := models.SanitizeMermaidID(tt.input)
+			if got != tt.want {
+				t.Errorf("SanitizeMermaidID(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEscapeMermaidLabel(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"simple", "simple"},
+		{"a & b", "a &amp; b"},
+		{"<script>", "&lt;script&gt;"},
+		{"say \"hello\"", "say &quot;hello&quot;"},
+		{"a|b", "a&#124;b"},
+		{"[array]", "&#91;array&#93;"},
+		{"{object}", "&#123;object&#125;"},
+		{"line1\nline2", "line1<br/>line2"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := models.EscapeMermaidLabel(tt.input)
+			if got != tt.want {
+				t.Errorf("EscapeMermaidLabel(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
 	}
 }

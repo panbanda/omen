@@ -496,3 +496,166 @@ func calculateBetweenness(nodes []models.GraphNode, outNeighbors map[string][]st
 func (a *GraphAnalyzer) Close() {
 	a.parser.Close()
 }
+
+// DetectCycles uses Tarjan's algorithm to find strongly connected components (cycles).
+func (a *GraphAnalyzer) DetectCycles(graph *models.DependencyGraph) [][]string {
+	return tarjanSCC(graph)
+}
+
+// tarjanSCC implements Tarjan's strongly connected components algorithm.
+func tarjanSCC(graph *models.DependencyGraph) [][]string {
+	n := len(graph.Nodes)
+	if n == 0 {
+		return nil
+	}
+
+	// Build node index mapping and adjacency list
+	nodeIndex := make(map[string]int)
+	for i, node := range graph.Nodes {
+		nodeIndex[node.ID] = i
+	}
+
+	adj := make([][]int, n)
+	for i := range adj {
+		adj[i] = []int{}
+	}
+	for _, edge := range graph.Edges {
+		fromIdx, fromOK := nodeIndex[edge.From]
+		toIdx, toOK := nodeIndex[edge.To]
+		if fromOK && toOK {
+			adj[fromIdx] = append(adj[fromIdx], toIdx)
+		}
+	}
+
+	// Tarjan's algorithm state
+	index := 0
+	indices := make([]int, n)
+	lowLinks := make([]int, n)
+	onStack := make([]bool, n)
+	stack := make([]int, 0, n)
+	for i := range n {
+		indices[i] = -1
+	}
+
+	var sccs [][]string
+
+	var strongConnect func(v int)
+	strongConnect = func(v int) {
+		indices[v] = index
+		lowLinks[v] = index
+		index++
+		stack = append(stack, v)
+		onStack[v] = true
+
+		for _, w := range adj[v] {
+			if indices[w] == -1 {
+				strongConnect(w)
+				if lowLinks[w] < lowLinks[v] {
+					lowLinks[v] = lowLinks[w]
+				}
+			} else if onStack[w] {
+				if indices[w] < lowLinks[v] {
+					lowLinks[v] = indices[w]
+				}
+			}
+		}
+
+		// Root of an SCC
+		if lowLinks[v] == indices[v] {
+			var scc []string
+			for {
+				w := stack[len(stack)-1]
+				stack = stack[:len(stack)-1]
+				onStack[w] = false
+				scc = append(scc, graph.Nodes[w].ID)
+				if w == v {
+					break
+				}
+			}
+			// Only include SCCs with more than one node (actual cycles)
+			if len(scc) > 1 {
+				sccs = append(sccs, scc)
+			}
+		}
+	}
+
+	for i := range n {
+		if indices[i] == -1 {
+			strongConnect(i)
+		}
+	}
+
+	return sccs
+}
+
+// rankedNode pairs a graph node with its PageRank score for sorting.
+type rankedNode struct {
+	node models.GraphNode
+	rank float64
+}
+
+// PruneGraph reduces graph size while preserving important nodes using PageRank.
+func (a *GraphAnalyzer) PruneGraph(graph *models.DependencyGraph, maxNodes, maxEdges int) *models.DependencyGraph {
+	if len(graph.Nodes) <= maxNodes && len(graph.Edges) <= maxEdges {
+		return graph
+	}
+
+	// Build adjacency list for PageRank
+	outNeighbors := make(map[string][]string)
+	for _, node := range graph.Nodes {
+		outNeighbors[node.ID] = []string{}
+	}
+	for _, edge := range graph.Edges {
+		outNeighbors[edge.From] = append(outNeighbors[edge.From], edge.To)
+	}
+
+	// Calculate PageRank to determine node importance
+	pageRank := calculatePageRank(graph.Nodes, outNeighbors, 20, 0.85)
+
+	// Sort nodes by PageRank (highest first)
+	ranked := make([]rankedNode, len(graph.Nodes))
+	for i, node := range graph.Nodes {
+		ranked[i] = rankedNode{node: node, rank: pageRank[node.ID]}
+	}
+	sortRankedNodes(ranked)
+
+	// Select top nodes
+	pruned := models.NewDependencyGraph()
+	nodeSet := make(map[string]bool)
+
+	limit := maxNodes
+	if limit > len(ranked) {
+		limit = len(ranked)
+	}
+	for i := 0; i < limit; i++ {
+		pruned.AddNode(ranked[i].node)
+		nodeSet[ranked[i].node.ID] = true
+	}
+
+	// Add edges between selected nodes
+	edgeCount := 0
+	for _, edge := range graph.Edges {
+		if edgeCount >= maxEdges {
+			break
+		}
+		if nodeSet[edge.From] && nodeSet[edge.To] {
+			pruned.AddEdge(edge)
+			edgeCount++
+		}
+	}
+
+	return pruned
+}
+
+// sortRankedNodes sorts nodes by PageRank in descending order using insertion sort.
+func sortRankedNodes(nodes []rankedNode) {
+	for i := 1; i < len(nodes); i++ {
+		key := nodes[i]
+		j := i - 1
+		for j >= 0 && nodes[j].rank < key.rank {
+			nodes[j+1] = nodes[j]
+			j--
+		}
+		nodes[j+1] = key
+	}
+}
