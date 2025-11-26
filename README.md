@@ -28,11 +28,23 @@ Go, Rust, Python, TypeScript, JavaScript, TSX/JSX, Java, C, C++, C#, Ruby, PHP, 
 
 ## Installation
 
+### Homebrew (macOS/Linux)
+
+```bash
+brew install panbanda/omen/omen
+```
+
+### Go Install
+
 ```bash
 go install github.com/panbanda/omen/cmd/omen@latest
 ```
 
-Or build from source:
+### Download Binary
+
+Download pre-built binaries from the [releases page](https://github.com/panbanda/omen/releases).
+
+### Build from Source
 
 ```bash
 git clone https://github.com/panbanda/omen.git
