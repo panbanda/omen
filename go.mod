@@ -17,6 +17,7 @@ require (
 	github.com/toon-format/toon-go v0.0.0-20251108125615-44b4cd22477f
 	github.com/urfave/cli/v2 v2.27.7
 	github.com/zeebo/blake3 v0.2.4
+	gonum.org/v1/gonum v0.16.0
 )
 
 require (

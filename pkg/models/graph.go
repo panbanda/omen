@@ -61,30 +61,44 @@ type NodeMetric struct {
 	Name                  string  `json:"name"`
 	PageRank              float64 `json:"pagerank"`
 	BetweennessCentrality float64 `json:"betweenness_centrality"`
+	ClosenessCentrality   float64 `json:"closeness_centrality"`
+	EigenvectorCentrality float64 `json:"eigenvector_centrality"`
+	HarmonicCentrality    float64 `json:"harmonic_centrality"`
 	InDegree              int     `json:"in_degree"`
 	OutDegree             int     `json:"out_degree"`
 	ClusteringCoef        float64 `json:"clustering_coefficient"`
+	CommunityID           int     `json:"community_id,omitempty"`
 }
 
 // GraphSummary provides aggregate graph statistics.
 type GraphSummary struct {
-	TotalNodes       int      `json:"total_nodes"`
-	TotalEdges       int      `json:"total_edges"`
-	AvgDegree        float64  `json:"avg_degree"`
-	Density          float64  `json:"density"`
-	Components       int      `json:"components"`
-	LargestComponent int      `json:"largest_component"`
-	CycleCount       int      `json:"cycle_count"`
-	CycleNodes       []string `json:"cycle_nodes,omitempty"`
+	TotalNodes                  int      `json:"total_nodes"`
+	TotalEdges                  int      `json:"total_edges"`
+	AvgDegree                   float64  `json:"avg_degree"`
+	Density                     float64  `json:"density"`
+	Components                  int      `json:"components"`
+	LargestComponent            int      `json:"largest_component"`
+	StronglyConnectedComponents int      `json:"strongly_connected_components"`
+	CycleCount                  int      `json:"cycle_count"`
+	CycleNodes                  []string `json:"cycle_nodes,omitempty"`
+	IsCyclic                    bool     `json:"is_cyclic"`
+	Diameter                    int      `json:"diameter,omitempty"`
+	Radius                      int      `json:"radius,omitempty"`
+	ClusteringCoefficient       float64  `json:"clustering_coefficient"`
+	Assortativity               float64  `json:"assortativity"`
+	Transitivity                float64  `json:"transitivity"`
+	Reciprocity                 float64  `json:"reciprocity,omitempty"`
+	Modularity                  float64  `json:"modularity,omitempty"`
+	CommunityCount              int      `json:"community_count,omitempty"`
 }
 
 // MermaidOptions configures Mermaid diagram generation.
 type MermaidOptions struct {
-	MaxNodes       int             `json:"max_nodes"`
-	MaxEdges       int             `json:"max_edges"`
-	ShowComplexity bool            `json:"show_complexity"`
-	GroupByModule  bool            `json:"group_by_module"`
-	NodeComplexity map[string]int  `json:"node_complexity,omitempty"`
+	MaxNodes       int              `json:"max_nodes"`
+	MaxEdges       int              `json:"max_edges"`
+	ShowComplexity bool             `json:"show_complexity"`
+	GroupByModule  bool             `json:"group_by_module"`
+	NodeComplexity map[string]int   `json:"node_complexity,omitempty"`
 	Direction      MermaidDirection `json:"direction"`
 }
 

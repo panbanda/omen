@@ -736,146 +736,8 @@ func TestCalculateMetrics(t *testing.T) {
 	}
 }
 
-func TestCalculatePageRank(t *testing.T) {
-	tests := []struct {
-		name  string
-		nodes []models.GraphNode
-		edges map[string][]string
-	}{
-		{
-			name:  "Empty graph",
-			nodes: []models.GraphNode{},
-			edges: map[string][]string{},
-		},
-		{
-			name: "Single node",
-			nodes: []models.GraphNode{
-				{ID: "A", Name: "A", Type: models.NodeFile},
-			},
-			edges: map[string][]string{
-				"A": {},
-			},
-		},
-		{
-			name: "Linear chain",
-			nodes: []models.GraphNode{
-				{ID: "A", Name: "A", Type: models.NodeFile},
-				{ID: "B", Name: "B", Type: models.NodeFile},
-				{ID: "C", Name: "C", Type: models.NodeFile},
-			},
-			edges: map[string][]string{
-				"A": {"B"},
-				"B": {"C"},
-				"C": {},
-			},
-		},
-		{
-			name: "Cycle",
-			nodes: []models.GraphNode{
-				{ID: "A", Name: "A", Type: models.NodeFile},
-				{ID: "B", Name: "B", Type: models.NodeFile},
-			},
-			edges: map[string][]string{
-				"A": {"B"},
-				"B": {"A"},
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			scores := calculatePageRank(tt.nodes, tt.edges, 20, 0.85)
-
-			if len(tt.nodes) == 0 {
-				if len(scores) != 0 {
-					t.Errorf("expected empty scores for empty graph, got %v", scores)
-				}
-				return
-			}
-
-			sumScore := 0.0
-			for _, score := range scores {
-				if score < 0 {
-					t.Errorf("PageRank score should be non-negative, got %v", score)
-				}
-				sumScore += score
-			}
-
-			expectedSum := 1.0
-			tolerance := 0.01
-			if sumScore < expectedSum-tolerance || sumScore > expectedSum+tolerance {
-				t.Errorf("Sum of PageRank scores = %v, want ~%v", sumScore, expectedSum)
-			}
-		})
-	}
-}
-
-func TestCalculateBetweenness(t *testing.T) {
-	tests := []struct {
-		name  string
-		nodes []models.GraphNode
-		edges map[string][]string
-	}{
-		{
-			name:  "Empty graph",
-			nodes: []models.GraphNode{},
-			edges: map[string][]string{},
-		},
-		{
-			name: "Single node",
-			nodes: []models.GraphNode{
-				{ID: "A", Name: "A", Type: models.NodeFile},
-			},
-			edges: map[string][]string{
-				"A": {},
-			},
-		},
-		{
-			name: "Linear path",
-			nodes: []models.GraphNode{
-				{ID: "A", Name: "A", Type: models.NodeFile},
-				{ID: "B", Name: "B", Type: models.NodeFile},
-				{ID: "C", Name: "C", Type: models.NodeFile},
-			},
-			edges: map[string][]string{
-				"A": {"B"},
-				"B": {"C"},
-				"C": {},
-			},
-		},
-		{
-			name: "Star topology",
-			nodes: []models.GraphNode{
-				{ID: "center", Name: "Center", Type: models.NodeFile},
-				{ID: "A", Name: "A", Type: models.NodeFile},
-				{ID: "B", Name: "B", Type: models.NodeFile},
-				{ID: "C", Name: "C", Type: models.NodeFile},
-			},
-			edges: map[string][]string{
-				"center": {"A", "B", "C"},
-				"A":      {},
-				"B":      {},
-				"C":      {},
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			betweenness := calculateBetweenness(tt.nodes, tt.edges)
-
-			if len(betweenness) != len(tt.nodes) {
-				t.Errorf("len(betweenness) = %v, want %v", len(betweenness), len(tt.nodes))
-			}
-
-			for id, score := range betweenness {
-				if score < 0 {
-					t.Errorf("Betweenness for %s should be non-negative, got %v", id, score)
-				}
-			}
-		})
-	}
-}
+// Note: Tests for PageRank, Betweenness, Closeness, Harmonic, and ConnectedComponents
+// are now covered via gonum library integration. We test them through CalculateMetrics.
 
 func TestToMermaid(t *testing.T) {
 	tests := []struct {
@@ -1215,57 +1077,7 @@ func main() {
 	}
 }
 
-func BenchmarkCalculatePageRank(b *testing.B) {
-	nodes := make([]models.GraphNode, 100)
-	edges := make(map[string][]string)
-
-	for i := range nodes {
-		id := string(rune('a' + (i % 26)))
-		nodes[i] = models.GraphNode{
-			ID:   id,
-			Name: id,
-			Type: models.NodeFile,
-		}
-		edges[id] = []string{}
-	}
-
-	for i := 0; i < len(nodes)-1; i++ {
-		fromID := nodes[i].ID
-		toID := nodes[i+1].ID
-		edges[fromID] = append(edges[fromID], toID)
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = calculatePageRank(nodes, edges, 20, 0.85)
-	}
-}
-
-func BenchmarkCalculateBetweenness(b *testing.B) {
-	nodes := make([]models.GraphNode, 50)
-	edges := make(map[string][]string)
-
-	for i := range nodes {
-		id := string(rune('a' + (i % 26)))
-		nodes[i] = models.GraphNode{
-			ID:   id,
-			Name: id,
-			Type: models.NodeFile,
-		}
-		edges[id] = []string{}
-	}
-
-	for i := 0; i < len(nodes)-1; i++ {
-		fromID := nodes[i].ID
-		toID := nodes[i+1].ID
-		edges[fromID] = append(edges[fromID], toID)
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = calculateBetweenness(nodes, edges)
-	}
-}
+// Benchmarks for PageRank and Betweenness removed - now using gonum library
 
 func TestDetectCycles_TarjanSCC(t *testing.T) {
 	tests := []struct {
@@ -1573,3 +1385,485 @@ func TestEscapeMermaidLabel(t *testing.T) {
 		})
 	}
 }
+
+// Tests for Closeness and Harmonic removed - now using gonum library
+
+func TestCalculateEigenvector(t *testing.T) {
+	tests := []struct {
+		name  string
+		nodes []models.GraphNode
+		edges map[string][]string
+	}{
+		{
+			name:  "Empty graph",
+			nodes: []models.GraphNode{},
+			edges: map[string][]string{},
+		},
+		{
+			name: "Cycle",
+			nodes: []models.GraphNode{
+				{ID: "A", Name: "A", Type: models.NodeFile},
+				{ID: "B", Name: "B", Type: models.NodeFile},
+			},
+			edges: map[string][]string{
+				"A": {"B"},
+				"B": {"A"},
+			},
+		},
+		{
+			name: "Star topology",
+			nodes: []models.GraphNode{
+				{ID: "center", Name: "Center", Type: models.NodeFile},
+				{ID: "A", Name: "A", Type: models.NodeFile},
+				{ID: "B", Name: "B", Type: models.NodeFile},
+				{ID: "C", Name: "C", Type: models.NodeFile},
+			},
+			edges: map[string][]string{
+				"A":      {"center"},
+				"B":      {"center"},
+				"C":      {"center"},
+				"center": {},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eigenvector := calculateEigenvector(tt.nodes, tt.edges, 100, 1e-6)
+
+			if len(eigenvector) != len(tt.nodes) {
+				t.Errorf("Expected %d eigenvector values, got %d", len(tt.nodes), len(eigenvector))
+			}
+
+			for id, score := range eigenvector {
+				if score < 0 {
+					t.Errorf("Eigenvector centrality for %s should be non-negative, got %v", id, score)
+				}
+			}
+		})
+	}
+}
+
+func TestCalculateClusteringCoefficients(t *testing.T) {
+	tests := []struct {
+		name  string
+		nodes []models.GraphNode
+		edges map[string][]string
+	}{
+		{
+			name:  "Empty graph",
+			nodes: []models.GraphNode{},
+			edges: map[string][]string{},
+		},
+		{
+			name: "Triangle (fully connected)",
+			nodes: []models.GraphNode{
+				{ID: "A", Name: "A", Type: models.NodeFile},
+				{ID: "B", Name: "B", Type: models.NodeFile},
+				{ID: "C", Name: "C", Type: models.NodeFile},
+			},
+			edges: map[string][]string{
+				"A": {"B", "C"},
+				"B": {"C"},
+				"C": {},
+			},
+		},
+		{
+			name: "Linear chain (no triangles)",
+			nodes: []models.GraphNode{
+				{ID: "A", Name: "A", Type: models.NodeFile},
+				{ID: "B", Name: "B", Type: models.NodeFile},
+				{ID: "C", Name: "C", Type: models.NodeFile},
+			},
+			edges: map[string][]string{
+				"A": {"B"},
+				"B": {"C"},
+				"C": {},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clustering := calculateClusteringCoefficients(tt.nodes, tt.edges)
+
+			if len(clustering) != len(tt.nodes) {
+				t.Errorf("Expected %d clustering values, got %d", len(tt.nodes), len(clustering))
+			}
+
+			for id, coef := range clustering {
+				if coef < 0 || coef > 1 {
+					t.Errorf("Clustering coefficient for %s should be in [0,1], got %v", id, coef)
+				}
+			}
+		})
+	}
+}
+
+func TestCalculateGlobalClustering(t *testing.T) {
+	tests := []struct {
+		name     string
+		nodes    []models.GraphNode
+		edges    map[string][]string
+		wantZero bool
+	}{
+		{
+			name:     "Empty graph",
+			nodes:    []models.GraphNode{},
+			edges:    map[string][]string{},
+			wantZero: true,
+		},
+		{
+			name: "Triangle (fully connected)",
+			nodes: []models.GraphNode{
+				{ID: "A", Name: "A", Type: models.NodeFile},
+				{ID: "B", Name: "B", Type: models.NodeFile},
+				{ID: "C", Name: "C", Type: models.NodeFile},
+			},
+			edges: map[string][]string{
+				"A": {"B", "C"},
+				"B": {"C"},
+				"C": {},
+			},
+			wantZero: false,
+		},
+		{
+			name: "Linear chain (no triangles)",
+			nodes: []models.GraphNode{
+				{ID: "A", Name: "A", Type: models.NodeFile},
+				{ID: "B", Name: "B", Type: models.NodeFile},
+				{ID: "C", Name: "C", Type: models.NodeFile},
+			},
+			edges: map[string][]string{
+				"A": {"B"},
+				"B": {"C"},
+				"C": {},
+			},
+			wantZero: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clustering := calculateGlobalClustering(tt.nodes, tt.edges)
+
+			if clustering < 0 || clustering > 1 {
+				t.Errorf("Global clustering should be in [0,1], got %v", clustering)
+			}
+
+			if tt.wantZero && clustering != 0 {
+				t.Errorf("Expected zero global clustering, got %v", clustering)
+			}
+			if !tt.wantZero && clustering == 0 {
+				t.Errorf("Expected non-zero global clustering, got 0")
+			}
+		})
+	}
+}
+
+func TestCalculateAssortativity(t *testing.T) {
+	tests := []struct {
+		name  string
+		graph func() *models.DependencyGraph
+	}{
+		{
+			name: "Empty graph",
+			graph: func() *models.DependencyGraph {
+				return models.NewDependencyGraph()
+			},
+		},
+		{
+			name: "Single edge",
+			graph: func() *models.DependencyGraph {
+				g := models.NewDependencyGraph()
+				g.AddNode(models.GraphNode{ID: "A", Name: "A", Type: models.NodeFile})
+				g.AddNode(models.GraphNode{ID: "B", Name: "B", Type: models.NodeFile})
+				g.AddEdge(models.GraphEdge{From: "A", To: "B", Type: models.EdgeImport})
+				return g
+			},
+		},
+		{
+			name: "Star topology",
+			graph: func() *models.DependencyGraph {
+				g := models.NewDependencyGraph()
+				g.AddNode(models.GraphNode{ID: "center", Name: "Center", Type: models.NodeFile})
+				for i := 0; i < 5; i++ {
+					id := string(rune('A' + i))
+					g.AddNode(models.GraphNode{ID: id, Name: id, Type: models.NodeFile})
+					g.AddEdge(models.GraphEdge{From: "center", To: id, Type: models.EdgeImport})
+				}
+				return g
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assort := calculateAssortativity(tt.graph())
+
+			if assort < -1 || assort > 1 {
+				t.Errorf("Assortativity should be in [-1,1], got %v", assort)
+			}
+		})
+	}
+}
+
+func TestCalculateReciprocity(t *testing.T) {
+	tests := []struct {
+		name  string
+		graph func() *models.DependencyGraph
+		want  float64
+	}{
+		{
+			name: "Empty graph",
+			graph: func() *models.DependencyGraph {
+				return models.NewDependencyGraph()
+			},
+			want: 0,
+		},
+		{
+			name: "No reciprocal edges",
+			graph: func() *models.DependencyGraph {
+				g := models.NewDependencyGraph()
+				g.AddNode(models.GraphNode{ID: "A", Name: "A", Type: models.NodeFile})
+				g.AddNode(models.GraphNode{ID: "B", Name: "B", Type: models.NodeFile})
+				g.AddEdge(models.GraphEdge{From: "A", To: "B", Type: models.EdgeImport})
+				return g
+			},
+			want: 0,
+		},
+		{
+			name: "Full reciprocity",
+			graph: func() *models.DependencyGraph {
+				g := models.NewDependencyGraph()
+				g.AddNode(models.GraphNode{ID: "A", Name: "A", Type: models.NodeFile})
+				g.AddNode(models.GraphNode{ID: "B", Name: "B", Type: models.NodeFile})
+				g.AddEdge(models.GraphEdge{From: "A", To: "B", Type: models.EdgeImport})
+				g.AddEdge(models.GraphEdge{From: "B", To: "A", Type: models.EdgeImport})
+				return g
+			},
+			want: 1,
+		},
+		{
+			name: "Partial reciprocity",
+			graph: func() *models.DependencyGraph {
+				g := models.NewDependencyGraph()
+				g.AddNode(models.GraphNode{ID: "A", Name: "A", Type: models.NodeFile})
+				g.AddNode(models.GraphNode{ID: "B", Name: "B", Type: models.NodeFile})
+				g.AddNode(models.GraphNode{ID: "C", Name: "C", Type: models.NodeFile})
+				g.AddEdge(models.GraphEdge{From: "A", To: "B", Type: models.EdgeImport})
+				g.AddEdge(models.GraphEdge{From: "B", To: "A", Type: models.EdgeImport})
+				g.AddEdge(models.GraphEdge{From: "B", To: "C", Type: models.EdgeImport})
+				return g
+			},
+			want: 0.666666,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reciprocity := calculateReciprocity(tt.graph())
+
+			if reciprocity < 0 || reciprocity > 1 {
+				t.Errorf("Reciprocity should be in [0,1], got %v", reciprocity)
+			}
+
+			tolerance := 0.01
+			if reciprocity < tt.want-tolerance || reciprocity > tt.want+tolerance {
+				t.Errorf("Reciprocity = %v, want ~%v", reciprocity, tt.want)
+			}
+		})
+	}
+}
+
+// TestFindConnectedComponents removed - now using gonum library
+
+func TestCalculateDiameterAndRadius(t *testing.T) {
+	tests := []struct {
+		name         string
+		nodes        []models.GraphNode
+		edges        map[string][]string
+		wantDiameter int
+		wantRadius   int
+	}{
+		{
+			name:         "Empty graph",
+			nodes:        []models.GraphNode{},
+			edges:        map[string][]string{},
+			wantDiameter: 0,
+			wantRadius:   0,
+		},
+		{
+			name: "Single node",
+			nodes: []models.GraphNode{
+				{ID: "A", Name: "A", Type: models.NodeFile},
+			},
+			edges: map[string][]string{
+				"A": {},
+			},
+			wantDiameter: 0,
+			wantRadius:   0,
+		},
+		{
+			name: "Linear chain of 3",
+			nodes: []models.GraphNode{
+				{ID: "A", Name: "A", Type: models.NodeFile},
+				{ID: "B", Name: "B", Type: models.NodeFile},
+				{ID: "C", Name: "C", Type: models.NodeFile},
+			},
+			edges: map[string][]string{
+				"A": {"B"},
+				"B": {"C"},
+				"C": {},
+			},
+			wantDiameter: 2,
+			wantRadius:   1,
+		},
+		{
+			name: "Triangle",
+			nodes: []models.GraphNode{
+				{ID: "A", Name: "A", Type: models.NodeFile},
+				{ID: "B", Name: "B", Type: models.NodeFile},
+				{ID: "C", Name: "C", Type: models.NodeFile},
+			},
+			edges: map[string][]string{
+				"A": {"B", "C"},
+				"B": {"C"},
+				"C": {},
+			},
+			wantDiameter: 1,
+			wantRadius:   1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			diameter, radius := calculateDiameterAndRadius(tt.nodes, tt.edges)
+
+			if diameter != tt.wantDiameter {
+				t.Errorf("Diameter = %d, want %d", diameter, tt.wantDiameter)
+			}
+			if radius != tt.wantRadius {
+				t.Errorf("Radius = %d, want %d", radius, tt.wantRadius)
+			}
+		})
+	}
+}
+
+// TestLouvainCommunityDetection and TestCalculateModularity removed - these functions
+// are now delegated to gonum's community.Modularize and community.Q.
+// Community detection is tested via integration through CalculateMetrics in TestComprehensiveMetrics.
+
+func TestComprehensiveMetrics(t *testing.T) {
+	graph := models.NewDependencyGraph()
+	// Create a small test graph
+	for i := 0; i < 5; i++ {
+		id := string(rune('A' + i))
+		graph.AddNode(models.GraphNode{ID: id, Name: id, Type: models.NodeFile})
+	}
+	// Create edges forming a structure
+	graph.AddEdge(models.GraphEdge{From: "A", To: "B", Type: models.EdgeImport})
+	graph.AddEdge(models.GraphEdge{From: "B", To: "C", Type: models.EdgeImport})
+	graph.AddEdge(models.GraphEdge{From: "C", To: "D", Type: models.EdgeImport})
+	graph.AddEdge(models.GraphEdge{From: "D", To: "E", Type: models.EdgeImport})
+	graph.AddEdge(models.GraphEdge{From: "E", To: "A", Type: models.EdgeImport}) // Create cycle
+
+	analyzer := NewGraphAnalyzer(ScopeFile)
+	defer analyzer.Close()
+
+	metrics := analyzer.CalculateMetrics(graph)
+
+	// Verify summary
+	if metrics.Summary.TotalNodes != 5 {
+		t.Errorf("TotalNodes = %d, want 5", metrics.Summary.TotalNodes)
+	}
+	if metrics.Summary.TotalEdges != 5 {
+		t.Errorf("TotalEdges = %d, want 5", metrics.Summary.TotalEdges)
+	}
+
+	// Verify we have metrics for all nodes
+	if len(metrics.NodeMetrics) != 5 {
+		t.Errorf("NodeMetrics count = %d, want 5", len(metrics.NodeMetrics))
+	}
+
+	// Check that centrality metrics are computed
+	for _, nm := range metrics.NodeMetrics {
+		if nm.PageRank <= 0 {
+			t.Errorf("PageRank for %s should be positive, got %v", nm.NodeID, nm.PageRank)
+		}
+	}
+
+	// Check structural metrics
+	if metrics.Summary.Components != 1 {
+		t.Errorf("Components = %d, want 1", metrics.Summary.Components)
+	}
+	if metrics.Summary.LargestComponent != 5 {
+		t.Errorf("LargestComponent = %d, want 5", metrics.Summary.LargestComponent)
+	}
+
+	// Cycle detection
+	if !metrics.Summary.IsCyclic {
+		t.Error("Expected IsCyclic = true for cyclic graph")
+	}
+	if metrics.Summary.CycleCount == 0 {
+		t.Error("Expected CycleCount > 0 for cyclic graph")
+	}
+
+	// Community detection
+	if metrics.Summary.CommunityCount == 0 {
+		t.Error("Expected CommunityCount > 0")
+	}
+
+	// Verify diameter and radius are computed
+	if metrics.Summary.Diameter < 0 {
+		t.Errorf("Diameter should be non-negative, got %d", metrics.Summary.Diameter)
+	}
+}
+
+func TestSqrt(t *testing.T) {
+	tests := []struct {
+		input float64
+		want  float64
+	}{
+		{0, 0},
+		{1, 1},
+		{4, 2},
+		{9, 3},
+		{16, 4},
+		{2, 1.414213},
+	}
+
+	for _, tt := range tests {
+		got := sqrt(tt.input)
+		tolerance := 0.0001
+		if got < tt.want-tolerance || got > tt.want+tolerance {
+			t.Errorf("sqrt(%v) = %v, want ~%v", tt.input, got, tt.want)
+		}
+	}
+}
+
+// BenchmarkCalculateCloseness removed - now using gonum library
+
+func BenchmarkCalculateEigenvector(b *testing.B) {
+	nodes := make([]models.GraphNode, 50)
+	edges := make(map[string][]string)
+
+	for i := range nodes {
+		id := string(rune('a' + (i % 26)))
+		nodes[i] = models.GraphNode{ID: id, Name: id, Type: models.NodeFile}
+		edges[id] = []string{}
+	}
+
+	for i := 0; i < len(nodes)-1; i++ {
+		toID := nodes[i].ID
+		fromID := nodes[i+1].ID
+		edges[fromID] = append(edges[fromID], toID)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = calculateEigenvector(nodes, edges, 100, 1e-6)
+	}
+}
+
+// BenchmarkLouvainCommunityDetection removed - now using gonum library
