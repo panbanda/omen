@@ -317,9 +317,9 @@ func TestSigmoid(t *testing.T) {
 		input    float32
 		expected float32
 	}{
-		{"zero input", 0.0, 0.00669},    // 1/(1+exp(5)) ~ 0.00669
-		{"midpoint", 0.5, 0.5},          // 1/(1+exp(0)) = 0.5
-		{"max input", 1.0, 0.99330},     // 1/(1+exp(-5)) ~ 0.99330
+		{"zero input", 0.0, 0.00669}, // 1/(1+exp(5)) ~ 0.00669
+		{"midpoint", 0.5, 0.5},       // 1/(1+exp(0)) = 0.5
+		{"max input", 1.0, 0.99330},  // 1/(1+exp(-5)) ~ 0.99330
 	}
 
 	for _, tt := range tests {
