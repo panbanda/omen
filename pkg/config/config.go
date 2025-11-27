@@ -101,7 +101,7 @@ func DefaultConfig() *Config {
 			DuplicateSimilarity:  0.8,
 			DeadCodeConfidence:   0.8,
 			DefectHighRisk:       0.6,
-			TDGHighRisk:          3.0,
+			TDGHighRisk:          2.5, // Critical threshold on 0-5 scale
 		},
 		Exclude: ExcludeConfig{
 			Patterns: []string{

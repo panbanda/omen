@@ -1,6 +1,11 @@
 version: '3'
 
 tasks:
+  setup:
+    desc: Install git hooks via lefthook
+    cmds:
+      - lefthook install
+
   tidy:
     desc: Format code and tidy dependencies
     cmds:

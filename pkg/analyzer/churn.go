@@ -202,6 +202,9 @@ func (a *ChurnAnalyzer) AnalyzeRepo(repoPath string) (*models.ChurnAnalysis, err
 	// Calculate churn statistics
 	analysis.Summary.CalculateStatistics(analysis.Files)
 
+	// Identify hotspot and stable files
+	analysis.Summary.IdentifyHotspotAndStableFiles(analysis.Files)
+
 	return analysis, nil
 }
 
