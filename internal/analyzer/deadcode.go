@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring/v2"
+	"github.com/panbanda/omen/internal/fileproc"
 	"github.com/panbanda/omen/pkg/models"
 	"github.com/panbanda/omen/pkg/parser"
 	sitter "github.com/smacker/go-tree-sitter"
@@ -1238,7 +1239,7 @@ func (a *DeadCodeAnalyzer) AnalyzeProject(files []string) (*models.DeadCodeAnaly
 // Phase 2: Resolve dynamic dispatch
 // Phase 3: Mark reachable from entry points
 // Phase 4: Classify dead code by type
-func (a *DeadCodeAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress ProgressFunc) (*models.DeadCodeAnalysis, error) {
+func (a *DeadCodeAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress fileproc.ProgressFunc) (*models.DeadCodeAnalysis, error) {
 	analysis := &models.DeadCodeAnalysis{
 		DeadFunctions:   make([]models.DeadFunction, 0),
 		DeadVariables:   make([]models.DeadVariable, 0),
@@ -1252,7 +1253,7 @@ func (a *DeadCodeAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress
 	}
 
 	// Collect file results
-	results := MapFilesWithProgress(files, func(psr *parser.Parser, path string) (*fileDeadCode, error) {
+	results := fileproc.MapFilesWithProgress(files, func(psr *parser.Parser, path string) (*fileDeadCode, error) {
 		return analyzeFileDeadCode(psr, path)
 	}, onProgress)
 

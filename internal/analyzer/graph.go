@@ -3,6 +3,7 @@ package analyzer
 import (
 	"sync"
 
+	"github.com/panbanda/omen/internal/fileproc"
 	"github.com/panbanda/omen/pkg/models"
 	"github.com/panbanda/omen/pkg/parser"
 	sitter "github.com/smacker/go-tree-sitter"
@@ -50,9 +51,9 @@ func (a *GraphAnalyzer) AnalyzeProject(files []string) (*models.DependencyGraph,
 }
 
 // AnalyzeProjectWithProgress builds a dependency graph with optional progress callback.
-func (a *GraphAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress ProgressFunc) (*models.DependencyGraph, error) {
+func (a *GraphAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress fileproc.ProgressFunc) (*models.DependencyGraph, error) {
 	// Parse all files in parallel, extracting nodes and edge data
-	fileData := MapFilesWithProgress(files, func(psr *parser.Parser, path string) (fileGraphData, error) {
+	fileData := fileproc.MapFilesWithProgress(files, func(psr *parser.Parser, path string) (fileGraphData, error) {
 		return a.analyzeFileGraph(psr, path)
 	}, onProgress)
 

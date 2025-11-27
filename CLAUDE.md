@@ -5,23 +5,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build and Development Commands
 
 ```bash
+# Setup git hooks (run once after clone)
+task setup
+
 # Format, vet, and tidy dependencies
 task tidy
+
+# Run linter
+task lint
+
+# Run all checks and tests
+task test
 
 # Build the CLI
 go build -o omen ./cmd/omen
 
-# Run the CLI
-./omen --help
-
-# Run tests
-go test ./...
-
 # Run a single test
-go test ./pkg/analyzer -run TestComplexity
+go test ./internal/analyzer -run TestComplexity
 
 # Run tests with verbose output
-go test -v ./pkg/analyzer/...
+go test -v ./internal/analyzer/...
 ```
 
 ## Architecture
@@ -30,26 +33,37 @@ Omen is a multi-language code analysis CLI built in Go. It uses tree-sitter for 
 
 ### Package Structure
 
-- `cmd/omen/` - CLI entry point using urfave/cli/v2
+**Public packages** (`pkg/`) - stable API for external consumers:
 - `pkg/parser/` - Tree-sitter wrapper for multi-language AST parsing
-- `pkg/scanner/` - File discovery with configurable exclusion patterns
-- `pkg/analyzer/` - Analysis implementations (complexity, SATD, dead code, churn, duplicates, defect prediction, TDG, dependency graph)
 - `pkg/models/` - Data structures for analysis results
 - `pkg/config/` - Configuration loading (TOML/YAML/JSON via koanf)
-- `pkg/cache/` - Result caching with Blake3 hashing
-- `pkg/output/` - Output formatting (text/JSON/markdown)
+
+**Internal packages** (`internal/`) - implementation details:
+- `internal/analyzer/` - Analysis implementations (complexity, SATD, dead code, churn, duplicates, defect prediction, TDG, dependency graph)
+- `internal/fileproc/` - Concurrent file processing utilities
+- `internal/scanner/` - File discovery with configurable exclusion patterns
+- `internal/cache/` - Result caching with Blake3 hashing
+- `internal/output/` - Output formatting (text/JSON/markdown)
+- `internal/progress/` - Progress bars and spinners
+
+**CLI** (`cmd/omen/`) - Entry point using urfave/cli/v2
 
 ### Key Patterns
 
-**Multi-language parsing**: The `pkg/parser/parser.go` contains `DetectLanguage()` which maps file extensions to tree-sitter parsers. Add new language support here by extending the switch statements for `GetTreeSitterLanguage()`, `getFunctionNodeTypes()`, and `getClassNodeTypes()`.
+**Multi-language parsing**: `pkg/parser/parser.go` contains `DetectLanguage()` which maps file extensions to tree-sitter parsers. Add new language support by extending `GetTreeSitterLanguage()`, `getFunctionNodeTypes()`, and `getClassNodeTypes()`.
 
-**Analyzer pattern**: Each analyzer in `pkg/analyzer/` follows the same structure:
+**Analyzer pattern**: Each analyzer in `internal/analyzer/` follows the same structure:
 1. Create analyzer with `NewXxxAnalyzer()`
 2. Analyze single file with `AnalyzeFile(path)`
-3. Analyze project with `AnalyzeProject(files)`
+3. Analyze project with `AnalyzeProject(files)` or `AnalyzeProjectWithProgress(files, progressFn)`
 4. Close with `Close()` to release parser resources
 
-**Configuration**: Config is loaded from `omen.toml`, `.omen.toml`, or `.omen/omen.toml` (also supports YAML/JSON). See `omen.example.toml` for all options.
+**Concurrent file processing**: `internal/fileproc/` provides generic parallel processing:
+- `MapFiles[T]` - For AST-based analyzers (parser provided per worker)
+- `ForEachFile[T]` - For non-AST operations (e.g., SATD regex scanning)
+- Both use 2x NumCPU workers, optimal for mixed I/O and CGO workloads
+
+**Configuration**: Config loaded from `omen.toml`, `.omen.toml`, or `.omen/omen.toml`. See `omen.example.toml` for all options.
 
 ### CLI Commands
 
@@ -68,7 +82,9 @@ Analyzer subcommands (`omen analyze <subcommand>`):
 - `graph` / `dag` - Dependency graph (Mermaid output)
 - `lint-hotspot` / `lh` - Lint violation density
 
-All commands support `-f/--format` (text/json/markdown) and `-o/--output` flags.
+**Global flags**: `--config`, `--verbose`, `--pprof`
+
+**Command flags** (on `analyze` and subcommands): `-f/--format` (text/json/markdown/toon), `-o/--output`, `--no-cache`
 
 ## Supported Languages
 

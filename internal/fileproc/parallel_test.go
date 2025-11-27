@@ -1,4 +1,4 @@
-package analyzer
+package fileproc
 
 import (
 	"fmt"
@@ -96,6 +96,39 @@ func TestMapFiles_WithErrors(t *testing.T) {
 	}
 }
 
+func TestMapFilesWithErrors(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	files := []string{
+		createTestFile(t, tmpDir, "good1.go", "package main"),
+		createTestFile(t, tmpDir, "bad.go", "package main"),
+		createTestFile(t, tmpDir, "good2.go", "package main"),
+	}
+
+	var errorPaths []string
+	var mu sync.Mutex
+	onError := func(path string, err error) {
+		mu.Lock()
+		errorPaths = append(errorPaths, filepath.Base(path))
+		mu.Unlock()
+	}
+
+	results := MapFilesWithErrors(files, func(p *parser.Parser, path string) (string, error) {
+		if filepath.Base(path) == "bad.go" {
+			return "", fmt.Errorf("simulated error")
+		}
+		return filepath.Base(path), nil
+	}, onError)
+
+	if len(results) != 2 {
+		t.Errorf("Expected 2 successful results, got %d", len(results))
+	}
+
+	if len(errorPaths) != 1 || errorPaths[0] != "bad.go" {
+		t.Errorf("Expected error callback for bad.go, got %v", errorPaths)
+	}
+}
+
 func TestMapFiles_ParserAvailable(t *testing.T) {
 	tmpDir := t.TempDir()
 	file := createTestFile(t, tmpDir, "test.go", "package main\nfunc main() {}")
@@ -175,14 +208,14 @@ func TestMapFilesN_WorkerCount(t *testing.T) {
 		{
 			name:       "default workers (0)",
 			maxWorkers: 0,
-			wantMin:    runtime.NumCPU() * 2,
-			wantMax:    runtime.NumCPU() * 2,
+			wantMin:    runtime.NumCPU() * DefaultWorkerMultiplier,
+			wantMax:    runtime.NumCPU() * DefaultWorkerMultiplier,
 		},
 		{
 			name:       "negative workers",
 			maxWorkers: -1,
-			wantMin:    runtime.NumCPU() * 2,
-			wantMax:    runtime.NumCPU() * 2,
+			wantMin:    runtime.NumCPU() * DefaultWorkerMultiplier,
+			wantMax:    runtime.NumCPU() * DefaultWorkerMultiplier,
 		},
 		{
 			name:       "single worker",
@@ -224,7 +257,7 @@ func TestMapFilesN_WorkerCount(t *testing.T) {
 				}
 
 				return 1, nil
-			}, nil)
+			}, nil, nil)
 
 			if len(results) != len(files) {
 				t.Errorf("Expected %d results, got %d", len(files), len(results))
@@ -250,7 +283,7 @@ func TestMapFilesN_ResultCorrectness(t *testing.T) {
 
 	results := MapFilesN(files, 8, func(p *parser.Parser, path string) (string, error) {
 		return filepath.Base(path), nil
-	}, nil)
+	}, nil, nil)
 
 	if len(results) != fileCount {
 		t.Fatalf("Expected %d results, got %d", fileCount, len(results))
@@ -287,7 +320,7 @@ func TestMapFilesN_ThreadSafety(t *testing.T) {
 		val := sharedCounter
 		mu.Unlock()
 		return val, nil
-	}, nil)
+	}, nil, nil)
 
 	if len(results) != fileCount {
 		t.Fatalf("Expected %d results, got %d", fileCount, len(results))
@@ -367,6 +400,39 @@ func TestForEachFile_WithErrors(t *testing.T) {
 
 	if len(results) != 2 {
 		t.Errorf("Expected 2 successful results, got %d", len(results))
+	}
+}
+
+func TestForEachFileWithErrors(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	files := []string{
+		createTestFile(t, tmpDir, "good1.txt", "content"),
+		createTestFile(t, tmpDir, "bad.txt", "content"),
+		createTestFile(t, tmpDir, "good2.txt", "content"),
+	}
+
+	var errorPaths []string
+	var mu sync.Mutex
+	onError := func(path string, err error) {
+		mu.Lock()
+		errorPaths = append(errorPaths, filepath.Base(path))
+		mu.Unlock()
+	}
+
+	results := ForEachFileWithErrors(files, func(path string) (string, error) {
+		if filepath.Base(path) == "bad.txt" {
+			return "", fmt.Errorf("simulated error")
+		}
+		return filepath.Base(path), nil
+	}, onError)
+
+	if len(results) != 2 {
+		t.Errorf("Expected 2 successful results, got %d", len(results))
+	}
+
+	if len(errorPaths) != 1 || errorPaths[0] != "bad.txt" {
+		t.Errorf("Expected error callback for bad.txt, got %v", errorPaths)
 	}
 }
 
@@ -571,7 +637,7 @@ func BenchmarkMapFiles_Sequential(b *testing.B) {
 				return 0, err
 			}
 			return 1, nil
-		}, nil)
+		}, nil, nil)
 
 		if len(results) != fileCount {
 			b.Fatalf("Expected %d results, got %d", fileCount, len(results))
@@ -625,7 +691,7 @@ func BenchmarkMapFiles_DifferentWorkerCounts(b *testing.B) {
 						return 0, err
 					}
 					return 1, nil
-				}, nil)
+				}, nil, nil)
 
 				if len(results) != fileCount {
 					b.Fatalf("Expected %d results, got %d", fileCount, len(results))

@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/panbanda/omen/internal/fileproc"
 	"github.com/panbanda/omen/pkg/models"
 	"github.com/panbanda/omen/pkg/parser"
 )
@@ -620,8 +621,8 @@ func (a *SATDAnalyzer) AnalyzeProject(files []string) (*models.SATDAnalysis, err
 }
 
 // AnalyzeProjectWithProgress scans all files with optional progress callback.
-func (a *SATDAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress ProgressFunc) (*models.SATDAnalysis, error) {
-	fileResults := ForEachFileWithProgress(files, func(path string) ([]models.TechnicalDebt, error) {
+func (a *SATDAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress fileproc.ProgressFunc) (*models.SATDAnalysis, error) {
+	fileResults := fileproc.ForEachFileWithProgress(files, func(path string) ([]models.TechnicalDebt, error) {
 		return a.AnalyzeFile(path)
 	}, onProgress)
 

@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	"github.com/cespare/xxhash/v2"
+	"github.com/panbanda/omen/internal/fileproc"
 	"github.com/panbanda/omen/pkg/config"
 	"github.com/panbanda/omen/pkg/models"
 	"github.com/panbanda/omen/pkg/parser"
@@ -109,7 +110,7 @@ func (a *DuplicateAnalyzer) AnalyzeProject(files []string) (*models.CloneAnalysi
 }
 
 // AnalyzeProjectWithProgress detects code clones with optional progress callback.
-func (a *DuplicateAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress ProgressFunc) (*models.CloneAnalysis, error) {
+func (a *DuplicateAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress fileproc.ProgressFunc) (*models.CloneAnalysis, error) {
 	analysis := &models.CloneAnalysis{
 		Clones:            make([]models.CodeClone, 0),
 		Groups:            make([]models.CloneGroup, 0),
@@ -120,7 +121,7 @@ func (a *DuplicateAnalyzer) AnalyzeProjectWithProgress(files []string, onProgres
 	}
 
 	// Extract fragments from all files in parallel
-	fileFragments := ForEachFileWithProgress(files, func(path string) ([]codeFragment, error) {
+	fileFragments := fileproc.ForEachFileWithProgress(files, func(path string) ([]codeFragment, error) {
 		return a.extractFragments(path)
 	}, onProgress)
 

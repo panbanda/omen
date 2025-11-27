@@ -3,6 +3,7 @@ package analyzer
 import (
 	"sort"
 
+	"github.com/panbanda/omen/internal/fileproc"
 	"github.com/panbanda/omen/pkg/models"
 	"github.com/panbanda/omen/pkg/parser"
 	sitter "github.com/smacker/go-tree-sitter"
@@ -270,9 +271,9 @@ func (a *ComplexityAnalyzer) AnalyzeProject(files []string) (*models.ComplexityA
 }
 
 // AnalyzeProjectWithProgress analyzes all files with optional progress callback.
-func (a *ComplexityAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress ProgressFunc) (*models.ComplexityAnalysis, error) {
+func (a *ComplexityAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress fileproc.ProgressFunc) (*models.ComplexityAnalysis, error) {
 	includeHalstead := a.halsteadEnabled
-	results := MapFilesWithProgress(files, func(psr *parser.Parser, path string) (models.FileComplexity, error) {
+	results := fileproc.MapFilesWithProgress(files, func(psr *parser.Parser, path string) (models.FileComplexity, error) {
 		fc, err := analyzeFileComplexityWithHalstead(psr, path, includeHalstead)
 		if err != nil {
 			return models.FileComplexity{}, err

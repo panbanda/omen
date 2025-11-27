@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/panbanda/omen/internal/scanner"
 	"github.com/panbanda/omen/pkg/config"
 	"github.com/panbanda/omen/pkg/models"
 	"github.com/panbanda/omen/pkg/parser"
-	"github.com/panbanda/omen/pkg/scanner"
 )
 
 func TestNewSATDAnalyzer(t *testing.T) {
