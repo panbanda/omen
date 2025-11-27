@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"encoding/binary"
 	"math"
 	"os"
 	"sort"
@@ -9,40 +10,90 @@ import (
 	"sync/atomic"
 
 	"github.com/cespare/xxhash/v2"
+	"github.com/panbanda/omen/pkg/config"
 	"github.com/panbanda/omen/pkg/models"
 	"github.com/panbanda/omen/pkg/parser"
+	"github.com/zeebo/blake3"
 )
 
-// DuplicateAnalyzer detects code clones using MinHash with identifier normalization.
+// DuplicateAnalyzer detects code clones using MinHash with LSH for efficient candidate filtering.
 type DuplicateAnalyzer struct {
-	parser    *parser.Parser
-	minLines  int
-	threshold float64
-	numHashes int
+	parser *parser.Parser
+	config DuplicateConfig
 
 	// Identifier normalization state
 	identifierCounter uint32
 	identifierMap     sync.Map
 }
 
-// NewDuplicateAnalyzer creates a new duplicate analyzer.
-func NewDuplicateAnalyzer(minLines int, threshold float64) *DuplicateAnalyzer {
-	if minLines <= 0 {
-		minLines = 6
-	}
-	if threshold <= 0 || threshold > 1 {
-		threshold = 0.8
-	}
-	return &DuplicateAnalyzer{
-		parser:    parser.New(),
-		minLines:  minLines,
-		threshold: threshold,
-		numHashes: 128,
+// DuplicateConfig holds duplicate detection configuration (pmat-compatible).
+type DuplicateConfig struct {
+	MinTokens            int
+	SimilarityThreshold  float64
+	ShingleSize          int
+	NumHashFunctions     int
+	NumBands             int
+	RowsPerBand          int
+	NormalizeIdentifiers bool
+	NormalizeLiterals    bool
+	IgnoreComments       bool
+	MinGroupSize         int
+}
+
+// DefaultDuplicateConfig returns pmat-compatible defaults.
+func DefaultDuplicateConfig() DuplicateConfig {
+	return DuplicateConfig{
+		MinTokens:            50,
+		SimilarityThreshold:  0.70,
+		ShingleSize:          5,
+		NumHashFunctions:     200,
+		NumBands:             20,
+		RowsPerBand:          10,
+		NormalizeIdentifiers: true,
+		NormalizeLiterals:    true,
+		IgnoreComments:       true,
+		MinGroupSize:         2,
 	}
 }
 
-// fileBlock represents a chunk of code for clone detection.
-type fileBlock struct {
+// NewDuplicateAnalyzer creates a new duplicate analyzer with default config.
+func NewDuplicateAnalyzer(minLines int, threshold float64) *DuplicateAnalyzer {
+	cfg := DefaultDuplicateConfig()
+	if threshold > 0 && threshold <= 1 {
+		cfg.SimilarityThreshold = threshold
+	}
+	// Convert minLines to approximate minTokens (roughly 8 tokens per line)
+	if minLines > 0 {
+		cfg.MinTokens = minLines * 8
+	}
+	return &DuplicateAnalyzer{
+		parser: parser.New(),
+		config: cfg,
+	}
+}
+
+// NewDuplicateAnalyzerWithConfig creates a new duplicate analyzer with explicit config.
+func NewDuplicateAnalyzerWithConfig(cfg config.DuplicateConfig) *DuplicateAnalyzer {
+	return &DuplicateAnalyzer{
+		parser: parser.New(),
+		config: DuplicateConfig{
+			MinTokens:            cfg.MinTokens,
+			SimilarityThreshold:  cfg.SimilarityThreshold,
+			ShingleSize:          cfg.ShingleSize,
+			NumHashFunctions:     cfg.NumHashFunctions,
+			NumBands:             cfg.NumBands,
+			RowsPerBand:          cfg.RowsPerBand,
+			NormalizeIdentifiers: cfg.NormalizeIdentifiers,
+			NormalizeLiterals:    cfg.NormalizeLiterals,
+			IgnoreComments:       cfg.IgnoreComments,
+			MinGroupSize:         cfg.MinGroupSize,
+		},
+	}
+}
+
+// codeFragment represents a code fragment for clone detection.
+type codeFragment struct {
+	id             uint64
 	file           string
 	startLine      uint32
 	endLine        uint32
@@ -64,35 +115,38 @@ func (a *DuplicateAnalyzer) AnalyzeProjectWithProgress(files []string, onProgres
 		Groups:            make([]models.CloneGroup, 0),
 		Summary:           models.NewCloneSummary(),
 		TotalFilesScanned: len(files),
-		MinLines:          a.minLines,
-		Threshold:         a.threshold,
+		MinLines:          a.config.MinTokens / 8, // Approximate lines from tokens
+		Threshold:         a.config.SimilarityThreshold,
 	}
 
-	// Extract blocks from all files in parallel
-	fileBlocks := ForEachFileWithProgress(files, func(path string) ([]fileBlock, error) {
-		return a.extractBlocks(path)
+	// Extract fragments from all files in parallel
+	fileFragments := ForEachFileWithProgress(files, func(path string) ([]codeFragment, error) {
+		return a.extractFragments(path)
 	}, onProgress)
 
-	var allBlocks []fileBlock
+	var allFragments []codeFragment
+	var fragmentID uint64
 	totalLines := 0
-	for _, blocks := range fileBlocks {
-		allBlocks = append(allBlocks, blocks...)
-		for _, b := range blocks {
-			totalLines += int(b.endLine - b.startLine + 1)
+	for _, fragments := range fileFragments {
+		for _, f := range fragments {
+			f.id = fragmentID
+			fragmentID++
+			allFragments = append(allFragments, f)
+			totalLines += int(f.endLine - f.startLine + 1)
 		}
 	}
 
-	// Compute MinHash signatures for all blocks
-	for i := range allBlocks {
-		allBlocks[i].signature = a.computeMinHash(allBlocks[i].content)
-		allBlocks[i].normalizedHash = a.computeNormalizedHash(allBlocks[i].tokens)
+	// Compute MinHash signatures for all fragments
+	for i := range allFragments {
+		allFragments[i].signature = a.computeMinHash(allFragments[i].tokens)
+		allFragments[i].normalizedHash = a.computeNormalizedHash(allFragments[i].tokens)
 	}
 
-	// Find clone pairs using threshold comparison
-	clonePairs := a.findClonePairs(allBlocks)
+	// Find clone pairs using LSH for O(n) average-case candidate filtering
+	clonePairs := a.findClonePairsLSH(allFragments)
 
 	// Group clones using Union-Find
-	groups := a.groupClones(allBlocks, clonePairs)
+	groups := a.groupClones(allFragments, clonePairs)
 	analysis.Groups = groups
 	analysis.Summary.TotalGroups = len(groups)
 
@@ -152,35 +206,97 @@ func (a *DuplicateAnalyzer) AnalyzeProjectWithProgress(files []string, onProgres
 	return analysis, nil
 }
 
-// findClonePairs finds pairs of blocks that exceed the similarity threshold.
-func (a *DuplicateAnalyzer) findClonePairs(blocks []fileBlock) []clonePair {
-	var pairs []clonePair
+// findClonePairsLSH uses Locality-Sensitive Hashing for O(n) average-case candidate filtering.
+func (a *DuplicateAnalyzer) findClonePairsLSH(fragments []codeFragment) []clonePair {
+	bands := a.config.NumBands
+	rowsPerBand := a.config.RowsPerBand
 
-	for i := 0; i < len(blocks); i++ {
-		for j := i + 1; j < len(blocks); j++ {
-			blockA := blocks[i]
-			blockB := blocks[j]
+	// Create LSH buckets for each band
+	lshBuckets := make([]map[uint64][]int, bands)
+	for i := range lshBuckets {
+		lshBuckets[i] = make(map[uint64][]int)
+	}
 
-			// Skip if same file and overlapping
-			if blockA.file == blockB.file {
-				if blockA.startLine <= blockB.endLine && blockB.startLine <= blockA.endLine {
-					continue
-				}
+	// Hash each fragment into buckets
+	for idx, fragment := range fragments {
+		if fragment.signature == nil || len(fragment.signature.Values) == 0 {
+			continue
+		}
+		for band := 0; band < bands; band++ {
+			start := band * rowsPerBand
+			end := start + rowsPerBand
+			if end > len(fragment.signature.Values) {
+				end = len(fragment.signature.Values)
+			}
+			if start >= end {
+				continue
 			}
 
-			// Calculate similarity
-			similarity := blockA.signature.JaccardSimilarity(blockB.signature)
-			if similarity >= a.threshold {
-				pairs = append(pairs, clonePair{
-					idxA:       i,
-					idxB:       j,
-					similarity: similarity,
-				})
+			// Hash the band portion of the signature
+			bandHash := hashBand(fragment.signature.Values[start:end], uint64(band))
+			lshBuckets[band][bandHash] = append(lshBuckets[band][bandHash], idx)
+		}
+	}
+
+	// Find candidate pairs from buckets (pairs that hash to the same bucket in any band)
+	candidatePairs := make(map[[2]int]struct{})
+	for _, bandBuckets := range lshBuckets {
+		for _, bucket := range bandBuckets {
+			if len(bucket) < 2 {
+				continue
+			}
+			// Add all pairs from this bucket as candidates
+			for i := 0; i < len(bucket); i++ {
+				for j := i + 1; j < len(bucket); j++ {
+					pair := [2]int{bucket[i], bucket[j]}
+					if bucket[i] > bucket[j] {
+						pair = [2]int{bucket[j], bucket[i]}
+					}
+					candidatePairs[pair] = struct{}{}
+				}
 			}
 		}
 	}
 
+	// Verify candidate pairs with actual Jaccard similarity calculation
+	var pairs []clonePair
+	for pair := range candidatePairs {
+		fragA := fragments[pair[0]]
+		fragB := fragments[pair[1]]
+
+		// Skip if same file and overlapping
+		if fragA.file == fragB.file {
+			if fragA.startLine <= fragB.endLine && fragB.startLine <= fragA.endLine {
+				continue
+			}
+		}
+
+		// Calculate actual similarity
+		similarity := fragA.signature.JaccardSimilarity(fragB.signature)
+		if similarity >= a.config.SimilarityThreshold {
+			pairs = append(pairs, clonePair{
+				idxA:       pair[0],
+				idxB:       pair[1],
+				similarity: similarity,
+			})
+		}
+	}
+
 	return pairs
+}
+
+// hashBand computes a hash for a band portion of the signature.
+func hashBand(values []uint64, seed uint64) uint64 {
+	h := xxhash.New()
+	seedBytes := []byte{byte(seed), byte(seed >> 8), byte(seed >> 16), byte(seed >> 24),
+		byte(seed >> 32), byte(seed >> 40), byte(seed >> 48), byte(seed >> 56)}
+	h.Write(seedBytes)
+	for _, v := range values {
+		vBytes := []byte{byte(v), byte(v >> 8), byte(v >> 16), byte(v >> 24),
+			byte(v >> 32), byte(v >> 40), byte(v >> 48), byte(v >> 56)}
+		h.Write(vBytes)
+	}
+	return h.Sum64()
 }
 
 type clonePair struct {
@@ -190,13 +306,13 @@ type clonePair struct {
 }
 
 // groupClones groups clone pairs using Union-Find algorithm.
-func (a *DuplicateAnalyzer) groupClones(blocks []fileBlock, pairs []clonePair) []models.CloneGroup {
+func (a *DuplicateAnalyzer) groupClones(fragments []codeFragment, pairs []clonePair) []models.CloneGroup {
 	if len(pairs) == 0 {
 		return nil
 	}
 
 	// Initialize Union-Find
-	parent := make([]int, len(blocks))
+	parent := make([]int, len(fragments))
 	for i := range parent {
 		parent[i] = i
 	}
@@ -221,9 +337,9 @@ func (a *DuplicateAnalyzer) groupClones(blocks []fileBlock, pairs []clonePair) [
 		union(pair.idxA, pair.idxB)
 	}
 
-	// Group blocks by their root
+	// Group fragments by their root
 	groupMap := make(map[int][]int)
-	for i := range blocks {
+	for i := range fragments {
 		root := find(i)
 		groupMap[root] = append(groupMap[root], i)
 	}
@@ -243,7 +359,7 @@ func (a *DuplicateAnalyzer) groupClones(blocks []fileBlock, pairs []clonePair) [
 	var groupID uint64
 
 	for _, memberIndices := range groupMap {
-		if len(memberIndices) < 2 {
+		if len(memberIndices) < a.config.MinGroupSize {
 			continue
 		}
 
@@ -254,18 +370,18 @@ func (a *DuplicateAnalyzer) groupClones(blocks []fileBlock, pairs []clonePair) [
 		var similarityCount int
 
 		for _, idx := range memberIndices {
-			block := blocks[idx]
-			lines := int(block.endLine - block.startLine + 1)
+			frag := fragments[idx]
+			lines := int(frag.endLine - frag.startLine + 1)
 			instances = append(instances, models.CloneInstance{
-				File:           block.file,
-				StartLine:      block.startLine,
-				EndLine:        block.endLine,
+				File:           frag.file,
+				StartLine:      frag.startLine,
+				EndLine:        frag.endLine,
 				Lines:          lines,
-				NormalizedHash: block.normalizedHash,
+				NormalizedHash: frag.normalizedHash,
 				Similarity:     1.0,
 			})
 			totalLines += lines
-			totalTokens += len(block.tokens)
+			totalTokens += len(frag.tokens)
 		}
 
 		// Calculate average similarity
@@ -356,44 +472,141 @@ func percentileFloat64Dup(sorted []float64, p int) float64 {
 	return sorted[idx]
 }
 
-// extractBlocks extracts code blocks from a file for clone detection.
-func (a *DuplicateAnalyzer) extractBlocks(path string) ([]fileBlock, error) {
+// extractFragments extracts code fragments from a file for clone detection.
+// Uses function-level extraction when possible, falling back to whole file (pmat-compatible).
+func (a *DuplicateAnalyzer) extractFragments(path string) ([]codeFragment, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 
 	lines := strings.Split(string(content), "\n")
-	var blocks []fileBlock
+	var fragments []codeFragment
 
-	// Use sliding window to create blocks
-	windowSize := a.minLines
-	for start := 0; start <= len(lines)-windowSize; start++ {
-		// Also try larger blocks
-		for end := start + windowSize - 1; end < len(lines) && end < start+windowSize*3; end++ {
-			blockLines := lines[start : end+1]
-			blockContent := strings.Join(blockLines, "\n")
+	// Try function-level extraction first
+	funcFragments := a.extractFunctionFragments(path, lines)
+	if len(funcFragments) > 0 {
+		fragments = append(fragments, funcFragments...)
+	}
 
-			// Skip mostly empty blocks
-			if countNonEmptyLines(blockLines) < a.minLines {
-				continue
-			}
-
-			normalizedContent := normalizeCode(blockContent)
-			tokens := tokenize(normalizedContent)
-			normalizedTokens := a.normalizeTokens(tokens)
-
-			blocks = append(blocks, fileBlock{
-				file:      path,
-				startLine: uint32(start + 1),
-				endLine:   uint32(end + 1),
-				content:   strings.Join(normalizedTokens, " "),
-				tokens:    normalizedTokens,
-			})
+	// If no function fragments, fall back to whole file as single fragment (pmat-compatible)
+	if len(fragments) == 0 {
+		frag := a.createFragment(path, 0, len(lines)-1, lines)
+		if frag != nil {
+			fragments = append(fragments, *frag)
 		}
 	}
 
-	return blocks, nil
+	return fragments, nil
+}
+
+// extractFunctionFragments extracts function-level code fragments.
+func (a *DuplicateAnalyzer) extractFunctionFragments(path string, lines []string) []codeFragment {
+	var fragments []codeFragment
+	lang := detectLanguage(path)
+
+	inFunction := false
+	var funcStartLine int
+	var funcLines []string
+	braceDepth := 0
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		if !inFunction {
+			if isFunctionStart(trimmed, lang) {
+				inFunction = true
+				funcStartLine = i
+				funcLines = []string{line}
+				braceDepth = strings.Count(line, "{") - strings.Count(line, "}")
+				if lang == "python" {
+					braceDepth = 1 // Python uses indentation, not braces
+				}
+			}
+		} else {
+			funcLines = append(funcLines, line)
+			if lang == "python" {
+				// Python function ends at dedent or new def/class
+				if trimmed != "" && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+					if strings.HasPrefix(trimmed, "def ") || strings.HasPrefix(trimmed, "class ") || i == len(lines)-1 {
+						// End of function
+						frag := a.createFragment(path, funcStartLine, i-1, funcLines[:len(funcLines)-1])
+						if frag != nil {
+							fragments = append(fragments, *frag)
+						}
+						// Check if this line starts a new function
+						if isFunctionStart(trimmed, lang) {
+							funcStartLine = i
+							funcLines = []string{line}
+						} else {
+							inFunction = false
+						}
+					}
+				}
+			} else {
+				braceDepth += strings.Count(line, "{") - strings.Count(line, "}")
+				if braceDepth <= 0 {
+					// End of function
+					frag := a.createFragment(path, funcStartLine, i, funcLines)
+					if frag != nil {
+						fragments = append(fragments, *frag)
+					}
+					inFunction = false
+					funcLines = nil
+				}
+			}
+		}
+	}
+
+	// Handle unclosed function at end of file
+	if inFunction && len(funcLines) > 0 {
+		frag := a.createFragment(path, funcStartLine, len(lines)-1, funcLines)
+		if frag != nil {
+			fragments = append(fragments, *frag)
+		}
+	}
+
+	return fragments
+}
+
+// createFragment creates a code fragment from lines if it meets minimum token requirements.
+func (a *DuplicateAnalyzer) createFragment(path string, startLine, endLine int, lines []string) *codeFragment {
+	content := strings.Join(lines, "\n")
+
+	// Normalize and tokenize
+	normalizedContent := a.normalizeCode(content)
+	tokens := tokenize(normalizedContent)
+	normalizedTokens := a.normalizeTokens(tokens)
+
+	// Check minimum token count
+	if len(normalizedTokens) < a.config.MinTokens {
+		return nil
+	}
+
+	return &codeFragment{
+		file:      path,
+		startLine: uint32(startLine + 1),
+		endLine:   uint32(endLine + 1),
+		content:   strings.Join(normalizedTokens, " "),
+		tokens:    normalizedTokens,
+	}
+}
+
+// normalizeCode normalizes code for comparison.
+func (a *DuplicateAnalyzer) normalizeCode(code string) string {
+	lines := strings.Split(code, "\n")
+	var normalized []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if a.config.IgnoreComments && isComment(trimmed) {
+			continue
+		}
+		normalized = append(normalized, trimmed)
+	}
+	return strings.Join(normalized, "\n")
 }
 
 // normalizeTokens applies identifier and literal normalization.
@@ -410,7 +623,6 @@ func (a *DuplicateAnalyzer) normalizeTokens(tokens []string) []string {
 
 // normalizeToken normalizes a single token.
 func (a *DuplicateAnalyzer) normalizeToken(token string) string {
-	// Skip empty tokens
 	if token == "" {
 		return ""
 	}
@@ -420,9 +632,12 @@ func (a *DuplicateAnalyzer) normalizeToken(token string) string {
 		return token
 	}
 
-	// Check if it's a literal (number or string)
+	// Check if it's a literal
 	if isLiteral(token) {
-		return "LITERAL"
+		if a.config.NormalizeLiterals {
+			return "LITERAL"
+		}
+		return token
 	}
 
 	// Check if it's an operator or delimiter (don't normalize)
@@ -430,8 +645,11 @@ func (a *DuplicateAnalyzer) normalizeToken(token string) string {
 		return token
 	}
 
-	// It's an identifier - canonicalize it
-	return a.canonicalizeIdentifier(token)
+	// It's an identifier
+	if a.config.NormalizeIdentifiers {
+		return a.canonicalizeIdentifier(token)
+	}
+	return token
 }
 
 // canonicalizeIdentifier maps identifiers to canonical names (VAR_N).
@@ -482,7 +700,7 @@ func isKeyword(token string) bool {
 		"finally": true, "with": true, "lambda": true, "yield": true, "assert": true,
 		"raise": true, "pass": true, "del": true, "global": true, "nonlocal": true,
 		"and": true, "or": true, "not": true, "is": true, "from": true,
-		// JavaScript/TypeScript (only unique keywords not in Go/Rust/Python)
+		// JavaScript/TypeScript
 		"function": true, "new": true, "this": true, "super": true,
 		"extends": true, "implements": true, "export": true, "throw": true,
 		"catch": true, "instanceof": true, "typeof": true, "void": true,
@@ -534,31 +752,7 @@ func isOperatorOrDelimiter(token string) bool {
 	return operators[token]
 }
 
-// countNonEmptyLines counts lines that aren't empty or just whitespace.
-func countNonEmptyLines(lines []string) int {
-	count := 0
-	for _, line := range lines {
-		if strings.TrimSpace(line) != "" {
-			count++
-		}
-	}
-	return count
-}
-
-// normalizeCode normalizes code for comparison by removing whitespace variations.
-func normalizeCode(code string) string {
-	lines := strings.Split(code, "\n")
-	var normalized []string
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" && !isComment(trimmed) {
-			normalized = append(normalized, trimmed)
-		}
-	}
-	return strings.Join(normalized, "\n")
-}
-
-// isComment checks if a line is a comment (basic heuristic).
+// isComment checks if a line is a comment.
 func isComment(line string) bool {
 	return strings.HasPrefix(line, "//") ||
 		strings.HasPrefix(line, "#") ||
@@ -567,23 +761,24 @@ func isComment(line string) bool {
 		strings.HasPrefix(line, "*/")
 }
 
-// computeMinHash computes a MinHash signature for a code block using xxhash.
-func (a *DuplicateAnalyzer) computeMinHash(content string) *models.MinHashSignature {
-	// Generate shingles (n-grams of tokens)
-	shingles := generateShingles(content, 3)
+// computeMinHash computes a MinHash signature using k-shingles (pmat-compatible).
+// Uses blake3-hashed shingles and xxhash with seeds for MinHash.
+func (a *DuplicateAnalyzer) computeMinHash(tokens []string) *models.MinHashSignature {
+	// Generate k-shingles as uint64 hashes (blake3)
+	shingles := generateKShingles(tokens, a.config.ShingleSize)
 
 	// Initialize signature with max values
 	signature := &models.MinHashSignature{
-		Values: make([]uint64, a.numHashes),
+		Values: make([]uint64, a.config.NumHashFunctions),
 	}
 	for i := range signature.Values {
 		signature.Values[i] = ^uint64(0)
 	}
 
-	// For each shingle, compute hashes and keep minimum
-	for shingle := range shingles {
-		for i := 0; i < a.numHashes; i++ {
-			h := hashWithSeed(shingle, uint64(i))
+	// For each shingle hash, compute MinHash values with different seeds
+	for _, shingleHash := range shingles {
+		for i := 0; i < a.config.NumHashFunctions; i++ {
+			h := hashUint64WithSeed(shingleHash, uint64(i))
 			if h < signature.Values[i] {
 				signature.Values[i] = h
 			}
@@ -593,78 +788,237 @@ func (a *DuplicateAnalyzer) computeMinHash(content string) *models.MinHashSignat
 	return signature
 }
 
+// hashUint64WithSeed computes a hash of a uint64 value with a seed using xxhash.
+func hashUint64WithSeed(value uint64, seed uint64) uint64 {
+	h := xxhash.New()
+	seedBytes := make([]byte, 8)
+	binary.LittleEndian.PutUint64(seedBytes, seed)
+	h.Write(seedBytes)
+	valueBytes := make([]byte, 8)
+	binary.LittleEndian.PutUint64(valueBytes, value)
+	h.Write(valueBytes)
+	return h.Sum64()
+}
+
+// generateKShingles creates k-shingles from tokens using blake3 hashing (pmat-compatible).
+// Returns a set of uint64 hashes instead of strings for efficiency.
+func generateKShingles(tokens []string, k int) []uint64 {
+	if len(tokens) < k {
+		if len(tokens) > 0 {
+			// Hash the entire token sequence if fewer than k tokens
+			h := blake3.New()
+			for _, t := range tokens {
+				h.Write([]byte(t))
+			}
+			sum := h.Sum(nil)
+			return []uint64{binary.LittleEndian.Uint64(sum[:8])}
+		}
+		return nil
+	}
+
+	shingleSet := make(map[uint64]struct{})
+	h := blake3.New()
+
+	for i := 0; i <= len(tokens)-k; i++ {
+		h.Reset()
+		for j := i; j < i+k; j++ {
+			h.Write([]byte(tokens[j]))
+		}
+		sum := h.Sum(nil)
+		hash := binary.LittleEndian.Uint64(sum[:8])
+		shingleSet[hash] = struct{}{}
+	}
+
+	shingles := make([]uint64, 0, len(shingleSet))
+	for hash := range shingleSet {
+		shingles = append(shingles, hash)
+	}
+
+	return shingles
+}
+
 // computeNormalizedHash computes a hash of the normalized token sequence.
 func (a *DuplicateAnalyzer) computeNormalizedHash(tokens []string) uint64 {
 	content := strings.Join(tokens, " ")
 	return xxhash.Sum64String(content)
 }
 
-// generateShingles creates n-grams from content.
-func generateShingles(content string, n int) map[string]bool {
-	tokens := tokenize(content)
-	shingles := make(map[string]bool)
-
-	if len(tokens) < n {
-		if len(tokens) > 0 {
-			shingles[strings.Join(tokens, " ")] = true
-		}
-		return shingles
-	}
-
-	for i := 0; i <= len(tokens)-n; i++ {
-		shingle := strings.Join(tokens[i:i+n], " ")
-		shingles[shingle] = true
-	}
-
-	return shingles
-}
-
-// tokenize splits code into tokens.
+// tokenize splits code into tokens (pmat-compatible).
+// Handles string literals, numbers, identifiers, operators, and delimiters.
 func tokenize(content string) []string {
-	// Simple tokenization: split on whitespace and punctuation
 	var tokens []string
-	var current strings.Builder
+	runes := []rune(content)
+	i := 0
 
-	for _, c := range content {
-		if isTokenChar(c) {
-			current.WriteRune(c)
-		} else {
-			if current.Len() > 0 {
-				tokens = append(tokens, current.String())
-				current.Reset()
-			}
-			// Include punctuation as tokens
-			if !isWhitespace(c) {
-				tokens = append(tokens, string(c))
-			}
+	for i < len(runes) {
+		c := runes[i]
+
+		// Skip whitespace
+		if isWhitespace(c) {
+			i++
+			continue
 		}
-	}
 
-	if current.Len() > 0 {
-		tokens = append(tokens, current.String())
+		// String literals (double quotes)
+		if c == '"' {
+			literal := collectStringLiteral(runes, &i, '"')
+			tokens = append(tokens, literal)
+			continue
+		}
+
+		// String literals (single quotes)
+		if c == '\'' {
+			literal := collectStringLiteral(runes, &i, '\'')
+			tokens = append(tokens, literal)
+			continue
+		}
+
+		// Template literals (backtick)
+		if c == '`' {
+			literal := collectStringLiteral(runes, &i, '`')
+			tokens = append(tokens, literal)
+			continue
+		}
+
+		// Numbers
+		if isDigit(c) || (c == '-' && i+1 < len(runes) && isDigit(runes[i+1])) {
+			number := collectNumber(runes, &i)
+			tokens = append(tokens, number)
+			continue
+		}
+
+		// Identifiers and keywords
+		if isIdentifierStart(c) {
+			ident := collectIdentifier(runes, &i)
+			tokens = append(tokens, ident)
+			continue
+		}
+
+		// Multi-character operators
+		if op := collectOperator(runes, &i); op != "" {
+			tokens = append(tokens, op)
+			continue
+		}
+
+		// Single character (delimiter or unknown)
+		tokens = append(tokens, string(c))
+		i++
 	}
 
 	return tokens
 }
 
-func isTokenChar(c rune) bool {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-		(c >= '0' && c <= '9') || c == '_'
+// collectStringLiteral collects a string literal including quotes.
+func collectStringLiteral(runes []rune, i *int, quote rune) string {
+	var sb strings.Builder
+	sb.WriteRune(runes[*i])
+	*i++
+
+	for *i < len(runes) {
+		c := runes[*i]
+		sb.WriteRune(c)
+		*i++
+
+		if c == quote {
+			break
+		}
+		// Handle escape sequences
+		if c == '\\' && *i < len(runes) {
+			sb.WriteRune(runes[*i])
+			*i++
+		}
+	}
+
+	return sb.String()
+}
+
+// collectNumber collects a numeric literal.
+func collectNumber(runes []rune, i *int) string {
+	var sb strings.Builder
+
+	// Handle negative sign
+	if runes[*i] == '-' {
+		sb.WriteRune('-')
+		*i++
+	}
+
+	for *i < len(runes) {
+		c := runes[*i]
+		if isDigit(c) || c == '.' || c == '_' || c == 'x' || c == 'X' ||
+			c == 'b' || c == 'B' || c == 'o' || c == 'O' ||
+			(c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') ||
+			c == 'e' || c == 'E' {
+			sb.WriteRune(c)
+			*i++
+		} else {
+			break
+		}
+	}
+
+	return sb.String()
+}
+
+// collectIdentifier collects an identifier.
+func collectIdentifier(runes []rune, i *int) string {
+	var sb strings.Builder
+
+	for *i < len(runes) {
+		c := runes[*i]
+		if isIdentifierChar(c) {
+			sb.WriteRune(c)
+			*i++
+		} else {
+			break
+		}
+	}
+
+	return sb.String()
+}
+
+// collectOperator collects multi-character operators.
+func collectOperator(runes []rune, i *int) string {
+	if *i >= len(runes) {
+		return ""
+	}
+
+	// Try 3-character operators
+	if *i+2 < len(runes) {
+		op3 := string(runes[*i : *i+3])
+		if op3 == "<<=" || op3 == ">>=" || op3 == "..." || op3 == "===" || op3 == "!==" {
+			*i += 3
+			return op3
+		}
+	}
+
+	// Try 2-character operators
+	if *i+1 < len(runes) {
+		op2 := string(runes[*i : *i+2])
+		switch op2 {
+		case "==", "!=", "<=", ">=", "&&", "||", "<<", ">>",
+			"+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=",
+			"++", "--", "->", "=>", "::", "..", "??":
+			*i += 2
+			return op2
+		}
+	}
+
+	return ""
+}
+
+func isDigit(c rune) bool {
+	return c >= '0' && c <= '9'
+}
+
+func isIdentifierStart(c rune) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
+}
+
+func isIdentifierChar(c rune) bool {
+	return isIdentifierStart(c) || isDigit(c)
 }
 
 func isWhitespace(c rune) bool {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
-}
-
-// hashWithSeed computes a hash with a seed for MinHash using xxhash.
-func hashWithSeed(s string, seed uint64) uint64 {
-	// Combine seed with string using xxhash
-	h := xxhash.New()
-	seedBytes := []byte{byte(seed), byte(seed >> 8), byte(seed >> 16), byte(seed >> 24),
-		byte(seed >> 32), byte(seed >> 40), byte(seed >> 48), byte(seed >> 56)}
-	h.Write(seedBytes)
-	h.Write([]byte(s))
-	return h.Sum64()
 }
 
 // determineCloneType classifies a clone based on similarity.
@@ -675,6 +1029,68 @@ func determineCloneType(similarity float64) models.CloneType {
 		return models.CloneType2 // Parametric (identifiers differ)
 	}
 	return models.CloneType3 // Structural (statements differ)
+}
+
+// detectLanguage detects programming language from file extension.
+func detectLanguage(path string) string {
+	path = strings.ToLower(path)
+	switch {
+	case strings.HasSuffix(path, ".go"):
+		return "go"
+	case strings.HasSuffix(path, ".rs"):
+		return "rust"
+	case strings.HasSuffix(path, ".py"):
+		return "python"
+	case strings.HasSuffix(path, ".ts"), strings.HasSuffix(path, ".tsx"):
+		return "typescript"
+	case strings.HasSuffix(path, ".js"), strings.HasSuffix(path, ".jsx"):
+		return "javascript"
+	case strings.HasSuffix(path, ".c"), strings.HasSuffix(path, ".h"):
+		return "c"
+	case strings.HasSuffix(path, ".cpp"), strings.HasSuffix(path, ".hpp"),
+		strings.HasSuffix(path, ".cc"), strings.HasSuffix(path, ".cxx"):
+		return "cpp"
+	case strings.HasSuffix(path, ".java"):
+		return "java"
+	case strings.HasSuffix(path, ".kt"), strings.HasSuffix(path, ".kts"):
+		return "kotlin"
+	case strings.HasSuffix(path, ".rb"):
+		return "ruby"
+	case strings.HasSuffix(path, ".php"):
+		return "php"
+	default:
+		return "unknown"
+	}
+}
+
+// isFunctionStart checks if a line starts a function definition.
+func isFunctionStart(line, lang string) bool {
+	switch lang {
+	case "go":
+		return strings.HasPrefix(line, "func ") && strings.Contains(line, "(")
+	case "rust":
+		return strings.Contains(line, "fn ") && strings.Contains(line, "(")
+	case "python":
+		return strings.HasPrefix(line, "def ") && strings.Contains(line, "(")
+	case "typescript", "javascript":
+		return strings.Contains(line, "function ") ||
+			strings.Contains(line, "=> {") ||
+			(strings.Contains(line, "(") && strings.Contains(line, ") {"))
+	case "c", "cpp":
+		return strings.Contains(line, "(") &&
+			(strings.Contains(line, ") {") || strings.HasSuffix(line, "{"))
+	case "java", "kotlin":
+		return (strings.Contains(line, "void ") ||
+			strings.Contains(line, "int ") ||
+			strings.Contains(line, "String ") ||
+			strings.Contains(line, "fun ") ||
+			strings.Contains(line, "public ") ||
+			strings.Contains(line, "private ") ||
+			strings.Contains(line, "protected ")) &&
+			strings.Contains(line, "(")
+	default:
+		return false
+	}
 }
 
 // Close releases analyzer resources.
