@@ -1688,10 +1688,6 @@ func helper() {
 	}
 }
 
-func containsSubstring(s, substr string) bool {
-	return strings.Contains(s, substr)
-}
-
 // extractCommentContent extracts the comment content from a line for testing.
 func extractCommentContent(line string) string {
 	trimmed := strings.TrimSpace(line)
