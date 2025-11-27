@@ -1,5 +1,7 @@
 package models
 
+import "math"
+
 // ComplexityMetrics represents code complexity measurements for a function or file.
 type ComplexityMetrics struct {
 	Cyclomatic uint32           `json:"cyclomatic"`
@@ -11,13 +13,75 @@ type ComplexityMetrics struct {
 
 // HalsteadMetrics represents Halstead software science metrics.
 type HalsteadMetrics struct {
-	OperatorsUnique uint16  `json:"operators_unique"`
-	OperandsUnique  uint16  `json:"operands_unique"`
-	OperatorsTotal  uint16  `json:"operators_total"`
-	OperandsTotal   uint16  `json:"operands_total"`
-	Volume          float64 `json:"volume"`
-	Difficulty      float64 `json:"difficulty"`
-	Effort          float64 `json:"effort"`
+	OperatorsUnique uint32  `json:"operators_unique"` // n1: distinct operators
+	OperandsUnique  uint32  `json:"operands_unique"`  // n2: distinct operands
+	OperatorsTotal  uint32  `json:"operators_total"`  // N1: total operators
+	OperandsTotal   uint32  `json:"operands_total"`   // N2: total operands
+	Vocabulary      uint32  `json:"vocabulary"`       // n = n1 + n2
+	Length          uint32  `json:"length"`           // N = N1 + N2
+	Volume          float64 `json:"volume"`           // V = N * log2(n)
+	Difficulty      float64 `json:"difficulty"`       // D = (n1/2) * (N2/n2)
+	Effort          float64 `json:"effort"`           // E = D * V
+	Time            float64 `json:"time"`             // T = E / 18 (seconds)
+	Bugs            float64 `json:"bugs"`             // B = E^(2/3) / 3000
+}
+
+// NewHalsteadMetrics creates Halstead metrics from base counts and calculates derived values.
+func NewHalsteadMetrics(operatorsUnique, operandsUnique, operatorsTotal, operandsTotal uint32) *HalsteadMetrics {
+	h := &HalsteadMetrics{
+		OperatorsUnique: operatorsUnique,
+		OperandsUnique:  operandsUnique,
+		OperatorsTotal:  operatorsTotal,
+		OperandsTotal:   operandsTotal,
+	}
+	h.calculateDerived()
+	return h
+}
+
+// calculateDerived computes all derived Halstead metrics from base counts.
+func (h *HalsteadMetrics) calculateDerived() {
+	if h.OperatorsUnique == 0 || h.OperandsUnique == 0 {
+		return
+	}
+
+	h.Vocabulary = h.OperatorsUnique + h.OperandsUnique
+	h.Length = h.OperatorsTotal + h.OperandsTotal
+
+	// V = N * log2(n) - Program Volume
+	if h.Vocabulary > 0 {
+		h.Volume = float64(h.Length) * log2(float64(h.Vocabulary))
+	}
+
+	// D = (n1/2) * (N2/n2) - Program Difficulty
+	if h.OperandsUnique > 0 {
+		h.Difficulty = (float64(h.OperatorsUnique) / 2.0) *
+			(float64(h.OperandsTotal) / float64(h.OperandsUnique))
+	}
+
+	// E = V * D - Programming Effort
+	h.Effort = h.Volume * h.Difficulty
+
+	// T = E / 18 - Time to program in seconds (18 mental discriminations per second)
+	h.Time = h.Effort / 18.0
+
+	// B = E^(2/3) / 3000 - Delivered bugs estimate
+	h.Bugs = pow(h.Effort, 2.0/3.0) / 3000.0
+}
+
+// log2 computes log base 2
+func log2(x float64) float64 {
+	if x <= 0 {
+		return 0
+	}
+	return math.Log2(x)
+}
+
+// pow computes x^y
+func pow(x, y float64) float64 {
+	if x <= 0 {
+		return 0
+	}
+	return math.Pow(x, y)
 }
 
 // FunctionComplexity represents complexity metrics for a single function.
@@ -81,6 +145,79 @@ func DefaultComplexityThresholds() ComplexityThresholds {
 	}
 }
 
+// ExtendedComplexityThresholds provides warn and error levels (pmat compatible).
+type ExtendedComplexityThresholds struct {
+	CyclomaticWarn  uint32 `json:"cyclomatic_warn"`
+	CyclomaticError uint32 `json:"cyclomatic_error"`
+	CognitiveWarn   uint32 `json:"cognitive_warn"`
+	CognitiveError  uint32 `json:"cognitive_error"`
+	NestingMax      uint8  `json:"nesting_max"`
+	MethodLength    uint16 `json:"method_length"`
+}
+
+// DefaultExtendedThresholds returns pmat-compatible default thresholds.
+func DefaultExtendedThresholds() ExtendedComplexityThresholds {
+	return ExtendedComplexityThresholds{
+		CyclomaticWarn:  10,
+		CyclomaticError: 20,
+		CognitiveWarn:   15,
+		CognitiveError:  30,
+		NestingMax:      5,
+		MethodLength:    50,
+	}
+}
+
+// ViolationSeverity indicates the severity of a complexity violation.
+type ViolationSeverity string
+
+const (
+	SeverityWarning ViolationSeverity = "warning"
+	SeverityError   ViolationSeverity = "error"
+)
+
+// Violation represents a complexity threshold violation.
+type Violation struct {
+	Severity  ViolationSeverity `json:"severity"`
+	Rule      string            `json:"rule"`
+	Message   string            `json:"message"`
+	Value     uint32            `json:"value"`
+	Threshold uint32            `json:"threshold"`
+	File      string            `json:"file"`
+	Line      uint32            `json:"line"`
+	Function  string            `json:"function,omitempty"`
+}
+
+// ComplexityHotspot identifies a high-complexity location in the codebase.
+type ComplexityHotspot struct {
+	File           string `json:"file"`
+	Function       string `json:"function,omitempty"`
+	Line           uint32 `json:"line"`
+	Complexity     uint32 `json:"complexity"`
+	ComplexityType string `json:"complexity_type"`
+}
+
+// ComplexityReport is the full analysis report with violations and hotspots.
+type ComplexityReport struct {
+	Summary            ExtendedComplexitySummary `json:"summary"`
+	Violations         []Violation               `json:"violations"`
+	Hotspots           []ComplexityHotspot       `json:"hotspots"`
+	Files              []FileComplexity          `json:"files"`
+	TechnicalDebtHours float32                   `json:"technical_debt_hours"`
+}
+
+// ExtendedComplexitySummary provides enhanced statistics (pmat compatible).
+type ExtendedComplexitySummary struct {
+	TotalFiles         int     `json:"total_files"`
+	TotalFunctions     int     `json:"total_functions"`
+	MedianCyclomatic   float32 `json:"median_cyclomatic"`
+	MedianCognitive    float32 `json:"median_cognitive"`
+	MaxCyclomatic      uint32  `json:"max_cyclomatic"`
+	MaxCognitive       uint32  `json:"max_cognitive"`
+	P90Cyclomatic      uint32  `json:"p90_cyclomatic"`
+	P90Cognitive       uint32  `json:"p90_cognitive"`
+	TechnicalDebtHours float32 `json:"technical_debt_hours"`
+}
+
 // IsSimple returns true if complexity is within acceptable limits.
 func (m *ComplexityMetrics) IsSimple(t ComplexityThresholds) bool {
 	return m.Cyclomatic <= t.MaxCyclomatic &&
@@ -93,4 +230,25 @@ func (m *ComplexityMetrics) NeedsRefactoring(t ComplexityThresholds) bool {
 	return m.Cyclomatic > t.MaxCyclomatic*2 ||
 		m.Cognitive > t.MaxCognitive*2 ||
 		m.MaxNesting > t.MaxNesting*2
+}
+
+// IsSimpleDefault checks if complexity is low using fixed thresholds (pmat compatible).
+// Returns true if cyclomatic <= 5 and cognitive <= 7.
+func (m *ComplexityMetrics) IsSimpleDefault() bool {
+	return m.Cyclomatic <= 5 && m.Cognitive <= 7
+}
+
+// NeedsRefactoringDefault checks if complexity exceeds fixed thresholds (pmat compatible).
+// Returns true if cyclomatic > 10 or cognitive > 15.
+func (m *ComplexityMetrics) NeedsRefactoringDefault() bool {
+	return m.Cyclomatic > 10 || m.Cognitive > 15
+}
+
+// ComplexityScore calculates a composite complexity score for ranking.
+// Combines cyclomatic, cognitive, nesting, and lines with weighted factors.
+func (m *ComplexityMetrics) ComplexityScore() float64 {
+	return float64(m.Cyclomatic)*1.0 +
+		float64(m.Cognitive)*1.2 +
+		float64(m.MaxNesting)*2.0 +
+		float64(m.Lines)*0.1
 }

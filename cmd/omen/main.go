@@ -146,6 +146,10 @@ func complexityCmd() *cli.Command {
 				Name:  "functions-only",
 				Usage: "Show only function-level metrics",
 			},
+			&cli.BoolFlag{
+				Name:  "halstead",
+				Usage: "Include Halstead software science metrics",
+			},
 		},
 		Action: runComplexityCmd,
 	}
@@ -156,6 +160,7 @@ func runComplexityCmd(c *cli.Context) error {
 	cycThreshold := c.Int("cyclomatic-threshold")
 	cogThreshold := c.Int("cognitive-threshold")
 	functionsOnly := c.Bool("functions-only")
+	includeHalstead := c.Bool("halstead")
 
 	cfg := config.LoadOrDefault()
 	scan := scanner.NewScanner(cfg)
@@ -178,7 +183,10 @@ func runComplexityCmd(c *cli.Context) error {
 		return nil
 	}
 
-	cxAnalyzer := analyzer.NewComplexityAnalyzer()
+	opts := analyzer.ComplexityOptions{
+		IncludeHalstead: includeHalstead,
+	}
+	cxAnalyzer := analyzer.NewComplexityAnalyzerWithOptions(opts)
 	defer cxAnalyzer.Close()
 
 	tracker := progress.NewTracker("Analyzing complexity...", len(files))
