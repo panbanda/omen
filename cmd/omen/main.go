@@ -11,12 +11,12 @@ import (
 	"time"
 
 	"github.com/fatih/color"
-	"github.com/panbanda/omen/pkg/analyzer"
+	"github.com/panbanda/omen/internal/analyzer"
+	"github.com/panbanda/omen/internal/output"
+	"github.com/panbanda/omen/internal/progress"
+	"github.com/panbanda/omen/internal/scanner"
 	"github.com/panbanda/omen/pkg/config"
 	"github.com/panbanda/omen/pkg/models"
-	"github.com/panbanda/omen/pkg/output"
-	"github.com/panbanda/omen/pkg/progress"
-	"github.com/panbanda/omen/pkg/scanner"
 	"github.com/urfave/cli/v2"
 )
 
@@ -32,6 +32,27 @@ func getPaths(c *cli.Context) []string {
 		return c.Args().Slice()
 	}
 	return []string{"."}
+}
+
+// outputFlags returns the common output-related flags for analyze commands.
+func outputFlags() []cli.Flag {
+	return []cli.Flag{
+		&cli.StringFlag{
+			Name:    "format",
+			Aliases: []string{"f"},
+			Value:   "text",
+			Usage:   "Output format: text, json, markdown, toon",
+		},
+		&cli.StringFlag{
+			Name:    "output",
+			Aliases: []string{"o"},
+			Usage:   "Write output to file",
+		},
+		&cli.BoolFlag{
+			Name:  "no-cache",
+			Usage: "Disable caching",
+		},
+	}
 }
 
 func main() {
@@ -50,21 +71,6 @@ Supports: Go, Rust, Python, TypeScript, JavaScript, Java, C, C++, Ruby, PHP`,
 				Aliases: []string{"c"},
 				Usage:   "Path to config file (TOML, YAML, or JSON)",
 				EnvVars: []string{"OMEN_CONFIG"},
-			},
-			&cli.StringFlag{
-				Name:    "format",
-				Aliases: []string{"f"},
-				Value:   "text",
-				Usage:   "Output format: text, json, markdown, toon",
-			},
-			&cli.StringFlag{
-				Name:    "output",
-				Aliases: []string{"o"},
-				Usage:   "Write output to file",
-			},
-			&cli.BoolFlag{
-				Name:  "no-cache",
-				Usage: "Disable caching",
 			},
 			&cli.BoolFlag{
 				Name:  "verbose",
@@ -127,32 +133,33 @@ Supports: Go, Rust, Python, TypeScript, JavaScript, Java, C, C++, Ruby, PHP`,
 }
 
 func complexityCmd() *cli.Command {
+	flags := append(outputFlags(),
+		&cli.IntFlag{
+			Name:  "cyclomatic-threshold",
+			Value: 10,
+			Usage: "Cyclomatic complexity warning threshold",
+		},
+		&cli.IntFlag{
+			Name:  "cognitive-threshold",
+			Value: 15,
+			Usage: "Cognitive complexity warning threshold",
+		},
+		&cli.BoolFlag{
+			Name:  "functions-only",
+			Usage: "Show only function-level metrics",
+		},
+		&cli.BoolFlag{
+			Name:  "halstead",
+			Usage: "Include Halstead software science metrics",
+		},
+	)
 	return &cli.Command{
 		Name:      "complexity",
 		Aliases:   []string{"cx"},
 		Usage:     "Analyze cyclomatic and cognitive complexity",
 		ArgsUsage: "[path...]",
-		Flags: []cli.Flag{
-			&cli.IntFlag{
-				Name:  "cyclomatic-threshold",
-				Value: 10,
-				Usage: "Cyclomatic complexity warning threshold",
-			},
-			&cli.IntFlag{
-				Name:  "cognitive-threshold",
-				Value: 15,
-				Usage: "Cognitive complexity warning threshold",
-			},
-			&cli.BoolFlag{
-				Name:  "functions-only",
-				Usage: "Show only function-level metrics",
-			},
-			&cli.BoolFlag{
-				Name:  "halstead",
-				Usage: "Include Halstead software science metrics",
-			},
-		},
-		Action: runComplexityCmd,
+		Flags:     flags,
+		Action:    runComplexityCmd,
 	}
 }
 
@@ -289,22 +296,23 @@ func runComplexityCmd(c *cli.Context) error {
 }
 
 func satdCmd() *cli.Command {
+	flags := append(outputFlags(),
+		&cli.StringSliceFlag{
+			Name:  "patterns",
+			Usage: "Additional patterns to detect",
+		},
+		&cli.BoolFlag{
+			Name:  "include-test",
+			Usage: "Include test files in analysis",
+		},
+	)
 	return &cli.Command{
 		Name:      "satd",
 		Aliases:   []string{"debt"},
 		Usage:     "Detect self-admitted technical debt (TODO, FIXME, HACK)",
 		ArgsUsage: "[path...]",
-		Flags: []cli.Flag{
-			&cli.StringSliceFlag{
-				Name:  "patterns",
-				Usage: "Additional patterns to detect",
-			},
-			&cli.BoolFlag{
-				Name:  "include-test",
-				Usage: "Include test files in analysis",
-			},
-		},
-		Action: runSATDCmd,
+		Flags:     flags,
+		Action:    runSATDCmd,
 	}
 }
 
@@ -407,19 +415,20 @@ func truncate(s string, maxLen int) string {
 }
 
 func deadcodeCmd() *cli.Command {
+	flags := append(outputFlags(),
+		&cli.Float64Flag{
+			Name:  "confidence",
+			Value: 0.8,
+			Usage: "Minimum confidence threshold (0.0-1.0)",
+		},
+	)
 	return &cli.Command{
 		Name:      "deadcode",
 		Aliases:   []string{"dc"},
 		Usage:     "Detect unused functions, variables, and unreachable code",
 		ArgsUsage: "[path...]",
-		Flags: []cli.Flag{
-			&cli.Float64Flag{
-				Name:  "confidence",
-				Value: 0.8,
-				Usage: "Minimum confidence threshold (0.0-1.0)",
-			},
-		},
-		Action: runDeadCodeCmd,
+		Flags:     flags,
+		Action:    runDeadCodeCmd,
 	}
 }
 
@@ -534,23 +543,24 @@ func runDeadCodeCmd(c *cli.Context) error {
 }
 
 func churnCmd() *cli.Command {
+	flags := append(outputFlags(),
+		&cli.IntFlag{
+			Name:  "days",
+			Value: 90,
+			Usage: "Number of days of history to analyze",
+		},
+		&cli.IntFlag{
+			Name:  "top",
+			Value: 20,
+			Usage: "Show top N files by churn",
+		},
+	)
 	return &cli.Command{
 		Name:      "churn",
 		Usage:     "Analyze git commit history for file churn",
 		ArgsUsage: "[path...]",
-		Flags: []cli.Flag{
-			&cli.IntFlag{
-				Name:  "days",
-				Value: 90,
-				Usage: "Number of days of history to analyze",
-			},
-			&cli.IntFlag{
-				Name:  "top",
-				Value: 20,
-				Usage: "Show top N files by churn",
-			},
-		},
-		Action: runChurnCmd,
+		Flags:     flags,
+		Action:    runChurnCmd,
 	}
 }
 
@@ -621,24 +631,25 @@ func runChurnCmd(c *cli.Context) error {
 }
 
 func duplicatesCmd() *cli.Command {
+	flags := append(outputFlags(),
+		&cli.IntFlag{
+			Name:  "min-lines",
+			Value: 6,
+			Usage: "Minimum lines for clone detection",
+		},
+		&cli.Float64Flag{
+			Name:  "threshold",
+			Value: 0.8,
+			Usage: "Similarity threshold (0.0-1.0)",
+		},
+	)
 	return &cli.Command{
 		Name:      "duplicates",
 		Aliases:   []string{"dup", "clones"},
 		Usage:     "Detect code clones and duplicates",
 		ArgsUsage: "[path...]",
-		Flags: []cli.Flag{
-			&cli.IntFlag{
-				Name:  "min-lines",
-				Value: 6,
-				Usage: "Minimum lines for clone detection",
-			},
-			&cli.Float64Flag{
-				Name:  "threshold",
-				Value: 0.8,
-				Usage: "Similarity threshold (0.0-1.0)",
-			},
-		},
-		Action: runDuplicatesCmd,
+		Flags:     flags,
+		Action:    runDuplicatesCmd,
 	}
 }
 
@@ -727,18 +738,19 @@ func runDuplicatesCmd(c *cli.Context) error {
 }
 
 func defectCmd() *cli.Command {
+	flags := append(outputFlags(),
+		&cli.BoolFlag{
+			Name:  "high-risk-only",
+			Usage: "Show only high-risk files",
+		},
+	)
 	return &cli.Command{
 		Name:      "defect",
 		Aliases:   []string{"predict"},
 		Usage:     "Predict defect probability using PMAT weights",
 		ArgsUsage: "[path...]",
-		Flags: []cli.Flag{
-			&cli.BoolFlag{
-				Name:  "high-risk-only",
-				Usage: "Show only high-risk files",
-			},
-		},
-		Action: runDefectCmd,
+		Flags:     flags,
+		Action:    runDefectCmd,
 	}
 }
 
@@ -836,33 +848,23 @@ func runDefectCmd(c *cli.Context) error {
 }
 
 func tdgCmd() *cli.Command {
+	flags := append(outputFlags(),
+		&cli.IntFlag{
+			Name:  "hotspots",
+			Value: 10,
+			Usage: "Number of hotspots to show",
+		},
+		&cli.BoolFlag{
+			Name:  "penalties",
+			Usage: "Show applied penalties",
+		},
+	)
 	return &cli.Command{
 		Name:      "tdg",
 		Usage:     "Calculate Technical Debt Gradient scores (0-100, higher is better)",
 		ArgsUsage: "[path...]",
-		Flags: []cli.Flag{
-			&cli.IntFlag{
-				Name:  "hotspots",
-				Value: 10,
-				Usage: "Number of hotspots to show",
-			},
-			&cli.BoolFlag{
-				Name:  "penalties",
-				Usage: "Show applied penalties",
-			},
-			&cli.StringFlag{
-				Name:    "format",
-				Aliases: []string{"f"},
-				Value:   "text",
-				Usage:   "Output format: text, json, markdown",
-			},
-			&cli.StringFlag{
-				Name:    "output",
-				Aliases: []string{"o"},
-				Usage:   "Write output to file",
-			},
-		},
-		Action: runTDGCmd,
+		Flags:     flags,
+		Action:    runTDGCmd,
 	}
 }
 
@@ -999,23 +1001,24 @@ func runTDGCmd(c *cli.Context) error {
 }
 
 func graphCmd() *cli.Command {
+	flags := append(outputFlags(),
+		&cli.StringFlag{
+			Name:  "scope",
+			Value: "module",
+			Usage: "Scope: file, function, module, package",
+		},
+		&cli.BoolFlag{
+			Name:  "metrics",
+			Usage: "Include PageRank and centrality metrics",
+		},
+	)
 	return &cli.Command{
 		Name:      "graph",
 		Aliases:   []string{"dag"},
 		Usage:     "Generate dependency graph (Mermaid output)",
 		ArgsUsage: "[path...]",
-		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:  "scope",
-				Value: "module",
-				Usage: "Scope: file, function, module, package",
-			},
-			&cli.BoolFlag{
-				Name:  "metrics",
-				Usage: "Include PageRank and centrality metrics",
-			},
-		},
-		Action: runGraphCmd,
+		Flags:     flags,
+		Action:    runGraphCmd,
 	}
 }
 
@@ -1134,19 +1137,20 @@ func sanitizeID(id string) string {
 }
 
 func lintHotspotCmd() *cli.Command {
+	flags := append(outputFlags(),
+		&cli.IntFlag{
+			Name:  "top",
+			Value: 10,
+			Usage: "Show top N files",
+		},
+	)
 	return &cli.Command{
 		Name:      "lint-hotspot",
 		Aliases:   []string{"lh"},
 		Usage:     "Identify files with high lint violation density",
 		ArgsUsage: "[path...]",
-		Flags: []cli.Flag{
-			&cli.IntFlag{
-				Name:  "top",
-				Value: 10,
-				Usage: "Show top N files",
-			},
-		},
-		Action: runLintHotspotCmd,
+		Flags:     flags,
+		Action:    runLintHotspotCmd,
 	}
 }
 
@@ -1349,18 +1353,17 @@ func runContextCmd(c *cli.Context) error {
 }
 
 func analyzeCmd() *cli.Command {
+	flags := append(outputFlags(), &cli.StringSliceFlag{
+		Name:  "exclude",
+		Usage: "Analyzers to exclude (when running all)",
+	})
 	return &cli.Command{
 		Name:      "analyze",
 		Aliases:   []string{"a"},
 		Usage:     "Run code analysis (all analyzers if no subcommand specified)",
 		ArgsUsage: "[path...]",
-		Flags: []cli.Flag{
-			&cli.StringSliceFlag{
-				Name:  "exclude",
-				Usage: "Analyzers to exclude (when running all)",
-			},
-		},
-		Action: runAnalyzeCmd,
+		Flags:     flags,
+		Action:    runAnalyzeCmd,
 		Subcommands: []*cli.Command{
 			complexityCmd(),
 			satdCmd(),

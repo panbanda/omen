@@ -7,8 +7,8 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/panbanda/omen/internal/progress"
 	"github.com/panbanda/omen/pkg/models"
-	"github.com/panbanda/omen/pkg/progress"
 )
 
 // ChurnAnalyzer analyzes git commit history for file churn.
