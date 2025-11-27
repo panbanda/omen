@@ -68,6 +68,8 @@ type ChurnSummary struct {
 	AvgCommitsPerFile float64  `json:"avg_commits_per_file"`
 	MaxChurnScore     float64  `json:"max_churn_score"`
 	TopChurnedFiles   []string `json:"top_churned_files"`
+	HotspotFiles      []string `json:"hotspot_files"`
+	StableFiles       []string `json:"stable_files"`
 	MeanChurnScore    float64  `json:"mean_churn_score"`
 	VarianceChurn     float64  `json:"variance_churn_score"`
 	StdDevChurn       float64  `json:"stddev_churn_score"`
@@ -135,5 +137,44 @@ type ChurnAnalysis struct {
 func NewChurnSummary() ChurnSummary {
 	return ChurnSummary{
 		TopChurnedFiles: make([]string, 0),
+		HotspotFiles:    make([]string, 0),
+		StableFiles:     make([]string, 0),
+	}
+}
+
+// Thresholds for hotspot and stable file detection.
+const (
+	HotspotThreshold = 0.5
+	StableThreshold  = 0.1
+)
+
+// IdentifyHotspotAndStableFiles populates HotspotFiles and StableFiles.
+// Files must be sorted by ChurnScore descending before calling.
+// Hotspots: top 10 files filtered by churn_score > 0.5
+// Stable: bottom 10 files filtered by churn_score < 0.1 and commit_count > 0
+func (s *ChurnSummary) IdentifyHotspotAndStableFiles(files []FileChurnMetrics) {
+	s.HotspotFiles = make([]string, 0)
+	s.StableFiles = make([]string, 0)
+
+	// Take top 10 candidates, then filter by threshold
+	candidateCount := 10
+	if len(files) < candidateCount {
+		candidateCount = len(files)
+	}
+	for i := 0; i < candidateCount; i++ {
+		if files[i].ChurnScore > HotspotThreshold {
+			s.HotspotFiles = append(s.HotspotFiles, files[i].Path)
+		}
+	}
+
+	// Take bottom 10 candidates, then filter by threshold
+	startIdx := len(files) - 10
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	for i := len(files) - 1; i >= startIdx; i-- {
+		if files[i].ChurnScore < StableThreshold && files[i].Commits > 0 {
+			s.StableFiles = append(s.StableFiles, files[i].Path)
+		}
 	}
 }
