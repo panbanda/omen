@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.5.0](https://github.com/panbanda/omen/compare/v1.4.0...v1.5.0) (2025-11-27)
+
+
+### Features
+
+* **analyzer:** add PMAT-compatible duplicate detection ([5003425](https://github.com/panbanda/omen/commit/500342590f5a6cf9ebf88d0006e06087167ed27b))
+* **defect:** PMAT-compatible defect prediction algorithm ([f11337e](https://github.com/panbanda/omen/commit/f11337e8ec261d01a1c7ec1cfb4934cda09f9d73))
+* **duplicates:** align duplicate detection with pmat implementation ([0ec0b0f](https://github.com/panbanda/omen/commit/0ec0b0fbb02c21876934886131a178117196e34c))
+* **tdg:** port PMAT scoring system with 0-100 scale ([8ce8c02](https://github.com/panbanda/omen/commit/8ce8c02776207a1b1dd8dea5795c64c0b9ed6533))
+* **tdg:** port PMAT scoring system with 0-100 scale ([b4e2eb5](https://github.com/panbanda/omen/commit/b4e2eb5d4b539cc4938776a79354e8eeb4392739))
+
 ## [1.4.0](https://github.com/panbanda/omen/compare/v1.3.0...v1.4.0) (2025-11-27)
 
 
