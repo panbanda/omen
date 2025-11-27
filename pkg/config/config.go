@@ -20,6 +20,9 @@ type Config struct {
 	// Thresholds for various metrics
 	Thresholds ThresholdConfig `koanf:"thresholds"`
 
+	// Duplicate detection settings
+	Duplicates DuplicateConfig `koanf:"duplicates"`
+
 	// File exclusion patterns
 	Exclude ExcludeConfig `koanf:"exclude"`
 
@@ -54,6 +57,20 @@ type ThresholdConfig struct {
 	DeadCodeConfidence   float64 `koanf:"dead_code_confidence"`
 	DefectHighRisk       float64 `koanf:"defect_high_risk"`
 	TDGHighRisk          float64 `koanf:"tdg_high_risk"`
+}
+
+// DuplicateConfig defines duplicate detection settings (pmat-compatible).
+type DuplicateConfig struct {
+	MinTokens            int     `koanf:"min_tokens"`
+	SimilarityThreshold  float64 `koanf:"similarity_threshold"`
+	ShingleSize          int     `koanf:"shingle_size"`
+	NumHashFunctions     int     `koanf:"num_hash_functions"`
+	NumBands             int     `koanf:"num_bands"`
+	RowsPerBand          int     `koanf:"rows_per_band"`
+	NormalizeIdentifiers bool    `koanf:"normalize_identifiers"`
+	NormalizeLiterals    bool    `koanf:"normalize_literals"`
+	IgnoreComments       bool    `koanf:"ignore_comments"`
+	MinGroupSize         int     `koanf:"min_group_size"`
 }
 
 // ExcludeConfig defines file exclusion patterns.
@@ -102,6 +119,18 @@ func DefaultConfig() *Config {
 			DeadCodeConfidence:   0.8,
 			DefectHighRisk:       0.6,
 			TDGHighRisk:          2.5, // Critical threshold on 0-5 scale
+		},
+		Duplicates: DuplicateConfig{
+			MinTokens:            50,
+			SimilarityThreshold:  0.70,
+			ShingleSize:          5,
+			NumHashFunctions:     200,
+			NumBands:             20,
+			RowsPerBand:          10,
+			NormalizeIdentifiers: true,
+			NormalizeLiterals:    true,
+			IgnoreComments:       true,
+			MinGroupSize:         2,
 		},
 		Exclude: ExcludeConfig{
 			Patterns: []string{
