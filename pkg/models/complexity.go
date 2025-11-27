@@ -145,6 +145,79 @@ func DefaultComplexityThresholds() ComplexityThresholds {
 	}
 }
 
+// ExtendedComplexityThresholds provides warn and error levels (pmat compatible).
+type ExtendedComplexityThresholds struct {
+	CyclomaticWarn  uint32 `json:"cyclomatic_warn"`
+	CyclomaticError uint32 `json:"cyclomatic_error"`
+	CognitiveWarn   uint32 `json:"cognitive_warn"`
+	CognitiveError  uint32 `json:"cognitive_error"`
+	NestingMax      uint8  `json:"nesting_max"`
+	MethodLength    uint16 `json:"method_length"`
+}
+
+// DefaultExtendedThresholds returns pmat-compatible default thresholds.
+func DefaultExtendedThresholds() ExtendedComplexityThresholds {
+	return ExtendedComplexityThresholds{
+		CyclomaticWarn:  10,
+		CyclomaticError: 20,
+		CognitiveWarn:   15,
+		CognitiveError:  30,
+		NestingMax:      5,
+		MethodLength:    50,
+	}
+}
+
+// ViolationSeverity indicates the severity of a complexity violation.
+type ViolationSeverity string
+
+const (
+	SeverityWarning ViolationSeverity = "warning"
+	SeverityError   ViolationSeverity = "error"
+)
+
+// Violation represents a complexity threshold violation.
+type Violation struct {
+	Severity  ViolationSeverity `json:"severity"`
+	Rule      string            `json:"rule"`
+	Message   string            `json:"message"`
+	Value     uint32            `json:"value"`
+	Threshold uint32            `json:"threshold"`
+	File      string            `json:"file"`
+	Line      uint32            `json:"line"`
+	Function  string            `json:"function,omitempty"`
+}
+
+// ComplexityHotspot identifies a high-complexity location in the codebase.
+type ComplexityHotspot struct {
+	File           string `json:"file"`
+	Function       string `json:"function,omitempty"`
+	Line           uint32 `json:"line"`
+	Complexity     uint32 `json:"complexity"`
+	ComplexityType string `json:"complexity_type"`
+}
+
+// ComplexityReport is the full analysis report with violations and hotspots.
+type ComplexityReport struct {
+	Summary            ExtendedComplexitySummary `json:"summary"`
+	Violations         []Violation               `json:"violations"`
+	Hotspots           []ComplexityHotspot       `json:"hotspots"`
+	Files              []FileComplexity          `json:"files"`
+	TechnicalDebtHours float32                   `json:"technical_debt_hours"`
+}
+
+// ExtendedComplexitySummary provides enhanced statistics (pmat compatible).
+type ExtendedComplexitySummary struct {
+	TotalFiles         int     `json:"total_files"`
+	TotalFunctions     int     `json:"total_functions"`
+	MedianCyclomatic   float32 `json:"median_cyclomatic"`
+	MedianCognitive    float32 `json:"median_cognitive"`
+	MaxCyclomatic      uint32  `json:"max_cyclomatic"`
+	MaxCognitive       uint32  `json:"max_cognitive"`
+	P90Cyclomatic      uint32  `json:"p90_cyclomatic"`
+	P90Cognitive       uint32  `json:"p90_cognitive"`
+	TechnicalDebtHours float32 `json:"technical_debt_hours"`
+}
+
 // IsSimple returns true if complexity is within acceptable limits.
 func (m *ComplexityMetrics) IsSimple(t ComplexityThresholds) bool {
 	return m.Cyclomatic <= t.MaxCyclomatic &&
@@ -157,4 +230,25 @@ func (m *ComplexityMetrics) NeedsRefactoring(t ComplexityThresholds) bool {
 	return m.Cyclomatic > t.MaxCyclomatic*2 ||
 		m.Cognitive > t.MaxCognitive*2 ||
 		m.MaxNesting > t.MaxNesting*2
+}
+
+// IsSimpleDefault checks if complexity is low using fixed thresholds (pmat compatible).
+// Returns true if cyclomatic <= 5 and cognitive <= 7.
+func (m *ComplexityMetrics) IsSimpleDefault() bool {
+	return m.Cyclomatic <= 5 && m.Cognitive <= 7
+}
+
+// NeedsRefactoringDefault checks if complexity exceeds fixed thresholds (pmat compatible).
+// Returns true if cyclomatic > 10 or cognitive > 15.
+func (m *ComplexityMetrics) NeedsRefactoringDefault() bool {
+	return m.Cyclomatic > 10 || m.Cognitive > 15
+}
+
+// ComplexityScore calculates a composite complexity score for ranking.
+// Combines cyclomatic, cognitive, nesting, and lines with weighted factors.
+func (m *ComplexityMetrics) ComplexityScore() float64 {
+	return float64(m.Cyclomatic)*1.0 +
+		float64(m.Cognitive)*1.2 +
+		float64(m.MaxNesting)*2.0 +
+		float64(m.Lines)*0.1
 }
