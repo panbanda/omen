@@ -328,7 +328,13 @@ func runSATDCmd(c *cli.Context) error {
 		return nil
 	}
 
-	satdAnalyzer := analyzer.NewSATDAnalyzer()
+	opts := analyzer.SATDOptions{
+		IncludeTests:      includeTest,
+		IncludeVendor:     false,
+		AdjustSeverity:    true,
+		GenerateContextID: true,
+	}
+	satdAnalyzer := analyzer.NewSATDAnalyzerWithOptions(opts)
 	for _, p := range patterns {
 		if err := satdAnalyzer.AddPattern(p, models.DebtDesign, models.SeverityMedium); err != nil {
 			color.Yellow("Invalid pattern %q: %v", p, err)
