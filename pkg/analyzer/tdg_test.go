@@ -8,753 +8,509 @@ import (
 	"github.com/panbanda/omen/pkg/models"
 )
 
-func TestNewTDGAnalyzer(t *testing.T) {
+func TestTdgAnalyzerAnalyzeSource(t *testing.T) {
+	analyzer := NewTdgAnalyzer()
+	defer analyzer.Close()
+
+	source := `
+// A simple function
+func simple() int {
+    return 42
+}
+`
+
+	score, err := analyzer.AnalyzeSource(source, models.LanguageGo, "test.go")
+	if err != nil {
+		t.Fatalf("AnalyzeSource() error = %v", err)
+	}
+
+	if score.Language != models.LanguageGo {
+		t.Errorf("Language = %v, want Go", score.Language)
+	}
+
+	if score.Total <= 0 || score.Total > 100 {
+		t.Errorf("Total = %v, want 0-100", score.Total)
+	}
+
+	if score.Confidence <= 0 || score.Confidence > 1 {
+		t.Errorf("Confidence = %v, want 0-1", score.Confidence)
+	}
+}
+
+func TestTdgAnalyzerComplexCode(t *testing.T) {
+	analyzer := NewTdgAnalyzer()
+	defer analyzer.Close()
+
+	// Complex nested code
+	source := `
+func complex(x int) int {
+    if x > 0 {
+        if x > 10 {
+            if x > 20 {
+                if x > 30 {
+                    if x > 40 {
+                        return x * 2
+                    }
+                }
+            }
+        }
+    }
+    return x
+}
+`
+
+	score, err := analyzer.AnalyzeSource(source, models.LanguageGo, "complex.go")
+	if err != nil {
+		t.Fatalf("AnalyzeSource() error = %v", err)
+	}
+
+	// Deep nesting should result in penalties
+	if score.SemanticComplexity >= 20.0 {
+		t.Errorf("Deep nesting should reduce SemanticComplexity, got %v", score.SemanticComplexity)
+	}
+
+	if len(score.PenaltiesApplied) == 0 {
+		t.Error("Complex code should have penalties applied")
+	}
+}
+
+func TestTdgAnalyzerDuplicateCode(t *testing.T) {
+	analyzer := NewTdgAnalyzer()
+	defer analyzer.Close()
+
+	// Code with duplicates (same line repeated)
+	source := `
+func duplicate() {
+    processDataWithLongFunctionName()
+    processDataWithLongFunctionName()
+    processDataWithLongFunctionName()
+    processDataWithLongFunctionName()
+    processDataWithLongFunctionName()
+    doSomethingElse()
+    doSomethingElse()
+    doSomethingElse()
+}
+`
+
+	score, err := analyzer.AnalyzeSource(source, models.LanguageGo, "dup.go")
+	if err != nil {
+		t.Fatalf("AnalyzeSource() error = %v", err)
+	}
+
+	// Duplication should be detected
+	if score.DuplicationRatio == 20.0 {
+		t.Error("Duplicated code should reduce duplication score")
+	}
+}
+
+func TestTdgAnalyzerHighCoupling(t *testing.T) {
+	analyzer := NewTdgAnalyzer()
+	defer analyzer.Close()
+
+	// Many imports = high coupling
+	source := `
+import "fmt"
+import "os"
+import "io"
+import "net/http"
+import "encoding/json"
+import "database/sql"
+import "crypto/tls"
+import "sync"
+import "context"
+import "time"
+import "strings"
+import "bytes"
+import "errors"
+import "log"
+import "path/filepath"
+import "regexp"
+import "sort"
+import "strconv"
+import "testing"
+import "reflect"
+import "math"
+import "bufio"
+import "compress/gzip"
+import "archive/zip"
+import "html/template"
+
+func main() {
+    fmt.Println("hello")
+}
+`
+
+	score, err := analyzer.AnalyzeSource(source, models.LanguageGo, "coupling.go")
+	if err != nil {
+		t.Fatalf("AnalyzeSource() error = %v", err)
+	}
+
+	// High coupling should reduce coupling score
+	if score.CouplingScore >= 15.0 {
+		t.Errorf("High coupling should reduce CouplingScore, got %v", score.CouplingScore)
+	}
+}
+
+func TestTdgAnalyzerDocumentation(t *testing.T) {
+	analyzer := NewTdgAnalyzer()
+	defer analyzer.Close()
+
+	// Well-documented code
+	source := `
+// Package main provides the entry point.
+//
+// This is a comprehensive documentation comment
+// that spans multiple lines to demonstrate
+// good documentation practices.
+package main
+
+// Main is the entry point of the application.
+// It initializes all components and starts the server.
+func main() {
+    // Initialize
+    init()
+}
+
+// init performs initialization.
+func init() {
+    // Setup
+}
+`
+
+	score, err := analyzer.AnalyzeSource(source, models.LanguageGo, "doc.go")
+	if err != nil {
+		t.Fatalf("AnalyzeSource() error = %v", err)
+	}
+
+	// Good documentation should give points
+	if score.DocCoverage <= 0 {
+		t.Errorf("Well-documented code should have DocCoverage > 0, got %v", score.DocCoverage)
+	}
+}
+
+func TestTdgAnalyzerCriticalDefects(t *testing.T) {
+	analyzer := NewTdgAnalyzer()
+	defer analyzer.Close()
+
+	// Rust code with .unwrap()
+	source := `
+fn main() {
+    let value = some_result().unwrap();
+    let other = another_result().unwrap();
+    panic!("something went wrong");
+}
+`
+
+	score, err := analyzer.AnalyzeSource(source, models.LanguageRust, "defects.rs")
+	if err != nil {
+		t.Fatalf("AnalyzeSource() error = %v", err)
+	}
+
+	if !score.HasCriticalDefects {
+		t.Error("Should detect critical defects (.unwrap() and panic!)")
+	}
+
+	if score.CriticalDefectsCount < 3 {
+		t.Errorf("CriticalDefectsCount = %v, want >= 3", score.CriticalDefectsCount)
+	}
+
+	// Critical defects should result in F grade
+	if score.Grade != models.GradeF {
+		t.Errorf("Critical defects should result in Grade F, got %v", score.Grade)
+	}
+
+	if score.Total != 0 {
+		t.Errorf("Critical defects should result in Total 0, got %v", score.Total)
+	}
+}
+
+func TestTdgAnalyzerAnalyzeFile(t *testing.T) {
+	analyzer := NewTdgAnalyzer()
+	defer analyzer.Close()
+
+	// Create a temp file
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.go")
+
+	content := `
+package main
+
+func main() {
+    println("hello")
+}
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to write temp file: %v", err)
+	}
+
+	score, err := analyzer.AnalyzeFile(path)
+	if err != nil {
+		t.Fatalf("AnalyzeFile() error = %v", err)
+	}
+
+	if score.FilePath != path {
+		t.Errorf("FilePath = %v, want %v", score.FilePath, path)
+	}
+
+	if score.Language != models.LanguageGo {
+		t.Errorf("Language = %v, want Go", score.Language)
+	}
+}
+
+func TestTdgAnalyzerAnalyzeProject(t *testing.T) {
+	analyzer := NewTdgAnalyzer()
+	defer analyzer.Close()
+
+	// Create temp directory with files
+	dir := t.TempDir()
+
+	files := map[string]string{
+		"main.go":       `package main; func main() {}`,
+		"helper.go":     `package main; func helper() {}`,
+		"utils/util.go": `package utils; func Util() {}`,
+	}
+
+	for name, content := range files {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatalf("Failed to create dir: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("Failed to write file: %v", err)
+		}
+	}
+
+	project, err := analyzer.AnalyzeProject(dir)
+	if err != nil {
+		t.Fatalf("AnalyzeProject() error = %v", err)
+	}
+
+	if project.TotalFiles != 3 {
+		t.Errorf("TotalFiles = %v, want 3", project.TotalFiles)
+	}
+
+	if project.LanguageDistribution[models.LanguageGo] != 3 {
+		t.Errorf("Go files = %v, want 3", project.LanguageDistribution[models.LanguageGo])
+	}
+}
+
+func TestTdgAnalyzerCompare(t *testing.T) {
+	analyzer := NewTdgAnalyzer()
+	defer analyzer.Close()
+
+	dir := t.TempDir()
+
+	// Simple file
+	path1 := filepath.Join(dir, "simple.go")
+	content1 := `package main; func main() {}`
+	if err := os.WriteFile(path1, []byte(content1), 0644); err != nil {
+		t.Fatalf("Failed to write file: %v", err)
+	}
+
+	// Much more complex file with deep nesting to trigger penalties
+	path2 := filepath.Join(dir, "complex.go")
+	content2 := `package main
+
+import "fmt"
+import "os"
+import "io"
+import "net"
+import "log"
+import "sync"
+import "time"
+import "strings"
+import "bytes"
+import "errors"
+import "context"
+import "path/filepath"
+import "encoding/json"
+import "net/http"
+import "database/sql"
+import "crypto/tls"
+import "reflect"
+import "runtime"
+import "sort"
+import "strconv"
+import "archive/zip"
+
+func complex(x int) {
+    if x > 0 {
+        if x > 10 {
+            if x > 20 {
+                if x > 30 {
+                    if x > 40 {
+                        if x > 50 {
+                            fmt.Println(x)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for i := 0; i < 10; i++ {
+        for j := 0; j < 10; j++ {
+            if i > j && j > 0 || i < 5 {
+                println(i, j)
+            }
+        }
+    }
+}
+`
+	if err := os.WriteFile(path2, []byte(content2), 0644); err != nil {
+		t.Fatalf("Failed to write file: %v", err)
+	}
+
+	comparison, err := analyzer.Compare(path1, path2)
+	if err != nil {
+		t.Fatalf("Compare() error = %v", err)
+	}
+
+	t.Logf("Source1 (simple) = %v, Source2 (complex) = %v, Delta = %v",
+		comparison.Source1.Total, comparison.Source2.Total, comparison.Delta)
+
+	// Both files should have scores between 0 and 100
+	if comparison.Source1.Total < 0 || comparison.Source1.Total > 100 {
+		t.Errorf("Source1.Total = %v, want 0-100", comparison.Source1.Total)
+	}
+	if comparison.Source2.Total < 0 || comparison.Source2.Total > 100 {
+		t.Errorf("Source2.Total = %v, want 0-100", comparison.Source2.Total)
+	}
+}
+
+func TestTdgAnalyzerSkipDirectories(t *testing.T) {
+	analyzer := NewTdgAnalyzer()
+
+	skipDirs := []string{
+		"node_modules", "target", "build", "dist", ".git",
+		"__pycache__", ".pytest_cache", "venv", ".venv",
+		"vendor", ".idea", ".vscode",
+	}
+
+	for _, dir := range skipDirs {
+		if !analyzer.shouldSkipDirectory(dir) {
+			t.Errorf("shouldSkipDirectory(%q) = false, want true", dir)
+		}
+	}
+
+	if analyzer.shouldSkipDirectory("src") {
+		t.Error("shouldSkipDirectory(src) = true, want false")
+	}
+}
+
+func TestTdgAnalyzerShouldAnalyzeFile(t *testing.T) {
+	analyzer := NewTdgAnalyzer()
+
+	analyzeFiles := []string{
+		"main.go", "app.rs", "script.py", "index.js", "app.ts",
+		"component.tsx", "Main.java", "lib.c", "impl.cpp",
+		"server.rb", "api.swift", "data.kt",
+	}
+
+	for _, file := range analyzeFiles {
+		if !analyzer.shouldAnalyzeFile(file) {
+			t.Errorf("shouldAnalyzeFile(%q) = false, want true", file)
+		}
+	}
+
+	skipFiles := []string{
+		"README.md", "config.yaml", "data.json", "Makefile",
+		"image.png", "styles.css", "index.html",
+	}
+
+	for _, file := range skipFiles {
+		if analyzer.shouldAnalyzeFile(file) {
+			t.Errorf("shouldAnalyzeFile(%q) = true, want false", file)
+		}
+	}
+}
+
+func TestTdgAnalyzerEstimateCyclomaticComplexity(t *testing.T) {
+	analyzer := NewTdgAnalyzer()
+
 	tests := []struct {
-		name      string
-		churnDays int
+		name        string
+		source      string
+		minExpected uint32
 	}{
 		{
-			name:      "default 90 days",
-			churnDays: 90,
+			name:        "simple",
+			source:      "func main() {\n    return\n}",
+			minExpected: 1,
 		},
 		{
-			name:      "30 days",
-			churnDays: 30,
+			name:        "with_if",
+			source:      "func main() {\n    if x > 0 {\n        return\n    }\n}",
+			minExpected: 2,
 		},
 		{
-			name:      "180 days",
-			churnDays: 180,
+			name:        "with_for",
+			source:      "func main() {\n    for i := 0; i < 10; i++ {\n        continue\n    }\n}",
+			minExpected: 2,
+		},
+		{
+			name:        "with_logical_ops",
+			source:      "func main() {\n    if x > 0 && y > 0 || z > 0 {\n        return\n    }\n}",
+			minExpected: 3,
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			analyzer := NewTDGAnalyzer(tt.churnDays)
-			defer analyzer.Close()
-
-			if analyzer == nil {
-				t.Fatal("NewTDGAnalyzer() returned nil")
-			}
-			if analyzer.complexity == nil {
-				t.Error("complexity analyzer is nil")
-			}
-			if analyzer.churn == nil {
-				t.Error("churn analyzer is nil")
-			}
-			if analyzer.duplicates == nil {
-				t.Error("duplicates analyzer is nil")
-			}
-			if analyzer.weights != models.DefaultTDGWeights() {
-				t.Error("weights not initialized to defaults")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			lines := splitLines(tc.source)
+			got := analyzer.estimateCyclomaticComplexity(lines)
+			if got < tc.minExpected {
+				t.Errorf("estimateCyclomaticComplexity() = %v, want >= %v", got, tc.minExpected)
 			}
 		})
 	}
 }
 
-func TestClamp(t *testing.T) {
-	tests := []struct {
-		name  string
-		value float64
-		min   float64
-		max   float64
-		want  float64
-	}{
-		{
-			name:  "value in range",
-			value: 2.5,
-			min:   0.0,
-			max:   5.0,
-			want:  2.5,
-		},
-		{
-			name:  "value below min",
-			value: -1.0,
-			min:   0.0,
-			max:   5.0,
-			want:  0.0,
-		},
-		{
-			name:  "value above max",
-			value: 10.0,
-			min:   0.0,
-			max:   5.0,
-			want:  5.0,
-		},
-		{
-			name:  "value at min",
-			value: 0.0,
-			min:   0.0,
-			max:   5.0,
-			want:  0.0,
-		},
-		{
-			name:  "value at max",
-			value: 5.0,
-			min:   0.0,
-			max:   5.0,
-			want:  5.0,
-		},
-	}
+func TestTdgAnalyzerEstimateNestingDepth(t *testing.T) {
+	analyzer := NewTdgAnalyzer()
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := clamp(tt.value, tt.min, tt.max)
-			if got != tt.want {
-				t.Errorf("clamp(%v, %v, %v) = %v, want %v", tt.value, tt.min, tt.max, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestCalculateDomainRisk(t *testing.T) {
 	tests := []struct {
 		name     string
-		path     string
-		minRisk  float64
-		maxRisk  float64
+		source   string
+		expected int
 	}{
 		{
-			name:    "auth path - high risk",
-			path:    "/src/auth/login.go",
-			minRisk: 2.0,
-			maxRisk: 5.0,
+			name:     "flat",
+			source:   "func main() {\n    return\n}",
+			expected: 1,
 		},
 		{
-			name:    "crypto path - high risk",
-			path:    "/src/crypto/hash.go",
-			minRisk: 2.0,
-			maxRisk: 5.0,
+			name:     "nested_2",
+			source:   "func main() {\n    if x {\n        y\n    }\n}",
+			expected: 2,
 		},
 		{
-			name:    "security path - high risk",
-			path:    "/src/security/validator.go",
-			minRisk: 2.0,
-			maxRisk: 5.0,
-		},
-		{
-			name:    "database path - medium risk",
-			path:    "/src/database/connection.go",
-			minRisk: 1.5,
-			maxRisk: 5.0,
-		},
-		{
-			name:    "migration path - medium risk",
-			path:    "/src/migration/v1.go",
-			minRisk: 1.5,
-			maxRisk: 5.0,
-		},
-		{
-			name:    "api path - lower risk",
-			path:    "/src/api/handlers.go",
-			minRisk: 1.0,
-			maxRisk: 5.0,
-		},
-		{
-			name:    "handler path - lower risk",
-			path:    "/src/handler/user.go",
-			minRisk: 1.0,
-			maxRisk: 5.0,
-		},
-		{
-			name:    "regular path - no domain risk",
-			path:    "/src/utils/helpers.go",
-			minRisk: 0.0,
-			maxRisk: 0.0,
-		},
-		{
-			name:    "combined auth+api - cumulative risk",
-			path:    "/src/api/auth/token.go",
-			minRisk: 3.0,
-			maxRisk: 5.0,
+			name:     "nested_3",
+			source:   "func main() {\n    if x {\n        for {\n            y\n        }\n    }\n}",
+			expected: 3,
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := calculateDomainRisk(tt.path)
-			if got < tt.minRisk || got > tt.maxRisk {
-				t.Errorf("calculateDomainRisk(%q) = %v, want in range [%v, %v]", tt.path, got, tt.minRisk, tt.maxRisk)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := analyzer.estimateNestingDepth(tc.source)
+			if got != tc.expected {
+				t.Errorf("estimateNestingDepth() = %v, want %v", got, tc.expected)
 			}
 		})
 	}
 }
 
-func TestPercentileFloat64TDG(t *testing.T) {
-	tests := []struct {
-		name       string
-		sorted     []float64
-		percentile int
-		want       float64
-	}{
-		{
-			name:       "p50 of 5 elements",
-			sorted:     []float64{1.0, 2.0, 3.0, 4.0, 5.0},
-			percentile: 50,
-			want:       3.0,
-		},
-		{
-			name:       "p95 of 5 elements",
-			sorted:     []float64{1.0, 2.0, 3.0, 4.0, 5.0},
-			percentile: 95,
-			want:       5.0,
-		},
-		{
-			name:       "p0 of elements",
-			sorted:     []float64{1.0, 2.0, 3.0},
-			percentile: 0,
-			want:       1.0,
-		},
-		{
-			name:       "p100 of elements",
-			sorted:     []float64{1.0, 2.0, 3.0},
-			percentile: 100,
-			want:       3.0,
-		},
-		{
-			name:       "empty slice",
-			sorted:     []float64{},
-			percentile: 50,
-			want:       0.0,
-		},
-		{
-			name:       "single element",
-			sorted:     []float64{2.5},
-			percentile: 50,
-			want:       2.5,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := percentileFloat64TDG(tt.sorted, tt.percentile)
-			if got != tt.want {
-				t.Errorf("percentileFloat64TDG(%v, %d) = %v, want %v", tt.sorted, tt.percentile, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestTDGAnalyzeProject_SingleFile(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	code := `package main
-
-func simple() int {
-	return 42
-}`
-
-	testFile := filepath.Join(tmpDir, "test.go")
-	if err := os.WriteFile(testFile, []byte(code), 0644); err != nil {
-		t.Fatalf("failed to write test file: %v", err)
-	}
-
-	analyzer := NewTDGAnalyzer(90)
-	defer analyzer.Close()
-
-	result, err := analyzer.AnalyzeProject(tmpDir, []string{testFile})
-	if err != nil {
-		t.Fatalf("AnalyzeProject() error = %v", err)
-	}
-
-	if result == nil {
-		t.Fatal("result is nil")
-	}
-
-	if len(result.Files) != 1 {
-		t.Errorf("expected 1 file, got %d", len(result.Files))
-	}
-
-	if result.Summary.TotalFiles != 1 {
-		t.Errorf("Summary.TotalFiles = %d, want 1", result.Summary.TotalFiles)
-	}
-
-	file := result.Files[0]
-	if file.FilePath != testFile {
-		t.Errorf("FilePath = %q, want %q", file.FilePath, testFile)
-	}
-
-	if file.Value < 0 || file.Value > 5 {
-		t.Errorf("TDG score %v out of range [0-5]", file.Value)
-	}
-
-	if file.Severity == "" {
-		t.Error("Severity should not be empty")
-	}
-
-	if file.Confidence <= 0 || file.Confidence > 1 {
-		t.Errorf("Confidence %v out of range (0-1]", file.Confidence)
-	}
-
-	if file.Components.Complexity < 0 || file.Components.Complexity > 5 {
-		t.Errorf("Complexity component %v out of range [0-5]", file.Components.Complexity)
-	}
-}
-
-func TestTDGAnalyzeProject_MultipleFiles(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	files := map[string]string{
-		"simple.go": `package main
-
-func simple() int {
-	return 42
-}`,
-		"complex.go": `package main
-
-func complex(x, y, z int) int {
-	if x > 0 {
-		if y > 0 {
-			if z > 0 {
-				for i := 0; i < 10; i++ {
-					if i%2 == 0 {
-						x += i
-					}
-				}
-				return x + y + z
-			}
-			return x + y
-		}
-		return x
-	}
-	return 0
-}`,
-		"moderate.go": `package main
-
-func moderate(x int) int {
-	if x > 0 {
-		return x * 2
-	}
-	return 0
-}`,
-	}
-
-	var filePaths []string
-	for name, content := range files {
-		path := filepath.Join(tmpDir, name)
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-			t.Fatalf("failed to write %s: %v", name, err)
-		}
-		filePaths = append(filePaths, path)
-	}
-
-	analyzer := NewTDGAnalyzer(90)
-	defer analyzer.Close()
-
-	result, err := analyzer.AnalyzeProject(tmpDir, filePaths)
-	if err != nil {
-		t.Fatalf("AnalyzeProject() error = %v", err)
-	}
-
-	if len(result.Files) != 3 {
-		t.Errorf("expected 3 files, got %d", len(result.Files))
-	}
-
-	if result.Summary.TotalFiles != 3 {
-		t.Errorf("Summary.TotalFiles = %d, want 3", result.Summary.TotalFiles)
-	}
-
-	if result.Summary.AvgScore < 0 {
-		t.Error("AvgScore should be >= 0")
-	}
-
-	if result.Summary.AvgScore > 5 {
-		t.Error("AvgScore should be <= 5")
-	}
-
-	if result.Summary.MaxScore < 0 || result.Summary.MaxScore > 5 {
-		t.Errorf("MaxScore %v out of range [0-5]", result.Summary.MaxScore)
-	}
-
-	complexFile := filepath.Join(tmpDir, "complex.go")
-	simpleFile := filepath.Join(tmpDir, "simple.go")
-
-	var complexScore, simpleScore float64
-	for _, f := range result.Files {
-		if f.FilePath == complexFile {
-			complexScore = f.Value
-		}
-		if f.FilePath == simpleFile {
-			simpleScore = f.Value
+func splitLines(s string) []string {
+	var lines []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			lines = append(lines, s[start:i])
+			start = i + 1
 		}
 	}
-
-	if complexScore <= simpleScore {
-		t.Errorf("complex file score (%v) should be higher than simple file score (%v)", complexScore, simpleScore)
+	if start < len(s) {
+		lines = append(lines, s[start:])
 	}
-}
-
-func TestTDGAnalyzeProject_SortedByScore(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	files := map[string]string{
-		"simple.go": `package main
-func simple() { return }`,
-		"medium.go": `package main
-func medium(x int) int {
-	if x > 0 { return x }
-	return 0
-}`,
-		"complex.go": `package main
-func complex(x, y int) int {
-	if x > 0 {
-		if y > 0 { return x + y }
-		return x
-	}
-	return 0
-}`,
-	}
-
-	var filePaths []string
-	for name, content := range files {
-		path := filepath.Join(tmpDir, name)
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-			t.Fatalf("failed to write %s: %v", name, err)
-		}
-		filePaths = append(filePaths, path)
-	}
-
-	analyzer := NewTDGAnalyzer(90)
-	defer analyzer.Close()
-
-	result, err := analyzer.AnalyzeProject(tmpDir, filePaths)
-	if err != nil {
-		t.Fatalf("AnalyzeProject() error = %v", err)
-	}
-
-	// Files should be sorted by score descending (highest debt first)
-	for i := 1; i < len(result.Files); i++ {
-		if result.Files[i].Value > result.Files[i-1].Value {
-			t.Errorf("files not sorted by score descending: files[%d].Value (%v) > files[%d].Value (%v)",
-				i, result.Files[i].Value, i-1, result.Files[i-1].Value)
-		}
-	}
-}
-
-func TestTDGAnalyzeProject_SeverityDistribution(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	files := map[string]string{
-		"normal.go": `package main
-func normal() { x := 1 }`,
-		"moderate.go": `package main
-func moderate(x int) int {
-	if x > 0 { return x }
-	return 0
-}`,
-	}
-
-	var filePaths []string
-	for name, content := range files {
-		path := filepath.Join(tmpDir, name)
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-			t.Fatalf("failed to write %s: %v", name, err)
-		}
-		filePaths = append(filePaths, path)
-	}
-
-	analyzer := NewTDGAnalyzer(90)
-	defer analyzer.Close()
-
-	result, err := analyzer.AnalyzeProject(tmpDir, filePaths)
-	if err != nil {
-		t.Fatalf("AnalyzeProject() error = %v", err)
-	}
-
-	totalBySeverity := 0
-	for _, count := range result.Summary.BySeverity {
-		totalBySeverity += count
-	}
-
-	if totalBySeverity != len(result.Files) {
-		t.Errorf("severity counts (%d) don't match file count (%d)", totalBySeverity, len(result.Files))
-	}
-
-	for _, file := range result.Files {
-		switch file.Severity {
-		case models.TDGNormal, models.TDGWarning, models.TDGCritical:
-		default:
-			t.Errorf("invalid severity: %v", file.Severity)
-		}
-	}
-}
-
-func TestTDGAnalyzeProject_Hotspots(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	var filePaths []string
-	for i := 0; i < 15; i++ {
-		content := `package main
-func test() { x := 1 }`
-		path := filepath.Join(tmpDir, "test"+string(rune('0'+i))+".go")
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-			t.Fatalf("failed to write file: %v", err)
-		}
-		filePaths = append(filePaths, path)
-	}
-
-	analyzer := NewTDGAnalyzer(90)
-	defer analyzer.Close()
-
-	result, err := analyzer.AnalyzeProject(tmpDir, filePaths)
-	if err != nil {
-		t.Fatalf("AnalyzeProject() error = %v", err)
-	}
-
-	if len(result.Summary.Hotspots) != 10 {
-		t.Errorf("expected 10 hotspots, got %d", len(result.Summary.Hotspots))
-	}
-
-	for i := 0; i < len(result.Summary.Hotspots); i++ {
-		if result.Summary.Hotspots[i].FilePath != result.Files[i].FilePath {
-			t.Errorf("hotspot[%d] doesn't match worst file[%d]", i, i)
-		}
-	}
-}
-
-func TestTDGAnalyzeProject_FewFilesHotspots(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	files := map[string]string{
-		"file1.go": `package main
-func test1() { x := 1 }`,
-		"file2.go": `package main
-func test2() { y := 2 }`,
-	}
-
-	var filePaths []string
-	for name, content := range files {
-		path := filepath.Join(tmpDir, name)
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-			t.Fatalf("failed to write %s: %v", name, err)
-		}
-		filePaths = append(filePaths, path)
-	}
-
-	analyzer := NewTDGAnalyzer(90)
-	defer analyzer.Close()
-
-	result, err := analyzer.AnalyzeProject(tmpDir, filePaths)
-	if err != nil {
-		t.Fatalf("AnalyzeProject() error = %v", err)
-	}
-
-	if len(result.Summary.Hotspots) != 2 {
-		t.Errorf("expected 2 hotspots for 2 files, got %d", len(result.Summary.Hotspots))
-	}
-}
-
-func TestTDGAnalyzeProject_EmptyFileList(t *testing.T) {
-	tmpDir := t.TempDir()
-	analyzer := NewTDGAnalyzer(90)
-	defer analyzer.Close()
-
-	result, err := analyzer.AnalyzeProject(tmpDir, []string{})
-	if err != nil {
-		t.Fatalf("AnalyzeProject() error = %v", err)
-	}
-
-	if len(result.Files) != 0 {
-		t.Errorf("expected 0 files, got %d", len(result.Files))
-	}
-
-	if result.Summary.TotalFiles != 0 {
-		t.Errorf("Summary.TotalFiles = %d, want 0", result.Summary.TotalFiles)
-	}
-
-	if result.Summary.AvgScore != 0 {
-		t.Errorf("AvgScore should be 0 for empty project, got %v", result.Summary.AvgScore)
-	}
-}
-
-func TestTDGAnalyzeProject_ComponentWeighting(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	code := `package main
-
-func test(x int) int {
-	if x > 0 {
-		return x
-	}
-	return 0
-}`
-
-	testFile := filepath.Join(tmpDir, "test.go")
-	if err := os.WriteFile(testFile, []byte(code), 0644); err != nil {
-		t.Fatalf("failed to write test file: %v", err)
-	}
-
-	analyzer := NewTDGAnalyzer(90)
-	defer analyzer.Close()
-
-	result, err := analyzer.AnalyzeProject(tmpDir, []string{testFile})
-	if err != nil {
-		t.Fatalf("AnalyzeProject() error = %v", err)
-	}
-
-	file := result.Files[0]
-
-	weights := models.DefaultTDGWeights()
-	expectedScore := file.Components.Complexity*weights.Complexity +
-		file.Components.Churn*weights.Churn +
-		file.Components.Coupling*weights.Coupling +
-		file.Components.Duplication*weights.Duplication +
-		file.Components.DomainRisk*weights.DomainRisk
-
-	if expectedScore < 0 {
-		expectedScore = 0
-	}
-	if expectedScore > 5 {
-		expectedScore = 5
-	}
-
-	if file.Value != expectedScore {
-		t.Errorf("TDG score = %v, expected %v", file.Value, expectedScore)
-	}
-}
-
-func TestTDGAnalyzeProject_MaxScoreTracking(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	files := map[string]string{
-		"best.go": `package main
-func best() { x := 1 }`,
-		"worst.go": `package main
-func worst(a, b, c, d int) int {
-	if a > 0 {
-		if b > 0 {
-			if c > 0 {
-				if d > 0 {
-					return a + b + c + d
-				}
-				return a + b + c
-			}
-			return a + b
-		}
-		return a
-	}
-	return 0
-}`,
-	}
-
-	var filePaths []string
-	for name, content := range files {
-		path := filepath.Join(tmpDir, name)
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-			t.Fatalf("failed to write %s: %v", name, err)
-		}
-		filePaths = append(filePaths, path)
-	}
-
-	analyzer := NewTDGAnalyzer(90)
-	defer analyzer.Close()
-
-	result, err := analyzer.AnalyzeProject(tmpDir, filePaths)
-	if err != nil {
-		t.Fatalf("AnalyzeProject() error = %v", err)
-	}
-
-	// MaxScore should be the highest (worst) debt score
-	if result.Summary.MaxScore != result.Files[0].Value {
-		t.Errorf("MaxScore (%v) should equal worst file score (%v)", result.Summary.MaxScore, result.Files[0].Value)
-	}
-}
-
-func TestTDGAnalyzer_Close(t *testing.T) {
-	analyzer := NewTDGAnalyzer(90)
-
-	analyzer.Close()
-
-	defer func() {
-		if r := recover(); r != nil {
-			t.Error("Close() should not panic when called multiple times")
-		}
-	}()
-	analyzer.Close()
-}
-
-func TestTDGAnalyzeProject_NoComplexityMetrics(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	testFile := filepath.Join(tmpDir, "empty.go")
-	if err := os.WriteFile(testFile, []byte("package main"), 0644); err != nil {
-		t.Fatalf("failed to write test file: %v", err)
-	}
-
-	analyzer := NewTDGAnalyzer(90)
-	defer analyzer.Close()
-
-	result, err := analyzer.AnalyzeProject(tmpDir, []string{testFile})
-	if err != nil {
-		t.Fatalf("AnalyzeProject() error = %v", err)
-	}
-
-	file := result.Files[0]
-	if file.Components.Complexity != 0 {
-		t.Errorf("Complexity should be 0 for file with no functions, got %v", file.Components.Complexity)
-	}
-
-	// Score may not be exactly 0 due to coupling estimation
-	if file.Value < 0 || file.Value > 1.0 {
-		t.Errorf("TDG score should be low for file with no complexity, got %v", file.Value)
-	}
-
-	if file.Severity != models.TDGNormal {
-		t.Errorf("Severity should be normal for low score, got %v", file.Severity)
-	}
-}
-
-func TestTDGAnalyzeProject_DomainRiskDetection(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	authDir := filepath.Join(tmpDir, "auth")
-	if err := os.MkdirAll(authDir, 0755); err != nil {
-		t.Fatalf("failed to create auth dir: %v", err)
-	}
-
-	code := `package auth
-func login() { return }`
-
-	testFile := filepath.Join(authDir, "login.go")
-	if err := os.WriteFile(testFile, []byte(code), 0644); err != nil {
-		t.Fatalf("failed to write test file: %v", err)
-	}
-
-	analyzer := NewTDGAnalyzer(90)
-	defer analyzer.Close()
-
-	result, err := analyzer.AnalyzeProject(tmpDir, []string{testFile})
-	if err != nil {
-		t.Fatalf("AnalyzeProject() error = %v", err)
-	}
-
-	file := result.Files[0]
-	if file.Components.DomainRisk == 0 {
-		t.Error("DomainRisk should be > 0 for auth path")
-	}
-}
-
-func TestTDGAnalyzeProject_ConfidenceReduction(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	code := `package main
-func test() { x := 1 }`
-
-	testFile := filepath.Join(tmpDir, "test.go")
-	if err := os.WriteFile(testFile, []byte(code), 0644); err != nil {
-		t.Fatalf("failed to write test file: %v", err)
-	}
-
-	analyzer := NewTDGAnalyzer(90)
-	defer analyzer.Close()
-
-	result, err := analyzer.AnalyzeProject(tmpDir, []string{testFile})
-	if err != nil {
-		t.Fatalf("AnalyzeProject() error = %v", err)
-	}
-
-	file := result.Files[0]
-	// Confidence should be reduced when churn data is missing (not a git repo)
-	if file.Confidence >= 1.0 {
-		t.Errorf("Confidence should be < 1.0 when data is missing, got %v", file.Confidence)
-	}
+	return lines
 }

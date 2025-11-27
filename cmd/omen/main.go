@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/fatih/color"
@@ -840,13 +841,28 @@ func runDefectCmd(c *cli.Context) error {
 func tdgCmd() *cli.Command {
 	return &cli.Command{
 		Name:      "tdg",
-		Usage:     "Calculate Technical Debt Gradient scores",
+		Usage:     "Calculate Technical Debt Gradient scores (0-100, higher is better)",
 		ArgsUsage: "[path...]",
 		Flags: []cli.Flag{
 			&cli.IntFlag{
 				Name:  "hotspots",
 				Value: 10,
 				Usage: "Number of hotspots to show",
+			},
+			&cli.BoolFlag{
+				Name:  "penalties",
+				Usage: "Show applied penalties",
+			},
+			&cli.StringFlag{
+				Name:    "format",
+				Aliases: []string{"f"},
+				Value:   "text",
+				Usage:   "Output format: text, json, markdown",
+			},
+			&cli.StringFlag{
+				Name:    "output",
+				Aliases: []string{"o"},
+				Usage:   "Write output to file",
 			},
 		},
 		Action: runTDGCmd,
@@ -856,91 +872,130 @@ func tdgCmd() *cli.Command {
 func runTDGCmd(c *cli.Context) error {
 	paths := getPaths(c)
 	hotspots := c.Int("hotspots")
+	showPenalties := c.Bool("penalties")
 
-	cfg := config.LoadOrDefault()
-	scan := scanner.NewScanner(cfg)
-
-	// Use first path as repo root for git analysis
-	repoPath, err := filepath.Abs(paths[0])
-	if err != nil {
-		return fmt.Errorf("invalid path: %w", err)
-	}
-
-	var files []string
-	for _, path := range paths {
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			return fmt.Errorf("invalid path %s: %w", path, err)
-		}
-		found, err := scan.ScanDir(absPath)
-		if err != nil {
-			return fmt.Errorf("failed to scan directory %s: %w", path, err)
-		}
-		files = append(files, found...)
-	}
-
-	if len(files) == 0 {
-		color.Yellow("No source files found")
-		return nil
-	}
-
-	tdgAnalyzer := analyzer.NewTDGAnalyzer(cfg.Analysis.ChurnDays)
+	tdgAnalyzer := analyzer.NewTdgAnalyzer()
 	defer tdgAnalyzer.Close()
 
-	analysis, err := tdgAnalyzer.AnalyzeProject(repoPath, files)
+	// Handle directory vs single file
+	var project models.ProjectScore
+	var err error
+
+	if len(paths) == 1 {
+		info, statErr := os.Stat(paths[0])
+		if statErr != nil {
+			return fmt.Errorf("invalid path %s: %w", paths[0], statErr)
+		}
+
+		if info.IsDir() {
+			project, err = tdgAnalyzer.AnalyzeProject(paths[0])
+		} else {
+			score, fileErr := tdgAnalyzer.AnalyzeFile(paths[0])
+			if fileErr != nil {
+				return fmt.Errorf("analysis failed: %w", fileErr)
+			}
+			project = models.AggregateProjectScore([]models.TdgScore{score})
+		}
+	} else {
+		var allScores []models.TdgScore
+		for _, path := range paths {
+			info, statErr := os.Stat(path)
+			if statErr != nil {
+				return fmt.Errorf("invalid path %s: %w", path, statErr)
+			}
+
+			if info.IsDir() {
+				dirProject, dirErr := tdgAnalyzer.AnalyzeProject(path)
+				if dirErr != nil {
+					return fmt.Errorf("analysis failed for %s: %w", path, dirErr)
+				}
+				allScores = append(allScores, dirProject.Files...)
+			} else {
+				score, fileErr := tdgAnalyzer.AnalyzeFile(path)
+				if fileErr != nil {
+					return fmt.Errorf("analysis failed for %s: %w", path, fileErr)
+				}
+				allScores = append(allScores, score)
+			}
+		}
+		project = models.AggregateProjectScore(allScores)
+	}
+
 	if err != nil {
 		return fmt.Errorf("analysis failed: %w", err)
 	}
 
-	formatter, err := output.NewFormatter(output.ParseFormat(c.String("format")), c.String("output"), true)
-	if err != nil {
-		return err
+	formatter, fmtErr := output.NewFormatter(output.ParseFormat(c.String("format")), c.String("output"), true)
+	if fmtErr != nil {
+		return fmtErr
 	}
 	defer formatter.Close()
 
-	// Show top hotspots
-	filesToShow := analysis.Files
+	// Sort by score (lowest first - worst quality)
+	files := project.Files
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Total < files[j].Total
+	})
+
+	// Show top hotspots (worst scores)
+	filesToShow := files
 	if len(filesToShow) > hotspots {
 		filesToShow = filesToShow[:hotspots]
 	}
 
 	var rows [][]string
 	for _, ts := range filesToShow {
-		scoreStr := fmt.Sprintf("%.2f", ts.Value)
-		sevStr := string(ts.Severity)
-		switch ts.Severity {
-		case models.TDGCritical:
-			scoreStr = color.RedString(scoreStr)
-			sevStr = color.RedString(sevStr)
-		case models.TDGWarning:
-			scoreStr = color.YellowString(scoreStr)
-			sevStr = color.YellowString(sevStr)
-		case models.TDGNormal:
+		scoreStr := fmt.Sprintf("%.1f", ts.Total)
+		gradeStr := string(ts.Grade)
+
+		// Color by grade
+		switch {
+		case ts.Total >= 90:
 			scoreStr = color.GreenString(scoreStr)
-			sevStr = color.GreenString(sevStr)
+			gradeStr = color.GreenString(gradeStr)
+		case ts.Total >= 70:
+			scoreStr = color.YellowString(scoreStr)
+			gradeStr = color.YellowString(gradeStr)
+		default:
+			scoreStr = color.RedString(scoreStr)
+			gradeStr = color.RedString(gradeStr)
 		}
 
-		rows = append(rows, []string{
+		row := []string{
 			ts.FilePath,
 			scoreStr,
-			sevStr,
-			fmt.Sprintf("%.2f", ts.Components.Complexity),
-			fmt.Sprintf("%.2f", ts.Components.Churn),
-			fmt.Sprintf("%.2f", ts.Components.Duplication),
-		})
+			gradeStr,
+			fmt.Sprintf("%.1f", ts.StructuralComplexity),
+			fmt.Sprintf("%.1f", ts.SemanticComplexity),
+			fmt.Sprintf("%.1f", ts.CouplingScore),
+		}
+
+		if showPenalties && len(ts.PenaltiesApplied) > 0 {
+			var penaltyStrs []string
+			for _, p := range ts.PenaltiesApplied {
+				penaltyStrs = append(penaltyStrs, fmt.Sprintf("%.1f: %s", p.Amount, p.Issue))
+			}
+			row = append(row, strings.Join(penaltyStrs, "; "))
+		}
+
+		rows = append(rows, row)
+	}
+
+	headers := []string{"File", "Score", "Grade", "Struct", "Semantic", "Coupling"}
+	if showPenalties {
+		headers = append(headers, "Penalties")
 	}
 
 	table := output.NewTable(
-		fmt.Sprintf("Technical Debt Gradient (Top %d Hotspots)", hotspots),
-		[]string{"File", "TDG Score", "Severity", "Complexity", "Churn", "Duplication"},
+		fmt.Sprintf("TDG Analysis (Top %d Hotspots)", hotspots),
+		headers,
 		rows,
 		[]string{
-			fmt.Sprintf("Total Files: %d", analysis.Summary.TotalFiles),
-			fmt.Sprintf("Max Score: %.2f", analysis.Summary.MaxScore),
-			fmt.Sprintf("Avg Score: %.2f", analysis.Summary.AvgScore),
-			"", "", "",
+			fmt.Sprintf("Total Files: %d", project.TotalFiles),
+			fmt.Sprintf("Average Score: %.1f", project.AverageScore),
+			fmt.Sprintf("Average Grade: %s", project.AverageGrade),
 		},
-		analysis,
+		project,
 	)
 
 	return formatter.Output(table)
@@ -1373,7 +1428,7 @@ func runAnalyzeCmd(c *cli.Context) error {
 		Churn      *models.ChurnAnalysis      `json:"churn,omitempty"`
 		Clones     *models.CloneAnalysis      `json:"clones,omitempty"`
 		Defect     *models.DefectAnalysis     `json:"defect,omitempty"`
-		TDG        *models.TDGAnalysis        `json:"tdg,omitempty"`
+		TDG        *models.ProjectScore       `json:"tdg,omitempty"`
 	}
 	results := FullAnalysis{}
 
@@ -1437,11 +1492,12 @@ func runAnalyzeCmd(c *cli.Context) error {
 		tracker.FinishSuccess()
 	}
 
-	// 7. TDG (composite - uses sub-analyzers)
+	// 7. TDG
 	if !excludeSet["tdg"] {
 		tracker := progress.NewTracker("Calculating TDG scores...", 1)
-		tdgAnalyzer := analyzer.NewTDGAnalyzer(cfg.Analysis.ChurnDays)
-		results.TDG, _ = tdgAnalyzer.AnalyzeProject(repoPath, files)
+		tdgAnalyzer := analyzer.NewTdgAnalyzer()
+		project, _ := tdgAnalyzer.AnalyzeProject(repoPath)
+		results.TDG = &project
 		tdgAnalyzer.Close()
 		tracker.FinishSuccess()
 	}
@@ -1513,11 +1569,18 @@ func runAnalyzeCmd(c *cli.Context) error {
 
 	if results.TDG != nil {
 		fmt.Fprintf(w, "\nTechnical Debt Gradient:\n")
-		fmt.Fprintf(w, "  Max Score: %.2f, Avg Score: %.2f\n",
-			results.TDG.Summary.MaxScore, results.TDG.Summary.AvgScore)
-		if len(results.TDG.Summary.Hotspots) > 0 {
-			fmt.Fprintf(w, "  Top Hotspot: %s (%.2f)\n",
-				results.TDG.Summary.Hotspots[0].FilePath, results.TDG.Summary.Hotspots[0].Value)
+		fmt.Fprintf(w, "  Files: %d, Avg Score: %.1f, Grade: %s\n",
+			results.TDG.TotalFiles, results.TDG.AverageScore, results.TDG.AverageGrade)
+		if len(results.TDG.Files) > 0 {
+			// Find lowest score (worst file)
+			worst := results.TDG.Files[0]
+			for _, f := range results.TDG.Files {
+				if f.Total < worst.Total {
+					worst = f
+				}
+			}
+			fmt.Fprintf(w, "  Lowest Score: %s (%.1f, %s)\n",
+				worst.FilePath, worst.Total, worst.Grade)
 		}
 	}
 
