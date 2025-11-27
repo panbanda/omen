@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.2.0](https://github.com/panbanda/omen/compare/v1.1.0...v1.2.0) (2025-11-27)
+
+
+### Features
+
+* **complexity:** add Halstead software science metrics ([797399c](https://github.com/panbanda/omen/commit/797399c21c4c723a818b5780fd8f72c5b2037f92))
+* **complexity:** add pmat-compatible models and tests ([d980808](https://github.com/panbanda/omen/commit/d98080863e7b13881692680cd31c73aae27dd60f))
+* **satd:** add PMAT-compatible strict mode, test block tracking, and AST context ([68452db](https://github.com/panbanda/omen/commit/68452db332d8009b77cf0a80f977aace461cea9c))
+* **satd:** add severity adjustment, context hash, and file exclusion ([9f4032e](https://github.com/panbanda/omen/commit/9f4032e1a7fd2b83768e5fec1bf7f5912845427a))
+
 ## [1.1.0](https://github.com/panbanda/omen/compare/v1.0.8...v1.1.0) (2025-11-26)
 
 
