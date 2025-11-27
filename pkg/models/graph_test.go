@@ -110,7 +110,7 @@ func TestDependencyGraph_ToMermaid(t *testing.T) {
 				g.AddEdge(GraphEdge{From: "node1", To: "node2", Type: EdgeImport})
 			},
 			expectedParts: []string{
-				"node1 --> node2",
+				"node1 -.->|imports| node2",
 			},
 		},
 		{
@@ -132,7 +132,7 @@ func TestDependencyGraph_ToMermaid(t *testing.T) {
 				g.AddEdge(GraphEdge{From: "node1", To: "node2", Type: EdgeInherit})
 			},
 			expectedParts: []string{
-				"node1 -.->|inherits| node2",
+				"node1 -->|inherits| node2",
 			},
 		},
 		{
@@ -149,7 +149,7 @@ func TestDependencyGraph_ToMermaid(t *testing.T) {
 				`main_go["main.go"]`,
 				`util_go["util.go"]`,
 				`helper_go["helper.go"]`,
-				"main_go --> util_go",
+				"main_go -.->|imports| util_go",
 				"main_go -->|calls| helper_go",
 			},
 		},
@@ -221,9 +221,9 @@ func TestSanitizeMermaidID(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := sanitizeMermaidID(tt.input)
+			got := SanitizeMermaidID(tt.input)
 			if got != tt.expected {
-				t.Errorf("sanitizeMermaidID(%q) = %q, expected %q", tt.input, got, tt.expected)
+				t.Errorf("SanitizeMermaidID(%q) = %q, expected %q", tt.input, got, tt.expected)
 			}
 		})
 	}
