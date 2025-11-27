@@ -20,12 +20,42 @@ type SATDAnalyzer struct {
 	testPatterns []*regexp.Regexp
 }
 
+// AstNodeType represents the type of AST context for a code location.
+// Matches PMAT's AstNodeType enum for severity adjustment.
+type AstNodeType int
+
+const (
+	// AstNodeRegular is a normal code location with no special context.
+	AstNodeRegular AstNodeType = iota
+	// AstNodeSecurityFunction is code within a security-related function.
+	AstNodeSecurityFunction
+	// AstNodeDataValidation is code within a data validation function.
+	AstNodeDataValidation
+	// AstNodeTestFunction is code within a test function.
+	AstNodeTestFunction
+	// AstNodeMockImplementation is code within a mock/stub implementation.
+	AstNodeMockImplementation
+)
+
+// AstContext provides context about a code location for severity adjustment.
+// Matches PMAT's AstContext struct.
+type AstContext struct {
+	NodeType              AstNodeType
+	ParentFunction        string
+	Complexity            uint32
+	SiblingsCount         int
+	NestingDepth          int
+	SurroundingStatements []string
+}
+
 // SATDOptions configures SATD analysis behavior.
 type SATDOptions struct {
 	IncludeTests      bool // Include test files in analysis
 	IncludeVendor     bool // Include vendor/third-party files
 	AdjustSeverity    bool // Adjust severity based on context
 	GenerateContextID bool // Generate context hash for identity tracking
+	StrictMode        bool // Only match explicit markers with colons (e.g., // TODO:)
+	ExcludeTestBlocks bool // Exclude SATD in Rust #[cfg(test)] blocks
 }
 
 // DefaultSATDOptions returns the default options.
@@ -35,6 +65,8 @@ func DefaultSATDOptions() SATDOptions {
 		IncludeVendor:     false,
 		AdjustSeverity:    true,
 		GenerateContextID: true,
+		StrictMode:        false,
+		ExcludeTestBlocks: true,
 	}
 }
 
@@ -51,10 +83,35 @@ func NewSATDAnalyzer() *SATDAnalyzer {
 
 // NewSATDAnalyzerWithOptions creates a SATD analyzer with custom options.
 func NewSATDAnalyzerWithOptions(opts SATDOptions) *SATDAnalyzer {
+	patterns := defaultSATDPatterns()
+	if opts.StrictMode {
+		patterns = strictSATDPatterns()
+	}
 	return &SATDAnalyzer{
-		patterns:     defaultSATDPatterns(),
+		patterns:     patterns,
 		options:      opts,
 		testPatterns: defaultTestPatterns(),
+	}
+}
+
+// NewSATDAnalyzerStrict creates a strict SATD analyzer that only matches
+// explicit markers with colons (e.g., // TODO:, // FIXME:).
+func NewSATDAnalyzerStrict() *SATDAnalyzer {
+	opts := DefaultSATDOptions()
+	opts.StrictMode = true
+	return NewSATDAnalyzerWithOptions(opts)
+}
+
+// strictSATDPatterns returns patterns that only match explicit comment markers.
+// This reduces false positives by requiring the format: // MARKER: description
+func strictSATDPatterns() []satdPattern {
+	return []satdPattern{
+		// Strict mode: only matches explicit markers with colons
+		{regexp.MustCompile(`//\s*TODO:\s+(.+)`), models.DebtRequirement, models.SeverityLow},
+		{regexp.MustCompile(`//\s*FIXME:\s+(.+)`), models.DebtDefect, models.SeverityHigh},
+		{regexp.MustCompile(`//\s*HACK:\s+(.+)`), models.DebtDesign, models.SeverityMedium},
+		{regexp.MustCompile(`//\s*XXX:\s+(.+)`), models.DebtDesign, models.SeverityMedium},
+		{regexp.MustCompile(`//\s*BUG:\s+(.+)`), models.DebtDefect, models.SeverityHigh},
 	}
 }
 
@@ -81,14 +138,20 @@ func defaultTestPatterns() []*regexp.Regexp {
 // - High: Defects (FIXME, BUG, BROKEN)
 // - Medium: Design compromises (HACK, KLUDGE)
 // - Low: TODOs, notes, minor enhancements
+//
+// Patterns exclude:
+// - Bug tracking IDs like "BUG-012:" or "PMAT-BUG-001:"
+// - Markdown headers like "### Security"
 func defaultSATDPatterns() []satdPattern {
 	return []satdPattern{
 		// Critical severity - Security concerns
+		// False positives (markdown headers, bug tracking IDs) are filtered by shouldSkipSATDProcessing
 		{regexp.MustCompile(`(?i)\b(SECURITY|VULN|VULNERABILITY|CVE|XSS)\b[:\s]*(.+)?`), models.DebtSecurity, models.SeverityCritical},
 		{regexp.MustCompile(`(?i)\bUNSAFE\b[:\s]*(.+)?`), models.DebtSecurity, models.SeverityCritical},
 
 		// High severity - Known defects
 		{regexp.MustCompile(`(?i)\b(FIXME|FIX\s*ME)\b[:\s]*(.+)?`), models.DebtDefect, models.SeverityHigh},
+		// BUG pattern - false positives (bug tracking IDs) filtered by shouldSkipSATDProcessing
 		{regexp.MustCompile(`(?i)\bBUG\b[:\s]*(.+)?`), models.DebtDefect, models.SeverityHigh},
 		{regexp.MustCompile(`(?i)\bBROKEN\b[:\s]*(.+)?`), models.DebtDefect, models.SeverityHigh},
 
@@ -112,6 +175,93 @@ func defaultSATDPatterns() []satdPattern {
 		{regexp.MustCompile(`(?i)\bTEST\s*(THIS|ME)?\b[:\s]*(.+)?`), models.DebtTest, models.SeverityLow},
 		{regexp.MustCompile(`(?i)\bUNTESTED\b[:\s]*(.+)?`), models.DebtTest, models.SeverityMedium},
 	}
+}
+
+// shouldSkipSATDProcessing checks if a line should be excluded from SATD detection.
+// This mirrors PMAT's should_skip_satd_processing function.
+func shouldSkipSATDProcessing(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return isMarkdownHeader(trimmed) ||
+		isBugTrackingID(trimmed) ||
+		isFixedBugDescription(trimmed)
+}
+
+// isMarkdownHeader checks if a line is a markdown header (not a comment with SATD)
+// Matches PMAT's is_markdown_header function.
+func isMarkdownHeader(trimmed string) bool {
+	if !strings.HasPrefix(trimmed, "#") {
+		return false
+	}
+	// Remove leading # symbols and whitespace to get header content
+	content := strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
+
+	// Check if it's a common section header (especially CHANGELOG sections)
+	commonHeaders := []string{
+		"Security", "Added", "Changed", "Deprecated", "Removed", "Fixed",
+		"Unreleased", "Changelog", "CHANGELOG",
+	}
+	for _, header := range commonHeaders {
+		if content == header {
+			return true
+		}
+	}
+	// Version header pattern like [1.0.0]
+	if strings.HasPrefix(content, "[") {
+		return true
+	}
+	return false
+}
+
+// isBugTrackingID checks if a line contains a bug tracking ID pattern.
+// Matches PMAT's is_bug_tracking_id function.
+// Patterns: BUG-123, PMAT-BUG-456, PROJECT-BUG-789
+func isBugTrackingID(line string) bool {
+	lower := strings.ToLower(line)
+
+	// Pattern 1: BUG-XXX (where XXX is digits)
+	if strings.Contains(lower, "bug-") {
+		idx := strings.Index(lower, "bug-")
+		if idx >= 0 && idx+4 < len(line) {
+			afterDash := line[idx+4:]
+			digitCount := 0
+			for _, c := range afterDash {
+				if c >= '0' && c <= '9' {
+					digitCount++
+				} else {
+					break
+				}
+			}
+			if digitCount >= 1 {
+				return true
+			}
+		}
+	}
+
+	// Pattern 2: PMAT-BUG-XXX, PROJECT-BUG-XXX (hyphen before BUG)
+	if strings.Contains(lower, "-bug-") {
+		return true
+	}
+
+	return false
+}
+
+// isFixedBugDescription checks if a comment describes a FIXED bug (not a current bug).
+// Matches PMAT's is_fixed_bug_description function.
+// Patterns: "Bug: Previously...", "CRITICAL FIX:", "BUG-064 FIX:"
+func isFixedBugDescription(line string) bool {
+	lower := strings.ToLower(line)
+
+	// Pattern 1: "Bug: Previously..." - past tense description
+	if strings.HasPrefix(lower, "bug:") && strings.Contains(lower, "previous") {
+		return true
+	}
+
+	// Pattern 2: "CRITICAL FIX:", "BUG FIX:", "BUG-XXX FIX:"
+	if strings.Contains(lower, " fix:") {
+		return true
+	}
+
+	return false
 }
 
 // AddPattern adds a custom SATD detection pattern.
@@ -146,12 +296,30 @@ func (a *SATDAnalyzer) AnalyzeFile(path string) ([]models.TechnicalDebt, error) 
 	isTestFile := a.isTestFile(path)
 	isSecurityContext := a.isSecurityContext(path)
 
+	// Initialize test block tracker for Rust files
+	isRustFile := lang == parser.LangRust
+	testTracker := newTestBlockTracker(isRustFile && a.options.ExcludeTestBlocks)
+
 	for scanner.Scan() {
 		lineNum++
 		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+
+		// Update test block tracking
+		testTracker.updateFromLine(trimmed)
+
+		// Skip SATD in test blocks for Rust files
+		if testTracker.isInTestBlock() {
+			continue
+		}
 
 		// Only scan comments
 		if !isCommentLine(line, commentStyle) {
+			continue
+		}
+
+		// Skip false positives (markdown headers, bug tracking IDs, fixed bug descriptions)
+		if shouldSkipSATDProcessing(line) {
 			continue
 		}
 
@@ -187,6 +355,58 @@ func (a *SATDAnalyzer) AnalyzeFile(path string) ([]models.TechnicalDebt, error) 
 	}
 
 	return debts, scanner.Err()
+}
+
+// testBlockTracker tracks #[cfg(test)] blocks in Rust files.
+// SATD within test blocks can be excluded to reduce noise.
+type testBlockTracker struct {
+	enabled        bool
+	inTestBlock    bool
+	testBlockDepth int
+}
+
+func newTestBlockTracker(enabled bool) *testBlockTracker {
+	return &testBlockTracker{enabled: enabled}
+}
+
+func (t *testBlockTracker) updateFromLine(trimmed string) {
+	if !t.enabled {
+		return
+	}
+
+	if t.isTestBlockStart(trimmed) {
+		t.startTestBlock()
+	} else if t.inTestBlock {
+		t.updateTestBlockDepth(trimmed)
+	}
+}
+
+func (t *testBlockTracker) isInTestBlock() bool {
+	return t.inTestBlock
+}
+
+func (t *testBlockTracker) isTestBlockStart(trimmed string) bool {
+	return strings.HasPrefix(trimmed, "#[cfg(test)]")
+}
+
+func (t *testBlockTracker) startTestBlock() {
+	t.inTestBlock = true
+	t.testBlockDepth = 0
+}
+
+func (t *testBlockTracker) updateTestBlockDepth(trimmed string) {
+	// Count opening braces
+	t.testBlockDepth += strings.Count(trimmed, "{")
+
+	// Count closing braces
+	closeCount := strings.Count(trimmed, "}")
+	t.testBlockDepth -= closeCount
+
+	// Exit test block when we've closed all braces
+	if t.testBlockDepth <= 0 && strings.HasSuffix(trimmed, "}") {
+		t.inTestBlock = false
+		t.testBlockDepth = 0
+	}
 }
 
 // shouldExcludeFile determines if a file should be skipped.
@@ -271,26 +491,52 @@ func (a *SATDAnalyzer) isSecurityContext(path string) bool {
 }
 
 // adjustSeverity modifies severity based on context.
+// This is the legacy method maintained for backward compatibility.
 func (a *SATDAnalyzer) adjustSeverity(base models.Severity, isTest, isSecurity bool, line string) models.Severity {
-	// Reduce severity for test code
+	// Build an AstContext from the legacy parameters
+	ctx := AstContext{
+		NodeType:   AstNodeRegular,
+		Complexity: 1,
+	}
+
 	if isTest {
-		return base.Reduce()
+		ctx.NodeType = AstNodeTestFunction
+	} else if isSecurity {
+		ctx.NodeType = AstNodeSecurityFunction
 	}
 
-	// Escalate severity in security contexts
-	if isSecurity {
-		return base.Escalate()
-	}
-
-	// Escalate if line mentions security-related terms
+	// Check for security terms in content to potentially escalate
 	lower := strings.ToLower(line)
 	securityTerms := []string{"security", "vuln", "auth", "password", "inject", "xss", "csrf", "sql"}
 	for _, term := range securityTerms {
 		if strings.Contains(lower, term) {
-			return base.Escalate()
+			ctx.NodeType = AstNodeSecurityFunction
+			break
 		}
 	}
 
+	return a.AdjustSeverityWithContext(base, &ctx)
+}
+
+// AdjustSeverityWithContext modifies severity based on AST context.
+// Matches PMAT's adjust_severity method:
+// - SecurityFunction/DataValidation: escalate severity
+// - TestFunction/MockImplementation: reduce severity
+// - Regular with complexity > 20: escalate severity
+func (a *SATDAnalyzer) AdjustSeverityWithContext(base models.Severity, ctx *AstContext) models.Severity {
+	switch ctx.NodeType {
+	case AstNodeSecurityFunction, AstNodeDataValidation:
+		// Critical paths escalate severity
+		return base.Escalate()
+	case AstNodeTestFunction, AstNodeMockImplementation:
+		// Test code reduces severity
+		return base.Reduce()
+	case AstNodeRegular:
+		// Hot paths (high complexity) escalate severity
+		if ctx.Complexity > 20 {
+			return base.Escalate()
+		}
+	}
 	return base
 }
 
@@ -385,16 +631,20 @@ func (a *SATDAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress Pro
 	}
 
 	analysis := &models.SATDAnalysis{
-		Items:   allItems,
-		Summary: models.NewSATDSummary(),
+		Items:              allItems,
+		Summary:            models.NewSATDSummary(),
+		TotalFilesAnalyzed: len(files),
 	}
 
+	filesWithDebtSet := make(map[string]bool)
 	for _, debt := range allItems {
 		analysis.Summary.TotalItems++
 		analysis.Summary.ByCategory[string(debt.Category)]++
 		analysis.Summary.BySeverity[string(debt.Severity)]++
 		analysis.Summary.ByFile[debt.File]++
+		filesWithDebtSet[debt.File] = true
 	}
+	analysis.FilesWithDebt = len(filesWithDebtSet)
 
 	return analysis, nil
 }
