@@ -6,6 +6,11 @@ import (
 	"github.com/panbanda/omen/pkg/models"
 	"github.com/panbanda/omen/pkg/parser"
 	sitter "github.com/smacker/go-tree-sitter"
+	"gonum.org/v1/gonum/graph/community"
+	"gonum.org/v1/gonum/graph/network"
+	"gonum.org/v1/gonum/graph/path"
+	"gonum.org/v1/gonum/graph/simple"
+	"gonum.org/v1/gonum/graph/topo"
 )
 
 // GraphAnalyzer builds dependency graphs from source code.
@@ -345,7 +350,49 @@ func contains(s, substr string) bool {
 	return false
 }
 
-// CalculateMetrics computes graph metrics like PageRank.
+// gonumGraph holds the gonum representation and mappings.
+type gonumGraph struct {
+	directed   *simple.DirectedGraph
+	undirected *simple.UndirectedGraph
+	nodeIDToID map[string]int64 // our node ID -> gonum int64 ID
+	idToNodeID map[int64]string // gonum int64 ID -> our node ID
+}
+
+// toGonumGraph converts our DependencyGraph to gonum graph types.
+func toGonumGraph(graph *models.DependencyGraph) *gonumGraph {
+	g := &gonumGraph{
+		directed:   simple.NewDirectedGraph(),
+		undirected: simple.NewUndirectedGraph(),
+		nodeIDToID: make(map[string]int64),
+		idToNodeID: make(map[int64]string),
+	}
+
+	// Create nodes with sequential IDs
+	for i, node := range graph.Nodes {
+		id := int64(i)
+		g.nodeIDToID[node.ID] = id
+		g.idToNodeID[id] = node.ID
+		g.directed.AddNode(simple.Node(id))
+		g.undirected.AddNode(simple.Node(id))
+	}
+
+	// Add edges (skip self-loops as gonum simple graphs don't support them)
+	for _, edge := range graph.Edges {
+		fromID, fromOK := g.nodeIDToID[edge.From]
+		toID, toOK := g.nodeIDToID[edge.To]
+		if fromOK && toOK && fromID != toID {
+			g.directed.SetEdge(simple.Edge{F: simple.Node(fromID), T: simple.Node(toID)})
+			// For undirected, only add if not already present (avoid duplicate)
+			if !g.undirected.HasEdgeBetween(fromID, toID) {
+				g.undirected.SetEdge(simple.Edge{F: simple.Node(fromID), T: simple.Node(toID)})
+			}
+		}
+	}
+
+	return g
+}
+
+// CalculateMetrics computes comprehensive graph metrics.
 func (a *GraphAnalyzer) CalculateMetrics(graph *models.DependencyGraph) *models.GraphMetrics {
 	metrics := &models.GraphMetrics{
 		NodeMetrics: make([]models.NodeMetric, 0),
@@ -355,28 +402,61 @@ func (a *GraphAnalyzer) CalculateMetrics(graph *models.DependencyGraph) *models.
 		},
 	}
 
-	// Build adjacency lists
+	if len(graph.Nodes) == 0 {
+		return metrics
+	}
+
+	// Convert to gonum graph
+	gGraph := toGonumGraph(graph)
+
+	// Build adjacency lists (still needed for some hand-rolled algorithms)
 	inDegree := make(map[string]int)
 	outDegree := make(map[string]int)
 	outNeighbors := make(map[string][]string)
+	inNeighbors := make(map[string][]string)
 
 	for _, node := range graph.Nodes {
 		inDegree[node.ID] = 0
 		outDegree[node.ID] = 0
 		outNeighbors[node.ID] = []string{}
+		inNeighbors[node.ID] = []string{}
 	}
 
 	for _, edge := range graph.Edges {
 		inDegree[edge.To]++
 		outDegree[edge.From]++
 		outNeighbors[edge.From] = append(outNeighbors[edge.From], edge.To)
+		inNeighbors[edge.To] = append(inNeighbors[edge.To], edge.From)
 	}
 
-	// Calculate PageRank
-	pageRank := calculatePageRank(graph.Nodes, outNeighbors, 20, 0.85)
+	// Use gonum for centrality metrics
+	pageRankMap := network.PageRank(gGraph.directed, 0.85, 1e-6)
+	betweennessMap := network.Betweenness(gGraph.directed)
 
-	// Calculate betweenness centrality (simplified)
-	betweenness := calculateBetweenness(graph.Nodes, outNeighbors)
+	// Closeness and Harmonic need AllShortest paths
+	allShortest := path.DijkstraAllPaths(gGraph.directed)
+	closenessMap := network.Closeness(gGraph.directed, allShortest)
+	harmonicMap := network.Harmonic(gGraph.directed, allShortest)
+
+	// Convert gonum maps (int64 keys) to our string-keyed maps
+	pageRank := make(map[string]float64)
+	betweenness := make(map[string]float64)
+	closeness := make(map[string]float64)
+	harmonic := make(map[string]float64)
+
+	for id, nodeID := range gGraph.idToNodeID {
+		pageRank[nodeID] = pageRankMap[id]
+		betweenness[nodeID] = betweennessMap[id]
+		closeness[nodeID] = closenessMap[id]
+		harmonic[nodeID] = harmonicMap[id]
+	}
+
+	// Hand-rolled algorithms (gonum doesn't provide these)
+	eigenvector := calculateEigenvector(graph.Nodes, inNeighbors, 100, 1e-6)
+	clustering := calculateClusteringCoefficients(graph.Nodes, outNeighbors)
+
+	// Community detection using gonum's Louvain implementation
+	communities, modularity := gonumCommunityDetection(gGraph)
 
 	// Build node metrics
 	for _, node := range graph.Nodes {
@@ -385,114 +465,513 @@ func (a *GraphAnalyzer) CalculateMetrics(graph *models.DependencyGraph) *models.
 			Name:                  node.Name,
 			PageRank:              pageRank[node.ID],
 			BetweennessCentrality: betweenness[node.ID],
+			ClosenessCentrality:   closeness[node.ID],
+			EigenvectorCentrality: eigenvector[node.ID],
+			HarmonicCentrality:    harmonic[node.ID],
 			InDegree:              inDegree[node.ID],
 			OutDegree:             outDegree[node.ID],
+			ClusteringCoef:        clustering[node.ID],
+			CommunityID:           communities[node.ID],
 		}
 		metrics.NodeMetrics = append(metrics.NodeMetrics, nm)
 	}
 
 	// Calculate summary statistics
-	if len(graph.Nodes) > 0 {
-		totalDegree := 0
-		for _, node := range graph.Nodes {
-			totalDegree += inDegree[node.ID] + outDegree[node.ID]
-		}
-		metrics.Summary.AvgDegree = float64(totalDegree) / float64(len(graph.Nodes))
+	totalDegree := 0
+	for _, node := range graph.Nodes {
+		totalDegree += inDegree[node.ID] + outDegree[node.ID]
+	}
+	metrics.Summary.AvgDegree = float64(totalDegree) / float64(len(graph.Nodes))
 
-		// Density = E / (V * (V-1))
-		if len(graph.Nodes) > 1 {
-			maxEdges := len(graph.Nodes) * (len(graph.Nodes) - 1)
-			metrics.Summary.Density = float64(len(graph.Edges)) / float64(maxEdges)
+	// Density = E / (V * (V-1)) for directed graph
+	if len(graph.Nodes) > 1 {
+		maxEdges := len(graph.Nodes) * (len(graph.Nodes) - 1)
+		metrics.Summary.Density = float64(len(graph.Edges)) / float64(maxEdges)
+	}
+
+	// Use gonum for connected components (undirected)
+	gonumComponents := topo.ConnectedComponents(gGraph.undirected)
+	metrics.Summary.Components = len(gonumComponents)
+	largestComponent := 0
+	for _, comp := range gonumComponents {
+		if len(comp) > largestComponent {
+			largestComponent = len(comp)
 		}
 	}
+	metrics.Summary.LargestComponent = largestComponent
+
+	// Use gonum for strongly connected components
+	gonumSCCs := topo.TarjanSCC(gGraph.directed)
+	// Filter to only SCCs with more than one node (actual cycles)
+	var sccs [][]string
+	for _, scc := range gonumSCCs {
+		if len(scc) > 1 {
+			var nodeIDs []string
+			for _, node := range scc {
+				nodeIDs = append(nodeIDs, gGraph.idToNodeID[node.ID()])
+			}
+			sccs = append(sccs, nodeIDs)
+		}
+	}
+	metrics.Summary.StronglyConnectedComponents = len(sccs)
+	metrics.Summary.CycleCount = len(sccs)
+	metrics.Summary.IsCyclic = len(sccs) > 0
+
+	// Collect cycle nodes
+	cycleNodeSet := make(map[string]bool)
+	for _, scc := range sccs {
+		for _, nodeID := range scc {
+			cycleNodeSet[nodeID] = true
+		}
+	}
+	for nodeID := range cycleNodeSet {
+		metrics.Summary.CycleNodes = append(metrics.Summary.CycleNodes, nodeID)
+	}
+
+	// Diameter and radius (hand-rolled)
+	diameter, radius := calculateDiameterAndRadius(graph.Nodes, outNeighbors)
+	metrics.Summary.Diameter = diameter
+	metrics.Summary.Radius = radius
+
+	// Global clustering coefficient (transitivity) - hand-rolled
+	metrics.Summary.ClusteringCoefficient = calculateGlobalClustering(graph.Nodes, outNeighbors)
+	metrics.Summary.Transitivity = metrics.Summary.ClusteringCoefficient
+
+	// Assortativity - hand-rolled
+	metrics.Summary.Assortativity = calculateAssortativity(graph)
+
+	// Reciprocity - hand-rolled
+	metrics.Summary.Reciprocity = calculateReciprocity(graph)
+
+	// Community metrics
+	communitySet := make(map[int]bool)
+	for _, c := range communities {
+		communitySet[c] = true
+	}
+	metrics.Summary.CommunityCount = len(communitySet)
+	metrics.Summary.Modularity = modularity
 
 	return metrics
 }
 
-// calculatePageRank computes PageRank scores for nodes.
-func calculatePageRank(nodes []models.GraphNode, outNeighbors map[string][]string, iterations int, damping float64) map[string]float64 {
-	n := float64(len(nodes))
+// calculateEigenvector computes eigenvector centrality using power iteration.
+func calculateEigenvector(nodes []models.GraphNode, inNeighbors map[string][]string, iterations int, tolerance float64) map[string]float64 {
+	n := len(nodes)
 	if n == 0 {
 		return make(map[string]float64)
 	}
 
-	// Initialize scores
+	// Initialize scores uniformly
 	scores := make(map[string]float64)
 	for _, node := range nodes {
-		scores[node.ID] = 1.0 / n
+		scores[node.ID] = 1.0 / float64(n)
 	}
 
-	// Iterate
-	for range iterations {
+	// Power iteration
+	for iter := 0; iter < iterations; iter++ {
 		newScores := make(map[string]float64)
+
+		// Each node's score is the sum of its neighbors' scores
 		for _, node := range nodes {
-			newScores[node.ID] = (1 - damping) / n
+			sum := 0.0
+			for _, neighbor := range inNeighbors[node.ID] {
+				sum += scores[neighbor]
+			}
+			newScores[node.ID] = sum
 		}
 
-		for _, node := range nodes {
-			neighbors := outNeighbors[node.ID]
-			if len(neighbors) > 0 {
-				share := scores[node.ID] / float64(len(neighbors))
-				for _, neighbor := range neighbors {
-					newScores[neighbor] += damping * share
-				}
-			} else {
-				// Dangling node: distribute evenly
-				share := scores[node.ID] / n
-				for _, other := range nodes {
-					newScores[other.ID] += damping * share
-				}
+		// Normalize
+		norm := 0.0
+		for _, score := range newScores {
+			norm += score * score
+		}
+		norm = sqrt(norm)
+		if norm > 0 {
+			for id := range newScores {
+				newScores[id] /= norm
+			}
+		}
+
+		// Check convergence
+		maxDiff := 0.0
+		for id, score := range newScores {
+			diff := score - scores[id]
+			if diff < 0 {
+				diff = -diff
+			}
+			if diff > maxDiff {
+				maxDiff = diff
 			}
 		}
 
 		scores = newScores
+		if maxDiff < tolerance {
+			break
+		}
 	}
 
 	return scores
 }
 
-// calculateBetweenness computes simplified betweenness centrality.
-func calculateBetweenness(nodes []models.GraphNode, outNeighbors map[string][]string) map[string]float64 {
-	betweenness := make(map[string]float64)
+// sqrt computes square root using Newton's method.
+func sqrt(x float64) float64 {
+	if x <= 0 {
+		return 0
+	}
+	z := x
+	for i := 0; i < 20; i++ {
+		z = (z + x/z) / 2
+	}
+	return z
+}
+
+// calculateClusteringCoefficients computes local clustering coefficient for each node.
+func calculateClusteringCoefficients(nodes []models.GraphNode, outNeighbors map[string][]string) map[string]float64 {
+	clustering := make(map[string]float64)
+
+	// Build bidirectional neighbor sets for undirected interpretation
+	neighbors := make(map[string]map[string]bool)
 	for _, node := range nodes {
-		betweenness[node.ID] = 0
+		neighbors[node.ID] = make(map[string]bool)
+	}
+	for id, out := range outNeighbors {
+		for _, neighbor := range out {
+			neighbors[id][neighbor] = true
+			neighbors[neighbor][id] = true
+		}
 	}
 
-	// Simplified: count paths through each node
-	for _, source := range nodes {
-		visited := make(map[string]bool)
-		queue := []string{source.ID}
-		visited[source.ID] = true
+	for _, node := range nodes {
+		neighborSet := neighbors[node.ID]
+		k := len(neighborSet)
+		if k < 2 {
+			clustering[node.ID] = 0
+			continue
+		}
 
-		for len(queue) > 0 {
-			current := queue[0]
-			queue = queue[1:]
+		// Count edges between neighbors
+		triangles := 0
+		neighborList := make([]string, 0, k)
+		for n := range neighborSet {
+			neighborList = append(neighborList, n)
+		}
 
-			for _, neighbor := range outNeighbors[current] {
-				if !visited[neighbor] {
-					visited[neighbor] = true
-					queue = append(queue, neighbor)
-					if current != source.ID {
-						betweenness[current]++
-					}
+		for i := 0; i < len(neighborList); i++ {
+			for j := i + 1; j < len(neighborList); j++ {
+				if neighbors[neighborList[i]][neighborList[j]] {
+					triangles++
+				}
+			}
+		}
+
+		// Local clustering coefficient
+		maxTriangles := k * (k - 1) / 2
+		if maxTriangles > 0 {
+			clustering[node.ID] = float64(triangles) / float64(maxTriangles)
+		}
+	}
+
+	return clustering
+}
+
+// calculateGlobalClustering computes global clustering coefficient (transitivity).
+func calculateGlobalClustering(nodes []models.GraphNode, outNeighbors map[string][]string) float64 {
+	// Build bidirectional neighbor sets
+	neighbors := make(map[string]map[string]bool)
+	for _, node := range nodes {
+		neighbors[node.ID] = make(map[string]bool)
+	}
+	for id, out := range outNeighbors {
+		for _, neighbor := range out {
+			neighbors[id][neighbor] = true
+			neighbors[neighbor][id] = true
+		}
+	}
+
+	triangles := 0
+	triplets := 0
+
+	for _, node := range nodes {
+		neighborList := make([]string, 0)
+		for n := range neighbors[node.ID] {
+			neighborList = append(neighborList, n)
+		}
+		k := len(neighborList)
+
+		// Count triplets centered on this node
+		triplets += k * (k - 1) / 2
+
+		// Count triangles
+		for i := 0; i < k; i++ {
+			for j := i + 1; j < k; j++ {
+				if neighbors[neighborList[i]][neighborList[j]] {
+					triangles++
 				}
 			}
 		}
 	}
 
-	// Normalize
-	n := float64(len(nodes))
-	if n > 2 {
-		norm := (n - 1) * (n - 2)
-		for id := range betweenness {
-			betweenness[id] /= norm
+	if triplets > 0 {
+		return float64(triangles) / float64(triplets)
+	}
+	return 0
+}
+
+// calculateAssortativity computes degree assortativity coefficient.
+func calculateAssortativity(graph *models.DependencyGraph) float64 {
+	if len(graph.Edges) == 0 {
+		return 0
+	}
+
+	// Calculate degrees
+	degree := make(map[string]int)
+	for _, node := range graph.Nodes {
+		degree[node.ID] = 0
+	}
+	for _, edge := range graph.Edges {
+		degree[edge.From]++
+		degree[edge.To]++
+	}
+
+	// Compute assortativity using Pearson correlation of degrees at edge endpoints
+	var sumXY, sumX, sumY, sumX2, sumY2 float64
+	m := float64(len(graph.Edges))
+
+	for _, edge := range graph.Edges {
+		x := float64(degree[edge.From])
+		y := float64(degree[edge.To])
+		sumXY += x * y
+		sumX += x
+		sumY += y
+		sumX2 += x * x
+		sumY2 += y * y
+	}
+
+	// Pearson correlation coefficient
+	num := sumXY - (sumX*sumY)/m
+	denom1 := sumX2 - (sumX*sumX)/m
+	denom2 := sumY2 - (sumY*sumY)/m
+
+	if denom1 > 0 && denom2 > 0 {
+		return num / sqrt(denom1*denom2)
+	}
+	return 0
+}
+
+// calculateReciprocity computes the fraction of edges that have a reverse edge.
+func calculateReciprocity(graph *models.DependencyGraph) float64 {
+	if len(graph.Edges) == 0 {
+		return 0
+	}
+
+	// Build edge set
+	edgeSet := make(map[string]bool)
+	for _, edge := range graph.Edges {
+		edgeSet[edge.From+":"+edge.To] = true
+	}
+
+	// Count reciprocal edges
+	reciprocal := 0
+	for _, edge := range graph.Edges {
+		reverseKey := edge.To + ":" + edge.From
+		if edgeSet[reverseKey] {
+			reciprocal++
 		}
 	}
 
-	return betweenness
+	return float64(reciprocal) / float64(len(graph.Edges))
+}
+
+// calculateDiameterAndRadius computes diameter and radius using BFS from each node.
+func calculateDiameterAndRadius(nodes []models.GraphNode, outNeighbors map[string][]string) (int, int) {
+	if len(nodes) == 0 {
+		return 0, 0
+	}
+
+	// Build undirected adjacency for diameter calculation
+	neighbors := make(map[string][]string)
+	for _, node := range nodes {
+		neighbors[node.ID] = []string{}
+	}
+	for id, out := range outNeighbors {
+		for _, neighbor := range out {
+			neighbors[id] = append(neighbors[id], neighbor)
+			neighbors[neighbor] = append(neighbors[neighbor], id)
+		}
+	}
+
+	diameter := 0
+	minEccentricity := -1
+
+	for _, source := range nodes {
+		// BFS to find eccentricity (max distance from source)
+		dist := make(map[string]int)
+		for _, n := range nodes {
+			dist[n.ID] = -1
+		}
+		dist[source.ID] = 0
+		queue := []string{source.ID}
+		maxDist := 0
+
+		for len(queue) > 0 {
+			current := queue[0]
+			queue = queue[1:]
+
+			for _, neighbor := range neighbors[current] {
+				if dist[neighbor] < 0 {
+					dist[neighbor] = dist[current] + 1
+					if dist[neighbor] > maxDist {
+						maxDist = dist[neighbor]
+					}
+					queue = append(queue, neighbor)
+				}
+			}
+		}
+
+		// Check if graph is connected from this node
+		connected := true
+		for _, n := range nodes {
+			if dist[n.ID] < 0 {
+				connected = false
+				break
+			}
+		}
+
+		if connected {
+			if maxDist > diameter {
+				diameter = maxDist
+			}
+			if minEccentricity < 0 || maxDist < minEccentricity {
+				minEccentricity = maxDist
+			}
+		}
+	}
+
+	if minEccentricity < 0 {
+		minEccentricity = 0
+	}
+
+	return diameter, minEccentricity
+}
+
+// gonumCommunityDetection uses gonum's Louvain implementation for community detection.
+func gonumCommunityDetection(gGraph *gonumGraph) (map[string]int, float64) {
+	if len(gGraph.idToNodeID) == 0 {
+		return make(map[string]int), 0
+	}
+
+	// Use gonum's Modularize (Louvain algorithm)
+	// resolution=1.0 is standard modularity, src=nil uses default random
+	reduced := community.Modularize(gGraph.undirected, 1.0, nil)
+
+	// Extract communities from the reduced graph
+	gonumCommunities := reduced.Communities()
+
+	// Convert gonum communities to our format (node ID -> community index)
+	communities := make(map[string]int)
+	for communityIdx, comm := range gonumCommunities {
+		for _, node := range comm {
+			nodeID := gGraph.idToNodeID[node.ID()]
+			communities[nodeID] = communityIdx
+		}
+	}
+
+	// Calculate modularity using gonum's Q function
+	modularity := community.Q(gGraph.undirected, gonumCommunities, 1.0)
+
+	return communities, modularity
 }
 
 // Close releases analyzer resources.
 func (a *GraphAnalyzer) Close() {
 	a.parser.Close()
+}
+
+// DetectCycles uses gonum's Tarjan SCC to find cycles.
+func (a *GraphAnalyzer) DetectCycles(graph *models.DependencyGraph) [][]string {
+	if len(graph.Nodes) == 0 {
+		return nil
+	}
+
+	gGraph := toGonumGraph(graph)
+	gonumSCCs := topo.TarjanSCC(gGraph.directed)
+
+	// Filter to only SCCs with more than one node (actual cycles)
+	var sccs [][]string
+	for _, scc := range gonumSCCs {
+		if len(scc) > 1 {
+			var nodeIDs []string
+			for _, node := range scc {
+				nodeIDs = append(nodeIDs, gGraph.idToNodeID[node.ID()])
+			}
+			sccs = append(sccs, nodeIDs)
+		}
+	}
+
+	return sccs
+}
+
+// rankedNode pairs a graph node with its PageRank score for sorting.
+type rankedNode struct {
+	node models.GraphNode
+	rank float64
+}
+
+// PruneGraph reduces graph size while preserving important nodes using PageRank.
+func (a *GraphAnalyzer) PruneGraph(graph *models.DependencyGraph, maxNodes, maxEdges int) *models.DependencyGraph {
+	if len(graph.Nodes) <= maxNodes && len(graph.Edges) <= maxEdges {
+		return graph
+	}
+
+	// Use gonum for PageRank
+	gGraph := toGonumGraph(graph)
+	pageRankMap := network.PageRank(gGraph.directed, 0.85, 1e-6)
+
+	// Sort nodes by PageRank (highest first)
+	ranked := make([]rankedNode, len(graph.Nodes))
+	for i, node := range graph.Nodes {
+		gonumID := gGraph.nodeIDToID[node.ID]
+		ranked[i] = rankedNode{node: node, rank: pageRankMap[gonumID]}
+	}
+	sortRankedNodes(ranked)
+
+	// Select top nodes
+	pruned := models.NewDependencyGraph()
+	nodeSet := make(map[string]bool)
+
+	limit := maxNodes
+	if limit > len(ranked) {
+		limit = len(ranked)
+	}
+	for i := 0; i < limit; i++ {
+		pruned.AddNode(ranked[i].node)
+		nodeSet[ranked[i].node.ID] = true
+	}
+
+	// Add edges between selected nodes
+	edgeCount := 0
+	for _, edge := range graph.Edges {
+		if edgeCount >= maxEdges {
+			break
+		}
+		if nodeSet[edge.From] && nodeSet[edge.To] {
+			pruned.AddEdge(edge)
+			edgeCount++
+		}
+	}
+
+	return pruned
+}
+
+// sortRankedNodes sorts nodes by PageRank in descending order using insertion sort.
+func sortRankedNodes(nodes []rankedNode) {
+	for i := 1; i < len(nodes); i++ {
+		key := nodes[i]
+		j := i - 1
+		for j >= 0 && nodes[j].rank < key.rank {
+			nodes[j+1] = nodes[j]
+			j--
+		}
+		nodes[j+1] = key
+	}
 }

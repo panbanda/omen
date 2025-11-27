@@ -500,7 +500,7 @@ func isLiteral(token string) bool {
 	}
 
 	// String literal
-	if (token[0] == '"' || token[0] == '\'' || token[0] == '`') {
+	if token[0] == '"' || token[0] == '\'' || token[0] == '`' {
 		return true
 	}
 

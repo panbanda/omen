@@ -221,3 +221,55 @@ func TestSATDSummary_FileTracking(t *testing.T) {
 		t.Errorf("file2.go count = %d, expected 1", s.ByFile["file2.go"])
 	}
 }
+
+func TestSeverity_Escalate(t *testing.T) {
+	tests := []struct {
+		input    Severity
+		expected Severity
+	}{
+		{SeverityLow, SeverityMedium},
+		{SeverityMedium, SeverityHigh},
+		{SeverityHigh, SeverityCritical},
+		{SeverityCritical, SeverityCritical},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.input), func(t *testing.T) {
+			result := tt.input.Escalate()
+			if result != tt.expected {
+				t.Errorf("Escalate(%s) = %s, expected %s", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestSeverity_Reduce(t *testing.T) {
+	tests := []struct {
+		input    Severity
+		expected Severity
+	}{
+		{SeverityCritical, SeverityHigh},
+		{SeverityHigh, SeverityMedium},
+		{SeverityMedium, SeverityLow},
+		{SeverityLow, SeverityLow},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.input), func(t *testing.T) {
+			result := tt.input.Reduce()
+			if result != tt.expected {
+				t.Errorf("Reduce(%s) = %s, expected %s", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestSeverity_EscalateReduceRoundTrip(t *testing.T) {
+	for _, sev := range []Severity{SeverityMedium, SeverityHigh} {
+		escalated := sev.Escalate()
+		reduced := escalated.Reduce()
+		if reduced != sev {
+			t.Errorf("Escalate then Reduce should return original for %s, got %s", sev, reduced)
+		}
+	}
+}

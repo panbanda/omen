@@ -88,3 +88,31 @@ func (s Severity) Weight() int {
 		return 0
 	}
 }
+
+// Escalate increases severity by one level (max Critical).
+func (s Severity) Escalate() Severity {
+	switch s {
+	case SeverityLow:
+		return SeverityMedium
+	case SeverityMedium:
+		return SeverityHigh
+	case SeverityHigh:
+		return SeverityCritical
+	default:
+		return s
+	}
+}
+
+// Reduce decreases severity by one level (min Low).
+func (s Severity) Reduce() Severity {
+	switch s {
+	case SeverityCritical:
+		return SeverityHigh
+	case SeverityHigh:
+		return SeverityMedium
+	case SeverityMedium:
+		return SeverityLow
+	default:
+		return s
+	}
+}
