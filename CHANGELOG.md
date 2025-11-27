@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.0](https://github.com/panbanda/omen/compare/v1.3.0...v1.4.0) (2025-11-27)
+
+
+### Features
+
+* **analyzer:** add Tarjan SCC cycle detection and enhanced Mermaid output ([6ee8f96](https://github.com/panbanda/omen/commit/6ee8f96ab766ff38b230ba95fe1e30b8b1d5eb5f))
+* **graph:** integrate gonum for graph algorithms ([1ed85d7](https://github.com/panbanda/omen/commit/1ed85d79f79dd016aaa726dbd60f0f87fc8d48a0))
+
 ## [1.3.0](https://github.com/panbanda/omen/compare/v1.2.0...v1.3.0) (2025-11-27)
 
 
