@@ -342,11 +342,6 @@ func percentile(sorted []uint32, p int) uint32 {
 	return sorted[idx]
 }
 
-// analyzeFileComplexity analyzes a single file with the provided parser.
-func analyzeFileComplexity(psr *parser.Parser, path string) (*models.FileComplexity, error) {
-	return analyzeFileComplexityWithHalstead(psr, path, false)
-}
-
 // analyzeFileComplexityWithHalstead analyzes a single file with optional Halstead metrics.
 func analyzeFileComplexityWithHalstead(psr *parser.Parser, path string, includeHalstead bool) (*models.FileComplexity, error) {
 	result, err := psr.ParseFile(path)
