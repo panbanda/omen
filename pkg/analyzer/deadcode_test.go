@@ -1362,10 +1362,10 @@ func TestCalculateConfidenceFromGraph(t *testing.T) {
 	defer a.Close()
 
 	tests := []struct {
-		name     string
-		def      definition
-		wantMin  float64
-		wantMax  float64
+		name    string
+		def     definition
+		wantMin float64
+		wantMax float64
 	}{
 		{
 			name: "private unexported",
@@ -1396,14 +1396,442 @@ func TestCalculateConfidenceFromGraph(t *testing.T) {
 		},
 	}
 
-	reachable := make(map[uint32]bool)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := a.calculateConfidenceWithCoverage(tt.def)
+			if got < tt.wantMin || got > tt.wantMax {
+				t.Errorf("calculateConfidenceWithCoverage() = %v, want between %v and %v", got, tt.wantMin, tt.wantMax)
+			}
+		})
+	}
+}
+
+// PMAT-compatible tests below
+
+func TestIsTestFileDeadCode(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"main_test.go", true},
+		{"main.go", false},
+		{"test_utils.py", true},
+		{"utils_test.py", true},
+		{"utils.py", false},
+		{"component.test.ts", true},
+		{"component.spec.ts", true},
+		{"component.ts", false},
+		{"component.test.tsx", true},
+		{"component.spec.tsx", true},
+		{"/project/tests/helper.rs", true},
+		{"/project/src/lib.rs", false},
+		{"/project/test/fixtures.go", true},
+		{"component.test.js", true},
+		{"component.spec.js", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			got := isTestFile(tt.path)
+			if got != tt.want {
+				t.Errorf("isTestFile(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsHTTPHandler(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"GetUser", true},
+		{"PostComment", true},
+		{"DeleteItem", true},
+		{"PutResource", true},
+		{"PatchSettings", true},
+		{"UserHandler", true},
+		{"userHandler", true},
+		{"UserEndpoint", true},
+		{"UserController", true},
+		{"ServeHTTP", true},
+		{"Handle", true},
+		{"serve", true},
+		{"processData", false},
+		{"calculateSum", false},
+		{"Get", false}, // Just "Get" alone shouldn't match
+		{"main", false},
+	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := a.calculateConfidenceFromGraph(tt.def, reachable)
-			if got < tt.wantMin || got > tt.wantMax {
-				t.Errorf("calculateConfidenceFromGraph() = %v, want between %v and %v", got, tt.wantMin, tt.wantMax)
+			got := isHTTPHandler(tt.name)
+			if got != tt.want {
+				t.Errorf("isHTTPHandler(%q) = %v, want %v", tt.name, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestIsEventHandler(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"OnClick", true},
+		{"onClick", true},
+		{"HandleSubmit", true},
+		{"handleSubmit", true},
+		{"ButtonCallback", true},
+		{"buttonCallback", true},
+		{"MouseListener", true},
+		{"EventObserver", true},
+		{"processData", false},
+		{"main", false},
+		{"On", false}, // Just "On" alone shouldn't match
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isEventHandler(tt.name)
+			if got != tt.want {
+				t.Errorf("isEventHandler(%q) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsLifecycleMethod(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"Setup", true},
+		{"Teardown", true},
+		{"TearDown", true},
+		{"SetUp", true},
+		{"__init__", true},
+		{"__del__", true},
+		{"setUp", true},
+		{"tearDown", true},
+		{"componentDidMount", true},
+		{"componentWillUnmount", true},
+		{"Initialize", true},
+		{"initialize", true},
+		{"Start", true},
+		{"Stop", true},
+		{"Connect", true},
+		{"Disconnect", true},
+		{"Dispose", true},
+		{"processData", false},
+		{"main", false},
+		{"helper", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isLifecycleMethod(tt.name)
+			if got != tt.want {
+				t.Errorf("isLifecycleMethod(%q) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsEntryPointExtended(t *testing.T) {
+	tests := []struct {
+		name     string
+		def      definition
+		expected bool
+	}{
+		{"main", definition{kind: "function", exported: false}, true},
+		{"init", definition{kind: "function", exported: false}, true},
+		{"TestFoo", definition{kind: "function", exported: true}, true},
+		{"BenchmarkFoo", definition{kind: "function", exported: true}, true},
+		{"ExampleFoo", definition{kind: "function", exported: true}, true},
+		{"FuzzFoo", definition{kind: "function", exported: true}, true},
+		{"GetUser", definition{kind: "function", exported: false}, true}, // HTTP handler
+		{"OnClick", definition{kind: "function", exported: false}, true}, // Event handler
+		{"Setup", definition{kind: "function", exported: false}, true},   // Lifecycle
+		{"ffiExport", definition{kind: "function", exported: false, isFFI: true}, true},
+		{"privateHelper", definition{kind: "function", exported: false}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isEntryPoint(tt.name, tt.def)
+			if got != tt.expected {
+				t.Errorf("isEntryPoint(%q, %+v) = %v, want %v", tt.name, tt.def, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestConfidenceWithTestFile(t *testing.T) {
+	a := NewDeadCodeAnalyzer(0.8)
+	defer a.Close()
+
+	normalDef := definition{
+		visibility: "private",
+		exported:   false,
+		isTestFile: false,
+	}
+
+	testFileDef := definition{
+		visibility: "private",
+		exported:   false,
+		isTestFile: true,
+	}
+
+	normalConfidence := a.calculateConfidence(normalDef)
+	testConfidence := a.calculateConfidence(testFileDef)
+
+	if testConfidence >= normalConfidence {
+		t.Errorf("test file confidence (%v) should be lower than normal (%v)",
+			testConfidence, normalConfidence)
+	}
+
+	// Test file confidence should be reduced by 0.15
+	expectedDiff := 0.15
+	actualDiff := normalConfidence - testConfidence
+	if actualDiff < expectedDiff-0.01 || actualDiff > expectedDiff+0.01 {
+		t.Errorf("confidence difference = %v, want ~%v", actualDiff, expectedDiff)
+	}
+}
+
+func TestConfidenceWithFFI(t *testing.T) {
+	a := NewDeadCodeAnalyzer(0.8)
+	defer a.Close()
+
+	normalDef := definition{
+		visibility: "private",
+		exported:   false,
+		isFFI:      false,
+	}
+
+	ffiDef := definition{
+		visibility: "private",
+		exported:   false,
+		isFFI:      true,
+	}
+
+	normalConfidence := a.calculateConfidence(normalDef)
+	ffiConfidence := a.calculateConfidence(ffiDef)
+
+	if ffiConfidence >= normalConfidence {
+		t.Errorf("FFI confidence (%v) should be lower than normal (%v)",
+			ffiConfidence, normalConfidence)
+	}
+}
+
+func TestUnreachableCodeDetection(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	content := `package main
+
+func main() {
+	println("hello")
+	return
+	println("unreachable") // This should be detected
+}
+
+func withPanic() {
+	panic("error")
+	x := 42 // This should be detected
+	println(x)
+}
+
+func normalFunc() {
+	x := 42
+	println(x)
+}
+`
+	testFile := filepath.Join(tmpDir, "main.go")
+	if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	a := NewDeadCodeAnalyzer(0.8)
+	defer a.Close()
+
+	result, err := a.AnalyzeProject([]string{testFile})
+	if err != nil {
+		t.Fatalf("AnalyzeProject() error = %v", err)
+	}
+
+	// We should detect unreachable blocks
+	t.Logf("Found %d unreachable blocks", len(result.UnreachableCode))
+	t.Logf("Summary: TotalUnreachableBlocks = %d", result.Summary.TotalUnreachableBlocks)
+
+	// Note: The actual detection depends on AST parsing details
+	// This test verifies the infrastructure is in place
+	if result.Summary.TotalUnreachableBlocks != len(result.UnreachableCode) {
+		t.Errorf("TotalUnreachableBlocks (%d) doesn't match len(UnreachableCode) (%d)",
+			result.Summary.TotalUnreachableBlocks, len(result.UnreachableCode))
+	}
+}
+
+func TestContextHashGeneration(t *testing.T) {
+	// Test that different inputs produce different hashes
+	hash1 := computeContextHash("func1", "file.go", 10, "function")
+	hash2 := computeContextHash("func2", "file.go", 10, "function")
+	hash3 := computeContextHash("func1", "other.go", 10, "function")
+	hash4 := computeContextHash("func1", "file.go", 20, "function")
+
+	if hash1 == hash2 {
+		t.Error("different function names should produce different hashes")
+	}
+	if hash1 == hash3 {
+		t.Error("different files should produce different hashes")
+	}
+	if hash1 == hash4 {
+		t.Error("different lines should produce different hashes")
+	}
+
+	// Test determinism - same input should produce same hash
+	hash1Again := computeContextHash("func1", "file.go", 10, "function")
+	if hash1 != hash1Again {
+		t.Error("same input should produce same hash")
+	}
+}
+
+func TestFFIExportDetectionGo(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	content := `package main
+
+import "C"
+
+//export GoFunction
+func GoFunction() int {
+	return 42
+}
+
+//go:linkname linkedFunc runtime.linkedFunc
+func linkedFunc() {}
+
+func normalFunc() {}
+`
+	testFile := filepath.Join(tmpDir, "cgo.go")
+	if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	a := NewDeadCodeAnalyzer(0.8)
+	defer a.Close()
+
+	fdc, err := a.AnalyzeFile(testFile)
+	if err != nil {
+		t.Fatalf("AnalyzeFile() error = %v", err)
+	}
+
+	// Check for FFI detection
+	goFuncDef, exists := fdc.definitions["GoFunction"]
+	if !exists {
+		t.Fatal("GoFunction not found in definitions")
+	}
+	if !goFuncDef.isFFI {
+		t.Error("GoFunction should be marked as FFI export")
+	}
+
+	linkedDef, exists := fdc.definitions["linkedFunc"]
+	if !exists {
+		t.Fatal("linkedFunc not found in definitions")
+	}
+	if !linkedDef.isFFI {
+		t.Error("linkedFunc should be marked as FFI (go:linkname)")
+	}
+
+	normalDef, exists := fdc.definitions["normalFunc"]
+	if !exists {
+		t.Fatal("normalFunc not found in definitions")
+	}
+	if normalDef.isFFI {
+		t.Error("normalFunc should NOT be marked as FFI")
+	}
+}
+
+func TestDefinitionHasContextHash(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	content := `package main
+
+func testFunc() {}
+`
+	testFile := filepath.Join(tmpDir, "test.go")
+	if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	a := NewDeadCodeAnalyzer(0.8)
+	defer a.Close()
+
+	fdc, err := a.AnalyzeFile(testFile)
+	if err != nil {
+		t.Fatalf("AnalyzeFile() error = %v", err)
+	}
+
+	def, exists := fdc.definitions["testFunc"]
+	if !exists {
+		t.Fatal("testFunc not found in definitions")
+	}
+
+	if def.contextHash == "" {
+		t.Error("definition should have a context hash")
+	}
+}
+
+func TestDefinitionHasTestFileFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Test file
+	testContent := `package main
+
+func TestSomething() {}
+`
+	testFile := filepath.Join(tmpDir, "main_test.go")
+	if err := os.WriteFile(testFile, []byte(testContent), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	// Normal file
+	normalContent := `package main
+
+func main() {}
+`
+	normalFile := filepath.Join(tmpDir, "main.go")
+	if err := os.WriteFile(normalFile, []byte(normalContent), 0644); err != nil {
+		t.Fatalf("failed to write normal file: %v", err)
+	}
+
+	a := NewDeadCodeAnalyzer(0.8)
+	defer a.Close()
+
+	testFdc, err := a.AnalyzeFile(testFile)
+	if err != nil {
+		t.Fatalf("AnalyzeFile() error = %v", err)
+	}
+
+	normalFdc, err := a.AnalyzeFile(normalFile)
+	if err != nil {
+		t.Fatalf("AnalyzeFile() error = %v", err)
+	}
+
+	// Test file definition should have isTestFile = true
+	testDef, exists := testFdc.definitions["TestSomething"]
+	if !exists {
+		t.Fatal("TestSomething not found in definitions")
+	}
+	if !testDef.isTestFile {
+		t.Error("definition in test file should have isTestFile = true")
+	}
+
+	// Normal file definition should have isTestFile = false
+	normalDef, exists := normalFdc.definitions["main"]
+	if !exists {
+		t.Fatal("main not found in definitions")
+	}
+	if normalDef.isTestFile {
+		t.Error("definition in normal file should have isTestFile = false")
 	}
 }

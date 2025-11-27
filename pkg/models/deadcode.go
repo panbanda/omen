@@ -4,11 +4,11 @@ package models
 type ReferenceType string
 
 const (
-	RefDirectCall     ReferenceType = "direct_call"
-	RefIndirectCall   ReferenceType = "indirect_call"
-	RefImport         ReferenceType = "import"
-	RefInheritance    ReferenceType = "inheritance"
-	RefTypeReference  ReferenceType = "type_reference"
+	RefDirectCall      ReferenceType = "direct_call"
+	RefIndirectCall    ReferenceType = "indirect_call"
+	RefImport          ReferenceType = "import"
+	RefInheritance     ReferenceType = "inheritance"
+	RefTypeReference   ReferenceType = "type_reference"
 	RefDynamicDispatch ReferenceType = "dynamic_dispatch"
 )
 
@@ -16,11 +16,11 @@ const (
 type DeadCodeKind string
 
 const (
-	DeadKindFunction       DeadCodeKind = "unused_function"
-	DeadKindClass          DeadCodeKind = "unused_class"
-	DeadKindVariable       DeadCodeKind = "unused_variable"
-	DeadKindUnreachable    DeadCodeKind = "unreachable_code"
-	DeadKindDeadBranch     DeadCodeKind = "dead_branch"
+	DeadKindFunction    DeadCodeKind = "unused_function"
+	DeadKindClass       DeadCodeKind = "unused_class"
+	DeadKindVariable    DeadCodeKind = "unused_variable"
+	DeadKindUnreachable DeadCodeKind = "unreachable_code"
+	DeadKindDeadBranch  DeadCodeKind = "dead_branch"
 )
 
 // ReferenceEdge represents a relationship between two code elements.
@@ -143,19 +143,20 @@ type UnreachableBlock struct {
 
 // DeadCodeSummary provides aggregate statistics.
 type DeadCodeSummary struct {
-	TotalDeadFunctions    int                      `json:"total_dead_functions"`
-	TotalDeadVariables    int                      `json:"total_dead_variables"`
-	TotalDeadClasses      int                      `json:"total_dead_classes"`
-	TotalUnreachableLines int                      `json:"total_unreachable_lines"`
-	DeadCodePercentage    float64                  `json:"dead_code_percentage"`
-	ByFile                map[string]int           `json:"by_file"`
-	ByKind                map[DeadCodeKind]int     `json:"by_kind,omitempty"`
-	TotalFilesAnalyzed    int                      `json:"total_files_analyzed"`
-	TotalLinesAnalyzed    int                      `json:"total_lines_analyzed"`
-	TotalNodesInGraph     int                      `json:"total_nodes_in_graph,omitempty"`
-	ReachableNodes        int                      `json:"reachable_nodes,omitempty"`
-	UnreachableNodes      int                      `json:"unreachable_nodes,omitempty"`
-	ConfidenceLevel       float64                  `json:"confidence_level,omitempty"`
+	TotalDeadFunctions     int                  `json:"total_dead_functions"`
+	TotalDeadVariables     int                  `json:"total_dead_variables"`
+	TotalDeadClasses       int                  `json:"total_dead_classes"`
+	TotalUnreachableBlocks int                  `json:"total_unreachable_blocks"`
+	TotalUnreachableLines  int                  `json:"total_unreachable_lines"`
+	DeadCodePercentage     float64              `json:"dead_code_percentage"`
+	ByFile                 map[string]int       `json:"by_file"`
+	ByKind                 map[DeadCodeKind]int `json:"by_kind,omitempty"`
+	TotalFilesAnalyzed     int                  `json:"total_files_analyzed"`
+	TotalLinesAnalyzed     int                  `json:"total_lines_analyzed"`
+	TotalNodesInGraph      int                  `json:"total_nodes_in_graph,omitempty"`
+	ReachableNodes         int                  `json:"reachable_nodes,omitempty"`
+	UnreachableNodes       int                  `json:"unreachable_nodes,omitempty"`
+	ConfidenceLevel        float64              `json:"confidence_level,omitempty"`
 }
 
 // NewDeadCodeSummary creates an initialized summary.
