@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.0](https://github.com/panbanda/omen/compare/v1.2.0...v1.3.0) (2025-11-27)
+
+
+### Features
+
+* **deadcode:** port PMAT architecture with Roaring bitmaps and VTable resolution ([c098ad8](https://github.com/panbanda/omen/commit/c098ad830548c43e0bcf87ebd7da53386086e919))
+* **deadcode:** port PMAT architecture with Roaring bitmaps and VTable resolution ([ab49bfd](https://github.com/panbanda/omen/commit/ab49bfd5cadc36ecd94c38a02f62652c922f64bb))
+
 ## [1.2.0](https://github.com/panbanda/omen/compare/v1.1.0...v1.2.0) (2025-11-27)
 
 
