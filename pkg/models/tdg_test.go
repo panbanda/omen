@@ -1,369 +1,372 @@
 package models
 
 import (
-	"math"
 	"testing"
 )
 
-func TestDefaultTDGWeights(t *testing.T) {
-	weights := DefaultTDGWeights()
-
-	if weights.Complexity != 0.30 {
-		t.Errorf("Complexity = %v, expected 0.30", weights.Complexity)
-	}
-	if weights.Churn != 0.25 {
-		t.Errorf("Churn = %v, expected 0.25", weights.Churn)
-	}
-	if weights.Coupling != 0.20 {
-		t.Errorf("Coupling = %v, expected 0.20", weights.Coupling)
-	}
-	if weights.Duplication != 0.15 {
-		t.Errorf("Duplication = %v, expected 0.15", weights.Duplication)
-	}
-	if weights.DomainRisk != 0.10 {
-		t.Errorf("DomainRisk = %v, expected 0.10", weights.DomainRisk)
-	}
-
-	total := weights.Complexity + weights.Churn + weights.Coupling + weights.Duplication + weights.DomainRisk
-	if math.Abs(total-1.0) > 0.001 {
-		t.Errorf("Weights sum = %v, expected 1.0", total)
-	}
-}
-
-func TestCalculateTDGSeverity(t *testing.T) {
+func TestGradeFromScore(t *testing.T) {
 	tests := []struct {
-		name     string
-		score    float64
-		expected TDGSeverity
+		score    float32
+		expected Grade
 	}{
-		{
-			name:     "excellent - 100",
-			score:    100.0,
-			expected: TDGExcellent,
-		},
-		{
-			name:     "excellent - 95",
-			score:    95.0,
-			expected: TDGExcellent,
-		},
-		{
-			name:     "excellent boundary",
-			score:    90.0,
-			expected: TDGExcellent,
-		},
-		{
-			name:     "good - 85",
-			score:    85.0,
-			expected: TDGGood,
-		},
-		{
-			name:     "good boundary",
-			score:    70.0,
-			expected: TDGGood,
-		},
-		{
-			name:     "moderate - 60",
-			score:    60.0,
-			expected: TDGModerate,
-		},
-		{
-			name:     "moderate boundary",
-			score:    50.0,
-			expected: TDGModerate,
-		},
-		{
-			name:     "high risk - 45",
-			score:    45.0,
-			expected: TDGHighRisk,
-		},
-		{
-			name:     "high risk - 0",
-			score:    0.0,
-			expected: TDGHighRisk,
-		},
-		{
-			name:     "just below excellent",
-			score:    89.9,
-			expected: TDGGood,
-		},
+		{95.0, GradeAPlus},
+		{97.5, GradeAPlus},
+		{90.0, GradeA},
+		{94.9, GradeA},
+		{85.0, GradeAMinus},
+		{89.9, GradeAMinus},
+		{80.0, GradeBPlus},
+		{84.9, GradeBPlus},
+		{75.0, GradeB},
+		{79.9, GradeB},
+		{70.0, GradeBMinus},
+		{74.9, GradeBMinus},
+		{65.0, GradeCPlus},
+		{69.9, GradeCPlus},
+		{60.0, GradeC},
+		{64.9, GradeC},
+		{55.0, GradeCMinus},
+		{59.9, GradeCMinus},
+		{50.0, GradeD},
+		{54.9, GradeD},
+		{45.0, GradeF},
+		{0.0, GradeF},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := CalculateTDGSeverity(tt.score)
-			if got != tt.expected {
-				t.Errorf("CalculateTDGSeverity(%v) = %v, expected %v", tt.score, got, tt.expected)
+	for _, tc := range tests {
+		t.Run("", func(t *testing.T) {
+			got := GradeFromScore(tc.score)
+			if got != tc.expected {
+				t.Errorf("GradeFromScore(%v) = %v, want %v", tc.score, got, tc.expected)
 			}
 		})
 	}
 }
 
-func TestCalculateTDG(t *testing.T) {
-	weights := DefaultTDGWeights()
-
+func TestLanguageFromExtension(t *testing.T) {
 	tests := []struct {
-		name       string
-		components TDGComponents
-		expected   float64
-		tolerance  float64
+		path     string
+		expected Language
 	}{
-		{
-			name: "no debt - perfect score",
-			components: TDGComponents{
-				Complexity:  0.0,
-				Churn:       0.0,
-				Coupling:    0.0,
-				Duplication: 0.0,
-				DomainRisk:  0.0,
-			},
-			expected:  100.0,
-			tolerance: 0.01,
-		},
-		{
-			name: "maximum debt",
-			components: TDGComponents{
-				Complexity:  1.0,
-				Churn:       1.0,
-				Coupling:    1.0,
-				Duplication: 1.0,
-				DomainRisk:  1.0,
-			},
-			expected:  0.0,
-			tolerance: 0.01,
-		},
-		{
-			name: "moderate debt",
-			components: TDGComponents{
-				Complexity:  0.5,
-				Churn:       0.5,
-				Coupling:    0.5,
-				Duplication: 0.5,
-				DomainRisk:  0.5,
-			},
-			expected:  50.0,
-			tolerance: 0.01,
-		},
-		{
-			name: "high complexity only",
-			components: TDGComponents{
-				Complexity:  1.0,
-				Churn:       0.0,
-				Coupling:    0.0,
-				Duplication: 0.0,
-				DomainRisk:  0.0,
-			},
-			expected:  70.0,
-			tolerance: 0.01,
-		},
-		{
-			name: "mixed penalties",
-			components: TDGComponents{
-				Complexity:  0.8,
-				Churn:       0.3,
-				Coupling:    0.2,
-				Duplication: 0.5,
-				DomainRisk:  0.1,
-			},
-			expected:  (1.0 - (0.8*0.30 + 0.3*0.25 + 0.2*0.20 + 0.5*0.15 + 0.1*0.10)) * 100.0,
-			tolerance: 0.01,
-		},
+		{"main.rs", LanguageRust},
+		{"main.go", LanguageGo},
+		{"main.py", LanguagePython},
+		{"main.js", LanguageJavaScript},
+		{"main.ts", LanguageTypeScript},
+		{"main.tsx", LanguageTypeScript},
+		{"main.java", LanguageJava},
+		{"main.c", LanguageC},
+		{"main.cpp", LanguageCpp},
+		{"main.cc", LanguageCpp},
+		{"main.cs", LanguageCSharp},
+		{"main.rb", LanguageRuby},
+		{"main.php", LanguagePHP},
+		{"main.swift", LanguageSwift},
+		{"main.kt", LanguageKotlin},
+		{"main.kts", LanguageKotlin},
+		{"main.txt", LanguageUnknown},
+		{"main", LanguageUnknown},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := CalculateTDG(tt.components, weights)
-
-			if math.Abs(got-tt.expected) > tt.tolerance {
-				t.Errorf("CalculateTDG() = %v, expected %v (±%v)", got, tt.expected, tt.tolerance)
-			}
-
-			if got < 0.0 || got > 100.0 {
-				t.Errorf("TDG score %v is outside valid range [0.0, 100.0]", got)
+	for _, tc := range tests {
+		t.Run(tc.path, func(t *testing.T) {
+			got := LanguageFromExtension(tc.path)
+			if got != tc.expected {
+				t.Errorf("LanguageFromExtension(%q) = %v, want %v", tc.path, got, tc.expected)
 			}
 		})
 	}
 }
 
-func TestCalculateTDG_CustomWeights(t *testing.T) {
-	customWeights := TDGWeights{
-		Complexity:  0.60,
-		Churn:       0.20,
-		Coupling:    0.10,
-		Duplication: 0.05,
-		DomainRisk:  0.05,
+func TestLanguageConfidence(t *testing.T) {
+	if LanguageUnknown.Confidence() != 0.5 {
+		t.Errorf("Unknown language confidence = %v, want 0.5", LanguageUnknown.Confidence())
 	}
 
-	components := TDGComponents{
-		Complexity:  1.0,
-		Churn:       0.0,
-		Coupling:    0.0,
-		Duplication: 0.0,
-		DomainRisk:  0.0,
-	}
-
-	score := CalculateTDG(components, customWeights)
-	expected := 40.0
-
-	if math.Abs(score-expected) > 0.01 {
-		t.Errorf("With custom weights, score = %v, expected %v", score, expected)
+	if LanguageGo.Confidence() != 0.95 {
+		t.Errorf("Go language confidence = %v, want 0.95", LanguageGo.Confidence())
 	}
 }
 
-func TestTDGSeverity_Color(t *testing.T) {
+func TestPenaltyTracker(t *testing.T) {
+	tracker := NewPenaltyTracker()
+
+	// First application should succeed
+	amount := tracker.Apply("issue1", MetricStructuralComplexity, 3.5, "High complexity")
+	if amount != 3.5 {
+		t.Errorf("First Apply() = %v, want 3.5", amount)
+	}
+
+	// Duplicate should return 0
+	amount = tracker.Apply("issue1", MetricStructuralComplexity, 3.5, "High complexity")
+	if amount != 0 {
+		t.Errorf("Duplicate Apply() = %v, want 0", amount)
+	}
+
+	// Different issue should succeed
+	amount = tracker.Apply("issue2", MetricDuplication, 2.0, "Code duplication")
+	if amount != 2.0 {
+		t.Errorf("Second Apply() = %v, want 2.0", amount)
+	}
+
+	attrs := tracker.GetAttributions()
+	if len(attrs) != 2 {
+		t.Errorf("GetAttributions() len = %v, want 2", len(attrs))
+	}
+}
+
+func TestTdgScoreDefault(t *testing.T) {
+	score := NewTdgScore()
+
+	if score.Total != 100.0 {
+		t.Errorf("Default Total = %v, want 100.0", score.Total)
+	}
+
+	if score.Grade != GradeAPlus {
+		t.Errorf("Default Grade = %v, want A+", score.Grade)
+	}
+
+	if score.Confidence != 1.0 {
+		t.Errorf("Default Confidence = %v, want 1.0", score.Confidence)
+	}
+}
+
+func TestTdgScoreCalculateTotal(t *testing.T) {
+	score := TdgScore{
+		StructuralComplexity: 20.0,
+		SemanticComplexity:   18.0,
+		DuplicationRatio:     19.0,
+		CouplingScore:        14.0,
+		DocCoverage:          9.0,
+		ConsistencyScore:     8.0,
+		EntropyScore:         0.0,
+	}
+
+	score.CalculateTotal()
+
+	// Expected: 20+18+19+14+9+8+0 = 88.0
+	expectedTotal := float32(88.0)
+	if score.Total != expectedTotal {
+		t.Errorf("CalculateTotal() Total = %v, want %v", score.Total, expectedTotal)
+	}
+
+	if score.Grade != GradeAMinus {
+		t.Errorf("CalculateTotal() Grade = %v, want A-", score.Grade)
+	}
+}
+
+func TestTdgScoreCriticalDefects(t *testing.T) {
+	score := TdgScore{
+		StructuralComplexity: 25.0,
+		SemanticComplexity:   20.0,
+		DuplicationRatio:     20.0,
+		CouplingScore:        15.0,
+		DocCoverage:          10.0,
+		ConsistencyScore:     10.0,
+		HasCriticalDefects:   true,
+		CriticalDefectsCount: 3,
+	}
+
+	score.CalculateTotal()
+
+	if score.Total != 0.0 {
+		t.Errorf("Critical defects Total = %v, want 0.0", score.Total)
+	}
+
+	if score.Grade != GradeF {
+		t.Errorf("Critical defects Grade = %v, want F", score.Grade)
+	}
+}
+
+func TestTdgScoreSetMetric(t *testing.T) {
+	score := NewTdgScore()
+
+	score.SetMetric(MetricStructuralComplexity, 15.0)
+	if score.StructuralComplexity != 15.0 {
+		t.Errorf("SetMetric StructuralComplexity = %v, want 15.0", score.StructuralComplexity)
+	}
+
+	score.SetMetric(MetricSemanticComplexity, 12.0)
+	if score.SemanticComplexity != 12.0 {
+		t.Errorf("SetMetric SemanticComplexity = %v, want 12.0", score.SemanticComplexity)
+	}
+
+	score.SetMetric(MetricDuplication, 10.0)
+	if score.DuplicationRatio != 10.0 {
+		t.Errorf("SetMetric DuplicationRatio = %v, want 10.0", score.DuplicationRatio)
+	}
+
+	score.SetMetric(MetricCoupling, 8.0)
+	if score.CouplingScore != 8.0 {
+		t.Errorf("SetMetric CouplingScore = %v, want 8.0", score.CouplingScore)
+	}
+
+	score.SetMetric(MetricDocumentation, 5.0)
+	if score.DocCoverage != 5.0 {
+		t.Errorf("SetMetric DocCoverage = %v, want 5.0", score.DocCoverage)
+	}
+
+	score.SetMetric(MetricConsistency, 6.0)
+	if score.ConsistencyScore != 6.0 {
+		t.Errorf("SetMetric ConsistencyScore = %v, want 6.0", score.ConsistencyScore)
+	}
+}
+
+func TestTdgScoreClamp(t *testing.T) {
+	score := TdgScore{
+		StructuralComplexity: 50.0, // Will be clamped to 25
+		SemanticComplexity:   -5.0, // Will be clamped to 0
+		DuplicationRatio:     20.0,
+		CouplingScore:        15.0,
+		DocCoverage:          10.0,
+		ConsistencyScore:     10.0,
+	}
+
+	score.CalculateTotal()
+
+	if score.StructuralComplexity != 25.0 {
+		t.Errorf("StructuralComplexity clamped = %v, want 25.0", score.StructuralComplexity)
+	}
+
+	if score.SemanticComplexity != 0.0 {
+		t.Errorf("SemanticComplexity clamped = %v, want 0.0", score.SemanticComplexity)
+	}
+}
+
+func TestProjectScoreAggregate(t *testing.T) {
+	scores := []TdgScore{
+		{Total: 80.0, Language: LanguageGo},
+		{Total: 90.0, Language: LanguageGo},
+		{Total: 70.0, Language: LanguageRust},
+	}
+
+	for i := range scores {
+		scores[i].Grade = GradeFromScore(scores[i].Total)
+	}
+
+	project := AggregateProjectScore(scores)
+
+	if project.TotalFiles != 3 {
+		t.Errorf("TotalFiles = %v, want 3", project.TotalFiles)
+	}
+
+	expectedAvg := float32(80.0)
+	if project.AverageScore != expectedAvg {
+		t.Errorf("AverageScore = %v, want %v", project.AverageScore, expectedAvg)
+	}
+
+	if project.LanguageDistribution[LanguageGo] != 2 {
+		t.Errorf("LanguageDistribution[Go] = %v, want 2", project.LanguageDistribution[LanguageGo])
+	}
+
+	if project.LanguageDistribution[LanguageRust] != 1 {
+		t.Errorf("LanguageDistribution[Rust] = %v, want 1", project.LanguageDistribution[LanguageRust])
+	}
+}
+
+func TestProjectScoreAverage(t *testing.T) {
+	scores := []TdgScore{
+		{
+			StructuralComplexity: 20.0,
+			SemanticComplexity:   16.0,
+			DuplicationRatio:     18.0,
+			CouplingScore:        12.0,
+			DocCoverage:          8.0,
+			ConsistencyScore:     8.0,
+			Confidence:           0.9,
+		},
+		{
+			StructuralComplexity: 22.0,
+			SemanticComplexity:   18.0,
+			DuplicationRatio:     16.0,
+			CouplingScore:        14.0,
+			DocCoverage:          6.0,
+			ConsistencyScore:     10.0,
+			Confidence:           0.95,
+		},
+	}
+
+	project := AggregateProjectScore(scores)
+	avg := project.Average()
+
+	// Expected averages
+	expectedStructural := float32(21.0)
+	if avg.StructuralComplexity != expectedStructural {
+		t.Errorf("Average StructuralComplexity = %v, want %v", avg.StructuralComplexity, expectedStructural)
+	}
+
+	expectedConfidence := float32(0.925)
+	// Use approximate comparison for floating point
+	if abs32(avg.Confidence-expectedConfidence) > 0.001 {
+		t.Errorf("Average Confidence = %v, want ~%v", avg.Confidence, expectedConfidence)
+	}
+}
+
+func TestTdgComparison(t *testing.T) {
+	source1 := TdgScore{
+		Total:                80.0,
+		StructuralComplexity: 20.0,
+		SemanticComplexity:   15.0,
+		DuplicationRatio:     18.0,
+		DocCoverage:          8.0,
+		FilePath:             "old.go",
+	}
+
+	source2 := TdgScore{
+		Total:                90.0,
+		StructuralComplexity: 24.0, // Improved
+		SemanticComplexity:   18.0, // Improved
+		DuplicationRatio:     16.0, // Regression
+		DocCoverage:          10.0, // Improved
+		FilePath:             "new.go",
+	}
+
+	comparison := NewTdgComparison(source1, source2)
+
+	if comparison.Delta != 10.0 {
+		t.Errorf("Delta = %v, want 10.0", comparison.Delta)
+	}
+
+	if comparison.ImprovementPercentage != 12.5 {
+		t.Errorf("ImprovementPercentage = %v, want 12.5", comparison.ImprovementPercentage)
+	}
+
+	if comparison.Winner != "new.go" {
+		t.Errorf("Winner = %v, want 'new.go'", comparison.Winner)
+	}
+
+	if len(comparison.Improvements) < 3 {
+		t.Errorf("Expected at least 3 improvements, got %d", len(comparison.Improvements))
+	}
+
+	if len(comparison.Regressions) < 1 {
+		t.Errorf("Expected at least 1 regression, got %d", len(comparison.Regressions))
+	}
+}
+
+func TestClampFloat32(t *testing.T) {
 	tests := []struct {
-		name     string
-		severity TDGSeverity
-		expected string
+		value, min, max, expected float32
 	}{
-		{
-			name:     "excellent",
-			severity: TDGExcellent,
-			expected: "\033[32m",
-		},
-		{
-			name:     "good",
-			severity: TDGGood,
-			expected: "\033[33m",
-		},
-		{
-			name:     "moderate",
-			severity: TDGModerate,
-			expected: "\033[38;5;208m",
-		},
-		{
-			name:     "high risk",
-			severity: TDGHighRisk,
-			expected: "\033[31m",
-		},
-		{
-			name:     "unknown",
-			severity: TDGSeverity("unknown"),
-			expected: "\033[0m",
-		},
+		{5.0, 0.0, 10.0, 5.0},   // Within range
+		{-5.0, 0.0, 10.0, 0.0},  // Below min
+		{15.0, 0.0, 10.0, 10.0}, // Above max
+		{0.0, 0.0, 10.0, 0.0},   // At min
+		{10.0, 0.0, 10.0, 10.0}, // At max
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tt.severity.Color()
-			if got != tt.expected {
-				t.Errorf("Color() = %q, expected %q", got, tt.expected)
-			}
-		})
+	for _, tc := range tests {
+		got := clampFloat32(tc.value, tc.min, tc.max)
+		if got != tc.expected {
+			t.Errorf("clampFloat32(%v, %v, %v) = %v, want %v",
+				tc.value, tc.min, tc.max, got, tc.expected)
+		}
 	}
 }
 
-func TestNewTDGSummary(t *testing.T) {
-	s := NewTDGSummary()
-
-	if s.BySeverity == nil {
-		t.Error("BySeverity should be initialized")
+func abs32(x float32) float32 {
+	if x < 0 {
+		return -x
 	}
-	if s.Hotspots == nil {
-		t.Error("Hotspots should be initialized")
-	}
-
-	if len(s.BySeverity) != 0 {
-		t.Error("BySeverity should be empty")
-	}
-	if len(s.Hotspots) != 0 {
-		t.Error("Hotspots should be empty")
-	}
-}
-
-func TestTDGSeverity_Constants(t *testing.T) {
-	if TDGExcellent != "excellent" {
-		t.Errorf("TDGExcellent = %s, expected excellent", TDGExcellent)
-	}
-	if TDGGood != "good" {
-		t.Errorf("TDGGood = %s, expected good", TDGGood)
-	}
-	if TDGModerate != "moderate" {
-		t.Errorf("TDGModerate = %s, expected moderate", TDGModerate)
-	}
-	if TDGHighRisk != "high_risk" {
-		t.Errorf("TDGHighRisk = %s, expected high_risk", TDGHighRisk)
-	}
-}
-
-func TestCalculateTDG_BoundaryConditions(t *testing.T) {
-	weights := DefaultTDGWeights()
-
-	t.Run("negative penalties clamped to 0", func(t *testing.T) {
-		components := TDGComponents{
-			Complexity:  -0.5,
-			Churn:       0.0,
-			Coupling:    0.0,
-			Duplication: 0.0,
-			DomainRisk:  0.0,
-		}
-
-		score := CalculateTDG(components, weights)
-		if score < 0 || score > 100 {
-			t.Errorf("Score %v outside valid range", score)
-		}
-	})
-
-	t.Run("penalties exceeding 1.0", func(t *testing.T) {
-		components := TDGComponents{
-			Complexity:  2.0,
-			Churn:       2.0,
-			Coupling:    2.0,
-			Duplication: 2.0,
-			DomainRisk:  2.0,
-		}
-
-		score := CalculateTDG(components, weights)
-		if score != 0.0 {
-			t.Errorf("With excessive penalties, score = %v, expected 0.0", score)
-		}
-	})
-}
-
-func TestCalculateTDG_ScoreIntegration(t *testing.T) {
-	weights := DefaultTDGWeights()
-
-	testCases := []struct {
-		components TDGComponents
-		minScore   float64
-		maxScore   float64
-		severity   TDGSeverity
-	}{
-		{
-			components: TDGComponents{0.0, 0.0, 0.0, 0.0, 0.0},
-			minScore:   90.0,
-			maxScore:   100.0,
-			severity:   TDGExcellent,
-		},
-		{
-			components: TDGComponents{0.3, 0.3, 0.3, 0.3, 0.3},
-			minScore:   70.0,
-			maxScore:   71.0,
-			severity:   TDGGood,
-		},
-		{
-			components: TDGComponents{0.5, 0.5, 0.5, 0.5, 0.5},
-			minScore:   50.0,
-			maxScore:   50.0,
-			severity:   TDGModerate,
-		},
-		{
-			components: TDGComponents{0.8, 0.8, 0.8, 0.8, 0.8},
-			minScore:   0.0,
-			maxScore:   21.0,
-			severity:   TDGHighRisk,
-		},
-	}
-
-	for _, tc := range testCases {
-		score := CalculateTDG(tc.components, weights)
-		severity := CalculateTDGSeverity(score)
-
-		if score < tc.minScore || score > tc.maxScore {
-			t.Errorf("Score %v outside expected range [%v, %v]", score, tc.minScore, tc.maxScore)
-		}
-
-		if severity != tc.severity {
-			t.Errorf("Severity %v, expected %v (score: %v)", severity, tc.severity, score)
-		}
-	}
+	return x
 }
