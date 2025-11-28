@@ -34,6 +34,30 @@ func getPaths(c *cli.Context) []string {
 	return []string{"."}
 }
 
+// loadConfig loads configuration from the --config flag, target directory, or defaults.
+// Priority: 1) --config flag, 2) target directory config, 3) defaults
+func loadConfig(c *cli.Context, targetPaths []string) *config.Config {
+	// Check for explicit --config flag
+	if configPath := c.String("config"); configPath != "" {
+		cfg, err := config.Load(configPath)
+		if err == nil {
+			return cfg
+		}
+	}
+
+	// Try to load from first target directory
+	if len(targetPaths) > 0 {
+		targetDir := targetPaths[0]
+		// If it's a file, use its directory
+		if info, err := os.Stat(targetDir); err == nil && !info.IsDir() {
+			targetDir = filepath.Dir(targetDir)
+		}
+		return config.LoadFromDir(targetDir)
+	}
+
+	return config.LoadOrDefault()
+}
+
 // outputFlags returns the common output-related flags for analyze commands.
 func outputFlags() []cli.Flag {
 	return []cli.Flag{
@@ -170,7 +194,7 @@ func runComplexityCmd(c *cli.Context) error {
 	functionsOnly := c.Bool("functions-only")
 	includeHalstead := c.Bool("halstead")
 
-	cfg := config.LoadOrDefault()
+	cfg := loadConfig(c, paths)
 	scan := scanner.NewScanner(cfg)
 
 	var files []string
@@ -325,7 +349,7 @@ func runSATDCmd(c *cli.Context) error {
 	patterns := c.StringSlice("patterns")
 	includeTest := c.Bool("include-test")
 
-	cfg := config.LoadOrDefault()
+	cfg := loadConfig(c, paths)
 	if includeTest {
 		cfg.Exclude.Patterns = []string{} // Clear test exclusions
 	}
@@ -440,7 +464,7 @@ func runDeadCodeCmd(c *cli.Context) error {
 	paths := getPaths(c)
 	confidence := c.Float64("confidence")
 
-	cfg := config.LoadOrDefault()
+	cfg := loadConfig(c, paths)
 	scan := scanner.NewScanner(cfg)
 
 	var files []string
@@ -662,7 +686,7 @@ func runDuplicatesCmd(c *cli.Context) error {
 	minLines := c.Int("min-lines")
 	threshold := c.Float64("threshold")
 
-	cfg := config.LoadOrDefault()
+	cfg := loadConfig(c, paths)
 	scan := scanner.NewScanner(cfg)
 
 	var files []string
@@ -762,7 +786,7 @@ func runDefectCmd(c *cli.Context) error {
 	paths := getPaths(c)
 	highRiskOnly := c.Bool("high-risk-only")
 
-	cfg := config.LoadOrDefault()
+	cfg := loadConfig(c, paths)
 	scan := scanner.NewScanner(cfg)
 
 	// Use first path as repo root for git analysis
@@ -1067,7 +1091,7 @@ func runGraphCmd(c *cli.Context) error {
 	scope := c.String("scope")
 	includeMetrics := c.Bool("metrics")
 
-	cfg := config.LoadOrDefault()
+	cfg := loadConfig(c, paths)
 	scan := scanner.NewScanner(cfg)
 
 	var files []string
@@ -1200,7 +1224,7 @@ func runLintHotspotCmd(c *cli.Context) error {
 	paths := getPaths(c)
 	topN := c.Int("top")
 
-	cfg := config.LoadOrDefault()
+	cfg := loadConfig(c, paths)
 	scan := scanner.NewScanner(cfg)
 
 	var files []string
@@ -1304,7 +1328,7 @@ func runContextCmd(c *cli.Context) error {
 	includeMetrics := c.Bool("include-metrics")
 	includeGraph := c.Bool("include-graph")
 
-	cfg := config.LoadOrDefault()
+	cfg := loadConfig(c, paths)
 	scan := scanner.NewScanner(cfg)
 
 	var files []string
@@ -1424,7 +1448,7 @@ func runAnalyzeCmd(c *cli.Context) error {
 	paths := getPaths(c)
 	exclude := c.StringSlice("exclude")
 
-	cfg := config.LoadOrDefault()
+	cfg := loadConfig(c, paths)
 	scan := scanner.NewScanner(cfg)
 
 	// Use first path as repo root for git-based analyzers

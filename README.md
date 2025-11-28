@@ -177,6 +177,12 @@ omen analyze tdg ./src --hotspots 5
 omen context ./src --include-metrics --include-graph
 ```
 
+## Understanding the Analyzers
+
+### Complexity Analysis
+
+Omen measures both **cyclomatic complexity** (McCabe, 1976) and **cognitive complexity** (SonarSource, 2017). Cyclomatic complexity counts linearly independent paths through code - each `if`, `while`, `for`, and logical operator (`&&`, `||`) adds to the count. Functions with cyclomatic complexity above 10 are considered moderately complex; above 20 indicates high risk. Cognitive complexity improves on this by penalizing nested structures more heavily, better reflecting how hard code is to understand rather than just test. Research consistently shows that high-complexity functions correlate with defect density, making this analysis valuable for prioritizing refactoring and code review efforts.
+
 ## Contributing
 
 1. Fork the repository

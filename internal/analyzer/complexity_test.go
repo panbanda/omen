@@ -1037,11 +1037,11 @@ func TestGetCognitiveNodeTypes(t *testing.T) {
 			lang: parser.LangGo,
 			wantNestingTypes: []string{
 				"if_statement",
-				"while_statement",
 				"for_statement",
+				"expression_switch_statement",
 			},
 			wantFlatTypes: []string{
-				"else_clause",
+				// Note: else_clause is NOT counted per SonarSource spec
 				"break_statement",
 				"continue_statement",
 			},
@@ -1057,7 +1057,7 @@ func TestGetCognitiveNodeTypes(t *testing.T) {
 			},
 			wantFlatTypes: []string{
 				"elsif",
-				"else",
+				// Note: else is NOT counted per SonarSource spec
 				"break",
 			},
 		},
@@ -1328,5 +1328,180 @@ func test() {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = calculateMaxNesting(root, result.Source, 0)
+	}
+}
+
+// TestCognitiveComplexity_PmatParity tests cognitive complexity matches pmat behavior.
+// These tests are ported from pmat's complexity_analyzer_accuracy_test.rs
+func TestCognitiveComplexity_PmatParity(t *testing.T) {
+	tests := []struct {
+		name           string
+		lang           parser.Language
+		fileExt        string
+		code           string
+		wantCyclomatic uint32
+		wantCognitive  uint32
+	}{
+		{
+			name:    "simple if-else chain (no nesting penalty)",
+			lang:    parser.LangGo,
+			fileExt: ".go",
+			code: `package main
+
+func processLine(line string) string {
+	if line == "a" {
+		return "first"
+	} else if line == "b" {
+		return "second"
+	} else if line == "c" {
+		return "third"
+	} else if line == "d" {
+		return "fourth"
+	} else {
+		return ""
+	}
+}`,
+			// Cyclomatic: 1 base + 4 if/else-if = 5
+			wantCyclomatic: 5,
+			// Cognitive: 4 (one for each if/else-if, no nesting penalty at top level)
+			wantCognitive: 4,
+		},
+		{
+			name:    "nested if",
+			lang:    parser.LangGo,
+			fileExt: ".go",
+			code: `package main
+
+func nestedIf(x int, y int) int {
+	if x > 0 {
+		if y > 0 {
+			return x + y
+		} else {
+			return x
+		}
+	} else {
+		return 0
+	}
+}`,
+			// Cyclomatic: 1 base + 2 if statements = 3
+			wantCyclomatic: 3,
+			// Cognitive: 1 (outer if) + 2 (inner if with nesting=1) = 3
+			wantCognitive: 3,
+		},
+		{
+			name:    "loop with nested if",
+			lang:    parser.LangGo,
+			fileExt: ".go",
+			code: `package main
+
+func loopWithIf(items []int) int {
+	sum := 0
+	for _, item := range items {
+		if item > 0 {
+			sum += item
+		}
+	}
+	return sum
+}`,
+			// Cyclomatic: 1 base + 1 for + 1 if = 3
+			wantCyclomatic: 3,
+			// Cognitive: 1 (for loop) + 2 (nested if) = 3
+			wantCognitive: 3,
+		},
+		{
+			name:    "binary operators",
+			lang:    parser.LangGo,
+			fileExt: ".go",
+			code: `package main
+
+func binaryOps(x bool, y bool, z bool) bool {
+	return x && y || z
+}`,
+			// Cyclomatic: 1 base + 1 && + 1 || = 3
+			wantCyclomatic: 3,
+			// Cognitive: 1 (&&) + 1 (||) = 2
+			wantCognitive: 2,
+		},
+		{
+			name:    "deeply nested",
+			lang:    parser.LangGo,
+			fileExt: ".go",
+			code: `package main
+
+func deeplyNested(x int) int {
+	result := 0
+	if x > 0 {
+		for i := 0; i < x; i++ {
+			if i%2 == 0 {
+				if i > 10 {
+					result += i * 2
+				} else {
+					result += i
+				}
+			}
+		}
+	}
+	return result
+}`,
+			// Cyclomatic: 1 base + 1 outer if + 1 for + 1 inner if + 1 deepest if = 5
+			wantCyclomatic: 5,
+			// Cognitive:
+			// - outer if: +1 (depth 0)
+			// - for: +1+1 = +2 (depth 1)
+			// - inner if: +1+2 = +3 (depth 2)
+			// - deepest if: +1+3 = +4 (depth 3)
+			// Total: 1+2+3+4 = 10
+			wantCognitive: 10,
+		},
+		{
+			name:    "switch statement",
+			lang:    parser.LangGo,
+			fileExt: ".go",
+			code: `package main
+
+func switchFunc(x int) string {
+	switch x {
+	case 1:
+		return "one"
+	case 2:
+		return "two"
+	default:
+		return "other"
+	}
+}`,
+			// Cyclomatic: 1 base + 1 switch = 2
+			wantCyclomatic: 2,
+			// Cognitive: 1 (switch)
+			wantCognitive: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpFile := filepath.Join(t.TempDir(), "test"+tt.fileExt)
+			if err := os.WriteFile(tmpFile, []byte(tt.code), 0644); err != nil {
+				t.Fatalf("failed to write test file: %v", err)
+			}
+
+			analyzer := NewComplexityAnalyzer()
+			defer analyzer.Close()
+
+			result, err := analyzer.AnalyzeFile(tmpFile)
+			if err != nil {
+				t.Fatalf("AnalyzeFile() error = %v", err)
+			}
+
+			if len(result.Functions) == 0 {
+				t.Fatal("expected at least 1 function")
+			}
+
+			fn := result.Functions[0]
+			if fn.Metrics.Cyclomatic != tt.wantCyclomatic {
+				t.Errorf("Cyclomatic = %v, want %v", fn.Metrics.Cyclomatic, tt.wantCyclomatic)
+			}
+			if fn.Metrics.Cognitive != tt.wantCognitive {
+				t.Errorf("Cognitive = %v, want %v", fn.Metrics.Cognitive, tt.wantCognitive)
+			}
+		})
 	}
 }

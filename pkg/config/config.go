@@ -203,6 +203,11 @@ func Load(path string) (*Config, error) {
 
 // LoadOrDefault tries to load config from standard locations or returns defaults.
 func LoadOrDefault() *Config {
+	return LoadFromDir(".")
+}
+
+// LoadFromDir tries to load config from a specific directory or returns defaults.
+func LoadFromDir(targetDir string) *Config {
 	// Standard config file names to search for
 	configNames := []string{
 		"omen.toml",
@@ -215,8 +220,8 @@ func LoadOrDefault() *Config {
 		".omen.json",
 	}
 
-	// Search in current directory and .omen directory
-	searchDirs := []string{".", ".omen"}
+	// Search in target directory and its .omen subdirectory
+	searchDirs := []string{targetDir, filepath.Join(targetDir, ".omen")}
 
 	for _, dir := range searchDirs {
 		for _, name := range configNames {

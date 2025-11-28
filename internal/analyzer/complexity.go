@@ -166,29 +166,70 @@ func calculateCognitiveComplexity(node *sitter.Node, source []byte, lang parser.
 
 // calcCognitiveRecursive is the recursive helper that reuses type info.
 func calcCognitiveRecursive(node *sitter.Node, source []byte, info cognitiveTypeInfo, depth int) uint32 {
+	return calcCognitiveWithContext(node, source, info, depth, false)
+}
+
+// calcCognitiveWithContext tracks if we're in an else clause to handle else-if chains.
+func calcCognitiveWithContext(node *sitter.Node, source []byte, info cognitiveTypeInfo, depth int, afterElse bool) uint32 {
 	var complexity uint32
+	var sawElse bool
 
 	for i := range int(node.ChildCount()) {
 		child := node.Child(i)
 		childType := child.Type() // Cache type once per child
 
+		// Track when we see an "else" token
+		if childType == "else" {
+			sawElse = true
+			continue
+		}
+
 		if info.nesting[childType] {
-			// Nesting construct: add base + depth penalty, recurse with increased depth
-			complexity++
-			complexity += uint32(depth)
-			complexity += calcCognitiveRecursive(child, source, info, depth+1)
+			// For if_statement after else, it's an "else if" - don't increase nesting
+			if childType == "if_statement" && (sawElse || afterElse) {
+				// else-if: add base complexity only, no nesting penalty
+				complexity++
+				complexity += calcCognitiveWithContext(child, source, info, depth, false)
+			} else {
+				// Regular nesting construct: add base + depth penalty, recurse with increased depth
+				complexity++
+				complexity += uint32(depth)
+				complexity += calcCognitiveWithContext(child, source, info, depth+1, false)
+			}
+			sawElse = false
 		} else if info.flat[childType] {
 			// Flat construct: add base + depth penalty, recurse at same depth
 			complexity++
 			complexity += uint32(depth)
-			complexity += calcCognitiveRecursive(child, source, info, depth)
+			complexity += calcCognitiveWithContext(child, source, info, depth, false)
+			sawElse = false
+		} else if childType == "binary_expression" || childType == "logical_expression" {
+			// Check for && or || operators which add cognitive complexity
+			complexity += countLogicalOperators(child, source)
+			complexity += calcCognitiveWithContext(child, source, info, depth, false)
+			sawElse = false
 		} else {
-			// Continue at same depth
-			complexity += calcCognitiveRecursive(child, source, info, depth)
+			// Continue at same depth, passing sawElse context
+			complexity += calcCognitiveWithContext(child, source, info, depth, sawElse)
+			sawElse = false
 		}
 	}
 
 	return complexity
+}
+
+// countLogicalOperators counts && and || in a binary/logical expression.
+// Each sequence of same operators counts as 1, switching operators adds another.
+func countLogicalOperators(node *sitter.Node, source []byte) uint32 {
+	var count uint32
+	for i := range int(node.ChildCount()) {
+		child := node.Child(i)
+		text := parser.GetNodeText(child, source)
+		if text == "&&" || text == "||" || text == "and" || text == "or" {
+			count++
+		}
+	}
+	return count
 }
 
 type cognitiveNodeType struct {
@@ -203,7 +244,20 @@ func getCognitiveNodeTypes(lang parser.Language) []cognitiveNodeType {
 	switch lang {
 	case parser.LangRuby:
 		nesting = []string{"if", "unless", "while", "until", "for", "case", "begin"}
-		flat = []string{"elsif", "else", "when", "rescue", "break", "next", "redo"}
+		flat = []string{"elsif", "when", "rescue", "break", "next", "redo"}
+	case parser.LangGo:
+		nesting = []string{
+			"if_statement",
+			"for_statement",
+			"expression_switch_statement", "type_switch_statement",
+			"select_statement",
+		}
+		// Note: else_clause is NOT counted per SonarSource spec (it's a continuation, not a branch)
+		// elif/else-if ARE counted as they represent additional decision points
+		flat = []string{
+			"break_statement", "continue_statement",
+			"goto_statement",
+		}
 	default:
 		nesting = []string{
 			"if_statement", "if_expression",
@@ -213,7 +267,7 @@ func getCognitiveNodeTypes(lang parser.Language) []cognitiveNodeType {
 			"try_statement",
 		}
 		flat = []string{
-			"else_clause", "elif_clause", "elseif_clause",
+			"elif_clause", "elseif_clause",
 			"break_statement", "continue_statement",
 			"goto_statement",
 		}
