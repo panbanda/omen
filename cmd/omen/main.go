@@ -477,9 +477,11 @@ func runDeadCodeCmd(c *cli.Context) error {
 	}
 	defer formatter.Close()
 
-	// For JSON/TOON, output raw analysis
+	// For JSON/TOON, output pmat-compatible format
 	if formatter.Format() == output.FormatJSON || formatter.Format() == output.FormatTOON {
-		return formatter.Output(analysis)
+		result := models.NewDeadCodeResult()
+		result.FromDeadCodeAnalysis(analysis)
+		return formatter.Output(result)
 	}
 
 	// Functions table
