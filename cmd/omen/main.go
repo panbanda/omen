@@ -810,6 +810,12 @@ func runDefectCmd(c *cli.Context) error {
 		return analysis.Files[i].Probability > analysis.Files[j].Probability
 	})
 
+	// For JSON/TOON, output pmat-compatible format
+	if formatter.Format() == output.FormatJSON || formatter.Format() == output.FormatTOON {
+		report := analysis.ToDefectPredictionReport()
+		return formatter.Output(report)
+	}
+
 	var rows [][]string
 	for _, ds := range analysis.Files {
 		if highRiskOnly && ds.RiskLevel != models.RiskHigh {
