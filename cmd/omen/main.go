@@ -550,7 +550,7 @@ func churnCmd() *cli.Command {
 	flags := append(outputFlags(),
 		&cli.IntFlag{
 			Name:  "days",
-			Value: 90,
+			Value: 30,
 			Usage: "Number of days of history to analyze",
 		},
 		&cli.IntFlag{
@@ -611,7 +611,7 @@ func runChurnCmd(c *cli.Context) error {
 		rows = append(rows, []string{
 			fm.Path,
 			fmt.Sprintf("%d", fm.Commits),
-			fmt.Sprintf("%d", fm.UniqueAuthors),
+			fmt.Sprintf("%d", len(fm.UniqueAuthors)),
 			fmt.Sprintf("+%d/-%d", fm.LinesAdded, fm.LinesDeleted),
 			scoreStr,
 		})
@@ -622,9 +622,9 @@ func runChurnCmd(c *cli.Context) error {
 		[]string{"File", "Commits", "Authors", "Lines Changed", "Churn Score"},
 		rows,
 		[]string{
-			fmt.Sprintf("Total Files: %d", analysis.Summary.TotalFiles),
+			fmt.Sprintf("Total Files: %d", analysis.Summary.TotalFilesChanged),
 			fmt.Sprintf("Total Commits: %d", analysis.Summary.TotalCommits),
-			fmt.Sprintf("Authors: %d", analysis.Summary.UniqueAuthors),
+			fmt.Sprintf("Authors: %d", len(analysis.Summary.AuthorContributions)),
 			"",
 			fmt.Sprintf("Max: %.2f", analysis.Summary.MaxChurnScore),
 		},
@@ -1588,9 +1588,9 @@ func runAnalyzeCmd(c *cli.Context) error {
 	if results.Churn != nil {
 		fmt.Fprintf(w, "\nFile Churn (last %d days):\n", cfg.Analysis.ChurnDays)
 		fmt.Fprintf(w, "  Files: %d, Total Commits: %d, Authors: %d\n",
-			results.Churn.Summary.TotalFiles,
+			results.Churn.Summary.TotalFilesChanged,
 			results.Churn.Summary.TotalCommits,
-			results.Churn.Summary.UniqueAuthors)
+			len(results.Churn.Summary.AuthorContributions))
 	}
 
 	if results.Clones != nil {

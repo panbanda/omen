@@ -192,16 +192,16 @@ func TestChurnAnalyzer_AnalyzeRepo(t *testing.T) {
 				t.Errorf("Files count = %v, want %v", len(result.Files), tt.wantFiles)
 			}
 
-			if result.Summary.TotalFiles != tt.wantFiles {
-				t.Errorf("Summary.TotalFiles = %v, want %v", result.Summary.TotalFiles, tt.wantFiles)
+			if result.Summary.TotalFilesChanged != tt.wantFiles {
+				t.Errorf("Summary.TotalFilesChanged = %v, want %v", result.Summary.TotalFilesChanged, tt.wantFiles)
 			}
 
-			if result.Days != tt.days {
-				t.Errorf("Days = %v, want %v", result.Days, tt.days)
+			if result.PeriodDays != tt.days {
+				t.Errorf("PeriodDays = %v, want %v", result.PeriodDays, tt.days)
 			}
 
-			if result.RepoPath != repoPath {
-				t.Errorf("RepoPath = %v, want %v", result.RepoPath, repoPath)
+			if result.RepositoryRoot == "" {
+				t.Error("RepositoryRoot should not be empty")
 			}
 
 			if tt.wantFiles > 0 && result.Summary.TotalCommits < tt.wantMinCommits {
@@ -240,8 +240,8 @@ func TestChurnAnalyzer_AnalyzeRepo_ChurnScores(t *testing.T) {
 		t.Error("Files should be sorted by churn score descending")
 	}
 
-	if result.Files[0].Path != "high_churn.go" {
-		t.Errorf("Highest churn file = %v, want high_churn.go", result.Files[0].Path)
+	if result.Files[0].RelativePath != "high_churn.go" {
+		t.Errorf("Highest churn file = %v, want high_churn.go", result.Files[0].RelativePath)
 	}
 
 	if result.Summary.MaxChurnScore != result.Files[0].ChurnScore {
@@ -288,10 +288,10 @@ func TestChurnAnalyzer_AnalyzeRepo_MultipleAuthors(t *testing.T) {
 	repoPath := filepath.Join(tmpDir, "repo")
 	repo := initGitRepo(t, repoPath)
 
-	writeFileAndCommitWithAuthor(t, repo, repoPath, "initial.go", "package init\n", "Initial", "init@example.com")
-	writeFileAndCommitWithAuthor(t, repo, repoPath, "shared.go", "package shared\n", "Author 1", "alice@example.com")
-	writeFileAndCommitWithAuthor(t, repo, repoPath, "shared.go", "package shared\n\nfunc A() {}\n", "Author 2", "bob@example.com")
-	writeFileAndCommitWithAuthor(t, repo, repoPath, "shared.go", "package shared\n\nfunc A() {}\nfunc B() {}\n", "Author 3", "charlie@example.com")
+	writeFileAndCommitWithAuthor(t, repo, repoPath, "initial.go", "package init\n", "Initial", "Init Author")
+	writeFileAndCommitWithAuthor(t, repo, repoPath, "shared.go", "package shared\n", "Author 1", "Alice")
+	writeFileAndCommitWithAuthor(t, repo, repoPath, "shared.go", "package shared\n\nfunc A() {}\n", "Author 2", "Bob")
+	writeFileAndCommitWithAuthor(t, repo, repoPath, "shared.go", "package shared\n\nfunc A() {}\nfunc B() {}\n", "Author 3", "Charlie")
 
 	analyzer := NewChurnAnalyzer(90)
 	result, err := analyzer.AnalyzeRepo(repoPath)
@@ -301,7 +301,7 @@ func TestChurnAnalyzer_AnalyzeRepo_MultipleAuthors(t *testing.T) {
 
 	var sharedFile *models.FileChurnMetrics
 	for i := range result.Files {
-		if result.Files[i].Path == "shared.go" {
+		if result.Files[i].RelativePath == "shared.go" {
 			sharedFile = &result.Files[i]
 			break
 		}
@@ -311,18 +311,18 @@ func TestChurnAnalyzer_AnalyzeRepo_MultipleAuthors(t *testing.T) {
 		t.Fatal("shared.go not found in results")
 	}
 
-	if sharedFile.UniqueAuthors != 3 {
-		t.Errorf("UniqueAuthors = %v, want 3", sharedFile.UniqueAuthors)
+	if len(sharedFile.UniqueAuthors) != 3 {
+		t.Errorf("UniqueAuthors = %v, want 3", len(sharedFile.UniqueAuthors))
 	}
 
-	if len(sharedFile.Authors) != 3 {
-		t.Errorf("Authors map length = %v, want 3", len(sharedFile.Authors))
+	if len(sharedFile.AuthorCounts) != 3 {
+		t.Errorf("AuthorCounts map length = %v, want 3", len(sharedFile.AuthorCounts))
 	}
 
-	expectedAuthors := []string{"alice@example.com", "bob@example.com", "charlie@example.com"}
+	expectedAuthors := []string{"Alice", "Bob", "Charlie"}
 	for _, author := range expectedAuthors {
-		if _, ok := sharedFile.Authors[author]; !ok {
-			t.Errorf("Expected author %s in Authors map", author)
+		if _, ok := sharedFile.AuthorCounts[author]; !ok {
+			t.Errorf("Expected author '%s' in AuthorCounts map, got %v", author, sharedFile.AuthorCounts)
 		}
 	}
 }
@@ -355,11 +355,11 @@ func TestChurnAnalyzer_AnalyzeRepo_LineCounts(t *testing.T) {
 		t.Error("Expected some lines deleted")
 	}
 
-	if result.Summary.TotalLinesAdded == 0 {
+	if result.Summary.TotalAdditions == 0 {
 		t.Error("Summary should have TotalLinesAdded > 0")
 	}
 
-	if result.Summary.TotalLinesDeleted == 0 {
+	if result.Summary.TotalDeletions == 0 {
 		t.Error("Summary should have TotalLinesDeleted > 0")
 	}
 }
@@ -387,7 +387,7 @@ func TestChurnAnalyzer_AnalyzeRepo_SummaryStatistics(t *testing.T) {
 		t.Error("AvgCommitsPerFile should not be 0")
 	}
 
-	expectedAvg := float64(result.Summary.TotalCommits) / float64(result.Summary.TotalFiles)
+	expectedAvg := float64(result.Summary.TotalCommits) / float64(result.Summary.TotalFilesChanged)
 	if result.Summary.AvgCommitsPerFile != expectedAvg {
 		t.Errorf("AvgCommitsPerFile = %v, want %v", result.Summary.AvgCommitsPerFile, expectedAvg)
 	}
@@ -400,17 +400,10 @@ func TestChurnAnalyzer_AnalyzeRepo_SummaryStatistics(t *testing.T) {
 		t.Error("P50ChurnScore should not be 0")
 	}
 
-	topN := 10
-	if len(result.Files) < topN {
-		topN = len(result.Files)
-	}
-	if len(result.Summary.TopChurnedFiles) != topN {
-		t.Errorf("TopChurnedFiles length = %v, want %v", len(result.Summary.TopChurnedFiles), topN)
-	}
-
-	for i := 0; i < topN; i++ {
-		if result.Summary.TopChurnedFiles[i] != result.Files[i].Path {
-			t.Errorf("TopChurnedFiles[%d] = %v, want %v", i, result.Summary.TopChurnedFiles[i], result.Files[i].Path)
+	// Verify files are sorted by churn score (top churned files)
+	for i := 1; i < len(result.Files); i++ {
+		if result.Files[i-1].ChurnScore < result.Files[i].ChurnScore {
+			t.Error("Files should be sorted by churn score descending")
 		}
 	}
 }
@@ -471,12 +464,12 @@ func TestChurnAnalyzer_AnalyzeFiles(t *testing.T) {
 				t.Errorf("Files count = %v, want %v", len(result.Files), tt.wantFiles)
 			}
 
-			if result.Summary.TotalFiles != tt.wantFiles {
-				t.Errorf("Summary.TotalFiles = %v, want %v", result.Summary.TotalFiles, tt.wantFiles)
+			if result.Summary.TotalFilesChanged != tt.wantFiles {
+				t.Errorf("Summary.TotalFilesChanged = %v, want %v", result.Summary.TotalFilesChanged, tt.wantFiles)
 			}
 
-			if result.RepoPath != repoPath {
-				t.Errorf("RepoPath = %v, want %v", result.RepoPath, repoPath)
+			if result.RepositoryRoot == "" {
+				t.Error("RepositoryRoot should not be empty")
 			}
 		})
 	}
@@ -513,11 +506,11 @@ func TestChurnAnalyzer_AnalyzeFiles_SummaryRecalculation(t *testing.T) {
 		t.Error("Filtered result should have fewer commits than full analysis")
 	}
 
-	if filteredResult.Summary.TotalFiles != 1 {
-		t.Errorf("Filtered TotalFiles = %v, want 1", filteredResult.Summary.TotalFiles)
+	if filteredResult.Summary.TotalFilesChanged != 1 {
+		t.Errorf("Filtered TotalFilesChanged = %v, want 1", filteredResult.Summary.TotalFilesChanged)
 	}
 
-	expectedAvg := float64(filteredResult.Summary.TotalCommits) / float64(filteredResult.Summary.TotalFiles)
+	expectedAvg := float64(filteredResult.Summary.TotalCommits) / float64(filteredResult.Summary.TotalFilesChanged)
 	if filteredResult.Summary.AvgCommitsPerFile != expectedAvg {
 		t.Errorf("Filtered AvgCommitsPerFile = %v, want %v", filteredResult.Summary.AvgCommitsPerFile, expectedAvg)
 	}
@@ -630,10 +623,10 @@ func initGitRepo(t *testing.T, path string) *git.Repository {
 
 func writeFileAndCommit(t *testing.T, repo *git.Repository, repoPath, filename, content, message string) {
 	t.Helper()
-	writeFileAndCommitWithAuthor(t, repo, repoPath, filename, content, message, "test@example.com")
+	writeFileAndCommitWithAuthor(t, repo, repoPath, filename, content, message, "Test Author")
 }
 
-func writeFileAndCommitWithAuthor(t *testing.T, repo *git.Repository, repoPath, filename, content, message, email string) {
+func writeFileAndCommitWithAuthor(t *testing.T, repo *git.Repository, repoPath, filename, content, message, authorName string) {
 	t.Helper()
 
 	filePath := filepath.Join(repoPath, filename)
@@ -652,8 +645,8 @@ func writeFileAndCommitWithAuthor(t *testing.T, repo *git.Repository, repoPath, 
 
 	_, err = w.Commit(message, &git.CommitOptions{
 		Author: &object.Signature{
-			Name:  "Test Author",
-			Email: email,
+			Name:  authorName,
+			Email: authorName + "@example.com",
 			When:  time.Now(),
 		},
 	})

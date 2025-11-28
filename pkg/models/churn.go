@@ -9,14 +9,15 @@ import (
 // FileChurnMetrics represents git churn data for a single file.
 type FileChurnMetrics struct {
 	Path          string         `json:"path"`
-	Commits       int            `json:"commits"`
-	UniqueAuthors int            `json:"unique_authors"`
-	Authors       map[string]int `json:"authors"` // author email -> commit count
-	LinesAdded    int            `json:"lines_added"`
-	LinesDeleted  int            `json:"lines_deleted"`
+	RelativePath  string         `json:"relative_path"`
+	Commits       int            `json:"commit_count"`
+	UniqueAuthors []string       `json:"unique_authors"`
+	AuthorCounts  map[string]int `json:"-"` // internal: author name -> commit count
+	LinesAdded    int            `json:"additions"`
+	LinesDeleted  int            `json:"deletions"`
 	ChurnScore    float64        `json:"churn_score"` // 0.0-1.0 normalized
-	FirstCommit   time.Time      `json:"first_commit"`
-	LastCommit    time.Time      `json:"last_commit"`
+	FirstCommit   time.Time      `json:"first_seen"`
+	LastCommit    time.Time      `json:"last_modified"`
 }
 
 // CalculateChurnScore computes a normalized churn score.
@@ -60,30 +61,30 @@ func (f *FileChurnMetrics) IsHotspot(threshold float64) bool {
 
 // ChurnSummary provides aggregate statistics.
 type ChurnSummary struct {
-	TotalFiles        int      `json:"total_files"`
-	TotalCommits      int      `json:"total_commits"`
-	TotalLinesAdded   int      `json:"total_lines_added"`
-	TotalLinesDeleted int      `json:"total_lines_deleted"`
-	UniqueAuthors     int      `json:"unique_authors"`
-	AvgCommitsPerFile float64  `json:"avg_commits_per_file"`
-	MaxChurnScore     float64  `json:"max_churn_score"`
-	TopChurnedFiles   []string `json:"top_churned_files"`
-	HotspotFiles      []string `json:"hotspot_files"`
-	StableFiles       []string `json:"stable_files"`
-	MeanChurnScore    float64  `json:"mean_churn_score"`
-	VarianceChurn     float64  `json:"variance_churn_score"`
-	StdDevChurn       float64  `json:"stddev_churn_score"`
-	P50ChurnScore     float64  `json:"p50_churn_score"`
-	P95ChurnScore     float64  `json:"p95_churn_score"`
+	// Required fields matching pmat
+	TotalCommits        int            `json:"total_commits"`
+	TotalFilesChanged   int            `json:"total_files_changed"`
+	HotspotFiles        []string       `json:"hotspot_files"`
+	StableFiles         []string       `json:"stable_files"`
+	AuthorContributions map[string]int `json:"author_contributions"`
+	MeanChurnScore      float64        `json:"mean_churn_score"`
+	VarianceChurnScore  float64        `json:"variance_churn_score"`
+	StdDevChurnScore    float64        `json:"stddev_churn_score"`
+	// Additional metrics not in pmat
+	TotalAdditions    int     `json:"total_additions,omitempty"`
+	TotalDeletions    int     `json:"total_deletions,omitempty"`
+	AvgCommitsPerFile float64 `json:"avg_commits_per_file,omitempty"`
+	MaxChurnScore     float64 `json:"max_churn_score,omitempty"`
+	P50ChurnScore     float64 `json:"p50_churn_score,omitempty"`
+	P95ChurnScore     float64 `json:"p95_churn_score,omitempty"`
 }
 
-// CalculateStatistics computes mean, variance, standard deviation, and percentiles of churn scores.
+// CalculateStatistics computes mean, variance, standard deviation, and percentiles.
 func (s *ChurnSummary) CalculateStatistics(files []FileChurnMetrics) {
 	if len(files) == 0 {
 		return
 	}
 
-	// Collect scores for percentile calculation
 	scores := make([]float64, len(files))
 	var sum float64
 	for i, f := range files {
@@ -98,17 +99,15 @@ func (s *ChurnSummary) CalculateStatistics(files []FileChurnMetrics) {
 		diff := f.ChurnScore - s.MeanChurnScore
 		varianceSum += diff * diff
 	}
-	s.VarianceChurn = varianceSum / float64(len(files))
+	s.VarianceChurnScore = varianceSum / float64(len(files))
 
 	// Calculate standard deviation
-	s.StdDevChurn = math.Sqrt(s.VarianceChurn)
+	s.StdDevChurnScore = math.Sqrt(s.VarianceChurnScore)
 
-	// Calculate percentiles (files are already sorted by churn score descending)
-	// We need ascending order for percentile calculation
+	// Calculate percentiles
 	sortedScores := make([]float64, len(scores))
 	copy(sortedScores, scores)
 	sort.Float64s(sortedScores)
-
 	s.P50ChurnScore = percentileFloat64(sortedScores, 50)
 	s.P95ChurnScore = percentileFloat64(sortedScores, 95)
 }
@@ -127,18 +126,19 @@ func percentileFloat64(sorted []float64, p int) float64 {
 
 // ChurnAnalysis represents the full churn analysis result.
 type ChurnAnalysis struct {
-	Files    []FileChurnMetrics `json:"files"`
-	Summary  ChurnSummary       `json:"summary"`
-	Days     int                `json:"days"`
-	RepoPath string             `json:"repo_path"`
+	GeneratedAt    time.Time          `json:"generated_at"`
+	PeriodDays     int                `json:"period_days"`
+	RepositoryRoot string             `json:"repository_root"`
+	Files          []FileChurnMetrics `json:"files"`
+	Summary        ChurnSummary       `json:"summary"`
 }
 
 // NewChurnSummary creates an initialized summary.
 func NewChurnSummary() ChurnSummary {
 	return ChurnSummary{
-		TopChurnedFiles: make([]string, 0),
-		HotspotFiles:    make([]string, 0),
-		StableFiles:     make([]string, 0),
+		HotspotFiles:        make([]string, 0),
+		StableFiles:         make([]string, 0),
+		AuthorContributions: make(map[string]int),
 	}
 }
 
