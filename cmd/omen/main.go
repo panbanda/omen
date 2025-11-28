@@ -274,8 +274,12 @@ func runComplexityCmd(c *cli.Context) error {
 		[]string{
 			fmt.Sprintf("Files: %d", analysis.Summary.TotalFiles),
 			fmt.Sprintf("Functions: %d", analysis.Summary.TotalFunctions),
-			fmt.Sprintf("Avg Cyc: %.1f", analysis.Summary.AvgCyclomatic),
-			fmt.Sprintf("Avg Cog: %.1f", analysis.Summary.AvgCognitive),
+			fmt.Sprintf("Median Cyclomatic (P50): %d", analysis.Summary.P50Cyclomatic),
+			fmt.Sprintf("Median Cognitive (P50): %d", analysis.Summary.P50Cognitive),
+			fmt.Sprintf("90th Percentile Cyclomatic: %d", analysis.Summary.P90Cyclomatic),
+			fmt.Sprintf("90th Percentile Cognitive: %d", analysis.Summary.P90Cognitive),
+			fmt.Sprintf("Max Cyclomatic: %d", analysis.Summary.MaxCyclomatic),
+			fmt.Sprintf("Max Cognitive: %d", analysis.Summary.MaxCognitive),
 		},
 		analysis,
 	)
@@ -997,7 +1001,43 @@ func runTDGCmd(c *cli.Context) error {
 		project,
 	)
 
-	return formatter.Output(table)
+	if err := formatter.Output(table); err != nil {
+		return err
+	}
+
+	// Display grade distribution
+	if formatter.Format() == output.FormatText && len(project.GradeDistribution) > 0 {
+		fmt.Fprintln(formatter.Writer())
+		if formatter.Colored() {
+			color.Cyan("Grade Distribution:")
+		} else {
+			fmt.Fprintln(formatter.Writer(), "Grade Distribution:")
+		}
+
+		// Define order of grades
+		gradeOrder := []models.Grade{
+			models.GradeAPlus,
+			models.GradeA,
+			models.GradeAMinus,
+			models.GradeBPlus,
+			models.GradeB,
+			models.GradeBMinus,
+			models.GradeCPlus,
+			models.GradeC,
+			models.GradeCMinus,
+			models.GradeD,
+			models.GradeF,
+		}
+
+		for _, grade := range gradeOrder {
+			if count := project.GradeDistribution[grade]; count > 0 {
+				percentage := float64(count) / float64(project.TotalFiles) * 100
+				fmt.Fprintf(formatter.Writer(), "- %s: %d files (%.1f%%)\n", grade, count, percentage)
+			}
+		}
+	}
+
+	return nil
 }
 
 func graphCmd() *cli.Command {
@@ -1322,8 +1362,10 @@ func runContextCmd(c *cli.Context) error {
 		analysis, err := cxAnalyzer.AnalyzeProject(files)
 		if err == nil {
 			fmt.Printf("- **Total Functions**: %d\n", analysis.Summary.TotalFunctions)
-			fmt.Printf("- **Avg Cyclomatic**: %.1f\n", analysis.Summary.AvgCyclomatic)
-			fmt.Printf("- **Avg Cognitive**: %.1f\n", analysis.Summary.AvgCognitive)
+			fmt.Printf("- **Median Cyclomatic (P50)**: %d\n", analysis.Summary.P50Cyclomatic)
+			fmt.Printf("- **Median Cognitive (P50)**: %d\n", analysis.Summary.P50Cognitive)
+			fmt.Printf("- **90th Percentile Cyclomatic**: %d\n", analysis.Summary.P90Cyclomatic)
+			fmt.Printf("- **90th Percentile Cognitive**: %d\n", analysis.Summary.P90Cognitive)
 			fmt.Printf("- **Max Cyclomatic**: %d\n", analysis.Summary.MaxCyclomatic)
 			fmt.Printf("- **Max Cognitive**: %d\n", analysis.Summary.MaxCognitive)
 		}
@@ -1521,7 +1563,9 @@ func runAnalyzeCmd(c *cli.Context) error {
 	if results.Complexity != nil {
 		fmt.Fprintf(w, "\nComplexity:\n")
 		fmt.Fprintf(w, "  Files: %d, Functions: %d\n", results.Complexity.Summary.TotalFiles, results.Complexity.Summary.TotalFunctions)
-		fmt.Fprintf(w, "  Avg Cyclomatic: %.1f, Avg Cognitive: %.1f\n", results.Complexity.Summary.AvgCyclomatic, results.Complexity.Summary.AvgCognitive)
+		fmt.Fprintf(w, "  Median Cyclomatic (P50): %d, Median Cognitive (P50): %d\n", results.Complexity.Summary.P50Cyclomatic, results.Complexity.Summary.P50Cognitive)
+		fmt.Fprintf(w, "  90th Percentile Cyclomatic: %d, 90th Percentile Cognitive: %d\n", results.Complexity.Summary.P90Cyclomatic, results.Complexity.Summary.P90Cognitive)
+		fmt.Fprintf(w, "  Max Cyclomatic: %d, Max Cognitive: %d\n", results.Complexity.Summary.MaxCyclomatic, results.Complexity.Summary.MaxCognitive)
 	}
 
 	if results.SATD != nil {
@@ -1581,6 +1625,22 @@ func runAnalyzeCmd(c *cli.Context) error {
 			}
 			fmt.Fprintf(w, "  Lowest Score: %s (%.1f, %s)\n",
 				worst.FilePath, worst.Total, worst.Grade)
+		}
+		// Display grade distribution
+		if len(results.TDG.GradeDistribution) > 0 {
+			fmt.Fprintf(w, "  Grade Distribution:\n")
+			gradeOrder := []models.Grade{
+				models.GradeAPlus, models.GradeA, models.GradeAMinus,
+				models.GradeBPlus, models.GradeB, models.GradeBMinus,
+				models.GradeCPlus, models.GradeC, models.GradeCMinus,
+				models.GradeD, models.GradeF,
+			}
+			for _, grade := range gradeOrder {
+				if count := results.TDG.GradeDistribution[grade]; count > 0 {
+					percentage := float64(count) / float64(results.TDG.TotalFiles) * 100
+					fmt.Fprintf(w, "    - %s: %d files (%.1f%%)\n", grade, count, percentage)
+				}
+			}
 		}
 	}
 

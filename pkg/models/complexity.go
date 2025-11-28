@@ -123,8 +123,10 @@ type ComplexitySummary struct {
 	MaxCyclomatic  uint32  `json:"max_cyclomatic"`
 	MaxCognitive   uint32  `json:"max_cognitive"`
 	P50Cyclomatic  uint32  `json:"p50_cyclomatic"`
+	P90Cyclomatic  uint32  `json:"p90_cyclomatic"`
 	P95Cyclomatic  uint32  `json:"p95_cyclomatic"`
 	P50Cognitive   uint32  `json:"p50_cognitive"`
+	P90Cognitive   uint32  `json:"p90_cognitive"`
 	P95Cognitive   uint32  `json:"p95_cognitive"`
 	ViolationCount int     `json:"violation_count"`
 }

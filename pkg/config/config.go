@@ -109,7 +109,7 @@ func DefaultConfig() *Config {
 			Graph:       true,
 			LintHotspot: true,
 			Context:     true,
-			ChurnDays:   90,
+			ChurnDays:   30,
 		},
 		Thresholds: ThresholdConfig{
 			CyclomaticComplexity: 10,

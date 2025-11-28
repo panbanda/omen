@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/panbanda/omen/internal/fileproc"
 	"github.com/panbanda/omen/pkg/models"
 )
 
@@ -71,23 +72,26 @@ func (a *TdgAnalyzer) AnalyzeSource(source string, language models.Language, fil
 
 // AnalyzeProject analyzes all supported files in a directory.
 func (a *TdgAnalyzer) AnalyzeProject(dir string) (models.ProjectScore, error) {
+	return a.AnalyzeProjectWithProgress(dir, nil)
+}
+
+// AnalyzeProjectWithProgress analyzes all supported files with optional progress callback.
+func (a *TdgAnalyzer) AnalyzeProjectWithProgress(dir string, onProgress func()) (models.ProjectScore, error) {
 	files, err := a.discoverFiles(dir)
 	if err != nil {
 		return models.ProjectScore{}, err
 	}
 
-	var scores []models.TdgScore
-	for _, file := range files {
-		score, err := a.AnalyzeFile(file)
-		if err != nil {
-			// Log warning but continue
-			fmt.Fprintf(os.Stderr, "Warning: Failed to analyze %s: %v\n", file, err)
-			continue
-		}
-		scores = append(scores, score)
-	}
+	return a.analyzeFiles(files, onProgress), nil
+}
 
-	return models.AggregateProjectScore(scores), nil
+// analyzeFiles processes files in parallel and returns aggregated project score.
+func (a *TdgAnalyzer) analyzeFiles(files []string, onProgress func()) models.ProjectScore {
+	scores := fileproc.ForEachFileWithProgress(files, func(path string) (models.TdgScore, error) {
+		return a.AnalyzeFile(path)
+	}, onProgress)
+
+	return models.AggregateProjectScore(scores)
 }
 
 // Compare compares two files or directories.
@@ -344,7 +348,7 @@ func (a *TdgAnalyzer) estimateNestingDepth(source string) int {
 	return maxDepth
 }
 
-// estimateDuplicationRatio estimates the ratio of duplicated lines.
+// estimateDuplicationRatio estimates the ratio of duplicated lines using hash-based counting.
 func (a *TdgAnalyzer) estimateDuplicationRatio(source string) float32 {
 	lines := []string{}
 	for _, line := range strings.Split(source, "\n") {
@@ -358,12 +362,17 @@ func (a *TdgAnalyzer) estimateDuplicationRatio(source string) float32 {
 		return 0
 	}
 
+	lineCounts := make(map[string]int)
+	for _, line := range lines {
+		if len(line) > 10 {
+			lineCounts[line]++
+		}
+	}
+
 	duplicates := 0
-	for i := 0; i < len(lines); i++ {
-		for j := i + 1; j < len(lines); j++ {
-			if lines[i] == lines[j] && len(lines[i]) > 10 {
-				duplicates++
-			}
+	for _, count := range lineCounts {
+		if count > 1 {
+			duplicates += count - 1
 		}
 	}
 

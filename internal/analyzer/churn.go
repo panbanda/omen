@@ -3,6 +3,7 @@ package analyzer
 import (
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/go-git/go-git/v5"
@@ -20,7 +21,7 @@ type ChurnAnalyzer struct {
 // NewChurnAnalyzer creates a new churn analyzer.
 func NewChurnAnalyzer(days int) *ChurnAnalyzer {
 	if days <= 0 {
-		days = 90
+		days = 30
 	}
 	return &ChurnAnalyzer{days: days, spinner: nil}
 }
@@ -210,13 +211,7 @@ func (a *ChurnAnalyzer) AnalyzeRepo(repoPath string) (*models.ChurnAnalysis, err
 
 // countLines counts the number of newlines in content.
 func countLines(content string) int {
-	count := 0
-	for _, c := range content {
-		if c == '\n' {
-			count++
-		}
-	}
-	return count
+	return strings.Count(content, "\n")
 }
 
 // AnalyzeFiles analyzes churn for specific files.
