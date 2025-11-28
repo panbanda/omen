@@ -29,14 +29,14 @@ func TestNewChurnAnalyzer(t *testing.T) {
 			wantDays: 30,
 		},
 		{
-			name:     "Zero days defaults to 90",
+			name:     "Zero days defaults to 30",
 			days:     0,
-			wantDays: 90,
+			wantDays: 30,
 		},
 		{
-			name:     "Negative days defaults to 90",
+			name:     "Negative days defaults to 30",
 			days:     -5,
-			wantDays: 90,
+			wantDays: 30,
 		},
 	}
 
