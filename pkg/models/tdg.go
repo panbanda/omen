@@ -289,6 +289,7 @@ type ProjectScore struct {
 	AverageGrade         Grade            `json:"average_grade"`
 	TotalFiles           int              `json:"total_files"`
 	LanguageDistribution map[Language]int `json:"language_distribution"`
+	GradeDistribution    map[Grade]int    `json:"grade_distribution"`
 }
 
 // AggregateProjectScore creates a ProjectScore from individual file scores.
@@ -305,8 +306,10 @@ func AggregateProjectScore(scores []TdgScore) ProjectScore {
 	}
 
 	langDist := make(map[Language]int)
+	gradeDist := make(map[Grade]int)
 	for _, s := range scores {
 		langDist[s.Language]++
+		gradeDist[s.Grade]++
 	}
 
 	return ProjectScore{
@@ -315,6 +318,7 @@ func AggregateProjectScore(scores []TdgScore) ProjectScore {
 		AverageGrade:         GradeFromScore(averageScore),
 		TotalFiles:           totalFiles,
 		LanguageDistribution: langDist,
+		GradeDistribution:    gradeDist,
 	}
 }
 

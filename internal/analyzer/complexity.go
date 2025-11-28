@@ -323,8 +323,10 @@ func (a *ComplexityAnalyzer) AnalyzeProjectWithProgress(files []string, onProgre
 		sort.Slice(allCognitive, func(i, j int) bool { return allCognitive[i] < allCognitive[j] })
 
 		analysis.Summary.P50Cyclomatic = percentile(allCyclomatic, 50)
+		analysis.Summary.P90Cyclomatic = percentile(allCyclomatic, 90)
 		analysis.Summary.P95Cyclomatic = percentile(allCyclomatic, 95)
 		analysis.Summary.P50Cognitive = percentile(allCognitive, 50)
+		analysis.Summary.P90Cognitive = percentile(allCognitive, 90)
 		analysis.Summary.P95Cognitive = percentile(allCognitive, 95)
 	}
 

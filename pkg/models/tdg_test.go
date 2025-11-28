@@ -262,6 +262,18 @@ func TestProjectScoreAggregate(t *testing.T) {
 	if project.LanguageDistribution[LanguageRust] != 1 {
 		t.Errorf("LanguageDistribution[Rust] = %v, want 1", project.LanguageDistribution[LanguageRust])
 	}
+
+	if project.GradeDistribution[GradeBPlus] != 1 {
+		t.Errorf("GradeDistribution[B+] = %v, want 1", project.GradeDistribution[GradeBPlus])
+	}
+
+	if project.GradeDistribution[GradeA] != 1 {
+		t.Errorf("GradeDistribution[A] = %v, want 1", project.GradeDistribution[GradeA])
+	}
+
+	if project.GradeDistribution[GradeBMinus] != 1 {
+		t.Errorf("GradeDistribution[B-] = %v, want 1", project.GradeDistribution[GradeBMinus])
+	}
 }
 
 func TestProjectScoreAverage(t *testing.T) {

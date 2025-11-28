@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"sort"
+	"sync"
 
 	"github.com/panbanda/omen/pkg/models"
 )
@@ -31,34 +32,63 @@ func (a *DefectAnalyzer) AnalyzeProject(repoPath string, files []string) (*model
 		Weights: a.weights,
 	}
 
+	// Run sub-analyzers in parallel
+	var wg sync.WaitGroup
+	var complexityAnalysis *models.ComplexityAnalysis
+	var churnAnalysis *models.ChurnAnalysis
+	var dupAnalysis *models.CloneAnalysis
+	var complexityErr, churnErr, dupErr error
+
+	wg.Add(3)
+
 	// Get complexity metrics
-	complexityAnalysis, err := a.complexity.AnalyzeProject(files)
-	if err != nil {
-		return nil, err
+	go func() {
+		defer wg.Done()
+		complexityAnalysis, complexityErr = a.complexity.AnalyzeProject(files)
+	}()
+
+	// Get churn metrics
+	go func() {
+		defer wg.Done()
+		churnAnalysis, churnErr = a.churn.AnalyzeFiles(repoPath, files)
+	}()
+
+	// Get duplicate metrics
+	go func() {
+		defer wg.Done()
+		dupAnalysis, dupErr = a.duplicates.AnalyzeProject(files)
+	}()
+
+	wg.Wait()
+
+	// Handle complexity error (required)
+	if complexityErr != nil {
+		return nil, complexityErr
 	}
+
+	// Handle churn error (optional - might fail if not a git repo)
+	if churnErr != nil {
+		churnAnalysis = &models.ChurnAnalysis{Files: []models.FileChurnMetrics{}}
+	}
+
+	// Handle duplicate error (optional)
+	if dupErr != nil {
+		dupAnalysis = &models.CloneAnalysis{}
+	}
+
+	// Build lookup maps
 	complexityByFile := make(map[string]*models.FileComplexity)
 	for i := range complexityAnalysis.Files {
 		fc := &complexityAnalysis.Files[i]
 		complexityByFile[fc.Path] = fc
 	}
 
-	// Get churn metrics
-	churnAnalysis, err := a.churn.AnalyzeFiles(repoPath, files)
-	if err != nil {
-		// Churn analysis might fail if not a git repo
-		churnAnalysis = &models.ChurnAnalysis{Files: []models.FileChurnMetrics{}}
-	}
 	churnByFile := make(map[string]*models.FileChurnMetrics)
 	for i := range churnAnalysis.Files {
 		fm := &churnAnalysis.Files[i]
 		churnByFile[fm.Path] = fm
 	}
 
-	// Get duplicate metrics
-	dupAnalysis, err := a.duplicates.AnalyzeProject(files)
-	if err != nil {
-		dupAnalysis = &models.CloneAnalysis{}
-	}
 	dupByFile := make(map[string]float32)
 	for _, clone := range dupAnalysis.Clones {
 		dupByFile[clone.FileA] += float32(clone.LinesA)
@@ -76,8 +106,11 @@ func (a *DefectAnalyzer) AnalyzeProject(repoPath string, files []string) (*model
 			FilePath: path,
 		}
 
+		var fileComplexity *models.FileComplexity
+
 		// Get complexity
 		if fc, ok := complexityByFile[path]; ok {
+			fileComplexity = fc
 			metrics.Complexity = float32(fc.AvgCyclomatic)
 			if len(fc.Functions) > 0 {
 				var maxCyc uint32
@@ -98,9 +131,9 @@ func (a *DefectAnalyzer) AnalyzeProject(repoPath string, files []string) (*model
 		// Get duplication ratio
 		if dupLines, ok := dupByFile[path]; ok {
 			// Estimate total lines (rough)
-			if fc, ok := complexityByFile[path]; ok && len(fc.Functions) > 0 {
+			if fileComplexity != nil && len(fileComplexity.Functions) > 0 {
 				totalLines := 0
-				for _, fn := range fc.Functions {
+				for _, fn := range fileComplexity.Functions {
 					totalLines += fn.Metrics.Lines
 				}
 				if totalLines > 0 {

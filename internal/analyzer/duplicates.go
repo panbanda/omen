@@ -240,7 +240,7 @@ func (a *DuplicateAnalyzer) findClonePairsLSH(fragments []codeFragment) []cloneP
 	}
 
 	// Find candidate pairs from buckets (pairs that hash to the same bucket in any band)
-	candidatePairs := make(map[[2]int]struct{})
+	candidatePairs := make(map[uint64]struct{})
 	for _, bandBuckets := range lshBuckets {
 		for _, bucket := range bandBuckets {
 			if len(bucket) < 2 {
@@ -249,11 +249,12 @@ func (a *DuplicateAnalyzer) findClonePairsLSH(fragments []codeFragment) []cloneP
 			// Add all pairs from this bucket as candidates
 			for i := 0; i < len(bucket); i++ {
 				for j := i + 1; j < len(bucket); j++ {
-					pair := [2]int{bucket[i], bucket[j]}
-					if bucket[i] > bucket[j] {
-						pair = [2]int{bucket[j], bucket[i]}
+					idxA, idxB := bucket[i], bucket[j]
+					if idxA > idxB {
+						idxA, idxB = idxB, idxA
 					}
-					candidatePairs[pair] = struct{}{}
+					pairKey := uint64(idxA)<<32 | uint64(idxB)
+					candidatePairs[pairKey] = struct{}{}
 				}
 			}
 		}
@@ -261,9 +262,11 @@ func (a *DuplicateAnalyzer) findClonePairsLSH(fragments []codeFragment) []cloneP
 
 	// Verify candidate pairs with actual Jaccard similarity calculation
 	var pairs []clonePair
-	for pair := range candidatePairs {
-		fragA := fragments[pair[0]]
-		fragB := fragments[pair[1]]
+	for pairKey := range candidatePairs {
+		idxA := int(pairKey >> 32)
+		idxB := int(pairKey & 0xFFFFFFFF)
+		fragA := fragments[idxA]
+		fragB := fragments[idxB]
 
 		// Skip if same file and overlapping
 		if fragA.file == fragB.file {
@@ -276,8 +279,8 @@ func (a *DuplicateAnalyzer) findClonePairsLSH(fragments []codeFragment) []cloneP
 		similarity := fragA.signature.JaccardSimilarity(fragB.signature)
 		if similarity >= a.config.SimilarityThreshold {
 			pairs = append(pairs, clonePair{
-				idxA:       pair[0],
-				idxB:       pair[1],
+				idxA:       idxA,
+				idxB:       idxB,
 				similarity: similarity,
 			})
 		}
@@ -289,13 +292,12 @@ func (a *DuplicateAnalyzer) findClonePairsLSH(fragments []codeFragment) []cloneP
 // hashBand computes a hash for a band portion of the signature.
 func hashBand(values []uint64, seed uint64) uint64 {
 	h := xxhash.New()
-	seedBytes := []byte{byte(seed), byte(seed >> 8), byte(seed >> 16), byte(seed >> 24),
-		byte(seed >> 32), byte(seed >> 40), byte(seed >> 48), byte(seed >> 56)}
-	h.Write(seedBytes)
+	var buf [8]byte
+	binary.LittleEndian.PutUint64(buf[:], seed)
+	h.Write(buf[:])
 	for _, v := range values {
-		vBytes := []byte{byte(v), byte(v >> 8), byte(v >> 16), byte(v >> 24),
-			byte(v >> 32), byte(v >> 40), byte(v >> 48), byte(v >> 56)}
-		h.Write(vBytes)
+		binary.LittleEndian.PutUint64(buf[:], v)
+		h.Write(buf[:])
 	}
 	return h.Sum64()
 }
@@ -792,12 +794,11 @@ func (a *DuplicateAnalyzer) computeMinHash(tokens []string) *models.MinHashSigna
 // hashUint64WithSeed computes a hash of a uint64 value with a seed using xxhash.
 func hashUint64WithSeed(value uint64, seed uint64) uint64 {
 	h := xxhash.New()
-	seedBytes := make([]byte, 8)
-	binary.LittleEndian.PutUint64(seedBytes, seed)
-	h.Write(seedBytes)
-	valueBytes := make([]byte, 8)
-	binary.LittleEndian.PutUint64(valueBytes, value)
-	h.Write(valueBytes)
+	var buf [8]byte
+	binary.LittleEndian.PutUint64(buf[:], seed)
+	h.Write(buf[:])
+	binary.LittleEndian.PutUint64(buf[:], value)
+	h.Write(buf[:])
 	return h.Sum64()
 }
 

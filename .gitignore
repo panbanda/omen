@@ -40,3 +40,8 @@ __debug_bin*
 
 # Performance
 *.pprof
+
+*.log
+requirements/
+
+.devcontainer/

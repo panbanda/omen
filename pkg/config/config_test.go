@@ -23,8 +23,8 @@ func TestDefaultConfig(t *testing.T) {
 	if !cfg.Analysis.DeadCode {
 		t.Error("Analysis.DeadCode should be true by default")
 	}
-	if cfg.Analysis.ChurnDays != 90 {
-		t.Errorf("Analysis.ChurnDays = %d, want 90", cfg.Analysis.ChurnDays)
+	if cfg.Analysis.ChurnDays != 30 {
+		t.Errorf("Analysis.ChurnDays = %d, want 30", cfg.Analysis.ChurnDays)
 	}
 
 	// Check threshold defaults
@@ -232,7 +232,7 @@ func TestLoadOrDefault(t *testing.T) {
 	}
 
 	// Should have default values
-	if cfg.Analysis.ChurnDays != 90 {
+	if cfg.Analysis.ChurnDays != 30 {
 		t.Errorf("LoadOrDefault() returned non-default ChurnDays: %d", cfg.Analysis.ChurnDays)
 	}
 }
