@@ -20,8 +20,9 @@ import (
 
 // DuplicateAnalyzer detects code clones using MinHash with LSH for efficient candidate filtering.
 type DuplicateAnalyzer struct {
-	parser *parser.Parser
-	config DuplicateConfig
+	parser      *parser.Parser
+	config      DuplicateConfig
+	maxFileSize int64
 
 	// Identifier normalization state
 	identifierCounter uint32
@@ -58,27 +59,27 @@ func DefaultDuplicateConfig() DuplicateConfig {
 	}
 }
 
-// NewDuplicateAnalyzer creates a new duplicate analyzer with default config.
-func NewDuplicateAnalyzer(minLines int, threshold float64) *DuplicateAnalyzer {
-	cfg := DefaultDuplicateConfig()
-	if threshold > 0 && threshold <= 1 {
-		cfg.SimilarityThreshold = threshold
-	}
-	// Convert minLines to approximate minTokens (roughly 8 tokens per line)
-	if minLines > 0 {
-		cfg.MinTokens = minLines * 8
-	}
-	return &DuplicateAnalyzer{
-		parser: parser.New(),
-		config: cfg,
+// DuplicateOption is a functional option for configuring DuplicateAnalyzer.
+type DuplicateOption func(*DuplicateAnalyzer)
+
+// WithDuplicateMinTokens sets the minimum number of tokens for a code fragment.
+func WithDuplicateMinTokens(minTokens int) DuplicateOption {
+	return func(a *DuplicateAnalyzer) {
+		a.config.MinTokens = minTokens
 	}
 }
 
-// NewDuplicateAnalyzerWithConfig creates a new duplicate analyzer with explicit config.
-func NewDuplicateAnalyzerWithConfig(cfg config.DuplicateConfig) *DuplicateAnalyzer {
-	return &DuplicateAnalyzer{
-		parser: parser.New(),
-		config: DuplicateConfig{
+// WithDuplicateSimilarityThreshold sets the similarity threshold for clone detection.
+func WithDuplicateSimilarityThreshold(threshold float64) DuplicateOption {
+	return func(a *DuplicateAnalyzer) {
+		a.config.SimilarityThreshold = threshold
+	}
+}
+
+// WithDuplicateConfig sets all duplicate configuration from a config struct.
+func WithDuplicateConfig(cfg config.DuplicateConfig) DuplicateOption {
+	return func(a *DuplicateAnalyzer) {
+		a.config = DuplicateConfig{
 			MinTokens:            cfg.MinTokens,
 			SimilarityThreshold:  cfg.SimilarityThreshold,
 			ShingleSize:          cfg.ShingleSize,
@@ -89,8 +90,28 @@ func NewDuplicateAnalyzerWithConfig(cfg config.DuplicateConfig) *DuplicateAnalyz
 			NormalizeLiterals:    cfg.NormalizeLiterals,
 			IgnoreComments:       cfg.IgnoreComments,
 			MinGroupSize:         cfg.MinGroupSize,
-		},
+		}
 	}
+}
+
+// WithDuplicateMaxFileSize sets the maximum file size to analyze (0 = no limit).
+func WithDuplicateMaxFileSize(maxSize int64) DuplicateOption {
+	return func(a *DuplicateAnalyzer) {
+		a.maxFileSize = maxSize
+	}
+}
+
+// NewDuplicateAnalyzer creates a new duplicate analyzer with default config.
+func NewDuplicateAnalyzer(opts ...DuplicateOption) *DuplicateAnalyzer {
+	a := &DuplicateAnalyzer{
+		parser:      parser.New(),
+		config:      DefaultDuplicateConfig(),
+		maxFileSize: 0,
+	}
+	for _, opt := range opts {
+		opt(a)
+	}
+	return a
 }
 
 // codeFragment represents a code fragment for clone detection.
@@ -123,6 +144,16 @@ func (a *DuplicateAnalyzer) AnalyzeProjectWithProgress(files []string, onProgres
 
 	// Extract fragments from all files in parallel
 	fileFragments := fileproc.ForEachFileWithProgress(files, func(path string) ([]codeFragment, error) {
+		// Check file size before reading
+		if a.maxFileSize > 0 {
+			info, err := os.Stat(path)
+			if err != nil {
+				return nil, err
+			}
+			if info.Size() > a.maxFileSize {
+				return nil, nil // Skip file if too large
+			}
+		}
 		return a.extractFragments(path)
 	}, onProgress)
 

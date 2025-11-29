@@ -13,34 +13,37 @@ import (
 type ComplexityAnalyzer struct {
 	parser          *parser.Parser
 	halsteadEnabled bool
+	maxFileSize     int64
 }
 
-// ComplexityOptions configures complexity analysis behavior.
-type ComplexityOptions struct {
-	IncludeHalstead bool // Calculate Halstead software science metrics
+// ComplexityOption is a functional option for configuring ComplexityAnalyzer.
+type ComplexityOption func(*ComplexityAnalyzer)
+
+// WithHalstead enables Halstead software science metrics calculation.
+func WithHalstead() ComplexityOption {
+	return func(a *ComplexityAnalyzer) {
+		a.halsteadEnabled = true
+	}
+}
+
+// WithComplexityMaxFileSize sets the maximum file size to analyze (0 = no limit).
+func WithComplexityMaxFileSize(maxSize int64) ComplexityOption {
+	return func(a *ComplexityAnalyzer) {
+		a.maxFileSize = maxSize
+	}
 }
 
 // NewComplexityAnalyzer creates a new complexity analyzer.
-func NewComplexityAnalyzer() *ComplexityAnalyzer {
-	return &ComplexityAnalyzer{
+func NewComplexityAnalyzer(opts ...ComplexityOption) *ComplexityAnalyzer {
+	a := &ComplexityAnalyzer{
 		parser:          parser.New(),
 		halsteadEnabled: false,
+		maxFileSize:     0,
 	}
-}
-
-// NewComplexityAnalyzerWithOptions creates a new complexity analyzer with options.
-func NewComplexityAnalyzerWithOptions(opts ComplexityOptions) *ComplexityAnalyzer {
-	return &ComplexityAnalyzer{
-		parser:          parser.New(),
-		halsteadEnabled: opts.IncludeHalstead,
+	for _, opt := range opts {
+		opt(a)
 	}
-}
-
-// DefaultComplexityOptions returns default complexity analysis options.
-func DefaultComplexityOptions() ComplexityOptions {
-	return ComplexityOptions{
-		IncludeHalstead: true,
-	}
+	return a
 }
 
 // AnalyzeFile analyzes complexity for a single file.
@@ -273,13 +276,13 @@ func (a *ComplexityAnalyzer) AnalyzeProject(files []string) (*models.ComplexityA
 // AnalyzeProjectWithProgress analyzes all files with optional progress callback.
 func (a *ComplexityAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress fileproc.ProgressFunc) (*models.ComplexityAnalysis, error) {
 	includeHalstead := a.halsteadEnabled
-	results := fileproc.MapFilesWithProgress(files, func(psr *parser.Parser, path string) (models.FileComplexity, error) {
+	results := fileproc.MapFilesWithSizeLimit(files, a.maxFileSize, func(psr *parser.Parser, path string) (models.FileComplexity, error) {
 		fc, err := analyzeFileComplexityWithHalstead(psr, path, includeHalstead)
 		if err != nil {
 			return models.FileComplexity{}, err
 		}
 		return *fc, nil
-	}, onProgress)
+	}, onProgress, nil)
 
 	analysis := &models.ComplexityAnalysis{Files: results}
 

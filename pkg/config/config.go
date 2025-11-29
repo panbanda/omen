@@ -37,17 +37,18 @@ type Config struct {
 
 // AnalysisConfig controls which analyzers run.
 type AnalysisConfig struct {
-	Complexity  bool `koanf:"complexity"`
-	SATD        bool `koanf:"satd"`
-	DeadCode    bool `koanf:"dead_code"`
-	Churn       bool `koanf:"churn"`
-	Duplicates  bool `koanf:"duplicates"`
-	Defect      bool `koanf:"defect"`
-	TDG         bool `koanf:"tdg"`
-	Graph       bool `koanf:"graph"`
-	LintHotspot bool `koanf:"lint_hotspot"`
-	Context     bool `koanf:"context"`
-	ChurnDays   int  `koanf:"churn_days"`
+	Complexity  bool  `koanf:"complexity"`
+	SATD        bool  `koanf:"satd"`
+	DeadCode    bool  `koanf:"dead_code"`
+	Churn       bool  `koanf:"churn"`
+	Duplicates  bool  `koanf:"duplicates"`
+	Defect      bool  `koanf:"defect"`
+	TDG         bool  `koanf:"tdg"`
+	Graph       bool  `koanf:"graph"`
+	LintHotspot bool  `koanf:"lint_hotspot"`
+	Context     bool  `koanf:"context"`
+	ChurnDays   int   `koanf:"churn_days"`
+	MaxFileSize int64 `koanf:"max_file_size"` // Maximum file size in bytes (0 = no limit)
 }
 
 // ThresholdConfig defines metric thresholds.
@@ -112,6 +113,7 @@ func DefaultConfig() *Config {
 			LintHotspot: true,
 			Context:     true,
 			ChurnDays:   30,
+			MaxFileSize: 10 * 1024 * 1024, // 10 MB default
 		},
 		Thresholds: ThresholdConfig{
 			CyclomaticComplexity: 10,
@@ -266,6 +268,19 @@ func (c *Config) ShouldExclude(path string) bool {
 	return false
 }
 
+// ErrFileTooLarge is returned when a file exceeds the configured size limit.
+var ErrFileTooLarge = errors.New("file exceeds maximum size limit")
+
+// IsFileTooLarge checks if a file exceeds the configured maximum size.
+// Returns true if the file is too large, false otherwise.
+// If maxSize is 0, no limit is enforced.
+func IsFileTooLarge(size int64, maxSize int64) bool {
+	if maxSize <= 0 {
+		return false
+	}
+	return size > maxSize
+}
+
 // Validate checks that all config values are within acceptable ranges.
 // Returns an error describing any validation failures.
 func (c *Config) Validate() error {
@@ -277,6 +292,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Analysis.ChurnDays > 3650 { // 10 years max
 		errs = append(errs, errors.New("analysis.churn_days must be at most 3650"))
+	}
+	if c.Analysis.MaxFileSize < 0 {
+		errs = append(errs, errors.New("analysis.max_file_size must be non-negative"))
 	}
 
 	// Threshold validation

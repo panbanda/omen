@@ -57,7 +57,7 @@ func TestNewDeadCodeAnalyzer(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a := NewDeadCodeAnalyzer(tt.confidence)
+			a := NewDeadCodeAnalyzer(WithDeadCodeConfidence(tt.confidence))
 			if a == nil {
 				t.Fatal("NewDeadCodeAnalyzer() returned nil")
 			}
@@ -158,7 +158,7 @@ function main() {
 				t.Fatalf("failed to write test file: %v", err)
 			}
 
-			a := NewDeadCodeAnalyzer(0.8)
+			a := NewDeadCodeAnalyzer(WithDeadCodeConfidence(0.8))
 			defer a.Close()
 
 			result, err := a.AnalyzeFile(testFile)
@@ -305,7 +305,7 @@ func main() {
 				files = append(files, testFile)
 			}
 
-			a := NewDeadCodeAnalyzer(tt.confidence)
+			a := NewDeadCodeAnalyzer(WithDeadCodeConfidence(tt.confidence))
 			defer a.Close()
 
 			result, err := a.AnalyzeProject(files)
@@ -665,7 +665,7 @@ func TestCalculateConfidence(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a := NewDeadCodeAnalyzer(0.8)
+			a := NewDeadCodeAnalyzer(WithDeadCodeConfidence(0.8))
 			defer a.Close()
 
 			got := a.calculateConfidence(tt.def)
@@ -706,7 +706,7 @@ func unusedFunc` + string(rune('0'+i)) + `() {
 		files[i] = filename
 	}
 
-	a := NewDeadCodeAnalyzer(0.8)
+	a := NewDeadCodeAnalyzer(WithDeadCodeConfidence(0.8))
 	defer a.Close()
 
 	var progressCount atomic.Int32
@@ -823,7 +823,7 @@ func ExportedHelper() {
 		filePaths = append(filePaths, testFile)
 	}
 
-	a := NewDeadCodeAnalyzer(0.8)
+	a := NewDeadCodeAnalyzer(WithDeadCodeConfidence(0.8))
 	defer a.Close()
 
 	result, err := a.AnalyzeProject(filePaths)
@@ -859,7 +859,7 @@ func ExportedHelper() {
 }
 
 func TestClose(t *testing.T) {
-	a := NewDeadCodeAnalyzer(0.8)
+	a := NewDeadCodeAnalyzer(WithDeadCodeConfidence(0.8))
 	a.Close()
 }
 
@@ -888,7 +888,7 @@ func Helper() {}
 		filePaths = append(filePaths, testFile)
 	}
 
-	a := NewDeadCodeAnalyzer(0.8)
+	a := NewDeadCodeAnalyzer(WithDeadCodeConfidence(0.8))
 	defer a.Close()
 
 	result, err := a.AnalyzeProject(filePaths)
@@ -938,7 +938,7 @@ func main() {}
 		filePaths = append(filePaths, testFile)
 	}
 
-	a := NewDeadCodeAnalyzer(0.8)
+	a := NewDeadCodeAnalyzer(WithDeadCodeConfidence(0.8))
 	defer a.Close()
 
 	result, err := a.AnalyzeProject(filePaths)
@@ -1115,7 +1115,7 @@ func unreachable() {
 		filePaths = append(filePaths, testFile)
 	}
 
-	a := NewDeadCodeAnalyzer(0.8)
+	a := NewDeadCodeAnalyzer(WithDeadCodeConfidence(0.8))
 	defer a.Close()
 
 	result, err := a.AnalyzeProject(filePaths)
@@ -1212,23 +1212,25 @@ func TestIsEntryPoint(t *testing.T) {
 }
 
 func TestWithCallGraph(t *testing.T) {
-	a := NewDeadCodeAnalyzer(0.8)
-	defer a.Close()
-
 	// Default should have buildGraph enabled
+	a := NewDeadCodeAnalyzer(WithDeadCodeConfidence(0.8))
+	defer a.Close()
 	if !a.buildGraph {
 		t.Error("buildGraph should be true by default")
 	}
 
-	// Test chaining
-	a.WithCallGraph(false)
-	if a.buildGraph {
-		t.Error("buildGraph should be false after WithCallGraph(false)")
+	// Test with call graph disabled
+	a2 := NewDeadCodeAnalyzer(WithDeadCodeConfidence(0.8), WithDeadCodeSkipCallGraph())
+	defer a2.Close()
+	if a2.buildGraph {
+		t.Error("buildGraph should be false with WithDeadCodeSkipCallGraph()")
 	}
 
-	a.WithCallGraph(true)
-	if !a.buildGraph {
-		t.Error("buildGraph should be true after WithCallGraph(true)")
+	// Test with call graph enabled
+	a3 := NewDeadCodeAnalyzer(WithDeadCodeConfidence(0.8))
+	defer a3.Close()
+	if !a3.buildGraph {
+		t.Error("buildGraph should be true with ")
 	}
 }
 
@@ -1338,7 +1340,7 @@ func helper() {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	a := NewDeadCodeAnalyzer(0.8)
+	a := NewDeadCodeAnalyzer(WithDeadCodeConfidence(0.8))
 	defer a.Close()
 
 	fdc, err := a.AnalyzeFile(testFile)
@@ -1358,7 +1360,7 @@ func helper() {
 }
 
 func TestCalculateConfidenceFromGraph(t *testing.T) {
-	a := NewDeadCodeAnalyzer(0.8)
+	a := NewDeadCodeAnalyzer(WithDeadCodeConfidence(0.8))
 	defer a.Close()
 
 	tests := []struct {
@@ -1568,7 +1570,7 @@ func TestIsEntryPointExtended(t *testing.T) {
 }
 
 func TestConfidenceWithTestFile(t *testing.T) {
-	a := NewDeadCodeAnalyzer(0.8)
+	a := NewDeadCodeAnalyzer(WithDeadCodeConfidence(0.8))
 	defer a.Close()
 
 	normalDef := definition{
@@ -1600,7 +1602,7 @@ func TestConfidenceWithTestFile(t *testing.T) {
 }
 
 func TestConfidenceWithFFI(t *testing.T) {
-	a := NewDeadCodeAnalyzer(0.8)
+	a := NewDeadCodeAnalyzer(WithDeadCodeConfidence(0.8))
 	defer a.Close()
 
 	normalDef := definition{
@@ -1651,7 +1653,7 @@ func normalFunc() {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	a := NewDeadCodeAnalyzer(0.8)
+	a := NewDeadCodeAnalyzer(WithDeadCodeConfidence(0.8))
 	defer a.Close()
 
 	result, err := a.AnalyzeProject([]string{testFile})
@@ -1717,7 +1719,7 @@ func normalFunc() {}
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	a := NewDeadCodeAnalyzer(0.8)
+	a := NewDeadCodeAnalyzer(WithDeadCodeConfidence(0.8))
 	defer a.Close()
 
 	fdc, err := a.AnalyzeFile(testFile)
@@ -1763,7 +1765,7 @@ func testFunc() {}
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	a := NewDeadCodeAnalyzer(0.8)
+	a := NewDeadCodeAnalyzer(WithDeadCodeConfidence(0.8))
 	defer a.Close()
 
 	fdc, err := a.AnalyzeFile(testFile)
@@ -1804,7 +1806,7 @@ func main() {}
 		t.Fatalf("failed to write normal file: %v", err)
 	}
 
-	a := NewDeadCodeAnalyzer(0.8)
+	a := NewDeadCodeAnalyzer(WithDeadCodeConfidence(0.8))
 	defer a.Close()
 
 	testFdc, err := a.AnalyzeFile(testFile)

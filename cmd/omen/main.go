@@ -280,10 +280,13 @@ func runComplexityCmd(c *cli.Context) error {
 		return nil
 	}
 
-	opts := analyzer.ComplexityOptions{
-		IncludeHalstead: includeHalstead,
+	opts := []analyzer.ComplexityOption{
+		analyzer.WithComplexityMaxFileSize(cfg.Analysis.MaxFileSize),
 	}
-	cxAnalyzer := analyzer.NewComplexityAnalyzerWithOptions(opts)
+	if includeHalstead {
+		opts = append(opts, analyzer.WithHalstead())
+	}
+	cxAnalyzer := analyzer.NewComplexityAnalyzer(opts...)
 	defer cxAnalyzer.Close()
 
 	tracker := progress.NewTracker("Analyzing complexity...", len(files))
@@ -438,13 +441,11 @@ func runSATDCmd(c *cli.Context) error {
 		return nil
 	}
 
-	opts := analyzer.SATDOptions{
-		IncludeTests:      includeTest,
-		IncludeVendor:     false,
-		AdjustSeverity:    true,
-		GenerateContextID: true,
+	var satdOpts []analyzer.SATDOption
+	if !includeTest {
+		satdOpts = append(satdOpts, analyzer.WithSATDSkipTests())
 	}
-	satdAnalyzer := analyzer.NewSATDAnalyzerWithOptions(opts)
+	satdAnalyzer := analyzer.NewSATDAnalyzer(satdOpts...)
 	for _, p := range patterns {
 		if err := satdAnalyzer.AddPattern(p, models.DebtDesign, models.SeverityMedium); err != nil {
 			color.Yellow("Invalid pattern %q: %v", p, err)
@@ -550,7 +551,7 @@ func runDeadCodeCmd(c *cli.Context) error {
 		return nil
 	}
 
-	dcAnalyzer := analyzer.NewDeadCodeAnalyzer(confidence)
+	dcAnalyzer := analyzer.NewDeadCodeAnalyzer(analyzer.WithDeadCodeConfidence(confidence))
 	defer dcAnalyzer.Close()
 
 	tracker := progress.NewTracker("Detecting dead code...", len(files))
@@ -673,9 +674,11 @@ func runChurnCmd(c *cli.Context) error {
 		return fmt.Errorf("invalid path: %w", err)
 	}
 
-	churnAnalyzer := analyzer.NewChurnAnalyzer(days)
 	spinner := progress.NewSpinner("Analyzing git history...")
-	churnAnalyzer.SetSpinner(spinner)
+	churnAnalyzer := analyzer.NewChurnAnalyzer(
+		analyzer.WithChurnDays(days),
+		analyzer.WithChurnSpinner(spinner),
+	)
 	analysis, err := churnAnalyzer.AnalyzeRepo(absPath)
 	spinner.FinishSuccess()
 	if err != nil {
@@ -778,7 +781,10 @@ func runDuplicatesCmd(c *cli.Context) error {
 		return nil
 	}
 
-	dupAnalyzer := analyzer.NewDuplicateAnalyzer(minLines, threshold)
+	dupAnalyzer := analyzer.NewDuplicateAnalyzer(
+		analyzer.WithDuplicateMinTokens(minLines*8), // Convert lines to approximate tokens
+		analyzer.WithDuplicateSimilarityThreshold(threshold),
+	)
 	defer dupAnalyzer.Close()
 
 	tracker := progress.NewTracker("Detecting duplicates...", len(files))
@@ -890,7 +896,10 @@ func runDefectCmd(c *cli.Context) error {
 		return nil
 	}
 
-	defectAnalyzer := analyzer.NewDefectAnalyzer(cfg.Analysis.ChurnDays)
+	defectAnalyzer := analyzer.NewDefectAnalyzer(
+		analyzer.WithDefectChurnDays(cfg.Analysis.ChurnDays),
+		analyzer.WithDefectMaxFileSize(cfg.Analysis.MaxFileSize),
+	)
 	defer defectAnalyzer.Close()
 
 	analysis, err := defectAnalyzer.AnalyzeProject(repoPath, files)
@@ -1201,7 +1210,7 @@ func runGraphCmd(c *cli.Context) error {
 		return nil
 	}
 
-	graphAnalyzer := analyzer.NewGraphAnalyzer(analyzer.GraphScope(scope))
+	graphAnalyzer := analyzer.NewGraphAnalyzer(analyzer.WithGraphScope(analyzer.GraphScope(scope)))
 	defer graphAnalyzer.Close()
 
 	tracker := progress.NewTracker("Building dependency graph...", len(files))
@@ -1450,7 +1459,10 @@ func runHotspotCmd(c *cli.Context) error {
 		return nil
 	}
 
-	hotspotAnalyzer := analyzer.NewHotspotAnalyzer(days)
+	hotspotAnalyzer := analyzer.NewHotspotAnalyzer(
+		analyzer.WithHotspotChurnDays(days),
+		analyzer.WithHotspotMaxFileSize(cfg.Analysis.MaxFileSize),
+	)
 	defer hotspotAnalyzer.Close()
 
 	tracker := progress.NewTracker("Analyzing hotspots...", len(files))
@@ -1658,7 +1670,11 @@ func runOwnershipCmd(c *cli.Context) error {
 		return nil
 	}
 
-	ownAnalyzer := analyzer.NewOwnershipAnalyzerWithOptions(!includeTrivial)
+	var ownOpts []analyzer.OwnershipOption
+	if includeTrivial {
+		ownOpts = append(ownOpts, analyzer.WithOwnershipIncludeTrivial())
+	}
+	ownAnalyzer := analyzer.NewOwnershipAnalyzer(ownOpts...)
 	defer ownAnalyzer.Close()
 
 	tracker := progress.NewTracker("Analyzing ownership", len(files))
@@ -1776,7 +1792,11 @@ func runCohesionCmd(c *cli.Context) error {
 		return nil
 	}
 
-	ckAnalyzer := analyzer.NewCohesionAnalyzerWithOptions(!includeTests)
+	var ckOpts []analyzer.CohesionOption
+	if includeTests {
+		ckOpts = append(ckOpts, analyzer.WithCohesionIncludeTestFiles())
+	}
+	ckAnalyzer := analyzer.NewCohesionAnalyzer(ckOpts...)
 	defer ckAnalyzer.Close()
 
 	tracker := progress.NewTracker("Analyzing CK metrics", len(files))
@@ -1985,7 +2005,7 @@ func runContextCmd(c *cli.Context) error {
 	if includeGraph {
 		fmt.Println()
 		fmt.Println("## Dependency Graph")
-		graphAnalyzer := analyzer.NewGraphAnalyzer(analyzer.ScopeFile)
+		graphAnalyzer := analyzer.NewGraphAnalyzer(analyzer.WithGraphScope(analyzer.ScopeFile))
 		defer graphAnalyzer.Close()
 
 		graph, err := graphAnalyzer.AnalyzeProject(files)
@@ -2175,7 +2195,7 @@ func runAnalyzeCmd(c *cli.Context) error {
 	// 3. Dead code
 	if !excludeSet["deadcode"] {
 		tracker := progress.NewTracker("Detecting dead code...", len(files))
-		dcAnalyzer := analyzer.NewDeadCodeAnalyzer(cfg.Thresholds.DeadCodeConfidence)
+		dcAnalyzer := analyzer.NewDeadCodeAnalyzer(analyzer.WithDeadCodeConfidence(cfg.Thresholds.DeadCodeConfidence))
 		results.DeadCode, _ = dcAnalyzer.AnalyzeProjectWithProgress(files, tracker.Tick)
 		dcAnalyzer.Close()
 		tracker.FinishSuccess()
@@ -2184,8 +2204,10 @@ func runAnalyzeCmd(c *cli.Context) error {
 	// 4. Churn
 	if !excludeSet["churn"] {
 		spinner := progress.NewSpinner("Analyzing git churn...")
-		churnAnalyzer := analyzer.NewChurnAnalyzer(cfg.Analysis.ChurnDays)
-		churnAnalyzer.SetSpinner(spinner)
+		churnAnalyzer := analyzer.NewChurnAnalyzer(
+			analyzer.WithChurnDays(cfg.Analysis.ChurnDays),
+			analyzer.WithChurnSpinner(spinner),
+		)
 		results.Churn, _ = churnAnalyzer.AnalyzeRepo(repoPath)
 		if results.Churn != nil {
 			spinner.FinishSuccess()
@@ -2197,7 +2219,10 @@ func runAnalyzeCmd(c *cli.Context) error {
 	// 5. Duplicates
 	if !excludeSet["duplicates"] {
 		tracker := progress.NewTracker("Detecting duplicates...", len(files))
-		dupAnalyzer := analyzer.NewDuplicateAnalyzer(cfg.Thresholds.DuplicateMinLines, cfg.Thresholds.DuplicateSimilarity)
+		dupAnalyzer := analyzer.NewDuplicateAnalyzer(
+			analyzer.WithDuplicateMinTokens(cfg.Thresholds.DuplicateMinLines*8), // Convert lines to approximate tokens
+			analyzer.WithDuplicateSimilarityThreshold(cfg.Thresholds.DuplicateSimilarity),
+		)
 		results.Clones, _ = dupAnalyzer.AnalyzeProjectWithProgress(files, tracker.Tick)
 		dupAnalyzer.Close()
 		tracker.FinishSuccess()
@@ -2206,7 +2231,10 @@ func runAnalyzeCmd(c *cli.Context) error {
 	// 6. Defect prediction (composite - uses sub-analyzers)
 	if !excludeSet["defect"] {
 		tracker := progress.NewTracker("Predicting defects...", 1)
-		defectAnalyzer := analyzer.NewDefectAnalyzer(cfg.Analysis.ChurnDays)
+		defectAnalyzer := analyzer.NewDefectAnalyzer(
+			analyzer.WithDefectChurnDays(cfg.Analysis.ChurnDays),
+			analyzer.WithDefectMaxFileSize(cfg.Analysis.MaxFileSize),
+		)
 		results.Defect, _ = defectAnalyzer.AnalyzeProject(repoPath, files)
 		defectAnalyzer.Close()
 		tracker.FinishSuccess()

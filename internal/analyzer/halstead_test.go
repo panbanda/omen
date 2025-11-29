@@ -241,8 +241,7 @@ func TestHalsteadMetrics_DerivedValues(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create with options to trigger derived calculation
-			opts := ComplexityOptions{IncludeHalstead: true}
-			analyzer := NewComplexityAnalyzerWithOptions(opts)
+			analyzer := NewComplexityAnalyzer(WithHalstead())
 			defer analyzer.Close()
 
 			// Test via the function that uses the analyzer
@@ -421,8 +420,7 @@ func withOps(a, b int) int {
 
 	// Test with Halstead enabled
 	t.Run("With Halstead", func(t *testing.T) {
-		opts := ComplexityOptions{IncludeHalstead: true}
-		analyzer := NewComplexityAnalyzerWithOptions(opts)
+		analyzer := NewComplexityAnalyzer(WithHalstead())
 		defer analyzer.Close()
 
 		result, err := analyzer.AnalyzeFile(testFile)

@@ -14,24 +14,39 @@ type CohesionAnalyzer struct {
 	parser       *parser.Parser
 	complexity   *ComplexityAnalyzer
 	skipTestFile bool
+	maxFileSize  int64
+}
+
+// CohesionOption is a functional option for configuring CohesionAnalyzer.
+type CohesionOption func(*CohesionAnalyzer)
+
+// WithCohesionIncludeTestFiles includes test files in analysis.
+// By default, test files are skipped.
+func WithCohesionIncludeTestFiles() CohesionOption {
+	return func(a *CohesionAnalyzer) {
+		a.skipTestFile = false
+	}
+}
+
+// WithCohesionMaxFileSize sets the maximum file size to analyze (0 = no limit).
+func WithCohesionMaxFileSize(maxSize int64) CohesionOption {
+	return func(a *CohesionAnalyzer) {
+		a.maxFileSize = maxSize
+	}
 }
 
 // NewCohesionAnalyzer creates a new CK metrics analyzer.
-func NewCohesionAnalyzer() *CohesionAnalyzer {
-	return &CohesionAnalyzer{
+func NewCohesionAnalyzer(opts ...CohesionOption) *CohesionAnalyzer {
+	a := &CohesionAnalyzer{
 		parser:       parser.New(),
 		complexity:   NewComplexityAnalyzer(),
 		skipTestFile: true,
+		maxFileSize:  0,
 	}
-}
-
-// NewCohesionAnalyzerWithOptions creates a CK metrics analyzer with options.
-func NewCohesionAnalyzerWithOptions(skipTestFile bool) *CohesionAnalyzer {
-	return &CohesionAnalyzer{
-		parser:       parser.New(),
-		complexity:   NewComplexityAnalyzer(),
-		skipTestFile: skipTestFile,
+	for _, opt := range opts {
+		opt(a)
 	}
+	return a
 }
 
 // isOOLanguage returns true if the language supports traditional OO classes.
@@ -65,12 +80,12 @@ func (a *CohesionAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress
 	inheritanceTree := a.buildInheritanceTree(files)
 
 	// Second pass: Process files in parallel to extract CK metrics
-	results := fileproc.MapFilesWithProgress(files, func(psr *parser.Parser, path string) ([]models.ClassMetrics, error) {
+	results := fileproc.MapFilesWithSizeLimit(files, a.maxFileSize, func(psr *parser.Parser, path string) ([]models.ClassMetrics, error) {
 		if a.skipTestFile && isTestFilePath(path) {
 			return nil, nil
 		}
 		return a.analyzeFile(psr, path, inheritanceTree)
-	}, onProgress)
+	}, onProgress, nil)
 
 	// Collect results
 	for _, fileClasses := range results {

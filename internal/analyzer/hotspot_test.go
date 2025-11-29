@@ -10,21 +10,26 @@ import (
 func TestNewHotspotAnalyzer(t *testing.T) {
 	tests := []struct {
 		name     string
-		days     int
-		wantDays int
+		opts     []HotspotOption
+		wantDays int64
+		wantSize int64
 	}{
-		{"default days", 0, 30},
-		{"negative days", -1, 30},
-		{"custom days", 60, 60},
+		{"default values", nil, 30, 0},
+		{"custom days", []HotspotOption{WithHotspotChurnDays(60)}, 60, 0},
+		{"custom size", []HotspotOption{WithHotspotMaxFileSize(1024)}, 30, 1024},
+		{"both options", []HotspotOption{WithHotspotChurnDays(90), WithHotspotMaxFileSize(2048)}, 90, 2048},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			a := NewHotspotAnalyzer(tt.days)
+			a := NewHotspotAnalyzer(tt.opts...)
 			defer a.Close()
 
-			if a.churnDays != tt.wantDays {
-				t.Errorf("NewHotspotAnalyzer(%d).churnDays = %d, want %d", tt.days, a.churnDays, tt.wantDays)
+			if int64(a.churnDays) != tt.wantDays {
+				t.Errorf("churnDays = %d, want %d", a.churnDays, tt.wantDays)
+			}
+			if a.maxFileSize != tt.wantSize {
+				t.Errorf("maxFileSize = %d, want %d", a.maxFileSize, tt.wantSize)
 			}
 		})
 	}
@@ -116,7 +121,7 @@ func simple() {
 	testFile := filepath.Join(repoPath, "test.go")
 
 	// Run analyzer
-	analyzer := NewHotspotAnalyzer(30)
+	analyzer := NewHotspotAnalyzer(WithHotspotChurnDays(30))
 	defer analyzer.Close()
 
 	analysis, err := analyzer.AnalyzeProject(repoPath, []string{testFile})
@@ -188,7 +193,7 @@ func foo() {
 
 	testFile := filepath.Join(repoPath, "main.go")
 
-	analyzer := NewHotspotAnalyzer(30)
+	analyzer := NewHotspotAnalyzer(WithHotspotChurnDays(30))
 	defer analyzer.Close()
 
 	analysis, err := analyzer.AnalyzeProject(repoPath, []string{testFile})
@@ -248,7 +253,7 @@ func TestHotspotScore_Multiplicative(t *testing.T) {
 func TestHotspotAnalyzer_NoGitRepo(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	analyzer := NewHotspotAnalyzer(30)
+	analyzer := NewHotspotAnalyzer(WithHotspotChurnDays(30))
 	defer analyzer.Close()
 
 	_, err := analyzer.AnalyzeProject(tmpDir, []string{})
@@ -304,7 +309,7 @@ func complex() {
 		filepath.Join(repoPath, "complex.go"),
 	}
 
-	analyzer := NewHotspotAnalyzer(30)
+	analyzer := NewHotspotAnalyzer(WithHotspotChurnDays(30))
 	defer analyzer.Close()
 
 	analysis, err := analyzer.AnalyzeProject(repoPath, files)

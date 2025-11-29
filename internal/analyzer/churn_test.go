@@ -42,7 +42,7 @@ func TestNewChurnAnalyzer(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			analyzer := NewChurnAnalyzer(tt.days)
+			analyzer := NewChurnAnalyzer(WithChurnDays(tt.days))
 			if analyzer == nil {
 				t.Fatal("NewChurnAnalyzer() returned nil")
 			}
@@ -173,7 +173,7 @@ func TestChurnAnalyzer_AnalyzeRepo(t *testing.T) {
 			tmpDir := t.TempDir()
 			repoPath := tt.setupRepo(t, tmpDir)
 
-			analyzer := NewChurnAnalyzer(tt.days)
+			analyzer := NewChurnAnalyzer(WithChurnDays(tt.days))
 			result, err := analyzer.AnalyzeRepo(repoPath)
 
 			if (err != nil) != tt.wantErr {
@@ -226,7 +226,7 @@ func TestChurnAnalyzer_AnalyzeRepo_ChurnScores(t *testing.T) {
 		writeFileAndCommit(t, repo, repoPath, "high_churn.go", content, "Update high churn")
 	}
 
-	analyzer := NewChurnAnalyzer(90)
+	analyzer := NewChurnAnalyzer(WithChurnDays(90))
 	result, err := analyzer.AnalyzeRepo(repoPath)
 	if err != nil {
 		t.Fatalf("AnalyzeRepo() error = %v", err)
@@ -266,7 +266,7 @@ func TestChurnAnalyzer_AnalyzeRepo_DateFiltering(t *testing.T) {
 
 	writeFileAndCommit(t, repo, repoPath, "recent.go", "package recent\n\nfunc New() {}\n", "Another recent change")
 
-	analyzer := NewChurnAnalyzer(1)
+	analyzer := NewChurnAnalyzer(WithChurnDays(1))
 	result, err := analyzer.AnalyzeRepo(repoPath)
 	if err != nil {
 		t.Fatalf("AnalyzeRepo() error = %v", err)
@@ -293,7 +293,7 @@ func TestChurnAnalyzer_AnalyzeRepo_MultipleAuthors(t *testing.T) {
 	writeFileAndCommitWithAuthor(t, repo, repoPath, "shared.go", "package shared\n\nfunc A() {}\n", "Author 2", "Bob")
 	writeFileAndCommitWithAuthor(t, repo, repoPath, "shared.go", "package shared\n\nfunc A() {}\nfunc B() {}\n", "Author 3", "Charlie")
 
-	analyzer := NewChurnAnalyzer(90)
+	analyzer := NewChurnAnalyzer(WithChurnDays(90))
 	result, err := analyzer.AnalyzeRepo(repoPath)
 	if err != nil {
 		t.Fatalf("AnalyzeRepo() error = %v", err)
@@ -336,7 +336,7 @@ func TestChurnAnalyzer_AnalyzeRepo_LineCounts(t *testing.T) {
 	writeFileAndCommit(t, repo, repoPath, "test.go", "package test\n\nfunc Add() {\n}\n", "Add function")
 	writeFileAndCommit(t, repo, repoPath, "test.go", "package test\n\nfunc Sub() {\n}\n", "Replace with different function")
 
-	analyzer := NewChurnAnalyzer(90)
+	analyzer := NewChurnAnalyzer(WithChurnDays(90))
 	result, err := analyzer.AnalyzeRepo(repoPath)
 	if err != nil {
 		t.Fatalf("AnalyzeRepo() error = %v", err)
@@ -377,7 +377,7 @@ func TestChurnAnalyzer_AnalyzeRepo_SummaryStatistics(t *testing.T) {
 		writeFileAndCommit(t, repo, repoPath, "file1.go", strings.Repeat("// Update\n", i+1), "Update file1")
 	}
 
-	analyzer := NewChurnAnalyzer(90)
+	analyzer := NewChurnAnalyzer(WithChurnDays(90))
 	result, err := analyzer.AnalyzeRepo(repoPath)
 	if err != nil {
 		t.Fatalf("AnalyzeRepo() error = %v", err)
@@ -454,7 +454,7 @@ func TestChurnAnalyzer_AnalyzeFiles(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			analyzer := NewChurnAnalyzer(90)
+			analyzer := NewChurnAnalyzer(WithChurnDays(90))
 			result, err := analyzer.AnalyzeFiles(repoPath, tt.files)
 			if err != nil {
 				t.Fatalf("AnalyzeFiles() error = %v", err)
@@ -487,7 +487,7 @@ func TestChurnAnalyzer_AnalyzeFiles_SummaryRecalculation(t *testing.T) {
 		writeFileAndCommit(t, repo, repoPath, "high.go", strings.Repeat("// Line\n", i+1), "Update high")
 	}
 
-	analyzer := NewChurnAnalyzer(90)
+	analyzer := NewChurnAnalyzer(WithChurnDays(90))
 	fullResult, err := analyzer.AnalyzeRepo(repoPath)
 	if err != nil {
 		t.Fatalf("AnalyzeRepo() error = %v", err)
@@ -577,7 +577,7 @@ func TestChurnAnalyzer_AnalyzeRepo_FirstLastCommit(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	writeFileAndCommit(t, repo, repoPath, "test.go", "package test\n\nfunc A() {}\nfunc B() {}\n", "Third commit")
 
-	analyzer := NewChurnAnalyzer(90)
+	analyzer := NewChurnAnalyzer(WithChurnDays(90))
 	result, err := analyzer.AnalyzeRepo(repoPath)
 	if err != nil {
 		t.Fatalf("AnalyzeRepo() error = %v", err)
@@ -602,8 +602,8 @@ func TestChurnAnalyzer_AnalyzeRepo_FirstLastCommit(t *testing.T) {
 	}
 }
 
-func TestChurnAnalyzer_SetSpinner(t *testing.T) {
-	analyzer := NewChurnAnalyzer(90)
+func TestChurnAnalyzer_WithSpinner(t *testing.T) {
+	analyzer := NewChurnAnalyzer(WithChurnDays(90))
 
 	if analyzer.spinner != nil {
 		t.Error("spinner should be nil initially")
@@ -694,7 +694,7 @@ func BenchmarkAnalyzeRepo_SmallRepo(b *testing.B) {
 		writeFileAndCommitForBench(b, repo, repoPath, filename, "package main\n", "Add file")
 	}
 
-	analyzer := NewChurnAnalyzer(90)
+	analyzer := NewChurnAnalyzer(WithChurnDays(90))
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -715,7 +715,7 @@ func BenchmarkAnalyzeRepo_ManyCommits(b *testing.B) {
 		writeFileAndCommitForBench(b, repo, repoPath, "main.go", content, "Update")
 	}
 
-	analyzer := NewChurnAnalyzer(90)
+	analyzer := NewChurnAnalyzer(WithChurnDays(90))
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

@@ -225,6 +225,7 @@ type DeadCodeAnalyzer struct {
 
 	confidence  float64
 	buildGraph  bool
+	maxFileSize int64
 	nodeCounter uint32
 }
 
@@ -234,38 +235,63 @@ const DefaultCapacity = 100_000
 // LargeCapacity for enterprise projects.
 const LargeCapacity = 1_000_000
 
-// NewDeadCodeAnalyzer creates a new dead code analyzer with PMAT-compatible architecture.
-func NewDeadCodeAnalyzer(confidence float64) *DeadCodeAnalyzer {
-	if confidence <= 0 || confidence > 1 {
-		confidence = 0.8
+// DeadCodeOption is a functional option for configuring DeadCodeAnalyzer.
+type DeadCodeOption func(*DeadCodeAnalyzer)
+
+// WithDeadCodeConfidence sets the confidence threshold (0-1).
+func WithDeadCodeConfidence(confidence float64) DeadCodeOption {
+	return func(a *DeadCodeAnalyzer) {
+		if confidence > 0 && confidence <= 1 {
+			a.confidence = confidence
+		}
 	}
-	return &DeadCodeAnalyzer{
+}
+
+// WithDeadCodeSkipCallGraph disables call graph-based analysis.
+// By default, call graph analysis is enabled.
+func WithDeadCodeSkipCallGraph() DeadCodeOption {
+	return func(a *DeadCodeAnalyzer) {
+		a.buildGraph = false
+	}
+}
+
+// WithDeadCodeCoverage adds test coverage data for improved accuracy.
+func WithDeadCodeCoverage(coverage *CoverageData) DeadCodeOption {
+	return func(a *DeadCodeAnalyzer) {
+		a.coverageData = coverage
+	}
+}
+
+// WithDeadCodeCapacity sets the initial node capacity.
+func WithDeadCodeCapacity(capacity uint32) DeadCodeOption {
+	return func(a *DeadCodeAnalyzer) {
+		a.reachability = NewHierarchicalBitSet(capacity)
+	}
+}
+
+// WithDeadCodeMaxFileSize sets the maximum file size to analyze (0 = no limit).
+func WithDeadCodeMaxFileSize(maxSize int64) DeadCodeOption {
+	return func(a *DeadCodeAnalyzer) {
+		a.maxFileSize = maxSize
+	}
+}
+
+// NewDeadCodeAnalyzer creates a new dead code analyzer with PMAT-compatible architecture.
+func NewDeadCodeAnalyzer(opts ...DeadCodeOption) *DeadCodeAnalyzer {
+	a := &DeadCodeAnalyzer{
 		parser:         parser.New(),
 		reachability:   NewHierarchicalBitSet(DefaultCapacity),
 		references:     NewCrossLangReferenceGraph(),
 		vtableResolver: NewVTableResolver(),
-		coverageData:   nil, // Optional, set via WithCoverage
+		coverageData:   nil,
 		entryPoints:    make(map[uint32]bool),
-		confidence:     confidence,
+		confidence:     0.8,
 		buildGraph:     true,
+		maxFileSize:    0,
 	}
-}
-
-// WithCallGraph enables or disables call graph-based analysis.
-func (a *DeadCodeAnalyzer) WithCallGraph(enabled bool) *DeadCodeAnalyzer {
-	a.buildGraph = enabled
-	return a
-}
-
-// WithCoverage adds test coverage data for improved accuracy.
-func (a *DeadCodeAnalyzer) WithCoverage(coverage *CoverageData) *DeadCodeAnalyzer {
-	a.coverageData = coverage
-	return a
-}
-
-// WithCapacity sets the initial node capacity.
-func (a *DeadCodeAnalyzer) WithCapacity(capacity uint32) *DeadCodeAnalyzer {
-	a.reachability = NewHierarchicalBitSet(capacity)
+	for _, opt := range opts {
+		opt(a)
+	}
 	return a
 }
 
@@ -1249,9 +1275,9 @@ func (a *DeadCodeAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress
 	}
 
 	// Collect file results
-	results := fileproc.MapFilesWithProgress(files, func(psr *parser.Parser, path string) (*fileDeadCode, error) {
+	results := fileproc.MapFilesWithSizeLimit(files, a.maxFileSize, func(psr *parser.Parser, path string) (*fileDeadCode, error) {
 		return analyzeFileDeadCode(psr, path)
-	}, onProgress)
+	}, onProgress, nil)
 
 	allDefs := make(map[string]definition)
 	allCalls := make([]callReference, 0)

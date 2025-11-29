@@ -22,17 +22,35 @@ type ChurnAnalyzer struct {
 	spinner *progress.Tracker
 }
 
-// NewChurnAnalyzer creates a new churn analyzer.
-func NewChurnAnalyzer(days int) *ChurnAnalyzer {
-	if days <= 0 {
-		days = 30
+// ChurnOption is a functional option for configuring ChurnAnalyzer.
+type ChurnOption func(*ChurnAnalyzer)
+
+// WithChurnDays sets the number of days to analyze git history.
+func WithChurnDays(days int) ChurnOption {
+	return func(a *ChurnAnalyzer) {
+		if days > 0 {
+			a.days = days
+		}
 	}
-	return &ChurnAnalyzer{days: days, spinner: nil}
 }
 
-// SetSpinner sets a spinner for progress indication during analysis.
-func (a *ChurnAnalyzer) SetSpinner(spinner *progress.Tracker) {
-	a.spinner = spinner
+// WithChurnSpinner sets a progress spinner for the analyzer.
+func WithChurnSpinner(spinner *progress.Tracker) ChurnOption {
+	return func(a *ChurnAnalyzer) {
+		a.spinner = spinner
+	}
+}
+
+// NewChurnAnalyzer creates a new churn analyzer.
+func NewChurnAnalyzer(opts ...ChurnOption) *ChurnAnalyzer {
+	a := &ChurnAnalyzer{
+		days:    30,
+		spinner: nil,
+	}
+	for _, opt := range opts {
+		opt(a)
+	}
+	return a
 }
 
 // AnalyzeRepo analyzes git history for a repository.

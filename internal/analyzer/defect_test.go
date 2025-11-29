@@ -10,7 +10,7 @@ import (
 )
 
 func TestNewDefectAnalyzer(t *testing.T) {
-	analyzer := NewDefectAnalyzer(90)
+	analyzer := NewDefectAnalyzer(WithDefectChurnDays(90))
 	if analyzer == nil {
 		t.Fatal("NewDefectAnalyzer() returned nil")
 	}
@@ -42,7 +42,7 @@ func TestNewDefectAnalyzer(t *testing.T) {
 }
 
 func TestDefectAnalyzer_Close(t *testing.T) {
-	analyzer := NewDefectAnalyzer(90)
+	analyzer := NewDefectAnalyzer(WithDefectChurnDays(90))
 	analyzer.Close()
 
 	// Calling Close multiple times should not panic
@@ -52,7 +52,7 @@ func TestDefectAnalyzer_Close(t *testing.T) {
 func TestDefectAnalyzer_AnalyzeProject_EmptyFiles(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	analyzer := NewDefectAnalyzer(90)
+	analyzer := NewDefectAnalyzer(WithDefectChurnDays(90))
 	defer analyzer.Close()
 
 	result, err := analyzer.AnalyzeProject(tmpDir, []string{})
@@ -127,7 +127,7 @@ func complex(x, y, z int) int {
 				t.Fatalf("failed to write test file: %v", err)
 			}
 
-			analyzer := NewDefectAnalyzer(90)
+			analyzer := NewDefectAnalyzer(WithDefectChurnDays(90))
 			defer analyzer.Close()
 
 			result, err := analyzer.AnalyzeProject(tmpDir, []string{testFile})
@@ -212,7 +212,7 @@ func medium(x, y int) int {
 		filePaths = append(filePaths, path)
 	}
 
-	analyzer := NewDefectAnalyzer(90)
+	analyzer := NewDefectAnalyzer(WithDefectChurnDays(90))
 	defer analyzer.Close()
 
 	result, err := analyzer.AnalyzeProject(tmpDir, filePaths)
@@ -258,7 +258,7 @@ func simple() int {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	analyzer := NewDefectAnalyzer(90)
+	analyzer := NewDefectAnalyzer(WithDefectChurnDays(90))
 	defer analyzer.Close()
 
 	result, err := analyzer.AnalyzeProject(tmpDir, []string{testFile})
@@ -543,7 +543,7 @@ func complex(x, y, z int) int {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	analyzer := NewDefectAnalyzer(90)
+	analyzer := NewDefectAnalyzer(WithDefectChurnDays(90))
 	defer analyzer.Close()
 
 	result, err := analyzer.AnalyzeProject(tmpDir, []string{testFile})
@@ -585,7 +585,7 @@ func simple() int {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	analyzer := NewDefectAnalyzer(90)
+	analyzer := NewDefectAnalyzer(WithDefectChurnDays(90))
 	defer analyzer.Close()
 
 	result, err := analyzer.AnalyzeProject(tmpDir, []string{testFile})
@@ -642,7 +642,7 @@ func f2() int {
 		filePaths = append(filePaths, path)
 	}
 
-	analyzer := NewDefectAnalyzer(90)
+	analyzer := NewDefectAnalyzer(WithDefectChurnDays(90))
 	defer analyzer.Close()
 
 	result, err := analyzer.AnalyzeProject(tmpDir, filePaths)
@@ -679,7 +679,7 @@ func TestDefectAnalyzer_FilesWithoutMetrics(t *testing.T) {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	analyzer := NewDefectAnalyzer(90)
+	analyzer := NewDefectAnalyzer(WithDefectChurnDays(90))
 	defer analyzer.Close()
 
 	result, err := analyzer.AnalyzeProject(tmpDir, []string{testFile})
@@ -740,7 +740,7 @@ func simple() int {
 		filePaths = append(filePaths, path)
 	}
 
-	analyzer := NewDefectAnalyzer(90)
+	analyzer := NewDefectAnalyzer(WithDefectChurnDays(90))
 	defer analyzer.Close()
 
 	result, err := analyzer.AnalyzeProject(tmpDir, filePaths)
@@ -786,7 +786,7 @@ func complex(x, y, z int) int {
 		b.Fatalf("failed to write test file: %v", err)
 	}
 
-	analyzer := NewDefectAnalyzer(90)
+	analyzer := NewDefectAnalyzer(WithDefectChurnDays(90))
 	defer analyzer.Close()
 
 	b.ResetTimer()

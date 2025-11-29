@@ -17,8 +17,9 @@ import (
 
 // GraphAnalyzer builds dependency graphs from source code.
 type GraphAnalyzer struct {
-	parser *parser.Parser
-	scope  GraphScope
+	parser      *parser.Parser
+	scope       GraphScope
+	maxFileSize int64
 }
 
 // GraphScope determines the granularity of graph nodes.
@@ -31,12 +32,34 @@ const (
 	ScopePackage  GraphScope = "package"
 )
 
-// NewGraphAnalyzer creates a new graph analyzer.
-func NewGraphAnalyzer(scope GraphScope) *GraphAnalyzer {
-	return &GraphAnalyzer{
-		parser: parser.New(),
-		scope:  scope,
+// GraphOption is a functional option for configuring GraphAnalyzer.
+type GraphOption func(*GraphAnalyzer)
+
+// WithGraphScope sets the graph node granularity.
+func WithGraphScope(scope GraphScope) GraphOption {
+	return func(a *GraphAnalyzer) {
+		a.scope = scope
 	}
+}
+
+// WithGraphMaxFileSize sets the maximum file size to analyze (0 = no limit).
+func WithGraphMaxFileSize(maxSize int64) GraphOption {
+	return func(a *GraphAnalyzer) {
+		a.maxFileSize = maxSize
+	}
+}
+
+// NewGraphAnalyzer creates a new graph analyzer.
+func NewGraphAnalyzer(opts ...GraphOption) *GraphAnalyzer {
+	a := &GraphAnalyzer{
+		parser:      parser.New(),
+		scope:       ScopeFunction,
+		maxFileSize: 0,
+	}
+	for _, opt := range opts {
+		opt(a)
+	}
+	return a
 }
 
 // fileGraphData holds parsed graph data for a single file.
@@ -54,9 +77,9 @@ func (a *GraphAnalyzer) AnalyzeProject(files []string) (*models.DependencyGraph,
 // AnalyzeProjectWithProgress builds a dependency graph with optional progress callback.
 func (a *GraphAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress fileproc.ProgressFunc) (*models.DependencyGraph, error) {
 	// Parse all files in parallel, extracting nodes and edge data
-	fileData := fileproc.MapFilesWithProgress(files, func(psr *parser.Parser, path string) (fileGraphData, error) {
+	fileData := fileproc.MapFilesWithSizeLimit(files, a.maxFileSize, func(psr *parser.Parser, path string) (fileGraphData, error) {
 		return a.analyzeFileGraph(psr, path)
-	}, onProgress)
+	}, onProgress, nil)
 
 	graph := models.NewDependencyGraph()
 	nodeMap := make(map[string]bool)
