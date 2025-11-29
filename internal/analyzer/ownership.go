@@ -19,10 +19,11 @@ type OwnershipAnalyzer struct {
 // OwnershipOption is a functional option for configuring OwnershipAnalyzer.
 type OwnershipOption func(*OwnershipAnalyzer)
 
-// WithOwnershipExcludeTrivial sets whether to exclude trivial lines from ownership analysis.
-func WithOwnershipExcludeTrivial(exclude bool) OwnershipOption {
+// WithOwnershipIncludeTrivial includes trivial lines in ownership analysis.
+// By default, trivial lines (empty, braces-only, etc.) are excluded.
+func WithOwnershipIncludeTrivial() OwnershipOption {
 	return func(a *OwnershipAnalyzer) {
-		a.excludeTrivial = exclude
+		a.excludeTrivial = false
 	}
 }
 

@@ -1220,17 +1220,17 @@ func TestWithCallGraph(t *testing.T) {
 	}
 
 	// Test with call graph disabled
-	a2 := NewDeadCodeAnalyzer(WithDeadCodeConfidence(0.8), WithDeadCodeCallGraph(false))
+	a2 := NewDeadCodeAnalyzer(WithDeadCodeConfidence(0.8), WithDeadCodeSkipCallGraph())
 	defer a2.Close()
 	if a2.buildGraph {
-		t.Error("buildGraph should be false with WithDeadCodeCallGraph(false)")
+		t.Error("buildGraph should be false with WithDeadCodeSkipCallGraph()")
 	}
 
 	// Test with call graph enabled
-	a3 := NewDeadCodeAnalyzer(WithDeadCodeConfidence(0.8), WithDeadCodeCallGraph(true))
+	a3 := NewDeadCodeAnalyzer(WithDeadCodeConfidence(0.8))
 	defer a3.Close()
 	if !a3.buildGraph {
-		t.Error("buildGraph should be true with WithDeadCodeCallGraph(true)")
+		t.Error("buildGraph should be true with ")
 	}
 }
 

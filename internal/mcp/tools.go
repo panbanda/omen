@@ -235,7 +235,11 @@ func handleAnalyzeComplexity(ctx context.Context, req *mcp.CallToolRequest, inpu
 		return toolError("no source files found")
 	}
 
-	cxAnalyzer := analyzer.NewComplexityAnalyzer(analyzer.WithHalstead(input.IncludeHalstead))
+	var cxOpts []analyzer.ComplexityOption
+	if input.IncludeHalstead {
+		cxOpts = append(cxOpts, analyzer.WithHalstead())
+	}
+	cxAnalyzer := analyzer.NewComplexityAnalyzer(cxOpts...)
 	defer cxAnalyzer.Close()
 
 	analysis, err := cxAnalyzer.AnalyzeProject(files)
@@ -272,12 +276,14 @@ func handleAnalyzeSATD(ctx context.Context, req *mcp.CallToolRequest, input SATD
 		return toolError("no source files found")
 	}
 
-	satdAnalyzer := analyzer.NewSATDAnalyzer(
-		analyzer.WithSATDIncludeTests(input.IncludeTests),
-		analyzer.WithSATDIncludeVendor(false),
-		analyzer.WithSATDAdjustSeverity(true),
-		analyzer.WithSATDStrictMode(input.StrictMode),
-	)
+	var satdOpts []analyzer.SATDOption
+	if !input.IncludeTests {
+		satdOpts = append(satdOpts, analyzer.WithSATDExcludeTests())
+	}
+	if input.StrictMode {
+		satdOpts = append(satdOpts, analyzer.WithSATDStrictMode())
+	}
+	satdAnalyzer := analyzer.NewSATDAnalyzer(satdOpts...)
 
 	// Add custom patterns if provided
 	for _, pattern := range input.Patterns {
@@ -643,7 +649,11 @@ func handleAnalyzeOwnership(ctx context.Context, req *mcp.CallToolRequest, input
 		return toolError("no source files found")
 	}
 
-	ownAnalyzer := analyzer.NewOwnershipAnalyzer(analyzer.WithOwnershipExcludeTrivial(!input.IncludeTrivial))
+	var ownOpts []analyzer.OwnershipOption
+	if input.IncludeTrivial {
+		ownOpts = append(ownOpts, analyzer.WithOwnershipIncludeTrivial())
+	}
+	ownAnalyzer := analyzer.NewOwnershipAnalyzer(ownOpts...)
 	defer ownAnalyzer.Close()
 
 	analysis, err := ownAnalyzer.AnalyzeRepo(repoPath, files)
@@ -681,7 +691,11 @@ func handleAnalyzeCohesion(ctx context.Context, req *mcp.CallToolRequest, input 
 		return toolError("no source files found")
 	}
 
-	ckAnalyzer := analyzer.NewCohesionAnalyzer(analyzer.WithCohesionSkipTestFiles(!input.IncludeTests))
+	var ckOpts []analyzer.CohesionOption
+	if input.IncludeTests {
+		ckOpts = append(ckOpts, analyzer.WithCohesionIncludeTestFiles())
+	}
+	ckAnalyzer := analyzer.NewCohesionAnalyzer(ckOpts...)
 	defer ckAnalyzer.Close()
 
 	analysis, err := ckAnalyzer.AnalyzeProject(files)

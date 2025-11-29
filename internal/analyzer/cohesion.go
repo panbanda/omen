@@ -20,10 +20,11 @@ type CohesionAnalyzer struct {
 // CohesionOption is a functional option for configuring CohesionAnalyzer.
 type CohesionOption func(*CohesionAnalyzer)
 
-// WithCohesionSkipTestFiles enables or disables skipping test files.
-func WithCohesionSkipTestFiles(skip bool) CohesionOption {
+// WithCohesionIncludeTestFiles includes test files in analysis.
+// By default, test files are skipped.
+func WithCohesionIncludeTestFiles() CohesionOption {
 	return func(a *CohesionAnalyzer) {
-		a.skipTestFile = skip
+		a.skipTestFile = false
 	}
 }
 

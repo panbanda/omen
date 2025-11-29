@@ -58,31 +58,35 @@ type AstContext struct {
 // SATDOption is a functional option for configuring SATDAnalyzer.
 type SATDOption func(*SATDAnalyzer)
 
-// WithSATDIncludeTests sets whether to include test files in analysis.
-func WithSATDIncludeTests(include bool) SATDOption {
+// WithSATDExcludeTests excludes test files from analysis.
+// By default, test files are included.
+func WithSATDExcludeTests() SATDOption {
 	return func(a *SATDAnalyzer) {
-		a.includeTests = include
+		a.includeTests = false
 	}
 }
 
-// WithSATDIncludeVendor sets whether to include vendor/third-party files.
-func WithSATDIncludeVendor(include bool) SATDOption {
+// WithSATDIncludeVendor includes vendor/third-party files in analysis.
+// By default, vendor files are excluded.
+func WithSATDIncludeVendor() SATDOption {
 	return func(a *SATDAnalyzer) {
-		a.includeVendor = include
+		a.includeVendor = true
 	}
 }
 
-// WithSATDAdjustSeverity sets whether to adjust severity based on context.
-func WithSATDAdjustSeverity(adjust bool) SATDOption {
+// WithSATDSkipSeverityAdjustment disables context-based severity adjustment.
+// By default, severity is adjusted based on code context.
+func WithSATDSkipSeverityAdjustment() SATDOption {
 	return func(a *SATDAnalyzer) {
-		a.adjustSeverity = adjust
+		a.adjustSeverity = false
 	}
 }
 
-// WithSATDStrictMode sets whether to only match explicit markers with colons.
-func WithSATDStrictMode(strict bool) SATDOption {
+// WithSATDStrictMode enables strict mode, matching only explicit markers with colons.
+// By default, relaxed matching is used.
+func WithSATDStrictMode() SATDOption {
 	return func(a *SATDAnalyzer) {
-		a.strictMode = strict
+		a.strictMode = true
 	}
 }
 
@@ -93,17 +97,11 @@ func WithSATDMaxFileSize(maxSize int64) SATDOption {
 	}
 }
 
-// WithSATDExcludeTestBlocks sets whether to exclude SATD in Rust #[cfg(test)] blocks.
-func WithSATDExcludeTestBlocks(exclude bool) SATDOption {
+// WithSATDIncludeTestBlocks includes SATD in Rust #[cfg(test)] blocks.
+// By default, test blocks are excluded.
+func WithSATDIncludeTestBlocks() SATDOption {
 	return func(a *SATDAnalyzer) {
-		a.excludeTestBlocks = exclude
-	}
-}
-
-// WithSATDGenerateContextID sets whether to generate context-aware hashes for debt items.
-func WithSATDGenerateContextID(generate bool) SATDOption {
-	return func(a *SATDAnalyzer) {
-		a.generateContextID = generate
+		a.excludeTestBlocks = false
 	}
 }
 

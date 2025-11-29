@@ -280,10 +280,13 @@ func runComplexityCmd(c *cli.Context) error {
 		return nil
 	}
 
-	cxAnalyzer := analyzer.NewComplexityAnalyzer(
-		analyzer.WithHalstead(includeHalstead),
+	opts := []analyzer.ComplexityOption{
 		analyzer.WithComplexityMaxFileSize(cfg.Analysis.MaxFileSize),
-	)
+	}
+	if includeHalstead {
+		opts = append(opts, analyzer.WithHalstead())
+	}
+	cxAnalyzer := analyzer.NewComplexityAnalyzer(opts...)
 	defer cxAnalyzer.Close()
 
 	tracker := progress.NewTracker("Analyzing complexity...", len(files))
@@ -438,11 +441,11 @@ func runSATDCmd(c *cli.Context) error {
 		return nil
 	}
 
-	satdAnalyzer := analyzer.NewSATDAnalyzer(
-		analyzer.WithSATDIncludeTests(includeTest),
-		analyzer.WithSATDIncludeVendor(false),
-		analyzer.WithSATDAdjustSeverity(true),
-	)
+	var satdOpts []analyzer.SATDOption
+	if !includeTest {
+		satdOpts = append(satdOpts, analyzer.WithSATDExcludeTests())
+	}
+	satdAnalyzer := analyzer.NewSATDAnalyzer(satdOpts...)
 	for _, p := range patterns {
 		if err := satdAnalyzer.AddPattern(p, models.DebtDesign, models.SeverityMedium); err != nil {
 			color.Yellow("Invalid pattern %q: %v", p, err)
@@ -1667,7 +1670,11 @@ func runOwnershipCmd(c *cli.Context) error {
 		return nil
 	}
 
-	ownAnalyzer := analyzer.NewOwnershipAnalyzer(analyzer.WithOwnershipExcludeTrivial(!includeTrivial))
+	var ownOpts []analyzer.OwnershipOption
+	if includeTrivial {
+		ownOpts = append(ownOpts, analyzer.WithOwnershipIncludeTrivial())
+	}
+	ownAnalyzer := analyzer.NewOwnershipAnalyzer(ownOpts...)
 	defer ownAnalyzer.Close()
 
 	tracker := progress.NewTracker("Analyzing ownership", len(files))
@@ -1785,7 +1792,11 @@ func runCohesionCmd(c *cli.Context) error {
 		return nil
 	}
 
-	ckAnalyzer := analyzer.NewCohesionAnalyzer(analyzer.WithCohesionSkipTestFiles(!includeTests))
+	var ckOpts []analyzer.CohesionOption
+	if includeTests {
+		ckOpts = append(ckOpts, analyzer.WithCohesionIncludeTestFiles())
+	}
+	ckAnalyzer := analyzer.NewCohesionAnalyzer(ckOpts...)
 	defer ckAnalyzer.Close()
 
 	tracker := progress.NewTracker("Analyzing CK metrics", len(files))

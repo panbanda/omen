@@ -20,9 +20,9 @@ type ComplexityAnalyzer struct {
 type ComplexityOption func(*ComplexityAnalyzer)
 
 // WithHalstead enables Halstead software science metrics calculation.
-func WithHalstead(enabled bool) ComplexityOption {
+func WithHalstead() ComplexityOption {
 	return func(a *ComplexityAnalyzer) {
-		a.halsteadEnabled = enabled
+		a.halsteadEnabled = true
 	}
 }
 

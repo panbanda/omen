@@ -972,8 +972,7 @@ func TestAnalyzeFile_SpecialPatterns(t *testing.T) {
 
 			// Use no severity adjustment to test raw pattern matching
 			analyzer := NewSATDAnalyzer(
-				WithSATDIncludeTests(true),
-				WithSATDAdjustSeverity(false),
+				WithSATDSkipSeverityAdjustment(),
 			)
 			debts, err := analyzer.AnalyzeFile(testFile)
 
@@ -1003,9 +1002,7 @@ func TestAnalyzeFile_SpecialPatterns(t *testing.T) {
 
 func TestNewSATDAnalyzerWithOptions(t *testing.T) {
 	analyzer := NewSATDAnalyzer(
-		WithSATDIncludeTests(false),
-		WithSATDIncludeVendor(false),
-		WithSATDAdjustSeverity(true),
+		WithSATDExcludeTests(),
 	)
 	if analyzer == nil {
 		t.Fatal("NewSATDAnalyzer returned nil")
@@ -1053,8 +1050,7 @@ func TestSATD_TestFileExclusion(t *testing.T) {
 
 	// With test exclusion disabled
 	analyzerWithTests := NewSATDAnalyzer(
-		WithSATDIncludeTests(true),
-		WithSATDAdjustSeverity(false),
+		WithSATDSkipSeverityAdjustment(),
 	)
 	debtsWithTests, err := analyzerWithTests.AnalyzeFile(testFile)
 	if err != nil {
@@ -1066,8 +1062,8 @@ func TestSATD_TestFileExclusion(t *testing.T) {
 
 	// With test exclusion enabled
 	analyzerNoTests := NewSATDAnalyzer(
-		WithSATDIncludeTests(false),
-		WithSATDAdjustSeverity(false),
+		WithSATDExcludeTests(),
+		WithSATDSkipSeverityAdjustment(),
 	)
 	debtsNoTests, err := analyzerNoTests.AnalyzeFile(testFile)
 	if err != nil {
@@ -1088,10 +1084,7 @@ func TestSATD_SeverityAdjustment(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	analyzer := NewSATDAnalyzer(
-		WithSATDIncludeTests(true),
-		WithSATDAdjustSeverity(true),
-	)
+	analyzer := NewSATDAnalyzer()
 	debts, err := analyzer.AnalyzeFile(testFile)
 	if err != nil {
 		t.Fatalf("AnalyzeFile failed: %v", err)
@@ -1135,10 +1128,8 @@ func TestSATD_ContextHashGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// With context hash
 	analyzer := NewSATDAnalyzer(
-		WithSATDIncludeTests(true),
-		WithSATDAdjustSeverity(false),
+		WithSATDSkipSeverityAdjustment(),
 	)
 	debts, err := analyzer.AnalyzeFile(testFile)
 	if err != nil {
@@ -1152,23 +1143,6 @@ func TestSATD_ContextHashGeneration(t *testing.T) {
 	}
 	if len(debts[0].ContextHash) != 32 {
 		t.Errorf("Expected 32 char hex hash (16 bytes), got %d chars", len(debts[0].ContextHash))
-	}
-
-	// Without context hash
-	analyzerNoHash := NewSATDAnalyzer(
-		WithSATDIncludeTests(true),
-		WithSATDAdjustSeverity(false),
-		WithSATDGenerateContextID(false),
-	)
-	debtsNoHash, err := analyzerNoHash.AnalyzeFile(testFile)
-	if err != nil {
-		t.Fatalf("AnalyzeFile failed: %v", err)
-	}
-	if len(debtsNoHash) != 1 {
-		t.Fatalf("Expected 1 debt item, got %d", len(debtsNoHash))
-	}
-	if debtsNoHash[0].ContextHash != "" {
-		t.Error("Expected empty context hash when disabled")
 	}
 }
 
@@ -1189,8 +1163,7 @@ func TestSATD_VendorExclusion(t *testing.T) {
 
 	// With vendor exclusion (default)
 	analyzer := NewSATDAnalyzer(
-		WithSATDIncludeVendor(false),
-		WithSATDAdjustSeverity(false),
+		WithSATDSkipSeverityAdjustment(),
 	)
 	debts, err := analyzer.AnalyzeFile(vendorFile)
 	if err != nil {
@@ -1202,8 +1175,8 @@ func TestSATD_VendorExclusion(t *testing.T) {
 
 	// With vendor inclusion
 	analyzerWithVendor := NewSATDAnalyzer(
-		WithSATDIncludeVendor(true),
-		WithSATDAdjustSeverity(false),
+		WithSATDIncludeVendor(),
+		WithSATDSkipSeverityAdjustment(),
 	)
 	debtsWithVendor, err := analyzerWithVendor.AnalyzeFile(vendorFile)
 	if err != nil {
@@ -1244,10 +1217,7 @@ func TestSATD_SecurityContextEscalation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	analyzer := NewSATDAnalyzer(
-		WithSATDIncludeTests(true),
-		WithSATDAdjustSeverity(true),
-	)
+	analyzer := NewSATDAnalyzer()
 	debts, err := analyzer.AnalyzeFile(normalFile)
 	if err != nil {
 		t.Fatalf("AnalyzeFile failed: %v", err)
@@ -1531,8 +1501,7 @@ func TestPatternClassification(t *testing.T) {
 			}
 
 			analyzer := NewSATDAnalyzer(
-				WithSATDIncludeTests(true),
-				WithSATDAdjustSeverity(false),
+				WithSATDSkipSeverityAdjustment(),
 			)
 			debts, err := analyzer.AnalyzeFile(testFile)
 
@@ -1840,10 +1809,7 @@ func TestSeverityAdjustmentContexts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	analyzer := NewSATDAnalyzer(
-		WithSATDIncludeTests(true),
-		WithSATDAdjustSeverity(true),
-	)
+	analyzer := NewSATDAnalyzer()
 	debts, err := analyzer.AnalyzeFile(securityFile)
 	if err != nil {
 		t.Fatalf("AnalyzeFile failed: %v", err)
@@ -2138,8 +2104,7 @@ func TestGenerateMetricsWithMixedSeverities(t *testing.T) {
 	}
 
 	analyzer := NewSATDAnalyzer(
-		WithSATDIncludeTests(true),
-		WithSATDAdjustSeverity(false),
+		WithSATDSkipSeverityAdjustment(),
 	)
 	analysis, err := analyzer.AnalyzeProject([]string{testFile})
 	if err != nil {
@@ -2382,8 +2347,7 @@ func TestAnalyzeProject(t *testing.T) {
 	}
 
 	analyzer := NewSATDAnalyzer(
-		WithSATDIncludeTests(true),
-		WithSATDAdjustSeverity(false),
+		WithSATDSkipSeverityAdjustment(),
 	)
 	result, err := analyzer.AnalyzeProject([]string{file1, file2})
 	if err != nil {
@@ -2456,8 +2420,8 @@ func TestAnalyzeDirectory(t *testing.T) {
 
 	// With test files excluded
 	analyzerNoTests := NewSATDAnalyzer(
-		WithSATDIncludeTests(false),
-		WithSATDAdjustSeverity(false),
+		WithSATDExcludeTests(),
+		WithSATDSkipSeverityAdjustment(),
 	)
 	resultNoTests, err := analyzerNoTests.AnalyzeProject([]string{mainFile, helperFile})
 	if err != nil {
@@ -2481,8 +2445,7 @@ func TestAnalyzeDirectory(t *testing.T) {
 
 	// With test files included
 	analyzerWithTests := NewSATDAnalyzer(
-		WithSATDIncludeTests(true),
-		WithSATDAdjustSeverity(false),
+		WithSATDSkipSeverityAdjustment(),
 	)
 	resultWithTests, err := analyzerWithTests.AnalyzeProject([]string{mainFile, helperFile})
 	if err != nil {
@@ -2651,8 +2614,7 @@ func TestCategoryMetrics(t *testing.T) {
 	}
 
 	analyzer := NewSATDAnalyzer(
-		WithSATDIncludeTests(true),
-		WithSATDAdjustSeverity(false),
+		WithSATDSkipSeverityAdjustment(),
 	)
 
 	// Use AnalyzeProject to get the full analysis with summary
@@ -2705,10 +2667,7 @@ func TestSATDMetrics(t *testing.T) {
 		filePaths = append(filePaths, path)
 	}
 
-	analyzer := NewSATDAnalyzer(
-		WithSATDIncludeTests(true),
-		WithSATDAdjustSeverity(true),
-	)
+	analyzer := NewSATDAnalyzer()
 	result, err := analyzer.AnalyzeProject(filePaths)
 	if err != nil {
 		t.Fatalf("AnalyzeProject failed: %v", err)
@@ -2782,8 +2741,8 @@ func TestDebtEvolution(t *testing.T) {
 	}
 
 	analyzer := NewSATDAnalyzer(
-		WithSATDIncludeTests(false),
-		WithSATDAdjustSeverity(false),
+		WithSATDExcludeTests(),
+		WithSATDSkipSeverityAdjustment(),
 	)
 
 	// Analyze same file twice
@@ -3402,7 +3361,7 @@ func TestSATDDetectorCreation(t *testing.T) {
 		{
 			name: "detector with options",
 			createAnalyzer: func() *SATDAnalyzer {
-				return NewSATDAnalyzer(WithSATDIncludeTests(true))
+				return NewSATDAnalyzer()
 			},
 			expectedPattern: 21,
 		},
@@ -3621,9 +3580,11 @@ func DoWork() error {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			analyzer := NewSATDAnalyzer(
-				WithSATDIncludeTests(tt.includeTests),
-			)
+			var opts []SATDOption
+			if !tt.includeTests {
+				opts = append(opts, WithSATDExcludeTests())
+			}
+			analyzer := NewSATDAnalyzer(opts...)
 
 			var filename string
 			if strings.Contains(tt.content, "TestExample") || strings.Contains(tt.content, "TestSuite") {
@@ -4295,9 +4256,8 @@ func TestCollectFilesRecursiveSkipsTestFiles(t *testing.T) {
 
 	// Test with IncludeTests=false (should skip test files)
 	analyzer := NewSATDAnalyzer(
-		WithSATDIncludeTests(false),
-		WithSATDIncludeVendor(false),
-		WithSATDAdjustSeverity(false),
+		WithSATDExcludeTests(),
+		WithSATDSkipSeverityAdjustment(),
 	)
 
 	cfg := config.DefaultConfig()
@@ -5242,7 +5202,7 @@ func TestSATDCategoriesConsistent(t *testing.T) {
 // ============================================================================
 
 func TestNewSATDAnalyzerStrict(t *testing.T) {
-	analyzer := NewSATDAnalyzer(WithSATDStrictMode(true))
+	analyzer := NewSATDAnalyzer(WithSATDStrictMode())
 	if analyzer == nil {
 		t.Fatal("NewSATDAnalyzer with strict mode returned nil")
 	}
@@ -5342,7 +5302,7 @@ func TestStrictModeMatchesExplicitMarkers(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			analyzer := NewSATDAnalyzer(WithSATDStrictMode(true))
+			analyzer := NewSATDAnalyzer(WithSATDStrictMode())
 			debts, err := analyzer.AnalyzeFile(testFile)
 			if err != nil {
 				t.Fatalf("AnalyzeFile failed: %v", err)
@@ -5385,7 +5345,7 @@ func main() {}
 	}
 
 	// Strict mode should find fewer matches
-	strictAnalyzer := NewSATDAnalyzer(WithSATDStrictMode(true))
+	strictAnalyzer := NewSATDAnalyzer(WithSATDStrictMode())
 	strictDebts, err := strictAnalyzer.AnalyzeFile(testFile)
 	if err != nil {
 		t.Fatalf("Strict analyzer failed: %v", err)
@@ -5403,7 +5363,7 @@ func main() {}
 }
 
 func TestStrictModeWithOptions(t *testing.T) {
-	analyzer := NewSATDAnalyzer(WithSATDStrictMode(true))
+	analyzer := NewSATDAnalyzer(WithSATDStrictMode())
 	if !analyzer.strictMode {
 		t.Error("Analyzer should have StrictMode enabled")
 	}
@@ -5569,7 +5529,7 @@ mod tests {
 	}
 
 	// With test block exclusion disabled
-	analyzer := NewSATDAnalyzer(WithSATDExcludeTestBlocks(false))
+	analyzer := NewSATDAnalyzer(WithSATDIncludeTestBlocks())
 	debts, err := analyzer.AnalyzeFile(testFile)
 	if err != nil {
 		t.Fatalf("AnalyzeFile failed: %v", err)

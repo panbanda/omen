@@ -247,10 +247,11 @@ func WithDeadCodeConfidence(confidence float64) DeadCodeOption {
 	}
 }
 
-// WithDeadCodeCallGraph enables or disables call graph-based analysis.
-func WithDeadCodeCallGraph(enabled bool) DeadCodeOption {
+// WithDeadCodeSkipCallGraph disables call graph-based analysis.
+// By default, call graph analysis is enabled.
+func WithDeadCodeSkipCallGraph() DeadCodeOption {
 	return func(a *DeadCodeAnalyzer) {
-		a.buildGraph = enabled
+		a.buildGraph = false
 	}
 }
 

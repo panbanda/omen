@@ -24,7 +24,7 @@ func TestNewCohesionAnalyzer(t *testing.T) {
 }
 
 func TestNewCohesionAnalyzerWithOptions(t *testing.T) {
-	a := NewCohesionAnalyzer(WithCohesionSkipTestFiles(false), WithCohesionMaxFileSize(1024))
+	a := NewCohesionAnalyzer(WithCohesionIncludeTestFiles(), WithCohesionMaxFileSize(1024))
 	defer a.Close()
 
 	if a.skipTestFile {
@@ -243,7 +243,7 @@ class TestCalculator:
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
-	analyzer := NewCohesionAnalyzer(WithCohesionSkipTestFiles(false)) // Include test files
+	analyzer := NewCohesionAnalyzer(WithCohesionIncludeTestFiles()) // Include test files
 	defer analyzer.Close()
 
 	analysis, err := analyzer.AnalyzeProject([]string{file})
