@@ -1,6 +1,9 @@
 package models
 
-import "math"
+import (
+	"fmt"
+	"math"
+)
 
 // RiskLevel represents the defect probability risk category.
 // PMAT-compatible: 3 levels with thresholds at 0.3 and 0.7
@@ -44,7 +47,7 @@ type FileMetrics struct {
 	CognitiveComplexity  uint32  `json:"cognitive_complexity"`
 }
 
-// DefectScore represents the prediction result for a file.
+// DefectScore represents the prediction result for a file (internal format).
 type DefectScore struct {
 	FilePath            string             `json:"file_path"`
 	Probability         float32            `json:"probability"` // 0.0 to 1.0
@@ -54,14 +57,14 @@ type DefectScore struct {
 	Recommendations     []string           `json:"recommendations"`
 }
 
-// DefectAnalysis represents the full defect prediction result.
+// DefectAnalysis represents the full defect prediction result (internal format).
 type DefectAnalysis struct {
 	Files   []DefectScore `json:"files"`
 	Summary DefectSummary `json:"summary"`
 	Weights DefectWeights `json:"weights"`
 }
 
-// DefectSummary provides aggregate statistics.
+// DefectSummary provides aggregate statistics (internal format).
 type DefectSummary struct {
 	TotalFiles      int     `json:"total_files"`
 	HighRiskCount   int     `json:"high_risk_count"`
@@ -70,6 +73,52 @@ type DefectSummary struct {
 	AvgProbability  float32 `json:"avg_probability"`
 	P50Probability  float32 `json:"p50_probability"`
 	P95Probability  float32 `json:"p95_probability"`
+}
+
+// FilePrediction represents a file's defect prediction (pmat-compatible).
+type FilePrediction struct {
+	FilePath  string   `json:"file_path"`
+	RiskScore float32  `json:"risk_score"`
+	RiskLevel string   `json:"risk_level"`
+	Factors   []string `json:"factors"`
+}
+
+// DefectPredictionReport is the pmat-compatible output format.
+type DefectPredictionReport struct {
+	TotalFiles      int              `json:"total_files"`
+	HighRiskFiles   int              `json:"high_risk_files"`
+	MediumRiskFiles int              `json:"medium_risk_files"`
+	LowRiskFiles    int              `json:"low_risk_files"`
+	FilePredictions []FilePrediction `json:"file_predictions"`
+}
+
+// ToDefectPredictionReport converts DefectAnalysis to pmat-compatible format.
+func (a *DefectAnalysis) ToDefectPredictionReport() *DefectPredictionReport {
+	report := &DefectPredictionReport{
+		TotalFiles:      a.Summary.TotalFiles,
+		HighRiskFiles:   a.Summary.HighRiskCount,
+		MediumRiskFiles: a.Summary.MediumRiskCount,
+		LowRiskFiles:    a.Summary.LowRiskCount,
+		FilePredictions: make([]FilePrediction, 0, len(a.Files)),
+	}
+
+	for _, score := range a.Files {
+		// Convert contributing factors map to string array like pmat
+		factors := make([]string, 0, len(score.ContributingFactors))
+		for factor, contribution := range score.ContributingFactors {
+			factors = append(factors, fmt.Sprintf("%s: %.1f%%", factor, contribution*100))
+		}
+
+		pred := FilePrediction{
+			FilePath:  score.FilePath,
+			RiskScore: score.Probability,
+			RiskLevel: string(score.RiskLevel),
+			Factors:   factors,
+		}
+		report.FilePredictions = append(report.FilePredictions, pred)
+	}
+
+	return report
 }
 
 // CalculateRiskLevel determines risk level from probability.
