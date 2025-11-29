@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.2](https://github.com/panbanda/omen/compare/v1.5.1...v1.5.2) (2025-11-29)
+
+
+### Bug Fixes
+
+* **cli:** handle trailing flags after positional arguments ([e8ea822](https://github.com/panbanda/omen/commit/e8ea8227b0492da91a1c64ce6d179141b24c3069))
+* **cli:** handle trailing flags after positional arguments ([366523b](https://github.com/panbanda/omen/commit/366523b0fbab84660fb4b2c3c2ac555be22de892))
+
 ## [1.5.1](https://github.com/panbanda/omen/compare/v1.5.0...v1.5.1) (2025-11-29)
 
 
