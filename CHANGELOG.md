@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.6.0](https://github.com/panbanda/omen/compare/v1.5.3...v1.6.0) (2025-11-29)
+
+
+### Features
+
+* **analyzer:** add advanced analysis capabilities ([b006d4c](https://github.com/panbanda/omen/commit/b006d4c6ae9d67a272a03956f8b5d4b34fab6244))
+* **analyzer:** add advanced analysis capabilities ([78c2a62](https://github.com/panbanda/omen/commit/78c2a620d1d63c2f800cf980533cc5fadfc3fe8b))
+
+
+### Bug Fixes
+
+* **output:** enable toon format serialization for all model types ([1fda456](https://github.com/panbanda/omen/commit/1fda456b7722653866cbeac91eae3bfa8a696cf6))
+* **output:** enable toon format serialization for all model types ([d39c952](https://github.com/panbanda/omen/commit/d39c952d98c322ba523541b7d7f941b3534d0eae))
+
+
+### Performance Improvements
+
+* **analyzer:** move map allocations to package level ([f58b2d5](https://github.com/panbanda/omen/commit/f58b2d54a30e5f869a6db793a193180958780a18))
+
 ## [1.5.3](https://github.com/panbanda/omen/compare/v1.5.2...v1.5.3) (2025-11-29)
 
 
