@@ -44,6 +44,6 @@ Available tools:
 }
 
 func runMCPCmd(c *cli.Context) error {
-	server := mcpserver.NewServer()
+	server := mcpserver.NewServer(version)
 	return server.Run(context.Background())
 }

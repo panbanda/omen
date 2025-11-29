@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -50,10 +51,10 @@ func HashFile(path string) (string, error) {
 	return HashBytes(data), nil
 }
 
-// HashBytes computes a BLAKE3 hash of bytes.
+// HashBytes computes a BLAKE3 hash of bytes and returns it as a hex string.
 func HashBytes(data []byte) string {
 	hash := blake3.Sum256(data)
-	return string(hash[:])
+	return hex.EncodeToString(hash[:])
 }
 
 // Get retrieves a cached entry if it exists and is not expired.
@@ -172,12 +173,7 @@ func (c *Cache) Clear() error {
 func (c *Cache) keyPath(key string) string {
 	// Use BLAKE3 hash of key for filename to avoid path issues
 	hash := blake3.Sum256([]byte(key))
-	filename := make([]byte, 64)
-	for i, b := range hash {
-		filename[i*2] = "0123456789abcdef"[b>>4]
-		filename[i*2+1] = "0123456789abcdef"[b&0xf]
-	}
-	return filepath.Join(c.dir, string(filename)+".json")
+	return filepath.Join(c.dir, hex.EncodeToString(hash[:])+".json")
 }
 
 // Stats returns cache statistics.

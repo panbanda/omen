@@ -13,12 +13,20 @@ import (
 
 // TestServerCreation verifies the MCP server can be created without panicking.
 func TestServerCreation(t *testing.T) {
-	server := NewServer()
+	server := NewServer("1.0.0-test")
 	if server == nil {
 		t.Fatal("NewServer() returned nil")
 	}
 	if server.server == nil {
 		t.Fatal("NewServer().server is nil")
+	}
+}
+
+// TestServerCreationEmptyVersion verifies empty version defaults to "dev".
+func TestServerCreationEmptyVersion(t *testing.T) {
+	server := NewServer("")
+	if server == nil {
+		t.Fatal("NewServer(\"\") returned nil")
 	}
 }
 

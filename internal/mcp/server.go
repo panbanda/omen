@@ -12,11 +12,14 @@ type Server struct {
 }
 
 // NewServer creates a new MCP server with all omen tools registered.
-func NewServer() *Server {
+func NewServer(version string) *Server {
+	if version == "" {
+		version = "dev"
+	}
 	server := mcp.NewServer(
 		&mcp.Implementation{
 			Name:    "omen",
-			Version: "1.0.0",
+			Version: version,
 		},
 		nil,
 	)
