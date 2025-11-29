@@ -133,38 +133,42 @@ func TestTdgScoreDefault(t *testing.T) {
 
 func TestTdgScoreCalculateTotal(t *testing.T) {
 	score := TdgScore{
-		StructuralComplexity: 20.0,
-		SemanticComplexity:   18.0,
-		DuplicationRatio:     19.0,
-		CouplingScore:        14.0,
-		DocCoverage:          9.0,
-		ConsistencyScore:     8.0,
-		EntropyScore:         0.0,
+		StructuralComplexity:  18.0,
+		SemanticComplexity:    13.0,
+		DuplicationRatio:      14.0,
+		CouplingScore:         14.0,
+		DocCoverage:           4.0,
+		ConsistencyScore:      9.0,
+		HotspotScore:          9.0,
+		TemporalCouplingScore: 9.0,
+		EntropyScore:          0.0,
 	}
 
 	score.CalculateTotal()
 
-	// Expected: 20+18+19+14+9+8+0 = 88.0
-	expectedTotal := float32(88.0)
+	// Expected: 18+13+14+14+4+9+9+9+0 = 90.0
+	expectedTotal := float32(90.0)
 	if score.Total != expectedTotal {
 		t.Errorf("CalculateTotal() Total = %v, want %v", score.Total, expectedTotal)
 	}
 
-	if score.Grade != GradeAMinus {
-		t.Errorf("CalculateTotal() Grade = %v, want A-", score.Grade)
+	if score.Grade != GradeA {
+		t.Errorf("CalculateTotal() Grade = %v, want A", score.Grade)
 	}
 }
 
 func TestTdgScoreCriticalDefects(t *testing.T) {
 	score := TdgScore{
-		StructuralComplexity: 25.0,
-		SemanticComplexity:   20.0,
-		DuplicationRatio:     20.0,
-		CouplingScore:        15.0,
-		DocCoverage:          10.0,
-		ConsistencyScore:     10.0,
-		HasCriticalDefects:   true,
-		CriticalDefectsCount: 3,
+		StructuralComplexity:  20.0,
+		SemanticComplexity:    15.0,
+		DuplicationRatio:      15.0,
+		CouplingScore:         15.0,
+		DocCoverage:           5.0,
+		ConsistencyScore:      10.0,
+		HotspotScore:          10.0,
+		TemporalCouplingScore: 10.0,
+		HasCriticalDefects:    true,
+		CriticalDefectsCount:  3,
 	}
 
 	score.CalculateTotal()
@@ -214,18 +218,20 @@ func TestTdgScoreSetMetric(t *testing.T) {
 
 func TestTdgScoreClamp(t *testing.T) {
 	score := TdgScore{
-		StructuralComplexity: 50.0, // Will be clamped to 25
-		SemanticComplexity:   -5.0, // Will be clamped to 0
-		DuplicationRatio:     20.0,
-		CouplingScore:        15.0,
-		DocCoverage:          10.0,
-		ConsistencyScore:     10.0,
+		StructuralComplexity:  50.0, // Will be clamped to 20
+		SemanticComplexity:    -5.0, // Will be clamped to 0
+		DuplicationRatio:      15.0,
+		CouplingScore:         15.0,
+		DocCoverage:           5.0,
+		ConsistencyScore:      10.0,
+		HotspotScore:          10.0,
+		TemporalCouplingScore: 10.0,
 	}
 
 	score.CalculateTotal()
 
-	if score.StructuralComplexity != 25.0 {
-		t.Errorf("StructuralComplexity clamped = %v, want 25.0", score.StructuralComplexity)
+	if score.StructuralComplexity != 20.0 {
+		t.Errorf("StructuralComplexity clamped = %v, want 20.0", score.StructuralComplexity)
 	}
 
 	if score.SemanticComplexity != 0.0 {
@@ -279,22 +285,26 @@ func TestProjectScoreAggregate(t *testing.T) {
 func TestProjectScoreAverage(t *testing.T) {
 	scores := []TdgScore{
 		{
-			StructuralComplexity: 20.0,
-			SemanticComplexity:   16.0,
-			DuplicationRatio:     18.0,
-			CouplingScore:        12.0,
-			DocCoverage:          8.0,
-			ConsistencyScore:     8.0,
-			Confidence:           0.9,
+			StructuralComplexity:  18.0,
+			SemanticComplexity:    13.0,
+			DuplicationRatio:      14.0,
+			CouplingScore:         12.0,
+			DocCoverage:           4.0,
+			ConsistencyScore:      8.0,
+			HotspotScore:          9.0,
+			TemporalCouplingScore: 9.0,
+			Confidence:            0.9,
 		},
 		{
-			StructuralComplexity: 22.0,
-			SemanticComplexity:   18.0,
-			DuplicationRatio:     16.0,
-			CouplingScore:        14.0,
-			DocCoverage:          6.0,
-			ConsistencyScore:     10.0,
-			Confidence:           0.95,
+			StructuralComplexity:  20.0,
+			SemanticComplexity:    14.0,
+			DuplicationRatio:      14.0,
+			CouplingScore:         14.0,
+			DocCoverage:           4.0,
+			ConsistencyScore:      10.0,
+			HotspotScore:          10.0,
+			TemporalCouplingScore: 10.0,
+			Confidence:            0.95,
 		},
 	}
 
@@ -302,7 +312,7 @@ func TestProjectScoreAverage(t *testing.T) {
 	avg := project.Average()
 
 	// Expected averages
-	expectedStructural := float32(21.0)
+	expectedStructural := float32(19.0) // (18+20)/2
 	if avg.StructuralComplexity != expectedStructural {
 		t.Errorf("Average StructuralComplexity = %v, want %v", avg.StructuralComplexity, expectedStructural)
 	}

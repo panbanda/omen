@@ -54,57 +54,74 @@ func getPaths(c *cli.Context) []string {
 	return paths
 }
 
-// getFormat returns the format flag value, checking both parsed flags and unparsed trailing args.
+// getTrailingFlag retrieves a string flag value, checking both parsed flags and unparsed trailing args.
 // This handles POSIX-style flag ordering where flags after positional args aren't parsed.
-func getFormat(c *cli.Context) string {
-	// First check if the flag was properly parsed
-	if format := c.String("format"); format != "" && format != "text" {
-		return format
+// Parameters:
+//   - c: CLI context
+//   - name: long flag name (e.g., "format")
+//   - shortName: short flag name (e.g., "f"), or empty string if none
+//   - defaultValue: value to compare against for "changed" detection
+func getTrailingFlag(c *cli.Context, name, shortName, defaultValue string) string {
+	// First check if the flag was properly parsed and differs from default
+	if val := c.String(name); val != "" && val != defaultValue {
+		return val
 	}
 
 	// Check unparsed args for trailing flags
 	args := c.Args().Slice()
+	longFlag := "--" + name
+	shortFlag := ""
+	if shortName != "" {
+		shortFlag = "-" + shortName
+	}
+
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
-		if (arg == "-f" || arg == "--format") && i+1 < len(args) {
+
+		// Handle "--flag value" or "-f value" style
+		if (arg == longFlag || (shortFlag != "" && arg == shortFlag)) && i+1 < len(args) {
 			return args[i+1]
 		}
-		// Handle --format=json style
-		if strings.HasPrefix(arg, "--format=") {
-			return strings.TrimPrefix(arg, "--format=")
+
+		// Handle "--flag=value" style
+		if strings.HasPrefix(arg, longFlag+"=") {
+			return strings.TrimPrefix(arg, longFlag+"=")
 		}
-		if strings.HasPrefix(arg, "-f=") {
-			return strings.TrimPrefix(arg, "-f=")
+
+		// Handle "-f=value" style
+		if shortFlag != "" && strings.HasPrefix(arg, shortFlag+"=") {
+			return strings.TrimPrefix(arg, shortFlag+"=")
 		}
 	}
 
-	return c.String("format")
+	// Fall back to parsed value (may be default)
+	return c.String(name)
+}
+
+// getFormat returns the format flag value, checking both parsed flags and unparsed trailing args.
+func getFormat(c *cli.Context) string {
+	return getTrailingFlag(c, "format", "f", "text")
 }
 
 // getOutputFile returns the output file path, checking both parsed flags and unparsed trailing args.
 func getOutputFile(c *cli.Context) string {
-	// First check if the flag was properly parsed
-	if output := c.String("output"); output != "" {
-		return output
-	}
+	return getTrailingFlag(c, "output", "o", "")
+}
 
-	// Check unparsed args for trailing flags
-	args := c.Args().Slice()
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if (arg == "-o" || arg == "--output") && i+1 < len(args) {
-			return args[i+1]
-		}
-		// Handle --output=file style
-		if strings.HasPrefix(arg, "--output=") {
-			return strings.TrimPrefix(arg, "--output=")
-		}
-		if strings.HasPrefix(arg, "-o=") {
-			return strings.TrimPrefix(arg, "-o=")
-		}
-	}
+// getSort returns the sort flag value, checking both parsed flags and unparsed trailing args.
+func getSort(c *cli.Context, defaultValue string) string {
+	return getTrailingFlag(c, "sort", "", defaultValue)
+}
 
-	return ""
+// validateDays validates the --days flag and returns an error if invalid.
+func validateDays(days int) error {
+	if days <= 0 {
+		return fmt.Errorf("--days must be a positive integer (got %d)", days)
+	}
+	if days > 3650 { // ~10 years
+		return fmt.Errorf("--days cannot exceed 3650 (10 years), got %d", days)
+	}
+	return nil
 }
 
 // outputFlags returns the common output-related flags for analyze commands.
@@ -648,6 +665,10 @@ func runChurnCmd(c *cli.Context) error {
 	paths := getPaths(c)
 	days := c.Int("days")
 	topN := c.Int("top")
+
+	if err := validateDays(days); err != nil {
+		return err
+	}
 
 	absPath, err := filepath.Abs(paths[0])
 	if err != nil {
@@ -1373,23 +1394,519 @@ func runLintHotspotCmd(c *cli.Context) error {
 	return formatter.Output(table)
 }
 
+func hotspotCmd() *cli.Command {
+	flags := append(outputFlags(),
+		&cli.IntFlag{
+			Name:  "top",
+			Value: 20,
+			Usage: "Show top N files by hotspot score",
+		},
+		&cli.IntFlag{
+			Name:  "days",
+			Value: 30,
+			Usage: "Number of days of git history to analyze",
+		},
+	)
+	return &cli.Command{
+		Name:      "hotspot",
+		Aliases:   []string{"hs"},
+		Usage:     "Identify code hotspots (high churn + high complexity)",
+		ArgsUsage: "[path...]",
+		Flags:     flags,
+		Action:    runHotspotCmd,
+	}
+}
+
+func runHotspotCmd(c *cli.Context) error {
+	paths := getPaths(c)
+	topN := c.Int("top")
+	days := c.Int("days")
+
+	if err := validateDays(days); err != nil {
+		return err
+	}
+
+	cfg := config.LoadOrDefault()
+	scan := scanner.NewScanner(cfg)
+
+	repoPath, err := filepath.Abs(paths[0])
+	if err != nil {
+		return fmt.Errorf("invalid path: %w", err)
+	}
+
+	var files []string
+	for _, path := range paths {
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return fmt.Errorf("invalid path %s: %w", path, err)
+		}
+		found, err := scan.ScanDir(absPath)
+		if err != nil {
+			return fmt.Errorf("failed to scan directory %s: %w", path, err)
+		}
+		files = append(files, found...)
+	}
+
+	if len(files) == 0 {
+		color.Yellow("No source files found")
+		return nil
+	}
+
+	hotspotAnalyzer := analyzer.NewHotspotAnalyzer(days)
+	defer hotspotAnalyzer.Close()
+
+	tracker := progress.NewTracker("Analyzing hotspots...", len(files))
+	analysis, err := hotspotAnalyzer.AnalyzeProjectWithProgress(repoPath, files, tracker.Tick)
+	tracker.FinishSuccess()
+	if err != nil {
+		return fmt.Errorf("hotspot analysis failed (is this a git repository?): %w", err)
+	}
+
+	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
+	if err != nil {
+		return err
+	}
+	defer formatter.Close()
+
+	// Limit results for display
+	filesToShow := analysis.Files
+	if len(filesToShow) > topN {
+		filesToShow = filesToShow[:topN]
+	}
+
+	var rows [][]string
+	for _, fh := range filesToShow {
+		hotspotStr := fmt.Sprintf("%.2f", fh.HotspotScore)
+		if fh.HotspotScore >= 0.7 {
+			hotspotStr = color.RedString(hotspotStr)
+		} else if fh.HotspotScore >= 0.4 {
+			hotspotStr = color.YellowString(hotspotStr)
+		}
+
+		rows = append(rows, []string{
+			fh.Path,
+			hotspotStr,
+			fmt.Sprintf("%.2f", fh.ChurnScore),
+			fmt.Sprintf("%.2f", fh.ComplexityScore),
+			fmt.Sprintf("%d", fh.Commits),
+			fmt.Sprintf("%.1f", fh.AvgCognitive),
+		})
+	}
+
+	table := output.NewTable(
+		fmt.Sprintf("Code Hotspots (Top %d, Last %d Days)", topN, days),
+		[]string{"File", "Hotspot", "Churn", "Complexity", "Commits", "Avg Cognitive"},
+		rows,
+		[]string{
+			fmt.Sprintf("Total Files: %d", analysis.Summary.TotalFiles),
+			fmt.Sprintf("Hotspots (>0.5): %d", analysis.Summary.HotspotCount),
+			fmt.Sprintf("Max Score: %.2f", analysis.Summary.MaxHotspotScore),
+			fmt.Sprintf("Avg Score: %.2f", analysis.Summary.AvgHotspotScore),
+		},
+		analysis,
+	)
+
+	return formatter.Output(table)
+}
+
+func temporalCouplingCmd() *cli.Command {
+	flags := append(outputFlags(),
+		&cli.IntFlag{
+			Name:  "top",
+			Value: 20,
+			Usage: "Show top N file pairs by coupling strength",
+		},
+		&cli.IntFlag{
+			Name:  "days",
+			Value: 30,
+			Usage: "Number of days of git history to analyze",
+		},
+		&cli.IntFlag{
+			Name:  "min-cochanges",
+			Value: 3,
+			Usage: "Minimum number of co-changes to consider files coupled",
+		},
+	)
+	return &cli.Command{
+		Name:      "temporal-coupling",
+		Aliases:   []string{"tc"},
+		Usage:     "Identify files that frequently change together",
+		ArgsUsage: "[path...]",
+		Flags:     flags,
+		Action:    runTemporalCouplingCmd,
+	}
+}
+
+func runTemporalCouplingCmd(c *cli.Context) error {
+	paths := getPaths(c)
+	topN := c.Int("top")
+	days := c.Int("days")
+	minCochanges := c.Int("min-cochanges")
+
+	if err := validateDays(days); err != nil {
+		return err
+	}
+
+	repoPath, err := filepath.Abs(paths[0])
+	if err != nil {
+		return fmt.Errorf("invalid path: %w", err)
+	}
+
+	tcAnalyzer := analyzer.NewTemporalCouplingAnalyzer(days, minCochanges)
+	defer tcAnalyzer.Close()
+
+	spinner := progress.NewSpinner("Analyzing temporal coupling...")
+	analysis, err := tcAnalyzer.AnalyzeRepo(repoPath)
+	spinner.FinishSuccess()
+	if err != nil {
+		return fmt.Errorf("temporal coupling analysis failed (is this a git repository?): %w", err)
+	}
+
+	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
+	if err != nil {
+		return err
+	}
+	defer formatter.Close()
+
+	// Limit results for display
+	couplingsToShow := analysis.Couplings
+	if len(couplingsToShow) > topN {
+		couplingsToShow = couplingsToShow[:topN]
+	}
+
+	var rows [][]string
+	for _, fc := range couplingsToShow {
+		strengthStr := fmt.Sprintf("%.2f", fc.CouplingStrength)
+		if fc.CouplingStrength >= 0.7 {
+			strengthStr = color.RedString(strengthStr)
+		} else if fc.CouplingStrength >= 0.4 {
+			strengthStr = color.YellowString(strengthStr)
+		}
+
+		rows = append(rows, []string{
+			fc.FileA,
+			fc.FileB,
+			fmt.Sprintf("%d", fc.CochangeCount),
+			strengthStr,
+		})
+	}
+
+	table := output.NewTable(
+		fmt.Sprintf("Temporal Coupling (Top %d, Last %d Days, Min %d Co-changes)", topN, days, minCochanges),
+		[]string{"File A", "File B", "Co-changes", "Strength"},
+		rows,
+		[]string{
+			fmt.Sprintf("Total Couplings: %d", analysis.Summary.TotalCouplings),
+			fmt.Sprintf("Strong (>0.5): %d", analysis.Summary.StrongCouplings),
+			fmt.Sprintf("Files Analyzed: %d", analysis.Summary.TotalFilesAnalyzed),
+			fmt.Sprintf("Max Strength: %.2f", analysis.Summary.MaxCouplingStrength),
+		},
+		analysis,
+	)
+
+	return formatter.Output(table)
+}
+
+func ownershipCmd() *cli.Command {
+	flags := append(outputFlags(),
+		&cli.IntFlag{
+			Name:  "top",
+			Value: 20,
+			Usage: "Show top N files by ownership concentration",
+		},
+		&cli.BoolFlag{
+			Name:  "include-trivial",
+			Usage: "Include trivial lines (imports, braces, blanks) in ownership calculation",
+		},
+	)
+	return &cli.Command{
+		Name:      "ownership",
+		Aliases:   []string{"own", "bus-factor"},
+		Usage:     "Analyze code ownership and bus factor risk",
+		ArgsUsage: "[path...]",
+		Flags:     flags,
+		Action:    runOwnershipCmd,
+	}
+}
+
+func runOwnershipCmd(c *cli.Context) error {
+	paths := getPaths(c)
+	topN := c.Int("top")
+	includeTrivial := c.Bool("include-trivial")
+
+	repoPath, err := filepath.Abs(paths[0])
+	if err != nil {
+		return fmt.Errorf("invalid path: %w", err)
+	}
+
+	cfg := config.LoadOrDefault()
+	scan := scanner.NewScanner(cfg)
+
+	var files []string
+	for _, path := range paths {
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return fmt.Errorf("invalid path %s: %w", path, err)
+		}
+		found, err := scan.ScanDir(absPath)
+		if err != nil {
+			return fmt.Errorf("failed to scan directory %s: %w", path, err)
+		}
+		files = append(files, found...)
+	}
+
+	if len(files) == 0 {
+		color.Yellow("No source files found")
+		return nil
+	}
+
+	ownAnalyzer := analyzer.NewOwnershipAnalyzerWithOptions(!includeTrivial)
+	defer ownAnalyzer.Close()
+
+	tracker := progress.NewTracker("Analyzing ownership", len(files))
+	analysis, err := ownAnalyzer.AnalyzeRepoWithProgress(repoPath, files, func() {
+		tracker.Tick()
+	})
+	tracker.FinishSuccess()
+	if err != nil {
+		return fmt.Errorf("ownership analysis failed (is this a git repository?): %w", err)
+	}
+
+	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
+	if err != nil {
+		return err
+	}
+	defer formatter.Close()
+
+	// Limit results for display
+	filesToShow := analysis.Files
+	if len(filesToShow) > topN {
+		filesToShow = filesToShow[:topN]
+	}
+
+	var rows [][]string
+	for _, fo := range filesToShow {
+		concStr := fmt.Sprintf("%.2f", fo.Concentration)
+		if fo.Concentration >= 0.9 {
+			concStr = color.RedString(concStr)
+		} else if fo.Concentration >= 0.7 {
+			concStr = color.YellowString(concStr)
+		}
+
+		siloStr := ""
+		if fo.IsSilo {
+			siloStr = color.RedString("SILO")
+		}
+
+		rows = append(rows, []string{
+			fo.Path,
+			fo.PrimaryOwner,
+			fmt.Sprintf("%.0f%%", fo.OwnershipPercent),
+			concStr,
+			fmt.Sprintf("%d", len(fo.Contributors)),
+			siloStr,
+		})
+	}
+
+	table := output.NewTable(
+		fmt.Sprintf("Code Ownership (Top %d by Concentration)", topN),
+		[]string{"Path", "Primary Owner", "Ownership", "Concentration", "Contributors", "Silo"},
+		rows,
+		[]string{
+			fmt.Sprintf("Total Files: %d", analysis.Summary.TotalFiles),
+			fmt.Sprintf("Bus Factor: %d", analysis.Summary.BusFactor),
+			fmt.Sprintf("Silos: %d", analysis.Summary.SiloCount),
+			fmt.Sprintf("Avg Contributors: %.1f", analysis.Summary.AvgContributors),
+		},
+		analysis,
+	)
+
+	return formatter.Output(table)
+}
+
+func cohesionCmd() *cli.Command {
+	flags := append(outputFlags(),
+		&cli.IntFlag{
+			Name:  "top",
+			Value: 20,
+			Usage: "Show top N classes by LCOM (least cohesive first)",
+		},
+		&cli.BoolFlag{
+			Name:  "include-tests",
+			Usage: "Include test files in analysis",
+		},
+		&cli.StringFlag{
+			Name:  "sort",
+			Value: "lcom",
+			Usage: "Sort by: lcom, wmc, cbo, dit",
+		},
+	)
+	return &cli.Command{
+		Name:      "cohesion",
+		Aliases:   []string{"ck"},
+		Usage:     "Analyze CK (Chidamber-Kemerer) OO metrics",
+		ArgsUsage: "[path...]",
+		Flags:     flags,
+		Action:    runCohesionCmd,
+	}
+}
+
+func runCohesionCmd(c *cli.Context) error {
+	paths := getPaths(c)
+	topN := c.Int("top")
+	includeTests := c.Bool("include-tests")
+	sortBy := getSort(c, "lcom")
+
+	cfg := config.LoadOrDefault()
+	scan := scanner.NewScanner(cfg)
+
+	var files []string
+	for _, path := range paths {
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return fmt.Errorf("invalid path %s: %w", path, err)
+		}
+		found, err := scan.ScanDir(absPath)
+		if err != nil {
+			return fmt.Errorf("failed to scan directory %s: %w", path, err)
+		}
+		files = append(files, found...)
+	}
+
+	if len(files) == 0 {
+		color.Yellow("No source files found")
+		return nil
+	}
+
+	ckAnalyzer := analyzer.NewCohesionAnalyzerWithOptions(!includeTests)
+	defer ckAnalyzer.Close()
+
+	tracker := progress.NewTracker("Analyzing CK metrics", len(files))
+	analysis, err := ckAnalyzer.AnalyzeProjectWithProgress(files, func() {
+		tracker.Tick()
+	})
+	tracker.FinishSuccess()
+	if err != nil {
+		return fmt.Errorf("cohesion analysis failed: %w", err)
+	}
+
+	if len(analysis.Classes) == 0 {
+		color.Yellow("No OO classes found (CK metrics only apply to Java, Python, TypeScript, etc.)")
+		return nil
+	}
+
+	// Sort by requested metric
+	switch sortBy {
+	case "wmc":
+		analysis.SortByWMC()
+	case "cbo":
+		analysis.SortByCBO()
+	case "dit":
+		analysis.SortByDIT()
+	default:
+		analysis.SortByLCOM()
+	}
+
+	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
+	if err != nil {
+		return err
+	}
+	defer formatter.Close()
+
+	// Limit results for display
+	classesToShow := analysis.Classes
+	if len(classesToShow) > topN {
+		classesToShow = classesToShow[:topN]
+	}
+
+	var rows [][]string
+	for _, cls := range classesToShow {
+		lcomStr := fmt.Sprintf("%d", cls.LCOM)
+		if cls.LCOM > 1 {
+			lcomStr = color.YellowString(lcomStr)
+		}
+		if cls.LCOM > 3 {
+			lcomStr = color.RedString(fmt.Sprintf("%d", cls.LCOM))
+		}
+
+		wmcStr := fmt.Sprintf("%d", cls.WMC)
+		if cls.WMC > 30 {
+			wmcStr = color.RedString(wmcStr)
+		} else if cls.WMC > 15 {
+			wmcStr = color.YellowString(wmcStr)
+		}
+
+		ditStr := fmt.Sprintf("%d", cls.DIT)
+		if cls.DIT >= 5 {
+			ditStr = color.RedString(ditStr)
+		} else if cls.DIT >= 4 {
+			ditStr = color.YellowString(ditStr)
+		}
+
+		nocStr := fmt.Sprintf("%d", cls.NOC)
+		if cls.NOC >= 6 {
+			nocStr = color.RedString(nocStr)
+		} else if cls.NOC >= 4 {
+			nocStr = color.YellowString(nocStr)
+		}
+
+		rows = append(rows, []string{
+			cls.ClassName,
+			cls.Path,
+			wmcStr,
+			fmt.Sprintf("%d", cls.CBO),
+			fmt.Sprintf("%d", cls.RFC),
+			lcomStr,
+			ditStr,
+			nocStr,
+			fmt.Sprintf("%d", cls.NOM),
+		})
+	}
+
+	table := output.NewTable(
+		fmt.Sprintf("CK Metrics (Top %d by %s)", topN, sortBy),
+		[]string{"Class", "Path", "WMC", "CBO", "RFC", "LCOM", "DIT", "NOC", "Methods"},
+		rows,
+		[]string{
+			fmt.Sprintf("Total Classes: %d", analysis.Summary.TotalClasses),
+			fmt.Sprintf("Low Cohesion (LCOM>1): %d", analysis.Summary.LowCohesionCount),
+			fmt.Sprintf("Avg WMC: %.1f", analysis.Summary.AvgWMC),
+			fmt.Sprintf("Max WMC: %d", analysis.Summary.MaxWMC),
+			fmt.Sprintf("Max DIT: %d", analysis.Summary.MaxDIT),
+		},
+		analysis,
+	)
+
+	return formatter.Output(table)
+}
+
 func contextCmd() *cli.Command {
+	flags := append(outputFlags(),
+		&cli.BoolFlag{
+			Name:  "include-metrics",
+			Usage: "Include complexity and quality metrics",
+		},
+		&cli.BoolFlag{
+			Name:  "include-graph",
+			Usage: "Include dependency graph",
+		},
+		&cli.BoolFlag{
+			Name:  "repo-map",
+			Usage: "Generate PageRank-ranked symbol map",
+		},
+		&cli.IntFlag{
+			Name:  "top",
+			Value: 50,
+			Usage: "Number of top symbols to include in repo map",
+		},
+	)
 	return &cli.Command{
 		Name:      "context",
 		Aliases:   []string{"ctx"},
 		Usage:     "Generate deep context for LLM consumption",
 		ArgsUsage: "[path...]",
-		Flags: []cli.Flag{
-			&cli.BoolFlag{
-				Name:  "include-metrics",
-				Usage: "Include complexity and quality metrics",
-			},
-			&cli.BoolFlag{
-				Name:  "include-graph",
-				Usage: "Include dependency graph",
-			},
-		},
-		Action: runContextCmd,
+		Flags:     flags,
+		Action:    runContextCmd,
 	}
 }
 
@@ -1397,6 +1914,8 @@ func runContextCmd(c *cli.Context) error {
 	paths := getPaths(c)
 	includeMetrics := c.Bool("include-metrics")
 	includeGraph := c.Bool("include-graph")
+	repoMap := c.Bool("repo-map")
+	topN := c.Int("top")
 
 	cfg := config.LoadOrDefault()
 	scan := scanner.NewScanner(cfg)
@@ -1485,6 +2004,69 @@ func runContextCmd(c *cli.Context) error {
 		}
 	}
 
+	if repoMap {
+		fmt.Println()
+		fmt.Println("## Repository Map")
+		rmAnalyzer := analyzer.NewRepoMapAnalyzer()
+		defer rmAnalyzer.Close()
+
+		spinner := progress.NewSpinner("Generating repo map...")
+		rm, err := rmAnalyzer.AnalyzeProject(files)
+		spinner.FinishSuccess()
+
+		if err == nil {
+			// Check if we should output using formatter
+			formatStr := getFormat(c)
+			if formatStr != "" && formatStr != "text" {
+				// Use formatter for non-text output
+				topSymbols := rm.TopN(topN)
+
+				var rows [][]string
+				for _, s := range topSymbols {
+					rows = append(rows, []string{
+						s.Name,
+						s.Kind,
+						s.File,
+						fmt.Sprintf("%d", s.Line),
+						fmt.Sprintf("%.4f", s.PageRank),
+						fmt.Sprintf("%d", s.InDegree),
+						fmt.Sprintf("%d", s.OutDegree),
+					})
+				}
+
+				table := output.NewTable(
+					fmt.Sprintf("Repository Map (Top %d Symbols by PageRank)", topN),
+					[]string{"Name", "Kind", "File", "Line", "PageRank", "In-Degree", "Out-Degree"},
+					rows,
+					[]string{
+						fmt.Sprintf("Total Symbols: %d", rm.Summary.TotalSymbols),
+						fmt.Sprintf("Total Files: %d", rm.Summary.TotalFiles),
+						fmt.Sprintf("Avg Connections: %.1f", rm.Summary.AvgConnections),
+					},
+					rm,
+				)
+
+				if err := formatter.Output(table); err != nil {
+					return err
+				}
+			} else {
+				// Text/markdown output
+				topSymbols := rm.TopN(topN)
+				fmt.Printf("Top %d symbols by PageRank:\n\n", len(topSymbols))
+				fmt.Println("| Symbol | Kind | File | Line | PageRank |")
+				fmt.Println("|--------|------|------|------|----------|")
+				for _, s := range topSymbols {
+					fmt.Printf("| %s | %s | %s | %d | %.4f |\n",
+						s.Name, s.Kind, s.File, s.Line, s.PageRank)
+				}
+				fmt.Println()
+				fmt.Printf("- **Total Symbols**: %d\n", rm.Summary.TotalSymbols)
+				fmt.Printf("- **Total Files**: %d\n", rm.Summary.TotalFiles)
+				fmt.Printf("- **Max PageRank**: %.4f\n", rm.Summary.MaxPageRank)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -1510,6 +2092,10 @@ func analyzeCmd() *cli.Command {
 			tdgCmd(),
 			graphCmd(),
 			lintHotspotCmd(),
+			hotspotCmd(),
+			temporalCouplingCmd(),
+			ownershipCmd(),
+			cohesionCmd(),
 		},
 	}
 }
