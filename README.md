@@ -30,7 +30,8 @@ There are two types of complexity:
 
 **Why it matters:** Research shows that complex code has more bugs and takes longer to fix. [McCabe's original 1976 paper](https://ieeexplore.ieee.org/document/1702388) found that functions with complexity over 10 are significantly harder to maintain. [SonarSource's cognitive complexity](https://www.sonarsource.com/docs/CognitiveComplexity.pdf) builds on this by measuring what actually confuses developers.
 
-**Rule of thumb:** Keep cyclomatic complexity under 10 and cognitive complexity under 15 per function.
+> [!TIP]
+> Keep cyclomatic complexity under 10 and cognitive complexity under 15 per function.
 
 </details>
 
@@ -50,7 +51,8 @@ When developers write `TODO: fix this later` or `HACK: this is terrible but work
 
 **Why it matters:** [Potdar and Shihab's 2014 study](https://ieeexplore.ieee.org/document/6976075) found that SATD comments often stay in codebases for years. The longer they stay, the harder they are to fix because people forget the context. [Maldonado and Shihab (2015)](https://ieeexplore.ieee.org/document/7332619) showed that design debt is the most common and most dangerous type.
 
-**Rule of thumb:** Review SATD weekly. If a TODO is older than 6 months, either fix it or delete it.
+> [!TIP]
+> Review SATD weekly. If a TODO is older than 6 months, either fix it or delete it.
 
 </details>
 
@@ -66,7 +68,8 @@ Dead code includes:
 
 **Why it matters:** Dead code isn't just clutter. It confuses new developers who think it must be important. It increases build times and binary sizes. Worst of all, it can hide bugs - if someone "fixes" dead code thinking it runs, they've wasted time. [Romano et al. (2020)](https://ieeexplore.ieee.org/document/8370748) found that dead code is a strong predictor of other code quality problems.
 
-**Rule of thumb:** Delete dead code. Version control means you can always get it back if needed.
+> [!TIP]
+> Delete dead code. Version control means you can always get it back if needed.
 
 </details>
 
@@ -87,7 +90,8 @@ Files with high churn are "hotspots" - they're constantly being touched, which c
 
 **Why it matters:** [Nagappan and Ball's 2005 research at Microsoft](https://www.microsoft.com/en-us/research/publication/use-of-relative-code-churn-measures-to-predict-system-defect-density/) found that code churn is one of the best predictors of bugs. Files that change a lot tend to have more defects. Combined with complexity data, churn helps you find the files that are both complicated AND frequently modified - your highest-risk code.
 
-**Rule of thumb:** If a file has high churn AND high complexity, prioritize refactoring it.
+> [!TIP]
+> If a file has high churn AND high complexity, prioritize refactoring it.
 
 </details>
 
@@ -104,7 +108,8 @@ There are three types of clones:
 
 **Why it matters:** When you fix a bug in one copy, you have to remember to fix all the other copies too. [Juergens et al. (2009)](https://ieeexplore.ieee.org/document/5070547) found that cloned code has significantly more bugs because fixes don't get applied consistently. The more clones you have, the more likely you'll miss one during updates.
 
-**Rule of thumb:** Anything copied more than twice should probably be a shared function. Aim for duplication ratio under 5%.
+> [!TIP]
+> Anything copied more than twice should probably be a shared function. Aim for duplication ratio under 5%.
 
 </details>
 
@@ -123,7 +128,8 @@ Each file gets a risk score from 0% to 100%.
 
 **Why it matters:** You can't review everything equally. [Menzies et al. (2007)](https://ieeexplore.ieee.org/document/4027145) showed that defect prediction helps teams focus testing and code review on the files most likely to have problems. [Rahman et al. (2014)](https://dl.acm.org/doi/10.1145/2568225.2568269) found that even simple models outperform random file selection for finding bugs.
 
-**Rule of thumb:** Prioritize code review for files with >70% defect probability.
+> [!TIP]
+> Prioritize code review for files with >70% defect probability.
 
 </details>
 
@@ -153,7 +159,8 @@ Scores are classified into letter grades (A+ to F), where:
 
 **Why it matters:** Technical debt is like financial debt - a little is fine, too much kills you. [Cunningham coined the term in 1992](http://c2.com/doc/oopsla92.html), and [Kruchten et al. (2012)](https://ieeexplore.ieee.org/document/6336722) formalized how to measure and manage it. TDG gives you a single number to track over time and compare across files.
 
-**Rule of thumb:** Fix files with grade C or lower before adding new features. Track average TDG over time - it should go up, not down.
+> [!TIP]
+> Fix files with grade C or lower before adding new features. Track average TDG over time - it should go up, not down.
 
 </details>
 
@@ -168,7 +175,8 @@ Omen builds a graph showing which files import which other files, then calculate
 
 **Why it matters:** Highly coupled code is fragile - changing one file breaks many others. [Parnas's 1972 paper on modularity](https://dl.acm.org/doi/10.1145/361598.361623) established that good software design minimizes dependencies between modules. The dependency graph shows you where your architecture is clean and where it's tangled.
 
-**Rule of thumb:** Files with high PageRank should be especially stable and well-tested. Consider breaking up files that appear as "bridges" everywhere.
+> [!TIP]
+> Files with high PageRank should be especially stable and well-tested. Consider breaking up files that appear as "bridges" everywhere.
 
 </details>
 
@@ -189,7 +197,8 @@ Omen builds a graph showing which files import which other files, then calculate
 
 **Why it matters:** Halstead metrics give you objective measurements for comparing different implementations of the same functionality. They can estimate how long code took to write and predict how many bugs it might contain.
 
-**Rule of thumb:** Use Halstead for comparing alternative implementations. Lower effort and predicted bugs = better.
+> [!TIP]
+> Use Halstead for comparing alternative implementations. Lower effort and predicted bugs = better.
 
 </details>
 
@@ -211,7 +220,8 @@ Omen calculates hotspot scores by multiplying:
 
 **Why it matters:** [Adam Tornhill's "Your Code as a Crime Scene"](https://pragprog.com/titles/atcrime/your-code-as-a-crime-scene/) introduced hotspot analysis as a way to find the most impactful refactoring targets. His research shows that a small percentage of files (typically 4-8%) contain most of the bugs. [Graves et al. (2000)](https://ieeexplore.ieee.org/document/859533) demonstrated that recent change activity is a better defect predictor than code age.
 
-**Rule of thumb:** Start refactoring with your top 3 hotspots. Reducing complexity in high-churn files has the highest ROI.
+> [!TIP]
+> Start refactoring with your top 3 hotspots. Reducing complexity in high-churn files has the highest ROI.
 
 </details>
 
@@ -235,7 +245,8 @@ Omen analyzes your git history to find file pairs that change together:
 
 **Why it matters:** [Ball et al. (1997)](https://www.researchgate.net/publication/2791666_If_Your_Version_Control_System_Could_Talk) first studied co-change patterns at AT&T and found they reveal architectural violations invisible to static analysis. [Beyer and Noack (2005)](https://www.semanticscholar.org/paper/Clustering-software-artifacts-based-on-frequent-Beyer-Noack/1afc4eeb182d92631c3ce400e6999eebbca71c12) showed that temporal coupling predicts future changes - if files changed together before, they'll likely change together again.
 
-**Rule of thumb:** If two files have >50% temporal coupling but no import relationship, consider extracting a shared module or merging them.
+> [!TIP]
+> If two files have >50% temporal coupling but no import relationship, consider extracting a shared module or merging them.
 
 </details>
 
@@ -260,7 +271,8 @@ Omen uses git blame to calculate:
 
 **Why it matters:** [Bird et al. (2011)](https://ieeexplore.ieee.org/document/6032488) found that code with many minor contributors has more bugs than code with clear ownership, but code owned by a single person creates organizational risk. The sweet spot is 2-4 significant contributors per module. [Nagappan et al. (2008)](https://www.microsoft.com/en-us/research/publication/the-influence-of-organizational-structure-on-software-quality/) showed that organizational metrics (like ownership) predict defects better than code metrics alone.
 
-**Rule of thumb:** Files with >80% single ownership should have documented knowledge transfer. Critical files should have at least 2 people who understand them.
+> [!TIP]
+> Files with >80% single ownership should have documented knowledge transfer. Critical files should have at least 2 people who understand them.
 
 </details>
 
@@ -282,7 +294,8 @@ The Chidamber-Kemerer (CK) metrics suite measures object-oriented design quality
 
 **Why it matters:** [Chidamber and Kemerer's 1994 paper](https://ieeexplore.ieee.org/document/295895) established these metrics as the foundation of OO quality measurement. [Basili et al. (1996)](https://ieeexplore.ieee.org/document/544352) validated them empirically, finding that WMC and CBO strongly correlate with fault-proneness. These metrics have been cited thousands of times and remain the standard for OO design analysis.
 
-**Rule of thumb:** Classes violating multiple CK thresholds are candidates for refactoring. High WMC + high LCOM often indicates a "god class" that should be split.
+> [!TIP]
+> Classes violating multiple CK thresholds are candidates for refactoring. High WMC + high LCOM often indicates a "god class" that should be split.
 
 </details>
 
@@ -317,7 +330,8 @@ For each symbol, the map includes:
   type TdgScore struct
 ```
 
-**Rule of thumb:** Use `omen context --repo-map --top 50` to generate context for LLM prompts. The top 50 symbols usually capture the essential architecture.
+> [!TIP]
+> Use `omen context --repo-map --top 50` to generate context for LLM prompts. The top 50 symbols usually capture the essential architecture.
 
 </details>
 
@@ -347,7 +361,8 @@ Tool outputs default to [TOON (Token-Oriented Object Notation)](https://github.c
 
 **Why it matters:** LLMs work best when they have access to structured tools rather than parsing unstructured output. MCP is the emerging standard for LLM tool integration, supported by Claude Desktop and other AI assistants. TOON output maximizes the information density within context windows.
 
-**Rule of thumb:** Configure omen as an MCP server in your AI assistant to enable natural language queries like "find the most complex functions" or "show me technical debt hotspots."
+> [!TIP]
+> Configure omen as an MCP server in your AI assistant to enable natural language queries like "find the most complex functions" or "show me technical debt hotspots."
 
 </details>
 
