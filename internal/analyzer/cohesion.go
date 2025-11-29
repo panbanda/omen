@@ -737,22 +737,24 @@ func extractCoupledClasses(classNode *sitter.Node, result *parser.ParseResult) [
 	return classes
 }
 
+// primitiveTypes is a pre-allocated set of primitive type names.
+var primitiveTypes = map[string]bool{
+	"int": true, "int8": true, "int16": true, "int32": true, "int64": true,
+	"uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true,
+	"float": true, "float32": true, "float64": true, "double": true,
+	"bool": true, "boolean": true, "Boolean": true,
+	"string": true, "String": true, "str": true,
+	"void": true, "None": true, "null": true, "nil": true,
+	"byte": true, "char": true, "short": true, "long": true,
+	"any": true, "object": true, "Object": true,
+	"number": true, "Number": true,
+	"true": true, "false": true,
+	"self": true, "this": true, "super": true,
+}
+
 // isPrimitiveType checks if a type name is a primitive.
 func isPrimitiveType(name string) bool {
-	primitives := map[string]bool{
-		"int": true, "int8": true, "int16": true, "int32": true, "int64": true,
-		"uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true,
-		"float": true, "float32": true, "float64": true, "double": true,
-		"bool": true, "boolean": true, "Boolean": true,
-		"string": true, "String": true, "str": true,
-		"void": true, "None": true, "null": true, "nil": true,
-		"byte": true, "char": true, "short": true, "long": true,
-		"any": true, "object": true, "Object": true,
-		"number": true, "Number": true,
-		"true": true, "false": true,
-		"self": true, "this": true, "super": true,
-	}
-	return primitives[name]
+	return primitiveTypes[name]
 }
 
 // calculateNodeComplexity calculates cyclomatic complexity for a node.

@@ -754,21 +754,23 @@ func extractCalleeWithReceiver(node *sitter.Node, source []byte, _ parser.Langua
 	return "", ""
 }
 
+// functionNodeTypes is a pre-allocated set of function node types.
+var functionNodeTypes = map[string]bool{
+	"function_declaration":    true,
+	"method_declaration":      true,
+	"function_definition":     true,
+	"function_item":           true,
+	"method_definition":       true,
+	"function":                true,
+	"arrow_function":          true,
+	"method":                  true,
+	"constructor_declaration": true,
+	"lambda_expression":       true,
+}
+
 // isFunctionNode checks if a node type represents a function definition.
 func isFunctionNode(nodeType string, _ parser.Language) bool {
-	functionTypes := map[string]bool{
-		"function_declaration":    true,
-		"method_declaration":      true,
-		"function_definition":     true,
-		"function_item":           true,
-		"method_definition":       true,
-		"function":                true,
-		"arrow_function":          true,
-		"method":                  true,
-		"constructor_declaration": true,
-		"lambda_expression":       true,
-	}
-	return functionTypes[nodeType]
+	return functionNodeTypes[nodeType]
 }
 
 // getFunctionBody returns the body node of a function.
