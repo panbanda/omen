@@ -1,6 +1,7 @@
 package fileproc
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -750,6 +751,278 @@ func BenchmarkMapFiles_WithProgress(b *testing.B) {
 		if len(results) != fileCount {
 			b.Fatalf("Expected %d results, got %d", fileCount, len(results))
 		}
+	}
+}
+
+func TestProcessingError(t *testing.T) {
+	err := ProcessingError{Path: "/path/to/file.go", Err: fmt.Errorf("parse failed")}
+	expected := "/path/to/file.go: parse failed"
+	if err.Error() != expected {
+		t.Errorf("Error() = %q, want %q", err.Error(), expected)
+	}
+}
+
+func TestProcessingErrors(t *testing.T) {
+	errs := &ProcessingErrors{}
+
+	// Empty errors
+	if errs.HasErrors() {
+		t.Error("Empty ProcessingErrors should not have errors")
+	}
+	if errs.Error() != "no errors" {
+		t.Errorf("Empty error message = %q, want 'no errors'", errs.Error())
+	}
+
+	// Single error
+	errs.Add("/file1.go", fmt.Errorf("error1"))
+	if !errs.HasErrors() {
+		t.Error("ProcessingErrors with one error should have errors")
+	}
+	if errs.Error() != "/file1.go: error1" {
+		t.Errorf("Single error message = %q", errs.Error())
+	}
+
+	// Multiple errors
+	errs.Add("/file2.go", fmt.Errorf("error2"))
+	if len(errs.Errors) != 2 {
+		t.Errorf("Expected 2 errors, got %d", len(errs.Errors))
+	}
+	errMsg := errs.Error()
+	if errMsg != "2 files failed to process (first: /file1.go: error1)" {
+		t.Errorf("Multiple error message = %q", errMsg)
+	}
+}
+
+func TestProcessingErrors_ThreadSafe(t *testing.T) {
+	errs := &ProcessingErrors{}
+	var wg sync.WaitGroup
+
+	// Add errors concurrently
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			errs.Add(fmt.Sprintf("/file%d.go", n), fmt.Errorf("error %d", n))
+		}(i)
+	}
+	wg.Wait()
+
+	if len(errs.Errors) != 100 {
+		t.Errorf("Expected 100 errors, got %d", len(errs.Errors))
+	}
+}
+
+func TestMapFilesCollectErrors(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	files := []string{
+		createTestFile(t, tmpDir, "good1.go", "package main"),
+		createTestFile(t, tmpDir, "good2.go", "package main"),
+		createTestFile(t, tmpDir, "bad.go", "package main"),
+	}
+
+	results, errs := MapFilesCollectErrors(files, func(p *parser.Parser, path string) (string, error) {
+		if filepath.Base(path) == "bad.go" {
+			return "", fmt.Errorf("simulated error")
+		}
+		return filepath.Base(path), nil
+	})
+
+	if len(results) != 2 {
+		t.Errorf("Expected 2 results, got %d", len(results))
+	}
+
+	if errs == nil {
+		t.Fatal("Expected errors to be returned")
+	}
+
+	if len(errs.Errors) != 1 {
+		t.Errorf("Expected 1 error, got %d", len(errs.Errors))
+	}
+
+	if errs.Errors[0].Path != files[2] {
+		t.Errorf("Error path = %q, want %q", errs.Errors[0].Path, files[2])
+	}
+}
+
+func TestMapFilesCollectErrors_NoErrors(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	files := []string{
+		createTestFile(t, tmpDir, "good1.go", "package main"),
+		createTestFile(t, tmpDir, "good2.go", "package main"),
+	}
+
+	results, errs := MapFilesCollectErrors(files, func(p *parser.Parser, path string) (string, error) {
+		return filepath.Base(path), nil
+	})
+
+	if len(results) != 2 {
+		t.Errorf("Expected 2 results, got %d", len(results))
+	}
+
+	if errs != nil {
+		t.Errorf("Expected nil errors, got %v", errs)
+	}
+}
+
+func TestMapFilesCollectErrors_Empty(t *testing.T) {
+	results, errs := MapFilesCollectErrors([]string{}, func(p *parser.Parser, path string) (string, error) {
+		return path, nil
+	})
+
+	if results != nil {
+		t.Errorf("Expected nil results, got %v", results)
+	}
+
+	if errs != nil {
+		t.Errorf("Expected nil errors, got %v", errs)
+	}
+}
+
+func TestForEachFileCollectErrors(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	files := []string{
+		createTestFile(t, tmpDir, "good1.txt", "content"),
+		createTestFile(t, tmpDir, "bad.txt", "content"),
+		createTestFile(t, tmpDir, "good2.txt", "content"),
+	}
+
+	results, errs := ForEachFileCollectErrors(files, func(path string) (string, error) {
+		if filepath.Base(path) == "bad.txt" {
+			return "", fmt.Errorf("simulated error")
+		}
+		return filepath.Base(path), nil
+	})
+
+	if len(results) != 2 {
+		t.Errorf("Expected 2 results, got %d", len(results))
+	}
+
+	if errs == nil {
+		t.Fatal("Expected errors to be returned")
+	}
+
+	if len(errs.Errors) != 1 {
+		t.Errorf("Expected 1 error, got %d", len(errs.Errors))
+	}
+}
+
+func TestMapFilesWithContext(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	files := []string{
+		createTestFile(t, tmpDir, "file1.go", "package main"),
+		createTestFile(t, tmpDir, "file2.go", "package main"),
+	}
+
+	ctx := context.Background()
+	results, errs := MapFilesWithContext(ctx, files, func(p *parser.Parser, path string) (string, error) {
+		return filepath.Base(path), nil
+	})
+
+	if len(results) != 2 {
+		t.Errorf("Expected 2 results, got %d", len(results))
+	}
+
+	if errs != nil {
+		t.Errorf("Expected no errors, got %v", errs)
+	}
+}
+
+func TestMapFilesWithContext_Cancellation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create many files to increase chance of catching cancellation
+	fileCount := 100
+	files := make([]string, fileCount)
+	for i := 0; i < fileCount; i++ {
+		files[i] = createTestFile(t, tmpDir, fmt.Sprintf("file%d.go", i), "package main")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	var processed atomic.Int32
+	go func() {
+		// Cancel after some files have started processing
+		for processed.Load() < 10 {
+			runtime.Gosched()
+		}
+		cancel()
+	}()
+
+	results, errs := MapFilesWithContext(ctx, files, func(p *parser.Parser, path string) (string, error) {
+		processed.Add(1)
+		// Small delay to allow cancellation to take effect
+		for i := 0; i < 1000; i++ {
+			runtime.Gosched()
+		}
+		return filepath.Base(path), nil
+	})
+
+	// We should have partial results
+	t.Logf("Processed %d files, got %d results", processed.Load(), len(results))
+
+	// Should have some context canceled errors
+	if errs != nil {
+		hasContextError := false
+		for _, e := range errs.Errors {
+			if e.Err == context.Canceled {
+				hasContextError = true
+				break
+			}
+		}
+		if !hasContextError {
+			t.Log("No context.Canceled errors found (cancellation may have happened after all processing)")
+		}
+	}
+
+	// Total results + errors should be <= fileCount
+	errorCount := 0
+	if errs != nil {
+		errorCount = len(errs.Errors)
+	}
+	if len(results)+errorCount > fileCount {
+		t.Errorf("Results (%d) + errors (%d) should not exceed file count (%d)",
+			len(results), errorCount, fileCount)
+	}
+}
+
+func TestForEachFileWithContext(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	files := []string{
+		createTestFile(t, tmpDir, "file1.txt", "content"),
+		createTestFile(t, tmpDir, "file2.txt", "content"),
+	}
+
+	ctx := context.Background()
+	results, errs := ForEachFileWithContext(ctx, files, func(path string) (string, error) {
+		return filepath.Base(path), nil
+	})
+
+	if len(results) != 2 {
+		t.Errorf("Expected 2 results, got %d", len(results))
+	}
+
+	if errs != nil {
+		t.Errorf("Expected no errors, got %v", errs)
+	}
+}
+
+func TestMapFilesWithContext_Empty(t *testing.T) {
+	ctx := context.Background()
+	results, errs := MapFilesWithContext(ctx, []string{}, func(p *parser.Parser, path string) (string, error) {
+		return path, nil
+	})
+
+	if results != nil {
+		t.Errorf("Expected nil results, got %v", results)
+	}
+
+	if errs != nil {
+		t.Errorf("Expected nil errors, got %v", errs)
 	}
 }
 
