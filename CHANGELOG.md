@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.3](https://github.com/panbanda/omen/compare/v1.5.2...v1.5.3) (2025-11-29)
+
+
+### Performance Improvements
+
+* **analyzer:** optimize dead code analyzer with single-pass AST traversal ([00203e0](https://github.com/panbanda/omen/commit/00203e0dd18093f1691bbece4188644ea523e1d6))
+* **analyzer:** optimize dead code analyzer with single-pass AST traversal ([5e08d83](https://github.com/panbanda/omen/commit/5e08d83894066f0188776423049a7b44530f8209))
+
 ## [1.5.2](https://github.com/panbanda/omen/compare/v1.5.1...v1.5.2) (2025-11-29)
 
 
