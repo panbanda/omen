@@ -657,13 +657,13 @@ func (a *DuplicateAnalyzer) normalizeToken(token string) string {
 
 // canonicalizeIdentifier maps identifiers to canonical names (VAR_N).
 func (a *DuplicateAnalyzer) canonicalizeIdentifier(name string) string {
-	if canonical, ok := a.identifierMap.Load(name); ok {
-		return canonical.(string)
-	}
-
+	// Use LoadOrStore to avoid race where two goroutines both see the key
+	// as missing and assign different IDs to the same identifier.
 	id := atomic.AddUint32(&a.identifierCounter, 1)
 	canonical := "VAR_" + itoa(int(id))
-	a.identifierMap.Store(name, canonical)
+	if actual, loaded := a.identifierMap.LoadOrStore(name, canonical); loaded {
+		return actual.(string)
+	}
 	return canonical
 }
 

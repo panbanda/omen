@@ -618,9 +618,10 @@ func test2() {
 
 func TestAnalyzeProject_ExactClones(t *testing.T) {
 	tmpDir := t.TempDir()
-	analyzer := NewDuplicateAnalyzer(6, 0.8)
+	analyzer := NewDuplicateAnalyzer(5, 0.8)
 	defer analyzer.Close()
 
+	// More substantial code to ensure we exceed minimum token threshold
 	duplicateCode := `func calculate(a, b int) int {
     x := a + b
     y := x * 2
@@ -629,7 +630,10 @@ func TestAnalyzeProject_ExactClones(t *testing.T) {
     w := result + 1
     v := w - 2
     u := v * 3
-    return u
+    final := u + 10
+    output := final - 5
+    value := output * 2
+    return value
 }
 `
 
