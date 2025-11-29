@@ -235,11 +235,13 @@ func LoadOrDefault() *Config {
 
 // ShouldExclude checks if a path should be excluded from analysis.
 func (c *Config) ShouldExclude(path string) bool {
-	// Check directory exclusions
+	// Check directory exclusions using exact path component matching
+	pathComponents := strings.Split(filepath.Clean(path), string(filepath.Separator))
 	for _, dir := range c.Exclude.Dirs {
-		if strings.Contains(path, string(filepath.Separator)+dir+string(filepath.Separator)) ||
-			strings.HasPrefix(path, dir+string(filepath.Separator)) {
-			return true
+		for _, component := range pathComponents {
+			if component == dir {
+				return true
+			}
 		}
 	}
 

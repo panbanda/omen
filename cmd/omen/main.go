@@ -118,9 +118,6 @@ func validateDays(days int) error {
 	if days <= 0 {
 		return fmt.Errorf("--days must be a positive integer (got %d)", days)
 	}
-	if days > 3650 { // ~10 years
-		return fmt.Errorf("--days cannot exceed 3650 (10 years), got %d", days)
-	}
 	return nil
 }
 

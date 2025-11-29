@@ -25,7 +25,24 @@ func NewScanner(cfg *config.Config) *Scanner {
 	return &Scanner{config: cfg}
 }
 
-// loadGitignore loads .gitignore patterns from a directory and its parents.
+// findGitRoot finds the root of the git repository by looking for .git directory.
+// Returns empty string if not in a git repository.
+func findGitRoot(start string) string {
+	dir := start
+	for {
+		gitDir := filepath.Join(dir, ".git")
+		if info, err := os.Stat(gitDir); err == nil && info.IsDir() {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+// loadGitignore loads .gitignore patterns from a directory up to the git root.
 func (s *Scanner) loadGitignore(root string) {
 	if !s.config.Exclude.Gitignore {
 		return
@@ -33,7 +50,10 @@ func (s *Scanner) loadGitignore(root string) {
 
 	var patterns []gitignore.Pattern
 
-	// Walk up to find all .gitignore files
+	// Find git root to limit how far up we walk
+	gitRoot := findGitRoot(root)
+
+	// Walk up to find all .gitignore files, stopping at git root
 	dir := root
 	for {
 		gitignorePath := filepath.Join(dir, ".gitignore")
@@ -48,6 +68,10 @@ func (s *Scanner) loadGitignore(root string) {
 			}
 		}
 
+		// Stop at git root or filesystem root
+		if gitRoot != "" && dir == gitRoot {
+			break
+		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
 			break

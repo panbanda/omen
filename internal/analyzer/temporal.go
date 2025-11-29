@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"context"
 	"sort"
 	"time"
 
@@ -44,6 +45,13 @@ func makeFilePair(a, b string) filePair {
 
 // AnalyzeRepo analyzes temporal coupling for a repository.
 func (a *TemporalCouplingAnalyzer) AnalyzeRepo(repoPath string) (*models.TemporalCouplingAnalysis, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultGitTimeout)
+	defer cancel()
+	return a.AnalyzeRepoWithContext(ctx, repoPath)
+}
+
+// AnalyzeRepoWithContext analyzes temporal coupling with a context for cancellation/timeout.
+func (a *TemporalCouplingAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath string) (*models.TemporalCouplingAnalysis, error) {
 	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
 		return nil, err
@@ -65,6 +73,12 @@ func (a *TemporalCouplingAnalyzer) AnalyzeRepo(repoPath string) (*models.Tempora
 	fileCommits := make(map[string]int)
 
 	err = logIter.ForEach(func(c *object.Commit) error {
+		// Check for context cancellation
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		stats, err := c.Stats()
 		if err != nil {
 			return nil // Skip commits we can't get stats for

@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"context"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -11,6 +12,9 @@ import (
 	"github.com/panbanda/omen/internal/progress"
 	"github.com/panbanda/omen/pkg/models"
 )
+
+// DefaultGitTimeout is the default timeout for git operations.
+const DefaultGitTimeout = 5 * time.Minute
 
 // ChurnAnalyzer analyzes git commit history for file churn.
 type ChurnAnalyzer struct {
@@ -33,6 +37,13 @@ func (a *ChurnAnalyzer) SetSpinner(spinner *progress.Tracker) {
 
 // AnalyzeRepo analyzes git history for a repository.
 func (a *ChurnAnalyzer) AnalyzeRepo(repoPath string) (*models.ChurnAnalysis, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultGitTimeout)
+	defer cancel()
+	return a.AnalyzeRepoWithContext(ctx, repoPath)
+}
+
+// AnalyzeRepoWithContext analyzes git history with a context for cancellation/timeout.
+func (a *ChurnAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath string) (*models.ChurnAnalysis, error) {
 	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
 		return nil, err
@@ -60,6 +71,12 @@ func (a *ChurnAnalyzer) AnalyzeRepo(repoPath string) (*models.ChurnAnalysis, err
 	fileMetrics := make(map[string]*models.FileChurnMetrics)
 
 	err = logIter.ForEach(func(commit *object.Commit) error {
+		// Check for context cancellation
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		if a.spinner != nil {
 			a.spinner.Tick()
 		}
