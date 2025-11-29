@@ -225,15 +225,15 @@ func TestChurnSummary_CalculateStatistics(t *testing.T) {
 			}
 
 			if len(tt.files) > 1 {
-				if s.VarianceChurn < 0 {
-					t.Errorf("VarianceChurn = %v, expected >= 0", s.VarianceChurn)
+				if s.VarianceChurnScore < 0 {
+					t.Errorf("VarianceChurnScore = %v, expected >= 0", s.VarianceChurnScore)
 				}
-				if s.StdDevChurn < 0 {
-					t.Errorf("StdDevChurn = %v, expected >= 0", s.StdDevChurn)
+				if s.StdDevChurnScore < 0 {
+					t.Errorf("StdDevChurnScore = %v, expected >= 0", s.StdDevChurnScore)
 				}
-				expectedStdDev := math.Sqrt(s.VarianceChurn)
-				if math.Abs(s.StdDevChurn-expectedStdDev) > 0.001 {
-					t.Errorf("StdDevChurn = %v, expected %v", s.StdDevChurn, expectedStdDev)
+				expectedStdDev := math.Sqrt(s.VarianceChurnScore)
+				if math.Abs(s.StdDevChurnScore-expectedStdDev) > 0.001 {
+					t.Errorf("StdDevChurnScore = %v, expected %v", s.StdDevChurnScore, expectedStdDev)
 				}
 			}
 		})
@@ -293,18 +293,18 @@ func TestPercentileFloat64(t *testing.T) {
 func TestNewChurnSummary(t *testing.T) {
 	s := NewChurnSummary()
 
-	if s.TopChurnedFiles == nil {
-		t.Error("TopChurnedFiles should be initialized")
-	}
-	if len(s.TopChurnedFiles) != 0 {
-		t.Errorf("TopChurnedFiles should be empty, got %d items", len(s.TopChurnedFiles))
-	}
-
 	if s.HotspotFiles == nil {
 		t.Error("HotspotFiles should be initialized")
 	}
 	if len(s.HotspotFiles) != 0 {
 		t.Errorf("HotspotFiles should be empty, got %d items", len(s.HotspotFiles))
+	}
+
+	if s.AuthorContributions == nil {
+		t.Error("AuthorContributions should be initialized")
+	}
+	if len(s.AuthorContributions) != 0 {
+		t.Errorf("AuthorContributions should be empty, got %d items", len(s.AuthorContributions))
 	}
 
 	if s.StableFiles == nil {
@@ -497,29 +497,33 @@ func TestChurnSummaryWithData(t *testing.T) {
 	// Create test data similar to PMAT's create_test_analysis
 	files := []FileChurnMetrics{
 		{
-			Path:         "src/main.go",
-			Commits:      25,
-			LinesAdded:   300,
-			LinesDeleted: 150,
-			ChurnScore:   0.85,
-			Authors:      map[string]int{"alice": 15, "bob": 10},
+			Path:          "src/main.go",
+			RelativePath:  "src/main.go",
+			Commits:       25,
+			LinesAdded:    300,
+			LinesDeleted:  150,
+			ChurnScore:    0.85,
+			UniqueAuthors: []string{"alice", "bob"},
+			AuthorCounts:  map[string]int{"alice": 15, "bob": 10},
 		},
 		{
-			Path:         "src/lib.go",
-			Commits:      5,
-			LinesAdded:   50,
-			LinesDeleted: 10,
-			ChurnScore:   0.15,
-			Authors:      map[string]int{"alice": 5},
+			Path:          "src/lib.go",
+			RelativePath:  "src/lib.go",
+			Commits:       5,
+			LinesAdded:    50,
+			LinesDeleted:  10,
+			ChurnScore:    0.15,
+			UniqueAuthors: []string{"alice"},
+			AuthorCounts:  map[string]int{"alice": 5},
 		},
 	}
 
 	summary := ChurnSummary{
-		TotalFiles:        2,
-		TotalCommits:      30,
-		TotalLinesAdded:   350,
-		TotalLinesDeleted: 160,
-		UniqueAuthors:     2,
+		TotalFilesChanged:   2,
+		TotalCommits:        30,
+		TotalAdditions:      350,
+		TotalDeletions:      160,
+		AuthorContributions: map[string]int{"alice": 20, "bob": 10},
 	}
 	summary.IdentifyHotspotAndStableFiles(files)
 
@@ -544,22 +548,22 @@ func TestChurnSummaryWithData(t *testing.T) {
 // TestChurnAnalysisCreation mirrors PMAT test_code_churn_analysis_creation
 func TestChurnAnalysisCreation(t *testing.T) {
 	analysis := ChurnAnalysis{
-		Files:    []FileChurnMetrics{},
-		Summary:  NewChurnSummary(),
-		Days:     30,
-		RepoPath: "/test/repo",
+		Files:          []FileChurnMetrics{},
+		Summary:        NewChurnSummary(),
+		PeriodDays:     30,
+		RepositoryRoot: "/test/repo",
 	}
 
-	if analysis.Days != 30 {
-		t.Errorf("Days = %d, expected 30", analysis.Days)
+	if analysis.PeriodDays != 30 {
+		t.Errorf("PeriodDays = %d, expected 30", analysis.PeriodDays)
 	}
 
 	if analysis.Summary.TotalCommits != 0 {
 		t.Errorf("TotalCommits = %d, expected 0", analysis.Summary.TotalCommits)
 	}
 
-	if analysis.Summary.TotalFiles != 0 {
-		t.Errorf("TotalFiles = %d, expected 0", analysis.Summary.TotalFiles)
+	if analysis.Summary.TotalFilesChanged != 0 {
+		t.Errorf("TotalFilesChanged = %d, expected 0", analysis.Summary.TotalFilesChanged)
 	}
 }
 
@@ -581,12 +585,12 @@ func TestStatisticsCalculation(t *testing.T) {
 		t.Errorf("MeanChurnScore = %v, expected 0.5", summary.MeanChurnScore)
 	}
 
-	if math.Abs(summary.VarianceChurn-0.1225) > 0.001 {
-		t.Errorf("VarianceChurn = %v, expected 0.1225", summary.VarianceChurn)
+	if math.Abs(summary.VarianceChurnScore-0.1225) > 0.001 {
+		t.Errorf("VarianceChurnScore = %v, expected 0.1225", summary.VarianceChurnScore)
 	}
 
-	if math.Abs(summary.StdDevChurn-0.35) > 0.001 {
-		t.Errorf("StdDevChurn = %v, expected 0.35", summary.StdDevChurn)
+	if math.Abs(summary.StdDevChurnScore-0.35) > 0.001 {
+		t.Errorf("StdDevChurnScore = %v, expected 0.35", summary.StdDevChurnScore)
 	}
 }
 
@@ -610,12 +614,12 @@ func TestEmptyAnalysis(t *testing.T) {
 		t.Errorf("MeanChurnScore = %v, expected 0", summary.MeanChurnScore)
 	}
 
-	if summary.VarianceChurn != 0 {
-		t.Errorf("VarianceChurn = %v, expected 0", summary.VarianceChurn)
+	if summary.VarianceChurnScore != 0 {
+		t.Errorf("VarianceChurnScore = %v, expected 0", summary.VarianceChurnScore)
 	}
 
-	if summary.StdDevChurn != 0 {
-		t.Errorf("StdDevChurn = %v, expected 0", summary.StdDevChurn)
+	if summary.StdDevChurnScore != 0 {
+		t.Errorf("StdDevChurnScore = %v, expected 0", summary.StdDevChurnScore)
 	}
 }
 

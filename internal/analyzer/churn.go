@@ -38,6 +38,12 @@ func (a *ChurnAnalyzer) AnalyzeRepo(repoPath string) (*models.ChurnAnalysis, err
 		return nil, err
 	}
 
+	// Get absolute path for repository root
+	absPath, err := filepath.Abs(repoPath)
+	if err != nil {
+		absPath = repoPath
+	}
+
 	// Calculate cutoff date
 	cutoff := time.Now().AddDate(0, 0, -a.days)
 
@@ -50,7 +56,7 @@ func (a *ChurnAnalyzer) AnalyzeRepo(repoPath string) (*models.ChurnAnalysis, err
 	}
 	defer logIter.Close()
 
-	// Track file metrics
+	// Track file metrics - keyed by relative path
 	fileMetrics := make(map[string]*models.FileChurnMetrics)
 
 	err = logIter.ForEach(func(commit *object.Commit) error {
@@ -86,23 +92,25 @@ func (a *ChurnAnalyzer) AnalyzeRepo(repoPath string) (*models.ChurnAnalysis, err
 
 		// Process each changed file
 		for _, change := range changes {
-			path := change.To.Name
-			if path == "" {
-				path = change.From.Name // Deleted file
+			relativePath := change.To.Name
+			if relativePath == "" {
+				relativePath = change.From.Name // Deleted file
 			}
 
-			if _, exists := fileMetrics[path]; !exists {
-				fileMetrics[path] = &models.FileChurnMetrics{
-					Path:        path,
-					Authors:     make(map[string]int),
-					FirstCommit: commit.Author.When,
-					LastCommit:  commit.Author.When,
+			if _, exists := fileMetrics[relativePath]; !exists {
+				fileMetrics[relativePath] = &models.FileChurnMetrics{
+					Path:         "./" + relativePath, // pmat prefixes with ./
+					RelativePath: relativePath,
+					AuthorCounts: make(map[string]int),
+					FirstCommit:  commit.Author.When,
+					LastCommit:   commit.Author.When,
 				}
 			}
 
-			fm := fileMetrics[path]
+			fm := fileMetrics[relativePath]
 			fm.Commits++
-			fm.Authors[commit.Author.Email]++
+			// Use author name instead of email (matching pmat behavior)
+			fm.AuthorCounts[commit.Author.Name]++
 
 			// Track first and last commit times
 			if commit.Author.When.Before(fm.FirstCommit) {
@@ -138,15 +146,15 @@ func (a *ChurnAnalyzer) AnalyzeRepo(repoPath string) (*models.ChurnAnalysis, err
 
 	// Convert to slice and calculate scores
 	analysis := &models.ChurnAnalysis{
-		Files:    make([]models.FileChurnMetrics, 0, len(fileMetrics)),
-		Summary:  models.ChurnSummary{},
-		Days:     a.days,
-		RepoPath: repoPath,
+		GeneratedAt:    time.Now().UTC(),
+		PeriodDays:     a.days,
+		RepositoryRoot: absPath,
+		Files:          make([]models.FileChurnMetrics, 0, len(fileMetrics)),
+		Summary:        models.NewChurnSummary(),
 	}
 
 	var totalCommits, totalAdded, totalDeleted int
 	var maxCommits, maxChanges int
-	authorSet := make(map[string]bool)
 
 	// First pass: find max values for normalization
 	for _, fm := range fileMetrics {
@@ -161,15 +169,22 @@ func (a *ChurnAnalyzer) AnalyzeRepo(repoPath string) (*models.ChurnAnalysis, err
 
 	// Second pass: calculate scores and collect stats
 	for _, fm := range fileMetrics {
-		fm.UniqueAuthors = len(fm.Authors)
+		// Convert author counts map to unique authors slice
+		fm.UniqueAuthors = make([]string, 0, len(fm.AuthorCounts))
+		for author := range fm.AuthorCounts {
+			fm.UniqueAuthors = append(fm.UniqueAuthors, author)
+		}
+
 		fm.CalculateChurnScoreWithMax(maxCommits, maxChanges)
 		analysis.Files = append(analysis.Files, *fm)
 
 		totalCommits += fm.Commits
 		totalAdded += fm.LinesAdded
 		totalDeleted += fm.LinesDeleted
-		for author := range fm.Authors {
-			authorSet[author] = true
+
+		// Aggregate author contributions
+		for author, count := range fm.AuthorCounts {
+			analysis.Summary.AuthorContributions[author] += count
 		}
 	}
 
@@ -179,25 +194,14 @@ func (a *ChurnAnalyzer) AnalyzeRepo(repoPath string) (*models.ChurnAnalysis, err
 	})
 
 	// Build summary
-	analysis.Summary.TotalFiles = len(analysis.Files)
+	analysis.Summary.TotalFilesChanged = len(analysis.Files)
 	analysis.Summary.TotalCommits = totalCommits
-	analysis.Summary.TotalLinesAdded = totalAdded
-	analysis.Summary.TotalLinesDeleted = totalDeleted
-	analysis.Summary.UniqueAuthors = len(authorSet)
+	analysis.Summary.TotalAdditions = totalAdded
+	analysis.Summary.TotalDeletions = totalDeleted
 
 	if len(analysis.Files) > 0 {
 		analysis.Summary.AvgCommitsPerFile = float64(totalCommits) / float64(len(analysis.Files))
 		analysis.Summary.MaxChurnScore = analysis.Files[0].ChurnScore
-	}
-
-	// Get top churned files
-	topN := 10
-	if len(analysis.Files) < topN {
-		topN = len(analysis.Files)
-	}
-	analysis.Summary.TopChurnedFiles = make([]string, topN)
-	for i := 0; i < topN; i++ {
-		analysis.Summary.TopChurnedFiles[i] = analysis.Files[i].Path
 	}
 
 	// Calculate churn statistics
@@ -231,38 +235,39 @@ func (a *ChurnAnalyzer) AnalyzeFiles(repoPath string, files []string) (*models.C
 		}
 		fileSet[rel] = true
 		fileSet[f] = true
+		fileSet["./"+rel] = true // Also match pmat-style paths
 	}
 
 	filtered := &models.ChurnAnalysis{
-		Files:    make([]models.FileChurnMetrics, 0),
-		Days:     a.days,
-		RepoPath: repoPath,
+		GeneratedAt:    time.Now().UTC(),
+		PeriodDays:     a.days,
+		RepositoryRoot: fullAnalysis.RepositoryRoot,
+		Files:          make([]models.FileChurnMetrics, 0),
+		Summary:        models.NewChurnSummary(),
 	}
 
 	for _, fm := range fullAnalysis.Files {
-		if fileSet[fm.Path] {
+		if fileSet[fm.Path] || fileSet[fm.RelativePath] {
 			filtered.Files = append(filtered.Files, fm)
 		}
 	}
 
 	// Recalculate summary for filtered files
 	var totalCommits, totalAdded, totalDeleted int
-	authorSet := make(map[string]bool)
 
 	for _, fm := range filtered.Files {
 		totalCommits += fm.Commits
 		totalAdded += fm.LinesAdded
 		totalDeleted += fm.LinesDeleted
-		for author := range fm.Authors {
-			authorSet[author] = true
+		for author, count := range fm.AuthorCounts {
+			filtered.Summary.AuthorContributions[author] += count
 		}
 	}
 
-	filtered.Summary.TotalFiles = len(filtered.Files)
+	filtered.Summary.TotalFilesChanged = len(filtered.Files)
 	filtered.Summary.TotalCommits = totalCommits
-	filtered.Summary.TotalLinesAdded = totalAdded
-	filtered.Summary.TotalLinesDeleted = totalDeleted
-	filtered.Summary.UniqueAuthors = len(authorSet)
+	filtered.Summary.TotalAdditions = totalAdded
+	filtered.Summary.TotalDeletions = totalDeleted
 
 	if len(filtered.Files) > 0 {
 		filtered.Summary.AvgCommitsPerFile = float64(totalCommits) / float64(len(filtered.Files))
