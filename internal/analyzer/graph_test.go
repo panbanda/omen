@@ -35,7 +35,7 @@ func TestNewGraphAnalyzer(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			analyzer := NewGraphAnalyzer(tt.scope)
+			analyzer := NewGraphAnalyzer(WithGraphScope(tt.scope))
 			if analyzer == nil {
 				t.Fatal("NewGraphAnalyzer() returned nil")
 			}
@@ -79,7 +79,7 @@ func helper() string {
 		filePaths = append(filePaths, path)
 	}
 
-	analyzer := NewGraphAnalyzer(ScopeFile)
+	analyzer := NewGraphAnalyzer(WithGraphScope(ScopeFile))
 	defer analyzer.Close()
 
 	graph, err := analyzer.AnalyzeProject(filePaths)
@@ -127,7 +127,7 @@ func baz() {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	analyzer := NewGraphAnalyzer(ScopeFunction)
+	analyzer := NewGraphAnalyzer(WithGraphScope(ScopeFunction))
 	defer analyzer.Close()
 
 	graph, err := analyzer.AnalyzeProject([]string{testFile})
@@ -282,7 +282,7 @@ func main() {}`,
 				t.Fatalf("failed to write test file: %v", err)
 			}
 
-			analyzer := NewGraphAnalyzer(ScopeFile)
+			analyzer := NewGraphAnalyzer(WithGraphScope(ScopeFile))
 			defer analyzer.Close()
 
 			result, err := analyzer.parser.ParseFile(testFile)
@@ -355,7 +355,7 @@ func main() {}`,
 				t.Fatalf("failed to write test file: %v", err)
 			}
 
-			analyzer := NewGraphAnalyzer(ScopeModule)
+			analyzer := NewGraphAnalyzer(WithGraphScope(ScopeModule))
 			defer analyzer.Close()
 
 			result, err := analyzer.parser.ParseFile(testFile)
@@ -443,7 +443,7 @@ func foo() {
 				t.Fatalf("failed to write test file: %v", err)
 			}
 
-			analyzer := NewGraphAnalyzer(ScopeFunction)
+			analyzer := NewGraphAnalyzer(WithGraphScope(ScopeFunction))
 			defer analyzer.Close()
 
 			result, err := analyzer.parser.ParseFile(testFile)
@@ -609,7 +609,7 @@ func TestCalculateMetrics(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			graph := tt.buildGraph()
-			analyzer := NewGraphAnalyzer(ScopeFile)
+			analyzer := NewGraphAnalyzer(WithGraphScope(ScopeFile))
 			defer analyzer.Close()
 
 			metrics := analyzer.CalculateMetrics(graph)
@@ -777,7 +777,7 @@ func standalone() int {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	analyzer := NewGraphAnalyzer(ScopeFile)
+	analyzer := NewGraphAnalyzer(WithGraphScope(ScopeFile))
 	defer analyzer.Close()
 
 	graph, err := analyzer.AnalyzeProject([]string{testFile})
@@ -811,7 +811,7 @@ func TestGraphAnalyzer_EmptyFiles(t *testing.T) {
 		filePaths = append(filePaths, path)
 	}
 
-	analyzer := NewGraphAnalyzer(ScopeFile)
+	analyzer := NewGraphAnalyzer(WithGraphScope(ScopeFile))
 	defer analyzer.Close()
 
 	graph, err := analyzer.AnalyzeProject(filePaths)
@@ -825,7 +825,7 @@ func TestGraphAnalyzer_EmptyFiles(t *testing.T) {
 }
 
 func TestAnalyzeProject_InvalidFile(t *testing.T) {
-	analyzer := NewGraphAnalyzer(ScopeFile)
+	analyzer := NewGraphAnalyzer(WithGraphScope(ScopeFile))
 	defer analyzer.Close()
 
 	graph, err := analyzer.AnalyzeProject([]string{"/nonexistent/file.go"})
@@ -864,7 +864,7 @@ def helper():
 		filePaths = append(filePaths, path)
 	}
 
-	analyzer := NewGraphAnalyzer(ScopeFile)
+	analyzer := NewGraphAnalyzer(WithGraphScope(ScopeFile))
 	defer analyzer.Close()
 
 	graph, err := analyzer.AnalyzeProject(filePaths)
@@ -906,7 +906,7 @@ func util() {}`,
 		filePaths = append(filePaths, path)
 	}
 
-	analyzer := NewGraphAnalyzer(ScopeFile)
+	analyzer := NewGraphAnalyzer(WithGraphScope(ScopeFile))
 	defer analyzer.Close()
 
 	graph, err := analyzer.AnalyzeProject(filePaths)
@@ -970,7 +970,7 @@ func main() {
 		files[i] = path
 	}
 
-	analyzer := NewGraphAnalyzer(ScopeFile)
+	analyzer := NewGraphAnalyzer(WithGraphScope(ScopeFile))
 	defer analyzer.Close()
 
 	b.ResetTimer()
@@ -1070,7 +1070,7 @@ func TestDetectCycles_TarjanSCC(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			graph := tt.buildGraph()
-			analyzer := NewGraphAnalyzer(ScopeFile)
+			analyzer := NewGraphAnalyzer(WithGraphScope(ScopeFile))
 			defer analyzer.Close()
 
 			cycles := analyzer.DetectCycles(graph)
@@ -1139,7 +1139,7 @@ func TestPruneGraph(t *testing.T) {
 				edgeCount++
 			}
 
-			analyzer := NewGraphAnalyzer(ScopeFile)
+			analyzer := NewGraphAnalyzer(WithGraphScope(ScopeFile))
 			defer analyzer.Close()
 
 			pruned := analyzer.PruneGraph(g, tt.maxNodes, tt.maxEdges)
@@ -1673,7 +1673,7 @@ func TestComprehensiveMetrics(t *testing.T) {
 	graph.AddEdge(models.GraphEdge{From: "D", To: "E", Type: models.EdgeImport})
 	graph.AddEdge(models.GraphEdge{From: "E", To: "A", Type: models.EdgeImport}) // Create cycle
 
-	analyzer := NewGraphAnalyzer(ScopeFile)
+	analyzer := NewGraphAnalyzer(WithGraphScope(ScopeFile))
 	defer analyzer.Close()
 
 	metrics := analyzer.CalculateMetrics(graph)

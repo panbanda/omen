@@ -63,8 +63,28 @@ func New() *Parser {
 	}
 }
 
+// ErrFileTooLarge is returned when a file exceeds the maximum size limit.
+var ErrFileTooLarge = fmt.Errorf("file too large")
+
 // ParseFile parses a source file and returns the AST.
 func (p *Parser) ParseFile(path string) (*ParseResult, error) {
+	return p.ParseFileWithLimit(path, 0)
+}
+
+// ParseFileWithLimit parses a source file with a maximum size limit.
+// If maxSize is 0, no limit is enforced.
+func (p *Parser) ParseFileWithLimit(path string, maxSize int64) (*ParseResult, error) {
+	// Check file size before reading if limit is set
+	if maxSize > 0 {
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to stat file: %w", err)
+		}
+		if info.Size() > maxSize {
+			return nil, fmt.Errorf("%w: %s is %d bytes (limit: %d)", ErrFileTooLarge, path, info.Size(), maxSize)
+		}
+	}
+
 	source, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)

@@ -9,20 +9,59 @@ import (
 
 // DefectAnalyzer predicts defect probability using PMAT weights.
 type DefectAnalyzer struct {
-	weights    models.DefectWeights
-	complexity *ComplexityAnalyzer
-	churn      *ChurnAnalyzer
-	duplicates *DuplicateAnalyzer
+	weights     models.DefectWeights
+	churnDays   int
+	maxFileSize int64
+	complexity  *ComplexityAnalyzer
+	churn       *ChurnAnalyzer
+	duplicates  *DuplicateAnalyzer
+}
+
+// DefectOption is a functional option for configuring DefectAnalyzer.
+type DefectOption func(*DefectAnalyzer)
+
+// WithDefectChurnDays sets the churn analysis period in days.
+func WithDefectChurnDays(days int) DefectOption {
+	return func(a *DefectAnalyzer) {
+		a.churnDays = days
+	}
+}
+
+// WithDefectWeights sets custom PMAT weights for defect prediction.
+func WithDefectWeights(weights models.DefectWeights) DefectOption {
+	return func(a *DefectAnalyzer) {
+		a.weights = weights
+	}
+}
+
+// WithDefectMaxFileSize sets the maximum file size to analyze (0 = no limit).
+func WithDefectMaxFileSize(maxSize int64) DefectOption {
+	return func(a *DefectAnalyzer) {
+		a.maxFileSize = maxSize
+	}
 }
 
 // NewDefectAnalyzer creates a new defect analyzer with default PMAT weights.
-func NewDefectAnalyzer(churnDays int) *DefectAnalyzer {
-	return &DefectAnalyzer{
-		weights:    models.DefaultDefectWeights(),
-		complexity: NewComplexityAnalyzer(),
-		churn:      NewChurnAnalyzer(churnDays),
-		duplicates: NewDuplicateAnalyzer(6, 0.8),
+func NewDefectAnalyzer(opts ...DefectOption) *DefectAnalyzer {
+	a := &DefectAnalyzer{
+		weights:     models.DefaultDefectWeights(),
+		churnDays:   30,
+		maxFileSize: 0,
 	}
+	for _, opt := range opts {
+		opt(a)
+	}
+
+	// Create sub-analyzers with configured options
+	a.complexity = NewComplexityAnalyzer(WithComplexityMaxFileSize(a.maxFileSize))
+	a.churn = NewChurnAnalyzer(WithChurnDays(a.churnDays))
+	a.duplicates = NewDuplicateAnalyzer(
+		WithDuplicateMinTokens(6),
+		WithDuplicateSimilarityThreshold(0.8),
+		WithDuplicateMaxFileSize(a.maxFileSize),
+	)
+
+	return a
 }
 
 // AnalyzeProject predicts defects across a project.

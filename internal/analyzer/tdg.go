@@ -12,26 +12,52 @@ import (
 
 // TdgAnalyzer implements TDG analysis using heuristic methods.
 type TdgAnalyzer struct {
-	config models.TdgConfig
+	config      models.TdgConfig
+	maxFileSize int64
+}
+
+// TdgOption is a functional option for configuring TdgAnalyzer.
+type TdgOption func(*TdgAnalyzer)
+
+// WithTdgConfig sets the full TDG configuration.
+func WithTdgConfig(config models.TdgConfig) TdgOption {
+	return func(a *TdgAnalyzer) {
+		a.config = config
+	}
+}
+
+// WithTdgMaxFileSize sets the maximum file size to analyze (0 = no limit).
+func WithTdgMaxFileSize(maxSize int64) TdgOption {
+	return func(a *TdgAnalyzer) {
+		a.maxFileSize = maxSize
+	}
 }
 
 // NewTdgAnalyzer creates a new TDG analyzer.
-func NewTdgAnalyzer() *TdgAnalyzer {
-	return &TdgAnalyzer{
-		config: models.DefaultTdgConfig(),
+func NewTdgAnalyzer(opts ...TdgOption) *TdgAnalyzer {
+	a := &TdgAnalyzer{
+		config:      models.DefaultTdgConfig(),
+		maxFileSize: 0,
 	}
-}
-
-// NewTdgAnalyzerWithConfig creates a TDG analyzer with custom config.
-func NewTdgAnalyzerWithConfig(config models.TdgConfig) *TdgAnalyzer {
-	return &TdgAnalyzer{
-		config: config,
+	for _, opt := range opts {
+		opt(a)
 	}
+	return a
 }
 
 // AnalyzeFile analyzes a single file and returns its TDG score.
 func (a *TdgAnalyzer) AnalyzeFile(path string) (models.TdgScore, error) {
 	language := models.LanguageFromExtension(path)
+
+	if a.maxFileSize > 0 {
+		info, err := os.Stat(path)
+		if err != nil {
+			return models.TdgScore{}, err
+		}
+		if info.Size() > a.maxFileSize {
+			return models.TdgScore{}, fmt.Errorf("file size %d exceeds maximum %d", info.Size(), a.maxFileSize)
+		}
+	}
 
 	source, err := os.ReadFile(path)
 	if err != nil {

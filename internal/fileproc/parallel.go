@@ -4,6 +4,7 @@ package fileproc
 import (
 	"context"
 	"fmt"
+	"os"
 	"runtime"
 	"sync"
 
@@ -83,6 +84,13 @@ func MapFilesWithProgress[T any](files []string, fn func(*parser.Parser, string)
 	return MapFilesN(files, 0, fn, onProgress, nil)
 }
 
+// MapFilesWithSizeLimit processes files in parallel, skipping files that exceed maxSize.
+// If maxSize is 0, no limit is enforced.
+// Files that exceed the limit are silently skipped unless onError is provided.
+func MapFilesWithSizeLimit[T any](files []string, maxSize int64, fn func(*parser.Parser, string) (T, error), onProgress ProgressFunc, onError ErrorFunc) []T {
+	return MapFilesNWithSizeLimit(files, 0, maxSize, fn, onProgress, onError)
+}
+
 // MapFilesWithErrors processes files in parallel with error callback.
 // The onError callback is invoked for each file that fails processing.
 func MapFilesWithErrors[T any](files []string, fn func(*parser.Parser, string) (T, error), onError ErrorFunc) []T {
@@ -106,6 +114,75 @@ func MapFilesN[T any](files []string, maxWorkers int, fn func(*parser.Parser, st
 	p := pool.New().WithMaxGoroutines(maxWorkers)
 	for _, path := range files {
 		p.Go(func() {
+			psr := parser.New()
+			defer psr.Close()
+
+			result, err := fn(psr, path)
+
+			if err != nil {
+				if onError != nil {
+					onError(path, err)
+				}
+				if onProgress != nil {
+					onProgress()
+				}
+				return
+			}
+
+			if onProgress != nil {
+				onProgress()
+			}
+
+			mu.Lock()
+			results = append(results, result)
+			mu.Unlock()
+		})
+	}
+	p.Wait()
+
+	return results
+}
+
+// MapFilesNWithSizeLimit processes files with configurable worker count and file size limit.
+// Files exceeding maxSize bytes are skipped. If maxSize is 0, no limit is enforced.
+func MapFilesNWithSizeLimit[T any](files []string, maxWorkers int, maxSize int64, fn func(*parser.Parser, string) (T, error), onProgress ProgressFunc, onError ErrorFunc) []T {
+	if len(files) == 0 {
+		return nil
+	}
+
+	if maxWorkers <= 0 {
+		maxWorkers = runtime.NumCPU() * DefaultWorkerMultiplier
+	}
+
+	results := make([]T, 0, len(files))
+	var mu sync.Mutex
+
+	p := pool.New().WithMaxGoroutines(maxWorkers)
+	for _, path := range files {
+		p.Go(func() {
+			// Check file size before processing
+			if maxSize > 0 {
+				info, err := os.Stat(path)
+				if err != nil {
+					if onError != nil {
+						onError(path, err)
+					}
+					if onProgress != nil {
+						onProgress()
+					}
+					return
+				}
+				if info.Size() > maxSize {
+					if onError != nil {
+						onError(path, fmt.Errorf("file too large: %d bytes (limit: %d)", info.Size(), maxSize))
+					}
+					if onProgress != nil {
+						onProgress()
+					}
+					return
+				}
+			}
+
 			psr := parser.New()
 			defer psr.Close()
 

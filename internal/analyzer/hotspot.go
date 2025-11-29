@@ -12,17 +12,37 @@ import (
 
 // HotspotAnalyzer identifies code hotspots using churn × complexity.
 type HotspotAnalyzer struct {
-	churnDays int
+	churnDays   int
+	maxFileSize int64
+}
+
+// HotspotOption is a functional option for configuring HotspotAnalyzer.
+type HotspotOption func(*HotspotAnalyzer)
+
+// WithHotspotChurnDays sets the number of days of git history to analyze.
+func WithHotspotChurnDays(days int) HotspotOption {
+	return func(a *HotspotAnalyzer) {
+		a.churnDays = days
+	}
+}
+
+// WithHotspotMaxFileSize sets the maximum file size to analyze (0 = no limit).
+func WithHotspotMaxFileSize(maxSize int64) HotspotOption {
+	return func(a *HotspotAnalyzer) {
+		a.maxFileSize = maxSize
+	}
 }
 
 // NewHotspotAnalyzer creates a new hotspot analyzer.
-func NewHotspotAnalyzer(churnDays int) *HotspotAnalyzer {
-	if churnDays <= 0 {
-		churnDays = 30
+func NewHotspotAnalyzer(opts ...HotspotOption) *HotspotAnalyzer {
+	a := &HotspotAnalyzer{
+		churnDays:   30,
+		maxFileSize: 0,
 	}
-	return &HotspotAnalyzer{
-		churnDays: churnDays,
+	for _, opt := range opts {
+		opt(a)
 	}
+	return a
 }
 
 // AnalyzeProject analyzes hotspots for a project.
@@ -33,7 +53,7 @@ func (a *HotspotAnalyzer) AnalyzeProject(repoPath string, files []string) (*mode
 // AnalyzeProjectWithProgress analyzes hotspots with optional progress callback.
 func (a *HotspotAnalyzer) AnalyzeProjectWithProgress(repoPath string, files []string, onProgress fileproc.ProgressFunc) (*models.HotspotAnalysis, error) {
 	// Get churn data
-	churnAnalyzer := NewChurnAnalyzer(a.churnDays)
+	churnAnalyzer := NewChurnAnalyzer(WithChurnDays(a.churnDays))
 	churnAnalysis, err := churnAnalyzer.AnalyzeRepo(repoPath)
 	if err != nil {
 		return nil, err
@@ -56,7 +76,7 @@ func (a *HotspotAnalyzer) AnalyzeProjectWithProgress(repoPath string, files []st
 		totalFuncs    int
 	}
 
-	complexityResults := fileproc.MapFilesWithProgress(files, func(psr *parser.Parser, path string) (complexityResult, error) {
+	complexityResults := fileproc.MapFilesWithSizeLimit(files, a.maxFileSize, func(psr *parser.Parser, path string) (complexityResult, error) {
 		result, err := psr.ParseFile(path)
 		if err != nil {
 			return complexityResult{path: path}, nil // Skip unparseable files
@@ -83,7 +103,7 @@ func (a *HotspotAnalyzer) AnalyzeProjectWithProgress(repoPath string, files []st
 			avgCyclomatic: float64(totalCyc) / float64(len(functions)),
 			totalFuncs:    len(functions),
 		}, nil
-	}, onProgress)
+	}, onProgress, nil)
 
 	// Find max values for normalization
 	var maxChurn, maxComplexity float64

@@ -514,3 +514,108 @@ func splitLines(s string) []string {
 	}
 	return lines
 }
+
+func TestTdgAnalyzerWithOptions(t *testing.T) {
+	t.Run("default_options", func(t *testing.T) {
+		analyzer := NewTdgAnalyzer()
+		defer analyzer.Close()
+
+		if analyzer.maxFileSize != 0 {
+			t.Errorf("maxFileSize = %v, want 0", analyzer.maxFileSize)
+		}
+
+		if analyzer.config.Weights.StructuralComplexity == 0 {
+			t.Error("config should be set to defaults")
+		}
+	})
+
+	t.Run("with_max_file_size", func(t *testing.T) {
+		maxSize := int64(1024)
+		analyzer := NewTdgAnalyzer(WithTdgMaxFileSize(maxSize))
+		defer analyzer.Close()
+
+		if analyzer.maxFileSize != maxSize {
+			t.Errorf("maxFileSize = %v, want %v", analyzer.maxFileSize, maxSize)
+		}
+	})
+
+	t.Run("with_custom_config", func(t *testing.T) {
+		customConfig := models.DefaultTdgConfig()
+		customConfig.Weights.StructuralComplexity = 999
+
+		analyzer := NewTdgAnalyzer(WithTdgConfig(customConfig))
+		defer analyzer.Close()
+
+		if analyzer.config.Weights.StructuralComplexity != 999 {
+			t.Errorf("StructuralComplexity = %v, want 999", analyzer.config.Weights.StructuralComplexity)
+		}
+	})
+
+	t.Run("with_multiple_options", func(t *testing.T) {
+		customConfig := models.DefaultTdgConfig()
+		customConfig.Weights.StructuralComplexity = 999
+		maxSize := int64(2048)
+
+		analyzer := NewTdgAnalyzer(
+			WithTdgConfig(customConfig),
+			WithTdgMaxFileSize(maxSize),
+		)
+		defer analyzer.Close()
+
+		if analyzer.config.Weights.StructuralComplexity != 999 {
+			t.Errorf("StructuralComplexity = %v, want 999", analyzer.config.Weights.StructuralComplexity)
+		}
+		if analyzer.maxFileSize != maxSize {
+			t.Errorf("maxFileSize = %v, want %v", analyzer.maxFileSize, maxSize)
+		}
+	})
+}
+
+func TestTdgAnalyzerMaxFileSize(t *testing.T) {
+	dir := t.TempDir()
+
+	smallFile := filepath.Join(dir, "small.go")
+	smallContent := `package main; func main() {}`
+	if err := os.WriteFile(smallFile, []byte(smallContent), 0644); err != nil {
+		t.Fatalf("Failed to write small file: %v", err)
+	}
+
+	largeFile := filepath.Join(dir, "large.go")
+	largeContent := `package main
+func main() {
+` + string(make([]byte, 2000)) + `
+}`
+	if err := os.WriteFile(largeFile, []byte(largeContent), 0644); err != nil {
+		t.Fatalf("Failed to write large file: %v", err)
+	}
+
+	t.Run("no_limit", func(t *testing.T) {
+		analyzer := NewTdgAnalyzer()
+		defer analyzer.Close()
+
+		_, err := analyzer.AnalyzeFile(smallFile)
+		if err != nil {
+			t.Errorf("AnalyzeFile(small) error = %v, want nil", err)
+		}
+
+		_, err = analyzer.AnalyzeFile(largeFile)
+		if err != nil {
+			t.Errorf("AnalyzeFile(large) error = %v, want nil", err)
+		}
+	})
+
+	t.Run("with_limit", func(t *testing.T) {
+		analyzer := NewTdgAnalyzer(WithTdgMaxFileSize(100))
+		defer analyzer.Close()
+
+		_, err := analyzer.AnalyzeFile(smallFile)
+		if err != nil {
+			t.Errorf("AnalyzeFile(small) error = %v, want nil", err)
+		}
+
+		_, err = analyzer.AnalyzeFile(largeFile)
+		if err == nil {
+			t.Error("AnalyzeFile(large) should fail when file exceeds maxFileSize")
+		}
+	})
+}

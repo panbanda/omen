@@ -12,50 +12,38 @@ import (
 
 func TestNewDuplicateAnalyzer(t *testing.T) {
 	tests := []struct {
-		name      string
-		minLines  int
-		threshold float64
+		name string
+		opts []DuplicateOption
 	}{
 		{
-			name:      "valid parameters",
-			minLines:  10,
-			threshold: 0.9,
+			name: "default config",
+			opts: nil,
 		},
 		{
-			name:      "zero minLines uses defaults",
-			minLines:  0,
-			threshold: 0.8,
+			name: "with custom min tokens",
+			opts: []DuplicateOption{WithDuplicateMinTokens(80)},
 		},
 		{
-			name:      "negative minLines uses defaults",
-			minLines:  -5,
-			threshold: 0.8,
+			name: "with custom threshold",
+			opts: []DuplicateOption{WithDuplicateSimilarityThreshold(0.9)},
 		},
 		{
-			name:      "zero threshold uses default",
-			minLines:  6,
-			threshold: 0,
+			name: "with max file size",
+			opts: []DuplicateOption{WithDuplicateMaxFileSize(1024 * 1024)},
 		},
 		{
-			name:      "negative threshold uses default",
-			minLines:  6,
-			threshold: -0.5,
-		},
-		{
-			name:      "threshold over 1 uses default",
-			minLines:  6,
-			threshold: 1.5,
-		},
-		{
-			name:      "both invalid parameters use defaults",
-			minLines:  -1,
-			threshold: -0.1,
+			name: "with multiple options",
+			opts: []DuplicateOption{
+				WithDuplicateMinTokens(100),
+				WithDuplicateSimilarityThreshold(0.85),
+				WithDuplicateMaxFileSize(2 * 1024 * 1024),
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			analyzer := NewDuplicateAnalyzer(tt.minLines, tt.threshold)
+			analyzer := NewDuplicateAnalyzer(tt.opts...)
 			defer analyzer.Close()
 
 			if analyzer.parser == nil {
@@ -65,7 +53,7 @@ func TestNewDuplicateAnalyzer(t *testing.T) {
 	}
 }
 
-func TestNewDuplicateAnalyzerWithConfig(t *testing.T) {
+func TestWithDuplicateConfig(t *testing.T) {
 	cfg := config.DuplicateConfig{
 		MinTokens:            100,
 		SimilarityThreshold:  0.75,
@@ -79,7 +67,7 @@ func TestNewDuplicateAnalyzerWithConfig(t *testing.T) {
 		MinGroupSize:         3,
 	}
 
-	analyzer := NewDuplicateAnalyzerWithConfig(cfg)
+	analyzer := NewDuplicateAnalyzer(WithDuplicateConfig(cfg))
 	defer analyzer.Close()
 
 	if analyzer.parser == nil {
@@ -322,7 +310,10 @@ func TestGenerateKShingles(t *testing.T) {
 }
 
 func TestComputeMinHash(t *testing.T) {
-	analyzer := NewDuplicateAnalyzer(6, 0.8)
+	analyzer := NewDuplicateAnalyzer(
+		WithDuplicateMinTokens(48), // 6 lines * 8 tokens/line
+		WithDuplicateSimilarityThreshold(0.8),
+	)
 	defer analyzer.Close()
 
 	tests := []struct {
@@ -585,7 +576,10 @@ func test2() {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			analyzer := NewDuplicateAnalyzer(tt.minLines, 0.8)
+			analyzer := NewDuplicateAnalyzer(
+				WithDuplicateMinTokens(tt.minLines*8),
+				WithDuplicateSimilarityThreshold(0.8),
+			)
 			defer analyzer.Close()
 
 			filePath := filepath.Join(tmpDir, "test.go")
@@ -619,7 +613,10 @@ func test2() {
 
 func TestAnalyzeProject_ExactClones(t *testing.T) {
 	tmpDir := t.TempDir()
-	analyzer := NewDuplicateAnalyzer(5, 0.8)
+	analyzer := NewDuplicateAnalyzer(
+		WithDuplicateMinTokens(40), // 5 lines * 8 tokens/line
+		WithDuplicateSimilarityThreshold(0.8),
+	)
 	defer analyzer.Close()
 
 	// More substantial code to ensure we exceed minimum token threshold
@@ -668,7 +665,10 @@ func TestAnalyzeProject_ExactClones(t *testing.T) {
 
 func TestAnalyzeProject_ParametricClones(t *testing.T) {
 	tmpDir := t.TempDir()
-	analyzer := NewDuplicateAnalyzer(6, 0.8)
+	analyzer := NewDuplicateAnalyzer(
+		WithDuplicateMinTokens(48), // 6 lines * 8 tokens/line
+		WithDuplicateSimilarityThreshold(0.8),
+	)
 	defer analyzer.Close()
 
 	code1 := `func calculate(a, b int) int {
@@ -718,7 +718,10 @@ func TestAnalyzeProject_ParametricClones(t *testing.T) {
 
 func TestAnalyzeProject_NoDuplicates(t *testing.T) {
 	tmpDir := t.TempDir()
-	analyzer := NewDuplicateAnalyzer(6, 0.8)
+	analyzer := NewDuplicateAnalyzer(
+		WithDuplicateMinTokens(48), // 6 lines * 8 tokens/line
+		WithDuplicateSimilarityThreshold(0.8),
+	)
 	defer analyzer.Close()
 
 	code1 := `func uniqueFunction1() {
@@ -760,7 +763,10 @@ func TestAnalyzeProject_NoDuplicates(t *testing.T) {
 
 func TestAnalyzeProject_EmptyFiles(t *testing.T) {
 	tmpDir := t.TempDir()
-	analyzer := NewDuplicateAnalyzer(6, 0.8)
+	analyzer := NewDuplicateAnalyzer(
+		WithDuplicateMinTokens(48), // 6 lines * 8 tokens/line
+		WithDuplicateSimilarityThreshold(0.8),
+	)
 	defer analyzer.Close()
 
 	file1 := filepath.Join(tmpDir, "empty1.go")
@@ -784,7 +790,10 @@ func TestAnalyzeProject_EmptyFiles(t *testing.T) {
 }
 
 func TestAnalyzeProject_NonExistentFile(t *testing.T) {
-	analyzer := NewDuplicateAnalyzer(6, 0.8)
+	analyzer := NewDuplicateAnalyzer(
+		WithDuplicateMinTokens(48), // 6 lines * 8 tokens/line
+		WithDuplicateSimilarityThreshold(0.8),
+	)
 	defer analyzer.Close()
 
 	result, err := analyzer.AnalyzeProject([]string{"/nonexistent/file.go"})
@@ -884,7 +893,10 @@ func TestIsOperatorOrDelimiter(t *testing.T) {
 }
 
 func TestCanonicalizeIdentifier(t *testing.T) {
-	analyzer := NewDuplicateAnalyzer(6, 0.8)
+	analyzer := NewDuplicateAnalyzer(
+		WithDuplicateMinTokens(48), // 6 lines * 8 tokens/line
+		WithDuplicateSimilarityThreshold(0.8),
+	)
 	defer analyzer.Close()
 
 	id1 := analyzer.canonicalizeIdentifier("myVariable")
@@ -909,7 +921,10 @@ func TestCanonicalizeIdentifier(t *testing.T) {
 }
 
 func TestNormalizeToken(t *testing.T) {
-	analyzer := NewDuplicateAnalyzer(6, 0.8)
+	analyzer := NewDuplicateAnalyzer(
+		WithDuplicateMinTokens(48), // 6 lines * 8 tokens/line
+		WithDuplicateSimilarityThreshold(0.8),
+	)
 	defer analyzer.Close()
 
 	tests := []struct {
@@ -1010,7 +1025,10 @@ func TestIsFunctionStart(t *testing.T) {
 
 func TestLSHCandidateFiltering(t *testing.T) {
 	tmpDir := t.TempDir()
-	analyzer := NewDuplicateAnalyzer(6, 0.7)
+	analyzer := NewDuplicateAnalyzer(
+		WithDuplicateMinTokens(48), // 6 lines * 8 tokens/line
+		WithDuplicateSimilarityThreshold(0.7),
+	)
 	defer analyzer.Close()
 
 	// Create multiple similar files to test LSH grouping
@@ -1074,7 +1092,10 @@ func TestHashBand(t *testing.T) {
 
 func TestCloneGrouping(t *testing.T) {
 	tmpDir := t.TempDir()
-	analyzer := NewDuplicateAnalyzer(6, 0.8)
+	analyzer := NewDuplicateAnalyzer(
+		WithDuplicateMinTokens(48), // 6 lines * 8 tokens/line
+		WithDuplicateSimilarityThreshold(0.8),
+	)
 	defer analyzer.Close()
 
 	duplicateCode := `func process() {
@@ -1120,7 +1141,10 @@ func TestCloneGrouping(t *testing.T) {
 
 func TestDuplicationHotspots(t *testing.T) {
 	tmpDir := t.TempDir()
-	analyzer := NewDuplicateAnalyzer(6, 0.8)
+	analyzer := NewDuplicateAnalyzer(
+		WithDuplicateMinTokens(48), // 6 lines * 8 tokens/line
+		WithDuplicateSimilarityThreshold(0.8),
+	)
 	defer analyzer.Close()
 
 	duplicateCode := `func handler() {
@@ -1199,7 +1223,10 @@ func TestPmatCompatibility(t *testing.T) {
 	})
 
 	t.Run("identifier normalization to VAR_N format", func(t *testing.T) {
-		analyzer := NewDuplicateAnalyzer(6, 0.8)
+		analyzer := NewDuplicateAnalyzer(
+			WithDuplicateMinTokens(48), // 6 lines * 8 tokens/line
+			WithDuplicateSimilarityThreshold(0.8),
+		)
 		defer analyzer.Close()
 
 		// pmat normalizes identifiers to VAR_N format
@@ -1219,7 +1246,10 @@ func TestPmatCompatibility(t *testing.T) {
 	})
 
 	t.Run("literal normalization to LITERAL", func(t *testing.T) {
-		analyzer := NewDuplicateAnalyzer(6, 0.8)
+		analyzer := NewDuplicateAnalyzer(
+			WithDuplicateMinTokens(48), // 6 lines * 8 tokens/line
+			WithDuplicateSimilarityThreshold(0.8),
+		)
 		defer analyzer.Close()
 
 		// pmat normalizes all literals to "LITERAL"
@@ -1233,7 +1263,10 @@ func TestPmatCompatibility(t *testing.T) {
 	})
 
 	t.Run("keywords preserved unchanged", func(t *testing.T) {
-		analyzer := NewDuplicateAnalyzer(6, 0.8)
+		analyzer := NewDuplicateAnalyzer(
+			WithDuplicateMinTokens(48), // 6 lines * 8 tokens/line
+			WithDuplicateSimilarityThreshold(0.8),
+		)
 		defer analyzer.Close()
 
 		// pmat preserves keywords
@@ -1263,7 +1296,10 @@ func TestPmatCompatibility(t *testing.T) {
 	})
 
 	t.Run("MinHash signature has 200 hash values", func(t *testing.T) {
-		analyzer := NewDuplicateAnalyzer(6, 0.8)
+		analyzer := NewDuplicateAnalyzer(
+			WithDuplicateMinTokens(48), // 6 lines * 8 tokens/line
+			WithDuplicateSimilarityThreshold(0.8),
+		)
 		defer analyzer.Close()
 
 		tokens := tokenize("func main() { return 42 }")
@@ -1290,7 +1326,7 @@ func TestNormalizationDisabled(t *testing.T) {
 		MinGroupSize:         2,
 	}
 
-	analyzer := NewDuplicateAnalyzerWithConfig(cfg)
+	analyzer := NewDuplicateAnalyzer(WithDuplicateConfig(cfg))
 	defer analyzer.Close()
 
 	t.Run("identifiers preserved when normalization disabled", func(t *testing.T) {
@@ -1317,6 +1353,85 @@ func TestNormalizationDisabled(t *testing.T) {
 				t.Errorf("normalizeToken(%q) = %q, expected %q when NormalizeLiterals=false",
 					tt.input, got, tt.expected)
 			}
+		}
+	})
+}
+
+// TestMaxFileSize verifies that files exceeding maxFileSize are skipped.
+func TestMaxFileSize(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a large file
+	largeContent := "func large() {\n"
+	for i := 0; i < 1000; i++ {
+		largeContent += "    x := " + strconv.Itoa(i) + "\n"
+	}
+	largeContent += "}\n"
+
+	largeFile := filepath.Join(tmpDir, "large.go")
+	if err := os.WriteFile(largeFile, []byte(largeContent), 0644); err != nil {
+		t.Fatalf("failed to write large file: %v", err)
+	}
+
+	// Get actual file size
+	info, err := os.Stat(largeFile)
+	if err != nil {
+		t.Fatalf("failed to stat file: %v", err)
+	}
+	fileSize := info.Size()
+
+	t.Run("file under limit is processed", func(t *testing.T) {
+		analyzer := NewDuplicateAnalyzer(
+			WithDuplicateMinTokens(48),
+			WithDuplicateSimilarityThreshold(0.8),
+			WithDuplicateMaxFileSize(fileSize+1000), // Set limit above file size
+		)
+		defer analyzer.Close()
+
+		result, err := analyzer.AnalyzeProject([]string{largeFile})
+		if err != nil {
+			t.Fatalf("AnalyzeProject() error = %v", err)
+		}
+
+		if result.TotalFilesScanned != 1 {
+			t.Errorf("TotalFilesScanned = %d, want 1", result.TotalFilesScanned)
+		}
+	})
+
+	t.Run("file over limit is skipped", func(t *testing.T) {
+		analyzer := NewDuplicateAnalyzer(
+			WithDuplicateMinTokens(48),
+			WithDuplicateSimilarityThreshold(0.8),
+			WithDuplicateMaxFileSize(100), // Set limit below file size
+		)
+		defer analyzer.Close()
+
+		result, err := analyzer.AnalyzeProject([]string{largeFile})
+		if err != nil {
+			t.Fatalf("AnalyzeProject() error = %v", err)
+		}
+
+		// File should be skipped, no fragments extracted
+		if result.TotalFilesScanned != 1 {
+			t.Errorf("TotalFilesScanned = %d, want 1 (counts scanned, not processed)", result.TotalFilesScanned)
+		}
+	})
+
+	t.Run("max file size of 0 means no limit", func(t *testing.T) {
+		analyzer := NewDuplicateAnalyzer(
+			WithDuplicateMinTokens(48),
+			WithDuplicateSimilarityThreshold(0.8),
+			WithDuplicateMaxFileSize(0), // No limit
+		)
+		defer analyzer.Close()
+
+		result, err := analyzer.AnalyzeProject([]string{largeFile})
+		if err != nil {
+			t.Fatalf("AnalyzeProject() error = %v", err)
+		}
+
+		if result.TotalFilesScanned != 1 {
+			t.Errorf("TotalFilesScanned = %d, want 1", result.TotalFilesScanned)
 		}
 	})
 }

@@ -18,14 +18,20 @@ func TestNewCohesionAnalyzer(t *testing.T) {
 	if !a.skipTestFile {
 		t.Error("Expected skipTestFile to be true by default")
 	}
+	if a.maxFileSize != 0 {
+		t.Error("Expected maxFileSize to be 0 by default")
+	}
 }
 
 func TestNewCohesionAnalyzerWithOptions(t *testing.T) {
-	a := NewCohesionAnalyzerWithOptions(false)
+	a := NewCohesionAnalyzer(WithCohesionSkipTestFiles(false), WithCohesionMaxFileSize(1024))
 	defer a.Close()
 
 	if a.skipTestFile {
 		t.Error("Expected skipTestFile to be false")
+	}
+	if a.maxFileSize != 1024 {
+		t.Error("Expected maxFileSize to be 1024")
 	}
 }
 
@@ -237,7 +243,7 @@ class TestCalculator:
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
-	analyzer := NewCohesionAnalyzerWithOptions(false) // Include test files
+	analyzer := NewCohesionAnalyzer(WithCohesionSkipTestFiles(false)) // Include test files
 	defer analyzer.Close()
 
 	analysis, err := analyzer.AnalyzeProject([]string{file})

@@ -235,10 +235,7 @@ func handleAnalyzeComplexity(ctx context.Context, req *mcp.CallToolRequest, inpu
 		return toolError("no source files found")
 	}
 
-	opts := analyzer.ComplexityOptions{
-		IncludeHalstead: input.IncludeHalstead,
-	}
-	cxAnalyzer := analyzer.NewComplexityAnalyzerWithOptions(opts)
+	cxAnalyzer := analyzer.NewComplexityAnalyzer(analyzer.WithHalstead(input.IncludeHalstead))
 	defer cxAnalyzer.Close()
 
 	analysis, err := cxAnalyzer.AnalyzeProject(files)
@@ -275,14 +272,12 @@ func handleAnalyzeSATD(ctx context.Context, req *mcp.CallToolRequest, input SATD
 		return toolError("no source files found")
 	}
 
-	opts := analyzer.SATDOptions{
-		IncludeTests:      input.IncludeTests,
-		IncludeVendor:     false,
-		AdjustSeverity:    true,
-		GenerateContextID: true,
-		StrictMode:        input.StrictMode,
-	}
-	satdAnalyzer := analyzer.NewSATDAnalyzerWithOptions(opts)
+	satdAnalyzer := analyzer.NewSATDAnalyzer(
+		analyzer.WithSATDIncludeTests(input.IncludeTests),
+		analyzer.WithSATDIncludeVendor(false),
+		analyzer.WithSATDAdjustSeverity(true),
+		analyzer.WithSATDStrictMode(input.StrictMode),
+	)
 
 	// Add custom patterns if provided
 	for _, pattern := range input.Patterns {
@@ -318,7 +313,7 @@ func handleAnalyzeDeadcode(ctx context.Context, req *mcp.CallToolRequest, input 
 		return toolError("no source files found")
 	}
 
-	dcAnalyzer := analyzer.NewDeadCodeAnalyzer(confidence)
+	dcAnalyzer := analyzer.NewDeadCodeAnalyzer(analyzer.WithDeadCodeConfidence(confidence))
 	defer dcAnalyzer.Close()
 
 	analysis, err := dcAnalyzer.AnalyzeProject(files)
@@ -346,7 +341,7 @@ func handleAnalyzeChurn(ctx context.Context, req *mcp.CallToolRequest, input Chu
 		return toolError(err.Error())
 	}
 
-	churnAnalyzer := analyzer.NewChurnAnalyzer(days)
+	churnAnalyzer := analyzer.NewChurnAnalyzer(analyzer.WithChurnDays(days))
 	analysis, err := churnAnalyzer.AnalyzeRepo(repoPath)
 	if err != nil {
 		return toolError(fmt.Sprintf("churn analysis failed: %v", err))
@@ -383,7 +378,10 @@ func handleAnalyzeDuplicates(ctx context.Context, req *mcp.CallToolRequest, inpu
 		return toolError("no source files found")
 	}
 
-	dupAnalyzer := analyzer.NewDuplicateAnalyzer(minLines, threshold)
+	dupAnalyzer := analyzer.NewDuplicateAnalyzer(
+		analyzer.WithDuplicateMinTokens(minLines*8), // Convert lines to approximate tokens
+		analyzer.WithDuplicateSimilarityThreshold(threshold),
+	)
 	defer dupAnalyzer.Close()
 
 	analysis, err := dupAnalyzer.AnalyzeProject(files)
@@ -414,7 +412,7 @@ func handleAnalyzeDefect(ctx context.Context, req *mcp.CallToolRequest, input De
 	}
 
 	cfg := config.LoadOrDefault()
-	defectAnalyzer := analyzer.NewDefectAnalyzer(cfg.Analysis.ChurnDays)
+	defectAnalyzer := analyzer.NewDefectAnalyzer(analyzer.WithDefectChurnDays(cfg.Analysis.ChurnDays))
 	defer defectAnalyzer.Close()
 
 	analysis, err := defectAnalyzer.AnalyzeProject(repoPath, files)
@@ -521,7 +519,7 @@ func handleAnalyzeGraph(ctx context.Context, req *mcp.CallToolRequest, input Gra
 		return toolError("no source files found")
 	}
 
-	graphAnalyzer := analyzer.NewGraphAnalyzer(analyzer.GraphScope(scope))
+	graphAnalyzer := analyzer.NewGraphAnalyzer(analyzer.WithGraphScope(analyzer.GraphScope(scope)))
 	defer graphAnalyzer.Close()
 
 	graph, err := graphAnalyzer.AnalyzeProject(files)
@@ -568,7 +566,7 @@ func handleAnalyzeHotspot(ctx context.Context, req *mcp.CallToolRequest, input H
 		return toolError("no source files found")
 	}
 
-	hotspotAnalyzer := analyzer.NewHotspotAnalyzer(days)
+	hotspotAnalyzer := analyzer.NewHotspotAnalyzer(analyzer.WithHotspotChurnDays(days))
 	defer hotspotAnalyzer.Close()
 
 	analysis, err := hotspotAnalyzer.AnalyzeProject(repoPath, files)
@@ -645,7 +643,7 @@ func handleAnalyzeOwnership(ctx context.Context, req *mcp.CallToolRequest, input
 		return toolError("no source files found")
 	}
 
-	ownAnalyzer := analyzer.NewOwnershipAnalyzerWithOptions(!input.IncludeTrivial)
+	ownAnalyzer := analyzer.NewOwnershipAnalyzer(analyzer.WithOwnershipExcludeTrivial(!input.IncludeTrivial))
 	defer ownAnalyzer.Close()
 
 	analysis, err := ownAnalyzer.AnalyzeRepo(repoPath, files)
@@ -683,7 +681,7 @@ func handleAnalyzeCohesion(ctx context.Context, req *mcp.CallToolRequest, input 
 		return toolError("no source files found")
 	}
 
-	ckAnalyzer := analyzer.NewCohesionAnalyzerWithOptions(!input.IncludeTests)
+	ckAnalyzer := analyzer.NewCohesionAnalyzer(analyzer.WithCohesionSkipTestFiles(!input.IncludeTests))
 	defer ckAnalyzer.Close()
 
 	analysis, err := ckAnalyzer.AnalyzeProject(files)

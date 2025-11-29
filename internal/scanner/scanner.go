@@ -235,3 +235,30 @@ func (s *Scanner) GroupByLanguage(files []string) map[parser.Language][]string {
 	}
 	return groups
 }
+
+// FilterBySize filters files that exceed the configured maximum size.
+// Returns the filtered list and the count of files that were skipped.
+// If maxSize is 0, returns the original list unchanged.
+func FilterBySize(files []string, maxSize int64) ([]string, int) {
+	if maxSize <= 0 {
+		return files, 0
+	}
+
+	filtered := make([]string, 0, len(files))
+	skipped := 0
+
+	for _, f := range files {
+		info, err := os.Stat(f)
+		if err != nil {
+			skipped++
+			continue
+		}
+		if info.Size() > maxSize {
+			skipped++
+			continue
+		}
+		filtered = append(filtered, f)
+	}
+
+	return filtered, skipped
+}

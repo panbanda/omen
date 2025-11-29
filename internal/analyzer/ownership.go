@@ -16,18 +16,25 @@ type OwnershipAnalyzer struct {
 	excludeTrivial bool
 }
 
-// NewOwnershipAnalyzer creates a new ownership analyzer.
-func NewOwnershipAnalyzer() *OwnershipAnalyzer {
-	return &OwnershipAnalyzer{
-		excludeTrivial: true, // Default: exclude trivial lines
+// OwnershipOption is a functional option for configuring OwnershipAnalyzer.
+type OwnershipOption func(*OwnershipAnalyzer)
+
+// WithOwnershipExcludeTrivial sets whether to exclude trivial lines from ownership analysis.
+func WithOwnershipExcludeTrivial(exclude bool) OwnershipOption {
+	return func(a *OwnershipAnalyzer) {
+		a.excludeTrivial = exclude
 	}
 }
 
-// NewOwnershipAnalyzerWithOptions creates an ownership analyzer with options.
-func NewOwnershipAnalyzerWithOptions(excludeTrivial bool) *OwnershipAnalyzer {
-	return &OwnershipAnalyzer{
-		excludeTrivial: excludeTrivial,
+// NewOwnershipAnalyzer creates a new ownership analyzer.
+func NewOwnershipAnalyzer(opts ...OwnershipOption) *OwnershipAnalyzer {
+	a := &OwnershipAnalyzer{
+		excludeTrivial: true, // Default: exclude trivial lines
 	}
+	for _, opt := range opts {
+		opt(a)
+	}
+	return a
 }
 
 // repoHandle holds a git repository and its HEAD commit for reuse across files.

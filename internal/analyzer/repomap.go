@@ -10,13 +10,33 @@ import (
 // RepoMapAnalyzer generates a PageRank-ranked map of repository symbols.
 type RepoMapAnalyzer struct {
 	graphAnalyzer *GraphAnalyzer
+	maxFileSize   int64
+}
+
+// RepoMapOption is a functional option for configuring RepoMapAnalyzer.
+type RepoMapOption func(*RepoMapAnalyzer)
+
+// WithRepoMapMaxFileSize sets the maximum file size to analyze (0 = no limit).
+func WithRepoMapMaxFileSize(maxSize int64) RepoMapOption {
+	return func(a *RepoMapAnalyzer) {
+		a.maxFileSize = maxSize
+	}
 }
 
 // NewRepoMapAnalyzer creates a new repo map analyzer.
-func NewRepoMapAnalyzer() *RepoMapAnalyzer {
-	return &RepoMapAnalyzer{
-		graphAnalyzer: NewGraphAnalyzer(ScopeFunction),
+func NewRepoMapAnalyzer(opts ...RepoMapOption) *RepoMapAnalyzer {
+	a := &RepoMapAnalyzer{
+		maxFileSize: 0,
 	}
+	for _, opt := range opts {
+		opt(a)
+	}
+	// Create graph analyzer with same maxFileSize setting
+	a.graphAnalyzer = NewGraphAnalyzer(
+		WithGraphScope(ScopeFunction),
+		WithGraphMaxFileSize(a.maxFileSize),
+	)
+	return a
 }
 
 // AnalyzeProject generates a repo map for the given files.

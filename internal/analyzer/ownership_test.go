@@ -15,7 +15,7 @@ func TestNewOwnershipAnalyzer(t *testing.T) {
 }
 
 func TestNewOwnershipAnalyzerWithOptions(t *testing.T) {
-	a := NewOwnershipAnalyzerWithOptions(false)
+	a := NewOwnershipAnalyzer(WithOwnershipExcludeTrivial(false))
 	defer a.Close()
 
 	if a.excludeTrivial {

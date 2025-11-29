@@ -16,9 +16,15 @@ import (
 
 // SATDAnalyzer detects self-admitted technical debt markers.
 type SATDAnalyzer struct {
-	patterns     []satdPattern
-	options      SATDOptions
-	testPatterns []*regexp.Regexp
+	patterns          []satdPattern
+	includeTests      bool
+	includeVendor     bool
+	adjustSeverity    bool
+	generateContextID bool
+	strictMode        bool
+	excludeTestBlocks bool
+	maxFileSize       int64
+	testPatterns      []*regexp.Regexp
 }
 
 // AstNodeType represents the type of AST context for a code location.
@@ -49,25 +55,55 @@ type AstContext struct {
 	SurroundingStatements []string
 }
 
-// SATDOptions configures SATD analysis behavior.
-type SATDOptions struct {
-	IncludeTests      bool // Include test files in analysis
-	IncludeVendor     bool // Include vendor/third-party files
-	AdjustSeverity    bool // Adjust severity based on context
-	GenerateContextID bool // Generate context hash for identity tracking
-	StrictMode        bool // Only match explicit markers with colons (e.g., // TODO:)
-	ExcludeTestBlocks bool // Exclude SATD in Rust #[cfg(test)] blocks
+// SATDOption is a functional option for configuring SATDAnalyzer.
+type SATDOption func(*SATDAnalyzer)
+
+// WithSATDIncludeTests sets whether to include test files in analysis.
+func WithSATDIncludeTests(include bool) SATDOption {
+	return func(a *SATDAnalyzer) {
+		a.includeTests = include
+	}
 }
 
-// DefaultSATDOptions returns the default options.
-func DefaultSATDOptions() SATDOptions {
-	return SATDOptions{
-		IncludeTests:      true,
-		IncludeVendor:     false,
-		AdjustSeverity:    true,
-		GenerateContextID: true,
-		StrictMode:        false,
-		ExcludeTestBlocks: true,
+// WithSATDIncludeVendor sets whether to include vendor/third-party files.
+func WithSATDIncludeVendor(include bool) SATDOption {
+	return func(a *SATDAnalyzer) {
+		a.includeVendor = include
+	}
+}
+
+// WithSATDAdjustSeverity sets whether to adjust severity based on context.
+func WithSATDAdjustSeverity(adjust bool) SATDOption {
+	return func(a *SATDAnalyzer) {
+		a.adjustSeverity = adjust
+	}
+}
+
+// WithSATDStrictMode sets whether to only match explicit markers with colons.
+func WithSATDStrictMode(strict bool) SATDOption {
+	return func(a *SATDAnalyzer) {
+		a.strictMode = strict
+	}
+}
+
+// WithSATDMaxFileSize sets the maximum file size to analyze (0 = no limit).
+func WithSATDMaxFileSize(maxSize int64) SATDOption {
+	return func(a *SATDAnalyzer) {
+		a.maxFileSize = maxSize
+	}
+}
+
+// WithSATDExcludeTestBlocks sets whether to exclude SATD in Rust #[cfg(test)] blocks.
+func WithSATDExcludeTestBlocks(exclude bool) SATDOption {
+	return func(a *SATDAnalyzer) {
+		a.excludeTestBlocks = exclude
+	}
+}
+
+// WithSATDGenerateContextID sets whether to generate context-aware hashes for debt items.
+func WithSATDGenerateContextID(generate bool) SATDOption {
+	return func(a *SATDAnalyzer) {
+		a.generateContextID = generate
 	}
 }
 
@@ -77,30 +113,30 @@ type satdPattern struct {
 	severity models.Severity
 }
 
-// NewSATDAnalyzer creates a new SATD analyzer with default patterns.
-func NewSATDAnalyzer() *SATDAnalyzer {
-	return NewSATDAnalyzerWithOptions(DefaultSATDOptions())
-}
-
-// NewSATDAnalyzerWithOptions creates a SATD analyzer with custom options.
-func NewSATDAnalyzerWithOptions(opts SATDOptions) *SATDAnalyzer {
-	patterns := defaultSATDPatterns()
-	if opts.StrictMode {
-		patterns = strictSATDPatterns()
+// NewSATDAnalyzer creates a new SATD analyzer with default options.
+func NewSATDAnalyzer(opts ...SATDOption) *SATDAnalyzer {
+	a := &SATDAnalyzer{
+		includeTests:      true,
+		includeVendor:     false,
+		adjustSeverity:    true,
+		generateContextID: true,
+		strictMode:        false,
+		excludeTestBlocks: true,
+		maxFileSize:       0,
+		testPatterns:      defaultTestPatterns(),
 	}
-	return &SATDAnalyzer{
-		patterns:     patterns,
-		options:      opts,
-		testPatterns: defaultTestPatterns(),
-	}
-}
 
-// NewSATDAnalyzerStrict creates a strict SATD analyzer that only matches
-// explicit markers with colons (e.g., // TODO:, // FIXME:).
-func NewSATDAnalyzerStrict() *SATDAnalyzer {
-	opts := DefaultSATDOptions()
-	opts.StrictMode = true
-	return NewSATDAnalyzerWithOptions(opts)
+	for _, opt := range opts {
+		opt(a)
+	}
+
+	if a.strictMode {
+		a.patterns = strictSATDPatterns()
+	} else {
+		a.patterns = defaultSATDPatterns()
+	}
+
+	return a
 }
 
 // strictSATDPatterns returns patterns that only match explicit comment markers.
@@ -277,6 +313,17 @@ func (a *SATDAnalyzer) AddPattern(pattern string, category models.DebtCategory, 
 
 // AnalyzeFile scans a file for SATD markers.
 func (a *SATDAnalyzer) AnalyzeFile(path string) ([]models.TechnicalDebt, error) {
+	// Check file size limit
+	if a.maxFileSize > 0 {
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, err
+		}
+		if info.Size() > a.maxFileSize {
+			return nil, nil
+		}
+	}
+
 	// Check exclusion rules
 	if a.shouldExcludeFile(path) {
 		return nil, nil
@@ -299,7 +346,7 @@ func (a *SATDAnalyzer) AnalyzeFile(path string) ([]models.TechnicalDebt, error) 
 
 	// Initialize test block tracker for Rust files
 	isRustFile := lang == parser.LangRust
-	testTracker := newTestBlockTracker(isRustFile && a.options.ExcludeTestBlocks)
+	testTracker := newTestBlockTracker(isRustFile && a.excludeTestBlocks)
 
 	for scanner.Scan() {
 		lineNum++
@@ -332,8 +379,8 @@ func (a *SATDAnalyzer) AnalyzeFile(path string) ([]models.TechnicalDebt, error) 
 				}
 
 				severity := pattern.severity
-				if a.options.AdjustSeverity {
-					severity = a.adjustSeverity(severity, isTestFile, isSecurityContext, line)
+				if a.adjustSeverity {
+					severity = a.adjustSeverityImpl(severity, isTestFile, isSecurityContext, line)
 				}
 
 				debt := models.TechnicalDebt{
@@ -345,7 +392,7 @@ func (a *SATDAnalyzer) AnalyzeFile(path string) ([]models.TechnicalDebt, error) 
 					Marker:      extractMarker(matches[0]),
 				}
 
-				if a.options.GenerateContextID {
+				if a.generateContextID {
 					debt.ContextHash = generateContextHash(path, lineNum, line)
 				}
 
@@ -413,12 +460,12 @@ func (t *testBlockTracker) updateTestBlockDepth(trimmed string) {
 // shouldExcludeFile determines if a file should be skipped.
 func (a *SATDAnalyzer) shouldExcludeFile(path string) bool {
 	// Exclude test files if configured
-	if !a.options.IncludeTests && a.isTestFile(path) {
+	if !a.includeTests && a.isTestFile(path) {
 		return true
 	}
 
 	// Exclude vendor/third-party files
-	if !a.options.IncludeVendor && isVendorFile(path) {
+	if !a.includeVendor && isVendorFile(path) {
 		return true
 	}
 
@@ -476,9 +523,9 @@ func (a *SATDAnalyzer) isSecurityContext(path string) bool {
 	return false
 }
 
-// adjustSeverity modifies severity based on context.
-// This is the legacy method maintained for backward compatibility.
-func (a *SATDAnalyzer) adjustSeverity(base models.Severity, isTest, isSecurity bool, line string) models.Severity {
+// adjustSeverityImpl modifies severity based on context.
+// This is the internal implementation used by AnalyzeFile.
+func (a *SATDAnalyzer) adjustSeverityImpl(base models.Severity, isTest, isSecurity bool, line string) models.Severity {
 	// Build an AstContext from the legacy parameters
 	ctx := AstContext{
 		NodeType:   AstNodeRegular,
