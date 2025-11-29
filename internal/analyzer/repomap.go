@@ -32,8 +32,8 @@ func (a *RepoMapAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress 
 		return nil, err
 	}
 
-	// Calculate graph metrics including PageRank
-	metrics := a.graphAnalyzer.CalculateMetrics(graph)
+	// Calculate PageRank only - much faster than full metrics
+	metrics := a.graphAnalyzer.CalculatePageRankOnly(graph)
 
 	// Build repo map from graph nodes and metrics
 	repoMap := &models.RepoMap{

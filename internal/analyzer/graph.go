@@ -62,7 +62,6 @@ func (a *GraphAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress fi
 	nodeMap := make(map[string]bool)
 
 	// Build index for O(1) function name lookup: funcName -> []nodeID
-	// Node IDs are "path:funcName", so we extract funcName and map to all matching IDs
 	funcNameIndex := make(map[string][]string)
 
 	// Collect all nodes and build index
@@ -72,9 +71,8 @@ func (a *GraphAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress fi
 				graph.AddNode(node)
 				nodeMap[node.ID] = true
 
-				// For function scope, index by function name
+				// For function scope, index by function name for O(1) lookup
 				if a.scope == ScopeFunction {
-					// Extract function name from "path:funcName"
 					if idx := strings.LastIndex(node.ID, ":"); idx >= 0 {
 						funcName := node.ID[idx+1:]
 						funcNameIndex[funcName] = append(funcNameIndex[funcName], node.ID)
@@ -107,17 +105,14 @@ func (a *GraphAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress fi
 			for sourceID, calls := range fd.calls {
 				for _, call := range calls {
 					// Use index for O(1) lookup instead of O(n) iteration
-					// Strip any receiver/package prefix from call (e.g., "foo.Bar" -> "Bar")
 					funcName := call
 					if idx := strings.LastIndex(call, "."); idx >= 0 {
 						funcName = call[idx+1:]
 					}
 
-					// Look up all nodes with this function name
 					if targetIDs, ok := funcNameIndex[funcName]; ok {
 						mu.Lock()
 						for _, targetID := range targetIDs {
-							// Avoid self-references
 							if targetID != sourceID {
 								graph.AddEdge(models.GraphEdge{
 									From: sourceID,
@@ -355,8 +350,7 @@ func extractCalls(body *sitter.Node, source []byte) []string {
 
 // matchesImport checks if a file path matches an import path.
 func matchesImport(filePath, importPath string) bool {
-	// Simple substring matching for now
-	return filePath != importPath && // Not self-reference
+	return filePath != importPath &&
 		(strings.Contains(filePath, importPath) || strings.Contains(importPath, filePath))
 }
 
@@ -402,6 +396,150 @@ func toGonumGraph(graph *models.DependencyGraph) *gonumGraph {
 	return g
 }
 
+// sparsePageRank computes PageRank using sparse power iteration.
+// This is O(E * iterations) instead of gonum's O(V^2 * iterations).
+func sparsePageRank(nodes []models.GraphNode, edges []models.GraphEdge, damping float64, tolerance float64) map[string]float64 {
+	n := len(nodes)
+	if n == 0 {
+		return make(map[string]float64)
+	}
+
+	// Build node index
+	nodeIndex := make(map[string]int, n)
+	for i, node := range nodes {
+		nodeIndex[node.ID] = i
+	}
+
+	// Build adjacency lists: outNeighbors[i] = list of nodes that i points to
+	outNeighbors := make([][]int, n)
+	outDegree := make([]int, n)
+	for i := range outNeighbors {
+		outNeighbors[i] = make([]int, 0)
+	}
+	for _, edge := range edges {
+		fromIdx := nodeIndex[edge.From]
+		toIdx := nodeIndex[edge.To]
+		outNeighbors[fromIdx] = append(outNeighbors[fromIdx], toIdx)
+		outDegree[fromIdx]++
+	}
+
+	// Initialize PageRank
+	rank := make([]float64, n)
+	newRank := make([]float64, n)
+	initial := 1.0 / float64(n)
+	for i := range rank {
+		rank[i] = initial
+	}
+
+	dampingFactor := damping
+	teleport := (1.0 - dampingFactor) / float64(n)
+	maxIterations := 100
+
+	for iter := 0; iter < maxIterations; iter++ {
+		// Reset new ranks
+		for i := range newRank {
+			newRank[i] = teleport
+		}
+
+		// Distribute rank along edges
+		for i := 0; i < n; i++ {
+			if outDegree[i] > 0 {
+				contrib := dampingFactor * rank[i] / float64(outDegree[i])
+				for _, j := range outNeighbors[i] {
+					newRank[j] += contrib
+				}
+			} else {
+				// Dangling node: distribute to all nodes
+				contrib := dampingFactor * rank[i] / float64(n)
+				for j := range newRank {
+					newRank[j] += contrib
+				}
+			}
+		}
+
+		// Check convergence
+		diff := 0.0
+		for i := range rank {
+			d := newRank[i] - rank[i]
+			if d < 0 {
+				d = -d
+			}
+			diff += d
+		}
+
+		// Swap
+		rank, newRank = newRank, rank
+
+		if diff < tolerance {
+			break
+		}
+	}
+
+	// Convert back to map
+	result := make(map[string]float64, n)
+	for i, node := range nodes {
+		result[node.ID] = rank[i]
+	}
+	return result
+}
+
+// CalculatePageRankOnly computes only PageRank and degree metrics for fast ranking.
+// Use this when you only need ranking (e.g., repo map) instead of full metrics.
+func (a *GraphAnalyzer) CalculatePageRankOnly(graph *models.DependencyGraph) *models.GraphMetrics {
+	metrics := &models.GraphMetrics{
+		NodeMetrics: make([]models.NodeMetric, 0, len(graph.Nodes)),
+		Summary: models.GraphSummary{
+			TotalNodes: len(graph.Nodes),
+			TotalEdges: len(graph.Edges),
+		},
+	}
+
+	if len(graph.Nodes) == 0 {
+		return metrics
+	}
+
+	// Build degree maps
+	inDegree := make(map[string]int, len(graph.Nodes))
+	outDegree := make(map[string]int, len(graph.Nodes))
+	for _, node := range graph.Nodes {
+		inDegree[node.ID] = 0
+		outDegree[node.ID] = 0
+	}
+	for _, edge := range graph.Edges {
+		inDegree[edge.To]++
+		outDegree[edge.From]++
+	}
+
+	// Use sparse PageRank for O(E * iterations) instead of O(V^2 * iterations)
+	pageRank := sparsePageRank(graph.Nodes, graph.Edges, 0.85, 1e-6)
+
+	// Build node metrics (only PageRank and degrees)
+	for _, node := range graph.Nodes {
+		nm := models.NodeMetric{
+			NodeID:    node.ID,
+			Name:      node.Name,
+			PageRank:  pageRank[node.ID],
+			InDegree:  inDegree[node.ID],
+			OutDegree: outDegree[node.ID],
+		}
+		metrics.NodeMetrics = append(metrics.NodeMetrics, nm)
+	}
+
+	// Calculate summary
+	totalDegree := 0
+	for _, node := range graph.Nodes {
+		totalDegree += inDegree[node.ID] + outDegree[node.ID]
+	}
+	metrics.Summary.AvgDegree = float64(totalDegree) / float64(len(graph.Nodes))
+
+	if len(graph.Nodes) > 1 {
+		maxEdges := len(graph.Nodes) * (len(graph.Nodes) - 1)
+		metrics.Summary.Density = float64(len(graph.Edges)) / float64(maxEdges)
+	}
+
+	return metrics
+}
+
 // CalculateMetrics computes comprehensive graph metrics.
 func (a *GraphAnalyzer) CalculateMetrics(graph *models.DependencyGraph) *models.GraphMetrics {
 	metrics := &models.GraphMetrics{
@@ -439,14 +577,38 @@ func (a *GraphAnalyzer) CalculateMetrics(graph *models.DependencyGraph) *models.
 		inNeighbors[edge.To] = append(inNeighbors[edge.To], edge.From)
 	}
 
-	// Use gonum for centrality metrics
-	pageRankMap := network.PageRank(gGraph.directed, 0.85, 1e-6)
-	betweennessMap := network.Betweenness(gGraph.directed)
+	// Compute centrality metrics in parallel for better performance
+	var pageRankMap, betweennessMap, closenessMap, harmonicMap map[int64]float64
+	var allShortest path.AllShortest
+	var wg sync.WaitGroup
 
-	// Closeness and Harmonic need AllShortest paths
-	allShortest := path.DijkstraAllPaths(gGraph.directed)
-	closenessMap := network.Closeness(gGraph.directed, allShortest)
-	harmonicMap := network.Harmonic(gGraph.directed, allShortest)
+	// Phase 1: Compute PageRank, Betweenness, and AllShortest in parallel
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		pageRankMap = network.PageRank(gGraph.directed, 0.85, 1e-6)
+	}()
+	go func() {
+		defer wg.Done()
+		betweennessMap = network.Betweenness(gGraph.directed)
+	}()
+	go func() {
+		defer wg.Done()
+		allShortest = path.DijkstraAllPaths(gGraph.directed)
+	}()
+	wg.Wait()
+
+	// Phase 2: Compute Closeness and Harmonic in parallel (both need AllShortest)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		closenessMap = network.Closeness(gGraph.directed, allShortest)
+	}()
+	go func() {
+		defer wg.Done()
+		harmonicMap = network.Harmonic(gGraph.directed, allShortest)
+	}()
+	wg.Wait()
 
 	// Convert gonum maps (int64 keys) to our string-keyed maps
 	pageRank := make(map[string]float64)
@@ -792,16 +954,17 @@ func calculateReciprocity(graph *models.DependencyGraph) float64 {
 	return float64(reciprocal) / float64(len(graph.Edges))
 }
 
-// calculateDiameterAndRadius computes diameter and radius using BFS from each node.
+// calculateDiameterAndRadius computes diameter and radius using BFS.
+// For large graphs (>1000 nodes), uses sampling for performance.
 func calculateDiameterAndRadius(nodes []models.GraphNode, outNeighbors map[string][]string) (int, int) {
 	if len(nodes) == 0 {
 		return 0, 0
 	}
 
 	// Build undirected adjacency for diameter calculation
-	neighbors := make(map[string][]string)
+	neighbors := make(map[string][]string, len(nodes))
 	for _, node := range nodes {
-		neighbors[node.ID] = []string{}
+		neighbors[node.ID] = nil
 	}
 	for id, out := range outNeighbors {
 		for _, neighbor := range out {
@@ -810,17 +973,40 @@ func calculateDiameterAndRadius(nodes []models.GraphNode, outNeighbors map[strin
 		}
 	}
 
+	// For large graphs, sample nodes instead of checking all
+	sampleSize := len(nodes)
+	if sampleSize > 100 {
+		sampleSize = 100 // Sample 100 nodes max for O(100*n) instead of O(n^2)
+	}
+
+	// Pre-allocate distance map once and reuse
+	dist := make(map[string]int, len(nodes))
+	queue := make([]string, 0, len(nodes))
+
 	diameter := 0
 	minEccentricity := -1
 
-	for _, source := range nodes {
-		// BFS to find eccentricity (max distance from source)
-		dist := make(map[string]int)
+	// Sample evenly across the node list
+	step := len(nodes) / sampleSize
+	if step < 1 {
+		step = 1
+	}
+
+	for i := 0; i < len(nodes) && i/step < sampleSize; i += step {
+		source := nodes[i]
+
+		// Reset distance map
+		for k := range dist {
+			delete(dist, k)
+		}
 		for _, n := range nodes {
 			dist[n.ID] = -1
 		}
 		dist[source.ID] = 0
-		queue := []string{source.ID}
+
+		// Reset queue
+		queue = queue[:0]
+		queue = append(queue, source.ID)
 		maxDist := 0
 
 		for len(queue) > 0 {
