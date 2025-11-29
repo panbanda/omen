@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.5.1](https://github.com/panbanda/omen/compare/v1.5.0...v1.5.1) (2025-11-29)
+
+
+### Bug Fixes
+
+* **churn:** align JSON output with pmat reference implementation ([7b80f50](https://github.com/panbanda/omen/commit/7b80f506f10e0af5afdb71dae1ad982121d42147))
+* **churn:** align JSON output with pmat reference implementation ([0f75b8d](https://github.com/panbanda/omen/commit/0f75b8d93c7a10906ccf2d9940ba6085b8ab0b9d))
+* **deadcode:** restructure JSON output to match pmat format ([6ca4568](https://github.com/panbanda/omen/commit/6ca4568480bcf6daedc2e7efd22ed499a3a64858))
+* **deadcode:** restructure JSON output to match pmat format ([b4c68b3](https://github.com/panbanda/omen/commit/b4c68b38d9b33d22fcf15374dabf27caea21ab38))
+* **defect:** align JSON output with pmat format ([2d7d417](https://github.com/panbanda/omen/commit/2d7d417992a928f498808f5da8b5fcf90a570d71))
+* **defect:** align JSON output with pmat format ([85f5ba3](https://github.com/panbanda/omen/commit/85f5ba398c08b979744e53fa0311297e8eb5504d))
+* **duplicates:** align JSON output with pmat format ([68a17d1](https://github.com/panbanda/omen/commit/68a17d1526f3c90c9fc7d5147ffa631becf5adb4))
+* **duplicates:** align JSON output with pmat format ([7c7dc2c](https://github.com/panbanda/omen/commit/7c7dc2c7a94286abd154f0e8ff967bcf9c388da3))
+* **duplicates:** fix race condition in identifier canonicalization ([3af00f1](https://github.com/panbanda/omen/commit/3af00f1186fa6307235e80fffd2d4fbb4c7b3166))
+* **satd:** add files_with_satd to summary for pmat compatibility ([4321269](https://github.com/panbanda/omen/commit/432126944b35c552c55988136531fb125c623973))
+* **satd:** add files_with_satd to summary for pmat compatibility ([4f2cd4f](https://github.com/panbanda/omen/commit/4f2cd4fb69f8206a115f38670c6f90b56639f26a))
+* **tdg:** align JSON output with pmat reference implementation ([d640a07](https://github.com/panbanda/omen/commit/d640a0724ca8eece3cada537543a0d1d7cc1aa43))
+* **tdg:** align JSON output with pmat reference implementation ([ae4ad5d](https://github.com/panbanda/omen/commit/ae4ad5d9971b212a4dd6fe539adba38193dce25c))
+
+
+### Performance Improvements
+
+* **analyzer:** optimize performance and add PMAT compatibility ([38a4659](https://github.com/panbanda/omen/commit/38a46592dec0c7155946c651f530f1f42d76a032))
+* **analyzer:** optimize performance and add PMAT compatibility ([4c77afd](https://github.com/panbanda/omen/commit/4c77afdb8451656997af8281022f9b17a9f248a7))
+
 ## [1.5.0](https://github.com/panbanda/omen/compare/v1.4.0...v1.5.0) (2025-11-27)
 
 
