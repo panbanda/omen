@@ -111,6 +111,49 @@ type MinHashSignature struct {
 	Values []uint64 `json:"values"`
 }
 
+// CloneReportSummary is the pmat-compatible summary format.
+type CloneReportSummary struct {
+	TotalFiles       int     `json:"total_files"`
+	TotalFragments   int     `json:"total_fragments"`
+	DuplicateLines   int     `json:"duplicate_lines"`
+	TotalLines       int     `json:"total_lines"`
+	DuplicationRatio float64 `json:"duplication_ratio"`
+	CloneGroups      int     `json:"clone_groups"`
+	LargestGroupSize int     `json:"largest_group_size"`
+}
+
+// CloneReport is the pmat-compatible output format.
+type CloneReport struct {
+	Summary  CloneReportSummary   `json:"summary"`
+	Groups   []CloneGroup         `json:"groups"`
+	Hotspots []DuplicationHotspot `json:"hotspots"`
+}
+
+// ToCloneReport converts CloneAnalysis to pmat-compatible format.
+func (a *CloneAnalysis) ToCloneReport() *CloneReport {
+	// Find largest group size
+	largestGroupSize := 0
+	for _, g := range a.Groups {
+		if len(g.Instances) > largestGroupSize {
+			largestGroupSize = len(g.Instances)
+		}
+	}
+
+	return &CloneReport{
+		Summary: CloneReportSummary{
+			TotalFiles:       a.TotalFilesScanned,
+			TotalFragments:   a.Summary.TotalClones,
+			DuplicateLines:   a.Summary.DuplicatedLines,
+			TotalLines:       a.Summary.TotalLines,
+			DuplicationRatio: a.Summary.DuplicationRatio,
+			CloneGroups:      len(a.Groups),
+			LargestGroupSize: largestGroupSize,
+		},
+		Groups:   a.Groups,
+		Hotspots: a.Summary.Hotspots,
+	}
+}
+
 // JaccardSimilarity computes similarity between two MinHash signatures.
 func (s *MinHashSignature) JaccardSimilarity(other *MinHashSignature) float64 {
 	if len(s.Values) != len(other.Values) || len(s.Values) == 0 {

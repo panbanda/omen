@@ -701,6 +701,12 @@ func runDuplicatesCmd(c *cli.Context) error {
 	}
 	defer formatter.Close()
 
+	// For JSON/TOON, output pmat-compatible format
+	if formatter.Format() == output.FormatJSON || formatter.Format() == output.FormatTOON {
+		report := analysis.ToCloneReport()
+		return formatter.Output(report)
+	}
+
 	if len(analysis.Clones) == 0 {
 		if formatter.Format() == output.FormatText {
 			color.Green("No code duplicates found above %.0f%% similarity threshold", threshold*100)
