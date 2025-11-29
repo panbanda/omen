@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.7.1](https://github.com/panbanda/omen/compare/v1.7.0...v1.7.1) (2025-11-29)
+
+
+### Bug Fixes
+
+* added tip instead of bold ([c0efa24](https://github.com/panbanda/omen/commit/c0efa24ff00dcf54d45a04822addc2bac10891ac))
+* address issues from comprehensive code review ([71ccb03](https://github.com/panbanda/omen/commit/71ccb034170f7a7acffd297e6e1ddfac9463c675))
+* address issues from comprehensive code review ([d9ad7f7](https://github.com/panbanda/omen/commit/d9ad7f78657d5f9b9383e68056760b8e22e40e91))
+* address issues from comprehensive code review ([944bb2a](https://github.com/panbanda/omen/commit/944bb2a4a27dcfe021123a895db9abde20b25a5c))
+* address issues from comprehensive code review ([54c193d](https://github.com/panbanda/omen/commit/54c193df859e6088e67eb84a164cf1d6dd0e8ed0))
+* address issues from comprehensive code review ([26d6878](https://github.com/panbanda/omen/commit/26d6878e0ff54046f3997b3200106f7ac0307e24))
+* resolve security, performance, and correctness issues from code review ([cf1ff03](https://github.com/panbanda/omen/commit/cf1ff0366845b60f7906eb0ae3948d15a47e5330))
+
 ## [1.7.0](https://github.com/panbanda/omen/compare/v1.6.0...v1.7.0) (2025-11-29)
 
 
