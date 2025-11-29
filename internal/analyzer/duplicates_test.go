@@ -3,6 +3,7 @@ package analyzer
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/panbanda/omen/pkg/config"
@@ -1026,7 +1027,7 @@ func TestLSHCandidateFiltering(t *testing.T) {
 
 	files := make([]string, 5)
 	for i := range files {
-		files[i] = filepath.Join(tmpDir, "file"+itoa(i+1)+".go")
+		files[i] = filepath.Join(tmpDir, "file"+strconv.Itoa(i+1)+".go")
 		if err := os.WriteFile(files[i], []byte(similarCode), 0644); err != nil {
 			t.Fatalf("failed to write file: %v", err)
 		}
@@ -1135,7 +1136,7 @@ func TestDuplicationHotspots(t *testing.T) {
 
 	files := make([]string, 5)
 	for i := range files {
-		files[i] = filepath.Join(tmpDir, "file"+itoa(i+1)+".go")
+		files[i] = filepath.Join(tmpDir, "file"+strconv.Itoa(i+1)+".go")
 		if err := os.WriteFile(files[i], []byte(duplicateCode), 0644); err != nil {
 			t.Fatalf("failed to write file: %v", err)
 		}
