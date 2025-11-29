@@ -290,16 +290,15 @@ func (a *DuplicateAnalyzer) findClonePairsLSH(fragments []codeFragment) []cloneP
 }
 
 // hashBand computes a hash for a band portion of the signature.
+// Uses FNV-1a style combining without allocations.
 func hashBand(values []uint64, seed uint64) uint64 {
-	h := xxhash.New()
-	var buf [8]byte
-	binary.LittleEndian.PutUint64(buf[:], seed)
-	h.Write(buf[:])
+	const fnvPrime = 0x00000100000001B3
+	h := seed ^ 0xcbf29ce484222325 // FNV offset basis
 	for _, v := range values {
-		binary.LittleEndian.PutUint64(buf[:], v)
-		h.Write(buf[:])
+		h ^= v
+		h *= fnvPrime
 	}
-	return h.Sum64()
+	return h
 }
 
 type clonePair struct {
@@ -795,15 +794,17 @@ func (a *DuplicateAnalyzer) computeMinHash(tokens []string) *models.MinHashSigna
 	return signature
 }
 
-// hashUint64WithSeed computes a hash of a uint64 value with a seed using xxhash.
+// hashUint64WithSeed computes a hash of a uint64 value with a seed.
+// Uses bit mixing instead of xxhash to avoid allocations.
 func hashUint64WithSeed(value uint64, seed uint64) uint64 {
-	h := xxhash.New()
-	var buf [8]byte
-	binary.LittleEndian.PutUint64(buf[:], seed)
-	h.Write(buf[:])
-	binary.LittleEndian.PutUint64(buf[:], value)
-	h.Write(buf[:])
-	return h.Sum64()
+	// Combine value and seed using murmur-style mixing
+	h := value ^ seed
+	h ^= h >> 33
+	h *= 0xff51afd7ed558ccd
+	h ^= h >> 33
+	h *= 0xc4ceb9fe1a85ec53
+	h ^= h >> 33
+	return h
 }
 
 // generateKShingles creates k-shingles from tokens using blake3 hashing (pmat-compatible).
