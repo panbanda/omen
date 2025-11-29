@@ -30,13 +30,15 @@ type ComplexityInput struct {
 	IncludeHalstead     bool `json:"include_halstead,omitempty" jsonschema:"Include Halstead software science metrics."`
 	CyclomaticThreshold int  `json:"cyclomatic_threshold,omitempty" jsonschema:"Cyclomatic complexity threshold for warnings. Default 10."`
 	CognitiveThreshold  int  `json:"cognitive_threshold,omitempty" jsonschema:"Cognitive complexity threshold for warnings. Default 15."`
+	FunctionsOnly       bool `json:"functions_only,omitempty" jsonschema:"Show only function-level metrics, omit file summaries."`
 }
 
 // SATDInput adds SATD-specific options.
 type SATDInput struct {
 	AnalyzeInput
-	IncludeTests bool `json:"include_tests,omitempty" jsonschema:"Include test files in analysis."`
-	StrictMode   bool `json:"strict_mode,omitempty" jsonschema:"Only match explicit markers with colons (e.g., TODO:)."`
+	IncludeTests bool     `json:"include_tests,omitempty" jsonschema:"Include test files in analysis."`
+	StrictMode   bool     `json:"strict_mode,omitempty" jsonschema:"Only match explicit markers with colons (e.g., TODO:)."`
+	Patterns     []string `json:"patterns,omitempty" jsonschema:"Additional patterns to detect beyond defaults."`
 }
 
 // DeadcodeInput adds deadcode-specific options.
@@ -68,13 +70,14 @@ type DefectInput struct {
 // TDGInput adds TDG-specific options.
 type TDGInput struct {
 	AnalyzeInput
-	Hotspots int `json:"hotspots,omitempty" jsonschema:"Number of hotspots to show. Default 10."`
+	Hotspots      int  `json:"hotspots,omitempty" jsonschema:"Number of hotspots to show. Default 10."`
+	ShowPenalties bool `json:"show_penalties,omitempty" jsonschema:"Show applied penalties in output."`
 }
 
 // GraphInput adds graph-specific options.
 type GraphInput struct {
 	AnalyzeInput
-	Scope          string `json:"scope,omitempty" jsonschema:"Analysis scope: file, function, or module. Default module."`
+	Scope          string `json:"scope,omitempty" jsonschema:"Analysis scope: file, function, module, or package. Default module."`
 	IncludeMetrics bool   `json:"include_metrics,omitempty" jsonschema:"Include PageRank and centrality metrics."`
 }
 
@@ -243,6 +246,19 @@ func handleAnalyzeComplexity(ctx context.Context, req *mcp.CallToolRequest, inpu
 		return toolError(fmt.Sprintf("analysis failed: %v", err))
 	}
 
+	if input.FunctionsOnly {
+		// Extract just functions from all files
+		var functions []models.FunctionComplexity
+		for _, f := range analysis.Files {
+			functions = append(functions, f.Functions...)
+		}
+		result := struct {
+			Functions []models.FunctionComplexity `json:"functions" toon:"functions"`
+			Summary   models.ComplexitySummary    `json:"summary" toon:"summary"`
+		}{functions, analysis.Summary}
+		return toolResult(result, format)
+	}
+
 	return toolResult(analysis, format)
 }
 
@@ -267,6 +283,14 @@ func handleAnalyzeSATD(ctx context.Context, req *mcp.CallToolRequest, input SATD
 		StrictMode:        input.StrictMode,
 	}
 	satdAnalyzer := analyzer.NewSATDAnalyzerWithOptions(opts)
+
+	// Add custom patterns if provided
+	for _, pattern := range input.Patterns {
+		// Add as medium severity requirement debt by default
+		if err := satdAnalyzer.AddPattern(pattern, models.DebtRequirement, models.SeverityMedium); err != nil {
+			return toolError(fmt.Sprintf("invalid pattern %q: %v", pattern, err))
+		}
+	}
 
 	analysis, err := satdAnalyzer.AnalyzeProject(files)
 	if err != nil {
@@ -441,6 +465,41 @@ func handleAnalyzeTDG(ctx context.Context, req *mcp.CallToolRequest, input TDGIn
 	}
 
 	report := project.ToTDGReport(hotspots)
+
+	if input.ShowPenalties {
+		// Create extended report with penalties included
+		type HotspotWithPenalties struct {
+			models.TDGHotspot
+			Penalties []models.PenaltyAttribution `json:"penalties,omitempty" toon:"penalties,omitempty"`
+		}
+		type ReportWithPenalties struct {
+			Summary  models.TDGSummary      `json:"summary" toon:"summary"`
+			Hotspots []HotspotWithPenalties `json:"hotspots" toon:"hotspots"`
+		}
+
+		// Build file path to TdgScore lookup
+		penaltyMap := make(map[string][]models.PenaltyAttribution)
+		for _, f := range project.Files {
+			if len(f.PenaltiesApplied) > 0 {
+				penaltyMap[f.FilePath] = f.PenaltiesApplied
+			}
+		}
+
+		extendedHotspots := make([]HotspotWithPenalties, len(report.Hotspots))
+		for i, h := range report.Hotspots {
+			extendedHotspots[i] = HotspotWithPenalties{
+				TDGHotspot: h,
+				Penalties:  penaltyMap[h.Path],
+			}
+		}
+
+		extendedReport := ReportWithPenalties{
+			Summary:  report.Summary,
+			Hotspots: extendedHotspots,
+		}
+		return toolResult(extendedReport, format)
+	}
+
 	return toolResult(report, format)
 }
 
