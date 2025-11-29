@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.7.0](https://github.com/panbanda/omen/compare/v1.6.0...v1.7.0) (2025-11-29)
+
+
+### Features
+
+* **mcp:** add MCP server for LLM tool integration ([518b378](https://github.com/panbanda/omen/commit/518b3780982949b6d5442239712089584762b62a))
+* **mcp:** add MCP server for LLM tool integration ([52c2708](https://github.com/panbanda/omen/commit/52c27088a01eb4b5765e574e64491d1f2039bc80))
+* **mcp:** add missing CLI parameters to tool inputs ([d6a9a3c](https://github.com/panbanda/omen/commit/d6a9a3cd29a3252b033a561a15ea9cd566b095da))
+
+
+### Performance Improvements
+
+* **analyzer:** optimize context command for large codebases ([6437c83](https://github.com/panbanda/omen/commit/6437c83ba3fa46e50d1b89a5b1db56a561743519))
+* **analyzer:** optimize context command for large codebases ([7d072ca](https://github.com/panbanda/omen/commit/7d072ca8064e138b24c7cb9f738669b066d1d2dd))
+* **analyzer:** replace xxhash with allocation-free hashing in duplicates ([786e5f5](https://github.com/panbanda/omen/commit/786e5f5bb022ca24a9cfdf149a68421735cc5f03))
+* **analyzer:** replace xxhash with allocation-free hashing in duplicates ([1d77a65](https://github.com/panbanda/omen/commit/1d77a65dd301e62d84bf1e4b2be5d16daad9046b))
+* **analyzer:** use indexed lookup for function call matching ([0ea2be2](https://github.com/panbanda/omen/commit/0ea2be289fc300baab419b3ca2c35f1793985ce2))
+
 ## [1.6.0](https://github.com/panbanda/omen/compare/v1.5.3...v1.6.0) (2025-11-29)
 
 
