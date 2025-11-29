@@ -531,105 +531,10 @@ func TestMatchesImport(t *testing.T) {
 	}
 }
 
-func TestMatchesCall(t *testing.T) {
-	tests := []struct {
-		name     string
-		nodeID   string
-		callName string
-		want     bool
-	}{
-		{
-			name:     "Function name matches",
-			nodeID:   "/path/to/file.go:foo",
-			callName: "foo",
-			want:     true,
-		},
-		{
-			name:     "Function name mismatch",
-			nodeID:   "/path/to/file.go:foo",
-			callName: "bar",
-			want:     false,
-		},
-		{
-			name:     "Partial match not enough",
-			nodeID:   "/path/to/file.go:foobar",
-			callName: "foo",
-			want:     true,
-		},
-		{
-			name:     "No colon in node ID",
-			nodeID:   "/path/to/file.go",
-			callName: "foo",
-			want:     false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := matchesCall(tt.nodeID, tt.callName)
-			if got != tt.want {
-				t.Errorf("matchesCall(%q, %q) = %v, want %v",
-					tt.nodeID, tt.callName, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestContains(t *testing.T) {
-	tests := []struct {
-		name   string
-		s      string
-		substr string
-		want   bool
-	}{
-		{
-			name:   "Contains at start",
-			s:      "hello world",
-			substr: "hello",
-			want:   true,
-		},
-		{
-			name:   "Contains in middle",
-			s:      "hello world",
-			substr: "lo wo",
-			want:   true,
-		},
-		{
-			name:   "Contains at end",
-			s:      "hello world",
-			substr: "world",
-			want:   true,
-		},
-		{
-			name:   "Does not contain",
-			s:      "hello world",
-			substr: "foo",
-			want:   false,
-		},
-		{
-			name:   "Empty substring",
-			s:      "hello",
-			substr: "",
-			want:   true,
-		},
-		{
-			name:   "Empty string",
-			s:      "",
-			substr: "foo",
-			want:   false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := contains(tt.s, tt.substr)
-			if got != tt.want {
-				t.Errorf("contains(%q, %q) = %v, want %v",
-					tt.s, tt.substr, got, tt.want)
-			}
-		})
-	}
-}
+// NOTE: TestMatchesCall and TestContains were removed as these functions
+// have been replaced with an indexed lookup approach for performance.
+// The edge-building logic now uses funcNameIndex for O(1) lookups
+// instead of O(n) iteration with string matching.
 
 func TestCalculateMetrics(t *testing.T) {
 	tests := []struct {

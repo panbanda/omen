@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"strings"
 	"sync"
 
 	"github.com/panbanda/omen/internal/fileproc"
@@ -60,12 +61,25 @@ func (a *GraphAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress fi
 	graph := models.NewDependencyGraph()
 	nodeMap := make(map[string]bool)
 
-	// Collect all nodes
+	// Build index for O(1) function name lookup: funcName -> []nodeID
+	// Node IDs are "path:funcName", so we extract funcName and map to all matching IDs
+	funcNameIndex := make(map[string][]string)
+
+	// Collect all nodes and build index
 	for _, fd := range fileData {
 		for _, node := range fd.nodes {
 			if !nodeMap[node.ID] {
 				graph.AddNode(node)
 				nodeMap[node.ID] = true
+
+				// For function scope, index by function name
+				if a.scope == ScopeFunction {
+					// Extract function name from "path:funcName"
+					if idx := strings.LastIndex(node.ID, ":"); idx >= 0 {
+						funcName := node.ID[idx+1:]
+						funcNameIndex[funcName] = append(funcNameIndex[funcName], node.ID)
+					}
+				}
 			}
 		}
 	}
@@ -92,16 +106,27 @@ func (a *GraphAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress fi
 		case ScopeFunction:
 			for sourceID, calls := range fd.calls {
 				for _, call := range calls {
-					for targetID := range nodeMap {
-						if matchesCall(targetID, call) {
-							mu.Lock()
-							graph.AddEdge(models.GraphEdge{
-								From: sourceID,
-								To:   targetID,
-								Type: models.EdgeCall,
-							})
-							mu.Unlock()
+					// Use index for O(1) lookup instead of O(n) iteration
+					// Strip any receiver/package prefix from call (e.g., "foo.Bar" -> "Bar")
+					funcName := call
+					if idx := strings.LastIndex(call, "."); idx >= 0 {
+						funcName = call[idx+1:]
+					}
+
+					// Look up all nodes with this function name
+					if targetIDs, ok := funcNameIndex[funcName]; ok {
+						mu.Lock()
+						for _, targetID := range targetIDs {
+							// Avoid self-references
+							if targetID != sourceID {
+								graph.AddEdge(models.GraphEdge{
+									From: sourceID,
+									To:   targetID,
+									Type: models.EdgeCall,
+								})
+							}
 						}
+						mu.Unlock()
 					}
 				}
 			}
@@ -332,23 +357,7 @@ func extractCalls(body *sitter.Node, source []byte) []string {
 func matchesImport(filePath, importPath string) bool {
 	// Simple substring matching for now
 	return filePath != importPath && // Not self-reference
-		(contains(filePath, importPath) || contains(importPath, filePath))
-}
-
-// matchesCall checks if a node ID matches a function call.
-func matchesCall(nodeID, callName string) bool {
-	// Node IDs are "path:funcName", calls are just "funcName"
-	return contains(nodeID, ":"+callName)
-}
-
-// contains checks if s contains substr.
-func contains(s, substr string) bool {
-	for i := 0; i+len(substr) <= len(s); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+		(strings.Contains(filePath, importPath) || strings.Contains(importPath, filePath))
 }
 
 // gonumGraph holds the gonum representation and mappings.
