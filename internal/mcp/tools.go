@@ -6,11 +6,11 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/go-git/go-git/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/panbanda/omen/internal/analyzer"
 	"github.com/panbanda/omen/internal/output"
 	"github.com/panbanda/omen/internal/scanner"
+	"github.com/panbanda/omen/internal/vcs"
 	"github.com/panbanda/omen/pkg/config"
 	"github.com/panbanda/omen/pkg/models"
 	toon "github.com/toon-format/toon-go"
@@ -163,9 +163,7 @@ func findGitRoot(path string) (string, error) {
 	}
 
 	// Try to open git repo starting from path
-	_, err = git.PlainOpenWithOptions(absPath, &git.PlainOpenOptions{
-		DetectDotGit: true,
-	})
+	_, err = vcs.DefaultOpener().PlainOpenWithDetect(absPath)
 	if err != nil {
 		return "", fmt.Errorf("not a git repository (or any parent): %w", err)
 	}

@@ -5,15 +5,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/panbanda/omen/internal/fileproc"
+	"github.com/panbanda/omen/internal/vcs"
 	"github.com/panbanda/omen/pkg/models"
 )
 
 // OwnershipAnalyzer calculates code ownership and bus factor.
 type OwnershipAnalyzer struct {
 	excludeTrivial bool
+	opener         vcs.Opener
 }
 
 // OwnershipOption is a functional option for configuring OwnershipAnalyzer.
@@ -27,10 +27,18 @@ func WithOwnershipIncludeTrivial() OwnershipOption {
 	}
 }
 
+// WithOwnershipOpener sets the VCS opener (useful for testing).
+func WithOwnershipOpener(opener vcs.Opener) OwnershipOption {
+	return func(a *OwnershipAnalyzer) {
+		a.opener = opener
+	}
+}
+
 // NewOwnershipAnalyzer creates a new ownership analyzer.
 func NewOwnershipAnalyzer(opts ...OwnershipOption) *OwnershipAnalyzer {
 	a := &OwnershipAnalyzer{
 		excludeTrivial: true, // Default: exclude trivial lines
+		opener:         vcs.DefaultOpener(),
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -40,8 +48,8 @@ func NewOwnershipAnalyzer(opts ...OwnershipOption) *OwnershipAnalyzer {
 
 // repoHandle holds a git repository and its HEAD commit for reuse across files.
 type repoHandle struct {
-	repo   *git.Repository
-	commit *object.Commit
+	repo   vcs.Repository
+	commit vcs.Commit
 }
 
 // AnalyzeRepo analyzes ownership for all files in a repository.
@@ -52,7 +60,7 @@ func (a *OwnershipAnalyzer) AnalyzeRepo(repoPath string, files []string) (*model
 // AnalyzeRepoWithProgress analyzes ownership with progress callback.
 func (a *OwnershipAnalyzer) AnalyzeRepoWithProgress(repoPath string, files []string, onProgress func()) (*models.OwnershipAnalysis, error) {
 	// Validate repository exists and get HEAD hash upfront
-	repo, err := git.PlainOpen(repoPath)
+	repo, err := a.opener.PlainOpen(repoPath)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +76,7 @@ func (a *OwnershipAnalyzer) AnalyzeRepoWithProgress(repoPath string, files []str
 		files,
 		// initResource: create a repo handle per worker
 		func() (*repoHandle, error) {
-			r, err := git.PlainOpen(repoPath)
+			r, err := a.opener.PlainOpen(repoPath)
 			if err != nil {
 				return nil, err
 			}
@@ -119,7 +127,7 @@ func (a *OwnershipAnalyzer) analyzeFile(h *repoHandle, repoPath string, filePath
 	}
 
 	// Get blame using the pooled commit
-	blame, err := git.Blame(h.commit, relPath)
+	blame, err := h.repo.Blame(h.commit, relPath)
 	if err != nil {
 		return nil, err
 	}
