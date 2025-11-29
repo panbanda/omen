@@ -1,6 +1,7 @@
 package models
 
 import (
+	"math"
 	"path/filepath"
 	"strings"
 )
@@ -425,5 +426,189 @@ func NewTdgComparison(source1, source2 TdgScore) TdgComparison {
 		Winner:                winner,
 		Improvements:          improvements,
 		Regressions:           regressions,
+	}
+}
+
+// TDGSeverity represents the severity classification based on thresholds (pmat-compatible).
+type TDGSeverity string
+
+const (
+	TDGSeverityNormal   TDGSeverity = "normal"   // TDG < 1.5
+	TDGSeverityWarning  TDGSeverity = "warning"  // TDG 1.5-2.5
+	TDGSeverityCritical TDGSeverity = "critical" // TDG > 2.5
+)
+
+// TDGSeverityFromValue converts a TDG value (0-5 scale) to severity.
+func TDGSeverityFromValue(value float64) TDGSeverity {
+	if value > 2.5 {
+		return TDGSeverityCritical
+	} else if value > 1.5 {
+		return TDGSeverityWarning
+	}
+	return TDGSeverityNormal
+}
+
+// TDGHotspot represents a file with high technical debt (pmat-compatible).
+type TDGHotspot struct {
+	Path           string  `json:"path"`
+	TdgScore       float64 `json:"tdg_score"`
+	PrimaryFactor  string  `json:"primary_factor"`
+	EstimatedHours float64 `json:"estimated_hours"`
+}
+
+// TDGSummary provides aggregate statistics (pmat-compatible).
+type TDGSummary struct {
+	TotalFiles         int     `json:"total_files"`
+	CriticalFiles      int     `json:"critical_files"`
+	WarningFiles       int     `json:"warning_files"`
+	AverageTdg         float64 `json:"average_tdg"`
+	P95Tdg             float64 `json:"p95_tdg"`
+	P99Tdg             float64 `json:"p99_tdg"`
+	EstimatedDebtHours float64 `json:"estimated_debt_hours"`
+}
+
+// TDGReport is the pmat-compatible TDG analysis output.
+type TDGReport struct {
+	Summary  TDGSummary   `json:"summary"`
+	Hotspots []TDGHotspot `json:"hotspots"`
+}
+
+// ToTDGReport converts a ProjectScore to pmat-compatible TDGReport.
+// Omen uses 0-100 scale (higher = better quality), pmat uses 0-5 scale (higher = more debt).
+func (p *ProjectScore) ToTDGReport(topN int) *TDGReport {
+	report := &TDGReport{
+		Summary: TDGSummary{
+			TotalFiles: p.TotalFiles,
+		},
+		Hotspots: make([]TDGHotspot, 0),
+	}
+
+	if p.TotalFiles == 0 {
+		return report
+	}
+
+	// Convert omen scores to pmat-style TDG values
+	// Omen: 0-100 (100 = best), pmat: 0-5 (0 = best)
+	// Formula: tdg = (100 - omenScore) / 20
+	tdgValues := make([]float64, 0, len(p.Files))
+
+	for _, f := range p.Files {
+		tdgValue := (100.0 - float64(f.Total)) / 20.0
+		if tdgValue < 0 {
+			tdgValue = 0
+		}
+		if tdgValue > 5 {
+			tdgValue = 5
+		}
+		tdgValues = append(tdgValues, tdgValue)
+
+		severity := TDGSeverityFromValue(tdgValue)
+		if severity == TDGSeverityCritical {
+			report.Summary.CriticalFiles++
+		} else if severity == TDGSeverityWarning {
+			report.Summary.WarningFiles++
+		}
+
+		// Identify primary factor
+		primaryFactor := identifyPrimaryFactor(f)
+
+		// Calculate estimated hours (pmat formula: 2.0 * 1.8^tdg)
+		estimatedHours := 2.0 * math.Pow(1.8, tdgValue)
+
+		report.Hotspots = append(report.Hotspots, TDGHotspot{
+			Path:           f.FilePath,
+			TdgScore:       tdgValue,
+			PrimaryFactor:  primaryFactor,
+			EstimatedHours: estimatedHours,
+		})
+
+		report.Summary.EstimatedDebtHours += estimatedHours
+	}
+
+	// Calculate average TDG
+	var sum float64
+	for _, v := range tdgValues {
+		sum += v
+	}
+	report.Summary.AverageTdg = sum / float64(len(tdgValues))
+
+	// Sort hotspots by TDG score (highest first = worst quality)
+	sortHotspotsByScore(report.Hotspots)
+
+	// Calculate percentiles
+	sortedValues := make([]float64, len(tdgValues))
+	copy(sortedValues, tdgValues)
+	sortFloat64s(sortedValues)
+	report.Summary.P95Tdg = percentile(sortedValues, 0.95)
+	report.Summary.P99Tdg = percentile(sortedValues, 0.99)
+
+	// Limit hotspots to topN
+	if topN > 0 && len(report.Hotspots) > topN {
+		report.Hotspots = report.Hotspots[:topN]
+	}
+
+	return report
+}
+
+// identifyPrimaryFactor determines the main contributor to high TDG.
+func identifyPrimaryFactor(score TdgScore) string {
+	// Calculate weighted contributions (using pmat weights)
+	// Complexity: 30%, Churn: 35%, Coupling: 15%, Domain Risk: 10%, Duplication: 10%
+	// For omen, we use the component penalties as proxies
+	structPenalty := 25.0 - float64(score.StructuralComplexity)
+	semPenalty := 20.0 - float64(score.SemanticComplexity)
+	couplingPenalty := 15.0 - float64(score.CouplingScore)
+	dupPenalty := 20.0 - float64(score.DuplicationRatio)
+
+	// Weighted contributions
+	factors := []struct {
+		name   string
+		weight float64
+	}{
+		{"High Complexity", (structPenalty + semPenalty) * 0.30},
+		{"High Coupling", couplingPenalty * 0.15},
+		{"Code Duplication", dupPenalty * 0.10},
+	}
+
+	// Find highest contributor
+	maxFactor := factors[0]
+	for _, f := range factors[1:] {
+		if f.weight > maxFactor.weight {
+			maxFactor = f
+		}
+	}
+
+	return maxFactor.name
+}
+
+// Helper functions for percentile calculation
+func percentile(sorted []float64, p float64) float64 {
+	if len(sorted) == 0 {
+		return 0.0
+	}
+	idx := int(float64(len(sorted)) * p)
+	if idx >= len(sorted) {
+		idx = len(sorted) - 1
+	}
+	return sorted[idx]
+}
+
+func sortFloat64s(vals []float64) {
+	for i := 0; i < len(vals)-1; i++ {
+		for j := i + 1; j < len(vals); j++ {
+			if vals[i] > vals[j] {
+				vals[i], vals[j] = vals[j], vals[i]
+			}
+		}
+	}
+}
+
+func sortHotspotsByScore(hotspots []TDGHotspot) {
+	for i := 0; i < len(hotspots)-1; i++ {
+		for j := i + 1; j < len(hotspots); j++ {
+			if hotspots[i].TdgScore < hotspots[j].TdgScore {
+				hotspots[i], hotspots[j] = hotspots[j], hotspots[i]
+			}
+		}
 	}
 }
