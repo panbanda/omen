@@ -301,6 +301,8 @@ For each symbol, the map includes:
 
 **Why it matters:** LLMs have limited context windows. Stuffing them with entire files wastes tokens on less important code. PageRank, [developed by Brin and Page (1998)](https://snap.stanford.edu/class/cs224w-readings/Brin98Anatomy.pdf), identifies structurally important nodes in a graph. Applied to code, it surfaces the symbols that are most central to understanding the codebase.
 
+**Scalability:** Omen uses a sparse power iteration algorithm for PageRank computation, scaling linearly with the number of edges O(E) rather than quadratically with nodes O(V^2). This enables fast analysis of large monorepos with 25,000+ symbols in under 30 seconds.
+
 **Example output:**
 
 ```
