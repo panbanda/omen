@@ -27,11 +27,84 @@ var (
 )
 
 // getPaths returns paths from positional args, defaulting to ["."]
+// Filters out any flag-like arguments that weren't parsed due to POSIX flag ordering.
 func getPaths(c *cli.Context) []string {
-	if c.Args().Len() > 0 {
-		return c.Args().Slice()
+	args := c.Args().Slice()
+	if len(args) == 0 {
+		return []string{"."}
 	}
-	return []string{"."}
+
+	// Filter out unparsed flags (arguments starting with -)
+	var paths []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "-") {
+			// Skip this flag and its value if it's a known flag with a value
+			if (arg == "-f" || arg == "--format" || arg == "-o" || arg == "--output") && i+1 < len(args) {
+				i++ // Skip the next arg (the value)
+			}
+			continue
+		}
+		paths = append(paths, arg)
+	}
+
+	if len(paths) == 0 {
+		return []string{"."}
+	}
+	return paths
+}
+
+// getFormat returns the format flag value, checking both parsed flags and unparsed trailing args.
+// This handles POSIX-style flag ordering where flags after positional args aren't parsed.
+func getFormat(c *cli.Context) string {
+	// First check if the flag was properly parsed
+	if format := c.String("format"); format != "" && format != "text" {
+		return format
+	}
+
+	// Check unparsed args for trailing flags
+	args := c.Args().Slice()
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if (arg == "-f" || arg == "--format") && i+1 < len(args) {
+			return args[i+1]
+		}
+		// Handle --format=json style
+		if strings.HasPrefix(arg, "--format=") {
+			return strings.TrimPrefix(arg, "--format=")
+		}
+		if strings.HasPrefix(arg, "-f=") {
+			return strings.TrimPrefix(arg, "-f=")
+		}
+	}
+
+	return c.String("format")
+}
+
+// getOutputFile returns the output file path, checking both parsed flags and unparsed trailing args.
+func getOutputFile(c *cli.Context) string {
+	// First check if the flag was properly parsed
+	if output := c.String("output"); output != "" {
+		return output
+	}
+
+	// Check unparsed args for trailing flags
+	args := c.Args().Slice()
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if (arg == "-o" || arg == "--output") && i+1 < len(args) {
+			return args[i+1]
+		}
+		// Handle --output=file style
+		if strings.HasPrefix(arg, "--output=") {
+			return strings.TrimPrefix(arg, "--output=")
+		}
+		if strings.HasPrefix(arg, "-o=") {
+			return strings.TrimPrefix(arg, "-o=")
+		}
+	}
+
+	return ""
 }
 
 // outputFlags returns the common output-related flags for analyze commands.
@@ -57,10 +130,11 @@ func outputFlags() []cli.Flag {
 
 func main() {
 	app := &cli.App{
-		Name:     "omen",
-		Usage:    "Multi-language code analysis CLI",
-		Version:  version,
-		Metadata: make(map[string]interface{}),
+		Name:                   "omen",
+		Usage:                  "Multi-language code analysis CLI",
+		Version:                version,
+		Metadata:               make(map[string]interface{}),
+		UseShortOptionHandling: true,
 		Description: `Omen analyzes codebases for complexity, technical debt, dead code,
 code duplication, defect prediction, and dependency graphs.
 
@@ -204,7 +278,7 @@ func runComplexityCmd(c *cli.Context) error {
 		return fmt.Errorf("analysis failed: %w", err)
 	}
 
-	formatter, err := output.NewFormatter(output.ParseFormat(c.String("format")), c.String("output"), true)
+	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
 	if err != nil {
 		return err
 	}
@@ -369,7 +443,7 @@ func runSATDCmd(c *cli.Context) error {
 		return fmt.Errorf("analysis failed: %w", err)
 	}
 
-	formatter, err := output.NewFormatter(output.ParseFormat(c.String("format")), c.String("output"), true)
+	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
 	if err != nil {
 		return err
 	}
@@ -471,7 +545,7 @@ func runDeadCodeCmd(c *cli.Context) error {
 		return fmt.Errorf("analysis failed: %w", err)
 	}
 
-	formatter, err := output.NewFormatter(output.ParseFormat(c.String("format")), c.String("output"), true)
+	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
 	if err != nil {
 		return err
 	}
@@ -589,7 +663,7 @@ func runChurnCmd(c *cli.Context) error {
 		return fmt.Errorf("churn analysis failed (is this a git repository?): %w", err)
 	}
 
-	formatter, err := output.NewFormatter(output.ParseFormat(c.String("format")), c.String("output"), true)
+	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
 	if err != nil {
 		return err
 	}
@@ -695,7 +769,7 @@ func runDuplicatesCmd(c *cli.Context) error {
 		return fmt.Errorf("analysis failed: %w", err)
 	}
 
-	formatter, err := output.NewFormatter(output.ParseFormat(c.String("format")), c.String("output"), true)
+	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
 	if err != nil {
 		return err
 	}
@@ -805,7 +879,7 @@ func runDefectCmd(c *cli.Context) error {
 		return fmt.Errorf("analysis failed: %w", err)
 	}
 
-	formatter, err := output.NewFormatter(output.ParseFormat(c.String("format")), c.String("output"), true)
+	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
 	if err != nil {
 		return err
 	}
@@ -942,7 +1016,7 @@ func runTDGCmd(c *cli.Context) error {
 		return fmt.Errorf("analysis failed: %w", err)
 	}
 
-	formatter, fmtErr := output.NewFormatter(output.ParseFormat(c.String("format")), c.String("output"), true)
+	formatter, fmtErr := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
 	if fmtErr != nil {
 		return fmtErr
 	}
@@ -1118,7 +1192,7 @@ func runGraphCmd(c *cli.Context) error {
 		return fmt.Errorf("analysis failed: %w", err)
 	}
 
-	formatter, err := output.NewFormatter(output.ParseFormat(c.String("format")), c.String("output"), true)
+	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
 	if err != nil {
 		return err
 	}
@@ -1252,7 +1326,7 @@ func runLintHotspotCmd(c *cli.Context) error {
 		return fmt.Errorf("analysis failed: %w", err)
 	}
 
-	formatter, err := output.NewFormatter(output.ParseFormat(c.String("format")), c.String("output"), true)
+	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
 	if err != nil {
 		return err
 	}
@@ -1348,7 +1422,7 @@ func runContextCmd(c *cli.Context) error {
 	// Group by language
 	langGroups := scan.GroupByLanguage(files)
 
-	formatter, err := output.NewFormatter(output.ParseFormat(c.String("format")), c.String("output"), true)
+	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
 	if err != nil {
 		return err
 	}
@@ -1471,7 +1545,7 @@ func runAnalyzeCmd(c *cli.Context) error {
 		return nil
 	}
 
-	formatter, err := output.NewFormatter(output.ParseFormat(c.String("format")), c.String("output"), true)
+	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
 	if err != nil {
 		return err
 	}
