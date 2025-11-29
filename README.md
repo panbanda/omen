@@ -19,23 +19,6 @@ A multi-language code analysis CLI built in Go. Omen uses tree-sitter for parsin
 
 ## Features
 
-- **Cyclomatic & Cognitive Complexity** - Measure code complexity at function and file levels
-- **Self-Admitted Technical Debt (SATD)** - Detect TODO, FIXME, HACK markers and classify severity
-- **Dead Code Detection** - Find unused functions and variables
-- **Git Churn Analysis** - Identify frequently changed files
-- **Code Clone Detection** - Find duplicated code blocks (Type-1, Type-2, Type-3 clones)
-- **Defect Prediction** - Predict defect probability using PMAT weights
-- **Technical Debt Gradient (TDG)** - Composite scoring for prioritizing refactoring
-- **Dependency Graph** - Generate Mermaid diagrams of module dependencies
-- **Halstead Metrics** - Software science measurements for effort and bug estimation
-- **Hotspot Analysis** - Identify risky files combining churn and complexity metrics
-- **Temporal Coupling** - Detect files that frequently change together
-- **Code Ownership/Bus Factor** - Analyze knowledge concentration and team risk
-- **CK Metrics** - Chidamber-Kemerer object-oriented cohesion metrics
-- **Repository Map** - PageRank-ranked symbol summaries for LLM context
-
-## What Each Analyzer Does
-
 <details>
 <summary><strong>Complexity Analysis</strong> - How hard your code is to understand and test</summary>
 
@@ -56,14 +39,14 @@ There are two types of complexity:
 
 When developers write `TODO: fix this later` or `HACK: this is terrible but works`, they're creating technical debt and admitting it. Omen finds these comments and groups them by type:
 
-| Category | Markers | What it means |
-|----------|---------|---------------|
-| Design | HACK, KLUDGE, SMELL | Architecture shortcuts that need rethinking |
-| Defect | BUG, FIXME, BROKEN | Known bugs that haven't been fixed |
-| Requirement | TODO, FEAT | Missing features or incomplete implementations |
-| Test | FAILING, SKIP, DISABLED | Tests that are broken or turned off |
-| Performance | SLOW, OPTIMIZE, PERF | Code that works but needs to be faster |
-| Security | SECURITY, VULN, UNSAFE | Known security issues |
+| Category    | Markers                 | What it means                                  |
+| ----------- | ----------------------- | ---------------------------------------------- |
+| Design      | HACK, KLUDGE, SMELL     | Architecture shortcuts that need rethinking    |
+| Defect      | BUG, FIXME, BROKEN      | Known bugs that haven't been fixed             |
+| Requirement | TODO, FEAT              | Missing features or incomplete implementations |
+| Test        | FAILING, SKIP, DISABLED | Tests that are broken or turned off            |
+| Performance | SLOW, OPTIMIZE, PERF    | Code that works but needs to be faster         |
+| Security    | SECURITY, VULN, UNSAFE  | Known security issues                          |
 
 **Why it matters:** [Potdar and Shihab's 2014 study](https://ieeexplore.ieee.org/document/6976075) found that SATD comments often stay in codebases for years. The longer they stay, the harder they are to fix because people forget the context. [Maldonado and Shihab (2015)](https://ieeexplore.ieee.org/document/7332619) showed that design debt is the most common and most dangerous type.
 
@@ -75,6 +58,7 @@ When developers write `TODO: fix this later` or `HACK: this is terrible but work
 <summary><strong>Dead Code Detection</strong> - Code that exists but never runs</summary>
 
 Dead code includes:
+
 - Functions that are never called
 - Variables that are assigned but never used
 - Classes that are never instantiated
@@ -90,11 +74,13 @@ Dead code includes:
 <summary><strong>Git Churn Analysis</strong> - How often files change over time</summary>
 
 Churn looks at your git history and counts:
+
 - How many times each file was modified
 - How many lines were added and deleted
 - Which files change together
 
 Files with high churn are "hotspots" - they're constantly being touched, which could mean they're:
+
 - Central to the system (everyone needs to modify them)
 - Poorly designed (constant bug fixes)
 - Missing good abstractions (features keep getting bolted on)
@@ -110,11 +96,11 @@ Files with high churn are "hotspots" - they're constantly being touched, which c
 
 There are three types of clones:
 
-| Type | Description | Example |
-|------|-------------|---------|
-| Type-1 | Exact copies (maybe different whitespace/comments) | Copy-pasted code |
-| Type-2 | Same structure, different names | Same function with renamed variables |
-| Type-3 | Similar code with some modifications | Functions that do almost the same thing |
+| Type   | Description                                        | Example                                 |
+| ------ | -------------------------------------------------- | --------------------------------------- |
+| Type-1 | Exact copies (maybe different whitespace/comments) | Copy-pasted code                        |
+| Type-2 | Same structure, different names                    | Same function with renamed variables    |
+| Type-3 | Similar code with some modifications               | Functions that do almost the same thing |
 
 **Why it matters:** When you fix a bug in one copy, you have to remember to fix all the other copies too. [Juergens et al. (2009)](https://ieeexplore.ieee.org/document/5070547) found that cloned code has significantly more bugs because fixes don't get applied consistently. The more clones you have, the more likely you'll miss one during updates.
 
@@ -126,6 +112,7 @@ There are three types of clones:
 <summary><strong>Defect Prediction</strong> - The likelihood that a file contains bugs</summary>
 
 Omen combines multiple signals to predict defect probability:
+
 - Complexity (complex code = more bugs)
 - Churn (frequently changed code = more bugs)
 - Size (bigger files = more bugs)
@@ -145,18 +132,19 @@ Each file gets a risk score from 0% to 100%.
 
 TDG combines multiple metrics into a single score (0-100 scale, higher is better):
 
-| Component | Weight | What it measures |
-|-----------|--------|------------------|
-| Structural Complexity | 20% | Cyclomatic complexity and nesting depth |
-| Semantic Complexity | 15% | Cognitive complexity |
-| Duplication | 15% | Amount of cloned code |
-| Coupling | 15% | Dependencies on other modules |
-| Hotspot | 10% | Churn x complexity interaction |
-| Temporal Coupling | 10% | Co-change patterns with other files |
-| Consistency | 10% | Code style and pattern adherence |
-| Documentation | 5% | Comment coverage |
+| Component             | Weight | What it measures                        |
+| --------------------- | ------ | --------------------------------------- |
+| Structural Complexity | 20%    | Cyclomatic complexity and nesting depth |
+| Semantic Complexity   | 15%    | Cognitive complexity                    |
+| Duplication           | 15%    | Amount of cloned code                   |
+| Coupling              | 15%    | Dependencies on other modules           |
+| Hotspot               | 10%    | Churn x complexity interaction          |
+| Temporal Coupling     | 10%    | Co-change patterns with other files     |
+| Consistency           | 10%    | Code style and pattern adherence        |
+| Documentation         | 5%     | Comment coverage                        |
 
 Scores are classified into letter grades (A+ to F), where:
+
 - **A/A+** (90-100): Excellent - well-maintained code
 - **B** (75-89): Good - minor improvements possible
 - **C** (60-74): Needs attention - technical debt accumulating
@@ -173,6 +161,7 @@ Scores are classified into letter grades (A+ to F), where:
 <summary><strong>Dependency Graph</strong> - How your modules connect to each other</summary>
 
 Omen builds a graph showing which files import which other files, then calculates:
+
 - **PageRank**: Which files are most "central" (many things depend on them)
 - **Betweenness**: Which files are "bridges" between different parts of the codebase
 - **Coupling**: How interconnected modules are
@@ -188,15 +177,15 @@ Omen builds a graph showing which files import which other files, then calculate
 
 [Maurice Halstead developed these metrics in 1977](https://dl.acm.org/doi/10.5555/540137) to measure programs like physical objects:
 
-| Metric | Formula | What it means |
-|--------|---------|---------------|
-| Vocabulary | n1 + n2 | Unique operators + unique operands |
-| Length | N1 + N2 | Total operators + total operands |
-| Volume | N * log2(n) | Size of the implementation |
-| Difficulty | (n1/2) * (N2/n2) | How hard to write and understand |
-| Effort | Volume * Difficulty | Mental effort required |
-| Time | Effort / 18 | Estimated coding time in seconds |
-| Bugs | Effort^(2/3) / 3000 | Estimated number of bugs |
+| Metric     | Formula              | What it means                      |
+| ---------- | -------------------- | ---------------------------------- |
+| Vocabulary | n1 + n2              | Unique operators + unique operands |
+| Length     | N1 + N2              | Total operators + total operands   |
+| Volume     | N \* log2(n)         | Size of the implementation         |
+| Difficulty | (n1/2) \* (N2/n2)    | How hard to write and understand   |
+| Effort     | Volume \* Difficulty | Mental effort required             |
+| Time       | Effort / 18          | Estimated coding time in seconds   |
+| Bugs       | Effort^(2/3) / 3000  | Estimated number of bugs           |
 
 **Why it matters:** Halstead metrics give you objective measurements for comparing different implementations of the same functionality. They can estimate how long code took to write and predict how many bugs it might contain.
 
@@ -210,14 +199,15 @@ Omen builds a graph showing which files import which other files, then calculate
 Hotspots are files that are both complex AND frequently modified. A simple file that changes often is probably fine - it's easy to work with. A complex file that rarely changes is also manageable - you can leave it alone. But a complex file that changes constantly? That's where bugs breed.
 
 Omen calculates hotspot scores by multiplying:
+
 - **Churn rate** - How often the file was modified in recent commits
 - **Complexity score** - Combined cyclomatic and cognitive complexity
 
-| Hotspot Score | Risk Level | Action |
-|---------------|------------|--------|
-| < 100 | Low | Monitor normally |
-| 100-500 | Medium | Consider refactoring |
-| > 500 | High | Prioritize immediately |
+| Hotspot Score | Risk Level | Action                 |
+| ------------- | ---------- | ---------------------- |
+| < 100         | Low        | Monitor normally       |
+| 100-500       | Medium     | Consider refactoring   |
+| > 500         | High       | Prioritize immediately |
 
 **Why it matters:** [Adam Tornhill's "Your Code as a Crime Scene"](https://pragprog.com/titles/atcrime/your-code-as-a-crime-scene/) introduced hotspot analysis as a way to find the most impactful refactoring targets. His research shows that a small percentage of files (typically 4-8%) contain most of the bugs. [Graves et al. (2000)](https://ieeexplore.ieee.org/document/859533) demonstrated that recent change activity is a better defect predictor than code age.
 
@@ -229,18 +219,19 @@ Omen calculates hotspot scores by multiplying:
 <summary><strong>Temporal Coupling</strong> - Files that change together reveal hidden dependencies</summary>
 
 When two files consistently change in the same commits, they're temporally coupled. This often reveals:
+
 - **Hidden dependencies** not visible in import statements
 - **Logical coupling** where a change in one file requires a change in another
 - **Accidental coupling** from copy-paste or inconsistent abstractions
 
 Omen analyzes your git history to find file pairs that change together:
 
-| Coupling Strength | Meaning |
-|-------------------|---------|
-| > 80% | Almost always change together - likely tight dependency |
-| 50-80% | Frequently coupled - investigate the relationship |
-| 20-50% | Moderately coupled - may be coincidental |
-| < 20% | Weakly coupled - probably independent |
+| Coupling Strength | Meaning                                                 |
+| ----------------- | ------------------------------------------------------- |
+| > 80%             | Almost always change together - likely tight dependency |
+| 50-80%            | Frequently coupled - investigate the relationship       |
+| 20-50%            | Moderately coupled - may be coincidental                |
+| < 20%             | Weakly coupled - probably independent                   |
 
 **Why it matters:** [Ball et al. (1997)](https://www.researchgate.net/publication/2791666_If_Your_Version_Control_System_Could_Talk) first studied co-change patterns at AT&T and found they reveal architectural violations invisible to static analysis. [Beyer and Noack (2005)](https://www.semanticscholar.org/paper/Clustering-software-artifacts-based-on-frequent-Beyer-Noack/1afc4eeb182d92631c3ce400e6999eebbca71c12) showed that temporal coupling predicts future changes - if files changed together before, they'll likely change together again.
 
@@ -254,17 +245,18 @@ Omen analyzes your git history to find file pairs that change together:
 Bus factor asks: "How many people would need to be hit by a bus before this code becomes unmaintainable?" Low bus factor means knowledge is concentrated in too few people.
 
 Omen uses git blame to calculate:
+
 - **Primary owner** - Who wrote most of the code
 - **Ownership ratio** - What percentage one person owns
 - **Contributor count** - How many people have touched the file
 - **Bus factor** - Number of major contributors (>5% of code)
 
-| Ownership Ratio | Risk Level | What it means |
-|-----------------|------------|---------------|
-| > 90% | High risk | Single point of failure |
-| 70-90% | Medium risk | Limited knowledge sharing |
-| 50-70% | Low risk | Healthy distribution |
-| < 50% | Very low | Broad ownership |
+| Ownership Ratio | Risk Level  | What it means             |
+| --------------- | ----------- | ------------------------- |
+| > 90%           | High risk   | Single point of failure   |
+| 70-90%          | Medium risk | Limited knowledge sharing |
+| 50-70%          | Low risk    | Healthy distribution      |
+| < 50%           | Very low    | Broad ownership           |
 
 **Why it matters:** [Bird et al. (2011)](https://ieeexplore.ieee.org/document/6032488) found that code with many minor contributors has more bugs than code with clear ownership, but code owned by a single person creates organizational risk. The sweet spot is 2-4 significant contributors per module. [Nagappan et al. (2008)](https://www.microsoft.com/en-us/research/publication/the-influence-of-organizational-structure-on-software-quality/) showed that organizational metrics (like ownership) predict defects better than code metrics alone.
 
@@ -277,14 +269,14 @@ Omen uses git blame to calculate:
 
 The Chidamber-Kemerer (CK) metrics suite measures object-oriented design quality:
 
-| Metric | Name | What it measures | Threshold |
-|--------|------|------------------|-----------|
-| WMC | Weighted Methods per Class | Sum of method complexities | < 20 |
-| CBO | Coupling Between Objects | Number of other classes used | < 10 |
-| RFC | Response for Class | Methods that can be invoked | < 50 |
-| LCOM | Lack of Cohesion in Methods | Methods not sharing fields | < 3 |
-| DIT | Depth of Inheritance Tree | Inheritance chain length | < 5 |
-| NOC | Number of Children | Direct subclasses | < 6 |
+| Metric | Name                        | What it measures             | Threshold |
+| ------ | --------------------------- | ---------------------------- | --------- |
+| WMC    | Weighted Methods per Class  | Sum of method complexities   | < 20      |
+| CBO    | Coupling Between Objects    | Number of other classes used | < 10      |
+| RFC    | Response for Class          | Methods that can be invoked  | < 50      |
+| LCOM   | Lack of Cohesion in Methods | Methods not sharing fields   | < 3       |
+| DIT    | Depth of Inheritance Tree   | Inheritance chain length     | < 5       |
+| NOC    | Number of Children          | Direct subclasses            | < 6       |
 
 **LCOM (Lack of Cohesion)** is particularly important. Low LCOM means methods in a class use similar instance variables - the class is focused. High LCOM means the class is doing unrelated things and should probably be split.
 
@@ -300,6 +292,7 @@ The Chidamber-Kemerer (CK) metrics suite measures object-oriented design quality
 Repository maps provide a compact summary of your codebase's important symbols, ranked by structural importance using PageRank. This is designed for LLM context windows - you get the most important functions and types first.
 
 For each symbol, the map includes:
+
 - **Name and kind** (function, class, method, interface)
 - **File location** and line number
 - **Signature** for quick understanding
@@ -309,6 +302,7 @@ For each symbol, the map includes:
 **Why it matters:** LLMs have limited context windows. Stuffing them with entire files wastes tokens on less important code. PageRank, [developed by Brin and Page (1998)](https://snap.stanford.edu/class/cs224w-readings/Brin98Anatomy.pdf), identifies structurally important nodes in a graph. Applied to code, it surfaces the symbols that are most central to understanding the codebase.
 
 **Example output:**
+
 ```
 # Repository Map (Top 20 symbols by PageRank)
 
@@ -322,6 +316,36 @@ For each symbol, the map includes:
 ```
 
 **Rule of thumb:** Use `omen context --repo-map --top 50` to generate context for LLM prompts. The top 50 symbols usually capture the essential architecture.
+
+</details>
+
+<details>
+<summary><strong>MCP Server</strong> - LLM tool integration via Model Context Protocol</summary>
+
+Omen includes a Model Context Protocol (MCP) server that exposes all analyzers as tools for LLMs like Claude. This enables AI assistants to analyze codebases directly through standardized tool calls.
+
+**Available tools:**
+- `analyze_complexity` - Cyclomatic and cognitive complexity
+- `analyze_satd` - Self-admitted technical debt detection
+- `analyze_deadcode` - Unused functions and variables
+- `analyze_churn` - Git file change frequency
+- `analyze_duplicates` - Code clones detection
+- `analyze_defect` - Defect probability prediction
+- `analyze_tdg` - Technical Debt Gradient scores
+- `analyze_graph` - Dependency graph generation
+- `analyze_hotspot` - High churn + complexity files
+- `analyze_temporal_coupling` - Files that change together
+- `analyze_ownership` - Code ownership and bus factor
+- `analyze_cohesion` - CK OO metrics
+- `analyze_repo_map` - PageRank-ranked symbol map
+
+Each tool includes detailed descriptions with interpretation guidance, helping LLMs understand what metrics mean and when to use each analyzer.
+
+Tool outputs default to [TOON (Token-Oriented Object Notation)](https://github.com/toon-format/toon) format, a compact serialization designed for LLM workflows that reduces token usage by 30-60% compared to JSON while maintaining high comprehension accuracy. JSON and Markdown formats are also available.
+
+**Why it matters:** LLMs work best when they have access to structured tools rather than parsing unstructured output. MCP is the emerging standard for LLM tool integration, supported by Claude Desktop and other AI assistants. TOON output maximizes the information density within context windows.
+
+**Rule of thumb:** Configure omen as an MCP server in your AI assistant to enable natural language queries like "find the most complex functions" or "show me technical debt hotspots."
 
 </details>
 
@@ -402,28 +426,29 @@ omen analyze cohesion ./src
 
 ### Top-level Commands
 
-| Command | Alias | Description |
-|---------|-------|-------------|
-| `analyze` | `a` | Run analyzers (all if no subcommand, or specific one) |
-| `context` | `ctx` | Deep context generation for LLMs |
+| Command   | Alias | Description                                           |
+| --------- | ----- | ----------------------------------------------------- |
+| `analyze` | `a`   | Run analyzers (all if no subcommand, or specific one) |
+| `context` | `ctx` | Deep context generation for LLMs                      |
+| `mcp`     | -     | Start MCP server for LLM tool integration             |
 
 ### Analyzer Subcommands (`omen analyze <subcommand>`)
 
-| Subcommand | Alias | Description |
-|------------|-------|-------------|
-| `complexity` | `cx` | Cyclomatic and cognitive complexity analysis |
-| `satd` | `debt` | Self-admitted technical debt detection |
-| `deadcode` | `dc` | Unused code detection |
-| `churn` | - | Git history analysis for file churn |
-| `duplicates` | `dup` | Code clone detection |
-| `defect` | `predict` | Defect probability prediction |
-| `tdg` | - | Technical Debt Gradient scores |
-| `graph` | `dag` | Dependency graph (Mermaid output) |
-| `hotspot` | `hs` | Churn x complexity risk analysis |
-| `temporal-coupling` | `tc` | Temporal coupling detection |
-| `ownership` | `own`, `bus-factor` | Code ownership and bus factor |
-| `cohesion` | `ck` | CK object-oriented metrics |
-| `lint-hotspot` | `lh` | Lint violation density |
+| Subcommand          | Alias               | Description                                  |
+| ------------------- | ------------------- | -------------------------------------------- |
+| `complexity`        | `cx`                | Cyclomatic and cognitive complexity analysis |
+| `satd`              | `debt`              | Self-admitted technical debt detection       |
+| `deadcode`          | `dc`                | Unused code detection                        |
+| `churn`             | -                   | Git history analysis for file churn          |
+| `duplicates`        | `dup`               | Code clone detection                         |
+| `defect`            | `predict`           | Defect probability prediction                |
+| `tdg`               | -                   | Technical Debt Gradient scores               |
+| `graph`             | `dag`               | Dependency graph (Mermaid output)            |
+| `hotspot`           | `hs`                | Churn x complexity risk analysis             |
+| `temporal-coupling` | `tc`                | Temporal coupling detection                  |
+| `ownership`         | `own`, `bus-factor` | Code ownership and bus factor                |
+| `cohesion`          | `ck`                | CK object-oriented metrics                   |
+| `lint-hotspot`      | `lh`                | Lint violation density                       |
 
 ## Output Formats
 
@@ -519,6 +544,54 @@ omen analyze ownership ./src --top 20
 ```bash
 omen analyze cohesion ./src --sort lcom
 ```
+
+## MCP Server
+
+Omen includes a Model Context Protocol (MCP) server that exposes all analyzers as tools for LLMs like Claude. This enables AI assistants to analyze codebases directly.
+
+### Configuration
+
+Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+
+```json
+{
+  "mcpServers": {
+    "omen": {
+      "command": "omen",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+### Available Tools
+
+| Tool                        | Description                                  |
+| --------------------------- | -------------------------------------------- |
+| `analyze_complexity`        | Cyclomatic and cognitive complexity analysis |
+| `analyze_satd`              | Self-admitted technical debt detection       |
+| `analyze_deadcode`          | Unused functions and variables               |
+| `analyze_churn`             | Git file change frequency                    |
+| `analyze_duplicates`        | Code clones and copy-paste detection         |
+| `analyze_defect`            | Defect probability prediction                |
+| `analyze_tdg`               | Technical Debt Gradient scores               |
+| `analyze_graph`             | Dependency graph generation                  |
+| `analyze_hotspot`           | High churn + high complexity files           |
+| `analyze_temporal_coupling` | Files that change together                   |
+| `analyze_ownership`         | Code ownership and bus factor                |
+| `analyze_cohesion`          | CK OO metrics (LCOM, WMC, CBO, DIT)          |
+| `analyze_repo_map`          | PageRank-ranked symbol map                   |
+
+Each tool includes detailed descriptions with interpretation guidance, helping LLMs understand what metrics mean and when to use each analyzer.
+
+### Example Usage
+
+Once configured, you can ask Claude:
+
+- "Analyze the complexity of this codebase"
+- "Find technical debt in the src directory"
+- "What are the hotspot files that need refactoring?"
+- "Show me the bus factor risk for this project"
 
 ## Contributing
 

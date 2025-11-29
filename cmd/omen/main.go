@@ -214,6 +214,7 @@ Supports: Go, Rust, Python, TypeScript, JavaScript, Java, C, C++, Ruby, PHP`,
 		Commands: []*cli.Command{
 			analyzeCmd(),
 			contextCmd(),
+			mcpCmd(),
 		},
 	}
 
