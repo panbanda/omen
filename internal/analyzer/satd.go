@@ -646,6 +646,7 @@ func (a *SATDAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress fil
 		filesWithDebtSet[debt.File] = true
 	}
 	analysis.FilesWithDebt = len(filesWithDebtSet)
+	analysis.Summary.FilesWithSATD = len(filesWithDebtSet)
 
 	return analysis, nil
 }

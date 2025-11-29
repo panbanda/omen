@@ -50,10 +50,12 @@ type SATDAnalysis struct {
 
 // SATDSummary provides aggregate statistics.
 type SATDSummary struct {
-	TotalItems int            `json:"total_items"`
-	BySeverity map[string]int `json:"by_severity"`
-	ByCategory map[string]int `json:"by_category"`
-	ByFile     map[string]int `json:"by_file"`
+	TotalItems    int            `json:"total_items"`
+	BySeverity    map[string]int `json:"by_severity"`
+	ByCategory    map[string]int `json:"by_category"`
+	ByFile        map[string]int `json:"by_file,omitempty"`
+	FilesWithSATD int            `json:"files_with_satd,omitempty"`
+	AvgAgeDays    float64        `json:"avg_age_days,omitempty"`
 }
 
 // NewSATDSummary creates an initialized summary.
