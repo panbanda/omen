@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,10 +13,11 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/panbanda/omen/internal/analyzer"
+	"github.com/panbanda/omen/internal/mcpserver"
 	"github.com/panbanda/omen/internal/output"
 	"github.com/panbanda/omen/internal/progress"
-	"github.com/panbanda/omen/internal/scanner"
-	"github.com/panbanda/omen/pkg/config"
+	"github.com/panbanda/omen/internal/service/analysis"
+	scannerSvc "github.com/panbanda/omen/internal/service/scanner"
 	"github.com/panbanda/omen/pkg/models"
 	"github.com/urfave/cli/v2"
 )
@@ -259,38 +261,26 @@ func runComplexityCmd(c *cli.Context) error {
 	functionsOnly := c.Bool("functions-only")
 	includeHalstead := c.Bool("halstead")
 
-	cfg := config.LoadOrDefault()
-	scan := scanner.NewScanner(cfg)
-
-	var files []string
-	for _, path := range paths {
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			return fmt.Errorf("invalid path %s: %w", path, err)
-		}
-		found, err := scan.ScanDir(absPath)
-		if err != nil {
-			return fmt.Errorf("failed to scan directory %s: %w", path, err)
-		}
-		files = append(files, found...)
+	scanSvc := scannerSvc.New()
+	scanResult, err := scanSvc.ScanPaths(paths)
+	if err != nil {
+		return err
 	}
 
-	if len(files) == 0 {
+	if len(scanResult.Files) == 0 {
 		color.Yellow("No source files found")
 		return nil
 	}
 
-	opts := []analyzer.ComplexityOption{
-		analyzer.WithComplexityMaxFileSize(cfg.Analysis.MaxFileSize),
-	}
-	if includeHalstead {
-		opts = append(opts, analyzer.WithHalstead())
-	}
-	cxAnalyzer := analyzer.NewComplexityAnalyzer(opts...)
-	defer cxAnalyzer.Close()
-
-	tracker := progress.NewTracker("Analyzing complexity...", len(files))
-	analysis, err := cxAnalyzer.AnalyzeProjectWithProgress(files, tracker.Tick)
+	tracker := progress.NewTracker("Analyzing complexity...", len(scanResult.Files))
+	svc := analysis.New()
+	result, err := svc.AnalyzeComplexity(scanResult.Files, analysis.ComplexityOptions{
+		IncludeHalstead:     includeHalstead,
+		CyclomaticThreshold: cycThreshold,
+		CognitiveThreshold:  cogThreshold,
+		FunctionsOnly:       functionsOnly,
+		OnProgress:          tracker.Tick,
+	})
 	tracker.FinishSuccess()
 	if err != nil {
 		return fmt.Errorf("analysis failed: %w", err)
@@ -306,7 +296,7 @@ func runComplexityCmd(c *cli.Context) error {
 	var rows [][]string
 	var warnings []string
 
-	for _, fc := range analysis.Files {
+	for _, fc := range result.Files {
 		if functionsOnly {
 			for _, fn := range fc.Functions {
 				cycColor := fmt.Sprintf("%d", fn.Metrics.Cyclomatic)
@@ -364,16 +354,16 @@ func runComplexityCmd(c *cli.Context) error {
 		headers,
 		rows,
 		[]string{
-			fmt.Sprintf("Files: %d", analysis.Summary.TotalFiles),
-			fmt.Sprintf("Functions: %d", analysis.Summary.TotalFunctions),
-			fmt.Sprintf("Median Cyclomatic (P50): %d", analysis.Summary.P50Cyclomatic),
-			fmt.Sprintf("Median Cognitive (P50): %d", analysis.Summary.P50Cognitive),
-			fmt.Sprintf("90th Percentile Cyclomatic: %d", analysis.Summary.P90Cyclomatic),
-			fmt.Sprintf("90th Percentile Cognitive: %d", analysis.Summary.P90Cognitive),
-			fmt.Sprintf("Max Cyclomatic: %d", analysis.Summary.MaxCyclomatic),
-			fmt.Sprintf("Max Cognitive: %d", analysis.Summary.MaxCognitive),
+			fmt.Sprintf("Files: %d", result.Summary.TotalFiles),
+			fmt.Sprintf("Functions: %d", result.Summary.TotalFunctions),
+			fmt.Sprintf("Median Cyclomatic (P50): %d", result.Summary.P50Cyclomatic),
+			fmt.Sprintf("Median Cognitive (P50): %d", result.Summary.P50Cognitive),
+			fmt.Sprintf("90th Percentile Cyclomatic: %d", result.Summary.P90Cyclomatic),
+			fmt.Sprintf("90th Percentile Cognitive: %d", result.Summary.P90Cognitive),
+			fmt.Sprintf("Max Cyclomatic: %d", result.Summary.MaxCyclomatic),
+			fmt.Sprintf("Max Cognitive: %d", result.Summary.MaxCognitive),
 		},
-		analysis,
+		result,
 	)
 
 	if err := formatter.Output(table); err != nil {
@@ -417,43 +407,34 @@ func runSATDCmd(c *cli.Context) error {
 	patterns := c.StringSlice("patterns")
 	includeTest := c.Bool("include-test")
 
-	cfg := config.LoadOrDefault()
-	if includeTest {
-		cfg.Exclude.Patterns = []string{} // Clear test exclusions
-	}
-	scan := scanner.NewScanner(cfg)
-
-	var files []string
-	for _, path := range paths {
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			return fmt.Errorf("invalid path %s: %w", path, err)
-		}
-		found, err := scan.ScanDir(absPath)
-		if err != nil {
-			return fmt.Errorf("failed to scan directory %s: %w", path, err)
-		}
-		files = append(files, found...)
+	scanSvc := scannerSvc.New()
+	scanResult, err := scanSvc.ScanPaths(paths)
+	if err != nil {
+		return err
 	}
 
-	if len(files) == 0 {
+	if len(scanResult.Files) == 0 {
 		color.Yellow("No source files found")
 		return nil
 	}
 
-	var satdOpts []analyzer.SATDOption
-	if !includeTest {
-		satdOpts = append(satdOpts, analyzer.WithSATDSkipTests())
-	}
-	satdAnalyzer := analyzer.NewSATDAnalyzer(satdOpts...)
+	// Convert patterns to PatternConfig
+	var customPatterns []analysis.PatternConfig
 	for _, p := range patterns {
-		if err := satdAnalyzer.AddPattern(p, models.DebtDesign, models.SeverityMedium); err != nil {
-			color.Yellow("Invalid pattern %q: %v", p, err)
-		}
+		customPatterns = append(customPatterns, analysis.PatternConfig{
+			Pattern:  p,
+			Category: models.DebtDesign,
+			Severity: models.SeverityMedium,
+		})
 	}
 
-	tracker := progress.NewTracker("Detecting technical debt...", len(files))
-	analysis, err := satdAnalyzer.AnalyzeProjectWithProgress(files, tracker.Tick)
+	tracker := progress.NewTracker("Detecting technical debt...", len(scanResult.Files))
+	svc := analysis.New()
+	result, err := svc.AnalyzeSATD(scanResult.Files, analysis.SATDOptions{
+		IncludeTests:   includeTest,
+		CustomPatterns: customPatterns,
+		OnProgress:     tracker.Tick,
+	})
 	tracker.FinishSuccess()
 	if err != nil {
 		return fmt.Errorf("analysis failed: %w", err)
@@ -466,7 +447,7 @@ func runSATDCmd(c *cli.Context) error {
 	defer formatter.Close()
 
 	var rows [][]string
-	for _, item := range analysis.Items {
+	for _, item := range result.Items {
 		sevColor := string(item.Severity)
 		switch item.Severity {
 		case models.SeverityHigh:
@@ -490,12 +471,12 @@ func runSATDCmd(c *cli.Context) error {
 		[]string{"Location", "Marker", "Severity", "Description"},
 		rows,
 		[]string{
-			fmt.Sprintf("Total: %d", analysis.Summary.TotalItems),
-			fmt.Sprintf("High: %d", analysis.Summary.BySeverity["high"]),
-			fmt.Sprintf("Medium: %d", analysis.Summary.BySeverity["medium"]),
-			fmt.Sprintf("Low: %d", analysis.Summary.BySeverity["low"]),
+			fmt.Sprintf("Total: %d", result.Summary.TotalItems),
+			fmt.Sprintf("High: %d", result.Summary.BySeverity["high"]),
+			fmt.Sprintf("Medium: %d", result.Summary.BySeverity["medium"]),
+			fmt.Sprintf("Low: %d", result.Summary.BySeverity["low"]),
 		},
-		analysis,
+		result,
 	)
 
 	return formatter.Output(table)
@@ -530,32 +511,23 @@ func runDeadCodeCmd(c *cli.Context) error {
 	paths := getPaths(c)
 	confidence := c.Float64("confidence")
 
-	cfg := config.LoadOrDefault()
-	scan := scanner.NewScanner(cfg)
-
-	var files []string
-	for _, path := range paths {
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			return fmt.Errorf("invalid path %s: %w", path, err)
-		}
-		found, err := scan.ScanDir(absPath)
-		if err != nil {
-			return fmt.Errorf("failed to scan directory %s: %w", path, err)
-		}
-		files = append(files, found...)
+	scanSvc := scannerSvc.New()
+	scanResult, err := scanSvc.ScanPaths(paths)
+	if err != nil {
+		return err
 	}
 
-	if len(files) == 0 {
+	if len(scanResult.Files) == 0 {
 		color.Yellow("No source files found")
 		return nil
 	}
 
-	dcAnalyzer := analyzer.NewDeadCodeAnalyzer(analyzer.WithDeadCodeConfidence(confidence))
-	defer dcAnalyzer.Close()
-
-	tracker := progress.NewTracker("Detecting dead code...", len(files))
-	analysis, err := dcAnalyzer.AnalyzeProjectWithProgress(files, tracker.Tick)
+	tracker := progress.NewTracker("Detecting dead code...", len(scanResult.Files))
+	svc := analysis.New()
+	result, err := svc.AnalyzeDeadCode(scanResult.Files, analysis.DeadCodeOptions{
+		Confidence: confidence,
+		OnProgress: tracker.Tick,
+	})
 	tracker.FinishSuccess()
 	if err != nil {
 		return fmt.Errorf("analysis failed: %w", err)
@@ -569,15 +541,15 @@ func runDeadCodeCmd(c *cli.Context) error {
 
 	// For JSON/TOON, output pmat-compatible format
 	if formatter.Format() == output.FormatJSON || formatter.Format() == output.FormatTOON {
-		result := models.NewDeadCodeResult()
-		result.FromDeadCodeAnalysis(analysis)
-		return formatter.Output(result)
+		pmatResult := models.NewDeadCodeResult()
+		pmatResult.FromDeadCodeAnalysis(result)
+		return formatter.Output(pmatResult)
 	}
 
 	// Functions table
-	if len(analysis.DeadFunctions) > 0 {
+	if len(result.DeadFunctions) > 0 {
 		var rows [][]string
-		for _, fn := range analysis.DeadFunctions {
+		for _, fn := range result.DeadFunctions {
 			confStr := fmt.Sprintf("%.0f%%", fn.Confidence*100)
 			if fn.Confidence >= 0.9 {
 				confStr = color.RedString(confStr)
@@ -606,9 +578,9 @@ func runDeadCodeCmd(c *cli.Context) error {
 	}
 
 	// Variables table
-	if len(analysis.DeadVariables) > 0 {
+	if len(result.DeadVariables) > 0 {
 		var rows [][]string
-		for _, v := range analysis.DeadVariables {
+		for _, v := range result.DeadVariables {
 			rows = append(rows, []string{
 				fmt.Sprintf("%s:%d", v.File, v.Line),
 				v.Name,
@@ -630,10 +602,10 @@ func runDeadCodeCmd(c *cli.Context) error {
 
 	// Summary
 	fmt.Printf("\nSummary: %d dead functions, %d dead variables across %d files (%.1f%% dead code)\n",
-		analysis.Summary.TotalDeadFunctions,
-		analysis.Summary.TotalDeadVariables,
-		analysis.Summary.TotalFilesAnalyzed,
-		analysis.Summary.DeadCodePercentage)
+		result.Summary.TotalDeadFunctions,
+		result.Summary.TotalDeadVariables,
+		result.Summary.TotalFilesAnalyzed,
+		result.Summary.DeadCodePercentage)
 
 	return nil
 }
@@ -675,11 +647,12 @@ func runChurnCmd(c *cli.Context) error {
 	}
 
 	spinner := progress.NewSpinner("Analyzing git history...")
-	churnAnalyzer := analyzer.NewChurnAnalyzer(
-		analyzer.WithChurnDays(days),
-		analyzer.WithChurnSpinner(spinner),
-	)
-	analysis, err := churnAnalyzer.AnalyzeRepo(absPath)
+	svc := analysis.New()
+	result, err := svc.AnalyzeChurn(absPath, analysis.ChurnOptions{
+		Days:    days,
+		Top:     topN,
+		Spinner: spinner,
+	})
 	spinner.FinishSuccess()
 	if err != nil {
 		return fmt.Errorf("churn analysis failed (is this a git repository?): %w", err)
@@ -692,7 +665,7 @@ func runChurnCmd(c *cli.Context) error {
 	defer formatter.Close()
 
 	// Limit results for display
-	files := analysis.Files
+	files := result.Files
 	if len(files) > topN {
 		files = files[:topN]
 	}
@@ -720,13 +693,13 @@ func runChurnCmd(c *cli.Context) error {
 		[]string{"File", "Commits", "Authors", "Lines Changed", "Churn Score"},
 		rows,
 		[]string{
-			fmt.Sprintf("Total Files: %d", analysis.Summary.TotalFilesChanged),
-			fmt.Sprintf("Total Commits: %d", analysis.Summary.TotalCommits),
-			fmt.Sprintf("Authors: %d", len(analysis.Summary.AuthorContributions)),
+			fmt.Sprintf("Total Files: %d", result.Summary.TotalFilesChanged),
+			fmt.Sprintf("Total Commits: %d", result.Summary.TotalCommits),
+			fmt.Sprintf("Authors: %d", len(result.Summary.AuthorContributions)),
 			"",
-			fmt.Sprintf("Max: %.2f", analysis.Summary.MaxChurnScore),
+			fmt.Sprintf("Max: %.2f", result.Summary.MaxChurnScore),
 		},
-		analysis,
+		result,
 	)
 
 	return formatter.Output(table)
@@ -760,35 +733,24 @@ func runDuplicatesCmd(c *cli.Context) error {
 	minLines := c.Int("min-lines")
 	threshold := c.Float64("threshold")
 
-	cfg := config.LoadOrDefault()
-	scan := scanner.NewScanner(cfg)
-
-	var files []string
-	for _, path := range paths {
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			return fmt.Errorf("invalid path %s: %w", path, err)
-		}
-		found, err := scan.ScanDir(absPath)
-		if err != nil {
-			return fmt.Errorf("failed to scan directory %s: %w", path, err)
-		}
-		files = append(files, found...)
+	scanSvc := scannerSvc.New()
+	scanResult, err := scanSvc.ScanPaths(paths)
+	if err != nil {
+		return err
 	}
 
-	if len(files) == 0 {
+	if len(scanResult.Files) == 0 {
 		color.Yellow("No source files found")
 		return nil
 	}
 
-	dupAnalyzer := analyzer.NewDuplicateAnalyzer(
-		analyzer.WithDuplicateMinTokens(minLines*8), // Convert lines to approximate tokens
-		analyzer.WithDuplicateSimilarityThreshold(threshold),
-	)
-	defer dupAnalyzer.Close()
-
-	tracker := progress.NewTracker("Detecting duplicates...", len(files))
-	analysis, err := dupAnalyzer.AnalyzeProjectWithProgress(files, tracker.Tick)
+	tracker := progress.NewTracker("Detecting duplicates...", len(scanResult.Files))
+	svc := analysis.New()
+	result, err := svc.AnalyzeDuplicates(scanResult.Files, analysis.DuplicatesOptions{
+		MinLines:            minLines,
+		SimilarityThreshold: threshold,
+		OnProgress:          tracker.Tick,
+	})
 	tracker.FinishSuccess()
 	if err != nil {
 		return fmt.Errorf("analysis failed: %w", err)
@@ -802,19 +764,19 @@ func runDuplicatesCmd(c *cli.Context) error {
 
 	// For JSON/TOON, output pmat-compatible format
 	if formatter.Format() == output.FormatJSON || formatter.Format() == output.FormatTOON {
-		report := analysis.ToCloneReport()
+		report := result.ToCloneReport()
 		return formatter.Output(report)
 	}
 
-	if len(analysis.Clones) == 0 {
+	if len(result.Clones) == 0 {
 		if formatter.Format() == output.FormatText {
 			color.Green("No code duplicates found above %.0f%% similarity threshold", threshold*100)
 		}
-		return formatter.Output(analysis)
+		return formatter.Output(result)
 	}
 
 	var rows [][]string
-	for _, clone := range analysis.Clones {
+	for _, clone := range result.Clones {
 		simStr := fmt.Sprintf("%.0f%%", clone.Similarity*100)
 		if clone.Similarity >= 0.95 {
 			simStr = color.RedString(simStr)
@@ -836,13 +798,13 @@ func runDuplicatesCmd(c *cli.Context) error {
 		[]string{"Location A", "Location B", "Type", "Similarity", "Lines"},
 		rows,
 		[]string{
-			fmt.Sprintf("Total Clones: %d", analysis.Summary.TotalClones),
-			fmt.Sprintf("Type-1: %d", analysis.Summary.Type1Count),
-			fmt.Sprintf("Type-2: %d", analysis.Summary.Type2Count),
-			fmt.Sprintf("Type-3: %d", analysis.Summary.Type3Count),
-			fmt.Sprintf("Avg Sim: %.0f%%", analysis.Summary.AvgSimilarity*100),
+			fmt.Sprintf("Total Clones: %d", result.Summary.TotalClones),
+			fmt.Sprintf("Type-1: %d", result.Summary.Type1Count),
+			fmt.Sprintf("Type-2: %d", result.Summary.Type2Count),
+			fmt.Sprintf("Type-3: %d", result.Summary.Type3Count),
+			fmt.Sprintf("Avg Sim: %.0f%%", result.Summary.AvgSimilarity*100),
 		},
-		analysis,
+		result,
 	)
 
 	return formatter.Output(table)
@@ -869,40 +831,27 @@ func runDefectCmd(c *cli.Context) error {
 	paths := getPaths(c)
 	highRiskOnly := c.Bool("high-risk-only")
 
-	cfg := config.LoadOrDefault()
-	scan := scanner.NewScanner(cfg)
-
 	// Use first path as repo root for git analysis
 	repoPath, err := filepath.Abs(paths[0])
 	if err != nil {
 		return fmt.Errorf("invalid path: %w", err)
 	}
 
-	var files []string
-	for _, path := range paths {
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			return fmt.Errorf("invalid path %s: %w", path, err)
-		}
-		found, err := scan.ScanDir(absPath)
-		if err != nil {
-			return fmt.Errorf("failed to scan directory %s: %w", path, err)
-		}
-		files = append(files, found...)
+	scanSvc := scannerSvc.New()
+	scanResult, err := scanSvc.ScanPaths(paths)
+	if err != nil {
+		return err
 	}
 
-	if len(files) == 0 {
+	if len(scanResult.Files) == 0 {
 		color.Yellow("No source files found")
 		return nil
 	}
 
-	defectAnalyzer := analyzer.NewDefectAnalyzer(
-		analyzer.WithDefectChurnDays(cfg.Analysis.ChurnDays),
-		analyzer.WithDefectMaxFileSize(cfg.Analysis.MaxFileSize),
-	)
-	defer defectAnalyzer.Close()
-
-	analysis, err := defectAnalyzer.AnalyzeProject(repoPath, files)
+	svc := analysis.New()
+	result, err := svc.AnalyzeDefects(repoPath, scanResult.Files, analysis.DefectOptions{
+		HighRiskOnly: highRiskOnly,
+	})
 	if err != nil {
 		return fmt.Errorf("analysis failed: %w", err)
 	}
@@ -914,18 +863,18 @@ func runDefectCmd(c *cli.Context) error {
 	defer formatter.Close()
 
 	// Sort by probability (highest first)
-	sort.Slice(analysis.Files, func(i, j int) bool {
-		return analysis.Files[i].Probability > analysis.Files[j].Probability
+	sort.Slice(result.Files, func(i, j int) bool {
+		return result.Files[i].Probability > result.Files[j].Probability
 	})
 
 	// For JSON/TOON, output pmat-compatible format
 	if formatter.Format() == output.FormatJSON || formatter.Format() == output.FormatTOON {
-		report := analysis.ToDefectPredictionReport()
+		report := result.ToDefectPredictionReport()
 		return formatter.Output(report)
 	}
 
 	var rows [][]string
-	for _, ds := range analysis.Files {
+	for _, ds := range result.Files {
 		if highRiskOnly && ds.RiskLevel != models.RiskHigh {
 			continue
 		}
@@ -956,12 +905,12 @@ func runDefectCmd(c *cli.Context) error {
 		[]string{"File", "Probability", "Risk Level"},
 		rows,
 		[]string{
-			fmt.Sprintf("Total Files: %d", analysis.Summary.TotalFiles),
-			fmt.Sprintf("High Risk: %d", analysis.Summary.HighRiskCount),
-			fmt.Sprintf("Medium Risk: %d", analysis.Summary.MediumRiskCount),
-			fmt.Sprintf("Avg Prob: %.0f%%", analysis.Summary.AvgProbability*100),
+			fmt.Sprintf("Total Files: %d", result.Summary.TotalFiles),
+			fmt.Sprintf("High Risk: %d", result.Summary.HighRiskCount),
+			fmt.Sprintf("Medium Risk: %d", result.Summary.MediumRiskCount),
+			fmt.Sprintf("Avg Prob: %.0f%%", result.Summary.AvgProbability*100),
 		},
-		analysis,
+		result,
 	)
 
 	return formatter.Output(table)
@@ -993,11 +942,10 @@ func runTDGCmd(c *cli.Context) error {
 	hotspots := c.Int("hotspots")
 	showPenalties := c.Bool("penalties")
 
-	tdgAnalyzer := analyzer.NewTdgAnalyzer()
-	defer tdgAnalyzer.Close()
+	svc := analysis.New()
 
 	// Handle directory vs single file
-	var project models.ProjectScore
+	var project *models.ProjectScore
 	var err error
 
 	if len(paths) == 1 {
@@ -1007,13 +955,16 @@ func runTDGCmd(c *cli.Context) error {
 		}
 
 		if info.IsDir() {
-			project, err = tdgAnalyzer.AnalyzeProject(paths[0])
+			project, err = svc.AnalyzeTDG(paths[0])
 		} else {
+			tdgAnalyzer := analyzer.NewTdgAnalyzer()
+			defer tdgAnalyzer.Close()
 			score, fileErr := tdgAnalyzer.AnalyzeFile(paths[0])
 			if fileErr != nil {
 				return fmt.Errorf("analysis failed: %w", fileErr)
 			}
-			project = models.AggregateProjectScore([]models.TdgScore{score})
+			projectScore := models.AggregateProjectScore([]models.TdgScore{score})
+			project = &projectScore
 		}
 	} else {
 		var allScores []models.TdgScore
@@ -1024,20 +975,23 @@ func runTDGCmd(c *cli.Context) error {
 			}
 
 			if info.IsDir() {
-				dirProject, dirErr := tdgAnalyzer.AnalyzeProject(path)
+				dirProject, dirErr := svc.AnalyzeTDG(path)
 				if dirErr != nil {
 					return fmt.Errorf("analysis failed for %s: %w", path, dirErr)
 				}
 				allScores = append(allScores, dirProject.Files...)
 			} else {
+				tdgAnalyzer := analyzer.NewTdgAnalyzer()
 				score, fileErr := tdgAnalyzer.AnalyzeFile(path)
+				tdgAnalyzer.Close()
 				if fileErr != nil {
 					return fmt.Errorf("analysis failed for %s: %w", path, fileErr)
 				}
 				allScores = append(allScores, score)
 			}
 		}
-		project = models.AggregateProjectScore(allScores)
+		projectScore := models.AggregateProjectScore(allScores)
+		project = &projectScore
 	}
 
 	if err != nil {
@@ -1189,32 +1143,24 @@ func runGraphCmd(c *cli.Context) error {
 	scope := c.String("scope")
 	includeMetrics := c.Bool("metrics")
 
-	cfg := config.LoadOrDefault()
-	scan := scanner.NewScanner(cfg)
-
-	var files []string
-	for _, path := range paths {
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			return fmt.Errorf("invalid path %s: %w", path, err)
-		}
-		found, err := scan.ScanDir(absPath)
-		if err != nil {
-			return fmt.Errorf("failed to scan directory %s: %w", path, err)
-		}
-		files = append(files, found...)
+	scanSvc := scannerSvc.New()
+	scanResult, err := scanSvc.ScanPaths(paths)
+	if err != nil {
+		return err
 	}
 
-	if len(files) == 0 {
+	if len(scanResult.Files) == 0 {
 		color.Yellow("No source files found")
 		return nil
 	}
 
-	graphAnalyzer := analyzer.NewGraphAnalyzer(analyzer.WithGraphScope(analyzer.GraphScope(scope)))
-	defer graphAnalyzer.Close()
-
-	tracker := progress.NewTracker("Building dependency graph...", len(files))
-	graph, err := graphAnalyzer.AnalyzeProjectWithProgress(files, tracker.Tick)
+	tracker := progress.NewTracker("Building dependency graph...", len(scanResult.Files))
+	svc := analysis.New()
+	graph, metrics, err := svc.AnalyzeGraph(scanResult.Files, analysis.GraphOptions{
+		Scope:          analyzer.GraphScope(scope),
+		IncludeMetrics: includeMetrics,
+		OnProgress:     tracker.Tick,
+	})
 	tracker.FinishSuccess()
 	if err != nil {
 		return fmt.Errorf("analysis failed: %w", err)
@@ -1228,8 +1174,7 @@ func runGraphCmd(c *cli.Context) error {
 
 	// For JSON/TOON, output structured data
 	if formatter.Format() == output.FormatJSON || formatter.Format() == output.FormatTOON {
-		if includeMetrics {
-			metrics := graphAnalyzer.CalculateMetrics(graph)
+		if includeMetrics && metrics != nil {
 			return formatter.Output(struct {
 				Graph   *models.DependencyGraph `json:"graph" toon:"graph"`
 				Metrics *models.GraphMetrics    `json:"metrics" toon:"metrics"`
@@ -1249,8 +1194,7 @@ func runGraphCmd(c *cli.Context) error {
 	}
 	fmt.Fprintln(formatter.Writer(), "```")
 
-	if includeMetrics {
-		metrics := graphAnalyzer.CalculateMetrics(graph)
+	if includeMetrics && metrics != nil {
 		fmt.Fprintln(formatter.Writer())
 		if formatter.Colored() {
 			color.Cyan("Graph Metrics:")
@@ -1322,33 +1266,23 @@ func runLintHotspotCmd(c *cli.Context) error {
 	paths := getPaths(c)
 	topN := c.Int("top")
 
-	cfg := config.LoadOrDefault()
-	scan := scanner.NewScanner(cfg)
-
-	var files []string
-	for _, path := range paths {
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			return fmt.Errorf("invalid path %s: %w", path, err)
-		}
-		found, err := scan.ScanDir(absPath)
-		if err != nil {
-			return fmt.Errorf("failed to scan directory %s: %w", path, err)
-		}
-		files = append(files, found...)
+	scanSvc := scannerSvc.New()
+	scanResult, err := scanSvc.ScanPaths(paths)
+	if err != nil {
+		return err
 	}
 
-	if len(files) == 0 {
+	if len(scanResult.Files) == 0 {
 		color.Yellow("No source files found")
 		return nil
 	}
 
 	// Use complexity as hotspot indicator
-	cxAnalyzer := analyzer.NewComplexityAnalyzer()
-	defer cxAnalyzer.Close()
-
-	tracker := progress.NewTracker("Analyzing hotspots...", len(files))
-	analysis, err := cxAnalyzer.AnalyzeProjectWithProgress(files, tracker.Tick)
+	tracker := progress.NewTracker("Analyzing hotspots...", len(scanResult.Files))
+	svc := analysis.New()
+	result, err := svc.AnalyzeComplexity(scanResult.Files, analysis.ComplexityOptions{
+		OnProgress: tracker.Tick,
+	})
 	tracker.FinishSuccess()
 	if err != nil {
 		return fmt.Errorf("analysis failed: %w", err)
@@ -1361,12 +1295,12 @@ func runLintHotspotCmd(c *cli.Context) error {
 	defer formatter.Close()
 
 	// Sort by total complexity (as proxy for lint density)
-	sort.Slice(analysis.Files, func(i, j int) bool {
-		return analysis.Files[i].TotalCyclomatic+analysis.Files[i].TotalCognitive >
-			analysis.Files[j].TotalCyclomatic+analysis.Files[j].TotalCognitive
+	sort.Slice(result.Files, func(i, j int) bool {
+		return result.Files[i].TotalCyclomatic+result.Files[i].TotalCognitive >
+			result.Files[j].TotalCyclomatic+result.Files[j].TotalCognitive
 	})
 
-	filesToShow := analysis.Files
+	filesToShow := result.Files
 	if len(filesToShow) > topN {
 		filesToShow = filesToShow[:topN]
 	}
@@ -1395,7 +1329,7 @@ func runLintHotspotCmd(c *cli.Context) error {
 		[]string{"File", "Functions", "Cyclomatic", "Cognitive", "Total Score"},
 		rows,
 		nil,
-		analysis,
+		result,
 	)
 
 	return formatter.Output(table)
@@ -1433,40 +1367,29 @@ func runHotspotCmd(c *cli.Context) error {
 		return err
 	}
 
-	cfg := config.LoadOrDefault()
-	scan := scanner.NewScanner(cfg)
-
 	repoPath, err := filepath.Abs(paths[0])
 	if err != nil {
 		return fmt.Errorf("invalid path: %w", err)
 	}
 
-	var files []string
-	for _, path := range paths {
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			return fmt.Errorf("invalid path %s: %w", path, err)
-		}
-		found, err := scan.ScanDir(absPath)
-		if err != nil {
-			return fmt.Errorf("failed to scan directory %s: %w", path, err)
-		}
-		files = append(files, found...)
+	scanSvc := scannerSvc.New()
+	scanResult, err := scanSvc.ScanPaths(paths)
+	if err != nil {
+		return err
 	}
 
-	if len(files) == 0 {
+	if len(scanResult.Files) == 0 {
 		color.Yellow("No source files found")
 		return nil
 	}
 
-	hotspotAnalyzer := analyzer.NewHotspotAnalyzer(
-		analyzer.WithHotspotChurnDays(days),
-		analyzer.WithHotspotMaxFileSize(cfg.Analysis.MaxFileSize),
-	)
-	defer hotspotAnalyzer.Close()
-
-	tracker := progress.NewTracker("Analyzing hotspots...", len(files))
-	analysis, err := hotspotAnalyzer.AnalyzeProjectWithProgress(repoPath, files, tracker.Tick)
+	tracker := progress.NewTracker("Analyzing hotspots...", len(scanResult.Files))
+	svc := analysis.New()
+	result, err := svc.AnalyzeHotspots(repoPath, scanResult.Files, analysis.HotspotOptions{
+		Days:       days,
+		Top:        topN,
+		OnProgress: tracker.Tick,
+	})
 	tracker.FinishSuccess()
 	if err != nil {
 		return fmt.Errorf("hotspot analysis failed (is this a git repository?): %w", err)
@@ -1479,7 +1402,7 @@ func runHotspotCmd(c *cli.Context) error {
 	defer formatter.Close()
 
 	// Limit results for display
-	filesToShow := analysis.Files
+	filesToShow := result.Files
 	if len(filesToShow) > topN {
 		filesToShow = filesToShow[:topN]
 	}
@@ -1508,12 +1431,12 @@ func runHotspotCmd(c *cli.Context) error {
 		[]string{"File", "Hotspot", "Churn", "Complexity", "Commits", "Avg Cognitive"},
 		rows,
 		[]string{
-			fmt.Sprintf("Total Files: %d", analysis.Summary.TotalFiles),
-			fmt.Sprintf("Hotspots (>0.5): %d", analysis.Summary.HotspotCount),
-			fmt.Sprintf("Max Score: %.2f", analysis.Summary.MaxHotspotScore),
-			fmt.Sprintf("Avg Score: %.2f", analysis.Summary.AvgHotspotScore),
+			fmt.Sprintf("Total Files: %d", result.Summary.TotalFiles),
+			fmt.Sprintf("Hotspots (>0.5): %d", result.Summary.HotspotCount),
+			fmt.Sprintf("Max Score: %.2f", result.Summary.MaxHotspotScore),
+			fmt.Sprintf("Avg Score: %.2f", result.Summary.AvgHotspotScore),
 		},
-		analysis,
+		result,
 	)
 
 	return formatter.Output(table)
@@ -1562,11 +1485,13 @@ func runTemporalCouplingCmd(c *cli.Context) error {
 		return fmt.Errorf("invalid path: %w", err)
 	}
 
-	tcAnalyzer := analyzer.NewTemporalCouplingAnalyzer(days, minCochanges)
-	defer tcAnalyzer.Close()
-
 	spinner := progress.NewSpinner("Analyzing temporal coupling...")
-	analysis, err := tcAnalyzer.AnalyzeRepo(repoPath)
+	svc := analysis.New()
+	result, err := svc.AnalyzeTemporalCoupling(repoPath, analysis.TemporalCouplingOptions{
+		Days:         days,
+		MinCochanges: minCochanges,
+		Top:          topN,
+	})
 	spinner.FinishSuccess()
 	if err != nil {
 		return fmt.Errorf("temporal coupling analysis failed (is this a git repository?): %w", err)
@@ -1579,7 +1504,7 @@ func runTemporalCouplingCmd(c *cli.Context) error {
 	defer formatter.Close()
 
 	// Limit results for display
-	couplingsToShow := analysis.Couplings
+	couplingsToShow := result.Couplings
 	if len(couplingsToShow) > topN {
 		couplingsToShow = couplingsToShow[:topN]
 	}
@@ -1606,12 +1531,12 @@ func runTemporalCouplingCmd(c *cli.Context) error {
 		[]string{"File A", "File B", "Co-changes", "Strength"},
 		rows,
 		[]string{
-			fmt.Sprintf("Total Couplings: %d", analysis.Summary.TotalCouplings),
-			fmt.Sprintf("Strong (>0.5): %d", analysis.Summary.StrongCouplings),
-			fmt.Sprintf("Files Analyzed: %d", analysis.Summary.TotalFilesAnalyzed),
-			fmt.Sprintf("Max Strength: %.2f", analysis.Summary.MaxCouplingStrength),
+			fmt.Sprintf("Total Couplings: %d", result.Summary.TotalCouplings),
+			fmt.Sprintf("Strong (>0.5): %d", result.Summary.StrongCouplings),
+			fmt.Sprintf("Files Analyzed: %d", result.Summary.TotalFilesAnalyzed),
+			fmt.Sprintf("Max Strength: %.2f", result.Summary.MaxCouplingStrength),
 		},
-		analysis,
+		result,
 	)
 
 	return formatter.Output(table)
@@ -1649,37 +1574,23 @@ func runOwnershipCmd(c *cli.Context) error {
 		return fmt.Errorf("invalid path: %w", err)
 	}
 
-	cfg := config.LoadOrDefault()
-	scan := scanner.NewScanner(cfg)
-
-	var files []string
-	for _, path := range paths {
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			return fmt.Errorf("invalid path %s: %w", path, err)
-		}
-		found, err := scan.ScanDir(absPath)
-		if err != nil {
-			return fmt.Errorf("failed to scan directory %s: %w", path, err)
-		}
-		files = append(files, found...)
+	scanSvc := scannerSvc.New()
+	scanResult, err := scanSvc.ScanPaths(paths)
+	if err != nil {
+		return err
 	}
 
-	if len(files) == 0 {
+	if len(scanResult.Files) == 0 {
 		color.Yellow("No source files found")
 		return nil
 	}
 
-	var ownOpts []analyzer.OwnershipOption
-	if includeTrivial {
-		ownOpts = append(ownOpts, analyzer.WithOwnershipIncludeTrivial())
-	}
-	ownAnalyzer := analyzer.NewOwnershipAnalyzer(ownOpts...)
-	defer ownAnalyzer.Close()
-
-	tracker := progress.NewTracker("Analyzing ownership", len(files))
-	analysis, err := ownAnalyzer.AnalyzeRepoWithProgress(repoPath, files, func() {
-		tracker.Tick()
+	tracker := progress.NewTracker("Analyzing ownership", len(scanResult.Files))
+	svc := analysis.New()
+	result, err := svc.AnalyzeOwnership(repoPath, scanResult.Files, analysis.OwnershipOptions{
+		Top:            topN,
+		IncludeTrivial: includeTrivial,
+		OnProgress:     tracker.Tick,
 	})
 	tracker.FinishSuccess()
 	if err != nil {
@@ -1693,7 +1604,7 @@ func runOwnershipCmd(c *cli.Context) error {
 	defer formatter.Close()
 
 	// Limit results for display
-	filesToShow := analysis.Files
+	filesToShow := result.Files
 	if len(filesToShow) > topN {
 		filesToShow = filesToShow[:topN]
 	}
@@ -1727,12 +1638,12 @@ func runOwnershipCmd(c *cli.Context) error {
 		[]string{"Path", "Primary Owner", "Ownership", "Concentration", "Contributors", "Silo"},
 		rows,
 		[]string{
-			fmt.Sprintf("Total Files: %d", analysis.Summary.TotalFiles),
-			fmt.Sprintf("Bus Factor: %d", analysis.Summary.BusFactor),
-			fmt.Sprintf("Silos: %d", analysis.Summary.SiloCount),
-			fmt.Sprintf("Avg Contributors: %.1f", analysis.Summary.AvgContributors),
+			fmt.Sprintf("Total Files: %d", result.Summary.TotalFiles),
+			fmt.Sprintf("Bus Factor: %d", result.Summary.BusFactor),
+			fmt.Sprintf("Silos: %d", result.Summary.SiloCount),
+			fmt.Sprintf("Avg Contributors: %.1f", result.Summary.AvgContributors),
 		},
-		analysis,
+		result,
 	)
 
 	return formatter.Output(table)
@@ -1771,44 +1682,31 @@ func runCohesionCmd(c *cli.Context) error {
 	includeTests := c.Bool("include-tests")
 	sortBy := getSort(c, "lcom")
 
-	cfg := config.LoadOrDefault()
-	scan := scanner.NewScanner(cfg)
-
-	var files []string
-	for _, path := range paths {
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			return fmt.Errorf("invalid path %s: %w", path, err)
-		}
-		found, err := scan.ScanDir(absPath)
-		if err != nil {
-			return fmt.Errorf("failed to scan directory %s: %w", path, err)
-		}
-		files = append(files, found...)
+	scanSvc := scannerSvc.New()
+	scanResult, err := scanSvc.ScanPaths(paths)
+	if err != nil {
+		return err
 	}
 
-	if len(files) == 0 {
+	if len(scanResult.Files) == 0 {
 		color.Yellow("No source files found")
 		return nil
 	}
 
-	var ckOpts []analyzer.CohesionOption
-	if includeTests {
-		ckOpts = append(ckOpts, analyzer.WithCohesionIncludeTestFiles())
-	}
-	ckAnalyzer := analyzer.NewCohesionAnalyzer(ckOpts...)
-	defer ckAnalyzer.Close()
-
-	tracker := progress.NewTracker("Analyzing CK metrics", len(files))
-	analysis, err := ckAnalyzer.AnalyzeProjectWithProgress(files, func() {
-		tracker.Tick()
+	tracker := progress.NewTracker("Analyzing CK metrics", len(scanResult.Files))
+	svc := analysis.New()
+	result, err := svc.AnalyzeCohesion(scanResult.Files, analysis.CohesionOptions{
+		IncludeTests: includeTests,
+		Sort:         sortBy,
+		Top:          topN,
+		OnProgress:   tracker.Tick,
 	})
 	tracker.FinishSuccess()
 	if err != nil {
 		return fmt.Errorf("cohesion analysis failed: %w", err)
 	}
 
-	if len(analysis.Classes) == 0 {
+	if len(result.Classes) == 0 {
 		color.Yellow("No OO classes found (CK metrics only apply to Java, Python, TypeScript, etc.)")
 		return nil
 	}
@@ -1816,13 +1714,13 @@ func runCohesionCmd(c *cli.Context) error {
 	// Sort by requested metric
 	switch sortBy {
 	case "wmc":
-		analysis.SortByWMC()
+		result.SortByWMC()
 	case "cbo":
-		analysis.SortByCBO()
+		result.SortByCBO()
 	case "dit":
-		analysis.SortByDIT()
+		result.SortByDIT()
 	default:
-		analysis.SortByLCOM()
+		result.SortByLCOM()
 	}
 
 	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
@@ -1832,7 +1730,7 @@ func runCohesionCmd(c *cli.Context) error {
 	defer formatter.Close()
 
 	// Limit results for display
-	classesToShow := analysis.Classes
+	classesToShow := result.Classes
 	if len(classesToShow) > topN {
 		classesToShow = classesToShow[:topN]
 	}
@@ -1886,13 +1784,13 @@ func runCohesionCmd(c *cli.Context) error {
 		[]string{"Class", "Path", "WMC", "CBO", "RFC", "LCOM", "DIT", "NOC", "Methods"},
 		rows,
 		[]string{
-			fmt.Sprintf("Total Classes: %d", analysis.Summary.TotalClasses),
-			fmt.Sprintf("Low Cohesion (LCOM>1): %d", analysis.Summary.LowCohesionCount),
-			fmt.Sprintf("Avg WMC: %.1f", analysis.Summary.AvgWMC),
-			fmt.Sprintf("Max WMC: %d", analysis.Summary.MaxWMC),
-			fmt.Sprintf("Max DIT: %d", analysis.Summary.MaxDIT),
+			fmt.Sprintf("Total Classes: %d", result.Summary.TotalClasses),
+			fmt.Sprintf("Low Cohesion (LCOM>1): %d", result.Summary.LowCohesionCount),
+			fmt.Sprintf("Avg WMC: %.1f", result.Summary.AvgWMC),
+			fmt.Sprintf("Max WMC: %d", result.Summary.MaxWMC),
+			fmt.Sprintf("Max DIT: %d", result.Summary.MaxDIT),
 		},
-		analysis,
+		result,
 	)
 
 	return formatter.Output(table)
@@ -1935,29 +1833,19 @@ func runContextCmd(c *cli.Context) error {
 	repoMap := c.Bool("repo-map")
 	topN := c.Int("top")
 
-	cfg := config.LoadOrDefault()
-	scan := scanner.NewScanner(cfg)
-
-	var files []string
-	for _, path := range paths {
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			return fmt.Errorf("invalid path %s: %w", path, err)
-		}
-		found, err := scan.ScanDir(absPath)
-		if err != nil {
-			return fmt.Errorf("failed to scan directory %s: %w", path, err)
-		}
-		files = append(files, found...)
+	scanSvc := scannerSvc.New()
+	scanResult, err := scanSvc.ScanPaths(paths)
+	if err != nil {
+		return err
 	}
 
-	if len(files) == 0 {
+	if len(scanResult.Files) == 0 {
 		color.Yellow("No source files found")
 		return nil
 	}
 
-	// Group by language
-	langGroups := scan.GroupByLanguage(files)
+	files := scanResult.Files
+	langGroups := scanResult.LanguageGroups
 
 	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
 	if err != nil {
@@ -1987,35 +1875,33 @@ func runContextCmd(c *cli.Context) error {
 	if includeMetrics {
 		fmt.Println()
 		fmt.Println("## Complexity Metrics")
-		cxAnalyzer := analyzer.NewComplexityAnalyzer()
-		defer cxAnalyzer.Close()
-
-		analysis, err := cxAnalyzer.AnalyzeProject(files)
-		if err == nil {
-			fmt.Printf("- **Total Functions**: %d\n", analysis.Summary.TotalFunctions)
-			fmt.Printf("- **Median Cyclomatic (P50)**: %d\n", analysis.Summary.P50Cyclomatic)
-			fmt.Printf("- **Median Cognitive (P50)**: %d\n", analysis.Summary.P50Cognitive)
-			fmt.Printf("- **90th Percentile Cyclomatic**: %d\n", analysis.Summary.P90Cyclomatic)
-			fmt.Printf("- **90th Percentile Cognitive**: %d\n", analysis.Summary.P90Cognitive)
-			fmt.Printf("- **Max Cyclomatic**: %d\n", analysis.Summary.MaxCyclomatic)
-			fmt.Printf("- **Max Cognitive**: %d\n", analysis.Summary.MaxCognitive)
+		svc := analysis.New()
+		cxResult, cxErr := svc.AnalyzeComplexity(files, analysis.ComplexityOptions{})
+		if cxErr == nil {
+			fmt.Printf("- **Total Functions**: %d\n", cxResult.Summary.TotalFunctions)
+			fmt.Printf("- **Median Cyclomatic (P50)**: %d\n", cxResult.Summary.P50Cyclomatic)
+			fmt.Printf("- **Median Cognitive (P50)**: %d\n", cxResult.Summary.P50Cognitive)
+			fmt.Printf("- **90th Percentile Cyclomatic**: %d\n", cxResult.Summary.P90Cyclomatic)
+			fmt.Printf("- **90th Percentile Cognitive**: %d\n", cxResult.Summary.P90Cognitive)
+			fmt.Printf("- **Max Cyclomatic**: %d\n", cxResult.Summary.MaxCyclomatic)
+			fmt.Printf("- **Max Cognitive**: %d\n", cxResult.Summary.MaxCognitive)
 		}
 	}
 
 	if includeGraph {
 		fmt.Println()
 		fmt.Println("## Dependency Graph")
-		graphAnalyzer := analyzer.NewGraphAnalyzer(analyzer.WithGraphScope(analyzer.ScopeFile))
-		defer graphAnalyzer.Close()
-
-		graph, err := graphAnalyzer.AnalyzeProject(files)
-		if err == nil {
+		graphSvc := analysis.New()
+		graphResult, _, graphErr := graphSvc.AnalyzeGraph(files, analysis.GraphOptions{
+			Scope: analyzer.ScopeFile,
+		})
+		if graphErr == nil {
 			fmt.Println("```mermaid")
 			fmt.Println("graph TD")
-			for _, node := range graph.Nodes {
+			for _, node := range graphResult.Nodes {
 				fmt.Printf("    %s[%s]\n", sanitizeID(node.ID), node.Name)
 			}
-			for _, edge := range graph.Edges {
+			for _, edge := range graphResult.Edges {
 				fmt.Printf("    %s --> %s\n", sanitizeID(edge.From), sanitizeID(edge.To))
 			}
 			fmt.Println("```")
@@ -2025,14 +1911,13 @@ func runContextCmd(c *cli.Context) error {
 	if repoMap {
 		fmt.Println()
 		fmt.Println("## Repository Map")
-		rmAnalyzer := analyzer.NewRepoMapAnalyzer()
-		defer rmAnalyzer.Close()
 
 		spinner := progress.NewSpinner("Generating repo map...")
-		rm, err := rmAnalyzer.AnalyzeProject(files)
+		rmSvc := analysis.New()
+		rm, rmErr := rmSvc.AnalyzeRepoMap(files, analysis.RepoMapOptions{Top: topN})
 		spinner.FinishSuccess()
 
-		if err == nil {
+		if rmErr == nil {
 			// Check if we should output using formatter
 			formatStr := getFormat(c)
 			if formatStr != "" && formatStr != "text" {
@@ -2122,32 +2007,24 @@ func runAnalyzeCmd(c *cli.Context) error {
 	paths := getPaths(c)
 	exclude := c.StringSlice("exclude")
 
-	cfg := config.LoadOrDefault()
-	scan := scanner.NewScanner(cfg)
-
 	// Use first path as repo root for git-based analyzers
 	repoPath, err := filepath.Abs(paths[0])
 	if err != nil {
 		return fmt.Errorf("invalid path: %w", err)
 	}
 
-	var files []string
-	for _, path := range paths {
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			return fmt.Errorf("invalid path %s: %w", path, err)
-		}
-		found, err := scan.ScanDir(absPath)
-		if err != nil {
-			return fmt.Errorf("failed to scan directory %s: %w", path, err)
-		}
-		files = append(files, found...)
+	scanSvc := scannerSvc.New()
+	scanResult, err := scanSvc.ScanPaths(paths)
+	if err != nil {
+		return err
 	}
 
-	if len(files) == 0 {
+	if len(scanResult.Files) == 0 {
 		color.Yellow("No source files found")
 		return nil
 	}
+
+	files := scanResult.Files
 
 	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
 	if err != nil {
@@ -2175,40 +2052,41 @@ func runAnalyzeCmd(c *cli.Context) error {
 	startTime := time.Now()
 	color.Cyan("Running comprehensive analysis on %d files...\n", len(files))
 
+	svc := analysis.New()
+
 	// 1. Complexity
 	if !excludeSet["complexity"] {
 		tracker := progress.NewTracker("Analyzing complexity...", len(files))
-		cxAnalyzer := analyzer.NewComplexityAnalyzer()
-		results.Complexity, _ = cxAnalyzer.AnalyzeProjectWithProgress(files, tracker.Tick)
-		cxAnalyzer.Close()
+		results.Complexity, _ = svc.AnalyzeComplexity(files, analysis.ComplexityOptions{
+			OnProgress: tracker.Tick,
+		})
 		tracker.FinishSuccess()
 	}
 
 	// 2. SATD
 	if !excludeSet["satd"] {
 		tracker := progress.NewTracker("Detecting technical debt...", len(files))
-		satdAnalyzer := analyzer.NewSATDAnalyzer()
-		results.SATD, _ = satdAnalyzer.AnalyzeProjectWithProgress(files, tracker.Tick)
+		results.SATD, _ = svc.AnalyzeSATD(files, analysis.SATDOptions{
+			OnProgress: tracker.Tick,
+		})
 		tracker.FinishSuccess()
 	}
 
 	// 3. Dead code
 	if !excludeSet["deadcode"] {
 		tracker := progress.NewTracker("Detecting dead code...", len(files))
-		dcAnalyzer := analyzer.NewDeadCodeAnalyzer(analyzer.WithDeadCodeConfidence(cfg.Thresholds.DeadCodeConfidence))
-		results.DeadCode, _ = dcAnalyzer.AnalyzeProjectWithProgress(files, tracker.Tick)
-		dcAnalyzer.Close()
+		results.DeadCode, _ = svc.AnalyzeDeadCode(files, analysis.DeadCodeOptions{
+			OnProgress: tracker.Tick,
+		})
 		tracker.FinishSuccess()
 	}
 
 	// 4. Churn
 	if !excludeSet["churn"] {
 		spinner := progress.NewSpinner("Analyzing git churn...")
-		churnAnalyzer := analyzer.NewChurnAnalyzer(
-			analyzer.WithChurnDays(cfg.Analysis.ChurnDays),
-			analyzer.WithChurnSpinner(spinner),
-		)
-		results.Churn, _ = churnAnalyzer.AnalyzeRepo(repoPath)
+		results.Churn, _ = svc.AnalyzeChurn(repoPath, analysis.ChurnOptions{
+			Spinner: spinner,
+		})
 		if results.Churn != nil {
 			spinner.FinishSuccess()
 		} else {
@@ -2219,34 +2097,23 @@ func runAnalyzeCmd(c *cli.Context) error {
 	// 5. Duplicates
 	if !excludeSet["duplicates"] {
 		tracker := progress.NewTracker("Detecting duplicates...", len(files))
-		dupAnalyzer := analyzer.NewDuplicateAnalyzer(
-			analyzer.WithDuplicateMinTokens(cfg.Thresholds.DuplicateMinLines*8), // Convert lines to approximate tokens
-			analyzer.WithDuplicateSimilarityThreshold(cfg.Thresholds.DuplicateSimilarity),
-		)
-		results.Clones, _ = dupAnalyzer.AnalyzeProjectWithProgress(files, tracker.Tick)
-		dupAnalyzer.Close()
+		results.Clones, _ = svc.AnalyzeDuplicates(files, analysis.DuplicatesOptions{
+			OnProgress: tracker.Tick,
+		})
 		tracker.FinishSuccess()
 	}
 
 	// 6. Defect prediction (composite - uses sub-analyzers)
 	if !excludeSet["defect"] {
 		tracker := progress.NewTracker("Predicting defects...", 1)
-		defectAnalyzer := analyzer.NewDefectAnalyzer(
-			analyzer.WithDefectChurnDays(cfg.Analysis.ChurnDays),
-			analyzer.WithDefectMaxFileSize(cfg.Analysis.MaxFileSize),
-		)
-		results.Defect, _ = defectAnalyzer.AnalyzeProject(repoPath, files)
-		defectAnalyzer.Close()
+		results.Defect, _ = svc.AnalyzeDefects(repoPath, files, analysis.DefectOptions{})
 		tracker.FinishSuccess()
 	}
 
 	// 7. TDG
 	if !excludeSet["tdg"] {
 		tracker := progress.NewTracker("Calculating TDG scores...", 1)
-		tdgAnalyzer := analyzer.NewTdgAnalyzer()
-		project, _ := tdgAnalyzer.AnalyzeProject(repoPath)
-		results.TDG = &project
-		tdgAnalyzer.Close()
+		results.TDG, _ = svc.AnalyzeTDG(repoPath)
 		tracker.FinishSuccess()
 	}
 
@@ -2292,7 +2159,7 @@ func runAnalyzeCmd(c *cli.Context) error {
 	}
 
 	if results.Churn != nil {
-		fmt.Fprintf(w, "\nFile Churn (last %d days):\n", cfg.Analysis.ChurnDays)
+		fmt.Fprintf(w, "\nFile Churn:\n")
 		fmt.Fprintf(w, "  Files: %d, Total Commits: %d, Authors: %d\n",
 			results.Churn.Summary.TotalFilesChanged,
 			results.Churn.Summary.TotalCommits,
@@ -2351,4 +2218,43 @@ func runAnalyzeCmd(c *cli.Context) error {
 	}
 
 	return nil
+}
+
+func mcpCmd() *cli.Command {
+	return &cli.Command{
+		Name:  "mcp",
+		Usage: "Start MCP (Model Context Protocol) server for LLM tool integration",
+		Description: `Starts an MCP server over stdio transport that exposes omen's analyzers
+as tools that LLMs can invoke. This enables AI assistants like Claude to
+analyze codebases for complexity, technical debt, dead code, and more.
+
+To use with Claude Desktop, add to your config:
+  {
+    "mcpServers": {
+      "omen": {
+        "command": "omen",
+        "args": ["mcp"]
+      }
+    }
+  }
+
+Available tools:
+  - analyze_complexity    Cyclomatic and cognitive complexity
+  - analyze_satd          Self-admitted technical debt (TODO/FIXME/HACK)
+  - analyze_deadcode      Unused functions and variables
+  - analyze_churn         Git file change frequency
+  - analyze_duplicates    Code clones and copy-paste detection
+  - analyze_defect        Defect probability prediction
+  - analyze_tdg           Technical Debt Gradient scores
+  - analyze_graph         Dependency graph generation
+  - analyze_hotspot       High churn + high complexity files
+  - analyze_temporal_coupling  Files that change together
+  - analyze_ownership     Code ownership and bus factor
+  - analyze_cohesion      CK OO metrics (LCOM, WMC, CBO, DIT)
+  - analyze_repo_map      PageRank-ranked symbol map`,
+		Action: func(c *cli.Context) error {
+			server := mcpserver.NewServer(version)
+			return server.Run(context.Background())
+		},
+	}
 }

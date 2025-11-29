@@ -226,3 +226,121 @@ func TestNewTable(t *testing.T) {
 		t.Fatal("NewTable() returned nil")
 	}
 }
+
+func TestOutputTable(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "table.txt")
+
+	svc, _ := New(WithFile(filePath), WithFormat(FormatText))
+	defer svc.Close()
+
+	table := NewTable(
+		"Test Table",
+		[]string{"Name", "Value"},
+		[][]string{{"foo", "1"}, {"bar", "2"}},
+		[]string{"Total: 2"},
+		nil,
+	)
+
+	if err := svc.OutputTable(table); err != nil {
+		t.Fatalf("OutputTable() error = %v", err)
+	}
+
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if len(content) == 0 {
+		t.Error("expected output to be written")
+	}
+}
+
+func TestOutputTable_JSON(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "table.json")
+
+	svc, _ := New(WithFile(filePath), WithFormat(FormatJSON))
+	defer svc.Close()
+
+	table := NewTable(
+		"Test Table",
+		[]string{"Name", "Value"},
+		[][]string{{"foo", "1"}},
+		nil,
+		map[string]int{"count": 1},
+	)
+
+	if err := svc.OutputTable(table); err != nil {
+		t.Fatalf("OutputTable() error = %v", err)
+	}
+
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if len(content) == 0 {
+		t.Error("expected output to be written")
+	}
+}
+
+func TestOutputTable_Markdown(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "table.md")
+
+	svc, _ := New(WithFile(filePath), WithFormat(FormatMarkdown))
+	defer svc.Close()
+
+	table := NewTable(
+		"Test Table",
+		[]string{"Name", "Value"},
+		[][]string{{"foo", "1"}},
+		[]string{"Summary"},
+		nil,
+	)
+
+	if err := svc.OutputTable(table); err != nil {
+		t.Fatalf("OutputTable() error = %v", err)
+	}
+
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if len(content) == 0 {
+		t.Error("expected output to be written")
+	}
+}
+
+func TestFormatData_InvalidJSON(t *testing.T) {
+	svc, _ := New(WithFormat(FormatJSON))
+	// Create a channel which can't be marshaled to JSON
+	data := make(chan int)
+
+	_, err := svc.FormatData(data)
+	if err == nil {
+		t.Error("expected error for unmarshallable data")
+	}
+}
+
+func TestFormatData_InvalidTOON(t *testing.T) {
+	svc, _ := New(WithFormat(FormatTOON))
+	// Create a channel which can't be marshaled to TOON
+	data := make(chan int)
+
+	_, err := svc.FormatData(data)
+	if err == nil {
+		t.Error("expected error for unmarshallable data")
+	}
+}
+
+func TestOutput_FormatError(t *testing.T) {
+	var buf bytes.Buffer
+	svc, _ := New(WithWriter(&buf), WithFormat(FormatJSON))
+
+	// Create a channel which can't be marshaled
+	data := make(chan int)
+	err := svc.Output(data)
+	if err == nil {
+		t.Error("expected error for unmarshallable data")
+	}
+}
