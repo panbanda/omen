@@ -1,4 +1,4 @@
-package mcp
+package mcpserver
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/panbanda/omen/internal/output"
+	scannerSvc "github.com/panbanda/omen/internal/service/scanner"
 )
 
 // TestServerCreation verifies the MCP server can be created without panicking.
@@ -673,20 +674,15 @@ func TestFormatOutput(t *testing.T) {
 	}
 }
 
-// TestFindGitRoot tests git root finding.
-func TestFindGitRoot(t *testing.T) {
-	// Test with non-git directory - should return error
+// TestScanPathsForGit tests git root finding via scanner service.
+func TestScanPathsForGit(t *testing.T) {
+	// Test with non-git directory - should return error when git required
 	tmpDir := t.TempDir()
-	result, err := findGitRoot(tmpDir)
+	scanner := scannerSvc.New()
+	_, err := scanner.ScanPathsForGit([]string{tmpDir}, true)
 	if err == nil {
-		t.Error("findGitRoot() on non-git dir should return error")
+		t.Error("ScanPathsForGit() on non-git dir with gitRequired=true should return error")
 	}
-	if result != "" {
-		t.Errorf("findGitRoot() on non-git dir should return empty string, got %q", result)
-	}
-
-	// Test with mock .git directory (note: go-git needs a real git repo)
-	// Just test the error case for now
 }
 
 // TestToolResultTextFormat tests text format output.
@@ -703,7 +699,7 @@ func TestToolResultTextFormat(t *testing.T) {
 	}
 }
 
-// TestScanFilesWithFile tests scanning a single file.
+// TestScanFilesWithFile tests scanning a single file via scanner service.
 func TestScanFilesWithFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	goFile := filepath.Join(tmpDir, "test.go")
@@ -711,11 +707,12 @@ func TestScanFilesWithFile(t *testing.T) {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	files, err := scanFiles([]string{goFile})
+	scanner := scannerSvc.New()
+	result, err := scanner.ScanPaths([]string{tmpDir})
 	if err != nil {
-		t.Errorf("scanFiles should not error on valid file: %v", err)
+		t.Errorf("ScanPaths should not error on valid dir: %v", err)
 	}
-	if len(files) != 1 {
-		t.Errorf("Expected 1 file, got %d", len(files))
+	if len(result.Files) != 1 {
+		t.Errorf("Expected 1 file, got %d", len(result.Files))
 	}
 }

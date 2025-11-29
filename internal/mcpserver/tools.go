@@ -1,17 +1,15 @@
-package mcp
+package mcpserver
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
 	"sort"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/panbanda/omen/internal/analyzer"
 	"github.com/panbanda/omen/internal/output"
-	"github.com/panbanda/omen/internal/scanner"
-	"github.com/panbanda/omen/internal/vcs"
-	"github.com/panbanda/omen/pkg/config"
+	"github.com/panbanda/omen/internal/service/analysis"
+	scannerSvc "github.com/panbanda/omen/internal/service/scanner"
 	"github.com/panbanda/omen/pkg/models"
 	toon "github.com/toon-format/toon-go"
 )
@@ -137,58 +135,21 @@ func getFormat(input AnalyzeInput) output.Format {
 	}
 }
 
-func scanFiles(paths []string) ([]string, error) {
-	cfg := config.LoadOrDefault()
-	scan := scanner.NewScanner(cfg)
-
-	var files []string
-	for _, path := range paths {
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			return nil, fmt.Errorf("invalid path %s: %w", path, err)
-		}
-		found, err := scan.ScanDir(absPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan directory %s: %w", path, err)
-		}
-		files = append(files, found...)
-	}
-	return files, nil
-}
-
-func findGitRoot(path string) (string, error) {
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return "", fmt.Errorf("invalid path: %w", err)
-	}
-
-	// Try to open git repo starting from path
-	_, err = vcs.DefaultOpener().PlainOpenWithDetect(absPath)
-	if err != nil {
-		return "", fmt.Errorf("not a git repository (or any parent): %w", err)
-	}
-
-	return absPath, nil
-}
-
 func formatOutput(data any, format output.Format) (string, error) {
 	switch format {
 	case output.FormatJSON:
-		// For JSON, use toon output as it's similar structure
 		out, err := toon.Marshal(data, toon.WithIndent(2))
 		if err != nil {
 			return "", err
 		}
 		return string(out), nil
 	case output.FormatMarkdown:
-		// For markdown, wrap in code block
 		out, err := toon.Marshal(data, toon.WithIndent(2))
 		if err != nil {
 			return "", err
 		}
 		return "```\n" + string(out) + "\n```", nil
 	default:
-		// TOON format (default)
 		out, err := toon.Marshal(data, toon.WithIndent(2))
 		if err != nil {
 			return "", err
@@ -224,79 +185,73 @@ func handleAnalyzeComplexity(ctx context.Context, req *mcp.CallToolRequest, inpu
 	paths := getPaths(input.AnalyzeInput)
 	format := getFormat(input.AnalyzeInput)
 
-	files, err := scanFiles(paths)
+	scanner := scannerSvc.New()
+	scanResult, err := scanner.ScanPaths(paths)
 	if err != nil {
 		return toolError(err.Error())
 	}
 
-	if len(files) == 0 {
+	if len(scanResult.Files) == 0 {
 		return toolError("no source files found")
 	}
 
-	var cxOpts []analyzer.ComplexityOption
-	if input.IncludeHalstead {
-		cxOpts = append(cxOpts, analyzer.WithHalstead())
-	}
-	cxAnalyzer := analyzer.NewComplexityAnalyzer(cxOpts...)
-	defer cxAnalyzer.Close()
-
-	analysis, err := cxAnalyzer.AnalyzeProject(files)
+	svc := analysis.New()
+	result, err := svc.AnalyzeComplexity(scanResult.Files, analysis.ComplexityOptions{
+		IncludeHalstead: input.IncludeHalstead,
+	})
 	if err != nil {
-		return toolError(fmt.Sprintf("analysis failed: %v", err))
+		return toolError(err.Error())
 	}
 
 	if input.FunctionsOnly {
-		// Extract just functions from all files
 		var functions []models.FunctionComplexity
-		for _, f := range analysis.Files {
+		for _, f := range result.Files {
 			functions = append(functions, f.Functions...)
 		}
-		result := struct {
+		out := struct {
 			Functions []models.FunctionComplexity `json:"functions" toon:"functions"`
 			Summary   models.ComplexitySummary    `json:"summary" toon:"summary"`
-		}{functions, analysis.Summary}
-		return toolResult(result, format)
+		}{functions, result.Summary}
+		return toolResult(out, format)
 	}
 
-	return toolResult(analysis, format)
+	return toolResult(result, format)
 }
 
 func handleAnalyzeSATD(ctx context.Context, req *mcp.CallToolRequest, input SATDInput) (*mcp.CallToolResult, any, error) {
 	paths := getPaths(input.AnalyzeInput)
 	format := getFormat(input.AnalyzeInput)
 
-	files, err := scanFiles(paths)
+	scanner := scannerSvc.New()
+	scanResult, err := scanner.ScanPaths(paths)
 	if err != nil {
 		return toolError(err.Error())
 	}
 
-	if len(files) == 0 {
+	if len(scanResult.Files) == 0 {
 		return toolError("no source files found")
 	}
 
-	var satdOpts []analyzer.SATDOption
-	if !input.IncludeTests {
-		satdOpts = append(satdOpts, analyzer.WithSATDSkipTests())
-	}
-	if input.StrictMode {
-		satdOpts = append(satdOpts, analyzer.WithSATDStrictMode())
-	}
-	satdAnalyzer := analyzer.NewSATDAnalyzer(satdOpts...)
-
-	// Add custom patterns if provided
-	for _, pattern := range input.Patterns {
-		// Add as medium severity requirement debt by default
-		if err := satdAnalyzer.AddPattern(pattern, models.DebtRequirement, models.SeverityMedium); err != nil {
-			return toolError(fmt.Sprintf("invalid pattern %q: %v", pattern, err))
-		}
+	var customPatterns []analysis.PatternConfig
+	for _, p := range input.Patterns {
+		customPatterns = append(customPatterns, analysis.PatternConfig{
+			Pattern:  p,
+			Category: models.DebtRequirement,
+			Severity: models.SeverityMedium,
+		})
 	}
 
-	analysis, err := satdAnalyzer.AnalyzeProject(files)
+	svc := analysis.New()
+	result, err := svc.AnalyzeSATD(scanResult.Files, analysis.SATDOptions{
+		IncludeTests:   input.IncludeTests,
+		StrictMode:     input.StrictMode,
+		CustomPatterns: customPatterns,
+	})
 	if err != nil {
-		return toolError(fmt.Sprintf("analysis failed: %v", err))
+		return toolError(err.Error())
 	}
 
-	return toolResult(analysis, format)
+	return toolResult(result, format)
 }
 
 func handleAnalyzeDeadcode(ctx context.Context, req *mcp.CallToolRequest, input DeadcodeInput) (*mcp.CallToolResult, any, error) {
@@ -308,27 +263,28 @@ func handleAnalyzeDeadcode(ctx context.Context, req *mcp.CallToolRequest, input 
 		confidence = 0.8
 	}
 
-	files, err := scanFiles(paths)
+	scanner := scannerSvc.New()
+	scanResult, err := scanner.ScanPaths(paths)
 	if err != nil {
 		return toolError(err.Error())
 	}
 
-	if len(files) == 0 {
+	if len(scanResult.Files) == 0 {
 		return toolError("no source files found")
 	}
 
-	dcAnalyzer := analyzer.NewDeadCodeAnalyzer(analyzer.WithDeadCodeConfidence(confidence))
-	defer dcAnalyzer.Close()
-
-	analysis, err := dcAnalyzer.AnalyzeProject(files)
+	svc := analysis.New()
+	result, err := svc.AnalyzeDeadCode(scanResult.Files, analysis.DeadCodeOptions{
+		Confidence: confidence,
+	})
 	if err != nil {
-		return toolError(fmt.Sprintf("analysis failed: %v", err))
+		return toolError(err.Error())
 	}
 
-	result := models.NewDeadCodeResult()
-	result.FromDeadCodeAnalysis(analysis)
+	out := models.NewDeadCodeResult()
+	out.FromDeadCodeAnalysis(result)
 
-	return toolResult(result, format)
+	return toolResult(out, format)
 }
 
 func handleAnalyzeChurn(ctx context.Context, req *mcp.CallToolRequest, input ChurnInput) (*mcp.CallToolResult, any, error) {
@@ -340,24 +296,26 @@ func handleAnalyzeChurn(ctx context.Context, req *mcp.CallToolRequest, input Chu
 		days = 30
 	}
 
-	repoPath, err := findGitRoot(paths[0])
+	scanner := scannerSvc.New()
+	scanResult, err := scanner.ScanPathsForGit(paths, true)
 	if err != nil {
 		return toolError(err.Error())
 	}
 
-	churnAnalyzer := analyzer.NewChurnAnalyzer(analyzer.WithChurnDays(days))
-	analysis, err := churnAnalyzer.AnalyzeRepo(repoPath)
+	svc := analysis.New()
+	result, err := svc.AnalyzeChurn(scanResult.RepoRoot, analysis.ChurnOptions{
+		Days: days,
+	})
 	if err != nil {
-		return toolError(fmt.Sprintf("churn analysis failed: %v", err))
+		return toolError(err.Error())
 	}
 
-	// Limit results if top is specified
 	top := input.Top
-	if top > 0 && len(analysis.Files) > top {
-		analysis.Files = analysis.Files[:top]
+	if top > 0 && len(result.Files) > top {
+		result.Files = result.Files[:top]
 	}
 
-	return toolResult(analysis, format)
+	return toolResult(result, format)
 }
 
 func handleAnalyzeDuplicates(ctx context.Context, req *mcp.CallToolRequest, input DuplicatesInput) (*mcp.CallToolResult, any, error) {
@@ -373,27 +331,26 @@ func handleAnalyzeDuplicates(ctx context.Context, req *mcp.CallToolRequest, inpu
 		threshold = 0.8
 	}
 
-	files, err := scanFiles(paths)
+	scanner := scannerSvc.New()
+	scanResult, err := scanner.ScanPaths(paths)
 	if err != nil {
 		return toolError(err.Error())
 	}
 
-	if len(files) == 0 {
+	if len(scanResult.Files) == 0 {
 		return toolError("no source files found")
 	}
 
-	dupAnalyzer := analyzer.NewDuplicateAnalyzer(
-		analyzer.WithDuplicateMinTokens(minLines*8), // Convert lines to approximate tokens
-		analyzer.WithDuplicateSimilarityThreshold(threshold),
-	)
-	defer dupAnalyzer.Close()
-
-	analysis, err := dupAnalyzer.AnalyzeProject(files)
+	svc := analysis.New()
+	result, err := svc.AnalyzeDuplicates(scanResult.Files, analysis.DuplicatesOptions{
+		MinLines:            minLines,
+		SimilarityThreshold: threshold,
+	})
 	if err != nil {
-		return toolError(fmt.Sprintf("analysis failed: %v", err))
+		return toolError(err.Error())
 	}
 
-	report := analysis.ToCloneReport()
+	report := result.ToCloneReport()
 	return toolResult(report, format)
 }
 
@@ -401,46 +358,37 @@ func handleAnalyzeDefect(ctx context.Context, req *mcp.CallToolRequest, input De
 	paths := getPaths(input.AnalyzeInput)
 	format := getFormat(input.AnalyzeInput)
 
-	repoPath, err := findGitRoot(paths[0])
+	scanner := scannerSvc.New()
+	scanResult, err := scanner.ScanPathsForGit(paths, true)
 	if err != nil {
 		return toolError(err.Error())
 	}
 
-	files, err := scanFiles(paths)
-	if err != nil {
-		return toolError(err.Error())
-	}
-
-	if len(files) == 0 {
+	if len(scanResult.Files) == 0 {
 		return toolError("no source files found")
 	}
 
-	cfg := config.LoadOrDefault()
-	defectAnalyzer := analyzer.NewDefectAnalyzer(analyzer.WithDefectChurnDays(cfg.Analysis.ChurnDays))
-	defer defectAnalyzer.Close()
-
-	analysis, err := defectAnalyzer.AnalyzeProject(repoPath, files)
+	svc := analysis.New()
+	result, err := svc.AnalyzeDefects(scanResult.RepoRoot, scanResult.Files, analysis.DefectOptions{})
 	if err != nil {
-		return toolError(fmt.Sprintf("analysis failed: %v", err))
+		return toolError(err.Error())
 	}
 
-	// Sort by probability
-	sort.Slice(analysis.Files, func(i, j int) bool {
-		return analysis.Files[i].Probability > analysis.Files[j].Probability
+	sort.Slice(result.Files, func(i, j int) bool {
+		return result.Files[i].Probability > result.Files[j].Probability
 	})
 
-	// Filter if high risk only
 	if input.HighRiskOnly {
 		var filtered []models.DefectScore
-		for _, ds := range analysis.Files {
+		for _, ds := range result.Files {
 			if ds.RiskLevel == models.RiskHigh {
 				filtered = append(filtered, ds)
 			}
 		}
-		analysis.Files = filtered
+		result.Files = filtered
 	}
 
-	report := analysis.ToDefectPredictionReport()
+	report := result.ToDefectPredictionReport()
 	return toolResult(report, format)
 }
 
@@ -453,23 +401,20 @@ func handleAnalyzeTDG(ctx context.Context, req *mcp.CallToolRequest, input TDGIn
 		hotspots = 10
 	}
 
-	tdgAnalyzer := analyzer.NewTdgAnalyzer()
-	defer tdgAnalyzer.Close()
-
 	absPath, err := filepath.Abs(paths[0])
 	if err != nil {
-		return toolError(fmt.Sprintf("invalid path: %v", err))
+		return toolError(err.Error())
 	}
 
-	project, err := tdgAnalyzer.AnalyzeProject(absPath)
+	svc := analysis.New()
+	project, err := svc.AnalyzeTDG(absPath)
 	if err != nil {
-		return toolError(fmt.Sprintf("analysis failed: %v", err))
+		return toolError(err.Error())
 	}
 
 	report := project.ToTDGReport(hotspots)
 
 	if input.ShowPenalties {
-		// Create extended report with penalties included
 		type HotspotWithPenalties struct {
 			models.TDGHotspot
 			Penalties []models.PenaltyAttribution `json:"penalties,omitempty" toon:"penalties,omitempty"`
@@ -479,7 +424,6 @@ func handleAnalyzeTDG(ctx context.Context, req *mcp.CallToolRequest, input TDGIn
 			Hotspots []HotspotWithPenalties `json:"hotspots" toon:"hotspots"`
 		}
 
-		// Build file path to TdgScore lookup
 		penaltyMap := make(map[string][]models.PenaltyAttribution)
 		for _, f := range project.Files {
 			if len(f.PenaltiesApplied) > 0 {
@@ -514,25 +458,26 @@ func handleAnalyzeGraph(ctx context.Context, req *mcp.CallToolRequest, input Gra
 		scope = "module"
 	}
 
-	files, err := scanFiles(paths)
+	scanner := scannerSvc.New()
+	scanResult, err := scanner.ScanPaths(paths)
 	if err != nil {
 		return toolError(err.Error())
 	}
 
-	if len(files) == 0 {
+	if len(scanResult.Files) == 0 {
 		return toolError("no source files found")
 	}
 
-	graphAnalyzer := analyzer.NewGraphAnalyzer(analyzer.WithGraphScope(analyzer.GraphScope(scope)))
-	defer graphAnalyzer.Close()
-
-	graph, err := graphAnalyzer.AnalyzeProject(files)
+	svc := analysis.New()
+	graph, metrics, err := svc.AnalyzeGraph(scanResult.Files, analysis.GraphOptions{
+		Scope:          analyzer.GraphScope(scope),
+		IncludeMetrics: input.IncludeMetrics,
+	})
 	if err != nil {
-		return toolError(fmt.Sprintf("analysis failed: %v", err))
+		return toolError(err.Error())
 	}
 
 	if input.IncludeMetrics {
-		metrics := graphAnalyzer.CalculateMetrics(graph)
 		result := struct {
 			Graph   *models.DependencyGraph `json:"graph" toon:"graph"`
 			Metrics *models.GraphMetrics    `json:"metrics" toon:"metrics"`
@@ -556,34 +501,29 @@ func handleAnalyzeHotspot(ctx context.Context, req *mcp.CallToolRequest, input H
 		top = 20
 	}
 
-	repoPath, err := findGitRoot(paths[0])
+	scanner := scannerSvc.New()
+	scanResult, err := scanner.ScanPathsForGit(paths, true)
 	if err != nil {
 		return toolError(err.Error())
 	}
 
-	files, err := scanFiles(paths)
-	if err != nil {
-		return toolError(err.Error())
-	}
-
-	if len(files) == 0 {
+	if len(scanResult.Files) == 0 {
 		return toolError("no source files found")
 	}
 
-	hotspotAnalyzer := analyzer.NewHotspotAnalyzer(analyzer.WithHotspotChurnDays(days))
-	defer hotspotAnalyzer.Close()
-
-	analysis, err := hotspotAnalyzer.AnalyzeProject(repoPath, files)
+	svc := analysis.New()
+	result, err := svc.AnalyzeHotspots(scanResult.RepoRoot, scanResult.Files, analysis.HotspotOptions{
+		Days: days,
+	})
 	if err != nil {
-		return toolError(fmt.Sprintf("hotspot analysis failed: %v", err))
+		return toolError(err.Error())
 	}
 
-	// Limit results
-	if len(analysis.Files) > top {
-		analysis.Files = analysis.Files[:top]
+	if len(result.Files) > top {
+		result.Files = result.Files[:top]
 	}
 
-	return toolResult(analysis, format)
+	return toolResult(result, format)
 }
 
 func handleAnalyzeTemporalCoupling(ctx context.Context, req *mcp.CallToolRequest, input TemporalCouplingInput) (*mcp.CallToolResult, any, error) {
@@ -603,25 +543,26 @@ func handleAnalyzeTemporalCoupling(ctx context.Context, req *mcp.CallToolRequest
 		top = 20
 	}
 
-	repoPath, err := findGitRoot(paths[0])
+	scanner := scannerSvc.New()
+	scanResult, err := scanner.ScanPathsForGit(paths, true)
 	if err != nil {
 		return toolError(err.Error())
 	}
 
-	tcAnalyzer := analyzer.NewTemporalCouplingAnalyzer(days, minCochanges)
-	defer tcAnalyzer.Close()
-
-	analysis, err := tcAnalyzer.AnalyzeRepo(repoPath)
+	svc := analysis.New()
+	result, err := svc.AnalyzeTemporalCoupling(scanResult.RepoRoot, analysis.TemporalCouplingOptions{
+		Days:         days,
+		MinCochanges: minCochanges,
+	})
 	if err != nil {
-		return toolError(fmt.Sprintf("temporal coupling analysis failed: %v", err))
+		return toolError(err.Error())
 	}
 
-	// Limit results
-	if len(analysis.Couplings) > top {
-		analysis.Couplings = analysis.Couplings[:top]
+	if len(result.Couplings) > top {
+		result.Couplings = result.Couplings[:top]
 	}
 
-	return toolResult(analysis, format)
+	return toolResult(result, format)
 }
 
 func handleAnalyzeOwnership(ctx context.Context, req *mcp.CallToolRequest, input OwnershipInput) (*mcp.CallToolResult, any, error) {
@@ -633,38 +574,29 @@ func handleAnalyzeOwnership(ctx context.Context, req *mcp.CallToolRequest, input
 		top = 20
 	}
 
-	repoPath, err := findGitRoot(paths[0])
+	scanner := scannerSvc.New()
+	scanResult, err := scanner.ScanPathsForGit(paths, true)
 	if err != nil {
 		return toolError(err.Error())
 	}
 
-	files, err := scanFiles(paths)
-	if err != nil {
-		return toolError(err.Error())
-	}
-
-	if len(files) == 0 {
+	if len(scanResult.Files) == 0 {
 		return toolError("no source files found")
 	}
 
-	var ownOpts []analyzer.OwnershipOption
-	if input.IncludeTrivial {
-		ownOpts = append(ownOpts, analyzer.WithOwnershipIncludeTrivial())
-	}
-	ownAnalyzer := analyzer.NewOwnershipAnalyzer(ownOpts...)
-	defer ownAnalyzer.Close()
-
-	analysis, err := ownAnalyzer.AnalyzeRepo(repoPath, files)
+	svc := analysis.New()
+	result, err := svc.AnalyzeOwnership(scanResult.RepoRoot, scanResult.Files, analysis.OwnershipOptions{
+		IncludeTrivial: input.IncludeTrivial,
+	})
 	if err != nil {
-		return toolError(fmt.Sprintf("ownership analysis failed: %v", err))
+		return toolError(err.Error())
 	}
 
-	// Limit results
-	if len(analysis.Files) > top {
-		analysis.Files = analysis.Files[:top]
+	if len(result.Files) > top {
+		result.Files = result.Files[:top]
 	}
 
-	return toolResult(analysis, format)
+	return toolResult(result, format)
 }
 
 func handleAnalyzeCohesion(ctx context.Context, req *mcp.CallToolRequest, input CohesionInput) (*mcp.CallToolResult, any, error) {
@@ -680,45 +612,40 @@ func handleAnalyzeCohesion(ctx context.Context, req *mcp.CallToolRequest, input 
 		sortBy = "lcom"
 	}
 
-	files, err := scanFiles(paths)
+	scanner := scannerSvc.New()
+	scanResult, err := scanner.ScanPaths(paths)
 	if err != nil {
 		return toolError(err.Error())
 	}
 
-	if len(files) == 0 {
+	if len(scanResult.Files) == 0 {
 		return toolError("no source files found")
 	}
 
-	var ckOpts []analyzer.CohesionOption
-	if input.IncludeTests {
-		ckOpts = append(ckOpts, analyzer.WithCohesionIncludeTestFiles())
-	}
-	ckAnalyzer := analyzer.NewCohesionAnalyzer(ckOpts...)
-	defer ckAnalyzer.Close()
-
-	analysis, err := ckAnalyzer.AnalyzeProject(files)
+	svc := analysis.New()
+	result, err := svc.AnalyzeCohesion(scanResult.Files, analysis.CohesionOptions{
+		IncludeTests: input.IncludeTests,
+	})
 	if err != nil {
-		return toolError(fmt.Sprintf("cohesion analysis failed: %v", err))
+		return toolError(err.Error())
 	}
 
-	// Sort by requested metric
 	switch sortBy {
 	case "wmc":
-		analysis.SortByWMC()
+		result.SortByWMC()
 	case "cbo":
-		analysis.SortByCBO()
+		result.SortByCBO()
 	case "dit":
-		analysis.SortByDIT()
+		result.SortByDIT()
 	default:
-		analysis.SortByLCOM()
+		result.SortByLCOM()
 	}
 
-	// Limit results
-	if len(analysis.Classes) > top {
-		analysis.Classes = analysis.Classes[:top]
+	if len(result.Classes) > top {
+		result.Classes = result.Classes[:top]
 	}
 
-	return toolResult(analysis, format)
+	return toolResult(result, format)
 }
 
 func handleAnalyzeRepoMap(ctx context.Context, req *mcp.CallToolRequest, input RepoMapInput) (*mcp.CallToolResult, any, error) {
@@ -730,24 +657,22 @@ func handleAnalyzeRepoMap(ctx context.Context, req *mcp.CallToolRequest, input R
 		top = 50
 	}
 
-	files, err := scanFiles(paths)
+	scanner := scannerSvc.New()
+	scanResult, err := scanner.ScanPaths(paths)
 	if err != nil {
 		return toolError(err.Error())
 	}
 
-	if len(files) == 0 {
+	if len(scanResult.Files) == 0 {
 		return toolError("no source files found")
 	}
 
-	rmAnalyzer := analyzer.NewRepoMapAnalyzer()
-	defer rmAnalyzer.Close()
-
-	rm, err := rmAnalyzer.AnalyzeProject(files)
+	svc := analysis.New()
+	rm, err := svc.AnalyzeRepoMap(scanResult.Files, analysis.RepoMapOptions{Top: top})
 	if err != nil {
-		return toolError(fmt.Sprintf("repo map analysis failed: %v", err))
+		return toolError(err.Error())
 	}
 
-	// Get top N symbols
 	topSymbols := rm.TopN(top)
 
 	result := struct {

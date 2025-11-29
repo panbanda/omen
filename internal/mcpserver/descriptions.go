@@ -1,4 +1,4 @@
-package mcp
+package mcpserver
 
 // Tool descriptions with interpretation guidance for LLMs.
 // Each description explains what the tool does, when to use it,

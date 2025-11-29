@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -216,5 +217,92 @@ func TestGitError(t *testing.T) {
 	}
 	if err.Unwrap() != os.ErrNotExist {
 		t.Error("Unwrap returned wrong error")
+	}
+}
+
+// createTestGitRepo creates a temporary git repository with test files
+func createTestGitRepo(t *testing.T) string {
+	t.Helper()
+	tmpDir := t.TempDir()
+
+	// Initialize git repo
+	runGit(t, tmpDir, "init")
+	runGit(t, tmpDir, "config", "user.email", "test@test.com")
+	runGit(t, tmpDir, "config", "user.name", "Test User")
+
+	// Create and commit a test file
+	goFile := filepath.Join(tmpDir, "test.go")
+	if err := os.WriteFile(goFile, []byte("package main\nfunc test() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	runGit(t, tmpDir, "add", ".")
+	runGit(t, tmpDir, "commit", "-m", "Initial commit")
+
+	return tmpDir
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, out)
+	}
+}
+
+func TestScanPathsForGit_InGitRepo(t *testing.T) {
+	repoPath := createTestGitRepo(t)
+
+	svc := New()
+
+	// Should find git root
+	result, err := svc.ScanPathsForGit([]string{repoPath}, true)
+	if err != nil {
+		t.Fatalf("ScanPathsForGit() error = %v", err)
+	}
+	if result.RepoRoot == "" {
+		t.Error("expected non-empty repo root for git directory")
+	}
+	if len(result.Files) == 0 {
+		t.Error("expected at least one file")
+	}
+}
+
+func TestScanPathsForGit_EmptyPaths(t *testing.T) {
+	// Use current directory which is likely a git repo
+	svc := New()
+
+	result, err := svc.ScanPathsForGit(nil, false)
+	if err != nil {
+		// May fail if not in git repo - that's ok
+		t.Skip("not in git repo, skipping")
+	}
+	if result == nil {
+		t.Fatal("result should not be nil")
+	}
+}
+
+func TestScanPaths_MultiplePaths(t *testing.T) {
+	tmpDir1 := t.TempDir()
+	tmpDir2 := t.TempDir()
+
+	goFile1 := filepath.Join(tmpDir1, "test1.go")
+	goFile2 := filepath.Join(tmpDir2, "test2.go")
+
+	if err := os.WriteFile(goFile1, []byte("package main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(goFile2, []byte("package main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := New()
+	result, err := svc.ScanPaths([]string{tmpDir1, tmpDir2})
+	if err != nil {
+		t.Fatalf("ScanPaths() error = %v", err)
+	}
+	if len(result.Files) != 2 {
+		t.Errorf("expected 2 files, got %d", len(result.Files))
 	}
 }
