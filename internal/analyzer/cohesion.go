@@ -46,8 +46,8 @@ func isOOLanguage(lang parser.Language) bool {
 }
 
 // isTestFilePath checks if a file path suggests a test file.
-// Uses the shared isTestFile from deadcode.go
-var isTestFilePath = isTestFile
+// Uses the shared IsTestFile function.
+var isTestFilePath = IsTestFile
 
 // AnalyzeProject computes CK metrics for all OO classes in the project.
 func (a *CohesionAnalyzer) AnalyzeProject(files []string) (*models.CohesionAnalysis, error) {

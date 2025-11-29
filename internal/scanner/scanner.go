@@ -101,17 +101,49 @@ func (s *Scanner) isGitignored(path string, isDir bool) bool {
 
 // ScanDir recursively scans a directory for source files.
 // Uses filepath.WalkDir for better performance (avoids stat calls).
+// Validates that all paths stay within the root directory to prevent traversal attacks.
 func (s *Scanner) ScanDir(root string) ([]string, error) {
 	files := make([]string, 0, 1024)
 
+	// Resolve root to absolute path for security validation
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	// Resolve any symlinks in the root path
+	absRoot, err = filepath.EvalSymlinks(absRoot)
+	if err != nil {
+		return nil, err
+	}
+
 	s.loadGitignore(root)
 
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 
 		relPath, _ := filepath.Rel(root, path)
+
+		// Security: validate path stays within root (prevent symlink traversal)
+		if d.Type()&fs.ModeSymlink != 0 {
+			// Resolve the symlink and check if it escapes root
+			resolved, err := filepath.EvalSymlinks(path)
+			if err != nil {
+				// Skip unresolvable symlinks
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !isWithinRoot(resolved, absRoot) {
+				// Symlink points outside root - skip it
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
 
 		if d.IsDir() {
 			for _, excluded := range s.config.Exclude.Dirs {
@@ -138,7 +170,29 @@ func (s *Scanner) ScanDir(root string) ([]string, error) {
 		return nil
 	})
 
-	return files, err
+	return files, walkErr
+}
+
+// isWithinRoot checks if a path is contained within the root directory.
+// Returns false if the path escapes via symlinks or relative paths.
+func isWithinRoot(path, root string) bool {
+	// Ensure both are absolute
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+
+	// Clean the paths to normalize them
+	absPath = filepath.Clean(absPath)
+	root = filepath.Clean(root)
+
+	// Check if path starts with root
+	// Add separator to prevent "/root2" matching "/root"
+	if !strings.HasPrefix(absPath, root+string(filepath.Separator)) && absPath != root {
+		return false
+	}
+
+	return true
 }
 
 // ScanFile checks if a single file should be analyzed.

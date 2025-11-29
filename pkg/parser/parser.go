@@ -241,8 +241,17 @@ func FindNodesByType(root *sitter.Node, source []byte, nodeType string) []*sitte
 }
 
 // GetNodeText extracts the source text for a node.
+// Returns empty string if node is nil or byte offsets are out of bounds.
 func GetNodeText(node *sitter.Node, source []byte) string {
-	return string(source[node.StartByte():node.EndByte()])
+	if node == nil {
+		return ""
+	}
+	start := node.StartByte()
+	end := node.EndByte()
+	if start > end || end > uint32(len(source)) {
+		return ""
+	}
+	return string(source[start:end])
 }
 
 // FunctionNode represents a parsed function.

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -262,4 +264,85 @@ func (c *Config) ShouldExclude(path string) bool {
 	}
 
 	return false
+}
+
+// Validate checks that all config values are within acceptable ranges.
+// Returns an error describing any validation failures.
+func (c *Config) Validate() error {
+	var errs []error
+
+	// Analysis config validation
+	if c.Analysis.ChurnDays < 1 {
+		errs = append(errs, errors.New("analysis.churn_days must be at least 1"))
+	}
+	if c.Analysis.ChurnDays > 3650 { // 10 years max
+		errs = append(errs, errors.New("analysis.churn_days must be at most 3650"))
+	}
+
+	// Threshold validation
+	if c.Thresholds.CyclomaticComplexity < 1 {
+		errs = append(errs, errors.New("thresholds.cyclomatic_complexity must be at least 1"))
+	}
+	if c.Thresholds.CognitiveComplexity < 1 {
+		errs = append(errs, errors.New("thresholds.cognitive_complexity must be at least 1"))
+	}
+	if c.Thresholds.DuplicateMinLines < 1 {
+		errs = append(errs, errors.New("thresholds.duplicate_min_lines must be at least 1"))
+	}
+	if c.Thresholds.DuplicateSimilarity < 0 || c.Thresholds.DuplicateSimilarity > 1 {
+		errs = append(errs, errors.New("thresholds.duplicate_similarity must be between 0 and 1"))
+	}
+	if c.Thresholds.DeadCodeConfidence < 0 || c.Thresholds.DeadCodeConfidence > 1 {
+		errs = append(errs, errors.New("thresholds.dead_code_confidence must be between 0 and 1"))
+	}
+	if c.Thresholds.DefectHighRisk < 0 || c.Thresholds.DefectHighRisk > 1 {
+		errs = append(errs, errors.New("thresholds.defect_high_risk must be between 0 and 1"))
+	}
+	if c.Thresholds.TDGHighRisk < 0 {
+		errs = append(errs, errors.New("thresholds.tdg_high_risk must be non-negative"))
+	}
+
+	// Duplicate config validation
+	if c.Duplicates.MinTokens < 1 {
+		errs = append(errs, errors.New("duplicates.min_tokens must be at least 1"))
+	}
+	if c.Duplicates.SimilarityThreshold < 0 || c.Duplicates.SimilarityThreshold > 1 {
+		errs = append(errs, errors.New("duplicates.similarity_threshold must be between 0 and 1"))
+	}
+	if c.Duplicates.ShingleSize < 1 {
+		errs = append(errs, errors.New("duplicates.shingle_size must be at least 1"))
+	}
+	if c.Duplicates.NumHashFunctions < 1 {
+		errs = append(errs, errors.New("duplicates.num_hash_functions must be at least 1"))
+	}
+	if c.Duplicates.NumBands < 1 {
+		errs = append(errs, errors.New("duplicates.num_bands must be at least 1"))
+	}
+	if c.Duplicates.RowsPerBand < 1 {
+		errs = append(errs, errors.New("duplicates.rows_per_band must be at least 1"))
+	}
+	if c.Duplicates.MinGroupSize < 2 {
+		errs = append(errs, errors.New("duplicates.min_group_size must be at least 2"))
+	}
+
+	// Validate relationship: NumHashFunctions should equal NumBands * RowsPerBand
+	if c.Duplicates.NumHashFunctions != c.Duplicates.NumBands*c.Duplicates.RowsPerBand {
+		errs = append(errs, fmt.Errorf(
+			"duplicates.num_hash_functions (%d) should equal num_bands (%d) * rows_per_band (%d) = %d",
+			c.Duplicates.NumHashFunctions,
+			c.Duplicates.NumBands,
+			c.Duplicates.RowsPerBand,
+			c.Duplicates.NumBands*c.Duplicates.RowsPerBand,
+		))
+	}
+
+	// Cache config validation
+	if c.Cache.TTL < 0 {
+		errs = append(errs, errors.New("cache.ttl must be non-negative"))
+	}
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
 }

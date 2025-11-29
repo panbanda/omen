@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -659,26 +660,11 @@ func (a *DuplicateAnalyzer) canonicalizeIdentifier(name string) string {
 	// Use LoadOrStore to avoid race where two goroutines both see the key
 	// as missing and assign different IDs to the same identifier.
 	id := atomic.AddUint32(&a.identifierCounter, 1)
-	canonical := "VAR_" + itoa(int(id))
+	canonical := "VAR_" + strconv.FormatUint(uint64(id), 10)
 	if actual, loaded := a.identifierMap.LoadOrStore(name, canonical); loaded {
 		return actual.(string)
 	}
 	return canonical
-}
-
-// itoa converts an int to string without fmt dependency.
-func itoa(i int) string {
-	if i == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	pos := len(buf)
-	for i > 0 {
-		pos--
-		buf[pos] = byte('0' + i%10)
-		i /= 10
-	}
-	return string(buf[pos:])
 }
 
 // keywords is a pre-allocated set of programming language keywords.

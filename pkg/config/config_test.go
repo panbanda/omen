@@ -375,3 +375,111 @@ func TestExcludeConfigDefaults(t *testing.T) {
 		t.Error("Default Exclude.Extensions should not be empty")
 	}
 }
+
+func TestValidate(t *testing.T) {
+	tests := []struct {
+		name      string
+		modify    func(*Config)
+		wantError bool
+		errorMsg  string
+	}{
+		{
+			name:      "default config is valid",
+			modify:    func(c *Config) {},
+			wantError: false,
+		},
+		{
+			name:      "negative churn days",
+			modify:    func(c *Config) { c.Analysis.ChurnDays = 0 },
+			wantError: true,
+			errorMsg:  "churn_days must be at least 1",
+		},
+		{
+			name:      "churn days too large",
+			modify:    func(c *Config) { c.Analysis.ChurnDays = 4000 },
+			wantError: true,
+			errorMsg:  "churn_days must be at most 3650",
+		},
+		{
+			name:      "cyclomatic complexity zero",
+			modify:    func(c *Config) { c.Thresholds.CyclomaticComplexity = 0 },
+			wantError: true,
+			errorMsg:  "cyclomatic_complexity must be at least 1",
+		},
+		{
+			name:      "similarity threshold out of range",
+			modify:    func(c *Config) { c.Thresholds.DuplicateSimilarity = 1.5 },
+			wantError: true,
+			errorMsg:  "duplicate_similarity must be between 0 and 1",
+		},
+		{
+			name:      "negative dead code confidence",
+			modify:    func(c *Config) { c.Thresholds.DeadCodeConfidence = -0.1 },
+			wantError: true,
+			errorMsg:  "dead_code_confidence must be between 0 and 1",
+		},
+		{
+			name:      "min tokens zero",
+			modify:    func(c *Config) { c.Duplicates.MinTokens = 0 },
+			wantError: true,
+			errorMsg:  "min_tokens must be at least 1",
+		},
+		{
+			name:      "min group size too small",
+			modify:    func(c *Config) { c.Duplicates.MinGroupSize = 1 },
+			wantError: true,
+			errorMsg:  "min_group_size must be at least 2",
+		},
+		{
+			name: "hash functions relationship mismatch",
+			modify: func(c *Config) {
+				c.Duplicates.NumHashFunctions = 100
+				c.Duplicates.NumBands = 10
+				c.Duplicates.RowsPerBand = 5 // 10 * 5 = 50 != 100
+			},
+			wantError: true,
+			errorMsg:  "num_hash_functions",
+		},
+		{
+			name:      "negative cache TTL",
+			modify:    func(c *Config) { c.Cache.TTL = -1 },
+			wantError: true,
+			errorMsg:  "cache.ttl must be non-negative",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			tt.modify(cfg)
+
+			err := cfg.Validate()
+
+			if tt.wantError {
+				if err == nil {
+					t.Errorf("Validate() expected error containing %q, got nil", tt.errorMsg)
+				} else if tt.errorMsg != "" && !contains(err.Error(), tt.errorMsg) {
+					t.Errorf("Validate() error = %q, want to contain %q", err.Error(), tt.errorMsg)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Validate() unexpected error = %v", err)
+				}
+			}
+		})
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)))
+}
+
+func findSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}

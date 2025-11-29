@@ -440,23 +440,8 @@ func (a *SATDAnalyzer) isTestFile(path string) bool {
 	return false
 }
 
-// isVendorFile checks if a file is in a vendor directory.
-func isVendorFile(path string) bool {
-	vendorPatterns := []string{
-		"/vendor/",
-		"/node_modules/",
-		"/third_party/",
-		"/external/",
-		"/.cargo/",
-		"/site-packages/",
-	}
-	for _, pattern := range vendorPatterns {
-		if strings.Contains(path, pattern) {
-			return true
-		}
-	}
-	return false
-}
+// isVendorFile is an alias for the shared IsVendorFile function.
+var isVendorFile = IsVendorFile
 
 // isMinifiedFile checks if a file appears to be minified.
 func isMinifiedFile(path string) bool {

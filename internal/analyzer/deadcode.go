@@ -2,7 +2,7 @@ package analyzer
 
 import (
 	"fmt"
-	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1084,32 +1084,8 @@ func isExported(name string, lang parser.Language) bool {
 	}
 }
 
-// isTestFile checks if a file is a test file based on naming conventions.
-func isTestFile(path string) bool {
-	// Go test files
-	if strings.HasSuffix(path, "_test.go") {
-		return true
-	}
-	// Python test files (test_*.py or *_test.py)
-	if strings.HasSuffix(path, "_test.py") || strings.Contains(path, "/test_") || strings.Contains(path, "\\test_") || strings.HasPrefix(filepath.Base(path), "test_") {
-		return true
-	}
-	// JavaScript/TypeScript test files
-	if strings.HasSuffix(path, ".test.ts") || strings.HasSuffix(path, ".test.js") ||
-		strings.HasSuffix(path, ".spec.ts") || strings.HasSuffix(path, ".spec.js") ||
-		strings.HasSuffix(path, ".test.tsx") || strings.HasSuffix(path, ".spec.tsx") {
-		return true
-	}
-	// Rust test modules
-	if strings.Contains(path, "/tests/") || strings.Contains(path, "\\tests\\") {
-		return true
-	}
-	// Generic test directories
-	if strings.Contains(path, "/test/") || strings.Contains(path, "\\test\\") {
-		return true
-	}
-	return false
-}
+// isTestFile is an alias for the shared IsTestFile function.
+var isTestFile = IsTestFile
 
 // isFFIExported checks if a function is exported via FFI (CGO, pyo3, etc.).
 func isFFIExported(node *sitter.Node, source []byte, lang parser.Language) bool {
@@ -1242,7 +1218,7 @@ func hasPythonFFIDecorator(node *sitter.Node, source []byte) bool {
 
 // computeContextHash generates a BLAKE3 hash for deduplication.
 func computeContextHash(name, file string, line uint32, kind string) string {
-	data := name + ":" + file + ":" + string(rune(line)) + ":" + kind
+	data := name + ":" + file + ":" + strconv.FormatUint(uint64(line), 10) + ":" + kind
 	hash := blake3.Sum256([]byte(data))
 	// Return first 16 hex characters
 	return string(hash[:8])
@@ -1453,13 +1429,14 @@ func (a *DeadCodeAnalyzer) markReachableVectorized() {
 	// Set all entry points as reachable
 	a.reachability.SetBatch(entryList)
 
-	// BFS traversal using queue
-	queue := make([]uint32, len(entryList))
+	// BFS traversal using index-based queue (avoids O(n) slice reslicing)
+	queue := make([]uint32, len(entryList), len(entryList)*2)
 	copy(queue, entryList)
+	head := 0
 
-	for len(queue) > 0 {
-		current := queue[0]
-		queue = queue[1:]
+	for head < len(queue) {
+		current := queue[head]
+		head++
 
 		// Get all outgoing edges
 		for _, edge := range a.references.GetOutgoingEdges(current) {

@@ -30,8 +30,8 @@ func New(dir string, ttlHours int, enabled bool) (*Cache, error) {
 		return &Cache{enabled: false}, nil
 	}
 
-	// Ensure cache directory exists
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	// Ensure cache directory exists with secure permissions (owner-only access)
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
 
