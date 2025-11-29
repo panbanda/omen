@@ -144,7 +144,7 @@ function main() {
 `,
 			filename:   "test.js",
 			lang:       parser.LangJavaScript,
-			wantDefs:   4, // unusedFunc, x, main, and possibly one more from parsing
+			wantDefs:   3, // unusedFunc, x, main
 			wantUsages: 3, // console, log, and possibly console.log
 			wantErr:    false,
 		},

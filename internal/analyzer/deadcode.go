@@ -274,6 +274,7 @@ func (a *DeadCodeAnalyzer) AnalyzeFile(path string) (*fileDeadCode, error) {
 }
 
 // analyzeFileDeadCode analyzes a single file with the provided parser.
+// Uses a single AST walk to collect all information for efficiency.
 func analyzeFileDeadCode(psr *parser.Parser, path string) (*fileDeadCode, error) {
 	result, err := psr.ParseFile(path)
 	if err != nil {
@@ -290,15 +291,220 @@ func analyzeFileDeadCode(psr *parser.Parser, path string) (*fileDeadCode, error)
 		unreachableBlocks: make([]models.UnreachableBlock, 0),
 	}
 
-	collectDefinitions(result, fdc)
-	collectUsages(result, fdc)
-	collectCalls(result, fdc)
-	collectTypeImplementations(result, fdc)
-
-	// Detect unreachable code blocks
-	fdc.unreachableBlocks = detectUnreachableBlocks(result)
+	// Single unified AST walk to collect all information
+	collectAllInSinglePass(result, fdc)
 
 	return fdc, nil
+}
+
+// collectAllInSinglePass performs a single AST walk to collect definitions, usages, calls,
+// type implementations, and unreachable code blocks. This is O(n) where n is AST nodes.
+func collectAllInSinglePass(result *parser.ParseResult, fdc *fileDeadCode) {
+	root := result.Tree.RootNode()
+	inTestFile := isTestFile(result.Path)
+	varTypes := getVariableNodeTypes(result.Language)
+	classTypes := getClassNodeTypes(result.Language)
+	identTypes := map[string]bool{"identifier": true, "type_identifier": true, "field_identifier": true}
+
+	// For tracking current function context (used by collectCalls)
+	var currentFunction string
+
+	// For Go type implementations (method tracking)
+	typeMethods := make(map[string][]string)
+
+	parser.Walk(root, result.Source, func(node *sitter.Node, source []byte) bool {
+		nodeType := node.Type()
+
+		// === DEFINITIONS ===
+		// Collect functions/methods
+		if isFunctionNode(nodeType, result.Language) {
+			nameNode := getFunctionNameNode(node, result.Language)
+			if nameNode != nil {
+				name := parser.GetNodeText(nameNode, source)
+				if name != "" {
+					isFFI := isFFIExported(node, source, result.Language)
+					receiverType := extractReceiverType(node, source, result.Language)
+
+					kind := "function"
+					if receiverType != "" {
+						kind = "method"
+						// Track method for Go type implementations
+						if result.Language == parser.LangGo {
+							typeMethods[receiverType] = append(typeMethods[receiverType], name)
+						}
+					}
+
+					line := node.StartPoint().Row + 1
+					endLine := node.EndPoint().Row + 1
+
+					fdc.definitions[name] = definition{
+						name:         name,
+						kind:         kind,
+						file:         result.Path,
+						line:         line,
+						endLine:      endLine,
+						visibility:   getVisibility(name, result.Language),
+						exported:     isExported(name, result.Language),
+						isFFI:        isFFI,
+						isTestFile:   inTestFile,
+						contextHash:  computeContextHash(name, result.Path, line, kind),
+						receiverType: receiverType,
+					}
+
+					// Update current function context for call tracking
+					currentFunction = name
+
+					// Check for unreachable code in function body
+					if bodyNode := getFunctionBody(node); bodyNode != nil {
+						unreachable := findUnreachableInBlock(bodyNode, source, result.Language, result.Path)
+						fdc.unreachableBlocks = append(fdc.unreachableBlocks, unreachable...)
+					}
+				}
+			}
+		}
+
+		// Collect variables
+		for _, vt := range varTypes {
+			if nodeType == vt {
+				name := extractVarName(node, source, result.Language)
+				if name != "" {
+					line := node.StartPoint().Row + 1
+					fdc.definitions[name] = definition{
+						name:        name,
+						kind:        "variable",
+						file:        result.Path,
+						line:        line,
+						endLine:     node.EndPoint().Row + 1,
+						visibility:  getVisibility(name, result.Language),
+						exported:    isExported(name, result.Language),
+						isTestFile:  inTestFile,
+						contextHash: computeContextHash(name, result.Path, line, "variable"),
+					}
+				}
+				break
+			}
+		}
+
+		// Collect classes/types
+		for _, ct := range classTypes {
+			if nodeType == ct {
+				name := extractClassName(node, source, result.Language)
+				if name != "" {
+					line := node.StartPoint().Row + 1
+					fdc.definitions[name] = definition{
+						name:        name,
+						kind:        "class",
+						file:        result.Path,
+						line:        line,
+						endLine:     node.EndPoint().Row + 1,
+						visibility:  getVisibility(name, result.Language),
+						exported:    isExported(name, result.Language),
+						isTestFile:  inTestFile,
+						contextHash: computeContextHash(name, result.Path, line, "class"),
+					}
+
+					// For Java/C#/TypeScript - collect interface implementations
+					if result.Language == parser.LangJava || result.Language == parser.LangCSharp {
+						if implements := node.ChildByFieldName("interfaces"); implements != nil {
+							for i := range int(implements.ChildCount()) {
+								child := implements.Child(i)
+								if child.Type() == "type_identifier" {
+									interfaceName := parser.GetNodeText(child, source)
+									fdc.typeImpls = append(fdc.typeImpls, typeImplementation{
+										typeName:      name,
+										interfaceName: interfaceName,
+									})
+								}
+							}
+						}
+					} else if result.Language == parser.LangTypeScript {
+						if heritage := node.ChildByFieldName("heritage"); heritage != nil {
+							collectTSHeritageClause(heritage, source, name, fdc)
+						}
+					}
+				}
+				break
+			}
+		}
+
+		// === USAGES ===
+		if identTypes[nodeType] {
+			name := parser.GetNodeText(node, source)
+			fdc.usages[name] = true
+		}
+
+		// Track call expressions for usages
+		if nodeType == "call_expression" || nodeType == "function_call" {
+			if fnNode := node.ChildByFieldName("function"); fnNode != nil {
+				name := parser.GetNodeText(fnNode, source)
+				fdc.usages[name] = true
+			}
+		}
+
+		// === CALLS ===
+		// Detect function calls
+		if nodeType == "call_expression" || nodeType == "function_call" || nodeType == "invocation_expression" {
+			callee, receiver := extractCalleeWithReceiver(node, source, result.Language)
+			if callee != "" && currentFunction != "" {
+				refType := models.RefDirectCall
+				if receiver != "" {
+					refType = models.RefDynamicDispatch
+				}
+				fdc.calls = append(fdc.calls, callReference{
+					caller:   currentFunction,
+					callee:   callee,
+					line:     node.StartPoint().Row + 1,
+					refType:  refType,
+					receiver: receiver,
+				})
+			}
+		}
+
+		// Detect imports
+		if nodeType == "import_declaration" || nodeType == "import_statement" ||
+			nodeType == "use_declaration" || nodeType == "using_directive" {
+			importName := extractImportName(node, source, result.Language)
+			if importName != "" {
+				fdc.calls = append(fdc.calls, callReference{
+					caller:  "",
+					callee:  importName,
+					line:    node.StartPoint().Row + 1,
+					refType: models.RefImport,
+				})
+			}
+		}
+
+		return true
+	})
+
+	// Finalize Go type implementations from collected method data
+	if result.Language == parser.LangGo {
+		for typeName, methods := range typeMethods {
+			fdc.typeImpls = append(fdc.typeImpls, typeImplementation{
+				typeName: typeName,
+				methods:  methods,
+			})
+		}
+	}
+}
+
+// collectTSHeritageClause extracts interface implementations from TypeScript heritage clause.
+func collectTSHeritageClause(heritage *sitter.Node, source []byte, className string, fdc *fileDeadCode) {
+	parser.Walk(heritage, source, func(child *sitter.Node, _ []byte) bool {
+		if child.Type() == "implements_clause" {
+			for i := range int(child.ChildCount()) {
+				typeNode := child.Child(i)
+				if typeNode.Type() == "type_identifier" {
+					interfaceName := parser.GetNodeText(typeNode, source)
+					fdc.typeImpls = append(fdc.typeImpls, typeImplementation{
+						typeName:      className,
+						interfaceName: interfaceName,
+					})
+				}
+			}
+		}
+		return true
+	})
 }
 
 type fileDeadCode struct {
@@ -341,54 +547,54 @@ type typeImplementation struct {
 }
 
 // collectDefinitions finds all function, variable, and class definitions.
+// Uses a single AST walk to collect all information efficiently.
 func collectDefinitions(result *parser.ParseResult, fdc *fileDeadCode) {
 	root := result.Tree.RootNode()
 	inTestFile := isTestFile(result.Path)
+	varTypes := getVariableNodeTypes(result.Language)
+	classTypes := getClassNodeTypes(result.Language)
 
-	// Collect functions with FFI detection
-	functions := parser.GetFunctions(result)
-	for _, fn := range functions {
-		// Check for FFI export by finding the function node
-		isFFI := false
-		receiverType := ""
-		parser.Walk(root, result.Source, func(node *sitter.Node, source []byte) bool {
-			if isFunctionNode(node.Type(), result.Language) {
-				if nameNode := getFunctionNameNode(node, result.Language); nameNode != nil {
-					if parser.GetNodeText(nameNode, source) == fn.Name {
-						isFFI = isFFIExported(node, source, result.Language)
-						receiverType = extractReceiverType(node, source, result.Language)
-						return false // Stop walking
+	// Single AST walk to collect functions, variables, and classes
+	parser.Walk(root, result.Source, func(node *sitter.Node, source []byte) bool {
+		nodeType := node.Type()
+
+		// Collect functions/methods
+		if isFunctionNode(nodeType, result.Language) {
+			nameNode := getFunctionNameNode(node, result.Language)
+			if nameNode != nil {
+				name := parser.GetNodeText(nameNode, source)
+				if name != "" {
+					isFFI := isFFIExported(node, source, result.Language)
+					receiverType := extractReceiverType(node, source, result.Language)
+
+					kind := "function"
+					if receiverType != "" {
+						kind = "method"
+					}
+
+					line := node.StartPoint().Row + 1
+					endLine := node.EndPoint().Row + 1
+
+					fdc.definitions[name] = definition{
+						name:         name,
+						kind:         kind,
+						file:         result.Path,
+						line:         line,
+						endLine:      endLine,
+						visibility:   getVisibility(name, result.Language),
+						exported:     isExported(name, result.Language),
+						isFFI:        isFFI,
+						isTestFile:   inTestFile,
+						contextHash:  computeContextHash(name, result.Path, line, kind),
+						receiverType: receiverType,
 					}
 				}
 			}
-			return true
-		})
-
-		kind := "function"
-		if receiverType != "" {
-			kind = "method"
 		}
 
-		fdc.definitions[fn.Name] = definition{
-			name:         fn.Name,
-			kind:         kind,
-			file:         result.Path,
-			line:         fn.StartLine,
-			endLine:      fn.EndLine,
-			visibility:   getVisibility(fn.Name, result.Language),
-			exported:     isExported(fn.Name, result.Language),
-			isFFI:        isFFI,
-			isTestFile:   inTestFile,
-			contextHash:  computeContextHash(fn.Name, result.Path, fn.StartLine, kind),
-			receiverType: receiverType,
-		}
-	}
-
-	// Collect variables
-	varTypes := getVariableNodeTypes(result.Language)
-	parser.Walk(root, result.Source, func(node *sitter.Node, source []byte) bool {
+		// Collect variables
 		for _, vt := range varTypes {
-			if node.Type() == vt {
+			if nodeType == vt {
 				name := extractVarName(node, source, result.Language)
 				if name != "" {
 					line := node.StartPoint().Row + 1
@@ -404,23 +610,13 @@ func collectDefinitions(result *parser.ParseResult, fdc *fileDeadCode) {
 						contextHash: computeContextHash(name, result.Path, line, "variable"),
 					}
 				}
+				break
 			}
 		}
-		return true
-	})
 
-	// Collect classes/types
-	collectClasses(result, fdc, inTestFile)
-}
-
-// collectClasses finds class/struct/type definitions.
-func collectClasses(result *parser.ParseResult, fdc *fileDeadCode, inTestFile bool) {
-	root := result.Tree.RootNode()
-	classTypes := getClassNodeTypes(result.Language)
-
-	parser.Walk(root, result.Source, func(node *sitter.Node, source []byte) bool {
+		// Collect classes/types
 		for _, ct := range classTypes {
-			if node.Type() == ct {
+			if nodeType == ct {
 				name := extractClassName(node, source, result.Language)
 				if name != "" {
 					line := node.StartPoint().Row + 1
@@ -436,8 +632,10 @@ func collectClasses(result *parser.ParseResult, fdc *fileDeadCode, inTestFile bo
 						contextHash: computeContextHash(name, result.Path, line, "class"),
 					}
 				}
+				break
 			}
 		}
+
 		return true
 	})
 }
@@ -524,167 +722,6 @@ func collectUsages(result *parser.ParseResult, fdc *fileDeadCode) {
 	})
 }
 
-// collectCalls extracts function call relationships for the call graph.
-func collectCalls(result *parser.ParseResult, fdc *fileDeadCode) {
-	root := result.Tree.RootNode()
-
-	// Find the enclosing function for each call
-	var currentFunction string
-
-	parser.Walk(root, result.Source, func(node *sitter.Node, source []byte) bool {
-		nodeType := node.Type()
-
-		// Track which function we're inside
-		if isFunctionNode(nodeType, result.Language) {
-			if nameNode := getFunctionNameNode(node, result.Language); nameNode != nil {
-				currentFunction = parser.GetNodeText(nameNode, source)
-			}
-		}
-
-		// Detect function calls
-		if nodeType == "call_expression" || nodeType == "function_call" || nodeType == "invocation_expression" {
-			callee, receiver := extractCalleeWithReceiver(node, source, result.Language)
-			if callee != "" && currentFunction != "" {
-				refType := models.RefDirectCall
-				if receiver != "" {
-					refType = models.RefDynamicDispatch // Could be virtual call
-				}
-				fdc.calls = append(fdc.calls, callReference{
-					caller:   currentFunction,
-					callee:   callee,
-					line:     node.StartPoint().Row + 1,
-					refType:  refType,
-					receiver: receiver,
-				})
-			}
-		}
-
-		// Detect imports
-		if nodeType == "import_declaration" || nodeType == "import_statement" ||
-			nodeType == "use_declaration" || nodeType == "using_directive" {
-			importName := extractImportName(node, source, result.Language)
-			if importName != "" {
-				fdc.calls = append(fdc.calls, callReference{
-					caller:  "",
-					callee:  importName,
-					line:    node.StartPoint().Row + 1,
-					refType: models.RefImport,
-				})
-			}
-		}
-
-		return true
-	})
-}
-
-// collectTypeImplementations finds interface implementations for VTable resolution.
-func collectTypeImplementations(result *parser.ParseResult, fdc *fileDeadCode) {
-	// Language-specific implementation collection
-	switch result.Language {
-	case parser.LangGo:
-		collectGoTypeImplementations(result, fdc)
-	case parser.LangJava, parser.LangCSharp:
-		collectOOPTypeImplementations(result, fdc)
-	case parser.LangTypeScript:
-		collectTSTypeImplementations(result, fdc)
-	}
-}
-
-// collectGoTypeImplementations finds Go interface implementations.
-func collectGoTypeImplementations(result *parser.ParseResult, fdc *fileDeadCode) {
-	// Go uses structural typing - track methods per type
-	root := result.Tree.RootNode()
-	typeMethods := make(map[string][]string)
-
-	parser.Walk(root, result.Source, func(node *sitter.Node, source []byte) bool {
-		if node.Type() == "method_declaration" {
-			if receiver := node.ChildByFieldName("receiver"); receiver != nil {
-				receiverType := ""
-				for i := range int(receiver.ChildCount()) {
-					child := receiver.Child(i)
-					if child.Type() == "parameter_declaration" {
-						if typeNode := child.ChildByFieldName("type"); typeNode != nil {
-							receiverType = strings.TrimPrefix(parser.GetNodeText(typeNode, source), "*")
-						}
-					}
-				}
-				if receiverType != "" {
-					if nameNode := getFunctionNameNode(node, result.Language); nameNode != nil {
-						methodName := parser.GetNodeText(nameNode, source)
-						typeMethods[receiverType] = append(typeMethods[receiverType], methodName)
-					}
-				}
-			}
-		}
-		return true
-	})
-
-	// Store for later VTable registration
-	for typeName, methods := range typeMethods {
-		fdc.typeImpls = append(fdc.typeImpls, typeImplementation{
-			typeName: typeName,
-			methods:  methods,
-		})
-	}
-}
-
-// collectOOPTypeImplementations finds Java/C# style interface implementations.
-func collectOOPTypeImplementations(result *parser.ParseResult, fdc *fileDeadCode) {
-	root := result.Tree.RootNode()
-
-	parser.Walk(root, result.Source, func(node *sitter.Node, source []byte) bool {
-		if node.Type() == "class_declaration" {
-			className := extractClassName(node, source, result.Language)
-
-			// Look for implements clause
-			if implements := node.ChildByFieldName("interfaces"); implements != nil {
-				for i := range int(implements.ChildCount()) {
-					child := implements.Child(i)
-					if child.Type() == "type_identifier" {
-						interfaceName := parser.GetNodeText(child, source)
-						fdc.typeImpls = append(fdc.typeImpls, typeImplementation{
-							typeName:      className,
-							interfaceName: interfaceName,
-						})
-					}
-				}
-			}
-		}
-		return true
-	})
-}
-
-// collectTSTypeImplementations finds TypeScript interface implementations.
-func collectTSTypeImplementations(result *parser.ParseResult, fdc *fileDeadCode) {
-	root := result.Tree.RootNode()
-
-	parser.Walk(root, result.Source, func(node *sitter.Node, source []byte) bool {
-		if node.Type() == "class_declaration" {
-			className := extractClassName(node, source, result.Language)
-
-			// Look for implements clause in heritage
-			if heritage := node.ChildByFieldName("heritage"); heritage != nil {
-				parser.Walk(heritage, source, func(child *sitter.Node, _ []byte) bool {
-					if child.Type() == "implements_clause" {
-						for i := range int(child.ChildCount()) {
-							typeNode := child.Child(i)
-							if typeNode.Type() == "type_identifier" {
-								interfaceName := parser.GetNodeText(typeNode, source)
-								fdc.typeImpls = append(fdc.typeImpls, typeImplementation{
-									typeName:      className,
-									interfaceName: interfaceName,
-								})
-							}
-						}
-					}
-					return true
-				})
-			}
-		}
-		return true
-	})
-}
-
 // extractCalleeWithReceiver extracts the function name and receiver type being called.
 func extractCalleeWithReceiver(node *sitter.Node, source []byte, _ parser.Language) (callee, receiver string) {
 	if fnNode := node.ChildByFieldName("function"); fnNode != nil {
@@ -731,26 +768,6 @@ func isFunctionNode(nodeType string, _ parser.Language) bool {
 		"lambda_expression":       true,
 	}
 	return functionTypes[nodeType]
-}
-
-// detectUnreachableBlocks finds code blocks that cannot be reached.
-func detectUnreachableBlocks(result *parser.ParseResult) []models.UnreachableBlock {
-	var blocks []models.UnreachableBlock
-	root := result.Tree.RootNode()
-
-	parser.Walk(root, result.Source, func(node *sitter.Node, source []byte) bool {
-		// Look for function bodies
-		if isFunctionNode(node.Type(), result.Language) {
-			bodyNode := getFunctionBody(node)
-			if bodyNode != nil {
-				unreachable := findUnreachableInBlock(bodyNode, source, result.Language, result.Path)
-				blocks = append(blocks, unreachable...)
-			}
-		}
-		return true
-	})
-
-	return blocks
 }
 
 // getFunctionBody returns the body node of a function.
@@ -1313,7 +1330,13 @@ func (a *DeadCodeAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress
 	}
 
 	// Build legacy CallGraph for output compatibility
-	analysis.CallGraph = a.buildLegacyCallGraph(allDefs, allCalls)
+	if a.buildGraph {
+		// Reuse data from a.references (already built)
+		analysis.CallGraph = a.convertReferencesToCallGraph()
+	} else {
+		// Build from scratch for fallback mode
+		analysis.CallGraph = a.buildCallGraphFromData(allDefs, allCalls)
+	}
 
 	analysis.Summary.CalculatePercentage()
 	analysis.Summary.ConfidenceLevel = 0.85
@@ -1549,8 +1572,37 @@ func (a *DeadCodeAnalyzer) calculateConfidenceWithCoverage(def definition) float
 	return confidence
 }
 
-// buildLegacyCallGraph builds a CallGraph for output compatibility.
-func (a *DeadCodeAnalyzer) buildLegacyCallGraph(defs map[string]definition, calls []callReference) *models.CallGraph {
+// convertReferencesToCallGraph converts the internal reference graph to a CallGraph.
+// This is O(n) where n is nodes+edges, avoiding duplicate work.
+func (a *DeadCodeAnalyzer) convertReferencesToCallGraph() *models.CallGraph {
+	graph := models.NewCallGraph()
+
+	a.references.mu.RLock()
+	defer a.references.mu.RUnlock()
+
+	// Copy nodes
+	for id, node := range a.references.Nodes {
+		graph.Nodes[id] = node
+		if node.IsEntry {
+			graph.EntryPoints = append(graph.EntryPoints, id)
+		}
+	}
+
+	// Copy edges and build index
+	graph.Edges = make([]models.ReferenceEdge, len(a.references.Edges))
+	copy(graph.Edges, a.references.Edges)
+
+	// Copy edge index
+	for nodeID, indices := range a.references.EdgeIndex {
+		graph.EdgeIndex[nodeID] = make([]int, len(indices))
+		copy(graph.EdgeIndex[nodeID], indices)
+	}
+
+	return graph
+}
+
+// buildCallGraphFromData builds a CallGraph from definitions and calls (fallback mode).
+func (a *DeadCodeAnalyzer) buildCallGraphFromData(defs map[string]definition, calls []callReference) *models.CallGraph {
 	graph := models.NewCallGraph()
 
 	// Create name to nodeID mapping
