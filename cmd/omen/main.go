@@ -443,7 +443,7 @@ func runSATDCmd(c *cli.Context) error {
 
 	var satdOpts []analyzer.SATDOption
 	if !includeTest {
-		satdOpts = append(satdOpts, analyzer.WithSATDExcludeTests())
+		satdOpts = append(satdOpts, analyzer.WithSATDSkipTests())
 	}
 	satdAnalyzer := analyzer.NewSATDAnalyzer(satdOpts...)
 	for _, p := range patterns {

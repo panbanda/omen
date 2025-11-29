@@ -1002,7 +1002,7 @@ func TestAnalyzeFile_SpecialPatterns(t *testing.T) {
 
 func TestNewSATDAnalyzerWithOptions(t *testing.T) {
 	analyzer := NewSATDAnalyzer(
-		WithSATDExcludeTests(),
+		WithSATDSkipTests(),
 	)
 	if analyzer == nil {
 		t.Fatal("NewSATDAnalyzer returned nil")
@@ -1062,7 +1062,7 @@ func TestSATD_TestFileExclusion(t *testing.T) {
 
 	// With test exclusion enabled
 	analyzerNoTests := NewSATDAnalyzer(
-		WithSATDExcludeTests(),
+		WithSATDSkipTests(),
 		WithSATDSkipSeverityAdjustment(),
 	)
 	debtsNoTests, err := analyzerNoTests.AnalyzeFile(testFile)
@@ -2420,7 +2420,7 @@ func TestAnalyzeDirectory(t *testing.T) {
 
 	// With test files excluded
 	analyzerNoTests := NewSATDAnalyzer(
-		WithSATDExcludeTests(),
+		WithSATDSkipTests(),
 		WithSATDSkipSeverityAdjustment(),
 	)
 	resultNoTests, err := analyzerNoTests.AnalyzeProject([]string{mainFile, helperFile})
@@ -2741,7 +2741,7 @@ func TestDebtEvolution(t *testing.T) {
 	}
 
 	analyzer := NewSATDAnalyzer(
-		WithSATDExcludeTests(),
+		WithSATDSkipTests(),
 		WithSATDSkipSeverityAdjustment(),
 	)
 
@@ -3582,7 +3582,7 @@ func DoWork() error {
 		t.Run(tt.name, func(t *testing.T) {
 			var opts []SATDOption
 			if !tt.includeTests {
-				opts = append(opts, WithSATDExcludeTests())
+				opts = append(opts, WithSATDSkipTests())
 			}
 			analyzer := NewSATDAnalyzer(opts...)
 
@@ -4256,7 +4256,7 @@ func TestCollectFilesRecursiveSkipsTestFiles(t *testing.T) {
 
 	// Test with IncludeTests=false (should skip test files)
 	analyzer := NewSATDAnalyzer(
-		WithSATDExcludeTests(),
+		WithSATDSkipTests(),
 		WithSATDSkipSeverityAdjustment(),
 	)
 

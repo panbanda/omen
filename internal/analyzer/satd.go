@@ -58,9 +58,9 @@ type AstContext struct {
 // SATDOption is a functional option for configuring SATDAnalyzer.
 type SATDOption func(*SATDAnalyzer)
 
-// WithSATDExcludeTests excludes test files from analysis.
+// WithSATDSkipTests excludes test files from analysis.
 // By default, test files are included.
-func WithSATDExcludeTests() SATDOption {
+func WithSATDSkipTests() SATDOption {
 	return func(a *SATDAnalyzer) {
 		a.includeTests = false
 	}

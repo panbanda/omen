@@ -278,7 +278,7 @@ func handleAnalyzeSATD(ctx context.Context, req *mcp.CallToolRequest, input SATD
 
 	var satdOpts []analyzer.SATDOption
 	if !input.IncludeTests {
-		satdOpts = append(satdOpts, analyzer.WithSATDExcludeTests())
+		satdOpts = append(satdOpts, analyzer.WithSATDSkipTests())
 	}
 	if input.StrictMode {
 		satdOpts = append(satdOpts, analyzer.WithSATDStrictMode())
