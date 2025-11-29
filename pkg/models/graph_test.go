@@ -284,3 +284,205 @@ func TestDependencyGraph_ComplexScenario(t *testing.T) {
 		t.Error("Mermaid output should start with 'graph TD'")
 	}
 }
+
+func TestToMermaidWithOptions(t *testing.T) {
+	t.Run("custom direction", func(t *testing.T) {
+		g := NewDependencyGraph()
+		g.AddNode(GraphNode{ID: "a", Name: "A"})
+
+		opts := MermaidOptions{Direction: DirectionLR}
+		mermaid := g.ToMermaidWithOptions(opts)
+
+		if !strings.HasPrefix(mermaid, "graph LR") {
+			t.Errorf("Expected 'graph LR', got %s", mermaid)
+		}
+	})
+
+	t.Run("max nodes pruning", func(t *testing.T) {
+		g := NewDependencyGraph()
+		g.AddNode(GraphNode{ID: "a", Name: "A"})
+		g.AddNode(GraphNode{ID: "b", Name: "B"})
+		g.AddNode(GraphNode{ID: "c", Name: "C"})
+		g.AddEdge(GraphEdge{From: "a", To: "b", Type: EdgeCall})
+		g.AddEdge(GraphEdge{From: "b", To: "c", Type: EdgeCall})
+
+		opts := MermaidOptions{MaxNodes: 2}
+		mermaid := g.ToMermaidWithOptions(opts)
+
+		// Should only contain 2 nodes
+		if strings.Contains(mermaid, `c["C"]`) {
+			t.Error("Should not contain third node when MaxNodes=2")
+		}
+	})
+
+	t.Run("max edges pruning", func(t *testing.T) {
+		g := NewDependencyGraph()
+		g.AddNode(GraphNode{ID: "a", Name: "A"})
+		g.AddNode(GraphNode{ID: "b", Name: "B"})
+		g.AddEdge(GraphEdge{From: "a", To: "b", Type: EdgeCall})
+		g.AddEdge(GraphEdge{From: "b", To: "a", Type: EdgeCall})
+
+		opts := MermaidOptions{MaxEdges: 1}
+		mermaid := g.ToMermaidWithOptions(opts)
+
+		// Count edge occurrences
+		count := strings.Count(mermaid, "-->|calls|")
+		if count > 1 {
+			t.Errorf("Expected at most 1 edge, got %d", count)
+		}
+	})
+
+	t.Run("show complexity styling", func(t *testing.T) {
+		g := NewDependencyGraph()
+		g.AddNode(GraphNode{ID: "simple", Name: "Simple"})
+		g.AddNode(GraphNode{ID: "complex", Name: "Complex"})
+
+		opts := MermaidOptions{
+			ShowComplexity: true,
+			NodeComplexity: map[string]int{
+				"simple":  2,
+				"complex": 15,
+			},
+		}
+		mermaid := g.ToMermaidWithOptions(opts)
+
+		if !strings.Contains(mermaid, ":::low") {
+			t.Error("Should contain low complexity class")
+		}
+		if !strings.Contains(mermaid, ":::critical") {
+			t.Error("Should contain critical complexity class")
+		}
+		if !strings.Contains(mermaid, "fill:#90EE90") {
+			t.Error("Should contain green color for low complexity")
+		}
+		if !strings.Contains(mermaid, "fill:#FF6347") {
+			t.Error("Should contain red color for high complexity")
+		}
+	})
+
+	t.Run("empty direction uses default", func(t *testing.T) {
+		g := NewDependencyGraph()
+		g.AddNode(GraphNode{ID: "a", Name: "A"})
+
+		opts := MermaidOptions{Direction: ""}
+		mermaid := g.ToMermaidWithOptions(opts)
+
+		if !strings.HasPrefix(mermaid, "graph TD") {
+			t.Errorf("Expected default 'graph TD', got %s", mermaid)
+		}
+	})
+}
+
+func TestEdgeArrow(t *testing.T) {
+	tests := []struct {
+		edgeType EdgeType
+		expected string
+	}{
+		{EdgeCall, "-->|calls|"},
+		{EdgeImport, "-.->|imports|"},
+		{EdgeInherit, "-->|inherits|"},
+		{EdgeImplement, "-->|implements|"},
+		{EdgeUses, "---"},
+		{EdgeType("unknown"), "-->"},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.edgeType), func(t *testing.T) {
+			got := edgeArrow(tt.edgeType)
+			if got != tt.expected {
+				t.Errorf("edgeArrow(%v) = %v, want %v", tt.edgeType, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestComplexityColor(t *testing.T) {
+	tests := []struct {
+		complexity int
+		expected   string
+	}{
+		{1, "#90EE90"},  // Light green
+		{3, "#90EE90"},  // Light green
+		{4, "#FFD700"},  // Gold
+		{7, "#FFD700"},  // Gold
+		{8, "#FFA500"},  // Orange
+		{12, "#FFA500"}, // Orange
+		{13, "#FF6347"}, // Tomato red
+		{50, "#FF6347"}, // Tomato red
+	}
+
+	for _, tt := range tests {
+		t.Run("", func(t *testing.T) {
+			got := complexityColor(tt.complexity)
+			if got != tt.expected {
+				t.Errorf("complexityColor(%d) = %v, want %v", tt.complexity, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestComplexityClass(t *testing.T) {
+	tests := []struct {
+		complexity int
+		expected   string
+	}{
+		{1, "low"},
+		{3, "low"},
+		{4, "medium"},
+		{7, "medium"},
+		{8, "high"},
+		{12, "high"},
+		{13, "critical"},
+		{50, "critical"},
+	}
+
+	for _, tt := range tests {
+		t.Run("", func(t *testing.T) {
+			got := complexityClass(tt.complexity)
+			if got != tt.expected {
+				t.Errorf("complexityClass(%d) = %v, want %v", tt.complexity, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestEscapeMermaidLabel(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"plain text", "hello", "hello"},
+		{"ampersand", "A & B", "A &amp; B"},
+		{"quotes", `say "hi"`, "say &quot;hi&quot;"},
+		{"less than", "a < b", "a &lt; b"},
+		{"greater than", "a > b", "a &gt; b"},
+		{"mixed", `"<>&`, "&quot;&lt;&gt;&amp;"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := EscapeMermaidLabel(tt.input)
+			if got != tt.expected {
+				t.Errorf("EscapeMermaidLabel(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestSanitizeMermaidID_StartsWithNumber(t *testing.T) {
+	result := SanitizeMermaidID("123abc")
+	if result[0] == '1' {
+		t.Errorf("SanitizeMermaidID should prefix IDs starting with numbers, got %q", result)
+	}
+	if result != "n123abc" {
+		t.Errorf("SanitizeMermaidID(\"123abc\") = %q, want \"n123abc\"", result)
+	}
+}
+
+func TestSanitizeMermaidID_Empty(t *testing.T) {
+	result := SanitizeMermaidID("")
+	if result != "empty" {
+		t.Errorf("SanitizeMermaidID(\"\") = %q, want \"empty\"", result)
+	}
+}

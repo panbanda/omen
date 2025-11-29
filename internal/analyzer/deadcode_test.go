@@ -1837,3 +1837,97 @@ func main() {}
 		t.Error("definition in normal file should have isTestFile = false")
 	}
 }
+
+func TestVTableResolver(t *testing.T) {
+	v := NewVTableResolver()
+
+	// Register types with their methods
+	v.RegisterType("Dog", "Animal", map[string]uint32{"speak": 1, "move": 2})
+	v.RegisterType("Cat", "Animal", map[string]uint32{"speak": 3, "move": 4})
+
+	// Register that both Dog and Cat implement the Speaker interface
+	v.RegisterImplementation("Speaker", "Dog")
+	v.RegisterImplementation("Speaker", "Cat")
+
+	// Resolve dynamic call for Speaker.speak
+	targets := v.ResolveDynamicCall("Speaker", "speak")
+	if len(targets) != 2 {
+		t.Errorf("ResolveDynamicCall returned %d targets, want 2", len(targets))
+	}
+
+	// Resolve dynamic call for non-existent interface
+	targets = v.ResolveDynamicCall("Unknown", "method")
+	if len(targets) != 0 {
+		t.Errorf("ResolveDynamicCall for unknown interface returned %d targets, want 0", len(targets))
+	}
+
+	// Resolve dynamic call for non-existent method
+	targets = v.ResolveDynamicCall("Speaker", "unknown")
+	if len(targets) != 0 {
+		t.Errorf("ResolveDynamicCall for unknown method returned %d targets, want 0", len(targets))
+	}
+}
+
+func TestCoverageData(t *testing.T) {
+	cov := NewCoverageData()
+
+	// Initially nothing is covered
+	if cov.IsLineCovered("test.go", 10) {
+		t.Error("line should not be covered initially")
+	}
+
+	// Add coverage data
+	cov.CoveredLines["test.go"] = map[uint32]bool{10: true, 20: true}
+	cov.ExecutionCounts["test.go"] = map[uint32]int64{10: 5, 20: 3}
+
+	if !cov.IsLineCovered("test.go", 10) {
+		t.Error("line 10 should be covered")
+	}
+	if cov.IsLineCovered("test.go", 15) {
+		t.Error("line 15 should not be covered")
+	}
+	if cov.IsLineCovered("other.go", 10) {
+		t.Error("line in other file should not be covered")
+	}
+
+	if cov.GetExecutionCount("test.go", 10) != 5 {
+		t.Errorf("execution count = %d, want 5", cov.GetExecutionCount("test.go", 10))
+	}
+	if cov.GetExecutionCount("test.go", 15) != 0 {
+		t.Errorf("execution count for uncovered line = %d, want 0", cov.GetExecutionCount("test.go", 15))
+	}
+	if cov.GetExecutionCount("other.go", 10) != 0 {
+		t.Errorf("execution count for other file = %d, want 0", cov.GetExecutionCount("other.go", 10))
+	}
+}
+
+func TestDeadCodeAnalyzerOptions(t *testing.T) {
+	t.Run("WithDeadCodeCoverage", func(t *testing.T) {
+		cov := NewCoverageData()
+		a := NewDeadCodeAnalyzer(WithDeadCodeCoverage(cov))
+		defer a.Close()
+
+		if a.coverageData != cov {
+			t.Error("coverage data not set correctly")
+		}
+	})
+
+	t.Run("WithDeadCodeCapacity", func(t *testing.T) {
+		a := NewDeadCodeAnalyzer(WithDeadCodeCapacity(1000))
+		defer a.Close()
+
+		// Just verify it doesn't panic
+		if a.reachability == nil {
+			t.Error("reachability should not be nil")
+		}
+	})
+
+	t.Run("WithDeadCodeMaxFileSize", func(t *testing.T) {
+		a := NewDeadCodeAnalyzer(WithDeadCodeMaxFileSize(1024))
+		defer a.Close()
+
+		if a.maxFileSize != 1024 {
+			t.Errorf("maxFileSize = %d, want 1024", a.maxFileSize)
+		}
+	})
+}

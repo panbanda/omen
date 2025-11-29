@@ -134,3 +134,25 @@ func TestClassMetrics_Fields(t *testing.T) {
 		t.Errorf("Methods count = %d, want 3", len(cm.Methods))
 	}
 }
+
+func TestCohesionAnalysis_SortByDIT(t *testing.T) {
+	analysis := &CohesionAnalysis{
+		Classes: []ClassMetrics{
+			{ClassName: "Shallow", DIT: 1},
+			{ClassName: "Deep", DIT: 5},
+			{ClassName: "Medium", DIT: 3},
+		},
+	}
+
+	analysis.SortByDIT()
+
+	if analysis.Classes[0].ClassName != "Deep" {
+		t.Errorf("First class should be 'Deep', got %q", analysis.Classes[0].ClassName)
+	}
+	if analysis.Classes[1].ClassName != "Medium" {
+		t.Errorf("Second class should be 'Medium', got %q", analysis.Classes[1].ClassName)
+	}
+	if analysis.Classes[2].ClassName != "Shallow" {
+		t.Errorf("Third class should be 'Shallow', got %q", analysis.Classes[2].ClassName)
+	}
+}

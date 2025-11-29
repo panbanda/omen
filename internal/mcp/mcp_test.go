@@ -672,3 +672,50 @@ func TestFormatOutput(t *testing.T) {
 		})
 	}
 }
+
+// TestFindGitRoot tests git root finding.
+func TestFindGitRoot(t *testing.T) {
+	// Test with non-git directory - should return error
+	tmpDir := t.TempDir()
+	result, err := findGitRoot(tmpDir)
+	if err == nil {
+		t.Error("findGitRoot() on non-git dir should return error")
+	}
+	if result != "" {
+		t.Errorf("findGitRoot() on non-git dir should return empty string, got %q", result)
+	}
+
+	// Test with mock .git directory (note: go-git needs a real git repo)
+	// Just test the error case for now
+}
+
+// TestToolResultTextFormat tests text format output.
+func TestToolResultTextFormat(t *testing.T) {
+	data := map[string]interface{}{
+		"key": "value",
+	}
+	result, _, err := toolResult(data, output.FormatText)
+	if err != nil {
+		t.Fatalf("toolResult returned error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("toolResult returned nil")
+	}
+}
+
+// TestScanFilesWithFile tests scanning a single file.
+func TestScanFilesWithFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	goFile := filepath.Join(tmpDir, "test.go")
+	if err := os.WriteFile(goFile, []byte("package main"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	files, err := scanFiles([]string{goFile})
+	if err != nil {
+		t.Errorf("scanFiles should not error on valid file: %v", err)
+	}
+	if len(files) != 1 {
+		t.Errorf("Expected 1 file, got %d", len(files))
+	}
+}
