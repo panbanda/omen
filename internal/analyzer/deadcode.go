@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -920,7 +921,7 @@ func isTerminatingStatement(node *sitter.Node, source []byte, lang parser.Langua
 
 // getUnreachableReason returns a human-readable reason for unreachable code.
 func getUnreachableReason(terminatorLine uint32) string {
-	return "Code after terminating statement at line " + string(rune(terminatorLine))
+	return fmt.Sprintf("Code after terminating statement at line %d", terminatorLine)
 }
 
 // getFunctionNameNode returns the name node of a function.

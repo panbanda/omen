@@ -315,10 +315,10 @@ type ReferenceNode struct {
 
 // CallGraph represents the reference graph for reachability analysis.
 type CallGraph struct {
-	Nodes       map[uint32]*ReferenceNode `json:"nodes"`
-	Edges       []ReferenceEdge           `json:"edges"`
-	EntryPoints []uint32                  `json:"entry_points"`
-	EdgeIndex   map[uint32][]int          `json:"-"` // node -> edge indices (outgoing)
+	Nodes       map[uint32]*ReferenceNode `json:"nodes" toon:"-"`
+	Edges       []ReferenceEdge           `json:"edges" toon:"edges"`
+	EntryPoints []uint32                  `json:"entry_points" toon:"entry_points"`
+	EdgeIndex   map[uint32][]int          `json:"-" toon:"-"` // node -> edge indices (outgoing)
 }
 
 // NewCallGraph creates an initialized call graph.
@@ -412,20 +412,20 @@ type UnreachableBlock struct {
 
 // DeadCodeSummary provides aggregate statistics.
 type DeadCodeSummary struct {
-	TotalDeadFunctions     int                  `json:"total_dead_functions"`
-	TotalDeadVariables     int                  `json:"total_dead_variables"`
-	TotalDeadClasses       int                  `json:"total_dead_classes"`
-	TotalUnreachableBlocks int                  `json:"total_unreachable_blocks"`
-	TotalUnreachableLines  int                  `json:"total_unreachable_lines"`
-	DeadCodePercentage     float64              `json:"dead_code_percentage"`
-	ByFile                 map[string]int       `json:"by_file"`
-	ByKind                 map[DeadCodeKind]int `json:"by_kind,omitempty"`
-	TotalFilesAnalyzed     int                  `json:"total_files_analyzed"`
-	TotalLinesAnalyzed     int                  `json:"total_lines_analyzed"`
-	TotalNodesInGraph      int                  `json:"total_nodes_in_graph,omitempty"`
-	ReachableNodes         int                  `json:"reachable_nodes,omitempty"`
-	UnreachableNodes       int                  `json:"unreachable_nodes,omitempty"`
-	ConfidenceLevel        float64              `json:"confidence_level,omitempty"`
+	TotalDeadFunctions     int                  `json:"total_dead_functions" toon:"total_dead_functions"`
+	TotalDeadVariables     int                  `json:"total_dead_variables" toon:"total_dead_variables"`
+	TotalDeadClasses       int                  `json:"total_dead_classes" toon:"total_dead_classes"`
+	TotalUnreachableBlocks int                  `json:"total_unreachable_blocks" toon:"total_unreachable_blocks"`
+	TotalUnreachableLines  int                  `json:"total_unreachable_lines" toon:"total_unreachable_lines"`
+	DeadCodePercentage     float64              `json:"dead_code_percentage" toon:"dead_code_percentage"`
+	ByFile                 map[string]int       `json:"by_file" toon:"by_file"`
+	ByKind                 map[DeadCodeKind]int `json:"by_kind,omitempty" toon:"-"`
+	TotalFilesAnalyzed     int                  `json:"total_files_analyzed" toon:"total_files_analyzed"`
+	TotalLinesAnalyzed     int                  `json:"total_lines_analyzed" toon:"total_lines_analyzed"`
+	TotalNodesInGraph      int                  `json:"total_nodes_in_graph,omitempty" toon:"total_nodes_in_graph,omitempty"`
+	ReachableNodes         int                  `json:"reachable_nodes,omitempty" toon:"reachable_nodes,omitempty"`
+	UnreachableNodes       int                  `json:"unreachable_nodes,omitempty" toon:"unreachable_nodes,omitempty"`
+	ConfidenceLevel        float64              `json:"confidence_level,omitempty" toon:"confidence_level,omitempty"`
 }
 
 // NewDeadCodeSummary creates an initialized summary.
