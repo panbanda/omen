@@ -65,7 +65,7 @@ When developers write `TODO: fix this later` or `HACK: this is terrible but work
 | Performance | SLOW, OPTIMIZE, PERF | Code that works but needs to be faster |
 | Security | SECURITY, VULN, UNSAFE | Known security issues |
 
-**Why it matters:** [Potdar and Shihab's 2014 study](https://ieeexplore.ieee.org/document/6976084) found that SATD comments often stay in codebases for years. The longer they stay, the harder they are to fix because people forget the context. [Maldonado and Shihab (2015)](https://ieeexplore.ieee.org/document/7180116) showed that design debt is the most common and most dangerous type.
+**Why it matters:** [Potdar and Shihab's 2014 study](https://ieeexplore.ieee.org/document/6976075) found that SATD comments often stay in codebases for years. The longer they stay, the harder they are to fix because people forget the context. [Maldonado and Shihab (2015)](https://ieeexplore.ieee.org/document/7332619) showed that design debt is the most common and most dangerous type.
 
 **Rule of thumb:** Review SATD weekly. If a TODO is older than 6 months, either fix it or delete it.
 
@@ -80,7 +80,7 @@ Dead code includes:
 - Classes that are never instantiated
 - Code after a `return` statement that can never execute
 
-**Why it matters:** Dead code isn't just clutter. It confuses new developers who think it must be important. It increases build times and binary sizes. Worst of all, it can hide bugs - if someone "fixes" dead code thinking it runs, they've wasted time. [Romano et al. (2020)](https://ieeexplore.ieee.org/document/9054810) found that dead code is a strong predictor of other code quality problems.
+**Why it matters:** Dead code isn't just clutter. It confuses new developers who think it must be important. It increases build times and binary sizes. Worst of all, it can hide bugs - if someone "fixes" dead code thinking it runs, they've wasted time. [Romano et al. (2020)](https://ieeexplore.ieee.org/document/8370748) found that dead code is a strong predictor of other code quality problems.
 
 **Rule of thumb:** Delete dead code. Version control means you can always get it back if needed.
 
@@ -116,7 +116,7 @@ There are three types of clones:
 | Type-2 | Same structure, different names | Same function with renamed variables |
 | Type-3 | Similar code with some modifications | Functions that do almost the same thing |
 
-**Why it matters:** When you fix a bug in one copy, you have to remember to fix all the other copies too. [Juergens et al. (2009)](https://ieeexplore.ieee.org/document/5069475) found that cloned code has significantly more bugs because fixes don't get applied consistently. The more clones you have, the more likely you'll miss one during updates.
+**Why it matters:** When you fix a bug in one copy, you have to remember to fix all the other copies too. [Juergens et al. (2009)](https://ieeexplore.ieee.org/document/5070547) found that cloned code has significantly more bugs because fixes don't get applied consistently. The more clones you have, the more likely you'll miss one during updates.
 
 **Rule of thumb:** Anything copied more than twice should probably be a shared function. Aim for duplication ratio under 5%.
 
@@ -134,7 +134,7 @@ Omen combines multiple signals to predict defect probability:
 
 Each file gets a risk score from 0% to 100%.
 
-**Why it matters:** You can't review everything equally. [Menzies et al. (2007)](https://ieeexplore.ieee.org/document/4343755) showed that defect prediction helps teams focus testing and code review on the files most likely to have problems. [Rahman et al. (2014)](https://dl.acm.org/doi/10.1145/2597073.2597104) found that even simple models outperform random file selection for finding bugs.
+**Why it matters:** You can't review everything equally. [Menzies et al. (2007)](https://ieeexplore.ieee.org/document/4027145) showed that defect prediction helps teams focus testing and code review on the files most likely to have problems. [Rahman et al. (2014)](https://dl.acm.org/doi/10.1145/2568225.2568269) found that even simple models outperform random file selection for finding bugs.
 
 **Rule of thumb:** Prioritize code review for files with >70% defect probability.
 
@@ -163,7 +163,7 @@ Scores are classified into letter grades (A+ to F), where:
 - **D** (50-59): Poor - significant refactoring needed
 - **F** (<50): Critical - immediate action required
 
-**Why it matters:** Technical debt is like financial debt - a little is fine, too much kills you. [Cunningham coined the term in 1992](https://dl.acm.org/doi/10.1145/157709.157715), and [Kruchten et al. (2012)](https://ieeexplore.ieee.org/document/6225999) formalized how to measure and manage it. TDG gives you a single number to track over time and compare across files.
+**Why it matters:** Technical debt is like financial debt - a little is fine, too much kills you. [Cunningham coined the term in 1992](http://c2.com/doc/oopsla92.html), and [Kruchten et al. (2012)](https://ieeexplore.ieee.org/document/6336722) formalized how to measure and manage it. TDG gives you a single number to track over time and compare across files.
 
 **Rule of thumb:** Fix files with grade C or lower before adding new features. Track average TDG over time - it should go up, not down.
 
@@ -186,7 +186,7 @@ Omen builds a graph showing which files import which other files, then calculate
 <details>
 <summary><strong>Halstead Metrics</strong> - Software complexity based on operators and operands</summary>
 
-[Maurice Halstead developed these metrics in 1977](https://ieeexplore.ieee.org/book/6276903) to measure programs like physical objects:
+[Maurice Halstead developed these metrics in 1977](https://dl.acm.org/doi/10.5555/540137) to measure programs like physical objects:
 
 | Metric | Formula | What it means |
 |--------|---------|---------------|
@@ -219,7 +219,7 @@ Omen calculates hotspot scores by multiplying:
 | 100-500 | Medium | Consider refactoring |
 | > 500 | High | Prioritize immediately |
 
-**Why it matters:** [Adam Tornhill's "Your Code as a Crime Scene"](https://pragprog.com/titles/atcrime/your-code-as-a-crime-scene/) introduced hotspot analysis as a way to find the most impactful refactoring targets. His research shows that a small percentage of files (typically 4-8%) contain most of the bugs. [Graves et al. (2000)](https://ieeexplore.ieee.org/document/841031) demonstrated that recent change activity is a better defect predictor than code age.
+**Why it matters:** [Adam Tornhill's "Your Code as a Crime Scene"](https://pragprog.com/titles/atcrime/your-code-as-a-crime-scene/) introduced hotspot analysis as a way to find the most impactful refactoring targets. His research shows that a small percentage of files (typically 4-8%) contain most of the bugs. [Graves et al. (2000)](https://ieeexplore.ieee.org/document/859533) demonstrated that recent change activity is a better defect predictor than code age.
 
 **Rule of thumb:** Start refactoring with your top 3 hotspots. Reducing complexity in high-churn files has the highest ROI.
 
@@ -242,7 +242,7 @@ Omen analyzes your git history to find file pairs that change together:
 | 20-50% | Moderately coupled - may be coincidental |
 | < 20% | Weakly coupled - probably independent |
 
-**Why it matters:** [Ball et al. (1997)](https://www.microsoft.com/en-us/research/publication/if-your-version-control-system-could-talk/) first studied co-change patterns at AT&T and found they reveal architectural violations invisible to static analysis. [Beyer and Noack (2005)](https://ieeexplore.ieee.org/document/1509307) showed that temporal coupling predicts future changes - if files changed together before, they'll likely change together again.
+**Why it matters:** [Ball et al. (1997)](https://www.researchgate.net/publication/2791666_If_Your_Version_Control_System_Could_Talk) first studied co-change patterns at AT&T and found they reveal architectural violations invisible to static analysis. [Beyer and Noack (2005)](https://www.semanticscholar.org/paper/Clustering-software-artifacts-based-on-frequent-Beyer-Noack/1afc4eeb182d92631c3ce400e6999eebbca71c12) showed that temporal coupling predicts future changes - if files changed together before, they'll likely change together again.
 
 **Rule of thumb:** If two files have >50% temporal coupling but no import relationship, consider extracting a shared module or merging them.
 
@@ -266,7 +266,7 @@ Omen uses git blame to calculate:
 | 50-70% | Low risk | Healthy distribution |
 | < 50% | Very low | Broad ownership |
 
-**Why it matters:** [Bird et al. (2011)](https://ieeexplore.ieee.org/document/6062100) found that code with many minor contributors has more bugs than code with clear ownership, but code owned by a single person creates organizational risk. The sweet spot is 2-4 significant contributors per module. [Nagappan et al. (2008)](https://www.microsoft.com/en-us/research/publication/the-influence-of-organizational-structure-on-software-quality/) showed that organizational metrics (like ownership) predict defects better than code metrics alone.
+**Why it matters:** [Bird et al. (2011)](https://ieeexplore.ieee.org/document/6032488) found that code with many minor contributors has more bugs than code with clear ownership, but code owned by a single person creates organizational risk. The sweet spot is 2-4 significant contributors per module. [Nagappan et al. (2008)](https://www.microsoft.com/en-us/research/publication/the-influence-of-organizational-structure-on-software-quality/) showed that organizational metrics (like ownership) predict defects better than code metrics alone.
 
 **Rule of thumb:** Files with >80% single ownership should have documented knowledge transfer. Critical files should have at least 2 people who understand them.
 
@@ -288,7 +288,7 @@ The Chidamber-Kemerer (CK) metrics suite measures object-oriented design quality
 
 **LCOM (Lack of Cohesion)** is particularly important. Low LCOM means methods in a class use similar instance variables - the class is focused. High LCOM means the class is doing unrelated things and should probably be split.
 
-**Why it matters:** [Chidamber and Kemerer's 1994 paper](https://ieeexplore.ieee.org/document/295895) established these metrics as the foundation of OO quality measurement. [Basili et al. (1996)](https://ieeexplore.ieee.org/document/493411) validated them empirically, finding that WMC and CBO strongly correlate with fault-proneness. These metrics have been cited thousands of times and remain the standard for OO design analysis.
+**Why it matters:** [Chidamber and Kemerer's 1994 paper](https://ieeexplore.ieee.org/document/295895) established these metrics as the foundation of OO quality measurement. [Basili et al. (1996)](https://ieeexplore.ieee.org/document/544352) validated them empirically, finding that WMC and CBO strongly correlate with fault-proneness. These metrics have been cited thousands of times and remain the standard for OO design analysis.
 
 **Rule of thumb:** Classes violating multiple CK thresholds are candidates for refactoring. High WMC + high LCOM often indicates a "god class" that should be split.
 
