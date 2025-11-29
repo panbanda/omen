@@ -936,6 +936,12 @@ func runTDGCmd(c *cli.Context) error {
 	}
 	defer formatter.Close()
 
+	// For JSON/TOON, output pmat-compatible format
+	if formatter.Format() == output.FormatJSON || formatter.Format() == output.FormatTOON {
+		report := project.ToTDGReport(hotspots)
+		return formatter.Output(report)
+	}
+
 	// Sort by score (lowest first - worst quality)
 	files := project.Files
 	sort.Slice(files, func(i, j int) bool {
