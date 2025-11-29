@@ -5,8 +5,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/panbanda/omen/internal/vcs"
 	"github.com/panbanda/omen/pkg/models"
 )
 
@@ -14,20 +13,36 @@ import (
 type TemporalCouplingAnalyzer struct {
 	days         int
 	minCochanges int
+	opener       vcs.Opener
+}
+
+// TemporalOption is a functional option for configuring TemporalCouplingAnalyzer.
+type TemporalOption func(*TemporalCouplingAnalyzer)
+
+// WithTemporalOpener sets the VCS opener (useful for testing).
+func WithTemporalOpener(opener vcs.Opener) TemporalOption {
+	return func(a *TemporalCouplingAnalyzer) {
+		a.opener = opener
+	}
 }
 
 // NewTemporalCouplingAnalyzer creates a new temporal coupling analyzer.
-func NewTemporalCouplingAnalyzer(days, minCochanges int) *TemporalCouplingAnalyzer {
+func NewTemporalCouplingAnalyzer(days, minCochanges int, opts ...TemporalOption) *TemporalCouplingAnalyzer {
 	if days <= 0 {
 		days = 30
 	}
 	if minCochanges <= 0 {
 		minCochanges = models.DefaultMinCochanges
 	}
-	return &TemporalCouplingAnalyzer{
+	a := &TemporalCouplingAnalyzer{
 		days:         days,
 		minCochanges: minCochanges,
+		opener:       vcs.DefaultOpener(),
 	}
+	for _, opt := range opts {
+		opt(a)
+	}
+	return a
 }
 
 // filePair represents an unordered pair of files.
@@ -52,7 +67,7 @@ func (a *TemporalCouplingAnalyzer) AnalyzeRepo(repoPath string) (*models.Tempora
 
 // AnalyzeRepoWithContext analyzes temporal coupling with a context for cancellation/timeout.
 func (a *TemporalCouplingAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath string) (*models.TemporalCouplingAnalysis, error) {
-	repo, err := git.PlainOpen(repoPath)
+	repo, err := a.opener.PlainOpen(repoPath)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +75,7 @@ func (a *TemporalCouplingAnalyzer) AnalyzeRepoWithContext(ctx context.Context, r
 	since := time.Now().AddDate(0, 0, -a.days)
 
 	// Get commit history
-	logIter, err := repo.Log(&git.LogOptions{
+	logIter, err := repo.Log(&vcs.LogOptions{
 		Since: &since,
 	})
 	if err != nil {
@@ -72,7 +87,7 @@ func (a *TemporalCouplingAnalyzer) AnalyzeRepoWithContext(ctx context.Context, r
 	// Track individual file commits: file -> count
 	fileCommits := make(map[string]int)
 
-	err = logIter.ForEach(func(c *object.Commit) error {
+	err = logIter.ForEach(func(c vcs.Commit) error {
 		// Check for context cancellation
 		select {
 		case <-ctx.Done():

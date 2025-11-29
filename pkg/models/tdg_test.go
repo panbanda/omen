@@ -392,3 +392,226 @@ func abs32(x float32) float32 {
 	}
 	return x
 }
+
+func TestTDGSeverityFromValue(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    float64
+		expected TDGSeverity
+	}{
+		{"critical high", 4.0, TDGSeverityCritical},
+		{"critical at boundary", 2.51, TDGSeverityCritical},
+		{"warning high", 2.5, TDGSeverityWarning},
+		{"warning mid", 2.0, TDGSeverityWarning},
+		{"warning at boundary", 1.51, TDGSeverityWarning},
+		{"normal high", 1.5, TDGSeverityNormal},
+		{"normal mid", 1.0, TDGSeverityNormal},
+		{"normal zero", 0.0, TDGSeverityNormal},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := TDGSeverityFromValue(tt.value)
+			if got != tt.expected {
+				t.Errorf("TDGSeverityFromValue(%v) = %v, want %v", tt.value, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestProjectScore_ToTDGReport(t *testing.T) {
+	t.Run("empty project", func(t *testing.T) {
+		project := &ProjectScore{TotalFiles: 0, Files: []TdgScore{}}
+		report := project.ToTDGReport(10)
+
+		if report.Summary.TotalFiles != 0 {
+			t.Errorf("TotalFiles = %d, want 0", report.Summary.TotalFiles)
+		}
+		if len(report.Hotspots) != 0 {
+			t.Errorf("Hotspots = %d, want 0", len(report.Hotspots))
+		}
+	})
+
+	t.Run("normal project", func(t *testing.T) {
+		project := &ProjectScore{
+			TotalFiles: 3,
+			Files: []TdgScore{
+				{Total: 90, FilePath: "good.go", StructuralComplexity: 20, SemanticComplexity: 15, CouplingScore: 14, DuplicationRatio: 15},
+				{Total: 50, FilePath: "bad.go", StructuralComplexity: 10, SemanticComplexity: 8, CouplingScore: 7, DuplicationRatio: 5},
+				{Total: 70, FilePath: "mid.go", StructuralComplexity: 15, SemanticComplexity: 12, CouplingScore: 10, DuplicationRatio: 10},
+			},
+		}
+
+		report := project.ToTDGReport(10)
+
+		if report.Summary.TotalFiles != 3 {
+			t.Errorf("TotalFiles = %d, want 3", report.Summary.TotalFiles)
+		}
+
+		// Check that TDG values are calculated correctly (100 - omenScore) / 20
+		// good.go: (100-90)/20 = 0.5, bad.go: (100-50)/20 = 2.5, mid.go: (100-70)/20 = 1.5
+		if len(report.Hotspots) != 3 {
+			t.Errorf("Hotspots count = %d, want 3", len(report.Hotspots))
+		}
+
+		// Hotspots should be sorted by TDG score (highest = worst first)
+		if report.Hotspots[0].Path != "bad.go" {
+			t.Errorf("First hotspot should be bad.go, got %s", report.Hotspots[0].Path)
+		}
+
+		// Check severity counts
+		if report.Summary.WarningFiles < 1 {
+			t.Errorf("WarningFiles = %d, want >= 1", report.Summary.WarningFiles)
+		}
+	})
+
+	t.Run("topN limit", func(t *testing.T) {
+		project := &ProjectScore{
+			TotalFiles: 5,
+			Files: []TdgScore{
+				{Total: 90, FilePath: "1.go"},
+				{Total: 80, FilePath: "2.go"},
+				{Total: 70, FilePath: "3.go"},
+				{Total: 60, FilePath: "4.go"},
+				{Total: 50, FilePath: "5.go"},
+			},
+		}
+
+		report := project.ToTDGReport(3)
+
+		if len(report.Hotspots) != 3 {
+			t.Errorf("Hotspots count = %d, want 3", len(report.Hotspots))
+		}
+	})
+
+	t.Run("clamping TDG values", func(t *testing.T) {
+		project := &ProjectScore{
+			TotalFiles: 2,
+			Files: []TdgScore{
+				{Total: 120, FilePath: "over.go"},  // Should clamp to TDG 0
+				{Total: -20, FilePath: "under.go"}, // Should clamp to TDG 5
+			},
+		}
+
+		report := project.ToTDGReport(10)
+
+		for _, h := range report.Hotspots {
+			if h.TdgScore < 0 || h.TdgScore > 5 {
+				t.Errorf("TDG score %v out of range [0, 5] for %s", h.TdgScore, h.Path)
+			}
+		}
+	})
+}
+
+func TestSortFloat64s(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []float64
+		expected []float64
+	}{
+		{"empty", []float64{}, []float64{}},
+		{"single", []float64{5.0}, []float64{5.0}},
+		{"sorted", []float64{1.0, 2.0, 3.0}, []float64{1.0, 2.0, 3.0}},
+		{"reverse", []float64{3.0, 2.0, 1.0}, []float64{1.0, 2.0, 3.0}},
+		{"random", []float64{3.0, 1.0, 4.0, 1.5, 9.0}, []float64{1.0, 1.5, 3.0, 4.0, 9.0}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := make([]float64, len(tt.input))
+			copy(input, tt.input)
+			sortFloat64s(input)
+
+			for i := range input {
+				if i < len(tt.expected) && input[i] != tt.expected[i] {
+					t.Errorf("sortFloat64s(%v) = %v, want %v", tt.input, input, tt.expected)
+					break
+				}
+			}
+		})
+	}
+}
+
+func TestPercentile(t *testing.T) {
+	tests := []struct {
+		name     string
+		sorted   []float64
+		p        float64
+		expected float64
+	}{
+		{"empty", []float64{}, 0.5, 0.0},
+		{"single element", []float64{5.0}, 0.5, 5.0},
+		{"p50", []float64{1.0, 2.0, 3.0, 4.0, 5.0}, 0.5, 3.0},
+		{"p95 small", []float64{1.0, 2.0, 3.0, 4.0, 5.0}, 0.95, 5.0},
+		{"p99 small", []float64{1.0, 2.0, 3.0, 4.0, 5.0}, 0.99, 5.0},
+		{"p0", []float64{1.0, 2.0, 3.0}, 0.0, 1.0},
+		{"p100", []float64{1.0, 2.0, 3.0}, 1.0, 3.0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := percentile(tt.sorted, tt.p)
+			if got != tt.expected {
+				t.Errorf("percentile(%v, %v) = %v, want %v", tt.sorted, tt.p, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestIdentifyPrimaryFactor(t *testing.T) {
+	// Formula:
+	// structPenalty = 25.0 - StructuralComplexity
+	// semPenalty = 20.0 - SemanticComplexity
+	// couplingPenalty = 15.0 - CouplingScore
+	// dupPenalty = 20.0 - DuplicationRatio
+	// Weighted: Complexity = (struct+sem)*0.30, Coupling = coupling*0.15, Duplication = dup*0.10
+
+	tests := []struct {
+		name     string
+		score    TdgScore
+		expected string
+	}{
+		{
+			name: "high complexity",
+			score: TdgScore{
+				StructuralComplexity: 5.0,  // penalty = 20
+				SemanticComplexity:   5.0,  // penalty = 15
+				CouplingScore:        14.0, // penalty = 1, weighted = 0.15
+				DuplicationRatio:     19.0, // penalty = 1, weighted = 0.10
+			},
+			// Complexity: (20+15)*0.30 = 10.5 (highest)
+			expected: "High Complexity",
+		},
+		{
+			name: "high coupling dominates",
+			score: TdgScore{
+				StructuralComplexity: 25.0, // penalty = 0
+				SemanticComplexity:   20.0, // penalty = 0
+				CouplingScore:        0.0,  // penalty = 15, weighted = 2.25
+				DuplicationRatio:     20.0, // penalty = 0, weighted = 0
+			},
+			// Complexity: (0+0)*0.30 = 0, Coupling: 15*0.15 = 2.25 (highest), Dup: 0*0.10 = 0
+			expected: "High Coupling",
+		},
+		{
+			name: "high duplication",
+			score: TdgScore{
+				StructuralComplexity: 25.0, // penalty = 0
+				SemanticComplexity:   20.0, // penalty = 0
+				CouplingScore:        15.0, // penalty = 0, weighted = 0
+				DuplicationRatio:     0.0,  // penalty = 20, weighted = 2.0
+			},
+			// Complexity: 0, Coupling: 0, Dup: 20*0.10 = 2.0 (highest)
+			expected: "Code Duplication",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := identifyPrimaryFactor(tt.score)
+			if got != tt.expected {
+				t.Errorf("identifyPrimaryFactor() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}

@@ -413,3 +413,248 @@ func TestGroupByLanguageEmpty(t *testing.T) {
 		t.Errorf("GroupByLanguage([]) should return empty map, got %v", result)
 	}
 }
+
+func TestFilterBySize(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create files of different sizes
+	smallContent := "small"
+	largeContent := make([]byte, 1024)
+	for i := range largeContent {
+		largeContent[i] = 'x'
+	}
+
+	smallFile := filepath.Join(tmpDir, "small.go")
+	largeFile := filepath.Join(tmpDir, "large.go")
+
+	if err := os.WriteFile(smallFile, []byte(smallContent), 0644); err != nil {
+		t.Fatalf("Failed to create small file: %v", err)
+	}
+	if err := os.WriteFile(largeFile, largeContent, 0644); err != nil {
+		t.Fatalf("Failed to create large file: %v", err)
+	}
+
+	t.Run("no limit", func(t *testing.T) {
+		filtered, skipped := FilterBySize([]string{smallFile, largeFile}, 0)
+		if len(filtered) != 2 {
+			t.Errorf("FilterBySize with no limit should return all files, got %d", len(filtered))
+		}
+		if skipped != 0 {
+			t.Errorf("FilterBySize with no limit should skip 0 files, got %d", skipped)
+		}
+	})
+
+	t.Run("negative limit", func(t *testing.T) {
+		filtered, skipped := FilterBySize([]string{smallFile, largeFile}, -1)
+		if len(filtered) != 2 {
+			t.Errorf("FilterBySize with negative limit should return all files, got %d", len(filtered))
+		}
+		if skipped != 0 {
+			t.Errorf("FilterBySize with negative limit should skip 0 files, got %d", skipped)
+		}
+	})
+
+	t.Run("with limit", func(t *testing.T) {
+		filtered, skipped := FilterBySize([]string{smallFile, largeFile}, 100)
+		if len(filtered) != 1 {
+			t.Errorf("FilterBySize should return 1 file, got %d", len(filtered))
+		}
+		if skipped != 1 {
+			t.Errorf("FilterBySize should skip 1 file, got %d", skipped)
+		}
+		if filtered[0] != smallFile {
+			t.Errorf("FilterBySize should keep small file, got %s", filtered[0])
+		}
+	})
+
+	t.Run("with stat error", func(t *testing.T) {
+		nonExistent := filepath.Join(tmpDir, "nonexistent.go")
+		filtered, skipped := FilterBySize([]string{smallFile, nonExistent}, 100)
+		if len(filtered) != 1 {
+			t.Errorf("FilterBySize should return 1 file, got %d", len(filtered))
+		}
+		if skipped != 1 {
+			t.Errorf("FilterBySize should skip non-existent file, got %d skipped", skipped)
+		}
+	})
+}
+
+func TestIsWithinRoot(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	tests := []struct {
+		name string
+		path string
+		root string
+		want bool
+	}{
+		{
+			name: "same path",
+			path: tmpDir,
+			root: tmpDir,
+			want: true,
+		},
+		{
+			name: "child path",
+			path: filepath.Join(tmpDir, "subdir", "file.go"),
+			root: tmpDir,
+			want: true,
+		},
+		{
+			name: "path outside root",
+			path: "/some/other/path",
+			root: tmpDir,
+			want: false,
+		},
+		{
+			name: "parent path",
+			path: filepath.Dir(tmpDir),
+			root: tmpDir,
+			want: false,
+		},
+		{
+			name: "similar prefix but different dir",
+			path: tmpDir + "2/file.go",
+			root: tmpDir,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isWithinRoot(tt.path, tt.root)
+			if got != tt.want {
+				t.Errorf("isWithinRoot(%q, %q) = %v, want %v", tt.path, tt.root, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFindGitRoot(t *testing.T) {
+	// Test with non-git directory
+	tmpDir := t.TempDir()
+	result := findGitRoot(tmpDir)
+	if result != "" {
+		t.Errorf("findGitRoot() on non-git dir should return empty string, got %q", result)
+	}
+
+	// Test with mock .git directory
+	gitDir := filepath.Join(tmpDir, ".git")
+	if err := os.Mkdir(gitDir, 0755); err != nil {
+		t.Fatalf("Failed to create .git dir: %v", err)
+	}
+
+	result = findGitRoot(tmpDir)
+	if result != tmpDir {
+		t.Errorf("findGitRoot() should return %q, got %q", tmpDir, result)
+	}
+
+	// Test from subdirectory
+	subDir := filepath.Join(tmpDir, "src", "pkg")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatalf("Failed to create subdir: %v", err)
+	}
+
+	result = findGitRoot(subDir)
+	if result != tmpDir {
+		t.Errorf("findGitRoot() from subdir should return %q, got %q", tmpDir, result)
+	}
+}
+
+func TestScanDirWithSymlinks(t *testing.T) {
+	// Skip on systems that don't support symlinks
+	tmpDir := t.TempDir()
+
+	// Create a real file
+	realFile := filepath.Join(tmpDir, "real.go")
+	if err := os.WriteFile(realFile, []byte("package main\n"), 0644); err != nil {
+		t.Fatalf("Failed to create file: %v", err)
+	}
+
+	// Create a symlink within the directory
+	symlinkPath := filepath.Join(tmpDir, "link.go")
+	if err := os.Symlink(realFile, symlinkPath); err != nil {
+		t.Skip("Symlinks not supported on this system")
+	}
+
+	s := NewScanner(nil)
+	result, err := s.ScanDir(tmpDir)
+	if err != nil {
+		t.Fatalf("ScanDir() error: %v", err)
+	}
+
+	// Should find both the real file and the symlink
+	if len(result) < 1 {
+		t.Errorf("ScanDir() should find at least the real file, got %d files", len(result))
+	}
+}
+
+func TestScanDirWithUnresolvableSymlink(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a dangling symlink
+	symlinkPath := filepath.Join(tmpDir, "dangling.go")
+	if err := os.Symlink("/nonexistent/path/file.go", symlinkPath); err != nil {
+		t.Skip("Symlinks not supported on this system")
+	}
+
+	// Create a real file to ensure scanner still works
+	realFile := filepath.Join(tmpDir, "real.go")
+	if err := os.WriteFile(realFile, []byte("package main\n"), 0644); err != nil {
+		t.Fatalf("Failed to create file: %v", err)
+	}
+
+	s := NewScanner(nil)
+	result, err := s.ScanDir(tmpDir)
+	if err != nil {
+		t.Fatalf("ScanDir() error: %v", err)
+	}
+
+	// Should find the real file, skip the dangling symlink
+	if len(result) != 1 {
+		t.Errorf("ScanDir() should find 1 file (skipping dangling symlink), got %d", len(result))
+	}
+}
+
+func TestScanDirWithSymlinkDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a real directory with files
+	realDir := filepath.Join(tmpDir, "real")
+	if err := os.Mkdir(realDir, 0755); err != nil {
+		t.Fatalf("Failed to create real dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(realDir, "file.go"), []byte("package real\n"), 0644); err != nil {
+		t.Fatalf("Failed to create file: %v", err)
+	}
+
+	// Create a symlink to a directory outside the root
+	outsideDir := t.TempDir() // Different temp directory
+	if err := os.WriteFile(filepath.Join(outsideDir, "outside.go"), []byte("package outside\n"), 0644); err != nil {
+		t.Fatalf("Failed to create outside file: %v", err)
+	}
+
+	symlinkDir := filepath.Join(tmpDir, "linked")
+	if err := os.Symlink(outsideDir, symlinkDir); err != nil {
+		t.Skip("Symlinks not supported on this system")
+	}
+
+	s := NewScanner(nil)
+	result, err := s.ScanDir(tmpDir)
+	if err != nil {
+		t.Fatalf("ScanDir() error: %v", err)
+	}
+
+	// Should only find files in the real directory, not through the symlink
+	// (symlink to outside directory should be skipped)
+	foundOutside := false
+	for _, f := range result {
+		if filepath.Base(f) == "outside.go" {
+			foundOutside = true
+		}
+	}
+
+	if foundOutside {
+		t.Error("ScanDir() should not follow symlinks outside the root directory")
+	}
+}

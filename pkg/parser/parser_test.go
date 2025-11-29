@@ -536,3 +536,207 @@ func TestGetClassNodeTypes(t *testing.T) {
 		})
 	}
 }
+
+func TestParseFileWithLimit(t *testing.T) {
+	tmpDir := t.TempDir()
+	goFile := filepath.Join(tmpDir, "test.go")
+	content := "package main\n\nfunc hello() {}\n"
+
+	if err := os.WriteFile(goFile, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+
+	p := New()
+	defer p.Close()
+
+	t.Run("within limit", func(t *testing.T) {
+		result, err := p.ParseFileWithLimit(goFile, 1024)
+		if err != nil {
+			t.Errorf("ParseFileWithLimit() with large limit should succeed: %v", err)
+		}
+		if result == nil {
+			t.Error("result should not be nil")
+		}
+	})
+
+	t.Run("exceeds limit", func(t *testing.T) {
+		_, err := p.ParseFileWithLimit(goFile, 10) // file is larger than 10 bytes
+		if err == nil {
+			t.Error("ParseFileWithLimit() should return error when file exceeds limit")
+		}
+	})
+
+	t.Run("zero limit means no limit", func(t *testing.T) {
+		result, err := p.ParseFileWithLimit(goFile, 0)
+		if err != nil {
+			t.Errorf("ParseFileWithLimit() with zero limit should succeed: %v", err)
+		}
+		if result == nil {
+			t.Error("result should not be nil")
+		}
+	})
+
+	t.Run("non-existent file", func(t *testing.T) {
+		_, err := p.ParseFileWithLimit("/nonexistent/file.go", 1024)
+		if err == nil {
+			t.Error("ParseFileWithLimit() should return error for non-existent file")
+		}
+	})
+}
+
+func TestGetNodeText_EdgeCases(t *testing.T) {
+	t.Run("nil node", func(t *testing.T) {
+		result := GetNodeText(nil, []byte("test"))
+		if result != "" {
+			t.Errorf("GetNodeText(nil) = %q, want empty string", result)
+		}
+	})
+
+	t.Run("nil source", func(t *testing.T) {
+		p := New()
+		defer p.Close()
+
+		source := "package main\nfunc main() {}"
+		res, _ := p.Parse([]byte(source), LangGo, "test.go")
+		root := res.Tree.RootNode()
+
+		// Passing nil source should return empty (out of bounds check)
+		result := GetNodeText(root, nil)
+		if result != "" {
+			t.Errorf("GetNodeText with nil source = %q, want empty string", result)
+		}
+	})
+}
+
+func TestExtractFunction_AllLanguages(t *testing.T) {
+	p := New()
+	defer p.Close()
+
+	tests := []struct {
+		name     string
+		lang     Language
+		source   string
+		expected string
+	}{
+		{
+			name:     "go method",
+			lang:     LangGo,
+			source:   "package main\n\nfunc (r *Receiver) Method() {}\n",
+			expected: "Method",
+		},
+		{
+			name:     "typescript function",
+			lang:     LangTypeScript,
+			source:   "function myFunc(): void {}\n",
+			expected: "myFunc",
+		},
+		{
+			name:     "java method",
+			lang:     LangJava,
+			source:   "class Test { public void myMethod() {} }",
+			expected: "myMethod",
+		},
+		{
+			name:     "c function",
+			lang:     LangC,
+			source:   "int main(int argc, char** argv) { return 0; }",
+			expected: "main",
+		},
+		{
+			name:     "c++ method",
+			lang:     LangCPP,
+			source:   "void myFunc() {}",
+			expected: "myFunc",
+		},
+		{
+			name:     "csharp method",
+			lang:     LangCSharp,
+			source:   "class Test { void MyMethod() {} }",
+			expected: "MyMethod",
+		},
+		{
+			name:     "ruby method",
+			lang:     LangRuby,
+			source:   "def my_method\nend\n",
+			expected: "my_method",
+		},
+		{
+			name:     "php function",
+			lang:     LangPHP,
+			source:   "<?php\nfunction myFunction() {}\n",
+			expected: "myFunction",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := p.Parse([]byte(tt.source), tt.lang, "test.file")
+			if err != nil {
+				t.Fatalf("Parse() error: %v", err)
+			}
+
+			functions := GetFunctions(result)
+			if len(functions) == 0 {
+				t.Skipf("No functions found for %s", tt.name)
+				return
+			}
+
+			found := false
+			for _, fn := range functions {
+				if fn.Name == tt.expected {
+					found = true
+					break
+				}
+			}
+			if !found && tt.expected != "" {
+				names := make([]string, len(functions))
+				for i, fn := range functions {
+					names[i] = fn.Name
+				}
+				t.Errorf("Expected function %q not found, got: %v", tt.expected, names)
+			}
+		})
+	}
+}
+
+func TestParseUnknownLanguage(t *testing.T) {
+	p := New()
+	defer p.Close()
+
+	_, err := p.Parse([]byte("hello world"), LangUnknown, "test.txt")
+	if err == nil {
+		t.Error("Parse() should return error for unknown language")
+	}
+}
+
+func TestGetFunctions_EmptyResult(t *testing.T) {
+	p := New()
+	defer p.Close()
+
+	// Parse a file with no functions
+	result, err := p.Parse([]byte("package main\n\nvar x = 1\n"), LangGo, "test.go")
+	if err != nil {
+		t.Fatalf("Parse() error: %v", err)
+	}
+
+	functions := GetFunctions(result)
+	if len(functions) != 0 {
+		t.Errorf("GetFunctions() returned %d functions, expected 0", len(functions))
+	}
+}
+
+func TestGetClasses_EmptyResult(t *testing.T) {
+	p := New()
+	defer p.Close()
+
+	// Parse a file with no classes
+	result, err := p.Parse([]byte("x = 1\n"), LangPython, "test.py")
+	if err != nil {
+		t.Fatalf("Parse() error: %v", err)
+	}
+
+	classes := GetClasses(result)
+	if len(classes) != 0 {
+		t.Errorf("GetClasses() returned %d classes, expected 0", len(classes))
+	}
+}

@@ -483,3 +483,155 @@ func findSubstring(s, substr string) bool {
 	}
 	return false
 }
+
+func TestIsFileTooLarge(t *testing.T) {
+	tests := []struct {
+		name    string
+		size    int64
+		maxSize int64
+		want    bool
+	}{
+		{"no limit (zero)", 1000000, 0, false},
+		{"no limit (negative)", 1000000, -1, false},
+		{"under limit", 100, 1000, false},
+		{"at limit", 1000, 1000, false},
+		{"over limit", 1001, 1000, true},
+		{"way over limit", 1000000, 1000, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsFileTooLarge(tt.size, tt.maxSize)
+			if got != tt.want {
+				t.Errorf("IsFileTooLarge(%d, %d) = %v, want %v", tt.size, tt.maxSize, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidate_AdditionalCases(t *testing.T) {
+	tests := []struct {
+		name      string
+		modify    func(*Config)
+		wantError bool
+		errorMsg  string
+	}{
+		{
+			name:      "negative max file size",
+			modify:    func(c *Config) { c.Analysis.MaxFileSize = -100 },
+			wantError: true,
+			errorMsg:  "max_file_size must be non-negative",
+		},
+		{
+			name:      "cognitive complexity zero",
+			modify:    func(c *Config) { c.Thresholds.CognitiveComplexity = 0 },
+			wantError: true,
+			errorMsg:  "cognitive_complexity must be at least 1",
+		},
+		{
+			name:      "duplicate min lines zero",
+			modify:    func(c *Config) { c.Thresholds.DuplicateMinLines = 0 },
+			wantError: true,
+			errorMsg:  "duplicate_min_lines must be at least 1",
+		},
+		{
+			name:      "defect high risk negative",
+			modify:    func(c *Config) { c.Thresholds.DefectHighRisk = -0.1 },
+			wantError: true,
+			errorMsg:  "defect_high_risk must be between 0 and 1",
+		},
+		{
+			name:      "defect high risk over 1",
+			modify:    func(c *Config) { c.Thresholds.DefectHighRisk = 1.5 },
+			wantError: true,
+			errorMsg:  "defect_high_risk must be between 0 and 1",
+		},
+		{
+			name:      "TDG high risk negative",
+			modify:    func(c *Config) { c.Thresholds.TDGHighRisk = -1 },
+			wantError: true,
+			errorMsg:  "tdg_high_risk must be non-negative",
+		},
+		{
+			name:      "shingle size zero",
+			modify:    func(c *Config) { c.Duplicates.ShingleSize = 0 },
+			wantError: true,
+			errorMsg:  "shingle_size must be at least 1",
+		},
+		{
+			name:      "similarity threshold negative",
+			modify:    func(c *Config) { c.Duplicates.SimilarityThreshold = -0.1 },
+			wantError: true,
+			errorMsg:  "similarity_threshold must be between 0 and 1",
+		},
+		{
+			name:      "similarity threshold over 1",
+			modify:    func(c *Config) { c.Duplicates.SimilarityThreshold = 1.5 },
+			wantError: true,
+			errorMsg:  "similarity_threshold must be between 0 and 1",
+		},
+		{
+			name:      "hash functions zero",
+			modify:    func(c *Config) { c.Duplicates.NumHashFunctions = 0 },
+			wantError: true,
+			errorMsg:  "num_hash_functions must be at least 1",
+		},
+		{
+			name:      "bands zero",
+			modify:    func(c *Config) { c.Duplicates.NumBands = 0 },
+			wantError: true,
+			errorMsg:  "num_bands must be at least 1",
+		},
+		{
+			name:      "rows per band zero",
+			modify:    func(c *Config) { c.Duplicates.RowsPerBand = 0 },
+			wantError: true,
+			errorMsg:  "rows_per_band must be at least 1",
+		},
+		{
+			name: "valid hash relationship",
+			modify: func(c *Config) {
+				c.Duplicates.NumHashFunctions = 100
+				c.Duplicates.NumBands = 20
+				c.Duplicates.RowsPerBand = 5 // 20 * 5 = 100
+			},
+			wantError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			tt.modify(cfg)
+
+			err := cfg.Validate()
+
+			if tt.wantError {
+				if err == nil {
+					t.Errorf("Validate() expected error containing %q, got nil", tt.errorMsg)
+				} else if tt.errorMsg != "" && !contains(err.Error(), tt.errorMsg) {
+					t.Errorf("Validate() error = %q, want to contain %q", err.Error(), tt.errorMsg)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Validate() unexpected error = %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestLoadUnsupportedExtension(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "omen.xml")
+
+	content := `<config>invalid</config>`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Error("Load() should return error for unsupported file extension")
+	}
+}

@@ -402,3 +402,159 @@ func TestCalculateConfidence(t *testing.T) {
 		})
 	}
 }
+
+func TestDefectAnalysis_ToDefectPredictionReport(t *testing.T) {
+	t.Run("empty analysis", func(t *testing.T) {
+		analysis := &DefectAnalysis{
+			Summary: DefectSummary{TotalFiles: 0},
+			Files:   []DefectScore{},
+		}
+
+		report := analysis.ToDefectPredictionReport()
+
+		if report.TotalFiles != 0 {
+			t.Errorf("TotalFiles = %d, want 0", report.TotalFiles)
+		}
+		if len(report.FilePredictions) != 0 {
+			t.Errorf("FilePredictions = %d, want 0", len(report.FilePredictions))
+		}
+	})
+
+	t.Run("normal analysis", func(t *testing.T) {
+		analysis := &DefectAnalysis{
+			Summary: DefectSummary{
+				TotalFiles:      3,
+				HighRiskCount:   1,
+				MediumRiskCount: 1,
+				LowRiskCount:    1,
+			},
+			Files: []DefectScore{
+				{
+					FilePath:    "high.go",
+					Probability: 0.85,
+					RiskLevel:   RiskHigh,
+					ContributingFactors: map[string]float32{
+						"complexity": 0.5,
+						"churn":      0.3,
+					},
+				},
+				{
+					FilePath:    "medium.go",
+					Probability: 0.5,
+					RiskLevel:   RiskMedium,
+					ContributingFactors: map[string]float32{
+						"coupling": 0.4,
+					},
+				},
+				{
+					FilePath:            "low.go",
+					Probability:         0.1,
+					RiskLevel:           RiskLow,
+					ContributingFactors: map[string]float32{},
+				},
+			},
+		}
+
+		report := analysis.ToDefectPredictionReport()
+
+		if report.TotalFiles != 3 {
+			t.Errorf("TotalFiles = %d, want 3", report.TotalFiles)
+		}
+		if report.HighRiskFiles != 1 {
+			t.Errorf("HighRiskFiles = %d, want 1", report.HighRiskFiles)
+		}
+		if report.MediumRiskFiles != 1 {
+			t.Errorf("MediumRiskFiles = %d, want 1", report.MediumRiskFiles)
+		}
+		if report.LowRiskFiles != 1 {
+			t.Errorf("LowRiskFiles = %d, want 1", report.LowRiskFiles)
+		}
+		if len(report.FilePredictions) != 3 {
+			t.Errorf("FilePredictions count = %d, want 3", len(report.FilePredictions))
+		}
+
+		// Check first prediction details
+		pred := report.FilePredictions[0]
+		if pred.FilePath != "high.go" {
+			t.Errorf("FilePath = %s, want high.go", pred.FilePath)
+		}
+		if pred.RiskScore != 0.85 {
+			t.Errorf("RiskScore = %v, want 0.85", pred.RiskScore)
+		}
+		if pred.RiskLevel != "high" {
+			t.Errorf("RiskLevel = %s, want high", pred.RiskLevel)
+		}
+		if len(pred.Factors) != 2 {
+			t.Errorf("Factors count = %d, want 2", len(pred.Factors))
+		}
+	})
+}
+
+func TestNormalizeDuplication(t *testing.T) {
+	// normalizeDuplication is a simple clamp to [0, 1] since it's already a ratio
+	tests := []struct {
+		name     string
+		input    float32
+		expected float32
+	}{
+		{"zero", 0.0, 0.0},
+		{"low", 0.05, 0.05},
+		{"medium", 0.5, 0.5},
+		{"max", 1.0, 1.0},
+		{"over max", 1.5, 1.0},
+		{"negative", -0.5, 0.0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeDuplication(tt.input)
+			if got != tt.expected {
+				t.Errorf("normalizeDuplication(%v) = %v, want %v", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestNormalizeChurn(t *testing.T) {
+	tests := []struct {
+		name  string
+		input float32
+	}{
+		{"zero", 0.0},
+		{"low", 0.1},
+		{"medium", 0.5},
+		{"high", 0.9},
+		{"max", 1.0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeChurn(tt.input)
+			if got < 0.0 || got > 1.0 {
+				t.Errorf("normalizeChurn(%v) = %v, out of range [0, 1]", tt.input, got)
+			}
+		})
+	}
+}
+
+func TestNormalizeComplexity(t *testing.T) {
+	tests := []struct {
+		name  string
+		input float32
+	}{
+		{"zero", 0.0},
+		{"low", 1.0},
+		{"medium", 5.0},
+		{"high", 15.0},
+		{"very high", 50.0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeComplexity(tt.input)
+			if got < 0.0 || got > 1.0 {
+				t.Errorf("normalizeComplexity(%v) = %v, out of range [0, 1]", tt.input, got)
+			}
+		})
+	}
+}

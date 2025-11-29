@@ -7,9 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/panbanda/omen/internal/progress"
+	"github.com/panbanda/omen/internal/vcs"
 	"github.com/panbanda/omen/pkg/models"
 )
 
@@ -20,6 +19,7 @@ const DefaultGitTimeout = 5 * time.Minute
 type ChurnAnalyzer struct {
 	days    int
 	spinner *progress.Tracker
+	opener  vcs.Opener
 }
 
 // ChurnOption is a functional option for configuring ChurnAnalyzer.
@@ -41,11 +41,19 @@ func WithChurnSpinner(spinner *progress.Tracker) ChurnOption {
 	}
 }
 
+// WithChurnOpener sets the VCS opener (useful for testing).
+func WithChurnOpener(opener vcs.Opener) ChurnOption {
+	return func(a *ChurnAnalyzer) {
+		a.opener = opener
+	}
+}
+
 // NewChurnAnalyzer creates a new churn analyzer.
 func NewChurnAnalyzer(opts ...ChurnOption) *ChurnAnalyzer {
 	a := &ChurnAnalyzer{
 		days:    30,
 		spinner: nil,
+		opener:  vcs.DefaultOpener(),
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -62,7 +70,7 @@ func (a *ChurnAnalyzer) AnalyzeRepo(repoPath string) (*models.ChurnAnalysis, err
 
 // AnalyzeRepoWithContext analyzes git history with a context for cancellation/timeout.
 func (a *ChurnAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath string) (*models.ChurnAnalysis, error) {
-	repo, err := git.PlainOpen(repoPath)
+	repo, err := a.opener.PlainOpen(repoPath)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +85,7 @@ func (a *ChurnAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath str
 	cutoff := time.Now().AddDate(0, 0, -a.days)
 
 	// Get commit log
-	logIter, err := repo.Log(&git.LogOptions{
+	logIter, err := repo.Log(&vcs.LogOptions{
 		Since: &cutoff,
 	})
 	if err != nil {
@@ -88,7 +96,7 @@ func (a *ChurnAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath str
 	// Track file metrics - keyed by relative path
 	fileMetrics := make(map[string]*models.FileChurnMetrics)
 
-	err = logIter.ForEach(func(commit *object.Commit) error {
+	err = logIter.ForEach(func(commit vcs.Commit) error {
 		// Check for context cancellation
 		select {
 		case <-ctx.Done():
@@ -127,9 +135,9 @@ func (a *ChurnAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath str
 
 		// Process each changed file
 		for _, change := range changes {
-			relativePath := change.To.Name
+			relativePath := change.ToName()
 			if relativePath == "" {
-				relativePath = change.From.Name // Deleted file
+				relativePath = change.FromName() // Deleted file
 			}
 
 			if _, exists := fileMetrics[relativePath]; !exists {
@@ -137,22 +145,22 @@ func (a *ChurnAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath str
 					Path:         "./" + relativePath, // pmat prefixes with ./
 					RelativePath: relativePath,
 					AuthorCounts: make(map[string]int),
-					FirstCommit:  commit.Author.When,
-					LastCommit:   commit.Author.When,
+					FirstCommit:  commit.Author().When,
+					LastCommit:   commit.Author().When,
 				}
 			}
 
 			fm := fileMetrics[relativePath]
 			fm.Commits++
 			// Use author name instead of email (matching pmat behavior)
-			fm.AuthorCounts[commit.Author.Name]++
+			fm.AuthorCounts[commit.Author().Name]++
 
 			// Track first and last commit times
-			if commit.Author.When.Before(fm.FirstCommit) {
-				fm.FirstCommit = commit.Author.When
+			if commit.Author().When.Before(fm.FirstCommit) {
+				fm.FirstCommit = commit.Author().When
 			}
-			if commit.Author.When.After(fm.LastCommit) {
-				fm.LastCommit = commit.Author.When
+			if commit.Author().When.After(fm.LastCommit) {
+				fm.LastCommit = commit.Author().When
 			}
 
 			// Count additions and deletions
@@ -162,9 +170,9 @@ func (a *ChurnAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath str
 					for _, chunk := range filePatch.Chunks() {
 						content := chunk.Content()
 						switch chunk.Type() {
-						case 1: // Add
+						case vcs.ChunkAdd:
 							fm.LinesAdded += countLines(content)
-						case 2: // Delete
+						case vcs.ChunkDelete:
 							fm.LinesDeleted += countLines(content)
 						}
 					}

@@ -234,3 +234,88 @@ func TestCloneSummary_FileOccurrenceTracking(t *testing.T) {
 		t.Errorf("file3.go occurrences = %d, expected 1", s.FileOccurrences["file3.go"])
 	}
 }
+
+func TestCloneAnalysis_ToCloneReport(t *testing.T) {
+	analysis := &CloneAnalysis{
+		Clones: []CodeClone{
+			{Type: CloneType1, FileA: "a.go", FileB: "b.go", LinesA: 10, LinesB: 10},
+		},
+		Groups: []CloneGroup{
+			{
+				ID:   1,
+				Type: CloneType1,
+				Instances: []CloneInstance{
+					{File: "a.go", StartLine: 1, EndLine: 10},
+					{File: "b.go", StartLine: 1, EndLine: 10},
+					{File: "c.go", StartLine: 1, EndLine: 10},
+				},
+			},
+			{
+				ID:   2,
+				Type: CloneType2,
+				Instances: []CloneInstance{
+					{File: "d.go", StartLine: 1, EndLine: 5},
+				},
+			},
+		},
+		Summary: CloneSummary{
+			TotalClones:      1,
+			DuplicatedLines:  20,
+			TotalLines:       100,
+			DuplicationRatio: 0.2,
+			Hotspots: []DuplicationHotspot{
+				{File: "a.go", DuplicateLines: 10, Severity: 0.5},
+			},
+		},
+		TotalFilesScanned: 5,
+	}
+
+	report := analysis.ToCloneReport()
+
+	if report == nil {
+		t.Fatal("ToCloneReport() returned nil")
+	}
+
+	// Check summary conversion
+	if report.Summary.TotalFiles != 5 {
+		t.Errorf("Summary.TotalFiles = %d, expected 5", report.Summary.TotalFiles)
+	}
+	if report.Summary.TotalFragments != 1 {
+		t.Errorf("Summary.TotalFragments = %d, expected 1", report.Summary.TotalFragments)
+	}
+	if report.Summary.DuplicateLines != 20 {
+		t.Errorf("Summary.DuplicateLines = %d, expected 20", report.Summary.DuplicateLines)
+	}
+	if report.Summary.TotalLines != 100 {
+		t.Errorf("Summary.TotalLines = %d, expected 100", report.Summary.TotalLines)
+	}
+	if report.Summary.CloneGroups != 2 {
+		t.Errorf("Summary.CloneGroups = %d, expected 2", report.Summary.CloneGroups)
+	}
+	if report.Summary.LargestGroupSize != 3 {
+		t.Errorf("Summary.LargestGroupSize = %d, expected 3", report.Summary.LargestGroupSize)
+	}
+
+	// Check groups are preserved
+	if len(report.Groups) != 2 {
+		t.Errorf("Groups count = %d, expected 2", len(report.Groups))
+	}
+
+	// Check hotspots are preserved
+	if len(report.Hotspots) != 1 {
+		t.Errorf("Hotspots count = %d, expected 1", len(report.Hotspots))
+	}
+}
+
+func TestCloneAnalysis_ToCloneReport_EmptyGroups(t *testing.T) {
+	analysis := &CloneAnalysis{
+		Groups:  []CloneGroup{},
+		Summary: CloneSummary{},
+	}
+
+	report := analysis.ToCloneReport()
+
+	if report.Summary.LargestGroupSize != 0 {
+		t.Errorf("LargestGroupSize should be 0 for empty groups, got %d", report.Summary.LargestGroupSize)
+	}
+}
