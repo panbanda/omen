@@ -1,5 +1,274 @@
 package models
 
+import "time"
+
+// ConfidenceLevel indicates how certain we are about dead code detection.
+type ConfidenceLevel string
+
+const (
+	ConfidenceHigh   ConfidenceLevel = "High"
+	ConfidenceMedium ConfidenceLevel = "Medium"
+	ConfidenceLow    ConfidenceLevel = "Low"
+)
+
+// DeadCodeType classifies the type of dead code item (pmat compatible).
+type DeadCodeType string
+
+const (
+	DeadCodeTypeFunction    DeadCodeType = "function"
+	DeadCodeTypeClass       DeadCodeType = "class"
+	DeadCodeTypeVariable    DeadCodeType = "variable"
+	DeadCodeTypeUnreachable DeadCodeType = "unreachable"
+)
+
+// DeadCodeItem represents an individual dead code item within a file (pmat compatible).
+type DeadCodeItem struct {
+	ItemType DeadCodeType `json:"item_type"`
+	Name     string       `json:"name"`
+	Line     uint32       `json:"line"`
+	Reason   string       `json:"reason"`
+}
+
+// FileDeadCodeMetrics contains file-level dead code metrics with items (pmat compatible).
+type FileDeadCodeMetrics struct {
+	Path              string          `json:"path"`
+	DeadLines         int             `json:"dead_lines"`
+	TotalLines        int             `json:"total_lines"`
+	DeadPercentage    float32         `json:"dead_percentage"`
+	DeadFunctions     int             `json:"dead_functions"`
+	DeadClasses       int             `json:"dead_classes"`
+	DeadModules       int             `json:"dead_modules"`
+	UnreachableBlocks int             `json:"unreachable_blocks"`
+	DeadScore         float32         `json:"dead_score"`
+	Confidence        ConfidenceLevel `json:"confidence"`
+	Items             []DeadCodeItem  `json:"items"`
+}
+
+// CalculateScore calculates the dead code score using weighted algorithm (pmat compatible).
+func (f *FileDeadCodeMetrics) CalculateScore() {
+	percentageWeight := float32(0.35)
+	absoluteWeight := float32(0.30)
+	functionWeight := float32(0.20)
+	confidenceWeight := float32(0.15)
+
+	var confidenceMultiplier float32
+	switch f.Confidence {
+	case ConfidenceHigh:
+		confidenceMultiplier = 1.0
+	case ConfidenceMedium:
+		confidenceMultiplier = 0.7
+	case ConfidenceLow:
+		confidenceMultiplier = 0.4
+	default:
+		confidenceMultiplier = 0.7
+	}
+
+	deadLines := f.DeadLines
+	if deadLines > 1000 {
+		deadLines = 1000
+	}
+
+	deadFunctions := f.DeadFunctions
+	if deadFunctions > 50 {
+		deadFunctions = 50
+	}
+
+	f.DeadScore = (f.DeadPercentage * percentageWeight) +
+		(float32(deadLines) / 10.0 * absoluteWeight) +
+		(float32(deadFunctions) * 2.0 * functionWeight) +
+		(100.0 * confidenceMultiplier * confidenceWeight)
+}
+
+// UpdatePercentage updates the dead percentage based on current counts.
+func (f *FileDeadCodeMetrics) UpdatePercentage() {
+	if f.TotalLines > 0 {
+		f.DeadPercentage = float32(f.DeadLines) / float32(f.TotalLines) * 100.0
+	}
+}
+
+// AddItem adds a dead code item and updates counts.
+func (f *FileDeadCodeMetrics) AddItem(item DeadCodeItem) {
+	switch item.ItemType {
+	case DeadCodeTypeFunction:
+		f.DeadFunctions++
+		f.DeadLines += 10 // Estimate 10 lines per function
+	case DeadCodeTypeClass:
+		f.DeadClasses++
+		f.DeadLines += 10 // Estimate 10 lines per class
+	case DeadCodeTypeVariable:
+		f.DeadModules++  // Variables tracked in modules counter
+		f.DeadLines += 1 // Estimate 1 line per variable
+	case DeadCodeTypeUnreachable:
+		f.UnreachableBlocks++
+		f.DeadLines += 3 // Estimate 3 lines per unreachable block
+	}
+	f.Items = append(f.Items, item)
+}
+
+// DeadCodeRankingSummary provides aggregate statistics (pmat compatible).
+type DeadCodeRankingSummary struct {
+	TotalFilesAnalyzed int     `json:"total_files_analyzed"`
+	FilesWithDeadCode  int     `json:"files_with_dead_code"`
+	TotalDeadLines     int     `json:"total_dead_lines"`
+	DeadPercentage     float32 `json:"dead_percentage"`
+	DeadFunctions      int     `json:"dead_functions"`
+	DeadClasses        int     `json:"dead_classes"`
+	DeadModules        int     `json:"dead_modules"`
+	UnreachableBlocks  int     `json:"unreachable_blocks"`
+}
+
+// DeadCodeAnalysisConfig holds configuration for dead code analysis (pmat compatible).
+type DeadCodeAnalysisConfig struct {
+	IncludeUnreachable bool `json:"include_unreachable"`
+	IncludeTests       bool `json:"include_tests"`
+	MinDeadLines       int  `json:"min_dead_lines"`
+}
+
+// DeadCodeResult is the pmat-compatible output format for dead code analysis.
+type DeadCodeResult struct {
+	Summary           DeadCodeRankingSummary `json:"summary"`
+	Files             []FileDeadCodeMetrics  `json:"files"`
+	TotalFiles        int                    `json:"total_files"`
+	AnalyzedFiles     int                    `json:"analyzed_files"`
+	AnalysisTimestamp time.Time              `json:"analysis_timestamp,omitempty"`
+	Config            DeadCodeAnalysisConfig `json:"config,omitempty"`
+}
+
+// NewDeadCodeResult creates a new pmat-compatible dead code result.
+func NewDeadCodeResult() *DeadCodeResult {
+	return &DeadCodeResult{
+		Files: make([]FileDeadCodeMetrics, 0),
+		Config: DeadCodeAnalysisConfig{
+			IncludeUnreachable: false,
+			IncludeTests:       false,
+			MinDeadLines:       10,
+		},
+	}
+}
+
+// FromDeadCodeAnalysis converts the internal DeadCodeAnalysis to pmat-compatible format.
+func (r *DeadCodeResult) FromDeadCodeAnalysis(analysis *DeadCodeAnalysis) {
+	// Group items by file
+	fileMap := make(map[string]*FileDeadCodeMetrics)
+
+	// Process dead functions
+	for _, df := range analysis.DeadFunctions {
+		fm := r.getOrCreateFileMetrics(fileMap, df.File)
+		fm.AddItem(DeadCodeItem{
+			ItemType: DeadCodeTypeFunction,
+			Name:     df.Name,
+			Line:     df.Line,
+			Reason:   df.Reason,
+		})
+		// Determine confidence from item confidence
+		if df.Confidence >= 0.9 {
+			fm.Confidence = ConfidenceHigh
+		} else if df.Confidence >= 0.6 {
+			fm.Confidence = ConfidenceMedium
+		} else {
+			fm.Confidence = ConfidenceLow
+		}
+	}
+
+	// Process dead classes
+	for _, dc := range analysis.DeadClasses {
+		fm := r.getOrCreateFileMetrics(fileMap, dc.File)
+		fm.AddItem(DeadCodeItem{
+			ItemType: DeadCodeTypeClass,
+			Name:     dc.Name,
+			Line:     dc.Line,
+			Reason:   dc.Reason,
+		})
+	}
+
+	// Process dead variables
+	for _, dv := range analysis.DeadVariables {
+		fm := r.getOrCreateFileMetrics(fileMap, dv.File)
+		fm.AddItem(DeadCodeItem{
+			ItemType: DeadCodeTypeVariable,
+			Name:     dv.Name,
+			Line:     dv.Line,
+			Reason:   dv.Reason,
+		})
+	}
+
+	// Process unreachable blocks
+	for _, ub := range analysis.UnreachableCode {
+		fm := r.getOrCreateFileMetrics(fileMap, ub.File)
+		fm.AddItem(DeadCodeItem{
+			ItemType: DeadCodeTypeUnreachable,
+			Name:     "unreachable_block",
+			Line:     ub.StartLine,
+			Reason:   ub.Reason,
+		})
+	}
+
+	// Convert map to slice and calculate scores
+	for _, fm := range fileMap {
+		fm.UpdatePercentage()
+		fm.CalculateScore()
+		r.Files = append(r.Files, *fm)
+	}
+
+	// Sort files by dead score descending
+	r.sortFilesByScore()
+
+	// Build summary
+	r.buildSummary(analysis)
+
+	r.TotalFiles = analysis.Summary.TotalFilesAnalyzed
+	r.AnalyzedFiles = analysis.Summary.TotalFilesAnalyzed
+	r.AnalysisTimestamp = time.Now().UTC()
+}
+
+func (r *DeadCodeResult) getOrCreateFileMetrics(fileMap map[string]*FileDeadCodeMetrics, path string) *FileDeadCodeMetrics {
+	if fm, exists := fileMap[path]; exists {
+		return fm
+	}
+	fm := &FileDeadCodeMetrics{
+		Path:       path,
+		Confidence: ConfidenceMedium,
+		Items:      make([]DeadCodeItem, 0),
+	}
+	fileMap[path] = fm
+	return fm
+}
+
+func (r *DeadCodeResult) sortFilesByScore() {
+	// Simple bubble sort for now (files list is typically small)
+	for i := 0; i < len(r.Files)-1; i++ {
+		for j := 0; j < len(r.Files)-i-1; j++ {
+			if r.Files[j].DeadScore < r.Files[j+1].DeadScore {
+				r.Files[j], r.Files[j+1] = r.Files[j+1], r.Files[j]
+			}
+		}
+	}
+}
+
+func (r *DeadCodeResult) buildSummary(analysis *DeadCodeAnalysis) {
+	r.Summary.TotalFilesAnalyzed = analysis.Summary.TotalFilesAnalyzed
+	r.Summary.FilesWithDeadCode = len(r.Files)
+	r.Summary.DeadFunctions = analysis.Summary.TotalDeadFunctions
+	r.Summary.DeadClasses = analysis.Summary.TotalDeadClasses
+	r.Summary.DeadModules = analysis.Summary.TotalDeadVariables
+	r.Summary.UnreachableBlocks = analysis.Summary.TotalUnreachableBlocks
+
+	// Sum dead lines from file metrics
+	totalDeadLines := 0
+	totalLines := 0
+	for _, f := range r.Files {
+		totalDeadLines += f.DeadLines
+		totalLines += f.TotalLines
+	}
+	r.Summary.TotalDeadLines = totalDeadLines
+
+	if totalLines > 0 {
+		r.Summary.DeadPercentage = float32(totalDeadLines) / float32(totalLines) * 100.0
+	} else {
+		r.Summary.DeadPercentage = float32(analysis.Summary.DeadCodePercentage)
+	}
+}
+
 // ReferenceType classifies the relationship between code elements.
 type ReferenceType string
 
