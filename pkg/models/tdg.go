@@ -177,13 +177,15 @@ func (pt *PenaltyTracker) GetAttributions() []PenaltyAttribution {
 // TdgScore represents a TDG score (0-100, higher is better).
 type TdgScore struct {
 	// Component scores (each contributes to the 100-point total)
-	StructuralComplexity float32 `json:"structural_complexity"` // Max 25 points
-	SemanticComplexity   float32 `json:"semantic_complexity"`   // Max 20 points
-	DuplicationRatio     float32 `json:"duplication_ratio"`     // Max 20 points
-	CouplingScore        float32 `json:"coupling_score"`        // Max 15 points
-	DocCoverage          float32 `json:"doc_coverage"`          // Max 10 points
-	ConsistencyScore     float32 `json:"consistency_score"`     // Max 10 points
-	EntropyScore         float32 `json:"entropy_score"`         // Max 10 points (pattern entropy)
+	StructuralComplexity  float32 `json:"structural_complexity"`   // Max 20 points
+	SemanticComplexity    float32 `json:"semantic_complexity"`     // Max 15 points
+	DuplicationRatio      float32 `json:"duplication_ratio"`       // Max 15 points
+	CouplingScore         float32 `json:"coupling_score"`          // Max 15 points
+	DocCoverage           float32 `json:"doc_coverage"`            // Max 5 points
+	ConsistencyScore      float32 `json:"consistency_score"`       // Max 10 points
+	HotspotScore          float32 `json:"hotspot_score"`           // Max 10 points (churn x complexity)
+	TemporalCouplingScore float32 `json:"temporal_coupling_score"` // Max 10 points (co-change patterns)
+	EntropyScore          float32 `json:"entropy_score"`           // Max 10 points (pattern entropy)
 
 	// Aggregated score and grade
 	Total float32 `json:"total"` // 0-100 (higher is better)
@@ -203,29 +205,33 @@ type TdgScore struct {
 // NewTdgScore creates a new TDG score with default values.
 func NewTdgScore() TdgScore {
 	return TdgScore{
-		StructuralComplexity: 25.0,
-		SemanticComplexity:   20.0,
-		DuplicationRatio:     20.0,
-		CouplingScore:        15.0,
-		DocCoverage:          10.0,
-		ConsistencyScore:     10.0,
-		EntropyScore:         0.0,
-		Total:                100.0,
-		Grade:                GradeAPlus,
-		Confidence:           1.0,
-		Language:             LanguageUnknown,
+		StructuralComplexity:  20.0,
+		SemanticComplexity:    15.0,
+		DuplicationRatio:      15.0,
+		CouplingScore:         15.0,
+		DocCoverage:           5.0,
+		ConsistencyScore:      10.0,
+		HotspotScore:          10.0, // Default: no hotspot penalty
+		TemporalCouplingScore: 10.0, // Default: no temporal coupling penalty
+		EntropyScore:          0.0,
+		Total:                 100.0,
+		Grade:                 GradeAPlus,
+		Confidence:            1.0,
+		Language:              LanguageUnknown,
 	}
 }
 
 // CalculateTotal computes the total score and grade from components.
 func (s *TdgScore) CalculateTotal() {
 	// Clamp individual components to their expected weight ranges
-	s.StructuralComplexity = clampFloat32(s.StructuralComplexity, 0, 25)
-	s.SemanticComplexity = clampFloat32(s.SemanticComplexity, 0, 20)
-	s.DuplicationRatio = clampFloat32(s.DuplicationRatio, 0, 20)
+	s.StructuralComplexity = clampFloat32(s.StructuralComplexity, 0, 20)
+	s.SemanticComplexity = clampFloat32(s.SemanticComplexity, 0, 15)
+	s.DuplicationRatio = clampFloat32(s.DuplicationRatio, 0, 15)
 	s.CouplingScore = clampFloat32(s.CouplingScore, 0, 15)
-	s.DocCoverage = clampFloat32(s.DocCoverage, 0, 10)
+	s.DocCoverage = clampFloat32(s.DocCoverage, 0, 5)
 	s.ConsistencyScore = clampFloat32(s.ConsistencyScore, 0, 10)
+	s.HotspotScore = clampFloat32(s.HotspotScore, 0, 10)
+	s.TemporalCouplingScore = clampFloat32(s.TemporalCouplingScore, 0, 10)
 	s.EntropyScore = clampFloat32(s.EntropyScore, 0, 10)
 
 	// Sum all clamped components
@@ -235,14 +241,17 @@ func (s *TdgScore) CalculateTotal() {
 		s.CouplingScore +
 		s.DocCoverage +
 		s.ConsistencyScore +
+		s.HotspotScore +
+		s.TemporalCouplingScore +
 		s.EntropyScore
 
 	// Normalize to 0-100 scale
+	// Base max is 100 (20+15+15+15+5+10+10+10), but entropy can add 10 more
 	if rawTotal <= 100.0 {
 		s.Total = clampFloat32(rawTotal, 0, 100)
 	} else {
 		// Scale down proportionally when entropy pushes total above 100
-		const theoreticalMax float32 = 110.0 // 25+20+20+15+10+10+10
+		const theoreticalMax float32 = 110.0 // 20+15+15+15+5+10+10+10+10
 		s.Total = clampFloat32(rawTotal/theoreticalMax*100.0, 0, 100)
 	}
 

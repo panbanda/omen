@@ -28,6 +28,11 @@ A multi-language code analysis CLI built in Go. Omen uses tree-sitter for parsin
 - **Technical Debt Gradient (TDG)** - Composite scoring for prioritizing refactoring
 - **Dependency Graph** - Generate Mermaid diagrams of module dependencies
 - **Halstead Metrics** - Software science measurements for effort and bug estimation
+- **Hotspot Analysis** - Identify risky files combining churn and complexity metrics
+- **Temporal Coupling** - Detect files that frequently change together
+- **Code Ownership/Bus Factor** - Analyze knowledge concentration and team risk
+- **CK Metrics** - Chidamber-Kemerer object-oriented cohesion metrics
+- **Repository Map** - PageRank-ranked symbol summaries for LLM context
 
 ## What Each Analyzer Does
 
@@ -60,7 +65,7 @@ When developers write `TODO: fix this later` or `HACK: this is terrible but work
 | Performance | SLOW, OPTIMIZE, PERF | Code that works but needs to be faster |
 | Security | SECURITY, VULN, UNSAFE | Known security issues |
 
-**Why it matters:** [Potdar and Shihab's 2014 study](https://ieeexplore.ieee.org/document/6976084) found that SATD comments often stay in codebases for years. The longer they stay, the harder they are to fix because people forget the context. [Maldonado and Shihab (2015)](https://ieeexplore.ieee.org/document/7180116) showed that design debt is the most common and most dangerous type.
+**Why it matters:** [Potdar and Shihab's 2014 study](https://ieeexplore.ieee.org/document/6976075) found that SATD comments often stay in codebases for years. The longer they stay, the harder they are to fix because people forget the context. [Maldonado and Shihab (2015)](https://ieeexplore.ieee.org/document/7332619) showed that design debt is the most common and most dangerous type.
 
 **Rule of thumb:** Review SATD weekly. If a TODO is older than 6 months, either fix it or delete it.
 
@@ -75,7 +80,7 @@ Dead code includes:
 - Classes that are never instantiated
 - Code after a `return` statement that can never execute
 
-**Why it matters:** Dead code isn't just clutter. It confuses new developers who think it must be important. It increases build times and binary sizes. Worst of all, it can hide bugs - if someone "fixes" dead code thinking it runs, they've wasted time. [Romano et al. (2020)](https://ieeexplore.ieee.org/document/9054810) found that dead code is a strong predictor of other code quality problems.
+**Why it matters:** Dead code isn't just clutter. It confuses new developers who think it must be important. It increases build times and binary sizes. Worst of all, it can hide bugs - if someone "fixes" dead code thinking it runs, they've wasted time. [Romano et al. (2020)](https://ieeexplore.ieee.org/document/8370748) found that dead code is a strong predictor of other code quality problems.
 
 **Rule of thumb:** Delete dead code. Version control means you can always get it back if needed.
 
@@ -111,7 +116,7 @@ There are three types of clones:
 | Type-2 | Same structure, different names | Same function with renamed variables |
 | Type-3 | Similar code with some modifications | Functions that do almost the same thing |
 
-**Why it matters:** When you fix a bug in one copy, you have to remember to fix all the other copies too. [Juergens et al. (2009)](https://ieeexplore.ieee.org/document/5069475) found that cloned code has significantly more bugs because fixes don't get applied consistently. The more clones you have, the more likely you'll miss one during updates.
+**Why it matters:** When you fix a bug in one copy, you have to remember to fix all the other copies too. [Juergens et al. (2009)](https://ieeexplore.ieee.org/document/5070547) found that cloned code has significantly more bugs because fixes don't get applied consistently. The more clones you have, the more likely you'll miss one during updates.
 
 **Rule of thumb:** Anything copied more than twice should probably be a shared function. Aim for duplication ratio under 5%.
 
@@ -129,7 +134,7 @@ Omen combines multiple signals to predict defect probability:
 
 Each file gets a risk score from 0% to 100%.
 
-**Why it matters:** You can't review everything equally. [Menzies et al. (2007)](https://ieeexplore.ieee.org/document/4343755) showed that defect prediction helps teams focus testing and code review on the files most likely to have problems. [Rahman et al. (2014)](https://dl.acm.org/doi/10.1145/2597073.2597104) found that even simple models outperform random file selection for finding bugs.
+**Why it matters:** You can't review everything equally. [Menzies et al. (2007)](https://ieeexplore.ieee.org/document/4027145) showed that defect prediction helps teams focus testing and code review on the files most likely to have problems. [Rahman et al. (2014)](https://dl.acm.org/doi/10.1145/2568225.2568269) found that even simple models outperform random file selection for finding bugs.
 
 **Rule of thumb:** Prioritize code review for files with >70% defect probability.
 
@@ -138,24 +143,29 @@ Each file gets a risk score from 0% to 100%.
 <details>
 <summary><strong>Technical Debt Gradient (TDG)</strong> - A composite "health score" for each file</summary>
 
-TDG combines multiple metrics into a single score (0-5 scale, lower is better):
+TDG combines multiple metrics into a single score (0-100 scale, higher is better):
 
 | Component | Weight | What it measures |
 |-----------|--------|------------------|
-| Complexity | 30% | Cyclomatic and cognitive complexity |
-| Churn | 35% | How often the file changes |
+| Structural Complexity | 20% | Cyclomatic complexity and nesting depth |
+| Semantic Complexity | 15% | Cognitive complexity |
+| Duplication | 15% | Amount of cloned code |
 | Coupling | 15% | Dependencies on other modules |
-| Domain Risk | 10% | Critical areas like auth, payments, crypto |
-| Duplication | 10% | Amount of cloned code |
+| Hotspot | 10% | Churn x complexity interaction |
+| Temporal Coupling | 10% | Co-change patterns with other files |
+| Consistency | 10% | Code style and pattern adherence |
+| Documentation | 5% | Comment coverage |
 
-Scores are classified as:
-- **Normal** (< 1.5): Healthy code
-- **Warning** (1.5 - 2.5): Needs attention
-- **Critical** (> 2.5): Prioritize for refactoring
+Scores are classified into letter grades (A+ to F), where:
+- **A/A+** (90-100): Excellent - well-maintained code
+- **B** (75-89): Good - minor improvements possible
+- **C** (60-74): Needs attention - technical debt accumulating
+- **D** (50-59): Poor - significant refactoring needed
+- **F** (<50): Critical - immediate action required
 
-**Why it matters:** Technical debt is like financial debt - a little is fine, too much kills you. [Cunningham coined the term in 1992](https://dl.acm.org/doi/10.1145/157709.157715), and [Kruchten et al. (2012)](https://ieeexplore.ieee.org/document/6225999) formalized how to measure and manage it. TDG gives you a single number to track over time and compare across files.
+**Why it matters:** Technical debt is like financial debt - a little is fine, too much kills you. [Cunningham coined the term in 1992](http://c2.com/doc/oopsla92.html), and [Kruchten et al. (2012)](https://ieeexplore.ieee.org/document/6336722) formalized how to measure and manage it. TDG gives you a single number to track over time and compare across files.
 
-**Rule of thumb:** Fix critical TDG files before adding new features. Track average TDG over time - it should go down, not up.
+**Rule of thumb:** Fix files with grade C or lower before adding new features. Track average TDG over time - it should go up, not down.
 
 </details>
 
@@ -176,7 +186,7 @@ Omen builds a graph showing which files import which other files, then calculate
 <details>
 <summary><strong>Halstead Metrics</strong> - Software complexity based on operators and operands</summary>
 
-[Maurice Halstead developed these metrics in 1977](https://ieeexplore.ieee.org/book/6276903) to measure programs like physical objects:
+[Maurice Halstead developed these metrics in 1977](https://dl.acm.org/doi/10.5555/540137) to measure programs like physical objects:
 
 | Metric | Formula | What it means |
 |--------|---------|---------------|
@@ -191,6 +201,127 @@ Omen builds a graph showing which files import which other files, then calculate
 **Why it matters:** Halstead metrics give you objective measurements for comparing different implementations of the same functionality. They can estimate how long code took to write and predict how many bugs it might contain.
 
 **Rule of thumb:** Use Halstead for comparing alternative implementations. Lower effort and predicted bugs = better.
+
+</details>
+
+<details>
+<summary><strong>Hotspot Analysis</strong> - High-risk files where complexity meets frequent changes</summary>
+
+Hotspots are files that are both complex AND frequently modified. A simple file that changes often is probably fine - it's easy to work with. A complex file that rarely changes is also manageable - you can leave it alone. But a complex file that changes constantly? That's where bugs breed.
+
+Omen calculates hotspot scores by multiplying:
+- **Churn rate** - How often the file was modified in recent commits
+- **Complexity score** - Combined cyclomatic and cognitive complexity
+
+| Hotspot Score | Risk Level | Action |
+|---------------|------------|--------|
+| < 100 | Low | Monitor normally |
+| 100-500 | Medium | Consider refactoring |
+| > 500 | High | Prioritize immediately |
+
+**Why it matters:** [Adam Tornhill's "Your Code as a Crime Scene"](https://pragprog.com/titles/atcrime/your-code-as-a-crime-scene/) introduced hotspot analysis as a way to find the most impactful refactoring targets. His research shows that a small percentage of files (typically 4-8%) contain most of the bugs. [Graves et al. (2000)](https://ieeexplore.ieee.org/document/859533) demonstrated that recent change activity is a better defect predictor than code age.
+
+**Rule of thumb:** Start refactoring with your top 3 hotspots. Reducing complexity in high-churn files has the highest ROI.
+
+</details>
+
+<details>
+<summary><strong>Temporal Coupling</strong> - Files that change together reveal hidden dependencies</summary>
+
+When two files consistently change in the same commits, they're temporally coupled. This often reveals:
+- **Hidden dependencies** not visible in import statements
+- **Logical coupling** where a change in one file requires a change in another
+- **Accidental coupling** from copy-paste or inconsistent abstractions
+
+Omen analyzes your git history to find file pairs that change together:
+
+| Coupling Strength | Meaning |
+|-------------------|---------|
+| > 80% | Almost always change together - likely tight dependency |
+| 50-80% | Frequently coupled - investigate the relationship |
+| 20-50% | Moderately coupled - may be coincidental |
+| < 20% | Weakly coupled - probably independent |
+
+**Why it matters:** [Ball et al. (1997)](https://www.researchgate.net/publication/2791666_If_Your_Version_Control_System_Could_Talk) first studied co-change patterns at AT&T and found they reveal architectural violations invisible to static analysis. [Beyer and Noack (2005)](https://www.semanticscholar.org/paper/Clustering-software-artifacts-based-on-frequent-Beyer-Noack/1afc4eeb182d92631c3ce400e6999eebbca71c12) showed that temporal coupling predicts future changes - if files changed together before, they'll likely change together again.
+
+**Rule of thumb:** If two files have >50% temporal coupling but no import relationship, consider extracting a shared module or merging them.
+
+</details>
+
+<details>
+<summary><strong>Code Ownership/Bus Factor</strong> - Knowledge concentration and team risk</summary>
+
+Bus factor asks: "How many people would need to be hit by a bus before this code becomes unmaintainable?" Low bus factor means knowledge is concentrated in too few people.
+
+Omen uses git blame to calculate:
+- **Primary owner** - Who wrote most of the code
+- **Ownership ratio** - What percentage one person owns
+- **Contributor count** - How many people have touched the file
+- **Bus factor** - Number of major contributors (>5% of code)
+
+| Ownership Ratio | Risk Level | What it means |
+|-----------------|------------|---------------|
+| > 90% | High risk | Single point of failure |
+| 70-90% | Medium risk | Limited knowledge sharing |
+| 50-70% | Low risk | Healthy distribution |
+| < 50% | Very low | Broad ownership |
+
+**Why it matters:** [Bird et al. (2011)](https://ieeexplore.ieee.org/document/6032488) found that code with many minor contributors has more bugs than code with clear ownership, but code owned by a single person creates organizational risk. The sweet spot is 2-4 significant contributors per module. [Nagappan et al. (2008)](https://www.microsoft.com/en-us/research/publication/the-influence-of-organizational-structure-on-software-quality/) showed that organizational metrics (like ownership) predict defects better than code metrics alone.
+
+**Rule of thumb:** Files with >80% single ownership should have documented knowledge transfer. Critical files should have at least 2 people who understand them.
+
+</details>
+
+<details>
+<summary><strong>CK Metrics</strong> - Object-oriented design quality measurements</summary>
+
+The Chidamber-Kemerer (CK) metrics suite measures object-oriented design quality:
+
+| Metric | Name | What it measures | Threshold |
+|--------|------|------------------|-----------|
+| WMC | Weighted Methods per Class | Sum of method complexities | < 20 |
+| CBO | Coupling Between Objects | Number of other classes used | < 10 |
+| RFC | Response for Class | Methods that can be invoked | < 50 |
+| LCOM | Lack of Cohesion in Methods | Methods not sharing fields | < 3 |
+| DIT | Depth of Inheritance Tree | Inheritance chain length | < 5 |
+| NOC | Number of Children | Direct subclasses | < 6 |
+
+**LCOM (Lack of Cohesion)** is particularly important. Low LCOM means methods in a class use similar instance variables - the class is focused. High LCOM means the class is doing unrelated things and should probably be split.
+
+**Why it matters:** [Chidamber and Kemerer's 1994 paper](https://ieeexplore.ieee.org/document/295895) established these metrics as the foundation of OO quality measurement. [Basili et al. (1996)](https://ieeexplore.ieee.org/document/544352) validated them empirically, finding that WMC and CBO strongly correlate with fault-proneness. These metrics have been cited thousands of times and remain the standard for OO design analysis.
+
+**Rule of thumb:** Classes violating multiple CK thresholds are candidates for refactoring. High WMC + high LCOM often indicates a "god class" that should be split.
+
+</details>
+
+<details>
+<summary><strong>Repository Map</strong> - PageRank-ranked symbol index for LLM context</summary>
+
+Repository maps provide a compact summary of your codebase's important symbols, ranked by structural importance using PageRank. This is designed for LLM context windows - you get the most important functions and types first.
+
+For each symbol, the map includes:
+- **Name and kind** (function, class, method, interface)
+- **File location** and line number
+- **Signature** for quick understanding
+- **PageRank score** based on how many other symbols depend on it
+- **In/out degree** showing dependency connections
+
+**Why it matters:** LLMs have limited context windows. Stuffing them with entire files wastes tokens on less important code. PageRank, [developed by Brin and Page (1998)](https://snap.stanford.edu/class/cs224w-readings/Brin98Anatomy.pdf), identifies structurally important nodes in a graph. Applied to code, it surfaces the symbols that are most central to understanding the codebase.
+
+**Example output:**
+```
+# Repository Map (Top 20 symbols by PageRank)
+
+## parser.ParseFile (function) - pkg/parser/parser.go:45
+  PageRank: 0.0823 | In: 12 | Out: 5
+  func ParseFile(path string) (*Result, error)
+
+## models.TdgScore (struct) - pkg/models/tdg.go:28
+  PageRank: 0.0651 | In: 8 | Out: 3
+  type TdgScore struct
+```
+
+**Rule of thumb:** Use `omen context --repo-map --top 50` to generate context for LLM prompts. The top 50 symbols usually capture the essential architecture.
 
 </details>
 
@@ -253,6 +384,18 @@ omen analyze tdg ./src
 
 # Generate dependency graph
 omen analyze graph ./src --metrics
+
+# Find hotspots (high churn + complexity)
+omen analyze hotspot ./src
+
+# Detect temporal coupling
+omen analyze temporal ./
+
+# Analyze code ownership
+omen analyze ownership ./src
+
+# Calculate CK cohesion metrics
+omen analyze cohesion ./src
 ```
 
 ## Commands
@@ -276,6 +419,10 @@ omen analyze graph ./src --metrics
 | `defect` | `predict` | Defect probability prediction |
 | `tdg` | - | Technical Debt Gradient scores |
 | `graph` | `dag` | Dependency graph (Mermaid output) |
+| `hotspot` | `hs` | Churn x complexity risk analysis |
+| `temporal-coupling` | `tc` | Temporal coupling detection |
+| `ownership` | `own`, `bus-factor` | Code ownership and bus factor |
+| `cohesion` | `ck` | CK object-oriented metrics |
 | `lint-hotspot` | `lh` | Lint violation density |
 
 ## Output Formats
@@ -341,6 +488,36 @@ omen analyze tdg ./src --hotspots 5
 
 ```bash
 omen context ./src --include-metrics --include-graph
+```
+
+### Repository Map for LLM Context
+
+```bash
+omen context ./src --repo-map --top 50
+```
+
+### Find Hotspots (High-Risk Files)
+
+```bash
+omen analyze hotspot ./src --top 10
+```
+
+### Analyze Temporal Coupling
+
+```bash
+omen analyze temporal ./ --min-coupling 0.5 --min-commits 5
+```
+
+### Check Bus Factor Risk
+
+```bash
+omen analyze ownership ./src --top 20
+```
+
+### CK Metrics for Classes
+
+```bash
+omen analyze cohesion ./src --sort lcom
 ```
 
 ## Contributing

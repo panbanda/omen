@@ -13,17 +13,22 @@ type WeightConfig struct {
 	Coupling             float32 `json:"coupling" toml:"coupling"`
 	Documentation        float32 `json:"documentation" toml:"documentation"`
 	Consistency          float32 `json:"consistency" toml:"consistency"`
+	Hotspot              float32 `json:"hotspot" toml:"hotspot"`
+	TemporalCoupling     float32 `json:"temporal_coupling" toml:"temporal_coupling"`
 }
 
 // DefaultWeightConfig returns the default weight configuration.
+// Weights are rebalanced to include hotspot (10%) and temporal coupling (10%).
 func DefaultWeightConfig() WeightConfig {
 	return WeightConfig{
-		StructuralComplexity: 25.0,
-		SemanticComplexity:   20.0,
-		Duplication:          20.0,
-		Coupling:             15.0,
-		Documentation:        10.0,
-		Consistency:          10.0,
+		StructuralComplexity: 20.0, // Reduced from 25 to make room for new metrics
+		SemanticComplexity:   15.0, // Reduced from 20
+		Duplication:          15.0, // Reduced from 20
+		Coupling:             15.0, // Same
+		Documentation:        5.0,  // Reduced from 10
+		Consistency:          10.0, // Same
+		Hotspot:              10.0, // New: churn x complexity
+		TemporalCoupling:     10.0, // New: co-change patterns
 	}
 }
 

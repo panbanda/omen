@@ -2,9 +2,9 @@ package analyzer
 
 import (
 	"sort"
-	"sync"
 
 	"github.com/panbanda/omen/pkg/models"
+	"github.com/sourcegraph/conc"
 )
 
 // DefectAnalyzer predicts defect probability using PMAT weights.
@@ -32,32 +32,28 @@ func (a *DefectAnalyzer) AnalyzeProject(repoPath string, files []string) (*model
 		Weights: a.weights,
 	}
 
-	// Run sub-analyzers in parallel
-	var wg sync.WaitGroup
+	// Run sub-analyzers in parallel using conc
 	var complexityAnalysis *models.ComplexityAnalysis
 	var churnAnalysis *models.ChurnAnalysis
 	var dupAnalysis *models.CloneAnalysis
 	var complexityErr, churnErr, dupErr error
 
-	wg.Add(3)
+	wg := conc.NewWaitGroup()
 
 	// Get complexity metrics
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		complexityAnalysis, complexityErr = a.complexity.AnalyzeProject(files)
-	}()
+	})
 
 	// Get churn metrics
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		churnAnalysis, churnErr = a.churn.AnalyzeFiles(repoPath, files)
-	}()
+	})
 
 	// Get duplicate metrics
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		dupAnalysis, dupErr = a.duplicates.AnalyzeProject(files)
-	}()
+	})
 
 	wg.Wait()
 

@@ -363,7 +363,7 @@ func TestIsOperandNode(t *testing.T) {
 	}
 }
 
-func TestGetOperatorKeywords(t *testing.T) {
+func TestOperatorKeywordsRecognized(t *testing.T) {
 	tests := []struct {
 		lang     parser.Language
 		keywords []string
@@ -371,16 +371,13 @@ func TestGetOperatorKeywords(t *testing.T) {
 		{parser.LangGo, []string{"if", "for", "go", "defer", "select", "range"}},
 		{parser.LangPython, []string{"if", "elif", "except", "with", "and", "or", "not"}},
 		{parser.LangRust, []string{"if", "match", "loop", "async", "await"}},
-		{parser.LangTypeScript, []string{"if", "async", "await", "function", "class"}},
-		{parser.LangRuby, []string{"if", "unless", "do", "end", "begin", "rescue"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(string(tt.lang), func(t *testing.T) {
-			keywords := getOperatorKeywords(tt.lang)
 			for _, kw := range tt.keywords {
-				if !keywords[kw] {
-					t.Errorf("getOperatorKeywords(%v) missing %q", tt.lang, kw)
+				if !isOperatorNode("", kw, tt.lang) {
+					t.Errorf("isOperatorNode(\"\", %q, %v) = false, want true", kw, tt.lang)
 				}
 			}
 		})

@@ -682,35 +682,37 @@ func itoa(i int) string {
 	return string(buf[pos:])
 }
 
+// keywords is a pre-allocated set of programming language keywords.
+var keywords = map[string]bool{
+	// Go
+	"func": true, "return": true, "if": true, "else": true, "for": true,
+	"range": true, "switch": true, "case": true, "default": true, "break": true,
+	"continue": true, "goto": true, "fallthrough": true, "defer": true,
+	"go": true, "select": true, "chan": true, "map": true, "struct": true,
+	"interface": true, "type": true, "var": true, "const": true, "package": true,
+	"import": true, "nil": true, "true": true, "false": true,
+	// Rust
+	"fn": true, "let": true, "mut": true, "match": true, "loop": true,
+	"while": true, "impl": true, "trait": true, "mod": true, "use": true,
+	"pub": true, "crate": true, "self": true, "Self": true, "where": true,
+	"async": true, "await": true, "static": true, "extern": true, "unsafe": true,
+	"enum": true, "move": true, "ref": true, "as": true, "in": true,
+	// Python
+	"def": true, "class": true, "elif": true, "try": true, "except": true,
+	"finally": true, "with": true, "lambda": true, "yield": true, "assert": true,
+	"raise": true, "pass": true, "del": true, "global": true, "nonlocal": true,
+	"and": true, "or": true, "not": true, "is": true, "from": true,
+	// JavaScript/TypeScript
+	"function": true, "new": true, "this": true, "super": true,
+	"extends": true, "implements": true, "export": true, "throw": true,
+	"catch": true, "instanceof": true, "typeof": true, "void": true,
+	"delete": true, "debugger": true,
+	// Common
+	"null": true, "undefined": true,
+}
+
 // isKeyword checks if a token is a programming language keyword.
 func isKeyword(token string) bool {
-	keywords := map[string]bool{
-		// Go
-		"func": true, "return": true, "if": true, "else": true, "for": true,
-		"range": true, "switch": true, "case": true, "default": true, "break": true,
-		"continue": true, "goto": true, "fallthrough": true, "defer": true,
-		"go": true, "select": true, "chan": true, "map": true, "struct": true,
-		"interface": true, "type": true, "var": true, "const": true, "package": true,
-		"import": true, "nil": true, "true": true, "false": true,
-		// Rust
-		"fn": true, "let": true, "mut": true, "match": true, "loop": true,
-		"while": true, "impl": true, "trait": true, "mod": true, "use": true,
-		"pub": true, "crate": true, "self": true, "Self": true, "where": true,
-		"async": true, "await": true, "static": true, "extern": true, "unsafe": true,
-		"enum": true, "move": true, "ref": true, "as": true, "in": true,
-		// Python
-		"def": true, "class": true, "elif": true, "try": true, "except": true,
-		"finally": true, "with": true, "lambda": true, "yield": true, "assert": true,
-		"raise": true, "pass": true, "del": true, "global": true, "nonlocal": true,
-		"and": true, "or": true, "not": true, "is": true, "from": true,
-		// JavaScript/TypeScript
-		"function": true, "new": true, "this": true, "super": true,
-		"extends": true, "implements": true, "export": true, "throw": true,
-		"catch": true, "instanceof": true, "typeof": true, "void": true,
-		"delete": true, "debugger": true,
-		// Common
-		"null": true, "undefined": true,
-	}
 	return keywords[token]
 }
 
@@ -738,20 +740,22 @@ func isLiteral(token string) bool {
 	return false
 }
 
+// operators is a pre-allocated set of operators and delimiters.
+var operators = map[string]bool{
+	"+": true, "-": true, "*": true, "/": true, "%": true,
+	"=": true, "==": true, "!=": true, "<": true, ">": true,
+	"<=": true, ">=": true, "&&": true, "||": true, "!": true,
+	"&": true, "|": true, "^": true, "<<": true, ">>": true,
+	"+=": true, "-=": true, "*=": true, "/=": true, "%=": true,
+	"&=": true, "|=": true, "^=": true, "<<=": true, ">>=": true,
+	"++": true, "--": true, "->": true, "=>": true, "::": true,
+	"..": true, "...": true, "?": true, ":": true,
+	"(": true, ")": true, "[": true, "]": true, "{": true, "}": true,
+	",": true, ";": true, ".": true,
+}
+
 // isOperatorOrDelimiter checks if a token is an operator or delimiter.
 func isOperatorOrDelimiter(token string) bool {
-	operators := map[string]bool{
-		"+": true, "-": true, "*": true, "/": true, "%": true,
-		"=": true, "==": true, "!=": true, "<": true, ">": true,
-		"<=": true, ">=": true, "&&": true, "||": true, "!": true,
-		"&": true, "|": true, "^": true, "<<": true, ">>": true,
-		"+=": true, "-=": true, "*=": true, "/=": true, "%=": true,
-		"&=": true, "|=": true, "^=": true, "<<=": true, ">>=": true,
-		"++": true, "--": true, "->": true, "=>": true, "::": true,
-		"..": true, "...": true, "?": true, ":": true,
-		"(": true, ")": true, "[": true, "]": true, "{": true, "}": true,
-		",": true, ";": true, ".": true,
-	}
 	return operators[token]
 }
 
