@@ -129,7 +129,7 @@ func (c *Cache) Set(key string, data []byte) error {
 		return err
 	}
 
-	return os.WriteFile(c.keyPath(key), entryData, 0644)
+	return os.WriteFile(c.keyPath(key), entryData, 0600)
 }
 
 // SetWithHash stores data in the cache with a hash for validation.
@@ -149,7 +149,7 @@ func (c *Cache) SetWithHash(key, hash string, data []byte) error {
 		return err
 	}
 
-	return os.WriteFile(c.keyPath(key), entryData, 0644)
+	return os.WriteFile(c.keyPath(key), entryData, 0600)
 }
 
 // Invalidate removes a cache entry.
