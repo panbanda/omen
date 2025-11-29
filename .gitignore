@@ -1,5 +1,5 @@
 # Binaries
-omen
+/omen
 *.exe
 *.exe~
 *.dll
