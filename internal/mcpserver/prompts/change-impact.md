@@ -1,3 +1,7 @@
+---
+description: Analyze the potential impact of changes to specific files, including dependencies, temporal coupling, and ownership.
+---
+
 # Change Impact Analysis
 
 Analyze the potential impact of changes to specific files or functions in this codebase.

@@ -1,3 +1,7 @@
+---
+description: Find the most likely locations for bugs using defect prediction, hotspot analysis, temporal coupling, and ownership patterns.
+---
+
 # Bug Hunt
 
 Identify the most likely locations for bugs in this codebase using statistical defect prediction.

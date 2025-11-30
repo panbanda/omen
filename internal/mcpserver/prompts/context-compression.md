@@ -1,3 +1,7 @@
+---
+description: Generate a compressed context summary of a codebase for LLM consumption, using PageRank-ranked symbols and dependency graphs.
+---
+
 # Context Compression
 
 Generate a compressed context summary of this codebase that fits within LLM context windows while preserving the most important architectural information.

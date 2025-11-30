@@ -1,97 +1,85 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
 	"embed"
-	"fmt"
+	"path/filepath"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"gopkg.in/yaml.v3"
 )
 
 //go:embed prompts/*.md
 var promptFiles embed.FS
 
-// promptDefinitions lists all available prompts.
-// Each prompt's content is embedded from prompts/*.md files.
-var promptDefinitions = []struct {
-	Name        string
-	Description string
-	ContentFile string
-}{
-	{
-		Name:        "context-compression",
-		Description: "Generate a compressed context summary of a codebase for LLM consumption, using PageRank-ranked symbols and dependency graphs.",
-		ContentFile: "prompts/context-compression.md",
-	},
-	{
-		Name:        "refactoring-priority",
-		Description: "Identify highest-priority refactoring targets based on TDG scores, complexity, code clones, and technical debt markers.",
-		ContentFile: "prompts/refactoring-priority.md",
-	},
-	{
-		Name:        "bug-hunt",
-		Description: "Find the most likely locations for bugs using defect prediction, hotspot analysis, temporal coupling, and ownership patterns.",
-		ContentFile: "prompts/bug-hunt.md",
-	},
-	{
-		Name:        "change-impact",
-		Description: "Analyze the potential impact of changes to specific files, including dependencies, temporal coupling, and ownership.",
-		ContentFile: "prompts/change-impact.md",
-	},
-	{
-		Name:        "codebase-onboarding",
-		Description: "Generate an onboarding guide for developers new to a codebase, including key symbols, architecture, and subject matter experts.",
-		ContentFile: "prompts/codebase-onboarding.md",
-	},
-	{
-		Name:        "code-review-focus",
-		Description: "Identify what to focus on when reviewing code changes, including complexity deltas, duplication, and risk assessment.",
-		ContentFile: "prompts/code-review-focus.md",
-	},
-	{
-		Name:        "architecture-review",
-		Description: "Analyze architectural health including module coupling, cohesion metrics, hidden dependencies, and design smells.",
-		ContentFile: "prompts/architecture-review.md",
-	},
-	{
-		Name:        "tech-debt-report",
-		Description: "Generate a comprehensive technical debt assessment including SATD, quality grades, duplication, and high-risk areas.",
-		ContentFile: "prompts/tech-debt-report.md",
-	},
-	{
-		Name:        "test-targeting",
-		Description: "Identify which files and functions most need additional test coverage based on risk, complexity, and churn.",
-		ContentFile: "prompts/test-targeting.md",
-	},
-	{
-		Name:        "quality-gate",
-		Description: "Perform a quality gate check against configurable thresholds for TDG grade, complexity, duplication, and defect risk.",
-		ContentFile: "prompts/quality-gate.md",
-	},
+// promptFrontmatter is parsed from YAML frontmatter in prompt files.
+type promptFrontmatter struct {
+	Description string `yaml:"description"`
 }
 
-// registerPrompts adds all prompts to the MCP server.
+// registerPrompts discovers and registers all prompts from embedded markdown files.
 func (s *Server) registerPrompts() {
-	for _, def := range promptDefinitions {
-		d := def // capture for closure
-		prompt := &mcp.Prompt{
-			Name:        d.Name,
-			Description: d.Description,
+	entries, err := promptFiles.ReadDir("prompts")
+	if err != nil {
+		return
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
 		}
-		s.server.AddPrompt(prompt, func(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
-			content, err := promptFiles.ReadFile(d.ContentFile)
-			if err != nil {
-				return nil, fmt.Errorf("failed to read prompt: %w", err)
-			}
-			return &mcp.GetPromptResult{
-				Description: d.Description,
-				Messages: []*mcp.PromptMessage{
-					{
-						Role:    "user",
-						Content: &mcp.TextContent{Text: string(content)},
-					},
+
+		name := strings.TrimSuffix(entry.Name(), ".md")
+		path := filepath.Join("prompts", entry.Name())
+
+		content, err := promptFiles.ReadFile(path)
+		if err != nil {
+			continue
+		}
+
+		description, body := parseFrontmatter(content)
+
+		prompt := &mcp.Prompt{
+			Name:        name,
+			Description: description,
+		}
+		s.server.AddPrompt(prompt, makePromptHandler(description, body))
+	}
+}
+
+// parseFrontmatter extracts YAML frontmatter and returns description and body.
+func parseFrontmatter(content []byte) (description string, body string) {
+	if !bytes.HasPrefix(content, []byte("---\n")) {
+		return "", string(content)
+	}
+
+	rest := content[4:]
+	end := bytes.Index(rest, []byte("\n---\n"))
+	if end == -1 {
+		return "", string(content)
+	}
+
+	var fm promptFrontmatter
+	if err := yaml.Unmarshal(rest[:end], &fm); err != nil {
+		return "", string(content)
+	}
+
+	body = strings.TrimPrefix(string(rest[end+5:]), "\n")
+	return fm.Description, body
+}
+
+func makePromptHandler(description, body string) mcp.PromptHandler {
+	return func(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+		return &mcp.GetPromptResult{
+			Description: description,
+			Messages: []*mcp.PromptMessage{
+				{
+					Role:    "user",
+					Content: &mcp.TextContent{Text: body},
 				},
-			}, nil
-		})
+			},
+		}, nil
 	}
 }

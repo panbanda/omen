@@ -1,3 +1,7 @@
+---
+description: Generate an onboarding guide for developers new to a codebase, including key symbols, architecture, and subject matter experts.
+---
+
 # Codebase Onboarding
 
 Generate an onboarding guide for a developer new to this codebase.

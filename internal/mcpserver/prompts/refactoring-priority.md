@@ -1,3 +1,7 @@
+---
+description: Identify highest-priority refactoring targets based on TDG scores, complexity, code clones, and technical debt markers.
+---
+
 # Refactoring Priority
 
 Identify the highest-priority refactoring targets in this codebase based on quality metrics and technical debt signals.

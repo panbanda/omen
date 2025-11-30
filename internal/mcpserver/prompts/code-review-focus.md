@@ -1,3 +1,7 @@
+---
+description: Identify what to focus on when reviewing code changes, including complexity deltas, duplication, and risk assessment.
+---
+
 # Code Review Focus
 
 Identify what to focus on when reviewing code changes in this codebase.

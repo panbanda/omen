@@ -1,3 +1,7 @@
+---
+description: Perform a quality gate check against configurable thresholds for TDG grade, complexity, duplication, and defect risk.
+---
+
 # Quality Gate Check
 
 Perform a quality gate check to determine if the codebase meets quality thresholds.

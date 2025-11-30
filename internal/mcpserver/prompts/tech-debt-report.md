@@ -1,3 +1,7 @@
+---
+description: Generate a comprehensive technical debt assessment including SATD, quality grades, duplication, and high-risk areas.
+---
+
 # Technical Debt Report
 
 Generate a comprehensive technical debt assessment for this codebase.

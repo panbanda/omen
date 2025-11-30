@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -717,31 +718,37 @@ func TestScanFilesWithFile(t *testing.T) {
 	}
 }
 
-// TestPromptDefinitions verifies all prompts have valid definitions.
-func TestPromptDefinitions(t *testing.T) {
-	if len(promptDefinitions) == 0 {
-		t.Fatal("no prompt definitions found")
+// TestPromptFiles verifies all embedded prompt files have valid frontmatter.
+func TestPromptFiles(t *testing.T) {
+	entries, err := promptFiles.ReadDir("prompts")
+	if err != nil {
+		t.Fatalf("failed to read prompts dir: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("no prompt files found")
 	}
 
-	for _, def := range promptDefinitions {
-		t.Run(def.Name, func(t *testing.T) {
-			if def.Name == "" {
-				t.Error("prompt name is empty")
-			}
-			if def.Description == "" {
-				t.Error("prompt description is empty")
-			}
-			if def.ContentFile == "" {
-				t.Error("prompt content file is empty")
-			}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
 
-			// Verify embedded file exists and is readable
-			content, err := promptFiles.ReadFile(def.ContentFile)
+		name := strings.TrimSuffix(entry.Name(), ".md")
+		t.Run(name, func(t *testing.T) {
+			content, err := promptFiles.ReadFile("prompts/" + entry.Name())
 			if err != nil {
-				t.Errorf("failed to read embedded file %s: %v", def.ContentFile, err)
+				t.Fatalf("failed to read file: %v", err)
 			}
 			if len(content) == 0 {
-				t.Errorf("embedded file %s is empty", def.ContentFile)
+				t.Fatal("file is empty")
+			}
+
+			description, body := parseFrontmatter(content)
+			if description == "" {
+				t.Error("frontmatter description is empty")
+			}
+			if body == "" {
+				t.Error("body is empty")
 			}
 		})
 	}

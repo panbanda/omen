@@ -1,3 +1,7 @@
+---
+description: Analyze architectural health including module coupling, cohesion metrics, hidden dependencies, and design smells.
+---
+
 # Architecture Review
 
 Analyze the architectural health of this codebase.
