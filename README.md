@@ -572,7 +572,7 @@ omen analyze cohesion ./src --sort lcom
 
 Omen includes a Model Context Protocol (MCP) server that exposes all analyzers as tools for LLMs like Claude. This enables AI assistants to analyze codebases directly.
 
-### Configuration
+### Claude Desktop
 
 Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
 
@@ -585,6 +585,27 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
     }
   }
 }
+```
+
+### Claude Code
+
+Add to your Claude Code settings (`.claude/settings.json` in your project or `~/.claude/settings.json` globally):
+
+```json
+{
+  "mcpServers": {
+    "omen": {
+      "command": "omen",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Or use the CLI:
+
+```bash
+claude mcp add omen -- omen mcp
 ```
 
 ### Available Tools
@@ -615,6 +636,58 @@ Once configured, you can ask Claude:
 - "Find technical debt in the src directory"
 - "What are the hotspot files that need refactoring?"
 - "Show me the bus factor risk for this project"
+
+## Claude Code Skills
+
+Omen includes a collection of skills that guide Claude through code analysis workflows. Skills provide structured prompts that combine multiple Omen tools to accomplish higher-level tasks.
+
+### Installing as a Plugin
+
+Install the Omen plugin in Claude Code:
+
+```bash
+/plugin install panbanda/omen
+```
+
+Or via marketplace (useful if Omen adds more plugins later):
+
+```bash
+/plugin marketplace add panbanda/omen
+/plugin install omen@omen-marketplace
+```
+
+Verify installation with `/skills` to see available Omen skills.
+
+### Available Skills
+
+| Skill | Description |
+|-------|-------------|
+| `omen:context-compression` | Generate compressed context summaries using PageRank-ranked symbols |
+| `omen:refactoring-priority` | Identify highest-priority refactoring targets |
+| `omen:bug-hunt` | Find likely bug locations using defect prediction and hotspots |
+| `omen:change-impact` | Analyze blast radius before making changes |
+| `omen:codebase-onboarding` | Generate onboarding guides for new developers |
+| `omen:code-review-focus` | Identify what to focus on when reviewing PRs |
+| `omen:architecture-review` | Analyze architectural health and design smells |
+| `omen:tech-debt-report` | Generate comprehensive technical debt assessments |
+| `omen:test-targeting` | Identify files most needing test coverage |
+| `omen:quality-gate` | Run pass/fail quality checks against thresholds |
+
+### Using Skills
+
+Invoke a skill by name:
+
+```
+/skill omen:bug-hunt
+```
+
+Or reference in conversation:
+
+```
+Use the omen:refactoring-priority skill to analyze this codebase
+```
+
+Skills require the Omen MCP server to be configured (see MCP Server section above).
 
 ## Contributing
 

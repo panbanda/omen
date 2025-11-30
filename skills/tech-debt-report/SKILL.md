@@ -1,0 +1,174 @@
+---
+name: tech-debt-report
+description: |
+  Generate a comprehensive technical debt assessment including SATD, quality grades, duplication, and high-risk areas. Use this skill for sprint planning, stakeholder reports, or justifying refactoring time.
+---
+
+# Technical Debt Report
+
+Generate a comprehensive technical debt assessment with quantified metrics, prioritized issues, and actionable recommendations.
+
+## When to Use
+
+- Sprint planning for tech debt reduction
+- Reporting to stakeholders on code health
+- Justifying refactoring time allocation
+- Tracking debt trends over time
+
+## Prerequisites
+
+Omen must be available as an MCP server. Add to Claude Code settings:
+
+```json
+{
+  "mcpServers": {
+    "omen": {
+      "command": "omen",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+## Workflow
+
+### Step 1: Scan for Self-Admitted Debt
+
+Use the `analyze_satd` tool to find explicit debt markers:
+
+```
+analyze_satd(paths: ["."])
+```
+
+Captures TODO, FIXME, HACK, XXX, and other debt markers with severity.
+
+### Step 2: Calculate TDG Scores
+
+Use the `analyze_tdg` tool for quality grades:
+
+```
+analyze_tdg(paths: ["."], hotspots: 20)
+```
+
+TDG provides A-F grades based on complexity, churn, and health metrics.
+
+### Step 3: Measure Duplication
+
+Use the `analyze_duplicates` tool:
+
+```
+analyze_duplicates(paths: ["."])
+```
+
+Calculate duplication ratio and identify clone clusters.
+
+### Step 4: Assess Defect Risk
+
+Use the `analyze_defect` tool:
+
+```
+analyze_defect(paths: ["."])
+```
+
+Identify files with high predicted defect probability.
+
+### Step 5: Check Complexity
+
+Use the `analyze_complexity` tool:
+
+```
+analyze_complexity(paths: ["."])
+```
+
+Find functions exceeding complexity thresholds.
+
+## Debt Categories
+
+Organize findings by category:
+
+| Category | Source | Impact |
+|----------|--------|--------|
+| Explicit | SATD markers | Known issues, documented |
+| Structural | TDG grade D/F | Hard to maintain |
+| Duplication | Clone ratio > 5% | Maintenance burden |
+| Risk | Defect probability > 0.7 | Likely to cause bugs |
+| Complexity | Cyclomatic > 15 | Hard to test/modify |
+
+## Output Format
+
+Generate a stakeholder-ready report:
+
+```markdown
+# Technical Debt Report
+Generated: YYYY-MM-DD
+
+## Executive Summary
+
+| Metric | Value | Status |
+|--------|-------|--------|
+| Overall TDG Grade | C+ | Needs attention |
+| Duplication Ratio | 7.2% | Above target (5%) |
+| High-Risk Files | 12 | 8% of codebase |
+| SATD Items | 45 | 12 critical |
+
+## Debt by Category
+
+### Explicit Debt (SATD)
+- **Critical**: 12 items (FIXME, HACK)
+- **High**: 18 items (TODO with urgency)
+- **Normal**: 15 items (TODO)
+
+Top items:
+1. `payment/processor.go:45` - HACK: Temporary fix for race condition
+2. `auth/session.go:123` - FIXME: Security review needed
+3. ...
+
+### Structural Debt (TDG Grades)
+| Grade | Files | % of Codebase |
+|-------|-------|---------------|
+| A | 45 | 30% |
+| B | 52 | 35% |
+| C | 32 | 21% |
+| D | 15 | 10% |
+| F | 6 | 4% |
+
+Worst files:
+1. `legacy/importer.go` - Grade F (TDG: 18)
+2. `core/processor.go` - Grade D (TDG: 35)
+
+### Duplication Debt
+- **Total clones**: 23 clone groups
+- **Duplicated lines**: 1,245 (7.2% of codebase)
+
+Largest clones:
+1. 85 lines duplicated across 3 files in `handlers/`
+2. 45 lines duplicated between `validator.go` and `checker.go`
+
+### Risk Debt
+- **High-risk files**: 12 (defect probability > 0.7)
+- **Medium-risk files**: 28 (probability 0.5-0.7)
+
+## Recommended Actions
+
+### Sprint 1 (Quick Wins)
+1. Address 12 critical SATD items (est: 8 hours)
+2. Consolidate largest clone cluster (est: 4 hours)
+3. Split `legacy/importer.go` (est: 6 hours)
+
+### Sprint 2-3 (Structural)
+1. Refactor Grade D files (est: 20 hours)
+2. Reduce complexity in `core/processor.go` (est: 8 hours)
+
+### Long Term
+1. Eliminate all Grade F files
+2. Reduce duplication to < 3%
+3. Add tests to high-risk files
+
+## Tracking
+
+| Metric | Last Month | This Month | Trend |
+|--------|------------|------------|-------|
+| TDG Average | 62 | 58 | Improving |
+| Duplication | 8.1% | 7.2% | Improving |
+| SATD Critical | 15 | 12 | Improving |
+```

@@ -1,0 +1,125 @@
+---
+name: change-impact
+description: |
+  Analyze the potential impact of changes to specific files, including dependencies, temporal coupling, and ownership. Use this skill before making significant changes to understand blast radius and identify stakeholders.
+---
+
+# Change Impact Analysis
+
+Understand the potential blast radius of changes before making them by analyzing dependencies, coupling patterns, and ownership.
+
+## When to Use
+
+- Before refactoring a core component
+- Planning a breaking API change
+- Estimating scope of a feature that touches shared code
+- Identifying who to notify about upcoming changes
+
+## Prerequisites
+
+Omen must be available as an MCP server. Add to Claude Code settings:
+
+```json
+{
+  "mcpServers": {
+    "omen": {
+      "command": "omen",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+## Workflow
+
+### Step 1: Map Dependencies
+
+Use the `analyze_graph` tool to find what depends on the target:
+
+```
+analyze_graph(paths: ["."], scope: "function", include_metrics: true)
+```
+
+Identify:
+- Direct dependents (files that import the target)
+- Transitive dependents (files that import the dependents)
+
+### Step 2: Check Temporal Coupling
+
+Use the `analyze_temporal_coupling` tool to find implicit dependencies:
+
+```
+analyze_temporal_coupling(paths: ["."])
+```
+
+Files with high temporal coupling to the target often need to change together even without explicit imports.
+
+### Step 3: Identify Stakeholders
+
+Use the `analyze_ownership` tool to find who works on related code:
+
+```
+analyze_ownership(paths: ["."])
+```
+
+Identify:
+- Primary owner of the target file
+- Owners of dependent files
+- Subject matter experts to consult
+
+## Impact Categories
+
+Classify impact by type:
+
+| Category | Description | Action |
+|----------|-------------|--------|
+| Direct | Explicit imports/calls | Will break if signature changes |
+| Implicit | Temporal coupling | May break due to shared assumptions |
+| Behavioral | Same owner/team | Likely understands the change |
+| Unknown | No coupling, different owner | Needs extra review |
+
+## Output Format
+
+Present impact analysis as:
+
+```markdown
+# Change Impact: `target/file.go:FunctionName`
+
+## Direct Dependencies (will break)
+- `consumer/a.go` - calls FunctionName directly
+- `consumer/b.go` - uses returned type
+- `test/target_test.go` - tests the function
+
+## Implicit Dependencies (may break)
+- `related/cache.go` - 0.85 temporal coupling
+  - Always changes with target
+  - Likely shares state or assumptions
+- `related/config.go` - 0.72 temporal coupling
+  - Often changes together
+  - May depend on same configuration
+
+## Stakeholders to Notify
+- alice@example.com - Primary owner of target (85% of commits)
+- bob@example.com - Owns consumer/a.go
+- charlie@example.com - Owns related/cache.go
+
+## Risk Assessment
+- **Blast Radius**: 5 files directly, 12 files transitively
+- **Coupling Risk**: 2 files with implicit dependencies
+- **Team Impact**: 3 developers should be notified
+
+## Recommended Approach
+1. Coordinate with alice (primary owner)
+2. Update tests in target_test.go first
+3. Check related/cache.go for shared assumptions
+4. Notify bob and charlie before merging
+```
+
+## Reducing Impact
+
+Strategies to minimize blast radius:
+
+1. **Add an adapter**: Wrap changes behind a stable interface
+2. **Deprecate first**: Add deprecation warnings before removing
+3. **Feature flag**: Gate changes behind a flag for gradual rollout
+4. **Split the change**: Break into smaller, reviewable pieces
