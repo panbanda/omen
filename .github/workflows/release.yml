@@ -15,15 +15,17 @@ jobs:
     runs-on: ubuntu-latest
 
     outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
+      release_created: ${{ steps.release.outputs['.--release_created'] }}
+      tag_name: ${{ steps.release.outputs['.--tag_name'] }}
+      skills_release_created: ${{ steps.release.outputs['.claude-plugin--release_created'] }}
 
     steps:
       - name: Release Please
         id: release
         uses: googleapis/release-please-action@16a9c90856f42705d54a6fda1823352bdc62cf38 # v4.4.0
         with:
-          release-type: go
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
 
   goreleaser:
     name: GoReleaser (${{ matrix.os }})

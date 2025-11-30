@@ -26,6 +26,7 @@ func NewServer(version string) *Server {
 
 	s := &Server{server: server}
 	s.registerTools()
+	s.registerPrompts()
 	return s
 }
 

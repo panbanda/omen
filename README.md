@@ -13,7 +13,9 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/panbanda/omen.svg)](https://pkg.go.dev/github.com/panbanda/omen)
 [![Snyk Security](https://snyk.io/test/github/panbanda/omen/badge.svg)](https://snyk.io/test/github/panbanda/omen)
 
-A multi-language code analysis CLI built in Go. Omen uses tree-sitter for parsing source code across 13 languages, providing insights into complexity, technical debt, code duplication, and defect prediction.
+**Your AI writes code without knowing where the landmines are.**
+
+Omen gives AI assistants the context they need: complexity hotspots, hidden dependencies, defect-prone files, and self-admitted debt. One command surfaces what's invisible.
 
 **Why "Omen"?** An omen is a sign of things to come - good or bad. Your codebase is full of omens: low complexity and clean architecture signal smooth sailing ahead, while high churn, technical debt, and code clones warn of trouble brewing. Omen surfaces these signals so you can act before that "temporary fix" celebrates its third anniversary in production.
 
@@ -572,7 +574,7 @@ omen analyze cohesion ./src --sort lcom
 
 Omen includes a Model Context Protocol (MCP) server that exposes all analyzers as tools for LLMs like Claude. This enables AI assistants to analyze codebases directly.
 
-### Configuration
+### Claude Desktop
 
 Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
 
@@ -585,6 +587,27 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
     }
   }
 }
+```
+
+### Claude Code
+
+Add to your Claude Code settings (`.claude/settings.json` in your project or `~/.claude/settings.json` globally):
+
+```json
+{
+  "mcpServers": {
+    "omen": {
+      "command": "omen",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Or use the CLI:
+
+```bash
+claude mcp add omen -- omen mcp
 ```
 
 ### Available Tools
@@ -615,6 +638,51 @@ Once configured, you can ask Claude:
 - "Find technical debt in the src directory"
 - "What are the hotspot files that need refactoring?"
 - "Show me the bus factor risk for this project"
+
+## Claude Code Skills
+
+Omen includes a collection of skills that guide Claude through code analysis workflows. Skills provide structured prompts that combine multiple Omen tools to accomplish higher-level tasks.
+
+### Installing as a Plugin
+
+Install the Omen plugin in Claude Code:
+
+```bash
+/plugin install panbanda/omen
+```
+
+Verify installation with `/skills` to see available Omen skills.
+
+### Available Skills
+
+| Skill | Description |
+|-------|-------------|
+| `omen:context-compression` | Generate compressed context summaries using PageRank-ranked symbols |
+| `omen:refactoring-priority` | Identify highest-priority refactoring targets |
+| `omen:bug-hunt` | Find likely bug locations using defect prediction and hotspots |
+| `omen:change-impact` | Analyze blast radius before making changes |
+| `omen:codebase-onboarding` | Generate onboarding guides for new developers |
+| `omen:code-review-focus` | Identify what to focus on when reviewing PRs |
+| `omen:architecture-review` | Analyze architectural health and design smells |
+| `omen:tech-debt-report` | Generate comprehensive technical debt assessments |
+| `omen:test-targeting` | Identify files most needing test coverage |
+| `omen:quality-gate` | Run pass/fail quality checks against thresholds |
+
+### Using Skills
+
+Invoke a skill by name:
+
+```
+/skill omen:bug-hunt
+```
+
+Or reference in conversation:
+
+```
+Use the omen:refactoring-priority skill to analyze this codebase
+```
+
+Skills require the Omen MCP server to be configured (see MCP Server section above).
 
 ## Contributing
 

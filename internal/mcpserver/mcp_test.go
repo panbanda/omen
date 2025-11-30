@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -715,4 +716,50 @@ func TestScanFilesWithFile(t *testing.T) {
 	if len(result.Files) != 1 {
 		t.Errorf("Expected 1 file, got %d", len(result.Files))
 	}
+}
+
+// TestPromptFiles verifies all embedded prompt files have valid frontmatter.
+func TestPromptFiles(t *testing.T) {
+	entries, err := promptFiles.ReadDir("prompts")
+	if err != nil {
+		t.Fatalf("failed to read prompts dir: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("no prompt files found")
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+
+		name := strings.TrimSuffix(entry.Name(), ".md")
+		t.Run(name, func(t *testing.T) {
+			content, err := promptFiles.ReadFile("prompts/" + entry.Name())
+			if err != nil {
+				t.Fatalf("failed to read file: %v", err)
+			}
+			if len(content) == 0 {
+				t.Fatal("file is empty")
+			}
+
+			description, body := parseFrontmatter(content)
+			if description == "" {
+				t.Error("frontmatter description is empty")
+			}
+			if body == "" {
+				t.Error("body is empty")
+			}
+		})
+	}
+}
+
+// TestRegisterPrompts verifies prompts are registered on the server.
+func TestRegisterPrompts(t *testing.T) {
+	server := NewServer("test")
+	if server == nil {
+		t.Fatal("NewServer returned nil")
+	}
+	// The registerPrompts() call happens in NewServer
+	// We verify indirectly that it doesn't panic and the server works
 }
