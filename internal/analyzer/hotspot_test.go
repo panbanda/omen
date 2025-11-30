@@ -226,8 +226,9 @@ func foo() {
 	}
 }
 
-func TestHotspotScore_Multiplicative(t *testing.T) {
-	// Test that hotspot score is multiplicative (churn × complexity)
+func TestHotspotScore_GeometricMean(t *testing.T) {
+	// Test that hotspot score uses geometric mean: sqrt(churn × complexity)
+	// This preserves intersection semantics while giving better score distribution
 	tests := []struct {
 		churn      float64
 		complexity float64
@@ -236,15 +237,16 @@ func TestHotspotScore_Multiplicative(t *testing.T) {
 		{0.0, 0.0, 0.0},
 		{1.0, 0.0, 0.0},
 		{0.0, 1.0, 0.0},
-		{0.5, 0.5, 0.25},
-		{1.0, 1.0, 1.0},
-		{0.8, 0.6, 0.48},
+		{0.5, 0.5, 0.5},    // sqrt(0.25) = 0.5
+		{1.0, 1.0, 1.0},    // sqrt(1.0) = 1.0
+		{0.64, 0.64, 0.64}, // sqrt(0.4096) = 0.64
+		{0.9, 0.4, 0.6},    // sqrt(0.36) = 0.6
 	}
 
 	for _, tt := range tests {
-		score := tt.churn * tt.complexity
-		if score != tt.wantScore {
-			t.Errorf("churn=%f × complexity=%f = %f, want %f",
+		score := models.CalculateHotspotScore(tt.churn, tt.complexity)
+		if score < tt.wantScore-0.01 || score > tt.wantScore+0.01 {
+			t.Errorf("CalculateHotspotScore(%f, %f) = %f, want %f",
 				tt.churn, tt.complexity, score, tt.wantScore)
 		}
 	}
