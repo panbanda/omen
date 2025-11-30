@@ -2,7 +2,8 @@
   "packages": {
     ".": {
       "release-type": "go",
-      "component": "omen"
+      "component": "omen",
+      "include-component-in-tag": false
     },
     ".claude-plugin": {
       "release-type": "simple",
