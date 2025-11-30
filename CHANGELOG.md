@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.7.2](https://github.com/panbanda/omen/compare/v1.7.1...v1.7.2) (2025-11-30)
+
+
+### Bug Fixes
+
+* **hotspot:** use geometric mean with CDF normalization for scoring ([594b6e9](https://github.com/panbanda/omen/commit/594b6e916f996b8901e755bc97dfe9134b3bdadd))
+* **hotspot:** use geometric mean with CDF normalization for scoring ([06a53a5](https://github.com/panbanda/omen/commit/06a53a509f9c44952d2e26c1d855a40c7306a79f))
+
 ## [1.7.1](https://github.com/panbanda/omen/compare/v1.7.0...v1.7.1) (2025-11-29)
 
 
