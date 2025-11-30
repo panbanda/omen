@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.0.1](https://github.com/panbanda/omen/compare/omen-v3.0.0...omen-v3.0.1) (2025-11-30)
+
+
+### Bug Fixes
+
+* **ci:** correct release-please output variable for root package ([a072ec4](https://github.com/panbanda/omen/commit/a072ec46b57d64ec4bde8782b3979207228f5755))
+* **ci:** correct release-please output variable for root package ([da83f29](https://github.com/panbanda/omen/commit/da83f295775d3d274453a61c517e060dfa50dbe5))
+
 ## [3.0.0](https://github.com/panbanda/omen/compare/omen-v2.0.0...omen-v3.0.0) (2025-11-30)
 
 
