@@ -10,7 +10,11 @@ import (
 	"github.com/panbanda/omen/pkg/parser"
 )
 
-// HotspotAnalyzer identifies code hotspots using churn × complexity.
+// HotspotAnalyzer identifies code hotspots using the geometric mean of
+// CDF-normalized churn and complexity scores. This approach:
+//   - Uses empirical CDFs to normalize metrics against industry benchmarks
+//   - Applies geometric mean to require BOTH factors to be elevated
+//   - Produces scores where 0.5+ indicates meaningful hotspots
 type HotspotAnalyzer struct {
 	churnDays   int
 	maxFileSize int64
@@ -105,20 +109,7 @@ func (a *HotspotAnalyzer) AnalyzeProjectWithProgress(repoPath string, files []st
 		}, nil
 	}, onProgress, nil)
 
-	// Find max values for normalization
-	var maxChurn, maxComplexity float64
-	for _, cr := range complexityResults {
-		if cr.avgCognitive > maxComplexity {
-			maxComplexity = cr.avgCognitive
-		}
-	}
-	for _, cf := range churnAnalysis.Files {
-		if cf.ChurnScore > maxChurn {
-			maxChurn = cf.ChurnScore
-		}
-	}
-
-	// Combine into hotspot scores
+	// Combine into hotspot scores using CDF-normalized values
 	analysis := &models.HotspotAnalysis{
 		GeneratedAt: time.Now().UTC(),
 		PeriodDays:  a.churnDays,
@@ -132,25 +123,21 @@ func (a *HotspotAnalyzer) AnalyzeProjectWithProgress(repoPath string, files []st
 			relPath = cr.path
 		}
 
-		// Look up churn data
-		var churnScore float64
+		// Look up churn data (commit count)
 		var commits int
 		if cf, ok := churnMap[relPath]; ok {
-			churnScore = cf.ChurnScore
 			commits = cf.Commits
 		} else if cf, ok := churnMap["./"+relPath]; ok {
-			churnScore = cf.ChurnScore
 			commits = cf.Commits
 		}
 
-		// Normalize complexity score (0-1)
-		var complexityScore float64
-		if maxComplexity > 0 {
-			complexityScore = cr.avgCognitive / maxComplexity
-		}
+		// Normalize using empirical CDFs (industry benchmarks)
+		churnScore := models.NormalizeChurnCDF(commits)
+		complexityScore := models.NormalizeComplexityCDF(cr.avgCognitive)
 
-		// Hotspot = churn × complexity (multiplicative)
-		hotspotScore := churnScore * complexityScore
+		// Hotspot = geometric mean of normalized scores
+		// This preserves intersection semantics: both factors must be elevated
+		hotspotScore := models.CalculateHotspotScore(churnScore, complexityScore)
 
 		analysis.Files = append(analysis.Files, models.FileHotspot{
 			Path:            cr.path,
