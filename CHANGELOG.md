@@ -1,5 +1,22 @@
 # Changelog
 
+## [3.0.0](https://github.com/panbanda/omen/compare/omen-v2.0.0...omen-v3.0.0) (2025-11-30)
+
+
+### ⚠ BREAKING CHANGES
+
+* **analyzer:** Halstead metrics removed from complexity analysis. Use cognitive complexity instead.
+
+### Features
+
+* **analyzer:** add research-backed analysis enhancements ([8795745](https://github.com/panbanda/omen/commit/879574544d2c767f491ec38eae8be21799f8ee04))
+* **analyzer:** add research-backed analysis enhancements ([6dfcf29](https://github.com/panbanda/omen/commit/6dfcf294a91ab4ef2ad5a23135f341154d95adf7))
+
+
+### Bug Fixes
+
+* **analyzer:** address code review feedback ([6036114](https://github.com/panbanda/omen/commit/6036114821ae78d0822c5c5d48042f3c23455bd3))
+
 ## [2.0.0](https://github.com/panbanda/omen/compare/omen-v1.7.2...omen-v2.0.0) (2025-11-30)
 
 
