@@ -1,18 +1,20 @@
-with-expecter: true
-dir: "{{.InterfaceDir}}/mocks"
-outpkg: mocks
-mockname: "Mock{{.InterfaceName}}"
-filename: "mock_{{.InterfaceName | snakecase}}.go"
+dir: '{{.InterfaceDir}}/mocks'
+filename: mock_{{.InterfaceName | snakecase}}.go
+structname: Mock{{.InterfaceName}}
+pkgname: mocks
+template: testify
+template-data:
+  unroll-variadic: true
 packages:
   github.com/panbanda/omen/internal/vcs:
     interfaces:
-      Repository:
-      Reference:
-      CommitIterator:
-      Commit:
-      Tree:
-      Change:
-      Patch:
-      FilePatch:
-      Chunk:
-      Opener:
+      Change: {}
+      Chunk: {}
+      Commit: {}
+      CommitIterator: {}
+      FilePatch: {}
+      Opener: {}
+      Patch: {}
+      Reference: {}
+      Repository: {}
+      Tree: {}
