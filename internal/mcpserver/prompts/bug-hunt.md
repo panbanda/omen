@@ -5,7 +5,7 @@ Identify the most likely locations for bugs in this codebase using statistical d
 ## Instructions
 
 1. Use `analyze_defect` with `high_risk_only: true` to find statistically high-risk files
-2. Use `analyze_hotspot` with `days: {{days}}` to find high-churn + high-complexity intersections
+2. Use `analyze_hotspot` to find high-churn + high-complexity intersections
 3. Use `analyze_temporal_coupling` to find files that change together (bugs often span coupled files)
 4. Use `analyze_ownership` to find knowledge silos (single-owner files have higher risk)
 

@@ -5,7 +5,7 @@ Generate a comprehensive technical debt assessment for this codebase.
 ## Instructions
 
 1. Use `analyze_satd` to find explicit debt (TODO, FIXME, HACK comments)
-2. Use `analyze_tdg` with `hotspots: {{count}}` for quality scores and grade distribution
+2. Use `analyze_tdg` for quality scores and grade distribution
 3. Use `analyze_duplicates` to quantify copy-paste debt
 4. Use `analyze_defect` to find implicit debt (high-risk files)
 5. Use `analyze_complexity` for functions exceeding complexity thresholds

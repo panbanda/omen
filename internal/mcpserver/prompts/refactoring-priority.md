@@ -4,7 +4,7 @@ Identify the highest-priority refactoring targets in this codebase based on qual
 
 ## Instructions
 
-1. Use `analyze_tdg` with `hotspots: {{count}}` to find lowest-quality files
+1. Use `analyze_tdg` to find lowest-quality files
 2. Use `analyze_complexity` with `functions_only: true` to find complex functions
 3. Use `analyze_duplicates` to find code clones that should be extracted
 4. Use `analyze_satd` to find explicit technical debt markers (TODO, FIXME, HACK)
