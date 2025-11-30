@@ -11,15 +11,9 @@ import (
 
 // SmellAnalyzer detects architectural smells in dependency graphs.
 // Implements detection algorithms from Fontana et al. (2017) "Arcan".
+// This analyzer is safe for concurrent use.
 type SmellAnalyzer struct {
 	thresholds models.SmellThresholds
-
-	// Reusable buffers for cycle detection (avoid allocation per call)
-	tarjanIndex    int
-	tarjanStack    []string
-	tarjanOnStack  map[string]bool
-	tarjanIndices  map[string]int
-	tarjanLowlinks map[string]int
 }
 
 // SmellOption is a functional option for configuring SmellAnalyzer.
@@ -76,11 +70,6 @@ func NewSmellAnalyzer(opts ...SmellOption) *SmellAnalyzer {
 	if a.thresholds.InstabilityDifference <= 0 {
 		a.thresholds.InstabilityDifference = 0.4 // Default
 	}
-
-	// Pre-allocate buffers for cycle detection
-	a.tarjanOnStack = make(map[string]bool)
-	a.tarjanIndices = make(map[string]int)
-	a.tarjanLowlinks = make(map[string]int)
 
 	return a
 }
@@ -173,22 +162,6 @@ func (a *SmellAnalyzer) calculateComponentMetrics(graph *models.DependencyGraph)
 	return components
 }
 
-// resetTarjanBuffers clears the reusable buffers for a new cycle detection run.
-func (a *SmellAnalyzer) resetTarjanBuffers() {
-	a.tarjanIndex = 0
-	a.tarjanStack = a.tarjanStack[:0] // Reuse backing array
-	// Clear maps without reallocating
-	for k := range a.tarjanOnStack {
-		delete(a.tarjanOnStack, k)
-	}
-	for k := range a.tarjanIndices {
-		delete(a.tarjanIndices, k)
-	}
-	for k := range a.tarjanLowlinks {
-		delete(a.tarjanLowlinks, k)
-	}
-}
-
 // detectCyclicDependencies finds cycles using Tarjan's strongly connected components.
 func (a *SmellAnalyzer) detectCyclicDependencies(graph *models.DependencyGraph, analysis *models.SmellAnalysis) {
 	// Build adjacency list
@@ -200,38 +173,41 @@ func (a *SmellAnalyzer) detectCyclicDependencies(graph *models.DependencyGraph, 
 		adj[edge.From] = append(adj[edge.From], edge.To)
 	}
 
-	// Reset reusable buffers
-	a.resetTarjanBuffers()
-
+	// Tarjan's algorithm state (local for thread safety)
+	index := 0
+	stack := make([]string, 0, len(graph.Nodes))
+	onStack := make(map[string]bool, len(graph.Nodes))
+	indices := make(map[string]int, len(graph.Nodes))
+	lowlinks := make(map[string]int, len(graph.Nodes))
 	sccs := make([][]string, 0)
 
 	var strongConnect func(v string)
 	strongConnect = func(v string) {
-		a.tarjanIndices[v] = a.tarjanIndex
-		a.tarjanLowlinks[v] = a.tarjanIndex
-		a.tarjanIndex++
-		a.tarjanStack = append(a.tarjanStack, v)
-		a.tarjanOnStack[v] = true
+		indices[v] = index
+		lowlinks[v] = index
+		index++
+		stack = append(stack, v)
+		onStack[v] = true
 
 		for _, w := range adj[v] {
-			if _, visited := a.tarjanIndices[w]; !visited {
+			if _, visited := indices[w]; !visited {
 				strongConnect(w)
-				if a.tarjanLowlinks[w] < a.tarjanLowlinks[v] {
-					a.tarjanLowlinks[v] = a.tarjanLowlinks[w]
+				if lowlinks[w] < lowlinks[v] {
+					lowlinks[v] = lowlinks[w]
 				}
-			} else if a.tarjanOnStack[w] {
-				if a.tarjanIndices[w] < a.tarjanLowlinks[v] {
-					a.tarjanLowlinks[v] = a.tarjanIndices[w]
+			} else if onStack[w] {
+				if indices[w] < lowlinks[v] {
+					lowlinks[v] = indices[w]
 				}
 			}
 		}
 
-		if a.tarjanLowlinks[v] == a.tarjanIndices[v] {
+		if lowlinks[v] == indices[v] {
 			scc := make([]string, 0)
 			for {
-				w := a.tarjanStack[len(a.tarjanStack)-1]
-				a.tarjanStack = a.tarjanStack[:len(a.tarjanStack)-1]
-				a.tarjanOnStack[w] = false
+				w := stack[len(stack)-1]
+				stack = stack[:len(stack)-1]
+				onStack[w] = false
 				scc = append(scc, w)
 				if w == v {
 					break
@@ -244,7 +220,7 @@ func (a *SmellAnalyzer) detectCyclicDependencies(graph *models.DependencyGraph, 
 	}
 
 	for _, node := range graph.Nodes {
-		if _, visited := a.tarjanIndices[node.ID]; !visited {
+		if _, visited := indices[node.ID]; !visited {
 			strongConnect(node.ID)
 		}
 	}

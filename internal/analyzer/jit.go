@@ -145,8 +145,8 @@ func (a *JITAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath strin
 	defer logIter.Close()
 
 	// Track author experience and file history
-	authorCommits := make(map[string]int)       // author -> total commits
-	fileChanges := make(map[string]int)         // file -> total commits
+	authorCommits := make(map[string]int)           // author -> total commits
+	fileChanges := make(map[string]int)             // file -> total commits
 	fileAuthors := make(map[string]map[string]bool) // file -> set of authors
 
 	// First pass: collect features from commits
@@ -286,14 +286,14 @@ func (a *JITAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath strin
 		level := models.GetJITRiskLevel(score)
 
 		factors := map[string]float64{
-			"fix":          boolToFloat(features.IsFix) * a.weights.FIX,
-			"entropy":      safeNormalize(features.Entropy, analysis.Normalization.MaxEntropy) * a.weights.Entropy,
-			"lines_added":  safeNormalizeInt(features.LinesAdded, analysis.Normalization.MaxLinesAdded) * a.weights.LA,
-			"lines_deleted": safeNormalizeInt(features.LinesDeleted, analysis.Normalization.MaxLinesDeleted) * a.weights.LD,
-			"num_files":    safeNormalizeInt(features.NumFiles, analysis.Normalization.MaxNumFiles) * a.weights.NF,
+			"fix":            boolToFloat(features.IsFix) * a.weights.FIX,
+			"entropy":        safeNormalize(features.Entropy, analysis.Normalization.MaxEntropy) * a.weights.Entropy,
+			"lines_added":    safeNormalizeInt(features.LinesAdded, analysis.Normalization.MaxLinesAdded) * a.weights.LA,
+			"lines_deleted":  safeNormalizeInt(features.LinesDeleted, analysis.Normalization.MaxLinesDeleted) * a.weights.LD,
+			"num_files":      safeNormalizeInt(features.NumFiles, analysis.Normalization.MaxNumFiles) * a.weights.NF,
 			"unique_changes": safeNormalizeInt(features.UniqueChanges, analysis.Normalization.MaxUniqueChanges) * a.weights.NUC,
 			"num_developers": safeNormalizeInt(features.NumDevelopers, analysis.Normalization.MaxNumDevelopers) * a.weights.NDEV,
-			"experience":   (1.0 - safeNormalizeInt(features.AuthorExperience, analysis.Normalization.MaxAuthorExperience)) * a.weights.EXP,
+			"experience":     (1.0 - safeNormalizeInt(features.AuthorExperience, analysis.Normalization.MaxAuthorExperience)) * a.weights.EXP,
 		}
 
 		risk := models.CommitRisk{

@@ -39,15 +39,15 @@ type CommitFeatures struct {
 	Author           string    `json:"author"`
 	Message          string    `json:"message"`
 	Timestamp        time.Time `json:"timestamp"`
-	IsFix            bool      `json:"is_fix"`             // FIX: Bug fix commit?
-	IsAutomated      bool      `json:"is_automated"`       // Automated/trivial commit (CI, merge, etc.)
-	Entropy          float64   `json:"entropy"`            // Entropy: Change distribution
-	LinesAdded       int       `json:"lines_added"`        // LA
-	LinesDeleted     int       `json:"lines_deleted"`      // LD
-	NumFiles         int       `json:"num_files"`          // NF
-	UniqueChanges    int       `json:"unique_changes"`     // NUC: Prior commits to these files
-	NumDevelopers    int       `json:"num_developers"`     // NDEV: Unique devs on these files
-	AuthorExperience int       `json:"author_experience"`  // EXP: Author's prior commits
+	IsFix            bool      `json:"is_fix"`            // FIX: Bug fix commit?
+	IsAutomated      bool      `json:"is_automated"`      // Automated/trivial commit (CI, merge, etc.)
+	Entropy          float64   `json:"entropy"`           // Entropy: Change distribution
+	LinesAdded       int       `json:"lines_added"`       // LA
+	LinesDeleted     int       `json:"lines_deleted"`     // LD
+	NumFiles         int       `json:"num_files"`         // NF
+	UniqueChanges    int       `json:"unique_changes"`    // NUC: Prior commits to these files
+	NumDevelopers    int       `json:"num_developers"`    // NDEV: Unique devs on these files
+	AuthorExperience int       `json:"author_experience"` // EXP: Author's prior commits
 	FilesModified    []string  `json:"files_modified"`
 }
 
@@ -75,11 +75,11 @@ type CommitRisk struct {
 
 // JITAnalysis represents the full JIT defect prediction result.
 type JITAnalysis struct {
-	GeneratedAt time.Time      `json:"generated_at"`
-	PeriodDays  int            `json:"period_days"`
-	Commits     []CommitRisk   `json:"commits"`
-	Summary     JITSummary     `json:"summary"`
-	Weights     JITWeights     `json:"weights"`
+	GeneratedAt   time.Time          `json:"generated_at"`
+	PeriodDays    int                `json:"period_days"`
+	Commits       []CommitRisk       `json:"commits"`
+	Summary       JITSummary         `json:"summary"`
+	Weights       JITWeights         `json:"weights"`
 	Normalization NormalizationStats `json:"normalization"`
 }
 

@@ -6,10 +6,10 @@ import "time"
 type SmellType string
 
 const (
-	SmellCyclicDependency    SmellType = "cyclic_dependency"
-	SmellHubLikeDependency   SmellType = "hub_like_dependency"
-	SmellUnstableDependency  SmellType = "unstable_dependency"
-	SmellGodComponent        SmellType = "god_component"
+	SmellCyclicDependency   SmellType = "cyclic_dependency"
+	SmellHubLikeDependency  SmellType = "hub_like_dependency"
+	SmellUnstableDependency SmellType = "unstable_dependency"
+	SmellGodComponent       SmellType = "god_component"
 )
 
 // SmellSeverity represents the severity level of an architectural smell.
@@ -43,11 +43,11 @@ type SmellMetrics struct {
 type ComponentMetrics struct {
 	ID          string  `json:"id"`
 	Name        string  `json:"name"`
-	FanIn       int     `json:"fan_in"`       // Afferent coupling (incoming dependencies)
-	FanOut      int     `json:"fan_out"`      // Efferent coupling (outgoing dependencies)
-	Instability float64 `json:"instability"`  // Ce / (Ca + Ce), 0 = stable, 1 = unstable
-	IsHub       bool    `json:"is_hub"`       // Fan-in + Fan-out > threshold
-	IsGod       bool    `json:"is_god"`       // High fan-in AND high fan-out
+	FanIn       int     `json:"fan_in"`      // Afferent coupling (incoming dependencies)
+	FanOut      int     `json:"fan_out"`     // Efferent coupling (outgoing dependencies)
+	Instability float64 `json:"instability"` // Ce / (Ca + Ce), 0 = stable, 1 = unstable
+	IsHub       bool    `json:"is_hub"`      // Fan-in + Fan-out > threshold
+	IsGod       bool    `json:"is_god"`      // High fan-in AND high fan-out
 }
 
 // Instability calculates Martin's Instability metric.
@@ -96,15 +96,15 @@ type SmellAnalysis struct {
 
 // SmellSummary provides aggregate statistics.
 type SmellSummary struct {
-	TotalSmells       int `json:"total_smells"`
-	CyclicCount       int `json:"cyclic_count"`
-	HubCount          int `json:"hub_count"`
-	UnstableCount     int `json:"unstable_count"`
-	GodCount          int `json:"god_count"`
-	CriticalCount     int `json:"critical_count"`
-	HighCount         int `json:"high_count"`
-	MediumCount       int `json:"medium_count"`
-	TotalComponents   int `json:"total_components"`
+	TotalSmells        int     `json:"total_smells"`
+	CyclicCount        int     `json:"cyclic_count"`
+	HubCount           int     `json:"hub_count"`
+	UnstableCount      int     `json:"unstable_count"`
+	GodCount           int     `json:"god_count"`
+	CriticalCount      int     `json:"critical_count"`
+	HighCount          int     `json:"high_count"`
+	MediumCount        int     `json:"medium_count"`
+	TotalComponents    int     `json:"total_components"`
 	AverageInstability float64 `json:"average_instability"`
 }
 

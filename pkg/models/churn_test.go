@@ -639,12 +639,12 @@ func TestCalculateRelativeChurn(t *testing.T) {
 	now := time.Now()
 
 	tests := []struct {
-		name                   string
-		metrics                FileChurnMetrics
-		expectedRelativeChurn  float64
-		expectedChurnRate      float64
-		expectedChangeFreq     float64
-		expectedDaysActive     int
+		name                  string
+		metrics               FileChurnMetrics
+		expectedRelativeChurn float64
+		expectedChurnRate     float64
+		expectedChangeFreq    float64
+		expectedDaysActive    int
 	}{
 		{
 			name: "standard case",
@@ -656,9 +656,9 @@ func TestCalculateRelativeChurn(t *testing.T) {
 				FirstCommit:  now.AddDate(0, 0, -10),
 				LastCommit:   now,
 			},
-			expectedRelativeChurn: 0.3,   // (100 + 50) / 500
-			expectedChurnRate:     0.03,  // 0.3 / 10
-			expectedChangeFreq:    1.0,   // 10 / 10
+			expectedRelativeChurn: 0.3,  // (100 + 50) / 500
+			expectedChurnRate:     0.03, // 0.3 / 10
+			expectedChangeFreq:    1.0,  // 10 / 10
 			expectedDaysActive:    10,
 		},
 		{
@@ -686,10 +686,10 @@ func TestCalculateRelativeChurn(t *testing.T) {
 				FirstCommit:  now,
 				LastCommit:   now,
 			},
-			expectedRelativeChurn: 0.3,  // (20 + 10) / 100
-			expectedChurnRate:     0.3,  // 0.3 / 1 (minimum 1 day)
-			expectedChangeFreq:    3.0,  // 3 / 1
-			expectedDaysActive:    1,    // Minimum
+			expectedRelativeChurn: 0.3, // (20 + 10) / 100
+			expectedChurnRate:     0.3, // 0.3 / 1 (minimum 1 day)
+			expectedChangeFreq:    3.0, // 3 / 1
+			expectedDaysActive:    1,   // Minimum
 		},
 		{
 			name: "high churn file",
@@ -701,9 +701,9 @@ func TestCalculateRelativeChurn(t *testing.T) {
 				FirstCommit:  now.AddDate(0, 0, -30),
 				LastCommit:   now,
 			},
-			expectedRelativeChurn: 4.0,   // (500 + 300) / 200
-			expectedChurnRate:     4.0/30,
-			expectedChangeFreq:    50.0/30,
+			expectedRelativeChurn: 4.0, // (500 + 300) / 200
+			expectedChurnRate:     4.0 / 30,
+			expectedChangeFreq:    50.0 / 30,
 			expectedDaysActive:    30,
 		},
 	}

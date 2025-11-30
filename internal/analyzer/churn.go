@@ -225,7 +225,7 @@ func (a *ChurnAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath str
 
 		// Calculate relative churn metrics (Nagappan & Ball 2005)
 		filePath := filepath.Join(absPath, fm.RelativePath)
-		fm.TotalLOC = countFileLOC(filePath)
+		fm.TotalLOC, fm.LOCReadError = countFileLOC(filePath)
 		fm.CalculateRelativeChurn(now)
 
 		analysis.Files = append(analysis.Files, *fm)
@@ -271,10 +271,12 @@ func countLines(content string) int {
 }
 
 // countFileLOC counts the number of lines in a file on disk.
-func countFileLOC(path string) int {
+// Returns the line count and whether an error occurred.
+// An error indicates the file could not be read (deleted, permission denied, etc.)
+func countFileLOC(path string) (int, bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return 0
+		return 0, true // Error occurred
 	}
 	defer f.Close()
 
@@ -283,7 +285,10 @@ func countFileLOC(path string) int {
 	for scanner.Scan() {
 		count++
 	}
-	return count
+	if scanner.Err() != nil {
+		return count, true // Partial read, error occurred
+	}
+	return count, false
 }
 
 // AnalyzeFiles analyzes churn for specific files.

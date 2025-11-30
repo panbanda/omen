@@ -20,11 +20,12 @@ type FileChurnMetrics struct {
 	LastCommit    time.Time      `json:"last_modified"`
 
 	// Relative churn metrics (research-backed - Nagappan & Ball 2005)
-	TotalLOC        int     `json:"total_loc,omitempty"`         // Current lines of code in file
-	RelativeChurn   float64 `json:"relative_churn,omitempty"`    // (LinesAdded + LinesDeleted) / TotalLOC
-	ChurnRate       float64 `json:"churn_rate,omitempty"`        // RelativeChurn / DaysSinceFirstCommit
-	ChangeFrequency float64 `json:"change_frequency,omitempty"`  // Commits / DaysSinceFirstCommit
-	DaysActive      int     `json:"days_active,omitempty"`       // Days between first and last commit
+	TotalLOC        int     `json:"total_loc,omitempty"`        // Current lines of code in file
+	LOCReadError    bool    `json:"loc_read_error,omitempty"`   // True if file could not be read for LOC count
+	RelativeChurn   float64 `json:"relative_churn,omitempty"`   // (LinesAdded + LinesDeleted) / TotalLOC
+	ChurnRate       float64 `json:"churn_rate,omitempty"`       // RelativeChurn / DaysSinceFirstCommit
+	ChangeFrequency float64 `json:"change_frequency,omitempty"` // Commits / DaysSinceFirstCommit
+	DaysActive      int     `json:"days_active,omitempty"`      // Days between first and last commit
 }
 
 // CalculateChurnScore computes a normalized churn score.

@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"sync"
+	"time"
+)
 
 // ConfidenceLevel indicates how certain we are about dead code detection.
 type ConfidenceLevel string
@@ -10,6 +13,52 @@ const (
 	ConfidenceMedium ConfidenceLevel = "Medium"
 	ConfidenceLow    ConfidenceLevel = "Low"
 )
+
+// ConfidenceThresholds defines the thresholds for confidence level classification.
+// These thresholds are based on empirical analysis of dead code detection accuracy:
+// - High (>=0.8): Private/unexported symbols with no references have very low false positive rates
+// - Medium (>=0.5): Exported symbols without internal usage may still be part of public API
+// - Low (<0.5): Symbols matching dynamic usage patterns (reflection, callbacks) need manual review
+type ConfidenceThresholds struct {
+	HighThreshold   float64 // Confidence >= this is "High" (default: 0.8)
+	MediumThreshold float64 // Confidence >= this (and < High) is "Medium" (default: 0.5)
+}
+
+// DefaultConfidenceThresholds returns the default confidence thresholds.
+func DefaultConfidenceThresholds() ConfidenceThresholds {
+	return ConfidenceThresholds{
+		HighThreshold:   0.8,
+		MediumThreshold: 0.5,
+	}
+}
+
+// Global confidence thresholds (can be overridden via SetConfidenceThresholds)
+var (
+	confidenceThresholds   = DefaultConfidenceThresholds()
+	confidenceThresholdsMu sync.RWMutex
+)
+
+// SetConfidenceThresholds allows customizing the confidence level thresholds.
+// This function is thread-safe and typically called once at startup.
+func SetConfidenceThresholds(thresholds ConfidenceThresholds) {
+	confidenceThresholdsMu.Lock()
+	defer confidenceThresholdsMu.Unlock()
+
+	if thresholds.HighThreshold > 0 && thresholds.HighThreshold <= 1 {
+		confidenceThresholds.HighThreshold = thresholds.HighThreshold
+	}
+	if thresholds.MediumThreshold > 0 && thresholds.MediumThreshold <= 1 {
+		confidenceThresholds.MediumThreshold = thresholds.MediumThreshold
+	}
+}
+
+// GetConfidenceThresholds returns the current confidence thresholds.
+// This function is thread-safe.
+func GetConfidenceThresholds() ConfidenceThresholds {
+	confidenceThresholdsMu.RLock()
+	defer confidenceThresholdsMu.RUnlock()
+	return confidenceThresholds
+}
 
 // DeadCodeType classifies the type of dead code item (pmat compatible).
 type DeadCodeType string
@@ -372,11 +421,13 @@ type DeadFunction struct {
 }
 
 // SetConfidenceLevel sets the confidence level and reason based on the numeric confidence.
+// Uses configurable thresholds from GetConfidenceThresholds().
 func (f *DeadFunction) SetConfidenceLevel() {
-	if f.Confidence >= 0.8 {
+	thresholds := GetConfidenceThresholds()
+	if f.Confidence >= thresholds.HighThreshold {
 		f.ConfidenceLevel = ConfidenceHigh
 		f.ConfidenceReason = "High confidence: private/unexported, no references in call graph"
-	} else if f.Confidence >= 0.5 {
+	} else if f.Confidence >= thresholds.MediumThreshold {
 		f.ConfidenceLevel = ConfidenceMedium
 		f.ConfidenceReason = "Medium confidence: exported but no internal references found"
 	} else {
@@ -411,11 +462,13 @@ type DeadClass struct {
 }
 
 // SetConfidenceLevel sets the confidence level and reason based on the numeric confidence.
+// Uses configurable thresholds from GetConfidenceThresholds().
 func (c *DeadClass) SetConfidenceLevel() {
-	if c.Confidence >= 0.8 {
+	thresholds := GetConfidenceThresholds()
+	if c.Confidence >= thresholds.HighThreshold {
 		c.ConfidenceLevel = ConfidenceHigh
 		c.ConfidenceReason = "High confidence: private/unexported type, no references in codebase"
-	} else if c.Confidence >= 0.5 {
+	} else if c.Confidence >= thresholds.MediumThreshold {
 		c.ConfidenceLevel = ConfidenceMedium
 		c.ConfidenceReason = "Medium confidence: exported type but no internal usages found"
 	} else {
@@ -439,11 +492,13 @@ type DeadVariable struct {
 }
 
 // SetConfidenceLevel sets the confidence level and reason based on the numeric confidence.
+// Uses configurable thresholds from GetConfidenceThresholds().
 func (v *DeadVariable) SetConfidenceLevel() {
-	if v.Confidence >= 0.8 {
+	thresholds := GetConfidenceThresholds()
+	if v.Confidence >= thresholds.HighThreshold {
 		v.ConfidenceLevel = ConfidenceHigh
 		v.ConfidenceReason = "High confidence: private/unexported variable, no references found"
-	} else if v.Confidence >= 0.5 {
+	} else if v.Confidence >= thresholds.MediumThreshold {
 		v.ConfidenceLevel = ConfidenceMedium
 		v.ConfidenceReason = "Medium confidence: exported variable but no internal usages found"
 	} else {

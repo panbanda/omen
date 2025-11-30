@@ -298,10 +298,10 @@ func TestSmellAnalyzer_CustomThresholds(t *testing.T) {
 
 func TestComponentMetrics_CalculateInstability(t *testing.T) {
 	tests := []struct {
-		name        string
-		fanIn       int
-		fanOut      int
-		expected    float64
+		name     string
+		fanIn    int
+		fanOut   int
+		expected float64
 	}{
 		{"all incoming (stable)", 10, 0, 0.0},
 		{"all outgoing (unstable)", 0, 10, 1.0},
