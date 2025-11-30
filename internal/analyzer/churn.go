@@ -1,7 +1,9 @@
 package analyzer
 
 import (
+	"bufio"
 	"context"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -211,6 +213,7 @@ func (a *ChurnAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath str
 	}
 
 	// Second pass: calculate scores and collect stats
+	now := time.Now()
 	for _, fm := range fileMetrics {
 		// Convert author counts map to unique authors slice
 		fm.UniqueAuthors = make([]string, 0, len(fm.AuthorCounts))
@@ -219,6 +222,12 @@ func (a *ChurnAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath str
 		}
 
 		fm.CalculateChurnScoreWithMax(maxCommits, maxChanges)
+
+		// Calculate relative churn metrics (Nagappan & Ball 2005)
+		filePath := filepath.Join(absPath, fm.RelativePath)
+		fm.TotalLOC, fm.LOCReadError = countFileLOC(filePath)
+		fm.CalculateRelativeChurn(now)
+
 		analysis.Files = append(analysis.Files, *fm)
 
 		totalCommits += fm.Commits
@@ -259,6 +268,27 @@ func (a *ChurnAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath str
 // countLines counts the number of newlines in content.
 func countLines(content string) int {
 	return strings.Count(content, "\n")
+}
+
+// countFileLOC counts the number of lines in a file on disk.
+// Returns the line count and whether an error occurred.
+// An error indicates the file could not be read (deleted, permission denied, etc.)
+func countFileLOC(path string) (int, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, true // Error occurred
+	}
+	defer f.Close()
+
+	count := 0
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		count++
+	}
+	if scanner.Err() != nil {
+		return count, true // Partial read, error occurred
+	}
+	return count, false
 }
 
 // AnalyzeFiles analyzes churn for specific files.

@@ -633,3 +633,123 @@ func TestThresholdConstants(t *testing.T) {
 		t.Errorf("StableThreshold = %v, expected 0.1", StableThreshold)
 	}
 }
+
+// TestCalculateRelativeChurn verifies relative churn metrics (Nagappan & Ball 2005)
+func TestCalculateRelativeChurn(t *testing.T) {
+	now := time.Now()
+
+	tests := []struct {
+		name                  string
+		metrics               FileChurnMetrics
+		expectedRelativeChurn float64
+		expectedChurnRate     float64
+		expectedChangeFreq    float64
+		expectedDaysActive    int
+	}{
+		{
+			name: "standard case",
+			metrics: FileChurnMetrics{
+				LinesAdded:   100,
+				LinesDeleted: 50,
+				TotalLOC:     500,
+				Commits:      10,
+				FirstCommit:  now.AddDate(0, 0, -10),
+				LastCommit:   now,
+			},
+			expectedRelativeChurn: 0.3,  // (100 + 50) / 500
+			expectedChurnRate:     0.03, // 0.3 / 10
+			expectedChangeFreq:    1.0,  // 10 / 10
+			expectedDaysActive:    10,
+		},
+		{
+			name: "zero LOC",
+			metrics: FileChurnMetrics{
+				LinesAdded:   50,
+				LinesDeleted: 30,
+				TotalLOC:     0,
+				Commits:      5,
+				FirstCommit:  now.AddDate(0, 0, -5),
+				LastCommit:   now,
+			},
+			expectedRelativeChurn: 0.0, // Cannot calculate without LOC
+			expectedChurnRate:     0.0,
+			expectedChangeFreq:    1.0, // 5 / 5
+			expectedDaysActive:    5,
+		},
+		{
+			name: "same day commits",
+			metrics: FileChurnMetrics{
+				LinesAdded:   20,
+				LinesDeleted: 10,
+				TotalLOC:     100,
+				Commits:      3,
+				FirstCommit:  now,
+				LastCommit:   now,
+			},
+			expectedRelativeChurn: 0.3, // (20 + 10) / 100
+			expectedChurnRate:     0.3, // 0.3 / 1 (minimum 1 day)
+			expectedChangeFreq:    3.0, // 3 / 1
+			expectedDaysActive:    1,   // Minimum
+		},
+		{
+			name: "high churn file",
+			metrics: FileChurnMetrics{
+				LinesAdded:   500,
+				LinesDeleted: 300,
+				TotalLOC:     200, // More churn than current size
+				Commits:      50,
+				FirstCommit:  now.AddDate(0, 0, -30),
+				LastCommit:   now,
+			},
+			expectedRelativeChurn: 4.0, // (500 + 300) / 200
+			expectedChurnRate:     4.0 / 30,
+			expectedChangeFreq:    50.0 / 30,
+			expectedDaysActive:    30,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := tt.metrics
+			m.CalculateRelativeChurn(now)
+
+			if math.Abs(m.RelativeChurn-tt.expectedRelativeChurn) > 0.001 {
+				t.Errorf("RelativeChurn = %v, expected %v", m.RelativeChurn, tt.expectedRelativeChurn)
+			}
+
+			if math.Abs(m.ChurnRate-tt.expectedChurnRate) > 0.001 {
+				t.Errorf("ChurnRate = %v, expected %v", m.ChurnRate, tt.expectedChurnRate)
+			}
+
+			if math.Abs(m.ChangeFrequency-tt.expectedChangeFreq) > 0.001 {
+				t.Errorf("ChangeFrequency = %v, expected %v", m.ChangeFrequency, tt.expectedChangeFreq)
+			}
+
+			if m.DaysActive != tt.expectedDaysActive {
+				t.Errorf("DaysActive = %d, expected %d", m.DaysActive, tt.expectedDaysActive)
+			}
+		})
+	}
+}
+
+// TestCalculateRelativeChurn_ZeroTime verifies handling of zero timestamps
+func TestCalculateRelativeChurn_ZeroTime(t *testing.T) {
+	now := time.Now()
+	m := FileChurnMetrics{
+		LinesAdded:   100,
+		LinesDeleted: 50,
+		TotalLOC:     500,
+		Commits:      10,
+		// Zero times - not set
+	}
+	m.CalculateRelativeChurn(now)
+
+	if m.DaysActive != 0 {
+		t.Errorf("DaysActive = %d, expected 0 with zero timestamps", m.DaysActive)
+	}
+
+	// RelativeChurn should still calculate since it only depends on LOC
+	if math.Abs(m.RelativeChurn-0.3) > 0.001 {
+		t.Errorf("RelativeChurn = %v, expected 0.3", m.RelativeChurn)
+	}
+}

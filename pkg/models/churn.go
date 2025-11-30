@@ -18,6 +18,14 @@ type FileChurnMetrics struct {
 	ChurnScore    float64        `json:"churn_score"` // 0.0-1.0 normalized
 	FirstCommit   time.Time      `json:"first_seen"`
 	LastCommit    time.Time      `json:"last_modified"`
+
+	// Relative churn metrics (research-backed - Nagappan & Ball 2005)
+	TotalLOC        int     `json:"total_loc,omitempty"`        // Current lines of code in file
+	LOCReadError    bool    `json:"loc_read_error,omitempty"`   // True if file could not be read for LOC count
+	RelativeChurn   float64 `json:"relative_churn,omitempty"`   // (LinesAdded + LinesDeleted) / TotalLOC
+	ChurnRate       float64 `json:"churn_rate,omitempty"`       // RelativeChurn / DaysSinceFirstCommit
+	ChangeFrequency float64 `json:"change_frequency,omitempty"` // Commits / DaysSinceFirstCommit
+	DaysActive      int     `json:"days_active,omitempty"`      // Days between first and last commit
 }
 
 // CalculateChurnScore computes a normalized churn score.
@@ -57,6 +65,35 @@ func (f *FileChurnMetrics) CalculateChurnScoreWithMax(maxCommits, maxChanges int
 // IsHotspot returns true if the file has high churn.
 func (f *FileChurnMetrics) IsHotspot(threshold float64) bool {
 	return f.ChurnScore >= threshold
+}
+
+// CalculateRelativeChurn computes relative churn metrics.
+// These metrics are research-backed per Nagappan & Ball (2005):
+// "Use of relative code churn measures to predict system defect density"
+// Relative churn discriminates fault-prone files with 89% accuracy.
+func (f *FileChurnMetrics) CalculateRelativeChurn(now time.Time) {
+	// Calculate days active
+	if !f.FirstCommit.IsZero() && !f.LastCommit.IsZero() {
+		f.DaysActive = int(f.LastCommit.Sub(f.FirstCommit).Hours() / 24)
+		if f.DaysActive < 1 {
+			f.DaysActive = 1 // Minimum 1 day
+		}
+	}
+
+	// Calculate relative churn: (LinesAdded + LinesDeleted) / TotalLOC
+	if f.TotalLOC > 0 {
+		f.RelativeChurn = float64(f.LinesAdded+f.LinesDeleted) / float64(f.TotalLOC)
+	}
+
+	// Calculate churn rate: RelativeChurn / DaysActive
+	if f.DaysActive > 0 {
+		f.ChurnRate = f.RelativeChurn / float64(f.DaysActive)
+	}
+
+	// Calculate change frequency: Commits / DaysActive
+	if f.DaysActive > 0 {
+		f.ChangeFrequency = float64(f.Commits) / float64(f.DaysActive)
+	}
 }
 
 // ChurnSummary provides aggregate statistics.

@@ -343,3 +343,47 @@ func (_c *MockCommit_Tree_Call) RunAndReturn(run func() (vcs.Tree, error)) *Mock
 	_c.Call.Return(run)
 	return _c
 }
+
+// Message provides a mock function for the type MockCommit
+func (_mock *MockCommit) Message() string {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for Message")
+	}
+
+	var r0 string
+	if returnFunc, ok := ret.Get(0).(func() string); ok {
+		r0 = returnFunc()
+	} else {
+		r0 = ret.Get(0).(string)
+	}
+	return r0
+}
+
+// MockCommit_Message_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Message'
+type MockCommit_Message_Call struct {
+	*mock.Call
+}
+
+// Message is a helper method to define mock.On call
+func (_e *MockCommit_Expecter) Message() *MockCommit_Message_Call {
+	return &MockCommit_Message_Call{Call: _e.mock.On("Message")}
+}
+
+func (_c *MockCommit_Message_Call) Run(run func()) *MockCommit_Message_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockCommit_Message_Call) Return(message string) *MockCommit_Message_Call {
+	_c.Call.Return(message)
+	return _c
+}
+
+func (_c *MockCommit_Message_Call) RunAndReturn(run func() string) *MockCommit_Message_Call {
+	_c.Call.Return(run)
+	return _c
+}

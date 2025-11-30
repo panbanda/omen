@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"sync"
+	"time"
+)
 
 // ConfidenceLevel indicates how certain we are about dead code detection.
 type ConfidenceLevel string
@@ -10,6 +13,52 @@ const (
 	ConfidenceMedium ConfidenceLevel = "Medium"
 	ConfidenceLow    ConfidenceLevel = "Low"
 )
+
+// ConfidenceThresholds defines the thresholds for confidence level classification.
+// These thresholds are based on empirical analysis of dead code detection accuracy:
+// - High (>=0.8): Private/unexported symbols with no references have very low false positive rates
+// - Medium (>=0.5): Exported symbols without internal usage may still be part of public API
+// - Low (<0.5): Symbols matching dynamic usage patterns (reflection, callbacks) need manual review
+type ConfidenceThresholds struct {
+	HighThreshold   float64 // Confidence >= this is "High" (default: 0.8)
+	MediumThreshold float64 // Confidence >= this (and < High) is "Medium" (default: 0.5)
+}
+
+// DefaultConfidenceThresholds returns the default confidence thresholds.
+func DefaultConfidenceThresholds() ConfidenceThresholds {
+	return ConfidenceThresholds{
+		HighThreshold:   0.8,
+		MediumThreshold: 0.5,
+	}
+}
+
+// Global confidence thresholds (can be overridden via SetConfidenceThresholds)
+var (
+	confidenceThresholds   = DefaultConfidenceThresholds()
+	confidenceThresholdsMu sync.RWMutex
+)
+
+// SetConfidenceThresholds allows customizing the confidence level thresholds.
+// This function is thread-safe and typically called once at startup.
+func SetConfidenceThresholds(thresholds ConfidenceThresholds) {
+	confidenceThresholdsMu.Lock()
+	defer confidenceThresholdsMu.Unlock()
+
+	if thresholds.HighThreshold > 0 && thresholds.HighThreshold <= 1 {
+		confidenceThresholds.HighThreshold = thresholds.HighThreshold
+	}
+	if thresholds.MediumThreshold > 0 && thresholds.MediumThreshold <= 1 {
+		confidenceThresholds.MediumThreshold = thresholds.MediumThreshold
+	}
+}
+
+// GetConfidenceThresholds returns the current confidence thresholds.
+// This function is thread-safe.
+func GetConfidenceThresholds() ConfidenceThresholds {
+	confidenceThresholdsMu.RLock()
+	defer confidenceThresholdsMu.RUnlock()
+	return confidenceThresholds
+}
 
 // DeadCodeType classifies the type of dead code item (pmat compatible).
 type DeadCodeType string
@@ -358,15 +407,33 @@ func (g *CallGraph) GetOutgoingEdges(nodeID uint32) []ReferenceEdge {
 
 // DeadFunction represents an unused function detected in the codebase.
 type DeadFunction struct {
-	Name       string       `json:"name"`
-	File       string       `json:"file"`
-	Line       uint32       `json:"line"`
-	EndLine    uint32       `json:"end_line"`
-	Visibility string       `json:"visibility"` // public, private, internal
-	Confidence float64      `json:"confidence"` // 0.0-1.0, how certain we are it's dead
-	Reason     string       `json:"reason"`     // Why it's considered dead
-	Kind       DeadCodeKind `json:"kind,omitempty"`
-	NodeID     uint32       `json:"node_id,omitempty"`
+	Name             string          `json:"name"`
+	File             string          `json:"file"`
+	Line             uint32          `json:"line"`
+	EndLine          uint32          `json:"end_line"`
+	Visibility       string          `json:"visibility"` // public, private, internal
+	Confidence       float64         `json:"confidence"` // 0.0-1.0, how certain we are it's dead
+	ConfidenceLevel  ConfidenceLevel `json:"confidence_level"`
+	ConfidenceReason string          `json:"confidence_reason"` // Why we have this confidence level
+	Reason           string          `json:"reason"`            // Why it's considered dead
+	Kind             DeadCodeKind    `json:"kind,omitempty"`
+	NodeID           uint32          `json:"node_id,omitempty"`
+}
+
+// SetConfidenceLevel sets the confidence level and reason based on the numeric confidence.
+// Uses configurable thresholds from GetConfidenceThresholds().
+func (f *DeadFunction) SetConfidenceLevel() {
+	thresholds := GetConfidenceThresholds()
+	if f.Confidence >= thresholds.HighThreshold {
+		f.ConfidenceLevel = ConfidenceHigh
+		f.ConfidenceReason = "High confidence: private/unexported, no references in call graph"
+	} else if f.Confidence >= thresholds.MediumThreshold {
+		f.ConfidenceLevel = ConfidenceMedium
+		f.ConfidenceReason = "Medium confidence: exported but no internal references found"
+	} else {
+		f.ConfidenceLevel = ConfidenceLow
+		f.ConfidenceReason = "Low confidence: matches patterns that may have dynamic usage"
+	}
 }
 
 // DeadCodeAnalysis represents the full dead code detection result.
@@ -381,25 +448,63 @@ type DeadCodeAnalysis struct {
 
 // DeadClass represents an unused class/struct/type.
 type DeadClass struct {
-	Name       string       `json:"name"`
-	File       string       `json:"file"`
-	Line       uint32       `json:"line"`
-	EndLine    uint32       `json:"end_line"`
-	Confidence float64      `json:"confidence"`
-	Reason     string       `json:"reason"`
-	Kind       DeadCodeKind `json:"kind,omitempty"`
-	NodeID     uint32       `json:"node_id,omitempty"`
+	Name             string          `json:"name"`
+	File             string          `json:"file"`
+	Line             uint32          `json:"line"`
+	EndLine          uint32          `json:"end_line"`
+	Visibility       string          `json:"visibility"`
+	Confidence       float64         `json:"confidence"`
+	ConfidenceLevel  ConfidenceLevel `json:"confidence_level"`
+	ConfidenceReason string          `json:"confidence_reason"`
+	Reason           string          `json:"reason"`
+	Kind             DeadCodeKind    `json:"kind,omitempty"`
+	NodeID           uint32          `json:"node_id,omitempty"`
+}
+
+// SetConfidenceLevel sets the confidence level and reason based on the numeric confidence.
+// Uses configurable thresholds from GetConfidenceThresholds().
+func (c *DeadClass) SetConfidenceLevel() {
+	thresholds := GetConfidenceThresholds()
+	if c.Confidence >= thresholds.HighThreshold {
+		c.ConfidenceLevel = ConfidenceHigh
+		c.ConfidenceReason = "High confidence: private/unexported type, no references in codebase"
+	} else if c.Confidence >= thresholds.MediumThreshold {
+		c.ConfidenceLevel = ConfidenceMedium
+		c.ConfidenceReason = "Medium confidence: exported type but no internal usages found"
+	} else {
+		c.ConfidenceLevel = ConfidenceLow
+		c.ConfidenceReason = "Low confidence: may be used via reflection or as public API"
+	}
 }
 
 // DeadVariable represents an unused variable.
 type DeadVariable struct {
-	Name       string       `json:"name"`
-	File       string       `json:"file"`
-	Line       uint32       `json:"line"`
-	Confidence float64      `json:"confidence"`
-	Reason     string       `json:"reason,omitempty"`
-	Kind       DeadCodeKind `json:"kind,omitempty"`
-	NodeID     uint32       `json:"node_id,omitempty"`
+	Name             string          `json:"name"`
+	File             string          `json:"file"`
+	Line             uint32          `json:"line"`
+	Visibility       string          `json:"visibility"`
+	Confidence       float64         `json:"confidence"`
+	ConfidenceLevel  ConfidenceLevel `json:"confidence_level"`
+	ConfidenceReason string          `json:"confidence_reason"`
+	Reason           string          `json:"reason,omitempty"`
+	Kind             DeadCodeKind    `json:"kind,omitempty"`
+	NodeID           uint32          `json:"node_id,omitempty"`
+}
+
+// SetConfidenceLevel sets the confidence level and reason based on the numeric confidence.
+// Uses configurable thresholds from GetConfidenceThresholds().
+func (v *DeadVariable) SetConfidenceLevel() {
+	thresholds := GetConfidenceThresholds()
+	if v.Confidence >= thresholds.HighThreshold {
+		v.ConfidenceLevel = ConfidenceHigh
+		v.ConfidenceReason = "High confidence: private/unexported variable, no references found"
+	} else if v.Confidence >= thresholds.MediumThreshold {
+		v.ConfidenceLevel = ConfidenceMedium
+		v.ConfidenceReason = "Medium confidence: exported variable but no internal usages found"
+	} else {
+		v.ConfidenceLevel = ConfidenceLow
+		v.ConfidenceReason = "Low confidence: may be accessed dynamically or via reflection"
+	}
 }
 
 // UnreachableBlock represents code that can never execute.

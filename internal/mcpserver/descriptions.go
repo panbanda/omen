@@ -22,11 +22,9 @@ INTERPRETING RESULTS:
 - P90 values show the 90th percentile across all functions (codebase trend)
 
 METRICS RETURNED:
-- Per-function: cyclomatic, cognitive, max_nesting, lines, halstead metrics
+- Per-function: cyclomatic, cognitive, max_nesting, lines
 - Per-file: function list, averages and totals
-- Summary: P50, P90, P95 percentiles, max values, total functions
-
-Halstead metrics (when enabled) predict bugs and development effort.`
+- Summary: P50, P90, P95 percentiles, max values, total functions`
 }
 
 func describeSATD() string {

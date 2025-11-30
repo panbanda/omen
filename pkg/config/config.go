@@ -156,6 +156,9 @@ func DefaultConfig() *Config {
 				"dist",
 				"build",
 				"__pycache__",
+				"coverage", // Test coverage output
+				".bundle",  // Ruby bundler
+				"sorbet",   // Sorbet type definitions (auto-generated)
 			},
 			Gitignore: true,
 		},

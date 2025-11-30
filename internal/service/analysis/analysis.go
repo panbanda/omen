@@ -45,7 +45,6 @@ func New(opts ...Option) *Service {
 
 // ComplexityOptions configures complexity analysis.
 type ComplexityOptions struct {
-	IncludeHalstead     bool
 	CyclomaticThreshold int
 	CognitiveThreshold  int
 	FunctionsOnly       bool
@@ -56,9 +55,6 @@ type ComplexityOptions struct {
 // AnalyzeComplexity runs complexity analysis on the given files.
 func (s *Service) AnalyzeComplexity(files []string, opts ComplexityOptions) (*models.ComplexityAnalysis, error) {
 	var analyzerOpts []analyzer.ComplexityOption
-	if opts.IncludeHalstead {
-		analyzerOpts = append(analyzerOpts, analyzer.WithHalstead())
-	}
 	if opts.MaxFileSize > 0 {
 		analyzerOpts = append(analyzerOpts, analyzer.WithComplexityMaxFileSize(opts.MaxFileSize))
 	} else if s.config.Analysis.MaxFileSize > 0 {
@@ -382,6 +378,80 @@ func (s *Service) AnalyzeRepoMap(files []string, opts RepoMapOptions) (*models.R
 	defer rmAnalyzer.Close()
 
 	return rmAnalyzer.AnalyzeProject(files)
+}
+
+// JITOptions configures Just-in-Time defect prediction.
+type JITOptions struct {
+	Days    int
+	Weights models.JITWeights
+}
+
+// AnalyzeJIT performs Just-in-Time defect prediction on recent commits.
+func (s *Service) AnalyzeJIT(repoPath string, opts JITOptions) (*models.JITAnalysis, error) {
+	days := opts.Days
+	if days <= 0 {
+		days = s.config.Analysis.ChurnDays
+	}
+
+	var analyzerOpts []analyzer.JITOption
+	analyzerOpts = append(analyzerOpts, analyzer.WithJITDays(days))
+	analyzerOpts = append(analyzerOpts, analyzer.WithJITOpener(s.opener))
+
+	// Only set weights if they're not zero-valued
+	if opts.Weights.FIX != 0 || opts.Weights.Entropy != 0 {
+		analyzerOpts = append(analyzerOpts, analyzer.WithJITWeights(opts.Weights))
+	}
+
+	jitAnalyzer := analyzer.NewJITAnalyzer(analyzerOpts...)
+	defer jitAnalyzer.Close()
+
+	return jitAnalyzer.AnalyzeRepo(repoPath)
+}
+
+// SmellOptions configures architectural smell detection.
+type SmellOptions struct {
+	HubThreshold          int
+	GodFanInThreshold     int
+	GodFanOutThreshold    int
+	InstabilityDifference float64
+	OnProgress            func()
+}
+
+// AnalyzeSmells detects architectural smells in a dependency graph.
+func (s *Service) AnalyzeSmells(files []string, opts SmellOptions) (*models.SmellAnalysis, error) {
+	// First build the dependency graph
+	graphAnalyzer := analyzer.NewGraphAnalyzer(analyzer.WithGraphScope(analyzer.ScopeFile))
+	defer graphAnalyzer.Close()
+
+	graph, err := graphAnalyzer.AnalyzeProjectWithProgress(files, opts.OnProgress)
+	if err != nil {
+		return nil, err
+	}
+
+	// Configure smell analyzer
+	var smellOpts []analyzer.SmellOption
+	if opts.HubThreshold > 0 {
+		smellOpts = append(smellOpts, analyzer.WithHubThreshold(opts.HubThreshold))
+	}
+	if opts.GodFanInThreshold > 0 || opts.GodFanOutThreshold > 0 {
+		fanIn := opts.GodFanInThreshold
+		fanOut := opts.GodFanOutThreshold
+		if fanIn == 0 {
+			fanIn = 10
+		}
+		if fanOut == 0 {
+			fanOut = 10
+		}
+		smellOpts = append(smellOpts, analyzer.WithGodThresholds(fanIn, fanOut))
+	}
+	if opts.InstabilityDifference > 0 {
+		smellOpts = append(smellOpts, analyzer.WithInstabilityDifference(opts.InstabilityDifference))
+	}
+
+	smellAnalyzer := analyzer.NewSmellAnalyzer(smellOpts...)
+	defer smellAnalyzer.Close()
+
+	return smellAnalyzer.AnalyzeGraph(graph), nil
 }
 
 // PatternError indicates an invalid pattern.

@@ -75,26 +75,6 @@ func simple() {
 	}
 }
 
-func TestAnalyzeComplexity_WithHalstead(t *testing.T) {
-	goFile := createTestGoFile(t, `package main
-
-func add(a, b int) int {
-	return a + b
-}
-`)
-
-	svc := New()
-	result, err := svc.AnalyzeComplexity([]string{goFile}, ComplexityOptions{
-		IncludeHalstead: true,
-	})
-	if err != nil {
-		t.Fatalf("AnalyzeComplexity() error = %v", err)
-	}
-	if result == nil {
-		t.Fatal("expected non-nil result")
-	}
-}
-
 func TestAnalyzeComplexity_WithProgress(t *testing.T) {
 	goFile := createTestGoFile(t, `package main
 
