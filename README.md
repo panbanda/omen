@@ -183,28 +183,6 @@ Omen builds a graph showing which files import which other files, then calculate
 </details>
 
 <details>
-<summary><strong>Halstead Metrics</strong> - Software complexity based on operators and operands</summary>
-
-[Maurice Halstead developed these metrics in 1977](https://dl.acm.org/doi/10.5555/540137) to measure programs like physical objects:
-
-| Metric     | Formula              | What it means                      |
-| ---------- | -------------------- | ---------------------------------- |
-| Vocabulary | n1 + n2              | Unique operators + unique operands |
-| Length     | N1 + N2              | Total operators + total operands   |
-| Volume     | N \* log2(n)         | Size of the implementation         |
-| Difficulty | (n1/2) \* (N2/n2)    | How hard to write and understand   |
-| Effort     | Volume \* Difficulty | Mental effort required             |
-| Time       | Effort / 18          | Estimated coding time in seconds   |
-| Bugs       | Effort^(2/3) / 3000  | Estimated number of bugs           |
-
-**Why it matters:** Halstead metrics give you objective measurements for comparing different implementations of the same functionality. They can estimate how long code took to write and predict how many bugs it might contain.
-
-> [!TIP]
-> Use Halstead for comparing alternative implementations. Lower effort and predicted bugs = better.
-
-</details>
-
-<details>
 <summary><strong>Hotspot Analysis</strong> - High-risk files where complexity meets frequent changes</summary>
 
 Hotspots are files that are both complex AND frequently modified. A simple file that changes often is probably fine - it's easy to work with. A complex file that rarely changes is also manageable - you can leave it alone. But a complex file that changes constantly? That's where bugs breed.

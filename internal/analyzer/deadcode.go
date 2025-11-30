@@ -1499,6 +1499,7 @@ func (a *DeadCodeAnalyzer) classifyDeadCode(analysis *models.DeadCodeAnalysis, d
 						Kind:       models.DeadKindFunction,
 						NodeID:     def.nodeID,
 					}
+					df.SetConfidenceLevel()
 					analysis.DeadFunctions = append(analysis.DeadFunctions, df)
 					analysis.Summary.AddDeadFunction(df)
 				case "class":
@@ -1507,11 +1508,13 @@ func (a *DeadCodeAnalyzer) classifyDeadCode(analysis *models.DeadCodeAnalysis, d
 						File:       def.file,
 						Line:       def.line,
 						EndLine:    def.endLine,
+						Visibility: def.visibility,
 						Confidence: confidence,
 						Reason:     "Class never instantiated or referenced",
 						Kind:       models.DeadKindClass,
 						NodeID:     def.nodeID,
 					}
+					dc.SetConfidenceLevel()
 					analysis.DeadClasses = append(analysis.DeadClasses, dc)
 					analysis.Summary.AddDeadClass(dc)
 				case "variable":
@@ -1519,11 +1522,13 @@ func (a *DeadCodeAnalyzer) classifyDeadCode(analysis *models.DeadCodeAnalysis, d
 						Name:       name,
 						File:       def.file,
 						Line:       def.line,
+						Visibility: def.visibility,
 						Confidence: confidence,
 						Reason:     "Variable never accessed",
 						Kind:       models.DeadKindVariable,
 						NodeID:     def.nodeID,
 					}
+					dv.SetConfidenceLevel()
 					analysis.DeadVariables = append(analysis.DeadVariables, dv)
 					analysis.Summary.AddDeadVariable(dv)
 				}
@@ -1675,6 +1680,7 @@ func (a *DeadCodeAnalyzer) findDeadCodeFromUsages(analysis *models.DeadCodeAnaly
 						Reason:     "No references found in codebase",
 						Kind:       models.DeadKindFunction,
 					}
+					df.SetConfidenceLevel()
 					analysis.DeadFunctions = append(analysis.DeadFunctions, df)
 					analysis.Summary.AddDeadFunction(df)
 				} else if def.kind == "variable" {
@@ -1682,10 +1688,12 @@ func (a *DeadCodeAnalyzer) findDeadCodeFromUsages(analysis *models.DeadCodeAnaly
 						Name:       name,
 						File:       def.file,
 						Line:       def.line,
+						Visibility: def.visibility,
 						Confidence: confidence,
 						Reason:     "Variable never used",
 						Kind:       models.DeadKindVariable,
 					}
+					dv.SetConfidenceLevel()
 					analysis.DeadVariables = append(analysis.DeadVariables, dv)
 					analysis.Summary.AddDeadVariable(dv)
 				} else if def.kind == "class" {
@@ -1694,10 +1702,12 @@ func (a *DeadCodeAnalyzer) findDeadCodeFromUsages(analysis *models.DeadCodeAnaly
 						File:       def.file,
 						Line:       def.line,
 						EndLine:    def.endLine,
+						Visibility: def.visibility,
 						Confidence: confidence,
 						Reason:     "Class never used",
 						Kind:       models.DeadKindClass,
 					}
+					dc.SetConfidenceLevel()
 					analysis.DeadClasses = append(analysis.DeadClasses, dc)
 					analysis.Summary.AddDeadClass(dc)
 				}

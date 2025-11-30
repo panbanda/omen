@@ -358,15 +358,31 @@ func (g *CallGraph) GetOutgoingEdges(nodeID uint32) []ReferenceEdge {
 
 // DeadFunction represents an unused function detected in the codebase.
 type DeadFunction struct {
-	Name       string       `json:"name"`
-	File       string       `json:"file"`
-	Line       uint32       `json:"line"`
-	EndLine    uint32       `json:"end_line"`
-	Visibility string       `json:"visibility"` // public, private, internal
-	Confidence float64      `json:"confidence"` // 0.0-1.0, how certain we are it's dead
-	Reason     string       `json:"reason"`     // Why it's considered dead
-	Kind       DeadCodeKind `json:"kind,omitempty"`
-	NodeID     uint32       `json:"node_id,omitempty"`
+	Name             string          `json:"name"`
+	File             string          `json:"file"`
+	Line             uint32          `json:"line"`
+	EndLine          uint32          `json:"end_line"`
+	Visibility       string          `json:"visibility"` // public, private, internal
+	Confidence       float64         `json:"confidence"` // 0.0-1.0, how certain we are it's dead
+	ConfidenceLevel  ConfidenceLevel `json:"confidence_level"`
+	ConfidenceReason string          `json:"confidence_reason"` // Why we have this confidence level
+	Reason           string          `json:"reason"`            // Why it's considered dead
+	Kind             DeadCodeKind    `json:"kind,omitempty"`
+	NodeID           uint32          `json:"node_id,omitempty"`
+}
+
+// SetConfidenceLevel sets the confidence level and reason based on the numeric confidence.
+func (f *DeadFunction) SetConfidenceLevel() {
+	if f.Confidence >= 0.8 {
+		f.ConfidenceLevel = ConfidenceHigh
+		f.ConfidenceReason = "High confidence: private/unexported, no references in call graph"
+	} else if f.Confidence >= 0.5 {
+		f.ConfidenceLevel = ConfidenceMedium
+		f.ConfidenceReason = "Medium confidence: exported but no internal references found"
+	} else {
+		f.ConfidenceLevel = ConfidenceLow
+		f.ConfidenceReason = "Low confidence: matches patterns that may have dynamic usage"
+	}
 }
 
 // DeadCodeAnalysis represents the full dead code detection result.
@@ -381,25 +397,59 @@ type DeadCodeAnalysis struct {
 
 // DeadClass represents an unused class/struct/type.
 type DeadClass struct {
-	Name       string       `json:"name"`
-	File       string       `json:"file"`
-	Line       uint32       `json:"line"`
-	EndLine    uint32       `json:"end_line"`
-	Confidence float64      `json:"confidence"`
-	Reason     string       `json:"reason"`
-	Kind       DeadCodeKind `json:"kind,omitempty"`
-	NodeID     uint32       `json:"node_id,omitempty"`
+	Name             string          `json:"name"`
+	File             string          `json:"file"`
+	Line             uint32          `json:"line"`
+	EndLine          uint32          `json:"end_line"`
+	Visibility       string          `json:"visibility"`
+	Confidence       float64         `json:"confidence"`
+	ConfidenceLevel  ConfidenceLevel `json:"confidence_level"`
+	ConfidenceReason string          `json:"confidence_reason"`
+	Reason           string          `json:"reason"`
+	Kind             DeadCodeKind    `json:"kind,omitempty"`
+	NodeID           uint32          `json:"node_id,omitempty"`
+}
+
+// SetConfidenceLevel sets the confidence level and reason based on the numeric confidence.
+func (c *DeadClass) SetConfidenceLevel() {
+	if c.Confidence >= 0.8 {
+		c.ConfidenceLevel = ConfidenceHigh
+		c.ConfidenceReason = "High confidence: private/unexported type, no references in codebase"
+	} else if c.Confidence >= 0.5 {
+		c.ConfidenceLevel = ConfidenceMedium
+		c.ConfidenceReason = "Medium confidence: exported type but no internal usages found"
+	} else {
+		c.ConfidenceLevel = ConfidenceLow
+		c.ConfidenceReason = "Low confidence: may be used via reflection or as public API"
+	}
 }
 
 // DeadVariable represents an unused variable.
 type DeadVariable struct {
-	Name       string       `json:"name"`
-	File       string       `json:"file"`
-	Line       uint32       `json:"line"`
-	Confidence float64      `json:"confidence"`
-	Reason     string       `json:"reason,omitempty"`
-	Kind       DeadCodeKind `json:"kind,omitempty"`
-	NodeID     uint32       `json:"node_id,omitempty"`
+	Name             string          `json:"name"`
+	File             string          `json:"file"`
+	Line             uint32          `json:"line"`
+	Visibility       string          `json:"visibility"`
+	Confidence       float64         `json:"confidence"`
+	ConfidenceLevel  ConfidenceLevel `json:"confidence_level"`
+	ConfidenceReason string          `json:"confidence_reason"`
+	Reason           string          `json:"reason,omitempty"`
+	Kind             DeadCodeKind    `json:"kind,omitempty"`
+	NodeID           uint32          `json:"node_id,omitempty"`
+}
+
+// SetConfidenceLevel sets the confidence level and reason based on the numeric confidence.
+func (v *DeadVariable) SetConfidenceLevel() {
+	if v.Confidence >= 0.8 {
+		v.ConfidenceLevel = ConfidenceHigh
+		v.ConfidenceReason = "High confidence: private/unexported variable, no references found"
+	} else if v.Confidence >= 0.5 {
+		v.ConfidenceLevel = ConfidenceMedium
+		v.ConfidenceReason = "Medium confidence: exported variable but no internal usages found"
+	} else {
+		v.ConfidenceLevel = ConfidenceLow
+		v.ConfidenceReason = "Low confidence: may be accessed dynamically or via reflection"
+	}
 }
 
 // UnreachableBlock represents code that can never execute.

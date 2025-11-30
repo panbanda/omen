@@ -58,7 +58,14 @@ func (s *Scanner) loadGitignore(root string) {
 	for {
 		gitignorePath := filepath.Join(dir, ".gitignore")
 		if data, err := os.ReadFile(gitignorePath); err == nil {
-			domain := strings.Split(strings.TrimPrefix(dir, root), string(filepath.Separator))
+			// Compute domain as relative path from root
+			// For root .gitignore, domain should be nil (not []string{""})
+			var domain []string
+			relPath := strings.TrimPrefix(dir, root)
+			relPath = strings.TrimPrefix(relPath, string(filepath.Separator))
+			if relPath != "" {
+				domain = strings.Split(relPath, string(filepath.Separator))
+			}
 			for _, line := range strings.Split(string(data), "\n") {
 				line = strings.TrimSpace(line)
 				if line == "" || strings.HasPrefix(line, "#") {

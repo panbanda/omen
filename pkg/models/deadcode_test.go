@@ -576,3 +576,180 @@ func TestDeadCodeResult_FromDeadCodeAnalysis(t *testing.T) {
 		t.Errorf("Files count = %d, expected 2", len(result.Files))
 	}
 }
+
+func TestDeadFunction_SetConfidenceLevel(t *testing.T) {
+	tests := []struct {
+		name                   string
+		confidence             float64
+		expectedLevel          ConfidenceLevel
+		expectedReasonContains string
+	}{
+		{
+			name:                   "high confidence - private unexported",
+			confidence:             0.95,
+			expectedLevel:          ConfidenceHigh,
+			expectedReasonContains: "High confidence",
+		},
+		{
+			name:                   "high confidence - boundary",
+			confidence:             0.8,
+			expectedLevel:          ConfidenceHigh,
+			expectedReasonContains: "private/unexported",
+		},
+		{
+			name:                   "medium confidence",
+			confidence:             0.65,
+			expectedLevel:          ConfidenceMedium,
+			expectedReasonContains: "Medium confidence",
+		},
+		{
+			name:                   "medium confidence - lower boundary",
+			confidence:             0.5,
+			expectedLevel:          ConfidenceMedium,
+			expectedReasonContains: "exported but no internal",
+		},
+		{
+			name:                   "low confidence - below medium threshold",
+			confidence:             0.49,
+			expectedLevel:          ConfidenceLow,
+			expectedReasonContains: "Low confidence",
+		},
+		{
+			name:                   "low confidence - very low",
+			confidence:             0.1,
+			expectedLevel:          ConfidenceLow,
+			expectedReasonContains: "dynamic usage",
+		},
+		{
+			name:                   "low confidence - zero",
+			confidence:             0.0,
+			expectedLevel:          ConfidenceLow,
+			expectedReasonContains: "Low confidence",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			df := DeadFunction{
+				Name:       "testFunc",
+				Confidence: tt.confidence,
+			}
+			df.SetConfidenceLevel()
+
+			if df.ConfidenceLevel != tt.expectedLevel {
+				t.Errorf("ConfidenceLevel = %s, expected %s", df.ConfidenceLevel, tt.expectedLevel)
+			}
+			if df.ConfidenceReason == "" {
+				t.Error("ConfidenceReason should not be empty")
+			}
+			if !contains(df.ConfidenceReason, tt.expectedReasonContains) {
+				t.Errorf("ConfidenceReason = %q, expected to contain %q", df.ConfidenceReason, tt.expectedReasonContains)
+			}
+		})
+	}
+}
+
+func TestDeadClass_SetConfidenceLevel(t *testing.T) {
+	tests := []struct {
+		name                   string
+		confidence             float64
+		expectedLevel          ConfidenceLevel
+		expectedReasonContains string
+	}{
+		{
+			name:                   "high confidence",
+			confidence:             0.9,
+			expectedLevel:          ConfidenceHigh,
+			expectedReasonContains: "private/unexported type",
+		},
+		{
+			name:                   "medium confidence",
+			confidence:             0.6,
+			expectedLevel:          ConfidenceMedium,
+			expectedReasonContains: "exported type",
+		},
+		{
+			name:                   "low confidence",
+			confidence:             0.3,
+			expectedLevel:          ConfidenceLow,
+			expectedReasonContains: "reflection",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dc := DeadClass{
+				Name:       "TestClass",
+				Confidence: tt.confidence,
+			}
+			dc.SetConfidenceLevel()
+
+			if dc.ConfidenceLevel != tt.expectedLevel {
+				t.Errorf("ConfidenceLevel = %s, expected %s", dc.ConfidenceLevel, tt.expectedLevel)
+			}
+			if dc.ConfidenceReason == "" {
+				t.Error("ConfidenceReason should not be empty")
+			}
+		})
+	}
+}
+
+func TestDeadVariable_SetConfidenceLevel(t *testing.T) {
+	tests := []struct {
+		name                   string
+		confidence             float64
+		expectedLevel          ConfidenceLevel
+		expectedReasonContains string
+	}{
+		{
+			name:                   "high confidence",
+			confidence:             0.85,
+			expectedLevel:          ConfidenceHigh,
+			expectedReasonContains: "private/unexported variable",
+		},
+		{
+			name:                   "medium confidence",
+			confidence:             0.55,
+			expectedLevel:          ConfidenceMedium,
+			expectedReasonContains: "exported variable",
+		},
+		{
+			name:                   "low confidence",
+			confidence:             0.2,
+			expectedLevel:          ConfidenceLow,
+			expectedReasonContains: "dynamically",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dv := DeadVariable{
+				Name:       "testVar",
+				Confidence: tt.confidence,
+			}
+			dv.SetConfidenceLevel()
+
+			if dv.ConfidenceLevel != tt.expectedLevel {
+				t.Errorf("ConfidenceLevel = %s, expected %s", dv.ConfidenceLevel, tt.expectedLevel)
+			}
+			if dv.ConfidenceReason == "" {
+				t.Error("ConfidenceReason should not be empty")
+			}
+		})
+	}
+}
+
+// contains checks if a string contains a substring (case-insensitive for flexibility)
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		(len(s) > 0 && containsSubstring(s, substr)))
+}
+
+func containsSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}

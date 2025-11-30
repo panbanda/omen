@@ -161,6 +161,10 @@ func (c *gitCommit) Author() object.Signature {
 	return c.commit.Author
 }
 
+func (c *gitCommit) Message() string {
+	return c.commit.Message
+}
+
 // gitTree wraps go-git Tree.
 type gitTree struct {
 	tree *object.Tree

@@ -51,6 +51,8 @@ type Commit interface {
 	Stats() (object.FileStats, error)
 	// Author returns commit author information.
 	Author() object.Signature
+	// Message returns the commit message.
+	Message() string
 }
 
 // Tree represents a git tree object.

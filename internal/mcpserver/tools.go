@@ -25,7 +25,6 @@ type AnalyzeInput struct {
 // ComplexityInput adds complexity-specific options.
 type ComplexityInput struct {
 	AnalyzeInput
-	IncludeHalstead     bool `json:"include_halstead,omitempty" jsonschema:"Include Halstead software science metrics."`
 	CyclomaticThreshold int  `json:"cyclomatic_threshold,omitempty" jsonschema:"Cyclomatic complexity threshold for warnings. Default 10."`
 	CognitiveThreshold  int  `json:"cognitive_threshold,omitempty" jsonschema:"Cognitive complexity threshold for warnings. Default 15."`
 	FunctionsOnly       bool `json:"functions_only,omitempty" jsonschema:"Show only function-level metrics, omit file summaries."`
@@ -196,9 +195,7 @@ func handleAnalyzeComplexity(ctx context.Context, req *mcp.CallToolRequest, inpu
 	}
 
 	svc := analysis.New()
-	result, err := svc.AnalyzeComplexity(scanResult.Files, analysis.ComplexityOptions{
-		IncludeHalstead: input.IncludeHalstead,
-	})
+	result, err := svc.AnalyzeComplexity(scanResult.Files, analysis.ComplexityOptions{})
 	if err != nil {
 		return toolError(err.Error())
 	}

@@ -239,10 +239,6 @@ func complexityCmd() *cli.Command {
 			Name:  "functions-only",
 			Usage: "Show only function-level metrics",
 		},
-		&cli.BoolFlag{
-			Name:  "halstead",
-			Usage: "Include Halstead software science metrics",
-		},
 	)
 	return &cli.Command{
 		Name:      "complexity",
@@ -259,7 +255,6 @@ func runComplexityCmd(c *cli.Context) error {
 	cycThreshold := c.Int("cyclomatic-threshold")
 	cogThreshold := c.Int("cognitive-threshold")
 	functionsOnly := c.Bool("functions-only")
-	includeHalstead := c.Bool("halstead")
 
 	scanSvc := scannerSvc.New()
 	scanResult, err := scanSvc.ScanPaths(paths)
@@ -275,7 +270,6 @@ func runComplexityCmd(c *cli.Context) error {
 	tracker := progress.NewTracker("Analyzing complexity...", len(scanResult.Files))
 	svc := analysis.New()
 	result, err := svc.AnalyzeComplexity(scanResult.Files, analysis.ComplexityOptions{
-		IncludeHalstead:     includeHalstead,
 		CyclomaticThreshold: cycThreshold,
 		CognitiveThreshold:  cogThreshold,
 		FunctionsOnly:       functionsOnly,
@@ -916,6 +910,120 @@ func runDefectCmd(c *cli.Context) error {
 	return formatter.Output(table)
 }
 
+func jitCmd() *cli.Command {
+	flags := append(outputFlags(),
+		&cli.IntFlag{
+			Name:  "days",
+			Value: 30,
+			Usage: "Number of days of history to analyze",
+		},
+		&cli.IntFlag{
+			Name:  "top",
+			Value: 20,
+			Usage: "Show top N commits by risk",
+		},
+		&cli.BoolFlag{
+			Name:  "high-risk-only",
+			Usage: "Show only high-risk commits",
+		},
+	)
+	return &cli.Command{
+		Name:      "jit",
+		Usage:     "Just-in-Time defect prediction on recent commits (Kamei et al. 2013)",
+		ArgsUsage: "[path]",
+		Flags:     flags,
+		Action:    runJITCmd,
+	}
+}
+
+func runJITCmd(c *cli.Context) error {
+	paths := getPaths(c)
+	days := c.Int("days")
+	topN := c.Int("top")
+	highRiskOnly := c.Bool("high-risk-only")
+
+	if err := validateDays(days); err != nil {
+		return err
+	}
+
+	absPath, err := filepath.Abs(paths[0])
+	if err != nil {
+		return fmt.Errorf("invalid path: %w", err)
+	}
+
+	spinner := progress.NewSpinner("Analyzing recent commits...")
+	svc := analysis.New()
+	result, err := svc.AnalyzeJIT(absPath, analysis.JITOptions{
+		Days: days,
+	})
+	spinner.FinishSuccess()
+	if err != nil {
+		return fmt.Errorf("JIT analysis failed (is this a git repository?): %w", err)
+	}
+
+	if result.Summary.TotalCommits == 0 {
+		color.Yellow("No commits found in the last %d days", days)
+		return nil
+	}
+
+	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
+	if err != nil {
+		return err
+	}
+	defer formatter.Close()
+
+	// Limit results for display
+	commits := result.Commits
+	if len(commits) > topN {
+		commits = commits[:topN]
+	}
+
+	var rows [][]string
+	for _, cr := range commits {
+		if highRiskOnly && cr.RiskLevel != models.JITRiskHigh {
+			continue
+		}
+
+		scoreStr := fmt.Sprintf("%.2f", cr.RiskScore)
+		riskStr := string(cr.RiskLevel)
+		switch cr.RiskLevel {
+		case models.JITRiskHigh:
+			scoreStr = color.RedString(scoreStr)
+			riskStr = color.RedString(riskStr)
+		case models.JITRiskMedium:
+			scoreStr = color.YellowString(scoreStr)
+			riskStr = color.YellowString(riskStr)
+		case models.JITRiskLow:
+			scoreStr = color.GreenString(scoreStr)
+			riskStr = color.GreenString(riskStr)
+		}
+
+		rows = append(rows, []string{
+			cr.CommitHash[:8],
+			cr.Author,
+			cr.Message,
+			scoreStr,
+			riskStr,
+		})
+	}
+
+	table := output.NewTable(
+		fmt.Sprintf("JIT Defect Prediction (Last %d Days)", days),
+		[]string{"Commit", "Author", "Message", "Risk Score", "Level"},
+		rows,
+		[]string{
+			fmt.Sprintf("Total Commits: %d", result.Summary.TotalCommits),
+			fmt.Sprintf("High Risk: %d", result.Summary.HighRiskCount),
+			fmt.Sprintf("Medium Risk: %d", result.Summary.MediumRiskCount),
+			fmt.Sprintf("Bug Fixes: %d", result.Summary.BugFixCount),
+			fmt.Sprintf("Avg Score: %.2f", result.Summary.AvgRiskScore),
+		},
+		result,
+	)
+
+	return formatter.Output(table)
+}
+
 func tdgCmd() *cli.Command {
 	flags := append(outputFlags(),
 		&cli.IntFlag{
@@ -1435,6 +1543,122 @@ func runHotspotCmd(c *cli.Context) error {
 			fmt.Sprintf("Hotspots (>0.5): %d", result.Summary.HotspotCount),
 			fmt.Sprintf("Max Score: %.2f", result.Summary.MaxHotspotScore),
 			fmt.Sprintf("Avg Score: %.2f", result.Summary.AvgHotspotScore),
+		},
+		result,
+	)
+
+	return formatter.Output(table)
+}
+
+func smellsCmd() *cli.Command {
+	flags := append(outputFlags(),
+		&cli.IntFlag{
+			Name:  "hub-threshold",
+			Value: 20,
+			Usage: "Fan-in + fan-out threshold for hub detection",
+		},
+		&cli.IntFlag{
+			Name:  "god-fan-in",
+			Value: 10,
+			Usage: "Minimum fan-in for god component detection",
+		},
+		&cli.IntFlag{
+			Name:  "god-fan-out",
+			Value: 10,
+			Usage: "Minimum fan-out for god component detection",
+		},
+		&cli.Float64Flag{
+			Name:  "instability-diff",
+			Value: 0.4,
+			Usage: "Max instability difference for unstable dependency detection",
+		},
+	)
+	return &cli.Command{
+		Name:      "smells",
+		Usage:     "Detect architectural smells (cycles, hubs, god components, unstable dependencies)",
+		ArgsUsage: "[path...]",
+		Flags:     flags,
+		Action:    runSmellsCmd,
+	}
+}
+
+func runSmellsCmd(c *cli.Context) error {
+	paths := getPaths(c)
+	hubThreshold := c.Int("hub-threshold")
+	godFanIn := c.Int("god-fan-in")
+	godFanOut := c.Int("god-fan-out")
+	instabilityDiff := c.Float64("instability-diff")
+
+	scanSvc := scannerSvc.New()
+	scanResult, err := scanSvc.ScanPaths(paths)
+	if err != nil {
+		return err
+	}
+
+	if len(scanResult.Files) == 0 {
+		color.Yellow("No source files found")
+		return nil
+	}
+
+	tracker := progress.NewTracker("Detecting architectural smells...", len(scanResult.Files))
+	svc := analysis.New()
+	result, err := svc.AnalyzeSmells(scanResult.Files, analysis.SmellOptions{
+		HubThreshold:          hubThreshold,
+		GodFanInThreshold:     godFanIn,
+		GodFanOutThreshold:    godFanOut,
+		InstabilityDifference: instabilityDiff,
+		OnProgress:            tracker.Tick,
+	})
+	tracker.FinishSuccess()
+	if err != nil {
+		return fmt.Errorf("smell analysis failed: %w", err)
+	}
+
+	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
+	if err != nil {
+		return err
+	}
+	defer formatter.Close()
+
+	if len(result.Smells) == 0 {
+		color.Green("No architectural smells detected")
+		return nil
+	}
+
+	var rows [][]string
+	for _, smell := range result.Smells {
+		severityStr := string(smell.Severity)
+		switch smell.Severity {
+		case models.SmellSeverityCritical:
+			severityStr = color.RedString(severityStr)
+		case models.SmellSeverityHigh:
+			severityStr = color.YellowString(severityStr)
+		}
+
+		componentsStr := smell.Components[0]
+		if len(smell.Components) > 1 {
+			componentsStr = fmt.Sprintf("%s (+%d more)", smell.Components[0], len(smell.Components)-1)
+		}
+
+		rows = append(rows, []string{
+			string(smell.Type),
+			severityStr,
+			componentsStr,
+			smell.Description,
+		})
+	}
+
+	table := output.NewTable(
+		"Architectural Smells",
+		[]string{"Type", "Severity", "Components", "Description"},
+		rows,
+		[]string{
+			fmt.Sprintf("Total Smells: %d", result.Summary.TotalSmells),
+			fmt.Sprintf("Critical: %d", result.Summary.CriticalCount),
+			fmt.Sprintf("High: %d", result.Summary.HighCount),
+			fmt.Sprintf("Cycles: %d", result.Summary.CyclicCount),
+			fmt.Sprintf("Hubs: %d", result.Summary.HubCount),
+			fmt.Sprintf("Gods: %d", result.Summary.GodCount),
 		},
 		result,
 	)
@@ -1992,10 +2216,12 @@ func analyzeCmd() *cli.Command {
 			churnCmd(),
 			duplicatesCmd(),
 			defectCmd(),
+			jitCmd(),
 			tdgCmd(),
 			graphCmd(),
 			lintHotspotCmd(),
 			hotspotCmd(),
+			smellsCmd(),
 			temporalCouplingCmd(),
 			ownershipCmd(),
 			cohesionCmd(),

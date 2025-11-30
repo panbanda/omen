@@ -1,87 +1,11 @@
 package models
 
-import "math"
-
 // ComplexityMetrics represents code complexity measurements for a function or file.
 type ComplexityMetrics struct {
-	Cyclomatic uint32           `json:"cyclomatic"`
-	Cognitive  uint32           `json:"cognitive"`
-	MaxNesting int              `json:"max_nesting"`
-	Lines      int              `json:"lines"`
-	Halstead   *HalsteadMetrics `json:"halstead,omitempty"`
-}
-
-// HalsteadMetrics represents Halstead software science metrics.
-type HalsteadMetrics struct {
-	OperatorsUnique uint32  `json:"operators_unique"` // n1: distinct operators
-	OperandsUnique  uint32  `json:"operands_unique"`  // n2: distinct operands
-	OperatorsTotal  uint32  `json:"operators_total"`  // N1: total operators
-	OperandsTotal   uint32  `json:"operands_total"`   // N2: total operands
-	Vocabulary      uint32  `json:"vocabulary"`       // n = n1 + n2
-	Length          uint32  `json:"length"`           // N = N1 + N2
-	Volume          float64 `json:"volume"`           // V = N * log2(n)
-	Difficulty      float64 `json:"difficulty"`       // D = (n1/2) * (N2/n2)
-	Effort          float64 `json:"effort"`           // E = D * V
-	Time            float64 `json:"time"`             // T = E / 18 (seconds)
-	Bugs            float64 `json:"bugs"`             // B = E^(2/3) / 3000
-}
-
-// NewHalsteadMetrics creates Halstead metrics from base counts and calculates derived values.
-func NewHalsteadMetrics(operatorsUnique, operandsUnique, operatorsTotal, operandsTotal uint32) *HalsteadMetrics {
-	h := &HalsteadMetrics{
-		OperatorsUnique: operatorsUnique,
-		OperandsUnique:  operandsUnique,
-		OperatorsTotal:  operatorsTotal,
-		OperandsTotal:   operandsTotal,
-	}
-	h.calculateDerived()
-	return h
-}
-
-// calculateDerived computes all derived Halstead metrics from base counts.
-func (h *HalsteadMetrics) calculateDerived() {
-	if h.OperatorsUnique == 0 || h.OperandsUnique == 0 {
-		return
-	}
-
-	h.Vocabulary = h.OperatorsUnique + h.OperandsUnique
-	h.Length = h.OperatorsTotal + h.OperandsTotal
-
-	// V = N * log2(n) - Program Volume
-	if h.Vocabulary > 0 {
-		h.Volume = float64(h.Length) * log2(float64(h.Vocabulary))
-	}
-
-	// D = (n1/2) * (N2/n2) - Program Difficulty
-	if h.OperandsUnique > 0 {
-		h.Difficulty = (float64(h.OperatorsUnique) / 2.0) *
-			(float64(h.OperandsTotal) / float64(h.OperandsUnique))
-	}
-
-	// E = V * D - Programming Effort
-	h.Effort = h.Volume * h.Difficulty
-
-	// T = E / 18 - Time to program in seconds (18 mental discriminations per second)
-	h.Time = h.Effort / 18.0
-
-	// B = E^(2/3) / 3000 - Delivered bugs estimate
-	h.Bugs = pow(h.Effort, 2.0/3.0) / 3000.0
-}
-
-// log2 computes log base 2
-func log2(x float64) float64 {
-	if x <= 0 {
-		return 0
-	}
-	return math.Log2(x)
-}
-
-// pow computes x^y
-func pow(x, y float64) float64 {
-	if x <= 0 {
-		return 0
-	}
-	return math.Pow(x, y)
+	Cyclomatic uint32 `json:"cyclomatic"`
+	Cognitive  uint32 `json:"cognitive"`
+	MaxNesting int    `json:"max_nesting"`
+	Lines      int    `json:"lines"`
 }
 
 // FunctionComplexity represents complexity metrics for a single function.

@@ -1,7 +1,9 @@
 package analyzer
 
 import (
+	"bufio"
 	"context"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -211,6 +213,7 @@ func (a *ChurnAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath str
 	}
 
 	// Second pass: calculate scores and collect stats
+	now := time.Now()
 	for _, fm := range fileMetrics {
 		// Convert author counts map to unique authors slice
 		fm.UniqueAuthors = make([]string, 0, len(fm.AuthorCounts))
@@ -219,6 +222,12 @@ func (a *ChurnAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath str
 		}
 
 		fm.CalculateChurnScoreWithMax(maxCommits, maxChanges)
+
+		// Calculate relative churn metrics (Nagappan & Ball 2005)
+		filePath := filepath.Join(absPath, fm.RelativePath)
+		fm.TotalLOC = countFileLOC(filePath)
+		fm.CalculateRelativeChurn(now)
+
 		analysis.Files = append(analysis.Files, *fm)
 
 		totalCommits += fm.Commits
@@ -259,6 +268,22 @@ func (a *ChurnAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath str
 // countLines counts the number of newlines in content.
 func countLines(content string) int {
 	return strings.Count(content, "\n")
+}
+
+// countFileLOC counts the number of lines in a file on disk.
+func countFileLOC(path string) int {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+
+	count := 0
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		count++
+	}
+	return count
 }
 
 // AnalyzeFiles analyzes churn for specific files.
