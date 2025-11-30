@@ -1,6 +1,6 @@
 {
   "name": "omen",
-  "description": "Code analysis skills for Claude Code: complexity hotspots, defect prediction, technical debt, architecture review, and more",
+  "description": "Code analysis that shows AI where the landmines are.",
   "version": "1.0.0",
   "author": {
     "name": "Jonathan Reyes",

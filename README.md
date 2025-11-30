@@ -13,7 +13,9 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/panbanda/omen.svg)](https://pkg.go.dev/github.com/panbanda/omen)
 [![Snyk Security](https://snyk.io/test/github/panbanda/omen/badge.svg)](https://snyk.io/test/github/panbanda/omen)
 
-A multi-language code analysis CLI built in Go. Omen uses tree-sitter for parsing source code across 13 languages, providing insights into complexity, technical debt, code duplication, and defect prediction.
+**Your AI writes code without knowing where the landmines are.**
+
+Omen gives AI assistants the context they need: complexity hotspots, hidden dependencies, defect-prone files, and self-admitted debt. One command surfaces what's invisible.
 
 **Why "Omen"?** An omen is a sign of things to come - good or bad. Your codebase is full of omens: low complexity and clean architecture signal smooth sailing ahead, while high churn, technical debt, and code clones warn of trouble brewing. Omen surfaces these signals so you can act before that "temporary fix" celebrates its third anniversary in production.
 
@@ -647,13 +649,6 @@ Install the Omen plugin in Claude Code:
 
 ```bash
 /plugin install panbanda/omen
-```
-
-Or via marketplace (useful if Omen adds more plugins later):
-
-```bash
-/plugin marketplace add panbanda/omen
-/plugin install omen@omen-marketplace
 ```
 
 Verify installation with `/skills` to see available Omen skills.
