@@ -751,8 +751,8 @@ func TestPromptFiles(t *testing.T) {
 				t.Fatal("file is empty")
 			}
 
-			description, body := parseFrontmatter(content)
-			if description == "" {
+			fm, body := parseFrontmatter(content)
+			if fm.Description == "" {
 				t.Error("frontmatter description is empty")
 			}
 			if body == "" {
