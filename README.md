@@ -387,7 +387,7 @@ query = '''
 '''
 ```
 
-**Why it matters:** [Meinicke et al. (2020)](https://dl.acm.org/doi/10.1145/3377811.3380377) studied feature flag debt at companies like Google and Microsoft, finding that stale flags cause configuration complexity, testing overhead, and dead code accumulation. [Rahman et al. (2016)](https://ieeexplore.ieee.org/document/7816485) found that feature flag code has 1.3x more defects than regular code due to complex conditional logic. Regular flag audits prevent your codebase from becoming a maze of unused toggles.
+**Why it matters:** [Meinicke et al. (2020)](https://dl.acm.org/doi/10.1145/3379597.3387463) studied feature flags across open-source projects and found that flag ownership (the developer who introduces a flag also removes it) correlates with shorter flag lifespans, helping keep technical debt in check. [Rahman et al. (2018)](https://link.springer.com/article/10.1007/s10664-018-9639-0) studied Google Chrome's 12,000+ feature toggles and found that while they enable rapid releases and flexible deployment, they also introduce technical debt and additional maintenance burden. Regular flag audits prevent your codebase from becoming a maze of unused toggles.
 
 > [!TIP]
 > Audit feature flags monthly. Remove flags older than 90 days for experiments, 14 days for release flags. Track flag staleness in your CI pipeline.
