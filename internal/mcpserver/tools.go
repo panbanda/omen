@@ -426,7 +426,7 @@ func handleAnalyzeChanges(ctx context.Context, req *mcp.CallToolRequest, input C
 	}
 
 	svc := analysis.New()
-	result, err := svc.AnalyzeJIT(scanResult.RepoRoot, analysis.JITOptions{
+	result, err := svc.AnalyzeChanges(scanResult.RepoRoot, analysis.ChangesOptions{
 		Days: days,
 	})
 	if err != nil {
@@ -440,7 +440,7 @@ func handleAnalyzeChanges(ctx context.Context, req *mcp.CallToolRequest, input C
 	if input.HighRiskOnly {
 		var filtered []models.CommitRisk
 		for _, cr := range result.Commits {
-			if cr.RiskLevel == models.JITRiskHigh {
+			if cr.RiskLevel == models.ChangeRiskHigh {
 				filtered = append(filtered, cr)
 			}
 		}

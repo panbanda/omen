@@ -105,8 +105,8 @@ func TestCalculateEntropy(t *testing.T) {
 	}
 }
 
-func TestCalculateJITRisk(t *testing.T) {
-	weights := models.DefaultJITWeights()
+func TestCalculateChangeRisk(t *testing.T) {
+	weights := models.DefaultChangesWeights()
 	norm := models.NormalizationStats{
 		MaxLinesAdded:       1000,
 		MaxLinesDeleted:     500,
@@ -171,45 +171,45 @@ func TestCalculateJITRisk(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			score := models.CalculateJITRisk(tt.features, weights, norm)
+			score := models.CalculateChangeRisk(tt.features, weights, norm)
 			if score < tt.expectedRange[0] || score > tt.expectedRange[1] {
-				t.Errorf("CalculateJITRisk() = %f, expected in range [%f, %f]",
+				t.Errorf("CalculateChangeRisk() = %f, expected in range [%f, %f]",
 					score, tt.expectedRange[0], tt.expectedRange[1])
 			}
 		})
 	}
 }
 
-func TestGetJITRiskLevel(t *testing.T) {
+func TestGetChangeRiskLevel(t *testing.T) {
 	tests := []struct {
 		score    float64
-		expected models.JITRiskLevel
+		expected models.ChangeRiskLevel
 	}{
-		{0.0, models.JITRiskLow},
-		{0.39, models.JITRiskLow},
-		{0.4, models.JITRiskMedium},
-		{0.69, models.JITRiskMedium},
-		{0.7, models.JITRiskHigh},
-		{1.0, models.JITRiskHigh},
+		{0.0, models.ChangeRiskLow},
+		{0.39, models.ChangeRiskLow},
+		{0.4, models.ChangeRiskMedium},
+		{0.69, models.ChangeRiskMedium},
+		{0.7, models.ChangeRiskHigh},
+		{1.0, models.ChangeRiskHigh},
 	}
 
 	for _, tt := range tests {
-		result := models.GetJITRiskLevel(tt.score)
+		result := models.GetChangeRiskLevel(tt.score)
 		if result != tt.expected {
-			t.Errorf("GetJITRiskLevel(%f) = %s, expected %s", tt.score, result, tt.expected)
+			t.Errorf("GetChangeRiskLevel(%f) = %s, expected %s", tt.score, result, tt.expected)
 		}
 	}
 }
 
-func TestDefaultJITWeights(t *testing.T) {
-	weights := models.DefaultJITWeights()
+func TestDefaultChangesWeights(t *testing.T) {
+	weights := models.DefaultChangesWeights()
 
 	// Verify weights sum to 1.0
 	sum := weights.FIX + weights.Entropy + weights.LA + weights.NUC +
 		weights.NF + weights.LD + weights.NDEV + weights.EXP
 
 	if sum < 0.99 || sum > 1.01 {
-		t.Errorf("JIT weights sum to %f, expected 1.0", sum)
+		t.Errorf("Changes weights sum to %f, expected 1.0", sum)
 	}
 
 	// Verify specific weights from requirements
@@ -269,7 +269,7 @@ func TestSafeNormalize(t *testing.T) {
 	}
 }
 
-func TestGenerateJITRecommendations(t *testing.T) {
+func TestGenerateChangeRecommendations(t *testing.T) {
 	features := models.CommitFeatures{
 		IsFix: true,
 	}
@@ -279,7 +279,7 @@ func TestGenerateJITRecommendations(t *testing.T) {
 	}
 	score := 0.75
 
-	recs := models.GenerateJITRecommendations(features, score, factors)
+	recs := models.GenerateChangeRecommendations(features, score, factors)
 
 	if len(recs) == 0 {
 		t.Error("Expected recommendations for high-risk commit")
@@ -298,13 +298,13 @@ func TestGenerateJITRecommendations(t *testing.T) {
 	}
 }
 
-// TestJITAnalyzer_AuthorExperience_TemporalOrder verifies that author experience
+// TestChangesAnalyzer_AuthorExperience_TemporalOrder verifies that author experience
 // is calculated correctly based on temporal order. Earlier commits by an author
 // should show LESS experience than later commits by the same author.
 //
 // Uses mock VCS to simulate git log returning commits newest-first, with distinct
 // timestamps so we can verify the fix correctly reverses to oldest-first processing.
-func TestJITAnalyzer_AuthorExperience_TemporalOrder(t *testing.T) {
+func TestChangesAnalyzer_AuthorExperience_TemporalOrder(t *testing.T) {
 	baseTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	// Create 4 commits by Alice, newest-first (simulating git log order)
@@ -343,10 +343,10 @@ func TestJITAnalyzer_AuthorExperience_TemporalOrder(t *testing.T) {
 	})
 	mockIter.EXPECT().Close().Return()
 
-	analyzer := NewJITAnalyzer(
-		WithJITOpener(mockOpener),
-		WithJITDays(90),
-		WithJITReferenceTime(baseTime.Add(24*time.Hour)),
+	analyzer := NewChangesAnalyzer(
+		WithChangesOpener(mockOpener),
+		WithChangesDays(90),
+		WithChangesReferenceTime(baseTime.Add(24*time.Hour)),
 	)
 
 	result, err := analyzer.AnalyzeRepo("/fake/path")
@@ -390,9 +390,9 @@ func TestJITAnalyzer_AuthorExperience_TemporalOrder(t *testing.T) {
 	}
 }
 
-// TestJITAnalyzer_NumDevelopers_TemporalOrder verifies that the number of developers
+// TestChangesAnalyzer_NumDevelopers_TemporalOrder verifies that the number of developers
 // who previously touched a file is tracked correctly over time.
-func TestJITAnalyzer_NumDevelopers_TemporalOrder(t *testing.T) {
+func TestChangesAnalyzer_NumDevelopers_TemporalOrder(t *testing.T) {
 	baseTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	// 4 different authors modify shared.go in sequence, git log order (newest first)
@@ -430,10 +430,10 @@ func TestJITAnalyzer_NumDevelopers_TemporalOrder(t *testing.T) {
 	})
 	mockIter.EXPECT().Close().Return()
 
-	analyzer := NewJITAnalyzer(
-		WithJITOpener(mockOpener),
-		WithJITDays(90),
-		WithJITReferenceTime(baseTime.Add(24*time.Hour)),
+	analyzer := NewChangesAnalyzer(
+		WithChangesOpener(mockOpener),
+		WithChangesDays(90),
+		WithChangesReferenceTime(baseTime.Add(24*time.Hour)),
 	)
 
 	result, err := analyzer.AnalyzeRepo("/fake/path")
@@ -472,9 +472,9 @@ func TestJITAnalyzer_NumDevelopers_TemporalOrder(t *testing.T) {
 	}
 }
 
-// TestJITAnalyzer_UniqueChanges_TemporalOrder verifies that the count of prior commits
+// TestChangesAnalyzer_UniqueChanges_TemporalOrder verifies that the count of prior commits
 // to touched files (NUC) increases over time.
-func TestJITAnalyzer_UniqueChanges_TemporalOrder(t *testing.T) {
+func TestChangesAnalyzer_UniqueChanges_TemporalOrder(t *testing.T) {
 	baseTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	// Same author makes 4 commits to main.go, git log order (newest first)
@@ -512,10 +512,10 @@ func TestJITAnalyzer_UniqueChanges_TemporalOrder(t *testing.T) {
 	})
 	mockIter.EXPECT().Close().Return()
 
-	analyzer := NewJITAnalyzer(
-		WithJITOpener(mockOpener),
-		WithJITDays(90),
-		WithJITReferenceTime(baseTime.Add(24*time.Hour)),
+	analyzer := NewChangesAnalyzer(
+		WithChangesOpener(mockOpener),
+		WithChangesDays(90),
+		WithChangesReferenceTime(baseTime.Add(24*time.Hour)),
 	)
 
 	result, err := analyzer.AnalyzeRepo("/fake/path")

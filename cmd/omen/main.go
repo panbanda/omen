@@ -954,7 +954,7 @@ func runChangesCmd(c *cli.Context) error {
 
 	spinner := progress.NewSpinner("Analyzing recent changes...")
 	svc := analysis.New()
-	result, err := svc.AnalyzeJIT(absPath, analysis.JITOptions{
+	result, err := svc.AnalyzeChanges(absPath, analysis.ChangesOptions{
 		Days: days,
 	})
 	spinner.FinishSuccess()
@@ -981,20 +981,20 @@ func runChangesCmd(c *cli.Context) error {
 
 	var rows [][]string
 	for _, cr := range commits {
-		if highRiskOnly && cr.RiskLevel != models.JITRiskHigh {
+		if highRiskOnly && cr.RiskLevel != models.ChangeRiskHigh {
 			continue
 		}
 
 		scoreStr := fmt.Sprintf("%.2f", cr.RiskScore)
 		riskStr := string(cr.RiskLevel)
 		switch cr.RiskLevel {
-		case models.JITRiskHigh:
+		case models.ChangeRiskHigh:
 			scoreStr = color.RedString(scoreStr)
 			riskStr = color.RedString(riskStr)
-		case models.JITRiskMedium:
+		case models.ChangeRiskMedium:
 			scoreStr = color.YellowString(scoreStr)
 			riskStr = color.YellowString(riskStr)
-		case models.JITRiskLow:
+		case models.ChangeRiskLow:
 			scoreStr = color.GreenString(scoreStr)
 			riskStr = color.GreenString(riskStr)
 		}

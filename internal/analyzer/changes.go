@@ -11,55 +11,55 @@ import (
 	"github.com/panbanda/omen/pkg/models"
 )
 
-// JITAnalyzer implements Just-in-Time defect prediction based on
+// ChangesAnalyzer implements change-level defect prediction based on
 // Kamei et al. (2013) "A Large-Scale Empirical Study of Just-in-Time Quality Assurance".
-type JITAnalyzer struct {
+type ChangesAnalyzer struct {
 	days      int
-	weights   models.JITWeights
+	weights   models.ChangesWeights
 	opener    vcs.Opener
 	reference time.Time // Reference time for analysis (defaults to time.Now())
 }
 
-// JITOption is a functional option for configuring JITAnalyzer.
-type JITOption func(*JITAnalyzer)
+// ChangesOption is a functional option for configuring ChangesAnalyzer.
+type ChangesOption func(*ChangesAnalyzer)
 
-// WithJITDays sets the number of days of git history to analyze.
-func WithJITDays(days int) JITOption {
-	return func(a *JITAnalyzer) {
+// WithChangesDays sets the number of days of git history to analyze.
+func WithChangesDays(days int) ChangesOption {
+	return func(a *ChangesAnalyzer) {
 		if days > 0 {
 			a.days = days
 		}
 	}
 }
 
-// WithJITWeights sets custom weights for JIT prediction.
-func WithJITWeights(weights models.JITWeights) JITOption {
-	return func(a *JITAnalyzer) {
+// WithChangesWeights sets custom weights for change risk prediction.
+func WithChangesWeights(weights models.ChangesWeights) ChangesOption {
+	return func(a *ChangesAnalyzer) {
 		a.weights = weights
 	}
 }
 
-// WithJITOpener sets the VCS opener (useful for testing).
-func WithJITOpener(opener vcs.Opener) JITOption {
-	return func(a *JITAnalyzer) {
+// WithChangesOpener sets the VCS opener (useful for testing).
+func WithChangesOpener(opener vcs.Opener) ChangesOption {
+	return func(a *ChangesAnalyzer) {
 		a.opener = opener
 	}
 }
 
-// WithJITReferenceTime sets the reference time for analysis.
+// WithChangesReferenceTime sets the reference time for analysis.
 // This is useful for reproducible tests or historical analysis.
 // If not set, defaults to time.Now().
-func WithJITReferenceTime(t time.Time) JITOption {
-	return func(a *JITAnalyzer) {
+func WithChangesReferenceTime(t time.Time) ChangesOption {
+	return func(a *ChangesAnalyzer) {
 		a.reference = t
 	}
 }
 
-// NewJITAnalyzer creates a new JIT defect prediction analyzer.
-func NewJITAnalyzer(opts ...JITOption) *JITAnalyzer {
-	a := &JITAnalyzer{
+// NewChangesAnalyzer creates a new change-level defect prediction analyzer.
+func NewChangesAnalyzer(opts ...ChangesOption) *ChangesAnalyzer {
+	a := &ChangesAnalyzer{
 		days:    30,
-		weights: models.DefaultJITWeights(),
+		weights: models.DefaultChangesWeights(),
 		opener:  vcs.DefaultOpener(),
 	}
 	for _, opt := range opts {
@@ -115,15 +115,15 @@ func isAutomatedCommit(message string) bool {
 	return false
 }
 
-// AnalyzeRepo performs JIT defect prediction on repository commits.
-func (a *JITAnalyzer) AnalyzeRepo(repoPath string) (*models.JITAnalysis, error) {
+// AnalyzeRepo performs change-level defect prediction on repository commits.
+func (a *ChangesAnalyzer) AnalyzeRepo(repoPath string) (*models.ChangesAnalysis, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultGitTimeout)
 	defer cancel()
 	return a.AnalyzeRepoWithContext(ctx, repoPath)
 }
 
-// AnalyzeRepoWithContext performs JIT analysis with context for cancellation/timeout.
-func (a *JITAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath string) (*models.JITAnalysis, error) {
+// AnalyzeRepoWithContext performs change analysis with context for cancellation/timeout.
+func (a *ChangesAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath string) (*models.ChangesAnalysis, error) {
 	repo, err := a.opener.PlainOpen(repoPath)
 	if err != nil {
 		return nil, err
@@ -295,7 +295,7 @@ func (a *JITAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath strin
 	}
 
 	// Build analysis result
-	analysis := models.NewJITAnalysis()
+	analysis := models.NewChangesAnalysis()
 	analysis.PeriodDays = a.days
 	analysis.Weights = a.weights
 
@@ -311,8 +311,8 @@ func (a *JITAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath strin
 	scores := make([]float64, 0, len(commits))
 
 	for _, features := range commits {
-		score := models.CalculateJITRisk(features, a.weights, analysis.Normalization)
-		level := models.GetJITRiskLevel(score)
+		score := models.CalculateChangeRisk(features, a.weights, analysis.Normalization)
+		level := models.GetChangeRiskLevel(score)
 
 		factors := map[string]float64{
 			"fix":            boolToFloat(features.IsFix) * a.weights.FIX,
@@ -333,7 +333,7 @@ func (a *JITAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath strin
 			RiskScore:           score,
 			RiskLevel:           level,
 			ContributingFactors: factors,
-			Recommendations:     models.GenerateJITRecommendations(features, score, factors),
+			Recommendations:     models.GenerateChangeRecommendations(features, score, factors),
 			FilesModified:       features.FilesModified,
 		}
 
@@ -343,11 +343,11 @@ func (a *JITAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath strin
 
 		// Update summary counts
 		switch level {
-		case models.JITRiskHigh:
+		case models.ChangeRiskHigh:
 			analysis.Summary.HighRiskCount++
-		case models.JITRiskMedium:
+		case models.ChangeRiskMedium:
 			analysis.Summary.MediumRiskCount++
-		case models.JITRiskLow:
+		case models.ChangeRiskLow:
 			analysis.Summary.LowRiskCount++
 		}
 
@@ -367,8 +367,8 @@ func (a *JITAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath strin
 		analysis.Summary.AvgRiskScore = totalScore / float64(len(commits))
 
 		sort.Float64s(scores)
-		analysis.Summary.P50RiskScore = jitPercentile(scores, 50)
-		analysis.Summary.P95RiskScore = jitPercentile(scores, 95)
+		analysis.Summary.P50RiskScore = changesPercentile(scores, 50)
+		analysis.Summary.P95RiskScore = changesPercentile(scores, 95)
 	}
 
 	return analysis, nil
@@ -428,8 +428,8 @@ func calculateNormalizationStats(commits []models.CommitFeatures) models.Normali
 	return stats
 }
 
-// jitPercentile calculates the p-th percentile of a sorted slice.
-func jitPercentile(sorted []float64, p int) float64 {
+// changesPercentile calculates the p-th percentile of a sorted slice.
+func changesPercentile(sorted []float64, p int) float64 {
 	if len(sorted) == 0 {
 		return 0
 	}
@@ -484,6 +484,6 @@ func truncateMessage(message string) string {
 }
 
 // Close releases analyzer resources.
-func (a *JITAnalyzer) Close() {
+func (a *ChangesAnalyzer) Close() {
 	// No resources to release
 }
