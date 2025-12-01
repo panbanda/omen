@@ -1,5 +1,27 @@
 # Changelog
 
+## [4.3.0](https://github.com/panbanda/omen/compare/v4.2.0...v4.3.0) (2025-12-01)
+
+
+### Features
+
+* **mcp:** add Go template support for prompts with frontmatter defaults ([287a4d3](https://github.com/panbanda/omen/commit/287a4d3d2f6d4c999ffb12a7f8829e5a6919f2ad))
+* **mcp:** add Go template support for prompts with frontmatter defaults ([6d19914](https://github.com/panbanda/omen/commit/6d1991404012b15054bb11f96d0a7f9aa3cdae8d))
+
+
+### Bug Fixes
+
+* **ci:** add concurrency control to release workflow ([345fc62](https://github.com/panbanda/omen/commit/345fc62bbc2917d38a2a51f340d76b29241e24f0))
+* **ci:** add concurrency control to release workflow ([ada1beb](https://github.com/panbanda/omen/commit/ada1bebeccbe2b09aafbf15d1200c592e8c7c2fa))
+* **jit:** correct temporal ordering for state-dependent metrics ([61d6f61](https://github.com/panbanda/omen/commit/61d6f611288488c4d4d81fbcf372482137c80d93))
+* **jit:** correct temporal ordering for state-dependent metrics ([f42f810](https://github.com/panbanda/omen/commit/f42f810af2400db753667ec19f19ff0591a16f1b))
+
+
+### Performance Improvements
+
+* **ownership:** use native git blame for 100x+ speedup ([0f7cc3c](https://github.com/panbanda/omen/commit/0f7cc3cc01e7941e8febbc1bb78ac4e09f7b0993))
+* **ownership:** use native git blame for 100x+ speedup ([7e2a551](https://github.com/panbanda/omen/commit/7e2a5516cd4e8c295feeae78e49b047e4c215e2f))
+
 ## [4.2.0](https://github.com/panbanda/omen/compare/v4.1.0...v4.2.0) (2025-12-01)
 
 
