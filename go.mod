@@ -22,6 +22,7 @@ require (
 	github.com/urfave/cli/v2 v2.27.7
 	github.com/zeebo/blake3 v0.2.4
 	gonum.org/v1/gonum v0.16.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -76,5 +77,4 @@ require (
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/term v0.37.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

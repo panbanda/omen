@@ -114,4 +114,16 @@ func (s *Server) registerTools() {
 		Name:        "analyze_repo_map",
 		Description: describeRepoMap(),
 	}, handleAnalyzeRepoMap)
+
+	// Architectural smells
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name:        "analyze_smells",
+		Description: describeSmells(),
+	}, handleAnalyzeSmells)
+
+	// Change risk analysis (JIT)
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name:        "analyze_changes",
+		Description: describeChanges(),
+	}, handleAnalyzeChanges)
 }

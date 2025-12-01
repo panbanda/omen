@@ -58,10 +58,18 @@ type DuplicatesInput struct {
 	Threshold float64 `json:"threshold,omitempty" jsonschema:"Similarity threshold (0.0-1.0). Default 0.8."`
 }
 
-// DefectInput adds defect prediction options.
+// DefectInput adds PMAT defect prediction options.
 type DefectInput struct {
 	AnalyzeInput
 	HighRiskOnly bool `json:"high_risk_only,omitempty" jsonschema:"Show only high-risk files."`
+}
+
+// ChangesInput adds JIT change risk analysis options.
+type ChangesInput struct {
+	AnalyzeInput
+	Days         int  `json:"days,omitempty" jsonschema:"Number of days of git history to analyze. Default 30."`
+	Top          int  `json:"top,omitempty" jsonschema:"Show top N commits by risk. Default 20."`
+	HighRiskOnly bool `json:"high_risk_only,omitempty" jsonschema:"Show only high-risk commits."`
 }
 
 // TDGInput adds TDG-specific options.
@@ -112,6 +120,15 @@ type CohesionInput struct {
 type RepoMapInput struct {
 	AnalyzeInput
 	Top int `json:"top,omitempty" jsonschema:"Number of top symbols to include. Default 50."`
+}
+
+// SmellsInput adds architectural smell detection options.
+type SmellsInput struct {
+	AnalyzeInput
+	HubThreshold          int     `json:"hub_threshold,omitempty" jsonschema:"Fan-in + fan-out threshold for hub detection. Default 20."`
+	GodFanInThreshold     int     `json:"god_fan_in,omitempty" jsonschema:"Minimum fan-in for god component detection. Default 10."`
+	GodFanOutThreshold    int     `json:"god_fan_out,omitempty" jsonschema:"Minimum fan-out for god component detection. Default 10."`
+	InstabilityDifference float64 `json:"instability_diff,omitempty" jsonschema:"Max instability difference for unstable dependency detection. Default 0.4."`
 }
 
 // Helper functions
@@ -387,6 +404,54 @@ func handleAnalyzeDefect(ctx context.Context, req *mcp.CallToolRequest, input De
 
 	report := result.ToDefectPredictionReport()
 	return toolResult(report, format)
+}
+
+func handleAnalyzeChanges(ctx context.Context, req *mcp.CallToolRequest, input ChangesInput) (*mcp.CallToolResult, any, error) {
+	paths := getPaths(input.AnalyzeInput)
+	format := getFormat(input.AnalyzeInput)
+
+	days := input.Days
+	if days <= 0 {
+		days = 30
+	}
+	top := input.Top
+	if top <= 0 {
+		top = 20
+	}
+
+	scanner := scannerSvc.New()
+	scanResult, err := scanner.ScanPathsForGit(paths, true)
+	if err != nil {
+		return toolError(err.Error())
+	}
+
+	svc := analysis.New()
+	result, err := svc.AnalyzeJIT(scanResult.RepoRoot, analysis.JITOptions{
+		Days: days,
+	})
+	if err != nil {
+		return toolError(err.Error())
+	}
+
+	if result.Summary.TotalCommits == 0 {
+		return toolError("no commits found in the specified time period")
+	}
+
+	if input.HighRiskOnly {
+		var filtered []models.CommitRisk
+		for _, cr := range result.Commits {
+			if cr.RiskLevel == models.JITRiskHigh {
+				filtered = append(filtered, cr)
+			}
+		}
+		result.Commits = filtered
+	}
+
+	if len(result.Commits) > top {
+		result.Commits = result.Commits[:top]
+	}
+
+	return toolResult(result, format)
 }
 
 func handleAnalyzeTDG(ctx context.Context, req *mcp.CallToolRequest, input TDGInput) (*mcp.CallToolResult, any, error) {
@@ -678,6 +743,34 @@ func handleAnalyzeRepoMap(ctx context.Context, req *mcp.CallToolRequest, input R
 	}{
 		Symbols: topSymbols,
 		Summary: rm.Summary,
+	}
+
+	return toolResult(result, format)
+}
+
+func handleAnalyzeSmells(ctx context.Context, req *mcp.CallToolRequest, input SmellsInput) (*mcp.CallToolResult, any, error) {
+	paths := getPaths(input.AnalyzeInput)
+	format := getFormat(input.AnalyzeInput)
+
+	scanner := scannerSvc.New()
+	scanResult, err := scanner.ScanPaths(paths)
+	if err != nil {
+		return toolError(err.Error())
+	}
+
+	if len(scanResult.Files) == 0 {
+		return toolError("no source files found")
+	}
+
+	svc := analysis.New()
+	result, err := svc.AnalyzeSmells(scanResult.Files, analysis.SmellOptions{
+		HubThreshold:          input.HubThreshold,
+		GodFanInThreshold:     input.GodFanInThreshold,
+		GodFanOutThreshold:    input.GodFanOutThreshold,
+		InstabilityDifference: input.InstabilityDifference,
+	})
+	if err != nil {
+		return toolError(err.Error())
 	}
 
 	return toolResult(result, format)
