@@ -1,5 +1,25 @@
 # Changelog
 
+## [4.1.0](https://github.com/panbanda/omen/compare/v4.0.0...v4.1.0) (2025-12-01)
+
+
+### Features
+
+* trigger 0.2.0 release ([525996b](https://github.com/panbanda/omen/commit/525996b8760591070a51682b65c00ec5e00ef084))
+* trigger 0.2.0 release ([a24d9bf](https://github.com/panbanda/omen/commit/a24d9bfd0a7cd389cad4327da8b0f666c9b566b4))
+
+
+### Bug Fixes
+
+* final release trigger ([ed5cf8b](https://github.com/panbanda/omen/commit/ed5cf8baf4e9afc65cfe73a429ee98ee8290182c))
+* final release trigger ([0e9eb61](https://github.com/panbanda/omen/commit/0e9eb618f00df0e6c00db5c31f4ff4549aa0b602))
+* **release:** reset CLI version to 0.1.0 ([796f5c4](https://github.com/panbanda/omen/commit/796f5c4356fb81cad97717bd0ddb2108ee93aabf))
+* **release:** reset CLI versioning to 0.1.0 ([0b090c6](https://github.com/panbanda/omen/commit/0b090c6e080304ef3e01c5463607df739f08863c))
+* reset manifest to 4.0.0 ([f1736e3](https://github.com/panbanda/omen/commit/f1736e31828d28b48f4774cf90a4d472c5e48013))
+* reset manifest to 4.0.0 ([f72dd84](https://github.com/panbanda/omen/commit/f72dd84ed9bbedd8f411e11f24f207ee5db6382b))
+* retrigger release-please ([83a725c](https://github.com/panbanda/omen/commit/83a725ca2450bffae12f4a87ab42286cd864efb5))
+* retrigger release-please ([3949a4f](https://github.com/panbanda/omen/commit/3949a4fa56838cc73ec48ef4b014555cbef97630))
+
 ## [4.0.0](https://github.com/panbanda/omen/compare/v3.0.1...v4.0.0) (2025-11-30)
 
 
