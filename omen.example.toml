@@ -2,23 +2,19 @@
 # Copy this file to omen.toml or .omen/omen.toml
 
 [analysis]
+# Enable/disable specific analyzers when running `omen analyze` without subcommand
 complexity = true
 satd = true
 dead_code = true
 churn = true
 duplicates = true
 defect = true      # File-level defect probability (PMAT)
-changes = true     # Commit-level change risk (JIT)
 tdg = true
 graph = true
-hotspot = true
-smells = true
-temporal_coupling = true
-ownership = true
-cohesion = true
 lint_hotspot = true
 context = true
-churn_days = 90
+churn_days = 90    # Days of git history to analyze
+# max_file_size = 10485760  # Skip files larger than 10MB (0 = no limit)
 
 [thresholds]
 cyclomatic_complexity = 10
@@ -72,7 +68,7 @@ dir = ".omen/cache"
 ttl = 24  # hours
 
 [output]
-format = "text"  # text, json, markdown
+format = "text"  # text, json, markdown, toon
 color = true
 verbose = false
 
