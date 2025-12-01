@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.2.0](https://github.com/panbanda/omen/compare/v4.1.0...v4.2.0) (2025-12-01)
+
+
+### Features
+
+* **mcp:** add analyze_changes and analyze_smells tools ([18b266a](https://github.com/panbanda/omen/commit/18b266aad050a768adcb023d1ae3001690c8d8ad))
+* **mcp:** add analyze_changes and analyze_smells tools ([88da6cc](https://github.com/panbanda/omen/commit/88da6cce367189914b7e9ce4509f3ee09e004dbe))
+
 ## [4.1.0](https://github.com/panbanda/omen/compare/v4.0.0...v4.1.0) (2025-12-01)
 
 
