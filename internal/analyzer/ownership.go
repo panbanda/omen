@@ -1,14 +1,107 @@
 package analyzer
 
 import (
+	"bufio"
+	"bytes"
+	"errors"
+	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/panbanda/omen/internal/fileproc"
 	"github.com/panbanda/omen/internal/vcs"
 	"github.com/panbanda/omen/pkg/models"
 )
+
+// ErrGitNotFound is returned when git is not available in PATH.
+var ErrGitNotFound = errors.New("git executable not found in PATH (required for ownership analysis)")
+
+// gitChecked tracks whether we've verified git availability.
+var (
+	gitCheckOnce sync.Once
+	gitCheckErr  error
+)
+
+// checkGitAvailable verifies that git is installed and accessible.
+func checkGitAvailable() error {
+	gitCheckOnce.Do(func() {
+		_, err := exec.LookPath("git")
+		if err != nil {
+			gitCheckErr = ErrGitNotFound
+		}
+	})
+	return gitCheckErr
+}
+
+// blameLine represents a single line from git blame output.
+type blameLine struct {
+	Author     string
+	AuthorName string
+	Text       string
+}
+
+// blameResult contains blame information for a file.
+type blameResult struct {
+	Lines []blameLine
+}
+
+// runGitBlame executes native git blame and parses the output.
+func runGitBlame(repoPath, relPath string) (*blameResult, error) {
+	cmd := exec.Command("git", "blame", "--line-porcelain", "HEAD", "--", relPath)
+	cmd.Dir = repoPath
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		// Check for "no such path" or similar - return nil for non-existent files
+		errStr := stderr.String()
+		if strings.Contains(errStr, "no such path") ||
+			strings.Contains(errStr, "does not exist") ||
+			strings.Contains(errStr, "fatal: no such path") {
+			return nil, nil
+		}
+		// Return nil for other errors (untracked files, binary files, etc.)
+		if len(errStr) > 0 {
+			return nil, nil
+		}
+		return nil, nil
+	}
+
+	return parseGitBlameOutput(&stdout), nil
+}
+
+// parseGitBlameOutput parses git blame --line-porcelain output.
+func parseGitBlameOutput(r *bytes.Buffer) *blameResult {
+	var lines []blameLine
+	scanner := bufio.NewScanner(r)
+
+	var currentLine blameLine
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		switch {
+		case strings.HasPrefix(line, "author "):
+			currentLine.AuthorName = strings.TrimPrefix(line, "author ")
+		case strings.HasPrefix(line, "author-mail "):
+			// Extract email from <email@example.com>
+			email := strings.TrimPrefix(line, "author-mail ")
+			email = strings.TrimPrefix(email, "<")
+			email = strings.TrimSuffix(email, ">")
+			currentLine.Author = email
+		case strings.HasPrefix(line, "\t"):
+			// Line content (prefixed with tab)
+			currentLine.Text = strings.TrimPrefix(line, "\t")
+			lines = append(lines, currentLine)
+			currentLine = blameLine{}
+		}
+	}
+
+	return &blameResult{Lines: lines}
+}
 
 // OwnershipAnalyzer calculates code ownership and bus factor.
 type OwnershipAnalyzer struct {
@@ -46,53 +139,40 @@ func NewOwnershipAnalyzer(opts ...OwnershipOption) *OwnershipAnalyzer {
 	return a
 }
 
-// repoHandle holds a git repository and its HEAD commit for reuse across files.
-type repoHandle struct {
-	repo   vcs.Repository
-	commit vcs.Commit
-}
-
 // AnalyzeRepo analyzes ownership for all files in a repository.
 func (a *OwnershipAnalyzer) AnalyzeRepo(repoPath string, files []string) (*models.OwnershipAnalysis, error) {
 	return a.AnalyzeRepoWithProgress(repoPath, files, nil)
 }
 
+// maxGitWorkers limits concurrent git blame processes to avoid FD exhaustion.
+// Git blame is I/O bound, so more workers don't help much beyond this point.
+const maxGitWorkers = 8
+
 // AnalyzeRepoWithProgress analyzes ownership with progress callback.
 func (a *OwnershipAnalyzer) AnalyzeRepoWithProgress(repoPath string, files []string, onProgress func()) (*models.OwnershipAnalysis, error) {
-	// Validate repository exists and get HEAD hash upfront
-	repo, err := a.opener.PlainOpen(repoPath)
+	// Check git is available (required for native blame)
+	if err := checkGitAvailable(); err != nil {
+		return nil, err
+	}
+
+	// Validate repository exists using detect mode (works from subfolders)
+	repo, err := a.opener.PlainOpenWithDetect(repoPath)
 	if err != nil {
 		return nil, err
 	}
 
-	head, err := repo.Head()
-	if err != nil {
-		return nil, err
-	}
-	headHash := head.Hash()
+	// Get the actual repo root path - only open once, not per worker
+	actualRepoPath := repo.RepoPath()
 
-	// Process files in parallel using resource pool (one repo handle per worker)
-	results := fileproc.ForEachFileWithResource(
+	// Process files in parallel with limited workers to avoid FD exhaustion
+	results := fileproc.ForEachFileN(
 		files,
-		// initResource: create a repo handle per worker
-		func() (*repoHandle, error) {
-			r, err := a.opener.PlainOpen(repoPath)
-			if err != nil {
-				return nil, err
-			}
-			c, err := r.CommitObject(headHash)
-			if err != nil {
-				return nil, err
-			}
-			return &repoHandle{repo: r, commit: c}, nil
-		},
-		// closeResource: nothing to close for git repos
-		func(h *repoHandle) {},
-		// fn: analyze file with pooled repo handle
-		func(h *repoHandle, file string) (*models.FileOwnership, error) {
-			return a.analyzeFile(h, repoPath, file)
+		maxGitWorkers,
+		func(file string) (*models.FileOwnership, error) {
+			return a.analyzeFileNative(actualRepoPath, file)
 		},
 		onProgress,
+		nil, // no error callback - silently skip failed files
 	)
 
 	// Collect non-nil results
@@ -117,8 +197,8 @@ func (a *OwnershipAnalyzer) AnalyzeRepoWithProgress(repoPath string, files []str
 	return analysis, nil
 }
 
-// analyzeFile analyzes ownership for a single file using git blame.
-func (a *OwnershipAnalyzer) analyzeFile(h *repoHandle, repoPath string, filePath string) (*models.FileOwnership, error) {
+// analyzeFileNative analyzes ownership for a single file using native git blame.
+func (a *OwnershipAnalyzer) analyzeFileNative(repoPath string, filePath string) (*models.FileOwnership, error) {
 	// Get relative path for git blame
 	relPath := filePath
 	if strings.HasPrefix(filePath, repoPath) {
@@ -126,10 +206,13 @@ func (a *OwnershipAnalyzer) analyzeFile(h *repoHandle, repoPath string, filePath
 		relPath = strings.TrimPrefix(relPath, "/")
 	}
 
-	// Get blame using the pooled commit
-	blame, err := h.repo.Blame(h.commit, relPath)
+	// Run native git blame directly
+	blame, err := runGitBlame(repoPath, relPath)
 	if err != nil {
 		return nil, err
+	}
+	if blame == nil {
+		return nil, nil // File not tracked
 	}
 
 	// Count lines per author

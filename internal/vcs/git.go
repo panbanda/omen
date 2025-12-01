@@ -1,8 +1,13 @@
 package vcs
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
+	"os/exec"
+	"path/filepath"
+	"strings"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -27,7 +32,8 @@ func (o *GitOpener) PlainOpen(path string) (Repository, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &gitRepository{repo: repo}, nil
+	absPath, _ := filepath.Abs(path)
+	return &gitRepository{repo: repo, repoPath: absPath}, nil
 }
 
 // PlainOpenWithDetect opens a git repository, detecting .git in parent directories.
@@ -38,12 +44,22 @@ func (o *GitOpener) PlainOpenWithDetect(path string) (Repository, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &gitRepository{repo: repo}, nil
+	// Find the actual repo root by looking for worktree
+	wt, err := repo.Worktree()
+	var repoPath string
+	if err == nil {
+		repoPath = wt.Filesystem.Root()
+	} else {
+		// Fallback to provided path
+		repoPath, _ = filepath.Abs(path)
+	}
+	return &gitRepository{repo: repo, repoPath: repoPath}, nil
 }
 
 // gitRepository wraps go-git Repository.
 type gitRepository struct {
-	repo *git.Repository
+	repo     *git.Repository
+	repoPath string
 }
 
 func (r *gitRepository) Head() (Reference, error) {
@@ -98,6 +114,66 @@ func (r *gitRepository) Blame(commit Commit, path string) (*BlameResult, error) 
 		}
 	}
 	return result, nil
+}
+
+// BlameAtHead uses native git blame for better performance on large repos.
+// Format: git blame --line-porcelain
+func (r *gitRepository) BlameAtHead(path string) (*BlameResult, error) {
+	cmd := exec.Command("git", "blame", "--line-porcelain", "HEAD", "--", path)
+	cmd.Dir = r.repoPath
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		// Check for "no such path" or similar - return nil for non-existent files
+		if strings.Contains(stderr.String(), "no such path") ||
+			strings.Contains(stderr.String(), "does not exist") {
+			return nil, nil
+		}
+		return nil, errors.New(stderr.String())
+	}
+
+	return parseGitBlameOutput(&stdout)
+}
+
+// RepoPath returns the repository root path.
+func (r *gitRepository) RepoPath() string {
+	return r.repoPath
+}
+
+// parseGitBlameOutput parses git blame --line-porcelain output.
+func parseGitBlameOutput(r *bytes.Buffer) (*BlameResult, error) {
+	var lines []BlameLine
+	scanner := bufio.NewScanner(r)
+
+	var currentLine BlameLine
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		switch {
+		case strings.HasPrefix(line, "author "):
+			currentLine.AuthorName = strings.TrimPrefix(line, "author ")
+		case strings.HasPrefix(line, "author-mail "):
+			// Extract email from <email@example.com>
+			email := strings.TrimPrefix(line, "author-mail ")
+			email = strings.TrimPrefix(email, "<")
+			email = strings.TrimSuffix(email, ">")
+			currentLine.Author = email
+		case strings.HasPrefix(line, "\t"):
+			// Line content (prefixed with tab)
+			currentLine.Text = strings.TrimPrefix(line, "\t")
+			lines = append(lines, currentLine)
+			currentLine = BlameLine{}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return &BlameResult{Lines: lines}, nil
 }
 
 // gitReference wraps go-git Reference.

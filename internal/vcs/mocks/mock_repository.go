@@ -283,3 +283,107 @@ func (_c *MockRepository_Log_Call) RunAndReturn(run func(opts *vcs.LogOptions) (
 	_c.Call.Return(run)
 	return _c
 }
+
+// BlameAtHead provides a mock function for the type MockRepository
+func (_mock *MockRepository) BlameAtHead(path string) (*vcs.BlameResult, error) {
+	ret := _mock.Called(path)
+
+	if len(ret) == 0 {
+		panic("no return value specified for BlameAtHead")
+	}
+
+	var r0 *vcs.BlameResult
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (*vcs.BlameResult, error)); ok {
+		return returnFunc(path)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) *vcs.BlameResult); ok {
+		r0 = returnFunc(path)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*vcs.BlameResult)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(path)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockRepository_BlameAtHead_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'BlameAtHead'
+type MockRepository_BlameAtHead_Call struct {
+	*mock.Call
+}
+
+// BlameAtHead is a helper method to define mock.On call
+//   - path string
+func (_e *MockRepository_Expecter) BlameAtHead(path interface{}) *MockRepository_BlameAtHead_Call {
+	return &MockRepository_BlameAtHead_Call{Call: _e.mock.On("BlameAtHead", path)}
+}
+
+func (_c *MockRepository_BlameAtHead_Call) Run(run func(path string)) *MockRepository_BlameAtHead_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(arg0)
+	})
+	return _c
+}
+
+func (_c *MockRepository_BlameAtHead_Call) Return(blameResult *vcs.BlameResult, err error) *MockRepository_BlameAtHead_Call {
+	_c.Call.Return(blameResult, err)
+	return _c
+}
+
+func (_c *MockRepository_BlameAtHead_Call) RunAndReturn(run func(path string) (*vcs.BlameResult, error)) *MockRepository_BlameAtHead_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// RepoPath provides a mock function for the type MockRepository
+func (_mock *MockRepository) RepoPath() string {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for RepoPath")
+	}
+
+	var r0 string
+	if returnFunc, ok := ret.Get(0).(func() string); ok {
+		r0 = returnFunc()
+	} else {
+		r0 = ret.Get(0).(string)
+	}
+	return r0
+}
+
+// MockRepository_RepoPath_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RepoPath'
+type MockRepository_RepoPath_Call struct {
+	*mock.Call
+}
+
+// RepoPath is a helper method to define mock.On call
+func (_e *MockRepository_Expecter) RepoPath() *MockRepository_RepoPath_Call {
+	return &MockRepository_RepoPath_Call{Call: _e.mock.On("RepoPath")}
+}
+
+func (_c *MockRepository_RepoPath_Call) Run(run func()) *MockRepository_RepoPath_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockRepository_RepoPath_Call) Return(path string) *MockRepository_RepoPath_Call {
+	_c.Call.Return(path)
+	return _c
+}
+
+func (_c *MockRepository_RepoPath_Call) RunAndReturn(run func() string) *MockRepository_RepoPath_Call {
+	_c.Call.Return(run)
+	return _c
+}

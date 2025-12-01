@@ -19,6 +19,11 @@ type Repository interface {
 	CommitObject(hash plumbing.Hash) (Commit, error)
 	// Blame returns blame information for a file at a specific commit.
 	Blame(commit Commit, path string) (*BlameResult, error)
+	// BlameAtHead returns blame information for a file at HEAD using native git.
+	// This is much faster than Blame() for large repositories.
+	BlameAtHead(path string) (*BlameResult, error)
+	// RepoPath returns the root path of the repository.
+	RepoPath() string
 }
 
 // Reference represents a git reference (branch, tag, HEAD).
