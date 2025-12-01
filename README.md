@@ -1,8 +1,7 @@
+<div align="center">
 # Omen
 
-<p align="center">
-  <img src="assets/omen-logo.png" alt="Omen - Code Analysis CLI" width="100%">
-</p>
+<img src="assets/omen-logo.png" alt="Omen - Code Analysis CLI" width="100%">
 
 [![Go Version](https://img.shields.io/github/go-mod/go-version/panbanda/omen)](https://go.dev/)
 [![License](https://img.shields.io/github/license/panbanda/omen)](https://github.com/panbanda/omen/blob/main/LICENSE)
@@ -18,6 +17,10 @@
 Omen gives AI assistants the context they need: complexity hotspots, hidden dependencies, defect-prone files, and self-admitted debt. One command surfaces what's invisible.
 
 **Why "Omen"?** An omen is a sign of things to come - good or bad. Your codebase is full of omens: low complexity and clean architecture signal smooth sailing ahead, while high churn, technical debt, and code clones warn of trouble brewing. Omen surfaces these signals so you can act before that "temporary fix" celebrates its third anniversary in production.
+
+</div>
+
+---
 
 ## Features
 
@@ -139,18 +142,19 @@ Each file gets a risk score from 0% to 100%.
 
 Just-in-Time (JIT) defect prediction analyzes recent commits to identify risky changes before they cause problems. Unlike file-level prediction, JIT operates at the commit level using factors from [Kamei et al. (2013)](https://ieeexplore.ieee.org/document/6341763):
 
-| Factor | Name | What it measures |
-|--------|------|------------------|
-| LA | Lines Added | More additions = more risk |
-| LD | Lines Deleted | Deletions are generally safer |
-| LT | Lines in Touched Files | Larger files = more risk |
-| FIX | Bug Fix | Bug fix commits indicate problematic areas |
-| NDEV | Number of Developers | More developers on files = more risk |
-| AGE | Average File Age | File stability indicator |
-| NUC | Unique Changes | Change entropy = higher risk |
-| EXP | Developer Experience | Less experience = more risk |
+| Factor | Name                   | What it measures                           |
+| ------ | ---------------------- | ------------------------------------------ |
+| LA     | Lines Added            | More additions = more risk                 |
+| LD     | Lines Deleted          | Deletions are generally safer              |
+| LT     | Lines in Touched Files | Larger files = more risk                   |
+| FIX    | Bug Fix                | Bug fix commits indicate problematic areas |
+| NDEV   | Number of Developers   | More developers on files = more risk       |
+| AGE    | Average File Age       | File stability indicator                   |
+| NUC    | Unique Changes         | Change entropy = higher risk               |
+| EXP    | Developer Experience   | Less experience = more risk                |
 
 Each commit gets a risk score from 0.0 to 1.0:
+
 - **High risk (>0.7)**: Prioritize careful review
 - **Medium risk (0.4-0.7)**: Worth extra attention
 - **Low risk (<0.4)**: Standard review process
@@ -221,6 +225,7 @@ hotspot = sqrt(churn_percentile * complexity_percentile)
 ```
 
 Both factors are normalized against industry benchmarks using empirical CDFs, so scores are comparable across projects:
+
 - **Churn percentile** - Where this file's commit count ranks against typical OSS projects
 - **Complexity percentile** - Where the average cognitive complexity ranks against industry benchmarks
 
@@ -228,8 +233,8 @@ Both factors are normalized against industry benchmarks using empirical CDFs, so
 | ------------- | -------- | ---------------------- |
 | >= 0.6        | Critical | Prioritize immediately |
 | >= 0.4        | High     | Schedule for review    |
-| >= 0.25       | Moderate | Monitor               |
-| < 0.25        | Low      | Healthy               |
+| >= 0.25       | Moderate | Monitor                |
+| < 0.25        | Low      | Healthy                |
 
 **Why it matters:** [Adam Tornhill's "Your Code as a Crime Scene"](https://pragprog.com/titles/atcrime/your-code-as-a-crime-scene/) introduced hotspot analysis as a way to find the most impactful refactoring targets. His research shows that a small percentage of files (typically 4-8%) contain most of the bugs. [Graves et al. (2000)](https://ieeexplore.ieee.org/document/859533) and [Nagappan et al. (2005)](https://www.microsoft.com/en-us/research/publication/use-of-relative-code-churn-measures-to-predict-system-defect-density/) demonstrated that relative code churn is a strong defect predictor.
 
@@ -349,11 +354,59 @@ For each symbol, the map includes:
 </details>
 
 <details>
+<summary><strong>Feature Flag Detection</strong> - Find and track feature flags across your codebase</summary>
+
+Feature flags are powerful but dangerous. They let you ship code without enabling it, run A/B tests, and roll out features gradually. But they accumulate. That "temporary" flag from 2019 is still in production. The flag you added for a one-week experiment is now load-bearing infrastructure.
+
+Omen detects feature flag usage across popular providers:
+
+| Provider     | Languages                     | What it finds                                  |
+| ------------ | ----------------------------- | ---------------------------------------------- |
+| LaunchDarkly | JS/TS, Python, Go, Java, Ruby | `variation()`, `boolVariation()` calls         |
+| Split        | JS/TS, Python, Go, Java, Ruby | `getTreatment()` calls                         |
+| Unleash      | JS/TS, Python, Go, Java, Ruby | `isEnabled()`, `getVariant()` calls            |
+| PostHog      | JS/TS, Python, Go, Ruby       | `isFeatureEnabled()`, `getFeatureFlag()` calls |
+| Flipper      | Ruby                          | `enabled?()`, `Flipper.enabled?()` calls       |
+
+For each flag, Omen reports:
+
+- **Flag key** - The identifier used in code
+- **Provider** - Which SDK is being used
+- **References** - All locations where the flag is checked
+- **Staleness** - When the flag was first and last modified (with git history)
+
+**Custom providers:** For in-house feature flag systems, define custom tree-sitter queries in your `omen.toml`:
+
+```toml
+[[feature_flags.custom_providers]]
+name = "feature"
+languages = ["ruby"]
+query = '''
+(call
+  receiver: (constant) @receiver
+  (#eq? @receiver "Feature")
+  method: (identifier) @method
+  (#match? @method "^(enabled\\?|get_feature_flag)$")
+  arguments: (argument_list
+    .
+    (simple_symbol) @flag_key))
+'''
+```
+
+**Why it matters:** [Meinicke et al. (2020)](https://dl.acm.org/doi/10.1145/3379597.3387463) studied feature flags across open-source projects and found that flag ownership (the developer who introduces a flag also removes it) correlates with shorter flag lifespans, helping keep technical debt in check. [Rahman et al. (2018)](https://link.springer.com/article/10.1007/s10664-018-9639-0) studied Google Chrome's 12,000+ feature toggles and found that while they enable rapid releases and flexible deployment, they also introduce technical debt and additional maintenance burden. Regular flag audits prevent your codebase from becoming a maze of unused toggles.
+
+> [!TIP]
+> Audit feature flags monthly. Remove flags older than 90 days for experiments, 14 days for release flags. Track flag staleness in your CI pipeline.
+
+</details>
+
+<details>
 <summary><strong>MCP Server</strong> - LLM tool integration via Model Context Protocol</summary>
 
 Omen includes a Model Context Protocol (MCP) server that exposes all analyzers as tools for LLMs like Claude. This enables AI assistants to analyze codebases directly through standardized tool calls.
 
 **Available tools:**
+
 - `analyze_complexity` - Cyclomatic and cognitive complexity
 - `analyze_satd` - Self-admitted technical debt detection
 - `analyze_deadcode` - Unused functions and variables
@@ -369,6 +422,7 @@ Omen includes a Model Context Protocol (MCP) server that exposes all analyzers a
 - `analyze_cohesion` - CK OO metrics
 - `analyze_repo_map` - PageRank-ranked symbol map
 - `analyze_smells` - Architectural smell detection
+- `analyze_flags` - Feature flag detection and staleness
 
 Each tool includes detailed descriptions with interpretation guidance, helping LLMs understand what metrics mean and when to use each analyzer.
 
@@ -455,6 +509,9 @@ omen analyze ownership ./src
 
 # Calculate CK cohesion metrics
 omen analyze cohesion ./src
+
+# Detect feature flags
+omen analyze flags ./src
 ```
 
 ## Commands
@@ -486,6 +543,7 @@ omen analyze cohesion ./src
 | `ownership`         | `own`, `bus-factor` | Code ownership and bus factor                    |
 | `cohesion`          | `ck`                | CK object-oriented metrics                       |
 | `lint-hotspot`      | `lh`                | Lint violation density                           |
+| `flags`             | `ff`                | Feature flag detection and staleness analysis    |
 
 ## Output Formats
 
@@ -514,8 +572,8 @@ patterns = ["vendor/**", "node_modules/**", "**/*_test.go"]
 dirs = [".git", "dist", "build"]
 
 [thresholds]
-cyclomatic = 10
-cognitive = 15
+cyclomatic_complexity = 10
+cognitive_complexity = 15
 duplicate_min_lines = 6
 duplicate_similarity = 0.8
 dead_code_confidence = 0.8
@@ -567,7 +625,7 @@ omen analyze hotspot ./src --top 10
 ### Analyze Temporal Coupling
 
 ```bash
-omen analyze temporal ./ --min-coupling 0.5 --min-commits 5
+omen analyze temporal-coupling ./ --min-cochanges 5 --days 90
 ```
 
 ### Check Bus Factor Risk
@@ -580,6 +638,18 @@ omen analyze ownership ./src --top 20
 
 ```bash
 omen analyze cohesion ./src --sort lcom
+```
+
+### Find Stale Feature Flags
+
+```bash
+omen analyze flags ./src --provider launchdarkly
+```
+
+### Feature Flags with Custom Provider
+
+```bash
+omen analyze flags ./src --config omen.toml --provider feature
 ```
 
 ## MCP Server
@@ -641,6 +711,7 @@ claude mcp add omen -- omen mcp
 | `analyze_ownership`         | Code ownership and bus factor                  |
 | `analyze_cohesion`          | CK OO metrics (LCOM, WMC, CBO, DIT)            |
 | `analyze_repo_map`          | PageRank-ranked symbol map                     |
+| `analyze_flags`             | Feature flag detection and staleness analysis  |
 
 Each tool includes detailed descriptions with interpretation guidance, helping LLMs understand what metrics mean and when to use each analyzer.
 
@@ -652,6 +723,7 @@ Once configured, you can ask Claude:
 - "Find technical debt in the src directory"
 - "What are the hotspot files that need refactoring?"
 - "Show me the bus factor risk for this project"
+- "Find stale feature flags that should be removed"
 
 ## Claude Code Skills
 
@@ -669,18 +741,18 @@ Verify installation with `/skills` to see available Omen skills.
 
 ### Available Skills
 
-| Skill | Description |
-|-------|-------------|
-| `omen:context-compression` | Generate compressed context summaries using PageRank-ranked symbols |
-| `omen:refactoring-priority` | Identify highest-priority refactoring targets |
-| `omen:bug-hunt` | Find likely bug locations using defect prediction and hotspots |
-| `omen:change-impact` | Analyze blast radius before making changes |
-| `omen:codebase-onboarding` | Generate onboarding guides for new developers |
-| `omen:code-review-focus` | Identify what to focus on when reviewing PRs |
-| `omen:architecture-review` | Analyze architectural health and design smells |
-| `omen:tech-debt-report` | Generate comprehensive technical debt assessments |
-| `omen:test-targeting` | Identify files most needing test coverage |
-| `omen:quality-gate` | Run pass/fail quality checks against thresholds |
+| Skill                       | Description                                                         |
+| --------------------------- | ------------------------------------------------------------------- |
+| `omen:context-compression`  | Generate compressed context summaries using PageRank-ranked symbols |
+| `omen:refactoring-priority` | Identify highest-priority refactoring targets                       |
+| `omen:bug-hunt`             | Find likely bug locations using defect prediction and hotspots      |
+| `omen:change-impact`        | Analyze blast radius before making changes                          |
+| `omen:codebase-onboarding`  | Generate onboarding guides for new developers                       |
+| `omen:code-review-focus`    | Identify what to focus on when reviewing PRs                        |
+| `omen:architecture-review`  | Analyze architectural health and design smells                      |
+| `omen:tech-debt-report`     | Generate comprehensive technical debt assessments                   |
+| `omen:test-targeting`       | Identify files most needing test coverage                           |
+| `omen:quality-gate`         | Run pass/fail quality checks against thresholds                     |
 
 ### Using Skills
 

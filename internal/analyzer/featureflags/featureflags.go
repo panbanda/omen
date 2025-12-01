@@ -1,0 +1,515 @@
+package featureflags
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	sitter "github.com/smacker/go-tree-sitter"
+
+	"github.com/panbanda/omen/internal/fileproc"
+	"github.com/panbanda/omen/internal/vcs"
+	"github.com/panbanda/omen/pkg/models"
+	"github.com/panbanda/omen/pkg/parser"
+)
+
+// Analyzer detects feature flags in source code using tree-sitter queries.
+type Analyzer struct {
+	parser          *parser.Parser
+	registry        *QueryRegistry
+	providers       []string
+	customProviders []CustomProvider
+	maxFileSize     int64
+	vcsOpener       vcs.Opener
+	includeGit      bool
+	expectedTTL     int // days
+}
+
+// Option is a functional option for configuring Analyzer.
+type Option func(*Analyzer)
+
+// WithProviders filters detection to specific providers.
+func WithProviders(providers []string) Option {
+	return func(a *Analyzer) {
+		a.providers = providers
+	}
+}
+
+// WithMaxFileSize sets the maximum file size to analyze (0 = no limit).
+func WithMaxFileSize(maxSize int64) Option {
+	return func(a *Analyzer) {
+		a.maxFileSize = maxSize
+	}
+}
+
+// WithVCSOpener sets the VCS opener for git history analysis.
+func WithVCSOpener(opener vcs.Opener) Option {
+	return func(a *Analyzer) {
+		a.vcsOpener = opener
+	}
+}
+
+// WithGitHistory enables git history analysis for staleness detection.
+func WithGitHistory(include bool) Option {
+	return func(a *Analyzer) {
+		a.includeGit = include
+	}
+}
+
+// WithExpectedTTL sets the expected time-to-live for flags in days.
+func WithExpectedTTL(days int) Option {
+	return func(a *Analyzer) {
+		a.expectedTTL = days
+	}
+}
+
+// CustomProvider defines a custom feature flag provider configuration.
+type CustomProvider struct {
+	Name      string
+	Languages []string
+	Query     string
+}
+
+// WithCustomProviders registers custom feature flag providers.
+func WithCustomProviders(providers []CustomProvider) Option {
+	return func(a *Analyzer) {
+		a.customProviders = providers
+	}
+}
+
+// NewAnalyzer creates a new feature flag analyzer.
+func NewAnalyzer(opts ...Option) (*Analyzer, error) {
+	registry, err := NewQueryRegistry()
+	if err != nil {
+		return nil, err
+	}
+
+	a := &Analyzer{
+		parser:      parser.New(),
+		registry:    registry,
+		providers:   nil, // nil means all providers
+		maxFileSize: 0,
+		vcsOpener:   vcs.DefaultOpener(),
+		includeGit:  true,
+		expectedTTL: 14, // default 14 days for release flags
+	}
+
+	for _, opt := range opts {
+		opt(a)
+	}
+
+	// Load custom providers after options are applied
+	for _, cp := range a.customProviders {
+		if err := registry.LoadCustomProvider(cp.Name, cp.Languages, cp.Query); err != nil {
+			return nil, fmt.Errorf("loading custom provider %s: %w", cp.Name, err)
+		}
+	}
+
+	return a, nil
+}
+
+// Close releases analyzer resources.
+func (a *Analyzer) Close() error {
+	if a.parser != nil {
+		a.parser.Close()
+	}
+	if a.registry != nil {
+		a.registry.Close()
+	}
+	return nil
+}
+
+// AnalyzeFile analyzes a single file for feature flags.
+func (a *Analyzer) AnalyzeFile(path string) ([]models.FlagReference, error) {
+	return a.analyzeFileWithParser(a.parser, path)
+}
+
+// analyzeFileWithParser analyzes a file using the provided parser instance.
+func (a *Analyzer) analyzeFileWithParser(p *parser.Parser, path string) ([]models.FlagReference, error) {
+	var result *parser.ParseResult
+	var err error
+
+	if a.maxFileSize > 0 {
+		result, err = p.ParseFileWithLimit(path, a.maxFileSize)
+	} else {
+		result, err = p.ParseFile(path)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	if result == nil || result.Tree == nil {
+		return nil, nil
+	}
+
+	queries := a.registry.GetQueries(result.Language, a.providers)
+	if len(queries) == 0 {
+		return nil, nil
+	}
+
+	var refs []models.FlagReference
+
+	for _, qs := range queries {
+		matches := a.executeQuery(qs, result)
+		for _, m := range matches {
+			m.File = path
+			refs = append(refs, m)
+		}
+	}
+
+	// Calculate nesting depth for each reference
+	for i := range refs {
+		refs[i].NestingDepth = a.calculateNestingDepth(result, refs[i].Line)
+	}
+
+	// Deduplicate references by (file, line, column, flagKey)
+	refs = deduplicateRefs(refs)
+
+	return refs, nil
+}
+
+// deduplicateRefs removes duplicate references based on location.
+func deduplicateRefs(refs []models.FlagReference) []models.FlagReference {
+	seen := make(map[string]bool)
+	result := make([]models.FlagReference, 0, len(refs))
+	for _, ref := range refs {
+		key := fmt.Sprintf("%s:%d:%d:%s", ref.File, ref.Line, ref.Column, ref.FlagKey)
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, ref)
+		}
+	}
+	return result
+}
+
+// executeQuery runs a tree-sitter query and extracts flag references.
+func (a *Analyzer) executeQuery(qs *QuerySet, result *parser.ParseResult) []models.FlagReference {
+	cursor := sitter.NewQueryCursor()
+	defer cursor.Close()
+
+	cursor.Exec(qs.Query, result.Tree.RootNode())
+
+	var refs []models.FlagReference
+
+	for {
+		match, ok := cursor.NextMatch()
+		if !ok {
+			break
+		}
+
+		// Apply predicates like #match? and #eq? to filter matches
+		match = cursor.FilterPredicates(match, result.Source)
+		if match == nil {
+			continue
+		}
+
+		var flagKey string
+		var line, column uint32
+
+		for _, capture := range match.Captures {
+			captureName := qs.Query.CaptureNameForId(capture.Index)
+			if captureName == "flag_key" {
+				flagKey = extractFlagKey(capture.Node, result.Source)
+				line = uint32(capture.Node.StartPoint().Row) + 1
+				column = uint32(capture.Node.StartPoint().Column)
+			}
+		}
+
+		if flagKey != "" {
+			refs = append(refs, models.FlagReference{
+				FlagKey:  flagKey,
+				Provider: qs.Provider,
+				Line:     line,
+				Column:   column,
+			})
+		}
+	}
+
+	return refs
+}
+
+// extractFlagKey extracts the flag key string from a node, handling quotes.
+func extractFlagKey(node *sitter.Node, source []byte) string {
+	text := parser.GetNodeText(node, source)
+	// Remove surrounding quotes if present
+	text = strings.Trim(text, "\"'`:") // handle "key", 'key', :key (Ruby symbol)
+	return text
+}
+
+// calculateNestingDepth determines how deeply nested a line is within conditionals.
+func (a *Analyzer) calculateNestingDepth(result *parser.ParseResult, line uint32) int {
+	depth := 0
+	conditionalTypes := map[string]bool{
+		"if_statement":     true,
+		"if_expression":    true,
+		"if":               true, // Ruby
+		"unless":           true, // Ruby
+		"conditional":      true,
+		"switch_statement": true,
+		"case":             true,
+		"match_expression": true,
+	}
+
+	parser.Walk(result.Tree.RootNode(), result.Source, func(node *sitter.Node, source []byte) bool {
+		startLine := uint32(node.StartPoint().Row) + 1
+		endLine := uint32(node.EndPoint().Row) + 1
+
+		if conditionalTypes[node.Type()] && startLine <= line && line <= endLine {
+			depth++
+		}
+		return true
+	})
+
+	return depth
+}
+
+// AnalyzeProject analyzes all files for feature flags.
+func (a *Analyzer) AnalyzeProject(files []string) (*models.FeatureFlagAnalysis, error) {
+	return a.AnalyzeProjectWithProgress(files, nil)
+}
+
+// AnalyzeProjectWithProgress analyzes all files with progress callback.
+func (a *Analyzer) AnalyzeProjectWithProgress(files []string, onProgress func()) (*models.FeatureFlagAnalysis, error) {
+	// Filter to supported languages
+	supportedFiles := a.filterSupportedFiles(files)
+
+	// Collect all references using concurrent file processing
+	allRefs := fileproc.MapFilesWithProgress(supportedFiles, func(p *parser.Parser, path string) ([]models.FlagReference, error) {
+		return a.analyzeFileWithParser(p, path)
+	}, onProgress)
+
+	// Flatten results
+	var refs []models.FlagReference
+	for _, fileRefs := range allRefs {
+		refs = append(refs, fileRefs...)
+	}
+
+	// Aggregate by flag key
+	analysis := a.aggregateResults(refs, supportedFiles)
+
+	return analysis, nil
+}
+
+// filterSupportedFiles filters to files with supported languages.
+func (a *Analyzer) filterSupportedFiles(files []string) []string {
+	supported := make([]string, 0, len(files))
+	for _, f := range files {
+		lang := parser.DetectLanguage(f)
+		if LanguageToDirName(lang) != "" {
+			supported = append(supported, f)
+		}
+	}
+	return supported
+}
+
+// aggregateResults aggregates references into per-flag analysis.
+func (a *Analyzer) aggregateResults(refs []models.FlagReference, files []string) *models.FeatureFlagAnalysis {
+	// Group references by flag key
+	byFlag := make(map[string][]models.FlagReference)
+	for _, ref := range refs {
+		byFlag[ref.FlagKey] = append(byFlag[ref.FlagKey], ref)
+	}
+
+	// Build flag analysis for each unique flag
+	flags := make([]models.FlagAnalysis, 0, len(byFlag))
+
+	for flagKey, flagRefs := range byFlag {
+		fa := models.FlagAnalysis{
+			FlagKey:    flagKey,
+			Provider:   flagRefs[0].Provider, // Use first reference's provider
+			References: flagRefs,
+			Complexity: a.calculateComplexity(flagRefs),
+		}
+
+		// Calculate staleness if git is available
+		if a.includeGit {
+			fa.Staleness = a.calculateStaleness(flagKey, files)
+		}
+
+		// Calculate priority
+		fa.Priority = models.CalculatePriority(fa.Staleness, fa.Complexity)
+
+		flags = append(flags, fa)
+	}
+
+	// Sort by priority (highest first)
+	sort.Slice(flags, func(i, j int) bool {
+		return flags[i].Priority.Score > flags[j].Priority.Score
+	})
+
+	// Build summary
+	summary := a.buildSummary(flags)
+
+	return &models.FeatureFlagAnalysis{
+		GeneratedAt: time.Now(),
+		Flags:       flags,
+		Summary:     summary,
+	}
+}
+
+// calculateComplexity computes complexity metrics for a flag's references.
+func (a *Analyzer) calculateComplexity(refs []models.FlagReference) models.FlagComplexity {
+	// File spread
+	files := make(map[string]bool)
+	for _, ref := range refs {
+		files[ref.File] = true
+	}
+
+	// Max nesting depth
+	maxNesting := 0
+	for _, ref := range refs {
+		if ref.NestingDepth > maxNesting {
+			maxNesting = ref.NestingDepth
+		}
+	}
+
+	// Coupled flags (flags that appear in the same conditional blocks)
+	coupledMap := make(map[string]bool)
+	for _, ref := range refs {
+		for _, sibling := range ref.SiblingFlags {
+			coupledMap[sibling] = true
+		}
+	}
+	coupled := make([]string, 0, len(coupledMap))
+	for f := range coupledMap {
+		coupled = append(coupled, f)
+	}
+
+	return models.FlagComplexity{
+		FileSpread:      len(files),
+		MaxNestingDepth: maxNesting,
+		DecisionPoints:  len(refs),
+		CoupledFlags:    coupled,
+		CyclomaticDelta: len(refs), // Each flag check adds one decision point
+	}
+}
+
+// calculateStaleness computes git-based staleness metrics for a flag.
+func (a *Analyzer) calculateStaleness(flagKey string, files []string) *models.FlagStaleness {
+	if a.vcsOpener == nil || len(files) == 0 {
+		return nil
+	}
+
+	// Try to open a git repo from one of the files
+	var repo vcs.Repository
+	for _, f := range files {
+		r, err := a.vcsOpener.PlainOpenWithDetect(f)
+		if err == nil {
+			repo = r
+			break
+		}
+	}
+
+	if repo == nil {
+		return nil
+	}
+
+	// Search git history for the flag key
+	staleness := &models.FlagStaleness{}
+	now := time.Now()
+	authors := make(map[string]bool)
+
+	// Get commit iterator
+	logOpts := &vcs.LogOptions{}
+	iter, err := repo.Log(logOpts)
+	if err != nil {
+		return nil
+	}
+
+	err = iter.ForEach(func(commit vcs.Commit) error {
+		msg := commit.Message()
+		// Simple check: does commit message or diff mention the flag?
+		if strings.Contains(msg, flagKey) {
+			commitTime := commit.Author().When
+			if staleness.IntroducedAt == nil || commitTime.Before(*staleness.IntroducedAt) {
+				staleness.IntroducedAt = &commitTime
+			}
+			if staleness.LastModifiedAt == nil || commitTime.After(*staleness.LastModifiedAt) {
+				staleness.LastModifiedAt = &commitTime
+			}
+			staleness.TotalCommits++
+			authors[commit.Author().Name] = true
+		}
+		return nil
+	})
+	iter.Close()
+
+	if err != nil || staleness.TotalCommits == 0 {
+		return nil
+	}
+
+	// Calculate days since intro/modified
+	if staleness.IntroducedAt != nil {
+		staleness.DaysSinceIntro = int(now.Sub(*staleness.IntroducedAt).Hours() / 24)
+	}
+	if staleness.LastModifiedAt != nil {
+		staleness.DaysSinceModified = int(now.Sub(*staleness.LastModifiedAt).Hours() / 24)
+	}
+
+	// Collect authors
+	for author := range authors {
+		staleness.Authors = append(staleness.Authors, author)
+	}
+	sort.Strings(staleness.Authors)
+
+	// Calculate staleness score
+	staleness.CalculateStalenessScore(a.expectedTTL)
+
+	return staleness
+}
+
+// buildSummary creates the analysis summary.
+func (a *Analyzer) buildSummary(flags []models.FlagAnalysis) models.FlagAnalysisSummary {
+	summary := models.NewFlagAnalysisSummary()
+	summary.TotalFlags = len(flags)
+
+	var totalSpread int
+	maxSpread := 0
+
+	for _, f := range flags {
+		summary.TotalReferences += len(f.References)
+		summary.ByPriority[f.Priority.Level]++
+		summary.ByProvider[f.Provider]++
+
+		totalSpread += f.Complexity.FileSpread
+		if f.Complexity.FileSpread > maxSpread {
+			maxSpread = f.Complexity.FileSpread
+		}
+
+		// Track coupled flags
+		for _, coupled := range f.Complexity.CoupledFlags {
+			// Add to top coupled if not already tracking too many
+			if len(summary.TopCoupled) < 10 {
+				found := false
+				for _, existing := range summary.TopCoupled {
+					if existing == coupled {
+						found = true
+						break
+					}
+				}
+				if !found {
+					summary.TopCoupled = append(summary.TopCoupled, coupled)
+				}
+			}
+		}
+	}
+
+	if len(flags) > 0 {
+		summary.AvgFileSpread = float64(totalSpread) / float64(len(flags))
+	}
+	summary.MaxFileSpread = maxSpread
+
+	return summary
+}
+
+// GetSupportedLanguages returns the list of languages with registered queries.
+func (a *Analyzer) GetSupportedLanguages() []parser.Language {
+	return a.registry.GetAllLanguages()
+}
+
+// GetProviders returns available providers for a language.
+func (a *Analyzer) GetProviders(lang parser.Language) []string {
+	return a.registry.GetProviders(lang)
+}

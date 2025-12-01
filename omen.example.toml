@@ -2,23 +2,19 @@
 # Copy this file to omen.toml or .omen/omen.toml
 
 [analysis]
+# Enable/disable specific analyzers when running `omen analyze` without subcommand
 complexity = true
 satd = true
 dead_code = true
 churn = true
 duplicates = true
 defect = true      # File-level defect probability (PMAT)
-changes = true     # Commit-level change risk (JIT)
 tdg = true
 graph = true
-hotspot = true
-smells = true
-temporal_coupling = true
-ownership = true
-cohesion = true
 lint_hotspot = true
 context = true
-churn_days = 90
+churn_days = 90    # Days of git history to analyze
+# max_file_size = 10485760  # Skip files larger than 10MB (0 = no limit)
 
 [thresholds]
 cyclomatic_complexity = 10
@@ -72,6 +68,38 @@ dir = ".omen/cache"
 ttl = 24  # hours
 
 [output]
-format = "text"  # text, json, markdown
+format = "text"  # text, json, markdown, toon
 color = true
 verbose = false
+
+[feature_flags]
+# Providers to detect (empty = all)
+# Available: launchdarkly, split, unleash, posthog, flipper
+providers = []
+
+[feature_flags.expected_ttl]
+# Expected time-to-live for release flags (days)
+release = 14
+# Expected time-to-live for experiment flags (days)
+experiment = 90
+
+# Custom providers define tree-sitter queries for proprietary feature flag systems.
+# Each custom provider needs:
+#   - name: Provider identifier (used in --provider flag)
+#   - languages: List of languages this query applies to (go, ruby, python, javascript, etc.)
+#   - query: Tree-sitter query pattern with @flag_key capture for the flag identifier
+#
+# Example: Custom provider for a Ruby Feature class wrapping Flipper/PostHog
+# [[feature_flags.custom_providers]]
+# name = "feature"
+# languages = ["ruby"]
+# query = '''
+# (call
+#   receiver: (constant) @receiver
+#   (#eq? @receiver "Feature")
+#   method: (identifier) @method
+#   (#match? @method "^(enabled\\?|get_feature_flag)$")
+#   arguments: (argument_list
+#     .
+#     (simple_symbol) @flag_key))
+# '''

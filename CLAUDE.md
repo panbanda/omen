@@ -39,12 +39,16 @@ Omen is a multi-language code analysis CLI built in Go. It uses tree-sitter for 
 - `pkg/config/` - Configuration loading (TOML/YAML/JSON via koanf)
 
 **Internal packages** (`internal/`) - implementation details:
-- `internal/analyzer/` - Analysis implementations (complexity, SATD, dead code, churn, duplicates, defect prediction, TDG, dependency graph)
+- `internal/analyzer/` - Analysis implementations (complexity, SATD, dead code, churn, duplicates, defect prediction, TDG, dependency graph, feature flags)
+- `internal/analyzer/featureflags/` - Feature flag detection with tree-sitter queries (queries stored in `queries/<lang>/<provider>.scm`)
 - `internal/fileproc/` - Concurrent file processing utilities
 - `internal/scanner/` - File discovery with configurable exclusion patterns
 - `internal/cache/` - Result caching with Blake3 hashing
-- `internal/output/` - Output formatting (text/JSON/markdown)
+- `internal/output/` - Output formatting (text/JSON/markdown/toon)
 - `internal/progress/` - Progress bars and spinners
+- `internal/mcpserver/` - MCP server implementation with tools and prompts
+- `internal/service/` - High-level service layer coordinating analyzers
+- `internal/vcs/` - Git operations (blame, log, diff)
 
 **CLI** (`cmd/omen/`) - Entry point using urfave/cli/v2
 
@@ -65,11 +69,18 @@ Omen is a multi-language code analysis CLI built in Go. It uses tree-sitter for 
 
 **Configuration**: Config loaded from `omen.toml`, `.omen.toml`, or `.omen/omen.toml`. See `omen.example.toml` for all options.
 
+**Tree-sitter queries**: Feature flag detection uses `.scm` query files in `internal/analyzer/featureflags/queries/<lang>/<provider>.scm`. Queries must capture `@flag_key` for the flag identifier. Predicates like `#match?` and `#eq?` must be placed inline within patterns, and `FilterPredicates()` must be called to evaluate them.
+
+**MCP server**: Tools are registered in `internal/mcpserver/mcpserver.go`. Each tool has a description in `descriptions.go`. Prompts are stored as markdown files in `internal/mcpserver/prompts/` using `go:embed`.
+
+**Skills**: Claude Code skills live in `skills/<skill-name>/SKILL.md` and are installed via `/plugin install panbanda/omen`.
+
 ### CLI Commands
 
 Top-level commands:
 - `analyze` / `a` - Run analyzers (all if no subcommand, or specific one)
 - `context` / `ctx` - Deep context generation for LLMs
+- `mcp` - Start MCP server for LLM tool integration
 
 Analyzer subcommands (`omen analyze <subcommand>`):
 - `complexity` / `cx` - Cyclomatic and cognitive complexity
@@ -84,9 +95,10 @@ Analyzer subcommands (`omen analyze <subcommand>`):
 - `hotspot` / `hs` - High churn + high complexity files
 - `smells` - Architectural smell detection (cycles, hubs, god components)
 - `temporal-coupling` / `tc` - Files that change together
-- `ownership` / `own` - Code ownership and bus factor
+- `ownership` / `own` / `bus-factor` - Code ownership and bus factor
 - `cohesion` / `ck` - CK object-oriented metrics
 - `lint-hotspot` / `lh` - Lint violation density
+- `flags` / `ff` - Feature flag detection and staleness analysis
 
 **Global flags**: `--config`, `--verbose`, `--pprof`
 

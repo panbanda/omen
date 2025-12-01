@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"github.com/panbanda/omen/internal/analyzer"
+	"github.com/panbanda/omen/internal/analyzer/featureflags"
 	"github.com/panbanda/omen/internal/progress"
 	"github.com/panbanda/omen/internal/vcs"
 	"github.com/panbanda/omen/pkg/config"
@@ -452,6 +453,65 @@ func (s *Service) AnalyzeSmells(files []string, opts SmellOptions) (*models.Smel
 	defer smellAnalyzer.Close()
 
 	return smellAnalyzer.AnalyzeGraph(graph), nil
+}
+
+// FeatureFlagOptions configures feature flag analysis.
+type FeatureFlagOptions struct {
+	Providers   []string
+	IncludeGit  bool
+	ExpectedTTL int
+	OnProgress  func()
+}
+
+// AnalyzeFeatureFlags detects and analyzes feature flags in the codebase.
+func (s *Service) AnalyzeFeatureFlags(files []string, opts FeatureFlagOptions) (*models.FeatureFlagAnalysis, error) {
+	var analyzerOpts []featureflags.Option
+
+	if len(opts.Providers) > 0 {
+		analyzerOpts = append(analyzerOpts, featureflags.WithProviders(opts.Providers))
+	} else if len(s.config.FeatureFlags.Providers) > 0 {
+		analyzerOpts = append(analyzerOpts, featureflags.WithProviders(s.config.FeatureFlags.Providers))
+	}
+
+	if s.config.Analysis.MaxFileSize > 0 {
+		analyzerOpts = append(analyzerOpts, featureflags.WithMaxFileSize(s.config.Analysis.MaxFileSize))
+	}
+
+	analyzerOpts = append(analyzerOpts, featureflags.WithGitHistory(opts.IncludeGit))
+	analyzerOpts = append(analyzerOpts, featureflags.WithVCSOpener(s.opener))
+
+	ttl := opts.ExpectedTTL
+	if ttl == 0 {
+		ttl = s.config.FeatureFlags.ExpectedTTL.Release
+	}
+	if ttl == 0 {
+		ttl = 14 // default
+	}
+	analyzerOpts = append(analyzerOpts, featureflags.WithExpectedTTL(ttl))
+
+	// Load custom providers from config
+	if len(s.config.FeatureFlags.CustomProviders) > 0 {
+		customProviders := make([]featureflags.CustomProvider, len(s.config.FeatureFlags.CustomProviders))
+		for i, cp := range s.config.FeatureFlags.CustomProviders {
+			customProviders[i] = featureflags.CustomProvider{
+				Name:      cp.Name,
+				Languages: cp.Languages,
+				Query:     cp.Query,
+			}
+		}
+		analyzerOpts = append(analyzerOpts, featureflags.WithCustomProviders(customProviders))
+	}
+
+	flagAnalyzer, err := featureflags.NewAnalyzer(analyzerOpts...)
+	if err != nil {
+		return nil, err
+	}
+	defer flagAnalyzer.Close()
+
+	if opts.OnProgress != nil {
+		return flagAnalyzer.AnalyzeProjectWithProgress(files, opts.OnProgress)
+	}
+	return flagAnalyzer.AnalyzeProject(files)
 }
 
 // PatternError indicates an invalid pattern.
