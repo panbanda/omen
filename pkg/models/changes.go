@@ -5,10 +5,10 @@ import (
 	"time"
 )
 
-// JITWeights defines the weights for JIT defect prediction features.
+// ChangesWeights defines the weights for change-level defect prediction features.
 // Based on Kamei et al. (2013) "A Large-Scale Empirical Study of Just-in-Time Quality Assurance"
 // and Zeng et al. (2021) showing simple models match deep learning accuracy (~65%).
-type JITWeights struct {
+type ChangesWeights struct {
 	FIX     float64 `json:"fix"`     // Is bug fix commit?
 	Entropy float64 `json:"entropy"` // Change entropy across files
 	LA      float64 `json:"la"`      // Lines added
@@ -19,9 +19,9 @@ type JITWeights struct {
 	EXP     float64 `json:"exp"`     // Author experience (inverted)
 }
 
-// DefaultJITWeights returns research-backed weights from the requirements spec.
-func DefaultJITWeights() JITWeights {
-	return JITWeights{
+// DefaultChangesWeights returns research-backed weights from the requirements spec.
+func DefaultChangesWeights() ChangesWeights {
+	return ChangesWeights{
 		FIX:     0.25,
 		Entropy: 0.20,
 		LA:      0.20,
@@ -33,7 +33,7 @@ func DefaultJITWeights() JITWeights {
 	}
 }
 
-// CommitFeatures represents JIT features extracted from a commit.
+// CommitFeatures represents features extracted from a commit for change risk analysis.
 type CommitFeatures struct {
 	CommitHash       string    `json:"commit_hash"`
 	Author           string    `json:"author"`
@@ -51,40 +51,40 @@ type CommitFeatures struct {
 	FilesModified    []string  `json:"files_modified"`
 }
 
-// JITRiskLevel represents the risk level for a commit.
-type JITRiskLevel string
+// ChangeRiskLevel represents the risk level for a commit.
+type ChangeRiskLevel string
 
 const (
-	JITRiskLow    JITRiskLevel = "low"    // < 0.4
-	JITRiskMedium JITRiskLevel = "medium" // 0.4 - 0.7
-	JITRiskHigh   JITRiskLevel = "high"   // >= 0.7
+	ChangeRiskLow    ChangeRiskLevel = "low"    // < 0.4
+	ChangeRiskMedium ChangeRiskLevel = "medium" // 0.4 - 0.7
+	ChangeRiskHigh   ChangeRiskLevel = "high"   // >= 0.7
 )
 
-// CommitRisk represents the JIT prediction result for a single commit.
+// CommitRisk represents the change risk prediction result for a single commit.
 type CommitRisk struct {
 	CommitHash          string             `json:"commit_hash"`
 	Author              string             `json:"author"`
 	Message             string             `json:"message"`
 	Timestamp           time.Time          `json:"timestamp"`
 	RiskScore           float64            `json:"risk_score"`
-	RiskLevel           JITRiskLevel       `json:"risk_level"`
+	RiskLevel           ChangeRiskLevel    `json:"risk_level"`
 	ContributingFactors map[string]float64 `json:"contributing_factors"`
 	Recommendations     []string           `json:"recommendations"`
 	FilesModified       []string           `json:"files_modified"`
 }
 
-// JITAnalysis represents the full JIT defect prediction result.
-type JITAnalysis struct {
+// ChangesAnalysis represents the full change-level defect prediction result.
+type ChangesAnalysis struct {
 	GeneratedAt   time.Time          `json:"generated_at"`
 	PeriodDays    int                `json:"period_days"`
 	Commits       []CommitRisk       `json:"commits"`
-	Summary       JITSummary         `json:"summary"`
-	Weights       JITWeights         `json:"weights"`
+	Summary       ChangesSummary     `json:"summary"`
+	Weights       ChangesWeights     `json:"weights"`
 	Normalization NormalizationStats `json:"normalization"`
 }
 
-// JITSummary provides aggregate statistics.
-type JITSummary struct {
+// ChangesSummary provides aggregate statistics.
+type ChangesSummary struct {
 	TotalCommits    int     `json:"total_commits"`
 	HighRiskCount   int     `json:"high_risk_count"`
 	MediumRiskCount int     `json:"medium_risk_count"`
@@ -106,17 +106,17 @@ type NormalizationStats struct {
 	MaxEntropy          float64 `json:"max_entropy"`
 }
 
-// NewJITAnalysis creates an initialized JIT analysis.
-func NewJITAnalysis() *JITAnalysis {
-	return &JITAnalysis{
+// NewChangesAnalysis creates an initialized changes analysis.
+func NewChangesAnalysis() *ChangesAnalysis {
+	return &ChangesAnalysis{
 		GeneratedAt: time.Now().UTC(),
 		Commits:     make([]CommitRisk, 0),
-		Weights:     DefaultJITWeights(),
+		Weights:     DefaultChangesWeights(),
 	}
 }
 
-// CalculateJITRisk computes the risk score for a commit using JIT features.
-func CalculateJITRisk(features CommitFeatures, weights JITWeights, norm NormalizationStats) float64 {
+// CalculateChangeRisk computes the risk score for a commit using change features.
+func CalculateChangeRisk(features CommitFeatures, weights ChangesWeights, norm NormalizationStats) float64 {
 	// Automated commits (CI, merges, docs, style) are inherently low risk
 	if features.IsAutomated {
 		return 0.05 // Minimal risk score for automated commits
@@ -207,20 +207,20 @@ func CalculateEntropy(linesPerFile map[string]int) float64 {
 	return entropy
 }
 
-// GetJITRiskLevel determines risk level from score.
-func GetJITRiskLevel(score float64) JITRiskLevel {
+// GetChangeRiskLevel determines risk level from score.
+func GetChangeRiskLevel(score float64) ChangeRiskLevel {
 	switch {
 	case score >= 0.7:
-		return JITRiskHigh
+		return ChangeRiskHigh
 	case score >= 0.4:
-		return JITRiskMedium
+		return ChangeRiskMedium
 	default:
-		return JITRiskLow
+		return ChangeRiskLow
 	}
 }
 
-// GenerateJITRecommendations suggests actions based on risk factors.
-func GenerateJITRecommendations(features CommitFeatures, score float64, factors map[string]float64) []string {
+// GenerateChangeRecommendations suggests actions based on risk factors.
+func GenerateChangeRecommendations(features CommitFeatures, score float64, factors map[string]float64) []string {
 	var recs []string
 
 	if features.IsFix {

@@ -380,32 +380,32 @@ func (s *Service) AnalyzeRepoMap(files []string, opts RepoMapOptions) (*models.R
 	return rmAnalyzer.AnalyzeProject(files)
 }
 
-// JITOptions configures Just-in-Time defect prediction.
-type JITOptions struct {
+// ChangesOptions configures change-level defect prediction.
+type ChangesOptions struct {
 	Days    int
-	Weights models.JITWeights
+	Weights models.ChangesWeights
 }
 
-// AnalyzeJIT performs Just-in-Time defect prediction on recent commits.
-func (s *Service) AnalyzeJIT(repoPath string, opts JITOptions) (*models.JITAnalysis, error) {
+// AnalyzeChanges performs change-level defect prediction on recent commits.
+func (s *Service) AnalyzeChanges(repoPath string, opts ChangesOptions) (*models.ChangesAnalysis, error) {
 	days := opts.Days
 	if days <= 0 {
 		days = s.config.Analysis.ChurnDays
 	}
 
-	var analyzerOpts []analyzer.JITOption
-	analyzerOpts = append(analyzerOpts, analyzer.WithJITDays(days))
-	analyzerOpts = append(analyzerOpts, analyzer.WithJITOpener(s.opener))
+	var analyzerOpts []analyzer.ChangesOption
+	analyzerOpts = append(analyzerOpts, analyzer.WithChangesDays(days))
+	analyzerOpts = append(analyzerOpts, analyzer.WithChangesOpener(s.opener))
 
 	// Only set weights if they're not zero-valued
 	if opts.Weights.FIX != 0 || opts.Weights.Entropy != 0 {
-		analyzerOpts = append(analyzerOpts, analyzer.WithJITWeights(opts.Weights))
+		analyzerOpts = append(analyzerOpts, analyzer.WithChangesWeights(opts.Weights))
 	}
 
-	jitAnalyzer := analyzer.NewJITAnalyzer(analyzerOpts...)
-	defer jitAnalyzer.Close()
+	changesAnalyzer := analyzer.NewChangesAnalyzer(analyzerOpts...)
+	defer changesAnalyzer.Close()
 
-	return jitAnalyzer.AnalyzeRepo(repoPath)
+	return changesAnalyzer.AnalyzeRepo(repoPath)
 }
 
 // SmellOptions configures architectural smell detection.
