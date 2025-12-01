@@ -2423,13 +2423,19 @@ func runAnalyzeCmd(c *cli.Context) error {
 
 	// Comprehensive analysis results
 	type FullAnalysis struct {
-		Complexity *models.ComplexityAnalysis `json:"complexity,omitempty"`
-		SATD       *models.SATDAnalysis       `json:"satd,omitempty"`
-		DeadCode   *models.DeadCodeAnalysis   `json:"dead_code,omitempty"`
-		Churn      *models.ChurnAnalysis      `json:"churn,omitempty"`
-		Clones     *models.CloneAnalysis      `json:"clones,omitempty"`
-		Defect     *models.DefectAnalysis     `json:"defect,omitempty"`
-		TDG        *models.ProjectScore       `json:"tdg,omitempty"`
+		Complexity       *models.ComplexityAnalysis       `json:"complexity,omitempty"`
+		SATD             *models.SATDAnalysis             `json:"satd,omitempty"`
+		DeadCode         *models.DeadCodeAnalysis         `json:"dead_code,omitempty"`
+		Churn            *models.ChurnAnalysis            `json:"churn,omitempty"`
+		Clones           *models.CloneAnalysis            `json:"clones,omitempty"`
+		Defect           *models.DefectAnalysis           `json:"defect,omitempty"`
+		TDG              *models.ProjectScore             `json:"tdg,omitempty"`
+		Hotspots         *models.HotspotAnalysis          `json:"hotspots,omitempty"`
+		Smells           *models.SmellAnalysis            `json:"smells,omitempty"`
+		Ownership        *models.OwnershipAnalysis        `json:"ownership,omitempty"`
+		TemporalCoupling *models.TemporalCouplingAnalysis `json:"temporal_coupling,omitempty"`
+		Cohesion         *models.CohesionAnalysis         `json:"cohesion,omitempty"`
+		FeatureFlags     *models.FeatureFlagAnalysis      `json:"feature_flags,omitempty"`
 	}
 	results := FullAnalysis{}
 
@@ -2498,6 +2504,67 @@ func runAnalyzeCmd(c *cli.Context) error {
 	if !excludeSet["tdg"] {
 		tracker := progress.NewTracker("Calculating TDG scores...", 1)
 		results.TDG, _ = svc.AnalyzeTDG(repoPath)
+		tracker.FinishSuccess()
+	}
+
+	// 8. Hotspots (requires churn + complexity data)
+	if !excludeSet["hotspots"] {
+		spinner := progress.NewSpinner("Analyzing hotspots...")
+		results.Hotspots, _ = svc.AnalyzeHotspots(repoPath, files, analysis.HotspotOptions{})
+		if results.Hotspots != nil {
+			spinner.FinishSuccess()
+		} else {
+			spinner.FinishSkipped("not a git repo")
+		}
+	}
+
+	// 9. Architectural Smells
+	if !excludeSet["smells"] {
+		tracker := progress.NewTracker("Detecting architectural smells...", len(files))
+		results.Smells, _ = svc.AnalyzeSmells(files, analysis.SmellOptions{
+			OnProgress: tracker.Tick,
+		})
+		tracker.FinishSuccess()
+	}
+
+	// 10. Ownership
+	if !excludeSet["ownership"] {
+		spinner := progress.NewSpinner("Analyzing code ownership...")
+		results.Ownership, _ = svc.AnalyzeOwnership(repoPath, files, analysis.OwnershipOptions{})
+		if results.Ownership != nil {
+			spinner.FinishSuccess()
+		} else {
+			spinner.FinishSkipped("not a git repo")
+		}
+	}
+
+	// 11. Temporal Coupling
+	if !excludeSet["temporal-coupling"] {
+		spinner := progress.NewSpinner("Analyzing temporal coupling...")
+		results.TemporalCoupling, _ = svc.AnalyzeTemporalCoupling(repoPath, analysis.TemporalCouplingOptions{})
+		if results.TemporalCoupling != nil {
+			spinner.FinishSuccess()
+		} else {
+			spinner.FinishSkipped("not a git repo")
+		}
+	}
+
+	// 12. Cohesion (CK metrics)
+	if !excludeSet["cohesion"] {
+		tracker := progress.NewTracker("Analyzing cohesion metrics...", len(files))
+		results.Cohesion, _ = svc.AnalyzeCohesion(files, analysis.CohesionOptions{
+			OnProgress: tracker.Tick,
+		})
+		tracker.FinishSuccess()
+	}
+
+	// 13. Feature Flags
+	if !excludeSet["flags"] {
+		tracker := progress.NewTracker("Detecting feature flags...", len(files))
+		results.FeatureFlags, _ = svc.AnalyzeFeatureFlags(files, analysis.FeatureFlagOptions{
+			OnProgress: tracker.Tick,
+			IncludeGit: true,
+		})
 		tracker.FinishSuccess()
 	}
 
@@ -2599,6 +2666,78 @@ func runAnalyzeCmd(c *cli.Context) error {
 				}
 			}
 		}
+	}
+
+	if results.Hotspots != nil {
+		fmt.Fprintf(w, "\nHotspots:\n")
+		fmt.Fprintf(w, "  Files: %d, Hotspots (score >= 0.4): %d\n",
+			results.Hotspots.Summary.TotalFiles,
+			results.Hotspots.Summary.HotspotCount)
+		fmt.Fprintf(w, "  P50 Score: %.2f, P90 Score: %.2f, Max: %.2f\n",
+			results.Hotspots.Summary.P50HotspotScore,
+			results.Hotspots.Summary.P90HotspotScore,
+			results.Hotspots.Summary.MaxHotspotScore)
+	}
+
+	if results.Smells != nil {
+		fmt.Fprintf(w, "\nArchitectural Smells:\n")
+		fmt.Fprintf(w, "  Total: %d (Critical: %d, High: %d, Medium: %d)\n",
+			results.Smells.Summary.TotalSmells,
+			results.Smells.Summary.CriticalCount,
+			results.Smells.Summary.HighCount,
+			results.Smells.Summary.MediumCount)
+		fmt.Fprintf(w, "  Cycles: %d, Hubs: %d, God Components: %d, Unstable: %d\n",
+			results.Smells.Summary.CyclicCount,
+			results.Smells.Summary.HubCount,
+			results.Smells.Summary.GodCount,
+			results.Smells.Summary.UnstableCount)
+	}
+
+	if results.Ownership != nil {
+		fmt.Fprintf(w, "\nCode Ownership:\n")
+		fmt.Fprintf(w, "  Files: %d, Bus Factor: %d, Silos: %d\n",
+			results.Ownership.Summary.TotalFiles,
+			results.Ownership.Summary.BusFactor,
+			results.Ownership.Summary.SiloCount)
+		fmt.Fprintf(w, "  Avg Contributors/File: %.1f\n", results.Ownership.Summary.AvgContributors)
+	}
+
+	if results.TemporalCoupling != nil {
+		fmt.Fprintf(w, "\nTemporal Coupling:\n")
+		fmt.Fprintf(w, "  Couplings: %d, Strong (>= 0.5): %d\n",
+			results.TemporalCoupling.Summary.TotalCouplings,
+			results.TemporalCoupling.Summary.StrongCouplings)
+		fmt.Fprintf(w, "  Avg Strength: %.2f, Max: %.2f\n",
+			results.TemporalCoupling.Summary.AvgCouplingStrength,
+			results.TemporalCoupling.Summary.MaxCouplingStrength)
+	}
+
+	if results.Cohesion != nil {
+		fmt.Fprintf(w, "\nCohesion (CK Metrics):\n")
+		fmt.Fprintf(w, "  Classes: %d, Files: %d\n",
+			results.Cohesion.Summary.TotalClasses,
+			results.Cohesion.Summary.TotalFiles)
+		fmt.Fprintf(w, "  Avg WMC: %.1f, Avg CBO: %.1f, Avg LCOM: %.1f\n",
+			results.Cohesion.Summary.AvgWMC,
+			results.Cohesion.Summary.AvgCBO,
+			results.Cohesion.Summary.AvgLCOM)
+		fmt.Fprintf(w, "  Low Cohesion (LCOM > 1): %d classes\n",
+			results.Cohesion.Summary.LowCohesionCount)
+	}
+
+	if results.FeatureFlags != nil {
+		fmt.Fprintf(w, "\nFeature Flags:\n")
+		fmt.Fprintf(w, "  Flags: %d, References: %d\n",
+			results.FeatureFlags.Summary.TotalFlags,
+			results.FeatureFlags.Summary.TotalReferences)
+		fmt.Fprintf(w, "  By Priority: Critical: %d, High: %d, Medium: %d, Low: %d\n",
+			results.FeatureFlags.Summary.ByPriority["CRITICAL"],
+			results.FeatureFlags.Summary.ByPriority["HIGH"],
+			results.FeatureFlags.Summary.ByPriority["MEDIUM"],
+			results.FeatureFlags.Summary.ByPriority["LOW"])
+		fmt.Fprintf(w, "  Avg File Spread: %.1f, Max: %d\n",
+			results.FeatureFlags.Summary.AvgFileSpread,
+			results.FeatureFlags.Summary.MaxFileSpread)
 	}
 
 	return nil
