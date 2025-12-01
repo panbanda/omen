@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.0](https://github.com/panbanda/omen/compare/omen-v1.0.0...omen-v1.1.0) (2025-12-01)
+
+
+### Features
+
+* **analyzer:** add feature flag detection ([3540b25](https://github.com/panbanda/omen/commit/3540b252bdce2cf9670d50f55d9c58b416b8207b))
+* **analyzer:** add feature flag detection ([1aad95c](https://github.com/panbanda/omen/commit/1aad95c342f62559a0dda74ba11226e372c23e9c))
+* **mcp:** add flag-audit prompt template ([e54beec](https://github.com/panbanda/omen/commit/e54beecf47740fa99b4e1f078824bc33ada4b603))
+
 ## 1.0.0 (2025-12-01)
 
 
