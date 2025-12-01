@@ -929,7 +929,6 @@ func changesCmd() *cli.Command {
 	)
 	return &cli.Command{
 		Name:      "changes",
-		Aliases:   []string{"jit"},
 		Usage:     "Analyze recent changes for defect risk (Kamei et al. 2013)",
 		ArgsUsage: "[path]",
 		Flags:     flags,
