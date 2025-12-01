@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.0](https://github.com/panbanda/omen/compare/omen-v1.1.0...omen-v1.2.0) (2025-12-01)
+
+
+### Features
+
+* **cli:** expand full analysis with 6 additional analyzers ([11c16bb](https://github.com/panbanda/omen/commit/11c16bbf89a03b45a8eaf6b75679ae098c98e5bf))
+* **cli:** expand full analysis with 6 additional analyzers ([31666df](https://github.com/panbanda/omen/commit/31666df8c77f3184fbfcebb0a0e25a16f2881f69))
+
 ## [1.1.0](https://github.com/panbanda/omen/compare/omen-v1.0.0...omen-v1.1.0) (2025-12-01)
 
 
