@@ -41,6 +41,7 @@ func TestToolDescriptions(t *testing.T) {
 		"churn":            describeChurn,
 		"duplicates":       describeDuplicates,
 		"defect":           describeDefect,
+		"changes":          describeChanges,
 		"tdg":              describeTDG,
 		"graph":            describeGraph,
 		"hotspot":          describeHotspot,
@@ -48,6 +49,7 @@ func TestToolDescriptions(t *testing.T) {
 		"ownership":        describeOwnership,
 		"cohesion":         describeCohesion,
 		"repoMap":          describeRepoMap,
+		"smells":           describeSmells,
 	}
 
 	for name, fn := range descriptions {
@@ -216,6 +218,7 @@ func TestInputStructTags(t *testing.T) {
 		ChurnInput{},
 		DuplicatesInput{},
 		DefectInput{},
+		ChangesInput{},
 		TDGInput{},
 		GraphInput{},
 		HotspotInput{},
@@ -223,6 +226,7 @@ func TestInputStructTags(t *testing.T) {
 		OwnershipInput{},
 		CohesionInput{},
 		RepoMapInput{},
+		SmellsInput{},
 	}
 
 	for _, input := range inputs {
@@ -253,6 +257,8 @@ func typeName(v interface{}) string {
 		return "DuplicatesInput"
 	case DefectInput:
 		return "DefectInput"
+	case ChangesInput:
+		return "ChangesInput"
 	case TDGInput:
 		return "TDGInput"
 	case GraphInput:
@@ -267,6 +273,8 @@ func typeName(v interface{}) string {
 		return "CohesionInput"
 	case RepoMapInput:
 		return "RepoMapInput"
+	case SmellsInput:
+		return "SmellsInput"
 	default:
 		return "Unknown"
 	}
@@ -762,4 +770,57 @@ func TestRegisterPrompts(t *testing.T) {
 	}
 	// The registerPrompts() call happens in NewServer
 	// We verify indirectly that it doesn't panic and the server works
+}
+
+// TestHandleSmells tests the architectural smells analyzer tool handler.
+func TestHandleSmells(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create multiple files with dependencies
+	file1 := filepath.Join(tmpDir, "main.go")
+	file2 := filepath.Join(tmpDir, "util.go")
+
+	main := `package main
+
+import "fmt"
+
+func main() {
+	helper()
+	fmt.Println("done")
+}
+`
+	util := `package main
+
+func helper() {
+	println("helping")
+}
+`
+	if err := os.WriteFile(file1, []byte(main), 0644); err != nil {
+		t.Fatalf("failed to write main.go: %v", err)
+	}
+	if err := os.WriteFile(file2, []byte(util), 0644); err != nil {
+		t.Fatalf("failed to write util.go: %v", err)
+	}
+
+	input := SmellsInput{
+		AnalyzeInput: AnalyzeInput{
+			Paths:  []string{tmpDir},
+			Format: "json",
+		},
+		HubThreshold:       20,
+		GodFanInThreshold:  10,
+		GodFanOutThreshold: 10,
+	}
+
+	result, _, err := handleAnalyzeSmells(context.Background(), nil, input)
+	if err != nil {
+		t.Fatalf("handleAnalyzeSmells returned error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("handleAnalyzeSmells returned nil result")
+	}
+	if result.IsError {
+		textContent := result.Content[0].(*mcp.TextContent)
+		t.Fatalf("handleAnalyzeSmells returned error: %s", textContent.Text)
+	}
 }

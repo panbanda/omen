@@ -118,13 +118,12 @@ There are three types of clones:
 <details>
 <summary><strong>Defect Prediction</strong> - The likelihood that a file contains bugs</summary>
 
-Omen combines multiple signals to predict defect probability:
+Omen combines multiple signals to predict defect probability using PMAT-weighted metrics:
 
-- Complexity (complex code = more bugs)
-- Churn (frequently changed code = more bugs)
-- Size (bigger files = more bugs)
-- Age (newer code = more bugs, counterintuitively)
-- Coupling (code with many dependencies = more bugs)
+- **Process** metrics (churn frequency, ownership diffusion)
+- **Metrics** (cyclomatic/cognitive complexity)
+- **Age** (code age and stability)
+- **Total** size (lines of code)
 
 Each file gets a risk score from 0% to 100%.
 
@@ -132,6 +131,34 @@ Each file gets a risk score from 0% to 100%.
 
 > [!TIP]
 > Prioritize code review for files with >70% defect probability.
+
+</details>
+
+<details>
+<summary><strong>Change Risk Analysis (JIT)</strong> - Predict which commits are likely to introduce bugs</summary>
+
+Just-in-Time (JIT) defect prediction analyzes recent commits to identify risky changes before they cause problems. Unlike file-level prediction, JIT operates at the commit level using factors from [Kamei et al. (2013)](https://ieeexplore.ieee.org/document/6341763):
+
+| Factor | Name | What it measures |
+|--------|------|------------------|
+| LA | Lines Added | More additions = more risk |
+| LD | Lines Deleted | Deletions are generally safer |
+| LT | Lines in Touched Files | Larger files = more risk |
+| FIX | Bug Fix | Bug fix commits indicate problematic areas |
+| NDEV | Number of Developers | More developers on files = more risk |
+| AGE | Average File Age | File stability indicator |
+| NUC | Unique Changes | Change entropy = higher risk |
+| EXP | Developer Experience | Less experience = more risk |
+
+Each commit gets a risk score from 0.0 to 1.0:
+- **High risk (>0.7)**: Prioritize careful review
+- **Medium risk (0.4-0.7)**: Worth extra attention
+- **Low risk (<0.4)**: Standard review process
+
+**Why it matters:** [Kamei et al. (2013)](https://ieeexplore.ieee.org/document/6341763) demonstrated that JIT prediction catches risky changes at commit time, before bugs propagate. [Zeng et al. (2021)](https://ieeexplore.ieee.org/document/9463091) showed that simple JIT models match deep learning accuracy (~65%) with better interpretability.
+
+> [!TIP]
+> Run `omen analyze changes` before merging PRs to identify commits needing extra review.
 
 </details>
 
@@ -332,7 +359,8 @@ Omen includes a Model Context Protocol (MCP) server that exposes all analyzers a
 - `analyze_deadcode` - Unused functions and variables
 - `analyze_churn` - Git file change frequency
 - `analyze_duplicates` - Code clones detection
-- `analyze_defect` - Defect probability prediction
+- `analyze_defect` - File-level defect probability (PMAT)
+- `analyze_changes` - Commit-level change risk (JIT)
 - `analyze_tdg` - Technical Debt Gradient scores
 - `analyze_graph` - Dependency graph generation
 - `analyze_hotspot` - High churn + complexity files
@@ -340,6 +368,7 @@ Omen includes a Model Context Protocol (MCP) server that exposes all analyzers a
 - `analyze_ownership` - Code ownership and bus factor
 - `analyze_cohesion` - CK OO metrics
 - `analyze_repo_map` - PageRank-ranked symbol map
+- `analyze_smells` - Architectural smell detection
 
 Each tool includes detailed descriptions with interpretation guidance, helping LLMs understand what metrics mean and when to use each analyzer.
 
@@ -403,8 +432,11 @@ omen analyze churn ./
 # Detect code clones
 omen analyze duplicates ./src
 
-# Predict defect probability
+# Predict file-level defect probability (PMAT)
 omen analyze defect ./src
+
+# Analyze recent commits for risk (JIT)
+omen analyze changes ./
 
 # Calculate TDG scores
 omen analyze tdg ./src
@@ -437,21 +469,23 @@ omen analyze cohesion ./src
 
 ### Analyzer Subcommands (`omen analyze <subcommand>`)
 
-| Subcommand          | Alias               | Description                                  |
-| ------------------- | ------------------- | -------------------------------------------- |
-| `complexity`        | `cx`                | Cyclomatic and cognitive complexity analysis |
-| `satd`              | `debt`              | Self-admitted technical debt detection       |
-| `deadcode`          | `dc`                | Unused code detection                        |
-| `churn`             | -                   | Git history analysis for file churn          |
-| `duplicates`        | `dup`               | Code clone detection                         |
-| `defect`            | `predict`           | Defect probability prediction                |
-| `tdg`               | -                   | Technical Debt Gradient scores               |
-| `graph`             | `dag`               | Dependency graph (Mermaid output)            |
-| `hotspot`           | `hs`                | Churn x complexity risk analysis             |
-| `temporal-coupling` | `tc`                | Temporal coupling detection                  |
-| `ownership`         | `own`, `bus-factor` | Code ownership and bus factor                |
-| `cohesion`          | `ck`                | CK object-oriented metrics                   |
-| `lint-hotspot`      | `lh`                | Lint violation density                       |
+| Subcommand          | Alias               | Description                                      |
+| ------------------- | ------------------- | ------------------------------------------------ |
+| `complexity`        | `cx`                | Cyclomatic and cognitive complexity analysis     |
+| `satd`              | `debt`              | Self-admitted technical debt detection           |
+| `deadcode`          | `dc`                | Unused code detection                            |
+| `churn`             | -                   | Git history analysis for file churn              |
+| `duplicates`        | `dup`               | Code clone detection                             |
+| `defect`            | `predict`           | File-level defect probability (PMAT)             |
+| `changes`           | `jit`               | Commit-level change risk analysis (Kamei et al.) |
+| `tdg`               | -                   | Technical Debt Gradient scores                   |
+| `graph`             | `dag`               | Dependency graph (Mermaid output)                |
+| `hotspot`           | `hs`                | Churn x complexity risk analysis                 |
+| `smells`            | -                   | Architectural smell detection                    |
+| `temporal-coupling` | `tc`                | Temporal coupling detection                      |
+| `ownership`         | `own`, `bus-factor` | Code ownership and bus factor                    |
+| `cohesion`          | `ck`                | CK object-oriented metrics                       |
+| `lint-hotspot`      | `lh`                | Lint violation density                           |
 
 ## Output Formats
 
@@ -590,21 +624,23 @@ claude mcp add omen -- omen mcp
 
 ### Available Tools
 
-| Tool                        | Description                                  |
-| --------------------------- | -------------------------------------------- |
-| `analyze_complexity`        | Cyclomatic and cognitive complexity analysis |
-| `analyze_satd`              | Self-admitted technical debt detection       |
-| `analyze_deadcode`          | Unused functions and variables               |
-| `analyze_churn`             | Git file change frequency                    |
-| `analyze_duplicates`        | Code clones and copy-paste detection         |
-| `analyze_defect`            | Defect probability prediction                |
-| `analyze_tdg`               | Technical Debt Gradient scores               |
-| `analyze_graph`             | Dependency graph generation                  |
-| `analyze_hotspot`           | High churn + high complexity files           |
-| `analyze_temporal_coupling` | Files that change together                   |
-| `analyze_ownership`         | Code ownership and bus factor                |
-| `analyze_cohesion`          | CK OO metrics (LCOM, WMC, CBO, DIT)          |
-| `analyze_repo_map`          | PageRank-ranked symbol map                   |
+| Tool                        | Description                                    |
+| --------------------------- | ---------------------------------------------- |
+| `analyze_complexity`        | Cyclomatic and cognitive complexity analysis   |
+| `analyze_satd`              | Self-admitted technical debt detection         |
+| `analyze_deadcode`          | Unused functions and variables                 |
+| `analyze_churn`             | Git file change frequency                      |
+| `analyze_duplicates`        | Code clones and copy-paste detection           |
+| `analyze_defect`            | File-level defect probability (PMAT)           |
+| `analyze_changes`           | Commit-level change risk (JIT/Kamei et al.)    |
+| `analyze_tdg`               | Technical Debt Gradient scores                 |
+| `analyze_graph`             | Dependency graph generation                    |
+| `analyze_hotspot`           | High churn + high complexity files             |
+| `analyze_smells`            | Architectural smells (cycles, hubs, god comps) |
+| `analyze_temporal_coupling` | Files that change together                     |
+| `analyze_ownership`         | Code ownership and bus factor                  |
+| `analyze_cohesion`          | CK OO metrics (LCOM, WMC, CBO, DIT)            |
+| `analyze_repo_map`          | PageRank-ranked symbol map                     |
 
 Each tool includes detailed descriptions with interpretation guidance, helping LLMs understand what metrics mean and when to use each analyzer.
 

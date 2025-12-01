@@ -910,7 +910,7 @@ func runDefectCmd(c *cli.Context) error {
 	return formatter.Output(table)
 }
 
-func jitCmd() *cli.Command {
+func changesCmd() *cli.Command {
 	flags := append(outputFlags(),
 		&cli.IntFlag{
 			Name:  "days",
@@ -928,15 +928,16 @@ func jitCmd() *cli.Command {
 		},
 	)
 	return &cli.Command{
-		Name:      "jit",
-		Usage:     "Just-in-Time defect prediction on recent commits (Kamei et al. 2013)",
+		Name:      "changes",
+		Aliases:   []string{"jit"},
+		Usage:     "Analyze recent changes for defect risk (Kamei et al. 2013)",
 		ArgsUsage: "[path]",
 		Flags:     flags,
-		Action:    runJITCmd,
+		Action:    runChangesCmd,
 	}
 }
 
-func runJITCmd(c *cli.Context) error {
+func runChangesCmd(c *cli.Context) error {
 	paths := getPaths(c)
 	days := c.Int("days")
 	topN := c.Int("top")
@@ -951,14 +952,14 @@ func runJITCmd(c *cli.Context) error {
 		return fmt.Errorf("invalid path: %w", err)
 	}
 
-	spinner := progress.NewSpinner("Analyzing recent commits...")
+	spinner := progress.NewSpinner("Analyzing recent changes...")
 	svc := analysis.New()
 	result, err := svc.AnalyzeJIT(absPath, analysis.JITOptions{
 		Days: days,
 	})
 	spinner.FinishSuccess()
 	if err != nil {
-		return fmt.Errorf("JIT analysis failed (is this a git repository?): %w", err)
+		return fmt.Errorf("changes analysis failed (is this a git repository?): %w", err)
 	}
 
 	if result.Summary.TotalCommits == 0 {
@@ -1008,7 +1009,7 @@ func runJITCmd(c *cli.Context) error {
 	}
 
 	table := output.NewTable(
-		fmt.Sprintf("JIT Defect Prediction (Last %d Days)", days),
+		fmt.Sprintf("Change Risk Analysis (Last %d Days)", days),
 		[]string{"Commit", "Author", "Message", "Risk Score", "Level"},
 		rows,
 		[]string{
@@ -2216,7 +2217,7 @@ func analyzeCmd() *cli.Command {
 			churnCmd(),
 			duplicatesCmd(),
 			defectCmd(),
-			jitCmd(),
+			changesCmd(),
 			tdgCmd(),
 			graphCmd(),
 			lintHotspotCmd(),

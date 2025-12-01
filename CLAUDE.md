@@ -77,9 +77,15 @@ Analyzer subcommands (`omen analyze <subcommand>`):
 - `deadcode` / `dc` - Unused code detection
 - `churn` - Git history analysis for file churn
 - `duplicates` / `dup` - Code clone detection
-- `defect` / `predict` - Defect probability using PMAT weights
+- `defect` / `predict` - File-level defect probability (PMAT weights)
+- `changes` / `jit` - Commit-level change risk analysis (Kamei et al. 2013)
 - `tdg` - Technical Debt Gradient scores
 - `graph` / `dag` - Dependency graph (Mermaid output)
+- `hotspot` / `hs` - High churn + high complexity files
+- `smells` - Architectural smell detection (cycles, hubs, god components)
+- `temporal-coupling` / `tc` - Files that change together
+- `ownership` / `own` - Code ownership and bus factor
+- `cohesion` / `ck` - CK object-oriented metrics
 - `lint-hotspot` / `lh` - Lint violation density
 
 **Global flags**: `--config`, `--verbose`, `--pprof`

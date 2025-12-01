@@ -127,7 +127,7 @@ func describeDefect() string {
 
 USE WHEN:
 - Prioritizing code review focus areas
-- Identifying high-risk code before releases
+- Identifying high-risk files before releases
 - Planning testing effort allocation
 - Making data-driven refactoring decisions
 
@@ -144,6 +144,40 @@ METRICS RETURNED:
 - Ranked list from highest to lowest risk
 
 Requires git repository for churn and ownership data.`
+}
+
+func describeChanges() string {
+	return `Analyzes recent changes for defect risk using Just-in-Time prediction (Kamei et al. 2013).
+
+USE WHEN:
+- Reviewing recent commits for bug risk before release
+- Identifying risky changes that need extra review
+- Prioritizing code review effort on high-risk commits
+- Understanding which types of changes introduce defects
+
+INTERPRETING RESULTS:
+- Risk score: 0-1, higher means more likely to introduce bugs
+- High risk (>0.7): commit should be carefully reviewed
+- Medium risk (0.4-0.7): worth extra attention
+- Low risk (<0.4): typical commit, standard review
+- Bug fix commits indicate prior defects in touched files
+
+JIT FACTORS (from Kamei et al. research):
+- LA (lines added): more lines = more risk
+- LD (lines deleted): fewer deletions is safer
+- LT (lines in touched files): larger files = more risk
+- FIX: bug fix commits indicate problematic areas
+- NDEV (developers on files): more developers = more risk
+- AGE (average file age): older files may be stable or legacy
+- NUC (unique changes): high entropy = higher risk
+- EXP (developer experience): less experience = more risk
+
+METRICS RETURNED:
+- Per-commit: hash, author, message, risk score, risk level
+- Risk factors breakdown for each commit
+- Summary: total commits, risk distribution, bug fix count
+
+Requires git repository. Analyzes commits within the specified time period.`
 }
 
 func describeTDG() string {
@@ -314,4 +348,44 @@ METRICS RETURNED:
 - Symbol type classification
 
 Useful for LLM context: shows which symbols matter most for understanding the codebase.`
+}
+
+func describeSmells() string {
+	return `Detects architectural smells: cycles, hubs, god components, and unstable dependencies.
+
+USE WHEN:
+- Auditing architecture before major refactoring
+- Finding structural problems that cause maintenance pain
+- Identifying components that violate design principles
+- Preparing architecture review documentation
+
+INTERPRETING RESULTS:
+Severity levels (critical > high > medium > low):
+
+CYCLIC DEPENDENCIES (critical):
+- Circular imports/dependencies between modules
+- Makes changes risky, testing difficult
+- Should be broken with dependency inversion
+
+HUB COMPONENTS (high):
+- High fan-in AND fan-out (connects everything)
+- Changes here affect many parts of the system
+- Consider splitting or using interfaces
+
+GOD COMPONENTS (high):
+- Extremely high coupling, does too much
+- Fan-in > threshold AND fan-out > threshold
+- Strong refactoring candidate
+
+UNSTABLE DEPENDENCIES (medium):
+- Stable module depends on unstable module
+- Violates Stable Dependencies Principle
+- Can cause cascading changes
+
+METRICS RETURNED:
+- Smells: type, severity, components involved, description
+- Summary: counts by type and severity
+- Components: specific files/modules with issues
+
+Thresholds are configurable (hub-threshold, god-fan-in, god-fan-out, instability-diff).`
 }
