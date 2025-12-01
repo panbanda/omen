@@ -131,6 +131,15 @@ type SmellsInput struct {
 	InstabilityDifference float64 `json:"instability_diff,omitempty" jsonschema:"Max instability difference for unstable dependency detection. Default 0.4."`
 }
 
+// FlagsInput adds feature flag detection options.
+type FlagsInput struct {
+	AnalyzeInput
+	Providers   []string `json:"providers,omitempty" jsonschema:"Filter by providers: launchdarkly, split, unleash, posthog, flipper. Default all."`
+	IncludeGit  bool     `json:"include_git,omitempty" jsonschema:"Include git history for staleness analysis. Default true."`
+	MinPriority string   `json:"min_priority,omitempty" jsonschema:"Filter by minimum priority: LOW, MEDIUM, HIGH, CRITICAL."`
+	Top         int      `json:"top,omitempty" jsonschema:"Show top N flags by priority. Default all."`
+}
+
 // Helper functions
 
 func getPaths(input AnalyzeInput) []string {
@@ -771,6 +780,64 @@ func handleAnalyzeSmells(ctx context.Context, req *mcp.CallToolRequest, input Sm
 	})
 	if err != nil {
 		return toolError(err.Error())
+	}
+
+	return toolResult(result, format)
+}
+
+func handleAnalyzeFlags(ctx context.Context, req *mcp.CallToolRequest, input FlagsInput) (*mcp.CallToolResult, any, error) {
+	paths := getPaths(input.AnalyzeInput)
+	format := getFormat(input.AnalyzeInput)
+
+	scanner := scannerSvc.New()
+	scanResult, err := scanner.ScanPaths(paths)
+	if err != nil {
+		return toolError(err.Error())
+	}
+
+	if len(scanResult.Files) == 0 {
+		return toolError("no source files found")
+	}
+
+	// Default include_git to true if not explicitly set
+	includeGit := true
+	if input.MinPriority != "" && !input.IncludeGit {
+		// Only disable if explicitly requested
+		includeGit = input.IncludeGit
+	}
+
+	svc := analysis.New()
+	result, err := svc.AnalyzeFeatureFlags(scanResult.Files, analysis.FeatureFlagOptions{
+		Providers:  input.Providers,
+		IncludeGit: includeGit,
+	})
+	if err != nil {
+		return toolError(err.Error())
+	}
+
+	// Filter by minimum priority if specified
+	if input.MinPriority != "" {
+		priorityOrder := map[string]int{
+			"LOW":      1,
+			"MEDIUM":   2,
+			"HIGH":     3,
+			"CRITICAL": 4,
+		}
+		minOrder := priorityOrder[input.MinPriority]
+		if minOrder > 0 {
+			var filtered []models.FlagAnalysis
+			for _, f := range result.Flags {
+				if priorityOrder[string(f.Priority.Level)] >= minOrder {
+					filtered = append(filtered, f)
+				}
+			}
+			result.Flags = filtered
+		}
+	}
+
+	// Limit to top N if specified
+	if input.Top > 0 && len(result.Flags) > input.Top {
+		result.Flags = result.Flags[:input.Top]
 	}
 
 	return toolResult(result, format)

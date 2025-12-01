@@ -33,6 +33,9 @@ type Config struct {
 
 	// Output settings
 	Output OutputConfig `koanf:"output"`
+
+	// Feature flag settings
+	FeatureFlags FeatureFlagConfig `koanf:"feature_flags"`
 }
 
 // AnalysisConfig controls which analyzers run.
@@ -96,6 +99,37 @@ type OutputConfig struct {
 	Format  string `koanf:"format"` // text, json, markdown
 	Color   bool   `koanf:"color"`
 	Verbose bool   `koanf:"verbose"`
+}
+
+// FeatureFlagConfig controls feature flag detection settings.
+type FeatureFlagConfig struct {
+	// Providers to detect (empty = all)
+	Providers []string `koanf:"providers"`
+
+	// Custom providers with inline query definitions
+	CustomProviders []CustomProviderConfig `koanf:"custom_providers"`
+
+	// Expected TTL settings (days)
+	ExpectedTTL FeatureFlagTTLConfig `koanf:"expected_ttl"`
+}
+
+// CustomProviderConfig defines a custom feature flag provider with query patterns.
+type CustomProviderConfig struct {
+	// Name of the custom provider (e.g., "feature", "custom-flipper")
+	Name string `koanf:"name"`
+
+	// Languages this provider applies to (e.g., ["ruby", "javascript"])
+	Languages []string `koanf:"languages"`
+
+	// Tree-sitter query pattern (.scm format)
+	// Must capture @flag_key for the flag name
+	Query string `koanf:"query"`
+}
+
+// FeatureFlagTTLConfig defines expected time-to-live settings.
+type FeatureFlagTTLConfig struct {
+	Release    int `koanf:"release"`    // days, default 14
+	Experiment int `koanf:"experiment"` // days, default 90
 }
 
 // DefaultConfig returns a config with sensible defaults.
@@ -171,6 +205,14 @@ func DefaultConfig() *Config {
 			Format:  "text",
 			Color:   true,
 			Verbose: false,
+		},
+		FeatureFlags: FeatureFlagConfig{
+			Providers:       []string{}, // empty = all providers
+			CustomProviders: []CustomProviderConfig{},
+			ExpectedTTL: FeatureFlagTTLConfig{
+				Release:    14,
+				Experiment: 90,
+			},
 		},
 	}
 }

@@ -389,3 +389,46 @@ METRICS RETURNED:
 
 Thresholds are configurable (hub-threshold, god-fan-in, god-fan-out, instability-diff).`
 }
+
+func describeFlags() string {
+	return `Detects feature flags in source code and analyzes them for staleness and cleanup priority.
+
+USE WHEN:
+- Auditing feature flag usage before cleanup sprints
+- Finding stale flags that should be removed
+- Identifying complex flag implementations
+- Planning feature flag debt remediation
+
+SUPPORTED PROVIDERS:
+- LaunchDarkly (JS/TS, Python, Go, Java)
+- Split.io (JS/TS, Python, Go)
+- Unleash (JS/TS, Go)
+- PostHog (JS/TS, Python, Go, Java, Ruby)
+- Flipper (Ruby)
+
+INTERPRETING RESULTS:
+Priority levels (CRITICAL > HIGH > MEDIUM > LOW):
+- CRITICAL: Very stale (>90 days) + high complexity
+- HIGH: Stale flags (>30 days) or high file spread
+- MEDIUM: Moderate staleness or complexity
+- LOW: Recent flags with low complexity
+
+COMPLEXITY METRICS:
+- FileSpread: Number of files containing flag references
+- MaxNestingDepth: Deepest conditional nesting level
+- DecisionPoints: Total flag check locations
+- CoupledFlags: Other flags used in same conditionals
+
+STALENESS METRICS (requires git):
+- DaysSinceIntro: Days since flag first appeared
+- DaysSinceModified: Days since last flag-related change
+- Authors: Contributors who touched the flag
+- StalenessScore: 0-1 score, higher = more stale
+
+METRICS RETURNED:
+- Per-flag: key, provider, references, complexity, staleness, priority
+- Summary: total flags, by priority, by provider, avg file spread
+- References: file locations with line numbers
+
+Use git history for accurate staleness analysis. Disable with include_git=false for faster results.`
+}

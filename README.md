@@ -349,6 +349,52 @@ For each symbol, the map includes:
 </details>
 
 <details>
+<summary><strong>Feature Flag Detection</strong> - Find and track feature flags across your codebase</summary>
+
+Feature flags are powerful but dangerous. They let you ship code without enabling it, run A/B tests, and roll out features gradually. But they accumulate. That "temporary" flag from 2019 is still in production. The flag you added for a one-week experiment is now load-bearing infrastructure.
+
+Omen detects feature flag usage across popular providers:
+
+| Provider | Languages | What it finds |
+|----------|-----------|---------------|
+| LaunchDarkly | JS/TS, Python, Go, Java, Ruby | `variation()`, `boolVariation()` calls |
+| Split | JS/TS, Python, Go, Java, Ruby | `getTreatment()` calls |
+| Unleash | JS/TS, Python, Go, Java, Ruby | `isEnabled()`, `getVariant()` calls |
+| PostHog | JS/TS, Python, Go, Ruby | `isFeatureEnabled()`, `getFeatureFlag()` calls |
+| Flipper | Ruby | `enabled?()`, `Flipper.enabled?()` calls |
+
+For each flag, Omen reports:
+- **Flag key** - The identifier used in code
+- **Provider** - Which SDK is being used
+- **References** - All locations where the flag is checked
+- **Staleness** - When the flag was first and last modified (with git history)
+
+**Custom providers:** For in-house feature flag systems, define custom tree-sitter queries in your `omen.toml`:
+
+```toml
+[[feature_flags.custom_providers]]
+name = "feature"
+languages = ["ruby"]
+query = '''
+(call
+  receiver: (constant) @receiver
+  (#eq? @receiver "Feature")
+  method: (identifier) @method
+  (#match? @method "^(enabled\\?|get_feature_flag)$")
+  arguments: (argument_list
+    .
+    (simple_symbol) @flag_key))
+'''
+```
+
+**Why it matters:** [Meinicke et al. (2020)](https://dl.acm.org/doi/10.1145/3377811.3380377) studied feature flag debt at companies like Google and Microsoft, finding that stale flags cause configuration complexity, testing overhead, and dead code accumulation. [Rahman et al. (2016)](https://ieeexplore.ieee.org/document/7816485) found that feature flag code has 1.3x more defects than regular code due to complex conditional logic. Regular flag audits prevent your codebase from becoming a maze of unused toggles.
+
+> [!TIP]
+> Audit feature flags monthly. Remove flags older than 90 days for experiments, 14 days for release flags. Track flag staleness in your CI pipeline.
+
+</details>
+
+<details>
 <summary><strong>MCP Server</strong> - LLM tool integration via Model Context Protocol</summary>
 
 Omen includes a Model Context Protocol (MCP) server that exposes all analyzers as tools for LLMs like Claude. This enables AI assistants to analyze codebases directly through standardized tool calls.
@@ -369,6 +415,7 @@ Omen includes a Model Context Protocol (MCP) server that exposes all analyzers a
 - `analyze_cohesion` - CK OO metrics
 - `analyze_repo_map` - PageRank-ranked symbol map
 - `analyze_smells` - Architectural smell detection
+- `analyze_flags` - Feature flag detection and staleness
 
 Each tool includes detailed descriptions with interpretation guidance, helping LLMs understand what metrics mean and when to use each analyzer.
 
@@ -455,6 +502,9 @@ omen analyze ownership ./src
 
 # Calculate CK cohesion metrics
 omen analyze cohesion ./src
+
+# Detect feature flags
+omen analyze flags ./src
 ```
 
 ## Commands
@@ -486,6 +536,7 @@ omen analyze cohesion ./src
 | `ownership`         | `own`, `bus-factor` | Code ownership and bus factor                    |
 | `cohesion`          | `ck`                | CK object-oriented metrics                       |
 | `lint-hotspot`      | `lh`                | Lint violation density                           |
+| `flags`             | `ff`                | Feature flag detection and staleness analysis    |
 
 ## Output Formats
 
@@ -582,6 +633,18 @@ omen analyze ownership ./src --top 20
 omen analyze cohesion ./src --sort lcom
 ```
 
+### Find Stale Feature Flags
+
+```bash
+omen analyze flags ./src --provider launchdarkly
+```
+
+### Feature Flags with Custom Provider
+
+```bash
+omen analyze flags ./src --config omen.toml --provider feature
+```
+
 ## MCP Server
 
 Omen includes a Model Context Protocol (MCP) server that exposes all analyzers as tools for LLMs like Claude. This enables AI assistants to analyze codebases directly.
@@ -641,6 +704,7 @@ claude mcp add omen -- omen mcp
 | `analyze_ownership`         | Code ownership and bus factor                  |
 | `analyze_cohesion`          | CK OO metrics (LCOM, WMC, CBO, DIT)            |
 | `analyze_repo_map`          | PageRank-ranked symbol map                     |
+| `analyze_flags`             | Feature flag detection and staleness analysis  |
 
 Each tool includes detailed descriptions with interpretation guidance, helping LLMs understand what metrics mean and when to use each analyzer.
 
@@ -652,6 +716,7 @@ Once configured, you can ask Claude:
 - "Find technical debt in the src directory"
 - "What are the hotspot files that need refactoring?"
 - "Show me the bus factor risk for this project"
+- "Find stale feature flags that should be removed"
 
 ## Claude Code Skills
 

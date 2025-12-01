@@ -126,4 +126,10 @@ func (s *Server) registerTools() {
 		Name:        "analyze_changes",
 		Description: describeChanges(),
 	}, handleAnalyzeChanges)
+
+	// Feature flag detection
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name:        "analyze_flags",
+		Description: describeFlags(),
+	}, handleAnalyzeFlags)
 }
