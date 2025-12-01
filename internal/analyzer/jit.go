@@ -144,13 +144,13 @@ func (a *JITAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath strin
 	}
 	defer logIter.Close()
 
-	// Track author experience and file history
-	authorCommits := make(map[string]int)           // author -> total commits
-	fileChanges := make(map[string]int)             // file -> total commits
-	fileAuthors := make(map[string]map[string]bool) // file -> set of authors
-
-	// First pass: collect features from commits
-	var commits []models.CommitFeatures
+	// First pass: collect raw commit data (git log returns newest-first)
+	// We collect commit-local data here; state-dependent fields are computed in second pass.
+	type rawCommit struct {
+		features     models.CommitFeatures
+		linesPerFile map[string]int // for entropy calculation
+	}
+	var rawCommits []rawCommit
 
 	err = logIter.ForEach(func(commit vcs.Commit) error {
 		select {
@@ -187,21 +187,20 @@ func (a *JITAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath strin
 			return nil
 		}
 
-		// Extract features
+		// Extract commit-local features (no state dependencies)
 		features := models.CommitFeatures{
-			CommitHash:       commit.Hash().String(),
-			Author:           author,
-			Message:          truncateMessage(message),
-			Timestamp:        commit.Author().When,
-			IsFix:            isBugFixCommit(message),
-			IsAutomated:      isAutomatedCommit(message),
-			FilesModified:    make([]string, 0),
-			AuthorExperience: authorCommits[author],
+			CommitHash:    commit.Hash().String(),
+			Author:        author,
+			Message:       truncateMessage(message),
+			Timestamp:     commit.Author().When,
+			IsFix:         isBugFixCommit(message),
+			IsAutomated:   isAutomatedCommit(message),
+			FilesModified: make([]string, 0),
+			// State-dependent fields (AuthorExperience, NumDevelopers, UniqueChanges)
+			// are computed in the second pass after sorting by timestamp
 		}
 
 		linesPerFile := make(map[string]int)
-		uniqueDevs := make(map[string]bool)
-		priorCommits := 0
 
 		for _, change := range changes {
 			filePath := change.ToName()
@@ -229,26 +228,62 @@ func (a *JITAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath strin
 					}
 				}
 			}
+		}
 
-			// Track unique changes (prior commits to this file)
+		features.NumFiles = len(features.FilesModified)
+		features.Entropy = models.CalculateEntropy(linesPerFile)
+
+		rawCommits = append(rawCommits, rawCommit{
+			features:     features,
+			linesPerFile: linesPerFile,
+		})
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Reverse to process oldest-first (git log returns newest-first)
+	// This ensures state-dependent metrics are calculated correctly.
+	// We reverse rather than sort because timestamps may have coarse granularity
+	// (e.g., second precision), making sort unstable for rapid commits.
+	for i, j := 0, len(rawCommits)-1; i < j; i, j = i+1, j-1 {
+		rawCommits[i], rawCommits[j] = rawCommits[j], rawCommits[i]
+	}
+
+	// Second pass: compute state-dependent features in chronological order
+	// State is looked up BEFORE processing each commit, then updated AFTER
+	authorCommits := make(map[string]int)           // author -> commits made BEFORE this one
+	fileChanges := make(map[string]int)             // file -> commits touching it BEFORE this one
+	fileAuthors := make(map[string]map[string]bool) // file -> authors who touched it BEFORE this one
+
+	var commits []models.CommitFeatures
+	for _, raw := range rawCommits {
+		features := raw.features
+		author := features.Author
+
+		// Look up state BEFORE this commit
+		features.AuthorExperience = authorCommits[author]
+
+		// Calculate NumDevelopers and UniqueChanges from state BEFORE this commit
+		uniqueDevs := make(map[string]bool)
+		priorCommits := 0
+		for _, filePath := range features.FilesModified {
 			priorCommits += fileChanges[filePath]
-
-			// Track unique developers
 			if authors, ok := fileAuthors[filePath]; ok {
 				for auth := range authors {
 					uniqueDevs[auth] = true
 				}
 			}
 		}
-
-		features.NumFiles = len(features.FilesModified)
-		features.UniqueChanges = priorCommits
 		features.NumDevelopers = len(uniqueDevs)
-		features.Entropy = models.CalculateEntropy(linesPerFile)
+		features.UniqueChanges = priorCommits
 
 		commits = append(commits, features)
 
-		// Update tracking for future commits
+		// Update state AFTER processing this commit (for future commits)
 		authorCommits[author]++
 		for _, file := range features.FilesModified {
 			fileChanges[file]++
@@ -257,12 +292,6 @@ func (a *JITAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath strin
 			}
 			fileAuthors[file][author] = true
 		}
-
-		return nil
-	})
-
-	if err != nil {
-		return nil, err
 	}
 
 	// Build analysis result
