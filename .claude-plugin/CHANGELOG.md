@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/panbanda/omen/compare/omen-skills-v1.2.1...omen-skills-v1.3.0) (2025-12-02)
+
+
+### Features
+
+* **skills:** trigger minor version bump ([#127](https://github.com/panbanda/omen/issues/127)) ([4a72df4](https://github.com/panbanda/omen/commit/4a72df486ab93770bfa27753e381a3f25ff48466))
+
 ## [1.2.1](https://github.com/panbanda/omen/compare/omen-skills-v1.2.0...omen-skills-v1.2.1) (2025-12-02)
 
 
