@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.1](https://github.com/panbanda/omen/compare/omen-v1.4.0...omen-v1.4.1) (2025-12-02)
+
+
+### Bug Fixes
+
+* **ci:** add --repo flag to gh release download in mcp-registry job ([ffabb4a](https://github.com/panbanda/omen/commit/ffabb4a7ee313a1cfa64399fdce3a8e68637cf49))
+
 ## [1.4.0](https://github.com/panbanda/omen/compare/omen-v1.3.2...omen-v1.4.0) (2025-12-02)
 
 
