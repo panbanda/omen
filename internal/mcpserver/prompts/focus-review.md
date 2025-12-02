@@ -1,7 +1,7 @@
 ---
-name: code-review-focus
-title: Code Review Focus
-description: Identify what to focus on when reviewing code changes - complexity deltas, duplication, and risk assessment
+name: focus-review
+title: Focus Review
+description: Identify high-priority areas to focus on during code review. Use when reviewing large PRs, preparing code for review, or prioritizing review effort based on complexity and risk.
 arguments:
   - name: changed_files
     description: Comma-separated list of changed files to review
@@ -29,7 +29,18 @@ Focus your review effort on the highest-risk areas of these changes: {{.changed_
 
 ## Workflow
 
-### Step 1: Complexity Analysis
+### Step 1: Commit Risk Analysis (JIT)
+```
+analyze_changes:
+  paths: {{.paths}}
+  days: {{.days}}
+  high_risk_only: false
+```
+Score commits using Just-In-Time defect prediction (Kamei et al. 2013).
+Factors: lines changed, files touched, fix patterns, author experience, entropy.
+High-risk commits (>0.7) need senior review.
+
+### Step 2: Complexity Analysis
 ```
 analyze_complexity:
   paths: [{{.changed_files}}]
@@ -37,14 +48,14 @@ analyze_complexity:
 ```
 Check if changes increased complexity. Flag functions exceeding thresholds.
 
-### Step 2: Defect Risk Assessment
+### Step 3: Defect Risk Assessment
 ```
 analyze_defect:
   paths: [{{.changed_files}}]
 ```
 Check if changes touched high-risk files. Higher scrutiny needed.
 
-### Step 3: Duplication Detection
+### Step 5: Duplication Detection
 ```
 analyze_duplicates:
   paths: {{.paths}}
@@ -53,7 +64,7 @@ analyze_duplicates:
 ```
 Check if changes introduced code clones. Suggest extraction.
 
-### Step 4: Dead Code Check
+### Step 6: Dead Code Check
 ```
 analyze_deadcode:
   paths: [{{.changed_files}}]
@@ -61,7 +72,7 @@ analyze_deadcode:
 ```
 Check if changes orphaned any code that should be removed.
 
-### Step 5: SATD Markers
+### Step 7: SATD Markers
 ```
 analyze_satd:
   paths: [{{.changed_files}}]
@@ -69,7 +80,7 @@ analyze_satd:
 ```
 Check for new TODO/FIXME/HACK markers. Should be justified.
 
-### Step 6: Dependency Impact
+### Step 8: Dependency Impact
 ```
 analyze_graph:
   paths: {{.paths}}
@@ -82,6 +93,7 @@ Understand what depends on the changed code.
 
 | Finding | Priority | Action |
 |---------|----------|--------|
+| Commit risk > 0.7 | Critical | Senior review required |
 | Cognitive complexity +10 | Critical | Request simplification |
 | New code in high-risk file | Critical | Extra scrutiny |
 | Introduced duplication >20 lines | High | Suggest extraction |

@@ -1,19 +1,11 @@
 ---
-name: test-targeting
-description: |
-  Identify which files and functions most need additional test coverage based on risk, complexity, and churn. Use this skill when prioritizing test writing efforts or improving coverage strategically.
+name: target-tests
+description: Identify files and functions most needing test coverage based on risk, complexity, and churn. Use when prioritizing test writing or improving coverage strategically.
 ---
 
-# Test Targeting
+# Target Tests
 
 Identify the highest-value targets for additional test coverage by combining risk, complexity, and behavioral signals.
-
-## When to Use
-
-- Prioritizing test writing efforts
-- Improving coverage strategically (not just for metrics)
-- Identifying undertested risky code
-- Planning a testing sprint
 
 ## Prerequisites
 

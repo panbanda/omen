@@ -1,19 +1,11 @@
 ---
-name: quality-gate
-description: |
-  Perform a quality gate check against configurable thresholds for TDG grade, complexity, duplication, and defect risk. Use this skill for CI/CD integration, release readiness checks, or enforcing quality standards.
+name: check-quality
+description: Check code quality against thresholds for complexity, duplication, and defect risk. Use for pre-merge quality checks, release readiness validation, or enforcing team standards.
 ---
 
-# Quality Gate
+# Check Quality
 
 Perform a pass/fail quality gate check against configurable thresholds to enforce code quality standards.
-
-## When to Use
-
-- Pre-merge quality checks
-- Release readiness validation
-- CI/CD pipeline integration
-- Enforcing team quality standards
 
 ## Prerequisites
 

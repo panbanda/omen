@@ -1,19 +1,11 @@
 ---
-name: refactoring-priority
-description: |
-  Identify highest-priority refactoring targets based on TDG scores, complexity, code clones, and technical debt markers. Use this skill when planning refactoring work, prioritizing tech debt reduction, or deciding what to clean up first.
+name: plan-refactoring
+description: Identify highest-priority refactoring targets based on TDG scores, complexity, and code clones. Use when planning refactoring work, prioritizing tech debt, or finding quick wins for code quality.
 ---
 
-# Refactoring Priority
+# Plan Refactoring
 
 Identify the highest-value refactoring targets by combining multiple code quality signals into a prioritized list.
-
-## When to Use
-
-- Planning a refactoring sprint
-- Deciding which tech debt to address first
-- Justifying refactoring work with data
-- Finding quick wins for code quality improvement
 
 ## Prerequisites
 

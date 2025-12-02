@@ -1,7 +1,7 @@
 ---
-name: bug-hunt
-title: Bug Hunt
-description: Find likely bug locations using defect prediction, hotspot analysis, and ownership patterns
+name: find-bugs
+title: Find Bugs
+description: Locate likely bug locations using defect prediction, hotspot analysis, and temporal coupling. Use when investigating bugs with unclear location, reviewing high-risk code, or prioritizing where to look first.
 arguments:
   - name: paths
     description: Paths to analyze

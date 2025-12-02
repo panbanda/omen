@@ -1,19 +1,11 @@
 ---
-name: code-review-focus
-description: |
-  Identify what to focus on when reviewing code changes, including complexity deltas, duplication, and risk assessment. Use this skill when reviewing pull requests or preparing code for review.
+name: focus-review
+description: Identify high-priority areas to focus on during code review. Use when reviewing large PRs, preparing code for review, or prioritizing review effort based on complexity and risk.
 ---
 
-# Code Review Focus
+# Focus Review
 
-Identify the highest-priority areas to focus on during code review by analyzing complexity, duplication, and risk signals.
-
-## When to Use
-
-- Reviewing a pull request
-- Preparing code for review
-- Prioritizing review effort on large PRs
-- Identifying potential issues before merge
+Identify the highest-priority areas to focus on during code review by analyzing commit risk, complexity, duplication, and defect signals.
 
 ## Prerequisites
 
@@ -32,7 +24,24 @@ Omen must be available as an MCP server. Add to Claude Code settings:
 
 ## Workflow
 
-### Step 1: Analyze Changed File Complexity
+### Step 1: Analyze Commit Risk (JIT)
+
+Use the `analyze_changes` tool to score commit risk:
+
+```
+analyze_changes(paths: ["."], days: 90)
+```
+
+JIT defect prediction (Kamei et al. 2013) scores commits based on:
+- Lines added/deleted
+- Files touched
+- Fix patterns in commit message
+- Author experience on these files
+- Entropy of changes
+
+High-risk commits (>0.7) need senior review.
+
+### Step 2: Analyze Changed File Complexity
 
 Use the `analyze_complexity` tool on the changed files:
 
@@ -45,7 +54,7 @@ Look for:
 - Functions with cognitive complexity > 15
 - Large increases from previous version
 
-### Step 2: Check for New Duplicates
+### Step 3: Check for New Duplicates
 
 Use the `analyze_duplicates` tool to find introduced clones:
 
@@ -55,7 +64,7 @@ analyze_duplicates(paths: ["."])
 
 Review if the PR introduces code that duplicates existing code.
 
-### Step 3: Check for Dead Code
+### Step 4: Check for Dead Code
 
 Use the `analyze_deadcode` tool to find unused code:
 
@@ -65,7 +74,7 @@ analyze_deadcode(paths: ["."])
 
 Catch dead code before it's merged.
 
-### Step 4: Assess Risk
+### Step 5: Assess File Risk
 
 Use the `analyze_defect` tool to check risk level:
 
@@ -74,6 +83,16 @@ analyze_defect(paths: ["path/to/changed/files"])
 ```
 
 Higher defect probability = more scrutiny needed.
+
+### Step 6: Check for New Tech Debt
+
+Use the `analyze_satd` tool:
+
+```
+analyze_satd(paths: ["path/to/changed/files"])
+```
+
+New TODO/FIXME/HACK markers should be justified or have tickets.
 
 ## Review Priority Matrix
 
