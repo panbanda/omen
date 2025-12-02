@@ -6,12 +6,13 @@ import (
 )
 
 // Manifest represents the MCP server manifest (server.json) format.
+// Uses schema version 2025-10-17 with camelCase field names.
 type Manifest struct {
 	Schema        string         `json:"$schema"`
 	Name          string         `json:"name"`
 	Description   string         `json:"description"`
 	Repository    Repository     `json:"repository"`
-	VersionDetail VersionDetail  `json:"version_detail"`
+	VersionDetail VersionDetail  `json:"versionDetail"`
 	Packages      []Package      `json:"packages"`
 	Remotes       []any          `json:"remotes"`
 	Tools         []ManifestTool `json:"tools"`
@@ -31,10 +32,10 @@ type VersionDetail struct {
 
 // Package describes how to install/run the MCP server.
 type Package struct {
-	RegistryType         string    `json:"registry_type"`
+	RegistryType         string    `json:"registryType"`
 	Name                 string    `json:"name"`
 	Version              string    `json:"version"`
-	EnvironmentVariables []string  `json:"environment_variables"`
+	EnvironmentVariables []string  `json:"environmentVariables"`
 	Transport            Transport `json:"transport"`
 }
 
@@ -102,7 +103,7 @@ func GenerateManifest(version string) ([]byte, error) {
 	}
 
 	manifest := Manifest{
-		Schema:      "https://raw.githubusercontent.com/modelcontextprotocol/registry/refs/heads/main/schemas/server-manifest.json",
+		Schema:      "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
 		Name:        "io.github.panbanda/omen",
 		Description: "Multi-language code analysis tools for complexity, technical debt, hotspots, ownership, and defect prediction",
 		Repository: Repository{
