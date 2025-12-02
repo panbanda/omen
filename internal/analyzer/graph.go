@@ -64,9 +64,12 @@ func NewGraphAnalyzer(opts ...GraphOption) *GraphAnalyzer {
 
 // fileGraphData holds parsed graph data for a single file.
 type fileGraphData struct {
-	nodes   []models.GraphNode
-	imports []string
-	calls   map[string][]string // nodeID -> called functions
+	nodes     []models.GraphNode
+	imports   []string
+	calls     map[string][]string // nodeID -> called functions
+	classes   []string            // class/module names defined in this file
+	classRefs []string            // class/constant references (for Ruby/Python)
+	language  parser.Language
 }
 
 // AnalyzeProject builds a dependency graph for a project.
@@ -87,7 +90,11 @@ func (a *GraphAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress fi
 	// Build index for O(1) function name lookup: funcName -> []nodeID
 	funcNameIndex := make(map[string][]string)
 
-	// Collect all nodes and build index
+	// Build class-to-file index for Ruby/Python dependency resolution
+	// Maps class/module name -> file path
+	classToFile := make(map[string]string)
+
+	// Collect all nodes and build indices
 	for _, fd := range fileData {
 		for _, node := range fd.nodes {
 			if !nodeMap[node.ID] {
@@ -103,6 +110,14 @@ func (a *GraphAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress fi
 				}
 			}
 		}
+
+		// Build class-to-file index from class definitions
+		if len(fd.nodes) > 0 {
+			filePath := fd.nodes[0].ID
+			for _, className := range fd.classes {
+				classToFile[className] = filePath
+			}
+		}
 	}
 
 	// Build edges using collected data
@@ -110,6 +125,7 @@ func (a *GraphAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress fi
 	for _, fd := range fileData {
 		switch a.scope {
 		case ScopeFile:
+			// Traditional import-based edges
 			for _, imp := range fd.imports {
 				for targetPath := range nodeMap {
 					if matchesImport(targetPath, imp) {
@@ -118,6 +134,22 @@ func (a *GraphAnalyzer) AnalyzeProjectWithProgress(files []string, onProgress fi
 							From: fd.nodes[0].ID,
 							To:   targetPath,
 							Type: models.EdgeImport,
+						})
+						mu.Unlock()
+					}
+				}
+			}
+
+			// Class reference-based edges (for Ruby, Python, etc.)
+			if len(fd.classRefs) > 0 && len(fd.nodes) > 0 {
+				sourceFile := fd.nodes[0].ID
+				for _, classRef := range fd.classRefs {
+					if targetFile, ok := classToFile[classRef]; ok && targetFile != sourceFile {
+						mu.Lock()
+						graph.AddEdge(models.GraphEdge{
+							From: sourceFile,
+							To:   targetFile,
+							Type: models.EdgeReference,
 						})
 						mu.Unlock()
 					}
@@ -162,7 +194,8 @@ func (a *GraphAnalyzer) analyzeFileGraph(psr *parser.Parser, path string) (fileG
 	}
 
 	fd := fileGraphData{
-		calls: make(map[string][]string),
+		calls:    make(map[string][]string),
+		language: result.Language,
 	}
 
 	switch a.scope {
@@ -174,6 +207,11 @@ func (a *GraphAnalyzer) analyzeFileGraph(psr *parser.Parser, path string) (fileG
 			File: path,
 		})
 		fd.imports = extractImports(result)
+
+		// For Ruby/Python, extract class definitions and references
+		if result.Language == parser.LangRuby || result.Language == parser.LangPython {
+			fd.classes, fd.classRefs = extractClassDependencies(result)
+		}
 
 	case ScopeFunction:
 		functions := parser.GetFunctions(result)
@@ -375,6 +413,251 @@ func extractCalls(body *sitter.Node, source []byte) []string {
 func matchesImport(filePath, importPath string) bool {
 	return filePath != importPath &&
 		(strings.Contains(filePath, importPath) || strings.Contains(importPath, filePath))
+}
+
+// extractClassDependencies extracts class/module definitions and references for Ruby/Python.
+// Returns (defined classes, referenced classes).
+func extractClassDependencies(result *parser.ParseResult) ([]string, []string) {
+	var defined []string
+	refsSet := make(map[string]bool)
+	definedSet := make(map[string]bool)
+	root := result.Tree.RootNode()
+
+	switch result.Language {
+	case parser.LangRuby:
+		defined, definedSet = extractRubyClassDefinitions(root, result.Source)
+		extractRubyClassReferences(root, result.Source, refsSet, definedSet)
+
+	case parser.LangPython:
+		defined, definedSet = extractPythonClassDefinitions(root, result.Source)
+		extractPythonClassReferences(root, result.Source, refsSet, definedSet)
+	}
+
+	// Convert refs set to slice, excluding self-references
+	var refs []string
+	for ref := range refsSet {
+		if !definedSet[ref] {
+			refs = append(refs, ref)
+		}
+	}
+
+	return defined, refs
+}
+
+// extractRubyClassDefinitions extracts class and module names defined in a Ruby file.
+func extractRubyClassDefinitions(root *sitter.Node, source []byte) ([]string, map[string]bool) {
+	var classes []string
+	classSet := make(map[string]bool)
+
+	parser.Walk(root, source, func(node *sitter.Node, src []byte) bool {
+		nodeType := node.Type()
+		if nodeType == "class" || nodeType == "module" {
+			// Find the constant (class/module name) child
+			for i := 0; i < int(node.ChildCount()); i++ {
+				child := node.Child(i)
+				if child.Type() == "constant" {
+					name := parser.GetNodeText(child, src)
+					if name != "" && !classSet[name] {
+						classes = append(classes, name)
+						classSet[name] = true
+					}
+					break
+				}
+				// Handle namespaced class: class Foo::Bar
+				if child.Type() == "scope_resolution" {
+					name := extractFullConstantName(child, src)
+					if name != "" && !classSet[name] {
+						classes = append(classes, name)
+						classSet[name] = true
+					}
+					break
+				}
+			}
+		}
+		return true
+	})
+
+	return classes, classSet
+}
+
+// extractRubyClassReferences finds class/constant references in Ruby code.
+func extractRubyClassReferences(root *sitter.Node, source []byte, refs map[string]bool, defined map[string]bool) {
+	parser.Walk(root, source, func(node *sitter.Node, src []byte) bool {
+		nodeType := node.Type()
+
+		switch nodeType {
+		case "superclass":
+			// Inheritance: class Foo < Bar
+			for i := 0; i < int(node.ChildCount()); i++ {
+				child := node.Child(i)
+				if child.Type() == "constant" {
+					refs[parser.GetNodeText(child, src)] = true
+				} else if child.Type() == "scope_resolution" {
+					refs[extractFullConstantName(child, src)] = true
+				}
+			}
+
+		case "call":
+			// Check for include/extend/prepend
+			var methodName string
+			for i := 0; i < int(node.ChildCount()); i++ {
+				child := node.Child(i)
+				if child.Type() == "identifier" && i == 0 {
+					methodName = parser.GetNodeText(child, src)
+					break
+				}
+			}
+
+			if methodName == "include" || methodName == "extend" || methodName == "prepend" {
+				// Find the argument list and extract constants
+				for i := 0; i < int(node.ChildCount()); i++ {
+					child := node.Child(i)
+					if child.Type() == "argument_list" {
+						extractConstantsFromNode(child, src, refs)
+					}
+				}
+			} else {
+				// Method call on a constant: PaymentService.charge
+				for i := 0; i < int(node.ChildCount()); i++ {
+					child := node.Child(i)
+					if child.Type() == "constant" && i == 0 {
+						refs[parser.GetNodeText(child, src)] = true
+						break
+					}
+					if child.Type() == "scope_resolution" && i == 0 {
+						refs[extractFullConstantName(child, src)] = true
+						break
+					}
+				}
+			}
+
+		case "constant":
+			// Standalone constant reference (but skip if it's part of a class/module definition)
+			parent := node.Parent()
+			if parent != nil {
+				parentType := parent.Type()
+				// Skip constants that are class/module names being defined
+				if parentType == "class" || parentType == "module" {
+					// Check if this constant is the name being defined (first constant child)
+					for i := 0; i < int(parent.ChildCount()); i++ {
+						child := parent.Child(i)
+						if child.Type() == "constant" {
+							if child == node {
+								return true // Skip - this is the definition
+							}
+							break
+						}
+					}
+				}
+			}
+			refs[parser.GetNodeText(node, src)] = true
+		}
+
+		return true
+	})
+}
+
+// extractPythonClassDefinitions extracts class names defined in a Python file.
+func extractPythonClassDefinitions(root *sitter.Node, source []byte) ([]string, map[string]bool) {
+	var classes []string
+	classSet := make(map[string]bool)
+
+	parser.Walk(root, source, func(node *sitter.Node, src []byte) bool {
+		if node.Type() == "class_definition" {
+			if nameNode := node.ChildByFieldName("name"); nameNode != nil {
+				name := parser.GetNodeText(nameNode, src)
+				if name != "" && !classSet[name] {
+					classes = append(classes, name)
+					classSet[name] = true
+				}
+			}
+		}
+		return true
+	})
+
+	return classes, classSet
+}
+
+// extractPythonClassReferences finds class references in Python code.
+func extractPythonClassReferences(root *sitter.Node, source []byte, refs map[string]bool, defined map[string]bool) {
+	parser.Walk(root, source, func(node *sitter.Node, src []byte) bool {
+		nodeType := node.Type()
+
+		switch nodeType {
+		case "class_definition":
+			// Check for base classes
+			if basesNode := node.ChildByFieldName("superclasses"); basesNode != nil {
+				extractIdentifiersFromNode(basesNode, src, refs)
+			}
+
+		case "call":
+			// Class instantiation or method call: MyClass() or MyClass.method()
+			if fnNode := node.ChildByFieldName("function"); fnNode != nil {
+				// Direct call: MyClass()
+				if fnNode.Type() == "identifier" {
+					name := parser.GetNodeText(fnNode, src)
+					// Heuristic: class names start with uppercase
+					if len(name) > 0 && name[0] >= 'A' && name[0] <= 'Z' {
+						refs[name] = true
+					}
+				}
+				// Attribute access: module.MyClass()
+				if fnNode.Type() == "attribute" {
+					if attrNode := fnNode.ChildByFieldName("attribute"); attrNode != nil {
+						name := parser.GetNodeText(attrNode, src)
+						if len(name) > 0 && name[0] >= 'A' && name[0] <= 'Z' {
+							refs[name] = true
+						}
+					}
+				}
+			}
+
+		case "attribute":
+			// SomeClass.class_method
+			if objNode := node.ChildByFieldName("object"); objNode != nil {
+				if objNode.Type() == "identifier" {
+					name := parser.GetNodeText(objNode, src)
+					if len(name) > 0 && name[0] >= 'A' && name[0] <= 'Z' {
+						refs[name] = true
+					}
+				}
+			}
+		}
+
+		return true
+	})
+}
+
+// extractFullConstantName extracts the full name from a scope_resolution node (e.g., "Stripe::Charge").
+func extractFullConstantName(node *sitter.Node, source []byte) string {
+	return parser.GetNodeText(node, source)
+}
+
+// extractConstantsFromNode extracts all constant names from a node tree.
+func extractConstantsFromNode(node *sitter.Node, source []byte, refs map[string]bool) {
+	parser.Walk(node, source, func(n *sitter.Node, src []byte) bool {
+		if n.Type() == "constant" {
+			refs[parser.GetNodeText(n, src)] = true
+		} else if n.Type() == "scope_resolution" {
+			refs[extractFullConstantName(n, src)] = true
+			return false // Don't descend into scope_resolution children
+		}
+		return true
+	})
+}
+
+// extractIdentifiersFromNode extracts identifier names from a node tree (for Python).
+func extractIdentifiersFromNode(node *sitter.Node, source []byte, refs map[string]bool) {
+	parser.Walk(node, source, func(n *sitter.Node, src []byte) bool {
+		if n.Type() == "identifier" {
+			name := parser.GetNodeText(n, src)
+			// Heuristic: class names start with uppercase
+			if len(name) > 0 && name[0] >= 'A' && name[0] <= 'Z' {
+				refs[name] = true
+			}
+		}
+		return true
+	})
 }
 
 // gonumGraph holds the gonum representation and mappings.
