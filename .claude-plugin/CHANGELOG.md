@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.1](https://github.com/panbanda/omen/compare/omen-skills-v1.2.0...omen-skills-v1.2.1) (2025-12-02)
+
+
+### Bug Fixes
+
+* **plugin:** use correct source field name in marketplace config ([#123](https://github.com/panbanda/omen/issues/123)) ([a0850ba](https://github.com/panbanda/omen/commit/a0850ba81bb7bd550182e40275803a121107e747))
+* **plugin:** use remote git URL for marketplace source ([#121](https://github.com/panbanda/omen/issues/121)) ([8362306](https://github.com/panbanda/omen/commit/836230628df633b41d76dcd23daa42ad1db8d2af))
+
 ## [1.2.0](https://github.com/panbanda/omen/compare/omen-skills-v1.1.0...omen-skills-v1.2.0) (2025-12-01)
 
 

@@ -1,7 +1,7 @@
 {
   "name": "omen",
   "description": "Code analysis skills for Claude Code: complexity hotspots, tech debt, defect prediction, architecture review, and more",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "author": {
     "name": "Jonathan Reyes",
     "email": "me@jonathanreyes.com"
@@ -9,5 +9,12 @@
   "homepage": "https://github.com/panbanda/omen",
   "repository": "https://github.com/panbanda/omen",
   "license": "MIT",
-  "keywords": ["code-analysis", "complexity", "technical-debt", "defect-prediction", "hotspots", "architecture"]
+  "keywords": [
+    "code-analysis",
+    "complexity",
+    "technical-debt",
+    "defect-prediction",
+    "hotspots",
+    "architecture"
+  ]
 }

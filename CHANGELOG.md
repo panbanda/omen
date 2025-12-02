@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.7](https://github.com/panbanda/omen/compare/omen-v1.4.6...omen-v1.4.7) (2025-12-02)
+
+
+### Bug Fixes
+
+* **plugin:** use correct source field name in marketplace config ([#123](https://github.com/panbanda/omen/issues/123)) ([a0850ba](https://github.com/panbanda/omen/commit/a0850ba81bb7bd550182e40275803a121107e747))
+* **plugin:** use remote git URL for marketplace source ([#121](https://github.com/panbanda/omen/issues/121)) ([8362306](https://github.com/panbanda/omen/commit/836230628df633b41d76dcd23daa42ad1db8d2af))
+
 ## [1.4.6](https://github.com/panbanda/omen/compare/omen-v1.4.5...omen-v1.4.6) (2025-12-02)
 
 
