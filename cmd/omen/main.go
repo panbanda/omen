@@ -2778,21 +2778,21 @@ Available tools:
   - analyze_ownership     Code ownership and bus factor
   - analyze_cohesion      CK OO metrics (LCOM, WMC, CBO, DIT)
   - analyze_repo_map      PageRank-ranked symbol map`,
-		Flags: []cli.Flag{
-			&cli.BoolFlag{
+		Subcommands: []*cli.Command{
+			{
 				Name:  "manifest",
 				Usage: "Output MCP server manifest (server.json) for registry publishing",
+				Action: func(c *cli.Context) error {
+					data, err := mcpserver.GenerateManifest(version)
+					if err != nil {
+						return err
+					}
+					fmt.Println(string(data))
+					return nil
+				},
 			},
 		},
 		Action: func(c *cli.Context) error {
-			if c.Bool("manifest") {
-				data, err := mcpserver.GenerateManifest(version)
-				if err != nil {
-					return err
-				}
-				fmt.Println(string(data))
-				return nil
-			}
 			server := mcpserver.NewServer(version)
 			return server.Run(context.Background())
 		},

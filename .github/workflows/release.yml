@@ -249,7 +249,7 @@ jobs:
           tar xzf "omen_${VERSION}_linux_amd64.tar.gz" omen
 
       - name: Generate server.json manifest
-        run: ./omen mcp --manifest > server.json
+        run: ./omen mcp manifest > server.json
 
       - name: Download mcp-publisher
         run: |
