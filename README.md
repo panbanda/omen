@@ -470,49 +470,10 @@ go build -o omen ./cmd/omen
 
 ```bash
 # Run all analyzers
-omen analyze ./src
+omen analyze
 
 # Analyze complexity
-omen analyze complexity ./src
-
-# Detect technical debt
-omen analyze satd ./src
-
-# Find dead code
-omen analyze deadcode ./src
-
-# Analyze git churn (last 30 days)
-omen analyze churn ./
-
-# Detect code clones
-omen analyze duplicates ./src
-
-# Predict file-level defect probability (PMAT)
-omen analyze defect ./src
-
-# Analyze recent commits for risk (JIT)
-omen analyze changes ./
-
-# Calculate TDG scores
-omen analyze tdg ./src
-
-# Generate dependency graph
-omen analyze graph ./src --metrics
-
-# Find hotspots (high churn + complexity)
-omen analyze hotspot ./src
-
-# Detect temporal coupling
-omen analyze temporal ./
-
-# Analyze code ownership
-omen analyze ownership ./src
-
-# Calculate CK cohesion metrics
-omen analyze cohesion ./src
-
-# Detect feature flags
-omen analyze flags ./src
+omen analyze --help
 ```
 
 ## Configuration
@@ -546,47 +507,9 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
 
 ### Claude Code
 
-Add to your Claude Code settings (`.claude/settings.json` in your project or `~/.claude/settings.json` globally):
-
-```json
-{
-  "mcpServers": {
-    "omen": {
-      "command": "omen",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-
-Or use the CLI:
-
 ```bash
 claude mcp add omen -- omen mcp
 ```
-
-### Available Tools
-
-| Tool                        | Description                                    |
-| --------------------------- | ---------------------------------------------- |
-| `analyze_complexity`        | Cyclomatic and cognitive complexity analysis   |
-| `analyze_satd`              | Self-admitted technical debt detection         |
-| `analyze_deadcode`          | Unused functions and variables                 |
-| `analyze_churn`             | Git file change frequency                      |
-| `analyze_duplicates`        | Code clones and copy-paste detection           |
-| `analyze_defect`            | File-level defect probability (PMAT)           |
-| `analyze_changes`           | Commit-level change risk (JIT/Kamei et al.)    |
-| `analyze_tdg`               | Technical Debt Gradient scores                 |
-| `analyze_graph`             | Dependency graph generation                    |
-| `analyze_hotspot`           | High churn + high complexity files             |
-| `analyze_smells`            | Architectural smells (cycles, hubs, god comps) |
-| `analyze_temporal_coupling` | Files that change together                     |
-| `analyze_ownership`         | Code ownership and bus factor                  |
-| `analyze_cohesion`          | CK OO metrics (LCOM, WMC, CBO, DIT)            |
-| `analyze_repo_map`          | PageRank-ranked symbol map                     |
-| `analyze_flags`             | Feature flag detection and staleness analysis  |
-
-Each tool includes detailed descriptions with interpretation guidance, helping LLMs understand what metrics mean and when to use each analyzer.
 
 ### Example Usage
 
@@ -611,35 +534,6 @@ Install the Omen plugin in Claude Code:
 ```
 
 Verify installation with `/skills` to see available Omen skills.
-
-### Available Skills
-
-| Skill                       | Description                                                         |
-| --------------------------- | ------------------------------------------------------------------- |
-| `omen:context-compression`  | Generate compressed context summaries using PageRank-ranked symbols |
-| `omen:refactoring-priority` | Identify highest-priority refactoring targets                       |
-| `omen:bug-hunt`             | Find likely bug locations using defect prediction and hotspots      |
-| `omen:change-impact`        | Analyze blast radius before making changes                          |
-| `omen:codebase-onboarding`  | Generate onboarding guides for new developers                       |
-| `omen:code-review-focus`    | Identify what to focus on when reviewing PRs                        |
-| `omen:architecture-review`  | Analyze architectural health and design smells                      |
-| `omen:tech-debt-report`     | Generate comprehensive technical debt assessments                   |
-| `omen:test-targeting`       | Identify files most needing test coverage                           |
-| `omen:quality-gate`         | Run pass/fail quality checks against thresholds                     |
-
-### Using Skills
-
-Invoke a skill by name:
-
-```
-/skill omen:bug-hunt
-```
-
-Or reference in conversation:
-
-```
-Use the omen:refactoring-priority skill to analyze this codebase
-```
 
 Skills require the Omen MCP server to be configured (see MCP Server section above).
 
