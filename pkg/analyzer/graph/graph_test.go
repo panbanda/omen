@@ -344,3 +344,412 @@ func TestMatchesImport(t *testing.T) {
 		}
 	}
 }
+
+func TestToMermaid(t *testing.T) {
+	g := NewDependencyGraph()
+	g.AddNode(Node{ID: "main", Name: "main", Type: NodeFunction})
+	g.AddNode(Node{ID: "helper", Name: "helper", Type: NodeFunction})
+	g.AddEdge(Edge{From: "main", To: "helper", Type: EdgeCall})
+
+	mermaid := g.ToMermaid()
+
+	if mermaid == "" {
+		t.Error("ToMermaid returned empty string")
+	}
+	if len(mermaid) < 20 {
+		t.Error("ToMermaid output too short")
+	}
+	// Check for graph direction
+	if !contains(mermaid, "graph TD") {
+		t.Error("Expected default direction TD")
+	}
+}
+
+func TestToMermaidWithOptions(t *testing.T) {
+	g := NewDependencyGraph()
+	g.AddNode(Node{ID: "a", Name: "a", Type: NodeFunction})
+	g.AddNode(Node{ID: "b", Name: "b", Type: NodeFunction})
+	g.AddNode(Node{ID: "c", Name: "c", Type: NodeFunction})
+	g.AddEdge(Edge{From: "a", To: "b", Type: EdgeCall})
+	g.AddEdge(Edge{From: "b", To: "c", Type: EdgeImport})
+
+	opts := MermaidOptions{
+		MaxNodes:       2,
+		MaxEdges:       5,
+		ShowComplexity: true,
+		NodeComplexity: map[string]int{"a": 5, "b": 15},
+		Direction:      DirectionLR,
+	}
+
+	mermaid := g.ToMermaidWithOptions(opts)
+
+	if !contains(mermaid, "graph LR") {
+		t.Error("Expected direction LR")
+	}
+}
+
+func TestToMermaidWithOptions_Pruning(t *testing.T) {
+	g := NewDependencyGraph()
+	for i := 0; i < 100; i++ {
+		id := string(rune('a' + (i % 26)))
+		g.AddNode(Node{ID: id, Name: id, Type: NodeFunction})
+	}
+	for i := 0; i < 50; i++ {
+		g.AddEdge(Edge{From: "a", To: "b", Type: EdgeCall})
+	}
+
+	opts := MermaidOptions{
+		MaxNodes:  10,
+		MaxEdges:  5,
+		Direction: DirectionTD,
+	}
+
+	mermaid := g.ToMermaidWithOptions(opts)
+
+	if mermaid == "" {
+		t.Error("Expected non-empty mermaid output")
+	}
+}
+
+func TestDefaultMermaidOptions(t *testing.T) {
+	opts := DefaultMermaidOptions()
+
+	if opts.MaxNodes != 50 {
+		t.Errorf("MaxNodes = %d, want 50", opts.MaxNodes)
+	}
+	if opts.MaxEdges != 150 {
+		t.Errorf("MaxEdges = %d, want 150", opts.MaxEdges)
+	}
+	if opts.Direction != DirectionTD {
+		t.Errorf("Direction = %v, want %v", opts.Direction, DirectionTD)
+	}
+}
+
+func TestSanitizeMermaidID(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"simple", "simple"},
+		{"with space", "with_space"},
+		{"with/slash", "with_slash"},
+		{"with.dot", "with_dot"},
+		{"123starts", "n123starts"},
+		{"", "empty"},
+		{"CamelCase", "CamelCase"},
+	}
+
+	for _, tt := range tests {
+		got := SanitizeMermaidID(tt.input)
+		if got != tt.want {
+			t.Errorf("SanitizeMermaidID(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestEscapeMermaidLabel(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"simple", "simple"},
+		{"a & b", "a &amp; b"},
+		{"<tag>", "&lt;tag&gt;"},
+		{`"quoted"`, "&quot;quoted&quot;"},
+		{"a|b", "a&#124;b"},
+		{"[brackets]", "&#91;brackets&#93;"},
+		{"{braces}", "&#123;braces&#125;"},
+		{"line\nbreak", "line<br/>break"},
+	}
+
+	for _, tt := range tests {
+		got := EscapeMermaidLabel(tt.input)
+		if got != tt.want {
+			t.Errorf("EscapeMermaidLabel(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestAnalyzeProject_Ruby(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "test.rb")
+
+	code := `class Animal
+  def speak
+    puts "..."
+  end
+end
+
+class Dog < Animal
+  def speak
+    puts "Woof!"
+  end
+end
+
+Dog.new.speak
+`
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New(WithScope(ScopeModule))
+	defer a.Close()
+
+	graph, err := a.AnalyzeProject([]string{path})
+	if err != nil {
+		t.Fatalf("AnalyzeProject failed: %v", err)
+	}
+
+	if graph == nil {
+		t.Fatal("Expected non-nil graph")
+	}
+}
+
+func TestAnalyzeProject_Python(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "test.py")
+
+	code := `class Animal:
+    def speak(self):
+        pass
+
+class Dog(Animal):
+    def speak(self):
+        print("Woof!")
+
+d = Dog()
+d.speak()
+`
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New(WithScope(ScopeModule))
+	defer a.Close()
+
+	graph, err := a.AnalyzeProject([]string{path})
+	if err != nil {
+		t.Fatalf("AnalyzeProject failed: %v", err)
+	}
+
+	if graph == nil {
+		t.Fatal("Expected non-nil graph")
+	}
+}
+
+func TestAnalyzeProject_TypeScript(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "test.ts")
+
+	code := `import { helper } from './utils';
+
+class MyClass {
+    method(): void {
+        helper();
+    }
+}
+
+export const instance = new MyClass();
+`
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New(WithScope(ScopeFile))
+	defer a.Close()
+
+	graph, err := a.AnalyzeProject([]string{path})
+	if err != nil {
+		t.Fatalf("AnalyzeProject failed: %v", err)
+	}
+
+	if graph == nil {
+		t.Fatal("Expected non-nil graph")
+	}
+}
+
+func TestAnalyzeProject_Java(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "Test.java")
+
+	code := `package com.example;
+
+import java.util.List;
+
+public class Test {
+    public void main(String[] args) {
+        helper();
+    }
+
+    private void helper() {}
+}
+`
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New(WithScope(ScopeFile))
+	defer a.Close()
+
+	graph, err := a.AnalyzeProject([]string{path})
+	if err != nil {
+		t.Fatalf("AnalyzeProject failed: %v", err)
+	}
+
+	if graph == nil {
+		t.Fatal("Expected non-nil graph")
+	}
+}
+
+func TestAnalyzeProject_Rust(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "test.rs")
+
+	code := `use std::io;
+
+fn main() {
+    helper();
+}
+
+fn helper() {
+    println!("Hello");
+}
+`
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New(WithScope(ScopeFile))
+	defer a.Close()
+
+	graph, err := a.AnalyzeProject([]string{path})
+	if err != nil {
+		t.Fatalf("AnalyzeProject failed: %v", err)
+	}
+
+	if graph == nil {
+		t.Fatal("Expected non-nil graph")
+	}
+}
+
+func TestEdgeTypeArrows(t *testing.T) {
+	g := NewDependencyGraph()
+	g.AddNode(Node{ID: "a", Name: "a"})
+	g.AddNode(Node{ID: "b", Name: "b"})
+	g.AddNode(Node{ID: "c", Name: "c"})
+	g.AddNode(Node{ID: "d", Name: "d"})
+	g.AddNode(Node{ID: "e", Name: "e"})
+	g.AddNode(Node{ID: "f", Name: "f"})
+
+	g.AddEdge(Edge{From: "a", To: "b", Type: EdgeCall})
+	g.AddEdge(Edge{From: "a", To: "c", Type: EdgeImport})
+	g.AddEdge(Edge{From: "a", To: "d", Type: EdgeInherit})
+	g.AddEdge(Edge{From: "a", To: "e", Type: EdgeImplement})
+	g.AddEdge(Edge{From: "a", To: "f", Type: EdgeUses})
+
+	mermaid := g.ToMermaid()
+
+	if !contains(mermaid, "calls") {
+		t.Error("Expected 'calls' label for EdgeCall")
+	}
+	if !contains(mermaid, "imports") {
+		t.Error("Expected 'imports' label for EdgeImport")
+	}
+	if !contains(mermaid, "inherits") {
+		t.Error("Expected 'inherits' label for EdgeInherit")
+	}
+	if !contains(mermaid, "implements") {
+		t.Error("Expected 'implements' label for EdgeImplement")
+	}
+}
+
+func TestComplexityColors(t *testing.T) {
+	g := NewDependencyGraph()
+	g.AddNode(Node{ID: "low", Name: "low"})
+	g.AddNode(Node{ID: "medium", Name: "medium"})
+	g.AddNode(Node{ID: "high", Name: "high"})
+	g.AddNode(Node{ID: "critical", Name: "critical"})
+
+	opts := MermaidOptions{
+		ShowComplexity: true,
+		NodeComplexity: map[string]int{
+			"low":      2,
+			"medium":   5,
+			"high":     10,
+			"critical": 20,
+		},
+	}
+
+	mermaid := g.ToMermaidWithOptions(opts)
+
+	if !contains(mermaid, "#90EE90") {
+		t.Error("Expected green color for low complexity")
+	}
+	if !contains(mermaid, "#FFD700") {
+		t.Error("Expected gold color for medium complexity")
+	}
+	if !contains(mermaid, "#FFA500") {
+		t.Error("Expected orange color for high complexity")
+	}
+	if !contains(mermaid, "#FF6347") {
+		t.Error("Expected red color for critical complexity")
+	}
+}
+
+func TestCalculateMetrics_LargeGraph(t *testing.T) {
+	a := New()
+	defer a.Close()
+
+	g := NewDependencyGraph()
+	// Create a larger graph
+	for i := 0; i < 20; i++ {
+		id := string(rune('a' + i))
+		g.AddNode(Node{ID: id, Name: id, Type: NodeFunction})
+	}
+	// Create a more complex edge pattern
+	for i := 0; i < 19; i++ {
+		from := string(rune('a' + i))
+		to := string(rune('a' + i + 1))
+		g.AddEdge(Edge{From: from, To: to, Type: EdgeCall})
+	}
+	// Add some cross edges
+	g.AddEdge(Edge{From: "a", To: "j", Type: EdgeCall})
+	g.AddEdge(Edge{From: "j", To: "t", Type: EdgeCall})
+
+	metrics := a.CalculateMetrics(g)
+
+	if metrics.Summary.TotalNodes != 20 {
+		t.Errorf("TotalNodes = %d, want 20", metrics.Summary.TotalNodes)
+	}
+	if metrics.Summary.Density <= 0 {
+		t.Error("Expected positive density")
+	}
+}
+
+func TestAnalyzeProject_EmptyFiles(t *testing.T) {
+	a := New()
+	defer a.Close()
+
+	graph, err := a.AnalyzeProject([]string{})
+	if err != nil {
+		t.Fatalf("AnalyzeProject failed: %v", err)
+	}
+
+	if len(graph.Nodes) != 0 {
+		t.Errorf("Expected 0 nodes, got %d", len(graph.Nodes))
+	}
+}
+
+// Helper function to check if string contains substring
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && findSubstring(s, substr) >= 0
+}
+
+func findSubstring(s, substr string) int {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
+}

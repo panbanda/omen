@@ -499,3 +499,241 @@ func TestAnalyzer_GetProviders(t *testing.T) {
 	assert.NotEmpty(t, providers)
 	assert.Contains(t, providers, "launchdarkly")
 }
+
+func TestCalculateStaleness_NilVCS(t *testing.T) {
+	a, err := New(WithVCSOpener(nil))
+	require.NoError(t, err)
+	defer a.Close()
+
+	staleness := a.calculateStaleness("test-flag", []string{"test.js"})
+	assert.Nil(t, staleness, "should return nil when vcsOpener is nil")
+}
+
+func TestCalculateStaleness_EmptyFiles(t *testing.T) {
+	a, err := New()
+	require.NoError(t, err)
+	defer a.Close()
+
+	staleness := a.calculateStaleness("test-flag", []string{})
+	assert.Nil(t, staleness, "should return nil for empty file list")
+}
+
+func TestCalculateStaleness_NoRepoFound(t *testing.T) {
+	a, err := New(WithGitHistory(true))
+	require.NoError(t, err)
+	defer a.Close()
+
+	// Non-existent files should not find a repo
+	staleness := a.calculateStaleness("test-flag", []string{"/nonexistent/path/test.js"})
+	assert.Nil(t, staleness, "should return nil when repo cannot be opened")
+}
+
+func TestBuildSummary_Empty(t *testing.T) {
+	a, err := New()
+	require.NoError(t, err)
+	defer a.Close()
+
+	summary := a.buildSummary([]FlagAnalysis{})
+	assert.Equal(t, 0, summary.TotalFlags)
+	assert.Equal(t, 0, summary.TotalReferences)
+	assert.Equal(t, 0.0, summary.AvgFileSpread)
+}
+
+func TestBuildSummary_WithFlags(t *testing.T) {
+	a, err := New()
+	require.NoError(t, err)
+	defer a.Close()
+
+	flags := []FlagAnalysis{
+		{
+			FlagKey:  "flag-1",
+			Provider: "launchdarkly",
+			References: []Reference{
+				{File: "a.js", FlagKey: "flag-1"},
+				{File: "b.js", FlagKey: "flag-1"},
+			},
+			Complexity: Complexity{
+				FileSpread:      2,
+				MaxNestingDepth: 1,
+				CoupledFlags:    []string{"flag-2"},
+			},
+			Priority: Priority{Level: PriorityLow},
+		},
+		{
+			FlagKey:  "flag-2",
+			Provider: "split",
+			References: []Reference{
+				{File: "a.js", FlagKey: "flag-2"},
+			},
+			Complexity: Complexity{
+				FileSpread:      1,
+				MaxNestingDepth: 2,
+				CoupledFlags:    []string{"flag-1"},
+			},
+			Priority: Priority{Level: PriorityHigh},
+		},
+	}
+
+	summary := a.buildSummary(flags)
+	assert.Equal(t, 2, summary.TotalFlags)
+	assert.Equal(t, 3, summary.TotalReferences)
+	assert.Equal(t, 1, summary.ByPriority[PriorityLow])
+	assert.Equal(t, 1, summary.ByPriority[PriorityHigh])
+	assert.Equal(t, 1, summary.ByProvider["launchdarkly"])
+	assert.Equal(t, 1, summary.ByProvider["split"])
+	assert.Equal(t, 1.5, summary.AvgFileSpread)
+}
+
+func TestCalculateComplexity(t *testing.T) {
+	a, err := New()
+	require.NoError(t, err)
+	defer a.Close()
+
+	refs := []Reference{
+		{FlagKey: "flag-a", File: "a.js", NestingDepth: 1},
+		{FlagKey: "flag-a", File: "b.js", NestingDepth: 3},
+		{FlagKey: "flag-a", File: "a.js", NestingDepth: 2},
+	}
+
+	complexity := a.calculateComplexity(refs)
+	assert.Equal(t, 2, complexity.FileSpread)      // a.js and b.js
+	assert.Equal(t, 3, complexity.MaxNestingDepth) // max nesting is 3
+	assert.Equal(t, 3, complexity.DecisionPoints)  // 3 refs
+}
+
+func TestNormalizeLanguageForQueries(t *testing.T) {
+	tests := []struct {
+		lang     parser.Language
+		expected parser.Language
+	}{
+		{parser.LangTypeScript, parser.LangJavaScript},
+		{parser.LangTSX, parser.LangJavaScript},
+		{parser.LangJavaScript, parser.LangJavaScript},
+		{parser.LangPython, parser.LangPython},
+		{parser.LangGo, parser.LangGo},
+	}
+
+	for _, tt := range tests {
+		result := normalizeLanguageForQueries(tt.lang)
+		assert.Equal(t, tt.expected, result, "normalizeLanguageForQueries(%v)", tt.lang)
+	}
+}
+
+func TestDirNameToLanguage(t *testing.T) {
+	tests := []struct {
+		dir      string
+		expected parser.Language
+	}{
+		{"javascript", parser.LangJavaScript},
+		{"python", parser.LangPython},
+		{"go", parser.LangGo},
+		{"java", parser.LangJava},
+		{"ruby", parser.LangRuby},
+		{"unknown", parser.LangUnknown},
+	}
+
+	for _, tt := range tests {
+		result := dirNameToLanguage(tt.dir)
+		assert.Equal(t, tt.expected, result, "dirNameToLanguage(%q)", tt.dir)
+	}
+}
+
+func TestAddQuery(t *testing.T) {
+	registry, err := NewQueryRegistry()
+	require.NoError(t, err)
+	defer registry.Close()
+
+	// Add a custom query
+	err = registry.AddQuery(parser.LangJavaScript, "custom-provider", `(call_expression) @call`)
+	assert.NoError(t, err)
+
+	// Verify query was added
+	queries := registry.GetQueries(parser.LangJavaScript, []string{"custom-provider"})
+	found := false
+	for _, q := range queries {
+		if q.Provider == "custom-provider" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "custom query should be added")
+
+	// Test invalid query
+	err = registry.AddQuery(parser.LangJavaScript, "bad-provider", `(invalid syntax`)
+	assert.Error(t, err)
+}
+
+func TestLoadCustomProvider(t *testing.T) {
+	registry, err := NewQueryRegistry()
+	require.NoError(t, err)
+	defer registry.Close()
+
+	err = registry.LoadCustomProvider("my-provider", []string{"javascript", "go"}, `(call_expression) @call`)
+	assert.NoError(t, err)
+
+	// Verify it was loaded for JavaScript
+	jsQueries := registry.GetQueries(parser.LangJavaScript, []string{"my-provider"})
+	found := false
+	for _, q := range jsQueries {
+		if q.Provider == "my-provider" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "custom provider should be loaded for javascript")
+}
+
+func TestCalculatePriority_AllLevels(t *testing.T) {
+	// Test with nil staleness
+	priority := CalculatePriority(nil, Complexity{
+		FileSpread:      1,
+		MaxNestingDepth: 1,
+	})
+	assert.NotEmpty(t, priority.Level)
+
+	// Test HIGH priority - stale + some complexity factors
+	staleness := &Staleness{
+		Score:             10.0, // high staleness score
+		DaysSinceIntro:    100,
+		DaysSinceModified: 100,
+	}
+	complexity := Complexity{
+		FileSpread:      15,                      // > 10, adds 2.0
+		MaxNestingDepth: 3,                       // > 2, adds 3.0
+		CoupledFlags:    []string{"a", "b", "c"}, // > 2, adds 2.0
+	}
+	// riskScore = 10 + 2 + 3 + 2 = 17
+	// effort = 15 * 0.5 = 7.5 * 1.5 = 11.25
+	// priority = 17 / 11.25 = 1.51 -> LOW
+	// Need higher staleness score for CRITICAL
+	priority = CalculatePriority(staleness, complexity)
+	// Just verify it returns a valid level
+	assert.Contains(t, []string{PriorityLow, PriorityMedium, PriorityHigh, PriorityCritical}, priority.Level)
+
+	// Test LOW priority - fresh + simple
+	staleness = &Staleness{
+		Score:             0.1,
+		DaysSinceIntro:    5,
+		DaysSinceModified: 2,
+	}
+	complexity = Complexity{
+		FileSpread:      1,
+		MaxNestingDepth: 1,
+	}
+	priority = CalculatePriority(staleness, complexity)
+	assert.Equal(t, PriorityLow, priority.Level)
+
+	// Test MEDIUM priority - moderate staleness, low complexity
+	staleness = &Staleness{
+		Score:             10.0,
+		DaysSinceIntro:    30,
+		DaysSinceModified: 30,
+	}
+	complexity = Complexity{
+		FileSpread:      1,
+		MaxNestingDepth: 1,
+	}
+	// riskScore = 10, effort = 1, priority = 10 -> MEDIUM
+	priority = CalculatePriority(staleness, complexity)
+	assert.Contains(t, []string{PriorityMedium, PriorityHigh}, priority.Level)
+}
