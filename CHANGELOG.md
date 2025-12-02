@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.3](https://github.com/panbanda/omen/compare/omen-v1.4.2...omen-v1.4.3) (2025-12-02)
+
+
+### Bug Fixes
+
+* **mcp:** migrate manifest to schema version 2025-10-17 ([52e77dd](https://github.com/panbanda/omen/commit/52e77ddd5d04b7f5f252b887f4100b5038d83f8b))
+
 ## [1.4.2](https://github.com/panbanda/omen/compare/omen-v1.4.1...omen-v1.4.2) (2025-12-02)
 
 
