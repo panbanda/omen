@@ -12,14 +12,27 @@ import (
 	"time"
 
 	"github.com/fatih/color"
-	"github.com/panbanda/omen/internal/analyzer"
 	"github.com/panbanda/omen/internal/mcpserver"
 	"github.com/panbanda/omen/internal/output"
 	"github.com/panbanda/omen/internal/progress"
 	"github.com/panbanda/omen/internal/service/analysis"
 	scannerSvc "github.com/panbanda/omen/internal/service/scanner"
+	"github.com/panbanda/omen/pkg/analyzer/changes"
+	"github.com/panbanda/omen/pkg/analyzer/churn"
+	"github.com/panbanda/omen/pkg/analyzer/cohesion"
+	"github.com/panbanda/omen/pkg/analyzer/complexity"
+	"github.com/panbanda/omen/pkg/analyzer/deadcode"
+	"github.com/panbanda/omen/pkg/analyzer/defect"
+	"github.com/panbanda/omen/pkg/analyzer/duplicates"
+	"github.com/panbanda/omen/pkg/analyzer/featureflags"
+	"github.com/panbanda/omen/pkg/analyzer/graph"
+	"github.com/panbanda/omen/pkg/analyzer/hotspot"
+	"github.com/panbanda/omen/pkg/analyzer/ownership"
+	"github.com/panbanda/omen/pkg/analyzer/satd"
+	"github.com/panbanda/omen/pkg/analyzer/smells"
+	"github.com/panbanda/omen/pkg/analyzer/tdg"
+	"github.com/panbanda/omen/pkg/analyzer/temporal"
 	"github.com/panbanda/omen/pkg/config"
-	"github.com/panbanda/omen/pkg/models"
 	"github.com/pelletier/go-toml"
 	"github.com/urfave/cli/v2"
 )
@@ -421,8 +434,8 @@ func runSATDCmd(c *cli.Context) error {
 	for _, p := range patterns {
 		customPatterns = append(customPatterns, analysis.PatternConfig{
 			Pattern:  p,
-			Category: models.DebtDesign,
-			Severity: models.SeverityMedium,
+			Category: satd.CategoryDesign,
+			Severity: satd.SeverityMedium,
 		})
 	}
 
@@ -448,11 +461,11 @@ func runSATDCmd(c *cli.Context) error {
 	for _, item := range result.Items {
 		sevColor := string(item.Severity)
 		switch item.Severity {
-		case models.SeverityHigh:
+		case satd.SeverityHigh:
 			sevColor = color.RedString(string(item.Severity))
-		case models.SeverityMedium:
+		case satd.SeverityMedium:
 			sevColor = color.YellowString(string(item.Severity))
-		case models.SeverityLow:
+		case satd.SeverityLow:
 			sevColor = color.GreenString(string(item.Severity))
 		}
 
@@ -539,8 +552,8 @@ func runDeadCodeCmd(c *cli.Context) error {
 
 	// For JSON/TOON, output pmat-compatible format
 	if formatter.Format() == output.FormatJSON || formatter.Format() == output.FormatTOON {
-		pmatResult := models.NewDeadCodeResult()
-		pmatResult.FromDeadCodeAnalysis(result)
+		pmatResult := deadcode.NewReport()
+		pmatResult.FromAnalysis(result)
 		return formatter.Output(pmatResult)
 	}
 
@@ -646,7 +659,7 @@ func runChurnCmd(c *cli.Context) error {
 
 	spinner := progress.NewSpinner("Analyzing git history...")
 	svc := analysis.New()
-	result, err := svc.AnalyzeChurn(absPath, analysis.ChurnOptions{
+	result, err := svc.AnalyzeChurn(context.Background(), absPath, analysis.ChurnOptions{
 		Days:    days,
 		Top:     topN,
 		Spinner: spinner,
@@ -762,7 +775,7 @@ func runDuplicatesCmd(c *cli.Context) error {
 
 	// For JSON/TOON, output pmat-compatible format
 	if formatter.Format() == output.FormatJSON || formatter.Format() == output.FormatTOON {
-		report := result.ToCloneReport()
+		report := result.ToReport()
 		return formatter.Output(report)
 	}
 
@@ -847,7 +860,7 @@ func runDefectCmd(c *cli.Context) error {
 	}
 
 	svc := analysis.New()
-	result, err := svc.AnalyzeDefects(repoPath, scanResult.Files, analysis.DefectOptions{
+	result, err := svc.AnalyzeDefects(context.Background(), repoPath, scanResult.Files, analysis.DefectOptions{
 		HighRiskOnly: highRiskOnly,
 	})
 	if err != nil {
@@ -867,26 +880,26 @@ func runDefectCmd(c *cli.Context) error {
 
 	// For JSON/TOON, output pmat-compatible format
 	if formatter.Format() == output.FormatJSON || formatter.Format() == output.FormatTOON {
-		report := result.ToDefectPredictionReport()
+		report := result.ToReport()
 		return formatter.Output(report)
 	}
 
 	var rows [][]string
 	for _, ds := range result.Files {
-		if highRiskOnly && ds.RiskLevel != models.RiskHigh {
+		if highRiskOnly && ds.RiskLevel != defect.RiskHigh {
 			continue
 		}
 
 		probStr := fmt.Sprintf("%.0f%%", ds.Probability*100)
 		riskStr := string(ds.RiskLevel)
 		switch ds.RiskLevel {
-		case models.RiskHigh:
+		case defect.RiskHigh:
 			probStr = color.RedString(probStr)
 			riskStr = color.RedString(riskStr)
-		case models.RiskMedium:
+		case defect.RiskMedium:
 			probStr = color.YellowString(probStr)
 			riskStr = color.YellowString(riskStr)
-		case models.RiskLow:
+		case defect.RiskLow:
 			probStr = color.GreenString(probStr)
 			riskStr = color.GreenString(riskStr)
 		}
@@ -958,7 +971,7 @@ func runChangesCmd(c *cli.Context) error {
 
 	spinner := progress.NewSpinner("Analyzing recent changes...")
 	svc := analysis.New()
-	result, err := svc.AnalyzeChanges(absPath, analysis.ChangesOptions{
+	result, err := svc.AnalyzeChanges(context.Background(), absPath, analysis.ChangesOptions{
 		Days: days,
 	})
 	spinner.FinishSuccess()
@@ -985,20 +998,20 @@ func runChangesCmd(c *cli.Context) error {
 
 	var rows [][]string
 	for _, cr := range commits {
-		if highRiskOnly && cr.RiskLevel != models.ChangeRiskHigh {
+		if highRiskOnly && cr.RiskLevel != changes.RiskLevelHigh {
 			continue
 		}
 
 		scoreStr := fmt.Sprintf("%.2f", cr.RiskScore)
 		riskStr := string(cr.RiskLevel)
 		switch cr.RiskLevel {
-		case models.ChangeRiskHigh:
+		case changes.RiskLevelHigh:
 			scoreStr = color.RedString(scoreStr)
 			riskStr = color.RedString(riskStr)
-		case models.ChangeRiskMedium:
+		case changes.RiskLevelMedium:
 			scoreStr = color.YellowString(scoreStr)
 			riskStr = color.YellowString(riskStr)
-		case models.ChangeRiskLow:
+		case changes.RiskLevelLow:
 			scoreStr = color.GreenString(scoreStr)
 			riskStr = color.GreenString(riskStr)
 		}
@@ -1058,7 +1071,7 @@ func runTDGCmd(c *cli.Context) error {
 	svc := analysis.New()
 
 	// Handle directory vs single file
-	var project *models.ProjectScore
+	var project *tdg.ProjectScore
 	var err error
 
 	if len(paths) == 1 {
@@ -1070,17 +1083,17 @@ func runTDGCmd(c *cli.Context) error {
 		if info.IsDir() {
 			project, err = svc.AnalyzeTDG(paths[0])
 		} else {
-			tdgAnalyzer := analyzer.NewTdgAnalyzer()
+			tdgAnalyzer := tdg.New()
 			defer tdgAnalyzer.Close()
 			score, fileErr := tdgAnalyzer.AnalyzeFile(paths[0])
 			if fileErr != nil {
 				return fmt.Errorf("analysis failed: %w", fileErr)
 			}
-			projectScore := models.AggregateProjectScore([]models.TdgScore{score})
+			projectScore := tdg.AggregateProjectScore([]tdg.Score{score})
 			project = &projectScore
 		}
 	} else {
-		var allScores []models.TdgScore
+		var allScores []tdg.Score
 		for _, path := range paths {
 			info, statErr := os.Stat(path)
 			if statErr != nil {
@@ -1094,7 +1107,7 @@ func runTDGCmd(c *cli.Context) error {
 				}
 				allScores = append(allScores, dirProject.Files...)
 			} else {
-				tdgAnalyzer := analyzer.NewTdgAnalyzer()
+				tdgAnalyzer := tdg.New()
 				score, fileErr := tdgAnalyzer.AnalyzeFile(path)
 				tdgAnalyzer.Close()
 				if fileErr != nil {
@@ -1103,7 +1116,7 @@ func runTDGCmd(c *cli.Context) error {
 				allScores = append(allScores, score)
 			}
 		}
-		projectScore := models.AggregateProjectScore(allScores)
+		projectScore := tdg.AggregateProjectScore(allScores)
 		project = &projectScore
 	}
 
@@ -1119,7 +1132,7 @@ func runTDGCmd(c *cli.Context) error {
 
 	// For JSON/TOON, output pmat-compatible format
 	if formatter.Format() == output.FormatJSON || formatter.Format() == output.FormatTOON {
-		report := project.ToTDGReport(hotspots)
+		report := project.ToReport(hotspots)
 		return formatter.Output(report)
 	}
 
@@ -1204,18 +1217,18 @@ func runTDGCmd(c *cli.Context) error {
 		}
 
 		// Define order of grades
-		gradeOrder := []models.Grade{
-			models.GradeAPlus,
-			models.GradeA,
-			models.GradeAMinus,
-			models.GradeBPlus,
-			models.GradeB,
-			models.GradeBMinus,
-			models.GradeCPlus,
-			models.GradeC,
-			models.GradeCMinus,
-			models.GradeD,
-			models.GradeF,
+		gradeOrder := []tdg.Grade{
+			tdg.GradeAPlus,
+			tdg.GradeA,
+			tdg.GradeAMinus,
+			tdg.GradeBPlus,
+			tdg.GradeB,
+			tdg.GradeBMinus,
+			tdg.GradeCPlus,
+			tdg.GradeC,
+			tdg.GradeCMinus,
+			tdg.GradeD,
+			tdg.GradeF,
 		}
 
 		for _, grade := range gradeOrder {
@@ -1269,8 +1282,8 @@ func runGraphCmd(c *cli.Context) error {
 
 	tracker := progress.NewTracker("Building dependency graph...", len(scanResult.Files))
 	svc := analysis.New()
-	graph, metrics, err := svc.AnalyzeGraph(scanResult.Files, analysis.GraphOptions{
-		Scope:          analyzer.GraphScope(scope),
+	graphResult, metrics, err := svc.AnalyzeGraph(scanResult.Files, analysis.GraphOptions{
+		Scope:          graph.Scope(scope),
 		IncludeMetrics: includeMetrics,
 		OnProgress:     tracker.Tick,
 	})
@@ -1289,20 +1302,20 @@ func runGraphCmd(c *cli.Context) error {
 	if formatter.Format() == output.FormatJSON || formatter.Format() == output.FormatTOON {
 		if includeMetrics && metrics != nil {
 			return formatter.Output(struct {
-				Graph   *models.DependencyGraph `json:"graph" toon:"graph"`
-				Metrics *models.GraphMetrics    `json:"metrics" toon:"metrics"`
-			}{graph, metrics})
+				Graph   *graph.DependencyGraph `json:"graph" toon:"graph"`
+				Metrics *graph.Metrics         `json:"metrics" toon:"metrics"`
+			}{graphResult, metrics})
 		}
-		return formatter.Output(graph)
+		return formatter.Output(graphResult)
 	}
 
 	// Generate Mermaid diagram for text/markdown
 	fmt.Fprintln(formatter.Writer(), "```mermaid")
 	fmt.Fprintln(formatter.Writer(), "graph TD")
-	for _, node := range graph.Nodes {
+	for _, node := range graphResult.Nodes {
 		fmt.Fprintf(formatter.Writer(), "    %s[%s]\n", sanitizeID(node.ID), node.Name)
 	}
-	for _, edge := range graph.Edges {
+	for _, edge := range graphResult.Edges {
 		fmt.Fprintf(formatter.Writer(), "    %s --> %s\n", sanitizeID(edge.From), sanitizeID(edge.To))
 	}
 	fmt.Fprintln(formatter.Writer(), "```")
@@ -1498,7 +1511,7 @@ func runHotspotCmd(c *cli.Context) error {
 
 	tracker := progress.NewTracker("Analyzing hotspots...", len(scanResult.Files))
 	svc := analysis.New()
-	result, err := svc.AnalyzeHotspots(repoPath, scanResult.Files, analysis.HotspotOptions{
+	result, err := svc.AnalyzeHotspots(context.Background(), repoPath, scanResult.Files, analysis.HotspotOptions{
 		Days:       days,
 		Top:        topN,
 		OnProgress: tracker.Tick,
@@ -1634,9 +1647,9 @@ func runSmellsCmd(c *cli.Context) error {
 	for _, smell := range result.Smells {
 		severityStr := string(smell.Severity)
 		switch smell.Severity {
-		case models.SmellSeverityCritical:
+		case smells.SeverityCritical:
 			severityStr = color.RedString(severityStr)
-		case models.SmellSeverityHigh:
+		case smells.SeverityHigh:
 			severityStr = color.YellowString(severityStr)
 		}
 
@@ -1716,7 +1729,7 @@ func runTemporalCouplingCmd(c *cli.Context) error {
 
 	spinner := progress.NewSpinner("Analyzing temporal coupling...")
 	svc := analysis.New()
-	result, err := svc.AnalyzeTemporalCoupling(repoPath, analysis.TemporalCouplingOptions{
+	result, err := svc.AnalyzeTemporalCoupling(context.Background(), repoPath, analysis.TemporalCouplingOptions{
 		Days:         days,
 		MinCochanges: minCochanges,
 		Top:          topN,
@@ -2112,7 +2125,7 @@ func runFlagsCmd(c *cli.Context) error {
 		}
 		minOrder, ok := priorityOrder[minPriority]
 		if ok {
-			filtered := make([]models.FlagAnalysis, 0)
+			filtered := make([]featureflags.FlagAnalysis, 0)
 			for _, f := range flags {
 				if priorityOrder[f.Priority.Level] >= minOrder {
 					filtered = append(filtered, f)
@@ -2276,16 +2289,16 @@ func runContextCmd(c *cli.Context) error {
 		fmt.Println()
 		fmt.Println("## Dependency Graph")
 		graphSvc := analysis.New()
-		graphResult, _, graphErr := graphSvc.AnalyzeGraph(files, analysis.GraphOptions{
-			Scope: analyzer.ScopeFile,
+		graphData, _, graphErr := graphSvc.AnalyzeGraph(files, analysis.GraphOptions{
+			Scope: graph.ScopeFile,
 		})
 		if graphErr == nil {
 			fmt.Println("```mermaid")
 			fmt.Println("graph TD")
-			for _, node := range graphResult.Nodes {
+			for _, node := range graphData.Nodes {
 				fmt.Printf("    %s[%s]\n", sanitizeID(node.ID), node.Name)
 			}
-			for _, edge := range graphResult.Edges {
+			for _, edge := range graphData.Edges {
 				fmt.Printf("    %s --> %s\n", sanitizeID(edge.From), sanitizeID(edge.To))
 			}
 			fmt.Println("```")
@@ -2426,19 +2439,19 @@ func runAnalyzeCmd(c *cli.Context) error {
 
 	// Comprehensive analysis results
 	type FullAnalysis struct {
-		Complexity       *models.ComplexityAnalysis       `json:"complexity,omitempty"`
-		SATD             *models.SATDAnalysis             `json:"satd,omitempty"`
-		DeadCode         *models.DeadCodeAnalysis         `json:"dead_code,omitempty"`
-		Churn            *models.ChurnAnalysis            `json:"churn,omitempty"`
-		Clones           *models.CloneAnalysis            `json:"clones,omitempty"`
-		Defect           *models.DefectAnalysis           `json:"defect,omitempty"`
-		TDG              *models.ProjectScore             `json:"tdg,omitempty"`
-		Hotspots         *models.HotspotAnalysis          `json:"hotspots,omitempty"`
-		Smells           *models.SmellAnalysis            `json:"smells,omitempty"`
-		Ownership        *models.OwnershipAnalysis        `json:"ownership,omitempty"`
-		TemporalCoupling *models.TemporalCouplingAnalysis `json:"temporal_coupling,omitempty"`
-		Cohesion         *models.CohesionAnalysis         `json:"cohesion,omitempty"`
-		FeatureFlags     *models.FeatureFlagAnalysis      `json:"feature_flags,omitempty"`
+		Complexity       *complexity.Analysis   `json:"complexity,omitempty"`
+		SATD             *satd.Analysis         `json:"satd,omitempty"`
+		DeadCode         *deadcode.Analysis     `json:"dead_code,omitempty"`
+		Churn            *churn.Analysis        `json:"churn,omitempty"`
+		Clones           *duplicates.Analysis   `json:"clones,omitempty"`
+		Defect           *defect.Analysis       `json:"defect,omitempty"`
+		TDG              *tdg.ProjectScore      `json:"tdg,omitempty"`
+		Hotspots         *hotspot.Analysis      `json:"hotspots,omitempty"`
+		Smells           *smells.Analysis       `json:"smells,omitempty"`
+		Ownership        *ownership.Analysis    `json:"ownership,omitempty"`
+		TemporalCoupling *temporal.Analysis     `json:"temporal_coupling,omitempty"`
+		Cohesion         *cohesion.Analysis     `json:"cohesion,omitempty"`
+		FeatureFlags     *featureflags.Analysis `json:"feature_flags,omitempty"`
 	}
 	results := FullAnalysis{}
 
@@ -2477,7 +2490,7 @@ func runAnalyzeCmd(c *cli.Context) error {
 	// 4. Churn
 	if !excludeSet["churn"] {
 		spinner := progress.NewSpinner("Analyzing git churn...")
-		results.Churn, _ = svc.AnalyzeChurn(repoPath, analysis.ChurnOptions{
+		results.Churn, _ = svc.AnalyzeChurn(context.Background(), repoPath, analysis.ChurnOptions{
 			Spinner: spinner,
 		})
 		if results.Churn != nil {
@@ -2499,7 +2512,7 @@ func runAnalyzeCmd(c *cli.Context) error {
 	// 6. Defect prediction (composite - uses sub-analyzers)
 	if !excludeSet["defect"] {
 		tracker := progress.NewTracker("Predicting defects...", 1)
-		results.Defect, _ = svc.AnalyzeDefects(repoPath, files, analysis.DefectOptions{})
+		results.Defect, _ = svc.AnalyzeDefects(context.Background(), repoPath, files, analysis.DefectOptions{})
 		tracker.FinishSuccess()
 	}
 
@@ -2513,7 +2526,7 @@ func runAnalyzeCmd(c *cli.Context) error {
 	// 8. Hotspots (requires churn + complexity data)
 	if !excludeSet["hotspots"] {
 		spinner := progress.NewSpinner("Analyzing hotspots...")
-		results.Hotspots, _ = svc.AnalyzeHotspots(repoPath, files, analysis.HotspotOptions{})
+		results.Hotspots, _ = svc.AnalyzeHotspots(context.Background(), repoPath, files, analysis.HotspotOptions{})
 		if results.Hotspots != nil {
 			spinner.FinishSuccess()
 		} else {
@@ -2544,7 +2557,7 @@ func runAnalyzeCmd(c *cli.Context) error {
 	// 11. Temporal Coupling
 	if !excludeSet["temporal-coupling"] {
 		spinner := progress.NewSpinner("Analyzing temporal coupling...")
-		results.TemporalCoupling, _ = svc.AnalyzeTemporalCoupling(repoPath, analysis.TemporalCouplingOptions{})
+		results.TemporalCoupling, _ = svc.AnalyzeTemporalCoupling(context.Background(), repoPath, analysis.TemporalCouplingOptions{})
 		if results.TemporalCoupling != nil {
 			spinner.FinishSuccess()
 		} else {
@@ -2656,11 +2669,11 @@ func runAnalyzeCmd(c *cli.Context) error {
 		// Display grade distribution
 		if len(results.TDG.GradeDistribution) > 0 {
 			fmt.Fprintf(w, "  Grade Distribution:\n")
-			gradeOrder := []models.Grade{
-				models.GradeAPlus, models.GradeA, models.GradeAMinus,
-				models.GradeBPlus, models.GradeB, models.GradeBMinus,
-				models.GradeCPlus, models.GradeC, models.GradeCMinus,
-				models.GradeD, models.GradeF,
+			gradeOrder := []tdg.Grade{
+				tdg.GradeAPlus, tdg.GradeA, tdg.GradeAMinus,
+				tdg.GradeBPlus, tdg.GradeB, tdg.GradeBMinus,
+				tdg.GradeCPlus, tdg.GradeC, tdg.GradeCMinus,
+				tdg.GradeD, tdg.GradeF,
 			}
 			for _, grade := range gradeOrder {
 				if count := results.TDG.GradeDistribution[grade]; count > 0 {

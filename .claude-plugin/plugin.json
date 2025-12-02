@@ -1,6 +1,6 @@
 {
   "name": "omen",
-  "description": "Code analysis that shows AI where the landmines are.",
+  "description": "Code analysis skills for Claude Code: complexity hotspots, tech debt, defect prediction, architecture review, and more",
   "version": "1.2.0",
   "author": {
     "name": "Jonathan Reyes",
@@ -9,13 +9,5 @@
   "homepage": "https://github.com/panbanda/omen",
   "repository": "https://github.com/panbanda/omen",
   "license": "MIT",
-  "keywords": [
-    "code-analysis",
-    "complexity",
-    "technical-debt",
-    "defect-prediction",
-    "hotspots",
-    "architecture"
-  ],
-  "skills": "./skills"
+  "keywords": ["code-analysis", "complexity", "technical-debt", "defect-prediction", "hotspots", "architecture"]
 }

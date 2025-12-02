@@ -21,10 +21,13 @@ task test
 go build -o omen ./cmd/omen
 
 # Run a single test
-go test ./internal/analyzer -run TestComplexity
+go test ./pkg/analyzer/complexity -run TestComplexity
 
 # Run tests with verbose output
-go test -v ./internal/analyzer/...
+go test -v ./pkg/analyzer/...
+
+# Run tests with coverage
+go test -coverprofile=/tmp/cover.out ./pkg/analyzer/complexity/... && go tool cover -func=/tmp/cover.out
 ```
 
 ## Architecture
@@ -35,32 +38,49 @@ Omen is a multi-language code analysis CLI built in Go. It uses tree-sitter for 
 
 **Public packages** (`pkg/`) - stable API for external consumers:
 - `pkg/parser/` - Tree-sitter wrapper for multi-language AST parsing
-- `pkg/models/` - Data structures for analysis results
 - `pkg/config/` - Configuration loading (TOML/YAML/JSON via koanf)
+- `pkg/analyzer/<name>/` - Each analyzer is a self-contained package with co-located types
+
+**Analyzer packages** (`pkg/analyzer/`):
+- `changes/` - JIT commit-level change risk (Kamei et al. 2013)
+- `churn/` - Git history file churn analysis
+- `cohesion/` - CK object-oriented metrics (LCOM, WMC, CBO, DIT)
+- `complexity/` - Cyclomatic and cognitive complexity
+- `deadcode/` - Unused code detection
+- `defect/` - File-level defect probability (PMAT weights)
+- `duplicates/` - Code clone detection
+- `featureflags/` - Feature flag detection with tree-sitter queries
+- `graph/` - Dependency graph generation
+- `hotspot/` - High churn + high complexity files
+- `ownership/` - Code ownership and bus factor
+- `repomap/` - PageRank-weighted symbol map
+- `satd/` - Self-admitted technical debt detection
+- `smells/` - Architectural smell detection (cycles, hubs, god components)
+- `tdg/` - Technical Debt Gradient scores
+- `temporal/` - Temporal coupling analysis
 
 **Internal packages** (`internal/`) - implementation details:
-- `internal/analyzer/` - Analysis implementations (complexity, SATD, dead code, churn, duplicates, defect prediction, TDG, dependency graph, feature flags)
-- `internal/analyzer/featureflags/` - Feature flag detection with tree-sitter queries (queries stored in `queries/<lang>/<provider>.scm`)
-- `internal/fileproc/` - Concurrent file processing utilities
-- `internal/scanner/` - File discovery with configurable exclusion patterns
-- `internal/cache/` - Result caching with Blake3 hashing
-- `internal/output/` - Output formatting (text/JSON/markdown/toon)
-- `internal/progress/` - Progress bars and spinners
-- `internal/mcpserver/` - MCP server implementation with tools and prompts
-- `internal/service/` - High-level service layer coordinating analyzers
-- `internal/vcs/` - Git operations (blame, log, diff)
+- `fileproc/` - Concurrent file processing utilities
+- `scanner/` - File discovery with configurable exclusion patterns
+- `cache/` - Result caching with Blake3 hashing
+- `output/` - Output formatting (text/JSON/markdown/toon)
+- `progress/` - Progress bars and spinners
+- `mcpserver/` - MCP server implementation with tools and prompts
+- `service/` - High-level service layer coordinating analyzers
+- `vcs/` - Git operations (blame, log, diff)
 
 **CLI** (`cmd/omen/`) - Entry point using urfave/cli/v2
 
 ### Key Patterns
 
-**Multi-language parsing**: `pkg/parser/parser.go` contains `DetectLanguage()` which maps file extensions to tree-sitter parsers. Add new language support by extending `GetTreeSitterLanguage()`, `getFunctionNodeTypes()`, and `getClassNodeTypes()`.
-
-**Analyzer pattern**: Each analyzer in `internal/analyzer/` follows the same structure:
-1. Create analyzer with `NewXxxAnalyzer()`
+**Analyzer pattern**: Each analyzer in `pkg/analyzer/<name>/` follows the same structure:
+1. Create analyzer with `New()` plus functional options
 2. Analyze single file with `AnalyzeFile(path)`
-3. Analyze project with `AnalyzeProject(files)` or `AnalyzeProjectWithProgress(files, progressFn)`
+3. Analyze project with `AnalyzeProject(path)` or `AnalyzeProjectWithProgress(path, progressFn)`
 4. Close with `Close()` to release parser resources
+5. Types are co-located in the same package (no separate models package)
+
+**Multi-language parsing**: `pkg/parser/parser.go` contains `DetectLanguage()` which maps file extensions to tree-sitter parsers. Add new language support by extending `GetTreeSitterLanguage()`, `getFunctionNodeTypes()`, and `getClassNodeTypes()`.
 
 **Concurrent file processing**: `internal/fileproc/` provides generic parallel processing:
 - `MapFiles[T]` - For AST-based analyzers (parser provided per worker)
@@ -69,7 +89,7 @@ Omen is a multi-language code analysis CLI built in Go. It uses tree-sitter for 
 
 **Configuration**: Config loaded from `omen.toml` or `.omen/omen.toml`. See `omen.example.toml` for all options.
 
-**Tree-sitter queries**: Feature flag detection uses `.scm` query files in `internal/analyzer/featureflags/queries/<lang>/<provider>.scm`. Queries must capture `@flag_key` for the flag identifier. Predicates like `#match?` and `#eq?` must be placed inline within patterns, and `FilterPredicates()` must be called to evaluate them.
+**Tree-sitter queries**: Feature flag detection uses `.scm` query files in `pkg/analyzer/featureflags/queries/<lang>/<provider>.scm`. Queries must capture `@flag_key` for the flag identifier. Predicates like `#match?` and `#eq?` must be placed inline within patterns, and `FilterPredicates()` must be called to evaluate them.
 
 **MCP server**: Tools are registered in `internal/mcpserver/mcpserver.go`. Each tool has a description in `descriptions.go`. Prompts are stored as markdown files in `internal/mcpserver/prompts/` using `go:embed`.
 

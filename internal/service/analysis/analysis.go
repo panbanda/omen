@@ -1,12 +1,27 @@
 package analysis
 
 import (
-	"github.com/panbanda/omen/internal/analyzer"
-	"github.com/panbanda/omen/internal/analyzer/featureflags"
+	"context"
+
 	"github.com/panbanda/omen/internal/progress"
 	"github.com/panbanda/omen/internal/vcs"
+	"github.com/panbanda/omen/pkg/analyzer/changes"
+	"github.com/panbanda/omen/pkg/analyzer/churn"
+	"github.com/panbanda/omen/pkg/analyzer/cohesion"
+	"github.com/panbanda/omen/pkg/analyzer/complexity"
+	"github.com/panbanda/omen/pkg/analyzer/deadcode"
+	"github.com/panbanda/omen/pkg/analyzer/defect"
+	"github.com/panbanda/omen/pkg/analyzer/duplicates"
+	"github.com/panbanda/omen/pkg/analyzer/featureflags"
+	"github.com/panbanda/omen/pkg/analyzer/graph"
+	"github.com/panbanda/omen/pkg/analyzer/hotspot"
+	"github.com/panbanda/omen/pkg/analyzer/ownership"
+	"github.com/panbanda/omen/pkg/analyzer/repomap"
+	"github.com/panbanda/omen/pkg/analyzer/satd"
+	"github.com/panbanda/omen/pkg/analyzer/smells"
+	"github.com/panbanda/omen/pkg/analyzer/tdg"
+	"github.com/panbanda/omen/pkg/analyzer/temporal"
 	"github.com/panbanda/omen/pkg/config"
-	"github.com/panbanda/omen/pkg/models"
 )
 
 // Service orchestrates code analysis operations.
@@ -54,15 +69,15 @@ type ComplexityOptions struct {
 }
 
 // AnalyzeComplexity runs complexity analysis on the given files.
-func (s *Service) AnalyzeComplexity(files []string, opts ComplexityOptions) (*models.ComplexityAnalysis, error) {
-	var analyzerOpts []analyzer.ComplexityOption
+func (s *Service) AnalyzeComplexity(files []string, opts ComplexityOptions) (*complexity.Analysis, error) {
+	var analyzerOpts []complexity.Option
 	if opts.MaxFileSize > 0 {
-		analyzerOpts = append(analyzerOpts, analyzer.WithComplexityMaxFileSize(opts.MaxFileSize))
+		analyzerOpts = append(analyzerOpts, complexity.WithMaxFileSize(opts.MaxFileSize))
 	} else if s.config.Analysis.MaxFileSize > 0 {
-		analyzerOpts = append(analyzerOpts, analyzer.WithComplexityMaxFileSize(s.config.Analysis.MaxFileSize))
+		analyzerOpts = append(analyzerOpts, complexity.WithMaxFileSize(s.config.Analysis.MaxFileSize))
 	}
 
-	cxAnalyzer := analyzer.NewComplexityAnalyzer(analyzerOpts...)
+	cxAnalyzer := complexity.New(analyzerOpts...)
 	defer cxAnalyzer.Close()
 
 	if opts.OnProgress != nil {
@@ -82,21 +97,21 @@ type SATDOptions struct {
 // PatternConfig defines a custom SATD pattern.
 type PatternConfig struct {
 	Pattern  string
-	Category models.DebtCategory
-	Severity models.Severity
+	Category satd.Category
+	Severity satd.Severity
 }
 
 // AnalyzeSATD runs self-admitted technical debt analysis.
-func (s *Service) AnalyzeSATD(files []string, opts SATDOptions) (*models.SATDAnalysis, error) {
-	var analyzerOpts []analyzer.SATDOption
+func (s *Service) AnalyzeSATD(files []string, opts SATDOptions) (*satd.Analysis, error) {
+	var analyzerOpts []satd.Option
 	if !opts.IncludeTests {
-		analyzerOpts = append(analyzerOpts, analyzer.WithSATDSkipTests())
+		analyzerOpts = append(analyzerOpts, satd.WithSkipTests())
 	}
 	if opts.StrictMode {
-		analyzerOpts = append(analyzerOpts, analyzer.WithSATDStrictMode())
+		analyzerOpts = append(analyzerOpts, satd.WithStrictMode())
 	}
 
-	satdAnalyzer := analyzer.NewSATDAnalyzer(analyzerOpts...)
+	satdAnalyzer := satd.New(analyzerOpts...)
 
 	for _, p := range opts.CustomPatterns {
 		if err := satdAnalyzer.AddPattern(p.Pattern, p.Category, p.Severity); err != nil {
@@ -117,13 +132,13 @@ type DeadCodeOptions struct {
 }
 
 // AnalyzeDeadCode detects potentially unused code.
-func (s *Service) AnalyzeDeadCode(files []string, opts DeadCodeOptions) (*models.DeadCodeAnalysis, error) {
+func (s *Service) AnalyzeDeadCode(files []string, opts DeadCodeOptions) (*deadcode.Analysis, error) {
 	confidence := opts.Confidence
 	if confidence == 0 {
 		confidence = s.config.Thresholds.DeadCodeConfidence
 	}
 
-	dcAnalyzer := analyzer.NewDeadCodeAnalyzer(analyzer.WithDeadCodeConfidence(confidence))
+	dcAnalyzer := deadcode.New(deadcode.WithConfidence(confidence))
 	defer dcAnalyzer.Close()
 
 	if opts.OnProgress != nil {
@@ -140,21 +155,21 @@ type ChurnOptions struct {
 }
 
 // AnalyzeChurn analyzes git commit history for file churn.
-func (s *Service) AnalyzeChurn(repoPath string, opts ChurnOptions) (*models.ChurnAnalysis, error) {
+func (s *Service) AnalyzeChurn(ctx context.Context, repoPath string, opts ChurnOptions) (*churn.Analysis, error) {
 	days := opts.Days
 	if days <= 0 {
 		days = s.config.Analysis.ChurnDays
 	}
 
-	var analyzerOpts []analyzer.ChurnOption
-	analyzerOpts = append(analyzerOpts, analyzer.WithChurnDays(days))
-	analyzerOpts = append(analyzerOpts, analyzer.WithChurnOpener(s.opener))
+	var analyzerOpts []churn.Option
+	analyzerOpts = append(analyzerOpts, churn.WithDays(days))
+	analyzerOpts = append(analyzerOpts, churn.WithOpener(s.opener))
 	if opts.Spinner != nil {
-		analyzerOpts = append(analyzerOpts, analyzer.WithChurnSpinner(opts.Spinner))
+		analyzerOpts = append(analyzerOpts, churn.WithSpinner(opts.Spinner))
 	}
 
-	churnAnalyzer := analyzer.NewChurnAnalyzer(analyzerOpts...)
-	return churnAnalyzer.AnalyzeRepo(repoPath)
+	churnAnalyzer := churn.New(analyzerOpts...)
+	return churnAnalyzer.AnalyzeRepo(ctx, repoPath)
 }
 
 // DuplicatesOptions configures duplicate detection.
@@ -165,7 +180,7 @@ type DuplicatesOptions struct {
 }
 
 // AnalyzeDuplicates detects code clones.
-func (s *Service) AnalyzeDuplicates(files []string, opts DuplicatesOptions) (*models.CloneAnalysis, error) {
+func (s *Service) AnalyzeDuplicates(files []string, opts DuplicatesOptions) (*duplicates.Analysis, error) {
 	minTokens := opts.MinLines * 8 // Convert lines to approximate tokens
 	if opts.MinLines <= 0 {
 		minTokens = s.config.Thresholds.DuplicateMinLines * 8
@@ -176,9 +191,9 @@ func (s *Service) AnalyzeDuplicates(files []string, opts DuplicatesOptions) (*mo
 		threshold = s.config.Thresholds.DuplicateSimilarity
 	}
 
-	dupAnalyzer := analyzer.NewDuplicateAnalyzer(
-		analyzer.WithDuplicateMinTokens(minTokens),
-		analyzer.WithDuplicateSimilarityThreshold(threshold),
+	dupAnalyzer := duplicates.New(
+		duplicates.WithMinTokens(minTokens),
+		duplicates.WithSimilarityThreshold(threshold),
 	)
 	defer dupAnalyzer.Close()
 
@@ -196,7 +211,7 @@ type DefectOptions struct {
 }
 
 // AnalyzeDefects predicts defect probability.
-func (s *Service) AnalyzeDefects(repoPath string, files []string, opts DefectOptions) (*models.DefectAnalysis, error) {
+func (s *Service) AnalyzeDefects(ctx context.Context, repoPath string, files []string, opts DefectOptions) (*defect.Analysis, error) {
 	churnDays := opts.ChurnDays
 	if churnDays <= 0 {
 		churnDays = s.config.Analysis.ChurnDays
@@ -207,13 +222,13 @@ func (s *Service) AnalyzeDefects(repoPath string, files []string, opts DefectOpt
 		maxFileSize = s.config.Analysis.MaxFileSize
 	}
 
-	defectAnalyzer := analyzer.NewDefectAnalyzer(
-		analyzer.WithDefectChurnDays(churnDays),
-		analyzer.WithDefectMaxFileSize(maxFileSize),
+	defectAnalyzer := defect.New(
+		defect.WithChurnDays(churnDays),
+		defect.WithMaxFileSize(maxFileSize),
 	)
 	defer defectAnalyzer.Close()
 
-	return defectAnalyzer.AnalyzeProject(repoPath, files)
+	return defectAnalyzer.AnalyzeProject(ctx, repoPath, files)
 }
 
 // TDGOptions configures TDG analysis.
@@ -223,8 +238,8 @@ type TDGOptions struct {
 }
 
 // AnalyzeTDG calculates Technical Debt Gradient scores.
-func (s *Service) AnalyzeTDG(path string) (*models.ProjectScore, error) {
-	tdgAnalyzer := analyzer.NewTdgAnalyzer()
+func (s *Service) AnalyzeTDG(path string) (*tdg.ProjectScore, error) {
+	tdgAnalyzer := tdg.New()
 	defer tdgAnalyzer.Close()
 
 	project, err := tdgAnalyzer.AnalyzeProject(path)
@@ -236,39 +251,39 @@ func (s *Service) AnalyzeTDG(path string) (*models.ProjectScore, error) {
 
 // GraphOptions configures dependency graph analysis.
 type GraphOptions struct {
-	Scope          analyzer.GraphScope
+	Scope          graph.Scope
 	IncludeMetrics bool
 	OnProgress     func()
 }
 
 // AnalyzeGraph builds a dependency graph.
-func (s *Service) AnalyzeGraph(files []string, opts GraphOptions) (*models.DependencyGraph, *models.GraphMetrics, error) {
+func (s *Service) AnalyzeGraph(files []string, opts GraphOptions) (*graph.DependencyGraph, *graph.Metrics, error) {
 	scope := opts.Scope
 	if scope == "" {
-		scope = analyzer.ScopeModule
+		scope = graph.ScopeModule
 	}
 
-	graphAnalyzer := analyzer.NewGraphAnalyzer(analyzer.WithGraphScope(scope))
+	graphAnalyzer := graph.New(graph.WithScope(scope))
 	defer graphAnalyzer.Close()
 
-	var graph *models.DependencyGraph
+	var depGraph *graph.DependencyGraph
 	var err error
 	if opts.OnProgress != nil {
-		graph, err = graphAnalyzer.AnalyzeProjectWithProgress(files, opts.OnProgress)
+		depGraph, err = graphAnalyzer.AnalyzeProjectWithProgress(files, opts.OnProgress)
 	} else {
-		graph, err = graphAnalyzer.AnalyzeProject(files)
+		depGraph, err = graphAnalyzer.AnalyzeProject(files)
 	}
 
 	if err != nil {
 		return nil, nil, err
 	}
 
-	var metrics *models.GraphMetrics
+	var metrics *graph.Metrics
 	if opts.IncludeMetrics {
-		metrics = graphAnalyzer.CalculateMetrics(graph)
+		metrics = graphAnalyzer.CalculateMetrics(depGraph)
 	}
 
-	return graph, metrics, nil
+	return depGraph, metrics, nil
 }
 
 // HotspotOptions configures hotspot analysis.
@@ -280,7 +295,7 @@ type HotspotOptions struct {
 }
 
 // AnalyzeHotspots identifies code hotspots (high churn + high complexity).
-func (s *Service) AnalyzeHotspots(repoPath string, files []string, opts HotspotOptions) (*models.HotspotAnalysis, error) {
+func (s *Service) AnalyzeHotspots(ctx context.Context, repoPath string, files []string, opts HotspotOptions) (*hotspot.Analysis, error) {
 	days := opts.Days
 	if days <= 0 {
 		days = s.config.Analysis.ChurnDays
@@ -291,13 +306,13 @@ func (s *Service) AnalyzeHotspots(repoPath string, files []string, opts HotspotO
 		maxFileSize = s.config.Analysis.MaxFileSize
 	}
 
-	hotspotAnalyzer := analyzer.NewHotspotAnalyzer(
-		analyzer.WithHotspotChurnDays(days),
-		analyzer.WithHotspotMaxFileSize(maxFileSize),
+	hotspotAnalyzer := hotspot.New(
+		hotspot.WithChurnDays(days),
+		hotspot.WithMaxFileSize(maxFileSize),
 	)
 	defer hotspotAnalyzer.Close()
 
-	return hotspotAnalyzer.AnalyzeProjectWithProgress(repoPath, files, opts.OnProgress)
+	return hotspotAnalyzer.AnalyzeProjectWithProgress(ctx, repoPath, files, opts.OnProgress)
 }
 
 // TemporalCouplingOptions configures temporal coupling analysis.
@@ -308,7 +323,7 @@ type TemporalCouplingOptions struct {
 }
 
 // AnalyzeTemporalCoupling identifies files that frequently change together.
-func (s *Service) AnalyzeTemporalCoupling(repoPath string, opts TemporalCouplingOptions) (*models.TemporalCouplingAnalysis, error) {
+func (s *Service) AnalyzeTemporalCoupling(ctx context.Context, repoPath string, opts TemporalCouplingOptions) (*temporal.Analysis, error) {
 	days := opts.Days
 	if days <= 0 {
 		days = 30
@@ -319,11 +334,11 @@ func (s *Service) AnalyzeTemporalCoupling(repoPath string, opts TemporalCoupling
 		minCochanges = 3
 	}
 
-	tcAnalyzer := analyzer.NewTemporalCouplingAnalyzer(days, minCochanges,
-		analyzer.WithTemporalOpener(s.opener))
+	tcAnalyzer := temporal.New(days, minCochanges,
+		temporal.WithOpener(s.opener))
 	defer tcAnalyzer.Close()
 
-	return tcAnalyzer.AnalyzeRepo(repoPath)
+	return tcAnalyzer.AnalyzeRepoWithContext(ctx, repoPath)
 }
 
 // OwnershipOptions configures ownership analysis.
@@ -334,14 +349,14 @@ type OwnershipOptions struct {
 }
 
 // AnalyzeOwnership calculates code ownership and bus factor.
-func (s *Service) AnalyzeOwnership(repoPath string, files []string, opts OwnershipOptions) (*models.OwnershipAnalysis, error) {
-	var analyzerOpts []analyzer.OwnershipOption
+func (s *Service) AnalyzeOwnership(repoPath string, files []string, opts OwnershipOptions) (*ownership.Analysis, error) {
+	var analyzerOpts []ownership.Option
 	if opts.IncludeTrivial {
-		analyzerOpts = append(analyzerOpts, analyzer.WithOwnershipIncludeTrivial())
+		analyzerOpts = append(analyzerOpts, ownership.WithIncludeTrivial())
 	}
-	analyzerOpts = append(analyzerOpts, analyzer.WithOwnershipOpener(s.opener))
+	analyzerOpts = append(analyzerOpts, ownership.WithOpener(s.opener))
 
-	ownAnalyzer := analyzer.NewOwnershipAnalyzer(analyzerOpts...)
+	ownAnalyzer := ownership.New(analyzerOpts...)
 	defer ownAnalyzer.Close()
 
 	return ownAnalyzer.AnalyzeRepoWithProgress(repoPath, files, opts.OnProgress)
@@ -356,13 +371,13 @@ type CohesionOptions struct {
 }
 
 // AnalyzeCohesion calculates CK (Chidamber-Kemerer) OO metrics.
-func (s *Service) AnalyzeCohesion(files []string, opts CohesionOptions) (*models.CohesionAnalysis, error) {
-	var analyzerOpts []analyzer.CohesionOption
+func (s *Service) AnalyzeCohesion(files []string, opts CohesionOptions) (*cohesion.Analysis, error) {
+	var analyzerOpts []cohesion.Option
 	if opts.IncludeTests {
-		analyzerOpts = append(analyzerOpts, analyzer.WithCohesionIncludeTestFiles())
+		analyzerOpts = append(analyzerOpts, cohesion.WithIncludeTestFiles())
 	}
 
-	ckAnalyzer := analyzer.NewCohesionAnalyzer(analyzerOpts...)
+	ckAnalyzer := cohesion.New(analyzerOpts...)
 	defer ckAnalyzer.Close()
 
 	return ckAnalyzer.AnalyzeProjectWithProgress(files, opts.OnProgress)
@@ -374,8 +389,8 @@ type RepoMapOptions struct {
 }
 
 // AnalyzeRepoMap generates a PageRank-ranked symbol map.
-func (s *Service) AnalyzeRepoMap(files []string, opts RepoMapOptions) (*models.RepoMap, error) {
-	rmAnalyzer := analyzer.NewRepoMapAnalyzer()
+func (s *Service) AnalyzeRepoMap(files []string, opts RepoMapOptions) (*repomap.Map, error) {
+	rmAnalyzer := repomap.New()
 	defer rmAnalyzer.Close()
 
 	return rmAnalyzer.AnalyzeProject(files)
@@ -384,29 +399,29 @@ func (s *Service) AnalyzeRepoMap(files []string, opts RepoMapOptions) (*models.R
 // ChangesOptions configures change-level defect prediction.
 type ChangesOptions struct {
 	Days    int
-	Weights models.ChangesWeights
+	Weights changes.Weights
 }
 
 // AnalyzeChanges performs change-level defect prediction on recent commits.
-func (s *Service) AnalyzeChanges(repoPath string, opts ChangesOptions) (*models.ChangesAnalysis, error) {
+func (s *Service) AnalyzeChanges(ctx context.Context, repoPath string, opts ChangesOptions) (*changes.Analysis, error) {
 	days := opts.Days
 	if days <= 0 {
 		days = s.config.Analysis.ChurnDays
 	}
 
-	var analyzerOpts []analyzer.ChangesOption
-	analyzerOpts = append(analyzerOpts, analyzer.WithChangesDays(days))
-	analyzerOpts = append(analyzerOpts, analyzer.WithChangesOpener(s.opener))
+	var analyzerOpts []changes.Option
+	analyzerOpts = append(analyzerOpts, changes.WithDays(days))
+	analyzerOpts = append(analyzerOpts, changes.WithOpener(s.opener))
 
 	// Only set weights if they're not zero-valued
 	if opts.Weights.FIX != 0 || opts.Weights.Entropy != 0 {
-		analyzerOpts = append(analyzerOpts, analyzer.WithChangesWeights(opts.Weights))
+		analyzerOpts = append(analyzerOpts, changes.WithWeights(opts.Weights))
 	}
 
-	changesAnalyzer := analyzer.NewChangesAnalyzer(analyzerOpts...)
+	changesAnalyzer := changes.New(analyzerOpts...)
 	defer changesAnalyzer.Close()
 
-	return changesAnalyzer.AnalyzeRepo(repoPath)
+	return changesAnalyzer.AnalyzeRepoWithContext(ctx, repoPath)
 }
 
 // SmellOptions configures architectural smell detection.
@@ -419,20 +434,20 @@ type SmellOptions struct {
 }
 
 // AnalyzeSmells detects architectural smells in a dependency graph.
-func (s *Service) AnalyzeSmells(files []string, opts SmellOptions) (*models.SmellAnalysis, error) {
+func (s *Service) AnalyzeSmells(files []string, opts SmellOptions) (*smells.Analysis, error) {
 	// First build the dependency graph
-	graphAnalyzer := analyzer.NewGraphAnalyzer(analyzer.WithGraphScope(analyzer.ScopeFile))
+	graphAnalyzer := graph.New(graph.WithScope(graph.ScopeFile))
 	defer graphAnalyzer.Close()
 
-	graph, err := graphAnalyzer.AnalyzeProjectWithProgress(files, opts.OnProgress)
+	depGraph, err := graphAnalyzer.AnalyzeProjectWithProgress(files, opts.OnProgress)
 	if err != nil {
 		return nil, err
 	}
 
 	// Configure smell analyzer
-	var smellOpts []analyzer.SmellOption
+	var smellOpts []smells.Option
 	if opts.HubThreshold > 0 {
-		smellOpts = append(smellOpts, analyzer.WithHubThreshold(opts.HubThreshold))
+		smellOpts = append(smellOpts, smells.WithHubThreshold(opts.HubThreshold))
 	}
 	if opts.GodFanInThreshold > 0 || opts.GodFanOutThreshold > 0 {
 		fanIn := opts.GodFanInThreshold
@@ -443,16 +458,16 @@ func (s *Service) AnalyzeSmells(files []string, opts SmellOptions) (*models.Smel
 		if fanOut == 0 {
 			fanOut = 10
 		}
-		smellOpts = append(smellOpts, analyzer.WithGodThresholds(fanIn, fanOut))
+		smellOpts = append(smellOpts, smells.WithGodThresholds(fanIn, fanOut))
 	}
 	if opts.InstabilityDifference > 0 {
-		smellOpts = append(smellOpts, analyzer.WithInstabilityDifference(opts.InstabilityDifference))
+		smellOpts = append(smellOpts, smells.WithInstabilityDifference(opts.InstabilityDifference))
 	}
 
-	smellAnalyzer := analyzer.NewSmellAnalyzer(smellOpts...)
+	smellAnalyzer := smells.New(smellOpts...)
 	defer smellAnalyzer.Close()
 
-	return smellAnalyzer.AnalyzeGraph(graph), nil
+	return smellAnalyzer.AnalyzeGraph(depGraph), nil
 }
 
 // FeatureFlagOptions configures feature flag analysis.
@@ -464,7 +479,7 @@ type FeatureFlagOptions struct {
 }
 
 // AnalyzeFeatureFlags detects and analyzes feature flags in the codebase.
-func (s *Service) AnalyzeFeatureFlags(files []string, opts FeatureFlagOptions) (*models.FeatureFlagAnalysis, error) {
+func (s *Service) AnalyzeFeatureFlags(files []string, opts FeatureFlagOptions) (*featureflags.Analysis, error) {
 	var analyzerOpts []featureflags.Option
 
 	if len(opts.Providers) > 0 {
@@ -502,7 +517,7 @@ func (s *Service) AnalyzeFeatureFlags(files []string, opts FeatureFlagOptions) (
 		analyzerOpts = append(analyzerOpts, featureflags.WithCustomProviders(customProviders))
 	}
 
-	flagAnalyzer, err := featureflags.NewAnalyzer(analyzerOpts...)
+	flagAnalyzer, err := featureflags.New(analyzerOpts...)
 	if err != nil {
 		return nil, err
 	}
