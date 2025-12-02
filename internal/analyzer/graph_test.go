@@ -1772,3 +1772,270 @@ func BenchmarkCalculateEigenvector(b *testing.B) {
 }
 
 // BenchmarkLouvainCommunityDetection removed - now using gonum library
+
+func TestExtractRubyClassDependencies(t *testing.T) {
+	tests := []struct {
+		name        string
+		code        string
+		wantClasses []string
+		wantRefs    []string
+		wantNoRefs  []string // refs that should NOT be present
+	}{
+		{
+			name: "Simple class with inheritance",
+			code: `class Order < ApplicationRecord
+end`,
+			wantClasses: []string{"Order"},
+			wantRefs:    []string{"ApplicationRecord"},
+		},
+		{
+			name: "Class with include and extend",
+			code: `class Order
+  include Payable
+  extend Searchable
+  prepend Auditable
+end`,
+			wantClasses: []string{"Order"},
+			wantRefs:    []string{"Payable", "Searchable", "Auditable"},
+		},
+		{
+			name: "Class method call on constant",
+			code: `class Order
+  def process
+    PaymentService.charge(total)
+  end
+end`,
+			wantClasses: []string{"Order"},
+			wantRefs:    []string{"PaymentService"},
+		},
+		{
+			name: "Constant instantiation",
+			code: `class Order
+  def notify
+    RestaurantNotifier.new(restaurant).notify
+  end
+end`,
+			wantClasses: []string{"Order"},
+			wantRefs:    []string{"RestaurantNotifier"},
+		},
+		{
+			name: "Namespaced constant",
+			code: `class Payment
+  def charge!
+    Stripe::Charge.create(amount: total)
+  end
+end`,
+			wantClasses: []string{"Payment"},
+			wantRefs:    []string{"Stripe::Charge"},
+		},
+		{
+			name: "Module definition",
+			code: `module Payable
+  def charge!
+    BillingService.process(self)
+  end
+end`,
+			wantClasses: []string{"Payable"},
+			wantRefs:    []string{"BillingService"},
+		},
+		{
+			name: "Multiple classes in one file",
+			code: `class Order < ApplicationRecord
+end
+
+class OrderItem < ApplicationRecord
+  belongs_to :order
+end`,
+			wantClasses: []string{"Order", "OrderItem"},
+			wantRefs:    []string{"ApplicationRecord"},
+		},
+		{
+			name: "Self-references should be excluded",
+			code: `class Order
+  def self.find_active
+    Order.where(active: true)
+  end
+end`,
+			wantClasses: []string{"Order"},
+			wantNoRefs:  []string{"Order"}, // Self-reference should be excluded
+		},
+		{
+			name: "Rails-like model with associations",
+			code: `class Order < ApplicationRecord
+  belongs_to :user
+  belongs_to :restaurant
+  has_many :order_items
+
+  include Payable
+  extend Searchable
+
+  def process_payment
+    PaymentService.charge(user, total)
+  end
+
+  def notify_restaurant
+    RestaurantNotifier.new(restaurant).notify
+  end
+end`,
+			wantClasses: []string{"Order"},
+			wantRefs:    []string{"ApplicationRecord", "Payable", "Searchable", "PaymentService", "RestaurantNotifier"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			testFile := filepath.Join(tmpDir, "test.rb")
+			if err := os.WriteFile(testFile, []byte(tt.code), 0644); err != nil {
+				t.Fatalf("failed to write test file: %v", err)
+			}
+
+			p := parser.New()
+			defer p.Close()
+
+			result, err := p.ParseFile(testFile)
+			if err != nil {
+				t.Fatalf("ParseFile() error = %v", err)
+			}
+
+			classes, refs := extractClassDependencies(result)
+
+			// Check defined classes
+			for _, want := range tt.wantClasses {
+				found := false
+				for _, cls := range classes {
+					if cls == want {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("class %q not found in defined classes %v", want, classes)
+				}
+			}
+
+			// Check referenced classes
+			for _, want := range tt.wantRefs {
+				found := false
+				for _, ref := range refs {
+					if ref == want {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("reference %q not found in refs %v", want, refs)
+				}
+			}
+
+			// Check that certain refs are NOT present (e.g., self-references)
+			for _, noWant := range tt.wantNoRefs {
+				for _, ref := range refs {
+					if ref == noWant {
+						t.Errorf("reference %q should NOT be present in refs %v", noWant, refs)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestAnalyzeProject_RubyClassDependencies(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	files := map[string]string{
+		"order.rb": `class Order < ApplicationRecord
+  include Payable
+
+  def process
+    PaymentService.charge(user, total)
+  end
+end`,
+		"payment_service.rb": `class PaymentService
+  def self.charge(user, amount)
+    Stripe::Charge.create(amount: amount)
+  end
+end`,
+		"payable.rb": `module Payable
+  def pay!
+    # payment logic
+  end
+end`,
+		"application_record.rb": `class ApplicationRecord
+  # base class
+end`,
+	}
+
+	var filePaths []string
+	for name, content := range files {
+		path := filepath.Join(tmpDir, name)
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("failed to write %s: %v", name, err)
+		}
+		filePaths = append(filePaths, path)
+	}
+
+	analyzer := NewGraphAnalyzer(WithGraphScope(ScopeFile))
+	defer analyzer.Close()
+
+	graph, err := analyzer.AnalyzeProject(filePaths)
+	if err != nil {
+		t.Fatalf("AnalyzeProject() error = %v", err)
+	}
+
+	if graph == nil {
+		t.Fatal("AnalyzeProject() returned nil graph")
+	}
+
+	// Should have 4 nodes (one per file)
+	if len(graph.Nodes) != 4 {
+		t.Errorf("len(graph.Nodes) = %v, want 4", len(graph.Nodes))
+	}
+
+	// Check for expected edges based on class references
+	// order.rb -> application_record.rb (inheritance)
+	// order.rb -> payable.rb (include)
+	// order.rb -> payment_service.rb (PaymentService.charge)
+
+	edgeMap := make(map[string]map[string]bool)
+	for _, edge := range graph.Edges {
+		if edgeMap[edge.From] == nil {
+			edgeMap[edge.From] = make(map[string]bool)
+		}
+		edgeMap[edge.From][edge.To] = true
+	}
+
+	// Find the order.rb node
+	var orderPath string
+	for _, node := range graph.Nodes {
+		if strings.HasSuffix(node.ID, "order.rb") {
+			orderPath = node.ID
+			break
+		}
+	}
+
+	if orderPath == "" {
+		t.Fatal("Could not find order.rb node")
+	}
+
+	// Count edges from order.rb
+	orderEdges := edgeMap[orderPath]
+	if len(orderEdges) < 3 {
+		t.Errorf("order.rb should have at least 3 outgoing edges (ApplicationRecord, Payable, PaymentService), got %d: %v", len(orderEdges), orderEdges)
+	}
+
+	// Verify specific edges exist
+	expectedTargets := []string{"application_record.rb", "payable.rb", "payment_service.rb"}
+	for _, target := range expectedTargets {
+		found := false
+		for to := range orderEdges {
+			if strings.HasSuffix(to, target) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected edge from order.rb to %s, but not found in %v", target, orderEdges)
+		}
+	}
+}
