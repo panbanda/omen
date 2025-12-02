@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.4](https://github.com/panbanda/omen/compare/omen-v1.4.3...omen-v1.4.4) (2025-12-02)
+
+
+### Bug Fixes
+
+* **mcp:** use identifier field and shorten description for registry ([0f7e1db](https://github.com/panbanda/omen/commit/0f7e1db6b45277f427a7630cd103391d5673321a))
+
 ## [1.4.3](https://github.com/panbanda/omen/compare/omen-v1.4.2...omen-v1.4.3) (2025-12-02)
 
 
