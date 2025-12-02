@@ -67,7 +67,7 @@ Omen is a multi-language code analysis CLI built in Go. It uses tree-sitter for 
 - `ForEachFile[T]` - For non-AST operations (e.g., SATD regex scanning)
 - Both use 2x NumCPU workers, optimal for mixed I/O and CGO workloads
 
-**Configuration**: Config loaded from `omen.toml`, `.omen.toml`, or `.omen/omen.toml`. See `omen.example.toml` for all options.
+**Configuration**: Config loaded from `omen.toml` or `.omen/omen.toml`. See `omen.example.toml` for all options.
 
 **Tree-sitter queries**: Feature flag detection uses `.scm` query files in `internal/analyzer/featureflags/queries/<lang>/<provider>.scm`. Queries must capture `@flag_key` for the flag identifier. Predicates like `#match?` and `#eq?` must be placed inline within patterns, and `FilterPredicates()` must be called to evaluate them.
 

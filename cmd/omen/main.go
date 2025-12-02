@@ -20,6 +20,7 @@ import (
 	scannerSvc "github.com/panbanda/omen/internal/service/scanner"
 	"github.com/panbanda/omen/pkg/config"
 	"github.com/panbanda/omen/pkg/models"
+	"github.com/pelletier/go-toml"
 	"github.com/urfave/cli/v2"
 )
 
@@ -212,6 +213,8 @@ Supports: Go, Rust, Python, TypeScript, JavaScript, Java, C, C++, Ruby, PHP`,
 			return nil
 		},
 		Commands: []*cli.Command{
+			initCmd(),
+			configCmd(),
 			analyzeCmd(),
 			contextCmd(),
 			mcpCmd(),
@@ -2780,4 +2783,170 @@ Available tools:
 			return server.Run(context.Background())
 		},
 	}
+}
+
+func initCmd() *cli.Command {
+	return &cli.Command{
+		Name:  "init",
+		Usage: "Initialize a new omen configuration file",
+		Description: `Creates a new omen.toml configuration file in the current directory
+with sensible defaults. Use --output to specify a different location.
+
+Examples:
+  omen init                    # Creates omen.toml in current directory
+  omen init -o .omen/omen.toml # Creates config in .omen directory
+  omen init --force            # Overwrite existing config file`,
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "output",
+				Aliases: []string{"o"},
+				Value:   "omen.toml",
+				Usage:   "Output file path",
+			},
+			&cli.BoolFlag{
+				Name:  "force",
+				Usage: "Overwrite existing config file",
+			},
+		},
+		Action: runInitCmd,
+	}
+}
+
+func runInitCmd(c *cli.Context) error {
+	outputPath := c.String("output")
+	force := c.Bool("force")
+
+	// Check if file already exists
+	if _, err := os.Stat(outputPath); err == nil && !force {
+		return fmt.Errorf("config file %q already exists (use --force to overwrite)", outputPath)
+	}
+
+	// Create parent directory if needed
+	dir := filepath.Dir(outputPath)
+	if dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("failed to create directory %q: %w", dir, err)
+		}
+	}
+
+	// Generate default config content
+	content, err := generateDefaultConfig()
+	if err != nil {
+		return err
+	}
+
+	if err := os.WriteFile(outputPath, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	color.Green("Created %s", outputPath)
+	fmt.Println("Edit this file to customize analysis settings.")
+	return nil
+}
+
+func generateDefaultConfig() (string, error) {
+	cfg := config.DefaultConfig()
+
+	content, err := toml.Marshal(cfg)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal config to TOML: %w", err)
+	}
+
+	var buf strings.Builder
+	buf.WriteString("# Omen CLI Configuration\n")
+	buf.WriteString("# Documentation: https://github.com/panbanda/omen\n\n")
+	buf.Write(content)
+
+	return buf.String(), nil
+}
+
+func configCmd() *cli.Command {
+	return &cli.Command{
+		Name:  "config",
+		Usage: "Configuration management commands",
+		Subcommands: []*cli.Command{
+			{
+				Name:  "validate",
+				Usage: "Validate a configuration file",
+				Description: `Validates an omen configuration file for syntax errors and invalid values.
+
+Examples:
+  omen config validate                  # Validates default config locations
+  omen config validate -c omen.toml     # Validates specific file
+  omen config validate -c .omen/omen.toml`,
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:    "config",
+						Aliases: []string{"c"},
+						Usage:   "Path to config file to validate",
+					},
+				},
+				Action: runConfigValidateCmd,
+			},
+			{
+				Name:  "show",
+				Usage: "Show the effective configuration",
+				Description: `Shows the merged configuration from defaults and config file.
+
+Examples:
+  omen config show              # Show effective config
+  omen config show -c omen.toml # Show config from specific file`,
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:    "config",
+						Aliases: []string{"c"},
+						Usage:   "Path to config file",
+					},
+				},
+				Action: runConfigShowCmd,
+			},
+		},
+	}
+}
+
+func runConfigValidateCmd(c *cli.Context) error {
+	var opts []config.LoadOption
+	if path := c.String("config"); path != "" {
+		opts = append(opts, config.WithPath(path))
+	}
+
+	result, err := config.LoadConfig(opts...)
+	if err != nil {
+		color.Red("Configuration validation failed:")
+		fmt.Printf("  - %s\n", err)
+		return err
+	}
+
+	if result.Source != "" {
+		color.Green("Configuration valid: %s", result.Source)
+	} else {
+		color.Yellow("No config file found. Default configuration is valid.")
+	}
+	return nil
+}
+
+func runConfigShowCmd(c *cli.Context) error {
+	var opts []config.LoadOption
+	if path := c.String("config"); path != "" {
+		opts = append(opts, config.WithPath(path))
+	}
+
+	result, err := config.LoadConfig(opts...)
+	if err != nil {
+		return err
+	}
+
+	if result.Source != "" {
+		fmt.Printf("# Configuration from: %s\n\n", result.Source)
+	} else {
+		fmt.Println("# Default configuration (no config file found)")
+	}
+
+	content, err := toml.Marshal(result.Config)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+	fmt.Print(string(content))
+
+	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/panbanda/omen/pkg/config"
 	"github.com/urfave/cli/v2"
 )
 
@@ -405,4 +406,295 @@ func TestVersionVariable(t *testing.T) {
 	if version == "" {
 		t.Error("version variable should have a default value")
 	}
+}
+
+// TestInitCommand verifies the init command creates a config file.
+func TestInitCommand(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "omen.toml")
+
+	app := &cli.App{
+		Name:     "omen",
+		Metadata: make(map[string]interface{}),
+		Commands: []*cli.Command{
+			initCmd(),
+		},
+	}
+
+	err := app.Run([]string{"omen", "init", "-o", configPath})
+	if err != nil {
+		t.Fatalf("init command failed: %v", err)
+	}
+
+	// Verify file was created
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		t.Fatal("init command did not create config file")
+	}
+
+	// Verify file content is valid TOML
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("failed to read config file: %v", err)
+	}
+
+	if len(content) == 0 {
+		t.Fatal("config file is empty")
+	}
+
+	// Verify it contains expected sections
+	contentStr := string(content)
+	for _, section := range []string{"[analysis]", "[thresholds]", "[cache]", "[output]"} {
+		if !contains(contentStr, section) {
+			t.Errorf("config file missing section %q", section)
+		}
+	}
+}
+
+// TestInitCommandRefusesOverwrite verifies init refuses to overwrite without --force.
+func TestInitCommandRefusesOverwrite(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "omen.toml")
+
+	// Create existing file
+	if err := os.WriteFile(configPath, []byte("existing"), 0644); err != nil {
+		t.Fatalf("failed to create test file: %v", err)
+	}
+
+	app := &cli.App{
+		Name:     "omen",
+		Metadata: make(map[string]interface{}),
+		Commands: []*cli.Command{
+			initCmd(),
+		},
+	}
+
+	err := app.Run([]string{"omen", "init", "-o", configPath})
+	if err == nil {
+		t.Fatal("init command should have failed when file exists")
+	}
+
+	// Verify original content preserved
+	content, _ := os.ReadFile(configPath)
+	if string(content) != "existing" {
+		t.Error("init command overwrote file without --force")
+	}
+}
+
+// TestInitCommandForce verifies init --force overwrites existing files.
+func TestInitCommandForce(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "omen.toml")
+
+	// Create existing file
+	if err := os.WriteFile(configPath, []byte("existing"), 0644); err != nil {
+		t.Fatalf("failed to create test file: %v", err)
+	}
+
+	app := &cli.App{
+		Name:     "omen",
+		Metadata: make(map[string]interface{}),
+		Commands: []*cli.Command{
+			initCmd(),
+		},
+	}
+
+	err := app.Run([]string{"omen", "init", "-o", configPath, "--force"})
+	if err != nil {
+		t.Fatalf("init --force command failed: %v", err)
+	}
+
+	// Verify file was overwritten
+	content, _ := os.ReadFile(configPath)
+	if string(content) == "existing" {
+		t.Error("init --force did not overwrite file")
+	}
+}
+
+// TestInitCommandCreatesDirectory verifies init creates parent directories.
+func TestInitCommandCreatesDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "subdir", "nested", "omen.toml")
+
+	app := &cli.App{
+		Name:     "omen",
+		Metadata: make(map[string]interface{}),
+		Commands: []*cli.Command{
+			initCmd(),
+		},
+	}
+
+	err := app.Run([]string{"omen", "init", "-o", configPath})
+	if err != nil {
+		t.Fatalf("init command failed: %v", err)
+	}
+
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		t.Fatal("init command did not create config file in nested directory")
+	}
+}
+
+// TestConfigValidateCommand verifies config validate works on valid config.
+func TestConfigValidateCommand(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "omen.toml")
+
+	// Create a valid config file
+	content := `[analysis]
+churn_days = 30
+
+[thresholds]
+cyclomatic_complexity = 10
+cognitive_complexity = 15
+duplicate_min_lines = 6
+duplicate_similarity = 0.8
+dead_code_confidence = 0.8
+defect_high_risk = 0.6
+tdg_high_risk = 2.5
+
+[duplicates]
+min_tokens = 50
+similarity_threshold = 0.70
+shingle_size = 5
+num_hash_functions = 200
+num_bands = 20
+rows_per_band = 10
+min_group_size = 2
+
+[cache]
+ttl = 24
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	app := &cli.App{
+		Name:     "omen",
+		Metadata: make(map[string]interface{}),
+		Commands: []*cli.Command{
+			configCmd(),
+		},
+	}
+
+	err := app.Run([]string{"omen", "config", "validate", "-c", configPath})
+	if err != nil {
+		t.Fatalf("config validate failed on valid config: %v", err)
+	}
+}
+
+// TestConfigValidateInvalid verifies config validate catches invalid values.
+func TestConfigValidateInvalid(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "bad.toml")
+
+	// Create an invalid config file
+	content := `[thresholds]
+cyclomatic_complexity = 0
+duplicate_similarity = 1.5
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	app := &cli.App{
+		Name:     "omen",
+		Metadata: make(map[string]interface{}),
+		Commands: []*cli.Command{
+			configCmd(),
+		},
+	}
+
+	err := app.Run([]string{"omen", "config", "validate", "-c", configPath})
+	if err == nil {
+		t.Fatal("config validate should have failed on invalid config")
+	}
+}
+
+// TestConfigValidateMissingFile verifies config validate handles missing files.
+func TestConfigValidateMissingFile(t *testing.T) {
+	app := &cli.App{
+		Name:     "omen",
+		Metadata: make(map[string]interface{}),
+		Commands: []*cli.Command{
+			configCmd(),
+		},
+	}
+
+	err := app.Run([]string{"omen", "config", "validate", "-c", "/nonexistent/path/omen.toml"})
+	if err == nil {
+		t.Fatal("config validate should have failed for missing file")
+	}
+}
+
+// TestConfigShowCommand verifies config show outputs configuration.
+func TestConfigShowCommand(t *testing.T) {
+	app := &cli.App{
+		Name:     "omen",
+		Metadata: make(map[string]interface{}),
+		Commands: []*cli.Command{
+			configCmd(),
+		},
+	}
+
+	// Should not error when showing defaults
+	err := app.Run([]string{"omen", "config", "show"})
+	if err != nil {
+		t.Fatalf("config show failed: %v", err)
+	}
+}
+
+// TestGenerateDefaultConfig verifies the generated config is valid.
+func TestGenerateDefaultConfig(t *testing.T) {
+	content, err := generateDefaultConfig()
+	if err != nil {
+		t.Fatalf("generateDefaultConfig failed: %v", err)
+	}
+
+	if len(content) == 0 {
+		t.Fatal("generateDefaultConfig returned empty string")
+	}
+
+	// Verify it contains expected sections
+	for _, section := range []string{"[analysis]", "[thresholds]", "[duplicates]", "[exclude]", "[cache]", "[output]", "[feature_flags]"} {
+		if !contains(content, section) {
+			t.Errorf("generated config missing section %q", section)
+		}
+	}
+}
+
+// TestFindConfigFile verifies config file discovery.
+func TestFindConfigFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalWd, _ := os.Getwd()
+	defer os.Chdir(originalWd)
+
+	os.Chdir(tmpDir)
+
+	// No config file should return empty
+	result := config.FindConfigFile()
+	if result != "" {
+		t.Errorf("FindConfigFile() = %q, want empty string", result)
+	}
+
+	// Create omen.toml
+	if err := os.WriteFile("omen.toml", []byte("# config"), 0644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	result = config.FindConfigFile()
+	if result != "omen.toml" {
+		t.Errorf("FindConfigFile() = %q, want %q", result, "omen.toml")
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
+}
+
+func containsHelper(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

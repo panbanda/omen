@@ -1,4 +1,5 @@
 <div align="center">
+
 # Omen
 
 <img src="assets/omen-logo.png" alt="Omen - Code Analysis CLI" width="100%">
@@ -437,7 +438,7 @@ Tool outputs default to [TOON (Token-Oriented Object Notation)](https://github.c
 
 ## Supported Languages
 
-Go, Rust, Python, TypeScript, JavaScript, TSX/JSX, Java, C, C++, C#, Ruby, PHP, Bash
+Go, Rust, Python, TypeScript, JavaScript, TSX/JSX, Java, C, C++, C#, Ruby, PHP, Bash, and any other `tree-sitter` supported language
 
 ## Installation
 
@@ -514,143 +515,15 @@ omen analyze cohesion ./src
 omen analyze flags ./src
 ```
 
-## Commands
-
-### Top-level Commands
-
-| Command   | Alias | Description                                           |
-| --------- | ----- | ----------------------------------------------------- |
-| `analyze` | `a`   | Run analyzers (all if no subcommand, or specific one) |
-| `context` | `ctx` | Deep context generation for LLMs                      |
-| `mcp`     | -     | Start MCP server for LLM tool integration             |
-
-### Analyzer Subcommands (`omen analyze <subcommand>`)
-
-| Subcommand          | Alias               | Description                                      |
-| ------------------- | ------------------- | ------------------------------------------------ |
-| `complexity`        | `cx`                | Cyclomatic and cognitive complexity analysis     |
-| `satd`              | `debt`              | Self-admitted technical debt detection           |
-| `deadcode`          | `dc`                | Unused code detection                            |
-| `churn`             | -                   | Git history analysis for file churn              |
-| `duplicates`        | `dup`               | Code clone detection                             |
-| `defect`            | `predict`           | File-level defect probability (PMAT)             |
-| `changes`           | `jit`               | Commit-level change risk analysis (Kamei et al.) |
-| `tdg`               | -                   | Technical Debt Gradient scores                   |
-| `graph`             | `dag`               | Dependency graph (Mermaid output)                |
-| `hotspot`           | `hs`                | Churn x complexity risk analysis                 |
-| `smells`            | -                   | Architectural smell detection                    |
-| `temporal-coupling` | `tc`                | Temporal coupling detection                      |
-| `ownership`         | `own`, `bus-factor` | Code ownership and bus factor                    |
-| `cohesion`          | `ck`                | CK object-oriented metrics                       |
-| `lint-hotspot`      | `lh`                | Lint violation density                           |
-| `flags`             | `ff`                | Feature flag detection and staleness analysis    |
-
-## Output Formats
-
-All commands support multiple output formats:
-
-```bash
-omen analyze complexity ./src -f text      # Default, colored terminal output
-omen analyze complexity ./src -f json      # JSON for programmatic use
-omen analyze complexity ./src -f markdown  # Markdown tables
-omen analyze complexity ./src -f toon      # TOON format
-```
-
-Write output to a file:
-
-```bash
-omen analyze ./src -f json -o report.json
-```
-
 ## Configuration
 
-Create `omen.toml`, `.omen.toml`, or `.omen/omen.toml`:
+Create `omen.toml` or `.omen/omen.toml` (supports `yaml`, `json` and `toml`):
 
-```toml
-[exclude]
-patterns = ["vendor/**", "node_modules/**", "**/*_test.go"]
-dirs = [".git", "dist", "build"]
-
-[thresholds]
-cyclomatic_complexity = 10
-cognitive_complexity = 15
-duplicate_min_lines = 6
-duplicate_similarity = 0.8
-dead_code_confidence = 0.8
-
-[analysis]
-churn_days = 30
+```bash
+omen init
 ```
 
 See [`omen.example.toml`](omen.example.toml) for all options.
-
-## Examples
-
-### Find Complex Functions
-
-```bash
-omen analyze complexity ./pkg --functions-only --cyclomatic-threshold 15
-```
-
-### High-Risk Files Only
-
-```bash
-omen analyze defect ./src --high-risk-only
-```
-
-### Top 5 TDG Hotspots
-
-```bash
-omen analyze tdg ./src --hotspots 5
-```
-
-### Generate LLM Context
-
-```bash
-omen context ./src --include-metrics --include-graph
-```
-
-### Repository Map for LLM Context
-
-```bash
-omen context ./src --repo-map --top 50
-```
-
-### Find Hotspots (High-Risk Files)
-
-```bash
-omen analyze hotspot ./src --top 10
-```
-
-### Analyze Temporal Coupling
-
-```bash
-omen analyze temporal-coupling ./ --min-cochanges 5 --days 90
-```
-
-### Check Bus Factor Risk
-
-```bash
-omen analyze ownership ./src --top 20
-```
-
-### CK Metrics for Classes
-
-```bash
-omen analyze cohesion ./src --sort lcom
-```
-
-### Find Stale Feature Flags
-
-```bash
-omen analyze flags ./src --provider launchdarkly
-```
-
-### Feature Flags with Custom Provider
-
-```bash
-omen analyze flags ./src --config omen.toml --provider feature
-```
 
 ## MCP Server
 
