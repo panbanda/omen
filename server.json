@@ -1,0 +1,94 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/registry/refs/heads/main/schemas/server-manifest.json",
+  "name": "io.github.panbanda/omen",
+  "description": "Multi-language code analysis tools for complexity, technical debt, hotspots, ownership, and defect prediction",
+  "repository": {
+    "url": "https://github.com/panbanda/omen",
+    "source": "github",
+    "id": "panbanda/omen"
+  },
+  "version_detail": {
+    "version": "0.0.0"
+  },
+  "packages": [
+    {
+      "registry_type": "oci",
+      "name": "ghcr.io/panbanda/omen",
+      "version": "0.0.0",
+      "environment_variables": [],
+      "transport": {
+        "type": "stdio",
+        "stdio": {
+          "args": ["mcp"]
+        }
+      }
+    }
+  ],
+  "remotes": [],
+  "tools": [
+    {
+      "name": "analyze_complexity",
+      "description": "Measures cyclomatic and cognitive complexity of functions across a codebase"
+    },
+    {
+      "name": "analyze_churn",
+      "description": "Analyzes git history to identify files that change frequently"
+    },
+    {
+      "name": "analyze_hotspot",
+      "description": "Identifies hotspots: files with both high churn AND high complexity"
+    },
+    {
+      "name": "analyze_ownership",
+      "description": "Analyzes code ownership patterns and calculates bus factor risk"
+    },
+    {
+      "name": "analyze_defect",
+      "description": "Predicts defect probability using PMAT-weighted metrics"
+    },
+    {
+      "name": "analyze_changes",
+      "description": "Analyzes recent changes for defect risk using Just-in-Time prediction"
+    },
+    {
+      "name": "analyze_satd",
+      "description": "Detects self-admitted technical debt markers in code comments"
+    },
+    {
+      "name": "analyze_tdg",
+      "description": "Calculates Technical Debt Gradient scores"
+    },
+    {
+      "name": "analyze_deadcode",
+      "description": "Identifies potentially unused functions, methods, and variables"
+    },
+    {
+      "name": "analyze_duplicates",
+      "description": "Detects code clones and duplicated code blocks"
+    },
+    {
+      "name": "analyze_graph",
+      "description": "Generates dependency graphs showing relationships between code modules"
+    },
+    {
+      "name": "analyze_smells",
+      "description": "Detects architectural smells: cycles, hubs, god components"
+    },
+    {
+      "name": "analyze_cohesion",
+      "description": "Calculates Chidamber-Kemerer object-oriented metrics"
+    },
+    {
+      "name": "analyze_temporal_coupling",
+      "description": "Finds files that frequently change together in git history"
+    },
+    {
+      "name": "analyze_flags",
+      "description": "Detects feature flags in source code and analyzes them for staleness"
+    },
+    {
+      "name": "analyze_repo_map",
+      "description": "Generates a PageRank-weighted map of important symbols in the repository"
+    }
+  ]
+}

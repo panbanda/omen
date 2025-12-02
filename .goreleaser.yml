@@ -119,6 +119,7 @@ dockers:
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
       - "--label=org.opencontainers.image.version={{ trimprefix .Version \"omen-v\" }}"
       - "--label=org.opencontainers.image.source=https://github.com/panbanda/omen"
+      - "--label=io.modelcontextprotocol.server.name=io.github.panbanda/omen"
       - "--platform=linux/amd64"
   - id: linux-arm64
     ids:
@@ -134,24 +135,6 @@ dockers:
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
       - "--label=org.opencontainers.image.version={{ trimprefix .Version \"omen-v\" }}"
       - "--label=org.opencontainers.image.source=https://github.com/panbanda/omen"
+      - "--label=io.modelcontextprotocol.server.name=io.github.panbanda/omen"
       - "--platform=linux/arm64"
 
-mcp:
-  github:
-    name: io.github.panbanda/omen
-    title: Omen
-    description: Multi-language code analysis tools for complexity, technical debt, hotspots, ownership, and defect prediction
-    homepage: https://github.com/panbanda/omen
-    repository:
-      url: https://github.com/panbanda/omen
-      source: github
-      id: panbanda/omen
-    auth:
-      type: github-oidc
-    packages:
-      - identifier: ghcr.io/panbanda/omen
-        registry_type: oci
-        transport:
-          type: stdio
-    transports:
-      - type: stdio
