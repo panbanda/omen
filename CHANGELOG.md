@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/panbanda/omen/compare/omen-v1.3.0...omen-v1.3.1) (2025-12-02)
+
+
+### Bug Fixes
+
+* **ci:** fix MCP and Docker release issues ([a0dcb79](https://github.com/panbanda/omen/commit/a0dcb79607fac78ef78babaf82789531ce6f77b2))
+
 ## [1.3.0](https://github.com/panbanda/omen/compare/omen-v1.2.1...omen-v1.3.0) (2025-12-02)
 
 
