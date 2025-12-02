@@ -18,7 +18,7 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w
-      - -X main.version={{ .Version }}
+      - -X main.version={{ trimprefix .Version "omen-v" }}
       - -X main.commit={{ .ShortCommit }}
       - -X main.date={{ .Date }}
   - id: linux-arm64
@@ -34,7 +34,7 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w
-      - -X main.version={{ .Version }}
+      - -X main.version={{ trimprefix .Version "omen-v" }}
       - -X main.commit={{ .ShortCommit }}
       - -X main.date={{ .Date }}
   - id: darwin-amd64
@@ -50,7 +50,7 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w
-      - -X main.version={{ .Version }}
+      - -X main.version={{ trimprefix .Version "omen-v" }}
       - -X main.commit={{ .ShortCommit }}
       - -X main.date={{ .Date }}
   - id: darwin-arm64
@@ -66,7 +66,7 @@ builds:
     mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w
-      - -X main.version={{ .Version }}
+      - -X main.version={{ trimprefix .Version "omen-v" }}
       - -X main.commit={{ .ShortCommit }}
       - -X main.date={{ .Date }}
 
