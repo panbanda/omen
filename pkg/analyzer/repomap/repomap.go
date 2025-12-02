@@ -1,0 +1,120 @@
+package repomap
+
+import (
+	"time"
+
+	"github.com/panbanda/omen/internal/fileproc"
+	"github.com/panbanda/omen/pkg/analyzer/graph"
+)
+
+// Analyzer generates a PageRank-ranked map of repository symbols.
+type Analyzer struct {
+	graphAnalyzer *graph.Analyzer
+	maxFileSize   int64
+}
+
+// Option is a functional option for configuring Analyzer.
+type Option func(*Analyzer)
+
+// WithMaxFileSize sets the maximum file size to analyze (0 = no limit).
+func WithMaxFileSize(maxSize int64) Option {
+	return func(a *Analyzer) {
+		a.maxFileSize = maxSize
+	}
+}
+
+// New creates a new repo map analyzer.
+func New(opts ...Option) *Analyzer {
+	a := &Analyzer{
+		maxFileSize: 0,
+	}
+	for _, opt := range opts {
+		opt(a)
+	}
+	// Create graph analyzer with same maxFileSize setting
+	a.graphAnalyzer = graph.New(
+		graph.WithScope(graph.ScopeFunction),
+		graph.WithMaxFileSize(a.maxFileSize),
+	)
+	return a
+}
+
+// AnalyzeProject generates a repo map for the given files.
+func (a *Analyzer) AnalyzeProject(files []string) (*Map, error) {
+	return a.AnalyzeProjectWithProgress(files, nil)
+}
+
+// AnalyzeProjectWithProgress generates a repo map with progress callback.
+func (a *Analyzer) AnalyzeProjectWithProgress(files []string, onProgress fileproc.ProgressFunc) (*Map, error) {
+	// Build the dependency graph at function scope
+	depGraph, err := a.graphAnalyzer.AnalyzeProjectWithProgress(files, onProgress)
+	if err != nil {
+		return nil, err
+	}
+
+	// Calculate PageRank only - much faster than full metrics
+	metrics := a.graphAnalyzer.CalculatePageRankOnly(depGraph)
+
+	// Build repo map from graph nodes and metrics
+	repoMap := &Map{
+		GeneratedAt: time.Now().UTC(),
+		Symbols:     make([]Symbol, 0, len(depGraph.Nodes)),
+	}
+
+	// Build lookup for node metrics
+	metricsByID := make(map[string]*graph.NodeMetric)
+	for i := range metrics.NodeMetrics {
+		m := &metrics.NodeMetrics[i]
+		metricsByID[m.NodeID] = m
+	}
+
+	// Convert graph nodes to symbols
+	for _, node := range depGraph.Nodes {
+		symbol := Symbol{
+			Name: node.Name,
+			Kind: string(node.Type),
+			File: node.File,
+			Line: int(node.Line),
+		}
+
+		// Add metrics if available
+		if m, ok := metricsByID[node.ID]; ok {
+			symbol.PageRank = m.PageRank
+			symbol.InDegree = m.InDegree
+			symbol.OutDegree = m.OutDegree
+		}
+
+		// Generate signature (simplified: just use name for now)
+		symbol.Signature = generateSignature(node)
+
+		repoMap.Symbols = append(repoMap.Symbols, symbol)
+	}
+
+	repoMap.SortByPageRank()
+	repoMap.CalculateSummary()
+
+	return repoMap, nil
+}
+
+// generateSignature creates a signature string for a node.
+func generateSignature(node graph.Node) string {
+	switch node.Type {
+	case graph.NodeFunction:
+		return "func " + node.Name + "()"
+	case graph.NodeClass:
+		return "class " + node.Name
+	case graph.NodeModule:
+		return "module " + node.Name
+	case graph.NodeFile:
+		return node.Name
+	default:
+		return node.Name
+	}
+}
+
+// Close releases resources.
+func (a *Analyzer) Close() {
+	if a.graphAnalyzer != nil {
+		a.graphAnalyzer.Close()
+	}
+}
