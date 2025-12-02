@@ -173,18 +173,18 @@ func interpolateCDF(percentiles [][2]float32, value float32) float32 {
 	return 0.0
 }
 
-// normalizeChurn normalizes churn score using empirical CDF from OSS projects.
-func normalizeChurn(rawScore float32) float32 {
+// NormalizeChurn normalizes churn score using empirical CDF from OSS projects.
+func NormalizeChurn(rawScore float32) float32 {
 	return interpolateCDF(churnPercentiles, rawScore)
 }
 
-// normalizeComplexity normalizes complexity using empirical CDF.
-func normalizeComplexity(rawScore float32) float32 {
+// NormalizeComplexity normalizes complexity using empirical CDF.
+func NormalizeComplexity(rawScore float32) float32 {
 	return interpolateCDF(complexityPercentiles, rawScore)
 }
 
-// normalizeDuplication normalizes duplication ratio (direct clamp since it's already a ratio).
-func normalizeDuplication(rawScore float32) float32 {
+// NormalizeDuplication normalizes duplication ratio (direct clamp since it's already a ratio).
+func NormalizeDuplication(rawScore float32) float32 {
 	if rawScore < 0 {
 		return 0
 	}
@@ -194,9 +194,9 @@ func normalizeDuplication(rawScore float32) float32 {
 	return rawScore
 }
 
-// normalizeCoupling normalizes afferent coupling using empirical CDF.
+// NormalizeCoupling normalizes afferent coupling using empirical CDF.
 // PMAT uses afferent coupling only (not sum of both).
-func normalizeCoupling(rawScore float32) float32 {
+func NormalizeCoupling(rawScore float32) float32 {
 	return interpolateCDF(couplingPercentiles, rawScore)
 }
 
@@ -240,10 +240,10 @@ func CalculateConfidence(m FileMetrics) float32 {
 // PMAT-compatible: uses CDF normalization and sigmoid transformation.
 func CalculateProbability(m FileMetrics, w DefectWeights) float32 {
 	// Normalize using empirical CDFs
-	churnNorm := normalizeChurn(m.ChurnScore)
-	complexityNorm := normalizeComplexity(m.Complexity)
-	duplicateNorm := normalizeDuplication(m.DuplicateRatio)
-	couplingNorm := normalizeCoupling(m.AfferentCoupling) // PMAT uses afferent only
+	churnNorm := NormalizeChurn(m.ChurnScore)
+	complexityNorm := NormalizeComplexity(m.Complexity)
+	duplicateNorm := NormalizeDuplication(m.DuplicateRatio)
+	couplingNorm := NormalizeCoupling(m.AfferentCoupling) // PMAT uses afferent only
 
 	// Weighted linear combination
 	rawScore := w.Churn*churnNorm +

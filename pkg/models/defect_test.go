@@ -507,9 +507,9 @@ func TestNormalizeDuplication(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := normalizeDuplication(tt.input)
+			got := NormalizeDuplication(tt.input)
 			if got != tt.expected {
-				t.Errorf("normalizeDuplication(%v) = %v, want %v", tt.input, got, tt.expected)
+				t.Errorf("NormalizeDuplication(%v) = %v, want %v", tt.input, got, tt.expected)
 			}
 		})
 	}
@@ -529,9 +529,9 @@ func TestNormalizeChurn(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := normalizeChurn(tt.input)
+			got := NormalizeChurn(tt.input)
 			if got < 0.0 || got > 1.0 {
-				t.Errorf("normalizeChurn(%v) = %v, out of range [0, 1]", tt.input, got)
+				t.Errorf("NormalizeChurn(%v) = %v, out of range [0, 1]", tt.input, got)
 			}
 		})
 	}
@@ -551,9 +551,9 @@ func TestNormalizeComplexity(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := normalizeComplexity(tt.input)
+			got := NormalizeComplexity(tt.input)
 			if got < 0.0 || got > 1.0 {
-				t.Errorf("normalizeComplexity(%v) = %v, out of range [0, 1]", tt.input, got)
+				t.Errorf("NormalizeComplexity(%v) = %v, out of range [0, 1]", tt.input, got)
 			}
 		})
 	}

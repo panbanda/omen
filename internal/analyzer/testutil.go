@@ -5,51 +5,57 @@ import (
 	"strings"
 )
 
+// testFileSuffixes are path suffixes that indicate test files.
+var testFileSuffixes = []string{
+	// Go
+	"_test.go",
+	// Python
+	"_test.py",
+	// JavaScript/TypeScript
+	".test.ts", ".test.js", ".spec.ts", ".spec.js",
+	".test.tsx", ".spec.tsx", ".test.jsx", ".spec.jsx",
+	// Ruby
+	"_test.rb", "_spec.rb",
+	// Java
+	"Test.java",
+	// C#
+	"Tests.cs", "Test.cs",
+}
+
+// testBasePrefixes are filename prefixes that indicate test files.
+var testBasePrefixes = []string{
+	"test_", // Python, Ruby
+	"Test",  // Java (Test*.java)
+}
+
+// testDirPatterns are directory patterns that indicate test directories.
+var testDirPatterns = []string{
+	"/tests/", "\\tests\\",
+	"/test/", "\\test\\",
+	"/__tests__/", "\\__tests__\\",
+	"/spec/", "\\spec\\",
+}
+
 // IsTestFile checks if a file is a test file based on naming conventions.
 // Supports Go, Python, JavaScript/TypeScript, Rust, Ruby, Java, and C#.
 func IsTestFile(path string) bool {
+	for _, suffix := range testFileSuffixes {
+		if strings.HasSuffix(path, suffix) {
+			return true
+		}
+	}
+
 	base := filepath.Base(path)
-
-	// Go test files
-	if strings.HasSuffix(path, "_test.go") {
-		return true
+	for _, prefix := range testBasePrefixes {
+		if strings.HasPrefix(base, prefix) {
+			return true
+		}
 	}
 
-	// Python test files (test_*.py or *_test.py)
-	if strings.HasSuffix(path, "_test.py") || strings.HasPrefix(base, "test_") {
-		return true
-	}
-
-	// JavaScript/TypeScript test files
-	if strings.HasSuffix(path, ".test.ts") || strings.HasSuffix(path, ".test.js") ||
-		strings.HasSuffix(path, ".spec.ts") || strings.HasSuffix(path, ".spec.js") ||
-		strings.HasSuffix(path, ".test.tsx") || strings.HasSuffix(path, ".spec.tsx") ||
-		strings.HasSuffix(path, ".test.jsx") || strings.HasSuffix(path, ".spec.jsx") {
-		return true
-	}
-
-	// Ruby test files (test_*.rb or *_test.rb, also spec files)
-	if strings.HasSuffix(path, "_test.rb") || strings.HasPrefix(base, "test_") ||
-		strings.HasSuffix(path, "_spec.rb") {
-		return true
-	}
-
-	// Java test files (Test*.java or *Test.java)
-	if strings.HasSuffix(path, "Test.java") || strings.HasPrefix(base, "Test") && strings.HasSuffix(path, ".java") {
-		return true
-	}
-
-	// C# test files (*Tests.cs or *Test.cs)
-	if strings.HasSuffix(path, "Tests.cs") || strings.HasSuffix(path, "Test.cs") {
-		return true
-	}
-
-	// Test directories
-	if strings.Contains(path, "/tests/") || strings.Contains(path, "\\tests\\") ||
-		strings.Contains(path, "/test/") || strings.Contains(path, "\\test\\") ||
-		strings.Contains(path, "/__tests__/") || strings.Contains(path, "\\__tests__\\") ||
-		strings.Contains(path, "/spec/") || strings.Contains(path, "\\spec\\") {
-		return true
+	for _, pattern := range testDirPatterns {
+		if strings.Contains(path, pattern) {
+			return true
+		}
 	}
 
 	return false

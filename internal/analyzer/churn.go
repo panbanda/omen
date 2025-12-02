@@ -1,12 +1,9 @@
 package analyzer
 
 import (
-	"bufio"
 	"context"
-	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/panbanda/omen/internal/progress"
@@ -77,16 +74,13 @@ func (a *ChurnAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath str
 		return nil, err
 	}
 
-	// Get absolute path for repository root
 	absPath, err := filepath.Abs(repoPath)
 	if err != nil {
 		absPath = repoPath
 	}
 
-	// Calculate cutoff date
 	cutoff := time.Now().AddDate(0, 0, -a.days)
 
-	// Get commit log
 	logIter, err := repo.Log(&vcs.LogOptions{
 		Since: &cutoff,
 	})
@@ -95,200 +89,27 @@ func (a *ChurnAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath str
 	}
 	defer logIter.Close()
 
-	// Track file metrics - keyed by relative path
 	fileMetrics := make(map[string]*models.FileChurnMetrics)
 
 	err = logIter.ForEach(func(commit vcs.Commit) error {
-		// Check for context cancellation
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
+
 		if a.spinner != nil {
 			a.spinner.Tick()
 		}
 
-		// Get parent commit for diff
-		if commit.NumParents() == 0 {
-			return nil
-		}
-
-		parent, err := commit.Parent(0)
-		if err != nil {
-			return nil
-		}
-
-		// Get diff between commits
-		parentTree, err := parent.Tree()
-		if err != nil {
-			return nil
-		}
-
-		commitTree, err := commit.Tree()
-		if err != nil {
-			return nil
-		}
-
-		changes, err := parentTree.Diff(commitTree)
-		if err != nil {
-			return nil
-		}
-
-		// Process each changed file
-		for _, change := range changes {
-			relativePath := change.ToName()
-			if relativePath == "" {
-				relativePath = change.FromName() // Deleted file
-			}
-
-			if _, exists := fileMetrics[relativePath]; !exists {
-				fileMetrics[relativePath] = &models.FileChurnMetrics{
-					Path:         "./" + relativePath, // pmat prefixes with ./
-					RelativePath: relativePath,
-					AuthorCounts: make(map[string]int),
-					FirstCommit:  commit.Author().When,
-					LastCommit:   commit.Author().When,
-				}
-			}
-
-			fm := fileMetrics[relativePath]
-			fm.Commits++
-			// Use author name instead of email (matching pmat behavior)
-			fm.AuthorCounts[commit.Author().Name]++
-
-			// Track first and last commit times
-			if commit.Author().When.Before(fm.FirstCommit) {
-				fm.FirstCommit = commit.Author().When
-			}
-			if commit.Author().When.After(fm.LastCommit) {
-				fm.LastCommit = commit.Author().When
-			}
-
-			// Count additions and deletions
-			patch, err := change.Patch()
-			if err == nil {
-				for _, filePatch := range patch.FilePatches() {
-					for _, chunk := range filePatch.Chunks() {
-						content := chunk.Content()
-						switch chunk.Type() {
-						case vcs.ChunkAdd:
-							fm.LinesAdded += countLines(content)
-						case vcs.ChunkDelete:
-							fm.LinesDeleted += countLines(content)
-						}
-					}
-				}
-			}
-		}
-
-		return nil
+		return a.processCommit(commit, fileMetrics)
 	})
 
 	if err != nil {
 		return nil, err
 	}
 
-	// Convert to slice and calculate scores
-	analysis := &models.ChurnAnalysis{
-		GeneratedAt:    time.Now().UTC(),
-		PeriodDays:     a.days,
-		RepositoryRoot: absPath,
-		Files:          make([]models.FileChurnMetrics, 0, len(fileMetrics)),
-		Summary:        models.NewChurnSummary(),
-	}
-
-	var totalCommits, totalAdded, totalDeleted int
-	var maxCommits, maxChanges int
-
-	// First pass: find max values for normalization
-	for _, fm := range fileMetrics {
-		if fm.Commits > maxCommits {
-			maxCommits = fm.Commits
-		}
-		changes := fm.LinesAdded + fm.LinesDeleted
-		if changes > maxChanges {
-			maxChanges = changes
-		}
-	}
-
-	// Second pass: calculate scores and collect stats
-	now := time.Now()
-	for _, fm := range fileMetrics {
-		// Convert author counts map to unique authors slice
-		fm.UniqueAuthors = make([]string, 0, len(fm.AuthorCounts))
-		for author := range fm.AuthorCounts {
-			fm.UniqueAuthors = append(fm.UniqueAuthors, author)
-		}
-
-		fm.CalculateChurnScoreWithMax(maxCommits, maxChanges)
-
-		// Calculate relative churn metrics (Nagappan & Ball 2005)
-		filePath := filepath.Join(absPath, fm.RelativePath)
-		fm.TotalLOC, fm.LOCReadError = countFileLOC(filePath)
-		fm.CalculateRelativeChurn(now)
-
-		analysis.Files = append(analysis.Files, *fm)
-
-		totalCommits += fm.Commits
-		totalAdded += fm.LinesAdded
-		totalDeleted += fm.LinesDeleted
-
-		// Aggregate author contributions
-		for author, count := range fm.AuthorCounts {
-			analysis.Summary.AuthorContributions[author] += count
-		}
-	}
-
-	// Sort by churn score (highest first)
-	sort.Slice(analysis.Files, func(i, j int) bool {
-		return analysis.Files[i].ChurnScore > analysis.Files[j].ChurnScore
-	})
-
-	// Build summary
-	analysis.Summary.TotalFilesChanged = len(analysis.Files)
-	analysis.Summary.TotalCommits = totalCommits
-	analysis.Summary.TotalAdditions = totalAdded
-	analysis.Summary.TotalDeletions = totalDeleted
-
-	if len(analysis.Files) > 0 {
-		analysis.Summary.AvgCommitsPerFile = float64(totalCommits) / float64(len(analysis.Files))
-		analysis.Summary.MaxChurnScore = analysis.Files[0].ChurnScore
-	}
-
-	// Calculate churn statistics
-	analysis.Summary.CalculateStatistics(analysis.Files)
-
-	// Identify hotspot and stable files
-	analysis.Summary.IdentifyHotspotAndStableFiles(analysis.Files)
-
-	return analysis, nil
-}
-
-// countLines counts the number of newlines in content.
-func countLines(content string) int {
-	return strings.Count(content, "\n")
-}
-
-// countFileLOC counts the number of lines in a file on disk.
-// Returns the line count and whether an error occurred.
-// An error indicates the file could not be read (deleted, permission denied, etc.)
-func countFileLOC(path string) (int, bool) {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, true // Error occurred
-	}
-	defer f.Close()
-
-	count := 0
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		count++
-	}
-	if scanner.Err() != nil {
-		return count, true // Partial read, error occurred
-	}
-	return count, false
+	return buildChurnAnalysis(fileMetrics, absPath, a.days), nil
 }
 
 // AnalyzeFiles analyzes churn for specific files.
@@ -298,17 +119,15 @@ func (a *ChurnAnalyzer) AnalyzeFiles(repoPath string, files []string) (*models.C
 		return nil, err
 	}
 
-	// Filter to only requested files
 	fileSet := make(map[string]bool)
 	for _, f := range files {
-		// Normalize paths
 		rel, err := filepath.Rel(repoPath, f)
 		if err != nil {
 			rel = f
 		}
 		fileSet[rel] = true
 		fileSet[f] = true
-		fileSet["./"+rel] = true // Also match pmat-style paths
+		fileSet["./"+rel] = true
 	}
 
 	filtered := &models.ChurnAnalysis{
@@ -325,9 +144,7 @@ func (a *ChurnAnalyzer) AnalyzeFiles(repoPath string, files []string) (*models.C
 		}
 	}
 
-	// Recalculate summary for filtered files
 	var totalCommits, totalAdded, totalDeleted int
-
 	for _, fm := range filtered.Files {
 		totalCommits += fm.Commits
 		totalAdded += fm.LinesAdded
@@ -345,7 +162,6 @@ func (a *ChurnAnalyzer) AnalyzeFiles(repoPath string, files []string) (*models.C
 	if len(filtered.Files) > 0 {
 		filtered.Summary.AvgCommitsPerFile = float64(totalCommits) / float64(len(filtered.Files))
 
-		// Sort and get max
 		sort.Slice(filtered.Files, func(i, j int) bool {
 			return filtered.Files[i].ChurnScore > filtered.Files[j].ChurnScore
 		})
