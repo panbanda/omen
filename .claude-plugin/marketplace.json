@@ -9,7 +9,7 @@
     {
       "name": "omen",
       "description": "Code analysis skills for Claude Code: complexity hotspots, tech debt, defect prediction, architecture review, and more",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "source": {
         "source": "url",
         "url": "https://github.com/panbanda/omen.git"
