@@ -11,6 +11,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/panbanda/omen/internal/output"
 	scannerSvc "github.com/panbanda/omen/internal/service/scanner"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 // TestServerCreation verifies the MCP server can be created without panicking.
@@ -825,7 +826,7 @@ func helper() {
 	}
 }
 
-// TestGenerateManifest verifies the manifest generation produces valid JSON.
+// TestGenerateManifest verifies the manifest generation produces valid JSON with expected values.
 func TestGenerateManifest(t *testing.T) {
 	data, err := GenerateManifest("1.2.3")
 	if err != nil {
@@ -837,31 +838,56 @@ func TestGenerateManifest(t *testing.T) {
 		t.Fatalf("GenerateManifest produced invalid JSON: %v", err)
 	}
 
-	// Verify required fields
-	if manifest.Name != "io.github.panbanda/omen" {
-		t.Errorf("unexpected name: %s", manifest.Name)
+	// Verify version is correctly embedded in identifier
+	if manifest.Version != "1.2.3" {
+		t.Errorf("unexpected version: %s", manifest.Version)
 	}
-	if manifest.VersionDetail.Version != "1.2.3" {
-		t.Errorf("unexpected version: %s", manifest.VersionDetail.Version)
+	if manifest.Packages[0].Identifier != "ghcr.io/panbanda/omen:1.2.3" {
+		t.Errorf("version not embedded in identifier: %s", manifest.Packages[0].Identifier)
 	}
-	if len(manifest.Packages) != 1 {
-		t.Fatalf("expected 1 package, got %d", len(manifest.Packages))
-	}
-	if manifest.Packages[0].Version != "1.2.3" {
-		t.Errorf("unexpected package version: %s", manifest.Packages[0].Version)
-	}
-	if len(manifest.Tools) == 0 {
-		t.Error("expected tools to be populated")
+}
+
+// TestGenerateManifestAgainstSchema validates the manifest against the official MCP schema.
+func TestGenerateManifestAgainstSchema(t *testing.T) {
+	data, err := GenerateManifest("1.2.3")
+	if err != nil {
+		t.Fatalf("GenerateManifest returned error: %v", err)
 	}
 
-	// Verify all tools have names and descriptions
-	for _, tool := range manifest.Tools {
-		if tool.Name == "" {
-			t.Error("tool has empty name")
-		}
-		if tool.Description == "" {
-			t.Errorf("tool %s has empty description", tool.Name)
-		}
+	schemaURL := "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json"
+
+	// Read local schema file
+	schemaBytes, err := os.ReadFile("testdata/server.schema.json")
+	if err != nil {
+		t.Fatalf("Failed to read schema file: %v", err)
+	}
+
+	// Unmarshal schema
+	var schemaDoc any
+	if err := json.Unmarshal(schemaBytes, &schemaDoc); err != nil {
+		t.Fatalf("Failed to unmarshal schema: %v", err)
+	}
+
+	// Compile the schema
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource(schemaURL, schemaDoc); err != nil {
+		t.Fatalf("Failed to add schema resource: %v", err)
+	}
+
+	schema, err := compiler.Compile(schemaURL)
+	if err != nil {
+		t.Fatalf("Failed to compile schema: %v", err)
+	}
+
+	// Unmarshal manifest for validation
+	var manifestData any
+	if err := json.Unmarshal(data, &manifestData); err != nil {
+		t.Fatalf("Failed to unmarshal manifest: %v", err)
+	}
+
+	// Validate against schema
+	if err := schema.Validate(manifestData); err != nil {
+		t.Errorf("Manifest does not validate against schema: %v", err)
 	}
 }
 
@@ -877,7 +903,7 @@ func TestGenerateManifestEmptyVersion(t *testing.T) {
 		t.Fatalf("GenerateManifest produced invalid JSON: %v", err)
 	}
 
-	if manifest.VersionDetail.Version != "0.0.0" {
-		t.Errorf("expected version 0.0.0, got %s", manifest.VersionDetail.Version)
+	if manifest.Version != "0.0.0" {
+		t.Errorf("expected version 0.0.0, got %s", manifest.Version)
 	}
 }
