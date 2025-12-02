@@ -84,7 +84,7 @@ jobs:
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean --skip=validate,homebrew${{ matrix.goos == 'darwin' && ',docker' || '' }}
+          args: release --clean --skip=validate,homebrew,mcp${{ matrix.goos == 'darwin' && ',docker' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOOS: ${{ matrix.goos }}
@@ -114,7 +114,8 @@ jobs:
         run: |
           mkdir -p dist
           TAG="${{ needs.release-please.outputs.tag_name }}"
-          VERSION="${TAG#v}"
+          # Extract version: omen-v1.3.0 -> 1.3.0
+          VERSION="${TAG#omen-v}"
 
           # Download all archives and checksums from the release
           gh release download "$TAG" --pattern "*.tar.gz" --dir dist
@@ -135,7 +136,8 @@ jobs:
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
         run: |
           TAG="${{ needs.release-please.outputs.tag_name }}"
-          VERSION="${TAG#v}"
+          # Extract version: omen-v1.3.0 -> 1.3.0
+          VERSION="${TAG#omen-v}"
 
           # Calculate SHA256 for each archive
           DARWIN_AMD64_SHA=$(sha256sum dist/omen_${VERSION}_darwin_amd64.tar.gz | cut -d' ' -f1)
@@ -214,7 +216,8 @@ jobs:
         env:
           TAG: ${{ needs.release-please.outputs.tag_name }}
         run: |
-          VERSION="${TAG#v}"
+          # Extract version: omen-v1.3.0 -> 1.3.0
+          VERSION="${TAG#omen-v}"
           docker manifest create ghcr.io/panbanda/omen:${VERSION} \
             ghcr.io/panbanda/omen:${VERSION}-amd64 \
             ghcr.io/panbanda/omen:${VERSION}-arm64
