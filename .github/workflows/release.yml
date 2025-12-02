@@ -57,6 +57,7 @@ jobs:
 
     permissions:
       contents: write
+      packages: write
 
     steps:
       - name: Checkout repository
@@ -70,12 +71,20 @@ jobs:
         with:
           go-version: stable
 
+      - name: Login to GitHub Container Registry
+        if: matrix.goos == 'linux'
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean --skip=validate,homebrew
+          args: release --clean --skip=validate,homebrew${{ matrix.goos == 'darwin' && ',docker' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOOS: ${{ matrix.goos }}
@@ -112,7 +121,14 @@ jobs:
           gh release download "$TAG" --pattern "checksums_*.txt" --dir dist
 
           # Merge all checksum files into one
-          cat dist/checksums_*.txt > dist/checksums.txt
+          cat dist/checksums_*.txt | sort > dist/checksums.txt
+
+      - name: Upload consolidated checksums
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ needs.release-please.outputs.tag_name }}"
+          gh release upload "$TAG" dist/checksums.txt --clobber
 
       - name: Generate Homebrew formula
         env:
@@ -176,3 +192,66 @@ jobs:
           git add Formula/omen.rb
           git commit -m "Update omen to ${VERSION}"
           git push
+
+  docker-manifest:
+    name: Create Docker Manifest
+    needs: [release-please, goreleaser]
+    if: ${{ needs.release-please.outputs.release_created }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      packages: write
+
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push manifest
+        env:
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          VERSION="${TAG#v}"
+          docker manifest create ghcr.io/panbanda/omen:${VERSION} \
+            ghcr.io/panbanda/omen:${VERSION}-amd64 \
+            ghcr.io/panbanda/omen:${VERSION}-arm64
+          docker manifest push ghcr.io/panbanda/omen:${VERSION}
+
+          docker manifest create ghcr.io/panbanda/omen:latest \
+            ghcr.io/panbanda/omen:${VERSION}-amd64 \
+            ghcr.io/panbanda/omen:${VERSION}-arm64
+          docker manifest push ghcr.io/panbanda/omen:latest
+
+  mcp-registry:
+    name: Publish MCP Manifest
+    needs: [release-please, docker-manifest]
+    if: ${{ needs.release-please.outputs.release_created }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - name: Set up Go
+        uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+        with:
+          go-version: stable
+
+      - name: Publish MCP manifest
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean --skip=announce,archive,aur,aur-source,before,chocolatey,docker,homebrew,ko,makeself,nfpm,nix,notarize,publish,sbom,scoop,sign,snapcraft,validate,winget
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
