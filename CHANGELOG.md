@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.2](https://github.com/panbanda/omen/compare/omen-v1.3.1...omen-v1.3.2) (2025-12-02)
+
+
+### Bug Fixes
+
+* **ci:** use trimprefix for Docker image version tags ([9ccfcac](https://github.com/panbanda/omen/commit/9ccfcac051ff8e1d869b1847a8c16b77f3aee2a9))
+
 ## [1.3.1](https://github.com/panbanda/omen/compare/omen-v1.3.0...omen-v1.3.1) (2025-12-02)
 
 
