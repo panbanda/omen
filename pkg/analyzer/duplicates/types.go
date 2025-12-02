@@ -9,6 +9,11 @@ const (
 	Type3 Type = "type3" // Structural (statements added/removed)
 )
 
+// String returns the string representation.
+func (t Type) String() string {
+	return string(t)
+}
+
 // Clone represents a detected duplicate code fragment.
 type Clone struct {
 	Type       Type    `json:"type"`

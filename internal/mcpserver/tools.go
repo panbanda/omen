@@ -6,11 +6,18 @@ import (
 	"sort"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/panbanda/omen/internal/analyzer"
 	"github.com/panbanda/omen/internal/output"
 	"github.com/panbanda/omen/internal/service/analysis"
 	scannerSvc "github.com/panbanda/omen/internal/service/scanner"
-	"github.com/panbanda/omen/pkg/models"
+	"github.com/panbanda/omen/pkg/analyzer/changes"
+	"github.com/panbanda/omen/pkg/analyzer/complexity"
+	"github.com/panbanda/omen/pkg/analyzer/deadcode"
+	"github.com/panbanda/omen/pkg/analyzer/defect"
+	"github.com/panbanda/omen/pkg/analyzer/featureflags"
+	"github.com/panbanda/omen/pkg/analyzer/graph"
+	"github.com/panbanda/omen/pkg/analyzer/repomap"
+	"github.com/panbanda/omen/pkg/analyzer/satd"
+	"github.com/panbanda/omen/pkg/analyzer/tdg"
 	toon "github.com/toon-format/toon-go"
 )
 
@@ -227,13 +234,13 @@ func handleAnalyzeComplexity(ctx context.Context, req *mcp.CallToolRequest, inpu
 	}
 
 	if input.FunctionsOnly {
-		var functions []models.FunctionComplexity
+		var functions []complexity.FunctionResult
 		for _, f := range result.Files {
 			functions = append(functions, f.Functions...)
 		}
 		out := struct {
-			Functions []models.FunctionComplexity `json:"functions" toon:"functions"`
-			Summary   models.ComplexitySummary    `json:"summary" toon:"summary"`
+			Functions []complexity.FunctionResult `json:"functions" toon:"functions"`
+			Summary   complexity.Summary          `json:"summary" toon:"summary"`
 		}{functions, result.Summary}
 		return toolResult(out, format)
 	}
@@ -259,8 +266,8 @@ func handleAnalyzeSATD(ctx context.Context, req *mcp.CallToolRequest, input SATD
 	for _, p := range input.Patterns {
 		customPatterns = append(customPatterns, analysis.PatternConfig{
 			Pattern:  p,
-			Category: models.DebtRequirement,
-			Severity: models.SeverityMedium,
+			Category: satd.CategoryRequirement,
+			Severity: satd.SeverityMedium,
 		})
 	}
 
@@ -304,8 +311,8 @@ func handleAnalyzeDeadcode(ctx context.Context, req *mcp.CallToolRequest, input 
 		return toolError(err.Error())
 	}
 
-	out := models.NewDeadCodeResult()
-	out.FromDeadCodeAnalysis(result)
+	out := deadcode.NewReport()
+	out.FromAnalysis(result)
 
 	return toolResult(out, format)
 }
@@ -326,7 +333,7 @@ func handleAnalyzeChurn(ctx context.Context, req *mcp.CallToolRequest, input Chu
 	}
 
 	svc := analysis.New()
-	result, err := svc.AnalyzeChurn(scanResult.RepoRoot, analysis.ChurnOptions{
+	result, err := svc.AnalyzeChurn(ctx, scanResult.RepoRoot, analysis.ChurnOptions{
 		Days: days,
 	})
 	if err != nil {
@@ -373,7 +380,7 @@ func handleAnalyzeDuplicates(ctx context.Context, req *mcp.CallToolRequest, inpu
 		return toolError(err.Error())
 	}
 
-	report := result.ToCloneReport()
+	report := result.ToReport()
 	return toolResult(report, format)
 }
 
@@ -392,7 +399,7 @@ func handleAnalyzeDefect(ctx context.Context, req *mcp.CallToolRequest, input De
 	}
 
 	svc := analysis.New()
-	result, err := svc.AnalyzeDefects(scanResult.RepoRoot, scanResult.Files, analysis.DefectOptions{})
+	result, err := svc.AnalyzeDefects(ctx, scanResult.RepoRoot, scanResult.Files, analysis.DefectOptions{})
 	if err != nil {
 		return toolError(err.Error())
 	}
@@ -402,16 +409,16 @@ func handleAnalyzeDefect(ctx context.Context, req *mcp.CallToolRequest, input De
 	})
 
 	if input.HighRiskOnly {
-		var filtered []models.DefectScore
+		var filtered []defect.Score
 		for _, ds := range result.Files {
-			if ds.RiskLevel == models.RiskHigh {
+			if ds.RiskLevel == defect.RiskHigh {
 				filtered = append(filtered, ds)
 			}
 		}
 		result.Files = filtered
 	}
 
-	report := result.ToDefectPredictionReport()
+	report := result.ToReport()
 	return toolResult(report, format)
 }
 
@@ -435,7 +442,7 @@ func handleAnalyzeChanges(ctx context.Context, req *mcp.CallToolRequest, input C
 	}
 
 	svc := analysis.New()
-	result, err := svc.AnalyzeChanges(scanResult.RepoRoot, analysis.ChangesOptions{
+	result, err := svc.AnalyzeChanges(ctx, scanResult.RepoRoot, analysis.ChangesOptions{
 		Days: days,
 	})
 	if err != nil {
@@ -447,9 +454,9 @@ func handleAnalyzeChanges(ctx context.Context, req *mcp.CallToolRequest, input C
 	}
 
 	if input.HighRiskOnly {
-		var filtered []models.CommitRisk
+		var filtered []changes.CommitRisk
 		for _, cr := range result.Commits {
-			if cr.RiskLevel == models.ChangeRiskHigh {
+			if cr.RiskLevel == changes.RiskLevelHigh {
 				filtered = append(filtered, cr)
 			}
 		}
@@ -483,19 +490,19 @@ func handleAnalyzeTDG(ctx context.Context, req *mcp.CallToolRequest, input TDGIn
 		return toolError(err.Error())
 	}
 
-	report := project.ToTDGReport(hotspots)
+	report := project.ToReport(hotspots)
 
 	if input.ShowPenalties {
 		type HotspotWithPenalties struct {
-			models.TDGHotspot
-			Penalties []models.PenaltyAttribution `json:"penalties,omitempty" toon:"penalties,omitempty"`
+			tdg.Hotspot
+			Penalties []tdg.PenaltyAttribution `json:"penalties,omitempty" toon:"penalties,omitempty"`
 		}
 		type ReportWithPenalties struct {
-			Summary  models.TDGSummary      `json:"summary" toon:"summary"`
+			Summary  tdg.Summary            `json:"summary" toon:"summary"`
 			Hotspots []HotspotWithPenalties `json:"hotspots" toon:"hotspots"`
 		}
 
-		penaltyMap := make(map[string][]models.PenaltyAttribution)
+		penaltyMap := make(map[string][]tdg.PenaltyAttribution)
 		for _, f := range project.Files {
 			if len(f.PenaltiesApplied) > 0 {
 				penaltyMap[f.FilePath] = f.PenaltiesApplied
@@ -505,8 +512,8 @@ func handleAnalyzeTDG(ctx context.Context, req *mcp.CallToolRequest, input TDGIn
 		extendedHotspots := make([]HotspotWithPenalties, len(report.Hotspots))
 		for i, h := range report.Hotspots {
 			extendedHotspots[i] = HotspotWithPenalties{
-				TDGHotspot: h,
-				Penalties:  penaltyMap[h.Path],
+				Hotspot:   h,
+				Penalties: penaltyMap[h.Path],
 			}
 		}
 
@@ -540,8 +547,8 @@ func handleAnalyzeGraph(ctx context.Context, req *mcp.CallToolRequest, input Gra
 	}
 
 	svc := analysis.New()
-	graph, metrics, err := svc.AnalyzeGraph(scanResult.Files, analysis.GraphOptions{
-		Scope:          analyzer.GraphScope(scope),
+	depGraph, metrics, err := svc.AnalyzeGraph(scanResult.Files, analysis.GraphOptions{
+		Scope:          graph.Scope(scope),
 		IncludeMetrics: input.IncludeMetrics,
 	})
 	if err != nil {
@@ -550,13 +557,13 @@ func handleAnalyzeGraph(ctx context.Context, req *mcp.CallToolRequest, input Gra
 
 	if input.IncludeMetrics {
 		result := struct {
-			Graph   *models.DependencyGraph `json:"graph" toon:"graph"`
-			Metrics *models.GraphMetrics    `json:"metrics" toon:"metrics"`
-		}{graph, metrics}
+			Graph   *graph.DependencyGraph `json:"graph" toon:"graph"`
+			Metrics *graph.Metrics         `json:"metrics" toon:"metrics"`
+		}{depGraph, metrics}
 		return toolResult(result, format)
 	}
 
-	return toolResult(graph, format)
+	return toolResult(depGraph, format)
 }
 
 func handleAnalyzeHotspot(ctx context.Context, req *mcp.CallToolRequest, input HotspotInput) (*mcp.CallToolResult, any, error) {
@@ -583,7 +590,7 @@ func handleAnalyzeHotspot(ctx context.Context, req *mcp.CallToolRequest, input H
 	}
 
 	svc := analysis.New()
-	result, err := svc.AnalyzeHotspots(scanResult.RepoRoot, scanResult.Files, analysis.HotspotOptions{
+	result, err := svc.AnalyzeHotspots(ctx, scanResult.RepoRoot, scanResult.Files, analysis.HotspotOptions{
 		Days: days,
 	})
 	if err != nil {
@@ -621,7 +628,7 @@ func handleAnalyzeTemporalCoupling(ctx context.Context, req *mcp.CallToolRequest
 	}
 
 	svc := analysis.New()
-	result, err := svc.AnalyzeTemporalCoupling(scanResult.RepoRoot, analysis.TemporalCouplingOptions{
+	result, err := svc.AnalyzeTemporalCoupling(ctx, scanResult.RepoRoot, analysis.TemporalCouplingOptions{
 		Days:         days,
 		MinCochanges: minCochanges,
 	})
@@ -747,8 +754,8 @@ func handleAnalyzeRepoMap(ctx context.Context, req *mcp.CallToolRequest, input R
 	topSymbols := rm.TopN(top)
 
 	result := struct {
-		Symbols []models.Symbol       `json:"symbols" toon:"symbols"`
-		Summary models.RepoMapSummary `json:"summary" toon:"summary"`
+		Symbols []repomap.Symbol `json:"symbols" toon:"symbols"`
+		Summary repomap.Summary  `json:"summary" toon:"summary"`
 	}{
 		Symbols: topSymbols,
 		Summary: rm.Summary,
@@ -825,7 +832,7 @@ func handleAnalyzeFlags(ctx context.Context, req *mcp.CallToolRequest, input Fla
 		}
 		minOrder := priorityOrder[input.MinPriority]
 		if minOrder > 0 {
-			var filtered []models.FlagAnalysis
+			var filtered []featureflags.FlagAnalysis
 			for _, f := range result.Flags {
 				if priorityOrder[string(f.Priority.Level)] >= minOrder {
 					filtered = append(filtered, f)

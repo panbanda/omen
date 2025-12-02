@@ -23,6 +23,11 @@ const (
 	NodeInterface NodeType = "interface"
 )
 
+// String returns the string representation.
+func (n NodeType) String() string {
+	return string(n)
+}
+
 // Edge represents a dependency between nodes.
 type Edge struct {
 	From   string   `json:"from" toon:"from"`
@@ -42,6 +47,11 @@ const (
 	EdgeReference EdgeType = "reference"
 	EdgeUses      EdgeType = "uses"
 )
+
+// String returns the string representation.
+func (e EdgeType) String() string {
+	return string(e)
+}
 
 // DependencyGraph represents the full graph structure.
 type DependencyGraph struct {

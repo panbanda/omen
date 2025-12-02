@@ -14,6 +14,11 @@ const (
 	ConfidenceLow    ConfidenceLevel = "Low"
 )
 
+// String returns the string representation.
+func (c ConfidenceLevel) String() string {
+	return string(c)
+}
+
 // ConfidenceThresholds defines the thresholds for confidence level classification.
 // These thresholds are based on empirical analysis of dead code detection accuracy:
 // - High (>=0.8): Private/unexported symbols with no references have very low false positive rates
@@ -69,6 +74,11 @@ const (
 	ItemTypeVariable    ItemType = "variable"
 	ItemTypeUnreachable ItemType = "unreachable"
 )
+
+// String returns the string representation.
+func (i ItemType) String() string {
+	return string(i)
+}
 
 // Item represents an individual dead code item within a file.
 type Item struct {
@@ -185,6 +195,11 @@ const (
 	RefDynamicDispatch ReferenceType = "dynamic_dispatch"
 )
 
+// String returns the string representation.
+func (r ReferenceType) String() string {
+	return string(r)
+}
+
 // Kind classifies the type of dead code detected.
 type Kind string
 
@@ -195,6 +210,11 @@ const (
 	KindUnreachable Kind = "unreachable_code"
 	KindDeadBranch  Kind = "dead_branch"
 )
+
+// String returns the string representation.
+func (k Kind) String() string {
+	return string(k)
+}
 
 // ReferenceEdge represents a relationship between two code elements.
 type ReferenceEdge struct {

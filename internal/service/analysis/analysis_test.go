@@ -1,15 +1,16 @@
 package analysis
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 
-	"github.com/panbanda/omen/internal/analyzer"
 	"github.com/panbanda/omen/internal/vcs/mocks"
+	"github.com/panbanda/omen/pkg/analyzer/graph"
+	"github.com/panbanda/omen/pkg/analyzer/satd"
 	"github.com/panbanda/omen/pkg/config"
-	"github.com/panbanda/omen/pkg/models"
 )
 
 func TestNew(t *testing.T) {
@@ -130,7 +131,7 @@ func test() {}
 	svc := New()
 	result, err := svc.AnalyzeSATD([]string{goFile}, SATDOptions{
 		CustomPatterns: []PatternConfig{
-			{Pattern: "CUSTOM:", Category: models.DebtDesign, Severity: models.SeverityHigh},
+			{Pattern: "CUSTOM:", Category: satd.CategoryDesign, Severity: satd.SeverityHigh},
 		},
 	})
 	if err != nil {
@@ -149,7 +150,7 @@ func test() {}
 	svc := New()
 	_, err := svc.AnalyzeSATD([]string{goFile}, SATDOptions{
 		CustomPatterns: []PatternConfig{
-			{Pattern: "[invalid", Category: models.DebtDesign, Severity: models.SeverityHigh},
+			{Pattern: "[invalid", Category: satd.CategoryDesign, Severity: satd.SeverityHigh},
 		},
 	})
 	if err == nil {
@@ -251,14 +252,14 @@ func test() {
 `)
 
 	svc := New()
-	graph, metrics, err := svc.AnalyzeGraph([]string{goFile}, GraphOptions{
-		Scope:          analyzer.ScopeFile,
+	graphResult, metrics, err := svc.AnalyzeGraph([]string{goFile}, GraphOptions{
+		Scope:          graph.ScopeFile,
 		IncludeMetrics: true,
 	})
 	if err != nil {
 		t.Fatalf("AnalyzeGraph() error = %v", err)
 	}
-	if graph == nil {
+	if graphResult == nil {
 		t.Fatal("expected non-nil graph")
 	}
 	if metrics == nil {
@@ -272,13 +273,13 @@ func test() {}
 `)
 
 	svc := New()
-	graph, metrics, err := svc.AnalyzeGraph([]string{goFile}, GraphOptions{
+	graphResult, metrics, err := svc.AnalyzeGraph([]string{goFile}, GraphOptions{
 		IncludeMetrics: false,
 	})
 	if err != nil {
 		t.Fatalf("AnalyzeGraph() error = %v", err)
 	}
-	if graph == nil {
+	if graphResult == nil {
 		t.Fatal("expected non-nil graph")
 	}
 	if metrics != nil {
@@ -405,7 +406,7 @@ func TestAnalyzeChurn(t *testing.T) {
 	repoPath := createTestGitRepo(t)
 
 	svc := New()
-	result, err := svc.AnalyzeChurn(repoPath, ChurnOptions{
+	result, err := svc.AnalyzeChurn(context.Background(), repoPath, ChurnOptions{
 		Days: 365,
 	})
 	if err != nil {
@@ -424,7 +425,7 @@ func TestAnalyzeChurn_NonGitDir(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	svc := New()
-	_, err := svc.AnalyzeChurn(tmpDir, ChurnOptions{})
+	_, err := svc.AnalyzeChurn(context.Background(), tmpDir, ChurnOptions{})
 	if err == nil {
 		t.Error("expected error for non-git directory")
 	}
@@ -434,7 +435,7 @@ func TestAnalyzeChurn_DefaultDays(t *testing.T) {
 	repoPath := createTestGitRepo(t)
 
 	svc := New()
-	result, err := svc.AnalyzeChurn(repoPath, ChurnOptions{
+	result, err := svc.AnalyzeChurn(context.Background(), repoPath, ChurnOptions{
 		Days: 0, // Should use config default
 	})
 	if err != nil {
@@ -450,7 +451,7 @@ func TestAnalyzeDefects(t *testing.T) {
 	goFile := filepath.Join(repoPath, "test.go")
 
 	svc := New()
-	result, err := svc.AnalyzeDefects(repoPath, []string{goFile}, DefectOptions{})
+	result, err := svc.AnalyzeDefects(context.Background(), repoPath, []string{goFile}, DefectOptions{})
 	if err != nil {
 		t.Fatalf("AnalyzeDefects() error = %v", err)
 	}
@@ -464,7 +465,7 @@ func TestAnalyzeDefects_WithOptions(t *testing.T) {
 	goFile := filepath.Join(repoPath, "test.go")
 
 	svc := New()
-	result, err := svc.AnalyzeDefects(repoPath, []string{goFile}, DefectOptions{
+	result, err := svc.AnalyzeDefects(context.Background(), repoPath, []string{goFile}, DefectOptions{
 		HighRiskOnly: true,
 		ChurnDays:    90,
 		MaxFileSize:  100000,
@@ -482,7 +483,7 @@ func TestAnalyzeHotspots(t *testing.T) {
 	goFile := filepath.Join(repoPath, "test.go")
 
 	svc := New()
-	result, err := svc.AnalyzeHotspots(repoPath, []string{goFile}, HotspotOptions{
+	result, err := svc.AnalyzeHotspots(context.Background(), repoPath, []string{goFile}, HotspotOptions{
 		Days: 365,
 	})
 	if err != nil {
@@ -499,7 +500,7 @@ func TestAnalyzeHotspots_WithProgress(t *testing.T) {
 
 	progressCalled := false
 	svc := New()
-	result, err := svc.AnalyzeHotspots(repoPath, []string{goFile}, HotspotOptions{
+	result, err := svc.AnalyzeHotspots(context.Background(), repoPath, []string{goFile}, HotspotOptions{
 		Days:       365,
 		OnProgress: func() { progressCalled = true },
 	})
@@ -522,7 +523,7 @@ func TestAnalyzeHotspots_NonGitDir(t *testing.T) {
 	}
 
 	svc := New()
-	_, err := svc.AnalyzeHotspots(tmpDir, []string{goFile}, HotspotOptions{})
+	_, err := svc.AnalyzeHotspots(context.Background(), tmpDir, []string{goFile}, HotspotOptions{})
 	if err == nil {
 		t.Error("expected error for non-git directory")
 	}
@@ -548,7 +549,7 @@ func TestAnalyzeTemporalCoupling(t *testing.T) {
 	runGit(t, repoPath, "commit", "-m", "Add helper and update test")
 
 	svc := New()
-	result, err := svc.AnalyzeTemporalCoupling(repoPath, TemporalCouplingOptions{
+	result, err := svc.AnalyzeTemporalCoupling(context.Background(), repoPath, TemporalCouplingOptions{
 		Days:         365,
 		MinCochanges: 1, // Lower threshold for testing
 	})
@@ -564,7 +565,7 @@ func TestAnalyzeTemporalCoupling_DefaultOptions(t *testing.T) {
 	repoPath := createTestGitRepo(t)
 
 	svc := New()
-	result, err := svc.AnalyzeTemporalCoupling(repoPath, TemporalCouplingOptions{
+	result, err := svc.AnalyzeTemporalCoupling(context.Background(), repoPath, TemporalCouplingOptions{
 		Days:         0, // Should use default
 		MinCochanges: 0, // Should use default
 	})
@@ -580,7 +581,7 @@ func TestAnalyzeTemporalCoupling_NonGitDir(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	svc := New()
-	_, err := svc.AnalyzeTemporalCoupling(tmpDir, TemporalCouplingOptions{})
+	_, err := svc.AnalyzeTemporalCoupling(context.Background(), tmpDir, TemporalCouplingOptions{})
 	if err == nil {
 		t.Error("expected error for non-git directory")
 	}
@@ -806,13 +807,13 @@ func test() {
 
 	progressCalled := false
 	svc := New()
-	graph, _, err := svc.AnalyzeGraph([]string{goFile}, GraphOptions{
+	graphResult, _, err := svc.AnalyzeGraph([]string{goFile}, GraphOptions{
 		OnProgress: func() { progressCalled = true },
 	})
 	if err != nil {
 		t.Fatalf("AnalyzeGraph() error = %v", err)
 	}
-	if graph == nil {
+	if graphResult == nil {
 		t.Fatal("expected non-nil graph")
 	}
 	if !progressCalled {
@@ -874,7 +875,7 @@ func TestAnalyzeChurn_WithSpinner(t *testing.T) {
 
 	svc := New()
 	// Pass a nil spinner - just testing the branch
-	result, err := svc.AnalyzeChurn(repoPath, ChurnOptions{
+	result, err := svc.AnalyzeChurn(context.Background(), repoPath, ChurnOptions{
 		Days:    365,
 		Spinner: nil, // explicitly nil
 	})
