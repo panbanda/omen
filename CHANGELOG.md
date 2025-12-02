@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.5](https://github.com/panbanda/omen/compare/omen-v1.4.4...omen-v1.4.5) (2025-12-02)
+
+
+### Bug Fixes
+
+* **mcp:** correct manifest schema compliance for OCI packages ([9543b10](https://github.com/panbanda/omen/commit/9543b10042d358a7eaa9162885c9c1de240feb0b))
+
 ## [1.4.4](https://github.com/panbanda/omen/compare/omen-v1.4.3...omen-v1.4.4) (2025-12-02)
 
 
