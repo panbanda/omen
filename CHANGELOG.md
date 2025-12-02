@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/panbanda/omen/compare/omen-v1.4.7...omen-v1.5.0) (2025-12-02)
+
+
+### Features
+
+* **skills:** trigger minor version bump ([#127](https://github.com/panbanda/omen/issues/127)) ([4a72df4](https://github.com/panbanda/omen/commit/4a72df486ab93770bfa27753e381a3f25ff48466))
+
 ## [1.4.7](https://github.com/panbanda/omen/compare/omen-v1.4.6...omen-v1.4.7) (2025-12-02)
 
 
