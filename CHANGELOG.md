@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.2](https://github.com/panbanda/omen/compare/omen-v1.4.1...omen-v1.4.2) (2025-12-02)
+
+
+### Bug Fixes
+
+* **release:** strip omen-v prefix from archive names ([015b2be](https://github.com/panbanda/omen/commit/015b2be24d522026b94e5a38ab3652172ff17383))
+
 ## [1.4.1](https://github.com/panbanda/omen/compare/omen-v1.4.0...omen-v1.4.1) (2025-12-02)
 
 
