@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.3.0](https://github.com/panbanda/omen/compare/omen-v1.2.1...omen-v1.3.0) (2025-12-02)
+
+
+### Features
+
+* **ci:** add MCP registry publishing with Docker images ([535c126](https://github.com/panbanda/omen/commit/535c1267ebf197433caa0208ea7dd56ba39a6a5c))
+* **ci:** add MCP registry publishing with Docker images ([03a2bb6](https://github.com/panbanda/omen/commit/03a2bb685d898abedbb4f5008a9f998dd9d9b828))
+* **cli:** add init and config commands ([6088cea](https://github.com/panbanda/omen/commit/6088cea6a0ad41b29e24508f421bdd95b289cb7d))
+
+
+### Bug Fixes
+
+* **cli:** add init and config commands, remove .omen.* config support ([9403df4](https://github.com/panbanda/omen/commit/9403df4e7c9c5b166121e0602edc3b12a9673621))
+
 ## [1.2.1](https://github.com/panbanda/omen/compare/omen-v1.2.0...omen-v1.2.1) (2025-12-02)
 
 
