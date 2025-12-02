@@ -245,7 +245,7 @@ jobs:
           TAG: ${{ needs.release-please.outputs.tag_name }}
         run: |
           VERSION="${TAG#omen-v}"
-          gh release download "$TAG" --pattern "omen_${VERSION}_linux_amd64.tar.gz"
+          gh release download "$TAG" --repo "${{ github.repository }}" --pattern "omen_${VERSION}_linux_amd64.tar.gz"
           tar xzf "omen_${VERSION}_linux_amd64.tar.gz" omen
 
       - name: Generate server.json manifest
