@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.4.0](https://github.com/panbanda/omen/compare/omen-v1.3.2...omen-v1.4.0) (2025-12-02)
+
+
+### Features
+
+* **mcp:** add --manifest flag to generate server.json dynamically ([4593123](https://github.com/panbanda/omen/commit/4593123a18c2077e05c37720b4bbb6be108a5e73))
+
+
+### Bug Fixes
+
+* **ci:** use mcp-publisher CLI instead of GoReleaser for MCP registry ([836f293](https://github.com/panbanda/omen/commit/836f2935ea63c850ab02ad0afbf4e8348f41fd22))
+* **mcp:** change --manifest flag to manifest subcommand ([31efb9c](https://github.com/panbanda/omen/commit/31efb9c3b5d088a7c160e11ad0a49db936226b1e))
+
 ## [1.3.2](https://github.com/panbanda/omen/compare/omen-v1.3.1...omen-v1.3.2) (2025-12-02)
 
 
