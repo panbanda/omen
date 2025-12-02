@@ -17,119 +17,119 @@ import (
 // Config holds all configuration options for omen.
 type Config struct {
 	// Analysis settings
-	Analysis AnalysisConfig `koanf:"analysis"`
+	Analysis AnalysisConfig `koanf:"analysis" toml:"analysis"`
 
 	// Thresholds for various metrics
-	Thresholds ThresholdConfig `koanf:"thresholds"`
+	Thresholds ThresholdConfig `koanf:"thresholds" toml:"thresholds"`
 
 	// Duplicate detection settings
-	Duplicates DuplicateConfig `koanf:"duplicates"`
+	Duplicates DuplicateConfig `koanf:"duplicates" toml:"duplicates"`
 
 	// File exclusion patterns
-	Exclude ExcludeConfig `koanf:"exclude"`
+	Exclude ExcludeConfig `koanf:"exclude" toml:"exclude"`
 
 	// Cache settings
-	Cache CacheConfig `koanf:"cache"`
+	Cache CacheConfig `koanf:"cache" toml:"cache"`
 
 	// Output settings
-	Output OutputConfig `koanf:"output"`
+	Output OutputConfig `koanf:"output" toml:"output"`
 
 	// Feature flag settings
-	FeatureFlags FeatureFlagConfig `koanf:"feature_flags"`
+	FeatureFlags FeatureFlagConfig `koanf:"feature_flags" toml:"feature_flags"`
 }
 
 // AnalysisConfig controls which analyzers run.
 type AnalysisConfig struct {
-	Complexity  bool  `koanf:"complexity"`
-	SATD        bool  `koanf:"satd"`
-	DeadCode    bool  `koanf:"dead_code"`
-	Churn       bool  `koanf:"churn"`
-	Duplicates  bool  `koanf:"duplicates"`
-	Defect      bool  `koanf:"defect"`
-	TDG         bool  `koanf:"tdg"`
-	Graph       bool  `koanf:"graph"`
-	LintHotspot bool  `koanf:"lint_hotspot"`
-	Context     bool  `koanf:"context"`
-	ChurnDays   int   `koanf:"churn_days"`
-	MaxFileSize int64 `koanf:"max_file_size"` // Maximum file size in bytes (0 = no limit)
+	Complexity  bool  `koanf:"complexity" toml:"complexity"`
+	SATD        bool  `koanf:"satd" toml:"satd"`
+	DeadCode    bool  `koanf:"dead_code" toml:"dead_code"`
+	Churn       bool  `koanf:"churn" toml:"churn"`
+	Duplicates  bool  `koanf:"duplicates" toml:"duplicates"`
+	Defect      bool  `koanf:"defect" toml:"defect"`
+	TDG         bool  `koanf:"tdg" toml:"tdg"`
+	Graph       bool  `koanf:"graph" toml:"graph"`
+	LintHotspot bool  `koanf:"lint_hotspot" toml:"lint_hotspot"`
+	Context     bool  `koanf:"context" toml:"context"`
+	ChurnDays   int   `koanf:"churn_days" toml:"churn_days"`
+	MaxFileSize int64 `koanf:"max_file_size" toml:"max_file_size"` // Maximum file size in bytes (0 = no limit)
 }
 
 // ThresholdConfig defines metric thresholds.
 type ThresholdConfig struct {
-	CyclomaticComplexity int     `koanf:"cyclomatic_complexity"`
-	CognitiveComplexity  int     `koanf:"cognitive_complexity"`
-	DuplicateMinLines    int     `koanf:"duplicate_min_lines"`
-	DuplicateSimilarity  float64 `koanf:"duplicate_similarity"`
-	DeadCodeConfidence   float64 `koanf:"dead_code_confidence"`
-	DefectHighRisk       float64 `koanf:"defect_high_risk"`
-	TDGHighRisk          float64 `koanf:"tdg_high_risk"`
+	CyclomaticComplexity int     `koanf:"cyclomatic_complexity" toml:"cyclomatic_complexity"`
+	CognitiveComplexity  int     `koanf:"cognitive_complexity" toml:"cognitive_complexity"`
+	DuplicateMinLines    int     `koanf:"duplicate_min_lines" toml:"duplicate_min_lines"`
+	DuplicateSimilarity  float64 `koanf:"duplicate_similarity" toml:"duplicate_similarity"`
+	DeadCodeConfidence   float64 `koanf:"dead_code_confidence" toml:"dead_code_confidence"`
+	DefectHighRisk       float64 `koanf:"defect_high_risk" toml:"defect_high_risk"`
+	TDGHighRisk          float64 `koanf:"tdg_high_risk" toml:"tdg_high_risk"`
 }
 
 // DuplicateConfig defines duplicate detection settings (pmat-compatible).
 type DuplicateConfig struct {
-	MinTokens            int     `koanf:"min_tokens"`
-	SimilarityThreshold  float64 `koanf:"similarity_threshold"`
-	ShingleSize          int     `koanf:"shingle_size"`
-	NumHashFunctions     int     `koanf:"num_hash_functions"`
-	NumBands             int     `koanf:"num_bands"`
-	RowsPerBand          int     `koanf:"rows_per_band"`
-	NormalizeIdentifiers bool    `koanf:"normalize_identifiers"`
-	NormalizeLiterals    bool    `koanf:"normalize_literals"`
-	IgnoreComments       bool    `koanf:"ignore_comments"`
-	MinGroupSize         int     `koanf:"min_group_size"`
+	MinTokens            int     `koanf:"min_tokens" toml:"min_tokens"`
+	SimilarityThreshold  float64 `koanf:"similarity_threshold" toml:"similarity_threshold"`
+	ShingleSize          int     `koanf:"shingle_size" toml:"shingle_size"`
+	NumHashFunctions     int     `koanf:"num_hash_functions" toml:"num_hash_functions"`
+	NumBands             int     `koanf:"num_bands" toml:"num_bands"`
+	RowsPerBand          int     `koanf:"rows_per_band" toml:"rows_per_band"`
+	NormalizeIdentifiers bool    `koanf:"normalize_identifiers" toml:"normalize_identifiers"`
+	NormalizeLiterals    bool    `koanf:"normalize_literals" toml:"normalize_literals"`
+	IgnoreComments       bool    `koanf:"ignore_comments" toml:"ignore_comments"`
+	MinGroupSize         int     `koanf:"min_group_size" toml:"min_group_size"`
 }
 
 // ExcludeConfig defines file exclusion patterns.
 type ExcludeConfig struct {
-	Patterns   []string `koanf:"patterns"`
-	Extensions []string `koanf:"extensions"`
-	Dirs       []string `koanf:"dirs"`
-	Gitignore  bool     `koanf:"gitignore"`
+	Patterns   []string `koanf:"patterns" toml:"patterns"`
+	Extensions []string `koanf:"extensions" toml:"extensions"`
+	Dirs       []string `koanf:"dirs" toml:"dirs"`
+	Gitignore  bool     `koanf:"gitignore" toml:"gitignore"`
 }
 
 // CacheConfig controls caching behavior.
 type CacheConfig struct {
-	Enabled bool   `koanf:"enabled"`
-	Dir     string `koanf:"dir"`
-	TTL     int    `koanf:"ttl"` // TTL in hours
+	Enabled bool   `koanf:"enabled" toml:"enabled"`
+	Dir     string `koanf:"dir" toml:"dir"`
+	TTL     int    `koanf:"ttl" toml:"ttl"` // TTL in hours
 }
 
 // OutputConfig controls output formatting.
 type OutputConfig struct {
-	Format  string `koanf:"format"` // text, json, markdown
-	Color   bool   `koanf:"color"`
-	Verbose bool   `koanf:"verbose"`
+	Format  string `koanf:"format" toml:"format"` // text, json, markdown
+	Color   bool   `koanf:"color" toml:"color"`
+	Verbose bool   `koanf:"verbose" toml:"verbose"`
 }
 
 // FeatureFlagConfig controls feature flag detection settings.
 type FeatureFlagConfig struct {
 	// Providers to detect (empty = all)
-	Providers []string `koanf:"providers"`
+	Providers []string `koanf:"providers" toml:"providers"`
 
 	// Custom providers with inline query definitions
-	CustomProviders []CustomProviderConfig `koanf:"custom_providers"`
+	CustomProviders []CustomProviderConfig `koanf:"custom_providers" toml:"custom_providers"`
 
 	// Expected TTL settings (days)
-	ExpectedTTL FeatureFlagTTLConfig `koanf:"expected_ttl"`
+	ExpectedTTL FeatureFlagTTLConfig `koanf:"expected_ttl" toml:"expected_ttl"`
 }
 
 // CustomProviderConfig defines a custom feature flag provider with query patterns.
 type CustomProviderConfig struct {
 	// Name of the custom provider (e.g., "feature", "custom-flipper")
-	Name string `koanf:"name"`
+	Name string `koanf:"name" toml:"name"`
 
 	// Languages this provider applies to (e.g., ["ruby", "javascript"])
-	Languages []string `koanf:"languages"`
+	Languages []string `koanf:"languages" toml:"languages"`
 
 	// Tree-sitter query pattern (.scm format)
 	// Must capture @flag_key for the flag name
-	Query string `koanf:"query"`
+	Query string `koanf:"query" toml:"query"`
 }
 
 // FeatureFlagTTLConfig defines expected time-to-live settings.
 type FeatureFlagTTLConfig struct {
-	Release    int `koanf:"release"`    // days, default 14
-	Experiment int `koanf:"experiment"` // days, default 90
+	Release    int `koanf:"release" toml:"release"`       // days, default 14
+	Experiment int `koanf:"experiment" toml:"experiment"` // days, default 90
 }
 
 // DefaultConfig returns a config with sensible defaults.
@@ -250,36 +250,99 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// LoadOrDefault tries to load config from standard locations or returns defaults.
-func LoadOrDefault() *Config {
-	// Standard config file names to search for
+// FindConfigFile searches for a config file in standard locations.
+// Returns the path if found, or empty string if not found.
+func FindConfigFile() string {
 	configNames := []string{
 		"omen.toml",
 		"omen.yaml",
 		"omen.yml",
 		"omen.json",
-		".omen.toml",
-		".omen.yaml",
-		".omen.yml",
-		".omen.json",
 	}
 
-	// Search in current directory and .omen directory
 	searchDirs := []string{".", ".omen"}
 
 	for _, dir := range searchDirs {
 		for _, name := range configNames {
 			path := filepath.Join(dir, name)
 			if _, err := os.Stat(path); err == nil {
-				cfg, err := Load(path)
-				if err == nil {
-					return cfg
-				}
+				return path
+			}
+		}
+	}
+	return ""
+}
+
+// LoadOption configures how configuration is loaded.
+type LoadOption func(*loadOptions)
+
+type loadOptions struct {
+	path string
+}
+
+// WithPath specifies an explicit config file path.
+// If the path doesn't exist, an error is returned.
+func WithPath(path string) LoadOption {
+	return func(o *loadOptions) {
+		o.path = path
+	}
+}
+
+// LoadResult contains the loaded configuration and metadata.
+type LoadResult struct {
+	Config *Config
+	Source string // Path to the config file, empty if using defaults
+}
+
+// LoadConfig loads configuration with the provided options.
+// If no path is specified, it searches standard locations.
+// Returns defaults if no config file is found.
+// Always validates the config before returning.
+func LoadConfig(opts ...LoadOption) (*LoadResult, error) {
+	o := &loadOptions{}
+	for _, opt := range opts {
+		opt(o)
+	}
+
+	var cfg *Config
+	var source string
+	var err error
+
+	if o.path != "" {
+		if _, statErr := os.Stat(o.path); os.IsNotExist(statErr) {
+			return nil, fmt.Errorf("config file not found: %s", o.path)
+		}
+		cfg, err = Load(o.path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load %s: %w", o.path, err)
+		}
+		source = o.path
+	} else {
+		source = FindConfigFile()
+		if source == "" {
+			cfg = DefaultConfig()
+		} else {
+			cfg, err = Load(source)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load %s: %w", source, err)
 			}
 		}
 	}
 
-	return DefaultConfig()
+	if validationErr := cfg.Validate(); validationErr != nil {
+		return nil, fmt.Errorf("config validation failed: %w", validationErr)
+	}
+
+	return &LoadResult{Config: cfg, Source: source}, nil
+}
+
+// LoadOrDefault tries to load config from standard locations or returns defaults.
+func LoadOrDefault() *Config {
+	result, _ := LoadConfig()
+	if result == nil {
+		return DefaultConfig()
+	}
+	return result.Config
 }
 
 // ShouldExclude checks if a path should be excluded from analysis.

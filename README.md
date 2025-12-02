@@ -1,4 +1,5 @@
 <div align="center">
+
 # Omen
 
 <img src="assets/omen-logo.png" alt="Omen - Code Analysis CLI" width="100%">
@@ -437,7 +438,7 @@ Tool outputs default to [TOON (Token-Oriented Object Notation)](https://github.c
 
 ## Supported Languages
 
-Go, Rust, Python, TypeScript, JavaScript, TSX/JSX, Java, C, C++, C#, Ruby, PHP, Bash
+Go, Rust, Python, TypeScript, JavaScript, TSX/JSX, Java, C, C++, C#, Ruby, PHP, Bash, and any other `tree-sitter` supported language
 
 ## Installation
 
@@ -469,188 +470,21 @@ go build -o omen ./cmd/omen
 
 ```bash
 # Run all analyzers
-omen analyze ./src
+omen analyze
 
 # Analyze complexity
-omen analyze complexity ./src
-
-# Detect technical debt
-omen analyze satd ./src
-
-# Find dead code
-omen analyze deadcode ./src
-
-# Analyze git churn (last 30 days)
-omen analyze churn ./
-
-# Detect code clones
-omen analyze duplicates ./src
-
-# Predict file-level defect probability (PMAT)
-omen analyze defect ./src
-
-# Analyze recent commits for risk (JIT)
-omen analyze changes ./
-
-# Calculate TDG scores
-omen analyze tdg ./src
-
-# Generate dependency graph
-omen analyze graph ./src --metrics
-
-# Find hotspots (high churn + complexity)
-omen analyze hotspot ./src
-
-# Detect temporal coupling
-omen analyze temporal ./
-
-# Analyze code ownership
-omen analyze ownership ./src
-
-# Calculate CK cohesion metrics
-omen analyze cohesion ./src
-
-# Detect feature flags
-omen analyze flags ./src
-```
-
-## Commands
-
-### Top-level Commands
-
-| Command   | Alias | Description                                           |
-| --------- | ----- | ----------------------------------------------------- |
-| `analyze` | `a`   | Run analyzers (all if no subcommand, or specific one) |
-| `context` | `ctx` | Deep context generation for LLMs                      |
-| `mcp`     | -     | Start MCP server for LLM tool integration             |
-
-### Analyzer Subcommands (`omen analyze <subcommand>`)
-
-| Subcommand          | Alias               | Description                                      |
-| ------------------- | ------------------- | ------------------------------------------------ |
-| `complexity`        | `cx`                | Cyclomatic and cognitive complexity analysis     |
-| `satd`              | `debt`              | Self-admitted technical debt detection           |
-| `deadcode`          | `dc`                | Unused code detection                            |
-| `churn`             | -                   | Git history analysis for file churn              |
-| `duplicates`        | `dup`               | Code clone detection                             |
-| `defect`            | `predict`           | File-level defect probability (PMAT)             |
-| `changes`           | `jit`               | Commit-level change risk analysis (Kamei et al.) |
-| `tdg`               | -                   | Technical Debt Gradient scores                   |
-| `graph`             | `dag`               | Dependency graph (Mermaid output)                |
-| `hotspot`           | `hs`                | Churn x complexity risk analysis                 |
-| `smells`            | -                   | Architectural smell detection                    |
-| `temporal-coupling` | `tc`                | Temporal coupling detection                      |
-| `ownership`         | `own`, `bus-factor` | Code ownership and bus factor                    |
-| `cohesion`          | `ck`                | CK object-oriented metrics                       |
-| `lint-hotspot`      | `lh`                | Lint violation density                           |
-| `flags`             | `ff`                | Feature flag detection and staleness analysis    |
-
-## Output Formats
-
-All commands support multiple output formats:
-
-```bash
-omen analyze complexity ./src -f text      # Default, colored terminal output
-omen analyze complexity ./src -f json      # JSON for programmatic use
-omen analyze complexity ./src -f markdown  # Markdown tables
-omen analyze complexity ./src -f toon      # TOON format
-```
-
-Write output to a file:
-
-```bash
-omen analyze ./src -f json -o report.json
+omen analyze --help
 ```
 
 ## Configuration
 
-Create `omen.toml`, `.omen.toml`, or `.omen/omen.toml`:
+Create `omen.toml` or `.omen/omen.toml` (supports `yaml`, `json` and `toml`):
 
-```toml
-[exclude]
-patterns = ["vendor/**", "node_modules/**", "**/*_test.go"]
-dirs = [".git", "dist", "build"]
-
-[thresholds]
-cyclomatic_complexity = 10
-cognitive_complexity = 15
-duplicate_min_lines = 6
-duplicate_similarity = 0.8
-dead_code_confidence = 0.8
-
-[analysis]
-churn_days = 30
+```bash
+omen init
 ```
 
 See [`omen.example.toml`](omen.example.toml) for all options.
-
-## Examples
-
-### Find Complex Functions
-
-```bash
-omen analyze complexity ./pkg --functions-only --cyclomatic-threshold 15
-```
-
-### High-Risk Files Only
-
-```bash
-omen analyze defect ./src --high-risk-only
-```
-
-### Top 5 TDG Hotspots
-
-```bash
-omen analyze tdg ./src --hotspots 5
-```
-
-### Generate LLM Context
-
-```bash
-omen context ./src --include-metrics --include-graph
-```
-
-### Repository Map for LLM Context
-
-```bash
-omen context ./src --repo-map --top 50
-```
-
-### Find Hotspots (High-Risk Files)
-
-```bash
-omen analyze hotspot ./src --top 10
-```
-
-### Analyze Temporal Coupling
-
-```bash
-omen analyze temporal-coupling ./ --min-cochanges 5 --days 90
-```
-
-### Check Bus Factor Risk
-
-```bash
-omen analyze ownership ./src --top 20
-```
-
-### CK Metrics for Classes
-
-```bash
-omen analyze cohesion ./src --sort lcom
-```
-
-### Find Stale Feature Flags
-
-```bash
-omen analyze flags ./src --provider launchdarkly
-```
-
-### Feature Flags with Custom Provider
-
-```bash
-omen analyze flags ./src --config omen.toml --provider feature
-```
 
 ## MCP Server
 
@@ -673,47 +507,9 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
 
 ### Claude Code
 
-Add to your Claude Code settings (`.claude/settings.json` in your project or `~/.claude/settings.json` globally):
-
-```json
-{
-  "mcpServers": {
-    "omen": {
-      "command": "omen",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-
-Or use the CLI:
-
 ```bash
 claude mcp add omen -- omen mcp
 ```
-
-### Available Tools
-
-| Tool                        | Description                                    |
-| --------------------------- | ---------------------------------------------- |
-| `analyze_complexity`        | Cyclomatic and cognitive complexity analysis   |
-| `analyze_satd`              | Self-admitted technical debt detection         |
-| `analyze_deadcode`          | Unused functions and variables                 |
-| `analyze_churn`             | Git file change frequency                      |
-| `analyze_duplicates`        | Code clones and copy-paste detection           |
-| `analyze_defect`            | File-level defect probability (PMAT)           |
-| `analyze_changes`           | Commit-level change risk (JIT/Kamei et al.)    |
-| `analyze_tdg`               | Technical Debt Gradient scores                 |
-| `analyze_graph`             | Dependency graph generation                    |
-| `analyze_hotspot`           | High churn + high complexity files             |
-| `analyze_smells`            | Architectural smells (cycles, hubs, god comps) |
-| `analyze_temporal_coupling` | Files that change together                     |
-| `analyze_ownership`         | Code ownership and bus factor                  |
-| `analyze_cohesion`          | CK OO metrics (LCOM, WMC, CBO, DIT)            |
-| `analyze_repo_map`          | PageRank-ranked symbol map                     |
-| `analyze_flags`             | Feature flag detection and staleness analysis  |
-
-Each tool includes detailed descriptions with interpretation guidance, helping LLMs understand what metrics mean and when to use each analyzer.
 
 ### Example Usage
 
@@ -738,35 +534,6 @@ Install the Omen plugin in Claude Code:
 ```
 
 Verify installation with `/skills` to see available Omen skills.
-
-### Available Skills
-
-| Skill                       | Description                                                         |
-| --------------------------- | ------------------------------------------------------------------- |
-| `omen:context-compression`  | Generate compressed context summaries using PageRank-ranked symbols |
-| `omen:refactoring-priority` | Identify highest-priority refactoring targets                       |
-| `omen:bug-hunt`             | Find likely bug locations using defect prediction and hotspots      |
-| `omen:change-impact`        | Analyze blast radius before making changes                          |
-| `omen:codebase-onboarding`  | Generate onboarding guides for new developers                       |
-| `omen:code-review-focus`    | Identify what to focus on when reviewing PRs                        |
-| `omen:architecture-review`  | Analyze architectural health and design smells                      |
-| `omen:tech-debt-report`     | Generate comprehensive technical debt assessments                   |
-| `omen:test-targeting`       | Identify files most needing test coverage                           |
-| `omen:quality-gate`         | Run pass/fail quality checks against thresholds                     |
-
-### Using Skills
-
-Invoke a skill by name:
-
-```
-/skill omen:bug-hunt
-```
-
-Or reference in conversation:
-
-```
-Use the omen:refactoring-priority skill to analyze this codebase
-```
 
 Skills require the Omen MCP server to be configured (see MCP Server section above).
 
