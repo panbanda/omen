@@ -1,19 +1,11 @@
 ---
-name: tech-debt-report
-description: |
-  Generate a comprehensive technical debt assessment including SATD, quality grades, duplication, and high-risk areas. Use this skill for sprint planning, stakeholder reports, or justifying refactoring time.
+name: report-debt
+description: Generate comprehensive tech debt assessment with quantified metrics and prioritized issues. Use for sprint planning, stakeholder reports, or justifying refactoring time allocation.
 ---
 
-# Technical Debt Report
+# Report Debt
 
 Generate a comprehensive technical debt assessment with quantified metrics, prioritized issues, and actionable recommendations.
-
-## When to Use
-
-- Sprint planning for tech debt reduction
-- Reporting to stakeholders on code health
-- Justifying refactoring time allocation
-- Tracking debt trends over time
 
 ## Prerequisites
 

@@ -1,7 +1,7 @@
 ---
-name: refactoring-priority
-title: Refactoring Priority
-description: Identify highest-ROI refactoring targets based on hotspots, complexity, duplication, and technical debt
+name: plan-refactoring
+title: Plan Refactoring
+description: Identify highest-priority refactoring targets based on TDG scores, complexity, and code clones. Use when planning refactoring work, prioritizing tech debt, or finding quick wins for code quality.
 arguments:
   - name: paths
     description: Paths to analyze

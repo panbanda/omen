@@ -1,19 +1,11 @@
 ---
-name: architecture-review
-description: |
-  Analyze architectural health including module coupling, cohesion metrics, hidden dependencies, and design smells. Use this skill for architectural reviews, design discussions, or identifying structural issues.
+name: audit-architecture
+description: Audit module coupling, cohesion, hidden dependencies, and design smells. Use when conducting architecture reviews, evaluating design decisions, or identifying structural tech debt.
 ---
 
-# Architecture Review
+# Audit Architecture
 
 Analyze the structural health of a codebase by examining coupling, cohesion, hidden dependencies, and design patterns.
-
-## When to Use
-
-- Conducting an architecture review
-- Evaluating design decisions
-- Planning major refactoring
-- Identifying structural tech debt
 
 ## Prerequisites
 

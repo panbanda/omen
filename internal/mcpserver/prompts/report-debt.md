@@ -1,7 +1,7 @@
 ---
-name: tech-debt-report
-title: Technical Debt Report
-description: Comprehensive technical debt assessment including explicit markers, structural debt, duplication, and high-risk areas
+name: report-debt
+title: Report Debt
+description: Generate comprehensive tech debt assessment with quantified metrics and prioritized issues. Use for sprint planning, stakeholder reports, or justifying refactoring time allocation.
 arguments:
   - name: paths
     description: Paths to analyze

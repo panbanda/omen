@@ -1,7 +1,7 @@
 ---
-name: codebase-onboarding
-title: Codebase Onboarding Guide
-description: Generate an onboarding guide for developers new to a codebase - key symbols, architecture, and subject matter experts
+name: onboard-codebase
+title: Onboard Codebase
+description: Generate onboarding guide with key symbols, architecture overview, and subject matter experts. Use when joining a new project, onboarding teammates, or creating project documentation.
 arguments:
   - name: paths
     description: Paths to analyze

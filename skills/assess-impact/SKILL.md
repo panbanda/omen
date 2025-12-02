@@ -1,19 +1,11 @@
 ---
-name: change-impact
-description: |
-  Analyze the potential impact of changes to specific files, including dependencies, temporal coupling, and ownership. Use this skill before making significant changes to understand blast radius and identify stakeholders.
+name: assess-impact
+description: Analyze blast radius before changing specific files. Use before refactoring core components, making breaking API changes, or modifying shared code to identify affected files and stakeholders.
 ---
 
-# Change Impact Analysis
+# Assess Impact
 
 Understand the potential blast radius of changes before making them by analyzing dependencies, coupling patterns, and ownership.
-
-## When to Use
-
-- Before refactoring a core component
-- Planning a breaking API change
-- Estimating scope of a feature that touches shared code
-- Identifying who to notify about upcoming changes
 
 ## Prerequisites
 

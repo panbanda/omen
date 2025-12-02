@@ -1,7 +1,7 @@
 ---
-name: flag-audit
-title: Feature Flag Audit
-description: Identify stale feature flags and provide actionable cleanup recommendations
+name: audit-flags
+title: Audit Flags
+description: Identify stale feature flags and prioritize cleanup. Use when cleaning up flags after launches, during monthly hygiene reviews, or before major releases.
 arguments:
   - name: paths
     description: Paths to analyze

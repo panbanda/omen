@@ -1,19 +1,11 @@
 ---
-name: codebase-onboarding
-description: |
-  Generate an onboarding guide for developers new to a codebase, including key symbols, architecture, and subject matter experts. Use this skill when joining a new project, onboarding teammates, or creating project documentation.
+name: onboard-codebase
+description: Generate onboarding guide with key symbols, architecture overview, and subject matter experts. Use when joining a new project, onboarding teammates, or creating project documentation.
 ---
 
-# Codebase Onboarding
+# Onboard Codebase
 
 Generate a comprehensive onboarding guide for a new developer joining the project, identifying key code, architecture, and people to talk to.
-
-## When to Use
-
-- Joining a new project or team
-- Onboarding a new team member
-- Creating project documentation
-- Understanding a codebase before a major project
 
 ## Prerequisites
 
