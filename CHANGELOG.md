@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.6](https://github.com/panbanda/omen/compare/omen-v1.4.5...omen-v1.4.6) (2025-12-02)
+
+
+### Bug Fixes
+
+* **release:** strip omen-v prefix from binary version ([682ef32](https://github.com/panbanda/omen/commit/682ef321b8f54c77aae3e40fb9ad2ab7425a557b))
+
 ## [1.4.5](https://github.com/panbanda/omen/compare/omen-v1.4.4...omen-v1.4.5) (2025-12-02)
 
 
