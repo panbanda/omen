@@ -472,7 +472,7 @@ go build -o omen ./cmd/omen
 # Run all analyzers
 omen analyze
 
-# Analyze complexity
+# Check out the analyzers
 omen analyze --help
 ```
 
