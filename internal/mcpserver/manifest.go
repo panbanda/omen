@@ -33,7 +33,7 @@ type VersionDetail struct {
 // Package describes how to install/run the MCP server.
 type Package struct {
 	RegistryType         string    `json:"registryType"`
-	Name                 string    `json:"name"`
+	Identifier           string    `json:"identifier"`
 	Version              string    `json:"version"`
 	EnvironmentVariables []string  `json:"environmentVariables"`
 	Transport            Transport `json:"transport"`
@@ -105,7 +105,7 @@ func GenerateManifest(version string) ([]byte, error) {
 	manifest := Manifest{
 		Schema:      "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
 		Name:        "io.github.panbanda/omen",
-		Description: "Multi-language code analysis tools for complexity, technical debt, hotspots, ownership, and defect prediction",
+		Description: "Multi-language code analysis for complexity, debt, hotspots, ownership, and defect prediction",
 		Repository: Repository{
 			URL:    "https://github.com/panbanda/omen",
 			Source: "github",
@@ -117,7 +117,7 @@ func GenerateManifest(version string) ([]byte, error) {
 		Packages: []Package{
 			{
 				RegistryType:         "oci",
-				Name:                 "ghcr.io/panbanda/omen",
+				Identifier:           "ghcr.io/panbanda/omen",
 				Version:              version,
 				EnvironmentVariables: []string{},
 				Transport: Transport{
