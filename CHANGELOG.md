@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.1](https://github.com/panbanda/omen/compare/omen-v1.2.0...omen-v1.2.1) (2025-12-02)
+
+
+### Bug Fixes
+
+* **graph:** add Ruby/Python class dependency detection for smells analyzer ([ea33cad](https://github.com/panbanda/omen/commit/ea33cad008ac621bfbb8a117005c47f1e06df8dd))
+* **graph:** add Ruby/Python class dependency detection for smells analyzer ([06f5499](https://github.com/panbanda/omen/commit/06f5499aafed08e6aa528c1a7741afb505504a60))
+
 ## [1.2.0](https://github.com/panbanda/omen/compare/omen-v1.1.0...omen-v1.2.0) (2025-12-01)
 
 
