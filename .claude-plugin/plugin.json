@@ -16,5 +16,6 @@
     "defect-prediction",
     "hotspots",
     "architecture"
-  ]
+  ],
+  "skills": "./skills"
 }

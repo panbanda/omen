@@ -1,0 +1,14 @@
+{
+  "name": "omen",
+  "owner": "panbanda",
+  "plugins": [
+    {
+      "name": "omen",
+      "source": "github://panbanda/omen",
+      "description": "Code analysis that shows AI where the landmines are. Includes 10 analysis-driven skills for complexity, tech debt, defect prediction, architecture review, and more.",
+      "version": "1.2.0",
+      "author": "Jonathan Reyes",
+      "license": "MIT"
+    }
+  ]
+}

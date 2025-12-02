@@ -521,19 +521,19 @@ Once configured, you can ask Claude:
 - "Show me the bus factor risk for this project"
 - "Find stale feature flags that should be removed"
 
-## Claude Code Skills
+## Claude Code Plugin
 
-Omen includes a collection of skills that guide Claude through code analysis workflows. Skills provide structured prompts that combine multiple Omen tools to accomplish higher-level tasks.
+Omen is available as a Claude Code plugin, providing analysis-driven skills that guide Claude through code analysis workflows.
 
-### Installing as a Plugin
-
-Install the Omen plugin in Claude Code:
+### Installation
 
 ```bash
 /plugin install panbanda/omen
 ```
 
 Verify installation with `/skills` to see available Omen skills.
+
+### Prerequisites
 
 Skills require the Omen MCP server to be configured (see MCP Server section above).
 
