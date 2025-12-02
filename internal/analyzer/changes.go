@@ -3,7 +3,6 @@ package analyzer
 import (
 	"context"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
@@ -68,7 +67,8 @@ func NewChangesAnalyzer(opts ...ChangesOption) *ChangesAnalyzer {
 	return a
 }
 
-// Bug fix regex patterns
+// Bug fix regex patterns - detect commits that fix bugs.
+// Based on patterns from Mockus & Votta (2000) and subsequent research.
 var bugFixPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bfix(es|ed|ing)?\b`),
 	regexp.MustCompile(`(?i)\bbug\b`),
@@ -83,7 +83,7 @@ var bugFixPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bcrash(es|ed|ing)?\b`),
 }
 
-// Automated/trivial commit patterns - these are low-risk by nature
+// Automated/trivial commit patterns - these are low-risk by nature.
 var automatedCommitPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)^\s*chore:\s*updated?\s+(image\s+)?tag`),
 	regexp.MustCompile(`(?i)\[skip ci\]`),
@@ -129,7 +129,6 @@ func (a *ChangesAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath s
 		return nil, err
 	}
 
-	// Use configured reference time or default to now
 	refTime := a.reference
 	if refTime.IsZero() {
 		refTime = time.Now()
@@ -145,233 +144,60 @@ func (a *ChangesAnalyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath s
 	defer logIter.Close()
 
 	// First pass: collect raw commit data (git log returns newest-first)
-	// We collect commit-local data here; state-dependent fields are computed in second pass.
-	type rawCommit struct {
-		features     models.CommitFeatures
-		linesPerFile map[string]int // for entropy calculation
-	}
-	var rawCommits []rawCommit
-
-	err = logIter.ForEach(func(commit vcs.Commit) error {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		if commit.NumParents() == 0 {
-			return nil // Skip initial commit
-		}
-
-		author := commit.Author().Name
-		message := commit.Message()
-
-		// Get parent for diff
-		parent, err := commit.Parent(0)
-		if err != nil {
-			return nil
-		}
-
-		parentTree, err := parent.Tree()
-		if err != nil {
-			return nil
-		}
-
-		commitTree, err := commit.Tree()
-		if err != nil {
-			return nil
-		}
-
-		changes, err := parentTree.Diff(commitTree)
-		if err != nil {
-			return nil
-		}
-
-		// Extract commit-local features (no state dependencies)
-		features := models.CommitFeatures{
-			CommitHash:    commit.Hash().String(),
-			Author:        author,
-			Message:       truncateMessage(message),
-			Timestamp:     commit.Author().When,
-			IsFix:         isBugFixCommit(message),
-			IsAutomated:   isAutomatedCommit(message),
-			FilesModified: make([]string, 0),
-			// State-dependent fields (AuthorExperience, NumDevelopers, UniqueChanges)
-			// are computed in the second pass after sorting by timestamp
-		}
-
-		linesPerFile := make(map[string]int)
-
-		for _, change := range changes {
-			filePath := change.ToName()
-			if filePath == "" {
-				filePath = change.FromName() // Deleted file
-			}
-
-			features.FilesModified = append(features.FilesModified, filePath)
-
-			// Count lines changed
-			patch, err := change.Patch()
-			if err == nil {
-				for _, filePatch := range patch.FilePatches() {
-					for _, chunk := range filePatch.Chunks() {
-						content := chunk.Content()
-						lines := strings.Count(content, "\n")
-						switch chunk.Type() {
-						case vcs.ChunkAdd:
-							features.LinesAdded += lines
-							linesPerFile[filePath] += lines
-						case vcs.ChunkDelete:
-							features.LinesDeleted += lines
-							linesPerFile[filePath] += lines
-						}
-					}
-				}
-			}
-		}
-
-		features.NumFiles = len(features.FilesModified)
-		features.Entropy = models.CalculateEntropy(linesPerFile)
-
-		rawCommits = append(rawCommits, rawCommit{
-			features:     features,
-			linesPerFile: linesPerFile,
-		})
-
-		return nil
-	})
-
+	rawCommits, err := a.collectCommitData(ctx, logIter)
 	if err != nil {
 		return nil, err
 	}
 
-	// Reverse to process oldest-first (git log returns newest-first)
-	// This ensures state-dependent metrics are calculated correctly.
-	// We reverse rather than sort because timestamps may have coarse granularity
-	// (e.g., second precision), making sort unstable for rapid commits.
-	for i, j := 0, len(rawCommits)-1; i < j; i, j = i+1, j-1 {
-		rawCommits[i], rawCommits[j] = rawCommits[j], rawCommits[i]
-	}
+	// Reverse to process oldest-first for correct state-dependent metrics
+	reverseCommits(rawCommits)
 
 	// Second pass: compute state-dependent features in chronological order
-	// State is looked up BEFORE processing each commit, then updated AFTER
-	authorCommits := make(map[string]int)           // author -> commits made BEFORE this one
-	fileChanges := make(map[string]int)             // file -> commits touching it BEFORE this one
-	fileAuthors := make(map[string]map[string]bool) // file -> authors who touched it BEFORE this one
+	commits := computeStateDependentFeatures(rawCommits)
 
-	var commits []models.CommitFeatures
-	for _, raw := range rawCommits {
-		features := raw.features
-		author := features.Author
+	// Build and return analysis result
+	return a.buildChangesAnalysis(commits), nil
+}
 
-		// Look up state BEFORE this commit
-		features.AuthorExperience = authorCommits[author]
-
-		// Calculate NumDevelopers and UniqueChanges from state BEFORE this commit
-		uniqueDevs := make(map[string]bool)
-		priorCommits := 0
-		for _, filePath := range features.FilesModified {
-			priorCommits += fileChanges[filePath]
-			if authors, ok := fileAuthors[filePath]; ok {
-				for auth := range authors {
-					uniqueDevs[auth] = true
-				}
-			}
-		}
-		features.NumDevelopers = len(uniqueDevs)
-		features.UniqueChanges = priorCommits
-
-		commits = append(commits, features)
-
-		// Update state AFTER processing this commit (for future commits)
-		authorCommits[author]++
-		for _, file := range features.FilesModified {
-			fileChanges[file]++
-			if fileAuthors[file] == nil {
-				fileAuthors[file] = make(map[string]bool)
-			}
-			fileAuthors[file][author] = true
-		}
+// safeNormalize performs min-max normalization with zero max handling.
+func safeNormalize(value, max float64) float64 {
+	if max <= 0 {
+		return 0
 	}
-
-	// Build analysis result
-	analysis := models.NewChangesAnalysis()
-	analysis.PeriodDays = a.days
-	analysis.Weights = a.weights
-
-	if len(commits) == 0 {
-		return analysis, nil
+	if value >= max {
+		return 1
 	}
+	return value / max
+}
 
-	// Calculate normalization stats (min-max scaling)
-	analysis.Normalization = calculateNormalizationStats(commits)
-
-	// Second pass: calculate risk scores
-	var totalScore float64
-	scores := make([]float64, 0, len(commits))
-
-	for _, features := range commits {
-		score := models.CalculateChangeRisk(features, a.weights, analysis.Normalization)
-		level := models.GetChangeRiskLevel(score)
-
-		factors := map[string]float64{
-			"fix":            boolToFloat(features.IsFix) * a.weights.FIX,
-			"entropy":        safeNormalize(features.Entropy, analysis.Normalization.MaxEntropy) * a.weights.Entropy,
-			"lines_added":    safeNormalizeInt(features.LinesAdded, analysis.Normalization.MaxLinesAdded) * a.weights.LA,
-			"lines_deleted":  safeNormalizeInt(features.LinesDeleted, analysis.Normalization.MaxLinesDeleted) * a.weights.LD,
-			"num_files":      safeNormalizeInt(features.NumFiles, analysis.Normalization.MaxNumFiles) * a.weights.NF,
-			"unique_changes": safeNormalizeInt(features.UniqueChanges, analysis.Normalization.MaxUniqueChanges) * a.weights.NUC,
-			"num_developers": safeNormalizeInt(features.NumDevelopers, analysis.Normalization.MaxNumDevelopers) * a.weights.NDEV,
-			"experience":     (1.0 - safeNormalizeInt(features.AuthorExperience, analysis.Normalization.MaxAuthorExperience)) * a.weights.EXP,
-		}
-
-		risk := models.CommitRisk{
-			CommitHash:          features.CommitHash,
-			Author:              features.Author,
-			Message:             features.Message,
-			Timestamp:           features.Timestamp,
-			RiskScore:           score,
-			RiskLevel:           level,
-			ContributingFactors: factors,
-			Recommendations:     models.GenerateChangeRecommendations(features, score, factors),
-			FilesModified:       features.FilesModified,
-		}
-
-		analysis.Commits = append(analysis.Commits, risk)
-		totalScore += score
-		scores = append(scores, score)
-
-		// Update summary counts
-		switch level {
-		case models.ChangeRiskHigh:
-			analysis.Summary.HighRiskCount++
-		case models.ChangeRiskMedium:
-			analysis.Summary.MediumRiskCount++
-		case models.ChangeRiskLow:
-			analysis.Summary.LowRiskCount++
-		}
-
-		if features.IsFix {
-			analysis.Summary.BugFixCount++
-		}
+// safeNormalizeInt performs min-max normalization for integers.
+func safeNormalizeInt(value, max int) float64 {
+	if max <= 0 {
+		return 0
 	}
-
-	// Sort by risk score descending
-	sort.Slice(analysis.Commits, func(i, j int) bool {
-		return analysis.Commits[i].RiskScore > analysis.Commits[j].RiskScore
-	})
-
-	// Calculate summary statistics
-	analysis.Summary.TotalCommits = len(commits)
-	if len(commits) > 0 {
-		analysis.Summary.AvgRiskScore = totalScore / float64(len(commits))
-
-		sort.Float64s(scores)
-		analysis.Summary.P50RiskScore = changesPercentile(scores, 50)
-		analysis.Summary.P95RiskScore = changesPercentile(scores, 95)
+	if value >= max {
+		return 1
 	}
+	return float64(value) / float64(max)
+}
 
-	return analysis, nil
+// boolToFloat converts bool to float64.
+func boolToFloat(b bool) float64 {
+	if b {
+		return 1.0
+	}
+	return 0.0
+}
+
+// truncateMessage truncates commit message to first line or 80 chars.
+func truncateMessage(message string) string {
+	if idx := strings.Index(message, "\n"); idx > 0 {
+		message = message[:idx]
+	}
+	if len(message) > 80 {
+		message = message[:77] + "..."
+	}
+	return strings.TrimSpace(message)
 }
 
 // calculateNormalizationStats computes min-max values for normalization.
@@ -402,7 +228,7 @@ func calculateNormalizationStats(commits []models.CommitFeatures) models.Normali
 		}
 	}
 
-	// Ensure no zero max values
+	// Ensure no zero max values to avoid division by zero
 	if stats.MaxLinesAdded == 0 {
 		stats.MaxLinesAdded = 1
 	}
@@ -438,49 +264,6 @@ func changesPercentile(sorted []float64, p int) float64 {
 		idx = len(sorted) - 1
 	}
 	return sorted[idx]
-}
-
-// safeNormalize performs min-max normalization with zero max handling.
-func safeNormalize(value, max float64) float64 {
-	if max <= 0 {
-		return 0
-	}
-	if value >= max {
-		return 1
-	}
-	return value / max
-}
-
-// safeNormalizeInt performs min-max normalization for integers.
-func safeNormalizeInt(value, max int) float64 {
-	if max <= 0 {
-		return 0
-	}
-	if value >= max {
-		return 1
-	}
-	return float64(value) / float64(max)
-}
-
-// boolToFloat converts bool to float64.
-func boolToFloat(b bool) float64 {
-	if b {
-		return 1.0
-	}
-	return 0.0
-}
-
-// truncateMessage truncates commit message to first line or 80 chars.
-func truncateMessage(message string) string {
-	// Get first line
-	if idx := strings.Index(message, "\n"); idx > 0 {
-		message = message[:idx]
-	}
-	// Truncate if too long
-	if len(message) > 80 {
-		message = message[:77] + "..."
-	}
-	return strings.TrimSpace(message)
 }
 
 // Close releases analyzer resources.
