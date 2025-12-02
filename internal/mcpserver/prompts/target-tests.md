@@ -1,7 +1,7 @@
 ---
-name: test-targeting
-title: Test Targeting
-description: Identify files and functions most needing test coverage based on defect risk, complexity, and churn
+name: target-tests
+title: Target Tests
+description: Identify files and functions most needing test coverage based on risk, complexity, and churn. Use when prioritizing test writing or improving coverage strategically.
 arguments:
   - name: paths
     description: Paths to analyze

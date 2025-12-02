@@ -1,7 +1,7 @@
 ---
-name: change-impact
-title: Change Impact Analysis
-description: Analyze blast radius before modifying a file - find dependents, co-change candidates, and reviewers
+name: assess-impact
+title: Assess Impact
+description: Analyze blast radius before changing specific files. Use before refactoring core components, making breaking API changes, or modifying shared code to identify affected files and stakeholders.
 arguments:
   - name: target
     description: File or function to analyze impact for

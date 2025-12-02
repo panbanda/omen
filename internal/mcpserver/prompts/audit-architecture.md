@@ -1,7 +1,7 @@
 ---
-name: architecture-review
-title: Architecture Review
-description: Analyze architectural health including module coupling, cohesion metrics, dependency cycles, and design smells
+name: audit-architecture
+title: Audit Architecture
+description: Audit module coupling, cohesion, hidden dependencies, and design smells. Use when conducting architecture reviews, evaluating design decisions, or identifying structural tech debt.
 arguments:
   - name: paths
     description: Paths to analyze

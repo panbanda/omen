@@ -1,7 +1,7 @@
 ---
-name: quality-gate
-title: Quality Gate Check
-description: Pass/fail quality gate check against configurable thresholds for complexity, duplication, defect risk, and technical debt
+name: check-quality
+title: Check Quality
+description: Check code quality against thresholds for complexity, duplication, and defect risk. Use for pre-merge quality checks, release readiness validation, or enforcing team standards.
 arguments:
   - name: paths
     description: Paths to analyze

@@ -1,19 +1,11 @@
 ---
-name: bug-hunt
-description: |
-  Find the most likely locations for bugs using defect prediction, hotspot analysis, temporal coupling, and ownership patterns. Use this skill when investigating bugs, reviewing high-risk code, or prioritizing testing efforts.
+name: find-bugs
+description: Locate likely bug locations using defect prediction, hotspot analysis, and temporal coupling. Use when investigating bugs with unclear location, reviewing high-risk code, or prioritizing where to look first.
 ---
 
-# Bug Hunt
+# Find Bugs
 
 Statistically identify the most likely locations for bugs by combining defect prediction models with behavioral signals from git history.
-
-## When to Use
-
-- Investigating a reported bug with unclear location
-- Reviewing code for potential issues before release
-- Prioritizing code review effort
-- Identifying high-risk areas for additional testing
 
 ## Prerequisites
 
