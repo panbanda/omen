@@ -111,13 +111,13 @@ dockers:
     goos: linux
     goarch: amd64
     image_templates:
-      - "ghcr.io/panbanda/omen:{{ .RawVersion }}-amd64"
+      - "ghcr.io/panbanda/omen:{{ trimprefix .Version \"omen-v\" }}-amd64"
     build_flag_templates:
       - "--pull"
       - "--label=org.opencontainers.image.created={{ .Date }}"
       - "--label=org.opencontainers.image.title={{ .ProjectName }}"
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
-      - "--label=org.opencontainers.image.version={{ .RawVersion }}"
+      - "--label=org.opencontainers.image.version={{ trimprefix .Version \"omen-v\" }}"
       - "--label=org.opencontainers.image.source=https://github.com/panbanda/omen"
       - "--platform=linux/amd64"
   - id: linux-arm64
@@ -126,13 +126,13 @@ dockers:
     goos: linux
     goarch: arm64
     image_templates:
-      - "ghcr.io/panbanda/omen:{{ .RawVersion }}-arm64"
+      - "ghcr.io/panbanda/omen:{{ trimprefix .Version \"omen-v\" }}-arm64"
     build_flag_templates:
       - "--pull"
       - "--label=org.opencontainers.image.created={{ .Date }}"
       - "--label=org.opencontainers.image.title={{ .ProjectName }}"
       - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
-      - "--label=org.opencontainers.image.version={{ .RawVersion }}"
+      - "--label=org.opencontainers.image.version={{ trimprefix .Version \"omen-v\" }}"
       - "--label=org.opencontainers.image.source=https://github.com/panbanda/omen"
       - "--platform=linux/arm64"
 
