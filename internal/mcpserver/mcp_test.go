@@ -824,3 +824,60 @@ func helper() {
 		t.Fatalf("handleAnalyzeSmells returned error: %s", textContent.Text)
 	}
 }
+
+// TestGenerateManifest verifies the manifest generation produces valid JSON.
+func TestGenerateManifest(t *testing.T) {
+	data, err := GenerateManifest("1.2.3")
+	if err != nil {
+		t.Fatalf("GenerateManifest returned error: %v", err)
+	}
+
+	var manifest Manifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("GenerateManifest produced invalid JSON: %v", err)
+	}
+
+	// Verify required fields
+	if manifest.Name != "io.github.panbanda/omen" {
+		t.Errorf("unexpected name: %s", manifest.Name)
+	}
+	if manifest.VersionDetail.Version != "1.2.3" {
+		t.Errorf("unexpected version: %s", manifest.VersionDetail.Version)
+	}
+	if len(manifest.Packages) != 1 {
+		t.Fatalf("expected 1 package, got %d", len(manifest.Packages))
+	}
+	if manifest.Packages[0].Version != "1.2.3" {
+		t.Errorf("unexpected package version: %s", manifest.Packages[0].Version)
+	}
+	if len(manifest.Tools) == 0 {
+		t.Error("expected tools to be populated")
+	}
+
+	// Verify all tools have names and descriptions
+	for _, tool := range manifest.Tools {
+		if tool.Name == "" {
+			t.Error("tool has empty name")
+		}
+		if tool.Description == "" {
+			t.Errorf("tool %s has empty description", tool.Name)
+		}
+	}
+}
+
+// TestGenerateManifestEmptyVersion verifies empty version defaults to 0.0.0.
+func TestGenerateManifestEmptyVersion(t *testing.T) {
+	data, err := GenerateManifest("")
+	if err != nil {
+		t.Fatalf("GenerateManifest returned error: %v", err)
+	}
+
+	var manifest Manifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("GenerateManifest produced invalid JSON: %v", err)
+	}
+
+	if manifest.VersionDetail.Version != "0.0.0" {
+		t.Errorf("expected version 0.0.0, got %s", manifest.VersionDetail.Version)
+	}
+}
