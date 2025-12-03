@@ -36,6 +36,9 @@ type Config struct {
 
 	// Feature flag settings
 	FeatureFlags FeatureFlagConfig `koanf:"feature_flags" toml:"feature_flags"`
+
+	// Score settings
+	Score ScoreConfig `koanf:"score" toml:"score"`
 }
 
 // AnalysisConfig controls which analyzers run.
@@ -132,6 +135,33 @@ type FeatureFlagTTLConfig struct {
 	Experiment int `koanf:"experiment" toml:"experiment"` // days, default 90
 }
 
+// ScoreConfig defines repository score settings.
+type ScoreConfig struct {
+	Weights    ScoreWeights    `koanf:"weights" toml:"weights"`
+	Thresholds ScoreThresholds `koanf:"thresholds" toml:"thresholds"`
+}
+
+// ScoreWeights defines component weights (must sum to 1.0).
+type ScoreWeights struct {
+	Complexity  float64 `koanf:"complexity" toml:"complexity"`
+	Duplication float64 `koanf:"duplication" toml:"duplication"`
+	Defect      float64 `koanf:"defect" toml:"defect"`
+	Debt        float64 `koanf:"debt" toml:"debt"`
+	Coupling    float64 `koanf:"coupling" toml:"coupling"`
+	Smells      float64 `koanf:"smells" toml:"smells"`
+}
+
+// ScoreThresholds defines minimum acceptable scores.
+type ScoreThresholds struct {
+	Score       int `koanf:"score" toml:"score"`
+	Complexity  int `koanf:"complexity" toml:"complexity"`
+	Duplication int `koanf:"duplication" toml:"duplication"`
+	Defect      int `koanf:"defect" toml:"defect"`
+	Debt        int `koanf:"debt" toml:"debt"`
+	Coupling    int `koanf:"coupling" toml:"coupling"`
+	Smells      int `koanf:"smells" toml:"smells"`
+}
+
 // DefaultConfig returns a config with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
@@ -213,6 +243,17 @@ func DefaultConfig() *Config {
 				Release:    14,
 				Experiment: 90,
 			},
+		},
+		Score: ScoreConfig{
+			Weights: ScoreWeights{
+				Complexity:  0.25,
+				Duplication: 0.20,
+				Defect:      0.25,
+				Debt:        0.15,
+				Coupling:    0.10,
+				Smells:      0.05,
+			},
+			Thresholds: ScoreThresholds{}, // All zeros = no enforcement
 		},
 	}
 }
@@ -466,6 +507,35 @@ func (c *Config) Validate() error {
 	if c.Cache.TTL < 0 {
 		errs = append(errs, errors.New("cache.ttl must be non-negative"))
 	}
+
+	// Score config validation
+	weightsSum := c.Score.Weights.Complexity + c.Score.Weights.Duplication +
+		c.Score.Weights.Defect + c.Score.Weights.Debt +
+		c.Score.Weights.Coupling + c.Score.Weights.Smells
+	if weightsSum < 0.99 || weightsSum > 1.01 {
+		errs = append(errs, fmt.Errorf("score.weights must sum to 1.0, got %f", weightsSum))
+	}
+
+	// Validate individual weights are non-negative
+	if c.Score.Weights.Complexity < 0 || c.Score.Weights.Duplication < 0 ||
+		c.Score.Weights.Defect < 0 || c.Score.Weights.Debt < 0 ||
+		c.Score.Weights.Coupling < 0 || c.Score.Weights.Smells < 0 {
+		errs = append(errs, errors.New("score.weights values must be non-negative"))
+	}
+
+	// Validate thresholds are in 0-100 range
+	validateThreshold := func(name string, val int) {
+		if val < 0 || val > 100 {
+			errs = append(errs, fmt.Errorf("score.thresholds.%s must be between 0 and 100", name))
+		}
+	}
+	validateThreshold("score", c.Score.Thresholds.Score)
+	validateThreshold("complexity", c.Score.Thresholds.Complexity)
+	validateThreshold("duplication", c.Score.Thresholds.Duplication)
+	validateThreshold("defect", c.Score.Thresholds.Defect)
+	validateThreshold("debt", c.Score.Thresholds.Debt)
+	validateThreshold("coupling", c.Score.Thresholds.Coupling)
+	validateThreshold("smells", c.Score.Thresholds.Smells)
 
 	if len(errs) > 0 {
 		return errors.Join(errs...)

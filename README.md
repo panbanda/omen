@@ -402,6 +402,75 @@ query = '''
 </details>
 
 <details>
+<summary><strong>Repository Score</strong> - Composite health score with letter grades</summary>
+
+Omen computes a composite repository health score (0-100) that combines multiple analysis dimensions into a single grade. This provides a quick overview of codebase quality and enables quality gates in CI/CD.
+
+**Score Components:**
+
+| Component       | Weight | What it measures                                   |
+| --------------- | ------ | -------------------------------------------------- |
+| Complexity      | 25%    | % of functions exceeding complexity thresholds     |
+| Duplication     | 20%    | Code clone ratio with non-linear penalty curve     |
+| Defect Risk     | 25%    | Average defect probability across files            |
+| Technical Debt  | 15%    | Severity-weighted SATD density per 1K LOC          |
+| Coupling        | 10%    | Cyclic deps, SDP violations, and instability       |
+| Smells          | 5%     | Architectural smells relative to codebase size     |
+
+**Grades:**
+
+| Score   | Grade |
+| ------- | ----- |
+| 95-100  | A+    |
+| 90-94   | A     |
+| 85-89   | A-    |
+| 80-84   | B+    |
+| 75-79   | B     |
+| 70-74   | B-    |
+| 65-69   | C+    |
+| 60-64   | C     |
+| 55-59   | C-    |
+| 50-54   | D     |
+| 0-49    | F     |
+
+**Normalization Philosophy:**
+
+Each component metric is normalized to a 0-100 scale where higher is always better. The normalization functions are designed to be:
+
+1. **Fair** - Different metrics with similar severity produce similar scores
+2. **Calibrated** - Based on industry benchmarks from SonarQube, CodeClimate, and CISQ
+3. **Non-linear** - Gentle penalties for minor issues, steep for severe ones
+4. **Severity-aware** - Weight items by impact, not just count
+
+For example, technical debt uses severity-weighted scoring:
+- Critical (SECURITY, VULN): 4x weight
+- High (FIXME, BUG): 2x weight
+- Medium (HACK, REFACTOR): 1x weight
+- Low (TODO, NOTE): 0.25x weight
+
+This prevents low-severity items (like documentation TODOs) from unfairly dragging down scores.
+
+**Usage:**
+
+```bash
+# Compute repository score
+omen score .
+
+# Score with thresholds (exit non-zero if thresholds not met)
+omen score . --threshold-score 80 --threshold-complexity 70
+
+# JSON output for CI integration
+omen score . -f json
+```
+
+**Why it matters:** A single health score enables quality gates, tracks trends over time, and provides quick codebase assessment. The weighted composite ensures that critical issues (defects, complexity) have more impact than cosmetic ones.
+
+> [!TIP]
+> Set minimum thresholds in CI to prevent quality regression. Start with threshold-score=70 and increase over time.
+
+</details>
+
+<details>
 <summary><strong>MCP Server</strong> - LLM tool integration via Model Context Protocol</summary>
 
 Omen includes a Model Context Protocol (MCP) server that exposes all analyzers as tools for LLMs like Claude. This enables AI assistants to analyze codebases directly through standardized tool calls.

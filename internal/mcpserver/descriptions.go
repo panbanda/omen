@@ -432,3 +432,37 @@ METRICS RETURNED:
 
 Use git history for accurate staleness analysis. Disable with include_git=false for faster results.`
 }
+
+func describeScore() string {
+	return `Compute repository health score (0-100) with component breakdown.
+
+USE WHEN:
+- Checking overall code health at a glance
+- CI/CD quality gates before merge or release
+- Tracking metrics trends over time
+- Comparing code quality before/after refactoring
+
+INTERPRETING RESULTS:
+- Score 95-100 (A+/A): Excellent health, minimal issues
+- Score 80-94 (A-/B+/B): Good health, some improvement areas
+- Score 65-79 (B-/C+/C): Fair health, needs attention
+- Score 50-64 (C-/D): Poor health, significant issues
+- Score 0-49 (F): Critical, requires immediate attention
+
+COMPONENT WEIGHTS (default):
+- Complexity: 25% - Function complexity issues
+- Defect Risk: 25% - Predicted defect probability
+- Duplication: 20% - Code clone ratio
+- Technical Debt: 15% - SATD marker density
+- Coupling: 10% - Module instability
+- Smells: 5% - Architectural issues
+
+METRICS RETURNED:
+- score: Weighted composite (0-100)
+- grade: Letter grade (A+ to F)
+- components: Individual scores per category
+- cohesion: CK cohesion metrics (informational, not in composite)
+- files_analyzed: Number of files included
+- commit: Git commit SHA (if available)
+- passed: Whether all thresholds met`
+}

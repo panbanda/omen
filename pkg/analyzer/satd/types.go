@@ -2,7 +2,7 @@ package satd
 
 import "time"
 
-// Category represents the type of technical debt.
+// Category represents the type of technical debt. omen:ignore
 type Category string
 
 // String implements fmt.Stringer for toon serialization.
@@ -136,11 +136,11 @@ type AstNodeType int
 const (
 	// AstNodeRegular is a normal code location with no special context.
 	AstNodeRegular AstNodeType = iota
-	// AstNodeSecurityFunction is code within a security-related function.
+	// AstNodeSecurityFunction is code within a security-related function. omen:ignore
 	AstNodeSecurityFunction
 	// AstNodeDataValidation is code within a data validation function.
 	AstNodeDataValidation
-	// AstNodeTestFunction is code within a test function.
+	// AstNodeTestFunction is code within a test function. omen:ignore
 	AstNodeTestFunction
 	// AstNodeMockImplementation is code within a mock/stub implementation.
 	AstNodeMockImplementation
