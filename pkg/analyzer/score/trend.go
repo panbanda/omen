@@ -17,11 +17,14 @@ type TrendResult struct {
 	// Raw data points (oldest first)
 	Points []TrendPoint `json:"points"`
 
-	// Regression statistics
+	// Overall score regression statistics
 	Slope       float64 `json:"slope"`       // Score change per period
 	Intercept   float64 `json:"intercept"`   // Y-intercept
 	RSquared    float64 `json:"r_squared"`   // Goodness of fit (0-1)
 	Correlation float64 `json:"correlation"` // Pearson correlation (-1 to 1)
+
+	// Per-component trend statistics
+	ComponentTrends ComponentTrends `json:"component_trends"`
 
 	// Summary
 	StartScore  int `json:"start_score"`
@@ -33,6 +36,16 @@ type TrendResult struct {
 	Since      string    `json:"since"`
 	Snapped    bool      `json:"snapped"`
 	AnalyzedAt time.Time `json:"analyzed_at"`
+}
+
+// ComponentTrends holds trend statistics for each score component.
+type ComponentTrends struct {
+	Complexity  TrendStats `json:"complexity"`
+	Duplication TrendStats `json:"duplication"`
+	Defect      TrendStats `json:"defect"`
+	Debt        TrendStats `json:"debt"`
+	Coupling    TrendStats `json:"coupling"`
+	Smells      TrendStats `json:"smells"`
 }
 
 // TrendPoint represents a score snapshot at a point in time.
@@ -245,12 +258,15 @@ func (t *TrendAnalyzer) AnalyzeTrendWithProgress(ctx context.Context, repoPath s
 		trendResult.EndScore = points[len(points)-1].Score
 		trendResult.TotalChange = trendResult.EndScore - trendResult.StartScore
 
-		// Compute statistics
+		// Compute overall score statistics
 		stats := ComputeTrendStats(points)
 		trendResult.Slope = stats.Slope
 		trendResult.Intercept = stats.Intercept
 		trendResult.RSquared = stats.RSquared
 		trendResult.Correlation = stats.Correlation
+
+		// Compute per-component statistics
+		trendResult.ComponentTrends = ComputeComponentTrends(points)
 	}
 
 	return trendResult, nil

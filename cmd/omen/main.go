@@ -3404,9 +3404,9 @@ func printScoreTrendResult(r *score.TrendResult) {
 	fmt.Println()
 
 	// Table header
-	fmt.Printf("%-12s %-9s %5s  %4s %4s %4s %4s %4s %4s\n",
-		"Date", "Commit", "Score", "Cx", "Dup", "Def", "Dbt", "Cpl", "Sml")
-	fmt.Println(strings.Repeat("-", 70))
+	fmt.Printf("%-12s %-9s %5s  %10s %11s %6s %4s %8s %6s\n",
+		"Date", "Commit", "Score", "Complexity", "Duplication", "Defect", "Debt", "Coupling", "Smells")
+	fmt.Println(strings.Repeat("-", 90))
 
 	// Data rows
 	for _, p := range r.Points {
@@ -3422,7 +3422,7 @@ func printScoreTrendResult(r *score.TrendResult) {
 			p.Date.Format("2006-01-02"),
 			p.CommitSHA)
 		scoreColor.Printf("%5d", p.Score)
-		fmt.Printf("  %4d %4d %4d %4d %4d %4d\n",
+		fmt.Printf("  %10d %11d %6d %4d %8d %6d\n",
 			p.Components.Complexity,
 			p.Components.Duplication,
 			p.Components.Defect,
@@ -3434,6 +3434,9 @@ func printScoreTrendResult(r *score.TrendResult) {
 	// Summary
 	fmt.Println()
 	if len(r.Points) >= 2 {
+		period := singularPeriod(r.Period)
+
+		// Overall trend
 		direction := "Stable"
 		if r.Slope > 0.5 {
 			direction = color.GreenString("Improving")
@@ -3448,11 +3451,37 @@ func printScoreTrendResult(r *score.TrendResult) {
 			changeStr = color.RedString(changeStr)
 		}
 
-		fmt.Printf("Trend: %s (%s points, R²=%.2f)\n", direction, changeStr, r.RSquared)
-		fmt.Printf("Slope: %+.2f points/%s\n", r.Slope, singularPeriod(r.Period))
+		fmt.Printf("Overall: %s (%s points, slope=%+.2f/%s, R²=%.2f)\n",
+			direction, changeStr, r.Slope, period, r.RSquared)
+		fmt.Println()
+
+		// Per-component trends
+		fmt.Println("Component Trends:")
+		printComponentTrend("  Complexity", r.ComponentTrends.Complexity, period)
+		printComponentTrend("  Duplication", r.ComponentTrends.Duplication, period)
+		printComponentTrend("  Defect", r.ComponentTrends.Defect, period)
+		printComponentTrend("  Debt", r.ComponentTrends.Debt, period)
+		printComponentTrend("  Coupling", r.ComponentTrends.Coupling, period)
+		printComponentTrend("  Smells", r.ComponentTrends.Smells, period)
 	} else {
 		fmt.Println("Trend: Insufficient data points for trend analysis")
 	}
+}
+
+func printComponentTrend(name string, stats score.TrendStats, period string) {
+	direction := "stable"
+	dirColor := color.New(color.Reset)
+	if stats.Slope > 0.5 {
+		direction = "improving"
+		dirColor = color.New(color.FgGreen)
+	} else if stats.Slope < -0.5 {
+		direction = "declining"
+		dirColor = color.New(color.FgRed)
+	}
+
+	fmt.Printf("%-14s ", name+":")
+	dirColor.Printf("%-10s", direction)
+	fmt.Printf(" (slope=%+.2f/%s, R²=%.2f)\n", stats.Slope, period, stats.RSquared)
 }
 
 func singularPeriod(period string) string {

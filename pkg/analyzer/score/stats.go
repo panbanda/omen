@@ -26,6 +26,46 @@ func ComputeTrendStats(points []TrendPoint) TrendStats {
 		ys[i] = float64(p.Score)
 	}
 
+	return computeStats(xs, ys)
+}
+
+// ComputeComponentTrends calculates regression statistics for each component.
+func ComputeComponentTrends(points []TrendPoint) ComponentTrends {
+	n := len(points)
+	if n < 2 {
+		return ComponentTrends{}
+	}
+
+	xs := make([]float64, n)
+	complexity := make([]float64, n)
+	duplication := make([]float64, n)
+	defect := make([]float64, n)
+	debt := make([]float64, n)
+	coupling := make([]float64, n)
+	smells := make([]float64, n)
+
+	for i, p := range points {
+		xs[i] = float64(i)
+		complexity[i] = float64(p.Components.Complexity)
+		duplication[i] = float64(p.Components.Duplication)
+		defect[i] = float64(p.Components.Defect)
+		debt[i] = float64(p.Components.Debt)
+		coupling[i] = float64(p.Components.Coupling)
+		smells[i] = float64(p.Components.Smells)
+	}
+
+	return ComponentTrends{
+		Complexity:  computeStats(xs, complexity),
+		Duplication: computeStats(xs, duplication),
+		Defect:      computeStats(xs, defect),
+		Debt:        computeStats(xs, debt),
+		Coupling:    computeStats(xs, coupling),
+		Smells:      computeStats(xs, smells),
+	}
+}
+
+// computeStats calculates regression statistics from x and y values.
+func computeStats(xs, ys []float64) TrendStats {
 	intercept, slope := stat.LinearRegression(xs, ys, nil, false)
 	rSquared := stat.RSquared(xs, ys, nil, intercept, slope)
 	correlation := stat.Correlation(xs, ys, nil)
