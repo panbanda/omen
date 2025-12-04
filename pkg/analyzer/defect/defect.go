@@ -7,6 +7,7 @@ import (
 	"github.com/panbanda/omen/pkg/analyzer/churn"
 	"github.com/panbanda/omen/pkg/analyzer/complexity"
 	"github.com/panbanda/omen/pkg/analyzer/duplicates"
+	"github.com/panbanda/omen/pkg/stats"
 	"github.com/sourcegraph/conc"
 )
 
@@ -237,23 +238,11 @@ func (a *Analyzer) AnalyzeProject(ctx context.Context, repoPath string, files []
 			probs[i] = float64(f.Probability)
 		}
 		sort.Float64s(probs)
-		analysis.Summary.P50Probability = float32(percentile(probs, 50))
-		analysis.Summary.P95Probability = float32(percentile(probs, 95))
+		analysis.Summary.P50Probability = float32(stats.Percentile(probs, 50))
+		analysis.Summary.P95Probability = float32(stats.Percentile(probs, 95))
 	}
 
 	return analysis, nil
-}
-
-// percentile calculates the p-th percentile of a sorted slice.
-func percentile(sorted []float64, p int) float64 {
-	if len(sorted) == 0 {
-		return 0
-	}
-	idx := (p * len(sorted)) / 100
-	if idx >= len(sorted) {
-		idx = len(sorted) - 1
-	}
-	return sorted[idx]
 }
 
 // generateRecommendations suggests improvements based on metrics.

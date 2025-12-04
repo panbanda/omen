@@ -4,6 +4,8 @@ import (
 	"math"
 	"sort"
 	"time"
+
+	"github.com/panbanda/omen/pkg/stats"
 )
 
 // Empirical CDF percentiles for hotspot churn (commits in 30 days).
@@ -187,18 +189,6 @@ func (h *Analysis) CalculateSummary() {
 
 	// Sort ascending for percentile calculation
 	sort.Float64s(scores)
-	h.Summary.P50HotspotScore = percentile(scores, 50)
-	h.Summary.P90HotspotScore = percentile(scores, 90)
-}
-
-// percentile calculates the p-th percentile of a sorted slice.
-func percentile(sorted []float64, p int) float64 {
-	if len(sorted) == 0 {
-		return 0
-	}
-	idx := (p * len(sorted)) / 100
-	if idx >= len(sorted) {
-		idx = len(sorted) - 1
-	}
-	return sorted[idx]
+	h.Summary.P50HotspotScore = stats.Percentile(scores, 50)
+	h.Summary.P90HotspotScore = stats.Percentile(scores, 90)
 }

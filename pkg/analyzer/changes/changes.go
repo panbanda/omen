@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/panbanda/omen/internal/vcs"
+	"github.com/panbanda/omen/pkg/stats"
 )
 
 // DefaultGitTimeout is the default timeout for git operations.
@@ -235,18 +236,6 @@ func calculateNormalizationStats(commits []CommitFeatures) NormalizationStats {
 	return stats
 }
 
-// percentile calculates the p-th percentile of a sorted slice.
-func percentile(sorted []float64, p int) float64 {
-	if len(sorted) == 0 {
-		return 0
-	}
-	idx := (p * len(sorted)) / 100
-	if idx >= len(sorted) {
-		idx = len(sorted) - 1
-	}
-	return sorted[idx]
-}
-
 // Close releases analyzer resources.
 func (a *Analyzer) Close() {
 	// No resources to release
@@ -461,8 +450,8 @@ func (a *Analyzer) buildAnalysis(commits []CommitFeatures) *Analysis {
 	analysis.Summary.AvgRiskScore = totalScore / float64(len(commits))
 
 	sort.Float64s(scores)
-	analysis.Summary.P50RiskScore = percentile(scores, 50)
-	analysis.Summary.P95RiskScore = percentile(scores, 95)
+	analysis.Summary.P50RiskScore = stats.Percentile(scores, 50)
+	analysis.Summary.P95RiskScore = stats.Percentile(scores, 95)
 
 	return analysis
 }

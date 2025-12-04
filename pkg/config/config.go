@@ -82,12 +82,21 @@ type DuplicateConfig struct {
 	MinGroupSize         int     `koanf:"min_group_size" toml:"min_group_size"`
 }
 
-// ExcludeConfig defines file exclusion patterns.
+// ExcludeConfig defines file exclusion patterns using gitignore-style syntax.
+// All patterns in the Patterns list are parsed as gitignore patterns and combined
+// with the repository's .gitignore file (when Gitignore is true).
 type ExcludeConfig struct {
-	Patterns   []string `koanf:"patterns" toml:"patterns"`
-	Extensions []string `koanf:"extensions" toml:"extensions"`
-	Dirs       []string `koanf:"dirs" toml:"dirs"`
-	Gitignore  bool     `koanf:"gitignore" toml:"gitignore"`
+	// Patterns uses gitignore syntax for excluding files:
+	//   - "*_test.go"     matches any file ending in _test.go
+	//   - "vendor/"       matches the vendor directory
+	//   - "*.min.js"      matches minified JS files
+	//   - "cmd/**/main.go" matches main.go in any subdirectory of cmd
+	//   - "!important.go" negates a previous pattern (include the file)
+	Patterns []string `koanf:"patterns" toml:"patterns"`
+
+	// Gitignore controls whether to also respect .gitignore files.
+	// When true, patterns from .gitignore are combined with Patterns.
+	Gitignore bool `koanf:"gitignore" toml:"gitignore"`
 }
 
 // CacheConfig controls caching behavior.
@@ -229,27 +238,32 @@ func DefaultConfig() *Config {
 		},
 		Exclude: ExcludeConfig{
 			Patterns: []string{
+				// Test files
 				"*_test.go",
 				"*_test.ts",
 				"*_test.py",
+				"*.spec.ts",
+				"*.spec.js",
+				// Minified assets
 				"*.min.js",
 				"*.min.css",
-			},
-			Extensions: []string{
-				".lock",
-				".sum",
-			},
-			Dirs: []string{
-				"vendor",
-				"node_modules",
-				".git",
-				".omen",
-				"dist",
-				"build",
-				"__pycache__",
-				"coverage", // Test coverage output
-				".bundle",  // Ruby bundler
-				"sorbet",   // Sorbet type definitions (auto-generated)
+				// Lock files
+				"*.lock",
+				"go.sum",
+				// Directories (trailing slash)
+				"vendor/",
+				"node_modules/",
+				".git/",
+				".omen/",
+				"dist/",
+				"build/",
+				"target/",
+				"__pycache__/",
+				"coverage/",
+				".bundle/",
+				"sorbet/",
+				// Auto-generated mocks
+				"**/mocks/",
 			},
 			Gitignore: true,
 		},
@@ -417,34 +431,25 @@ func LoadOrDefault() (*Config, error) {
 	return result.Config, nil
 }
 
-// ShouldExclude checks if a path should be excluded from analysis.
+// ShouldExclude is deprecated. Use the scanner's gitignore-based matching instead.
+// This method is kept for backward compatibility but only does basic pattern matching.
 func (c *Config) ShouldExclude(path string) bool {
-	// Check directory exclusions using exact path component matching
-	pathComponents := strings.Split(filepath.Clean(path), string(filepath.Separator))
-	for _, dir := range c.Exclude.Dirs {
-		for _, component := range pathComponents {
-			if component == dir {
-				return true
-			}
-		}
-	}
-
-	// Check extension exclusions
-	ext := filepath.Ext(path)
-	for _, excludeExt := range c.Exclude.Extensions {
-		if ext == excludeExt {
-			return true
-		}
-	}
-
-	// Check pattern exclusions
+	// Basic pattern matching for backward compatibility
+	// The scanner now handles full gitignore-style matching
 	base := filepath.Base(path)
 	for _, pattern := range c.Exclude.Patterns {
+		// Skip directory patterns (handled by scanner)
+		if strings.HasSuffix(pattern, "/") {
+			continue
+		}
+		// Skip glob patterns with path separators (handled by scanner)
+		if strings.Contains(pattern, "/") {
+			continue
+		}
 		if matched, _ := filepath.Match(pattern, base); matched {
 			return true
 		}
 	}
-
 	return false
 }
 

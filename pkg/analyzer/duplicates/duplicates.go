@@ -14,6 +14,7 @@ import (
 	"github.com/panbanda/omen/internal/fileproc"
 	"github.com/panbanda/omen/pkg/config"
 	"github.com/panbanda/omen/pkg/parser"
+	"github.com/panbanda/omen/pkg/stats"
 	"github.com/zeebo/blake3"
 )
 
@@ -188,8 +189,8 @@ func (a *Analyzer) AnalyzeProjectWithProgress(files []string, onProgress filepro
 		analysis.Summary.AvgSimilarity = totalSim / float64(len(analysis.Clones))
 
 		sort.Float64s(similarities)
-		analysis.Summary.P50Similarity = percentileFloat64(similarities, 50)
-		analysis.Summary.P95Similarity = percentileFloat64(similarities, 95)
+		analysis.Summary.P50Similarity = stats.Percentile(similarities, 50)
+		analysis.Summary.P95Similarity = stats.Percentile(similarities, 95)
 	}
 
 	// Calculate duplication ratio (capped at 1.0 since overlapping blocks can inflate the count)
@@ -461,18 +462,6 @@ func (a *Analyzer) computeHotspots(groups []Group) []Hotspot {
 	}
 
 	return hotspots
-}
-
-// percentileFloat64 calculates the p-th percentile of a sorted slice.
-func percentileFloat64(sorted []float64, p int) float64 {
-	if len(sorted) == 0 {
-		return 0
-	}
-	idx := (p * len(sorted)) / 100
-	if idx >= len(sorted) {
-		idx = len(sorted) - 1
-	}
-	return sorted[idx]
 }
 
 // extractFragments extracts code fragments from a file for clone detection.
