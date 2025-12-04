@@ -1,6 +1,7 @@
 package vcs
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -479,5 +480,43 @@ func TestTreeEntries(t *testing.T) {
 	}
 	if !foundGoMod {
 		t.Error("should find go.mod in tree entries")
+	}
+}
+
+func TestTreeFile(t *testing.T) {
+	opener := NewGitOpener()
+	repo, err := opener.PlainOpen("../..")
+	if err != nil {
+		t.Fatalf("PlainOpen() error = %v", err)
+	}
+
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatalf("Head() error = %v", err)
+	}
+
+	commit, err := repo.CommitObject(head.Hash())
+	if err != nil {
+		t.Fatalf("CommitObject() error = %v", err)
+	}
+
+	tree, err := commit.Tree()
+	if err != nil {
+		t.Fatalf("Tree() error = %v", err)
+	}
+
+	// Read go.mod which should exist
+	content, err := tree.File("go.mod")
+	if err != nil {
+		t.Fatalf("File() error = %v", err)
+	}
+	if !bytes.Contains(content, []byte("module github.com/panbanda/omen")) {
+		t.Error("go.mod should contain module declaration")
+	}
+
+	// Non-existent file should error
+	_, err = tree.File("nonexistent.txt")
+	if err == nil {
+		t.Error("File() should return error for non-existent file")
 	}
 }

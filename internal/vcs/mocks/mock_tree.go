@@ -152,3 +152,63 @@ func (_c *MockTree_Entries_Call) RunAndReturn(run func() ([]vcs.TreeEntry, error
 	_c.Call.Return(run)
 	return _c
 }
+
+// File provides a mock function for the type MockTree
+func (_mock *MockTree) File(path string) ([]byte, error) {
+	ret := _mock.Called(path)
+
+	if len(ret) == 0 {
+		panic("no return value specified for File")
+	}
+
+	var r0 []byte
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) ([]byte, error)); ok {
+		return returnFunc(path)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) []byte); ok {
+		r0 = returnFunc(path)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]byte)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(path)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockTree_File_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'File'
+type MockTree_File_Call struct {
+	*mock.Call
+}
+
+// File is a helper method to define mock.On call
+//   - path string
+func (_e *MockTree_Expecter) File(path interface{}) *MockTree_File_Call {
+	return &MockTree_File_Call{Call: _e.mock.On("File", path)}
+}
+
+func (_c *MockTree_File_Call) Run(run func(path string)) *MockTree_File_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(arg0)
+	})
+	return _c
+}
+
+func (_c *MockTree_File_Call) Return(content []byte, err error) *MockTree_File_Call {
+	_c.Call.Return(content, err)
+	return _c
+}
+
+func (_c *MockTree_File_Call) RunAndReturn(run func(string) ([]byte, error)) *MockTree_File_Call {
+	_c.Call.Return(run)
+	return _c
+}

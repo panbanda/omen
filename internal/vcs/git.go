@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -276,6 +277,20 @@ func (t *gitTree) Entries() ([]TreeEntry, error) {
 		return nil, err
 	}
 	return entries, nil
+}
+
+func (t *gitTree) File(path string) ([]byte, error) {
+	file, err := t.tree.File(path)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := file.Reader()
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+
+	return io.ReadAll(reader)
 }
 
 // gitChange wraps go-git Change.

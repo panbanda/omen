@@ -73,6 +73,8 @@ type Tree interface {
 	Diff(to Tree) (Changes, error)
 	// Entries returns all files in the tree (recursively).
 	Entries() ([]TreeEntry, error)
+	// File returns the content of a file at the given path.
+	File(path string) ([]byte, error)
 }
 
 // Changes represents a collection of file changes between trees.
