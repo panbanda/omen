@@ -1,0 +1,9 @@
+# Repository score thresholds
+[score.thresholds]
+score = 95
+complexity = 95
+duplication = 95
+defect = 95
+debt = 95
+coupling = 95
+smells = 95

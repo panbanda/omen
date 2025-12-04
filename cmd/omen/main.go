@@ -3163,10 +3163,6 @@ func printScoreResult(r *score.Result) {
 		printScoreComponent("Cohesion", r.Components.Cohesion)
 	}
 	fmt.Println()
-	if !r.CohesionIncluded {
-		fmt.Printf("  Cohesion:        %3d/100  (not in composite)\n", r.Components.Cohesion)
-	}
-	fmt.Println()
 	fmt.Printf("Files analyzed: %d\n", r.FilesAnalyzed)
 
 	// Threshold failures
@@ -3179,6 +3175,34 @@ func printScoreResult(r *score.Result) {
 				color.Red("  %s: %d < %d (minimum)", name, actual, th.Min)
 			}
 		}
+		fmt.Println()
+		fmt.Println("Run analyzers to diagnose:")
+		for name, th := range r.Thresholds {
+			if !th.Passed && name != "score" {
+				fmt.Printf("  omen analyze %s\n", componentToAnalyzer(name))
+			}
+		}
+	}
+}
+
+func componentToAnalyzer(name string) string {
+	switch name {
+	case "complexity":
+		return "complexity"
+	case "duplication":
+		return "duplicates"
+	case "defect":
+		return "defect"
+	case "debt":
+		return "satd"
+	case "coupling":
+		return "graph"
+	case "smells":
+		return "smells"
+	case "cohesion":
+		return "cohesion"
+	default:
+		return name
 	}
 }
 
@@ -3231,8 +3255,6 @@ func writeScoreMarkdown(r *score.Result, f *output.Formatter) error {
 	fmt.Fprintf(w, "| Smells | %d/100 |\n", r.Components.Smells)
 	if r.CohesionIncluded {
 		fmt.Fprintf(w, "| Cohesion | %d/100 |\n", r.Components.Cohesion)
-	} else {
-		fmt.Fprintf(w, "| **Cohesion** | %d/100 (not in composite) |\n", r.Components.Cohesion)
 	}
 	fmt.Fprintf(w, "\nFiles analyzed: %d\n", r.FilesAnalyzed)
 	if r.Commit != "" {
