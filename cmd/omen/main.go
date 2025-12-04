@@ -3030,6 +3030,9 @@ func scoreCmd() *cli.Command {
 		ArgsUsage: "[path...]",
 		Flags:     flags,
 		Action:    runScoreCmd,
+		Subcommands: []*cli.Command{
+			scoreTrendCmd(),
+		},
 	}
 }
 
@@ -3275,6 +3278,239 @@ func writeScoreMarkdown(r *score.Result, f *output.Formatter) error {
 			}
 		}
 	}
+
+	return nil
+}
+
+func scoreTrendCmd() *cli.Command {
+	return &cli.Command{
+		Name:      "trend",
+		Usage:     "Analyze score trends over time",
+		ArgsUsage: "[path]",
+		Flags: append(outputFlags(),
+			&cli.StringFlag{
+				Name:  "period",
+				Value: "monthly",
+				Usage: "Sampling period: weekly or monthly",
+			},
+			&cli.StringFlag{
+				Name:  "since",
+				Value: "1y",
+				Usage: "How far back to analyze (e.g., 3m, 6m, 1y, 2y)",
+			},
+			&cli.BoolFlag{
+				Name:  "snap",
+				Usage: "Snap to period boundaries (1st of month, Monday of week)",
+			},
+		),
+		Action: runScoreTrendCmd,
+	}
+}
+
+func runScoreTrendCmd(c *cli.Context) error {
+	paths := getPaths(c)
+	repoPath := "."
+	if len(paths) > 0 {
+		repoPath = paths[0]
+	}
+
+	cfg, err := config.LoadOrDefault()
+	if err != nil {
+		return err
+	}
+
+	// Parse since duration
+	since, err := score.ParseSince(c.String("since"))
+	if err != nil {
+		return err
+	}
+
+	// Build weights from effective config
+	effectiveWeights := cfg.Score.EffectiveWeights()
+	weights := score.Weights{
+		Complexity:  effectiveWeights.Complexity,
+		Duplication: effectiveWeights.Duplication,
+		Defect:      effectiveWeights.Defect,
+		Debt:        effectiveWeights.Debt,
+		Coupling:    effectiveWeights.Coupling,
+		Smells:      effectiveWeights.Smells,
+		Cohesion:    effectiveWeights.Cohesion,
+	}
+
+	analyzer := score.NewTrendAnalyzer(
+		score.WithTrendPeriod(c.String("period")),
+		score.WithTrendSince(since),
+		score.WithTrendSnap(c.Bool("snap")),
+		score.WithTrendWeights(weights),
+		score.WithTrendChurnDays(30),
+		score.WithTrendMaxFileSize(cfg.Analysis.MaxFileSize),
+	)
+
+	var tracker *progress.Tracker
+
+	result, err := analyzer.AnalyzeTrendWithProgress(context.Background(), repoPath, func(current, total int, commitSHA string) {
+		if tracker == nil {
+			tracker = progress.NewTracker(fmt.Sprintf("Analyzing %d commits", total), total)
+		}
+		tracker.Tick()
+	})
+	if tracker != nil {
+		if err != nil {
+			tracker.FinishError(err)
+		} else {
+			tracker.FinishSuccess()
+		}
+	}
+	if err != nil {
+		return err
+	}
+
+	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
+	if err != nil {
+		return err
+	}
+	defer formatter.Close()
+
+	format := getFormat(c)
+	switch format {
+	case "json", "toon":
+		if err := formatter.Output(result); err != nil {
+			return err
+		}
+	case "markdown":
+		if err := writeScoreTrendMarkdown(result, formatter); err != nil {
+			return err
+		}
+	default:
+		printScoreTrendResult(result)
+	}
+
+	return nil
+}
+
+func printScoreTrendResult(r *score.TrendResult) {
+	if len(r.Points) == 0 {
+		color.Yellow("No data points found in the specified time range")
+		return
+	}
+
+	// Header
+	fmt.Println()
+	snapped := ""
+	if r.Snapped {
+		snapped = ", snapped"
+	}
+	fmt.Printf("Score Trend (%s, %s%s)\n", r.Period, r.Since, snapped)
+	fmt.Println()
+
+	// Table header
+	fmt.Printf("%-12s %-9s %5s  %4s %4s %4s %4s %4s %4s\n",
+		"Date", "Commit", "Score", "Cx", "Dup", "Def", "Dbt", "Cpl", "Sml")
+	fmt.Println(strings.Repeat("-", 70))
+
+	// Data rows
+	for _, p := range r.Points {
+		scoreColor := color.New(color.FgGreen)
+		if p.Score < 70 {
+			scoreColor = color.New(color.FgYellow)
+		}
+		if p.Score < 50 {
+			scoreColor = color.New(color.FgRed)
+		}
+
+		fmt.Printf("%-12s %-9s ",
+			p.Date.Format("2006-01-02"),
+			p.CommitSHA)
+		scoreColor.Printf("%5d", p.Score)
+		fmt.Printf("  %4d %4d %4d %4d %4d %4d\n",
+			p.Components.Complexity,
+			p.Components.Duplication,
+			p.Components.Defect,
+			p.Components.Debt,
+			p.Components.Coupling,
+			p.Components.Smells)
+	}
+
+	// Summary
+	fmt.Println()
+	if len(r.Points) >= 2 {
+		direction := "Stable"
+		if r.Slope > 0.5 {
+			direction = color.GreenString("Improving")
+		} else if r.Slope < -0.5 {
+			direction = color.RedString("Declining")
+		}
+
+		changeStr := fmt.Sprintf("%+d", r.TotalChange)
+		if r.TotalChange > 0 {
+			changeStr = color.GreenString(changeStr)
+		} else if r.TotalChange < 0 {
+			changeStr = color.RedString(changeStr)
+		}
+
+		fmt.Printf("Trend: %s (%s points, R²=%.2f)\n", direction, changeStr, r.RSquared)
+		fmt.Printf("Slope: %+.2f points/%s\n", r.Slope, singularPeriod(r.Period))
+	} else {
+		fmt.Println("Trend: Insufficient data points for trend analysis")
+	}
+}
+
+func singularPeriod(period string) string {
+	switch period {
+	case "weekly":
+		return "week"
+	case "monthly":
+		return "month"
+	default:
+		return period
+	}
+}
+
+func writeScoreTrendMarkdown(r *score.TrendResult, f *output.Formatter) error {
+	w := f.Writer()
+
+	snapped := ""
+	if r.Snapped {
+		snapped = ", snapped"
+	}
+	fmt.Fprintf(w, "# Score Trend (%s, %s%s)\n\n", r.Period, r.Since, snapped)
+
+	if len(r.Points) == 0 {
+		fmt.Fprintln(w, "No data points found in the specified time range.")
+		return nil
+	}
+
+	// Summary
+	if len(r.Points) >= 2 {
+		direction := "Stable"
+		if r.Slope > 0.5 {
+			direction = "Improving"
+		} else if r.Slope < -0.5 {
+			direction = "Declining"
+		}
+
+		fmt.Fprintf(w, "**Trend:** %s (%+d points, R²=%.2f)\n\n", direction, r.TotalChange, r.RSquared)
+		fmt.Fprintf(w, "**Slope:** %+.2f points/%s\n\n", r.Slope, singularPeriod(r.Period))
+	}
+
+	// Table
+	fmt.Fprintln(w, "| Date | Commit | Score | Complexity | Duplication | Defect | Debt | Coupling | Smells |")
+	fmt.Fprintln(w, "|------|--------|-------|------------|-------------|--------|------|----------|--------|")
+
+	for _, p := range r.Points {
+		fmt.Fprintf(w, "| %s | %s | %d | %d | %d | %d | %d | %d | %d |\n",
+			p.Date.Format("2006-01-02"),
+			p.CommitSHA,
+			p.Score,
+			p.Components.Complexity,
+			p.Components.Duplication,
+			p.Components.Defect,
+			p.Components.Debt,
+			p.Components.Coupling,
+			p.Components.Smells)
+	}
+
+	fmt.Fprintf(w, "\n*Analyzed at: %s*\n", r.AnalyzedAt.Format(time.RFC3339))
 
 	return nil
 }
