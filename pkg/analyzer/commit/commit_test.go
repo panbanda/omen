@@ -2,6 +2,7 @@ package commit
 
 import (
 	"testing"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/panbanda/omen/internal/vcs"
@@ -60,4 +61,20 @@ func TestAnalyzeCommits(t *testing.T) {
 		assert.NotEmpty(t, r.CommitHash)
 		assert.NotNil(t, r.Complexity)
 	}
+}
+
+func TestAnalyzeTrend(t *testing.T) {
+	opener := vcs.NewGitOpener()
+	repo, err := opener.PlainOpen("../../..")
+	require.NoError(t, err)
+
+	a := New()
+	defer a.Close()
+
+	// Analyze trend over last 7 days (may have few commits)
+	trends, err := a.AnalyzeTrend(repo, 7*24*time.Hour)
+	require.NoError(t, err)
+
+	// Should have at least one commit
+	assert.GreaterOrEqual(t, len(trends.Commits), 1)
 }

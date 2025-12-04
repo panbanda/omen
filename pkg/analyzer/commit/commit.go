@@ -3,6 +3,7 @@ package commit
 import (
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/panbanda/omen/internal/vcs"
@@ -58,6 +59,7 @@ func (a *Analyzer) AnalyzeCommit(repo vcs.Repository, hash plumbing.Hash) (*Comm
 
 	return &CommitAnalysis{
 		CommitHash: hash.String(),
+		CommitDate: commit.Author().When,
 		Complexity: complexityAnalysis,
 	}, nil
 }
@@ -113,6 +115,48 @@ func (a *Analyzer) AnalyzeCommits(repo vcs.Repository, hashes []plumbing.Hash) (
 	}
 
 	return filtered, nil
+}
+
+// AnalyzeTrend analyzes repository trends over a time period.
+func (a *Analyzer) AnalyzeTrend(repo vcs.Repository, duration time.Duration) (*TrendAnalysis, error) {
+	since := time.Now().Add(-duration)
+
+	iter, err := repo.Log(&vcs.LogOptions{Since: &since})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	var hashes []plumbing.Hash
+	var dates []time.Time
+
+	err = iter.ForEach(func(c vcs.Commit) error {
+		hashes = append(hashes, c.Hash())
+		dates = append(dates, c.Author().When)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if len(hashes) == 0 {
+		return &TrendAnalysis{}, nil
+	}
+
+	// Analyze all commits in parallel
+	results, err := a.AnalyzeCommits(repo, hashes)
+	if err != nil {
+		return nil, err
+	}
+
+	// Add dates to results
+	for i, r := range results {
+		if i < len(dates) {
+			r.CommitDate = dates[i]
+		}
+	}
+
+	return CalculateTrends(results), nil
 }
 
 // Close releases analyzer resources.
