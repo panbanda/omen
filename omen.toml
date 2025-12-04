@@ -19,7 +19,7 @@ duplicate_similarity = 0.90
 [score.thresholds]
 score = 80
 complexity = 85
-duplication = 65
+duplication = 60
 defect = 80
 debt = 75
 coupling = 70

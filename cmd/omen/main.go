@@ -3139,17 +3139,17 @@ func intOrDefault(flag, cfg int) int {
 }
 
 func printScoreResult(r *score.Result) {
-	// Header with grade coloring
-	gradeColor := color.New(color.FgGreen)
+	// Header with score coloring
+	scoreColor := color.New(color.FgGreen)
 	if r.Score < 70 {
-		gradeColor = color.New(color.FgYellow)
+		scoreColor = color.New(color.FgYellow)
 	}
 	if r.Score < 50 {
-		gradeColor = color.New(color.FgRed)
+		scoreColor = color.New(color.FgRed)
 	}
 
 	fmt.Println()
-	gradeColor.Printf("Repository Score: %d/100 (%s)\n", r.Score, r.Grade)
+	scoreColor.Printf("Repository Score: %d/100\n", r.Score)
 	fmt.Println()
 
 	// Components
@@ -3242,7 +3242,7 @@ func getScoreComponent(r *score.Result, name string) int {
 
 func writeScoreMarkdown(r *score.Result, f *output.Formatter) error {
 	w := f.Writer()
-	fmt.Fprintf(w, "# Repository Score: %d/100 (%s)\n\n", r.Score, r.Grade)
+	fmt.Fprintf(w, "# Repository Score: %d/100\n\n", r.Score)
 	fmt.Fprintln(w, "## Component Scores")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "| Component | Score |")

@@ -45,9 +45,6 @@ func TestAnalyzeProject_Integration(t *testing.T) {
 	assert.GreaterOrEqual(t, result.Score, 0)
 	assert.LessOrEqual(t, result.Score, 100)
 
-	// Verify grade is assigned
-	assert.NotEmpty(t, result.Grade)
-
 	// Verify all component scores are in valid range
 	assert.GreaterOrEqual(t, result.Components.Complexity, 0)
 	assert.LessOrEqual(t, result.Components.Complexity, 100)
@@ -83,7 +80,7 @@ func TestAnalyzeProject_Integration(t *testing.T) {
 	// Verify timestamp is set
 	assert.False(t, result.Timestamp.IsZero())
 
-	t.Logf("Score: %d/100 (%s)", result.Score, result.Grade)
+	t.Logf("Score: %d/100", result.Score)
 	t.Logf("Components: complexity=%d, duplication=%d, defect=%d, debt=%d, coupling=%d, smells=%d",
 		result.Components.Complexity, result.Components.Duplication, result.Components.Defect,
 		result.Components.Debt, result.Components.Coupling, result.Components.Smells)

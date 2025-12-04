@@ -2,46 +2,6 @@ package score
 
 import "testing"
 
-func TestGradeFromScore(t *testing.T) {
-	tests := []struct {
-		score int
-		want  Grade
-	}{
-		{100, GradeAPlus},
-		{97, GradeAPlus},
-		{96, GradeA},
-		{93, GradeA},
-		{92, GradeAMinus},
-		{90, GradeAMinus},
-		{89, GradeBPlus},
-		{87, GradeBPlus},
-		{86, GradeB},
-		{83, GradeB},
-		{82, GradeBMinus},
-		{80, GradeBMinus},
-		{79, GradeCPlus},
-		{77, GradeCPlus},
-		{76, GradeC},
-		{73, GradeC},
-		{72, GradeCMinus},
-		{70, GradeCMinus},
-		{69, GradeDPlus},
-		{67, GradeDPlus},
-		{66, GradeD},
-		{63, GradeD},
-		{62, GradeDMinus},
-		{60, GradeDMinus},
-		{59, GradeF},
-		{0, GradeF},
-	}
-	for _, tt := range tests {
-		got := GradeFromScore(tt.score)
-		if got != tt.want {
-			t.Errorf("GradeFromScore(%d) = %s, want %s", tt.score, got, tt.want)
-		}
-	}
-}
-
 func TestDefaultWeights_SumToOne(t *testing.T) {
 	w := DefaultWeights()
 	sum := w.Complexity + w.Duplication + w.Defect + w.Debt + w.Coupling + w.Smells
@@ -68,10 +28,6 @@ func TestResult_ComputeComposite(t *testing.T) {
 	// = 20 + 18 + 17.5 + 9 + 8.5 + 4.75 = 77.75 -> 78
 	if r.Score < 77 || r.Score > 79 {
 		t.Errorf("ComputeComposite() = %d, want ~78", r.Score)
-	}
-	// 78 is C+ (77-79 range)
-	if r.Grade != string(GradeCPlus) {
-		t.Errorf("Grade = %s, want C+", r.Grade)
 	}
 }
 

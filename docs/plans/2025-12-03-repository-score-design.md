@@ -13,7 +13,7 @@ omen score [paths...] [flags]
 ### Output (default text)
 
 ```
-Repository Score: 74/100 (C)
+Repository Score: 74/100
 
   Complexity:    82/100
   Duplication:   91/100
@@ -80,26 +80,6 @@ Cohesion is reported separately by default (penalizes non-OO codebases). Use `en
 
 Composite = weighted sum of component scores, rounded to integer.
 
-### Grade Scale
-
-Standard academic grading scale:
-
-| Score | Grade |
-|-------|-------|
-| 97-100 | A+ |
-| 93-96 | A |
-| 90-92 | A- |
-| 87-89 | B+ |
-| 83-86 | B |
-| 80-82 | B- |
-| 77-79 | C+ |
-| 73-76 | C |
-| 70-72 | C- |
-| 67-69 | D+ |
-| 63-66 | D |
-| 60-62 | D- |
-| 0-59 | F |
-
 ## Configuration
 
 In `omen.toml`:
@@ -143,7 +123,6 @@ When `enable_cohesion = true` and `cohesion` weight is 0, weights are automatica
 ```json
 {
   "score": 74,
-  "grade": "C",
   "components": {
     "complexity": 82,
     "duplication": 91,

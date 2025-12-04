@@ -32,13 +32,13 @@ score_repository:
 
 The composite score (0-100) indicates overall health:
 
-| Score Range | Grade | Status |
-|-------------|-------|--------|
-| 95-100 | A+/A | Excellent health |
-| 80-94 | A-/B+ | Good health |
-| 65-79 | B/B-/C+ | Fair, needs attention |
-| 50-64 | C/C-/D | Poor, significant issues |
-| 0-49 | F | Critical, immediate action needed |
+| Score Range | Status |
+|-------------|--------|
+| 90-100 | Excellent health |
+| 80-89 | Good health |
+| 70-79 | Fair, needs attention |
+| 50-69 | Poor, significant issues |
+| 0-49 | Critical, immediate action needed |
 
 ### Step 3: Drill Into Problem Areas
 
@@ -56,7 +56,7 @@ For each component scoring below the composite, investigate:
 ### Repository Health Report
 
 **Scope**: {{.paths}}
-**Score**: [score]/100 ([grade])
+**Score**: [score]/100
 
 | Component | Score | Weight | Status |
 |-----------|-------|--------|--------|

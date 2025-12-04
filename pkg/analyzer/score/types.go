@@ -5,58 +5,6 @@ import (
 	"time"
 )
 
-// Grade represents a letter grade from A+ to F.
-type Grade string
-
-const (
-	GradeAPlus  Grade = "A+"
-	GradeA      Grade = "A"
-	GradeAMinus Grade = "A-"
-	GradeBPlus  Grade = "B+"
-	GradeB      Grade = "B"
-	GradeBMinus Grade = "B-"
-	GradeCPlus  Grade = "C+"
-	GradeC      Grade = "C"
-	GradeCMinus Grade = "C-"
-	GradeDPlus  Grade = "D+"
-	GradeD      Grade = "D"
-	GradeDMinus Grade = "D-"
-	GradeF      Grade = "F"
-)
-
-// GradeFromScore converts a 0-100 score to a letter grade.
-// Uses standard academic grading scale.
-func GradeFromScore(score int) Grade {
-	switch {
-	case score >= 97:
-		return GradeAPlus
-	case score >= 93:
-		return GradeA
-	case score >= 90:
-		return GradeAMinus
-	case score >= 87:
-		return GradeBPlus
-	case score >= 83:
-		return GradeB
-	case score >= 80:
-		return GradeBMinus
-	case score >= 77:
-		return GradeCPlus
-	case score >= 73:
-		return GradeC
-	case score >= 70:
-		return GradeCMinus
-	case score >= 67:
-		return GradeDPlus
-	case score >= 63:
-		return GradeD
-	case score >= 60:
-		return GradeDMinus
-	default:
-		return GradeF
-	}
-}
-
 // Weights defines the weights for each component in the composite score.
 type Weights struct {
 	Complexity  float64 `json:"complexity" toml:"complexity"`
@@ -112,7 +60,6 @@ type ThresholdResult struct {
 // Result represents the complete score analysis result.
 type Result struct {
 	Score            int                        `json:"score"`
-	Grade            string                     `json:"grade"`
 	Components       ComponentScores            `json:"components"`
 	CohesionIncluded bool                       `json:"cohesion_included"` // True if cohesion weight > 0
 	Weights          Weights                    `json:"weights"`
@@ -123,7 +70,7 @@ type Result struct {
 	Commit           string                     `json:"commit,omitempty"`
 }
 
-// ComputeComposite calculates the weighted composite score and grade.
+// ComputeComposite calculates the weighted composite score.
 func (r *Result) ComputeComposite() {
 	weighted := float64(r.Components.Complexity)*r.Weights.Complexity +
 		float64(r.Components.Duplication)*r.Weights.Duplication +
@@ -142,7 +89,6 @@ func (r *Result) ComputeComposite() {
 	if r.Score < 0 {
 		r.Score = 0
 	}
-	r.Grade = string(GradeFromScore(r.Score))
 }
 
 // CheckThresholds evaluates all thresholds and sets Passed status.

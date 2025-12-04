@@ -183,18 +183,10 @@ TDG combines multiple metrics into a single score (0-100 scale, higher is better
 | Consistency           | 10%    | Code style and pattern adherence        |
 | Documentation         | 5%     | Comment coverage                        |
 
-Scores are classified into letter grades (A+ to F), where:
-
-- **A/A+** (90-100): Excellent - well-maintained code
-- **B** (75-89): Good - minor improvements possible
-- **C** (60-74): Needs attention - technical debt accumulating
-- **D** (50-59): Poor - significant refactoring needed
-- **F** (<50): Critical - immediate action required
-
 **Why it matters:** Technical debt is like financial debt - a little is fine, too much kills you. [Cunningham coined the term in 1992](http://c2.com/doc/oopsla92.html), and [Kruchten et al. (2012)](https://ieeexplore.ieee.org/document/6336722) formalized how to measure and manage it. TDG gives you a single number to track over time and compare across files.
 
 > [!TIP]
-> Fix files with grade C or lower before adding new features. Track average TDG over time - it should go up, not down.
+> Fix files with scores below 70 before adding new features. Track average TDG over time - it should go up, not down.
 
 </details>
 
@@ -402,9 +394,9 @@ query = '''
 </details>
 
 <details>
-<summary><strong>Repository Score</strong> - Composite health score with letter grades</summary>
+<summary><strong>Repository Score</strong> - Composite health score (0-100)</summary>
 
-Omen computes a composite repository health score (0-100) that combines multiple analysis dimensions into a single grade. This provides a quick overview of codebase quality and enables quality gates in CI/CD.
+Omen computes a composite repository health score (0-100) that combines multiple analysis dimensions. This provides a quick overview of codebase quality and enables quality gates in CI/CD.
 
 **Score Components:**
 
@@ -416,22 +408,6 @@ Omen computes a composite repository health score (0-100) that combines multiple
 | Technical Debt  | 15%    | Severity-weighted SATD density per 1K LOC          |
 | Coupling        | 10%    | Cyclic deps, SDP violations, and instability       |
 | Smells          | 5%     | Architectural smells relative to codebase size     |
-
-**Grades:**
-
-| Score   | Grade |
-| ------- | ----- |
-| 95-100  | A+    |
-| 90-94   | A     |
-| 85-89   | A-    |
-| 80-84   | B+    |
-| 75-79   | B     |
-| 70-74   | B-    |
-| 65-69   | C+    |
-| 60-64   | C     |
-| 55-59   | C-    |
-| 50-54   | D     |
-| 0-49    | F     |
 
 **Normalization Philosophy:**
 
@@ -456,17 +432,44 @@ This prevents low-severity items (like documentation TODOs) from unfairly draggi
 # Compute repository score
 omen score .
 
-# Score with thresholds (exit non-zero if thresholds not met)
-omen score . --threshold-score 80 --threshold-complexity 70
-
 # JSON output for CI integration
 omen score . -f json
 ```
 
+**Adjusting thresholds:**
+
+Achieving a score of 100 is nearly impossible for real-world codebases. Set realistic thresholds in `omen.toml` based on your codebase:
+
+```toml
+[score.thresholds]
+score = 80        # Overall score minimum
+complexity = 85   # Function complexity
+duplication = 65  # Code clone ratio (often the hardest to improve)
+defect = 80       # Defect probability
+debt = 75         # Technical debt density
+coupling = 70     # Module coupling
+smells = 90       # Architectural smells
+```
+
+Run `omen score` to see your current scores, then set thresholds slightly below those values. Gradually increase them over time.
+
+**Enforcing on commit with [Lefthook](https://github.com/evilmartians/lefthook):**
+
+Add to `lefthook.yml`:
+
+```yaml
+pre-push:
+  commands:
+    omen-score:
+      run: omen score
+```
+
+This prevents pushing code that fails your quality thresholds.
+
 **Why it matters:** A single health score enables quality gates, tracks trends over time, and provides quick codebase assessment. The weighted composite ensures that critical issues (defects, complexity) have more impact than cosmetic ones.
 
 > [!TIP]
-> Set minimum thresholds in CI to prevent quality regression. Start with threshold-score=70 and increase over time.
+> Start with achievable thresholds and increase them as you improve your codebase. Duplication is often the hardest metric to improve in legacy code.
 
 </details>
 
