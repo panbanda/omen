@@ -3350,7 +3350,7 @@ func runScoreTrendCmd(c *cli.Context) error {
 
 	result, err := analyzer.AnalyzeTrendWithProgress(context.Background(), repoPath, func(current, total int, commitSHA string) {
 		if tracker == nil {
-			tracker = progress.NewTracker(fmt.Sprintf("Analyzing %d commits", total), total)
+			tracker = progress.NewTracker(fmt.Sprintf("Analyzing %d points in time", total), total)
 		}
 		tracker.Tick()
 	})
