@@ -42,7 +42,6 @@ func NewTracker(label string, total int) *Tracker {
 			BarStart:      "[",
 			BarEnd:        "]",
 		}),
-		progressbar.OptionClearOnFinish(),
 	)
 	return &Tracker{bar: bar, label: label}
 }

@@ -23,6 +23,7 @@ type CommitInfo struct {
 }
 
 // IsDirty returns true if there are uncommitted changes in the working directory.
+// Untracked files are not considered dirty.
 func IsDirty(repoPath string) (bool, error) {
 	repo, err := git.PlainOpen(repoPath)
 	if err != nil {
@@ -39,7 +40,18 @@ func IsDirty(repoPath string) (bool, error) {
 		return false, err
 	}
 
-	return !status.IsClean(), nil
+	for _, s := range status {
+		// Skip untracked files
+		if s.Staging == git.Untracked && s.Worktree == git.Untracked {
+			continue
+		}
+		// Any staged or modified file means dirty
+		if s.Staging != git.Unmodified || s.Worktree != git.Unmodified {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 // GetCurrentRef returns the current branch name or commit SHA (for detached HEAD).
