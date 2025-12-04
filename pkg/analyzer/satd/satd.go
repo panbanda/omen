@@ -181,7 +181,15 @@ func shouldSkipProcessing(line string) bool {
 	trimmed := strings.TrimSpace(line)
 	return isMarkdownHeader(trimmed) ||
 		isBugTrackingID(trimmed) ||
-		isFixedBugDescription(trimmed)
+		isFixedBugDescription(trimmed) ||
+		hasIgnoreDirective(line)
+}
+
+// hasIgnoreDirective checks if a line contains an omen:ignore directive.
+// Supports: omen:ignore, omen:ignore-line, omen:ignore-satd
+func hasIgnoreDirective(line string) bool {
+	lower := strings.ToLower(line)
+	return strings.Contains(lower, "omen:ignore")
 }
 
 // isMarkdownHeader checks if a line is a markdown header.

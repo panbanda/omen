@@ -83,6 +83,35 @@ release = 14
 # Expected time-to-live for experiment flags (days)
 experiment = 90
 
+# Repository score settings
+[score]
+# Enable cohesion in composite score (for OO-heavy codebases).
+# When true, weights are automatically redistributed to include cohesion at 15%.
+enable_cohesion = false
+
+# Weights for composite score (must sum to 1.0)
+# When enable_cohesion = true, these weights are scaled down by 0.85 and
+# cohesion is added at 0.15.
+[score.weights]
+complexity = 0.25
+duplication = 0.20
+defect = 0.25
+debt = 0.15
+coupling = 0.10
+smells = 0.05
+cohesion = 0.0  # Or set manually if you prefer custom weights
+
+# Minimum acceptable scores (0 = no enforcement)
+[score.thresholds]
+score = 0
+complexity = 0
+duplication = 0
+defect = 0
+debt = 0
+coupling = 0
+smells = 0
+cohesion = 0
+
 # Custom providers define tree-sitter queries for proprietary feature flag systems.
 # Each custom provider needs:
 #   - name: Provider identifier (used in --provider flag)

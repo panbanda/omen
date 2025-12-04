@@ -17,7 +17,9 @@ import (
 	"github.com/panbanda/omen/pkg/analyzer/graph"
 	"github.com/panbanda/omen/pkg/analyzer/repomap"
 	"github.com/panbanda/omen/pkg/analyzer/satd"
+	"github.com/panbanda/omen/pkg/analyzer/score"
 	"github.com/panbanda/omen/pkg/analyzer/tdg"
+	"github.com/panbanda/omen/pkg/config"
 	toon "github.com/toon-format/toon-go"
 )
 
@@ -145,6 +147,11 @@ type FlagsInput struct {
 	IncludeGit  bool     `json:"include_git,omitempty" jsonschema:"Include git history for staleness analysis. Default true."`
 	MinPriority string   `json:"min_priority,omitempty" jsonschema:"Filter by minimum priority: LOW, MEDIUM, HIGH, CRITICAL."`
 	Top         int      `json:"top,omitempty" jsonschema:"Show top N flags by priority. Default all."`
+}
+
+// ScoreInput adds repository score options.
+type ScoreInput struct {
+	AnalyzeInput
 }
 
 // Helper functions
@@ -845,6 +852,67 @@ func handleAnalyzeFlags(ctx context.Context, req *mcp.CallToolRequest, input Fla
 	// Limit to top N if specified
 	if input.Top > 0 && len(result.Flags) > input.Top {
 		result.Flags = result.Flags[:input.Top]
+	}
+
+	return toolResult(result, format)
+}
+
+func handleAnalyzeScore(ctx context.Context, req *mcp.CallToolRequest, input ScoreInput) (*mcp.CallToolResult, any, error) {
+	paths := getPaths(input.AnalyzeInput)
+	format := getFormat(input.AnalyzeInput)
+
+	cfg, err := config.LoadOrDefault()
+	if err != nil {
+		return toolError(err.Error())
+	}
+
+	scanner := scannerSvc.New()
+	scanResult, err := scanner.ScanPaths(paths)
+	if err != nil {
+		return toolError(err.Error())
+	}
+
+	if len(scanResult.Files) == 0 {
+		return toolError("no source files found")
+	}
+
+	repoPath := "."
+	if len(paths) > 0 {
+		repoPath = paths[0]
+	}
+
+	// Build weights and thresholds from config
+	effectiveWeights := cfg.Score.EffectiveWeights()
+	weights := score.Weights{
+		Complexity:  effectiveWeights.Complexity,
+		Duplication: effectiveWeights.Duplication,
+		Defect:      effectiveWeights.Defect,
+		Debt:        effectiveWeights.Debt,
+		Coupling:    effectiveWeights.Coupling,
+		Smells:      effectiveWeights.Smells,
+		Cohesion:    effectiveWeights.Cohesion,
+	}
+
+	thresholds := score.Thresholds{
+		Score:       cfg.Score.Thresholds.Score,
+		Complexity:  cfg.Score.Thresholds.Complexity,
+		Duplication: cfg.Score.Thresholds.Duplication,
+		Defect:      cfg.Score.Thresholds.Defect,
+		Debt:        cfg.Score.Thresholds.Debt,
+		Coupling:    cfg.Score.Thresholds.Coupling,
+		Smells:      cfg.Score.Thresholds.Smells,
+		Cohesion:    cfg.Score.Thresholds.Cohesion,
+	}
+
+	analyzer := score.New(
+		score.WithWeights(weights),
+		score.WithThresholds(thresholds),
+		score.WithChurnDays(cfg.Analysis.ChurnDays),
+		score.WithMaxFileSize(cfg.Analysis.MaxFileSize),
+	)
+	result, err := analyzer.AnalyzeProject(ctx, repoPath, scanResult.Files)
+	if err != nil {
+		return toolError(err.Error())
 	}
 
 	return toolResult(result, format)

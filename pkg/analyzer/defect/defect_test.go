@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/panbanda/omen/pkg/stats"
 )
 
 func TestNew(t *testing.T) {
@@ -497,9 +499,9 @@ func TestPercentile(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := percentile(tt.sorted, tt.p)
+			got := stats.Percentile(tt.sorted, tt.p)
 			if got != tt.want {
-				t.Errorf("percentile() = %v, want %v", got, tt.want)
+				t.Errorf("stats.Percentile() = %v, want %v", got, tt.want)
 			}
 		})
 	}

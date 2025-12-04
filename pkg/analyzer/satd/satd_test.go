@@ -982,3 +982,72 @@ func TestNewSummary(t *testing.T) {
 		t.Errorf("TotalItems = %d, want 0", s.TotalItems)
 	}
 }
+
+func TestHasIgnoreDirective(t *testing.T) {
+	tests := []struct {
+		line     string
+		expected bool
+	}{
+		// Should ignore
+		{"// omen:ignore", true},
+		{"// omen:ignore-line", true},
+		{"// omen:ignore-satd", true},
+		{"# omen:ignore", true},
+		{"/* omen:ignore */", true},
+		{"// SECURITY: validate input omen:ignore", true},
+		{"// TODO: fix this omen:ignore", true},
+
+		// Should NOT ignore
+		{"// TODO: implement this function", false},
+		{"// FIXME: this is broken", false},
+		{"// some regular comment", false},
+		{"code();", false},
+	}
+
+	for _, tt := range tests {
+		got := hasIgnoreDirective(tt.line)
+		if got != tt.expected {
+			t.Errorf("hasIgnoreDirective(%q) = %v, want %v", tt.line, got, tt.expected)
+		}
+	}
+}
+
+func TestAnalyzeFile_IgnoreDirective(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "normalize.go")
+
+	code := `package score
+
+// Severity weights (based on remediation urgency): omen:ignore
+// - Critical (SECURITY, VULN): 4.0 - Immediate security risk omen:ignore
+// - High (FIXME, BUG): 2.0 - Known defects requiring fix omen:ignore
+// - Medium (HACK, REFACTOR): 1.0 - Design compromises omen:ignore
+// - Low (TODO, NOTE): 0.25 - Future work, minimal impact omen:ignore
+
+// TODO: add actual implementation
+func NormalizeDebt() int {
+	return 0
+}
+`
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New()
+	items, err := a.AnalyzeFile(path)
+	if err != nil {
+		t.Fatalf("AnalyzeFile failed: %v", err)
+	}
+
+	// Should only find the actual TODO, not the ignored documentation
+	if len(items) != 1 {
+		t.Errorf("len(items) = %d, want 1 (only actual TODO)", len(items))
+		for _, item := range items {
+			t.Logf("  Found: %s at line %d: %s", item.Marker, item.Line, item.Description)
+		}
+	}
+
+	if len(items) > 0 && items[0].Marker != "TODO" {
+		t.Errorf("expected TODO marker, got %s", items[0].Marker)
+	}
+}

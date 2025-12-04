@@ -36,6 +36,9 @@ type Config struct {
 
 	// Feature flag settings
 	FeatureFlags FeatureFlagConfig `koanf:"feature_flags" toml:"feature_flags"`
+
+	// Score settings
+	Score ScoreConfig `koanf:"score" toml:"score"`
 }
 
 // AnalysisConfig controls which analyzers run.
@@ -79,12 +82,21 @@ type DuplicateConfig struct {
 	MinGroupSize         int     `koanf:"min_group_size" toml:"min_group_size"`
 }
 
-// ExcludeConfig defines file exclusion patterns.
+// ExcludeConfig defines file exclusion patterns using gitignore-style syntax.
+// All patterns in the Patterns list are parsed as gitignore patterns and combined
+// with the repository's .gitignore file (when Gitignore is true).
 type ExcludeConfig struct {
-	Patterns   []string `koanf:"patterns" toml:"patterns"`
-	Extensions []string `koanf:"extensions" toml:"extensions"`
-	Dirs       []string `koanf:"dirs" toml:"dirs"`
-	Gitignore  bool     `koanf:"gitignore" toml:"gitignore"`
+	// Patterns uses gitignore syntax for excluding files:
+	//   - "*_test.go"     matches any file ending in _test.go
+	//   - "vendor/"       matches the vendor directory
+	//   - "*.min.js"      matches minified JS files
+	//   - "cmd/**/main.go" matches main.go in any subdirectory of cmd
+	//   - "!important.go" negates a previous pattern (include the file)
+	Patterns []string `koanf:"patterns" toml:"patterns"`
+
+	// Gitignore controls whether to also respect .gitignore files.
+	// When true, patterns from .gitignore are combined with Patterns.
+	Gitignore bool `koanf:"gitignore" toml:"gitignore"`
 }
 
 // CacheConfig controls caching behavior.
@@ -132,6 +144,60 @@ type FeatureFlagTTLConfig struct {
 	Experiment int `koanf:"experiment" toml:"experiment"` // days, default 90
 }
 
+// ScoreConfig defines repository score settings.
+type ScoreConfig struct {
+	EnableCohesion bool            `koanf:"enable_cohesion" toml:"enable_cohesion"` // Include cohesion in composite score
+	Weights        ScoreWeights    `koanf:"weights" toml:"weights"`
+	Thresholds     ScoreThresholds `koanf:"thresholds" toml:"thresholds"`
+}
+
+// ScoreWeights defines component weights (must sum to 1.0).
+type ScoreWeights struct {
+	Complexity  float64 `koanf:"complexity" toml:"complexity"`
+	Duplication float64 `koanf:"duplication" toml:"duplication"`
+	Defect      float64 `koanf:"defect" toml:"defect"`
+	Debt        float64 `koanf:"debt" toml:"debt"`
+	Coupling    float64 `koanf:"coupling" toml:"coupling"`
+	Smells      float64 `koanf:"smells" toml:"smells"`
+	Cohesion    float64 `koanf:"cohesion" toml:"cohesion"` // Optional, for OO-heavy codebases
+}
+
+// ScoreThresholds defines minimum acceptable scores.
+type ScoreThresholds struct {
+	Score       int `koanf:"score" toml:"score"`
+	Complexity  int `koanf:"complexity" toml:"complexity"`
+	Duplication int `koanf:"duplication" toml:"duplication"`
+	Defect      int `koanf:"defect" toml:"defect"`
+	Debt        int `koanf:"debt" toml:"debt"`
+	Coupling    int `koanf:"coupling" toml:"coupling"`
+	Smells      int `koanf:"smells" toml:"smells"`
+	Cohesion    int `koanf:"cohesion" toml:"cohesion"`
+}
+
+// DefaultCohesionWeight is the weight used for cohesion when enable_cohesion is true.
+const DefaultCohesionWeight = 0.15
+
+// EffectiveWeights returns weights adjusted for enable_cohesion.
+// When enable_cohesion is true and cohesion weight is 0, it redistributes weights
+// to include cohesion at DefaultCohesionWeight.
+func (c *ScoreConfig) EffectiveWeights() ScoreWeights {
+	if !c.EnableCohesion || c.Weights.Cohesion > 0 {
+		return c.Weights
+	}
+
+	// Scale down existing weights to make room for cohesion
+	scale := 1.0 - DefaultCohesionWeight
+	return ScoreWeights{
+		Complexity:  c.Weights.Complexity * scale,
+		Duplication: c.Weights.Duplication * scale,
+		Defect:      c.Weights.Defect * scale,
+		Debt:        c.Weights.Debt * scale,
+		Coupling:    c.Weights.Coupling * scale,
+		Smells:      c.Weights.Smells * scale,
+		Cohesion:    DefaultCohesionWeight,
+	}
+}
+
 // DefaultConfig returns a config with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
@@ -172,27 +238,32 @@ func DefaultConfig() *Config {
 		},
 		Exclude: ExcludeConfig{
 			Patterns: []string{
+				// Test files
 				"*_test.go",
 				"*_test.ts",
 				"*_test.py",
+				"*.spec.ts",
+				"*.spec.js",
+				// Minified assets
 				"*.min.js",
 				"*.min.css",
-			},
-			Extensions: []string{
-				".lock",
-				".sum",
-			},
-			Dirs: []string{
-				"vendor",
-				"node_modules",
-				".git",
-				".omen",
-				"dist",
-				"build",
-				"__pycache__",
-				"coverage", // Test coverage output
-				".bundle",  // Ruby bundler
-				"sorbet",   // Sorbet type definitions (auto-generated)
+				// Lock files
+				"*.lock",
+				"go.sum",
+				// Directories (trailing slash)
+				"vendor/",
+				"node_modules/",
+				".git/",
+				".omen/",
+				"dist/",
+				"build/",
+				"target/",
+				"__pycache__/",
+				"coverage/",
+				".bundle/",
+				"sorbet/",
+				// Auto-generated mocks
+				"**/mocks/",
 			},
 			Gitignore: true,
 		},
@@ -213,6 +284,17 @@ func DefaultConfig() *Config {
 				Release:    14,
 				Experiment: 90,
 			},
+		},
+		Score: ScoreConfig{
+			Weights: ScoreWeights{
+				Complexity:  0.25,
+				Duplication: 0.20,
+				Defect:      0.25,
+				Debt:        0.15,
+				Coupling:    0.10,
+				Smells:      0.05,
+			},
+			Thresholds: ScoreThresholds{}, // All zeros = no enforcement
 		},
 	}
 }
@@ -336,43 +418,38 @@ func LoadConfig(opts ...LoadOption) (*LoadResult, error) {
 	return &LoadResult{Config: cfg, Source: source}, nil
 }
 
-// LoadOrDefault tries to load config from standard locations or returns defaults.
-func LoadOrDefault() *Config {
-	result, _ := LoadConfig()
-	if result == nil {
-		return DefaultConfig()
+// LoadOrDefault loads config from standard locations or returns defaults.
+// Returns an error if validation fails.
+func LoadOrDefault() (*Config, error) {
+	result, err := LoadConfig()
+	if err != nil {
+		if FindConfigFile() == "" {
+			return DefaultConfig(), nil
+		}
+		return nil, err
 	}
-	return result.Config
+	return result.Config, nil
 }
 
-// ShouldExclude checks if a path should be excluded from analysis.
+// ShouldExclude is deprecated. Use the scanner's gitignore-based matching instead.
+// This method is kept for backward compatibility but only does basic pattern matching.
 func (c *Config) ShouldExclude(path string) bool {
-	// Check directory exclusions using exact path component matching
-	pathComponents := strings.Split(filepath.Clean(path), string(filepath.Separator))
-	for _, dir := range c.Exclude.Dirs {
-		for _, component := range pathComponents {
-			if component == dir {
-				return true
-			}
-		}
-	}
-
-	// Check extension exclusions
-	ext := filepath.Ext(path)
-	for _, excludeExt := range c.Exclude.Extensions {
-		if ext == excludeExt {
-			return true
-		}
-	}
-
-	// Check pattern exclusions
+	// Basic pattern matching for backward compatibility
+	// The scanner now handles full gitignore-style matching
 	base := filepath.Base(path)
 	for _, pattern := range c.Exclude.Patterns {
+		// Skip directory patterns (handled by scanner)
+		if strings.HasSuffix(pattern, "/") {
+			continue
+		}
+		// Skip glob patterns with path separators (handled by scanner)
+		if strings.Contains(pattern, "/") {
+			continue
+		}
 		if matched, _ := filepath.Match(pattern, base); matched {
 			return true
 		}
 	}
-
 	return false
 }
 
@@ -466,6 +543,39 @@ func (c *Config) Validate() error {
 	if c.Cache.TTL < 0 {
 		errs = append(errs, errors.New("cache.ttl must be non-negative"))
 	}
+
+	// Score config validation - validate effective weights (after enable_cohesion adjustment)
+	effectiveWeights := c.Score.EffectiveWeights()
+	weightsSum := effectiveWeights.Complexity + effectiveWeights.Duplication +
+		effectiveWeights.Defect + effectiveWeights.Debt +
+		effectiveWeights.Coupling + effectiveWeights.Smells +
+		effectiveWeights.Cohesion
+	if weightsSum < 0.99 || weightsSum > 1.01 {
+		errs = append(errs, fmt.Errorf("score.weights must sum to 1.0, got %f", weightsSum))
+	}
+
+	// Validate individual weights are non-negative
+	if effectiveWeights.Complexity < 0 || effectiveWeights.Duplication < 0 ||
+		effectiveWeights.Defect < 0 || effectiveWeights.Debt < 0 ||
+		effectiveWeights.Coupling < 0 || effectiveWeights.Smells < 0 ||
+		effectiveWeights.Cohesion < 0 {
+		errs = append(errs, errors.New("score.weights values must be non-negative"))
+	}
+
+	// Validate thresholds are in 0-100 range
+	validateThreshold := func(name string, val int) {
+		if val < 0 || val > 100 {
+			errs = append(errs, fmt.Errorf("score.thresholds.%s must be between 0 and 100", name))
+		}
+	}
+	validateThreshold("score", c.Score.Thresholds.Score)
+	validateThreshold("complexity", c.Score.Thresholds.Complexity)
+	validateThreshold("duplication", c.Score.Thresholds.Duplication)
+	validateThreshold("defect", c.Score.Thresholds.Defect)
+	validateThreshold("debt", c.Score.Thresholds.Debt)
+	validateThreshold("coupling", c.Score.Thresholds.Coupling)
+	validateThreshold("smells", c.Score.Thresholds.Smells)
+	validateThreshold("cohesion", c.Score.Thresholds.Cohesion)
 
 	if len(errs) > 0 {
 		return errors.Join(errs...)

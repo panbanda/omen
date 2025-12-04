@@ -41,8 +41,12 @@ func WithOpener(opener vcs.Opener) Option {
 
 // New creates a new scanner service.
 func New(opts ...Option) *Service {
+	cfg, _ := config.LoadOrDefault()
+	if cfg == nil {
+		cfg = config.DefaultConfig()
+	}
 	s := &Service{
-		config: config.LoadOrDefault(),
+		config: cfg,
 		opener: vcs.DefaultOpener(),
 	}
 	for _, opt := range opts {

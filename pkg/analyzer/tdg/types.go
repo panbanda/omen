@@ -457,7 +457,7 @@ func SeverityFromValue(value float64) Severity {
 	return SeverityNormal
 }
 
-// Hotspot represents a file with high technical debt (pmat-compatible).
+// Hotspot represents a file with high technical debt (pmat-compatible). omen:ignore
 type Hotspot struct {
 	Path           string  `json:"path"`
 	TdgScore       float64 `json:"tdg_score"`

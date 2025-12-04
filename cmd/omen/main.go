@@ -29,6 +29,7 @@ import (
 	"github.com/panbanda/omen/pkg/analyzer/hotspot"
 	"github.com/panbanda/omen/pkg/analyzer/ownership"
 	"github.com/panbanda/omen/pkg/analyzer/satd"
+	"github.com/panbanda/omen/pkg/analyzer/score"
 	"github.com/panbanda/omen/pkg/analyzer/smells"
 	"github.com/panbanda/omen/pkg/analyzer/tdg"
 	"github.com/panbanda/omen/pkg/analyzer/temporal"
@@ -231,6 +232,7 @@ Supports: Go, Rust, Python, TypeScript, JavaScript, Java, C, C++, Ruby, PHP`,
 			analyzeCmd(),
 			contextCmd(),
 			mcpCmd(),
+			scoreCmd(),
 		},
 	}
 
@@ -2974,6 +2976,305 @@ func runConfigShowCmd(c *cli.Context) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 	fmt.Print(string(content))
+
+	return nil
+}
+
+func scoreCmd() *cli.Command {
+	flags := append(outputFlags(),
+		&cli.IntFlag{
+			Name:  "min-score",
+			Usage: "Minimum composite score (0-100)",
+		},
+		&cli.IntFlag{
+			Name:  "min-complexity",
+			Usage: "Minimum complexity score (0-100)",
+		},
+		&cli.IntFlag{
+			Name:  "min-duplication",
+			Usage: "Minimum duplication score (0-100)",
+		},
+		&cli.IntFlag{
+			Name:  "min-defect",
+			Usage: "Minimum defect risk score (0-100)",
+		},
+		&cli.IntFlag{
+			Name:  "min-debt",
+			Usage: "Minimum technical debt score (0-100)",
+		},
+		&cli.IntFlag{
+			Name:  "min-coupling",
+			Usage: "Minimum coupling score (0-100)",
+		},
+		&cli.IntFlag{
+			Name:  "min-smells",
+			Usage: "Minimum smells score (0-100)",
+		},
+		&cli.IntFlag{
+			Name:  "min-cohesion",
+			Usage: "Minimum cohesion score (0-100)",
+		},
+		&cli.BoolFlag{
+			Name:  "enable-cohesion",
+			Usage: "Include cohesion in composite score (redistributes weights)",
+		},
+		&cli.IntFlag{
+			Name:  "days",
+			Value: 30,
+			Usage: "Days of git history for churn analysis",
+		},
+	)
+	return &cli.Command{
+		Name:      "score",
+		Usage:     "Compute repository health score",
+		ArgsUsage: "[path...]",
+		Flags:     flags,
+		Action:    runScoreCmd,
+	}
+}
+
+func runScoreCmd(c *cli.Context) error {
+	paths := getPaths(c)
+
+	cfg, err := config.LoadOrDefault()
+	if err != nil {
+		return err
+	}
+
+	// CLI flag overrides config
+	if c.Bool("enable-cohesion") {
+		cfg.Score.EnableCohesion = true
+	}
+
+	// Build thresholds from flags (override config)
+	thresholds := score.Thresholds{
+		Score:       intFlagOrConfig(c, "min-score", cfg.Score.Thresholds.Score),
+		Complexity:  intFlagOrConfig(c, "min-complexity", cfg.Score.Thresholds.Complexity),
+		Duplication: intFlagOrConfig(c, "min-duplication", cfg.Score.Thresholds.Duplication),
+		Defect:      intFlagOrConfig(c, "min-defect", cfg.Score.Thresholds.Defect),
+		Debt:        intFlagOrConfig(c, "min-debt", cfg.Score.Thresholds.Debt),
+		Coupling:    intFlagOrConfig(c, "min-coupling", cfg.Score.Thresholds.Coupling),
+		Smells:      intFlagOrConfig(c, "min-smells", cfg.Score.Thresholds.Smells),
+		Cohesion:    intFlagOrConfig(c, "min-cohesion", cfg.Score.Thresholds.Cohesion),
+	}
+
+	// Build weights from effective config (handles enable_cohesion)
+	effectiveWeights := cfg.Score.EffectiveWeights()
+	weights := score.Weights{
+		Complexity:  effectiveWeights.Complexity,
+		Duplication: effectiveWeights.Duplication,
+		Defect:      effectiveWeights.Defect,
+		Debt:        effectiveWeights.Debt,
+		Coupling:    effectiveWeights.Coupling,
+		Smells:      effectiveWeights.Smells,
+		Cohesion:    effectiveWeights.Cohesion,
+	}
+
+	scanSvc := scannerSvc.New()
+	scanResult, err := scanSvc.ScanPaths(paths)
+	if err != nil {
+		return err
+	}
+
+	if len(scanResult.Files) == 0 {
+		color.Yellow("No source files found")
+		return nil
+	}
+
+	// Find repo root
+	repoPath := "."
+	if len(paths) > 0 {
+		repoPath = paths[0]
+	}
+
+	tracker := progress.NewTracker("Computing repository score...", score.ProgressStages)
+
+	analyzer := score.New(
+		score.WithWeights(weights),
+		score.WithThresholds(thresholds),
+		score.WithChurnDays(c.Int("days")),
+		score.WithMaxFileSize(cfg.Analysis.MaxFileSize),
+	)
+
+	result, err := analyzer.AnalyzeProjectWithProgress(context.Background(), repoPath, scanResult.Files, func(stage string) {
+		tracker.Tick()
+	})
+	tracker.FinishSuccess()
+	if err != nil {
+		return fmt.Errorf("score analysis failed: %w", err)
+	}
+
+	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
+	if err != nil {
+		return err
+	}
+	defer formatter.Close()
+
+	// Output based on format
+	format := getFormat(c)
+	if format == "json" || format == "toon" {
+		if err := formatter.Output(result); err != nil {
+			return err
+		}
+	} else if format == "markdown" {
+		if err := writeScoreMarkdown(result, formatter); err != nil {
+			return err
+		}
+	} else {
+		printScoreResult(result)
+	}
+
+	// Exit with error if thresholds not met
+	if !result.Passed {
+		return cli.Exit("threshold violation", 1)
+	}
+	return nil
+}
+
+// intFlagOrConfig returns the CLI flag value if explicitly set, otherwise the config value.
+// This handles the case where a user explicitly passes --min-foo 0 to disable a threshold.
+func intFlagOrConfig(c *cli.Context, flagName string, cfgValue int) int {
+	if c.IsSet(flagName) {
+		return c.Int(flagName)
+	}
+	return cfgValue
+}
+
+func printScoreResult(r *score.Result) {
+	// Header with score coloring
+	scoreColor := color.New(color.FgGreen)
+	if r.Score < 70 {
+		scoreColor = color.New(color.FgYellow)
+	}
+	if r.Score < 50 {
+		scoreColor = color.New(color.FgRed)
+	}
+
+	fmt.Println()
+	scoreColor.Printf("Repository Score: %d/100\n", r.Score)
+	fmt.Println()
+
+	// Components
+	printScoreComponent("Complexity", r.Components.Complexity)
+	printScoreComponent("Duplication", r.Components.Duplication)
+	printScoreComponent("Defect Risk", r.Components.Defect)
+	printScoreComponent("Technical Debt", r.Components.Debt)
+	printScoreComponent("Coupling", r.Components.Coupling)
+	printScoreComponent("Smells", r.Components.Smells)
+	if r.CohesionIncluded {
+		printScoreComponent("Cohesion", r.Components.Cohesion)
+	}
+	fmt.Println()
+	fmt.Printf("Files analyzed: %d\n", r.FilesAnalyzed)
+
+	// Threshold failures
+	if !r.Passed {
+		fmt.Println()
+		color.Red("Threshold violations:")
+		for name, th := range r.Thresholds {
+			if !th.Passed {
+				actual := getScoreComponent(r, name)
+				color.Red("  %s: %d < %d (minimum)", name, actual, th.Min)
+			}
+		}
+		fmt.Println()
+		fmt.Println("Run analyzers to diagnose:")
+		for name, th := range r.Thresholds {
+			if !th.Passed && name != "score" {
+				fmt.Printf("  omen analyze %s\n", componentToAnalyzer(name))
+			}
+		}
+	}
+}
+
+func componentToAnalyzer(name string) string {
+	switch name {
+	case "complexity":
+		return "complexity"
+	case "duplication":
+		return "duplicates"
+	case "defect":
+		return "defect"
+	case "debt":
+		return "satd"
+	case "coupling":
+		return "graph"
+	case "smells":
+		return "smells"
+	case "cohesion":
+		return "cohesion"
+	default:
+		return name
+	}
+}
+
+func printScoreComponent(name string, value int) {
+	c := color.New(color.FgGreen)
+	if value < 70 {
+		c = color.New(color.FgYellow)
+	}
+	if value < 50 {
+		c = color.New(color.FgRed)
+	}
+	c.Printf("  %-15s %3d/100\n", name+":", value)
+}
+
+func getScoreComponent(r *score.Result, name string) int {
+	switch name {
+	case "score":
+		return r.Score
+	case "complexity":
+		return r.Components.Complexity
+	case "duplication":
+		return r.Components.Duplication
+	case "defect":
+		return r.Components.Defect
+	case "debt":
+		return r.Components.Debt
+	case "coupling":
+		return r.Components.Coupling
+	case "smells":
+		return r.Components.Smells
+	case "cohesion":
+		return r.Components.Cohesion
+	default:
+		return 0
+	}
+}
+
+func writeScoreMarkdown(r *score.Result, f *output.Formatter) error {
+	w := f.Writer()
+	fmt.Fprintf(w, "# Repository Score: %d/100\n\n", r.Score)
+	fmt.Fprintln(w, "## Component Scores")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "| Component | Score |")
+	fmt.Fprintln(w, "|-----------|-------|")
+	fmt.Fprintf(w, "| Complexity | %d/100 |\n", r.Components.Complexity)
+	fmt.Fprintf(w, "| Duplication | %d/100 |\n", r.Components.Duplication)
+	fmt.Fprintf(w, "| Defect Risk | %d/100 |\n", r.Components.Defect)
+	fmt.Fprintf(w, "| Technical Debt | %d/100 |\n", r.Components.Debt)
+	fmt.Fprintf(w, "| Coupling | %d/100 |\n", r.Components.Coupling)
+	fmt.Fprintf(w, "| Smells | %d/100 |\n", r.Components.Smells)
+	if r.CohesionIncluded {
+		fmt.Fprintf(w, "| Cohesion | %d/100 |\n", r.Components.Cohesion)
+	}
+	fmt.Fprintf(w, "\nFiles analyzed: %d\n", r.FilesAnalyzed)
+	if r.Commit != "" {
+		fmt.Fprintf(w, "Commit: %s\n", r.Commit)
+	}
+	fmt.Fprintf(w, "Timestamp: %s\n", r.Timestamp.Format(time.RFC3339))
+
+	if !r.Passed {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "## Threshold Violations")
+		fmt.Fprintln(w)
+		for name, th := range r.Thresholds {
+			if !th.Passed {
+				actual := getScoreComponent(r, name)
+				fmt.Fprintf(w, "- **%s**: %d < %d (minimum)\n", name, actual, th.Min)
+			}
+		}
+	}
 
 	return nil
 }

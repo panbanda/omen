@@ -1,0 +1,26 @@
+# Exclude auto-generated files, tests, and mocks from analysis
+# Uses gitignore-style patterns (trailing / for directories, ** for recursive)
+[exclude]
+patterns = [
+    "*_test.go",
+    "*_test.ts",
+    "*_test.py",
+    "*.spec.ts",
+    "*.spec.js",
+    "**/mocks/",
+]
+
+# Use higher thresholds to avoid flagging idiomatic Go patterns
+[thresholds]
+duplicate_min_lines = 15
+duplicate_similarity = 0.90
+
+# Repository score thresholds
+[score.thresholds]
+score = 80
+complexity = 85
+duplication = 60
+defect = 80
+debt = 75
+coupling = 70
+smells = 90

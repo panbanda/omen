@@ -42,48 +42,52 @@ func findGitRoot(start string) string {
 	}
 }
 
-// loadGitignore loads .gitignore patterns from a directory up to the git root.
-func (s *Scanner) loadGitignore(root string) {
-	if !s.config.Exclude.Gitignore {
-		return
-	}
-
+// loadExcludePatterns loads exclusion patterns from both config and .gitignore files.
+// Config patterns are parsed as gitignore patterns and combined with .gitignore files.
+func (s *Scanner) loadExcludePatterns(root string) {
 	var patterns []gitignore.Pattern
 
-	// Find git root to limit how far up we walk
-	gitRoot := findGitRoot(root)
+	// Add config exclude patterns (always applied, parsed as gitignore syntax)
+	for _, pattern := range s.config.Exclude.Patterns {
+		patterns = append(patterns, gitignore.ParsePattern(pattern, nil))
+	}
 
-	// Walk up to find all .gitignore files, stopping at git root
-	dir := root
-	for {
-		gitignorePath := filepath.Join(dir, ".gitignore")
-		if data, err := os.ReadFile(gitignorePath); err == nil {
-			// Compute domain as relative path from root
-			// For root .gitignore, domain should be nil (not []string{""})
-			var domain []string
-			relPath := strings.TrimPrefix(dir, root)
-			relPath = strings.TrimPrefix(relPath, string(filepath.Separator))
-			if relPath != "" {
-				domain = strings.Split(relPath, string(filepath.Separator))
-			}
-			for _, line := range strings.Split(string(data), "\n") {
-				line = strings.TrimSpace(line)
-				if line == "" || strings.HasPrefix(line, "#") {
-					continue
+	// Add .gitignore patterns if enabled
+	if s.config.Exclude.Gitignore {
+		gitRoot := findGitRoot(root)
+
+		// Walk up to find all .gitignore files, stopping at git root
+		dir := root
+		for {
+			gitignorePath := filepath.Join(dir, ".gitignore")
+			if data, err := os.ReadFile(gitignorePath); err == nil {
+				// Compute domain as relative path from root
+				// For root .gitignore, domain should be nil (not []string{""})
+				var domain []string
+				relPath := strings.TrimPrefix(dir, root)
+				relPath = strings.TrimPrefix(relPath, string(filepath.Separator))
+				if relPath != "" {
+					domain = strings.Split(relPath, string(filepath.Separator))
 				}
-				patterns = append(patterns, gitignore.ParsePattern(line, domain))
+				for _, line := range strings.Split(string(data), "\n") {
+					line = strings.TrimSpace(line)
+					if line == "" || strings.HasPrefix(line, "#") {
+						continue
+					}
+					patterns = append(patterns, gitignore.ParsePattern(line, domain))
+				}
 			}
-		}
 
-		// Stop at git root or filesystem root
-		if gitRoot != "" && dir == gitRoot {
-			break
+			// Stop at git root or filesystem root
+			if gitRoot != "" && dir == gitRoot {
+				break
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
 		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			break
-		}
-		dir = parent
 	}
 
 	if len(patterns) > 0 {
@@ -91,9 +95,9 @@ func (s *Scanner) loadGitignore(root string) {
 	}
 }
 
-// isGitignored checks if a path matches gitignore patterns.
-func (s *Scanner) isGitignored(path string, isDir bool) bool {
-	if !s.config.Exclude.Gitignore || len(s.matchers) == 0 {
+// isExcluded checks if a path matches any exclusion pattern.
+func (s *Scanner) isExcluded(path string, isDir bool) bool {
+	if len(s.matchers) == 0 {
 		return false
 	}
 
@@ -123,7 +127,7 @@ func (s *Scanner) ScanDir(root string) ([]string, error) {
 		return nil, err
 	}
 
-	s.loadGitignore(root)
+	s.loadExcludePatterns(root)
 
 	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -153,21 +157,13 @@ func (s *Scanner) ScanDir(root string) ([]string, error) {
 		}
 
 		if d.IsDir() {
-			for _, excluded := range s.config.Exclude.Dirs {
-				if d.Name() == excluded {
-					return filepath.SkipDir
-				}
-			}
-			if s.isGitignored(relPath, true) {
+			if s.isExcluded(relPath, true) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
-		if s.isGitignored(relPath, false) {
-			return nil
-		}
-		if s.config.ShouldExclude(path) {
+		if s.isExcluded(relPath, false) {
 			return nil
 		}
 		if parser.DetectLanguage(path) != parser.LangUnknown {
@@ -213,7 +209,13 @@ func (s *Scanner) ScanFile(path string) (bool, error) {
 		return false, nil
 	}
 
-	if s.config.ShouldExclude(path) {
+	// Load exclude patterns if not already loaded
+	if len(s.matchers) == 0 {
+		dir := filepath.Dir(path)
+		s.loadExcludePatterns(dir)
+	}
+
+	if s.isExcluded(filepath.Base(path), false) {
 		return false, nil
 	}
 

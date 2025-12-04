@@ -132,4 +132,10 @@ func (s *Server) registerTools() {
 		Name:        "analyze_flags",
 		Description: describeFlags(),
 	}, handleAnalyzeFlags)
+
+	// Repository score
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name:        "score_repository",
+		Description: describeScore(),
+	}, handleAnalyzeScore)
 }

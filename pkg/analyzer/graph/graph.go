@@ -169,6 +169,25 @@ func (a *Analyzer) AnalyzeProjectWithProgress(files []string, onProgress filepro
 					}
 				}
 			}
+
+		case ScopeModule:
+			// Class reference-based edges (for Ruby, Python, etc.)
+			// These languages use autoloading, so class references are
+			// the primary way to detect inter-file dependencies
+			if len(fd.classRefs) > 0 && len(fd.nodes) > 0 {
+				sourceFile := fd.nodes[0].ID
+				for _, classRef := range fd.classRefs {
+					if targetFile, ok := classToFile[classRef]; ok && targetFile != sourceFile {
+						mu.Lock()
+						graph.AddEdge(Edge{
+							From: sourceFile,
+							To:   targetFile,
+							Type: EdgeReference,
+						})
+						mu.Unlock()
+					}
+				}
+			}
 		}
 	}
 
@@ -225,6 +244,22 @@ func (a *Analyzer) analyzeFileGraph(psr *parser.Parser, path string) (fileGraphD
 				Type: NodeModule,
 				File: path,
 			})
+		}
+
+		// For Ruby/Python, extract class dependencies for module-level edges
+		// These languages use autoloading/file-based modules, so class references
+		// are the primary way to detect dependencies
+		if result.Language == parser.LangRuby || result.Language == parser.LangPython {
+			// Use file path as node if no module name was extracted
+			if moduleName == "" {
+				fd.nodes = append(fd.nodes, Node{
+					ID:   path,
+					Name: path,
+					Type: NodeModule,
+					File: path,
+				})
+			}
+			fd.classes, fd.classRefs = extractClassDependencies(result)
 		}
 	}
 

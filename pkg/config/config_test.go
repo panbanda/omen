@@ -42,8 +42,8 @@ func TestDefaultConfig(t *testing.T) {
 	if !cfg.Exclude.Gitignore {
 		t.Error("Exclude.Gitignore should be true by default")
 	}
-	if len(cfg.Exclude.Dirs) == 0 {
-		t.Error("Exclude.Dirs should have default values")
+	if len(cfg.Exclude.Patterns) == 0 {
+		t.Error("Exclude.Patterns should have default values")
 	}
 
 	// Check cache defaults
@@ -77,8 +77,7 @@ churn_days = 30
 cyclomatic_complexity = 15
 
 [exclude]
-dirs = ["vendor", "custom_exclude"]
-patterns = ["*_generated.go"]
+patterns = ["vendor/", "custom_exclude/", "*_generated.go"]
 
 [cache]
 enabled = false
@@ -226,7 +225,10 @@ func TestLoadOrDefault(t *testing.T) {
 		t.Fatalf("Failed to change directory: %v", err)
 	}
 
-	cfg := LoadOrDefault()
+	cfg, err := LoadOrDefault()
+	if err != nil {
+		t.Fatalf("LoadOrDefault() returned error: %v", err)
+	}
 	if cfg == nil {
 		t.Fatal("LoadOrDefault() returned nil")
 	}
@@ -255,7 +257,10 @@ churn_days = 999
 		t.Fatalf("Failed to change directory: %v", err)
 	}
 
-	cfg := LoadOrDefault()
+	cfg, err := LoadOrDefault()
+	if err != nil {
+		t.Fatalf("LoadOrDefault() returned error: %v", err)
+	}
 	if cfg.Analysis.ChurnDays != 999 {
 		t.Errorf("LoadOrDefault() should load from file, got ChurnDays=%d", cfg.Analysis.ChurnDays)
 	}
@@ -268,17 +273,10 @@ func TestShouldExclude(t *testing.T) {
 		path string
 		want bool
 	}{
-		// Excluded directories
-		{"vendor/pkg/file.go", true},
-		{"node_modules/pkg/file.js", true},
-		{".git/objects/file", true},
-
-		// Excluded patterns
+		// Simple basename patterns (what ShouldExclude still handles)
 		{"main_test.go", true},
 		{"util_test.py", true},
 		{"app.min.js", true},
-
-		// Excluded extensions
 		{"go.sum", true},
 		{"package.lock", true},
 
@@ -300,8 +298,7 @@ func TestShouldExclude(t *testing.T) {
 
 func TestShouldExcludeCustomPatterns(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Exclude.Patterns = append(cfg.Exclude.Patterns, "*_generated.go", "*.pb.go")
-	cfg.Exclude.Dirs = append(cfg.Exclude.Dirs, "custom_exclude")
+	cfg.Exclude.Patterns = append(cfg.Exclude.Patterns, "*_generated.go", "*.pb.go", "custom_exclude/")
 
 	tests := []struct {
 		path string
@@ -309,7 +306,8 @@ func TestShouldExcludeCustomPatterns(t *testing.T) {
 	}{
 		{"model_generated.go", true},
 		{"service.pb.go", true},
-		{"custom_exclude/file.go", true},
+		// Directory exclusion is now handled by the scanner's gitignore matching
+		// ShouldExclude only does simple basename matching for backward compatibility
 		{"main.go", false},
 	}
 
@@ -326,15 +324,15 @@ func TestShouldExcludeCustomPatterns(t *testing.T) {
 func TestShouldExcludePathsWithSeparators(t *testing.T) {
 	cfg := DefaultConfig()
 
-	// Test paths with directory separators
+	// ShouldExclude only matches basename patterns now
+	// Directory-based exclusion is handled by the scanner's gitignore matching
 	tests := []struct {
 		path string
 		want bool
 	}{
-		{filepath.Join("src", "vendor", "pkg", "file.go"), true},
-		{filepath.Join("vendor", "file.go"), true},
-		{filepath.Join("src", "main.go"), false},
-		{filepath.Join("pkg", "vendor_utils.go"), false}, // "vendor" in name, not directory
+		{filepath.Join("src", "main_test.go"), true},     // basename matches *_test.go
+		{filepath.Join("src", "main.go"), false},         // no pattern match
+		{filepath.Join("pkg", "vendor_utils.go"), false}, // "vendor" in name, not a pattern
 	}
 
 	for _, tt := range tests {
@@ -350,29 +348,24 @@ func TestShouldExcludePathsWithSeparators(t *testing.T) {
 func TestExcludeConfigDefaults(t *testing.T) {
 	cfg := DefaultConfig()
 
-	// Check default excluded directories
-	expectedDirs := []string{"vendor", "node_modules", ".git", "dist", "build"}
-	for _, dir := range expectedDirs {
+	// Check default excluded patterns (using gitignore-style syntax)
+	expectedPatterns := []string{"vendor/", "node_modules/", ".git/", "dist/", "build/", "*_test.go"}
+	for _, pattern := range expectedPatterns {
 		found := false
-		for _, d := range cfg.Exclude.Dirs {
-			if d == dir {
+		for _, p := range cfg.Exclude.Patterns {
+			if p == pattern {
 				found = true
 				break
 			}
 		}
 		if !found {
-			t.Errorf("Default Exclude.Dirs should contain %q", dir)
+			t.Errorf("Default Exclude.Patterns should contain %q", pattern)
 		}
 	}
 
-	// Check default excluded patterns
+	// Check default excluded patterns exist
 	if len(cfg.Exclude.Patterns) == 0 {
 		t.Error("Default Exclude.Patterns should not be empty")
-	}
-
-	// Check default excluded extensions
-	if len(cfg.Exclude.Extensions) == 0 {
-		t.Error("Default Exclude.Extensions should not be empty")
 	}
 }
 
@@ -633,5 +626,77 @@ func TestLoadUnsupportedExtension(t *testing.T) {
 	_, err := Load(configPath)
 	if err == nil {
 		t.Error("Load() should return error for unsupported file extension")
+	}
+}
+
+func TestEffectiveWeights(t *testing.T) {
+	tests := []struct {
+		name           string
+		enableCohesion bool
+		weights        ScoreWeights
+		wantCohesion   float64
+	}{
+		{
+			name:           "enable_cohesion redistributes weights",
+			enableCohesion: true,
+			weights: ScoreWeights{
+				Complexity:  0.25,
+				Duplication: 0.20,
+				Defect:      0.25,
+				Debt:        0.15,
+				Coupling:    0.10,
+				Smells:      0.05,
+				Cohesion:    0.0,
+			},
+			wantCohesion: DefaultCohesionWeight,
+		},
+		{
+			name:           "disable_cohesion keeps original weights",
+			enableCohesion: false,
+			weights: ScoreWeights{
+				Complexity:  0.25,
+				Duplication: 0.20,
+				Defect:      0.25,
+				Debt:        0.15,
+				Coupling:    0.10,
+				Smells:      0.05,
+				Cohesion:    0.0,
+			},
+			wantCohesion: 0.0,
+		},
+		{
+			name:           "enable_cohesion with manual cohesion weight keeps it",
+			enableCohesion: true,
+			weights: ScoreWeights{
+				Complexity:  0.20,
+				Duplication: 0.15,
+				Defect:      0.20,
+				Debt:        0.15,
+				Coupling:    0.10,
+				Smells:      0.05,
+				Cohesion:    0.15,
+			},
+			wantCohesion: 0.15,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &ScoreConfig{
+				EnableCohesion: tt.enableCohesion,
+				Weights:        tt.weights,
+			}
+			effective := cfg.EffectiveWeights()
+			if effective.Cohesion != tt.wantCohesion {
+				t.Errorf("EffectiveWeights().Cohesion = %f, want %f", effective.Cohesion, tt.wantCohesion)
+			}
+
+			// Verify weights still sum to 1.0
+			sum := effective.Complexity + effective.Duplication + effective.Defect +
+				effective.Debt + effective.Coupling + effective.Smells + effective.Cohesion
+			if sum < 0.99 || sum > 1.01 {
+				t.Errorf("EffectiveWeights() sum = %f, want 1.0", sum)
+			}
+		})
 	}
 }

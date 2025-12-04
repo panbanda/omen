@@ -4,6 +4,8 @@ import (
 	"math"
 	"sort"
 	"time"
+
+	"github.com/panbanda/omen/pkg/stats"
 )
 
 // FileMetrics represents git churn data for a single file.
@@ -145,20 +147,8 @@ func (s *Summary) CalculateStatistics(files []FileMetrics) {
 	sortedScores := make([]float64, len(scores))
 	copy(sortedScores, scores)
 	sort.Float64s(sortedScores)
-	s.P50ChurnScore = percentileFloat64(sortedScores, 50)
-	s.P95ChurnScore = percentileFloat64(sortedScores, 95)
-}
-
-// percentileFloat64 calculates the p-th percentile of a sorted slice.
-func percentileFloat64(sorted []float64, p int) float64 {
-	if len(sorted) == 0 {
-		return 0
-	}
-	idx := (p * len(sorted)) / 100
-	if idx >= len(sorted) {
-		idx = len(sorted) - 1
-	}
-	return sorted[idx]
+	s.P50ChurnScore = stats.Percentile(sortedScores, 50)
+	s.P95ChurnScore = stats.Percentile(sortedScores, 95)
 }
 
 // Analysis represents the full churn analysis result.
