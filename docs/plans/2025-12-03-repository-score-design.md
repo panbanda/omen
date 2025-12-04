@@ -38,6 +38,8 @@ Files analyzed: 247
 | `--min-debt N` | Exit 1 if technical debt score < N |
 | `--min-coupling N` | Exit 1 if coupling score < N |
 | `--min-smells N` | Exit 1 if smells score < N |
+| `--min-cohesion N` | Exit 1 if cohesion score < N |
+| `--enable-cohesion` | Include cohesion in composite score |
 | `--format` | Output format: text, json, markdown, toon |
 | `--json` | Shorthand for `--format json` |
 
@@ -63,7 +65,7 @@ Each component normalized to 0-100, higher is better.
 | Smells | `smells` | 100 - (smell count penalty) |
 | Cohesion | `cohesion` | 100 - (avg LCOM * 100) |
 
-Cohesion is reported separately, not included in composite (penalizes non-OO codebases).
+Cohesion is reported separately by default (penalizes non-OO codebases). Use `enable_cohesion = true` or `--enable-cohesion` to include it in the composite score.
 
 ### Default Weights
 
@@ -80,19 +82,23 @@ Composite = weighted sum of component scores, rounded to integer.
 
 ### Grade Scale
 
+Standard academic grading scale:
+
 | Score | Grade |
 |-------|-------|
-| 95-100 | A+ |
-| 90-94 | A |
-| 85-89 | A- |
-| 80-84 | B+ |
-| 75-79 | B |
-| 70-74 | B- |
-| 65-69 | C+ |
-| 60-64 | C |
-| 55-59 | C- |
-| 50-54 | D |
-| 0-49 | F |
+| 97-100 | A+ |
+| 93-96 | A |
+| 90-92 | A- |
+| 87-89 | B+ |
+| 83-86 | B |
+| 80-82 | B- |
+| 77-79 | C+ |
+| 73-76 | C |
+| 70-72 | C- |
+| 67-69 | D+ |
+| 63-66 | D |
+| 60-62 | D- |
+| 0-59 | F |
 
 ## Configuration
 
@@ -100,6 +106,10 @@ In `omen.toml`:
 
 ```toml
 [score]
+# Include cohesion in composite score (for OO-heavy codebases)
+# When true, weights are automatically scaled by 0.85 and cohesion added at 0.15
+enable_cohesion = false
+
 # Weights for composite (must sum to 1.0)
 [score.weights]
 complexity = 0.25
@@ -108,6 +118,7 @@ duplication = 0.20
 debt = 0.15
 coupling = 0.10
 smells = 0.05
+cohesion = 0.0  # Or set manually if you prefer custom weights
 
 # Default thresholds (--min-* flags override)
 [score.thresholds]
@@ -118,9 +129,14 @@ defect = 0
 debt = 0
 coupling = 0
 smells = 0
+cohesion = 0
 ```
 
 Setting a threshold > 0 in config enforces it on every run. CLI flags override config values.
+
+When `enable_cohesion = true` and `cohesion` weight is 0, weights are automatically redistributed:
+- Existing weights scaled by 0.85
+- Cohesion added at 0.15 weight
 
 ## JSON Output
 
@@ -134,16 +150,18 @@ Setting a threshold > 0 in config enforces it on every run. CLI flags override c
     "defect": 65,
     "debt": 70,
     "coupling": 78,
-    "smells": 85
+    "smells": 85,
+    "cohesion": 68
   },
-  "cohesion": 68,
+  "cohesion_included": false,
   "weights": {
     "complexity": 0.25,
     "duplication": 0.20,
     "defect": 0.25,
     "debt": 0.15,
     "coupling": 0.10,
-    "smells": 0.05
+    "smells": 0.05,
+    "cohesion": 0.0
   },
   "files_analyzed": 247,
   "thresholds": {
