@@ -740,3 +740,45 @@ func TestGetClasses_EmptyResult(t *testing.T) {
 		t.Errorf("GetClasses() returned %d classes, expected 0", len(classes))
 	}
 }
+
+func TestParseFromSource(t *testing.T) {
+	// Create a mock source
+	content := []byte(`package main
+
+func main() {
+	println("hello")
+}
+`)
+	src := &mockSource{content: content}
+
+	p := New()
+	defer p.Close()
+
+	result, err := p.ParseFromSource(src, "main.go")
+	if err != nil {
+		t.Fatalf("ParseFromSource() error: %v", err)
+	}
+
+	if result.Language != LangGo {
+		t.Errorf("result.Language = %v, want %v", result.Language, LangGo)
+	}
+	if result.Path != "main.go" {
+		t.Errorf("result.Path = %v, want main.go", result.Path)
+	}
+
+	// Should find the main function
+	fns := GetFunctions(result)
+	if len(fns) != 1 {
+		t.Errorf("GetFunctions() returned %d functions, want 1", len(fns))
+	} else if fns[0].Name != "main" {
+		t.Errorf("function name = %v, want main", fns[0].Name)
+	}
+}
+
+type mockSource struct {
+	content []byte
+}
+
+func (m *mockSource) Read(path string) ([]byte, error) {
+	return m.content, nil
+}
