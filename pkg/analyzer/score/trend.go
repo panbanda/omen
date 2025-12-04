@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -46,6 +47,7 @@ type ComponentTrends struct {
 	Debt        TrendStats `json:"debt"`
 	Coupling    TrendStats `json:"coupling"`
 	Smells      TrendStats `json:"smells"`
+	Cohesion    TrendStats `json:"cohesion"`
 }
 
 // TrendPoint represents a score snapshot at a point in time.
@@ -174,16 +176,18 @@ func (t *TrendAnalyzer) AnalyzeTrendWithProgress(ctx context.Context, repoPath s
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigChan)
 
-	restored := false
+	var restoreOnce sync.Once
 	restore := func() {
-		if !restored {
+		restoreOnce.Do(func() {
 			_ = vcs.CheckoutCommit(repoPath, originalRef)
-			restored = true
-		}
+		})
 	}
 	defer restore()
 
 	// Handle interrupt via signal or context cancellation
+	done := make(chan struct{})
+	defer close(done)
+
 	go func() {
 		select {
 		case <-sigChan:
@@ -192,6 +196,8 @@ func (t *TrendAnalyzer) AnalyzeTrendWithProgress(ctx context.Context, repoPath s
 			os.Exit(1)
 		case <-ctx.Done():
 			// Context canceled - restore handled by defer
+		case <-done:
+			// Normal completion - exit goroutine
 		}
 	}()
 

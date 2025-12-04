@@ -2,7 +2,6 @@ package vcs
 
 import (
 	"errors"
-	"sort"
 	"time"
 
 	"github.com/go-git/go-git/v5"
@@ -236,21 +235,15 @@ func startOfMonth(t time.Time) time.Time {
 }
 
 // findCommitAtOrAfter finds the first commit on or after the given time.
-// Commits are assumed to be sorted newest-first.
+// Commits are assumed to be sorted newest-first (from git log).
 func findCommitAtOrAfter(commits []CommitInfo, target time.Time) *CommitInfo {
-	// Sort by date ascending for easier searching
-	sorted := make([]CommitInfo, len(commits))
-	copy(sorted, commits)
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].Date.Before(sorted[j].Date)
-	})
-
-	// Find first commit on or after target
-	for i := range sorted {
-		if !sorted[i].Date.Before(target) {
-			return &sorted[i]
+	// Search from oldest to newest (reverse order since commits are newest-first)
+	var result *CommitInfo
+	for i := len(commits) - 1; i >= 0; i-- {
+		if !commits[i].Date.Before(target) {
+			result = &commits[i]
+			break
 		}
 	}
-
-	return nil
+	return result
 }

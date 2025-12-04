@@ -3404,9 +3404,9 @@ func printScoreTrendResult(r *score.TrendResult) {
 	fmt.Println()
 
 	// Table header
-	fmt.Printf("%-12s %-9s %5s  %10s %11s %6s %4s %8s %6s\n",
-		"Date", "Commit", "Score", "Complexity", "Duplication", "Defect", "Debt", "Coupling", "Smells")
-	fmt.Println(strings.Repeat("-", 90))
+	fmt.Printf("%-12s %-9s %5s  %10s %11s %6s %4s %8s %6s %8s\n",
+		"Date", "Commit", "Score", "Complexity", "Duplication", "Defect", "Debt", "Coupling", "Smells", "Cohesion")
+	fmt.Println(strings.Repeat("-", 99))
 
 	// Data rows
 	for _, p := range r.Points {
@@ -3422,13 +3422,14 @@ func printScoreTrendResult(r *score.TrendResult) {
 			p.Date.Format("2006-01-02"),
 			p.CommitSHA)
 		scoreColor.Printf("%5d", p.Score)
-		fmt.Printf("  %10d %11d %6d %4d %8d %6d\n",
+		fmt.Printf("  %10d %11d %6d %4d %8d %6d %8d\n",
 			p.Components.Complexity,
 			p.Components.Duplication,
 			p.Components.Defect,
 			p.Components.Debt,
 			p.Components.Coupling,
-			p.Components.Smells)
+			p.Components.Smells,
+			p.Components.Cohesion)
 	}
 
 	// Summary
@@ -3463,6 +3464,7 @@ func printScoreTrendResult(r *score.TrendResult) {
 		printComponentTrend("  Debt", r.ComponentTrends.Debt, period)
 		printComponentTrend("  Coupling", r.ComponentTrends.Coupling, period)
 		printComponentTrend("  Smells", r.ComponentTrends.Smells, period)
+		printComponentTrend("  Cohesion", r.ComponentTrends.Cohesion, period)
 	} else {
 		fmt.Println("Trend: Insufficient data points for trend analysis")
 	}
@@ -3523,11 +3525,11 @@ func writeScoreTrendMarkdown(r *score.TrendResult, f *output.Formatter) error {
 	}
 
 	// Table
-	fmt.Fprintln(w, "| Date | Commit | Score | Complexity | Duplication | Defect | Debt | Coupling | Smells |")
-	fmt.Fprintln(w, "|------|--------|-------|------------|-------------|--------|------|----------|--------|")
+	fmt.Fprintln(w, "| Date | Commit | Score | Complexity | Duplication | Defect | Debt | Coupling | Smells | Cohesion |")
+	fmt.Fprintln(w, "|------|--------|-------|------------|-------------|--------|------|----------|--------|----------|")
 
 	for _, p := range r.Points {
-		fmt.Fprintf(w, "| %s | %s | %d | %d | %d | %d | %d | %d | %d |\n",
+		fmt.Fprintf(w, "| %s | %s | %d | %d | %d | %d | %d | %d | %d | %d |\n",
 			p.Date.Format("2006-01-02"),
 			p.CommitSHA,
 			p.Score,
@@ -3536,7 +3538,8 @@ func writeScoreTrendMarkdown(r *score.TrendResult, f *output.Formatter) error {
 			p.Components.Defect,
 			p.Components.Debt,
 			p.Components.Coupling,
-			p.Components.Smells)
+			p.Components.Smells,
+			p.Components.Cohesion)
 	}
 
 	fmt.Fprintf(w, "\n*Analyzed at: %s*\n", r.AnalyzedAt.Format(time.RFC3339))

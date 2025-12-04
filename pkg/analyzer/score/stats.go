@@ -43,6 +43,7 @@ func ComputeComponentTrends(points []TrendPoint) ComponentTrends {
 	debt := make([]float64, n)
 	coupling := make([]float64, n)
 	smells := make([]float64, n)
+	cohesion := make([]float64, n)
 
 	for i, p := range points {
 		xs[i] = float64(i)
@@ -52,6 +53,7 @@ func ComputeComponentTrends(points []TrendPoint) ComponentTrends {
 		debt[i] = float64(p.Components.Debt)
 		coupling[i] = float64(p.Components.Coupling)
 		smells[i] = float64(p.Components.Smells)
+		cohesion[i] = float64(p.Components.Cohesion)
 	}
 
 	return ComponentTrends{
@@ -61,6 +63,7 @@ func ComputeComponentTrends(points []TrendPoint) ComponentTrends {
 		Debt:        computeStats(xs, debt),
 		Coupling:    computeStats(xs, coupling),
 		Smells:      computeStats(xs, smells),
+		Cohesion:    computeStats(xs, cohesion),
 	}
 }
 
