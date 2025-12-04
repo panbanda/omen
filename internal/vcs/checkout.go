@@ -13,6 +13,9 @@ import (
 // ErrDirtyWorkingDir is returned when the working directory has uncommitted changes.
 var ErrDirtyWorkingDir = errors.New("working directory has uncommitted changes")
 
+// ErrDetachedHead is returned when the repository is in detached HEAD state.
+var ErrDetachedHead = errors.New("repository is in detached HEAD state; checkout a branch first")
+
 // CommitInfo represents a commit with its SHA and timestamp.
 type CommitInfo struct {
 	SHA  string
@@ -58,6 +61,21 @@ func GetCurrentRef(repoPath string) (string, error) {
 
 	// Detached HEAD - return the commit SHA
 	return head.Hash().String(), nil
+}
+
+// IsDetachedHead returns true if the repository is in detached HEAD state.
+func IsDetachedHead(repoPath string) (bool, error) {
+	repo, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return false, err
+	}
+
+	head, err := repo.Head()
+	if err != nil {
+		return false, err
+	}
+
+	return !head.Name().IsBranch(), nil
 }
 
 // CheckoutCommit checks out a specific commit or ref.

@@ -145,6 +145,15 @@ func (t *TrendAnalyzer) AnalyzeTrend(ctx context.Context, repoPath string) (*Tre
 
 // AnalyzeTrendWithProgress performs historical score analysis with progress reporting.
 func (t *TrendAnalyzer) AnalyzeTrendWithProgress(ctx context.Context, repoPath string, onProgress TrendProgressFunc) (*TrendResult, error) {
+	// Check for detached HEAD state
+	detached, err := vcs.IsDetachedHead(repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check HEAD state: %w", err)
+	}
+	if detached {
+		return nil, vcs.ErrDetachedHead
+	}
+
 	// Check for dirty working directory
 	dirty, err := vcs.IsDirty(repoPath)
 	if err != nil {
@@ -174,12 +183,16 @@ func (t *TrendAnalyzer) AnalyzeTrendWithProgress(ctx context.Context, repoPath s
 	}
 	defer restore()
 
-	// Handle interrupt
+	// Handle interrupt via signal or context cancellation
 	go func() {
-		<-sigChan
-		fmt.Fprintln(os.Stderr, "\nRestoring to original point in time...")
-		restore()
-		os.Exit(1)
+		select {
+		case <-sigChan:
+			fmt.Fprintln(os.Stderr, "\nRestoring to original point in time...")
+			restore()
+			os.Exit(1)
+		case <-ctx.Done():
+			// Context canceled - restore handled by defer
+		}
 	}()
 
 	// Find commits at intervals
@@ -208,6 +221,14 @@ func (t *TrendAnalyzer) AnalyzeTrendWithProgress(ctx context.Context, repoPath s
 
 	var points []TrendPoint
 	for i, commit := range commits {
+		// Check for context cancellation
+		select {
+		case <-ctx.Done():
+			fmt.Fprintln(os.Stderr, "\nCanceled. Restoring to original point in time...")
+			return nil, ctx.Err()
+		default:
+		}
+
 		if onProgress != nil {
 			onProgress(i+1, len(commits), commit.SHA[:7])
 		}
