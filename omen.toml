@@ -1,7 +1,0 @@
-# Omen CLI Configuration
-# Documentation: https://github.com/panbanda/omen
-
-# File exclusion patterns (replaces defaults when specified)
-[exclude]
-  dirs = ["vendor", "node_modules", ".git", ".omen", "dist", "build"]
-  patterns = ["*_test.go", "**/mocks/*.go", "**/mocks/**/*.go", "mock_*.go"]

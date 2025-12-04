@@ -137,8 +137,9 @@ type FeatureFlagTTLConfig struct {
 
 // ScoreConfig defines repository score settings.
 type ScoreConfig struct {
-	Weights    ScoreWeights    `koanf:"weights" toml:"weights"`
-	Thresholds ScoreThresholds `koanf:"thresholds" toml:"thresholds"`
+	EnableCohesion bool            `koanf:"enable_cohesion" toml:"enable_cohesion"` // Include cohesion in composite score
+	Weights        ScoreWeights    `koanf:"weights" toml:"weights"`
+	Thresholds     ScoreThresholds `koanf:"thresholds" toml:"thresholds"`
 }
 
 // ScoreWeights defines component weights (must sum to 1.0).
@@ -149,6 +150,7 @@ type ScoreWeights struct {
 	Debt        float64 `koanf:"debt" toml:"debt"`
 	Coupling    float64 `koanf:"coupling" toml:"coupling"`
 	Smells      float64 `koanf:"smells" toml:"smells"`
+	Cohesion    float64 `koanf:"cohesion" toml:"cohesion"` // Optional, for OO-heavy codebases
 }
 
 // ScoreThresholds defines minimum acceptable scores.
@@ -160,6 +162,31 @@ type ScoreThresholds struct {
 	Debt        int `koanf:"debt" toml:"debt"`
 	Coupling    int `koanf:"coupling" toml:"coupling"`
 	Smells      int `koanf:"smells" toml:"smells"`
+	Cohesion    int `koanf:"cohesion" toml:"cohesion"`
+}
+
+// DefaultCohesionWeight is the weight used for cohesion when enable_cohesion is true.
+const DefaultCohesionWeight = 0.15
+
+// EffectiveWeights returns weights adjusted for enable_cohesion.
+// When enable_cohesion is true and cohesion weight is 0, it redistributes weights
+// to include cohesion at DefaultCohesionWeight.
+func (c *ScoreConfig) EffectiveWeights() ScoreWeights {
+	if !c.EnableCohesion || c.Weights.Cohesion > 0 {
+		return c.Weights
+	}
+
+	// Scale down existing weights to make room for cohesion
+	scale := 1.0 - DefaultCohesionWeight
+	return ScoreWeights{
+		Complexity:  c.Weights.Complexity * scale,
+		Duplication: c.Weights.Duplication * scale,
+		Defect:      c.Weights.Defect * scale,
+		Debt:        c.Weights.Debt * scale,
+		Coupling:    c.Weights.Coupling * scale,
+		Smells:      c.Weights.Smells * scale,
+		Cohesion:    DefaultCohesionWeight,
+	}
 }
 
 // DefaultConfig returns a config with sensible defaults.
@@ -377,13 +404,17 @@ func LoadConfig(opts ...LoadOption) (*LoadResult, error) {
 	return &LoadResult{Config: cfg, Source: source}, nil
 }
 
-// LoadOrDefault tries to load config from standard locations or returns defaults.
-func LoadOrDefault() *Config {
-	result, _ := LoadConfig()
-	if result == nil {
-		return DefaultConfig()
+// LoadOrDefault loads config from standard locations or returns defaults.
+// Returns an error if validation fails.
+func LoadOrDefault() (*Config, error) {
+	result, err := LoadConfig()
+	if err != nil {
+		if FindConfigFile() == "" {
+			return DefaultConfig(), nil
+		}
+		return nil, err
 	}
-	return result.Config
+	return result.Config, nil
 }
 
 // ShouldExclude checks if a path should be excluded from analysis.
@@ -508,18 +539,21 @@ func (c *Config) Validate() error {
 		errs = append(errs, errors.New("cache.ttl must be non-negative"))
 	}
 
-	// Score config validation
-	weightsSum := c.Score.Weights.Complexity + c.Score.Weights.Duplication +
-		c.Score.Weights.Defect + c.Score.Weights.Debt +
-		c.Score.Weights.Coupling + c.Score.Weights.Smells
+	// Score config validation - validate effective weights (after enable_cohesion adjustment)
+	effectiveWeights := c.Score.EffectiveWeights()
+	weightsSum := effectiveWeights.Complexity + effectiveWeights.Duplication +
+		effectiveWeights.Defect + effectiveWeights.Debt +
+		effectiveWeights.Coupling + effectiveWeights.Smells +
+		effectiveWeights.Cohesion
 	if weightsSum < 0.99 || weightsSum > 1.01 {
 		errs = append(errs, fmt.Errorf("score.weights must sum to 1.0, got %f", weightsSum))
 	}
 
 	// Validate individual weights are non-negative
-	if c.Score.Weights.Complexity < 0 || c.Score.Weights.Duplication < 0 ||
-		c.Score.Weights.Defect < 0 || c.Score.Weights.Debt < 0 ||
-		c.Score.Weights.Coupling < 0 || c.Score.Weights.Smells < 0 {
+	if effectiveWeights.Complexity < 0 || effectiveWeights.Duplication < 0 ||
+		effectiveWeights.Defect < 0 || effectiveWeights.Debt < 0 ||
+		effectiveWeights.Coupling < 0 || effectiveWeights.Smells < 0 ||
+		effectiveWeights.Cohesion < 0 {
 		errs = append(errs, errors.New("score.weights values must be non-negative"))
 	}
 
@@ -536,6 +570,7 @@ func (c *Config) Validate() error {
 	validateThreshold("debt", c.Score.Thresholds.Debt)
 	validateThreshold("coupling", c.Score.Thresholds.Coupling)
 	validateThreshold("smells", c.Score.Thresholds.Smells)
+	validateThreshold("cohesion", c.Score.Thresholds.Cohesion)
 
 	if len(errs) > 0 {
 		return errors.Join(errs...)

@@ -3011,6 +3011,14 @@ func scoreCmd() *cli.Command {
 			Usage: "Minimum smells score (0-100)",
 		},
 		&cli.IntFlag{
+			Name:  "min-cohesion",
+			Usage: "Minimum cohesion score (0-100)",
+		},
+		&cli.BoolFlag{
+			Name:  "enable-cohesion",
+			Usage: "Include cohesion in composite score (redistributes weights)",
+		},
+		&cli.IntFlag{
 			Name:  "days",
 			Value: 30,
 			Usage: "Days of git history for churn analysis",
@@ -3027,7 +3035,16 @@ func scoreCmd() *cli.Command {
 
 func runScoreCmd(c *cli.Context) error {
 	paths := getPaths(c)
-	cfg := config.LoadOrDefault()
+
+	cfg, err := config.LoadOrDefault()
+	if err != nil {
+		return err
+	}
+
+	// CLI flag overrides config
+	if c.Bool("enable-cohesion") {
+		cfg.Score.EnableCohesion = true
+	}
 
 	// Build thresholds from flags (override config)
 	thresholds := score.Thresholds{
@@ -3038,16 +3055,19 @@ func runScoreCmd(c *cli.Context) error {
 		Debt:        intOrDefault(c.Int("min-debt"), cfg.Score.Thresholds.Debt),
 		Coupling:    intOrDefault(c.Int("min-coupling"), cfg.Score.Thresholds.Coupling),
 		Smells:      intOrDefault(c.Int("min-smells"), cfg.Score.Thresholds.Smells),
+		Cohesion:    intOrDefault(c.Int("min-cohesion"), cfg.Score.Thresholds.Cohesion),
 	}
 
-	// Build weights from config
+	// Build weights from effective config (handles enable_cohesion)
+	effectiveWeights := cfg.Score.EffectiveWeights()
 	weights := score.Weights{
-		Complexity:  cfg.Score.Weights.Complexity,
-		Duplication: cfg.Score.Weights.Duplication,
-		Defect:      cfg.Score.Weights.Defect,
-		Debt:        cfg.Score.Weights.Debt,
-		Coupling:    cfg.Score.Weights.Coupling,
-		Smells:      cfg.Score.Weights.Smells,
+		Complexity:  effectiveWeights.Complexity,
+		Duplication: effectiveWeights.Duplication,
+		Defect:      effectiveWeights.Defect,
+		Debt:        effectiveWeights.Debt,
+		Coupling:    effectiveWeights.Coupling,
+		Smells:      effectiveWeights.Smells,
+		Cohesion:    effectiveWeights.Cohesion,
 	}
 
 	scanSvc := scannerSvc.New()
@@ -3139,8 +3159,13 @@ func printScoreResult(r *score.Result) {
 	printScoreComponent("Technical Debt", r.Components.Debt)
 	printScoreComponent("Coupling", r.Components.Coupling)
 	printScoreComponent("Smells", r.Components.Smells)
+	if r.CohesionIncluded {
+		printScoreComponent("Cohesion", r.Components.Cohesion)
+	}
 	fmt.Println()
-	fmt.Printf("  Cohesion:        %3d/100  (not in composite)\n", r.Cohesion)
+	if !r.CohesionIncluded {
+		fmt.Printf("  Cohesion:        %3d/100  (not in composite)\n", r.Components.Cohesion)
+	}
 	fmt.Println()
 	fmt.Printf("Files analyzed: %d\n", r.FilesAnalyzed)
 
@@ -3184,6 +3209,8 @@ func getScoreComponent(r *score.Result, name string) int {
 		return r.Components.Coupling
 	case "smells":
 		return r.Components.Smells
+	case "cohesion":
+		return r.Components.Cohesion
 	default:
 		return 0
 	}
@@ -3202,7 +3229,11 @@ func writeScoreMarkdown(r *score.Result, f *output.Formatter) error {
 	fmt.Fprintf(w, "| Technical Debt | %d/100 |\n", r.Components.Debt)
 	fmt.Fprintf(w, "| Coupling | %d/100 |\n", r.Components.Coupling)
 	fmt.Fprintf(w, "| Smells | %d/100 |\n", r.Components.Smells)
-	fmt.Fprintf(w, "| **Cohesion** | %d/100 (not in composite) |\n", r.Cohesion)
+	if r.CohesionIncluded {
+		fmt.Fprintf(w, "| Cohesion | %d/100 |\n", r.Components.Cohesion)
+	} else {
+		fmt.Fprintf(w, "| **Cohesion** | %d/100 (not in composite) |\n", r.Components.Cohesion)
+	}
 	fmt.Fprintf(w, "\nFiles analyzed: %d\n", r.FilesAnalyzed)
 	if r.Commit != "" {
 		fmt.Fprintf(w, "Commit: %s\n", r.Commit)

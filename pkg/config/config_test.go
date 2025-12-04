@@ -226,7 +226,10 @@ func TestLoadOrDefault(t *testing.T) {
 		t.Fatalf("Failed to change directory: %v", err)
 	}
 
-	cfg := LoadOrDefault()
+	cfg, err := LoadOrDefault()
+	if err != nil {
+		t.Fatalf("LoadOrDefault() returned error: %v", err)
+	}
 	if cfg == nil {
 		t.Fatal("LoadOrDefault() returned nil")
 	}
@@ -255,7 +258,10 @@ churn_days = 999
 		t.Fatalf("Failed to change directory: %v", err)
 	}
 
-	cfg := LoadOrDefault()
+	cfg, err := LoadOrDefault()
+	if err != nil {
+		t.Fatalf("LoadOrDefault() returned error: %v", err)
+	}
 	if cfg.Analysis.ChurnDays != 999 {
 		t.Errorf("LoadOrDefault() should load from file, got ChurnDays=%d", cfg.Analysis.ChurnDays)
 	}
@@ -633,5 +639,77 @@ func TestLoadUnsupportedExtension(t *testing.T) {
 	_, err := Load(configPath)
 	if err == nil {
 		t.Error("Load() should return error for unsupported file extension")
+	}
+}
+
+func TestEffectiveWeights(t *testing.T) {
+	tests := []struct {
+		name           string
+		enableCohesion bool
+		weights        ScoreWeights
+		wantCohesion   float64
+	}{
+		{
+			name:           "enable_cohesion redistributes weights",
+			enableCohesion: true,
+			weights: ScoreWeights{
+				Complexity:  0.25,
+				Duplication: 0.20,
+				Defect:      0.25,
+				Debt:        0.15,
+				Coupling:    0.10,
+				Smells:      0.05,
+				Cohesion:    0.0,
+			},
+			wantCohesion: DefaultCohesionWeight,
+		},
+		{
+			name:           "disable_cohesion keeps original weights",
+			enableCohesion: false,
+			weights: ScoreWeights{
+				Complexity:  0.25,
+				Duplication: 0.20,
+				Defect:      0.25,
+				Debt:        0.15,
+				Coupling:    0.10,
+				Smells:      0.05,
+				Cohesion:    0.0,
+			},
+			wantCohesion: 0.0,
+		},
+		{
+			name:           "enable_cohesion with manual cohesion weight keeps it",
+			enableCohesion: true,
+			weights: ScoreWeights{
+				Complexity:  0.20,
+				Duplication: 0.15,
+				Defect:      0.20,
+				Debt:        0.15,
+				Coupling:    0.10,
+				Smells:      0.05,
+				Cohesion:    0.15,
+			},
+			wantCohesion: 0.15,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &ScoreConfig{
+				EnableCohesion: tt.enableCohesion,
+				Weights:        tt.weights,
+			}
+			effective := cfg.EffectiveWeights()
+			if effective.Cohesion != tt.wantCohesion {
+				t.Errorf("EffectiveWeights().Cohesion = %f, want %f", effective.Cohesion, tt.wantCohesion)
+			}
+
+			// Verify weights still sum to 1.0
+			sum := effective.Complexity + effective.Duplication + effective.Defect +
+				effective.Debt + effective.Coupling + effective.Smells + effective.Cohesion
+			if sum < 0.99 || sum > 1.01 {
+				t.Errorf("EffectiveWeights() sum = %f, want 1.0", sum)
+			}
+		})
 	}
 }

@@ -253,11 +253,11 @@ func (a *Analyzer) AnalyzeProjectWithProgress(ctx context.Context, repoPath stri
 		result.Components.Smells = 100
 	}
 
-	// Cohesion: reported separately
+	// Cohesion: included in composite when weight > 0
 	if cohesionResult != nil && cohesionResult.Summary.TotalClasses > 0 {
-		result.Cohesion = NormalizeCohesion(cohesionResult.Summary.AvgLCOM)
+		result.Components.Cohesion = NormalizeCohesion(cohesionResult.Summary.AvgLCOM)
 	} else {
-		result.Cohesion = 100
+		result.Components.Cohesion = 100
 	}
 
 	// Compute composite and check thresholds
