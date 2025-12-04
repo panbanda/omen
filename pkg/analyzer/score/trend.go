@@ -164,6 +164,7 @@ func (t *TrendAnalyzer) AnalyzeTrendWithProgress(ctx context.Context, repoPath s
 	// Handle interrupt
 	go func() {
 		<-sigChan
+		fmt.Fprintln(os.Stderr, "\nRestoring to original point in time...")
 		restore()
 		os.Exit(1)
 	}()
