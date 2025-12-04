@@ -3,6 +3,7 @@ package featureflags
 import (
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/panbanda/omen/pkg/parser"
@@ -239,14 +240,14 @@ func TestProgressCallback(t *testing.T) {
 		filepath.Join(dir, "test_c.js"),
 	}
 
-	progressCount := 0
+	var progressCount atomic.Int32
 	result, err := a.AnalyzeProjectWithProgress(files, func() {
-		progressCount++
+		progressCount.Add(1)
 	})
 	require.NoError(t, err)
 	assert.NotNil(t, result)
 	// Progress callback should be called for each file
-	assert.GreaterOrEqual(t, progressCount, 1)
+	assert.GreaterOrEqual(t, progressCount.Load(), int32(1))
 }
 
 func TestSummaryAggregation(t *testing.T) {
