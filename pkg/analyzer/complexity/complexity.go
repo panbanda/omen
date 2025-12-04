@@ -1,6 +1,7 @@
 package complexity
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/panbanda/omen/internal/fileproc"
@@ -39,6 +40,31 @@ func New(opts ...Option) *Analyzer {
 // AnalyzeFile analyzes complexity for a single file.
 func (a *Analyzer) AnalyzeFile(path string) (*FileResult, error) {
 	return analyzeFileComplexity(a.parser, path)
+}
+
+// ContentSource provides file content.
+type ContentSource interface {
+	Read(path string) ([]byte, error)
+}
+
+// AnalyzeFileFromSource analyzes complexity for a file from a ContentSource.
+func (a *Analyzer) AnalyzeFileFromSource(src ContentSource, path string) (*FileResult, error) {
+	content, err := src.Read(path)
+	if err != nil {
+		return nil, err
+	}
+
+	lang := parser.DetectLanguage(path)
+	if lang == parser.LangUnknown {
+		return nil, fmt.Errorf("unsupported language for file: %s", path)
+	}
+
+	result, err := a.parser.Parse(content, lang, path)
+	if err != nil {
+		return nil, err
+	}
+
+	return analyzeParseResult(result), nil
 }
 
 // AnalyzeProject analyzes all files in a project using parallel processing.
@@ -163,8 +189,13 @@ func analyzeFileComplexity(psr *parser.Parser, path string) (*FileResult, error)
 		return nil, err
 	}
 
+	return analyzeParseResult(result), nil
+}
+
+// analyzeParseResult analyzes a parsed result (shared between filesystem and source methods).
+func analyzeParseResult(result *parser.ParseResult) *FileResult {
 	fc := &FileResult{
-		Path:      path,
+		Path:      result.Path,
 		Language:  string(result.Language),
 		Functions: make([]FunctionResult, 0),
 	}
@@ -182,7 +213,7 @@ func analyzeFileComplexity(psr *parser.Parser, path string) (*FileResult, error)
 		fc.AvgCognitive = float64(fc.TotalCognitive) / float64(len(fc.Functions))
 	}
 
-	return fc, nil
+	return fc
 }
 
 // analyzeFunctionComplexity computes complexity metrics for a single function.
