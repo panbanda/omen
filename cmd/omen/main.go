@@ -3048,14 +3048,14 @@ func runScoreCmd(c *cli.Context) error {
 
 	// Build thresholds from flags (override config)
 	thresholds := score.Thresholds{
-		Score:       intOrDefault(c.Int("min-score"), cfg.Score.Thresholds.Score),
-		Complexity:  intOrDefault(c.Int("min-complexity"), cfg.Score.Thresholds.Complexity),
-		Duplication: intOrDefault(c.Int("min-duplication"), cfg.Score.Thresholds.Duplication),
-		Defect:      intOrDefault(c.Int("min-defect"), cfg.Score.Thresholds.Defect),
-		Debt:        intOrDefault(c.Int("min-debt"), cfg.Score.Thresholds.Debt),
-		Coupling:    intOrDefault(c.Int("min-coupling"), cfg.Score.Thresholds.Coupling),
-		Smells:      intOrDefault(c.Int("min-smells"), cfg.Score.Thresholds.Smells),
-		Cohesion:    intOrDefault(c.Int("min-cohesion"), cfg.Score.Thresholds.Cohesion),
+		Score:       intFlagOrConfig(c, "min-score", cfg.Score.Thresholds.Score),
+		Complexity:  intFlagOrConfig(c, "min-complexity", cfg.Score.Thresholds.Complexity),
+		Duplication: intFlagOrConfig(c, "min-duplication", cfg.Score.Thresholds.Duplication),
+		Defect:      intFlagOrConfig(c, "min-defect", cfg.Score.Thresholds.Defect),
+		Debt:        intFlagOrConfig(c, "min-debt", cfg.Score.Thresholds.Debt),
+		Coupling:    intFlagOrConfig(c, "min-coupling", cfg.Score.Thresholds.Coupling),
+		Smells:      intFlagOrConfig(c, "min-smells", cfg.Score.Thresholds.Smells),
+		Cohesion:    intFlagOrConfig(c, "min-cohesion", cfg.Score.Thresholds.Cohesion),
 	}
 
 	// Build weights from effective config (handles enable_cohesion)
@@ -3087,7 +3087,7 @@ func runScoreCmd(c *cli.Context) error {
 		repoPath = paths[0]
 	}
 
-	tracker := progress.NewTracker("Computing repository score...", 7)
+	tracker := progress.NewTracker("Computing repository score...", score.ProgressStages)
 
 	analyzer := score.New(
 		score.WithWeights(weights),
@@ -3131,11 +3131,13 @@ func runScoreCmd(c *cli.Context) error {
 	return nil
 }
 
-func intOrDefault(flag, cfg int) int {
-	if flag != 0 {
-		return flag
+// intFlagOrConfig returns the CLI flag value if explicitly set, otherwise the config value.
+// This handles the case where a user explicitly passes --min-foo 0 to disable a threshold.
+func intFlagOrConfig(c *cli.Context, flagName string, cfgValue int) int {
+	if c.IsSet(flagName) {
+		return c.Int(flagName)
 	}
-	return cfg
+	return cfgValue
 }
 
 func printScoreResult(r *score.Result) {

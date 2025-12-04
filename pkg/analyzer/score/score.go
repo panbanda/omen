@@ -70,6 +70,10 @@ func New(opts ...Option) *Analyzer {
 // ProgressFunc is called to report analysis progress.
 type ProgressFunc func(stage string)
 
+// ProgressStages is the number of stages in the score analysis.
+// Stages: complexity, duplicates, defect, satd, graph, cohesion, smells
+const ProgressStages = 7
+
 // AnalyzeProject computes the repository score for the given files.
 func (a *Analyzer) AnalyzeProject(ctx context.Context, repoPath string, files []string) (*Result, error) {
 	return a.AnalyzeProjectWithProgress(ctx, repoPath, files, nil)

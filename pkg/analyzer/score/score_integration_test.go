@@ -64,9 +64,9 @@ func TestAnalyzeProject_Integration(t *testing.T) {
 	assert.GreaterOrEqual(t, result.Components.Smells, 0)
 	assert.LessOrEqual(t, result.Components.Smells, 100)
 
-	// Cohesion is reported separately
-	assert.GreaterOrEqual(t, result.Cohesion, 0)
-	assert.LessOrEqual(t, result.Cohesion, 100)
+	// Cohesion is reported separately (inside Components)
+	assert.GreaterOrEqual(t, result.Components.Cohesion, 0)
+	assert.LessOrEqual(t, result.Components.Cohesion, 100)
 
 	// Verify weights sum to 1.0
 	weights := result.Weights
@@ -84,7 +84,7 @@ func TestAnalyzeProject_Integration(t *testing.T) {
 	t.Logf("Components: complexity=%d, duplication=%d, defect=%d, debt=%d, coupling=%d, smells=%d",
 		result.Components.Complexity, result.Components.Duplication, result.Components.Defect,
 		result.Components.Debt, result.Components.Coupling, result.Components.Smells)
-	t.Logf("Cohesion: %d", result.Cohesion)
+	t.Logf("Cohesion: %d", result.Components.Cohesion)
 	t.Logf("Files analyzed: %d", result.FilesAnalyzed)
 }
 
