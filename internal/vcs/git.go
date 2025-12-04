@@ -262,6 +262,22 @@ func (t *gitTree) Diff(to Tree) (Changes, error) {
 	return changes, nil
 }
 
+func (t *gitTree) Entries() ([]TreeEntry, error) {
+	var entries []TreeEntry
+	err := t.tree.Files().ForEach(func(f *object.File) error {
+		entries = append(entries, TreeEntry{
+			Path:  f.Name,
+			Size:  f.Size,
+			IsDir: false,
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
 // gitChange wraps go-git Change.
 type gitChange struct {
 	change *object.Change
