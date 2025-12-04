@@ -1,12 +1,13 @@
 package vcs
 
 import (
-	"bytes"
 	"errors"
-	"os/exec"
 	"sort"
-	"strings"
 	"time"
+
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 // ErrDirtyWorkingDir is returned when the working directory has uncommitted changes.
@@ -20,96 +21,106 @@ type CommitInfo struct {
 
 // IsDirty returns true if there are uncommitted changes in the working directory.
 func IsDirty(repoPath string) (bool, error) {
-	cmd := exec.Command("git", "status", "--porcelain")
-	cmd.Dir = repoPath
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return false, errors.New(stderr.String())
+	repo, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return false, err
 	}
 
-	return strings.TrimSpace(stdout.String()) != "", nil
+	wt, err := repo.Worktree()
+	if err != nil {
+		return false, err
+	}
+
+	status, err := wt.Status()
+	if err != nil {
+		return false, err
+	}
+
+	return !status.IsClean(), nil
 }
 
 // GetCurrentRef returns the current branch name or commit SHA (for detached HEAD).
 func GetCurrentRef(repoPath string) (string, error) {
-	// Try to get branch name first
-	cmd := exec.Command("git", "symbolic-ref", "--short", "HEAD")
-	cmd.Dir = repoPath
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err == nil {
-		return strings.TrimSpace(stdout.String()), nil
+	repo, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return "", err
 	}
 
-	// Detached HEAD - get the commit SHA
-	cmd = exec.Command("git", "rev-parse", "HEAD")
-	cmd.Dir = repoPath
-	stdout.Reset()
-	stderr.Reset()
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return "", errors.New(stderr.String())
+	head, err := repo.Head()
+	if err != nil {
+		return "", err
 	}
 
-	return strings.TrimSpace(stdout.String()), nil
+	// If it's a branch, return the short name
+	if head.Name().IsBranch() {
+		return head.Name().Short(), nil
+	}
+
+	// Detached HEAD - return the commit SHA
+	return head.Hash().String(), nil
 }
 
 // CheckoutCommit checks out a specific commit or ref.
 func CheckoutCommit(repoPath, ref string) error {
-	cmd := exec.Command("git", "checkout", ref)
-	cmd.Dir = repoPath
-
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return errors.New(stderr.String())
+	repo, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return err
 	}
 
-	return nil
+	wt, err := repo.Worktree()
+	if err != nil {
+		return err
+	}
+
+	// Try to resolve as a branch first
+	branchRef := plumbing.NewBranchReferenceName(ref)
+	if _, err := repo.Reference(branchRef, true); err == nil {
+		return wt.Checkout(&git.CheckoutOptions{
+			Branch: branchRef,
+		})
+	}
+
+	// Try to resolve as a commit hash
+	hash, err := repo.ResolveRevision(plumbing.Revision(ref))
+	if err != nil {
+		return err
+	}
+
+	return wt.Checkout(&git.CheckoutOptions{
+		Hash: *hash,
+	})
 }
 
 // FindCommitsAtIntervals finds commits at regular intervals going back from now.
 // If snap is true, intervals are aligned to period boundaries (1st of month, Monday).
 func FindCommitsAtIntervals(repoPath string, period string, since time.Duration, snap bool) ([]CommitInfo, error) {
-	// Get all commits in the time range
-	sinceTime := time.Now().Add(-since)
-
-	cmd := exec.Command("git", "log", "--format=%H %aI", "--since="+sinceTime.Format(time.RFC3339))
-	cmd.Dir = repoPath
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return nil, errors.New(stderr.String())
+	repo, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return nil, err
 	}
 
-	// Parse commits
+	sinceTime := time.Now().Add(-since)
+
+	// Get commits since the start time
+	iter, err := repo.Log(&git.LogOptions{
+		Since: &sinceTime,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	// Collect all commits
 	var commits []CommitInfo
-	for _, line := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
-		if line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, " ", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		date, err := time.Parse(time.RFC3339, parts[1])
-		if err != nil {
-			continue
-		}
-		commits = append(commits, CommitInfo{SHA: parts[0], Date: date})
+	err = iter.ForEach(func(c *object.Commit) error {
+		commits = append(commits, CommitInfo{
+			SHA:  c.Hash.String(),
+			Date: c.Author.When,
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	if len(commits) == 0 {
