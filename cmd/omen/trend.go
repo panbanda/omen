@@ -7,6 +7,7 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/panbanda/omen/internal/output"
+	"github.com/panbanda/omen/internal/progress"
 	"github.com/panbanda/omen/pkg/analyzer/score"
 	"github.com/urfave/cli/v2"
 )
@@ -72,25 +73,24 @@ func runTrendCmd(c *cli.Context) error {
 		score.WithTrendSnap(snap),
 	)
 
-	// Show progress
-	var progressFn score.TrendProgressFunc
-	if !c.Bool("quiet") {
-		progressFn = func(current, total int, commitSHA string) {
-			fmt.Printf("\r\033[KAnalyzing commit %d/%d (%s)...", current, total, commitSHA)
-		}
-	}
+	var tracker *progress.Tracker
 
 	ctx := context.Background()
-	result, err := trendAnalyzer.AnalyzeTrendWithProgress(ctx, repoPath, progressFn)
-	if err != nil {
-		if progressFn != nil {
-			fmt.Print("\r\033[K") // Clear progress line on error
+	result, err := trendAnalyzer.AnalyzeTrendWithProgress(ctx, repoPath, func(current, total int, commitSHA string) {
+		if tracker == nil {
+			tracker = progress.NewTracker(fmt.Sprintf("Analyzing %d points in time", total), total)
 		}
-		return fmt.Errorf("failed to analyze trend: %w", err)
+		tracker.Tick()
+	})
+	if tracker != nil {
+		if err != nil {
+			tracker.FinishError(err)
+		} else {
+			tracker.FinishSuccess()
+		}
 	}
-
-	if progressFn != nil {
-		fmt.Print("\r\033[K") // Clear progress line
+	if err != nil {
+		return fmt.Errorf("failed to analyze trend: %w", err)
 	}
 
 	if len(result.Points) == 0 {
