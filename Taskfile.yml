@@ -6,6 +6,11 @@ tasks:
     cmds:
       - lefthook install
 
+  build:
+    desc: Build the omen CLI
+    cmds:
+      - go build -o omen ./cmd/omen
+
   tidy:
     desc: Format code and tidy dependencies
     cmds:
