@@ -2401,6 +2401,7 @@ func analyzeCmd() *cli.Command {
 			ownershipCmd(),
 			cohesionCmd(),
 			flagsCmd(),
+			trendCmd(),
 		},
 	}
 }
