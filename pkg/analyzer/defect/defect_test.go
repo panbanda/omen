@@ -56,13 +56,13 @@ func TestAnalyzer_AnalyzeProject_EmptyFiles(t *testing.T) {
 	analyzer := New(WithChurnDays(90))
 	defer analyzer.Close()
 
-	result, err := analyzer.AnalyzeProject(context.Background(), tmpDir, []string{})
+	result, err := analyzer.Analyze(context.Background(), tmpDir, []string{})
 	if err != nil {
-		t.Fatalf("AnalyzeProject() error = %v", err)
+		t.Fatalf("Analyze() error = %v", err)
 	}
 
 	if result == nil {
-		t.Fatal("AnalyzeProject() returned nil result")
+		t.Fatal("Analyze() returned nil result")
 	}
 
 	if result.Summary.TotalFiles != 0 {
@@ -131,9 +131,9 @@ func complex(x, y, z int) int {
 			analyzer := New(WithChurnDays(90))
 			defer analyzer.Close()
 
-			result, err := analyzer.AnalyzeProject(context.Background(), tmpDir, []string{testFile})
+			result, err := analyzer.Analyze(context.Background(), tmpDir, []string{testFile})
 			if err != nil {
-				t.Fatalf("AnalyzeProject() error = %v", err)
+				t.Fatalf("Analyze() error = %v", err)
 			}
 
 			if len(result.Files) != 1 {
@@ -216,9 +216,9 @@ func medium(x, y int) int {
 	analyzer := New(WithChurnDays(90))
 	defer analyzer.Close()
 
-	result, err := analyzer.AnalyzeProject(context.Background(), tmpDir, filePaths)
+	result, err := analyzer.Analyze(context.Background(), tmpDir, filePaths)
 	if err != nil {
-		t.Fatalf("AnalyzeProject() error = %v", err)
+		t.Fatalf("Analyze() error = %v", err)
 	}
 
 	if result.Summary.TotalFiles != 3 {
@@ -262,9 +262,9 @@ func simple() int {
 	analyzer := New(WithChurnDays(90))
 	defer analyzer.Close()
 
-	result, err := analyzer.AnalyzeProject(context.Background(), tmpDir, []string{testFile})
+	result, err := analyzer.Analyze(context.Background(), tmpDir, []string{testFile})
 	if err != nil {
-		t.Fatalf("AnalyzeProject() should handle non-git repos, got error: %v", err)
+		t.Fatalf("Analyze() should handle non-git repos, got error: %v", err)
 	}
 
 	if len(result.Files) != 1 {
@@ -533,9 +533,9 @@ func complex(x, y, z int) int {
 	analyzer := New(WithChurnDays(90))
 	defer analyzer.Close()
 
-	result, err := analyzer.AnalyzeProject(context.Background(), tmpDir, []string{testFile})
+	result, err := analyzer.Analyze(context.Background(), tmpDir, []string{testFile})
 	if err != nil {
-		t.Fatalf("AnalyzeProject() error = %v", err)
+		t.Fatalf("Analyze() error = %v", err)
 	}
 
 	if len(result.Files) != 1 {
@@ -575,9 +575,9 @@ func simple() int {
 	analyzer := New(WithChurnDays(90))
 	defer analyzer.Close()
 
-	result, err := analyzer.AnalyzeProject(context.Background(), tmpDir, []string{testFile})
+	result, err := analyzer.Analyze(context.Background(), tmpDir, []string{testFile})
 	if err != nil {
-		t.Fatalf("AnalyzeProject() error = %v", err)
+		t.Fatalf("Analyze() error = %v", err)
 	}
 
 	expectedWeights := DefaultWeights()
@@ -632,9 +632,9 @@ func f2() int {
 	analyzer := New(WithChurnDays(90))
 	defer analyzer.Close()
 
-	result, err := analyzer.AnalyzeProject(context.Background(), tmpDir, filePaths)
+	result, err := analyzer.Analyze(context.Background(), tmpDir, filePaths)
 	if err != nil {
-		t.Fatalf("AnalyzeProject() error = %v", err)
+		t.Fatalf("Analyze() error = %v", err)
 	}
 
 	for _, score := range result.Files {
@@ -811,9 +811,9 @@ func complex(x, y, z int) int {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := analyzer.AnalyzeProject(context.Background(), tmpDir, []string{testFile})
+		_, err := analyzer.Analyze(context.Background(), tmpDir, []string{testFile})
 		if err != nil {
-			b.Fatalf("AnalyzeProject() error = %v", err)
+			b.Fatalf("Analyze() error = %v", err)
 		}
 	}
 }

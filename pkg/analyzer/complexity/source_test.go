@@ -1,6 +1,7 @@
 package complexity
 
 import (
+	"context"
 	"testing"
 
 	"github.com/panbanda/omen/internal/vcs"
@@ -69,7 +70,7 @@ func TestAnalyzeProjectFromSource(t *testing.T) {
 	a := New()
 	defer a.Close()
 
-	analysis, err := a.AnalyzeProjectFromSource(goFiles, src)
+	analysis, err := a.AnalyzeProjectFromSource(context.Background(), goFiles, src)
 	require.NoError(t, err)
 
 	assert.Greater(t, analysis.Summary.TotalFiles, 0)

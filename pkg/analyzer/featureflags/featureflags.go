@@ -1,6 +1,7 @@
 package featureflags
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -10,8 +11,12 @@ import (
 
 	"github.com/panbanda/omen/internal/fileproc"
 	"github.com/panbanda/omen/internal/vcs"
+	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/parser"
 )
+
+// Compile-time check that Analyzer implements analyzer.FileAnalyzer.
+var _ analyzer.FileAnalyzer[*Analysis] = (*Analyzer)(nil)
 
 // Analyzer detects feature flags in source code using tree-sitter queries.
 type Analyzer struct {
@@ -109,14 +114,13 @@ func New(opts ...Option) (*Analyzer, error) {
 }
 
 // Close releases analyzer resources.
-func (a *Analyzer) Close() error {
+func (a *Analyzer) Close() {
 	if a.parser != nil {
 		a.parser.Close()
 	}
 	if a.registry != nil {
 		a.registry.Close()
 	}
-	return nil
 }
 
 // AnalyzeFile analyzes a single file for feature flags.
@@ -264,20 +268,16 @@ func (a *Analyzer) calculateNestingDepth(result *parser.ParseResult, line uint32
 	return depth
 }
 
-// AnalyzeProject analyzes all files for feature flags.
-func (a *Analyzer) AnalyzeProject(files []string) (*Analysis, error) {
-	return a.AnalyzeProjectWithProgress(files, nil)
-}
-
-// AnalyzeProjectWithProgress analyzes all files with progress callback.
-func (a *Analyzer) AnalyzeProjectWithProgress(files []string, onProgress func()) (*Analysis, error) {
+// Analyze analyzes all files for feature flags.
+// Progress is tracked via context using analyzer.WithTracker.
+func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Analysis, error) {
 	// Filter to supported languages
 	supportedFiles := a.filterSupportedFiles(files)
 
-	// Collect all references using concurrent file processing
-	allRefs := fileproc.MapFilesWithProgress(supportedFiles, func(p *parser.Parser, path string) ([]Reference, error) {
+	// Collect all references using concurrent file processing with context
+	allRefs, errs := fileproc.MapFilesWithSizeLimit(ctx, supportedFiles, a.maxFileSize, func(p *parser.Parser, path string) ([]Reference, error) {
 		return a.analyzeFileWithParser(p, path)
-	}, onProgress)
+	})
 
 	// Flatten results
 	var refs []Reference
@@ -287,6 +287,11 @@ func (a *Analyzer) AnalyzeProjectWithProgress(files []string, onProgress func())
 
 	// Aggregate by flag key
 	analysis := a.aggregateResults(refs, supportedFiles)
+
+	// Return processing errors if any occurred
+	if errs != nil && errs.HasErrors() {
+		return analysis, errs
+	}
 
 	return analysis, nil
 }

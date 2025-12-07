@@ -1,11 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"path/filepath"
 
 	"github.com/fatih/color"
 	"github.com/panbanda/omen/internal/output"
-	"github.com/panbanda/omen/internal/vcs"
 	"github.com/panbanda/omen/pkg/analyzer/score"
 	"github.com/urfave/cli/v2"
 )
@@ -59,11 +60,9 @@ func runTrendCmd(c *cli.Context) error {
 	}
 
 	paths := getPaths(c)
-
-	opener := vcs.NewGitOpener()
-	repo, err := opener.PlainOpenWithDetect(paths[0])
+	repoPath, err := filepath.Abs(paths[0])
 	if err != nil {
-		return fmt.Errorf("failed to open repository: %w", err)
+		return fmt.Errorf("failed to resolve path: %w", err)
 	}
 
 	// Create trend analyzer
@@ -81,7 +80,8 @@ func runTrendCmd(c *cli.Context) error {
 		}
 	}
 
-	result, err := trendAnalyzer.AnalyzeTrendFastWithProgress(repo, progressFn)
+	ctx := context.Background()
+	result, err := trendAnalyzer.AnalyzeTrendWithProgress(ctx, repoPath, progressFn)
 	if err != nil {
 		if progressFn != nil {
 			fmt.Print("\r\033[K") // Clear progress line on error

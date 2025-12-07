@@ -1,6 +1,7 @@
 package fileproc
 
 import (
+	"context"
 	"testing"
 
 	"github.com/panbanda/omen/internal/vcs"
@@ -40,7 +41,7 @@ func TestMapSourceFiles(t *testing.T) {
 
 	// Process files from the tree using a mock source
 	src := &mockTreeSource{tree: tree}
-	results := MapSourceFiles(goFiles, src, func(psr *parser.Parser, path string, content []byte) (int, error) {
+	results := MapSourceFiles(context.Background(), goFiles, src, func(psr *parser.Parser, path string, content []byte) (int, error) {
 		result, err := psr.Parse(content, parser.LangGo, path)
 		if err != nil {
 			return 0, err

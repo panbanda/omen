@@ -1,6 +1,7 @@
 package tdg
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -335,9 +336,14 @@ func TestAnalyzer_AnalyzeProject(t *testing.T) {
 		}
 	}
 
-	project, err := analyzer.AnalyzeProject(dir)
+	filePaths, err := analyzer.discoverFiles(dir)
 	if err != nil {
-		t.Fatalf("AnalyzeProject() error = %v", err)
+		t.Fatalf("discoverFiles() error = %v", err)
+	}
+
+	project, err := analyzer.Analyze(context.Background(), filePaths)
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
 	}
 
 	if project.TotalFiles != 3 {

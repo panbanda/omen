@@ -288,7 +288,7 @@ func runComplexityCmd(c *cli.Context) error {
 
 	tracker := progress.NewTracker("Analyzing complexity...", len(scanResult.Files))
 	svc := analysis.New()
-	result, err := svc.AnalyzeComplexity(scanResult.Files, analysis.ComplexityOptions{
+	result, err := svc.AnalyzeComplexity(context.Background(), scanResult.Files, analysis.ComplexityOptions{
 		CyclomaticThreshold: cycThreshold,
 		CognitiveThreshold:  cogThreshold,
 		FunctionsOnly:       functionsOnly,
@@ -443,7 +443,7 @@ func runSATDCmd(c *cli.Context) error {
 
 	tracker := progress.NewTracker("Detecting technical debt...", len(scanResult.Files))
 	svc := analysis.New()
-	result, err := svc.AnalyzeSATD(scanResult.Files, analysis.SATDOptions{
+	result, err := svc.AnalyzeSATD(context.Background(), scanResult.Files, analysis.SATDOptions{
 		IncludeTests:   includeTest,
 		CustomPatterns: customPatterns,
 		OnProgress:     tracker.Tick,
@@ -537,7 +537,7 @@ func runDeadCodeCmd(c *cli.Context) error {
 
 	tracker := progress.NewTracker("Detecting dead code...", len(scanResult.Files))
 	svc := analysis.New()
-	result, err := svc.AnalyzeDeadCode(scanResult.Files, analysis.DeadCodeOptions{
+	result, err := svc.AnalyzeDeadCode(context.Background(), scanResult.Files, analysis.DeadCodeOptions{
 		Confidence: confidence,
 		OnProgress: tracker.Tick,
 	})
@@ -759,7 +759,7 @@ func runDuplicatesCmd(c *cli.Context) error {
 
 	tracker := progress.NewTracker("Detecting duplicates...", len(scanResult.Files))
 	svc := analysis.New()
-	result, err := svc.AnalyzeDuplicates(scanResult.Files, analysis.DuplicatesOptions{
+	result, err := svc.AnalyzeDuplicates(context.Background(), scanResult.Files, analysis.DuplicatesOptions{
 		MinLines:            minLines,
 		SimilarityThreshold: threshold,
 		OnProgress:          tracker.Tick,
@@ -948,6 +948,7 @@ func changesCmd() *cli.Command {
 	)
 	return &cli.Command{
 		Name:      "changes",
+		Aliases:   []string{"jit"},
 		Usage:     "Analyze recent changes for defect risk (Kamei et al. 2013)",
 		ArgsUsage: "[path]",
 		Flags:     flags,
@@ -1043,94 +1044,6 @@ func runChangesCmd(c *cli.Context) error {
 	return formatter.Output(table)
 }
 
-func diffCmd() *cli.Command {
-	flags := append(outputFlags(),
-		&cli.StringFlag{
-			Name:    "target",
-			Aliases: []string{"t"},
-			Usage:   "Target branch to compare against (default: auto-detect main/master)",
-		},
-		&cli.IntFlag{
-			Name:  "days",
-			Value: 30,
-			Usage: "Days of history for normalization context",
-		},
-	)
-	return &cli.Command{
-		Name:      "diff",
-		Usage:     "Analyze current branch diff for defect risk",
-		ArgsUsage: "[path]",
-		Flags:     flags,
-		Action:    runDiffCmd,
-	}
-}
-
-func runDiffCmd(c *cli.Context) error {
-	paths := getPaths(c)
-	target := c.String("target")
-	days := c.Int("days")
-
-	absPath, err := filepath.Abs(paths[0])
-	if err != nil {
-		return fmt.Errorf("invalid path: %w", err)
-	}
-
-	spinner := progress.NewSpinner("Analyzing branch diff...")
-	analyzer := changes.New(changes.WithDays(days))
-	defer analyzer.Close()
-
-	result, err := analyzer.AnalyzeDiff(absPath, target)
-	spinner.FinishSuccess()
-	if err != nil {
-		return fmt.Errorf("diff analysis failed: %w", err)
-	}
-
-	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
-	if err != nil {
-		return err
-	}
-	defer formatter.Close()
-
-	// Risk level with color for text output
-	scoreStr := fmt.Sprintf("%.2f", result.Score)
-	levelStr := result.Level
-	if formatter.Colored() {
-		switch result.Level {
-		case "high":
-			scoreStr = color.RedString(scoreStr)
-			levelStr = color.RedString(levelStr)
-		case "medium":
-			scoreStr = color.YellowString(scoreStr)
-			levelStr = color.YellowString(levelStr)
-		case "low":
-			scoreStr = color.GreenString(scoreStr)
-			levelStr = color.GreenString(levelStr)
-		}
-	}
-
-	rows := [][]string{
-		{"Source Branch", result.SourceBranch},
-		{"Target Branch", result.TargetBranch},
-		{"Merge Base", result.MergeBase[:8]},
-		{"Risk Score", scoreStr},
-		{"Risk Level", levelStr},
-		{"Files Modified", fmt.Sprintf("%d", result.FilesModified)},
-		{"Lines Added", fmt.Sprintf("+%d", result.LinesAdded)},
-		{"Lines Deleted", fmt.Sprintf("-%d", result.LinesDeleted)},
-		{"Commits", fmt.Sprintf("%d", result.Commits)},
-	}
-
-	table := output.NewTable(
-		"Branch Diff Risk Analysis",
-		[]string{"Metric", "Value"},
-		rows,
-		nil,
-		result,
-	)
-
-	return formatter.Output(table)
-}
-
 func tdgCmd() *cli.Command {
 	flags := append(outputFlags(),
 		&cli.IntFlag{
@@ -1157,58 +1070,21 @@ func runTDGCmd(c *cli.Context) error {
 	hotspots := c.Int("hotspots")
 	showPenalties := c.Bool("penalties")
 
-	svc := analysis.New()
-
-	// Handle directory vs single file
-	var project *tdg.ProjectScore
-	var err error
-
-	if len(paths) == 1 {
-		info, statErr := os.Stat(paths[0])
-		if statErr != nil {
-			return fmt.Errorf("invalid path %s: %w", paths[0], statErr)
-		}
-
-		if info.IsDir() {
-			project, err = svc.AnalyzeTDG(paths[0])
-		} else {
-			tdgAnalyzer := tdg.New()
-			defer tdgAnalyzer.Close()
-			score, fileErr := tdgAnalyzer.AnalyzeFile(paths[0])
-			if fileErr != nil {
-				return fmt.Errorf("analysis failed: %w", fileErr)
-			}
-			projectScore := tdg.AggregateProjectScore([]tdg.Score{score})
-			project = &projectScore
-		}
-	} else {
-		var allScores []tdg.Score
-		for _, path := range paths {
-			info, statErr := os.Stat(path)
-			if statErr != nil {
-				return fmt.Errorf("invalid path %s: %w", path, statErr)
-			}
-
-			if info.IsDir() {
-				dirProject, dirErr := svc.AnalyzeTDG(path)
-				if dirErr != nil {
-					return fmt.Errorf("analysis failed for %s: %w", path, dirErr)
-				}
-				allScores = append(allScores, dirProject.Files...)
-			} else {
-				tdgAnalyzer := tdg.New()
-				score, fileErr := tdgAnalyzer.AnalyzeFile(path)
-				tdgAnalyzer.Close()
-				if fileErr != nil {
-					return fmt.Errorf("analysis failed for %s: %w", path, fileErr)
-				}
-				allScores = append(allScores, score)
-			}
-		}
-		projectScore := tdg.AggregateProjectScore(allScores)
-		project = &projectScore
+	scanSvc := scannerSvc.New()
+	scanResult, err := scanSvc.ScanPaths(paths)
+	if err != nil {
+		return err
 	}
 
+	if len(scanResult.Files) == 0 {
+		color.Yellow("No source files found")
+		return nil
+	}
+
+	tracker := progress.NewTracker("Calculating TDG scores...", len(scanResult.Files))
+	svc := analysis.New()
+	project, err := svc.AnalyzeTDG(context.Background(), scanResult.Files)
+	tracker.FinishSuccess()
 	if err != nil {
 		return fmt.Errorf("analysis failed: %w", err)
 	}
@@ -1371,7 +1247,7 @@ func runGraphCmd(c *cli.Context) error {
 
 	tracker := progress.NewTracker("Building dependency graph...", len(scanResult.Files))
 	svc := analysis.New()
-	graphResult, metrics, err := svc.AnalyzeGraph(scanResult.Files, analysis.GraphOptions{
+	graphResult, metrics, err := svc.AnalyzeGraph(context.Background(), scanResult.Files, analysis.GraphOptions{
 		Scope:          graph.Scope(scope),
 		IncludeMetrics: includeMetrics,
 		OnProgress:     tracker.Tick,
@@ -1495,7 +1371,7 @@ func runLintHotspotCmd(c *cli.Context) error {
 	// Use complexity as hotspot indicator
 	tracker := progress.NewTracker("Analyzing hotspots...", len(scanResult.Files))
 	svc := analysis.New()
-	result, err := svc.AnalyzeComplexity(scanResult.Files, analysis.ComplexityOptions{
+	result, err := svc.AnalyzeComplexity(context.Background(), scanResult.Files, analysis.ComplexityOptions{
 		OnProgress: tracker.Tick,
 	})
 	tracker.FinishSuccess()
@@ -1709,7 +1585,7 @@ func runSmellsCmd(c *cli.Context) error {
 
 	tracker := progress.NewTracker("Detecting architectural smells...", len(scanResult.Files))
 	svc := analysis.New()
-	result, err := svc.AnalyzeSmells(scanResult.Files, analysis.SmellOptions{
+	result, err := svc.AnalyzeSmells(context.Background(), scanResult.Files, analysis.SmellOptions{
 		HubThreshold:          hubThreshold,
 		GodFanInThreshold:     godFanIn,
 		GodFanOutThreshold:    godFanOut,
@@ -1918,7 +1794,7 @@ func runOwnershipCmd(c *cli.Context) error {
 
 	tracker := progress.NewTracker("Analyzing ownership", len(scanResult.Files))
 	svc := analysis.New()
-	result, err := svc.AnalyzeOwnership(repoPath, scanResult.Files, analysis.OwnershipOptions{
+	result, err := svc.AnalyzeOwnership(context.Background(), repoPath, scanResult.Files, analysis.OwnershipOptions{
 		Top:            topN,
 		IncludeTrivial: includeTrivial,
 		OnProgress:     tracker.Tick,
@@ -2026,7 +1902,7 @@ func runCohesionCmd(c *cli.Context) error {
 
 	tracker := progress.NewTracker("Analyzing CK metrics", len(scanResult.Files))
 	svc := analysis.New()
-	result, err := svc.AnalyzeCohesion(scanResult.Files, analysis.CohesionOptions{
+	result, err := svc.AnalyzeCohesion(context.Background(), scanResult.Files, analysis.CohesionOptions{
 		IncludeTests: includeTests,
 		Sort:         sortBy,
 		Top:          topN,
@@ -2190,7 +2066,7 @@ func runFlagsCmd(c *cli.Context) error {
 		svc = analysis.New()
 	}
 
-	result, err := svc.AnalyzeFeatureFlags(scanResult.Files, analysis.FeatureFlagOptions{
+	result, err := svc.AnalyzeFeatureFlags(context.Background(), scanResult.Files, analysis.FeatureFlagOptions{
 		Providers:  providers,
 		IncludeGit: !noGit,
 		OnProgress: tracker.Tick,
@@ -2362,7 +2238,7 @@ func runContextCmd(c *cli.Context) error {
 		fmt.Println()
 		fmt.Println("## Complexity Metrics")
 		svc := analysis.New()
-		cxResult, cxErr := svc.AnalyzeComplexity(files, analysis.ComplexityOptions{})
+		cxResult, cxErr := svc.AnalyzeComplexity(context.Background(), files, analysis.ComplexityOptions{})
 		if cxErr == nil {
 			fmt.Printf("- **Total Functions**: %d\n", cxResult.Summary.TotalFunctions)
 			fmt.Printf("- **Median Cyclomatic (P50)**: %d\n", cxResult.Summary.P50Cyclomatic)
@@ -2378,7 +2254,7 @@ func runContextCmd(c *cli.Context) error {
 		fmt.Println()
 		fmt.Println("## Dependency Graph")
 		graphSvc := analysis.New()
-		graphData, _, graphErr := graphSvc.AnalyzeGraph(files, analysis.GraphOptions{
+		graphData, _, graphErr := graphSvc.AnalyzeGraph(context.Background(), files, analysis.GraphOptions{
 			Scope: graph.ScopeFile,
 		})
 		if graphErr == nil {
@@ -2400,7 +2276,7 @@ func runContextCmd(c *cli.Context) error {
 
 		spinner := progress.NewSpinner("Generating repo map...")
 		rmSvc := analysis.New()
-		rm, rmErr := rmSvc.AnalyzeRepoMap(files, analysis.RepoMapOptions{Top: topN})
+		rm, rmErr := rmSvc.AnalyzeRepoMap(context.Background(), files, analysis.RepoMapOptions{Top: topN})
 		spinner.FinishSuccess()
 
 		if rmErr == nil {
@@ -2479,7 +2355,6 @@ func analyzeCmd() *cli.Command {
 			duplicatesCmd(),
 			defectCmd(),
 			changesCmd(),
-			diffCmd(),
 			tdgCmd(),
 			graphCmd(),
 			lintHotspotCmd(),
@@ -2554,7 +2429,7 @@ func runAnalyzeCmd(c *cli.Context) error {
 	// 1. Complexity
 	if !excludeSet["complexity"] {
 		tracker := progress.NewTracker("Analyzing complexity...", len(files))
-		results.Complexity, _ = svc.AnalyzeComplexity(files, analysis.ComplexityOptions{
+		results.Complexity, _ = svc.AnalyzeComplexity(context.Background(), files, analysis.ComplexityOptions{
 			OnProgress: tracker.Tick,
 		})
 		tracker.FinishSuccess()
@@ -2563,7 +2438,7 @@ func runAnalyzeCmd(c *cli.Context) error {
 	// 2. SATD
 	if !excludeSet["satd"] {
 		tracker := progress.NewTracker("Detecting technical debt...", len(files))
-		results.SATD, _ = svc.AnalyzeSATD(files, analysis.SATDOptions{
+		results.SATD, _ = svc.AnalyzeSATD(context.Background(), files, analysis.SATDOptions{
 			OnProgress: tracker.Tick,
 		})
 		tracker.FinishSuccess()
@@ -2572,7 +2447,7 @@ func runAnalyzeCmd(c *cli.Context) error {
 	// 3. Dead code
 	if !excludeSet["deadcode"] {
 		tracker := progress.NewTracker("Detecting dead code...", len(files))
-		results.DeadCode, _ = svc.AnalyzeDeadCode(files, analysis.DeadCodeOptions{
+		results.DeadCode, _ = svc.AnalyzeDeadCode(context.Background(), files, analysis.DeadCodeOptions{
 			OnProgress: tracker.Tick,
 		})
 		tracker.FinishSuccess()
@@ -2594,7 +2469,7 @@ func runAnalyzeCmd(c *cli.Context) error {
 	// 5. Duplicates
 	if !excludeSet["duplicates"] {
 		tracker := progress.NewTracker("Detecting duplicates...", len(files))
-		results.Clones, _ = svc.AnalyzeDuplicates(files, analysis.DuplicatesOptions{
+		results.Clones, _ = svc.AnalyzeDuplicates(context.Background(), files, analysis.DuplicatesOptions{
 			OnProgress: tracker.Tick,
 		})
 		tracker.FinishSuccess()
@@ -2609,8 +2484,8 @@ func runAnalyzeCmd(c *cli.Context) error {
 
 	// 7. TDG
 	if !excludeSet["tdg"] {
-		tracker := progress.NewTracker("Calculating TDG scores...", 1)
-		results.TDG, _ = svc.AnalyzeTDG(repoPath)
+		tracker := progress.NewTracker("Calculating TDG scores...", len(files))
+		results.TDG, _ = svc.AnalyzeTDG(context.Background(), files)
 		tracker.FinishSuccess()
 	}
 
@@ -2628,7 +2503,7 @@ func runAnalyzeCmd(c *cli.Context) error {
 	// 9. Architectural Smells
 	if !excludeSet["smells"] {
 		tracker := progress.NewTracker("Detecting architectural smells...", len(files))
-		results.Smells, _ = svc.AnalyzeSmells(files, analysis.SmellOptions{
+		results.Smells, _ = svc.AnalyzeSmells(context.Background(), files, analysis.SmellOptions{
 			OnProgress: tracker.Tick,
 		})
 		tracker.FinishSuccess()
@@ -2637,7 +2512,7 @@ func runAnalyzeCmd(c *cli.Context) error {
 	// 10. Ownership
 	if !excludeSet["ownership"] {
 		spinner := progress.NewSpinner("Analyzing code ownership...")
-		results.Ownership, _ = svc.AnalyzeOwnership(repoPath, files, analysis.OwnershipOptions{})
+		results.Ownership, _ = svc.AnalyzeOwnership(context.Background(), repoPath, files, analysis.OwnershipOptions{})
 		if results.Ownership != nil {
 			spinner.FinishSuccess()
 		} else {
@@ -2659,7 +2534,7 @@ func runAnalyzeCmd(c *cli.Context) error {
 	// 12. Cohesion (CK metrics)
 	if !excludeSet["cohesion"] {
 		tracker := progress.NewTracker("Analyzing cohesion metrics...", len(files))
-		results.Cohesion, _ = svc.AnalyzeCohesion(files, analysis.CohesionOptions{
+		results.Cohesion, _ = svc.AnalyzeCohesion(context.Background(), files, analysis.CohesionOptions{
 			OnProgress: tracker.Tick,
 		})
 		tracker.FinishSuccess()
@@ -2668,7 +2543,7 @@ func runAnalyzeCmd(c *cli.Context) error {
 	// 13. Feature Flags
 	if !excludeSet["flags"] {
 		tracker := progress.NewTracker("Detecting feature flags...", len(files))
-		results.FeatureFlags, _ = svc.AnalyzeFeatureFlags(files, analysis.FeatureFlagOptions{
+		results.FeatureFlags, _ = svc.AnalyzeFeatureFlags(context.Background(), files, analysis.FeatureFlagOptions{
 			OnProgress: tracker.Tick,
 			IncludeGit: true,
 		})
@@ -3119,6 +2994,9 @@ func scoreCmd() *cli.Command {
 		ArgsUsage: "[path...]",
 		Flags:     flags,
 		Action:    runScoreCmd,
+		Subcommands: []*cli.Command{
+			scoreTrendCmd(),
+		},
 	}
 }
 
@@ -3282,10 +3160,10 @@ func componentToAnalyzer(name string) string {
 		return "complexity"
 	case "duplication":
 		return "duplicates"
-	case "defect":
-		return "defect"
-	case "debt":
+	case "satd":
 		return "satd"
+	case "tdg":
+		return "tdg"
 	case "coupling":
 		return "graph"
 	case "smells":
@@ -3364,6 +3242,271 @@ func writeScoreMarkdown(r *score.Result, f *output.Formatter) error {
 			}
 		}
 	}
+
+	return nil
+}
+
+func scoreTrendCmd() *cli.Command {
+	return &cli.Command{
+		Name:      "trend",
+		Usage:     "Analyze score trends over time",
+		ArgsUsage: "[path]",
+		Flags: append(outputFlags(),
+			&cli.StringFlag{
+				Name:  "period",
+				Value: "monthly",
+				Usage: "Sampling period: weekly or monthly",
+			},
+			&cli.StringFlag{
+				Name:  "since",
+				Value: "1y",
+				Usage: "How far back to analyze (e.g., 3m, 6m, 1y, 2y)",
+			},
+			&cli.BoolFlag{
+				Name:  "snap",
+				Usage: "Snap to period boundaries (1st of month, Monday of week)",
+			},
+		),
+		Action: runScoreTrendCmd,
+	}
+}
+
+func runScoreTrendCmd(c *cli.Context) error {
+	paths := getPaths(c)
+	repoPath := "."
+	if len(paths) > 0 {
+		repoPath = paths[0]
+	}
+
+	cfg, err := config.LoadOrDefault()
+	if err != nil {
+		return err
+	}
+
+	// Parse since duration
+	since, err := score.ParseSince(c.String("since"))
+	if err != nil {
+		return err
+	}
+
+	// Build weights from effective config
+	effectiveWeights := cfg.Score.EffectiveWeights()
+	weights := score.Weights{
+		Complexity:  effectiveWeights.Complexity,
+		Duplication: effectiveWeights.Duplication,
+		SATD:        effectiveWeights.SATD,
+		TDG:         effectiveWeights.TDG,
+		Coupling:    effectiveWeights.Coupling,
+		Smells:      effectiveWeights.Smells,
+		Cohesion:    effectiveWeights.Cohesion,
+	}
+
+	analyzer := score.NewTrendAnalyzer(
+		score.WithTrendPeriod(c.String("period")),
+		score.WithTrendSince(since),
+		score.WithTrendSnap(c.Bool("snap")),
+		score.WithTrendWeights(weights),
+		score.WithTrendChurnDays(30),
+		score.WithTrendMaxFileSize(cfg.Analysis.MaxFileSize),
+	)
+
+	var tracker *progress.Tracker
+
+	result, err := analyzer.AnalyzeTrendWithProgress(context.Background(), repoPath, func(current, total int, commitSHA string) {
+		if tracker == nil {
+			tracker = progress.NewTracker(fmt.Sprintf("Analyzing %d points in time", total), total)
+		}
+		tracker.Tick()
+	})
+	if tracker != nil {
+		if err != nil {
+			tracker.FinishError(err)
+		} else {
+			tracker.FinishSuccess()
+		}
+	}
+	if err != nil {
+		return err
+	}
+
+	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
+	if err != nil {
+		return err
+	}
+	defer formatter.Close()
+
+	format := getFormat(c)
+	switch format {
+	case "json", "toon":
+		if err := formatter.Output(result); err != nil {
+			return err
+		}
+	case "markdown":
+		if err := writeScoreTrendMarkdown(result, formatter); err != nil {
+			return err
+		}
+	default:
+		printScoreTrendResult(result)
+	}
+
+	return nil
+}
+
+func printScoreTrendResult(r *score.TrendResult) {
+	if len(r.Points) == 0 {
+		color.Yellow("No data points found in the specified time range")
+		return
+	}
+
+	// Header
+	fmt.Println()
+	snapped := ""
+	if r.Snapped {
+		snapped = ", snapped"
+	}
+	fmt.Printf("Score Trend (%s, %s%s)\n", r.Period, r.Since, snapped)
+	fmt.Println()
+
+	// Table header
+	fmt.Printf("%-12s %-9s %5s  %10s %11s %6s %4s %8s %6s %8s\n",
+		"Date", "Commit", "Score", "Complexity", "Duplication", "SATD", "TDG", "Coupling", "Smells", "Cohesion")
+	fmt.Println(strings.Repeat("-", 99))
+
+	// Data rows
+	for _, p := range r.Points {
+		scoreColor := color.New(color.FgGreen)
+		if p.Score < 70 {
+			scoreColor = color.New(color.FgYellow)
+		}
+		if p.Score < 50 {
+			scoreColor = color.New(color.FgRed)
+		}
+
+		fmt.Printf("%-12s %-9s ",
+			p.Date.Format("2006-01-02"),
+			p.CommitSHA)
+		scoreColor.Printf("%5d", p.Score)
+		fmt.Printf("  %10d %11d %6d %4d %8d %6d %8d\n",
+			p.Components.Complexity,
+			p.Components.Duplication,
+			p.Components.SATD,
+			p.Components.TDG,
+			p.Components.Coupling,
+			p.Components.Smells,
+			p.Components.Cohesion)
+	}
+
+	// Summary
+	fmt.Println()
+	if len(r.Points) >= 2 {
+		period := singularPeriod(r.Period)
+
+		// Overall trend
+		direction := "Stable"
+		if r.Slope > 0.5 {
+			direction = color.GreenString("Improving")
+		} else if r.Slope < -0.5 {
+			direction = color.RedString("Declining")
+		}
+
+		changeStr := fmt.Sprintf("%+d", r.TotalChange)
+		if r.TotalChange > 0 {
+			changeStr = color.GreenString(changeStr)
+		} else if r.TotalChange < 0 {
+			changeStr = color.RedString(changeStr)
+		}
+
+		fmt.Printf("Overall: %s (%s points, slope=%+.2f/%s, R²=%.2f)\n",
+			direction, changeStr, r.Slope, period, r.RSquared)
+		fmt.Println()
+
+		// Per-component trends
+		fmt.Println("Component Trends:")
+		printComponentTrend("  Complexity", r.ComponentTrends.Complexity, period)
+		printComponentTrend("  Duplication", r.ComponentTrends.Duplication, period)
+		printComponentTrend("  SATD", r.ComponentTrends.SATD, period)
+		printComponentTrend("  TDG", r.ComponentTrends.TDG, period)
+		printComponentTrend("  Coupling", r.ComponentTrends.Coupling, period)
+		printComponentTrend("  Smells", r.ComponentTrends.Smells, period)
+		printComponentTrend("  Cohesion", r.ComponentTrends.Cohesion, period)
+	} else {
+		fmt.Println("Trend: Insufficient data points for trend analysis")
+	}
+}
+
+func printComponentTrend(name string, stats score.TrendStats, period string) {
+	direction := "stable"
+	dirColor := color.New(color.Reset)
+	if stats.Slope > 0.5 {
+		direction = "improving"
+		dirColor = color.New(color.FgGreen)
+	} else if stats.Slope < -0.5 {
+		direction = "declining"
+		dirColor = color.New(color.FgRed)
+	}
+
+	fmt.Printf("%-14s ", name+":")
+	dirColor.Printf("%-10s", direction)
+	fmt.Printf(" (slope=%+.2f/%s, R²=%.2f)\n", stats.Slope, period, stats.RSquared)
+}
+
+func singularPeriod(period string) string {
+	switch period {
+	case "weekly":
+		return "week"
+	case "monthly":
+		return "month"
+	default:
+		return period
+	}
+}
+
+func writeScoreTrendMarkdown(r *score.TrendResult, f *output.Formatter) error {
+	w := f.Writer()
+
+	snapped := ""
+	if r.Snapped {
+		snapped = ", snapped"
+	}
+	fmt.Fprintf(w, "# Score Trend (%s, %s%s)\n\n", r.Period, r.Since, snapped)
+
+	if len(r.Points) == 0 {
+		fmt.Fprintln(w, "No data points found in the specified time range.")
+		return nil
+	}
+
+	// Summary
+	if len(r.Points) >= 2 {
+		direction := "Stable"
+		if r.Slope > 0.5 {
+			direction = "Improving"
+		} else if r.Slope < -0.5 {
+			direction = "Declining"
+		}
+
+		fmt.Fprintf(w, "**Trend:** %s (%+d points, R²=%.2f)\n\n", direction, r.TotalChange, r.RSquared)
+		fmt.Fprintf(w, "**Slope:** %+.2f points/%s\n\n", r.Slope, singularPeriod(r.Period))
+	}
+
+	// Table
+	fmt.Fprintln(w, "| Date | Commit | Score | Complexity | Duplication | Defect | Debt | Coupling | Smells | Cohesion |")
+	fmt.Fprintln(w, "|------|--------|-------|------------|-------------|--------|------|----------|--------|----------|")
+
+	for _, p := range r.Points {
+		fmt.Fprintf(w, "| %s | %s | %d | %d | %d | %d | %d | %d | %d | %d |\n",
+			p.Date.Format("2006-01-02"),
+			p.CommitSHA,
+			p.Score,
+			p.Components.Complexity,
+			p.Components.Duplication,
+			p.Components.SATD,
+			p.Components.TDG,
+			p.Components.Coupling,
+			p.Components.Smells,
+			p.Components.Cohesion)
+	}
+
+	fmt.Fprintf(w, "\n*Analyzed at: %s*\n", r.AnalyzedAt.Format(time.RFC3339))
 
 	return nil
 }

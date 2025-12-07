@@ -11,7 +11,7 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 )
 
-// Compile-time check that Analyzer implements FileAnalyzer interface.
+// Ensure Analyzer implements analyzer.FileAnalyzer.
 var _ analyzer.FileAnalyzer[*Analysis] = (*Analyzer)(nil)
 
 // Analyzer computes cyclomatic and cognitive complexity.
@@ -97,37 +97,23 @@ func analyzeParseResult(result *parser.ParseResult) *FileResult {
 }
 
 // Analyze analyzes all files in a project using parallel processing.
+// Progress is tracked via context using analyzer.WithTracker.
 func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Analysis, error) {
-	return a.AnalyzeProjectWithProgress(files, nil)
-}
-
-// AnalyzeProject analyzes all files in a project using parallel processing.
-// Deprecated: Use Analyze with context instead.
-func (a *Analyzer) AnalyzeProject(files []string) (*Analysis, error) {
-	return a.Analyze(context.Background(), files)
-}
-
-// AnalyzeProjectWithProgress analyzes all files with optional progress callback.
-func (a *Analyzer) AnalyzeProjectWithProgress(files []string, onProgress fileproc.ProgressFunc) (*Analysis, error) {
-	results := fileproc.MapFilesWithSizeLimit(files, a.maxFileSize, func(psr *parser.Parser, path string) (FileResult, error) {
+	results, _ := fileproc.MapFilesWithSizeLimit(ctx, files, a.maxFileSize, func(psr *parser.Parser, path string) (FileResult, error) {
 		fc, err := analyzeFileComplexity(psr, path)
 		if err != nil {
 			return FileResult{}, err
 		}
 		return *fc, nil
-	}, onProgress, nil)
+	})
 
 	return buildAnalysis(results), nil
 }
 
 // AnalyzeProjectFromSource analyzes all files from a ContentSource using parallel processing.
-func (a *Analyzer) AnalyzeProjectFromSource(files []string, src ContentSource) (*Analysis, error) {
-	return a.AnalyzeProjectFromSourceWithProgress(files, src, nil)
-}
-
-// AnalyzeProjectFromSourceWithProgress analyzes files from source with progress callback.
-func (a *Analyzer) AnalyzeProjectFromSourceWithProgress(files []string, src ContentSource, onProgress fileproc.ProgressFunc) (*Analysis, error) {
-	results := fileproc.MapSourceFilesWithProgress(files, src, func(psr *parser.Parser, path string, content []byte) (FileResult, error) {
+// Progress is tracked via context using analyzer.WithTracker.
+func (a *Analyzer) AnalyzeProjectFromSource(ctx context.Context, files []string, src ContentSource) (*Analysis, error) {
+	results := fileproc.MapSourceFiles(ctx, files, src, func(psr *parser.Parser, path string, content []byte) (FileResult, error) {
 		lang := parser.DetectLanguage(path)
 		if lang == parser.LangUnknown {
 			return FileResult{}, fmt.Errorf("unsupported language: %s", path)
@@ -139,7 +125,7 @@ func (a *Analyzer) AnalyzeProjectFromSourceWithProgress(files []string, src Cont
 		}
 
 		return *analyzeParseResult(result), nil
-	}, onProgress)
+	})
 
 	return buildAnalysis(results), nil
 }

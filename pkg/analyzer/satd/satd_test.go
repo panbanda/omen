@@ -1,6 +1,7 @@
 package satd
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -324,9 +325,9 @@ func c() {}
 	}
 
 	a := New()
-	analysis, err := a.AnalyzeProject([]string{file1, file2})
+	analysis, err := a.Analyze(context.Background(), []string{file1, file2})
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	if analysis.Summary.TotalItems < 3 {

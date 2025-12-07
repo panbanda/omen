@@ -1,6 +1,7 @@
 package repomap
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -63,9 +64,9 @@ func utilFunc() int {
 	defer analyzer.Close()
 
 	files := []string{file1, file2}
-	repoMap, err := analyzer.AnalyzeProject(files)
+	repoMap, err := analyzer.Analyze(context.Background(), files)
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	if len(repoMap.Symbols) == 0 {
@@ -109,9 +110,9 @@ func c() {}
 	analyzer := New()
 	defer analyzer.Close()
 
-	repoMap, err := analyzer.AnalyzeProject([]string{file1})
+	repoMap, err := analyzer.Analyze(context.Background(), []string{file1})
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	// Verify sorting (should be descending by PageRank)
@@ -126,9 +127,9 @@ func TestAnalyzer_EmptyProject(t *testing.T) {
 	analyzer := New()
 	defer analyzer.Close()
 
-	repoMap, err := analyzer.AnalyzeProject([]string{})
+	repoMap, err := analyzer.Analyze(context.Background(), []string{})
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	if len(repoMap.Symbols) != 0 {
@@ -283,7 +284,7 @@ func TestSymbol_Fields(t *testing.T) {
 	}
 }
 
-func TestAnalyzer_AnalyzeProjectWithProgress(t *testing.T) {
+func TestAnalyzer_AnalyzeWithProgress(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	file1 := filepath.Join(tmpDir, "main.go")
@@ -298,22 +299,18 @@ func main() {}
 	analyzer := New()
 	defer analyzer.Close()
 
-	progressCalled := false
-	onProgress := func() {
-		progressCalled = true
-	}
+	// Progress is now passed via context, but since the underlying graph analyzer
+	// hasn't been refactored yet, we just test that Analyze works with a context
+	ctx := context.Background()
 
-	repoMap, err := analyzer.AnalyzeProjectWithProgress([]string{file1}, onProgress)
+	repoMap, err := analyzer.Analyze(ctx, []string{file1})
 	if err != nil {
-		t.Fatalf("AnalyzeProjectWithProgress failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	if len(repoMap.Symbols) == 0 {
 		t.Error("Expected at least one symbol")
 	}
-
-	// Note: progress may or may not be called depending on internal implementation
-	_ = progressCalled
 }
 
 func TestAnalyzer_Close(t *testing.T) {

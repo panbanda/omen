@@ -2,7 +2,7 @@ package satd
 
 import (
 	"bufio"
-	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/panbanda/omen/internal/fileproc"
+	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/parser"
 )
 
@@ -26,6 +27,9 @@ type Analyzer struct {
 	maxFileSize       int64
 	testPatterns      []*regexp.Regexp
 }
+
+// Compile-time check that Analyzer implements FileAnalyzer.
+var _ analyzer.FileAnalyzer[*Analysis] = (*Analyzer)(nil)
 
 // Option is a functional option for configuring Analyzer.
 type Option func(*Analyzer)
@@ -282,18 +286,14 @@ func (a *Analyzer) AnalyzeFile(path string) ([]Item, error) {
 		return nil, nil
 	}
 
-	content, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
+	defer file.Close()
 
-	return a.analyzeContent(path, content), nil
-}
-
-// analyzeContent scans content for SATD markers.
-func (a *Analyzer) analyzeContent(path string, content []byte) []Item {
 	var items []Item
-	scanner := bufio.NewScanner(bytes.NewReader(content))
+	scanner := bufio.NewScanner(file)
 	lineNum := uint32(0)
 
 	lang := parser.DetectLanguage(path)
@@ -354,7 +354,7 @@ func (a *Analyzer) analyzeContent(path string, content []byte) []Item {
 		}
 	}
 
-	return items
+	return items, scanner.Err()
 }
 
 // testBlockTracker tracks #[cfg(test)] blocks in Rust files.
@@ -584,66 +584,18 @@ func extractMarker(match string) string {
 	return "UNKNOWN"
 }
 
-// AnalyzeProject scans all files in a project for SATD using parallel processing.
-func (a *Analyzer) AnalyzeProject(files []string) (*Analysis, error) {
-	return a.AnalyzeProjectWithProgress(files, nil)
+// Close releases analyzer resources.
+func (a *Analyzer) Close() {
 }
 
-// AnalyzeProjectWithProgress scans all files with optional progress callback.
-func (a *Analyzer) AnalyzeProjectWithProgress(files []string, onProgress fileproc.ProgressFunc) (*Analysis, error) {
-	fileResults := fileproc.ForEachFileWithProgress(files, func(path string) ([]Item, error) {
+// Analyze scans all files in a project for SATD using parallel processing.
+func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Analysis, error) {
+	fileResults, _ := fileproc.ForEachFile(ctx, files, func(path string) ([]Item, error) {
 		return a.AnalyzeFile(path)
-	}, onProgress)
+	})
 
 	var allItems []Item
 	for _, items := range fileResults {
-		allItems = append(allItems, items...)
-	}
-
-	analysis := &Analysis{
-		Items:              allItems,
-		Summary:            NewSummary(),
-		TotalFilesAnalyzed: len(files),
-	}
-
-	filesWithDebtSet := make(map[string]bool)
-	for _, item := range allItems {
-		analysis.Summary.TotalItems++
-		analysis.Summary.ByCategory[string(item.Category)]++
-		analysis.Summary.BySeverity[string(item.Severity)]++
-		analysis.Summary.ByFile[item.File]++
-		filesWithDebtSet[item.File] = true
-	}
-	analysis.FilesWithDebt = len(filesWithDebtSet)
-	analysis.Summary.FilesWithSATD = len(filesWithDebtSet)
-
-	return analysis, nil
-}
-
-// ContentSource provides file content.
-type ContentSource interface {
-	Read(path string) ([]byte, error)
-}
-
-// AnalyzeProjectFromSource scans files from a ContentSource for SATD.
-func (a *Analyzer) AnalyzeProjectFromSource(files []string, src ContentSource) (*Analysis, error) {
-	var allItems []Item
-
-	for _, path := range files {
-		if a.shouldExcludeFile(path) {
-			continue
-		}
-
-		content, err := src.Read(path)
-		if err != nil {
-			continue
-		}
-
-		if a.maxFileSize > 0 && int64(len(content)) > a.maxFileSize {
-			continue
-		}
-
-		items := a.analyzeContent(path, content)
 		allItems = append(allItems, items...)
 	}
 

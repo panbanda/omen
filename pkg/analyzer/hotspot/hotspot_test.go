@@ -122,13 +122,17 @@ func simple() {
 `
 	writeFileAndCommit(t, repo, repoPath, "test.go", content, "initial commit")
 
+	// Add a second commit to create churn
+	content2 := content + "\nfunc another() { println(\"more\") }\n"
+	writeFileAndCommit(t, repo, repoPath, "test.go", content2, "add another function")
+
 	testFile := filepath.Join(repoPath, "test.go")
 
 	// Run analyzer
 	analyzer := New(WithChurnDays(30))
 	defer analyzer.Close()
 
-	analysis, err := analyzer.AnalyzeProject(context.Background(), repoPath, []string{testFile})
+	analysis, err := analyzer.Analyze(context.Background(), repoPath, []string{testFile})
 	if err != nil {
 		t.Fatalf("AnalyzeProject failed: %v", err)
 	}
@@ -137,8 +141,8 @@ func simple() {
 		t.Errorf("Expected 1 file, got %d", len(analysis.Files))
 	}
 
-	if analysis.Files[0].TotalFunctions != 2 {
-		t.Errorf("Expected 2 functions, got %d", analysis.Files[0].TotalFunctions)
+	if analysis.Files[0].TotalFunctions != 3 {
+		t.Errorf("Expected 3 functions, got %d", analysis.Files[0].TotalFunctions)
 	}
 
 	// Verify complexity was calculated
@@ -200,7 +204,7 @@ func foo() {
 	analyzer := New(WithChurnDays(30))
 	defer analyzer.Close()
 
-	analysis, err := analyzer.AnalyzeProject(context.Background(), repoPath, []string{testFile})
+	analysis, err := analyzer.Analyze(context.Background(), repoPath, []string{testFile})
 	if err != nil {
 		t.Fatalf("AnalyzeProject failed: %v", err)
 	}
@@ -262,7 +266,7 @@ func TestAnalyzer_NoGitRepo(t *testing.T) {
 	analyzer := New(WithChurnDays(30))
 	defer analyzer.Close()
 
-	_, err := analyzer.AnalyzeProject(context.Background(), tmpDir, []string{})
+	_, err := analyzer.Analyze(context.Background(), tmpDir, []string{})
 	if err == nil {
 		t.Error("Expected error for non-git directory")
 	}
@@ -274,14 +278,22 @@ func TestAnalyzer_SortsByScore(t *testing.T) {
 
 	repo := initGitRepo(t, repoPath)
 
-	// Create simple file (low complexity)
-	simple := `package main
+	// Create simple file (low complexity) with 2 commits to register churn
+	simple1 := `package main
 
 func simple() {
 	println("hello")
 }
 `
-	writeFileAndCommit(t, repo, repoPath, "simple.go", simple, "add simple")
+	writeFileAndCommit(t, repo, repoPath, "simple.go", simple1, "add simple v1")
+
+	simple2 := `package main
+
+func simple() {
+	println("hello world")
+}
+`
+	writeFileAndCommit(t, repo, repoPath, "simple.go", simple2, "add simple v2")
 
 	// Create complex file with more commits (high hotspot)
 	complex1 := `package main
@@ -318,7 +330,7 @@ func complex() {
 	analyzer := New(WithChurnDays(30))
 	defer analyzer.Close()
 
-	analysis, err := analyzer.AnalyzeProject(context.Background(), repoPath, files)
+	analysis, err := analyzer.Analyze(context.Background(), repoPath, files)
 	if err != nil {
 		t.Fatalf("AnalyzeProject failed: %v", err)
 	}

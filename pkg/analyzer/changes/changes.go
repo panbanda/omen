@@ -8,8 +8,12 @@ import (
 	"time"
 
 	"github.com/panbanda/omen/internal/vcs"
+	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/stats"
 )
+
+// Compile-time check that Analyzer implements RepoAnalyzer interface.
+var _ analyzer.RepoAnalyzer[*Analysis] = (*Analyzer)(nil)
 
 // DefaultGitTimeout is the default timeout for git operations.
 const DefaultGitTimeout = 5 * time.Minute
@@ -119,15 +123,10 @@ func isAutomatedCommit(message string) bool {
 	return false
 }
 
-// AnalyzeRepo performs change-level defect prediction on repository commits.
-func (a *Analyzer) AnalyzeRepo(repoPath string) (*Analysis, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), DefaultGitTimeout)
-	defer cancel()
-	return a.AnalyzeRepoWithContext(ctx, repoPath)
-}
-
-// AnalyzeRepoWithContext performs change analysis with context for cancellation/timeout.
-func (a *Analyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath string) (*Analysis, error) {
+// Analyze performs change-level defect prediction on repository commits.
+// If files is nil or empty, analyzes all commits in the repository.
+// If files is provided, filters commits to only those that touched the specified files.
+func (a *Analyzer) Analyze(ctx context.Context, repoPath string, files []string) (*Analysis, error) {
 	repo, err := a.opener.PlainOpen(repoPath)
 	if err != nil {
 		return nil, err
@@ -151,6 +150,11 @@ func (a *Analyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath string) 
 	rawCommits, err := a.collectCommitData(ctx, logIter)
 	if err != nil {
 		return nil, err
+	}
+
+	// Filter commits by files if specified
+	if len(files) > 0 {
+		rawCommits = a.filterCommitsByFiles(rawCommits, files)
 	}
 
 	// Reverse to process oldest-first for correct state-dependent metrics
@@ -238,7 +242,7 @@ func calculateNormalizationStats(commits []CommitFeatures) NormalizationStats {
 		MaxEntropy:          stats.Percentile(entropy, p),
 	}
 
-	// Ensure no zero values to avoid division by zero
+	// Ensure no zero max values to avoid division by zero
 	if result.MaxLinesAdded == 0 {
 		result.MaxLinesAdded = 1
 	}
@@ -376,6 +380,25 @@ func (a *Analyzer) extractCommitFeatures(commit vcs.Commit) (rawCommit, error) {
 		features:     features,
 		linesPerFile: linesPerFile,
 	}, nil
+}
+
+// filterCommitsByFiles filters commits to only those that touched the specified files.
+func (a *Analyzer) filterCommitsByFiles(commits []rawCommit, files []string) []rawCommit {
+	fileSet := make(map[string]bool, len(files))
+	for _, f := range files {
+		fileSet[f] = true
+	}
+
+	filtered := make([]rawCommit, 0, len(commits))
+	for _, commit := range commits {
+		for _, modifiedFile := range commit.features.FilesModified {
+			if fileSet[modifiedFile] {
+				filtered = append(filtered, commit)
+				break
+			}
+		}
+	}
+	return filtered
 }
 
 // reverseCommits reverses the commit slice in place for chronological processing.

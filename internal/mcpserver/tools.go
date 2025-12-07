@@ -2,7 +2,6 @@ package mcpserver
 
 import (
 	"context"
-	"path/filepath"
 	"sort"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -235,7 +234,7 @@ func handleAnalyzeComplexity(ctx context.Context, req *mcp.CallToolRequest, inpu
 	}
 
 	svc := analysis.New()
-	result, err := svc.AnalyzeComplexity(scanResult.Files, analysis.ComplexityOptions{})
+	result, err := svc.AnalyzeComplexity(ctx, scanResult.Files, analysis.ComplexityOptions{})
 	if err != nil {
 		return toolError(err.Error())
 	}
@@ -279,7 +278,7 @@ func handleAnalyzeSATD(ctx context.Context, req *mcp.CallToolRequest, input SATD
 	}
 
 	svc := analysis.New()
-	result, err := svc.AnalyzeSATD(scanResult.Files, analysis.SATDOptions{
+	result, err := svc.AnalyzeSATD(ctx, scanResult.Files, analysis.SATDOptions{
 		IncludeTests:   input.IncludeTests,
 		StrictMode:     input.StrictMode,
 		CustomPatterns: customPatterns,
@@ -311,7 +310,7 @@ func handleAnalyzeDeadcode(ctx context.Context, req *mcp.CallToolRequest, input 
 	}
 
 	svc := analysis.New()
-	result, err := svc.AnalyzeDeadCode(scanResult.Files, analysis.DeadCodeOptions{
+	result, err := svc.AnalyzeDeadCode(ctx, scanResult.Files, analysis.DeadCodeOptions{
 		Confidence: confidence,
 	})
 	if err != nil {
@@ -379,7 +378,7 @@ func handleAnalyzeDuplicates(ctx context.Context, req *mcp.CallToolRequest, inpu
 	}
 
 	svc := analysis.New()
-	result, err := svc.AnalyzeDuplicates(scanResult.Files, analysis.DuplicatesOptions{
+	result, err := svc.AnalyzeDuplicates(ctx, scanResult.Files, analysis.DuplicatesOptions{
 		MinLines:            minLines,
 		SimilarityThreshold: threshold,
 	})
@@ -486,13 +485,18 @@ func handleAnalyzeTDG(ctx context.Context, req *mcp.CallToolRequest, input TDGIn
 		hotspots = 10
 	}
 
-	absPath, err := filepath.Abs(paths[0])
+	scanner := scannerSvc.New()
+	scanResult, err := scanner.ScanPaths(paths)
 	if err != nil {
 		return toolError(err.Error())
 	}
 
+	if len(scanResult.Files) == 0 {
+		return toolError("no source files found")
+	}
+
 	svc := analysis.New()
-	project, err := svc.AnalyzeTDG(absPath)
+	project, err := svc.AnalyzeTDG(ctx, scanResult.Files)
 	if err != nil {
 		return toolError(err.Error())
 	}
@@ -554,7 +558,7 @@ func handleAnalyzeGraph(ctx context.Context, req *mcp.CallToolRequest, input Gra
 	}
 
 	svc := analysis.New()
-	depGraph, metrics, err := svc.AnalyzeGraph(scanResult.Files, analysis.GraphOptions{
+	depGraph, metrics, err := svc.AnalyzeGraph(ctx, scanResult.Files, analysis.GraphOptions{
 		Scope:          graph.Scope(scope),
 		IncludeMetrics: input.IncludeMetrics,
 	})
@@ -670,7 +674,7 @@ func handleAnalyzeOwnership(ctx context.Context, req *mcp.CallToolRequest, input
 	}
 
 	svc := analysis.New()
-	result, err := svc.AnalyzeOwnership(scanResult.RepoRoot, scanResult.Files, analysis.OwnershipOptions{
+	result, err := svc.AnalyzeOwnership(ctx, scanResult.RepoRoot, scanResult.Files, analysis.OwnershipOptions{
 		IncludeTrivial: input.IncludeTrivial,
 	})
 	if err != nil {
@@ -708,7 +712,7 @@ func handleAnalyzeCohesion(ctx context.Context, req *mcp.CallToolRequest, input 
 	}
 
 	svc := analysis.New()
-	result, err := svc.AnalyzeCohesion(scanResult.Files, analysis.CohesionOptions{
+	result, err := svc.AnalyzeCohesion(ctx, scanResult.Files, analysis.CohesionOptions{
 		IncludeTests: input.IncludeTests,
 	})
 	if err != nil {
@@ -753,7 +757,7 @@ func handleAnalyzeRepoMap(ctx context.Context, req *mcp.CallToolRequest, input R
 	}
 
 	svc := analysis.New()
-	rm, err := svc.AnalyzeRepoMap(scanResult.Files, analysis.RepoMapOptions{Top: top})
+	rm, err := svc.AnalyzeRepoMap(ctx, scanResult.Files, analysis.RepoMapOptions{Top: top})
 	if err != nil {
 		return toolError(err.Error())
 	}
@@ -786,7 +790,7 @@ func handleAnalyzeSmells(ctx context.Context, req *mcp.CallToolRequest, input Sm
 	}
 
 	svc := analysis.New()
-	result, err := svc.AnalyzeSmells(scanResult.Files, analysis.SmellOptions{
+	result, err := svc.AnalyzeSmells(ctx, scanResult.Files, analysis.SmellOptions{
 		HubThreshold:          input.HubThreshold,
 		GodFanInThreshold:     input.GodFanInThreshold,
 		GodFanOutThreshold:    input.GodFanOutThreshold,
@@ -821,7 +825,7 @@ func handleAnalyzeFlags(ctx context.Context, req *mcp.CallToolRequest, input Fla
 	}
 
 	svc := analysis.New()
-	result, err := svc.AnalyzeFeatureFlags(scanResult.Files, analysis.FeatureFlagOptions{
+	result, err := svc.AnalyzeFeatureFlags(ctx, scanResult.Files, analysis.FeatureFlagOptions{
 		Providers:  input.Providers,
 		IncludeGit: includeGit,
 	})

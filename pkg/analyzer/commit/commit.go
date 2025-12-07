@@ -1,6 +1,7 @@
 package commit
 
 import (
+	"context"
 	"runtime"
 	"sync"
 	"time"
@@ -52,7 +53,7 @@ func (a *Analyzer) AnalyzeCommit(repo vcs.Repository, hash plumbing.Hash) (*Comm
 
 	src := source.NewTree(tree)
 
-	complexityAnalysis, err := a.complexity.AnalyzeProjectFromSource(files, src)
+	complexityAnalysis, err := a.complexity.AnalyzeProjectFromSource(context.Background(), files, src)
 	if err != nil {
 		return nil, err
 	}

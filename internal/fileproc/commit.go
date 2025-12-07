@@ -1,9 +1,11 @@
 package fileproc
 
 import (
+	"context"
 	"runtime"
 	"sync"
 
+	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/parser"
 	"github.com/sourcegraph/conc/pool"
 )
@@ -13,29 +15,20 @@ type ContentSource interface {
 	Read(path string) ([]byte, error)
 }
 
-// MapSourceFiles processes files from a ContentSource in parallel.
-// Unlike MapFiles, this reads content from the source before processing.
-func MapSourceFiles[T any](
-	files []string,
-	src ContentSource,
-	fn func(*parser.Parser, string, []byte) (T, error),
-) []T {
-	return MapSourceFilesWithProgress(files, src, fn, nil)
-}
-
 // fileWithContent holds a file path and its content.
 type fileWithContent struct {
 	path    string
 	content []byte
 }
 
-// MapSourceFilesWithProgress processes files from a ContentSource with progress callback.
-// Reads all file content first to avoid concurrent access issues with git trees.
-func MapSourceFilesWithProgress[T any](
+// MapSourceFiles processes files from a ContentSource in parallel.
+// Unlike MapFiles, this reads content from the source before processing.
+// Progress is tracked via context using analyzer.WithTracker.
+func MapSourceFiles[T any](
+	ctx context.Context,
 	files []string,
 	src ContentSource,
 	fn func(*parser.Parser, string, []byte) (T, error),
-	onProgress ProgressFunc,
 ) []T {
 	if len(files) == 0 {
 		return nil
@@ -55,32 +48,52 @@ func MapSourceFilesWithProgress[T any](
 		})
 	}
 
+	// Get tracker from context
+	tracker := analyzer.TrackerFromContext(ctx)
+	if tracker != nil {
+		tracker.Add(len(filesWithContent))
+	}
+
 	// Now process in parallel with content already loaded
 	maxWorkers := runtime.NumCPU() * DefaultWorkerMultiplier
 	results := make([]T, 0, len(filesWithContent))
 	var mu sync.Mutex
 
-	p := pool.New().WithMaxGoroutines(maxWorkers)
+	p := pool.New().WithMaxGoroutines(maxWorkers).WithContext(ctx)
 	for _, fc := range filesWithContent {
-		p.Go(func() {
+		p.Go(func(ctx context.Context) error {
+			// Check for cancellation
+			select {
+			case <-ctx.Done():
+				if tracker != nil {
+					tracker.Tick(fc.path)
+				}
+				return ctx.Err()
+			default:
+			}
+
 			psr := parser.New()
 			defer psr.Close()
 
 			result, err := fn(psr, fc.path, fc.content)
 			if err != nil {
-				return
-			}
-
-			if onProgress != nil {
-				onProgress()
+				if tracker != nil {
+					tracker.Tick(fc.path)
+				}
+				return nil
 			}
 
 			mu.Lock()
 			results = append(results, result)
 			mu.Unlock()
+
+			if tracker != nil {
+				tracker.Tick(fc.path)
+			}
+			return nil
 		})
 	}
-	p.Wait()
+	_ = p.Wait()
 
 	return results
 }

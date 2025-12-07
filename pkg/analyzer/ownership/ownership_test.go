@@ -1,6 +1,7 @@
 package ownership
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -28,7 +29,7 @@ func TestNewWithOptions(t *testing.T) {
 	}
 }
 
-func TestAnalyzer_AnalyzeRepo(t *testing.T) {
+func TestAnalyzer_Analyze(t *testing.T) {
 	tmpDir := t.TempDir()
 	repoPath := filepath.Join(tmpDir, "repo")
 
@@ -48,9 +49,9 @@ func foo() {
 	defer analyzer.Close()
 
 	files := []string{filepath.Join(repoPath, "main.go")}
-	analysis, err := analyzer.AnalyzeRepo(repoPath, files)
+	analysis, err := analyzer.Analyze(context.Background(), repoPath, files)
 	if err != nil {
-		t.Fatalf("AnalyzeRepo failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	if len(analysis.Files) != 1 {
@@ -106,9 +107,9 @@ func bar() {
 	defer analyzer.Close()
 
 	files := []string{filepath.Join(repoPath, "main.go")}
-	analysis, err := analyzer.AnalyzeRepo(repoPath, files)
+	analysis, err := analyzer.Analyze(context.Background(), repoPath, files)
 	if err != nil {
-		t.Fatalf("AnalyzeRepo failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	if len(analysis.Files) != 1 {
@@ -130,7 +131,7 @@ func TestAnalyzer_NoGitRepo(t *testing.T) {
 	analyzer := New()
 	defer analyzer.Close()
 
-	_, err := analyzer.AnalyzeRepo(tmpDir, []string{})
+	_, err := analyzer.Analyze(context.Background(), tmpDir, []string{})
 	if err == nil {
 		t.Error("Expected error for non-git directory")
 	}
@@ -162,9 +163,9 @@ func TestAnalyzer_BusFactor(t *testing.T) {
 		filepath.Join(repoPath, "alice4.go"),
 		filepath.Join(repoPath, "bob.go"),
 	}
-	analysis, err := analyzer.AnalyzeRepo(repoPath, files)
+	analysis, err := analyzer.Analyze(context.Background(), repoPath, files)
 	if err != nil {
-		t.Fatalf("AnalyzeRepo failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	// Bus factor should be 1 (Alice alone covers > 50%)
@@ -223,9 +224,9 @@ func TestAnalyzer_SortsByConcentration(t *testing.T) {
 		filepath.Join(repoPath, "silo.go"),
 		filepath.Join(repoPath, "shared.go"),
 	}
-	analysis, err := analyzer.AnalyzeRepo(repoPath, files)
+	analysis, err := analyzer.Analyze(context.Background(), repoPath, files)
 	if err != nil {
-		t.Fatalf("AnalyzeRepo failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	if len(analysis.Files) < 2 {

@@ -1,6 +1,7 @@
 package temporal
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -68,9 +69,9 @@ func TestAnalyzer_AnalyzeRepo(t *testing.T) {
 	analyzer := New(30, 1) // Lower threshold for test
 	defer analyzer.Close()
 
-	analysis, err := analyzer.AnalyzeRepo(repoPath)
+	analysis, err := analyzer.Analyze(context.Background(), repoPath, nil)
 	if err != nil {
-		t.Fatalf("AnalyzeRepo failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	// Should find a.go <-> b.go coupling (3 co-changes)
@@ -104,7 +105,7 @@ func TestAnalyzer_NoGitRepo(t *testing.T) {
 	analyzer := New(30, 3)
 	defer analyzer.Close()
 
-	_, err := analyzer.AnalyzeRepo(tmpDir)
+	_, err := analyzer.Analyze(context.Background(), tmpDir, nil)
 	if err == nil {
 		t.Error("Expected error for non-git directory")
 	}
@@ -124,9 +125,9 @@ func TestAnalyzer_MinCochangesFilter(t *testing.T) {
 	analyzer := New(30, 5)
 	defer analyzer.Close()
 
-	analysis, err := analyzer.AnalyzeRepo(repoPath)
+	analysis, err := analyzer.Analyze(context.Background(), repoPath, nil)
 	if err != nil {
-		t.Fatalf("AnalyzeRepo failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	// Should have no couplings (below threshold)
@@ -158,9 +159,9 @@ func TestAnalyzer_SortsByStrength(t *testing.T) {
 	analyzer := New(30, 1) // Low threshold
 	defer analyzer.Close()
 
-	analysis, err := analyzer.AnalyzeRepo(repoPath)
+	analysis, err := analyzer.Analyze(context.Background(), repoPath, nil)
 	if err != nil {
-		t.Fatalf("AnalyzeRepo failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	if len(analysis.Couplings) < 2 {

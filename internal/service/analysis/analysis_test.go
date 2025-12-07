@@ -64,7 +64,7 @@ func simple() {
 `)
 
 	svc := New()
-	result, err := svc.AnalyzeComplexity([]string{goFile}, ComplexityOptions{})
+	result, err := svc.AnalyzeComplexity(context.Background(), []string{goFile}, ComplexityOptions{})
 	if err != nil {
 		t.Fatalf("AnalyzeComplexity() error = %v", err)
 	}
@@ -84,7 +84,7 @@ func test() {}
 
 	progressCalled := false
 	svc := New()
-	result, err := svc.AnalyzeComplexity([]string{goFile}, ComplexityOptions{
+	result, err := svc.AnalyzeComplexity(context.Background(), []string{goFile}, ComplexityOptions{
 		OnProgress: func() { progressCalled = true },
 	})
 	if err != nil {
@@ -108,7 +108,7 @@ func broken() {
 `)
 
 	svc := New()
-	result, err := svc.AnalyzeSATD([]string{goFile}, SATDOptions{})
+	result, err := svc.AnalyzeSATD(context.Background(), []string{goFile}, SATDOptions{})
 	if err != nil {
 		t.Fatalf("AnalyzeSATD() error = %v", err)
 	}
@@ -129,7 +129,7 @@ func test() {}
 `)
 
 	svc := New()
-	result, err := svc.AnalyzeSATD([]string{goFile}, SATDOptions{
+	result, err := svc.AnalyzeSATD(context.Background(), []string{goFile}, SATDOptions{
 		CustomPatterns: []PatternConfig{
 			{Pattern: "CUSTOM:", Category: satd.CategoryDesign, Severity: satd.SeverityHigh},
 		},
@@ -148,7 +148,7 @@ func test() {}
 `)
 
 	svc := New()
-	_, err := svc.AnalyzeSATD([]string{goFile}, SATDOptions{
+	_, err := svc.AnalyzeSATD(context.Background(), []string{goFile}, SATDOptions{
 		CustomPatterns: []PatternConfig{
 			{Pattern: "[invalid", Category: satd.CategoryDesign, Severity: satd.SeverityHigh},
 		},
@@ -173,7 +173,7 @@ func unused() {
 `)
 
 	svc := New()
-	result, err := svc.AnalyzeDeadCode([]string{goFile}, DeadCodeOptions{
+	result, err := svc.AnalyzeDeadCode(context.Background(), []string{goFile}, DeadCodeOptions{
 		Confidence: 0.5,
 	})
 	if err != nil {
@@ -203,7 +203,7 @@ func dup2() {
 `)
 
 	svc := New()
-	result, err := svc.AnalyzeDuplicates([]string{goFile}, DuplicatesOptions{
+	result, err := svc.AnalyzeDuplicates(context.Background(), []string{goFile}, DuplicatesOptions{
 		MinLines:            3,
 		SimilarityThreshold: 0.8,
 	})
@@ -229,7 +229,7 @@ func simple() {
 	}
 
 	svc := New()
-	result, err := svc.AnalyzeTDG(tmpDir)
+	result, err := svc.AnalyzeTDG(context.Background(), []string{goFile})
 	if err != nil {
 		t.Fatalf("AnalyzeTDG() error = %v", err)
 	}
@@ -252,7 +252,7 @@ func test() {
 `)
 
 	svc := New()
-	graphResult, metrics, err := svc.AnalyzeGraph([]string{goFile}, GraphOptions{
+	graphResult, metrics, err := svc.AnalyzeGraph(context.Background(), []string{goFile}, GraphOptions{
 		Scope:          graph.ScopeFile,
 		IncludeMetrics: true,
 	})
@@ -273,7 +273,7 @@ func test() {}
 `)
 
 	svc := New()
-	graphResult, metrics, err := svc.AnalyzeGraph([]string{goFile}, GraphOptions{
+	graphResult, metrics, err := svc.AnalyzeGraph(context.Background(), []string{goFile}, GraphOptions{
 		IncludeMetrics: false,
 	})
 	if err != nil {
@@ -307,7 +307,7 @@ func TestAnalyzeCohesion(t *testing.T) {
 	}
 
 	svc := New()
-	result, err := svc.AnalyzeCohesion([]string{javaFile}, CohesionOptions{})
+	result, err := svc.AnalyzeCohesion(context.Background(), []string{javaFile}, CohesionOptions{})
 	if err != nil {
 		t.Fatalf("AnalyzeCohesion() error = %v", err)
 	}
@@ -327,7 +327,7 @@ func helper() {}
 `)
 
 	svc := New()
-	result, err := svc.AnalyzeRepoMap([]string{goFile}, RepoMapOptions{Top: 10})
+	result, err := svc.AnalyzeRepoMap(context.Background(), []string{goFile}, RepoMapOptions{Top: 10})
 	if err != nil {
 		t.Fatalf("AnalyzeRepoMap() error = %v", err)
 	}
@@ -494,24 +494,19 @@ func TestAnalyzeHotspots(t *testing.T) {
 	}
 }
 
-func TestAnalyzeHotspots_WithProgress(t *testing.T) {
+func TestAnalyzeHotspots_WithDays(t *testing.T) {
 	repoPath := createTestGitRepo(t)
 	goFile := filepath.Join(repoPath, "test.go")
 
-	progressCalled := false
 	svc := New()
 	result, err := svc.AnalyzeHotspots(context.Background(), repoPath, []string{goFile}, HotspotOptions{
-		Days:       365,
-		OnProgress: func() { progressCalled = true },
+		Days: 365,
 	})
 	if err != nil {
 		t.Fatalf("AnalyzeHotspots() error = %v", err)
 	}
 	if result == nil {
 		t.Fatal("expected non-nil result")
-	}
-	if !progressCalled {
-		t.Error("expected progress callback to be called")
 	}
 }
 
@@ -592,7 +587,7 @@ func TestAnalyzeOwnership(t *testing.T) {
 	goFile := filepath.Join(repoPath, "test.go")
 
 	svc := New()
-	result, err := svc.AnalyzeOwnership(repoPath, []string{goFile}, OwnershipOptions{})
+	result, err := svc.AnalyzeOwnership(context.Background(), repoPath, []string{goFile}, OwnershipOptions{})
 	if err != nil {
 		t.Fatalf("AnalyzeOwnership() error = %v", err)
 	}
@@ -609,21 +604,16 @@ func TestAnalyzeOwnership_WithOptions(t *testing.T) {
 	repoPath := createTestGitRepo(t)
 	goFile := filepath.Join(repoPath, "test.go")
 
-	progressCalled := false
 	svc := New()
-	result, err := svc.AnalyzeOwnership(repoPath, []string{goFile}, OwnershipOptions{
+	result, err := svc.AnalyzeOwnership(context.Background(), repoPath, []string{goFile}, OwnershipOptions{
 		Top:            10,
 		IncludeTrivial: true,
-		OnProgress:     func() { progressCalled = true },
 	})
 	if err != nil {
 		t.Fatalf("AnalyzeOwnership() error = %v", err)
 	}
 	if result == nil {
 		t.Fatal("expected non-nil result")
-	}
-	if !progressCalled {
-		t.Error("expected progress callback to be called")
 	}
 }
 
@@ -635,7 +625,7 @@ func TestAnalyzeOwnership_NonGitDir(t *testing.T) {
 	}
 
 	svc := New()
-	_, err := svc.AnalyzeOwnership(tmpDir, []string{goFile}, OwnershipOptions{})
+	_, err := svc.AnalyzeOwnership(context.Background(), tmpDir, []string{goFile}, OwnershipOptions{})
 	if err == nil {
 		t.Error("expected error for non-git directory")
 	}
@@ -649,7 +639,7 @@ func test() {}
 `)
 
 	svc := New()
-	result, err := svc.AnalyzeComplexity([]string{goFile}, ComplexityOptions{
+	result, err := svc.AnalyzeComplexity(context.Background(), []string{goFile}, ComplexityOptions{
 		MaxFileSize: 10000,
 	})
 	if err != nil {
@@ -668,7 +658,7 @@ func unused() {}
 
 	progressCalled := false
 	svc := New()
-	result, err := svc.AnalyzeDeadCode([]string{goFile}, DeadCodeOptions{
+	result, err := svc.AnalyzeDeadCode(context.Background(), []string{goFile}, DeadCodeOptions{
 		OnProgress: func() { progressCalled = true },
 	})
 	if err != nil {
@@ -689,7 +679,7 @@ func unused() {}
 `)
 
 	svc := New()
-	result, err := svc.AnalyzeDeadCode([]string{goFile}, DeadCodeOptions{
+	result, err := svc.AnalyzeDeadCode(context.Background(), []string{goFile}, DeadCodeOptions{
 		Confidence: 0, // Should use config default
 	})
 	if err != nil {
@@ -720,7 +710,7 @@ func dup2() {
 
 	progressCalled := false
 	svc := New()
-	result, err := svc.AnalyzeDuplicates([]string{goFile}, DuplicatesOptions{
+	result, err := svc.AnalyzeDuplicates(context.Background(), []string{goFile}, DuplicatesOptions{
 		MinLines:   3,
 		OnProgress: func() { progressCalled = true },
 	})
@@ -741,7 +731,7 @@ func test() {}
 `)
 
 	svc := New()
-	result, err := svc.AnalyzeDuplicates([]string{goFile}, DuplicatesOptions{
+	result, err := svc.AnalyzeDuplicates(context.Background(), []string{goFile}, DuplicatesOptions{
 		MinLines:            0, // Should use config default
 		SimilarityThreshold: 0, // Should use config default
 	})
@@ -762,7 +752,7 @@ func test() {}
 
 	progressCalled := false
 	svc := New()
-	result, err := svc.AnalyzeSATD([]string{goFile}, SATDOptions{
+	result, err := svc.AnalyzeSATD(context.Background(), []string{goFile}, SATDOptions{
 		OnProgress: func() { progressCalled = true },
 	})
 	if err != nil {
@@ -784,7 +774,7 @@ func test() {}
 `)
 
 	svc := New()
-	result, err := svc.AnalyzeSATD([]string{goFile}, SATDOptions{
+	result, err := svc.AnalyzeSATD(context.Background(), []string{goFile}, SATDOptions{
 		StrictMode: true,
 	})
 	if err != nil {
@@ -807,7 +797,7 @@ func test() {
 
 	progressCalled := false
 	svc := New()
-	graphResult, _, err := svc.AnalyzeGraph([]string{goFile}, GraphOptions{
+	graphResult, _, err := svc.AnalyzeGraph(context.Background(), []string{goFile}, GraphOptions{
 		OnProgress: func() { progressCalled = true },
 	})
 	if err != nil {
@@ -834,7 +824,7 @@ func TestAnalyzeCohesion_WithProgress(t *testing.T) {
 
 	progressCalled := false
 	svc := New()
-	result, err := svc.AnalyzeCohesion([]string{javaFile}, CohesionOptions{
+	result, err := svc.AnalyzeCohesion(context.Background(), []string{javaFile}, CohesionOptions{
 		OnProgress: func() { progressCalled = true },
 	})
 	if err != nil {
@@ -859,7 +849,7 @@ func TestAnalyzeCohesion_WithIncludeTests(t *testing.T) {
 	}
 
 	svc := New()
-	result, err := svc.AnalyzeCohesion([]string{javaFile}, CohesionOptions{
+	result, err := svc.AnalyzeCohesion(context.Background(), []string{javaFile}, CohesionOptions{
 		IncludeTests: true,
 	})
 	if err != nil {

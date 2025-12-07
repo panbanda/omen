@@ -3,6 +3,7 @@ package deadcode
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -198,9 +199,6 @@ func (g *CrossLangReferenceGraph) GetOutgoingEdges(nodeID uint32) []ReferenceEdg
 	return edges
 }
 
-// Compile-time check that Analyzer implements FileAnalyzer interface.
-var _ analyzer.FileAnalyzer[*Analysis] = (*Analyzer)(nil)
-
 // Analyzer detects unused functions, variables, and unreachable code.
 // Architecture matches PMAT's DeadCodeAnalyzer with:
 // - HierarchicalBitSet for efficient reachability tracking
@@ -232,6 +230,9 @@ type Analyzer struct {
 	maxFileSize int64
 	nodeCounter uint32
 }
+
+// Compile-time check that Analyzer implements analyzer.FileAnalyzer[*Analysis]
+var _ analyzer.FileAnalyzer[*Analysis] = (*Analyzer)(nil)
 
 // DefaultCapacity for small to medium projects.
 const DefaultCapacity = 100_000
@@ -1147,23 +1148,12 @@ func computeContextHash(name, file string, line uint32, kind string) string {
 }
 
 // Analyze analyzes dead code across a project using the 4-phase PMAT architecture.
-func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Analysis, error) {
-	return a.AnalyzeProjectWithProgress(files, nil)
-}
-
-// AnalyzeProject analyzes dead code across a project using the 4-phase PMAT architecture.
-// Deprecated: Use Analyze with context instead.
-func (a *Analyzer) AnalyzeProject(files []string) (*Analysis, error) {
-	return a.Analyze(context.Background(), files)
-}
-
-// AnalyzeProjectWithProgress analyzes dead code with optional progress callback.
 // Implements PMAT's 4-phase analysis:
 // Phase 1: Build reference graph from AST
 // Phase 2: Resolve dynamic dispatch
 // Phase 3: Mark reachable from entry points
 // Phase 4: Classify dead code by type
-func (a *Analyzer) AnalyzeProjectWithProgress(files []string, onProgress fileproc.ProgressFunc) (*Analysis, error) {
+func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Analysis, error) {
 	analysis := &Analysis{
 		DeadFunctions:   make([]Function, 0),
 		DeadVariables:   make([]Variable, 0),
@@ -1177,9 +1167,25 @@ func (a *Analyzer) AnalyzeProjectWithProgress(files []string, onProgress filepro
 	}
 
 	// Collect file results
-	results := fileproc.MapFilesWithSizeLimit(files, a.maxFileSize, func(psr *parser.Parser, path string) (*fileDeadCode, error) {
+	results, errs := fileproc.MapFiles(ctx, files, func(psr *parser.Parser, path string) (*fileDeadCode, error) {
+		// Check file size limit if configured
+		if a.maxFileSize > 0 {
+			info, err := os.Stat(path)
+			if err != nil {
+				return nil, err
+			}
+			if info.Size() > a.maxFileSize {
+				return nil, fmt.Errorf("file too large: %d bytes (limit: %d)", info.Size(), a.maxFileSize)
+			}
+		}
 		return analyzeFileDeadCode(psr, path)
-	}, onProgress, nil)
+	})
+
+	// Log errors but continue processing
+	if errs != nil && errs.HasErrors() {
+		// Errors are collected but don't stop analysis
+		_ = errs
+	}
 
 	allDefs := make(map[string]definition)
 	allCalls := make([]callReference, 0)

@@ -6,6 +6,9 @@ import (
 	"strings"
 )
 
+// Analysis is an alias for ProjectScore to implement FileAnalyzer interface.
+type Analysis = ProjectScore
+
 // Grade represents a letter grade from A+ to F (PMAT-compatible).
 // Higher grades indicate better code quality.
 type Grade string

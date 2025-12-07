@@ -1,11 +1,13 @@
 package smells
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/analyzer/graph"
 )
 
@@ -13,8 +15,12 @@ import (
 // Implements detection algorithms from Fontana et al. (2017) "Arcan".
 // This analyzer is safe for concurrent use.
 type Analyzer struct {
-	thresholds Thresholds
+	thresholds    Thresholds
+	graphAnalyzer *graph.Analyzer
 }
+
+// Compile-time check that Analyzer implements FileAnalyzer.
+var _ analyzer.FileAnalyzer[*Analysis] = (*Analyzer)(nil)
 
 // Option is a functional option for configuring Analyzer.
 type Option func(*Analyzer)
@@ -51,7 +57,8 @@ func WithInstabilityDifference(diff float64) Option {
 // New creates a new smell analyzer.
 func New(opts ...Option) *Analyzer {
 	a := &Analyzer{
-		thresholds: DefaultThresholds(),
+		thresholds:    DefaultThresholds(),
+		graphAnalyzer: graph.New(),
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -72,6 +79,19 @@ func New(opts ...Option) *Analyzer {
 	}
 
 	return a
+}
+
+// Analyze builds a dependency graph from files and detects architectural smells.
+// This method implements the FileAnalyzer interface.
+func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Analysis, error) {
+	// Build dependency graph from files
+	g, err := a.graphAnalyzer.Analyze(ctx, files)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build dependency graph: %w", err)
+	}
+
+	// Analyze the graph for smells
+	return a.AnalyzeGraph(g), nil
 }
 
 // AnalyzeGraph detects architectural smells in a dependency graph.
@@ -335,5 +355,7 @@ func formatComponentList(components []string) string {
 
 // Close releases analyzer resources.
 func (a *Analyzer) Close() {
-	// No resources to release
+	if a.graphAnalyzer != nil {
+		a.graphAnalyzer.Close()
+	}
 }

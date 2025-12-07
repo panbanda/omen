@@ -1,12 +1,14 @@
 package tdg
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/panbanda/omen/internal/fileproc"
+	"github.com/panbanda/omen/pkg/analyzer"
 )
 
 // Analyzer implements TDG analysis using heuristic methods.
@@ -14,6 +16,9 @@ type Analyzer struct {
 	config      Config
 	maxFileSize int64
 }
+
+// Compile-time check that Analyzer implements FileAnalyzer.
+var _ analyzer.FileAnalyzer[*Analysis] = (*Analyzer)(nil)
 
 // Option is a functional option for configuring Analyzer.
 type Option func(*Analyzer)
@@ -95,28 +100,19 @@ func (a *Analyzer) AnalyzeSource(source string, language Language, filePath stri
 	return score, nil
 }
 
-// AnalyzeProject analyzes all supported files in a directory.
-func (a *Analyzer) AnalyzeProject(dir string) (ProjectScore, error) {
-	return a.AnalyzeProjectWithProgress(dir, nil)
-}
+// Analyze processes the given files and returns TDG analysis results.
+// Progress can be tracked by passing a context with analyzer.WithProgress.
+func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Analysis, error) {
+	scores, errs := fileproc.ForEachFile(ctx, files, func(path string) (Score, error) {
+		return a.AnalyzeFile(path)
+	})
 
-// AnalyzeProjectWithProgress analyzes all supported files with optional progress callback.
-func (a *Analyzer) AnalyzeProjectWithProgress(dir string, onProgress func()) (ProjectScore, error) {
-	files, err := a.discoverFiles(dir)
-	if err != nil {
-		return ProjectScore{}, err
+	if errs != nil && errs.HasErrors() {
+		return nil, errs
 	}
 
-	return a.analyzeFiles(files, onProgress), nil
-}
-
-// analyzeFiles processes files in parallel and returns aggregated project score.
-func (a *Analyzer) analyzeFiles(files []string, onProgress func()) ProjectScore {
-	scores := fileproc.ForEachFileWithProgress(files, func(path string) (Score, error) {
-		return a.AnalyzeFile(path)
-	}, onProgress)
-
-	return AggregateProjectScore(scores)
+	analysis := AggregateProjectScore(scores)
+	return &analysis, nil
 }
 
 // Compare compares two files or directories.
@@ -132,9 +128,14 @@ func (a *Analyzer) Compare(path1, path2 string) (Comparison, error) {
 	}
 
 	var score1, score2 Score
+	ctx := context.Background()
 
 	if info1.IsDir() {
-		project, err := a.AnalyzeProject(path1)
+		files, err := a.discoverFiles(path1)
+		if err != nil {
+			return Comparison{}, err
+		}
+		project, err := a.Analyze(ctx, files)
 		if err != nil {
 			return Comparison{}, err
 		}
@@ -147,7 +148,11 @@ func (a *Analyzer) Compare(path1, path2 string) (Comparison, error) {
 	}
 
 	if info2.IsDir() {
-		project, err := a.AnalyzeProject(path2)
+		files, err := a.discoverFiles(path2)
+		if err != nil {
+			return Comparison{}, err
+		}
+		project, err := a.Analyze(ctx, files)
 		if err != nil {
 			return Comparison{}, err
 		}
@@ -498,49 +503,6 @@ func (a *Analyzer) shouldAnalyzeFile(path string) bool {
 // Close releases any resources (implements interface compatibility).
 func (a *Analyzer) Close() {
 	// No resources to release
-}
-
-// ContentSource provides file content from an in-memory source.
-type ContentSource interface {
-	Read(path string) ([]byte, error)
-}
-
-// AnalyzeFiles analyzes a list of files and returns the project score.
-// This is the public API for analyzing pre-discovered files.
-func (a *Analyzer) AnalyzeFiles(files []string) (*ProjectScore, error) {
-	result := a.analyzeFiles(files, nil)
-	return &result, nil
-}
-
-// AnalyzeProjectFromSource analyzes files read via ContentSource.
-// Used for historical analysis where files are read from git trees.
-func (a *Analyzer) AnalyzeProjectFromSource(files []string, src ContentSource) (*ProjectScore, error) {
-	scores := make([]Score, 0, len(files))
-
-	for _, path := range files {
-		content, err := src.Read(path)
-		if err != nil {
-			continue
-		}
-
-		if a.maxFileSize > 0 && int64(len(content)) > a.maxFileSize {
-			continue
-		}
-
-		lang := LanguageFromExtension(path)
-		if lang == LanguageUnknown {
-			continue
-		}
-
-		score, err := a.AnalyzeSource(string(content), lang, path)
-		if err != nil {
-			continue
-		}
-		scores = append(scores, score)
-	}
-
-	result := AggregateProjectScore(scores)
-	return &result, nil
 }
 
 func min32(a, b float32) float32 {

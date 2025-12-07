@@ -40,7 +40,7 @@ func TestNewWithOptions(t *testing.T) {
 	a.Close()
 }
 
-func TestAnalyze_ExactClones(t *testing.T) {
+func TestAnalyzeProject_ExactClones(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create two files with identical functions
@@ -98,7 +98,7 @@ func duplicate() int {
 	}
 }
 
-func TestAnalyze_NoClones(t *testing.T) {
+func TestAnalyzeProject_NoClones(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	file1 := filepath.Join(tmpDir, "a.go")
@@ -136,7 +136,7 @@ func funcB() string {
 	}
 }
 
-func TestAnalyze_EmptyFiles(t *testing.T) {
+func TestAnalyzeProject_EmptyFiles(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	file1 := filepath.Join(tmpDir, "a.go")

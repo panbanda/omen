@@ -11,6 +11,7 @@ import (
 
 	"github.com/panbanda/omen/internal/progress"
 	"github.com/panbanda/omen/internal/vcs"
+	"github.com/panbanda/omen/pkg/analyzer"
 )
 
 // DefaultGitTimeout is the default timeout for git operations.
@@ -22,6 +23,9 @@ type Analyzer struct {
 	spinner *progress.Tracker
 	opener  vcs.Opener
 }
+
+// Compile-time check that Analyzer implements RepoAnalyzer.
+var _ analyzer.RepoAnalyzer[*Analysis] = (*Analyzer)(nil)
 
 // Option is a functional option for configuring Analyzer.
 type Option func(*Analyzer)
@@ -62,9 +66,8 @@ func New(opts ...Option) *Analyzer {
 	return a
 }
 
-// AnalyzeRepo analyzes git history for a repository.
-// Uses DefaultGitTimeout. For custom timeout, use AnalyzeRepoWithContext.
-func (a *Analyzer) AnalyzeRepo(ctx context.Context, repoPath string) (*Analysis, error) {
+// Analyze analyzes git history for a repository, optionally filtering to specific files.
+func (a *Analyzer) Analyze(ctx context.Context, repoPath string, files []string) (*Analysis, error) {
 	if ctx == nil {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(context.Background(), DefaultGitTimeout)
@@ -111,16 +114,14 @@ func (a *Analyzer) AnalyzeRepo(ctx context.Context, repoPath string) (*Analysis,
 		return nil, err
 	}
 
-	return buildAnalysis(fileMetrics, absPath, a.days), nil
-}
+	fullAnalysis := buildAnalysis(fileMetrics, absPath, a.days)
 
-// AnalyzeFiles analyzes churn for specific files.
-func (a *Analyzer) AnalyzeFiles(ctx context.Context, repoPath string, files []string) (*Analysis, error) {
-	fullAnalysis, err := a.AnalyzeRepo(ctx, repoPath)
-	if err != nil {
-		return nil, err
+	// If no files specified, return full analysis
+	if len(files) == 0 {
+		return fullAnalysis, nil
 	}
 
+	// Filter to specified files
 	fileSet := make(map[string]bool)
 	for _, f := range files {
 		rel, err := filepath.Rel(repoPath, f)
@@ -171,6 +172,10 @@ func (a *Analyzer) AnalyzeFiles(ctx context.Context, repoPath string, files []st
 	}
 
 	return filtered, nil
+}
+
+// Close releases any resources held by the analyzer.
+func (a *Analyzer) Close() {
 }
 
 // processCommit extracts churn data from a single commit.

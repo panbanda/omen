@@ -1,6 +1,7 @@
 package temporal
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -21,10 +22,10 @@ func TestTemporalCouplingAnalyzer_WithMockOpener(t *testing.T) {
 	mockIter.EXPECT().ForEach(mock.AnythingOfType("func(vcs.Commit) error")).Return(nil)
 
 	analyzer := New(30, 3, WithOpener(mockOpener))
-	result, err := analyzer.AnalyzeRepo("/fake/repo")
+	result, err := analyzer.Analyze(context.Background(), "/fake/repo", nil)
 
 	if err != nil {
-		t.Fatalf("AnalyzeRepo() error = %v", err)
+		t.Fatalf("Analyze() error = %v", err)
 	}
 	if result == nil {
 		t.Fatal("Expected non-nil result")
@@ -39,7 +40,7 @@ func TestTemporalCouplingAnalyzer_OpenError(t *testing.T) {
 	mockOpener.EXPECT().PlainOpen("/invalid/path").Return(nil, errors.New("not a git repository"))
 
 	analyzer := New(30, 3, WithOpener(mockOpener))
-	_, err := analyzer.AnalyzeRepo("/invalid/path")
+	_, err := analyzer.Analyze(context.Background(), "/invalid/path", nil)
 
 	if err == nil {
 		t.Fatal("Expected error for invalid path")
@@ -54,7 +55,7 @@ func TestTemporalCouplingAnalyzer_LogError(t *testing.T) {
 	mockRepo.EXPECT().Log(mock.AnythingOfType("*vcs.LogOptions")).Return(nil, errors.New("log error"))
 
 	analyzer := New(30, 3, WithOpener(mockOpener))
-	_, err := analyzer.AnalyzeRepo("/fake/repo")
+	_, err := analyzer.Analyze(context.Background(), "/fake/repo", nil)
 
 	if err == nil {
 		t.Fatal("Expected error from Log()")
@@ -93,10 +94,10 @@ func TestTemporalCouplingAnalyzer_WithCoChangedFiles(t *testing.T) {
 	mockCommit3.EXPECT().Stats().Return(stats, nil)
 
 	analyzer := New(30, 3, WithOpener(mockOpener))
-	result, err := analyzer.AnalyzeRepo("/fake/repo")
+	result, err := analyzer.Analyze(context.Background(), "/fake/repo", nil)
 
 	if err != nil {
-		t.Fatalf("AnalyzeRepo() error = %v", err)
+		t.Fatalf("Analyze() error = %v", err)
 	}
 	if len(result.Couplings) != 1 {
 		t.Errorf("Expected 1 coupling, got %d", len(result.Couplings))
@@ -127,10 +128,10 @@ func TestTemporalCouplingAnalyzer_BelowThreshold(t *testing.T) {
 	mockCommit.EXPECT().Stats().Return(stats, nil)
 
 	analyzer := New(30, 3, WithOpener(mockOpener))
-	result, err := analyzer.AnalyzeRepo("/fake/repo")
+	result, err := analyzer.Analyze(context.Background(), "/fake/repo", nil)
 
 	if err != nil {
-		t.Fatalf("AnalyzeRepo() error = %v", err)
+		t.Fatalf("Analyze() error = %v", err)
 	}
 	// No couplings because cochange count (1) is below threshold (3)
 	if len(result.Couplings) != 0 {
@@ -155,10 +156,10 @@ func TestTemporalCouplingAnalyzer_StatsError(t *testing.T) {
 	mockCommit.EXPECT().Stats().Return(nil, errors.New("stats error"))
 
 	analyzer := New(30, 3, WithOpener(mockOpener))
-	result, err := analyzer.AnalyzeRepo("/fake/repo")
+	result, err := analyzer.Analyze(context.Background(), "/fake/repo", nil)
 
 	if err != nil {
-		t.Fatalf("AnalyzeRepo() error = %v (should handle stats errors gracefully)", err)
+		t.Fatalf("Analyze() error = %v (should handle stats errors gracefully)", err)
 	}
 	if len(result.Couplings) != 0 {
 		t.Errorf("Expected 0 couplings, got %d", len(result.Couplings))
@@ -225,10 +226,10 @@ func TestTemporalCouplingAnalyzer_ContextCancellation(t *testing.T) {
 	mockCommit.EXPECT().Stats().Return(stats, nil)
 
 	analyzer := New(30, 3, WithOpener(mockOpener))
-	result, err := analyzer.AnalyzeRepo("/fake/repo")
+	result, err := analyzer.Analyze(context.Background(), "/fake/repo", nil)
 
 	if err != nil {
-		t.Fatalf("AnalyzeRepo() error = %v", err)
+		t.Fatalf("Analyze() error = %v", err)
 	}
 	if result == nil {
 		t.Fatal("Expected non-nil result")
@@ -272,10 +273,10 @@ func TestTemporalCouplingAnalyzer_CouplingStrengthSorting(t *testing.T) {
 	}
 
 	analyzer := New(30, 3, WithOpener(mockOpener))
-	result, err := analyzer.AnalyzeRepo("/fake/repo")
+	result, err := analyzer.Analyze(context.Background(), "/fake/repo", nil)
 
 	if err != nil {
-		t.Fatalf("AnalyzeRepo() error = %v", err)
+		t.Fatalf("Analyze() error = %v", err)
 	}
 
 	// Should have couplings sorted by strength
@@ -309,9 +310,9 @@ func TestTemporalCouplingAnalyzer_NowTimeUsed(t *testing.T) {
 	mockIter.EXPECT().ForEach(mock.AnythingOfType("func(vcs.Commit) error")).Return(nil)
 
 	analyzer := New(30, 3, WithOpener(mockOpener))
-	_, err := analyzer.AnalyzeRepo("/fake/repo")
+	_, err := analyzer.Analyze(context.Background(), "/fake/repo", nil)
 
 	if err != nil {
-		t.Fatalf("AnalyzeRepo() error = %v", err)
+		t.Fatalf("Analyze() error = %v", err)
 	}
 }

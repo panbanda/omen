@@ -1,6 +1,7 @@
 package changes
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -341,7 +342,7 @@ func TestAnalyzer_AuthorExperience_TemporalOrder(t *testing.T) {
 		WithReferenceTime(baseTime.Add(24*time.Hour)),
 	)
 
-	result, err := analyzer.AnalyzeRepo("/fake/path")
+	result, err := analyzer.Analyze(context.Background(), "/fake/path", nil)
 	if err != nil {
 		t.Fatalf("AnalyzeRepo() error = %v", err)
 	}
@@ -428,7 +429,7 @@ func TestAnalyzer_NumDevelopers_TemporalOrder(t *testing.T) {
 		WithReferenceTime(baseTime.Add(24*time.Hour)),
 	)
 
-	result, err := analyzer.AnalyzeRepo("/fake/path")
+	result, err := analyzer.Analyze(context.Background(), "/fake/path", nil)
 	if err != nil {
 		t.Fatalf("AnalyzeRepo() error = %v", err)
 	}
@@ -510,7 +511,7 @@ func TestAnalyzer_UniqueChanges_TemporalOrder(t *testing.T) {
 		WithReferenceTime(baseTime.Add(24*time.Hour)),
 	)
 
-	result, err := analyzer.AnalyzeRepo("/fake/path")
+	result, err := analyzer.Analyze(context.Background(), "/fake/path", nil)
 	if err != nil {
 		t.Fatalf("AnalyzeRepo() error = %v", err)
 	}
