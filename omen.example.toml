@@ -93,13 +93,14 @@ enable_cohesion = false
 # When enable_cohesion = true, these weights are scaled down by 0.85 and
 # cohesion is added at 0.15.
 [score.weights]
-complexity = 0.25
-duplication = 0.20
-defect = 0.25
-debt = 0.15
+complexity = 0.20
+duplication = 0.15
+defect = 0.20
+satd = 0.10       # Self-Admitted Technical Debt (TODO/FIXME markers)
+tdg = 0.10        # Technical Debt Gradient (comprehensive debt score)
 coupling = 0.10
 smells = 0.05
-cohesion = 0.0  # Or set manually if you prefer custom weights
+cohesion = 0.10   # Or set to 0.0 if enable_cohesion = false
 
 # Minimum acceptable scores (0 = no enforcement)
 [score.thresholds]
@@ -107,7 +108,8 @@ score = 0
 complexity = 0
 duplication = 0
 defect = 0
-debt = 0
+satd = 0
+tdg = 0
 coupling = 0
 smells = 0
 cohesion = 0

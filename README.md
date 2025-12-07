@@ -402,12 +402,14 @@ Omen computes a composite repository health score (0-100) that combines multiple
 
 | Component       | Weight | What it measures                                   |
 | --------------- | ------ | -------------------------------------------------- |
-| Complexity      | 25%    | % of functions exceeding complexity thresholds     |
-| Duplication     | 20%    | Code clone ratio with non-linear penalty curve     |
-| Defect Risk     | 25%    | Average defect probability across files            |
-| Technical Debt  | 15%    | Severity-weighted SATD density per 1K LOC          |
+| Complexity      | 20%    | % of functions exceeding complexity thresholds     |
+| Duplication     | 15%    | Code clone ratio with non-linear penalty curve     |
+| Defect Risk     | 20%    | Average defect probability across files            |
+| SATD            | 10%    | Severity-weighted TODO/FIXME density per 1K LOC    |
+| TDG             | 10%    | Technical Debt Gradient composite score            |
 | Coupling        | 10%    | Cyclic deps, SDP violations, and instability       |
 | Smells          | 5%     | Architectural smells relative to codebase size     |
+| Cohesion        | 10%    | Class cohesion (LCOM) for OO codebases             |
 
 **Normalization Philosophy:**
 
@@ -418,13 +420,15 @@ Each component metric is normalized to a 0-100 scale where higher is always bett
 3. **Non-linear** - Gentle penalties for minor issues, steep for severe ones
 4. **Severity-aware** - Weight items by impact, not just count
 
-For example, technical debt uses severity-weighted scoring:
+For example, SATD (Self-Admitted Technical Debt) uses severity-weighted scoring:
 - Critical (SECURITY, VULN): 4x weight
 - High (FIXME, BUG): 2x weight
 - Medium (HACK, REFACTOR): 1x weight
 - Low (TODO, NOTE): 0.25x weight
 
 This prevents low-severity items (like documentation TODOs) from unfairly dragging down scores.
+
+TDG (Technical Debt Gradient) provides a complementary view by analyzing structural complexity, semantic complexity, duplication patterns, and coupling within each file.
 
 **Usage:**
 
