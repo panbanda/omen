@@ -44,7 +44,6 @@ type TrendResult struct {
 type ComponentTrends struct {
 	Complexity  TrendStats `json:"complexity"`
 	Duplication TrendStats `json:"duplication"`
-	Defect      TrendStats `json:"defect"`
 	SATD        TrendStats `json:"satd"`
 	TDG         TrendStats `json:"tdg"`
 	Coupling    TrendStats `json:"coupling"`

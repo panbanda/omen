@@ -98,32 +98,6 @@ func NormalizeDuplication(ratio float64) int {
 }
 
 // -----------------------------------------------------------------------------
-// Defect Risk Normalization
-// -----------------------------------------------------------------------------
-//
-// Maps defect probability (0-1) to score using a non-linear curve.
-//
-// Rationale:
-// - Defect probability is output from a predictive model (PMAT approach)
-// - Low probabilities (<10%) are common and acceptable
-// - Medium probabilities (10-30%) warrant attention
-// - High probabilities (>30%) indicate high-risk code
-//
-// The curve uses a power function to be more forgiving at low probabilities
-// while penalizing heavily as risk approaches certainty.
-// -----------------------------------------------------------------------------
-
-// NormalizeDefect converts average defect probability to 0-100 score.
-// Uses power curve: forgiving at low risk, steep at high risk.
-func NormalizeDefect(avgProbability float32) int {
-	// Use sqrt to make the curve gentler at low probabilities
-	// p=0.1 -> score=68, p=0.3 -> score=45, p=0.5 -> score=29
-	adjusted := math.Sqrt(float64(avgProbability))
-	score := int(math.Round(100 * (1 - adjusted)))
-	return clamp(score, 0, 100)
-}
-
-// -----------------------------------------------------------------------------
 // Self-Admitted Technical Debt (SATD) Normalization
 // -----------------------------------------------------------------------------
 //

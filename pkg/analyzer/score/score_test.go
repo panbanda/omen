@@ -11,20 +11,19 @@ func TestAnalyzer_New(t *testing.T) {
 	}
 	// Check defaults
 	w := a.weights
-	if w.Complexity != 0.20 {
-		t.Errorf("default complexity weight = %f, want 0.20", w.Complexity)
+	if w.Complexity != 0.25 {
+		t.Errorf("default complexity weight = %f, want 0.25", w.Complexity)
 	}
 }
 
 func TestAnalyzer_WithWeights(t *testing.T) {
 	custom := Weights{
 		Complexity:  0.30,
-		Duplication: 0.20,
-		Defect:      0.20,
-		SATD:        0.10,
-		TDG:         0.05,
+		Duplication: 0.25,
+		SATD:        0.15,
+		TDG:         0.10,
 		Coupling:    0.10,
-		Smells:      0.05,
+		Smells:      0.10,
 	}
 	a := New(WithWeights(custom))
 	if a.weights.Complexity != 0.30 {

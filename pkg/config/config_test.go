@@ -640,12 +640,11 @@ func TestEffectiveWeights(t *testing.T) {
 			name:           "enable_cohesion redistributes weights",
 			enableCohesion: true,
 			weights: ScoreWeights{
-				Complexity:  0.25,
-				Duplication: 0.20,
-				Defect:      0.25,
-				SATD:        0.10,
-				TDG:         0.05,
-				Coupling:    0.10,
+				Complexity:  0.30,
+				Duplication: 0.25,
+				SATD:        0.15,
+				TDG:         0.10,
+				Coupling:    0.15,
 				Smells:      0.05,
 				Cohesion:    0.0,
 			},
@@ -655,12 +654,11 @@ func TestEffectiveWeights(t *testing.T) {
 			name:           "disable_cohesion keeps original weights",
 			enableCohesion: false,
 			weights: ScoreWeights{
-				Complexity:  0.25,
-				Duplication: 0.20,
-				Defect:      0.25,
-				SATD:        0.10,
-				TDG:         0.05,
-				Coupling:    0.10,
+				Complexity:  0.30,
+				Duplication: 0.25,
+				SATD:        0.15,
+				TDG:         0.10,
+				Coupling:    0.15,
 				Smells:      0.05,
 				Cohesion:    0.0,
 			},
@@ -670,12 +668,11 @@ func TestEffectiveWeights(t *testing.T) {
 			name:           "enable_cohesion with manual cohesion weight keeps it",
 			enableCohesion: true,
 			weights: ScoreWeights{
-				Complexity:  0.20,
-				Duplication: 0.15,
-				Defect:      0.20,
+				Complexity:  0.25,
+				Duplication: 0.20,
 				SATD:        0.10,
-				TDG:         0.05,
-				Coupling:    0.10,
+				TDG:         0.10,
+				Coupling:    0.15,
 				Smells:      0.05,
 				Cohesion:    0.15,
 			},
@@ -695,7 +692,7 @@ func TestEffectiveWeights(t *testing.T) {
 			}
 
 			// Verify weights still sum to 1.0
-			sum := effective.Complexity + effective.Duplication + effective.Defect +
+			sum := effective.Complexity + effective.Duplication +
 				effective.SATD + effective.TDG + effective.Coupling + effective.Smells + effective.Cohesion
 			if sum < 0.99 || sum > 1.01 {
 				t.Errorf("EffectiveWeights() sum = %f, want 1.0", sum)

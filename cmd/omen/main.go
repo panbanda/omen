@@ -3052,7 +3052,6 @@ func runScoreCmd(c *cli.Context) error {
 		Score:       intFlagOrConfig(c, "min-score", cfg.Score.Thresholds.Score),
 		Complexity:  intFlagOrConfig(c, "min-complexity", cfg.Score.Thresholds.Complexity),
 		Duplication: intFlagOrConfig(c, "min-duplication", cfg.Score.Thresholds.Duplication),
-		Defect:      intFlagOrConfig(c, "min-defect", cfg.Score.Thresholds.Defect),
 		SATD:        intFlagOrConfig(c, "min-satd", cfg.Score.Thresholds.SATD),
 		TDG:         intFlagOrConfig(c, "min-tdg", cfg.Score.Thresholds.TDG),
 		Coupling:    intFlagOrConfig(c, "min-coupling", cfg.Score.Thresholds.Coupling),
@@ -3065,7 +3064,6 @@ func runScoreCmd(c *cli.Context) error {
 	weights := score.Weights{
 		Complexity:  effectiveWeights.Complexity,
 		Duplication: effectiveWeights.Duplication,
-		Defect:      effectiveWeights.Defect,
 		SATD:        effectiveWeights.SATD,
 		TDG:         effectiveWeights.TDG,
 		Coupling:    effectiveWeights.Coupling,
@@ -3160,7 +3158,6 @@ func printScoreResult(r *score.Result) {
 	// Components
 	printScoreComponent("Complexity", r.Components.Complexity)
 	printScoreComponent("Duplication", r.Components.Duplication)
-	printScoreComponent("Defect Risk", r.Components.Defect)
 	printScoreComponent("SATD", r.Components.SATD)
 	printScoreComponent("TDG", r.Components.TDG)
 	printScoreComponent("Coupling", r.Components.Coupling)
@@ -3231,8 +3228,6 @@ func getScoreComponent(r *score.Result, name string) int {
 		return r.Components.Complexity
 	case "duplication":
 		return r.Components.Duplication
-	case "defect":
-		return r.Components.Defect
 	case "satd":
 		return r.Components.SATD
 	case "tdg":
@@ -3257,7 +3252,6 @@ func writeScoreMarkdown(r *score.Result, f *output.Formatter) error {
 	fmt.Fprintln(w, "|-----------|-------|")
 	fmt.Fprintf(w, "| Complexity | %d/100 |\n", r.Components.Complexity)
 	fmt.Fprintf(w, "| Duplication | %d/100 |\n", r.Components.Duplication)
-	fmt.Fprintf(w, "| Defect Risk | %d/100 |\n", r.Components.Defect)
 	fmt.Fprintf(w, "| SATD | %d/100 |\n", r.Components.SATD)
 	fmt.Fprintf(w, "| TDG | %d/100 |\n", r.Components.TDG)
 	fmt.Fprintf(w, "| Coupling | %d/100 |\n", r.Components.Coupling)

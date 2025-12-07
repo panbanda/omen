@@ -886,7 +886,6 @@ func handleAnalyzeScore(ctx context.Context, req *mcp.CallToolRequest, input Sco
 	weights := score.Weights{
 		Complexity:  effectiveWeights.Complexity,
 		Duplication: effectiveWeights.Duplication,
-		Defect:      effectiveWeights.Defect,
 		SATD:        effectiveWeights.SATD,
 		TDG:         effectiveWeights.TDG,
 		Coupling:    effectiveWeights.Coupling,
@@ -898,7 +897,6 @@ func handleAnalyzeScore(ctx context.Context, req *mcp.CallToolRequest, input Sco
 		Score:       cfg.Score.Thresholds.Score,
 		Complexity:  cfg.Score.Thresholds.Complexity,
 		Duplication: cfg.Score.Thresholds.Duplication,
-		Defect:      cfg.Score.Thresholds.Defect,
 		SATD:        cfg.Score.Thresholds.SATD,
 		TDG:         cfg.Score.Thresholds.TDG,
 		Coupling:    cfg.Score.Thresholds.Coupling,

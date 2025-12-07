@@ -7,7 +7,6 @@ import (
 	"github.com/panbanda/omen/internal/vcs"
 	"github.com/panbanda/omen/pkg/analyzer/cohesion"
 	"github.com/panbanda/omen/pkg/analyzer/complexity"
-	"github.com/panbanda/omen/pkg/analyzer/defect"
 	"github.com/panbanda/omen/pkg/analyzer/duplicates"
 	"github.com/panbanda/omen/pkg/analyzer/graph"
 	"github.com/panbanda/omen/pkg/analyzer/satd"
@@ -72,8 +71,8 @@ func New(opts ...Option) *Analyzer {
 type ProgressFunc func(stage string)
 
 // ProgressStages is the number of stages in the score analysis.
-// Stages: complexity, duplicates, defect, satd, tdg, graph, cohesion, smells
-const ProgressStages = 8
+// Stages: complexity, duplicates, satd, tdg, graph, cohesion, smells
+const ProgressStages = 7
 
 // AnalyzeProject computes the repository score for the given files.
 func (a *Analyzer) AnalyzeProject(ctx context.Context, repoPath string, files []string) (*Result, error) {
@@ -92,12 +91,6 @@ func (a *Analyzer) AnalyzeProjectWithProgress(ctx context.Context, repoPath stri
 		duplicates.WithMaxFileSize(a.maxFileSize),
 	)
 	defer duplicatesAnalyzer.Close()
-
-	defectAnalyzer := defect.New(
-		defect.WithChurnDays(a.churnDays),
-		defect.WithMaxFileSize(a.maxFileSize),
-	)
-	defer defectAnalyzer.Close()
 
 	satdAnalyzer := satd.New()
 
@@ -133,7 +126,6 @@ func (a *Analyzer) AnalyzeProjectWithProgress(ctx context.Context, repoPath stri
 	var (
 		cxResult       *complexity.Analysis
 		dupResult      *duplicates.Analysis
-		defectResult   *defect.Analysis
 		satdResult     *satd.Analysis
 		tdgResult      *tdg.ProjectScore
 		graphResult    *graph.DependencyGraph
@@ -153,12 +145,6 @@ func (a *Analyzer) AnalyzeProjectWithProgress(ctx context.Context, repoPath stri
 			onProgress("duplicates")
 		}
 		dupResult, _ = duplicatesAnalyzer.AnalyzeProject(files)
-	})
-	wg.Go(func() {
-		if onProgress != nil {
-			onProgress("defect")
-		}
-		defectResult, _ = defectAnalyzer.AnalyzeProject(ctx, repoPath, files)
 	})
 	wg.Go(func() {
 		if onProgress != nil {
@@ -220,13 +206,6 @@ func (a *Analyzer) AnalyzeProjectWithProgress(ctx context.Context, repoPath stri
 		result.Components.Duplication = NormalizeDuplication(dupResult.Summary.DuplicationRatio)
 	} else {
 		result.Components.Duplication = 100
-	}
-
-	// Defect: 100 - (avg probability * 100)
-	if defectResult != nil {
-		result.Components.Defect = NormalizeDefect(defectResult.Summary.AvgProbability)
-	} else {
-		result.Components.Defect = 100
 	}
 
 	// SATD: severity-weighted density per 1K LOC
@@ -301,7 +280,6 @@ type ContentSource interface {
 }
 
 // AnalyzeProjectFromSource computes the repository score from files read via ContentSource.
-// This skips defect analysis since it requires git history.
 func (a *Analyzer) AnalyzeProjectFromSource(files []string, src ContentSource, commitHash string) (*Result, error) {
 	// Create sub-analyzers
 	complexityAnalyzer := complexity.New(complexity.WithMaxFileSize(a.maxFileSize))
@@ -401,9 +379,6 @@ func (a *Analyzer) AnalyzeProjectFromSource(files []string, src ContentSource, c
 	} else {
 		result.Components.Duplication = 100
 	}
-
-	// Defect: skip for source-based analysis (requires git history)
-	result.Components.Defect = 100
 
 	// SATD: severity-weighted density per 1K LOC
 	if satdResult != nil {

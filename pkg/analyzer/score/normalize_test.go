@@ -79,31 +79,6 @@ func TestNormalizeDuplication_Monotonic(t *testing.T) {
 	}
 }
 
-func TestNormalizeDefect_PowerCurve(t *testing.T) {
-	tests := []struct {
-		name           string
-		avgProbability float32
-		min            int
-		max            int
-	}{
-		{"0% probability", 0.0, 100, 100},
-		{"1% probability", 0.01, 89, 91},  // sqrt(0.01) = 0.1, score ~90
-		{"10% probability", 0.10, 67, 69}, // sqrt(0.1) = 0.316, score ~68
-		{"25% probability", 0.25, 49, 51}, // sqrt(0.25) = 0.5, score ~50
-		{"50% probability", 0.50, 28, 30}, // sqrt(0.5) = 0.707, score ~29
-		{"100% probability", 1.0, 0, 0},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := NormalizeDefect(tt.avgProbability)
-			if got < tt.min || got > tt.max {
-				t.Errorf("NormalizeDefect(%f) = %d, want %d-%d",
-					tt.avgProbability, got, tt.min, tt.max)
-			}
-		})
-	}
-}
-
 func TestNormalizeSATD_SeverityWeighted(t *testing.T) {
 	tests := []struct {
 		name   string

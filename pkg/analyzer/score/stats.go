@@ -43,7 +43,6 @@ func ComputeComponentTrends(points []TrendPoint) ComponentTrends {
 	xs := make([]float64, n)
 	complexity := make([]float64, n)
 	duplication := make([]float64, n)
-	defect := make([]float64, n)
 	satd := make([]float64, n)
 	tdg := make([]float64, n)
 	coupling := make([]float64, n)
@@ -54,7 +53,6 @@ func ComputeComponentTrends(points []TrendPoint) ComponentTrends {
 		xs[i] = float64(i)
 		complexity[i] = float64(p.Components.Complexity)
 		duplication[i] = float64(p.Components.Duplication)
-		defect[i] = float64(p.Components.Defect)
 		satd[i] = float64(p.Components.SATD)
 		tdg[i] = float64(p.Components.TDG)
 		coupling[i] = float64(p.Components.Coupling)
@@ -65,7 +63,6 @@ func ComputeComponentTrends(points []TrendPoint) ComponentTrends {
 	return ComponentTrends{
 		Complexity:  computeStats(xs, complexity),
 		Duplication: computeStats(xs, duplication),
-		Defect:      computeStats(xs, defect),
 		SATD:        computeStats(xs, satd),
 		TDG:         computeStats(xs, tdg),
 		Coupling:    computeStats(xs, coupling),

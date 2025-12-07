@@ -6,10 +6,13 @@ import (
 )
 
 // Weights defines the weights for each component in the composite score.
+// Note: Defect prediction is excluded from composite scoring because it requires
+// git history (churn data) which isn't available during trend analysis. For
+// consistency between `omen score` and `omen trend`, defect is analyzed separately
+// via `omen analyze defect`.
 type Weights struct {
 	Complexity  float64 `json:"complexity" toml:"complexity"`
 	Duplication float64 `json:"duplication" toml:"duplication"`
-	Defect      float64 `json:"defect" toml:"defect"`
 	SATD        float64 `json:"satd" toml:"satd"` // Self-Admitted Technical Debt (TODO/FIXME markers)
 	TDG         float64 `json:"tdg" toml:"tdg"`   // Technical Debt Gradient (comprehensive debt score)
 	Coupling    float64 `json:"coupling" toml:"coupling"`
@@ -20,14 +23,13 @@ type Weights struct {
 // DefaultWeights returns the default weights (must sum to 1.0).
 func DefaultWeights() Weights {
 	return Weights{
-		Complexity:  0.20,
-		Duplication: 0.15,
-		Defect:      0.20,
-		SATD:        0.10, // Self-Admitted Technical Debt
-		TDG:         0.10, // Technical Debt Gradient
+		Complexity:  0.25,
+		Duplication: 0.20,
+		SATD:        0.10,
+		TDG:         0.15,
 		Coupling:    0.10,
 		Smells:      0.05,
-		Cohesion:    0.10,
+		Cohesion:    0.15,
 	}
 }
 
@@ -36,7 +38,6 @@ type Thresholds struct {
 	Score       int `json:"score" toml:"score"`
 	Complexity  int `json:"complexity" toml:"complexity"`
 	Duplication int `json:"duplication" toml:"duplication"`
-	Defect      int `json:"defect" toml:"defect"`
 	SATD        int `json:"satd" toml:"satd"`
 	TDG         int `json:"tdg" toml:"tdg"`
 	Coupling    int `json:"coupling" toml:"coupling"`
@@ -48,7 +49,6 @@ type Thresholds struct {
 type ComponentScores struct {
 	Complexity  int `json:"complexity"`
 	Duplication int `json:"duplication"`
-	Defect      int `json:"defect"`
 	SATD        int `json:"satd"` // Self-Admitted Technical Debt
 	TDG         int `json:"tdg"`  // Technical Debt Gradient
 	Coupling    int `json:"coupling"`
@@ -79,7 +79,6 @@ type Result struct {
 func (r *Result) ComputeComposite() {
 	weighted := float64(r.Components.Complexity)*r.Weights.Complexity +
 		float64(r.Components.Duplication)*r.Weights.Duplication +
-		float64(r.Components.Defect)*r.Weights.Defect +
 		float64(r.Components.SATD)*r.Weights.SATD +
 		float64(r.Components.TDG)*r.Weights.TDG +
 		float64(r.Components.Coupling)*r.Weights.Coupling +
@@ -113,7 +112,6 @@ func (r *Result) CheckThresholds(t Thresholds) {
 	check("score", r.Score, t.Score)
 	check("complexity", r.Components.Complexity, t.Complexity)
 	check("duplication", r.Components.Duplication, t.Duplication)
-	check("defect", r.Components.Defect, t.Defect)
 	check("satd", r.Components.SATD, t.SATD)
 	check("tdg", r.Components.TDG, t.TDG)
 	check("coupling", r.Components.Coupling, t.Coupling)

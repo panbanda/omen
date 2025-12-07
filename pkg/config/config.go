@@ -152,10 +152,11 @@ type ScoreConfig struct {
 }
 
 // ScoreWeights defines component weights (must sum to 1.0).
+// Note: Defect prediction is excluded from composite scoring because it requires
+// git history (churn data) which isn't available during trend analysis.
 type ScoreWeights struct {
 	Complexity  float64 `koanf:"complexity" toml:"complexity"`
 	Duplication float64 `koanf:"duplication" toml:"duplication"`
-	Defect      float64 `koanf:"defect" toml:"defect"`
 	SATD        float64 `koanf:"satd" toml:"satd"` // Self-Admitted Technical Debt (TODO/FIXME markers)
 	TDG         float64 `koanf:"tdg" toml:"tdg"`   // Technical Debt Gradient (comprehensive debt score)
 	Coupling    float64 `koanf:"coupling" toml:"coupling"`
@@ -168,7 +169,6 @@ type ScoreThresholds struct {
 	Score       int `koanf:"score" toml:"score"`
 	Complexity  int `koanf:"complexity" toml:"complexity"`
 	Duplication int `koanf:"duplication" toml:"duplication"`
-	Defect      int `koanf:"defect" toml:"defect"`
 	SATD        int `koanf:"satd" toml:"satd"`
 	TDG         int `koanf:"tdg" toml:"tdg"`
 	Coupling    int `koanf:"coupling" toml:"coupling"`
@@ -192,7 +192,6 @@ func (c *ScoreConfig) EffectiveWeights() ScoreWeights {
 	return ScoreWeights{
 		Complexity:  c.Weights.Complexity * scale,
 		Duplication: c.Weights.Duplication * scale,
-		Defect:      c.Weights.Defect * scale,
 		SATD:        c.Weights.SATD * scale,
 		TDG:         c.Weights.TDG * scale,
 		Coupling:    c.Weights.Coupling * scale,
@@ -290,14 +289,13 @@ func DefaultConfig() *Config {
 		},
 		Score: ScoreConfig{
 			Weights: ScoreWeights{
-				Complexity:  0.20,
-				Duplication: 0.15,
-				Defect:      0.20,
+				Complexity:  0.25,
+				Duplication: 0.20,
 				SATD:        0.10,
-				TDG:         0.10,
+				TDG:         0.15,
 				Coupling:    0.10,
 				Smells:      0.05,
-				Cohesion:    0.10,
+				Cohesion:    0.15,
 			},
 			Thresholds: ScoreThresholds{}, // All zeros = no enforcement
 		},
@@ -552,7 +550,7 @@ func (c *Config) Validate() error {
 	// Score config validation - validate effective weights (after enable_cohesion adjustment)
 	effectiveWeights := c.Score.EffectiveWeights()
 	weightsSum := effectiveWeights.Complexity + effectiveWeights.Duplication +
-		effectiveWeights.Defect + effectiveWeights.SATD + effectiveWeights.TDG +
+		effectiveWeights.SATD + effectiveWeights.TDG +
 		effectiveWeights.Coupling + effectiveWeights.Smells +
 		effectiveWeights.Cohesion
 	if weightsSum < 0.99 || weightsSum > 1.01 {
@@ -561,7 +559,7 @@ func (c *Config) Validate() error {
 
 	// Validate individual weights are non-negative
 	if effectiveWeights.Complexity < 0 || effectiveWeights.Duplication < 0 ||
-		effectiveWeights.Defect < 0 || effectiveWeights.SATD < 0 || effectiveWeights.TDG < 0 ||
+		effectiveWeights.SATD < 0 || effectiveWeights.TDG < 0 ||
 		effectiveWeights.Coupling < 0 || effectiveWeights.Smells < 0 ||
 		effectiveWeights.Cohesion < 0 {
 		errs = append(errs, errors.New("score.weights values must be non-negative"))
@@ -576,7 +574,6 @@ func (c *Config) Validate() error {
 	validateThreshold("score", c.Score.Thresholds.Score)
 	validateThreshold("complexity", c.Score.Thresholds.Complexity)
 	validateThreshold("duplication", c.Score.Thresholds.Duplication)
-	validateThreshold("defect", c.Score.Thresholds.Defect)
 	validateThreshold("satd", c.Score.Thresholds.SATD)
 	validateThreshold("tdg", c.Score.Thresholds.TDG)
 	validateThreshold("coupling", c.Score.Thresholds.Coupling)
