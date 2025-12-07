@@ -1,6 +1,7 @@
 package duplicates
 
 import (
+	"context"
 	"encoding/binary"
 	"math"
 	"os"
@@ -12,11 +13,15 @@ import (
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/panbanda/omen/internal/fileproc"
+	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/config"
 	"github.com/panbanda/omen/pkg/parser"
 	"github.com/panbanda/omen/pkg/stats"
 	"github.com/zeebo/blake3"
 )
+
+// Compile-time check that Analyzer implements FileAnalyzer interface.
+var _ analyzer.FileAnalyzer[*Analysis] = (*Analyzer)(nil)
 
 // Analyzer detects code clones using MinHash with LSH for efficient candidate filtering.
 type Analyzer struct {
@@ -96,9 +101,15 @@ type codeFragment struct {
 	tokens         []string
 }
 
-// AnalyzeProject detects code clones across a project.
-func (a *Analyzer) AnalyzeProject(files []string) (*Analysis, error) {
+// Analyze detects code clones across a project.
+func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Analysis, error) {
 	return a.AnalyzeProjectWithProgress(files, nil)
+}
+
+// AnalyzeProject detects code clones across a project.
+// Deprecated: Use Analyze with context instead.
+func (a *Analyzer) AnalyzeProject(files []string) (*Analysis, error) {
+	return a.Analyze(context.Background(), files)
 }
 
 // AnalyzeProjectWithProgress detects code clones with optional progress callback.

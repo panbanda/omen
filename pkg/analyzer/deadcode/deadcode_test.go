@@ -1,6 +1,7 @@
 package deadcode
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -122,7 +123,7 @@ def unused():
 	}
 }
 
-func TestAnalyzeProject(t *testing.T) {
+func TestAnalyze(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	file1 := filepath.Join(tmpDir, "main.go")
@@ -154,9 +155,9 @@ func unused() int {
 	a := New(WithConfidence(0.5)) // Lower confidence to catch more
 	defer a.Close()
 
-	analysis, err := a.AnalyzeProject([]string{file1, file2})
+	analysis, err := a.Analyze(context.Background(), []string{file1, file2})
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	if analysis.Summary.TotalFilesAnalyzed != 2 {
@@ -429,7 +430,7 @@ func TestWithCapacity(t *testing.T) {
 	}
 }
 
-func TestAnalyzeProject_WithSkipCallGraph(t *testing.T) {
+func TestAnalyze_WithSkipCallGraph(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	file1 := filepath.Join(tmpDir, "main.go")
@@ -450,9 +451,9 @@ func unused() {}
 	a := New(WithSkipCallGraph(), WithConfidence(0.5))
 	defer a.Close()
 
-	analysis, err := a.AnalyzeProject([]string{file1})
+	analysis, err := a.Analyze(context.Background(), []string{file1})
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	// Should still detect dead code using simple usage analysis
@@ -1010,13 +1011,13 @@ func withPanic() {
 	}
 }
 
-func TestAnalyzeProject_EmptyFiles(t *testing.T) {
+func TestAnalyze_EmptyFiles(t *testing.T) {
 	a := New()
 	defer a.Close()
 
-	analysis, err := a.AnalyzeProject([]string{})
+	analysis, err := a.Analyze(context.Background(), []string{})
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	if analysis == nil {

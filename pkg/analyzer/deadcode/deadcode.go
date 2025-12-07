@@ -1,6 +1,7 @@
 package deadcode
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/panbanda/omen/internal/fileproc"
+	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/parser"
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/zeebo/blake3"
@@ -195,6 +197,9 @@ func (g *CrossLangReferenceGraph) GetOutgoingEdges(nodeID uint32) []ReferenceEdg
 	}
 	return edges
 }
+
+// Compile-time check that Analyzer implements FileAnalyzer interface.
+var _ analyzer.FileAnalyzer[*Analysis] = (*Analyzer)(nil)
 
 // Analyzer detects unused functions, variables, and unreachable code.
 // Architecture matches PMAT's DeadCodeAnalyzer with:
@@ -1141,9 +1146,15 @@ func computeContextHash(name, file string, line uint32, kind string) string {
 	return string(hash[:8])
 }
 
-// AnalyzeProject analyzes dead code across a project using the 4-phase PMAT architecture.
-func (a *Analyzer) AnalyzeProject(files []string) (*Analysis, error) {
+// Analyze analyzes dead code across a project using the 4-phase PMAT architecture.
+func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Analysis, error) {
 	return a.AnalyzeProjectWithProgress(files, nil)
+}
+
+// AnalyzeProject analyzes dead code across a project using the 4-phase PMAT architecture.
+// Deprecated: Use Analyze with context instead.
+func (a *Analyzer) AnalyzeProject(files []string) (*Analysis, error) {
+	return a.Analyze(context.Background(), files)
 }
 
 // AnalyzeProjectWithProgress analyzes dead code with optional progress callback.

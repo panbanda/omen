@@ -1,10 +1,12 @@
 package graph
 
 import (
+	"context"
 	"strings"
 	"sync"
 
 	"github.com/panbanda/omen/internal/fileproc"
+	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/parser"
 	sitter "github.com/smacker/go-tree-sitter"
 	"gonum.org/v1/gonum/graph/community"
@@ -13,6 +15,9 @@ import (
 	"gonum.org/v1/gonum/graph/simple"
 	"gonum.org/v1/gonum/graph/topo"
 )
+
+// Compile-time check that Analyzer implements FileAnalyzer interface.
+var _ analyzer.FileAnalyzer[*DependencyGraph] = (*Analyzer)(nil)
 
 // Analyzer builds dependency graphs from source code.
 type Analyzer struct {
@@ -61,17 +66,33 @@ type fileGraphData struct {
 	language  parser.Language
 }
 
+// Analyze builds a dependency graph for a project.
+func (a *Analyzer) Analyze(ctx context.Context, files []string) (*DependencyGraph, error) {
+	return a.analyzeWithProgress(ctx, files, nil)
+}
+
 // AnalyzeProject builds a dependency graph for a project.
+// Deprecated: Use Analyze with context instead.
 func (a *Analyzer) AnalyzeProject(files []string) (*DependencyGraph, error) {
-	return a.AnalyzeProjectWithProgress(files, nil)
+	return a.Analyze(context.Background(), files)
 }
 
 // AnalyzeProjectWithProgress builds a dependency graph with optional progress callback.
+// Deprecated: Use Analyze with context instead.
 func (a *Analyzer) AnalyzeProjectWithProgress(files []string, onProgress fileproc.ProgressFunc) (*DependencyGraph, error) {
+	return a.analyzeWithProgress(context.Background(), files, onProgress)
+}
+
+// analyzeWithProgress is the internal implementation that supports progress callbacks.
+func (a *Analyzer) analyzeWithProgress(ctx context.Context, files []string, onProgress fileproc.ProgressFunc) (*DependencyGraph, error) {
 	// Parse all files in parallel, extracting nodes and edge data
-	fileData := fileproc.MapFilesWithSizeLimit(files, a.maxFileSize, func(psr *parser.Parser, path string) (fileGraphData, error) {
+	fileData, procErr := fileproc.MapFilesWithContextAndProgress(ctx, files, func(psr *parser.Parser, path string) (fileGraphData, error) {
 		return a.analyzeFileGraph(psr, path)
-	}, onProgress, nil)
+	}, onProgress)
+
+	if procErr != nil && len(fileData) == 0 {
+		return nil, procErr
+	}
 
 	graph := NewDependencyGraph()
 	nodeMap := make(map[string]bool)

@@ -1,13 +1,18 @@
 package complexity
 
 import (
+	"context"
 	"fmt"
 	"sort"
 
 	"github.com/panbanda/omen/internal/fileproc"
+	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/parser"
 	sitter "github.com/smacker/go-tree-sitter"
 )
+
+// Compile-time check that Analyzer implements FileAnalyzer interface.
+var _ analyzer.FileAnalyzer[*Analysis] = (*Analyzer)(nil)
 
 // Analyzer computes cyclomatic and cognitive complexity.
 type Analyzer struct {
@@ -91,9 +96,15 @@ func analyzeParseResult(result *parser.ParseResult) *FileResult {
 	return fc
 }
 
-// AnalyzeProject analyzes all files in a project using parallel processing.
-func (a *Analyzer) AnalyzeProject(files []string) (*Analysis, error) {
+// Analyze analyzes all files in a project using parallel processing.
+func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Analysis, error) {
 	return a.AnalyzeProjectWithProgress(files, nil)
+}
+
+// AnalyzeProject analyzes all files in a project using parallel processing.
+// Deprecated: Use Analyze with context instead.
+func (a *Analyzer) AnalyzeProject(files []string) (*Analysis, error) {
+	return a.Analyze(context.Background(), files)
 }
 
 // AnalyzeProjectWithProgress analyzes all files with optional progress callback.
