@@ -47,9 +47,11 @@ For each component scoring below the composite, investigate:
 - **Low Complexity Score (<70)**: Run `analyze_complexity` to find specific functions
 - **Low Duplication Score (<80)**: Run `analyze_duplicates` to find clone groups
 - **Low Defect Score (<70)**: Run `analyze_defect` to find high-risk files
-- **Low Debt Score (<80)**: Run `analyze_satd` to find explicit debt markers
+- **Low SATD Score (<80)**: Run `analyze_satd` to find explicit debt markers (TODO/FIXME)
+- **Low TDG Score (<70)**: Run `analyze_tdg` to find files with high technical debt gradient
 - **Low Coupling Score (<70)**: Run `analyze_graph` and `analyze_smells`
 - **Low Smells Score (<80)**: Run `analyze_smells` for architectural issues
+- **Low Cohesion Score (<70)**: Run `analyze_cohesion` to find classes with poor cohesion
 
 ## Output
 
@@ -60,13 +62,14 @@ For each component scoring below the composite, investigate:
 
 | Component | Score | Weight | Status |
 |-----------|-------|--------|--------|
-| Complexity | | 25% | |
-| Duplication | | 20% | |
-| Defect Risk | | 25% | |
-| Technical Debt | | 15% | |
+| Complexity | | 20% | |
+| Duplication | | 15% | |
+| Defect Risk | | 20% | |
+| SATD | | 10% | |
+| TDG | | 10% | |
 | Coupling | | 10% | |
 | Smells | | 5% | |
-| Cohesion (info) | | - | |
+| Cohesion | | 10% | |
 
 ### Score Breakdown
 
