@@ -948,7 +948,6 @@ func changesCmd() *cli.Command {
 	)
 	return &cli.Command{
 		Name:      "changes",
-		Aliases:   []string{"jit"},
 		Usage:     "Analyze recent changes for defect risk (Kamei et al. 2013)",
 		ArgsUsage: "[path]",
 		Flags:     flags,
@@ -1038,6 +1037,94 @@ func runChangesCmd(c *cli.Context) error {
 			fmt.Sprintf("Bug Fixes: %d", result.Summary.BugFixCount),
 			fmt.Sprintf("Avg Score: %.2f", result.Summary.AvgRiskScore),
 		},
+		result,
+	)
+
+	return formatter.Output(table)
+}
+
+func diffCmd() *cli.Command {
+	flags := append(outputFlags(),
+		&cli.StringFlag{
+			Name:    "target",
+			Aliases: []string{"t"},
+			Usage:   "Target branch to compare against (default: auto-detect main/master)",
+		},
+		&cli.IntFlag{
+			Name:  "days",
+			Value: 30,
+			Usage: "Days of history for normalization context",
+		},
+	)
+	return &cli.Command{
+		Name:      "diff",
+		Usage:     "Analyze current branch diff for defect risk",
+		ArgsUsage: "[path]",
+		Flags:     flags,
+		Action:    runDiffCmd,
+	}
+}
+
+func runDiffCmd(c *cli.Context) error {
+	paths := getPaths(c)
+	target := c.String("target")
+	days := c.Int("days")
+
+	absPath, err := filepath.Abs(paths[0])
+	if err != nil {
+		return fmt.Errorf("invalid path: %w", err)
+	}
+
+	spinner := progress.NewSpinner("Analyzing branch diff...")
+	analyzer := changes.New(changes.WithDays(days))
+	defer analyzer.Close()
+
+	result, err := analyzer.AnalyzeDiff(absPath, target)
+	spinner.FinishSuccess()
+	if err != nil {
+		return fmt.Errorf("diff analysis failed: %w", err)
+	}
+
+	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
+	if err != nil {
+		return err
+	}
+	defer formatter.Close()
+
+	// Risk level with color for text output
+	scoreStr := fmt.Sprintf("%.2f", result.Score)
+	levelStr := result.Level
+	if formatter.Colored() {
+		switch result.Level {
+		case "high":
+			scoreStr = color.RedString(scoreStr)
+			levelStr = color.RedString(levelStr)
+		case "medium":
+			scoreStr = color.YellowString(scoreStr)
+			levelStr = color.YellowString(levelStr)
+		case "low":
+			scoreStr = color.GreenString(scoreStr)
+			levelStr = color.GreenString(levelStr)
+		}
+	}
+
+	rows := [][]string{
+		{"Source Branch", result.SourceBranch},
+		{"Target Branch", result.TargetBranch},
+		{"Merge Base", result.MergeBase[:8]},
+		{"Risk Score", scoreStr},
+		{"Risk Level", levelStr},
+		{"Files Modified", fmt.Sprintf("%d", result.FilesModified)},
+		{"Lines Added", fmt.Sprintf("+%d", result.LinesAdded)},
+		{"Lines Deleted", fmt.Sprintf("-%d", result.LinesDeleted)},
+		{"Commits", fmt.Sprintf("%d", result.Commits)},
+	}
+
+	table := output.NewTable(
+		"Branch Diff Risk Analysis",
+		[]string{"Metric", "Value"},
+		rows,
+		nil,
 		result,
 	)
 
@@ -2392,6 +2479,7 @@ func analyzeCmd() *cli.Command {
 			duplicatesCmd(),
 			defectCmd(),
 			changesCmd(),
+			diffCmd(),
 			tdgCmd(),
 			graphCmd(),
 			lintHotspotCmd(),

@@ -182,58 +182,86 @@ func truncateMessage(message string) string {
 	return strings.TrimSpace(message)
 }
 
-// calculateNormalizationStats computes min-max values for normalization.
+// calculateNormalizationStats computes 95th percentile values for normalization.
+// Using percentiles instead of max values makes the normalization robust to outliers.
 func calculateNormalizationStats(commits []CommitFeatures) NormalizationStats {
-	stats := NormalizationStats{}
-
-	for _, c := range commits {
-		if c.LinesAdded > stats.MaxLinesAdded {
-			stats.MaxLinesAdded = c.LinesAdded
-		}
-		if c.LinesDeleted > stats.MaxLinesDeleted {
-			stats.MaxLinesDeleted = c.LinesDeleted
-		}
-		if c.NumFiles > stats.MaxNumFiles {
-			stats.MaxNumFiles = c.NumFiles
-		}
-		if c.UniqueChanges > stats.MaxUniqueChanges {
-			stats.MaxUniqueChanges = c.UniqueChanges
-		}
-		if c.NumDevelopers > stats.MaxNumDevelopers {
-			stats.MaxNumDevelopers = c.NumDevelopers
-		}
-		if c.AuthorExperience > stats.MaxAuthorExperience {
-			stats.MaxAuthorExperience = c.AuthorExperience
-		}
-		if c.Entropy > stats.MaxEntropy {
-			stats.MaxEntropy = c.Entropy
+	if len(commits) == 0 {
+		return NormalizationStats{
+			MaxLinesAdded:       1,
+			MaxLinesDeleted:     1,
+			MaxNumFiles:         1,
+			MaxUniqueChanges:    1,
+			MaxNumDevelopers:    1,
+			MaxAuthorExperience: 1,
+			MaxEntropy:          1,
 		}
 	}
 
-	// Ensure no zero max values to avoid division by zero
-	if stats.MaxLinesAdded == 0 {
-		stats.MaxLinesAdded = 1
-	}
-	if stats.MaxLinesDeleted == 0 {
-		stats.MaxLinesDeleted = 1
-	}
-	if stats.MaxNumFiles == 0 {
-		stats.MaxNumFiles = 1
-	}
-	if stats.MaxUniqueChanges == 0 {
-		stats.MaxUniqueChanges = 1
-	}
-	if stats.MaxNumDevelopers == 0 {
-		stats.MaxNumDevelopers = 1
-	}
-	if stats.MaxAuthorExperience == 0 {
-		stats.MaxAuthorExperience = 1
-	}
-	if stats.MaxEntropy == 0 {
-		stats.MaxEntropy = 1
+	// Collect values for each metric
+	linesAdded := make([]float64, len(commits))
+	linesDeleted := make([]float64, len(commits))
+	numFiles := make([]float64, len(commits))
+	uniqueChanges := make([]float64, len(commits))
+	numDevelopers := make([]float64, len(commits))
+	authorExperience := make([]float64, len(commits))
+	entropy := make([]float64, len(commits))
+
+	for i, c := range commits {
+		linesAdded[i] = float64(c.LinesAdded)
+		linesDeleted[i] = float64(c.LinesDeleted)
+		numFiles[i] = float64(c.NumFiles)
+		uniqueChanges[i] = float64(c.UniqueChanges)
+		numDevelopers[i] = float64(c.NumDevelopers)
+		authorExperience[i] = float64(c.AuthorExperience)
+		entropy[i] = c.Entropy
 	}
 
-	return stats
+	// Sort slices for percentile calculation
+	sort.Float64s(linesAdded)
+	sort.Float64s(linesDeleted)
+	sort.Float64s(numFiles)
+	sort.Float64s(uniqueChanges)
+	sort.Float64s(numDevelopers)
+	sort.Float64s(authorExperience)
+	sort.Float64s(entropy)
+
+	// Use 95th percentile to exclude outliers
+	const p = 95
+
+	result := NormalizationStats{
+		MaxLinesAdded:       int(stats.Percentile(linesAdded, p)),
+		MaxLinesDeleted:     int(stats.Percentile(linesDeleted, p)),
+		MaxNumFiles:         int(stats.Percentile(numFiles, p)),
+		MaxUniqueChanges:    int(stats.Percentile(uniqueChanges, p)),
+		MaxNumDevelopers:    int(stats.Percentile(numDevelopers, p)),
+		MaxAuthorExperience: int(stats.Percentile(authorExperience, p)),
+		MaxEntropy:          stats.Percentile(entropy, p),
+	}
+
+	// Ensure no zero values to avoid division by zero
+	if result.MaxLinesAdded == 0 {
+		result.MaxLinesAdded = 1
+	}
+	if result.MaxLinesDeleted == 0 {
+		result.MaxLinesDeleted = 1
+	}
+	if result.MaxNumFiles == 0 {
+		result.MaxNumFiles = 1
+	}
+	if result.MaxUniqueChanges == 0 {
+		result.MaxUniqueChanges = 1
+	}
+	if result.MaxNumDevelopers == 0 {
+		result.MaxNumDevelopers = 1
+	}
+	if result.MaxAuthorExperience == 0 {
+		result.MaxAuthorExperience = 1
+	}
+	if result.MaxEntropy == 0 {
+		result.MaxEntropy = 1
+	}
+
+	return result
 }
 
 // Close releases analyzer resources.
