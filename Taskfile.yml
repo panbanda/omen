@@ -22,4 +22,10 @@ tasks:
     desc: Run all checks and tests
     cmds:
       - task: lint
+      - go test ./...
+
+  test-race:
+    desc: Run tests with race detector (slower, for CI)
+    cmds:
+      - task: lint
       - go test -race ./...

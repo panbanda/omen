@@ -2,28 +2,37 @@ package main
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/fatih/color"
 	"github.com/panbanda/omen/internal/output"
 	"github.com/panbanda/omen/internal/vcs"
-	commitanalyzer "github.com/panbanda/omen/pkg/analyzer/commit"
+	"github.com/panbanda/omen/pkg/analyzer/score"
 	"github.com/urfave/cli/v2"
 )
 
 func trendCmd() *cli.Command {
 	flags := append(outputFlags(),
-		&cli.IntFlag{
-			Name:    "days",
-			Aliases: []string{"d"},
-			Value:   30,
-			Usage:   "Number of days to analyze",
+		&cli.StringFlag{
+			Name:    "since",
+			Aliases: []string{"s"},
+			Value:   "3m",
+			Usage:   "How far back to analyze (e.g., 3m, 6m, 1y, 2y, 30d, 4w)",
+		},
+		&cli.StringFlag{
+			Name:    "period",
+			Aliases: []string{"p"},
+			Value:   "weekly",
+			Usage:   "Sampling period (daily, weekly, monthly)",
+		},
+		&cli.BoolFlag{
+			Name:  "snap",
+			Usage: "Snap to period boundaries (1st of month, Monday)",
 		},
 	)
 	return &cli.Command{
 		Name:      "trend",
 		Aliases:   []string{"tr"},
-		Usage:     "Analyze repository metrics over time",
+		Usage:     "Analyze repository score over time",
 		ArgsUsage: "[path...]",
 		Flags:     flags,
 		Action:    runTrendCmd,
@@ -31,10 +40,22 @@ func trendCmd() *cli.Command {
 }
 
 func runTrendCmd(c *cli.Context) error {
-	days := c.Int("days")
+	sinceStr := c.String("since")
+	period := c.String("period")
+	snap := c.Bool("snap")
 
-	if err := validateDays(days); err != nil {
-		return err
+	// Parse duration
+	since, err := score.ParseSince(sinceStr)
+	if err != nil {
+		return fmt.Errorf("invalid --since value: %w", err)
+	}
+
+	// Validate period
+	switch period {
+	case "daily", "weekly", "monthly":
+		// OK
+	default:
+		return fmt.Errorf("invalid --period: %s (use daily, weekly, or monthly)", period)
 	}
 
 	paths := getPaths(c)
@@ -45,16 +66,31 @@ func runTrendCmd(c *cli.Context) error {
 		return fmt.Errorf("failed to open repository: %w", err)
 	}
 
-	a := commitanalyzer.New()
-	defer a.Close()
+	// Create trend analyzer
+	trendAnalyzer := score.NewTrendAnalyzer(
+		score.WithTrendPeriod(period),
+		score.WithTrendSince(since),
+		score.WithTrendSnap(snap),
+	)
 
-	duration := time.Duration(days) * 24 * time.Hour
-	trends, err := a.AnalyzeTrend(repo, duration)
-	if err != nil {
-		return fmt.Errorf("failed to analyze trends: %w", err)
+	// Show progress
+	var progressFn score.TrendProgressFunc
+	if !c.Bool("quiet") {
+		progressFn = func(current, total int, commitSHA string) {
+			fmt.Printf("\rAnalyzing commit %d/%d (%s)...", current, total, commitSHA)
+		}
 	}
 
-	if len(trends.Commits) == 0 {
+	result, err := trendAnalyzer.AnalyzeTrendFastWithProgress(repo, progressFn)
+	if err != nil {
+		return fmt.Errorf("failed to analyze trend: %w", err)
+	}
+
+	if progressFn != nil {
+		fmt.Println() // Clear progress line
+	}
+
+	if len(result.Points) == 0 {
 		color.Yellow("No commits found in the specified time range")
 		return nil
 	}
@@ -65,5 +101,5 @@ func runTrendCmd(c *cli.Context) error {
 	}
 	defer formatter.Close()
 
-	return formatter.Output(trends)
+	return formatter.Output(result)
 }

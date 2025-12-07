@@ -868,3 +868,177 @@ func (a *Analyzer) Close() {
 		a.parser.Close()
 	}
 }
+
+// ContentSource provides file content.
+type ContentSource interface {
+	Read(path string) ([]byte, error)
+}
+
+// AnalyzeProjectFromSource computes CK metrics from files read via ContentSource.
+func (a *Analyzer) AnalyzeProjectFromSource(files []string, src ContentSource) (*Analysis, error) {
+	analysis := &Analysis{
+		GeneratedAt: time.Now().UTC(),
+		Classes:     make([]ClassMetrics, 0),
+	}
+
+	psr := parser.New()
+	defer psr.Close()
+
+	// First pass: Build inheritance tree from all files
+	inheritanceTree := a.buildInheritanceTreeFromSource(files, src, psr)
+
+	// Second pass: Extract CK metrics from each file
+	for _, path := range files {
+		if a.skipTestFile && isTestFile(path) {
+			continue
+		}
+
+		content, err := src.Read(path)
+		if err != nil {
+			continue
+		}
+
+		if a.maxFileSize > 0 && int64(len(content)) > a.maxFileSize {
+			continue
+		}
+
+		classes, err := a.analyzeFileFromContent(psr, path, content, inheritanceTree)
+		if err != nil {
+			continue
+		}
+
+		analysis.Classes = append(analysis.Classes, classes...)
+	}
+
+	analysis.SortByLCOM()
+	analysis.CalculateSummary()
+
+	return analysis, nil
+}
+
+// buildInheritanceTreeFromSource builds inheritance tree from ContentSource.
+func (a *Analyzer) buildInheritanceTreeFromSource(files []string, src ContentSource, psr *parser.Parser) *inheritanceTree {
+	tree := &inheritanceTree{
+		classToParents:  make(map[string][]string),
+		classToChildren: make(map[string][]string),
+		allClasses:      make(map[string]bool),
+	}
+
+	childrenSet := make(map[string]map[string]bool)
+
+	for _, path := range files {
+		if a.skipTestFile && isTestFile(path) {
+			continue
+		}
+
+		content, err := src.Read(path)
+		if err != nil {
+			continue
+		}
+
+		infos, err := extractInheritanceInfoFromContent(psr, path, content)
+		if err != nil {
+			continue
+		}
+
+		for _, info := range infos {
+			tree.allClasses[info.className] = true
+			tree.classToParents[info.className] = info.parents
+
+			for _, parent := range info.parents {
+				if childrenSet[parent] == nil {
+					childrenSet[parent] = make(map[string]bool)
+				}
+				if !childrenSet[parent][info.className] {
+					childrenSet[parent][info.className] = true
+					tree.classToChildren[parent] = append(tree.classToChildren[parent], info.className)
+				}
+			}
+		}
+	}
+
+	return tree
+}
+
+// extractInheritanceInfoFromContent extracts class inheritance from content.
+func extractInheritanceInfoFromContent(psr *parser.Parser, path string, content []byte) ([]inheritanceInfo, error) {
+	lang := parser.DetectLanguage(path)
+	if lang == parser.LangUnknown {
+		return nil, nil
+	}
+	result, err := psr.Parse(content, lang, path)
+	if err != nil {
+		return nil, err
+	}
+
+	if !isOOLanguage(result.Language) {
+		return nil, nil
+	}
+
+	var infos []inheritanceInfo
+	root := result.Tree.RootNode()
+
+	parser.Walk(root, result.Source, func(node *sitter.Node, source []byte) bool {
+		if isClassNode(node.Type(), result.Language) {
+			info := inheritanceInfo{file: path}
+
+			if nameNode := node.ChildByFieldName("name"); nameNode != nil {
+				info.className = parser.GetNodeText(nameNode, source)
+			}
+
+			if info.className == "" {
+				return true
+			}
+
+			info.parents = extractParentClasses(node, source, result.Language)
+			infos = append(infos, info)
+		}
+		return true
+	})
+
+	return infos, nil
+}
+
+// analyzeFileFromContent extracts CK metrics from file content.
+func (a *Analyzer) analyzeFileFromContent(psr *parser.Parser, path string, content []byte, tree *inheritanceTree) ([]ClassMetrics, error) {
+	lang := parser.DetectLanguage(path)
+	if lang == parser.LangUnknown {
+		return nil, nil
+	}
+	result, err := psr.Parse(content, lang, path)
+	if err != nil {
+		return nil, err
+	}
+
+	if !isOOLanguage(result.Language) {
+		return nil, nil
+	}
+
+	var classes []ClassMetrics
+
+	classNodes := parser.GetClasses(result)
+
+	for _, cls := range classNodes {
+		if cls.Name == "" {
+			continue
+		}
+
+		metrics := ClassMetrics{
+			Path:      path,
+			ClassName: cls.Name,
+			Language:  string(result.Language),
+			StartLine: int(cls.StartLine),
+			EndLine:   int(cls.EndLine),
+			LOC:       int(cls.EndLine - cls.StartLine + 1),
+		}
+
+		classNode := findClassNode(result, cls.Name)
+		if classNode != nil {
+			a.extractClassMetrics(classNode, result, &metrics, tree)
+		}
+
+		classes = append(classes, metrics)
+	}
+
+	return classes, nil
+}

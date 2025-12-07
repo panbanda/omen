@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/panbanda/omen/internal/service/scanner"
 	"github.com/panbanda/omen/internal/vcs"
 )
@@ -342,4 +343,300 @@ func ParseSince(s string) (time.Duration, error) {
 	default:
 		return 0, fmt.Errorf("invalid duration unit: %c (use m, y, w, or d)", unit)
 	}
+}
+
+// AnalyzeTrendFast performs historical score analysis using go-git tree traversal.
+// This is faster than AnalyzeTrend because it doesn't require checking out commits.
+func (t *TrendAnalyzer) AnalyzeTrendFast(repo vcs.Repository) (*TrendResult, error) {
+	return t.AnalyzeTrendFastWithProgress(repo, nil)
+}
+
+// AnalyzeTrendFastWithProgress performs historical score analysis with progress reporting.
+func (t *TrendAnalyzer) AnalyzeTrendFastWithProgress(repo vcs.Repository, onProgress TrendProgressFunc) (*TrendResult, error) {
+	// Find commits at intervals
+	commits, err := findCommitsAtIntervalsFromRepo(repo, t.period, t.since, t.snap)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find commits: %w", err)
+	}
+
+	if len(commits) == 0 {
+		return &TrendResult{
+			Period:     t.period,
+			Since:      formatDuration(t.since),
+			Snapped:    t.snap,
+			AnalyzedAt: time.Now().UTC(),
+		}, nil
+	}
+
+	// Create score analyzer
+	analyzer := New(
+		WithWeights(t.weights),
+		WithThresholds(t.thresholds),
+		WithChurnDays(t.churnDays),
+		WithMaxFileSize(t.maxFileSize),
+	)
+
+	var points []TrendPoint
+	for i, commit := range commits {
+		if onProgress != nil {
+			shortSHA := commit.SHA
+			if len(shortSHA) > 7 {
+				shortSHA = shortSHA[:7]
+			}
+			onProgress(i+1, len(commits), shortSHA)
+		}
+
+		// Get commit tree
+		commitObj, err := repo.CommitObject(commit.Hash)
+		if err != nil {
+			continue
+		}
+
+		tree, err := commitObj.Tree()
+		if err != nil {
+			continue
+		}
+
+		// Get all analyzable files from the tree
+		entries, err := tree.Entries()
+		if err != nil {
+			continue
+		}
+
+		var files []string
+		for _, e := range entries {
+			if !e.IsDir && isAnalyzableFile(e.Path) {
+				files = append(files, e.Path)
+			}
+		}
+
+		if len(files) == 0 {
+			continue
+		}
+
+		// Create source from tree
+		src := &treeSource{tree: tree}
+
+		// Run score analysis
+		result, err := analyzer.AnalyzeProjectFromSource(files, src, commit.SHA)
+		if err != nil {
+			continue
+		}
+
+		shortSHA := commit.SHA
+		if len(shortSHA) > 7 {
+			shortSHA = shortSHA[:7]
+		}
+
+		points = append(points, TrendPoint{
+			Date:       commit.Date,
+			CommitSHA:  shortSHA,
+			Score:      result.Score,
+			Components: result.Components,
+		})
+	}
+
+	// Build result
+	trendResult := &TrendResult{
+		Points:     points,
+		Period:     t.period,
+		Since:      formatDuration(t.since),
+		Snapped:    t.snap,
+		AnalyzedAt: time.Now().UTC(),
+	}
+
+	if len(points) > 0 {
+		trendResult.StartScore = points[0].Score
+		trendResult.EndScore = points[len(points)-1].Score
+		trendResult.TotalChange = trendResult.EndScore - trendResult.StartScore
+
+		// Compute overall score statistics
+		stats := ComputeTrendStats(points)
+		trendResult.Slope = stats.Slope
+		trendResult.Intercept = stats.Intercept
+		trendResult.RSquared = stats.RSquared
+		trendResult.Correlation = stats.Correlation
+
+		// Compute per-component statistics
+		trendResult.ComponentTrends = ComputeComponentTrends(points)
+	}
+
+	return trendResult, nil
+}
+
+// treeSource reads files from a git tree with thread-safe access.
+type treeSource struct {
+	tree vcs.Tree
+	mu   sync.Mutex
+}
+
+func (t *treeSource) Read(path string) ([]byte, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.tree.File(path)
+}
+
+// commitInfo holds commit information for interval sampling.
+type commitInfo struct {
+	SHA  string
+	Hash plumbing.Hash
+	Date time.Time
+}
+
+// findCommitsAtIntervalsFromRepo finds commits at regular intervals from a repository.
+func findCommitsAtIntervalsFromRepo(repo vcs.Repository, period string, since time.Duration, snap bool) ([]commitInfo, error) {
+	sinceTime := time.Now().Add(-since)
+
+	iter, err := repo.Log(&vcs.LogOptions{Since: &sinceTime})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	// Collect all commits
+	var allCommits []commitInfo
+	err = iter.ForEach(func(c vcs.Commit) error {
+		allCommits = append(allCommits, commitInfo{
+			SHA:  c.Hash().String(),
+			Hash: c.Hash(),
+			Date: c.Author().When,
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if len(allCommits) == 0 {
+		return nil, nil
+	}
+
+	// Reverse to oldest first
+	for i, j := 0, len(allCommits)-1; i < j; i, j = i+1, j-1 {
+		allCommits[i], allCommits[j] = allCommits[j], allCommits[i]
+	}
+
+	// Sample at intervals
+	return sampleCommitsAtIntervals(allCommits, period, snap), nil
+}
+
+// sampleCommitsAtIntervals samples commits at period intervals.
+func sampleCommitsAtIntervals(commits []commitInfo, period string, snap bool) []commitInfo {
+	if len(commits) == 0 {
+		return nil
+	}
+
+	var result []commitInfo
+	var lastPeriod time.Time
+
+	for _, c := range commits {
+		periodStart := getPeriodStart(c.Date, period, snap)
+
+		if lastPeriod.IsZero() || !periodStart.Equal(lastPeriod) {
+			result = append(result, c)
+			lastPeriod = periodStart
+		}
+	}
+
+	return result
+}
+
+// getPeriodStart returns the start of the period containing the given time.
+// Always uses UTC to ensure consistent period bucketing across time zones.
+func getPeriodStart(t time.Time, period string, snap bool) time.Time {
+	// Normalize to UTC for consistent period calculation
+	t = t.UTC()
+
+	if !snap {
+		// Without snapping, just truncate to the period
+		switch period {
+		case "daily":
+			return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+		case "weekly":
+			weekday := int(t.Weekday())
+			if weekday == 0 {
+				weekday = 7 // Sunday
+			}
+			return time.Date(t.Year(), t.Month(), t.Day()-weekday+1, 0, 0, 0, 0, time.UTC)
+		case "monthly":
+			return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
+		default:
+			return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
+		}
+	}
+
+	// With snapping, align to calendar boundaries
+	switch period {
+	case "daily":
+		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+	case "weekly":
+		weekday := int(t.Weekday())
+		if weekday == 0 {
+			weekday = 7
+		}
+		return time.Date(t.Year(), t.Month(), t.Day()-weekday+1, 0, 0, 0, 0, time.UTC)
+	case "monthly":
+		return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
+	default:
+		return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
+	}
+}
+
+// isAnalyzableFile checks if a file should be included in analysis.
+func isAnalyzableFile(path string) bool {
+	// Skip hidden files and directories
+	for _, part := range splitPath(path) {
+		if len(part) > 0 && part[0] == '.' {
+			return false
+		}
+	}
+
+	// Skip common non-source directories
+	for _, part := range splitPath(path) {
+		switch part {
+		case "vendor", "node_modules", "dist", "build", ".git", "__pycache__", "target":
+			return false
+		}
+	}
+
+	// Check for known source extensions
+	ext := getFileExtension(path)
+	switch ext {
+	case ".go", ".rs", ".py", ".ts", ".tsx", ".js", ".jsx", ".java", ".c", ".cpp", ".h", ".hpp",
+		".cs", ".rb", ".php", ".sh", ".bash":
+		return true
+	default:
+		return false
+	}
+}
+
+func splitPath(path string) []string {
+	var parts []string
+	current := ""
+	for _, c := range path {
+		if c == '/' || c == '\\' {
+			if current != "" {
+				parts = append(parts, current)
+				current = ""
+			}
+		} else {
+			current += string(c)
+		}
+	}
+	if current != "" {
+		parts = append(parts, current)
+	}
+	return parts
+}
+
+func getFileExtension(path string) string {
+	for i := len(path) - 1; i >= 0; i-- {
+		if path[i] == '.' {
+			return path[i:]
+		}
+		if path[i] == '/' || path[i] == '\\' {
+			break
+		}
+	}
+	return ""
 }

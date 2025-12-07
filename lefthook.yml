@@ -17,7 +17,7 @@ pre-push:
   parallel: true
   commands:
     test:
-      run: go test -race ./...
+      run: go test ./...
     score:
       run: ./omen score
       fail_text: "Repository score below threshold"

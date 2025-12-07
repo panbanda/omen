@@ -1,6 +1,10 @@
 package score
 
-import "gonum.org/v1/gonum/stat"
+import (
+	"math"
+
+	"gonum.org/v1/gonum/stat"
+)
 
 // TrendStats holds regression statistics computed from trend data points.
 type TrendStats struct {
@@ -68,15 +72,24 @@ func ComputeComponentTrends(points []TrendPoint) ComponentTrends {
 }
 
 // computeStats calculates regression statistics from x and y values.
+// Returns zero values for stats that would be NaN (e.g., when all ys are identical).
 func computeStats(xs, ys []float64) TrendStats {
 	intercept, slope := stat.LinearRegression(xs, ys, nil, false)
 	rSquared := stat.RSquared(xs, ys, nil, intercept, slope)
 	correlation := stat.Correlation(xs, ys, nil)
 
 	return TrendStats{
-		Slope:       slope,
-		Intercept:   intercept,
-		RSquared:    rSquared,
-		Correlation: correlation,
+		Slope:       sanitizeFloat(slope),
+		Intercept:   sanitizeFloat(intercept),
+		RSquared:    sanitizeFloat(rSquared),
+		Correlation: sanitizeFloat(correlation),
 	}
+}
+
+// sanitizeFloat returns 0 for NaN or infinite values.
+func sanitizeFloat(v float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0
+	}
+	return v
 }

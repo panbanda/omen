@@ -2,6 +2,7 @@ package satd
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -281,14 +282,18 @@ func (a *Analyzer) AnalyzeFile(path string) ([]Item, error) {
 		return nil, nil
 	}
 
-	file, err := os.Open(path)
+	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
 
+	return a.analyzeContent(path, content), nil
+}
+
+// analyzeContent scans content for SATD markers.
+func (a *Analyzer) analyzeContent(path string, content []byte) []Item {
 	var items []Item
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(bytes.NewReader(content))
 	lineNum := uint32(0)
 
 	lang := parser.DetectLanguage(path)
@@ -349,7 +354,7 @@ func (a *Analyzer) AnalyzeFile(path string) ([]Item, error) {
 		}
 	}
 
-	return items, scanner.Err()
+	return items
 }
 
 // testBlockTracker tracks #[cfg(test)] blocks in Rust files.
@@ -592,6 +597,53 @@ func (a *Analyzer) AnalyzeProjectWithProgress(files []string, onProgress filepro
 
 	var allItems []Item
 	for _, items := range fileResults {
+		allItems = append(allItems, items...)
+	}
+
+	analysis := &Analysis{
+		Items:              allItems,
+		Summary:            NewSummary(),
+		TotalFilesAnalyzed: len(files),
+	}
+
+	filesWithDebtSet := make(map[string]bool)
+	for _, item := range allItems {
+		analysis.Summary.TotalItems++
+		analysis.Summary.ByCategory[string(item.Category)]++
+		analysis.Summary.BySeverity[string(item.Severity)]++
+		analysis.Summary.ByFile[item.File]++
+		filesWithDebtSet[item.File] = true
+	}
+	analysis.FilesWithDebt = len(filesWithDebtSet)
+	analysis.Summary.FilesWithSATD = len(filesWithDebtSet)
+
+	return analysis, nil
+}
+
+// ContentSource provides file content.
+type ContentSource interface {
+	Read(path string) ([]byte, error)
+}
+
+// AnalyzeProjectFromSource scans files from a ContentSource for SATD.
+func (a *Analyzer) AnalyzeProjectFromSource(files []string, src ContentSource) (*Analysis, error) {
+	var allItems []Item
+
+	for _, path := range files {
+		if a.shouldExcludeFile(path) {
+			continue
+		}
+
+		content, err := src.Read(path)
+		if err != nil {
+			continue
+		}
+
+		if a.maxFileSize > 0 && int64(len(content)) > a.maxFileSize {
+			continue
+		}
+
+		items := a.analyzeContent(path, content)
 		allItems = append(allItems, items...)
 	}
 

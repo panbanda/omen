@@ -200,7 +200,11 @@ func (a *Analyzer) analyzeFileGraph(psr *parser.Parser, path string) (fileGraphD
 	if err != nil {
 		return fileGraphData{}, err
 	}
+	return a.analyzeFileGraphFromResult(result, path), nil
+}
 
+// analyzeFileGraphFromResult extracts graph data from a parsed file.
+func (a *Analyzer) analyzeFileGraphFromResult(result *parser.ParseResult, path string) fileGraphData {
 	fd := fileGraphData{
 		calls:    make(map[string][]string),
 		language: result.Language,
@@ -263,7 +267,7 @@ func (a *Analyzer) analyzeFileGraph(psr *parser.Parser, path string) (fileGraphD
 		}
 	}
 
-	return fd, nil
+	return fd
 }
 
 // extractModuleName extracts the module/package name from source.
@@ -1500,4 +1504,132 @@ func sortRankedNodes(nodes []rankedNode) {
 		}
 		nodes[j+1] = key
 	}
+}
+
+// ContentSource provides file content.
+type ContentSource interface {
+	Read(path string) ([]byte, error)
+}
+
+// AnalyzeProjectFromSource builds a dependency graph from files read via ContentSource.
+func (a *Analyzer) AnalyzeProjectFromSource(files []string, src ContentSource) (*DependencyGraph, error) {
+	psr := parser.New()
+	defer psr.Close()
+
+	var fileData []fileGraphData
+
+	for _, path := range files {
+		content, err := src.Read(path)
+		if err != nil {
+			continue
+		}
+		if a.maxFileSize > 0 && int64(len(content)) > a.maxFileSize {
+			continue
+		}
+
+		lang := parser.DetectLanguage(path)
+		if lang == parser.LangUnknown {
+			continue
+		}
+
+		result, err := psr.Parse(content, lang, path)
+		if err != nil {
+			continue
+		}
+
+		fd := a.analyzeFileGraphFromResult(result, path)
+		fileData = append(fileData, fd)
+	}
+
+	graph := NewDependencyGraph()
+	nodeMap := make(map[string]bool)
+
+	funcNameIndex := make(map[string][]string)
+	classToFile := make(map[string]string)
+
+	for _, fd := range fileData {
+		for _, node := range fd.nodes {
+			if !nodeMap[node.ID] {
+				graph.AddNode(node)
+				nodeMap[node.ID] = true
+
+				if a.scope == ScopeFunction {
+					if idx := strings.LastIndex(node.ID, ":"); idx >= 0 {
+						funcName := node.ID[idx+1:]
+						funcNameIndex[funcName] = append(funcNameIndex[funcName], node.ID)
+					}
+				}
+			}
+		}
+
+		if len(fd.nodes) > 0 {
+			filePath := fd.nodes[0].ID
+			for _, className := range fd.classes {
+				classToFile[className] = filePath
+			}
+		}
+	}
+
+	for _, fd := range fileData {
+		switch a.scope {
+		case ScopeFile:
+			for _, imp := range fd.imports {
+				for targetPath := range nodeMap {
+					if matchesImport(targetPath, imp) {
+						if len(fd.nodes) > 0 {
+							graph.AddEdge(Edge{
+								From: fd.nodes[0].ID,
+								To:   targetPath,
+								Type: EdgeImport,
+							})
+						}
+					}
+				}
+			}
+			for _, classRef := range fd.classRefs {
+				if filePath, ok := classToFile[classRef]; ok {
+					if len(fd.nodes) > 0 && fd.nodes[0].ID != filePath {
+						graph.AddEdge(Edge{
+							From: fd.nodes[0].ID,
+							To:   filePath,
+							Type: EdgeReference,
+						})
+					}
+				}
+			}
+
+		case ScopeFunction:
+			for nodeID, calls := range fd.calls {
+				for _, call := range calls {
+					if targets, ok := funcNameIndex[call]; ok {
+						for _, target := range targets {
+							if target != nodeID {
+								graph.AddEdge(Edge{
+									From: nodeID,
+									To:   target,
+									Type: EdgeCall,
+								})
+							}
+						}
+					}
+				}
+			}
+
+		case ScopeModule:
+			if len(fd.nodes) > 0 {
+				sourceModule := fd.nodes[0].ID
+				for _, classRef := range fd.classRefs {
+					if filePath, ok := classToFile[classRef]; ok && filePath != sourceModule {
+						graph.AddEdge(Edge{
+							From: sourceModule,
+							To:   filePath,
+							Type: EdgeReference,
+						})
+					}
+				}
+			}
+		}
+	}
+
+	return graph, nil
 }
