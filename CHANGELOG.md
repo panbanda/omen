@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.6.0](https://github.com/panbanda/omen/compare/omen-v1.5.0...omen-v1.6.0) (2025-12-07)
+
+
+### Features
+
+* **score:** add composite repository score analyzer ([#130](https://github.com/panbanda/omen/issues/130)) ([a98df4c](https://github.com/panbanda/omen/commit/a98df4c4b9da2344306897416aa55bbc67bea48e))
+* **score:** add historical trend analysis ([#132](https://github.com/panbanda/omen/issues/132)) ([b73eed8](https://github.com/panbanda/omen/commit/b73eed8b183e0d12eb6204029b2128a61f3e0c8d))
+
 ## [1.5.0](https://github.com/panbanda/omen/compare/omen-v1.4.7...omen-v1.5.0) (2025-12-02)
 
 
