@@ -72,38 +72,30 @@ func (a *Analyzer) AnalyzeCommits(repo vcs.Repository, hashes []plumbing.Hash) (
 
 	results := make([]*CommitAnalysis, len(hashes))
 	var mu sync.Mutex
-	var firstErr error
 
-	maxWorkers := runtime.NumCPU()
-	p := pool.New().WithMaxGoroutines(maxWorkers)
+	maxWorkers := runtime.NumCPU() * 2 // Match DefaultWorkerMultiplier pattern
+	p := pool.New().WithMaxGoroutines(maxWorkers).WithErrors()
 
 	for i, hash := range hashes {
-		i := i
-		hash := hash
-		p.Go(func() {
+		p.Go(func() error {
 			// Each worker creates its own analyzer to avoid parser contention
 			localAnalyzer := &Analyzer{complexity: complexity.New()}
 			defer localAnalyzer.Close()
 
 			result, err := localAnalyzer.AnalyzeCommit(repo, hash)
 			if err != nil {
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = err
-				}
-				mu.Unlock()
-				return
+				return err
 			}
 
 			mu.Lock()
 			results[i] = result
 			mu.Unlock()
+			return nil
 		})
 	}
-	p.Wait()
 
-	if firstErr != nil {
-		return nil, firstErr
+	if err := p.Wait(); err != nil {
+		return nil, err
 	}
 
 	// Filter out nil results (shouldn't happen if no error)

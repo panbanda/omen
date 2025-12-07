@@ -77,17 +77,20 @@ func runTrendCmd(c *cli.Context) error {
 	var progressFn score.TrendProgressFunc
 	if !c.Bool("quiet") {
 		progressFn = func(current, total int, commitSHA string) {
-			fmt.Printf("\rAnalyzing commit %d/%d (%s)...", current, total, commitSHA)
+			fmt.Printf("\r\033[KAnalyzing commit %d/%d (%s)...", current, total, commitSHA)
 		}
 	}
 
 	result, err := trendAnalyzer.AnalyzeTrendFastWithProgress(repo, progressFn)
 	if err != nil {
+		if progressFn != nil {
+			fmt.Print("\r\033[K") // Clear progress line on error
+		}
 		return fmt.Errorf("failed to analyze trend: %w", err)
 	}
 
 	if progressFn != nil {
-		fmt.Println() // Clear progress line
+		fmt.Print("\r\033[K") // Clear progress line
 	}
 
 	if len(result.Points) == 0 {

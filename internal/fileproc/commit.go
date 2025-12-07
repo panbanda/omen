@@ -62,16 +62,12 @@ func MapSourceFilesWithProgress[T any](
 
 	p := pool.New().WithMaxGoroutines(maxWorkers)
 	for _, fc := range filesWithContent {
-		fc := fc // capture loop variable
 		p.Go(func() {
 			psr := parser.New()
 			defer psr.Close()
 
 			result, err := fn(psr, fc.path, fc.content)
 			if err != nil {
-				if onProgress != nil {
-					onProgress()
-				}
 				return
 			}
 
