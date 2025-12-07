@@ -124,21 +124,21 @@ func NormalizeDefect(avgProbability float32) int {
 }
 
 // -----------------------------------------------------------------------------
-// Technical Debt (SATD) Normalization omen:ignore
+// Self-Admitted Technical Debt (SATD) Normalization
 // -----------------------------------------------------------------------------
 //
 // Uses SEVERITY-WEIGHTED scoring rather than raw item counts.
 //
 // Rationale:
-// - Not all debt is equal: a SECURITY TODO is far worse than a NOTE omen:ignore
+// - Not all debt is equal: a SECURITY TODO is far worse than a NOTE
 // - Raw counts penalize well-documented codebases that track their debt
 // - Density (per KLOC) scales appropriately with codebase size
 //
-// Severity weights (based on remediation urgency): omen:ignore
-// - Critical (SECURITY, VULN): 4.0 - Immediate security risk omen:ignore
-// - High (FIXME, BUG): 2.0 - Known defects requiring fix omen:ignore
-// - Medium (HACK, REFACTOR): 1.0 - Design compromises omen:ignore
-// - Low (TODO, NOTE): 0.25 - Future work, minimal impact omen:ignore
+// Severity weights (based on remediation urgency):
+// - Critical (SECURITY, VULN): 4.0 - Immediate security risk
+// - High (FIXME, BUG): 2.0 - Known defects requiring fix
+// - Medium (HACK, REFACTOR): 1.0 - Design compromises
+// - Low (TODO, NOTE): 0.25 - Future work, minimal impact
 //
 // The weighted density is then mapped to score:
 // - 0 weighted items/KLOC: 100
@@ -148,17 +148,17 @@ func NormalizeDefect(avgProbability float32) int {
 // - 50+ weighted items/KLOC: 0
 // -----------------------------------------------------------------------------
 
-// DebtSeverityCounts holds SATD item counts by severity level.
-type DebtSeverityCounts struct {
+// SATDSeverityCounts holds SATD item counts by severity level.
+type SATDSeverityCounts struct {
 	Critical int // SECURITY, VULN, UNSAFE
 	High     int // FIXME, BUG, BROKEN
 	Medium   int // HACK, KLUDGE, REFACTOR
 	Low      int // TODO, NOTE, OPTIMIZE
 }
 
-// NormalizeDebt converts SATD severity counts to 0-100 score.
+// NormalizeSATD converts SATD severity counts to 0-100 score.
 // Uses severity-weighted density per 1K LOC.
-func NormalizeDebt(counts DebtSeverityCounts, loc int) int {
+func NormalizeSATD(counts SATDSeverityCounts, loc int) int {
 	if loc == 0 {
 		return 100
 	}
@@ -182,6 +182,24 @@ func NormalizeDebt(counts DebtSeverityCounts, loc int) int {
 	// Using a curve that's gentle at low density, steep at high
 	score := 100 - (densityPer1K * 2)
 	return clamp(int(math.Round(score)), 0, 100)
+}
+
+// -----------------------------------------------------------------------------
+// Technical Debt Gradient (TDG) Normalization
+// -----------------------------------------------------------------------------
+//
+// The TDG analyzer produces a comprehensive 0-100 score (higher is better)
+// based on structural complexity, semantic complexity, duplication, coupling,
+// documentation, and consistency.
+//
+// Since TDG already outputs a 0-100 score, we pass it through with minor
+// adjustments to align with our scoring philosophy.
+// -----------------------------------------------------------------------------
+
+// NormalizeTDG converts TDG average score to 0-100 component score.
+// TDG scores are already 0-100 (higher = better quality).
+func NormalizeTDG(avgScore float32) int {
+	return clamp(int(math.Round(float64(avgScore))), 0, 100)
 }
 
 // -----------------------------------------------------------------------------

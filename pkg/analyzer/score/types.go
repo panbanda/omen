@@ -10,7 +10,8 @@ type Weights struct {
 	Complexity  float64 `json:"complexity" toml:"complexity"`
 	Duplication float64 `json:"duplication" toml:"duplication"`
 	Defect      float64 `json:"defect" toml:"defect"`
-	Debt        float64 `json:"debt" toml:"debt"`
+	SATD        float64 `json:"satd" toml:"satd"` // Self-Admitted Technical Debt (TODO/FIXME markers)
+	TDG         float64 `json:"tdg" toml:"tdg"`   // Technical Debt Gradient (comprehensive debt score)
 	Coupling    float64 `json:"coupling" toml:"coupling"`
 	Smells      float64 `json:"smells" toml:"smells"`
 	Cohesion    float64 `json:"cohesion" toml:"cohesion"` // Optional, for OO-heavy codebases
@@ -19,12 +20,14 @@ type Weights struct {
 // DefaultWeights returns the default weights (must sum to 1.0).
 func DefaultWeights() Weights {
 	return Weights{
-		Complexity:  0.25,
-		Duplication: 0.20,
-		Defect:      0.25,
-		Debt:        0.15,
+		Complexity:  0.20,
+		Duplication: 0.15,
+		Defect:      0.20,
+		SATD:        0.10, // Self-Admitted Technical Debt
+		TDG:         0.10, // Technical Debt Gradient
 		Coupling:    0.10,
 		Smells:      0.05,
+		Cohesion:    0.10,
 	}
 }
 
@@ -34,7 +37,8 @@ type Thresholds struct {
 	Complexity  int `json:"complexity" toml:"complexity"`
 	Duplication int `json:"duplication" toml:"duplication"`
 	Defect      int `json:"defect" toml:"defect"`
-	Debt        int `json:"debt" toml:"debt"`
+	SATD        int `json:"satd" toml:"satd"`
+	TDG         int `json:"tdg" toml:"tdg"`
 	Coupling    int `json:"coupling" toml:"coupling"`
 	Smells      int `json:"smells" toml:"smells"`
 	Cohesion    int `json:"cohesion" toml:"cohesion"`
@@ -45,7 +49,8 @@ type ComponentScores struct {
 	Complexity  int `json:"complexity"`
 	Duplication int `json:"duplication"`
 	Defect      int `json:"defect"`
-	Debt        int `json:"debt"`
+	SATD        int `json:"satd"` // Self-Admitted Technical Debt
+	TDG         int `json:"tdg"`  // Technical Debt Gradient
 	Coupling    int `json:"coupling"`
 	Smells      int `json:"smells"`
 	Cohesion    int `json:"cohesion"`
@@ -75,7 +80,8 @@ func (r *Result) ComputeComposite() {
 	weighted := float64(r.Components.Complexity)*r.Weights.Complexity +
 		float64(r.Components.Duplication)*r.Weights.Duplication +
 		float64(r.Components.Defect)*r.Weights.Defect +
-		float64(r.Components.Debt)*r.Weights.Debt +
+		float64(r.Components.SATD)*r.Weights.SATD +
+		float64(r.Components.TDG)*r.Weights.TDG +
 		float64(r.Components.Coupling)*r.Weights.Coupling +
 		float64(r.Components.Smells)*r.Weights.Smells +
 		float64(r.Components.Cohesion)*r.Weights.Cohesion
@@ -108,7 +114,8 @@ func (r *Result) CheckThresholds(t Thresholds) {
 	check("complexity", r.Components.Complexity, t.Complexity)
 	check("duplication", r.Components.Duplication, t.Duplication)
 	check("defect", r.Components.Defect, t.Defect)
-	check("debt", r.Components.Debt, t.Debt)
+	check("satd", r.Components.SATD, t.SATD)
+	check("tdg", r.Components.TDG, t.TDG)
 	check("coupling", r.Components.Coupling, t.Coupling)
 	check("smells", r.Components.Smells, t.Smells)
 	check("cohesion", r.Components.Cohesion, t.Cohesion)

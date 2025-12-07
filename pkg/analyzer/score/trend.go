@@ -45,7 +45,8 @@ type ComponentTrends struct {
 	Complexity  TrendStats `json:"complexity"`
 	Duplication TrendStats `json:"duplication"`
 	Defect      TrendStats `json:"defect"`
-	Debt        TrendStats `json:"debt"`
+	SATD        TrendStats `json:"satd"`
+	TDG         TrendStats `json:"tdg"`
 	Coupling    TrendStats `json:"coupling"`
 	Smells      TrendStats `json:"smells"`
 	Cohesion    TrendStats `json:"cohesion"`

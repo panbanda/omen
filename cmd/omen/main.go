@@ -3053,7 +3053,8 @@ func runScoreCmd(c *cli.Context) error {
 		Complexity:  intFlagOrConfig(c, "min-complexity", cfg.Score.Thresholds.Complexity),
 		Duplication: intFlagOrConfig(c, "min-duplication", cfg.Score.Thresholds.Duplication),
 		Defect:      intFlagOrConfig(c, "min-defect", cfg.Score.Thresholds.Defect),
-		Debt:        intFlagOrConfig(c, "min-debt", cfg.Score.Thresholds.Debt),
+		SATD:        intFlagOrConfig(c, "min-satd", cfg.Score.Thresholds.SATD),
+		TDG:         intFlagOrConfig(c, "min-tdg", cfg.Score.Thresholds.TDG),
 		Coupling:    intFlagOrConfig(c, "min-coupling", cfg.Score.Thresholds.Coupling),
 		Smells:      intFlagOrConfig(c, "min-smells", cfg.Score.Thresholds.Smells),
 		Cohesion:    intFlagOrConfig(c, "min-cohesion", cfg.Score.Thresholds.Cohesion),
@@ -3065,7 +3066,8 @@ func runScoreCmd(c *cli.Context) error {
 		Complexity:  effectiveWeights.Complexity,
 		Duplication: effectiveWeights.Duplication,
 		Defect:      effectiveWeights.Defect,
-		Debt:        effectiveWeights.Debt,
+		SATD:        effectiveWeights.SATD,
+		TDG:         effectiveWeights.TDG,
 		Coupling:    effectiveWeights.Coupling,
 		Smells:      effectiveWeights.Smells,
 		Cohesion:    effectiveWeights.Cohesion,
@@ -3159,7 +3161,8 @@ func printScoreResult(r *score.Result) {
 	printScoreComponent("Complexity", r.Components.Complexity)
 	printScoreComponent("Duplication", r.Components.Duplication)
 	printScoreComponent("Defect Risk", r.Components.Defect)
-	printScoreComponent("Technical Debt", r.Components.Debt)
+	printScoreComponent("SATD", r.Components.SATD)
+	printScoreComponent("TDG", r.Components.TDG)
 	printScoreComponent("Coupling", r.Components.Coupling)
 	printScoreComponent("Smells", r.Components.Smells)
 	if r.CohesionIncluded {
@@ -3230,8 +3233,10 @@ func getScoreComponent(r *score.Result, name string) int {
 		return r.Components.Duplication
 	case "defect":
 		return r.Components.Defect
-	case "debt":
-		return r.Components.Debt
+	case "satd":
+		return r.Components.SATD
+	case "tdg":
+		return r.Components.TDG
 	case "coupling":
 		return r.Components.Coupling
 	case "smells":
@@ -3253,7 +3258,8 @@ func writeScoreMarkdown(r *score.Result, f *output.Formatter) error {
 	fmt.Fprintf(w, "| Complexity | %d/100 |\n", r.Components.Complexity)
 	fmt.Fprintf(w, "| Duplication | %d/100 |\n", r.Components.Duplication)
 	fmt.Fprintf(w, "| Defect Risk | %d/100 |\n", r.Components.Defect)
-	fmt.Fprintf(w, "| Technical Debt | %d/100 |\n", r.Components.Debt)
+	fmt.Fprintf(w, "| SATD | %d/100 |\n", r.Components.SATD)
+	fmt.Fprintf(w, "| TDG | %d/100 |\n", r.Components.TDG)
 	fmt.Fprintf(w, "| Coupling | %d/100 |\n", r.Components.Coupling)
 	fmt.Fprintf(w, "| Smells | %d/100 |\n", r.Components.Smells)
 	if r.CohesionIncluded {

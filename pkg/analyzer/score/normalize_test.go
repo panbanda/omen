@@ -104,59 +104,59 @@ func TestNormalizeDefect_PowerCurve(t *testing.T) {
 	}
 }
 
-func TestNormalizeDebt_SeverityWeighted(t *testing.T) {
+func TestNormalizeSATD_SeverityWeighted(t *testing.T) {
 	tests := []struct {
 		name   string
-		counts DebtSeverityCounts
+		counts SATDSeverityCounts
 		loc    int
 		min    int
 		max    int
 	}{
 		{
 			name:   "no debt",
-			counts: DebtSeverityCounts{0, 0, 0, 0},
+			counts: SATDSeverityCounts{0, 0, 0, 0},
 			loc:    1000,
 			min:    100,
 			max:    100,
 		},
 		{
 			name:   "only low severity",
-			counts: DebtSeverityCounts{0, 0, 0, 40}, // 40 low * 0.25 = 10 weighted
+			counts: SATDSeverityCounts{0, 0, 0, 40}, // 40 low * 0.25 = 10 weighted
 			loc:    1000,
 			min:    78, // 100 - 10*2 = 80, allow margin
 			max:    82,
 		},
 		{
 			name:   "only medium severity",
-			counts: DebtSeverityCounts{0, 0, 10, 0}, // 10 medium * 1.0 = 10 weighted
+			counts: SATDSeverityCounts{0, 0, 10, 0}, // 10 medium * 1.0 = 10 weighted
 			loc:    1000,
 			min:    78,
 			max:    82,
 		},
 		{
 			name:   "only high severity",
-			counts: DebtSeverityCounts{0, 5, 0, 0}, // 5 high * 2.0 = 10 weighted
+			counts: SATDSeverityCounts{0, 5, 0, 0}, // 5 high * 2.0 = 10 weighted
 			loc:    1000,
 			min:    78,
 			max:    82,
 		},
 		{
 			name:   "critical items",
-			counts: DebtSeverityCounts{3, 0, 0, 0}, // 3 critical * 4.0 = 12 weighted
+			counts: SATDSeverityCounts{3, 0, 0, 0}, // 3 critical * 4.0 = 12 weighted
 			loc:    1000,
 			min:    74,
 			max:    78,
 		},
 		{
 			name:   "mixed severity",
-			counts: DebtSeverityCounts{2, 3, 5, 10}, // 2*4 + 3*2 + 5*1 + 10*0.25 = 8+6+5+2.5 = 21.5
+			counts: SATDSeverityCounts{2, 3, 5, 10}, // 2*4 + 3*2 + 5*1 + 10*0.25 = 8+6+5+2.5 = 21.5
 			loc:    1000,
 			min:    55, // 100 - 21.5*2 = ~57
 			max:    59,
 		},
 		{
 			name:   "no LOC returns 100",
-			counts: DebtSeverityCounts{10, 10, 10, 10},
+			counts: SATDSeverityCounts{10, 10, 10, 10},
 			loc:    0,
 			min:    100,
 			max:    100,
@@ -164,9 +164,9 @@ func TestNormalizeDebt_SeverityWeighted(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := NormalizeDebt(tt.counts, tt.loc)
+			got := NormalizeSATD(tt.counts, tt.loc)
 			if got < tt.min || got > tt.max {
-				t.Errorf("NormalizeDebt(%+v, %d) = %d, want %d-%d",
+				t.Errorf("NormalizeSATD(%+v, %d) = %d, want %d-%d",
 					tt.counts, tt.loc, got, tt.min, tt.max)
 			}
 		})

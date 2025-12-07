@@ -12,6 +12,7 @@ import (
 	"github.com/panbanda/omen/pkg/analyzer/graph"
 	"github.com/panbanda/omen/pkg/analyzer/satd"
 	"github.com/panbanda/omen/pkg/analyzer/smells"
+	"github.com/panbanda/omen/pkg/analyzer/tdg"
 	"github.com/sourcegraph/conc"
 )
 
@@ -71,8 +72,8 @@ func New(opts ...Option) *Analyzer {
 type ProgressFunc func(stage string)
 
 // ProgressStages is the number of stages in the score analysis.
-// Stages: complexity, duplicates, defect, satd, graph, cohesion, smells
-const ProgressStages = 7
+// Stages: complexity, duplicates, defect, satd, tdg, graph, cohesion, smells
+const ProgressStages = 8
 
 // AnalyzeProject computes the repository score for the given files.
 func (a *Analyzer) AnalyzeProject(ctx context.Context, repoPath string, files []string) (*Result, error) {
@@ -108,6 +109,9 @@ func (a *Analyzer) AnalyzeProjectWithProgress(ctx context.Context, repoPath stri
 	cohesionAnalyzer := cohesion.New(cohesion.WithMaxFileSize(a.maxFileSize))
 	defer cohesionAnalyzer.Close()
 
+	tdgAnalyzer := tdg.New(tdg.WithMaxFileSize(a.maxFileSize))
+	defer tdgAnalyzer.Close()
+
 	result := &Result{
 		Weights:   a.weights,
 		Timestamp: time.Now().UTC(),
@@ -131,6 +135,7 @@ func (a *Analyzer) AnalyzeProjectWithProgress(ctx context.Context, repoPath stri
 		dupResult      *duplicates.Analysis
 		defectResult   *defect.Analysis
 		satdResult     *satd.Analysis
+		tdgResult      *tdg.ProjectScore
 		graphResult    *graph.DependencyGraph
 		cohesionResult *cohesion.Analysis
 	)
@@ -160,6 +165,12 @@ func (a *Analyzer) AnalyzeProjectWithProgress(ctx context.Context, repoPath stri
 			onProgress("satd")
 		}
 		satdResult, _ = satdAnalyzer.AnalyzeProject(files)
+	})
+	wg.Go(func() {
+		if onProgress != nil {
+			onProgress("tdg")
+		}
+		tdgResult, _ = tdgAnalyzer.AnalyzeFiles(files)
 	})
 	wg.Go(func() {
 		if onProgress != nil {
@@ -218,18 +229,25 @@ func (a *Analyzer) AnalyzeProjectWithProgress(ctx context.Context, repoPath stri
 		result.Components.Defect = 100
 	}
 
-	// Debt: severity-weighted density per 1K LOC
+	// SATD: severity-weighted density per 1K LOC
 	if satdResult != nil {
 		loc := estimateLOC(files)
-		counts := DebtSeverityCounts{
+		counts := SATDSeverityCounts{
 			Critical: satdResult.Summary.BySeverity["critical"],
 			High:     satdResult.Summary.BySeverity["high"],
 			Medium:   satdResult.Summary.BySeverity["medium"],
 			Low:      satdResult.Summary.BySeverity["low"],
 		}
-		result.Components.Debt = NormalizeDebt(counts, loc)
+		result.Components.SATD = NormalizeSATD(counts, loc)
 	} else {
-		result.Components.Debt = 100
+		result.Components.SATD = 100
+	}
+
+	// TDG: comprehensive technical debt gradient score
+	if tdgResult != nil {
+		result.Components.TDG = NormalizeTDG(tdgResult.AverageScore)
+	} else {
+		result.Components.TDG = 100
 	}
 
 	// Coupling: combines cycles, SDP violations, and instability
@@ -306,6 +324,9 @@ func (a *Analyzer) AnalyzeProjectFromSource(files []string, src ContentSource, c
 	cohesionAnalyzer := cohesion.New(cohesion.WithMaxFileSize(a.maxFileSize))
 	defer cohesionAnalyzer.Close()
 
+	tdgAnalyzer := tdg.New(tdg.WithMaxFileSize(a.maxFileSize))
+	defer tdgAnalyzer.Close()
+
 	result := &Result{
 		Weights:   a.weights,
 		Timestamp: time.Now().UTC(),
@@ -321,6 +342,7 @@ func (a *Analyzer) AnalyzeProjectFromSource(files []string, src ContentSource, c
 		cxResult       *complexity.Analysis
 		dupResult      *duplicates.Analysis
 		satdResult     *satd.Analysis
+		tdgResult      *tdg.ProjectScore
 		graphResult    *graph.DependencyGraph
 		cohesionResult *cohesion.Analysis
 	)
@@ -335,6 +357,9 @@ func (a *Analyzer) AnalyzeProjectFromSource(files []string, src ContentSource, c
 	})
 	wg.Go(func() {
 		satdResult, _ = satdAnalyzer.AnalyzeProjectFromSource(files, src)
+	})
+	wg.Go(func() {
+		tdgResult, _ = tdgAnalyzer.AnalyzeProjectFromSource(files, src)
 	})
 	wg.Go(func() {
 		graphResult, _ = graphAnalyzer.AnalyzeProjectFromSource(files, src)
@@ -380,18 +405,25 @@ func (a *Analyzer) AnalyzeProjectFromSource(files []string, src ContentSource, c
 	// Defect: skip for source-based analysis (requires git history)
 	result.Components.Defect = 100
 
-	// Debt: severity-weighted density per 1K LOC
+	// SATD: severity-weighted density per 1K LOC
 	if satdResult != nil {
 		loc := estimateLOC(files)
-		counts := DebtSeverityCounts{
+		counts := SATDSeverityCounts{
 			Critical: satdResult.Summary.BySeverity["critical"],
 			High:     satdResult.Summary.BySeverity["high"],
 			Medium:   satdResult.Summary.BySeverity["medium"],
 			Low:      satdResult.Summary.BySeverity["low"],
 		}
-		result.Components.Debt = NormalizeDebt(counts, loc)
+		result.Components.SATD = NormalizeSATD(counts, loc)
 	} else {
-		result.Components.Debt = 100
+		result.Components.SATD = 100
+	}
+
+	// TDG: comprehensive technical debt gradient score
+	if tdgResult != nil {
+		result.Components.TDG = NormalizeTDG(tdgResult.AverageScore)
+	} else {
+		result.Components.TDG = 100
 	}
 
 	// Coupling: combines cycles, SDP violations, and instability

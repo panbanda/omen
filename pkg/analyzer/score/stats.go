@@ -44,7 +44,8 @@ func ComputeComponentTrends(points []TrendPoint) ComponentTrends {
 	complexity := make([]float64, n)
 	duplication := make([]float64, n)
 	defect := make([]float64, n)
-	debt := make([]float64, n)
+	satd := make([]float64, n)
+	tdg := make([]float64, n)
 	coupling := make([]float64, n)
 	smells := make([]float64, n)
 	cohesion := make([]float64, n)
@@ -54,7 +55,8 @@ func ComputeComponentTrends(points []TrendPoint) ComponentTrends {
 		complexity[i] = float64(p.Components.Complexity)
 		duplication[i] = float64(p.Components.Duplication)
 		defect[i] = float64(p.Components.Defect)
-		debt[i] = float64(p.Components.Debt)
+		satd[i] = float64(p.Components.SATD)
+		tdg[i] = float64(p.Components.TDG)
 		coupling[i] = float64(p.Components.Coupling)
 		smells[i] = float64(p.Components.Smells)
 		cohesion[i] = float64(p.Components.Cohesion)
@@ -64,7 +66,8 @@ func ComputeComponentTrends(points []TrendPoint) ComponentTrends {
 		Complexity:  computeStats(xs, complexity),
 		Duplication: computeStats(xs, duplication),
 		Defect:      computeStats(xs, defect),
-		Debt:        computeStats(xs, debt),
+		SATD:        computeStats(xs, satd),
+		TDG:         computeStats(xs, tdg),
 		Coupling:    computeStats(xs, coupling),
 		Smells:      computeStats(xs, smells),
 		Cohesion:    computeStats(xs, cohesion),

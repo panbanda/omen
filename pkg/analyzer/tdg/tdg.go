@@ -500,6 +500,49 @@ func (a *Analyzer) Close() {
 	// No resources to release
 }
 
+// ContentSource provides file content from an in-memory source.
+type ContentSource interface {
+	Read(path string) ([]byte, error)
+}
+
+// AnalyzeFiles analyzes a list of files and returns the project score.
+// This is the public API for analyzing pre-discovered files.
+func (a *Analyzer) AnalyzeFiles(files []string) (*ProjectScore, error) {
+	result := a.analyzeFiles(files, nil)
+	return &result, nil
+}
+
+// AnalyzeProjectFromSource analyzes files read via ContentSource.
+// Used for historical analysis where files are read from git trees.
+func (a *Analyzer) AnalyzeProjectFromSource(files []string, src ContentSource) (*ProjectScore, error) {
+	scores := make([]Score, 0, len(files))
+
+	for _, path := range files {
+		content, err := src.Read(path)
+		if err != nil {
+			continue
+		}
+
+		if a.maxFileSize > 0 && int64(len(content)) > a.maxFileSize {
+			continue
+		}
+
+		lang := LanguageFromExtension(path)
+		if lang == LanguageUnknown {
+			continue
+		}
+
+		score, err := a.AnalyzeSource(string(content), lang, path)
+		if err != nil {
+			continue
+		}
+		scores = append(scores, score)
+	}
+
+	result := AggregateProjectScore(scores)
+	return &result, nil
+}
+
 func min32(a, b float32) float32 {
 	if a < b {
 		return a

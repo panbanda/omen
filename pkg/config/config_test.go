@@ -643,7 +643,8 @@ func TestEffectiveWeights(t *testing.T) {
 				Complexity:  0.25,
 				Duplication: 0.20,
 				Defect:      0.25,
-				Debt:        0.15,
+				SATD:        0.10,
+				TDG:         0.05,
 				Coupling:    0.10,
 				Smells:      0.05,
 				Cohesion:    0.0,
@@ -657,7 +658,8 @@ func TestEffectiveWeights(t *testing.T) {
 				Complexity:  0.25,
 				Duplication: 0.20,
 				Defect:      0.25,
-				Debt:        0.15,
+				SATD:        0.10,
+				TDG:         0.05,
 				Coupling:    0.10,
 				Smells:      0.05,
 				Cohesion:    0.0,
@@ -671,7 +673,8 @@ func TestEffectiveWeights(t *testing.T) {
 				Complexity:  0.20,
 				Duplication: 0.15,
 				Defect:      0.20,
-				Debt:        0.15,
+				SATD:        0.10,
+				TDG:         0.05,
 				Coupling:    0.10,
 				Smells:      0.05,
 				Cohesion:    0.15,
@@ -693,7 +696,7 @@ func TestEffectiveWeights(t *testing.T) {
 
 			// Verify weights still sum to 1.0
 			sum := effective.Complexity + effective.Duplication + effective.Defect +
-				effective.Debt + effective.Coupling + effective.Smells + effective.Cohesion
+				effective.SATD + effective.TDG + effective.Coupling + effective.Smells + effective.Cohesion
 			if sum < 0.99 || sum > 1.01 {
 				t.Errorf("EffectiveWeights() sum = %f, want 1.0", sum)
 			}
