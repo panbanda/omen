@@ -69,7 +69,7 @@ Omen is a multi-language code analysis CLI built in Go. It uses tree-sitter for 
 - `service/` - High-level service layer coordinating analyzers
 - `vcs/` - Git operations (blame, log, diff)
 
-**CLI** (`cmd/omen/`) - Entry point using urfave/cli/v2
+**CLI** (`cmd/omen/`) - Entry point using spf13/cobra with persistent flag inheritance
 
 ### Key Patterns
 
