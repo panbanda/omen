@@ -557,6 +557,29 @@ omen analyze
 omen analyze --help
 ```
 
+## Remote Repository Scanning
+
+Analyze any public GitHub repository without cloning it manually:
+
+```bash
+# GitHub shorthand
+omen analyze complexity facebook/react
+omen analyze satd kubernetes/kubernetes
+
+# With specific ref (branch, tag, or commit SHA)
+omen analyze agentgateway/agentgateway@v0.1.0
+omen analyze owner/repo --ref feature-branch
+
+# Full URLs
+omen analyze github.com/golang/go
+omen analyze https://github.com/vercel/next.js
+
+# Shallow clone for faster analysis (static analyzers only)
+omen analyze facebook/react --shallow
+```
+
+Omen clones to a temp directory, runs analysis, and cleans up automatically. The `--shallow` flag uses `git clone --depth 1` for faster clones but disables git-history-based analyzers (churn, ownership, hotspot, temporal coupling, changes).
+
 ## Configuration
 
 Create `omen.toml` or `.omen/omen.toml` (supports `yaml`, `json` and `toml`):
