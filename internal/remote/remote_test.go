@@ -16,3 +16,49 @@ func TestParse_LocalPath(t *testing.T) {
 		t.Errorf("expected nil for local path, got %+v", src)
 	}
 }
+
+func TestParse_GitHubShorthand(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantURL string
+		wantRef string
+	}{
+		{
+			name:    "simple owner/repo",
+			input:   "facebook/react",
+			wantURL: "https://github.com/facebook/react",
+			wantRef: "",
+		},
+		{
+			name:    "with ref suffix",
+			input:   "facebook/react@v18.2.0",
+			wantURL: "https://github.com/facebook/react",
+			wantRef: "v18.2.0",
+		},
+		{
+			name:    "with branch ref",
+			input:   "owner/repo@feature-branch",
+			wantURL: "https://github.com/owner/repo",
+			wantRef: "feature-branch",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src, err := Parse(tt.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if src == nil {
+				t.Fatal("expected Source, got nil")
+			}
+			if src.URL != tt.wantURL {
+				t.Errorf("URL = %q, want %q", src.URL, tt.wantURL)
+			}
+			if src.Ref != tt.wantRef {
+				t.Errorf("Ref = %q, want %q", src.Ref, tt.wantRef)
+			}
+		})
+	}
+}
