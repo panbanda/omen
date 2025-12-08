@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/panbanda/omen/pkg/parser"
+	"github.com/panbanda/omen/pkg/source"
 )
 
 func TestNew(t *testing.T) {
@@ -325,7 +326,7 @@ func c() {}
 	}
 
 	a := New()
-	analysis, err := a.Analyze(context.Background(), []string{file1, file2})
+	analysis, err := a.Analyze(context.Background(), []string{file1, file2}, source.NewFilesystem())
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}

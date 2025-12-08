@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"math"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -12,7 +11,6 @@ import (
 	"sync/atomic"
 
 	"github.com/cespare/xxhash/v2"
-	"github.com/panbanda/omen/internal/fileproc"
 	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/config"
 	"github.com/panbanda/omen/pkg/parser"
@@ -32,7 +30,7 @@ type Analyzer struct {
 }
 
 // Compile-time check that Analyzer implements analyzer.FileAnalyzer
-var _ analyzer.FileAnalyzer[*Analysis] = (*Analyzer)(nil)
+var _ analyzer.SourceFileAnalyzer[*Analysis] = (*Analyzer)(nil)
 
 // Option is a functional option for configuring Analyzer.
 type Option func(*Analyzer)
@@ -99,114 +97,6 @@ type codeFragment struct {
 	normalizedHash uint64
 	signature      *MinHashSignature
 	tokens         []string
-}
-
-// Analyze detects code clones across a project.
-func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Analysis, error) {
-	analysis := &Analysis{
-		Clones:            make([]Clone, 0),
-		Groups:            make([]Group, 0),
-		Summary:           NewSummary(),
-		TotalFilesScanned: len(files),
-		MinLines:          a.config.MinTokens / 8, // Approximate lines from tokens
-		Threshold:         a.config.SimilarityThreshold,
-	}
-
-	// Extract fragments from all files in parallel
-	fileFragments, _ := fileproc.ForEachFile(ctx, files, func(path string) ([]codeFragment, error) {
-		// Check file size before reading
-		if a.maxFileSize > 0 {
-			info, err := os.Stat(path)
-			if err != nil {
-				return nil, err
-			}
-			if info.Size() > a.maxFileSize {
-				return nil, nil // Skip file if too large
-			}
-		}
-		return a.extractFragments(path)
-	})
-
-	var allFragments []codeFragment
-	var fragmentID uint64
-	totalLines := 0
-	for _, fragments := range fileFragments {
-		for _, f := range fragments {
-			f.id = fragmentID
-			fragmentID++
-			allFragments = append(allFragments, f)
-			totalLines += int(f.endLine - f.startLine + 1)
-		}
-	}
-
-	// Compute MinHash signatures for all fragments
-	for i := range allFragments {
-		allFragments[i].signature = a.computeMinHash(allFragments[i].tokens)
-		allFragments[i].normalizedHash = a.computeNormalizedHash(allFragments[i].tokens)
-	}
-
-	// Find clone pairs using LSH for O(n) average-case candidate filtering
-	clonePairs := a.findClonePairsLSH(allFragments)
-
-	// Group clones using Union-Find
-	groups := a.groupClones(allFragments, clonePairs)
-	analysis.Groups = groups
-	analysis.Summary.TotalGroups = len(groups)
-
-	// Convert groups to pairwise clones for backward compatibility
-	for _, group := range groups {
-		for i := 0; i < len(group.Instances); i++ {
-			for j := i + 1; j < len(group.Instances); j++ {
-				instA := group.Instances[i]
-				instB := group.Instances[j]
-				clone := Clone{
-					Type:       group.Type,
-					Similarity: group.AverageSimilarity,
-					FileA:      instA.File,
-					FileB:      instB.File,
-					StartLineA: instA.StartLine,
-					EndLineA:   instA.EndLine,
-					StartLineB: instB.StartLine,
-					EndLineB:   instB.EndLine,
-					LinesA:     instA.Lines,
-					LinesB:     instB.Lines,
-					GroupID:    group.ID,
-				}
-				analysis.Clones = append(analysis.Clones, clone)
-				analysis.Summary.AddClone(clone)
-			}
-		}
-	}
-
-	// Calculate average similarity and percentiles
-	if len(analysis.Clones) > 0 {
-		similarities := make([]float64, len(analysis.Clones))
-		var totalSim float64
-		for i, c := range analysis.Clones {
-			similarities[i] = c.Similarity
-			totalSim += c.Similarity
-		}
-		analysis.Summary.AvgSimilarity = totalSim / float64(len(analysis.Clones))
-
-		sort.Float64s(similarities)
-		analysis.Summary.P50Similarity = stats.Percentile(similarities, 50)
-		analysis.Summary.P95Similarity = stats.Percentile(similarities, 95)
-	}
-
-	// Calculate duplication ratio (capped at 1.0 since overlapping blocks can inflate the count)
-	analysis.Summary.TotalLines = totalLines
-	if totalLines > 0 {
-		ratio := float64(analysis.Summary.DuplicatedLines) / float64(totalLines)
-		if ratio > 1.0 {
-			ratio = 1.0
-		}
-		analysis.Summary.DuplicationRatio = ratio
-	}
-
-	// Compute hotspots
-	analysis.Summary.Hotspots = a.computeHotspots(groups)
-
-	return analysis, nil
 }
 
 // findClonePairsLSH uses Locality-Sensitive Hashing for O(n) average-case candidate filtering.
@@ -464,14 +354,9 @@ func (a *Analyzer) computeHotspots(groups []Group) []Hotspot {
 	return hotspots
 }
 
-// extractFragments extracts code fragments from a file for clone detection.
+// extractFragmentsFromContent extracts code fragments from content.
 // Uses function-level extraction when possible, falling back to whole file (pmat-compatible).
-func (a *Analyzer) extractFragments(path string) ([]codeFragment, error) {
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
+func (a *Analyzer) extractFragmentsFromContent(path string, content []byte) []codeFragment {
 	lines := strings.Split(string(content), "\n")
 	var fragments []codeFragment
 
@@ -489,7 +374,7 @@ func (a *Analyzer) extractFragments(path string) ([]codeFragment, error) {
 		}
 	}
 
-	return fragments, nil
+	return fragments
 }
 
 // extractFunctionFragments extracts function-level code fragments.
@@ -1078,4 +963,128 @@ func isFunctionStart(line, lang string) bool {
 // Close releases analyzer resources.
 func (a *Analyzer) Close() {
 	a.parser.Close()
+}
+
+// ContentSource is an alias for analyzer.ContentSource.
+type ContentSource = analyzer.ContentSource
+
+// Analyze detects code clones from a ContentSource.
+func (a *Analyzer) Analyze(ctx context.Context, files []string, src ContentSource) (*Analysis, error) {
+	analysis := &Analysis{
+		Clones:            make([]Clone, 0),
+		Groups:            make([]Group, 0),
+		Summary:           NewSummary(),
+		TotalFilesScanned: len(files),
+		MinLines:          a.config.MinTokens / 8,
+		Threshold:         a.config.SimilarityThreshold,
+	}
+
+	// Get progress tracker from context
+	tracker := analyzer.TrackerFromContext(ctx)
+	if tracker != nil {
+		tracker.Add(len(files))
+	}
+
+	// Extract fragments from all files sequentially (to avoid concurrent git tree access)
+	var allFragments []codeFragment
+	var fragmentID uint64
+	totalLines := 0
+
+	for _, path := range files {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		if tracker != nil {
+			tracker.Tick(path)
+		}
+
+		content, err := src.Read(path)
+		if err != nil {
+			continue
+		}
+
+		if a.maxFileSize > 0 && int64(len(content)) > a.maxFileSize {
+			continue
+		}
+
+		fragments := a.extractFragmentsFromContent(path, content)
+		for _, f := range fragments {
+			f.id = fragmentID
+			fragmentID++
+			allFragments = append(allFragments, f)
+			totalLines += int(f.endLine - f.startLine + 1)
+		}
+	}
+
+	// Compute MinHash signatures for all fragments
+	for i := range allFragments {
+		allFragments[i].signature = a.computeMinHash(allFragments[i].tokens)
+		allFragments[i].normalizedHash = a.computeNormalizedHash(allFragments[i].tokens)
+	}
+
+	// Find clone pairs using LSH for O(n) average-case candidate filtering
+	clonePairs := a.findClonePairsLSH(allFragments)
+
+	// Group clones using Union-Find
+	groups := a.groupClones(allFragments, clonePairs)
+	analysis.Groups = groups
+	analysis.Summary.TotalGroups = len(groups)
+
+	// Convert groups to pairwise clones for backward compatibility
+	for _, group := range groups {
+		for i := 0; i < len(group.Instances); i++ {
+			for j := i + 1; j < len(group.Instances); j++ {
+				instA := group.Instances[i]
+				instB := group.Instances[j]
+				clone := Clone{
+					Type:       group.Type,
+					Similarity: group.AverageSimilarity,
+					FileA:      instA.File,
+					FileB:      instB.File,
+					StartLineA: instA.StartLine,
+					EndLineA:   instA.EndLine,
+					StartLineB: instB.StartLine,
+					EndLineB:   instB.EndLine,
+					LinesA:     instA.Lines,
+					LinesB:     instB.Lines,
+					GroupID:    group.ID,
+				}
+				analysis.Clones = append(analysis.Clones, clone)
+				analysis.Summary.AddClone(clone)
+			}
+		}
+	}
+
+	// Calculate average similarity and percentiles
+	if len(analysis.Clones) > 0 {
+		similarities := make([]float64, len(analysis.Clones))
+		var totalSim float64
+		for i, c := range analysis.Clones {
+			similarities[i] = c.Similarity
+			totalSim += c.Similarity
+		}
+		analysis.Summary.AvgSimilarity = totalSim / float64(len(analysis.Clones))
+
+		sort.Float64s(similarities)
+		analysis.Summary.P50Similarity = stats.Percentile(similarities, 50)
+		analysis.Summary.P95Similarity = stats.Percentile(similarities, 95)
+	}
+
+	// Calculate duplication ratio
+	analysis.Summary.TotalLines = totalLines
+	if totalLines > 0 {
+		ratio := float64(analysis.Summary.DuplicatedLines) / float64(totalLines)
+		if ratio > 1.0 {
+			ratio = 1.0
+		}
+		analysis.Summary.DuplicationRatio = ratio
+	}
+
+	// Compute hotspots
+	analysis.Summary.Hotspots = a.computeHotspots(groups)
+
+	return analysis, nil
 }

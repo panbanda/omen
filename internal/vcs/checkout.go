@@ -120,6 +120,24 @@ func CheckoutCommit(repoPath, ref string) error {
 	})
 }
 
+// GetTreeAtCommit returns the tree for a specific commit SHA.
+// This enables reading files from historical commits without checking out.
+func GetTreeAtCommit(repoPath string, sha string) (Tree, error) {
+	opener := NewGitOpener()
+	repo, err := opener.PlainOpen(repoPath)
+	if err != nil {
+		return nil, err
+	}
+
+	hash := plumbing.NewHash(sha)
+	commit, err := repo.CommitObject(hash)
+	if err != nil {
+		return nil, err
+	}
+
+	return commit.Tree()
+}
+
 // FindCommitsAtIntervals finds commits at regular intervals going back from now.
 // If snap is true, intervals are aligned to period boundaries (1st of month, Monday).
 func FindCommitsAtIntervals(repoPath string, period string, since time.Duration, snap bool) ([]CommitInfo, error) {

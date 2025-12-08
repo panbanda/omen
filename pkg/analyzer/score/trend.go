@@ -3,14 +3,11 @@ package score
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/signal"
-	"sync"
-	"syscall"
 	"time"
 
-	"github.com/panbanda/omen/internal/service/scanner"
 	"github.com/panbanda/omen/internal/vcs"
+	"github.com/panbanda/omen/pkg/parser"
+	"github.com/panbanda/omen/pkg/source"
 )
 
 // TrendResult contains historical score data and computed statistics.
@@ -137,7 +134,8 @@ func NewTrendAnalyzer(opts ...TrendOption) *TrendAnalyzer {
 }
 
 // TrendProgressFunc reports progress during trend analysis.
-type TrendProgressFunc func(current, total int, commitSHA string)
+// Parameters: current commit index, total commits, commit SHA, file count at this commit.
+type TrendProgressFunc func(current, total int, commitSHA string, fileCount int)
 
 // AnalyzeTrend performs historical score analysis.
 // Returns error if the working directory has uncommitted changes.
@@ -146,61 +144,8 @@ func (t *TrendAnalyzer) AnalyzeTrend(ctx context.Context, repoPath string) (*Tre
 }
 
 // AnalyzeTrendWithProgress performs historical score analysis with progress reporting.
+// Uses git tree objects to analyze historical commits without filesystem checkouts.
 func (t *TrendAnalyzer) AnalyzeTrendWithProgress(ctx context.Context, repoPath string, onProgress TrendProgressFunc) (*TrendResult, error) {
-	// Check for detached HEAD state
-	detached, err := vcs.IsDetachedHead(repoPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to check HEAD state: %w", err)
-	}
-	if detached {
-		return nil, vcs.ErrDetachedHead
-	}
-
-	// Check for dirty working directory
-	dirty, err := vcs.IsDirty(repoPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to check git status: %w", err)
-	}
-	if dirty {
-		return nil, vcs.ErrDirtyWorkingDir
-	}
-
-	// Get current ref to restore later
-	originalRef, err := vcs.GetCurrentRef(repoPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get current ref: %w", err)
-	}
-
-	// Set up signal handler to restore on interrupt
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(sigChan)
-
-	var restoreOnce sync.Once
-	restore := func() {
-		restoreOnce.Do(func() {
-			_ = vcs.CheckoutCommit(repoPath, originalRef)
-		})
-	}
-	defer restore()
-
-	// Handle interrupt via signal or context cancellation
-	done := make(chan struct{})
-	defer close(done)
-
-	go func() {
-		select {
-		case <-sigChan:
-			fmt.Fprintln(os.Stderr, "\nRestoring to original point in time...")
-			restore()
-			os.Exit(1)
-		case <-ctx.Done():
-			// Context canceled - restore handled by defer
-		case <-done:
-			// Normal completion - exit goroutine
-		}
-	}()
-
 	// Find commits at intervals
 	commits, err := vcs.FindCommitsAtIntervals(repoPath, t.period, t.since, t.snap)
 	if err != nil {
@@ -216,8 +161,7 @@ func (t *TrendAnalyzer) AnalyzeTrendWithProgress(ctx context.Context, repoPath s
 		}, nil
 	}
 
-	// Analyze each commit
-	scanSvc := scanner.New()
+	// Create score analyzer
 	analyzer := New(
 		WithWeights(t.weights),
 		WithThresholds(t.thresholds),
@@ -230,32 +174,48 @@ func (t *TrendAnalyzer) AnalyzeTrendWithProgress(ctx context.Context, repoPath s
 		// Check for context cancellation
 		select {
 		case <-ctx.Done():
-			fmt.Fprintln(os.Stderr, "\nCanceled. Restoring to original point in time...")
 			return nil, ctx.Err()
 		default:
 		}
 
-		if onProgress != nil {
-			onProgress(i+1, len(commits), commit.SHA[:7])
-		}
-
-		// Checkout the commit
-		if err := vcs.CheckoutCommit(repoPath, commit.SHA); err != nil {
-			return nil, fmt.Errorf("failed to checkout %s: %w", commit.SHA[:7], err)
-		}
-
-		// Scan files at this commit
-		scanResult, err := scanSvc.ScanPaths([]string{repoPath})
+		// Get tree for this commit
+		tree, err := vcs.GetTreeAtCommit(repoPath, commit.SHA)
 		if err != nil {
-			continue // Skip commits with scan errors
+			if onProgress != nil {
+				onProgress(i+1, len(commits), commit.SHA[:7], 0)
+			}
+			continue // Skip commits with errors
 		}
 
-		if len(scanResult.Files) == 0 {
+		// Get file entries from tree
+		entries, err := tree.Entries()
+		if err != nil {
+			if onProgress != nil {
+				onProgress(i+1, len(commits), commit.SHA[:7], 0)
+			}
 			continue
 		}
 
-		// Run score analysis
-		result, err := analyzer.AnalyzeProject(ctx, repoPath, scanResult.Files)
+		// Filter to analyzable files
+		var files []string
+		for _, e := range entries {
+			if !e.IsDir && parser.DetectLanguage(e.Path) != parser.LangUnknown {
+				files = append(files, e.Path)
+			}
+		}
+
+		// Report progress with file count
+		if onProgress != nil {
+			onProgress(i+1, len(commits), commit.SHA[:7], len(files))
+		}
+
+		if len(files) == 0 {
+			continue
+		}
+
+		// Create tree source and run analysis
+		src := source.NewTree(tree)
+		result, err := analyzer.Analyze(ctx, files, src, commit.SHA)
 		if err != nil {
 			continue // Skip commits with analysis errors
 		}
@@ -267,9 +227,6 @@ func (t *TrendAnalyzer) AnalyzeTrendWithProgress(ctx context.Context, repoPath s
 			Components: result.Components,
 		})
 	}
-
-	// Restore original ref
-	restore()
 
 	// Build result
 	trendResult := &TrendResult{

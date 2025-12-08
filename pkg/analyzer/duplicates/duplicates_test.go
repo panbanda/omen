@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/panbanda/omen/pkg/source"
 )
 
 func TestNew(t *testing.T) {
@@ -83,7 +85,7 @@ func duplicate() int {
 	a := New(WithMinTokens(10), WithSimilarityThreshold(0.8))
 	defer a.Close()
 
-	analysis, err := a.Analyze(context.Background(), []string{file1, file2})
+	analysis, err := a.Analyze(context.Background(), []string{file1, file2}, source.NewFilesystem())
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -126,7 +128,7 @@ func funcB() string {
 	a := New(WithMinTokens(50)) // High threshold to avoid small matches
 	defer a.Close()
 
-	analysis, err := a.Analyze(context.Background(), []string{file1, file2})
+	analysis, err := a.Analyze(context.Background(), []string{file1, file2}, source.NewFilesystem())
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -147,7 +149,7 @@ func TestAnalyzeProject_EmptyFiles(t *testing.T) {
 	a := New()
 	defer a.Close()
 
-	analysis, err := a.Analyze(context.Background(), []string{file1})
+	analysis, err := a.Analyze(context.Background(), []string{file1}, source.NewFilesystem())
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}

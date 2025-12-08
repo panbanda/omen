@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/panbanda/omen/internal/fileproc"
 	"github.com/panbanda/omen/pkg/analyzer"
 )
 
@@ -17,8 +16,8 @@ type Analyzer struct {
 	maxFileSize int64
 }
 
-// Compile-time check that Analyzer implements FileAnalyzer.
-var _ analyzer.FileAnalyzer[*Analysis] = (*Analyzer)(nil)
+// Compile-time check that Analyzer implements SourceFileAnalyzer.
+var _ analyzer.SourceFileAnalyzer[*Analysis] = (*Analyzer)(nil)
 
 // Option is a functional option for configuring Analyzer.
 type Option func(*Analyzer)
@@ -100,19 +99,11 @@ func (a *Analyzer) AnalyzeSource(source string, language Language, filePath stri
 	return score, nil
 }
 
-// Analyze processes the given files and returns TDG analysis results.
-// Progress can be tracked by passing a context with analyzer.WithProgress.
-func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Analysis, error) {
-	scores, errs := fileproc.ForEachFile(ctx, files, func(path string) (Score, error) {
-		return a.AnalyzeFile(path)
-	})
+// filesystemSource reads files from the filesystem.
+type filesystemSource struct{}
 
-	if errs != nil && errs.HasErrors() {
-		return nil, errs
-	}
-
-	analysis := AggregateProjectScore(scores)
-	return &analysis, nil
+func (f filesystemSource) Read(path string) ([]byte, error) {
+	return os.ReadFile(path)
 }
 
 // Compare compares two files or directories.
@@ -129,13 +120,14 @@ func (a *Analyzer) Compare(path1, path2 string) (Comparison, error) {
 
 	var score1, score2 Score
 	ctx := context.Background()
+	src := filesystemSource{}
 
 	if info1.IsDir() {
 		files, err := a.discoverFiles(path1)
 		if err != nil {
 			return Comparison{}, err
 		}
-		project, err := a.Analyze(ctx, files)
+		project, err := a.Analyze(ctx, files, src)
 		if err != nil {
 			return Comparison{}, err
 		}
@@ -152,7 +144,7 @@ func (a *Analyzer) Compare(path1, path2 string) (Comparison, error) {
 		if err != nil {
 			return Comparison{}, err
 		}
-		project, err := a.Analyze(ctx, files)
+		project, err := a.Analyze(ctx, files, src)
 		if err != nil {
 			return Comparison{}, err
 		}
@@ -526,6 +518,41 @@ func (a *Analyzer) shouldAnalyzeFile(path string) bool {
 		".kts":   true,
 	}
 	return analyzableExts[ext]
+}
+
+// ContentSource is an alias for analyzer.ContentSource.
+type ContentSource = analyzer.ContentSource
+
+// Analyze processes files from a ContentSource and returns TDG analysis.
+func (a *Analyzer) Analyze(ctx context.Context, files []string, src ContentSource) (*Analysis, error) {
+	var scores []Score
+
+	for _, path := range files {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		content, err := src.Read(path)
+		if err != nil {
+			continue
+		}
+
+		if a.maxFileSize > 0 && int64(len(content)) > a.maxFileSize {
+			continue
+		}
+
+		language := LanguageFromExtension(path)
+		score, err := a.AnalyzeSource(string(content), language, path)
+		if err != nil {
+			continue
+		}
+		scores = append(scores, score)
+	}
+
+	analysis := AggregateProjectScore(scores)
+	return &analysis, nil
 }
 
 // Close releases any resources (implements interface compatibility).

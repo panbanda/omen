@@ -11,8 +11,8 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 )
 
-// Ensure Analyzer implements analyzer.FileAnalyzer.
-var _ analyzer.FileAnalyzer[*Analysis] = (*Analyzer)(nil)
+// Ensure Analyzer implements analyzer.SourceFileAnalyzer.
+var _ analyzer.SourceFileAnalyzer[*Analysis] = (*Analyzer)(nil)
 
 // Analyzer computes cyclomatic and cognitive complexity.
 type Analyzer struct {
@@ -47,10 +47,8 @@ func (a *Analyzer) AnalyzeFile(path string) (*FileResult, error) {
 	return analyzeFileComplexity(a.parser, path)
 }
 
-// ContentSource provides file content.
-type ContentSource interface {
-	Read(path string) ([]byte, error)
-}
+// ContentSource is an alias for analyzer.ContentSource.
+type ContentSource = analyzer.ContentSource
 
 // AnalyzeFileFromSource analyzes complexity for a file from a ContentSource.
 func (a *Analyzer) AnalyzeFileFromSource(src ContentSource, path string) (*FileResult, error) {
@@ -96,23 +94,9 @@ func analyzeParseResult(result *parser.ParseResult) *FileResult {
 	return fc
 }
 
-// Analyze analyzes all files in a project using parallel processing.
+// Analyze analyzes all files from a ContentSource using parallel processing.
 // Progress is tracked via context using analyzer.WithTracker.
-func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Analysis, error) {
-	results, _ := fileproc.MapFilesWithSizeLimit(ctx, files, a.maxFileSize, func(psr *parser.Parser, path string) (FileResult, error) {
-		fc, err := analyzeFileComplexity(psr, path)
-		if err != nil {
-			return FileResult{}, err
-		}
-		return *fc, nil
-	})
-
-	return buildAnalysis(results), nil
-}
-
-// AnalyzeProjectFromSource analyzes all files from a ContentSource using parallel processing.
-// Progress is tracked via context using analyzer.WithTracker.
-func (a *Analyzer) AnalyzeProjectFromSource(ctx context.Context, files []string, src ContentSource) (*Analysis, error) {
+func (a *Analyzer) Analyze(ctx context.Context, files []string, src ContentSource) (*Analysis, error) {
 	results := fileproc.MapSourceFiles(ctx, files, src, func(psr *parser.Parser, path string, content []byte) (FileResult, error) {
 		lang := parser.DetectLanguage(path)
 		if lang == parser.LangUnknown {

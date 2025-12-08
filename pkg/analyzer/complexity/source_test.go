@@ -70,7 +70,7 @@ func TestAnalyzeProjectFromSource(t *testing.T) {
 	a := New()
 	defer a.Close()
 
-	analysis, err := a.AnalyzeProjectFromSource(context.Background(), goFiles, src)
+	analysis, err := a.Analyze(context.Background(), goFiles, src)
 	require.NoError(t, err)
 
 	assert.Greater(t, analysis.Summary.TotalFiles, 0)

@@ -78,10 +78,15 @@ func runTrendCmd(c *cli.Context) error {
 	var tracker *progress.Tracker
 	var trackerOnce sync.Once
 
-	result, err := trendAnalyzer.AnalyzeTrendWithProgress(ctx, repoPath, func(current, total int, commitSHA string) {
+	result, err := trendAnalyzer.AnalyzeTrendWithProgress(ctx, repoPath, func(current, total int, commitSHA string, fileCount int) {
 		trackerOnce.Do(func() {
 			tracker = progress.NewTracker(fmt.Sprintf("Analyzing %d points in time", total), total)
 		})
+		if fileCount > 0 {
+			tracker.SetDescription(fmt.Sprintf("%s (%d files)", commitSHA, fileCount))
+		} else {
+			tracker.SetDescription(commitSHA)
+		}
 		tracker.Tick()
 	})
 	if tracker != nil {

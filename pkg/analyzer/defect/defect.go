@@ -8,6 +8,7 @@ import (
 	"github.com/panbanda/omen/pkg/analyzer/churn"
 	"github.com/panbanda/omen/pkg/analyzer/complexity"
 	"github.com/panbanda/omen/pkg/analyzer/duplicates"
+	"github.com/panbanda/omen/pkg/source"
 	"github.com/panbanda/omen/pkg/stats"
 	"github.com/sourcegraph/conc"
 )
@@ -88,9 +89,11 @@ func (a *Analyzer) Analyze(ctx context.Context, repoPath string, files []string)
 
 	wg := conc.NewWaitGroup()
 
+	fsSrc := source.NewFilesystem()
+
 	// Get complexity metrics
 	wg.Go(func() {
-		complexityAnalysis, complexityErr = a.complexity.Analyze(ctx, files)
+		complexityAnalysis, complexityErr = a.complexity.Analyze(ctx, files, fsSrc)
 	})
 
 	// Get churn metrics
@@ -100,7 +103,7 @@ func (a *Analyzer) Analyze(ctx context.Context, repoPath string, files []string)
 
 	// Get duplicate metrics
 	wg.Go(func() {
-		dupAnalysis, dupErr = a.duplicates.Analyze(ctx, files)
+		dupAnalysis, dupErr = a.duplicates.Analyze(ctx, files, fsSrc)
 	})
 
 	wg.Wait()

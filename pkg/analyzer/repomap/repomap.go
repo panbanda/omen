@@ -6,6 +6,7 @@ import (
 
 	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/analyzer/graph"
+	"github.com/panbanda/omen/pkg/source"
 )
 
 // Ensure Analyzer implements analyzer.FileAnalyzer.
@@ -47,7 +48,7 @@ func New(opts ...Option) *Analyzer {
 // Progress can be tracked by passing a context with analyzer.WithProgress.
 func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Map, error) {
 	// Build the dependency graph at function scope
-	depGraph, err := a.graphAnalyzer.Analyze(ctx, files)
+	depGraph, err := a.graphAnalyzer.Analyze(ctx, files, source.NewFilesystem())
 	if err != nil {
 		return nil, err
 	}

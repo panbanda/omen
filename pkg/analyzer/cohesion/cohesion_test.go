@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/panbanda/omen/pkg/parser"
+	"github.com/panbanda/omen/pkg/source"
 )
 
 func TestNew(t *testing.T) {
@@ -69,7 +70,7 @@ public class Calculator {
 	analyzer := New()
 	defer analyzer.Close()
 
-	analysis, err := analyzer.Analyze(context.Background(), []string{file})
+	analysis, err := analyzer.Analyze(context.Background(), []string{file}, source.NewFilesystem())
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -113,7 +114,7 @@ class Calculator:
 	analyzer := New()
 	defer analyzer.Close()
 
-	analysis, err := analyzer.Analyze(context.Background(), []string{file})
+	analysis, err := analyzer.Analyze(context.Background(), []string{file}, source.NewFilesystem())
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -158,7 +159,7 @@ class Calculator {
 	analyzer := New()
 	defer analyzer.Close()
 
-	analysis, err := analyzer.Analyze(context.Background(), []string{file})
+	analysis, err := analyzer.Analyze(context.Background(), []string{file}, source.NewFilesystem())
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -191,7 +192,7 @@ func main() {
 	analyzer := New()
 	defer analyzer.Close()
 
-	analysis, err := analyzer.Analyze(context.Background(), []string{file})
+	analysis, err := analyzer.Analyze(context.Background(), []string{file}, source.NewFilesystem())
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -219,7 +220,7 @@ class TestCalculator:
 	analyzer := New() // Default skips test files
 	defer analyzer.Close()
 
-	analysis, err := analyzer.Analyze(context.Background(), []string{file})
+	analysis, err := analyzer.Analyze(context.Background(), []string{file}, source.NewFilesystem())
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -247,7 +248,7 @@ class TestCalculator:
 	analyzer := New(WithIncludeTestFiles()) // Include test files
 	defer analyzer.Close()
 
-	analysis, err := analyzer.Analyze(context.Background(), []string{file})
+	analysis, err := analyzer.Analyze(context.Background(), []string{file}, source.NewFilesystem())
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -581,7 +582,7 @@ class Cat(Mammal):
 	analyzer := New()
 	defer analyzer.Close()
 
-	analysis, err := analyzer.Analyze(context.Background(), []string{baseFile, childFile})
+	analysis, err := analyzer.Analyze(context.Background(), []string{baseFile, childFile}, source.NewFilesystem())
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}

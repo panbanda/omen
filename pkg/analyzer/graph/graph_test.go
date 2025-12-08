@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/panbanda/omen/pkg/source"
 )
 
 func TestNew(t *testing.T) {
@@ -66,7 +68,7 @@ func helper() int {
 	a := New(WithScope(ScopeFile))
 	defer a.Close()
 
-	graph, err := a.Analyze(context.Background(), []string{file1, file2})
+	graph, err := a.Analyze(context.Background(), []string{file1, file2}, source.NewFilesystem())
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -97,7 +99,7 @@ func helper() int {
 	a := New(WithScope(ScopeFunction))
 	defer a.Close()
 
-	graph, err := a.Analyze(context.Background(), []string{file1})
+	graph, err := a.Analyze(context.Background(), []string{file1}, source.NewFilesystem())
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -496,7 +498,7 @@ Dog.new.speak
 	a := New(WithScope(ScopeModule))
 	defer a.Close()
 
-	graph, err := a.Analyze(context.Background(), []string{path})
+	graph, err := a.Analyze(context.Background(), []string{path}, source.NewFilesystem())
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -528,7 +530,7 @@ d.speak()
 	a := New(WithScope(ScopeModule))
 	defer a.Close()
 
-	graph, err := a.Analyze(context.Background(), []string{path})
+	graph, err := a.Analyze(context.Background(), []string{path}, source.NewFilesystem())
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -559,7 +561,7 @@ export const instance = new MyClass();
 	a := New(WithScope(ScopeFile))
 	defer a.Close()
 
-	graph, err := a.Analyze(context.Background(), []string{path})
+	graph, err := a.Analyze(context.Background(), []string{path}, source.NewFilesystem())
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -592,7 +594,7 @@ public class Test {
 	a := New(WithScope(ScopeFile))
 	defer a.Close()
 
-	graph, err := a.Analyze(context.Background(), []string{path})
+	graph, err := a.Analyze(context.Background(), []string{path}, source.NewFilesystem())
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -623,7 +625,7 @@ fn helper() {
 	a := New(WithScope(ScopeFile))
 	defer a.Close()
 
-	graph, err := a.Analyze(context.Background(), []string{path})
+	graph, err := a.Analyze(context.Background(), []string{path}, source.NewFilesystem())
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}
@@ -731,7 +733,7 @@ func TestAnalyze_EmptyFiles(t *testing.T) {
 	a := New()
 	defer a.Close()
 
-	graph, err := a.Analyze(context.Background(), []string{})
+	graph, err := a.Analyze(context.Background(), []string{}, source.NewFilesystem())
 	if err != nil {
 		t.Fatalf("Analyze failed: %v", err)
 	}

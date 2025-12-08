@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/panbanda/omen/pkg/source"
 )
 
 func TestNew(t *testing.T) {
@@ -339,7 +341,7 @@ func TestAnalyzer_AnalyzeProject(t *testing.T) {
 		t.Fatalf("discoverFiles() error = %v", err)
 	}
 
-	project, err := analyzer.Analyze(context.Background(), filePaths)
+	project, err := analyzer.Analyze(context.Background(), filePaths, source.NewFilesystem())
 	if err != nil {
 		t.Fatalf("Analyze() error = %v", err)
 	}

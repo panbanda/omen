@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/panbanda/omen/pkg/analyzer/score"
+	"github.com/panbanda/omen/pkg/source"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -37,7 +38,7 @@ func TestAnalyzeProject_Integration(t *testing.T) {
 
 	analyzer := score.New()
 
-	result, err := analyzer.AnalyzeProject(context.Background(), repoRoot, files)
+	result, err := analyzer.Analyze(context.Background(), files, source.NewFilesystem(), "")
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -120,7 +121,7 @@ func TestAnalyzeProject_WithThresholds(t *testing.T) {
 
 	analyzer := score.New(score.WithThresholds(thresholds))
 
-	result, err := analyzer.AnalyzeProject(context.Background(), repoRoot, files)
+	result, err := analyzer.Analyze(context.Background(), files, source.NewFilesystem(), "")
 	require.NoError(t, err)
 
 	// With such high thresholds, at least one should fail
@@ -137,39 +138,23 @@ func TestAnalyzeProject_WithThresholds(t *testing.T) {
 	assert.True(t, hasFailure, "should have at least one threshold failure")
 }
 
-func TestAnalyzeProject_WithProgress(t *testing.T) {
+func TestAnalyze_WithFilesystemSource(t *testing.T) {
 	wd, err := os.Getwd()
 	require.NoError(t, err)
-
-	repoRoot := wd
-	for {
-		if _, err := os.Stat(filepath.Join(repoRoot, "go.mod")); err == nil {
-			break
-		}
-		parent := filepath.Dir(repoRoot)
-		if parent == repoRoot {
-			t.Skip("could not find repository root")
-		}
-		repoRoot = parent
-	}
 
 	files, err := discoverGoFiles(wd)
 	require.NoError(t, err)
 
 	analyzer := score.New()
 
-	var progressCalls int
-	progressFn := func(stage string) {
-		progressCalls++
-		t.Logf("Progress: %s", stage)
-	}
-
-	result, err := analyzer.AnalyzeProjectWithProgress(context.Background(), repoRoot, files, progressFn)
+	result, err := analyzer.Analyze(context.Background(), files, source.NewFilesystem(), "")
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	// Progress should have been called for each analyzer
-	assert.Greater(t, progressCalls, 0, "progress function should have been called")
+	// Verify basic result structure
+	assert.GreaterOrEqual(t, result.Score, 0)
+	assert.LessOrEqual(t, result.Score, 100)
+	assert.Greater(t, result.FilesAnalyzed, 0)
 }
 
 func discoverGoFiles(dir string) ([]string, error) {

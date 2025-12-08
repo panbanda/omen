@@ -5,7 +5,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/panbanda/omen/internal/fileproc"
 	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/parser"
 	sitter "github.com/smacker/go-tree-sitter"
@@ -54,7 +53,7 @@ func New(opts ...Option) *Analyzer {
 }
 
 // Compile-time check that Analyzer implements FileAnalyzer.
-var _ analyzer.FileAnalyzer[*DependencyGraph] = (*Analyzer)(nil)
+var _ analyzer.SourceFileAnalyzer[*DependencyGraph] = (*Analyzer)(nil)
 
 // fileGraphData holds parsed graph data for a single file.
 type fileGraphData struct {
@@ -64,207 +63,6 @@ type fileGraphData struct {
 	classes   []string            // class/module names defined in this file
 	classRefs []string            // class/constant references (for Ruby/Python)
 	language  parser.Language
-}
-
-// Analyze builds a dependency graph for a project.
-// Progress is tracked via context using analyzer.WithTracker.
-func (a *Analyzer) Analyze(ctx context.Context, files []string) (*DependencyGraph, error) {
-	// Parse all files in parallel, extracting nodes and edge data
-	fileData, _ := fileproc.MapFilesWithSizeLimit(ctx, files, a.maxFileSize, func(psr *parser.Parser, path string) (fileGraphData, error) {
-		return a.analyzeFileGraph(psr, path)
-	})
-
-	graph := NewDependencyGraph()
-	nodeMap := make(map[string]bool)
-
-	// Build index for O(1) function name lookup: funcName -> []nodeID
-	funcNameIndex := make(map[string][]string)
-
-	// Build class-to-file index for Ruby/Python dependency resolution
-	// Maps class/module name -> file path
-	classToFile := make(map[string]string)
-
-	// Collect all nodes and build indices
-	for _, fd := range fileData {
-		for _, node := range fd.nodes {
-			if !nodeMap[node.ID] {
-				graph.AddNode(node)
-				nodeMap[node.ID] = true
-
-				// For function scope, index by function name for O(1) lookup
-				if a.scope == ScopeFunction {
-					if idx := strings.LastIndex(node.ID, ":"); idx >= 0 {
-						funcName := node.ID[idx+1:]
-						funcNameIndex[funcName] = append(funcNameIndex[funcName], node.ID)
-					}
-				}
-			}
-		}
-
-		// Build class-to-file index from class definitions
-		if len(fd.nodes) > 0 {
-			filePath := fd.nodes[0].ID
-			for _, className := range fd.classes {
-				classToFile[className] = filePath
-			}
-		}
-	}
-
-	// Build edges using collected data
-	var mu sync.Mutex
-	for _, fd := range fileData {
-		switch a.scope {
-		case ScopeFile:
-			// Traditional import-based edges
-			for _, imp := range fd.imports {
-				for targetPath := range nodeMap {
-					if matchesImport(targetPath, imp) {
-						mu.Lock()
-						graph.AddEdge(Edge{
-							From: fd.nodes[0].ID,
-							To:   targetPath,
-							Type: EdgeImport,
-						})
-						mu.Unlock()
-					}
-				}
-			}
-
-			// Class reference-based edges (for Ruby, Python, etc.)
-			if len(fd.classRefs) > 0 && len(fd.nodes) > 0 {
-				sourceFile := fd.nodes[0].ID
-				for _, classRef := range fd.classRefs {
-					if targetFile, ok := classToFile[classRef]; ok && targetFile != sourceFile {
-						mu.Lock()
-						graph.AddEdge(Edge{
-							From: sourceFile,
-							To:   targetFile,
-							Type: EdgeReference,
-						})
-						mu.Unlock()
-					}
-				}
-			}
-
-		case ScopeFunction:
-			for sourceID, calls := range fd.calls {
-				for _, call := range calls {
-					// Use index for O(1) lookup instead of O(n) iteration
-					funcName := call
-					if idx := strings.LastIndex(call, "."); idx >= 0 {
-						funcName = call[idx+1:]
-					}
-
-					if targetIDs, ok := funcNameIndex[funcName]; ok {
-						mu.Lock()
-						for _, targetID := range targetIDs {
-							if targetID != sourceID {
-								graph.AddEdge(Edge{
-									From: sourceID,
-									To:   targetID,
-									Type: EdgeCall,
-								})
-							}
-						}
-						mu.Unlock()
-					}
-				}
-			}
-
-		case ScopeModule:
-			// Class reference-based edges (for Ruby, Python, etc.)
-			// These languages use autoloading, so class references are
-			// the primary way to detect inter-file dependencies
-			if len(fd.classRefs) > 0 && len(fd.nodes) > 0 {
-				sourceFile := fd.nodes[0].ID
-				for _, classRef := range fd.classRefs {
-					if targetFile, ok := classToFile[classRef]; ok && targetFile != sourceFile {
-						mu.Lock()
-						graph.AddEdge(Edge{
-							From: sourceFile,
-							To:   targetFile,
-							Type: EdgeReference,
-						})
-						mu.Unlock()
-					}
-				}
-			}
-		}
-	}
-
-	return graph, nil
-}
-
-// analyzeFileGraph extracts graph data from a single file.
-func (a *Analyzer) analyzeFileGraph(psr *parser.Parser, path string) (fileGraphData, error) {
-	result, err := psr.ParseFile(path)
-	if err != nil {
-		return fileGraphData{}, err
-	}
-
-	fd := fileGraphData{
-		calls:    make(map[string][]string),
-		language: result.Language,
-	}
-
-	switch a.scope {
-	case ScopeFile:
-		fd.nodes = append(fd.nodes, Node{
-			ID:   path,
-			Name: path,
-			Type: NodeFile,
-			File: path,
-		})
-		fd.imports = extractImports(result)
-
-		// For Ruby/Python, extract class definitions and references
-		if result.Language == parser.LangRuby || result.Language == parser.LangPython {
-			fd.classes, fd.classRefs = extractClassDependencies(result)
-		}
-
-	case ScopeFunction:
-		functions := parser.GetFunctions(result)
-		for _, fn := range functions {
-			nodeID := path + ":" + fn.Name
-			fd.nodes = append(fd.nodes, Node{
-				ID:   nodeID,
-				Name: fn.Name,
-				Type: NodeFunction,
-				File: path,
-				Line: fn.StartLine,
-			})
-			fd.calls[nodeID] = extractCalls(fn.Body, result.Source)
-		}
-
-	case ScopeModule:
-		moduleName := extractModuleName(result)
-		if moduleName != "" {
-			fd.nodes = append(fd.nodes, Node{
-				ID:   moduleName,
-				Name: moduleName,
-				Type: NodeModule,
-				File: path,
-			})
-		}
-
-		// For Ruby/Python, extract class dependencies for module-level edges
-		// These languages use autoloading/file-based modules, so class references
-		// are the primary way to detect dependencies
-		if result.Language == parser.LangRuby || result.Language == parser.LangPython {
-			// Use file path as node if no module name was extracted
-			if moduleName == "" {
-				fd.nodes = append(fd.nodes, Node{
-					ID:   path,
-					Name: path,
-					Type: NodeModule,
-					File: path,
-				})
-			}
-			fd.classes, fd.classRefs = extractClassDependencies(result)
-		}
-	}
-
-	return fd, nil
 }
 
 // extractModuleName extracts the module/package name from source.
@@ -1407,6 +1205,239 @@ func gonumCommunityDetection(gGraph *gonumGraph) (map[string]int, float64) {
 	modularity := community.Q(gGraph.undirected, gonumCommunities, 1.0)
 
 	return communities, modularity
+}
+
+// ContentSource is an alias for analyzer.ContentSource.
+type ContentSource = analyzer.ContentSource
+
+// Analyze builds a dependency graph for a project from a ContentSource.
+func (a *Analyzer) Analyze(ctx context.Context, files []string, src ContentSource) (*DependencyGraph, error) {
+	// Get progress tracker from context
+	tracker := analyzer.TrackerFromContext(ctx)
+	if tracker != nil {
+		tracker.Add(len(files))
+	}
+
+	// Parse all files sequentially from ContentSource
+	var fileData []fileGraphData
+	for _, path := range files {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		if tracker != nil {
+			tracker.Tick(path)
+		}
+
+		content, err := src.Read(path)
+		if err != nil {
+			continue
+		}
+
+		if a.maxFileSize > 0 && int64(len(content)) > a.maxFileSize {
+			continue
+		}
+
+		fd, err := a.analyzeFileGraphFromContent(path, content)
+		if err != nil {
+			continue
+		}
+		fileData = append(fileData, fd)
+	}
+
+	return a.buildGraphFromFileData(fileData), nil
+}
+
+// analyzeFileGraphFromContent extracts graph data from file content.
+func (a *Analyzer) analyzeFileGraphFromContent(path string, content []byte) (fileGraphData, error) {
+	lang := parser.DetectLanguage(path)
+	result, err := a.parser.Parse(content, lang, path)
+	if err != nil {
+		return fileGraphData{}, err
+	}
+
+	fd := fileGraphData{
+		calls:    make(map[string][]string),
+		language: result.Language,
+	}
+
+	switch a.scope {
+	case ScopeFile:
+		fd.nodes = append(fd.nodes, Node{
+			ID:   path,
+			Name: path,
+			Type: NodeFile,
+			File: path,
+		})
+		fd.imports = extractImports(result)
+
+		// For Ruby/Python, extract class definitions and references
+		if result.Language == parser.LangRuby || result.Language == parser.LangPython {
+			fd.classes, fd.classRefs = extractClassDependencies(result)
+		}
+
+	case ScopeFunction:
+		functions := parser.GetFunctions(result)
+		for _, fn := range functions {
+			nodeID := path + ":" + fn.Name
+			fd.nodes = append(fd.nodes, Node{
+				ID:   nodeID,
+				Name: fn.Name,
+				Type: NodeFunction,
+				File: path,
+				Line: fn.StartLine,
+			})
+			fd.calls[nodeID] = extractCalls(fn.Body, result.Source)
+		}
+
+	case ScopeModule:
+		moduleName := extractModuleName(result)
+		if moduleName != "" {
+			fd.nodes = append(fd.nodes, Node{
+				ID:   moduleName,
+				Name: moduleName,
+				Type: NodeModule,
+				File: path,
+			})
+		}
+
+		// For Ruby/Python, extract class dependencies for module-level edges
+		if result.Language == parser.LangRuby || result.Language == parser.LangPython {
+			if moduleName == "" {
+				fd.nodes = append(fd.nodes, Node{
+					ID:   path,
+					Name: path,
+					Type: NodeModule,
+					File: path,
+				})
+			}
+			fd.classes, fd.classRefs = extractClassDependencies(result)
+		}
+	}
+
+	return fd, nil
+}
+
+// buildGraphFromFileData constructs the DependencyGraph from parsed file data.
+func (a *Analyzer) buildGraphFromFileData(fileData []fileGraphData) *DependencyGraph {
+	graph := NewDependencyGraph()
+	nodeMap := make(map[string]bool)
+
+	// Build index for O(1) function name lookup: funcName -> []nodeID
+	funcNameIndex := make(map[string][]string)
+
+	// Build class-to-file index for Ruby/Python dependency resolution
+	classToFile := make(map[string]string)
+
+	// Collect all nodes and build indices
+	for _, fd := range fileData {
+		for _, node := range fd.nodes {
+			if !nodeMap[node.ID] {
+				graph.AddNode(node)
+				nodeMap[node.ID] = true
+
+				// For function scope, index by function name for O(1) lookup
+				if a.scope == ScopeFunction {
+					if idx := strings.LastIndex(node.ID, ":"); idx >= 0 {
+						funcName := node.ID[idx+1:]
+						funcNameIndex[funcName] = append(funcNameIndex[funcName], node.ID)
+					}
+				}
+			}
+		}
+
+		// Build class-to-file index from class definitions
+		if len(fd.nodes) > 0 {
+			filePath := fd.nodes[0].ID
+			for _, className := range fd.classes {
+				classToFile[className] = filePath
+			}
+		}
+	}
+
+	// Build edges using collected data
+	var mu sync.Mutex
+	for _, fd := range fileData {
+		switch a.scope {
+		case ScopeFile:
+			// Traditional import-based edges
+			for _, imp := range fd.imports {
+				for targetPath := range nodeMap {
+					if matchesImport(targetPath, imp) {
+						mu.Lock()
+						graph.AddEdge(Edge{
+							From: fd.nodes[0].ID,
+							To:   targetPath,
+							Type: EdgeImport,
+						})
+						mu.Unlock()
+					}
+				}
+			}
+
+			// Class reference-based edges (for Ruby, Python, etc.)
+			if len(fd.classRefs) > 0 && len(fd.nodes) > 0 {
+				sourceFile := fd.nodes[0].ID
+				for _, classRef := range fd.classRefs {
+					if targetFile, ok := classToFile[classRef]; ok && targetFile != sourceFile {
+						mu.Lock()
+						graph.AddEdge(Edge{
+							From: sourceFile,
+							To:   targetFile,
+							Type: EdgeReference,
+						})
+						mu.Unlock()
+					}
+				}
+			}
+
+		case ScopeFunction:
+			for sourceID, calls := range fd.calls {
+				for _, call := range calls {
+					// Use index for O(1) lookup instead of O(n) iteration
+					funcName := call
+					if idx := strings.LastIndex(call, "."); idx >= 0 {
+						funcName = call[idx+1:]
+					}
+
+					if targetIDs, ok := funcNameIndex[funcName]; ok {
+						mu.Lock()
+						for _, targetID := range targetIDs {
+							if targetID != sourceID {
+								graph.AddEdge(Edge{
+									From: sourceID,
+									To:   targetID,
+									Type: EdgeCall,
+								})
+							}
+						}
+						mu.Unlock()
+					}
+				}
+			}
+
+		case ScopeModule:
+			// Class reference-based edges (for Ruby, Python, etc.)
+			if len(fd.classRefs) > 0 && len(fd.nodes) > 0 {
+				sourceFile := fd.nodes[0].ID
+				for _, classRef := range fd.classRefs {
+					if targetFile, ok := classToFile[classRef]; ok && targetFile != sourceFile {
+						mu.Lock()
+						graph.AddEdge(Edge{
+							From: sourceFile,
+							To:   targetFile,
+							Type: EdgeReference,
+						})
+						mu.Unlock()
+					}
+				}
+			}
+		}
+	}
+
+	return graph
 }
 
 // Close releases analyzer resources.

@@ -23,6 +23,7 @@ import (
 	"github.com/panbanda/omen/pkg/analyzer/tdg"
 	"github.com/panbanda/omen/pkg/analyzer/temporal"
 	"github.com/panbanda/omen/pkg/config"
+	"github.com/panbanda/omen/pkg/source"
 )
 
 // Service orchestrates code analysis operations.
@@ -91,7 +92,7 @@ func (s *Service) AnalyzeComplexity(ctx context.Context, files []string, opts Co
 		})
 		ctx = analyzer.WithTracker(ctx, tracker)
 	}
-	return cxAnalyzer.Analyze(ctx, files)
+	return cxAnalyzer.Analyze(ctx, files, source.NewFilesystem())
 }
 
 // SATDOptions configures SATD analysis.
@@ -134,7 +135,7 @@ func (s *Service) AnalyzeSATD(ctx context.Context, files []string, opts SATDOpti
 		})
 		ctx = analyzer.WithTracker(ctx, tracker)
 	}
-	return satdAnalyzer.Analyze(ctx, files)
+	return satdAnalyzer.Analyze(ctx, files, source.NewFilesystem())
 }
 
 // DeadCodeOptions configures dead code detection.
@@ -220,7 +221,7 @@ func (s *Service) AnalyzeDuplicates(ctx context.Context, files []string, opts Du
 		})
 		ctx = analyzer.WithTracker(ctx, tracker)
 	}
-	return dupAnalyzer.Analyze(ctx, files)
+	return dupAnalyzer.Analyze(ctx, files, source.NewFilesystem())
 }
 
 // DefectOptions configures defect prediction.
@@ -262,7 +263,7 @@ func (s *Service) AnalyzeTDG(ctx context.Context, files []string) (*tdg.Analysis
 	tdgAnalyzer := tdg.New()
 	defer tdgAnalyzer.Close()
 
-	return tdgAnalyzer.Analyze(ctx, files)
+	return tdgAnalyzer.Analyze(ctx, files, source.NewFilesystem())
 }
 
 // GraphOptions configures dependency graph analysis.
@@ -289,7 +290,7 @@ func (s *Service) AnalyzeGraph(ctx context.Context, files []string, opts GraphOp
 		ctx = analyzer.WithTracker(ctx, tracker)
 	}
 
-	depGraph, err := graphAnalyzer.Analyze(ctx, files)
+	depGraph, err := graphAnalyzer.Analyze(ctx, files, source.NewFilesystem())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -414,7 +415,7 @@ func (s *Service) AnalyzeCohesion(ctx context.Context, files []string, opts Cohe
 		})
 		ctx = analyzer.WithTracker(ctx, tracker)
 	}
-	return ckAnalyzer.Analyze(ctx, files)
+	return ckAnalyzer.Analyze(ctx, files, source.NewFilesystem())
 }
 
 // RepoMapOptions configures repo map generation.
@@ -480,7 +481,7 @@ func (s *Service) AnalyzeSmells(ctx context.Context, files []string, opts SmellO
 		ctx = analyzer.WithTracker(ctx, tracker)
 	}
 
-	depGraph, err := graphAnalyzer.Analyze(ctx, files)
+	depGraph, err := graphAnalyzer.Analyze(ctx, files, source.NewFilesystem())
 	if err != nil {
 		return nil, err
 	}

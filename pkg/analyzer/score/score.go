@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/panbanda/omen/internal/vcs"
 	"github.com/panbanda/omen/pkg/analyzer/cohesion"
 	"github.com/panbanda/omen/pkg/analyzer/complexity"
 	"github.com/panbanda/omen/pkg/analyzer/duplicates"
@@ -14,6 +13,11 @@ import (
 	"github.com/panbanda/omen/pkg/analyzer/tdg"
 	"github.com/sourcegraph/conc"
 )
+
+// ContentSource provides file content for source-based analysis.
+type ContentSource interface {
+	Read(path string) ([]byte, error)
+}
 
 // Analyzer orchestrates component analyzers to produce a composite score.
 type Analyzer struct {
@@ -67,20 +71,9 @@ func New(opts ...Option) *Analyzer {
 	return a
 }
 
-// ProgressFunc is called to report analysis progress.
-type ProgressFunc func(stage string)
-
-// ProgressStages is the number of stages in the score analysis.
-// Stages: complexity, duplicates, satd, tdg, graph, cohesion, smells
-const ProgressStages = 7
-
-// AnalyzeProject computes the repository score for the given files.
-func (a *Analyzer) AnalyzeProject(ctx context.Context, repoPath string, files []string) (*Result, error) {
-	return a.AnalyzeProjectWithProgress(ctx, repoPath, files, nil)
-}
-
-// AnalyzeProjectWithProgress computes the score with progress reporting.
-func (a *Analyzer) AnalyzeProjectWithProgress(ctx context.Context, repoPath string, files []string, onProgress ProgressFunc) (*Result, error) {
+// Analyze computes the score from a ContentSource (e.g., git tree or filesystem).
+// This enables analysis of historical commits without filesystem checkouts.
+func (a *Analyzer) Analyze(ctx context.Context, files []string, src ContentSource, commitHash string) (*Result, error) {
 	// Create sub-analyzers
 	complexityAnalyzer := complexity.New(complexity.WithMaxFileSize(a.maxFileSize))
 	defer complexityAnalyzer.Close()
@@ -112,21 +105,12 @@ func (a *Analyzer) AnalyzeProjectWithProgress(ctx context.Context, repoPath stri
 		Passed:    true,
 	}
 
-	// Get current commit
-	opener := vcs.NewGitOpener()
-	if repo, err := opener.PlainOpenWithDetect(repoPath); err == nil {
-		if head, err := repo.Head(); err == nil {
-			hash := head.Hash().String()
-			if len(hash) >= 7 {
-				result.Commit = hash[:7]
-			}
-		}
+	// Set commit hash if provided
+	if len(commitHash) >= 7 {
+		result.Commit = commitHash[:7]
 	}
 
-	// Use the context as-is (analyzers get progress from context via WithTracker)
-	analysisCtx := ctx
-
-	// Run analyzers in parallel
+	// Run analyzers in parallel using source-based methods
 	var (
 		cxResult       *complexity.Analysis
 		dupResult      *duplicates.Analysis
@@ -139,40 +123,22 @@ func (a *Analyzer) AnalyzeProjectWithProgress(ctx context.Context, repoPath stri
 	wg := conc.NewWaitGroup()
 
 	wg.Go(func() {
-		if onProgress != nil {
-			onProgress("complexity")
-		}
-		cxResult, _ = complexityAnalyzer.Analyze(analysisCtx, files)
+		cxResult, _ = complexityAnalyzer.Analyze(ctx, files, src)
 	})
 	wg.Go(func() {
-		if onProgress != nil {
-			onProgress("duplicates")
-		}
-		dupResult, _ = duplicatesAnalyzer.Analyze(analysisCtx, files)
+		dupResult, _ = duplicatesAnalyzer.Analyze(ctx, files, src)
 	})
 	wg.Go(func() {
-		if onProgress != nil {
-			onProgress("satd")
-		}
-		satdResult, _ = satdAnalyzer.Analyze(analysisCtx, files)
+		satdResult, _ = satdAnalyzer.Analyze(ctx, files, src)
 	})
 	wg.Go(func() {
-		if onProgress != nil {
-			onProgress("tdg")
-		}
-		tdgResult, _ = tdgAnalyzer.Analyze(analysisCtx, files)
+		tdgResult, _ = tdgAnalyzer.Analyze(ctx, files, src)
 	})
 	wg.Go(func() {
-		if onProgress != nil {
-			onProgress("graph")
-		}
-		graphResult, _ = graphAnalyzer.Analyze(analysisCtx, files)
+		graphResult, _ = graphAnalyzer.Analyze(ctx, files, src)
 	})
 	wg.Go(func() {
-		if onProgress != nil {
-			onProgress("cohesion")
-		}
-		cohesionResult, _ = cohesionAnalyzer.Analyze(analysisCtx, files)
+		cohesionResult, _ = cohesionAnalyzer.Analyze(ctx, files, src)
 	})
 
 	wg.Wait()
@@ -180,9 +146,6 @@ func (a *Analyzer) AnalyzeProjectWithProgress(ctx context.Context, repoPath stri
 	// Analyze smells from graph (must be after graph completes)
 	var smellResult *smells.Analysis
 	if graphResult != nil {
-		if onProgress != nil {
-			onProgress("smells")
-		}
 		smellResult = smellsAnalyzer.AnalyzeGraph(graphResult)
 	}
 

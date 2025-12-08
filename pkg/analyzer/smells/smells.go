@@ -9,6 +9,7 @@ import (
 
 	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/analyzer/graph"
+	"github.com/panbanda/omen/pkg/source"
 )
 
 // Analyzer detects architectural smells in dependency graphs.
@@ -85,7 +86,7 @@ func New(opts ...Option) *Analyzer {
 // This method implements the FileAnalyzer interface.
 func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Analysis, error) {
 	// Build dependency graph from files
-	g, err := a.graphAnalyzer.Analyze(ctx, files)
+	g, err := a.graphAnalyzer.Analyze(ctx, files, source.NewFilesystem())
 	if err != nil {
 		return nil, fmt.Errorf("failed to build dependency graph: %w", err)
 	}

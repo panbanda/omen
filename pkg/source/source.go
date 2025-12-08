@@ -2,6 +2,7 @@ package source
 
 import (
 	"os"
+	"sync"
 
 	"github.com/panbanda/omen/internal/vcs"
 )
@@ -26,8 +27,10 @@ func (f *FilesystemSource) Read(path string) ([]byte, error) {
 }
 
 // TreeSource reads files from a git tree.
+// It is safe for concurrent use by multiple goroutines.
 type TreeSource struct {
 	tree vcs.Tree
+	mu   sync.Mutex
 }
 
 // NewTree creates a source that reads from a git tree.
@@ -36,6 +39,9 @@ func NewTree(tree vcs.Tree) *TreeSource {
 }
 
 // Read implements ContentSource.
+// It is safe for concurrent use.
 func (t *TreeSource) Read(path string) ([]byte, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	return t.tree.File(path)
 }

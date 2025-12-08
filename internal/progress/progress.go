@@ -53,6 +53,11 @@ func (t *Tracker) Tick() {
 	t.bar.Add(1)
 }
 
+// SetDescription updates the progress bar description text.
+func (t *Tracker) SetDescription(desc string) {
+	t.bar.Describe(desc)
+}
+
 // Add increments the total by n. Use when total count becomes known.
 // For spinners, this converts them to a progress bar.
 func (t *Tracker) Add(n int) {

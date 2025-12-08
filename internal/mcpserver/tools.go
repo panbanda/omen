@@ -19,6 +19,7 @@ import (
 	"github.com/panbanda/omen/pkg/analyzer/score"
 	"github.com/panbanda/omen/pkg/analyzer/tdg"
 	"github.com/panbanda/omen/pkg/config"
+	"github.com/panbanda/omen/pkg/source"
 	toon "github.com/toon-format/toon-go"
 )
 
@@ -880,11 +881,6 @@ func handleAnalyzeScore(ctx context.Context, req *mcp.CallToolRequest, input Sco
 		return toolError("no source files found")
 	}
 
-	repoPath := "."
-	if len(paths) > 0 {
-		repoPath = paths[0]
-	}
-
 	// Build weights and thresholds from config
 	effectiveWeights := cfg.Score.EffectiveWeights()
 	weights := score.Weights{
@@ -914,7 +910,7 @@ func handleAnalyzeScore(ctx context.Context, req *mcp.CallToolRequest, input Sco
 		score.WithChurnDays(cfg.Analysis.ChurnDays),
 		score.WithMaxFileSize(cfg.Analysis.MaxFileSize),
 	)
-	result, err := analyzer.AnalyzeProject(ctx, repoPath, scanResult.Files)
+	result, err := analyzer.Analyze(ctx, scanResult.Files, source.NewFilesystem(), "")
 	if err != nil {
 		return toolError(err.Error())
 	}

@@ -34,6 +34,7 @@ import (
 	"github.com/panbanda/omen/pkg/analyzer/tdg"
 	"github.com/panbanda/omen/pkg/analyzer/temporal"
 	"github.com/panbanda/omen/pkg/config"
+	"github.com/panbanda/omen/pkg/source"
 	"github.com/pelletier/go-toml"
 	"github.com/urfave/cli/v2"
 )
@@ -3143,14 +3144,6 @@ func runScoreCmd(c *cli.Context) error {
 		return nil
 	}
 
-	// Find repo root
-	repoPath := "."
-	if len(paths) > 0 {
-		repoPath = paths[0]
-	}
-
-	tracker := progress.NewTracker("Computing repository score...", score.ProgressStages)
-
 	analyzer := score.New(
 		score.WithWeights(weights),
 		score.WithThresholds(thresholds),
@@ -3158,10 +3151,7 @@ func runScoreCmd(c *cli.Context) error {
 		score.WithMaxFileSize(cfg.Analysis.MaxFileSize),
 	)
 
-	result, err := analyzer.AnalyzeProjectWithProgress(context.Background(), repoPath, scanResult.Files, func(stage string) {
-		tracker.Tick()
-	})
-	tracker.FinishSuccess()
+	result, err := analyzer.Analyze(context.Background(), scanResult.Files, source.NewFilesystem(), "")
 	if err != nil {
 		return fmt.Errorf("score analysis failed: %w", err)
 	}
@@ -3407,9 +3397,14 @@ func runScoreTrendCmd(c *cli.Context) error {
 
 	var tracker *progress.Tracker
 
-	result, err := analyzer.AnalyzeTrendWithProgress(context.Background(), repoPath, func(current, total int, commitSHA string) {
+	result, err := analyzer.AnalyzeTrendWithProgress(context.Background(), repoPath, func(current, total int, commitSHA string, fileCount int) {
 		if tracker == nil {
 			tracker = progress.NewTracker(fmt.Sprintf("Analyzing %d points in time", total), total)
+		}
+		if fileCount > 0 {
+			tracker.SetDescription(fmt.Sprintf("%s (%d files)", commitSHA, fileCount))
+		} else {
+			tracker.SetDescription(commitSHA)
 		}
 		tracker.Tick()
 	})

@@ -53,7 +53,7 @@ func (a *Analyzer) AnalyzeCommit(repo vcs.Repository, hash plumbing.Hash) (*Comm
 
 	src := source.NewTree(tree)
 
-	complexityAnalysis, err := a.complexity.AnalyzeProjectFromSource(context.Background(), files, src)
+	complexityAnalysis, err := a.complexity.Analyze(context.Background(), files, src)
 	if err != nil {
 		return nil, err
 	}
