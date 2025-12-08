@@ -30,6 +30,19 @@ func MapSourceFiles[T any](
 	src ContentSource,
 	fn func(*parser.Parser, string, []byte) (T, error),
 ) []T {
+	return MapSourceFilesWithSizeLimit(ctx, files, src, 0, fn)
+}
+
+// MapSourceFilesWithSizeLimit processes files from a ContentSource in parallel,
+// skipping files that exceed maxSize bytes. If maxSize is 0, no limit is enforced.
+// Progress is tracked via context using analyzer.WithTracker.
+func MapSourceFilesWithSizeLimit[T any](
+	ctx context.Context,
+	files []string,
+	src ContentSource,
+	maxSize int64,
+	fn func(*parser.Parser, string, []byte) (T, error),
+) []T {
 	if len(files) == 0 {
 		return nil
 	}
@@ -40,6 +53,10 @@ func MapSourceFiles[T any](
 		content, err := src.Read(path)
 		if err != nil {
 			// Skip files that can't be read
+			continue
+		}
+		// Skip files that exceed size limit
+		if maxSize > 0 && int64(len(content)) > maxSize {
 			continue
 		}
 		filesWithContent = append(filesWithContent, fileWithContent{

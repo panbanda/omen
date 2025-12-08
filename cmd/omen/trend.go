@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sync"
 
 	"github.com/fatih/color"
 	"github.com/panbanda/omen/internal/output"
@@ -73,14 +74,17 @@ func runTrendCmd(c *cli.Context) error {
 		score.WithTrendSnap(snap),
 	)
 
-	var tracker *progress.Tracker
-
 	ctx := context.Background()
+	var tracker *progress.Tracker
+	var trackerOnce sync.Once
+
 	result, err := trendAnalyzer.AnalyzeTrendWithProgress(ctx, repoPath, func(current, total int, commitSHA string) {
-		if tracker == nil {
+		trackerOnce.Do(func() {
 			tracker = progress.NewTracker(fmt.Sprintf("Analyzing %d points in time", total), total)
+		})
+		if tracker != nil {
+			tracker.Tick()
 		}
-		tracker.Tick()
 	})
 	if tracker != nil {
 		if err != nil {

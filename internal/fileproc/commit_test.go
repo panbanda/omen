@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/panbanda/omen/internal/testutil"
 	"github.com/panbanda/omen/internal/vcs"
 	"github.com/panbanda/omen/pkg/parser"
 	"github.com/stretchr/testify/assert"
@@ -11,8 +12,9 @@ import (
 )
 
 func TestMapSourceFiles(t *testing.T) {
+	repoRoot := testutil.RepoRoot(t)
 	opener := vcs.NewGitOpener()
-	repo, err := opener.PlainOpen("../..")
+	repo, err := opener.PlainOpen(repoRoot)
 	require.NoError(t, err)
 
 	head, err := repo.Head()

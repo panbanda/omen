@@ -408,14 +408,13 @@ Omen computes a composite repository health score (0-100) that combines multiple
 
 | Component       | Weight | What it measures                                   |
 | --------------- | ------ | -------------------------------------------------- |
-| Complexity      | 20%    | % of functions exceeding complexity thresholds     |
-| Duplication     | 15%    | Code clone ratio with non-linear penalty curve     |
-| Defect Risk     | 20%    | Average defect probability across files            |
+| Complexity      | 25%    | % of functions exceeding complexity thresholds     |
+| Duplication     | 20%    | Code clone ratio with non-linear penalty curve     |
 | SATD            | 10%    | Severity-weighted TODO/FIXME density per 1K LOC    |
-| TDG             | 10%    | Technical Debt Gradient composite score            |
+| TDG             | 15%    | Technical Debt Gradient composite score            |
 | Coupling        | 10%    | Cyclic deps, SDP violations, and instability       |
 | Smells          | 5%     | Architectural smells relative to codebase size     |
-| Cohesion        | 10%    | Class cohesion (LCOM) for OO codebases             |
+| Cohesion        | 15%    | Class cohesion (LCOM) for OO codebases             |
 
 **Normalization Philosophy:**
 
