@@ -79,12 +79,15 @@ func MapSourceFilesWithSizeLimit[T any](
 	p := pool.New().WithMaxGoroutines(maxWorkers).WithContext(ctx)
 	for _, fc := range filesWithContent {
 		p.Go(func(ctx context.Context) error {
-			// Check for cancellation
-			select {
-			case <-ctx.Done():
+			defer func() {
 				if tracker != nil {
 					tracker.Tick(fc.path)
 				}
+			}()
+
+			// Check for cancellation
+			select {
+			case <-ctx.Done():
 				return ctx.Err()
 			default:
 			}
@@ -94,9 +97,6 @@ func MapSourceFilesWithSizeLimit[T any](
 
 			result, err := fn(psr, fc.path, fc.content)
 			if err != nil {
-				if tracker != nil {
-					tracker.Tick(fc.path)
-				}
 				return nil
 			}
 
@@ -104,9 +104,6 @@ func MapSourceFilesWithSizeLimit[T any](
 			results = append(results, result)
 			mu.Unlock()
 
-			if tracker != nil {
-				tracker.Tick(fc.path)
-			}
 			return nil
 		})
 	}

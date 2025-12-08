@@ -82,9 +82,7 @@ func runTrendCmd(c *cli.Context) error {
 		trackerOnce.Do(func() {
 			tracker = progress.NewTracker(fmt.Sprintf("Analyzing %d points in time", total), total)
 		})
-		if tracker != nil {
-			tracker.Tick()
-		}
+		tracker.Tick()
 	})
 	if tracker != nil {
 		if err != nil {
