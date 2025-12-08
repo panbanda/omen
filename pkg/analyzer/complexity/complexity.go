@@ -4,11 +4,20 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/panbanda/omen/internal/fileproc"
 	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/parser"
 	sitter "github.com/smacker/go-tree-sitter"
+)
+
+var (
+	decisionTypesCache   = make(map[string]map[string]bool)
+	decisionTypesCacheMu sync.RWMutex
+
+	cognitiveTypesCache   = make(map[string]cognitiveTypeInfo)
+	cognitiveTypesCacheMu sync.RWMutex
 )
 
 // Ensure Analyzer implements analyzer.SourceFileAnalyzer.
@@ -178,7 +187,7 @@ func buildAnalysis(results []FileResult) *Analysis {
 func CountDecisionPoints(node *sitter.Node, source []byte, lang parser.Language) uint32 {
 	var count uint32
 
-	decisionTypes := makeSet(getDecisionNodeTypes(lang))
+	decisionTypes := getCachedDecisionTypes(string(lang))
 
 	parser.WalkTyped(node, source, func(n *sitter.Node, nodeType string, src []byte) bool {
 		if decisionTypes[nodeType] {
@@ -200,7 +209,7 @@ func CountDecisionPoints(node *sitter.Node, source []byte, lang parser.Language)
 // CalculateCognitiveComplexity computes cognitive complexity with nesting penalties.
 // Exported for use by other analyzers (hotspot, cohesion).
 func CalculateCognitiveComplexity(node *sitter.Node, source []byte, lang parser.Language, depth int) uint32 {
-	info := buildCognitiveTypeInfo(lang)
+	info := getCachedCognitiveTypeInfo(string(lang))
 	return calcCognitiveRecursive(node, source, info, depth)
 }
 
@@ -296,6 +305,27 @@ func getDecisionNodeTypes(lang parser.Language) []string {
 	}
 }
 
+func getCachedDecisionTypes(lang string) map[string]bool {
+	decisionTypesCacheMu.RLock()
+	if cached, ok := decisionTypesCache[lang]; ok {
+		decisionTypesCacheMu.RUnlock()
+		return cached
+	}
+	decisionTypesCacheMu.RUnlock()
+
+	decisionTypesCacheMu.Lock()
+	defer decisionTypesCacheMu.Unlock()
+
+	// Double-check after acquiring write lock
+	if cached, ok := decisionTypesCache[lang]; ok {
+		return cached
+	}
+
+	types := makeSet(getDecisionNodeTypes(parser.Language(lang)))
+	decisionTypesCache[lang] = types
+	return types
+}
+
 // getOperator extracts the operator from a binary expression node.
 func getOperator(node *sitter.Node, source []byte) string {
 	for i := range int(node.ChildCount()) {
@@ -332,6 +362,27 @@ func buildCognitiveTypeInfo(lang parser.Language) cognitiveTypeInfo {
 			info.flat[ct.nodeType] = true
 		}
 	}
+	return info
+}
+
+func getCachedCognitiveTypeInfo(lang string) cognitiveTypeInfo {
+	cognitiveTypesCacheMu.RLock()
+	if cached, ok := cognitiveTypesCache[lang]; ok {
+		cognitiveTypesCacheMu.RUnlock()
+		return cached
+	}
+	cognitiveTypesCacheMu.RUnlock()
+
+	cognitiveTypesCacheMu.Lock()
+	defer cognitiveTypesCacheMu.Unlock()
+
+	// Double-check after acquiring write lock
+	if cached, ok := cognitiveTypesCache[lang]; ok {
+		return cached
+	}
+
+	info := buildCognitiveTypeInfo(parser.Language(lang))
+	cognitiveTypesCache[lang] = info
 	return info
 }
 
