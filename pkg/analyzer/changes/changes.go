@@ -457,6 +457,8 @@ func computeStateDependentFeatures(rawCommits []rawCommit) []CommitFeatures {
 }
 
 // buildAnalysis constructs the analysis result from processed commits.
+// Risk levels are assigned using percentile-based thresholds following
+// JIT defect prediction best practices (top 5% = high, top 20% = medium).
 func (a *Analyzer) buildAnalysis(commits []CommitFeatures) *Analysis {
 	analysis := NewAnalysis()
 	analysis.PeriodDays = a.days
@@ -468,14 +470,33 @@ func (a *Analyzer) buildAnalysis(commits []CommitFeatures) *Analysis {
 
 	analysis.Normalization = calculateNormalizationStats(commits)
 
-	var totalScore float64
-	scores := make([]float64, 0, len(commits))
+	// First pass: compute all risk scores
+	scores := make([]float64, len(commits))
+	for i, features := range commits {
+		scores[i] = CalculateRisk(features, a.weights, analysis.Normalization)
+		if features.IsFix {
+			analysis.Summary.BugFixCount++
+		}
+	}
 
-	for _, features := range commits {
-		risk := a.calculateCommitRisk(features, analysis.Normalization)
+	// Calculate percentile-based thresholds
+	sortedScores := make([]float64, len(scores))
+	copy(sortedScores, scores)
+	sort.Float64s(sortedScores)
+
+	analysis.RiskThresholds = RiskThresholds{
+		HighThreshold:   stats.Percentile(sortedScores, HighRiskPercentile),
+		MediumThreshold: stats.Percentile(sortedScores, MediumRiskPercentile),
+	}
+
+	// Second pass: assign risk levels using computed thresholds
+	var totalScore float64
+	for i, features := range commits {
+		score := scores[i]
+		totalScore += score
+
+		risk := a.buildCommitRisk(features, score, analysis.Normalization, analysis.RiskThresholds)
 		analysis.Commits = append(analysis.Commits, risk)
-		totalScore += risk.RiskScore
-		scores = append(scores, risk.RiskScore)
 
 		switch risk.RiskLevel {
 		case RiskLevelHigh:
@@ -484,10 +505,6 @@ func (a *Analyzer) buildAnalysis(commits []CommitFeatures) *Analysis {
 			analysis.Summary.MediumRiskCount++
 		case RiskLevelLow:
 			analysis.Summary.LowRiskCount++
-		}
-
-		if features.IsFix {
-			analysis.Summary.BugFixCount++
 		}
 	}
 
@@ -499,18 +516,15 @@ func (a *Analyzer) buildAnalysis(commits []CommitFeatures) *Analysis {
 	// Calculate summary statistics
 	analysis.Summary.TotalCommits = len(commits)
 	analysis.Summary.AvgRiskScore = totalScore / float64(len(commits))
-
-	sort.Float64s(scores)
-	analysis.Summary.P50RiskScore = stats.Percentile(scores, 50)
-	analysis.Summary.P95RiskScore = stats.Percentile(scores, 95)
+	analysis.Summary.P50RiskScore = stats.Percentile(sortedScores, 50)
+	analysis.Summary.P95RiskScore = stats.Percentile(sortedScores, 95)
 
 	return analysis
 }
 
-// calculateCommitRisk computes risk score and contributing factors for a single commit.
-func (a *Analyzer) calculateCommitRisk(features CommitFeatures, norm NormalizationStats) CommitRisk {
-	score := CalculateRisk(features, a.weights, norm)
-	level := GetRiskLevel(score)
+// buildCommitRisk constructs a CommitRisk from pre-computed score and thresholds.
+func (a *Analyzer) buildCommitRisk(features CommitFeatures, score float64, norm NormalizationStats, thresholds RiskThresholds) CommitRisk {
+	level := GetRiskLevel(score, thresholds)
 
 	factors := map[string]float64{
 		"fix":            boolToFloat(features.IsFix) * a.weights.FIX,

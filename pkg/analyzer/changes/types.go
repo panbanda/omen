@@ -54,10 +54,27 @@ type CommitFeatures struct {
 // RiskLevel represents the risk level for a commit.
 type RiskLevel string
 
+// Risk levels are assigned using percentile-based thresholds following
+// JIT (Just-in-Time) defect prediction research best practices.
+// Rather than fixed thresholds, commits are ranked relative to the repository:
+//   - High:   Top 5% of commits (P95+) - deserve extra scrutiny
+//   - Medium: Top 5-20% of commits (P80-P95) - worth additional attention
+//   - Low:    Bottom 80% of commits - standard review process
+//
+// This approach aligns with the 80/20 rule from defect prediction research:
+// ~20% of code changes contain ~80% of defects.
+// See: Kamei et al. (2013) "A Large-Scale Empirical Study of Just-in-Time Quality Assurance"
 const (
-	RiskLevelLow    RiskLevel = "low"    // < 0.4
-	RiskLevelMedium RiskLevel = "medium" // 0.4 - 0.7
-	RiskLevelHigh   RiskLevel = "high"   // >= 0.7
+	RiskLevelLow    RiskLevel = "low"
+	RiskLevelMedium RiskLevel = "medium"
+	RiskLevelHigh   RiskLevel = "high"
+)
+
+// Percentile thresholds for risk level classification.
+// These follow effort-aware JIT defect prediction best practices.
+const (
+	HighRiskPercentile   = 95 // Top 5% are high risk
+	MediumRiskPercentile = 80 // Top 20% (P80-P95) are medium risk
 )
 
 // CommitRisk represents the change risk prediction result for a single commit.
@@ -75,12 +92,13 @@ type CommitRisk struct {
 
 // Analysis represents the full change-level defect prediction result.
 type Analysis struct {
-	GeneratedAt   time.Time          `json:"generated_at"`
-	PeriodDays    int                `json:"period_days"`
-	Commits       []CommitRisk       `json:"commits"`
-	Summary       Summary            `json:"summary"`
-	Weights       Weights            `json:"weights"`
-	Normalization NormalizationStats `json:"normalization"`
+	GeneratedAt    time.Time          `json:"generated_at"`
+	PeriodDays     int                `json:"period_days"`
+	Commits        []CommitRisk       `json:"commits"`
+	Summary        Summary            `json:"summary"`
+	Weights        Weights            `json:"weights"`
+	Normalization  NormalizationStats `json:"normalization"`
+	RiskThresholds RiskThresholds     `json:"risk_thresholds"`
 }
 
 // Summary provides aggregate statistics.
@@ -207,12 +225,29 @@ func CalculateEntropy(linesPerFile map[string]int) float64 {
 	return entropy
 }
 
-// GetRiskLevel determines risk level from score.
-func GetRiskLevel(score float64) RiskLevel {
+// RiskThresholds holds the computed percentile thresholds for risk classification.
+type RiskThresholds struct {
+	HighThreshold   float64 `json:"high_threshold"`   // Score at P95
+	MediumThreshold float64 `json:"medium_threshold"` // Score at P80
+}
+
+// DefaultRiskThresholds returns fixed thresholds for single-item analysis
+// (e.g., analyzing a PR diff where we don't have a population for percentiles).
+// These are based on empirical observations of what constitutes risky changes.
+func DefaultRiskThresholds() RiskThresholds {
+	return RiskThresholds{
+		HighThreshold:   0.6, // Score >= 0.6 indicates significant risk
+		MediumThreshold: 0.3, // Score >= 0.3 warrants attention
+	}
+}
+
+// GetRiskLevel determines risk level from score using percentile-based thresholds.
+// The thresholds parameter contains P95 and P80 values computed from all commits.
+func GetRiskLevel(score float64, thresholds RiskThresholds) RiskLevel {
 	switch {
-	case score >= 0.7:
+	case score >= thresholds.HighThreshold:
 		return RiskLevelHigh
-	case score >= 0.4:
+	case score >= thresholds.MediumThreshold:
 		return RiskLevelMedium
 	default:
 		return RiskLevelLow

@@ -179,6 +179,12 @@ func TestCalculateRisk(t *testing.T) {
 }
 
 func TestGetRiskLevel(t *testing.T) {
+	// Test with percentile-based thresholds
+	thresholds := RiskThresholds{
+		HighThreshold:   0.7,
+		MediumThreshold: 0.4,
+	}
+
 	tests := []struct {
 		score    float64
 		expected RiskLevel
@@ -192,10 +198,26 @@ func TestGetRiskLevel(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result := GetRiskLevel(tt.score)
+		result := GetRiskLevel(tt.score, thresholds)
 		if result != tt.expected {
 			t.Errorf("GetRiskLevel(%f) = %s, expected %s", tt.score, result, tt.expected)
 		}
+	}
+}
+
+func TestDefaultRiskThresholds(t *testing.T) {
+	thresholds := DefaultRiskThresholds()
+
+	// Verify thresholds are sensible
+	if thresholds.HighThreshold <= thresholds.MediumThreshold {
+		t.Errorf("HighThreshold (%f) should be > MediumThreshold (%f)",
+			thresholds.HighThreshold, thresholds.MediumThreshold)
+	}
+	if thresholds.MediumThreshold <= 0 {
+		t.Errorf("MediumThreshold should be > 0, got %f", thresholds.MediumThreshold)
+	}
+	if thresholds.HighThreshold > 1.0 {
+		t.Errorf("HighThreshold should be <= 1.0, got %f", thresholds.HighThreshold)
 	}
 }
 

@@ -154,13 +154,19 @@ Just-in-Time (JIT) defect prediction analyzes recent commits to identify risky c
 | NUC    | Unique Changes         | Change entropy = higher risk               |
 | EXP    | Developer Experience   | Less experience = more risk                |
 
-Each commit gets a risk score from 0.0 to 1.0:
+**Percentile-based risk classification:**
 
-- **High risk (>0.7)**: Prioritize careful review
-- **Medium risk (0.4-0.7)**: Worth extra attention
-- **Low risk (<0.4)**: Standard review process
+Risk levels use percentile-based thresholds following JIT defect prediction best practices. Rather than fixed thresholds, commits are ranked relative to the repository's own distribution:
 
-**Why it matters:** [Kamei et al. (2013)](https://ieeexplore.ieee.org/document/6341763) demonstrated that JIT prediction catches risky changes at commit time, before bugs propagate. [Zeng et al. (2021)](https://ieeexplore.ieee.org/document/9463091) showed that simple JIT models match deep learning accuracy (~65%) with better interpretability.
+| Level  | Percentile | Meaning                                    |
+| ------ | ---------- | ------------------------------------------ |
+| High   | Top 5%     | P95+ - Deserve extra scrutiny              |
+| Medium | Top 20%    | P80-P95 - Worth additional attention       |
+| Low    | Bottom 80% | Below P80 - Standard review process        |
+
+This approach aligns with the 80/20 rule from defect prediction research: ~20% of code changes contain ~80% of defects. It ensures actionable results regardless of repository characteristics - well-disciplined repos will have lower thresholds, while high-churn repos will have higher ones.
+
+**Why it matters:** [Kamei et al. (2013)](https://ieeexplore.ieee.org/document/6341763) demonstrated that JIT prediction catches risky changes at commit time, before bugs propagate. Their effort-aware approach uses ranking rather than fixed thresholds, focusing limited review resources on the riskiest ~20% of commits. [Zeng et al. (2021)](https://ieeexplore.ieee.org/document/9463091) showed that simple JIT models match deep learning accuracy (~65%) with better interpretability.
 
 > [!TIP]
 > Run `omen analyze changes` before merging PRs to identify commits needing extra review.

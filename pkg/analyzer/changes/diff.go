@@ -102,9 +102,9 @@ func (a *Analyzer) AnalyzeDiffWithContext(ctx context.Context, repoPath string, 
 		IsAutomated:   false,
 	}
 
-	// Calculate risk score
+	// Calculate risk score using fixed thresholds for single-diff analysis
 	score := CalculateRisk(features, a.weights, norm)
-	level := string(GetRiskLevel(score))
+	level := string(GetRiskLevel(score, DefaultRiskThresholds()))
 
 	// Build contributing factors
 	factors := map[string]float64{
