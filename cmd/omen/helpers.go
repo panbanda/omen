@@ -21,7 +21,7 @@ func getPaths(args []string) []string {
 // Returns resolved paths, a cleanup function, and any error.
 // The cleanup function must be called (via defer) to remove cloned temp directories.
 //
-//nolint:unused // Will be used in subsequent tasks for remote repo integration
+
 func resolvePaths(ctx context.Context, args []string, ref string, shallow bool) ([]string, func(), error) {
 	paths := getPaths(args)
 	var cleanups []func()
