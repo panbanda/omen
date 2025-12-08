@@ -40,17 +40,17 @@ func DefaultWeights() Weights {
 
 // FileMetrics contains input metrics for defect prediction.
 type FileMetrics struct {
-	FilePath             string  `json:"file_path"`
-	ChurnScore           float32 `json:"churn_score"`       // 0.0 to 1.0
-	Complexity           float32 `json:"complexity"`        // Raw complexity
-	DuplicateRatio       float32 `json:"duplicate_ratio"`   // 0.0 to 1.0
-	AfferentCoupling     float32 `json:"afferent_coupling"` // Incoming deps
-	EfferentCoupling     float32 `json:"efferent_coupling"` // Outgoing deps
-	LinesOfCode          int     `json:"lines_of_code"`
-	CyclomaticComplexity uint32  `json:"cyclomatic_complexity"`
-	CognitiveComplexity  uint32  `json:"cognitive_complexity"`
-	OwnershipDiffusion   float32 `json:"ownership_diffusion"`     // Number of unique contributors
-	OwnershipConcentrat  float32 `json:"ownership_concentration"` // 0.0-1.0, low = diffuse ownership
+	FilePath               string  `json:"file_path"`
+	ChurnScore             float32 `json:"churn_score"`       // 0.0 to 1.0
+	Complexity             float32 `json:"complexity"`        // Raw complexity
+	DuplicateRatio         float32 `json:"duplicate_ratio"`   // 0.0 to 1.0
+	AfferentCoupling       float32 `json:"afferent_coupling"` // Incoming deps
+	EfferentCoupling       float32 `json:"efferent_coupling"` // Outgoing deps
+	LinesOfCode            int     `json:"lines_of_code"`
+	CyclomaticComplexity   uint32  `json:"cyclomatic_complexity"`
+	CognitiveComplexity    uint32  `json:"cognitive_complexity"`
+	OwnershipDiffusion     float32 `json:"ownership_diffusion"`     // Number of unique contributors
+	OwnershipConcentration float32 `json:"ownership_concentration"` // 0.0-1.0, low = diffuse ownership
 }
 
 // Score represents the prediction result for a file (internal format).

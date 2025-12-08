@@ -215,7 +215,7 @@ func (a *Analyzer) Analyze(ctx context.Context, repoPath string, files []string)
 		// Get ownership diffusion (Bird et al. 2011 - more contributors = higher defect risk)
 		if fo, ok := ownershipByFile[path]; ok {
 			metrics.OwnershipDiffusion = float32(len(fo.Contributors))
-			metrics.OwnershipConcentrat = float32(fo.Concentration)
+			metrics.OwnershipConcentration = float32(fo.Concentration)
 		}
 
 		// Calculate probability and confidence

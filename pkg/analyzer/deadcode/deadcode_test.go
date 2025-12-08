@@ -1068,9 +1068,9 @@ end
 		t.Fatalf("AnalyzeFile failed: %v", err)
 	}
 
-	// Should have 4 method definitions
-	if len(result.definitions) != 4 {
-		t.Errorf("len(definitions) = %d, want 4", len(result.definitions))
+	// Should have 5 definitions: 1 class + 4 methods
+	if len(result.definitions) != 5 {
+		t.Errorf("len(definitions) = %d, want 5", len(result.definitions))
 	}
 
 	// Should track calls to calculate_total and validate_items
