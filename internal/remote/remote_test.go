@@ -6,6 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
 func TestParse_LocalPath(t *testing.T) {
@@ -149,5 +152,74 @@ func TestSource_Clone(t *testing.T) {
 	gitDir := filepath.Join(src.CloneDir, ".git")
 	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
 		t.Errorf(".git directory not found in %s", src.CloneDir)
+	}
+}
+
+func TestSource_Clone_WithRef(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	src := &Source{
+		URL: "https://github.com/octocat/Hello-World",
+		Ref: "master",
+	}
+
+	ctx := context.Background()
+	err := src.Clone(ctx, io.Discard, false)
+	if err != nil {
+		t.Fatalf("Clone failed: %v", err)
+	}
+	defer src.Cleanup()
+
+	// Verify we're on the right branch
+	repo, err := git.PlainOpen(src.CloneDir)
+	if err != nil {
+		t.Fatalf("open cloned repo: %v", err)
+	}
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatalf("get HEAD: %v", err)
+	}
+	if !head.Name().IsBranch() || head.Name().Short() != "master" {
+		t.Errorf("expected branch master, got %s", head.Name())
+	}
+}
+
+func TestSource_Clone_Shallow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	src := &Source{
+		URL: "https://github.com/octocat/Hello-World",
+	}
+
+	ctx := context.Background()
+	err := src.Clone(ctx, io.Discard, true)
+	if err != nil {
+		t.Fatalf("Clone failed: %v", err)
+	}
+	defer src.Cleanup()
+
+	// Verify it's a shallow clone by checking commit count
+	repo, err := git.PlainOpen(src.CloneDir)
+	if err != nil {
+		t.Fatalf("open cloned repo: %v", err)
+	}
+	iter, err := repo.Log(&git.LogOptions{})
+	if err != nil {
+		t.Fatalf("get log: %v", err)
+	}
+
+	count := 0
+	iter.ForEach(func(c *object.Commit) error {
+		count++
+		return nil
+	})
+
+	// Shallow clone should have very few commits (typically 1)
+	if count > 5 {
+		t.Errorf("expected shallow clone with few commits, got %d", count)
 	}
 }
