@@ -410,23 +410,51 @@ func (a *Analyzer) estimateDuplicationRatio(source string) float32 {
 }
 
 // detectCriticalDefects detects critical code defects.
+// Returns the count but no longer auto-fails - critical defects now apply
+// a penalty rather than zeroing the score.
 func (a *Analyzer) detectCriticalDefects(source string, language Language) (int, bool) {
 	count := 0
 
-	switch language {
-	case LanguageRust:
-		// Detect .unwrap() without context
-		count += strings.Count(source, ".unwrap()")
-		// Detect panic! macros
-		count += strings.Count(source, "panic!")
-	case LanguageGo:
-		// Detect naked panics in non-test code
-		if !strings.Contains(source, "func Test") {
-			count += strings.Count(source, "panic(")
+	// Count critical defects but don't use them for auto-fail
+	// String literals that contain "panic(" etc. should not be counted
+	lines := strings.Split(source, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// Skip comments and string literals
+		if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") {
+			continue
+		}
+		// Skip lines that are clearly string literals containing the pattern
+		if strings.Contains(trimmed, `"panic(`) || strings.Contains(trimmed, `'panic(`) {
+			continue
+		}
+		if strings.Contains(trimmed, `".unwrap()`) || strings.Contains(trimmed, `'.unwrap()`) {
+			continue
+		}
+
+		switch language {
+		case LanguageRust:
+			// Detect .unwrap() without context (actual calls, not in strings)
+			if strings.Contains(trimmed, ".unwrap()") {
+				count++
+			}
+			// Detect panic! macros
+			if strings.Contains(trimmed, "panic!") {
+				count++
+			}
+		case LanguageGo:
+			// Detect naked panics in non-test code (actual calls)
+			if !strings.Contains(source, "func Test") {
+				if strings.Contains(trimmed, "panic(") {
+					count++
+				}
+			}
 		}
 	}
 
-	return count, count > 0
+	// Return count but never auto-fail (HasCriticalDefects always false)
+	// Instead, critical defects contribute to complexity penalties
+	return count, false
 }
 
 // discoverFiles finds all analyzable files in a directory.

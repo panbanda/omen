@@ -1,0 +1,17 @@
+{
+  "name": "target-tests",
+  "version": "1.0.0",
+  "description": "Identify files and functions most needing test coverage based on risk, complexity, and churn. Use when prioritizing test writing or improving test coverage strategically.",
+  "author": {
+    "name": "Panbanda"
+  },
+  "repository": "https://github.com/panbanda/omen",
+  "license": "Apache-2.0",
+  "keywords": [
+    "omen",
+    "code-analysis",
+    "testing",
+    "coverage",
+    "risk-based-testing"
+  ]
+}

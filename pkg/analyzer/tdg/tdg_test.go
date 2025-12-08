@@ -262,21 +262,19 @@ fn main() {
 		t.Fatalf("AnalyzeSource() error = %v", err)
 	}
 
-	if !score.HasCriticalDefects {
-		t.Error("Should detect critical defects (.unwrap() and panic!)")
-	}
-
+	// Critical defects are counted but no longer auto-fail
 	if score.CriticalDefectsCount < 3 {
 		t.Errorf("CriticalDefectsCount = %v, want >= 3", score.CriticalDefectsCount)
 	}
 
-	// Critical defects should result in F grade
-	if score.Grade != GradeF {
-		t.Errorf("Critical defects should result in Grade F, got %v", score.Grade)
+	// HasCriticalDefects should now be false (no auto-fail behavior)
+	if score.HasCriticalDefects {
+		t.Error("HasCriticalDefects should be false (auto-fail disabled)")
 	}
 
-	if score.Total != 0 {
-		t.Errorf("Critical defects should result in Total 0, got %v", score.Total)
+	// Score should still be calculated normally, not auto-fail to 0
+	if score.Total == 0 {
+		t.Errorf("Total should not be 0 (auto-fail disabled), got %v", score.Total)
 	}
 }
 
@@ -611,21 +609,22 @@ func main() {
 }
 
 func TestGradeFromScore(t *testing.T) {
+	// Standard US academic grading scale
 	tests := []struct {
 		score float32
 		want  Grade
 	}{
-		{96.0, GradeAPlus},
-		{92.0, GradeA},
-		{87.0, GradeAMinus},
-		{82.0, GradeBPlus},
-		{77.0, GradeB},
-		{72.0, GradeBMinus},
-		{67.0, GradeCPlus},
-		{62.0, GradeC},
-		{57.0, GradeCMinus},
-		{52.0, GradeD},
-		{40.0, GradeF},
+		{98.0, GradeAPlus},  // 97+
+		{94.0, GradeA},      // 93-96
+		{91.0, GradeAMinus}, // 90-92
+		{88.0, GradeBPlus},  // 87-89
+		{84.0, GradeB},      // 83-86
+		{81.0, GradeBMinus}, // 80-82
+		{78.0, GradeCPlus},  // 77-79
+		{74.0, GradeC},      // 73-76
+		{71.0, GradeCMinus}, // 70-72
+		{65.0, GradeD},      // 60-69
+		{55.0, GradeF},      // <60
 	}
 
 	for _, tt := range tests {
@@ -711,8 +710,9 @@ func TestScore_CalculateTotal(t *testing.T) {
 		if score.Total != 72.0 {
 			t.Errorf("Total = %v, want 72.0", score.Total)
 		}
-		if score.Grade != GradeBMinus {
-			t.Errorf("Grade = %v, want B-", score.Grade)
+		// With standard US grading, 72 is C- (70-72)
+		if score.Grade != GradeCMinus {
+			t.Errorf("Grade = %v, want C-", score.Grade)
 		}
 	})
 

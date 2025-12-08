@@ -1,0 +1,18 @@
+{
+  "name": "find-bugs",
+  "version": "1.0.0",
+  "description": "Locate likely bug locations using defect prediction, hotspot analysis, and temporal coupling. Use when triaging production incidents, investigating recurring bugs, or prioritizing QA effort.",
+  "author": {
+    "name": "Panbanda"
+  },
+  "repository": "https://github.com/panbanda/omen",
+  "license": "Apache-2.0",
+  "keywords": [
+    "omen",
+    "code-analysis",
+    "bug-detection",
+    "defect-prediction",
+    "hotspot",
+    "temporal-coupling"
+  ]
+}

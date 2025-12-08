@@ -8,7 +8,7 @@
   },
   "homepage": "https://github.com/panbanda/omen",
   "repository": "https://github.com/panbanda/omen",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": [
     "code-analysis",
     "complexity",
