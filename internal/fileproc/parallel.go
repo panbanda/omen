@@ -7,7 +7,9 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"sync/atomic"
 
+	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/parser"
 	"github.com/sourcegraph/conc/pool"
 )
@@ -64,172 +66,202 @@ func (e *ProcessingErrors) Unwrap() error {
 // 2x is optimal for mixed I/O and CGO workloads.
 const DefaultWorkerMultiplier = 2
 
-// ProgressFunc is called after each file is processed.
-type ProgressFunc func()
-
 // ErrorFunc is called when a file processing error occurs.
 // Receives the file path and the error. If nil, errors are silently skipped.
 type ErrorFunc func(path string, err error)
 
-// MapFiles processes files in parallel, calling fn for each file with a dedicated parser.
+// MapFiles processes files in parallel with context cancellation and progress tracking.
+// Progress is tracked via context using analyzer.WithTracker.
 // Results are collected and returned in arbitrary order.
-// Errors from individual files are silently skipped; use MapFilesWithErrors for error handling.
-// Uses 2x NumCPU workers by default (optimal for mixed I/O and CGO workloads).
-func MapFiles[T any](files []string, fn func(*parser.Parser, string) (T, error)) []T {
-	return MapFilesWithProgress(files, fn, nil)
-}
-
-// MapFilesWithProgress processes files in parallel with optional progress callback.
-func MapFilesWithProgress[T any](files []string, fn func(*parser.Parser, string) (T, error), onProgress ProgressFunc) []T {
-	return MapFilesN(files, 0, fn, onProgress, nil)
+// Uses 2x NumCPU workers by default.
+func MapFiles[T any](ctx context.Context, files []string, fn func(*parser.Parser, string) (T, error)) ([]T, *ProcessingErrors) {
+	return MapFilesWithSizeLimit(ctx, files, 0, fn)
 }
 
 // MapFilesWithSizeLimit processes files in parallel, skipping files that exceed maxSize.
 // If maxSize is 0, no limit is enforced.
-// Files that exceed the limit are silently skipped unless onError is provided.
-func MapFilesWithSizeLimit[T any](files []string, maxSize int64, fn func(*parser.Parser, string) (T, error), onProgress ProgressFunc, onError ErrorFunc) []T {
-	return MapFilesNWithSizeLimit(files, 0, maxSize, fn, onProgress, onError)
-}
-
-// MapFilesWithErrors processes files in parallel with error callback.
-// The onError callback is invoked for each file that fails processing.
-func MapFilesWithErrors[T any](files []string, fn func(*parser.Parser, string) (T, error), onError ErrorFunc) []T {
-	return MapFilesN(files, 0, fn, nil, onError)
-}
-
-// MapFilesN processes files with configurable worker count and callbacks.
-// If maxWorkers is <= 0, defaults to 2x NumCPU.
-func MapFilesN[T any](files []string, maxWorkers int, fn func(*parser.Parser, string) (T, error), onProgress ProgressFunc, onError ErrorFunc) []T {
+// Progress is tracked via context using analyzer.WithTracker.
+func MapFilesWithSizeLimit[T any](ctx context.Context, files []string, maxSize int64, fn func(*parser.Parser, string) (T, error)) ([]T, *ProcessingErrors) {
 	if len(files) == 0 {
-		return nil
-	}
-
-	if maxWorkers <= 0 {
-		maxWorkers = runtime.NumCPU() * DefaultWorkerMultiplier
-	}
-
-	results := make([]T, 0, len(files))
-	var mu sync.Mutex
-
-	p := pool.New().WithMaxGoroutines(maxWorkers)
-	for _, path := range files {
-		p.Go(func() {
-			psr := parser.New()
-			defer psr.Close()
-
-			result, err := fn(psr, path)
-
-			if err != nil {
-				if onError != nil {
-					onError(path, err)
-				}
-				if onProgress != nil {
-					onProgress()
-				}
-				return
-			}
-
-			if onProgress != nil {
-				onProgress()
-			}
-
-			mu.Lock()
-			results = append(results, result)
-			mu.Unlock()
-		})
-	}
-	p.Wait()
-
-	return results
-}
-
-// MapFilesNWithSizeLimit processes files with configurable worker count and file size limit.
-// Files exceeding maxSize bytes are skipped. If maxSize is 0, no limit is enforced.
-func MapFilesNWithSizeLimit[T any](files []string, maxWorkers int, maxSize int64, fn func(*parser.Parser, string) (T, error), onProgress ProgressFunc, onError ErrorFunc) []T {
-	if len(files) == 0 {
-		return nil
-	}
-
-	if maxWorkers <= 0 {
-		maxWorkers = runtime.NumCPU() * DefaultWorkerMultiplier
-	}
-
-	results := make([]T, 0, len(files))
-	var mu sync.Mutex
-
-	p := pool.New().WithMaxGoroutines(maxWorkers)
-	for _, path := range files {
-		p.Go(func() {
-			// Check file size before processing
-			if maxSize > 0 {
-				info, err := os.Stat(path)
-				if err != nil {
-					if onError != nil {
-						onError(path, err)
-					}
-					if onProgress != nil {
-						onProgress()
-					}
-					return
-				}
-				if info.Size() > maxSize {
-					if onError != nil {
-						onError(path, fmt.Errorf("file too large: %d bytes (limit: %d)", info.Size(), maxSize))
-					}
-					if onProgress != nil {
-						onProgress()
-					}
-					return
-				}
-			}
-
-			psr := parser.New()
-			defer psr.Close()
-
-			result, err := fn(psr, path)
-
-			if err != nil {
-				if onError != nil {
-					onError(path, err)
-				}
-				if onProgress != nil {
-					onProgress()
-				}
-				return
-			}
-
-			if onProgress != nil {
-				onProgress()
-			}
-
-			mu.Lock()
-			results = append(results, result)
-			mu.Unlock()
-		})
-	}
-	p.Wait()
-
-	return results
-}
-
-// ForEachFileWithResource processes files in parallel, calling fn for each file with a per-worker resource.
-// The initResource function is called once per worker to create the resource (e.g., git repo handle).
-// The closeResource function is called when the worker is done to release the resource.
-// Uses 2x NumCPU workers by default.
-func ForEachFileWithResource[T any, R any](
-	files []string,
-	initResource func() (R, error),
-	closeResource func(R),
-	fn func(R, string) (T, error),
-	onProgress ProgressFunc,
-) []T {
-	if len(files) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	maxWorkers := runtime.NumCPU() * DefaultWorkerMultiplier
 	results := make([]T, 0, len(files))
+	errs := &ProcessingErrors{}
 	var mu sync.Mutex
+
+	total := len(files)
+	var processed atomic.Int32
+	tracker := analyzer.TrackerFromContext(ctx)
+
+	// If using tracker, set total count
+	if tracker != nil {
+		tracker.Add(total)
+	}
+
+	reportProgress := func(path string) {
+		processed.Add(1)
+		if tracker != nil {
+			tracker.Tick(path)
+		}
+	}
+
+	p := pool.New().WithMaxGoroutines(maxWorkers).WithContext(ctx)
+	for _, path := range files {
+		p.Go(func(ctx context.Context) error {
+			// Check for cancellation before processing
+			select {
+			case <-ctx.Done():
+				errs.Add(path, ctx.Err())
+				reportProgress(path)
+				return ctx.Err()
+			default:
+			}
+
+			// Check file size before processing
+			if maxSize > 0 {
+				info, err := os.Stat(path)
+				if err != nil {
+					errs.Add(path, err)
+					reportProgress(path)
+					return nil
+				}
+				if info.Size() > maxSize {
+					errs.Add(path, fmt.Errorf("file too large: %d bytes (limit: %d)", info.Size(), maxSize))
+					reportProgress(path)
+					return nil
+				}
+			}
+
+			psr := parser.New()
+			defer psr.Close()
+
+			result, err := fn(psr, path)
+
+			if err != nil {
+				errs.Add(path, err)
+				reportProgress(path)
+				return nil
+			}
+
+			mu.Lock()
+			results = append(results, result)
+			mu.Unlock()
+
+			reportProgress(path)
+			return nil
+		})
+	}
+	_ = p.Wait()
+
+	if !errs.HasErrors() {
+		return results, nil
+	}
+	return results, errs
+}
+
+// ForEachFile processes files in parallel with context cancellation and progress tracking.
+// No parser is provided; use this for non-AST operations (e.g., SATD scanning).
+// Progress is tracked via context using analyzer.WithTracker.
+// Uses 2x NumCPU workers by default.
+func ForEachFile[T any](ctx context.Context, files []string, fn func(string) (T, error)) ([]T, *ProcessingErrors) {
+	if len(files) == 0 {
+		return nil, nil
+	}
+
+	maxWorkers := runtime.NumCPU() * DefaultWorkerMultiplier
+	results := make([]T, 0, len(files))
+	errs := &ProcessingErrors{}
+	var mu sync.Mutex
+
+	total := len(files)
+	var processed atomic.Int32
+	tracker := analyzer.TrackerFromContext(ctx)
+
+	// If using tracker, set total count
+	if tracker != nil {
+		tracker.Add(total)
+	}
+
+	reportProgress := func(path string) {
+		processed.Add(1)
+		if tracker != nil {
+			tracker.Tick(path)
+		}
+	}
+
+	p := pool.New().WithMaxGoroutines(maxWorkers).WithContext(ctx)
+	for _, path := range files {
+		p.Go(func(ctx context.Context) error {
+			// Check for cancellation before processing
+			select {
+			case <-ctx.Done():
+				errs.Add(path, ctx.Err())
+				reportProgress(path)
+				return ctx.Err()
+			default:
+			}
+
+			result, err := fn(path)
+
+			if err != nil {
+				errs.Add(path, err)
+				reportProgress(path)
+				return nil
+			}
+
+			mu.Lock()
+			results = append(results, result)
+			mu.Unlock()
+
+			reportProgress(path)
+			return nil
+		})
+	}
+	_ = p.Wait()
+
+	if !errs.HasErrors() {
+		return results, nil
+	}
+	return results, errs
+}
+
+// ForEachFileWithResource processes files in parallel with a per-worker resource.
+// The initResource function is called once per worker to create the resource (e.g., git repo handle).
+// The closeResource function is called when the worker is done to release the resource.
+// Progress is tracked via context using analyzer.WithTracker.
+// Uses 2x NumCPU workers by default.
+func ForEachFileWithResource[T any, R any](
+	ctx context.Context,
+	files []string,
+	initResource func() (R, error),
+	closeResource func(R),
+	fn func(R, string) (T, error),
+) ([]T, *ProcessingErrors) {
+	if len(files) == 0 {
+		return nil, nil
+	}
+
+	maxWorkers := runtime.NumCPU() * DefaultWorkerMultiplier
+	results := make([]T, 0, len(files))
+	errs := &ProcessingErrors{}
+	var mu sync.Mutex
+
+	total := len(files)
+	var processed atomic.Int32
+	tracker := analyzer.TrackerFromContext(ctx)
+
+	if tracker != nil {
+		tracker.Add(total)
+	}
+
+	reportProgress := func(path string) {
+		processed.Add(1)
+		if tracker != nil {
+			tracker.Tick(path)
+		}
+	}
 
 	// Create a pool of resources matching worker count
 	type resourceWrapper struct {
@@ -242,46 +274,51 @@ func ForEachFileWithResource[T any, R any](
 	for i := 0; i < maxWorkers; i++ {
 		r, err := initResource()
 		if err != nil {
-			// If we can't create a resource, add an invalid wrapper
 			resourcePool <- &resourceWrapper{valid: false}
 		} else {
 			resourcePool <- &resourceWrapper{resource: r, valid: true}
 		}
 	}
 
-	p := pool.New().WithMaxGoroutines(maxWorkers)
+	p := pool.New().WithMaxGoroutines(maxWorkers).WithContext(ctx)
 	for _, path := range files {
-		p.Go(func() {
+		p.Go(func(ctx context.Context) error {
+			// Check for cancellation
+			select {
+			case <-ctx.Done():
+				errs.Add(path, ctx.Err())
+				reportProgress(path)
+				return ctx.Err()
+			default:
+			}
+
 			// Get resource from pool
 			wrapper := <-resourcePool
 			defer func() { resourcePool <- wrapper }()
 
 			if !wrapper.valid {
-				if onProgress != nil {
-					onProgress()
-				}
-				return
+				errs.Add(path, fmt.Errorf("resource unavailable"))
+				reportProgress(path)
+				return nil
 			}
 
 			result, err := fn(wrapper.resource, path)
 
 			if err != nil {
-				if onProgress != nil {
-					onProgress()
-				}
-				return
-			}
-
-			if onProgress != nil {
-				onProgress()
+				errs.Add(path, err)
+				reportProgress(path)
+				return nil
 			}
 
 			mu.Lock()
 			results = append(results, result)
 			mu.Unlock()
+
+			reportProgress(path)
+			return nil
 		})
 	}
-	p.Wait()
+	_ = p.Wait()
 
 	// Close all resources
 	close(resourcePool)
@@ -290,280 +327,6 @@ func ForEachFileWithResource[T any, R any](
 			closeResource(wrapper.resource)
 		}
 	}
-
-	return results
-}
-
-// ForEachFile processes files in parallel, calling fn for each file.
-// No parser is provided; use this for non-AST operations (e.g., SATD scanning).
-// Uses 2x NumCPU workers by default.
-func ForEachFile[T any](files []string, fn func(string) (T, error)) []T {
-	return ForEachFileWithProgress(files, fn, nil)
-}
-
-// ForEachFileWithProgress processes files in parallel with optional progress callback.
-func ForEachFileWithProgress[T any](files []string, fn func(string) (T, error), onProgress ProgressFunc) []T {
-	return ForEachFileN(files, 0, fn, onProgress, nil)
-}
-
-// ForEachFileWithErrors processes files in parallel with error callback.
-func ForEachFileWithErrors[T any](files []string, fn func(string) (T, error), onError ErrorFunc) []T {
-	return ForEachFileN(files, 0, fn, nil, onError)
-}
-
-// ForEachFileN processes files with configurable worker count and callbacks.
-// If maxWorkers is <= 0, defaults to 2x NumCPU.
-func ForEachFileN[T any](files []string, maxWorkers int, fn func(string) (T, error), onProgress ProgressFunc, onError ErrorFunc) []T {
-	if len(files) == 0 {
-		return nil
-	}
-
-	if maxWorkers <= 0 {
-		maxWorkers = runtime.NumCPU() * DefaultWorkerMultiplier
-	}
-
-	results := make([]T, 0, len(files))
-	var mu sync.Mutex
-
-	p := pool.New().WithMaxGoroutines(maxWorkers)
-	for _, path := range files {
-		p.Go(func() {
-			result, err := fn(path)
-
-			if err != nil {
-				if onError != nil {
-					onError(path, err)
-				}
-				if onProgress != nil {
-					onProgress()
-				}
-				return
-			}
-
-			if onProgress != nil {
-				onProgress()
-			}
-
-			mu.Lock()
-			results = append(results, result)
-			mu.Unlock()
-		})
-	}
-	p.Wait()
-
-	return results
-}
-
-// MapFilesCollectErrors processes files in parallel and collects all errors.
-// Returns results and any errors that occurred during processing.
-func MapFilesCollectErrors[T any](files []string, fn func(*parser.Parser, string) (T, error)) ([]T, *ProcessingErrors) {
-	return MapFilesCollectErrorsWithProgress(files, fn, nil)
-}
-
-// MapFilesCollectErrorsWithProgress processes files in parallel with progress callback and collects errors.
-func MapFilesCollectErrorsWithProgress[T any](files []string, fn func(*parser.Parser, string) (T, error), onProgress ProgressFunc) ([]T, *ProcessingErrors) {
-	if len(files) == 0 {
-		return nil, nil
-	}
-
-	maxWorkers := runtime.NumCPU() * DefaultWorkerMultiplier
-	results := make([]T, 0, len(files))
-	errs := &ProcessingErrors{}
-	var mu sync.Mutex
-
-	p := pool.New().WithMaxGoroutines(maxWorkers)
-	for _, path := range files {
-		p.Go(func() {
-			psr := parser.New()
-			defer psr.Close()
-
-			result, err := fn(psr, path)
-
-			if err != nil {
-				errs.Add(path, err)
-				if onProgress != nil {
-					onProgress()
-				}
-				return
-			}
-
-			if onProgress != nil {
-				onProgress()
-			}
-
-			mu.Lock()
-			results = append(results, result)
-			mu.Unlock()
-		})
-	}
-	p.Wait()
-
-	if !errs.HasErrors() {
-		return results, nil
-	}
-	return results, errs
-}
-
-// ForEachFileCollectErrors processes files in parallel and collects all errors.
-// Returns results and any errors that occurred during processing.
-func ForEachFileCollectErrors[T any](files []string, fn func(string) (T, error)) ([]T, *ProcessingErrors) {
-	return ForEachFileCollectErrorsWithProgress(files, fn, nil)
-}
-
-// ForEachFileCollectErrorsWithProgress processes files in parallel with progress callback and collects errors.
-func ForEachFileCollectErrorsWithProgress[T any](files []string, fn func(string) (T, error), onProgress ProgressFunc) ([]T, *ProcessingErrors) {
-	if len(files) == 0 {
-		return nil, nil
-	}
-
-	maxWorkers := runtime.NumCPU() * DefaultWorkerMultiplier
-	results := make([]T, 0, len(files))
-	errs := &ProcessingErrors{}
-	var mu sync.Mutex
-
-	p := pool.New().WithMaxGoroutines(maxWorkers)
-	for _, path := range files {
-		p.Go(func() {
-			result, err := fn(path)
-
-			if err != nil {
-				errs.Add(path, err)
-				if onProgress != nil {
-					onProgress()
-				}
-				return
-			}
-
-			if onProgress != nil {
-				onProgress()
-			}
-
-			mu.Lock()
-			results = append(results, result)
-			mu.Unlock()
-		})
-	}
-	p.Wait()
-
-	if !errs.HasErrors() {
-		return results, nil
-	}
-	return results, errs
-}
-
-// MapFilesWithContext processes files in parallel with context cancellation support.
-// Returns results collected before cancellation and any errors including context errors.
-func MapFilesWithContext[T any](ctx context.Context, files []string, fn func(*parser.Parser, string) (T, error)) ([]T, *ProcessingErrors) {
-	return MapFilesWithContextAndProgress(ctx, files, fn, nil)
-}
-
-// MapFilesWithContextAndProgress processes files with context and progress callback.
-func MapFilesWithContextAndProgress[T any](ctx context.Context, files []string, fn func(*parser.Parser, string) (T, error), onProgress ProgressFunc) ([]T, *ProcessingErrors) {
-	if len(files) == 0 {
-		return nil, nil
-	}
-
-	maxWorkers := runtime.NumCPU() * DefaultWorkerMultiplier
-	results := make([]T, 0, len(files))
-	errs := &ProcessingErrors{}
-	var mu sync.Mutex
-
-	p := pool.New().WithMaxGoroutines(maxWorkers).WithContext(ctx)
-	for _, path := range files {
-		p.Go(func(ctx context.Context) error {
-			// Check for cancellation before processing
-			select {
-			case <-ctx.Done():
-				errs.Add(path, ctx.Err())
-				if onProgress != nil {
-					onProgress()
-				}
-				return ctx.Err()
-			default:
-			}
-
-			psr := parser.New()
-			defer psr.Close()
-
-			result, err := fn(psr, path)
-
-			if err != nil {
-				errs.Add(path, err)
-				if onProgress != nil {
-					onProgress()
-				}
-				return nil // Don't stop pool on individual file errors
-			}
-
-			if onProgress != nil {
-				onProgress()
-			}
-
-			mu.Lock()
-			results = append(results, result)
-			mu.Unlock()
-			return nil
-		})
-	}
-	_ = p.Wait() // Context errors are already captured in errs
-
-	if !errs.HasErrors() {
-		return results, nil
-	}
-	return results, errs
-}
-
-// ForEachFileWithContext processes files in parallel with context cancellation support.
-func ForEachFileWithContext[T any](ctx context.Context, files []string, fn func(string) (T, error)) ([]T, *ProcessingErrors) {
-	return ForEachFileWithContextAndProgress(ctx, files, fn, nil)
-}
-
-// ForEachFileWithContextAndProgress processes files with context and progress callback.
-func ForEachFileWithContextAndProgress[T any](ctx context.Context, files []string, fn func(string) (T, error), onProgress ProgressFunc) ([]T, *ProcessingErrors) {
-	if len(files) == 0 {
-		return nil, nil
-	}
-
-	maxWorkers := runtime.NumCPU() * DefaultWorkerMultiplier
-	results := make([]T, 0, len(files))
-	errs := &ProcessingErrors{}
-	var mu sync.Mutex
-
-	p := pool.New().WithMaxGoroutines(maxWorkers).WithContext(ctx)
-	for _, path := range files {
-		p.Go(func(ctx context.Context) error {
-			// Check for cancellation before processing
-			select {
-			case <-ctx.Done():
-				errs.Add(path, ctx.Err())
-				if onProgress != nil {
-					onProgress()
-				}
-				return ctx.Err()
-			default:
-			}
-
-			result, err := fn(path)
-
-			if err != nil {
-				errs.Add(path, err)
-				if onProgress != nil {
-					onProgress()
-				}
-				return nil
-			}
-
-			if onProgress != nil {
-				onProgress()
-			}
-
-			mu.Lock()
-			results = append(results, result)
-			mu.Unlock()
-			return nil
-		})
-	}
-	_ = p.Wait()
 
 	if !errs.HasErrors() {
 		return results, nil

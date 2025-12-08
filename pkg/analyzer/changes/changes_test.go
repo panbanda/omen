@@ -1,11 +1,12 @@
 package changes
 
 import (
+	"context"
 	"testing"
 	"time"
 
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/panbanda/omen/internal/vcs"
 	"github.com/panbanda/omen/internal/vcs/mocks"
 	"github.com/panbanda/omen/pkg/stats"
@@ -178,6 +179,12 @@ func TestCalculateRisk(t *testing.T) {
 }
 
 func TestGetRiskLevel(t *testing.T) {
+	// Test with percentile-based thresholds
+	thresholds := RiskThresholds{
+		HighThreshold:   0.7,
+		MediumThreshold: 0.4,
+	}
+
 	tests := []struct {
 		score    float64
 		expected RiskLevel
@@ -191,10 +198,26 @@ func TestGetRiskLevel(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result := GetRiskLevel(tt.score)
+		result := GetRiskLevel(tt.score, thresholds)
 		if result != tt.expected {
 			t.Errorf("GetRiskLevel(%f) = %s, expected %s", tt.score, result, tt.expected)
 		}
+	}
+}
+
+func TestDefaultRiskThresholds(t *testing.T) {
+	thresholds := DefaultRiskThresholds()
+
+	// Verify thresholds are sensible
+	if thresholds.HighThreshold <= thresholds.MediumThreshold {
+		t.Errorf("HighThreshold (%f) should be > MediumThreshold (%f)",
+			thresholds.HighThreshold, thresholds.MediumThreshold)
+	}
+	if thresholds.MediumThreshold <= 0 {
+		t.Errorf("MediumThreshold should be > 0, got %f", thresholds.MediumThreshold)
+	}
+	if thresholds.HighThreshold > 1.0 {
+		t.Errorf("HighThreshold should be <= 1.0, got %f", thresholds.HighThreshold)
 	}
 }
 
@@ -341,7 +364,7 @@ func TestAnalyzer_AuthorExperience_TemporalOrder(t *testing.T) {
 		WithReferenceTime(baseTime.Add(24*time.Hour)),
 	)
 
-	result, err := analyzer.AnalyzeRepo("/fake/path")
+	result, err := analyzer.Analyze(context.Background(), "/fake/path", nil)
 	if err != nil {
 		t.Fatalf("AnalyzeRepo() error = %v", err)
 	}
@@ -428,7 +451,7 @@ func TestAnalyzer_NumDevelopers_TemporalOrder(t *testing.T) {
 		WithReferenceTime(baseTime.Add(24*time.Hour)),
 	)
 
-	result, err := analyzer.AnalyzeRepo("/fake/path")
+	result, err := analyzer.Analyze(context.Background(), "/fake/path", nil)
 	if err != nil {
 		t.Fatalf("AnalyzeRepo() error = %v", err)
 	}
@@ -510,7 +533,7 @@ func TestAnalyzer_UniqueChanges_TemporalOrder(t *testing.T) {
 		WithReferenceTime(baseTime.Add(24*time.Hour)),
 	)
 
-	result, err := analyzer.AnalyzeRepo("/fake/path")
+	result, err := analyzer.Analyze(context.Background(), "/fake/path", nil)
 	if err != nil {
 		t.Fatalf("AnalyzeRepo() error = %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 
 	"github.com/panbanda/omen/internal/progress"
 	"github.com/panbanda/omen/internal/vcs"
+	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/analyzer/changes"
 	"github.com/panbanda/omen/pkg/analyzer/churn"
 	"github.com/panbanda/omen/pkg/analyzer/cohesion"
@@ -22,6 +23,7 @@ import (
 	"github.com/panbanda/omen/pkg/analyzer/tdg"
 	"github.com/panbanda/omen/pkg/analyzer/temporal"
 	"github.com/panbanda/omen/pkg/config"
+	"github.com/panbanda/omen/pkg/source"
 )
 
 // Service orchestrates code analysis operations.
@@ -73,7 +75,7 @@ type ComplexityOptions struct {
 }
 
 // AnalyzeComplexity runs complexity analysis on the given files.
-func (s *Service) AnalyzeComplexity(files []string, opts ComplexityOptions) (*complexity.Analysis, error) {
+func (s *Service) AnalyzeComplexity(ctx context.Context, files []string, opts ComplexityOptions) (*complexity.Analysis, error) {
 	var analyzerOpts []complexity.Option
 	if opts.MaxFileSize > 0 {
 		analyzerOpts = append(analyzerOpts, complexity.WithMaxFileSize(opts.MaxFileSize))
@@ -85,9 +87,12 @@ func (s *Service) AnalyzeComplexity(files []string, opts ComplexityOptions) (*co
 	defer cxAnalyzer.Close()
 
 	if opts.OnProgress != nil {
-		return cxAnalyzer.AnalyzeProjectWithProgress(files, opts.OnProgress)
+		tracker := analyzer.NewTracker(func(_, _ int, _ string) {
+			opts.OnProgress()
+		})
+		ctx = analyzer.WithTracker(ctx, tracker)
 	}
-	return cxAnalyzer.AnalyzeProject(files)
+	return cxAnalyzer.Analyze(ctx, files, source.NewFilesystem())
 }
 
 // SATDOptions configures SATD analysis.
@@ -106,7 +111,7 @@ type PatternConfig struct {
 }
 
 // AnalyzeSATD runs self-admitted technical debt analysis.
-func (s *Service) AnalyzeSATD(files []string, opts SATDOptions) (*satd.Analysis, error) {
+func (s *Service) AnalyzeSATD(ctx context.Context, files []string, opts SATDOptions) (*satd.Analysis, error) {
 	var analyzerOpts []satd.Option
 	if !opts.IncludeTests {
 		analyzerOpts = append(analyzerOpts, satd.WithSkipTests())
@@ -116,6 +121,7 @@ func (s *Service) AnalyzeSATD(files []string, opts SATDOptions) (*satd.Analysis,
 	}
 
 	satdAnalyzer := satd.New(analyzerOpts...)
+	defer satdAnalyzer.Close()
 
 	for _, p := range opts.CustomPatterns {
 		if err := satdAnalyzer.AddPattern(p.Pattern, p.Category, p.Severity); err != nil {
@@ -124,9 +130,12 @@ func (s *Service) AnalyzeSATD(files []string, opts SATDOptions) (*satd.Analysis,
 	}
 
 	if opts.OnProgress != nil {
-		return satdAnalyzer.AnalyzeProjectWithProgress(files, opts.OnProgress)
+		tracker := analyzer.NewTracker(func(_, _ int, _ string) {
+			opts.OnProgress()
+		})
+		ctx = analyzer.WithTracker(ctx, tracker)
 	}
-	return satdAnalyzer.AnalyzeProject(files)
+	return satdAnalyzer.Analyze(ctx, files, source.NewFilesystem())
 }
 
 // DeadCodeOptions configures dead code detection.
@@ -136,7 +145,7 @@ type DeadCodeOptions struct {
 }
 
 // AnalyzeDeadCode detects potentially unused code.
-func (s *Service) AnalyzeDeadCode(files []string, opts DeadCodeOptions) (*deadcode.Analysis, error) {
+func (s *Service) AnalyzeDeadCode(ctx context.Context, files []string, opts DeadCodeOptions) (*deadcode.Analysis, error) {
 	confidence := opts.Confidence
 	if confidence == 0 {
 		confidence = s.config.Thresholds.DeadCodeConfidence
@@ -146,9 +155,12 @@ func (s *Service) AnalyzeDeadCode(files []string, opts DeadCodeOptions) (*deadco
 	defer dcAnalyzer.Close()
 
 	if opts.OnProgress != nil {
-		return dcAnalyzer.AnalyzeProjectWithProgress(files, opts.OnProgress)
+		tracker := analyzer.NewTracker(func(_, _ int, _ string) {
+			opts.OnProgress()
+		})
+		ctx = analyzer.WithTracker(ctx, tracker)
 	}
-	return dcAnalyzer.AnalyzeProject(files)
+	return dcAnalyzer.Analyze(ctx, files)
 }
 
 // ChurnOptions configures churn analysis.
@@ -173,7 +185,9 @@ func (s *Service) AnalyzeChurn(ctx context.Context, repoPath string, opts ChurnO
 	}
 
 	churnAnalyzer := churn.New(analyzerOpts...)
-	return churnAnalyzer.AnalyzeRepo(ctx, repoPath)
+	defer churnAnalyzer.Close()
+
+	return churnAnalyzer.Analyze(ctx, repoPath, nil)
 }
 
 // DuplicatesOptions configures duplicate detection.
@@ -184,7 +198,7 @@ type DuplicatesOptions struct {
 }
 
 // AnalyzeDuplicates detects code clones.
-func (s *Service) AnalyzeDuplicates(files []string, opts DuplicatesOptions) (*duplicates.Analysis, error) {
+func (s *Service) AnalyzeDuplicates(ctx context.Context, files []string, opts DuplicatesOptions) (*duplicates.Analysis, error) {
 	minTokens := opts.MinLines * 8 // Convert lines to approximate tokens
 	if opts.MinLines <= 0 {
 		minTokens = s.config.Thresholds.DuplicateMinLines * 8
@@ -202,9 +216,12 @@ func (s *Service) AnalyzeDuplicates(files []string, opts DuplicatesOptions) (*du
 	defer dupAnalyzer.Close()
 
 	if opts.OnProgress != nil {
-		return dupAnalyzer.AnalyzeProjectWithProgress(files, opts.OnProgress)
+		tracker := analyzer.NewTracker(func(_, _ int, _ string) {
+			opts.OnProgress()
+		})
+		ctx = analyzer.WithTracker(ctx, tracker)
 	}
-	return dupAnalyzer.AnalyzeProject(files)
+	return dupAnalyzer.Analyze(ctx, files, source.NewFilesystem())
 }
 
 // DefectOptions configures defect prediction.
@@ -232,7 +249,7 @@ func (s *Service) AnalyzeDefects(ctx context.Context, repoPath string, files []s
 	)
 	defer defectAnalyzer.Close()
 
-	return defectAnalyzer.AnalyzeProject(ctx, repoPath, files)
+	return defectAnalyzer.Analyze(ctx, repoPath, files)
 }
 
 // TDGOptions configures TDG analysis.
@@ -242,15 +259,11 @@ type TDGOptions struct {
 }
 
 // AnalyzeTDG calculates Technical Debt Gradient scores.
-func (s *Service) AnalyzeTDG(path string) (*tdg.ProjectScore, error) {
+func (s *Service) AnalyzeTDG(ctx context.Context, files []string) (*tdg.Analysis, error) {
 	tdgAnalyzer := tdg.New()
 	defer tdgAnalyzer.Close()
 
-	project, err := tdgAnalyzer.AnalyzeProject(path)
-	if err != nil {
-		return nil, err
-	}
-	return &project, nil
+	return tdgAnalyzer.Analyze(ctx, files, source.NewFilesystem())
 }
 
 // GraphOptions configures dependency graph analysis.
@@ -261,7 +274,7 @@ type GraphOptions struct {
 }
 
 // AnalyzeGraph builds a dependency graph.
-func (s *Service) AnalyzeGraph(files []string, opts GraphOptions) (*graph.DependencyGraph, *graph.Metrics, error) {
+func (s *Service) AnalyzeGraph(ctx context.Context, files []string, opts GraphOptions) (*graph.DependencyGraph, *graph.Metrics, error) {
 	scope := opts.Scope
 	if scope == "" {
 		scope = graph.ScopeModule
@@ -270,14 +283,14 @@ func (s *Service) AnalyzeGraph(files []string, opts GraphOptions) (*graph.Depend
 	graphAnalyzer := graph.New(graph.WithScope(scope))
 	defer graphAnalyzer.Close()
 
-	var depGraph *graph.DependencyGraph
-	var err error
 	if opts.OnProgress != nil {
-		depGraph, err = graphAnalyzer.AnalyzeProjectWithProgress(files, opts.OnProgress)
-	} else {
-		depGraph, err = graphAnalyzer.AnalyzeProject(files)
+		tracker := analyzer.NewTracker(func(_, _ int, _ string) {
+			opts.OnProgress()
+		})
+		ctx = analyzer.WithTracker(ctx, tracker)
 	}
 
+	depGraph, err := graphAnalyzer.Analyze(ctx, files, source.NewFilesystem())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -316,7 +329,13 @@ func (s *Service) AnalyzeHotspots(ctx context.Context, repoPath string, files []
 	)
 	defer hotspotAnalyzer.Close()
 
-	return hotspotAnalyzer.AnalyzeProjectWithProgress(ctx, repoPath, files, opts.OnProgress)
+	if opts.OnProgress != nil {
+		tracker := analyzer.NewTracker(func(_, _ int, _ string) {
+			opts.OnProgress()
+		})
+		ctx = analyzer.WithTracker(ctx, tracker)
+	}
+	return hotspotAnalyzer.Analyze(ctx, repoPath, files)
 }
 
 // TemporalCouplingOptions configures temporal coupling analysis.
@@ -342,7 +361,7 @@ func (s *Service) AnalyzeTemporalCoupling(ctx context.Context, repoPath string, 
 		temporal.WithOpener(s.opener))
 	defer tcAnalyzer.Close()
 
-	return tcAnalyzer.AnalyzeRepoWithContext(ctx, repoPath)
+	return tcAnalyzer.Analyze(ctx, repoPath, nil)
 }
 
 // OwnershipOptions configures ownership analysis.
@@ -353,7 +372,7 @@ type OwnershipOptions struct {
 }
 
 // AnalyzeOwnership calculates code ownership and bus factor.
-func (s *Service) AnalyzeOwnership(repoPath string, files []string, opts OwnershipOptions) (*ownership.Analysis, error) {
+func (s *Service) AnalyzeOwnership(ctx context.Context, repoPath string, files []string, opts OwnershipOptions) (*ownership.Analysis, error) {
 	var analyzerOpts []ownership.Option
 	if opts.IncludeTrivial {
 		analyzerOpts = append(analyzerOpts, ownership.WithIncludeTrivial())
@@ -363,7 +382,13 @@ func (s *Service) AnalyzeOwnership(repoPath string, files []string, opts Ownersh
 	ownAnalyzer := ownership.New(analyzerOpts...)
 	defer ownAnalyzer.Close()
 
-	return ownAnalyzer.AnalyzeRepoWithProgress(repoPath, files, opts.OnProgress)
+	if opts.OnProgress != nil {
+		tracker := analyzer.NewTracker(func(_, _ int, _ string) {
+			opts.OnProgress()
+		})
+		ctx = analyzer.WithTracker(ctx, tracker)
+	}
+	return ownAnalyzer.Analyze(ctx, repoPath, files)
 }
 
 // CohesionOptions configures cohesion analysis.
@@ -375,7 +400,7 @@ type CohesionOptions struct {
 }
 
 // AnalyzeCohesion calculates CK (Chidamber-Kemerer) OO metrics.
-func (s *Service) AnalyzeCohesion(files []string, opts CohesionOptions) (*cohesion.Analysis, error) {
+func (s *Service) AnalyzeCohesion(ctx context.Context, files []string, opts CohesionOptions) (*cohesion.Analysis, error) {
 	var analyzerOpts []cohesion.Option
 	if opts.IncludeTests {
 		analyzerOpts = append(analyzerOpts, cohesion.WithIncludeTestFiles())
@@ -384,7 +409,13 @@ func (s *Service) AnalyzeCohesion(files []string, opts CohesionOptions) (*cohesi
 	ckAnalyzer := cohesion.New(analyzerOpts...)
 	defer ckAnalyzer.Close()
 
-	return ckAnalyzer.AnalyzeProjectWithProgress(files, opts.OnProgress)
+	if opts.OnProgress != nil {
+		tracker := analyzer.NewTracker(func(_, _ int, _ string) {
+			opts.OnProgress()
+		})
+		ctx = analyzer.WithTracker(ctx, tracker)
+	}
+	return ckAnalyzer.Analyze(ctx, files, source.NewFilesystem())
 }
 
 // RepoMapOptions configures repo map generation.
@@ -393,11 +424,11 @@ type RepoMapOptions struct {
 }
 
 // AnalyzeRepoMap generates a PageRank-ranked symbol map.
-func (s *Service) AnalyzeRepoMap(files []string, opts RepoMapOptions) (*repomap.Map, error) {
+func (s *Service) AnalyzeRepoMap(ctx context.Context, files []string, opts RepoMapOptions) (*repomap.Map, error) {
 	rmAnalyzer := repomap.New()
 	defer rmAnalyzer.Close()
 
-	return rmAnalyzer.AnalyzeProject(files)
+	return rmAnalyzer.Analyze(ctx, files)
 }
 
 // ChangesOptions configures change-level defect prediction.
@@ -425,7 +456,7 @@ func (s *Service) AnalyzeChanges(ctx context.Context, repoPath string, opts Chan
 	changesAnalyzer := changes.New(analyzerOpts...)
 	defer changesAnalyzer.Close()
 
-	return changesAnalyzer.AnalyzeRepoWithContext(ctx, repoPath)
+	return changesAnalyzer.Analyze(ctx, repoPath, nil)
 }
 
 // SmellOptions configures architectural smell detection.
@@ -438,12 +469,19 @@ type SmellOptions struct {
 }
 
 // AnalyzeSmells detects architectural smells in a dependency graph.
-func (s *Service) AnalyzeSmells(files []string, opts SmellOptions) (*smells.Analysis, error) {
+func (s *Service) AnalyzeSmells(ctx context.Context, files []string, opts SmellOptions) (*smells.Analysis, error) {
 	// First build the dependency graph
 	graphAnalyzer := graph.New(graph.WithScope(graph.ScopeFile))
 	defer graphAnalyzer.Close()
 
-	depGraph, err := graphAnalyzer.AnalyzeProjectWithProgress(files, opts.OnProgress)
+	if opts.OnProgress != nil {
+		tracker := analyzer.NewTracker(func(_, _ int, _ string) {
+			opts.OnProgress()
+		})
+		ctx = analyzer.WithTracker(ctx, tracker)
+	}
+
+	depGraph, err := graphAnalyzer.Analyze(ctx, files, source.NewFilesystem())
 	if err != nil {
 		return nil, err
 	}
@@ -483,7 +521,7 @@ type FeatureFlagOptions struct {
 }
 
 // AnalyzeFeatureFlags detects and analyzes feature flags in the codebase.
-func (s *Service) AnalyzeFeatureFlags(files []string, opts FeatureFlagOptions) (*featureflags.Analysis, error) {
+func (s *Service) AnalyzeFeatureFlags(ctx context.Context, files []string, opts FeatureFlagOptions) (*featureflags.Analysis, error) {
 	var analyzerOpts []featureflags.Option
 
 	if len(opts.Providers) > 0 {
@@ -528,9 +566,12 @@ func (s *Service) AnalyzeFeatureFlags(files []string, opts FeatureFlagOptions) (
 	defer flagAnalyzer.Close()
 
 	if opts.OnProgress != nil {
-		return flagAnalyzer.AnalyzeProjectWithProgress(files, opts.OnProgress)
+		tracker := analyzer.NewTracker(func(_, _ int, _ string) {
+			opts.OnProgress()
+		})
+		ctx = analyzer.WithTracker(ctx, tracker)
 	}
-	return flagAnalyzer.AnalyzeProject(files)
+	return flagAnalyzer.Analyze(ctx, files)
 }
 
 // PatternError indicates an invalid pattern.

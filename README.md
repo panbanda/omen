@@ -154,13 +154,19 @@ Just-in-Time (JIT) defect prediction analyzes recent commits to identify risky c
 | NUC    | Unique Changes         | Change entropy = higher risk               |
 | EXP    | Developer Experience   | Less experience = more risk                |
 
-Each commit gets a risk score from 0.0 to 1.0:
+**Percentile-based risk classification:**
 
-- **High risk (>0.7)**: Prioritize careful review
-- **Medium risk (0.4-0.7)**: Worth extra attention
-- **Low risk (<0.4)**: Standard review process
+Risk levels use percentile-based thresholds following JIT defect prediction best practices. Rather than fixed thresholds, commits are ranked relative to the repository's own distribution:
 
-**Why it matters:** [Kamei et al. (2013)](https://ieeexplore.ieee.org/document/6341763) demonstrated that JIT prediction catches risky changes at commit time, before bugs propagate. [Zeng et al. (2021)](https://ieeexplore.ieee.org/document/9463091) showed that simple JIT models match deep learning accuracy (~65%) with better interpretability.
+| Level  | Percentile | Meaning                                    |
+| ------ | ---------- | ------------------------------------------ |
+| High   | Top 5%     | P95+ - Deserve extra scrutiny              |
+| Medium | Top 20%    | P80-P95 - Worth additional attention       |
+| Low    | Bottom 80% | Below P80 - Standard review process        |
+
+This approach aligns with the 80/20 rule from defect prediction research: ~20% of code changes contain ~80% of defects. It ensures actionable results regardless of repository characteristics - well-disciplined repos will have lower thresholds, while high-churn repos will have higher ones.
+
+**Why it matters:** [Kamei et al. (2013)](https://ieeexplore.ieee.org/document/6341763) demonstrated that JIT prediction catches risky changes at commit time, before bugs propagate. Their effort-aware approach uses ranking rather than fixed thresholds, focusing limited review resources on the riskiest ~20% of commits. [Zeng et al. (2021)](https://ieeexplore.ieee.org/document/9463091) showed that simple JIT models match deep learning accuracy (~65%) with better interpretability.
 
 > [!TIP]
 > Run `omen analyze changes` before merging PRs to identify commits needing extra review.
@@ -404,10 +410,11 @@ Omen computes a composite repository health score (0-100) that combines multiple
 | --------------- | ------ | -------------------------------------------------- |
 | Complexity      | 25%    | % of functions exceeding complexity thresholds     |
 | Duplication     | 20%    | Code clone ratio with non-linear penalty curve     |
-| Defect Risk     | 25%    | Average defect probability across files            |
-| Technical Debt  | 15%    | Severity-weighted SATD density per 1K LOC          |
+| SATD            | 10%    | Severity-weighted TODO/FIXME density per 1K LOC    |
+| TDG             | 15%    | Technical Debt Gradient composite score            |
 | Coupling        | 10%    | Cyclic deps, SDP violations, and instability       |
 | Smells          | 5%     | Architectural smells relative to codebase size     |
+| Cohesion        | 15%    | Class cohesion (LCOM) for OO codebases             |
 
 **Normalization Philosophy:**
 
@@ -418,13 +425,15 @@ Each component metric is normalized to a 0-100 scale where higher is always bett
 3. **Non-linear** - Gentle penalties for minor issues, steep for severe ones
 4. **Severity-aware** - Weight items by impact, not just count
 
-For example, technical debt uses severity-weighted scoring:
+For example, SATD (Self-Admitted Technical Debt) uses severity-weighted scoring:
 - Critical (SECURITY, VULN): 4x weight
 - High (FIXME, BUG): 2x weight
 - Medium (HACK, REFACTOR): 1x weight
 - Low (TODO, NOTE): 0.25x weight
 
 This prevents low-severity items (like documentation TODOs) from unfairly dragging down scores.
+
+TDG (Technical Debt Gradient) provides a complementary view by analyzing structural complexity, semantic complexity, duplication patterns, and coupling within each file.
 
 **Usage:**
 

@@ -1,13 +1,17 @@
 package cohesion
 
 import (
+	"context"
 	"strings"
 	"time"
 
-	"github.com/panbanda/omen/internal/fileproc"
+	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/parser"
 	sitter "github.com/smacker/go-tree-sitter"
 )
+
+// Ensure Analyzer implements analyzer.FileAnalyzer.
+var _ analyzer.SourceFileAnalyzer[*Analysis] = (*Analyzer)(nil)
 
 // Analyzer computes CK (Chidamber-Kemerer) metrics for OO code.
 type Analyzer struct {
@@ -71,41 +75,6 @@ func isTestFile(path string) bool {
 		strings.Contains(path, "/__tests__/")
 }
 
-// AnalyzeProject computes CK metrics for all OO classes in the project.
-func (a *Analyzer) AnalyzeProject(files []string) (*Analysis, error) {
-	return a.AnalyzeProjectWithProgress(files, nil)
-}
-
-// AnalyzeProjectWithProgress computes CK metrics with progress callback.
-func (a *Analyzer) AnalyzeProjectWithProgress(files []string, onProgress fileproc.ProgressFunc) (*Analysis, error) {
-	analysis := &Analysis{
-		GeneratedAt: time.Now().UTC(),
-		Classes:     make([]ClassMetrics, 0),
-	}
-
-	// First pass: Build inheritance tree across all files
-	inheritanceTree := a.buildInheritanceTree(files)
-
-	// Second pass: Process files in parallel to extract CK metrics
-	results := fileproc.MapFilesWithSizeLimit(files, a.maxFileSize, func(psr *parser.Parser, path string) ([]ClassMetrics, error) {
-		if a.skipTestFile && isTestFile(path) {
-			return nil, nil
-		}
-		return a.analyzeFile(psr, path, inheritanceTree)
-	}, onProgress, nil)
-
-	// Collect results
-	for _, fileClasses := range results {
-		analysis.Classes = append(analysis.Classes, fileClasses...)
-	}
-
-	// Sort by LCOM (least cohesive first)
-	analysis.SortByLCOM()
-	analysis.CalculateSummary()
-
-	return analysis, nil
-}
-
 // inheritanceInfo holds inheritance relationship data for a class.
 type inheritanceInfo struct {
 	className string
@@ -121,47 +90,6 @@ type inheritanceTree struct {
 	classToChildren map[string][]string
 	// allClasses tracks all known class names
 	allClasses map[string]bool
-}
-
-// buildInheritanceTree scans all files to build the inheritance graph.
-func (a *Analyzer) buildInheritanceTree(files []string) *inheritanceTree {
-	tree := &inheritanceTree{
-		classToParents:  make(map[string][]string),
-		classToChildren: make(map[string][]string),
-		allClasses:      make(map[string]bool),
-	}
-
-	// Extract inheritance info from all files in parallel
-	results := fileproc.MapFiles(files, func(psr *parser.Parser, path string) ([]inheritanceInfo, error) {
-		if a.skipTestFile && isTestFile(path) {
-			return nil, nil
-		}
-		return extractInheritanceInfo(psr, path)
-	})
-
-	// Track children relationships to avoid duplicates
-	childrenSet := make(map[string]map[string]bool)
-
-	// Build the tree from results
-	for _, fileInfo := range results {
-		for _, info := range fileInfo {
-			tree.allClasses[info.className] = true
-			tree.classToParents[info.className] = info.parents
-
-			// Build reverse mapping (parent -> children) with deduplication
-			for _, parent := range info.parents {
-				if childrenSet[parent] == nil {
-					childrenSet[parent] = make(map[string]bool)
-				}
-				if !childrenSet[parent][info.className] {
-					childrenSet[parent][info.className] = true
-					tree.classToChildren[parent] = append(tree.classToChildren[parent], info.className)
-				}
-			}
-		}
-	}
-
-	return tree
 }
 
 // getDIT calculates Depth of Inheritance Tree for a class.
@@ -197,43 +125,6 @@ func (tree *inheritanceTree) calculateDepth(className string, visited map[string
 // NOC is the count of immediate subclasses.
 func (tree *inheritanceTree) getNOC(className string) int {
 	return len(tree.classToChildren[className])
-}
-
-// extractInheritanceInfo extracts class inheritance from a file.
-func extractInheritanceInfo(psr *parser.Parser, path string) ([]inheritanceInfo, error) {
-	result, err := psr.ParseFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	if !isOOLanguage(result.Language) {
-		return nil, nil
-	}
-
-	var infos []inheritanceInfo
-	root := result.Tree.RootNode()
-
-	parser.Walk(root, result.Source, func(node *sitter.Node, source []byte) bool {
-		if isClassNode(node.Type(), result.Language) {
-			info := inheritanceInfo{file: path}
-
-			// Get class name
-			if nameNode := node.ChildByFieldName("name"); nameNode != nil {
-				info.className = parser.GetNodeText(nameNode, source)
-			}
-
-			if info.className == "" {
-				return true
-			}
-
-			// Extract parent classes based on language
-			info.parents = extractParentClasses(node, source, result.Language)
-			infos = append(infos, info)
-		}
-		return true
-	})
-
-	return infos, nil
 }
 
 // extractParentClasses extracts parent class names from a class declaration.
@@ -396,49 +287,6 @@ func cleanTypeName(name string) string {
 		name = name[:len(name)-1]
 	}
 	return name
-}
-
-// analyzeFile extracts CK metrics from a single file.
-func (a *Analyzer) analyzeFile(psr *parser.Parser, path string, tree *inheritanceTree) ([]ClassMetrics, error) {
-	result, err := psr.ParseFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	// Only process OO languages
-	if !isOOLanguage(result.Language) {
-		return nil, nil
-	}
-
-	var classes []ClassMetrics
-
-	// Find all class definitions
-	classNodes := parser.GetClasses(result)
-
-	for _, cls := range classNodes {
-		if cls.Name == "" {
-			continue
-		}
-
-		metrics := ClassMetrics{
-			Path:      path,
-			ClassName: cls.Name,
-			Language:  string(result.Language),
-			StartLine: int(cls.StartLine),
-			EndLine:   int(cls.EndLine),
-			LOC:       int(cls.EndLine - cls.StartLine + 1),
-		}
-
-		// Find the class node in the AST for deeper analysis
-		classNode := findClassNode(result, cls.Name)
-		if classNode != nil {
-			a.extractClassMetrics(classNode, result, &metrics, tree)
-		}
-
-		classes = append(classes, metrics)
-	}
-
-	return classes, nil
 }
 
 // findClassNode finds the AST node for a class by name.
@@ -860,6 +708,202 @@ func calculateLCOM4(methods []methodInfo, fields []string) int {
 	}
 
 	return components
+}
+
+// ContentSource is an alias for analyzer.ContentSource.
+type ContentSource = analyzer.ContentSource
+
+// Analyze computes CK metrics for all OO classes from a ContentSource.
+func (a *Analyzer) Analyze(ctx context.Context, files []string, src ContentSource) (*Analysis, error) {
+	analysis := &Analysis{
+		GeneratedAt: time.Now().UTC(),
+		Classes:     make([]ClassMetrics, 0),
+	}
+
+	// Get progress tracker from context
+	tracker := analyzer.TrackerFromContext(ctx)
+	if tracker != nil {
+		tracker.Add(len(files))
+	}
+
+	// First pass: Build inheritance tree across all files
+	inheritanceTree := a.buildInheritanceTreeFromSource(ctx, files, src)
+
+	// Second pass: Process files sequentially to extract CK metrics
+	for _, path := range files {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		if tracker != nil {
+			tracker.Tick(path)
+		}
+
+		if a.skipTestFile && isTestFile(path) {
+			continue
+		}
+
+		content, err := src.Read(path)
+		if err != nil {
+			continue
+		}
+
+		if a.maxFileSize > 0 && int64(len(content)) > a.maxFileSize {
+			continue
+		}
+
+		fileClasses, err := a.analyzeFileFromContent(path, content, inheritanceTree)
+		if err != nil {
+			continue
+		}
+		analysis.Classes = append(analysis.Classes, fileClasses...)
+	}
+
+	// Sort by LCOM (least cohesive first)
+	analysis.SortByLCOM()
+	analysis.CalculateSummary()
+
+	return analysis, nil
+}
+
+// buildInheritanceTreeFromSource scans all files from ContentSource to build the inheritance graph.
+func (a *Analyzer) buildInheritanceTreeFromSource(ctx context.Context, files []string, src ContentSource) *inheritanceTree {
+	tree := &inheritanceTree{
+		classToParents:  make(map[string][]string),
+		classToChildren: make(map[string][]string),
+		allClasses:      make(map[string]bool),
+	}
+
+	// Track children relationships to avoid duplicates
+	childrenSet := make(map[string]map[string]bool)
+
+	for _, path := range files {
+		select {
+		case <-ctx.Done():
+			return tree
+		default:
+		}
+
+		if a.skipTestFile && isTestFile(path) {
+			continue
+		}
+
+		content, err := src.Read(path)
+		if err != nil {
+			continue
+		}
+
+		if a.maxFileSize > 0 && int64(len(content)) > a.maxFileSize {
+			continue
+		}
+
+		infos, err := extractInheritanceInfoFromContent(a.parser, path, content)
+		if err != nil {
+			continue
+		}
+
+		for _, info := range infos {
+			tree.allClasses[info.className] = true
+			tree.classToParents[info.className] = info.parents
+
+			// Build reverse mapping (parent -> children) with deduplication
+			for _, parent := range info.parents {
+				if childrenSet[parent] == nil {
+					childrenSet[parent] = make(map[string]bool)
+				}
+				if !childrenSet[parent][info.className] {
+					childrenSet[parent][info.className] = true
+					tree.classToChildren[parent] = append(tree.classToChildren[parent], info.className)
+				}
+			}
+		}
+	}
+
+	return tree
+}
+
+// extractInheritanceInfoFromContent extracts class inheritance from file content.
+func extractInheritanceInfoFromContent(psr *parser.Parser, path string, content []byte) ([]inheritanceInfo, error) {
+	lang := parser.DetectLanguage(path)
+	result, err := psr.Parse(content, lang, path)
+	if err != nil {
+		return nil, err
+	}
+
+	if !isOOLanguage(result.Language) {
+		return nil, nil
+	}
+
+	var infos []inheritanceInfo
+	root := result.Tree.RootNode()
+
+	parser.Walk(root, result.Source, func(node *sitter.Node, source []byte) bool {
+		if isClassNode(node.Type(), result.Language) {
+			info := inheritanceInfo{file: path}
+
+			// Get class name
+			if nameNode := node.ChildByFieldName("name"); nameNode != nil {
+				info.className = parser.GetNodeText(nameNode, source)
+			}
+
+			if info.className == "" {
+				return true
+			}
+
+			// Extract parent classes based on language
+			info.parents = extractParentClasses(node, source, result.Language)
+			infos = append(infos, info)
+		}
+		return true
+	})
+
+	return infos, nil
+}
+
+// analyzeFileFromContent extracts CK metrics from file content.
+func (a *Analyzer) analyzeFileFromContent(path string, content []byte, tree *inheritanceTree) ([]ClassMetrics, error) {
+	lang := parser.DetectLanguage(path)
+	result, err := a.parser.Parse(content, lang, path)
+	if err != nil {
+		return nil, err
+	}
+
+	// Only process OO languages
+	if !isOOLanguage(result.Language) {
+		return nil, nil
+	}
+
+	var classes []ClassMetrics
+
+	// Find all class definitions
+	classNodes := parser.GetClasses(result)
+
+	for _, cls := range classNodes {
+		if cls.Name == "" {
+			continue
+		}
+
+		metrics := ClassMetrics{
+			Path:      path,
+			ClassName: cls.Name,
+			Language:  string(result.Language),
+			StartLine: int(cls.StartLine),
+			EndLine:   int(cls.EndLine),
+			LOC:       int(cls.EndLine - cls.StartLine + 1),
+		}
+
+		// Find the class node in the AST for deeper analysis
+		classNode := findClassNode(result, cls.Name)
+		if classNode != nil {
+			a.extractClassMetrics(classNode, result, &metrics, tree)
+		}
+
+		classes = append(classes, metrics)
+	}
+
+	return classes, nil
 }
 
 // Close releases resources.

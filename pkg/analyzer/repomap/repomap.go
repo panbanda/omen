@@ -1,11 +1,16 @@
 package repomap
 
 import (
+	"context"
 	"time"
 
-	"github.com/panbanda/omen/internal/fileproc"
+	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/analyzer/graph"
+	"github.com/panbanda/omen/pkg/source"
 )
+
+// Ensure Analyzer implements analyzer.FileAnalyzer.
+var _ analyzer.FileAnalyzer[*Map] = (*Analyzer)(nil)
 
 // Analyzer generates a PageRank-ranked map of repository symbols.
 type Analyzer struct {
@@ -39,15 +44,11 @@ func New(opts ...Option) *Analyzer {
 	return a
 }
 
-// AnalyzeProject generates a repo map for the given files.
-func (a *Analyzer) AnalyzeProject(files []string) (*Map, error) {
-	return a.AnalyzeProjectWithProgress(files, nil)
-}
-
-// AnalyzeProjectWithProgress generates a repo map with progress callback.
-func (a *Analyzer) AnalyzeProjectWithProgress(files []string, onProgress fileproc.ProgressFunc) (*Map, error) {
+// Analyze generates a repo map for the given files.
+// Progress can be tracked by passing a context with analyzer.WithProgress.
+func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Map, error) {
 	// Build the dependency graph at function scope
-	depGraph, err := a.graphAnalyzer.AnalyzeProjectWithProgress(files, onProgress)
+	depGraph, err := a.graphAnalyzer.Analyze(ctx, files, source.NewFilesystem())
 	if err != nil {
 		return nil, err
 	}

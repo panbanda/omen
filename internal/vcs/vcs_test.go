@@ -1,13 +1,14 @@
 package vcs
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
 func TestNewGitOpener(t *testing.T) {
@@ -432,4 +433,90 @@ func initTestRepoWithMultipleCommits(t *testing.T) string {
 	}
 
 	return repoPath
+}
+
+func TestTreeEntries(t *testing.T) {
+	// Use the existing omen repo as a fixture
+	opener := NewGitOpener()
+	repo, err := opener.PlainOpen("../..")
+	if err != nil {
+		t.Fatalf("PlainOpen() error = %v", err)
+	}
+
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatalf("Head() error = %v", err)
+	}
+
+	commit, err := repo.CommitObject(head.Hash())
+	if err != nil {
+		t.Fatalf("CommitObject() error = %v", err)
+	}
+
+	tree, err := commit.Tree()
+	if err != nil {
+		t.Fatalf("Tree() error = %v", err)
+	}
+
+	entries, err := tree.Entries()
+	if err != nil {
+		t.Fatalf("Entries() error = %v", err)
+	}
+
+	// Should have entries
+	if len(entries) == 0 {
+		t.Error("Entries() returned empty slice")
+	}
+
+	// Should include known files
+	var foundGoMod bool
+	for _, e := range entries {
+		if e.Path == "go.mod" {
+			foundGoMod = true
+			if e.IsDir {
+				t.Error("go.mod should not be a directory")
+			}
+		}
+	}
+	if !foundGoMod {
+		t.Error("should find go.mod in tree entries")
+	}
+}
+
+func TestTreeFile(t *testing.T) {
+	opener := NewGitOpener()
+	repo, err := opener.PlainOpen("../..")
+	if err != nil {
+		t.Fatalf("PlainOpen() error = %v", err)
+	}
+
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatalf("Head() error = %v", err)
+	}
+
+	commit, err := repo.CommitObject(head.Hash())
+	if err != nil {
+		t.Fatalf("CommitObject() error = %v", err)
+	}
+
+	tree, err := commit.Tree()
+	if err != nil {
+		t.Fatalf("Tree() error = %v", err)
+	}
+
+	// Read go.mod which should exist
+	content, err := tree.File("go.mod")
+	if err != nil {
+		t.Fatalf("File() error = %v", err)
+	}
+	if !bytes.Contains(content, []byte("module github.com/panbanda/omen")) {
+		t.Error("go.mod should contain module declaration")
+	}
+
+	// Non-existent file should error
+	_, err = tree.File("nonexistent.txt")
+	if err == nil {
+		t.Error("File() should return error for non-existent file")
+	}
 }

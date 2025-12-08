@@ -2,6 +2,8 @@ package satd
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -9,7 +11,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/panbanda/omen/internal/fileproc"
+	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/parser"
 )
 
@@ -25,6 +27,9 @@ type Analyzer struct {
 	maxFileSize       int64
 	testPatterns      []*regexp.Regexp
 }
+
+// Compile-time check that Analyzer implements SourceFileAnalyzer.
+var _ analyzer.SourceFileAnalyzer[*Analysis] = (*Analyzer)(nil)
 
 // Option is a functional option for configuring Analyzer.
 type Option func(*Analyzer)
@@ -579,26 +584,128 @@ func extractMarker(match string) string {
 	return "UNKNOWN"
 }
 
-// AnalyzeProject scans all files in a project for SATD using parallel processing.
-func (a *Analyzer) AnalyzeProject(files []string) (*Analysis, error) {
-	return a.AnalyzeProjectWithProgress(files, nil)
+// Close releases analyzer resources.
+func (a *Analyzer) Close() {
 }
 
-// AnalyzeProjectWithProgress scans all files with optional progress callback.
-func (a *Analyzer) AnalyzeProjectWithProgress(files []string, onProgress fileproc.ProgressFunc) (*Analysis, error) {
-	fileResults := fileproc.ForEachFileWithProgress(files, func(path string) ([]Item, error) {
-		return a.AnalyzeFile(path)
-	}, onProgress)
+// ContentSource is an alias for analyzer.ContentSource.
+type ContentSource = analyzer.ContentSource
 
+// AnalyzeFileFromSource scans content for SATD markers.
+func (a *Analyzer) AnalyzeFileFromSource(path string, content []byte) ([]Item, error) {
+	if a.maxFileSize > 0 && int64(len(content)) > a.maxFileSize {
+		return nil, nil
+	}
+
+	if a.shouldExcludeFile(path) {
+		return nil, nil
+	}
+
+	var items []Item
+	scanner := bufio.NewScanner(bytes.NewReader(content))
+	lineNum := uint32(0)
+
+	lang := parser.DetectLanguage(path)
+	commentStyle := getCommentStyle(lang)
+	isTestFile := a.isTestFile(path)
+	isSecurityContext := a.isSecurityContext(path)
+
+	isRustFile := lang == parser.LangRust
+	testTracker := newTestBlockTracker(isRustFile && a.excludeTestBlocks)
+
+	for scanner.Scan() {
+		lineNum++
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+
+		testTracker.updateFromLine(trimmed)
+
+		if testTracker.isInTestBlock() {
+			continue
+		}
+
+		if !isCommentLine(line, commentStyle) {
+			continue
+		}
+
+		if shouldSkipProcessing(line) {
+			continue
+		}
+
+		for _, pat := range a.patterns {
+			if matches := pat.regex.FindStringSubmatch(line); matches != nil {
+				description := strings.TrimSpace(line)
+				if len(matches) > 1 && matches[1] != "" {
+					description = strings.TrimSpace(matches[1])
+				}
+
+				severity := pat.severity
+				if a.adjustSeverity {
+					severity = a.adjustSeverityImpl(severity, isTestFile, isSecurityContext, line)
+				}
+
+				item := Item{
+					Category:    pat.category,
+					Severity:    severity,
+					File:        path,
+					Line:        lineNum,
+					Description: description,
+					Marker:      extractMarker(matches[0]),
+				}
+
+				if a.generateContextID {
+					item.ContextHash = generateContextHash(path, lineNum, line)
+				}
+
+				items = append(items, item)
+				break
+			}
+		}
+	}
+
+	return items, scanner.Err()
+}
+
+// Analyze scans all files from a ContentSource for SATD.
+func (a *Analyzer) Analyze(ctx context.Context, files []string, src ContentSource) (*Analysis, error) {
 	var allItems []Item
-	for _, items := range fileResults {
+	filesAnalyzed := 0
+
+	// Get progress tracker from context
+	tracker := analyzer.TrackerFromContext(ctx)
+	if tracker != nil {
+		tracker.Add(len(files))
+	}
+
+	for _, path := range files {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		if tracker != nil {
+			tracker.Tick(path)
+		}
+
+		content, err := src.Read(path)
+		if err != nil {
+			continue
+		}
+
+		items, err := a.AnalyzeFileFromSource(path, content)
+		if err != nil {
+			continue
+		}
+
 		allItems = append(allItems, items...)
+		filesAnalyzed++
 	}
 
 	analysis := &Analysis{
 		Items:              allItems,
 		Summary:            NewSummary(),
-		TotalFilesAnalyzed: len(files),
+		TotalFilesAnalyzed: filesAnalyzed,
 	}
 
 	filesWithDebtSet := make(map[string]bool)

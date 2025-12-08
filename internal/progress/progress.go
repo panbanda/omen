@@ -4,13 +4,15 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/schollz/progressbar/v3"
 )
 
 // Tracker wraps a progress bar for file processing.
 type Tracker struct {
-	bar   *progressbar.ProgressBar
-	label string
+	bar      *progressbar.ProgressBar
+	label    string
+	analyzer *analyzer.Tracker
 }
 
 // NewSpinner creates a spinner for operations with unknown total count.
@@ -49,6 +51,29 @@ func NewTracker(label string, total int) *Tracker {
 // Tick increments the progress by 1. Safe for concurrent use.
 func (t *Tracker) Tick() {
 	t.bar.Add(1)
+}
+
+// SetDescription updates the progress bar description text.
+func (t *Tracker) SetDescription(desc string) {
+	t.bar.Describe(desc)
+}
+
+// Add increments the total by n. Use when total count becomes known.
+// For spinners, this converts them to a progress bar.
+func (t *Tracker) Add(n int) {
+	t.bar.ChangeMax(t.bar.GetMax() + n)
+}
+
+// AnalyzerTracker returns an analyzer.Tracker that updates this UI tracker.
+// Use this to pass progress tracking through context to analyzers.
+func (t *Tracker) AnalyzerTracker() *analyzer.Tracker {
+	if t.analyzer == nil {
+		t.analyzer = analyzer.NewTracker(func(current, total int, path string) {
+			t.bar.ChangeMax(total)
+			t.bar.Set(current)
+		})
+	}
+	return t.analyzer
 }
 
 // FinishSuccess clears the bar completely (no output).

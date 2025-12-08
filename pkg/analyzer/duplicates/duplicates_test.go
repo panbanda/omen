@@ -1,9 +1,12 @@
 package duplicates
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/panbanda/omen/pkg/source"
 )
 
 func TestNew(t *testing.T) {
@@ -82,9 +85,9 @@ func duplicate() int {
 	a := New(WithMinTokens(10), WithSimilarityThreshold(0.8))
 	defer a.Close()
 
-	analysis, err := a.AnalyzeProject([]string{file1, file2})
+	analysis, err := a.Analyze(context.Background(), []string{file1, file2}, source.NewFilesystem())
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	if analysis.TotalFilesScanned != 2 {
@@ -125,9 +128,9 @@ func funcB() string {
 	a := New(WithMinTokens(50)) // High threshold to avoid small matches
 	defer a.Close()
 
-	analysis, err := a.AnalyzeProject([]string{file1, file2})
+	analysis, err := a.Analyze(context.Background(), []string{file1, file2}, source.NewFilesystem())
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	if len(analysis.Clones) != 0 {
@@ -146,9 +149,9 @@ func TestAnalyzeProject_EmptyFiles(t *testing.T) {
 	a := New()
 	defer a.Close()
 
-	analysis, err := a.AnalyzeProject([]string{file1})
+	analysis, err := a.Analyze(context.Background(), []string{file1}, source.NewFilesystem())
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	// Empty/minimal files should not produce clones

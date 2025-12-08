@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/panbanda/omen/internal/vcs"
 	"github.com/panbanda/omen/internal/vcs/mocks"
 	"github.com/stretchr/testify/mock"
@@ -25,7 +25,7 @@ func TestChurnAnalyzer_WithMockOpener(t *testing.T) {
 
 	ctx := context.Background()
 	analyzer := New(WithOpener(mockOpener))
-	result, err := analyzer.AnalyzeRepo(ctx, "/fake/repo")
+	result, err := analyzer.Analyze(ctx, "/fake/repo", nil)
 
 	if err != nil {
 		t.Fatalf("AnalyzeRepo() error = %v", err)
@@ -44,7 +44,7 @@ func TestChurnAnalyzer_OpenError(t *testing.T) {
 
 	ctx := context.Background()
 	analyzer := New(WithOpener(mockOpener))
-	_, err := analyzer.AnalyzeRepo(ctx, "/invalid/path")
+	_, err := analyzer.Analyze(ctx, "/invalid/path", nil)
 
 	if err == nil {
 		t.Fatal("Expected error for invalid path")
@@ -60,7 +60,7 @@ func TestChurnAnalyzer_LogError(t *testing.T) {
 
 	ctx := context.Background()
 	analyzer := New(WithOpener(mockOpener))
-	_, err := analyzer.AnalyzeRepo(ctx, "/fake/repo")
+	_, err := analyzer.Analyze(ctx, "/fake/repo", nil)
 
 	if err == nil {
 		t.Fatal("Expected error from Log()")
@@ -113,7 +113,7 @@ func TestChurnAnalyzer_WithCommits(t *testing.T) {
 
 	ctx := context.Background()
 	analyzer := New(WithOpener(mockOpener))
-	result, err := analyzer.AnalyzeRepo(ctx, "/fake/repo")
+	result, err := analyzer.Analyze(ctx, "/fake/repo", nil)
 
 	if err != nil {
 		t.Fatalf("AnalyzeRepo() error = %v", err)
@@ -151,7 +151,7 @@ func TestChurnAnalyzer_InitialCommitSkipped(t *testing.T) {
 
 	ctx := context.Background()
 	analyzer := New(WithOpener(mockOpener))
-	result, err := analyzer.AnalyzeRepo(ctx, "/fake/repo")
+	result, err := analyzer.Analyze(ctx, "/fake/repo", nil)
 
 	if err != nil {
 		t.Fatalf("AnalyzeRepo() error = %v", err)
@@ -200,7 +200,7 @@ func TestChurnAnalyzer_DeletedFile(t *testing.T) {
 
 	ctx := context.Background()
 	analyzer := New(WithOpener(mockOpener))
-	result, err := analyzer.AnalyzeRepo(ctx, "/fake/repo")
+	result, err := analyzer.Analyze(ctx, "/fake/repo", nil)
 
 	if err != nil {
 		t.Fatalf("AnalyzeRepo() error = %v", err)

@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/parser"
 )
 
@@ -22,9 +23,14 @@ func TestMapFiles(t *testing.T) {
 		createTestFile(t, tmpDir, "file3.go", "package main\nfunc validate() {}"),
 	}
 
-	results := MapFiles(files, func(p *parser.Parser, path string) (string, error) {
+	ctx := context.Background()
+	results, errs := MapFiles(ctx, files, func(p *parser.Parser, path string) (string, error) {
 		return filepath.Base(path), nil
 	})
+
+	if errs != nil {
+		t.Errorf("Unexpected errors: %v", errs)
+	}
 
 	if len(results) != len(files) {
 		t.Errorf("Expected %d results, got %d", len(files), len(results))
@@ -44,12 +50,16 @@ func TestMapFiles(t *testing.T) {
 }
 
 func TestMapFiles_EmptyFileList(t *testing.T) {
-	results := MapFiles([]string{}, func(p *parser.Parser, path string) (string, error) {
+	ctx := context.Background()
+	results, errs := MapFiles(ctx, []string{}, func(p *parser.Parser, path string) (string, error) {
 		return path, nil
 	})
 
 	if results != nil {
 		t.Errorf("Expected nil for empty file list, got %v", results)
+	}
+	if errs != nil {
+		t.Errorf("Expected nil errors for empty file list, got %v", errs)
 	}
 }
 
@@ -57,9 +67,14 @@ func TestMapFiles_SingleFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	file := createTestFile(t, tmpDir, "single.go", "package main")
 
-	results := MapFiles([]string{file}, func(p *parser.Parser, path string) (int, error) {
+	ctx := context.Background()
+	results, errs := MapFiles(ctx, []string{file}, func(p *parser.Parser, path string) (int, error) {
 		return 42, nil
 	})
+
+	if errs != nil {
+		t.Errorf("Unexpected errors: %v", errs)
+	}
 
 	if len(results) != 1 {
 		t.Fatalf("Expected 1 result, got %d", len(results))
@@ -79,8 +94,9 @@ func TestMapFiles_WithErrors(t *testing.T) {
 		createTestFile(t, tmpDir, "good2.go", "package main"),
 	}
 
+	ctx := context.Background()
 	processedCount := atomic.Int32{}
-	results := MapFiles(files, func(p *parser.Parser, path string) (string, error) {
+	results, errs := MapFiles(ctx, files, func(p *parser.Parser, path string) (string, error) {
 		processedCount.Add(1)
 		if filepath.Base(path) == "bad.go" {
 			return "", fmt.Errorf("simulated error")
@@ -95,38 +111,11 @@ func TestMapFiles_WithErrors(t *testing.T) {
 	if len(results) != 2 {
 		t.Errorf("Expected 2 successful results (errors skipped), got %d", len(results))
 	}
-}
 
-func TestMapFilesWithErrors(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	files := []string{
-		createTestFile(t, tmpDir, "good1.go", "package main"),
-		createTestFile(t, tmpDir, "bad.go", "package main"),
-		createTestFile(t, tmpDir, "good2.go", "package main"),
-	}
-
-	var errorPaths []string
-	var mu sync.Mutex
-	onError := func(path string, err error) {
-		mu.Lock()
-		errorPaths = append(errorPaths, filepath.Base(path))
-		mu.Unlock()
-	}
-
-	results := MapFilesWithErrors(files, func(p *parser.Parser, path string) (string, error) {
-		if filepath.Base(path) == "bad.go" {
-			return "", fmt.Errorf("simulated error")
-		}
-		return filepath.Base(path), nil
-	}, onError)
-
-	if len(results) != 2 {
-		t.Errorf("Expected 2 successful results, got %d", len(results))
-	}
-
-	if len(errorPaths) != 1 || errorPaths[0] != "bad.go" {
-		t.Errorf("Expected error callback for bad.go, got %v", errorPaths)
+	if errs == nil {
+		t.Error("Expected errors to be returned")
+	} else if len(errs.Errors) != 1 {
+		t.Errorf("Expected 1 error, got %d", len(errs.Errors))
 	}
 }
 
@@ -134,7 +123,8 @@ func TestMapFiles_ParserAvailable(t *testing.T) {
 	tmpDir := t.TempDir()
 	file := createTestFile(t, tmpDir, "test.go", "package main\nfunc main() {}")
 
-	results := MapFiles([]string{file}, func(p *parser.Parser, path string) (bool, error) {
+	ctx := context.Background()
+	results, errs := MapFiles(ctx, []string{file}, func(p *parser.Parser, path string) (bool, error) {
 		if p == nil {
 			t.Error("Parser should not be nil")
 			return false, nil
@@ -148,6 +138,10 @@ func TestMapFiles_ParserAvailable(t *testing.T) {
 		return result != nil && result.Tree != nil, nil
 	})
 
+	if errs != nil {
+		t.Errorf("Unexpected errors: %v", errs)
+	}
+
 	if len(results) != 1 {
 		t.Fatalf("Expected 1 result, got %d", len(results))
 	}
@@ -157,7 +151,7 @@ func TestMapFiles_ParserAvailable(t *testing.T) {
 	}
 }
 
-func TestMapFilesWithProgress(t *testing.T) {
+func TestMapFiles_WithProgress(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	files := []string{
@@ -169,13 +163,18 @@ func TestMapFilesWithProgress(t *testing.T) {
 	}
 
 	progressCount := atomic.Int32{}
-	progressFunc := func() {
+	tracker := analyzer.NewTracker(func(current, total int, path string) {
 		progressCount.Add(1)
-	}
+	})
 
-	results := MapFilesWithProgress(files, func(p *parser.Parser, path string) (int, error) {
+	ctx := analyzer.WithTracker(context.Background(), tracker)
+	results, errs := MapFiles(ctx, files, func(p *parser.Parser, path string) (int, error) {
 		return 1, nil
-	}, progressFunc)
+	})
+
+	if errs != nil {
+		t.Errorf("Unexpected errors: %v", errs)
+	}
 
 	if len(results) != len(files) {
 		t.Errorf("Expected %d results, got %d", len(files), len(results))
@@ -186,161 +185,138 @@ func TestMapFilesWithProgress(t *testing.T) {
 	}
 }
 
-func TestMapFilesWithProgress_NilCallback(t *testing.T) {
+func TestMapFiles_WithProgressNilTracker(t *testing.T) {
 	tmpDir := t.TempDir()
 	file := createTestFile(t, tmpDir, "test.go", "package main")
 
-	results := MapFilesWithProgress([]string{file}, func(p *parser.Parser, path string) (int, error) {
+	// No tracker in context - should still work
+	ctx := context.Background()
+	results, errs := MapFiles(ctx, []string{file}, func(p *parser.Parser, path string) (int, error) {
 		return 1, nil
-	}, nil)
+	})
 
+	if errs != nil {
+		t.Errorf("Unexpected errors: %v", errs)
+	}
 	if len(results) != 1 {
 		t.Errorf("Expected 1 result, got %d", len(results))
 	}
 }
 
-func TestMapFilesN_WorkerCount(t *testing.T) {
-	tests := []struct {
-		name       string
-		maxWorkers int
-		wantMin    int
-		wantMax    int
-	}{
-		{
-			name:       "default workers (0)",
-			maxWorkers: 0,
-			wantMin:    runtime.NumCPU() * DefaultWorkerMultiplier,
-			wantMax:    runtime.NumCPU() * DefaultWorkerMultiplier,
-		},
-		{
-			name:       "negative workers",
-			maxWorkers: -1,
-			wantMin:    runtime.NumCPU() * DefaultWorkerMultiplier,
-			wantMax:    runtime.NumCPU() * DefaultWorkerMultiplier,
-		},
-		{
-			name:       "single worker",
-			maxWorkers: 1,
-			wantMin:    1,
-			wantMax:    1,
-		},
-		{
-			name:       "four workers",
-			maxWorkers: 4,
-			wantMin:    4,
-			wantMax:    4,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tmpDir := t.TempDir()
-			files := make([]string, 20)
-			for i := 0; i < 20; i++ {
-				files[i] = createTestFile(t, tmpDir, fmt.Sprintf("file%d.go", i), "package main")
-			}
-
-			var maxConcurrent atomic.Int32
-			var currentConcurrent atomic.Int32
-
-			results := MapFilesN(files, tt.maxWorkers, func(p *parser.Parser, path string) (int, error) {
-				current := currentConcurrent.Add(1)
-				defer currentConcurrent.Add(-1)
-
-				for {
-					max := maxConcurrent.Load()
-					if current <= max {
-						break
-					}
-					if maxConcurrent.CompareAndSwap(max, current) {
-						break
-					}
-				}
-
-				return 1, nil
-			}, nil, nil)
-
-			if len(results) != len(files) {
-				t.Errorf("Expected %d results, got %d", len(files), len(results))
-			}
-
-			observedMax := int(maxConcurrent.Load())
-			if observedMax < tt.wantMin || observedMax > tt.wantMax {
-				t.Logf("Observed max concurrent: %d (expected range: %d-%d)", observedMax, tt.wantMin, tt.wantMax)
-			}
-		})
-	}
-}
-
-func TestMapFilesN_ResultCorrectness(t *testing.T) {
+func TestMapFiles_Cancellation(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	fileCount := 50
-	files := make([]string, fileCount)
-	for i := 0; i < fileCount; i++ {
-		content := fmt.Sprintf("package main\n// File number %d\n", i)
-		files[i] = createTestFile(t, tmpDir, fmt.Sprintf("file%d.go", i), content)
-	}
-
-	results := MapFilesN(files, 8, func(p *parser.Parser, path string) (string, error) {
-		return filepath.Base(path), nil
-	}, nil, nil)
-
-	if len(results) != fileCount {
-		t.Fatalf("Expected %d results, got %d", fileCount, len(results))
-	}
-
-	resultSet := make(map[string]bool)
-	for _, r := range results {
-		resultSet[r] = true
-	}
-
-	for i := 0; i < fileCount; i++ {
-		expected := fmt.Sprintf("file%d.go", i)
-		if !resultSet[expected] {
-			t.Errorf("Missing result for %s", expected)
-		}
-	}
-}
-
-func TestMapFilesN_ThreadSafety(t *testing.T) {
-	tmpDir := t.TempDir()
-
+	// Create many files to increase chance of catching cancellation
 	fileCount := 100
 	files := make([]string, fileCount)
 	for i := 0; i < fileCount; i++ {
 		files[i] = createTestFile(t, tmpDir, fmt.Sprintf("file%d.go", i), "package main")
 	}
 
-	sharedCounter := 0
-	var mu sync.Mutex
+	ctx, cancel := context.WithCancel(context.Background())
 
-	results := MapFilesN(files, runtime.NumCPU()*2, func(p *parser.Parser, path string) (int, error) {
-		mu.Lock()
-		sharedCounter++
-		val := sharedCounter
-		mu.Unlock()
-		return val, nil
-	}, nil, nil)
+	var processed atomic.Int32
+	go func() {
+		// Cancel after some files have started processing
+		for processed.Load() < 10 {
+			runtime.Gosched()
+		}
+		cancel()
+	}()
 
-	if len(results) != fileCount {
-		t.Fatalf("Expected %d results, got %d", fileCount, len(results))
-	}
+	results, errs := MapFiles(ctx, files, func(p *parser.Parser, path string) (string, error) {
+		processed.Add(1)
+		// Small delay to allow cancellation to take effect
+		for i := 0; i < 1000; i++ {
+			runtime.Gosched()
+		}
+		return filepath.Base(path), nil
+	})
 
-	if sharedCounter != fileCount {
-		t.Errorf("Expected counter to be %d, got %d", fileCount, sharedCounter)
-	}
+	// We should have partial results
+	t.Logf("Processed %d files, got %d results", processed.Load(), len(results))
 
-	resultMap := make(map[int]int)
-	for _, r := range results {
-		resultMap[r]++
-	}
-
-	for i := 1; i <= fileCount; i++ {
-		if resultMap[i] != 1 {
-			t.Errorf("Value %d appeared %d times, expected 1", i, resultMap[i])
+	// Should have some context canceled errors
+	if errs != nil {
+		hasContextError := false
+		for _, e := range errs.Errors {
+			if e.Err == context.Canceled {
+				hasContextError = true
+				break
+			}
+		}
+		if !hasContextError {
+			t.Log("No context.Canceled errors found (cancellation may have happened after all processing)")
 		}
 	}
+
+	// Total results + errors should be <= fileCount
+	errorCount := 0
+	if errs != nil {
+		errorCount = len(errs.Errors)
+	}
+	if len(results)+errorCount > fileCount {
+		t.Errorf("Results (%d) + errors (%d) should not exceed file count (%d)",
+			len(results), errorCount, fileCount)
+	}
+}
+
+func TestMapFilesWithSizeLimit(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create files of different sizes
+	smallFile := createTestFile(t, tmpDir, "small.go", "package main")
+	largeContent := make([]byte, 1024)
+	for i := range largeContent {
+		largeContent[i] = 'a'
+	}
+	largeFile := filepath.Join(tmpDir, "large.go")
+	if err := os.WriteFile(largeFile, append([]byte("package main\n"), largeContent...), 0644); err != nil {
+		t.Fatalf("failed to create large file: %v", err)
+	}
+
+	t.Run("with size limit", func(t *testing.T) {
+		ctx := context.Background()
+		results, errs := MapFilesWithSizeLimit(ctx, []string{smallFile, largeFile}, 100, func(p *parser.Parser, path string) (string, error) {
+			return filepath.Base(path), nil
+		})
+
+		if len(results) != 1 {
+			t.Errorf("Expected 1 result (small file only), got %d", len(results))
+		}
+		if errs == nil || len(errs.Errors) != 1 {
+			t.Errorf("Expected 1 error for large file, got %v", errs)
+		}
+	})
+
+	t.Run("no size limit", func(t *testing.T) {
+		ctx := context.Background()
+		results, errs := MapFilesWithSizeLimit(ctx, []string{smallFile, largeFile}, 0, func(p *parser.Parser, path string) (string, error) {
+			return filepath.Base(path), nil
+		})
+
+		if errs != nil {
+			t.Errorf("Unexpected errors: %v", errs)
+		}
+		if len(results) != 2 {
+			t.Errorf("Expected 2 results with no limit, got %d", len(results))
+		}
+	})
+
+	t.Run("stat error handling", func(t *testing.T) {
+		ctx := context.Background()
+		nonExistent := filepath.Join(tmpDir, "nonexistent.go")
+		results, errs := MapFilesWithSizeLimit(ctx, []string{nonExistent}, 100, func(p *parser.Parser, path string) (string, error) {
+			return filepath.Base(path), nil
+		})
+
+		if len(results) != 0 {
+			t.Errorf("Expected 0 results, got %d", len(results))
+		}
+		if errs == nil || len(errs.Errors) != 1 {
+			t.Errorf("Expected 1 error, got %v", errs)
+		}
+	})
 }
 
 func TestForEachFile(t *testing.T) {
@@ -352,9 +328,14 @@ func TestForEachFile(t *testing.T) {
 		createTestFile(t, tmpDir, "file3.txt", "content3"),
 	}
 
-	results := ForEachFile(files, func(path string) (string, error) {
+	ctx := context.Background()
+	results, errs := ForEachFile(ctx, files, func(path string) (string, error) {
 		return filepath.Base(path), nil
 	})
+
+	if errs != nil {
+		t.Errorf("Unexpected errors: %v", errs)
+	}
 
 	if len(results) != len(files) {
 		t.Errorf("Expected %d results, got %d", len(files), len(results))
@@ -374,12 +355,16 @@ func TestForEachFile(t *testing.T) {
 }
 
 func TestForEachFile_EmptyFileList(t *testing.T) {
-	results := ForEachFile([]string{}, func(path string) (int, error) {
+	ctx := context.Background()
+	results, errs := ForEachFile(ctx, []string{}, func(path string) (int, error) {
 		return 1, nil
 	})
 
 	if results != nil {
 		t.Errorf("Expected nil for empty file list, got %v", results)
+	}
+	if errs != nil {
+		t.Errorf("Expected nil errors for empty file list, got %v", errs)
 	}
 }
 
@@ -392,7 +377,8 @@ func TestForEachFile_WithErrors(t *testing.T) {
 		createTestFile(t, tmpDir, "good2.txt", "content"),
 	}
 
-	results := ForEachFile(files, func(path string) (string, error) {
+	ctx := context.Background()
+	results, errs := ForEachFile(ctx, files, func(path string) (string, error) {
 		if filepath.Base(path) == "bad.txt" {
 			return "", fmt.Errorf("simulated error")
 		}
@@ -402,42 +388,13 @@ func TestForEachFile_WithErrors(t *testing.T) {
 	if len(results) != 2 {
 		t.Errorf("Expected 2 successful results, got %d", len(results))
 	}
-}
 
-func TestForEachFileWithErrors(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	files := []string{
-		createTestFile(t, tmpDir, "good1.txt", "content"),
-		createTestFile(t, tmpDir, "bad.txt", "content"),
-		createTestFile(t, tmpDir, "good2.txt", "content"),
-	}
-
-	var errorPaths []string
-	var mu sync.Mutex
-	onError := func(path string, err error) {
-		mu.Lock()
-		errorPaths = append(errorPaths, filepath.Base(path))
-		mu.Unlock()
-	}
-
-	results := ForEachFileWithErrors(files, func(path string) (string, error) {
-		if filepath.Base(path) == "bad.txt" {
-			return "", fmt.Errorf("simulated error")
-		}
-		return filepath.Base(path), nil
-	}, onError)
-
-	if len(results) != 2 {
-		t.Errorf("Expected 2 successful results, got %d", len(results))
-	}
-
-	if len(errorPaths) != 1 || errorPaths[0] != "bad.txt" {
-		t.Errorf("Expected error callback for bad.txt, got %v", errorPaths)
+	if errs == nil || len(errs.Errors) != 1 {
+		t.Errorf("Expected 1 error, got %v", errs)
 	}
 }
 
-func TestForEachFileWithProgress(t *testing.T) {
+func TestForEachFile_WithProgress(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	files := []string{
@@ -448,13 +405,18 @@ func TestForEachFileWithProgress(t *testing.T) {
 	}
 
 	progressCount := atomic.Int32{}
-	progressFunc := func() {
+	tracker := analyzer.NewTracker(func(current, total int, path string) {
 		progressCount.Add(1)
-	}
+	})
 
-	results := ForEachFileWithProgress(files, func(path string) (int, error) {
+	ctx := analyzer.WithTracker(context.Background(), tracker)
+	results, errs := ForEachFile(ctx, files, func(path string) (int, error) {
 		return 1, nil
-	}, progressFunc)
+	})
+
+	if errs != nil {
+		t.Errorf("Unexpected errors: %v", errs)
+	}
 
 	if len(results) != len(files) {
 		t.Errorf("Expected %d results, got %d", len(files), len(results))
@@ -465,7 +427,7 @@ func TestForEachFileWithProgress(t *testing.T) {
 	}
 }
 
-func TestForEachFileWithProgress_ProgressOnError(t *testing.T) {
+func TestForEachFile_ProgressOnError(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	files := []string{
@@ -474,16 +436,17 @@ func TestForEachFileWithProgress_ProgressOnError(t *testing.T) {
 	}
 
 	progressCount := atomic.Int32{}
-	progressFunc := func() {
+	tracker := analyzer.NewTracker(func(current, total int, path string) {
 		progressCount.Add(1)
-	}
+	})
 
-	results := ForEachFileWithProgress(files, func(path string) (int, error) {
+	ctx := analyzer.WithTracker(context.Background(), tracker)
+	results, _ := ForEachFile(ctx, files, func(path string) (int, error) {
 		if filepath.Base(path) == "bad.txt" {
 			return 0, fmt.Errorf("error")
 		}
 		return 1, nil
-	}, progressFunc)
+	})
 
 	if len(results) != 1 {
 		t.Errorf("Expected 1 successful result, got %d", len(results))
@@ -494,264 +457,141 @@ func TestForEachFileWithProgress_ProgressOnError(t *testing.T) {
 	}
 }
 
-func TestMapFiles_LargeFileSet(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping large file set test in short mode")
-	}
-
+func TestForEachFileWithResource(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	fileCount := 1000
-	files := make([]string, fileCount)
-	for i := 0; i < fileCount; i++ {
-		files[i] = createTestFile(t, tmpDir, fmt.Sprintf("file%d.go", i), "package main")
+	files := []string{
+		createTestFile(t, tmpDir, "file1.txt", "content1"),
+		createTestFile(t, tmpDir, "file2.txt", "content2"),
+		createTestFile(t, tmpDir, "file3.txt", "content3"),
 	}
 
-	results := MapFiles(files, func(p *parser.Parser, path string) (int, error) {
-		return 1, nil
-	})
-
-	if len(results) != fileCount {
-		t.Errorf("Expected %d results, got %d", fileCount, len(results))
-	}
-
-	sum := 0
-	for _, r := range results {
-		sum += r
-	}
-
-	if sum != fileCount {
-		t.Errorf("Expected sum of %d, got %d", fileCount, sum)
-	}
-}
-
-func TestParallelProcessing_ActualParsing(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	fileCount := 20
-	files := make([]string, fileCount)
-	for i := 0; i < fileCount; i++ {
-		content := fmt.Sprintf("package main\nfunc test%d() {}", i)
-		files[i] = createTestFile(t, tmpDir, fmt.Sprintf("file%d.go", i), content)
-	}
-
-	results := MapFiles(files, func(p *parser.Parser, path string) (string, error) {
-		result, err := p.ParseFile(path)
-		if err != nil {
-			return "", err
+	t.Run("successful resource usage", func(t *testing.T) {
+		type mockResource struct {
+			id int
 		}
-		if result == nil || result.Tree == nil {
-			return "", fmt.Errorf("parse result or tree is nil")
+
+		var resourceCount int32
+		initResource := func() (*mockResource, error) {
+			id := atomic.AddInt32(&resourceCount, 1)
+			return &mockResource{id: int(id)}, nil
 		}
-		return result.Path, nil
-	})
-
-	if len(results) != fileCount {
-		t.Errorf("Expected %d results, got %d", fileCount, len(results))
-	}
-
-	resultSet := make(map[string]bool)
-	for _, r := range results {
-		resultSet[r] = true
-	}
-
-	for _, file := range files {
-		if !resultSet[file] {
-			t.Errorf("Missing result for file: %s", file)
+		closeResource := func(r *mockResource) {
+			// Resource cleanup
 		}
-	}
-}
 
-func TestMapFiles_ReturnTypes(t *testing.T) {
-	tmpDir := t.TempDir()
-	file := createTestFile(t, tmpDir, "test.go", "package main")
-
-	t.Run("string result", func(t *testing.T) {
-		results := MapFiles([]string{file}, func(p *parser.Parser, path string) (string, error) {
-			return "test", nil
+		ctx := context.Background()
+		results, errs := ForEachFileWithResource(ctx, files, initResource, closeResource, func(r *mockResource, path string) (string, error) {
+			return fmt.Sprintf("%s:%d", filepath.Base(path), r.id), nil
 		})
-		if len(results) != 1 || results[0] != "test" {
-			t.Errorf("Expected ['test'], got %v", results)
+
+		if errs != nil {
+			t.Errorf("Unexpected errors: %v", errs)
+		}
+		if len(results) != 3 {
+			t.Errorf("Expected 3 results, got %d", len(results))
 		}
 	})
 
-	t.Run("int result", func(t *testing.T) {
-		results := MapFiles([]string{file}, func(p *parser.Parser, path string) (int, error) {
+	t.Run("empty file list", func(t *testing.T) {
+		ctx := context.Background()
+		results, errs := ForEachFileWithResource(ctx, []string{}, func() (int, error) {
+			return 0, nil
+		}, func(r int) {}, func(r int, path string) (string, error) {
+			return path, nil
+		})
+
+		if results != nil {
+			t.Errorf("Expected nil for empty file list, got %v", results)
+		}
+		if errs != nil {
+			t.Errorf("Expected nil errors for empty file list, got %v", errs)
+		}
+	})
+
+	t.Run("resource init error", func(t *testing.T) {
+		initResource := func() (int, error) {
+			return 0, fmt.Errorf("init failed")
+		}
+
+		ctx := context.Background()
+		results, errs := ForEachFileWithResource(ctx, files, initResource, func(r int) {}, func(r int, path string) (string, error) {
+			return filepath.Base(path), nil
+		})
+
+		// With invalid resources, all files are skipped
+		if len(results) != 0 {
+			t.Errorf("Expected 0 results with failed init, got %d", len(results))
+		}
+		if errs == nil {
+			t.Error("Expected errors for failed resource init")
+		}
+	})
+
+	t.Run("processing error handling", func(t *testing.T) {
+		initResource := func() (int, error) {
 			return 42, nil
+		}
+
+		ctx := context.Background()
+		results, errs := ForEachFileWithResource(ctx, files, initResource, func(r int) {}, func(r int, path string) (string, error) {
+			if filepath.Base(path) == "file2.txt" {
+				return "", fmt.Errorf("processing error")
+			}
+			return filepath.Base(path), nil
 		})
-		if len(results) != 1 || results[0] != 42 {
-			t.Errorf("Expected [42], got %v", results)
+
+		if len(results) != 2 {
+			t.Errorf("Expected 2 results, got %d", len(results))
+		}
+		if errs == nil || len(errs.Errors) != 1 {
+			t.Errorf("Expected 1 error, got %v", errs)
 		}
 	})
 
-	t.Run("struct result", func(t *testing.T) {
-		type Result struct {
-			Path string
-			OK   bool
+	t.Run("with nil closeResource", func(t *testing.T) {
+		initResource := func() (int, error) {
+			return 1, nil
 		}
-		results := MapFiles([]string{file}, func(p *parser.Parser, path string) (Result, error) {
-			return Result{Path: path, OK: true}, nil
+
+		ctx := context.Background()
+		results, errs := ForEachFileWithResource(ctx, files, initResource, nil, func(r int, path string) (string, error) {
+			return filepath.Base(path), nil
 		})
-		if len(results) != 1 || !results[0].OK {
-			t.Errorf("Expected struct with OK=true, got %v", results)
+
+		if errs != nil {
+			t.Errorf("Unexpected errors: %v", errs)
 		}
-	})
-}
-
-func TestForEachFile_ReturnTypes(t *testing.T) {
-	tmpDir := t.TempDir()
-	file := createTestFile(t, tmpDir, "test.txt", "content")
-
-	t.Run("bool result", func(t *testing.T) {
-		results := ForEachFile([]string{file}, func(path string) (bool, error) {
-			return true, nil
-		})
-		if len(results) != 1 || !results[0] {
-			t.Errorf("Expected [true], got %v", results)
+		if len(results) != 3 {
+			t.Errorf("Expected 3 results, got %d", len(results))
 		}
 	})
 
-	t.Run("slice result", func(t *testing.T) {
-		results := ForEachFile([]string{file}, func(path string) ([]string, error) {
-			return []string{"a", "b"}, nil
+	t.Run("with progress tracking", func(t *testing.T) {
+		initResource := func() (int, error) {
+			return 1, nil
+		}
+
+		progressCount := atomic.Int32{}
+		tracker := analyzer.NewTracker(func(current, total int, path string) {
+			progressCount.Add(1)
 		})
-		if len(results) != 1 || len(results[0]) != 2 {
-			t.Errorf("Expected [['a', 'b']], got %v", results)
+
+		ctx := analyzer.WithTracker(context.Background(), tracker)
+		results, errs := ForEachFileWithResource(ctx, files, initResource, nil, func(r int, path string) (string, error) {
+			return filepath.Base(path), nil
+		})
+
+		if errs != nil {
+			t.Errorf("Unexpected errors: %v", errs)
+		}
+		if len(results) != 3 {
+			t.Errorf("Expected 3 results, got %d", len(results))
+		}
+		if int(progressCount.Load()) != 3 {
+			t.Errorf("Expected progress callback 3 times, got %d", progressCount.Load())
 		}
 	})
-}
-
-func BenchmarkMapFiles_Sequential(b *testing.B) {
-	tmpDir := b.TempDir()
-
-	fileCount := 100
-	files := make([]string, fileCount)
-	for i := 0; i < fileCount; i++ {
-		files[i] = createTestFile(b, tmpDir, fmt.Sprintf("file%d.go", i), "package main\nfunc test() {}")
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		results := MapFilesN(files, 1, func(p *parser.Parser, path string) (int, error) {
-			_, err := p.ParseFile(path)
-			if err != nil {
-				return 0, err
-			}
-			return 1, nil
-		}, nil, nil)
-
-		if len(results) != fileCount {
-			b.Fatalf("Expected %d results, got %d", fileCount, len(results))
-		}
-	}
-}
-
-func BenchmarkMapFiles_Parallel(b *testing.B) {
-	tmpDir := b.TempDir()
-
-	fileCount := 100
-	files := make([]string, fileCount)
-	for i := 0; i < fileCount; i++ {
-		files[i] = createTestFile(b, tmpDir, fmt.Sprintf("file%d.go", i), "package main\nfunc test() {}")
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		results := MapFiles(files, func(p *parser.Parser, path string) (int, error) {
-			_, err := p.ParseFile(path)
-			if err != nil {
-				return 0, err
-			}
-			return 1, nil
-		})
-
-		if len(results) != fileCount {
-			b.Fatalf("Expected %d results, got %d", fileCount, len(results))
-		}
-	}
-}
-
-func BenchmarkMapFiles_DifferentWorkerCounts(b *testing.B) {
-	tmpDir := b.TempDir()
-
-	fileCount := 100
-	files := make([]string, fileCount)
-	for i := 0; i < fileCount; i++ {
-		files[i] = createTestFile(b, tmpDir, fmt.Sprintf("file%d.go", i), "package main\nfunc test() {}")
-	}
-
-	workerCounts := []int{1, 2, 4, 8, runtime.NumCPU(), runtime.NumCPU() * 2}
-
-	for _, workers := range workerCounts {
-		b.Run(fmt.Sprintf("workers=%d", workers), func(b *testing.B) {
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				results := MapFilesN(files, workers, func(p *parser.Parser, path string) (int, error) {
-					_, err := p.ParseFile(path)
-					if err != nil {
-						return 0, err
-					}
-					return 1, nil
-				}, nil, nil)
-
-				if len(results) != fileCount {
-					b.Fatalf("Expected %d results, got %d", fileCount, len(results))
-				}
-			}
-		})
-	}
-}
-
-func BenchmarkForEachFile(b *testing.B) {
-	tmpDir := b.TempDir()
-
-	fileCount := 100
-	files := make([]string, fileCount)
-	for i := 0; i < fileCount; i++ {
-		files[i] = createTestFile(b, tmpDir, fmt.Sprintf("file%d.txt", i), "test content")
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		results := ForEachFile(files, func(path string) (int, error) {
-			_, err := os.ReadFile(path)
-			if err != nil {
-				return 0, err
-			}
-			return 1, nil
-		})
-
-		if len(results) != fileCount {
-			b.Fatalf("Expected %d results, got %d", fileCount, len(results))
-		}
-	}
-}
-
-func BenchmarkMapFiles_WithProgress(b *testing.B) {
-	tmpDir := b.TempDir()
-
-	fileCount := 100
-	files := make([]string, fileCount)
-	for i := 0; i < fileCount; i++ {
-		files[i] = createTestFile(b, tmpDir, fmt.Sprintf("file%d.go", i), "package main")
-	}
-
-	progressCount := atomic.Int32{}
-	progressFunc := func() {
-		progressCount.Add(1)
-	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		progressCount.Store(0)
-		results := MapFilesWithProgress(files, func(p *parser.Parser, path string) (int, error) {
-			return 1, nil
-		}, progressFunc)
-
-		if len(results) != fileCount {
-			b.Fatalf("Expected %d results, got %d", fileCount, len(results))
-		}
-	}
 }
 
 func TestProcessingError(t *testing.T) {
@@ -812,230 +652,6 @@ func TestProcessingErrors_ThreadSafe(t *testing.T) {
 	}
 }
 
-func TestMapFilesCollectErrors(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	files := []string{
-		createTestFile(t, tmpDir, "good1.go", "package main"),
-		createTestFile(t, tmpDir, "good2.go", "package main"),
-		createTestFile(t, tmpDir, "bad.go", "package main"),
-	}
-
-	results, errs := MapFilesCollectErrors(files, func(p *parser.Parser, path string) (string, error) {
-		if filepath.Base(path) == "bad.go" {
-			return "", fmt.Errorf("simulated error")
-		}
-		return filepath.Base(path), nil
-	})
-
-	if len(results) != 2 {
-		t.Errorf("Expected 2 results, got %d", len(results))
-	}
-
-	if errs == nil {
-		t.Fatal("Expected errors to be returned")
-	}
-
-	if len(errs.Errors) != 1 {
-		t.Errorf("Expected 1 error, got %d", len(errs.Errors))
-	}
-
-	if errs.Errors[0].Path != files[2] {
-		t.Errorf("Error path = %q, want %q", errs.Errors[0].Path, files[2])
-	}
-}
-
-func TestMapFilesCollectErrors_NoErrors(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	files := []string{
-		createTestFile(t, tmpDir, "good1.go", "package main"),
-		createTestFile(t, tmpDir, "good2.go", "package main"),
-	}
-
-	results, errs := MapFilesCollectErrors(files, func(p *parser.Parser, path string) (string, error) {
-		return filepath.Base(path), nil
-	})
-
-	if len(results) != 2 {
-		t.Errorf("Expected 2 results, got %d", len(results))
-	}
-
-	if errs != nil {
-		t.Errorf("Expected nil errors, got %v", errs)
-	}
-}
-
-func TestMapFilesCollectErrors_Empty(t *testing.T) {
-	results, errs := MapFilesCollectErrors([]string{}, func(p *parser.Parser, path string) (string, error) {
-		return path, nil
-	})
-
-	if results != nil {
-		t.Errorf("Expected nil results, got %v", results)
-	}
-
-	if errs != nil {
-		t.Errorf("Expected nil errors, got %v", errs)
-	}
-}
-
-func TestForEachFileCollectErrors(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	files := []string{
-		createTestFile(t, tmpDir, "good1.txt", "content"),
-		createTestFile(t, tmpDir, "bad.txt", "content"),
-		createTestFile(t, tmpDir, "good2.txt", "content"),
-	}
-
-	results, errs := ForEachFileCollectErrors(files, func(path string) (string, error) {
-		if filepath.Base(path) == "bad.txt" {
-			return "", fmt.Errorf("simulated error")
-		}
-		return filepath.Base(path), nil
-	})
-
-	if len(results) != 2 {
-		t.Errorf("Expected 2 results, got %d", len(results))
-	}
-
-	if errs == nil {
-		t.Fatal("Expected errors to be returned")
-	}
-
-	if len(errs.Errors) != 1 {
-		t.Errorf("Expected 1 error, got %d", len(errs.Errors))
-	}
-}
-
-func TestMapFilesWithContext(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	files := []string{
-		createTestFile(t, tmpDir, "file1.go", "package main"),
-		createTestFile(t, tmpDir, "file2.go", "package main"),
-	}
-
-	ctx := context.Background()
-	results, errs := MapFilesWithContext(ctx, files, func(p *parser.Parser, path string) (string, error) {
-		return filepath.Base(path), nil
-	})
-
-	if len(results) != 2 {
-		t.Errorf("Expected 2 results, got %d", len(results))
-	}
-
-	if errs != nil {
-		t.Errorf("Expected no errors, got %v", errs)
-	}
-}
-
-func TestMapFilesWithContext_Cancellation(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Create many files to increase chance of catching cancellation
-	fileCount := 100
-	files := make([]string, fileCount)
-	for i := 0; i < fileCount; i++ {
-		files[i] = createTestFile(t, tmpDir, fmt.Sprintf("file%d.go", i), "package main")
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	var processed atomic.Int32
-	go func() {
-		// Cancel after some files have started processing
-		for processed.Load() < 10 {
-			runtime.Gosched()
-		}
-		cancel()
-	}()
-
-	results, errs := MapFilesWithContext(ctx, files, func(p *parser.Parser, path string) (string, error) {
-		processed.Add(1)
-		// Small delay to allow cancellation to take effect
-		for i := 0; i < 1000; i++ {
-			runtime.Gosched()
-		}
-		return filepath.Base(path), nil
-	})
-
-	// We should have partial results
-	t.Logf("Processed %d files, got %d results", processed.Load(), len(results))
-
-	// Should have some context canceled errors
-	if errs != nil {
-		hasContextError := false
-		for _, e := range errs.Errors {
-			if e.Err == context.Canceled {
-				hasContextError = true
-				break
-			}
-		}
-		if !hasContextError {
-			t.Log("No context.Canceled errors found (cancellation may have happened after all processing)")
-		}
-	}
-
-	// Total results + errors should be <= fileCount
-	errorCount := 0
-	if errs != nil {
-		errorCount = len(errs.Errors)
-	}
-	if len(results)+errorCount > fileCount {
-		t.Errorf("Results (%d) + errors (%d) should not exceed file count (%d)",
-			len(results), errorCount, fileCount)
-	}
-}
-
-func TestForEachFileWithContext(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	files := []string{
-		createTestFile(t, tmpDir, "file1.txt", "content"),
-		createTestFile(t, tmpDir, "file2.txt", "content"),
-	}
-
-	ctx := context.Background()
-	results, errs := ForEachFileWithContext(ctx, files, func(path string) (string, error) {
-		return filepath.Base(path), nil
-	})
-
-	if len(results) != 2 {
-		t.Errorf("Expected 2 results, got %d", len(results))
-	}
-
-	if errs != nil {
-		t.Errorf("Expected no errors, got %v", errs)
-	}
-}
-
-func TestMapFilesWithContext_Empty(t *testing.T) {
-	ctx := context.Background()
-	results, errs := MapFilesWithContext(ctx, []string{}, func(p *parser.Parser, path string) (string, error) {
-		return path, nil
-	})
-
-	if results != nil {
-		t.Errorf("Expected nil results, got %v", results)
-	}
-
-	if errs != nil {
-		t.Errorf("Expected nil errors, got %v", errs)
-	}
-}
-
-func createTestFile(t testing.TB, dir, name, content string) string {
-	t.Helper()
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		t.Fatalf("failed to create test file %s: %v", name, err)
-	}
-	return path
-}
-
-// Tests for Unwrap method
 func TestProcessingErrors_Unwrap(t *testing.T) {
 	errs := &ProcessingErrors{}
 	if errs.Unwrap() != nil {
@@ -1048,425 +664,291 @@ func TestProcessingErrors_Unwrap(t *testing.T) {
 	}
 }
 
-// Tests for MapFilesWithSizeLimit
-func TestMapFilesWithSizeLimit(t *testing.T) {
+func TestMapFiles_LargeFileSet(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping large file set test in short mode")
+	}
+
 	tmpDir := t.TempDir()
 
-	// Create files of different sizes
-	smallFile := createTestFile(t, tmpDir, "small.go", "package main")
-	largeContent := make([]byte, 1024)
-	for i := range largeContent {
-		largeContent[i] = 'a'
-	}
-	largeFile := filepath.Join(tmpDir, "large.go")
-	if err := os.WriteFile(largeFile, append([]byte("package main\n"), largeContent...), 0644); err != nil {
-		t.Fatalf("failed to create large file: %v", err)
+	fileCount := 1000
+	files := make([]string, fileCount)
+	for i := 0; i < fileCount; i++ {
+		files[i] = createTestFile(t, tmpDir, fmt.Sprintf("file%d.go", i), "package main")
 	}
 
-	t.Run("with size limit", func(t *testing.T) {
-		var skipped []string
-		var mu sync.Mutex
-		onError := func(path string, err error) {
-			mu.Lock()
-			skipped = append(skipped, filepath.Base(path))
-			mu.Unlock()
-		}
-
-		results := MapFilesWithSizeLimit([]string{smallFile, largeFile}, 100, func(p *parser.Parser, path string) (string, error) {
-			return filepath.Base(path), nil
-		}, nil, onError)
-
-		if len(results) != 1 {
-			t.Errorf("Expected 1 result (small file only), got %d", len(results))
-		}
-		if len(skipped) != 1 || skipped[0] != "large.go" {
-			t.Errorf("Expected large.go to be skipped, got %v", skipped)
-		}
+	ctx := context.Background()
+	results, errs := MapFiles(ctx, files, func(p *parser.Parser, path string) (int, error) {
+		return 1, nil
 	})
 
-	t.Run("no size limit", func(t *testing.T) {
-		results := MapFilesWithSizeLimit([]string{smallFile, largeFile}, 0, func(p *parser.Parser, path string) (string, error) {
-			return filepath.Base(path), nil
-		}, nil, nil)
-
-		if len(results) != 2 {
-			t.Errorf("Expected 2 results with no limit, got %d", len(results))
-		}
-	})
-}
-
-// Tests for MapFilesNWithSizeLimit
-func TestMapFilesNWithSizeLimit(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	smallFile := createTestFile(t, tmpDir, "small.go", "package main")
-	largeContent := make([]byte, 2048)
-	for i := range largeContent {
-		largeContent[i] = 'x'
-	}
-	largeFile := filepath.Join(tmpDir, "large.go")
-	if err := os.WriteFile(largeFile, append([]byte("package main\n"), largeContent...), 0644); err != nil {
-		t.Fatalf("failed to create large file: %v", err)
+	if errs != nil {
+		t.Errorf("Unexpected errors: %v", errs)
 	}
 
-	t.Run("empty file list", func(t *testing.T) {
-		results := MapFilesNWithSizeLimit([]string{}, 4, 100, func(p *parser.Parser, path string) (string, error) {
-			return path, nil
-		}, nil, nil)
-		if results != nil {
-			t.Errorf("Expected nil for empty file list, got %v", results)
-		}
-	})
-
-	t.Run("default workers", func(t *testing.T) {
-		results := MapFilesNWithSizeLimit([]string{smallFile}, -1, 0, func(p *parser.Parser, path string) (string, error) {
-			return filepath.Base(path), nil
-		}, nil, nil)
-		if len(results) != 1 {
-			t.Errorf("Expected 1 result, got %d", len(results))
-		}
-	})
-
-	t.Run("with progress and errors", func(t *testing.T) {
-		var progressCount int32
-		var errorPaths []string
-		var mu sync.Mutex
-
-		onProgress := func() {
-			atomic.AddInt32(&progressCount, 1)
-		}
-		onError := func(path string, err error) {
-			mu.Lock()
-			errorPaths = append(errorPaths, filepath.Base(path))
-			mu.Unlock()
-		}
-
-		results := MapFilesNWithSizeLimit([]string{smallFile, largeFile}, 2, 100, func(p *parser.Parser, path string) (string, error) {
-			return filepath.Base(path), nil
-		}, onProgress, onError)
-
-		if len(results) != 1 {
-			t.Errorf("Expected 1 result, got %d", len(results))
-		}
-		if atomic.LoadInt32(&progressCount) != 2 {
-			t.Errorf("Expected 2 progress calls, got %d", progressCount)
-		}
-	})
-
-	t.Run("stat error handling", func(t *testing.T) {
-		nonExistent := filepath.Join(tmpDir, "nonexistent.go")
-		var errorPaths []string
-		var mu sync.Mutex
-		onError := func(path string, err error) {
-			mu.Lock()
-			errorPaths = append(errorPaths, filepath.Base(path))
-			mu.Unlock()
-		}
-
-		results := MapFilesNWithSizeLimit([]string{nonExistent}, 2, 100, func(p *parser.Parser, path string) (string, error) {
-			return filepath.Base(path), nil
-		}, nil, onError)
-
-		if len(results) != 0 {
-			t.Errorf("Expected 0 results, got %d", len(results))
-		}
-		if len(errorPaths) != 1 {
-			t.Errorf("Expected 1 error, got %d", len(errorPaths))
-		}
-	})
-}
-
-// Tests for ForEachFileWithResource
-func TestForEachFileWithResource(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	files := []string{
-		createTestFile(t, tmpDir, "file1.txt", "content1"),
-		createTestFile(t, tmpDir, "file2.txt", "content2"),
-		createTestFile(t, tmpDir, "file3.txt", "content3"),
+	if len(results) != fileCount {
+		t.Errorf("Expected %d results, got %d", fileCount, len(results))
 	}
 
-	t.Run("successful resource usage", func(t *testing.T) {
-		type mockResource struct {
-			id int
-		}
-
-		var resourceCount int32
-		initResource := func() (*mockResource, error) {
-			id := atomic.AddInt32(&resourceCount, 1)
-			return &mockResource{id: int(id)}, nil
-		}
-		closeResource := func(r *mockResource) {
-			// Resource cleanup
-		}
-
-		results := ForEachFileWithResource(files, initResource, closeResource, func(r *mockResource, path string) (string, error) {
-			return fmt.Sprintf("%s:%d", filepath.Base(path), r.id), nil
-		}, nil)
-
-		if len(results) != 3 {
-			t.Errorf("Expected 3 results, got %d", len(results))
-		}
-	})
-
-	t.Run("empty file list", func(t *testing.T) {
-		results := ForEachFileWithResource([]string{}, func() (int, error) {
-			return 0, nil
-		}, func(r int) {}, func(r int, path string) (string, error) {
-			return path, nil
-		}, nil)
-
-		if results != nil {
-			t.Errorf("Expected nil for empty file list, got %v", results)
-		}
-	})
-
-	t.Run("resource init error", func(t *testing.T) {
-		initResource := func() (int, error) {
-			return 0, fmt.Errorf("init failed")
-		}
-
-		var progressCount int32
-		onProgress := func() {
-			atomic.AddInt32(&progressCount, 1)
-		}
-
-		results := ForEachFileWithResource(files, initResource, func(r int) {}, func(r int, path string) (string, error) {
-			return filepath.Base(path), nil
-		}, onProgress)
-
-		// With invalid resources, all files are skipped
-		if len(results) != 0 {
-			t.Errorf("Expected 0 results with failed init, got %d", len(results))
-		}
-	})
-
-	t.Run("processing error handling", func(t *testing.T) {
-		initResource := func() (int, error) {
-			return 42, nil
-		}
-
-		var progressCount int32
-		onProgress := func() {
-			atomic.AddInt32(&progressCount, 1)
-		}
-
-		results := ForEachFileWithResource(files, initResource, func(r int) {}, func(r int, path string) (string, error) {
-			if filepath.Base(path) == "file2.txt" {
-				return "", fmt.Errorf("processing error")
-			}
-			return filepath.Base(path), nil
-		}, onProgress)
-
-		if len(results) != 2 {
-			t.Errorf("Expected 2 results, got %d", len(results))
-		}
-	})
-
-	t.Run("with nil closeResource", func(t *testing.T) {
-		initResource := func() (int, error) {
-			return 1, nil
-		}
-
-		results := ForEachFileWithResource(files, initResource, nil, func(r int, path string) (string, error) {
-			return filepath.Base(path), nil
-		}, nil)
-
-		if len(results) != 3 {
-			t.Errorf("Expected 3 results, got %d", len(results))
-		}
-	})
-}
-
-// Test for ForEachFileCollectErrorsWithProgress
-func TestForEachFileCollectErrorsWithProgress(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	files := []string{
-		createTestFile(t, tmpDir, "good1.txt", "content"),
-		createTestFile(t, tmpDir, "bad.txt", "content"),
-		createTestFile(t, tmpDir, "good2.txt", "content"),
+	sum := 0
+	for _, r := range results {
+		sum += r
 	}
 
-	var progressCount int32
-	onProgress := func() {
-		atomic.AddInt32(&progressCount, 1)
-	}
-
-	results, errs := ForEachFileCollectErrorsWithProgress(files, func(path string) (string, error) {
-		if filepath.Base(path) == "bad.txt" {
-			return "", fmt.Errorf("error")
-		}
-		return filepath.Base(path), nil
-	}, onProgress)
-
-	if len(results) != 2 {
-		t.Errorf("Expected 2 results, got %d", len(results))
-	}
-	if errs == nil || len(errs.Errors) != 1 {
-		t.Errorf("Expected 1 error, got %v", errs)
-	}
-	if atomic.LoadInt32(&progressCount) != 3 {
-		t.Errorf("Expected 3 progress calls, got %d", progressCount)
+	if sum != fileCount {
+		t.Errorf("Expected sum of %d, got %d", fileCount, sum)
 	}
 }
 
-// Test for MapFilesCollectErrorsWithProgress
-func TestMapFilesCollectErrorsWithProgress(t *testing.T) {
+func TestMapFiles_ActualParsing(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	files := []string{
-		createTestFile(t, tmpDir, "good1.go", "package main"),
-		createTestFile(t, tmpDir, "bad.go", "package main"),
-		createTestFile(t, tmpDir, "good2.go", "package main"),
+	fileCount := 20
+	files := make([]string, fileCount)
+	for i := 0; i < fileCount; i++ {
+		content := fmt.Sprintf("package main\nfunc test%d() {}", i)
+		files[i] = createTestFile(t, tmpDir, fmt.Sprintf("file%d.go", i), content)
 	}
 
-	var progressCount int32
-	onProgress := func() {
-		atomic.AddInt32(&progressCount, 1)
-	}
-
-	results, errs := MapFilesCollectErrorsWithProgress(files, func(p *parser.Parser, path string) (string, error) {
-		if filepath.Base(path) == "bad.go" {
-			return "", fmt.Errorf("error")
+	ctx := context.Background()
+	results, errs := MapFiles(ctx, files, func(p *parser.Parser, path string) (string, error) {
+		result, err := p.ParseFile(path)
+		if err != nil {
+			return "", err
 		}
-		return filepath.Base(path), nil
-	}, onProgress)
+		if result == nil || result.Tree == nil {
+			return "", fmt.Errorf("parse result or tree is nil")
+		}
+		return result.Path, nil
+	})
 
-	if len(results) != 2 {
-		t.Errorf("Expected 2 results, got %d", len(results))
+	if errs != nil {
+		t.Errorf("Unexpected errors: %v", errs)
 	}
-	if errs == nil || len(errs.Errors) != 1 {
-		t.Errorf("Expected 1 error, got %v", errs)
+
+	if len(results) != fileCount {
+		t.Errorf("Expected %d results, got %d", fileCount, len(results))
 	}
-	if atomic.LoadInt32(&progressCount) != 3 {
-		t.Errorf("Expected 3 progress calls, got %d", progressCount)
+
+	resultSet := make(map[string]bool)
+	for _, r := range results {
+		resultSet[r] = true
+	}
+
+	for _, file := range files {
+		if !resultSet[file] {
+			t.Errorf("Missing result for file: %s", file)
+		}
 	}
 }
 
-// Test for ForEachFileWithContextAndProgress
-func TestForEachFileWithContextAndProgress(t *testing.T) {
+func TestMapFiles_ReturnTypes(t *testing.T) {
 	tmpDir := t.TempDir()
+	file := createTestFile(t, tmpDir, "test.go", "package main")
+	ctx := context.Background()
 
-	files := []string{
-		createTestFile(t, tmpDir, "file1.txt", "content"),
-		createTestFile(t, tmpDir, "file2.txt", "content"),
-	}
-
-	t.Run("with progress callback", func(t *testing.T) {
-		var progressCount int32
-		onProgress := func() {
-			atomic.AddInt32(&progressCount, 1)
-		}
-
-		ctx := context.Background()
-		results, errs := ForEachFileWithContextAndProgress(ctx, files, func(path string) (string, error) {
-			return filepath.Base(path), nil
-		}, onProgress)
-
-		if len(results) != 2 {
-			t.Errorf("Expected 2 results, got %d", len(results))
-		}
+	t.Run("string result", func(t *testing.T) {
+		results, errs := MapFiles(ctx, []string{file}, func(p *parser.Parser, path string) (string, error) {
+			return "test", nil
+		})
 		if errs != nil {
-			t.Errorf("Expected no errors, got %v", errs)
+			t.Errorf("Unexpected errors: %v", errs)
 		}
-		if atomic.LoadInt32(&progressCount) != 2 {
-			t.Errorf("Expected 2 progress calls, got %d", progressCount)
-		}
-	})
-
-	t.Run("with error and progress", func(t *testing.T) {
-		var progressCount int32
-		onProgress := func() {
-			atomic.AddInt32(&progressCount, 1)
-		}
-
-		ctx := context.Background()
-		results, errs := ForEachFileWithContextAndProgress(ctx, files, func(path string) (string, error) {
-			if filepath.Base(path) == "file1.txt" {
-				return "", fmt.Errorf("processing error")
-			}
-			return filepath.Base(path), nil
-		}, onProgress)
-
-		if len(results) != 1 {
-			t.Errorf("Expected 1 result, got %d", len(results))
-		}
-		if errs == nil || len(errs.Errors) != 1 {
-			t.Errorf("Expected 1 error, got %v", errs)
+		if len(results) != 1 || results[0] != "test" {
+			t.Errorf("Expected ['test'], got %v", results)
 		}
 	})
 
-	t.Run("cancellation with progress", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel() // Cancel immediately
-
-		var progressCount int32
-		onProgress := func() {
-			atomic.AddInt32(&progressCount, 1)
+	t.Run("int result", func(t *testing.T) {
+		results, errs := MapFiles(ctx, []string{file}, func(p *parser.Parser, path string) (int, error) {
+			return 42, nil
+		})
+		if errs != nil {
+			t.Errorf("Unexpected errors: %v", errs)
 		}
+		if len(results) != 1 || results[0] != 42 {
+			t.Errorf("Expected [42], got %v", results)
+		}
+	})
 
-		_, errs := ForEachFileWithContextAndProgress(ctx, files, func(path string) (string, error) {
-			return filepath.Base(path), nil
-		}, onProgress)
-
-		// With immediate cancellation, should have context errors
-		if errs == nil {
-			t.Log("Expected errors from cancellation (may vary depending on timing)")
+	t.Run("struct result", func(t *testing.T) {
+		type Result struct {
+			Path string
+			OK   bool
+		}
+		results, errs := MapFiles(ctx, []string{file}, func(p *parser.Parser, path string) (Result, error) {
+			return Result{Path: path, OK: true}, nil
+		})
+		if errs != nil {
+			t.Errorf("Unexpected errors: %v", errs)
+		}
+		if len(results) != 1 || !results[0].OK {
+			t.Errorf("Expected struct with OK=true, got %v", results)
 		}
 	})
 }
 
-// Test for MapFilesWithContextAndProgress
-func TestMapFilesWithContextAndProgress(t *testing.T) {
+func TestForEachFile_ReturnTypes(t *testing.T) {
 	tmpDir := t.TempDir()
+	file := createTestFile(t, tmpDir, "test.txt", "content")
+	ctx := context.Background()
 
+	t.Run("bool result", func(t *testing.T) {
+		results, errs := ForEachFile(ctx, []string{file}, func(path string) (bool, error) {
+			return true, nil
+		})
+		if errs != nil {
+			t.Errorf("Unexpected errors: %v", errs)
+		}
+		if len(results) != 1 || !results[0] {
+			t.Errorf("Expected [true], got %v", results)
+		}
+	})
+
+	t.Run("slice result", func(t *testing.T) {
+		results, errs := ForEachFile(ctx, []string{file}, func(path string) ([]string, error) {
+			return []string{"a", "b"}, nil
+		})
+		if errs != nil {
+			t.Errorf("Unexpected errors: %v", errs)
+		}
+		if len(results) != 1 || len(results[0]) != 2 {
+			t.Errorf("Expected [['a', 'b']], got %v", results)
+		}
+	})
+}
+
+func TestTrackerIntegration(t *testing.T) {
+	tmpDir := t.TempDir()
 	files := []string{
 		createTestFile(t, tmpDir, "file1.go", "package main"),
 		createTestFile(t, tmpDir, "file2.go", "package main"),
+		createTestFile(t, tmpDir, "file3.go", "package main"),
 	}
 
-	t.Run("with progress callback", func(t *testing.T) {
-		var progressCount int32
-		onProgress := func() {
-			atomic.AddInt32(&progressCount, 1)
-		}
+	var currentValues []int
+	var totalValues []int
+	var paths []string
+	var mu sync.Mutex
 
-		ctx := context.Background()
-		results, errs := MapFilesWithContextAndProgress(ctx, files, func(p *parser.Parser, path string) (string, error) {
-			return filepath.Base(path), nil
-		}, onProgress)
-
-		if len(results) != 2 {
-			t.Errorf("Expected 2 results, got %d", len(results))
-		}
-		if errs != nil {
-			t.Errorf("Expected no errors, got %v", errs)
-		}
-		if atomic.LoadInt32(&progressCount) != 2 {
-			t.Errorf("Expected 2 progress calls, got %d", progressCount)
-		}
+	tracker := analyzer.NewTracker(func(current, total int, path string) {
+		mu.Lock()
+		currentValues = append(currentValues, current)
+		totalValues = append(totalValues, total)
+		paths = append(paths, filepath.Base(path))
+		mu.Unlock()
 	})
 
-	t.Run("with error and progress", func(t *testing.T) {
-		var progressCount int32
-		onProgress := func() {
-			atomic.AddInt32(&progressCount, 1)
-		}
+	ctx := analyzer.WithTracker(context.Background(), tracker)
+	results, errs := MapFiles(ctx, files, func(p *parser.Parser, path string) (string, error) {
+		return filepath.Base(path), nil
+	})
 
-		ctx := context.Background()
-		results, errs := MapFilesWithContextAndProgress(ctx, files, func(p *parser.Parser, path string) (string, error) {
-			if filepath.Base(path) == "file1.go" {
-				return "", fmt.Errorf("processing error")
+	if errs != nil {
+		t.Errorf("Unexpected errors: %v", errs)
+	}
+	if len(results) != 3 {
+		t.Errorf("Expected 3 results, got %d", len(results))
+	}
+
+	// Check tracker was called 3 times
+	if len(paths) != 3 {
+		t.Errorf("Expected 3 progress callbacks, got %d", len(paths))
+	}
+
+	// Check total was always 3
+	for i, total := range totalValues {
+		if total != 3 {
+			t.Errorf("Progress callback %d: expected total=3, got %d", i, total)
+		}
+	}
+}
+
+func BenchmarkMapFiles_Parallel(b *testing.B) {
+	tmpDir := b.TempDir()
+
+	fileCount := 100
+	files := make([]string, fileCount)
+	for i := 0; i < fileCount; i++ {
+		files[i] = createTestFile(b, tmpDir, fmt.Sprintf("file%d.go", i), "package main\nfunc test() {}")
+	}
+
+	ctx := context.Background()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		results, _ := MapFiles(ctx, files, func(p *parser.Parser, path string) (int, error) {
+			_, err := p.ParseFile(path)
+			if err != nil {
+				return 0, err
 			}
-			return filepath.Base(path), nil
-		}, onProgress)
+			return 1, nil
+		})
 
-		if len(results) != 1 {
-			t.Errorf("Expected 1 result, got %d", len(results))
+		if len(results) != fileCount {
+			b.Fatalf("Expected %d results, got %d", fileCount, len(results))
 		}
-		if errs == nil || len(errs.Errors) != 1 {
-			t.Errorf("Expected 1 error, got %v", errs)
+	}
+}
+
+func BenchmarkForEachFile(b *testing.B) {
+	tmpDir := b.TempDir()
+
+	fileCount := 100
+	files := make([]string, fileCount)
+	for i := 0; i < fileCount; i++ {
+		files[i] = createTestFile(b, tmpDir, fmt.Sprintf("file%d.txt", i), "test content")
+	}
+
+	ctx := context.Background()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		results, _ := ForEachFile(ctx, files, func(path string) (int, error) {
+			_, err := os.ReadFile(path)
+			if err != nil {
+				return 0, err
+			}
+			return 1, nil
+		})
+
+		if len(results) != fileCount {
+			b.Fatalf("Expected %d results, got %d", fileCount, len(results))
 		}
+	}
+}
+
+func BenchmarkMapFiles_WithProgress(b *testing.B) {
+	tmpDir := b.TempDir()
+
+	fileCount := 100
+	files := make([]string, fileCount)
+	for i := 0; i < fileCount; i++ {
+		files[i] = createTestFile(b, tmpDir, fmt.Sprintf("file%d.go", i), "package main")
+	}
+
+	progressCount := atomic.Int32{}
+	tracker := analyzer.NewTracker(func(current, total int, path string) {
+		progressCount.Add(1)
 	})
+
+	ctx := analyzer.WithTracker(context.Background(), tracker)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		progressCount.Store(0)
+		results, _ := MapFiles(ctx, files, func(p *parser.Parser, path string) (int, error) {
+			return 1, nil
+		})
+
+		if len(results) != fileCount {
+			b.Fatalf("Expected %d results, got %d", fileCount, len(results))
+		}
+	}
+}
+
+func createTestFile(t testing.TB, dir, name, content string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to create test file %s: %v", name, err)
+	}
+	return path
 }

@@ -119,6 +119,26 @@ func (p *Parser) Parse(source []byte, lang Language, path string) (*ParseResult,
 	}, nil
 }
 
+// ContentSource provides file content.
+type ContentSource interface {
+	Read(path string) ([]byte, error)
+}
+
+// ParseFromSource parses a file using a ContentSource instead of filesystem.
+func (p *Parser) ParseFromSource(src ContentSource, path string) (*ParseResult, error) {
+	source, err := src.Read(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read from source: %w", err)
+	}
+
+	lang := DetectLanguage(path)
+	if lang == LangUnknown {
+		return nil, fmt.Errorf("unsupported language for file: %s", path)
+	}
+
+	return p.Parse(source, lang, path)
+}
+
 // GetTreeSitterLanguage returns the tree-sitter language for a Language enum.
 func GetTreeSitterLanguage(lang Language) (*sitter.Language, error) {
 	switch lang {

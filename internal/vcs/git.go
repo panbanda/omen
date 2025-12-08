@@ -5,14 +5,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/format/diff"
-	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/format/diff"
+	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
 // ErrInvalidType is returned when a type assertion fails for vcs types.
@@ -260,6 +261,36 @@ func (t *gitTree) Diff(to Tree) (Changes, error) {
 		changes[i] = &gitChange{change: c}
 	}
 	return changes, nil
+}
+
+func (t *gitTree) Entries() ([]TreeEntry, error) {
+	var entries []TreeEntry
+	err := t.tree.Files().ForEach(func(f *object.File) error {
+		entries = append(entries, TreeEntry{
+			Path:  f.Name,
+			Size:  f.Size,
+			IsDir: false,
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+func (t *gitTree) File(path string) ([]byte, error) {
+	file, err := t.tree.File(path)
+	if err != nil {
+		return nil, err
+	}
+	reader, err := file.Reader()
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+
+	return io.ReadAll(reader)
 }
 
 // gitChange wraps go-git Change.

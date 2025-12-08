@@ -1,11 +1,13 @@
 package cohesion
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/panbanda/omen/pkg/parser"
+	"github.com/panbanda/omen/pkg/source"
 )
 
 func TestNew(t *testing.T) {
@@ -68,9 +70,9 @@ public class Calculator {
 	analyzer := New()
 	defer analyzer.Close()
 
-	analysis, err := analyzer.AnalyzeProject([]string{file})
+	analysis, err := analyzer.Analyze(context.Background(), []string{file}, source.NewFilesystem())
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	if len(analysis.Classes) == 0 {
@@ -112,9 +114,9 @@ class Calculator:
 	analyzer := New()
 	defer analyzer.Close()
 
-	analysis, err := analyzer.AnalyzeProject([]string{file})
+	analysis, err := analyzer.Analyze(context.Background(), []string{file}, source.NewFilesystem())
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	if len(analysis.Classes) == 0 {
@@ -157,9 +159,9 @@ class Calculator {
 	analyzer := New()
 	defer analyzer.Close()
 
-	analysis, err := analyzer.AnalyzeProject([]string{file})
+	analysis, err := analyzer.Analyze(context.Background(), []string{file}, source.NewFilesystem())
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	if len(analysis.Classes) == 0 {
@@ -190,9 +192,9 @@ func main() {
 	analyzer := New()
 	defer analyzer.Close()
 
-	analysis, err := analyzer.AnalyzeProject([]string{file})
+	analysis, err := analyzer.Analyze(context.Background(), []string{file}, source.NewFilesystem())
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	// Go files should return 0 classes (Go is not in the OO language list)
@@ -218,9 +220,9 @@ class TestCalculator:
 	analyzer := New() // Default skips test files
 	defer analyzer.Close()
 
-	analysis, err := analyzer.AnalyzeProject([]string{file})
+	analysis, err := analyzer.Analyze(context.Background(), []string{file}, source.NewFilesystem())
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	// Should skip test file
@@ -246,9 +248,9 @@ class TestCalculator:
 	analyzer := New(WithIncludeTestFiles()) // Include test files
 	defer analyzer.Close()
 
-	analysis, err := analyzer.AnalyzeProject([]string{file})
+	analysis, err := analyzer.Analyze(context.Background(), []string{file}, source.NewFilesystem())
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	// Should include test file
@@ -580,9 +582,9 @@ class Cat(Mammal):
 	analyzer := New()
 	defer analyzer.Close()
 
-	analysis, err := analyzer.AnalyzeProject([]string{baseFile, childFile})
+	analysis, err := analyzer.Analyze(context.Background(), []string{baseFile, childFile}, source.NewFilesystem())
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	// Find classes by name

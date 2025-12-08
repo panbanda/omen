@@ -93,7 +93,7 @@ Omen is a multi-language code analysis CLI built in Go. It uses tree-sitter for 
 
 **MCP server**: Tools are registered in `internal/mcpserver/mcpserver.go`. Each tool has a description in `descriptions.go`. Prompts are stored as markdown files in `internal/mcpserver/prompts/` using `go:embed`.
 
-**Skills**: Claude Code skills live in `skills/<skill-name>/SKILL.md` and are installed via `/plugin install panbanda/omen`.
+**Skills**: Claude Code skills live in `skills/<skill-name>/SKILL.md`. Register the repository as a plugin marketplace with `/plugin marketplace add panbanda/omen`, then install skills with `/plugin install <skill-name>@omen` (e.g., `/plugin install find-bugs@omen`).
 
 ### CLI Commands
 
@@ -110,6 +110,7 @@ Analyzer subcommands (`omen analyze <subcommand>`):
 - `duplicates` / `dup` - Code clone detection
 - `defect` / `predict` - File-level defect probability (PMAT weights)
 - `changes` / `jit` - Commit-level change risk analysis (Kamei et al. 2013)
+- `diff` / `pr` - Branch diff risk analysis for PR review
 - `tdg` - Technical Debt Gradient scores
 - `graph` / `dag` - Dependency graph (Mermaid output)
 - `hotspot` / `hs` - High churn + high complexity files

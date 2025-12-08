@@ -5,8 +5,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
 // Repository provides access to git repository operations.
@@ -60,10 +60,21 @@ type Commit interface {
 	Message() string
 }
 
+// TreeEntry represents a file or directory in a git tree.
+type TreeEntry struct {
+	Path  string
+	Size  int64
+	IsDir bool
+}
+
 // Tree represents a git tree object.
 type Tree interface {
 	// Diff computes differences between this tree and another.
 	Diff(to Tree) (Changes, error)
+	// Entries returns all files in the tree (recursively).
+	Entries() ([]TreeEntry, error)
+	// File returns the content of a file at the given path.
+	File(path string) ([]byte, error)
 }
 
 // Changes represents a collection of file changes between trees.

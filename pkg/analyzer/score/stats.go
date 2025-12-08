@@ -1,6 +1,10 @@
 package score
 
-import "gonum.org/v1/gonum/stat"
+import (
+	"math"
+
+	"gonum.org/v1/gonum/stat"
+)
 
 // TrendStats holds regression statistics computed from trend data points.
 type TrendStats struct {
@@ -39,8 +43,8 @@ func ComputeComponentTrends(points []TrendPoint) ComponentTrends {
 	xs := make([]float64, n)
 	complexity := make([]float64, n)
 	duplication := make([]float64, n)
-	defect := make([]float64, n)
-	debt := make([]float64, n)
+	satd := make([]float64, n)
+	tdg := make([]float64, n)
 	coupling := make([]float64, n)
 	smells := make([]float64, n)
 	cohesion := make([]float64, n)
@@ -49,8 +53,8 @@ func ComputeComponentTrends(points []TrendPoint) ComponentTrends {
 		xs[i] = float64(i)
 		complexity[i] = float64(p.Components.Complexity)
 		duplication[i] = float64(p.Components.Duplication)
-		defect[i] = float64(p.Components.Defect)
-		debt[i] = float64(p.Components.Debt)
+		satd[i] = float64(p.Components.SATD)
+		tdg[i] = float64(p.Components.TDG)
 		coupling[i] = float64(p.Components.Coupling)
 		smells[i] = float64(p.Components.Smells)
 		cohesion[i] = float64(p.Components.Cohesion)
@@ -59,8 +63,8 @@ func ComputeComponentTrends(points []TrendPoint) ComponentTrends {
 	return ComponentTrends{
 		Complexity:  computeStats(xs, complexity),
 		Duplication: computeStats(xs, duplication),
-		Defect:      computeStats(xs, defect),
-		Debt:        computeStats(xs, debt),
+		SATD:        computeStats(xs, satd),
+		TDG:         computeStats(xs, tdg),
 		Coupling:    computeStats(xs, coupling),
 		Smells:      computeStats(xs, smells),
 		Cohesion:    computeStats(xs, cohesion),
@@ -68,15 +72,24 @@ func ComputeComponentTrends(points []TrendPoint) ComponentTrends {
 }
 
 // computeStats calculates regression statistics from x and y values.
+// Returns zero values for stats that would be NaN (e.g., when all ys are identical).
 func computeStats(xs, ys []float64) TrendStats {
 	intercept, slope := stat.LinearRegression(xs, ys, nil, false)
 	rSquared := stat.RSquared(xs, ys, nil, intercept, slope)
 	correlation := stat.Correlation(xs, ys, nil)
 
 	return TrendStats{
-		Slope:       slope,
-		Intercept:   intercept,
-		RSquared:    rSquared,
-		Correlation: correlation,
+		Slope:       sanitizeFloat(slope),
+		Intercept:   sanitizeFloat(intercept),
+		RSquared:    sanitizeFloat(rSquared),
+		Correlation: sanitizeFloat(correlation),
 	}
+}
+
+// sanitizeFloat returns 0 for NaN or infinite values.
+func sanitizeFloat(v float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0
+	}
+	return v
 }

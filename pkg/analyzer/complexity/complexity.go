@@ -1,12 +1,18 @@
 package complexity
 
 import (
+	"context"
+	"fmt"
 	"sort"
 
 	"github.com/panbanda/omen/internal/fileproc"
+	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/parser"
 	sitter "github.com/smacker/go-tree-sitter"
 )
+
+// Ensure Analyzer implements analyzer.SourceFileAnalyzer.
+var _ analyzer.SourceFileAnalyzer[*Analysis] = (*Analyzer)(nil)
 
 // Analyzer computes cyclomatic and cognitive complexity.
 type Analyzer struct {
@@ -41,21 +47,80 @@ func (a *Analyzer) AnalyzeFile(path string) (*FileResult, error) {
 	return analyzeFileComplexity(a.parser, path)
 }
 
-// AnalyzeProject analyzes all files in a project using parallel processing.
-func (a *Analyzer) AnalyzeProject(files []string) (*Analysis, error) {
-	return a.AnalyzeProjectWithProgress(files, nil)
+// ContentSource is an alias for analyzer.ContentSource.
+type ContentSource = analyzer.ContentSource
+
+// AnalyzeFileFromSource analyzes complexity for a file from a ContentSource.
+func (a *Analyzer) AnalyzeFileFromSource(src ContentSource, path string) (*FileResult, error) {
+	content, err := src.Read(path)
+	if err != nil {
+		return nil, err
+	}
+
+	lang := parser.DetectLanguage(path)
+	if lang == parser.LangUnknown {
+		return nil, fmt.Errorf("unsupported language for file: %s", path)
+	}
+
+	result, err := a.parser.Parse(content, lang, path)
+	if err != nil {
+		return nil, err
+	}
+
+	return analyzeParseResult(result), nil
 }
 
-// AnalyzeProjectWithProgress analyzes all files with optional progress callback.
-func (a *Analyzer) AnalyzeProjectWithProgress(files []string, onProgress fileproc.ProgressFunc) (*Analysis, error) {
-	results := fileproc.MapFilesWithSizeLimit(files, a.maxFileSize, func(psr *parser.Parser, path string) (FileResult, error) {
-		fc, err := analyzeFileComplexity(psr, path)
+// analyzeParseResult analyzes a parsed result (shared between filesystem and source methods).
+func analyzeParseResult(result *parser.ParseResult) *FileResult {
+	fc := &FileResult{
+		Path:      result.Path,
+		Language:  string(result.Language),
+		Functions: make([]FunctionResult, 0),
+	}
+
+	functions := parser.GetFunctions(result)
+	for _, fn := range functions {
+		fnComplexity := analyzeFunctionComplexity(fn, result)
+		fc.Functions = append(fc.Functions, fnComplexity)
+		fc.TotalCyclomatic += fnComplexity.Metrics.Cyclomatic
+		fc.TotalCognitive += fnComplexity.Metrics.Cognitive
+	}
+
+	if len(fc.Functions) > 0 {
+		fc.AvgCyclomatic = float64(fc.TotalCyclomatic) / float64(len(fc.Functions))
+		fc.AvgCognitive = float64(fc.TotalCognitive) / float64(len(fc.Functions))
+	}
+
+	return fc
+}
+
+// Analyze analyzes all files from a ContentSource using parallel processing.
+// Progress is tracked via context using analyzer.WithTracker.
+func (a *Analyzer) Analyze(ctx context.Context, files []string, src ContentSource) (*Analysis, error) {
+	results := fileproc.MapSourceFiles(ctx, files, src, func(psr *parser.Parser, path string, content []byte) (FileResult, error) {
+		lang := parser.DetectLanguage(path)
+		if lang == parser.LangUnknown {
+			return FileResult{}, fmt.Errorf("unsupported language: %s", path)
+		}
+
+		result, err := psr.Parse(content, lang, path)
 		if err != nil {
 			return FileResult{}, err
 		}
-		return *fc, nil
-	}, onProgress, nil)
 
+		return *analyzeParseResult(result), nil
+	})
+
+	return buildAnalysis(results), nil
+}
+
+// Close releases analyzer resources.
+func (a *Analyzer) Close() {
+	a.parser.Close()
+}
+
+// buildAnalysis constructs an Analysis from file results (shared between methods).
+func buildAnalysis(results []FileResult) *Analysis {
 	analysis := &Analysis{Files: results}
 
 	var totalCyc, totalCog uint32
@@ -105,12 +170,7 @@ func (a *Analyzer) AnalyzeProjectWithProgress(files []string, onProgress filepro
 		analysis.Summary.P95Cognitive = percentile(allCognitive, 95)
 	}
 
-	return analysis, nil
-}
-
-// Close releases analyzer resources.
-func (a *Analyzer) Close() {
-	a.parser.Close()
+	return analysis
 }
 
 // CountDecisionPoints counts branching statements for cyclomatic complexity.
@@ -163,26 +223,7 @@ func analyzeFileComplexity(psr *parser.Parser, path string) (*FileResult, error)
 		return nil, err
 	}
 
-	fc := &FileResult{
-		Path:      path,
-		Language:  string(result.Language),
-		Functions: make([]FunctionResult, 0),
-	}
-
-	functions := parser.GetFunctions(result)
-	for _, fn := range functions {
-		fnComplexity := analyzeFunctionComplexity(fn, result)
-		fc.Functions = append(fc.Functions, fnComplexity)
-		fc.TotalCyclomatic += fnComplexity.Metrics.Cyclomatic
-		fc.TotalCognitive += fnComplexity.Metrics.Cognitive
-	}
-
-	if len(fc.Functions) > 0 {
-		fc.AvgCyclomatic = float64(fc.TotalCyclomatic) / float64(len(fc.Functions))
-		fc.AvgCognitive = float64(fc.TotalCognitive) / float64(len(fc.Functions))
-	}
-
-	return fc, nil
+	return analyzeParseResult(result), nil
 }
 
 // analyzeFunctionComplexity computes complexity metrics for a single function.

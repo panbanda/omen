@@ -8,8 +8,12 @@ import (
 	"time"
 
 	"github.com/panbanda/omen/internal/vcs"
+	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/stats"
 )
+
+// Compile-time check that Analyzer implements RepoAnalyzer interface.
+var _ analyzer.RepoAnalyzer[*Analysis] = (*Analyzer)(nil)
 
 // DefaultGitTimeout is the default timeout for git operations.
 const DefaultGitTimeout = 5 * time.Minute
@@ -119,15 +123,10 @@ func isAutomatedCommit(message string) bool {
 	return false
 }
 
-// AnalyzeRepo performs change-level defect prediction on repository commits.
-func (a *Analyzer) AnalyzeRepo(repoPath string) (*Analysis, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), DefaultGitTimeout)
-	defer cancel()
-	return a.AnalyzeRepoWithContext(ctx, repoPath)
-}
-
-// AnalyzeRepoWithContext performs change analysis with context for cancellation/timeout.
-func (a *Analyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath string) (*Analysis, error) {
+// Analyze performs change-level defect prediction on repository commits.
+// If files is nil or empty, analyzes all commits in the repository.
+// If files is provided, filters commits to only those that touched the specified files.
+func (a *Analyzer) Analyze(ctx context.Context, repoPath string, files []string) (*Analysis, error) {
 	repo, err := a.opener.PlainOpen(repoPath)
 	if err != nil {
 		return nil, err
@@ -151,6 +150,11 @@ func (a *Analyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath string) 
 	rawCommits, err := a.collectCommitData(ctx, logIter)
 	if err != nil {
 		return nil, err
+	}
+
+	// Filter commits by files if specified
+	if len(files) > 0 {
+		rawCommits = a.filterCommitsByFiles(rawCommits, files)
 	}
 
 	// Reverse to process oldest-first for correct state-dependent metrics
@@ -182,58 +186,86 @@ func truncateMessage(message string) string {
 	return strings.TrimSpace(message)
 }
 
-// calculateNormalizationStats computes min-max values for normalization.
+// calculateNormalizationStats computes 95th percentile values for normalization.
+// Using percentiles instead of max values makes the normalization robust to outliers.
 func calculateNormalizationStats(commits []CommitFeatures) NormalizationStats {
-	stats := NormalizationStats{}
+	if len(commits) == 0 {
+		return NormalizationStats{
+			MaxLinesAdded:       1,
+			MaxLinesDeleted:     1,
+			MaxNumFiles:         1,
+			MaxUniqueChanges:    1,
+			MaxNumDevelopers:    1,
+			MaxAuthorExperience: 1,
+			MaxEntropy:          1,
+		}
+	}
 
-	for _, c := range commits {
-		if c.LinesAdded > stats.MaxLinesAdded {
-			stats.MaxLinesAdded = c.LinesAdded
-		}
-		if c.LinesDeleted > stats.MaxLinesDeleted {
-			stats.MaxLinesDeleted = c.LinesDeleted
-		}
-		if c.NumFiles > stats.MaxNumFiles {
-			stats.MaxNumFiles = c.NumFiles
-		}
-		if c.UniqueChanges > stats.MaxUniqueChanges {
-			stats.MaxUniqueChanges = c.UniqueChanges
-		}
-		if c.NumDevelopers > stats.MaxNumDevelopers {
-			stats.MaxNumDevelopers = c.NumDevelopers
-		}
-		if c.AuthorExperience > stats.MaxAuthorExperience {
-			stats.MaxAuthorExperience = c.AuthorExperience
-		}
-		if c.Entropy > stats.MaxEntropy {
-			stats.MaxEntropy = c.Entropy
-		}
+	// Collect values for each metric
+	linesAdded := make([]float64, len(commits))
+	linesDeleted := make([]float64, len(commits))
+	numFiles := make([]float64, len(commits))
+	uniqueChanges := make([]float64, len(commits))
+	numDevelopers := make([]float64, len(commits))
+	authorExperience := make([]float64, len(commits))
+	entropy := make([]float64, len(commits))
+
+	for i, c := range commits {
+		linesAdded[i] = float64(c.LinesAdded)
+		linesDeleted[i] = float64(c.LinesDeleted)
+		numFiles[i] = float64(c.NumFiles)
+		uniqueChanges[i] = float64(c.UniqueChanges)
+		numDevelopers[i] = float64(c.NumDevelopers)
+		authorExperience[i] = float64(c.AuthorExperience)
+		entropy[i] = c.Entropy
+	}
+
+	// Sort slices for percentile calculation
+	sort.Float64s(linesAdded)
+	sort.Float64s(linesDeleted)
+	sort.Float64s(numFiles)
+	sort.Float64s(uniqueChanges)
+	sort.Float64s(numDevelopers)
+	sort.Float64s(authorExperience)
+	sort.Float64s(entropy)
+
+	// Use 95th percentile to exclude outliers
+	const p = 95
+
+	result := NormalizationStats{
+		MaxLinesAdded:       int(stats.Percentile(linesAdded, p)),
+		MaxLinesDeleted:     int(stats.Percentile(linesDeleted, p)),
+		MaxNumFiles:         int(stats.Percentile(numFiles, p)),
+		MaxUniqueChanges:    int(stats.Percentile(uniqueChanges, p)),
+		MaxNumDevelopers:    int(stats.Percentile(numDevelopers, p)),
+		MaxAuthorExperience: int(stats.Percentile(authorExperience, p)),
+		MaxEntropy:          stats.Percentile(entropy, p),
 	}
 
 	// Ensure no zero max values to avoid division by zero
-	if stats.MaxLinesAdded == 0 {
-		stats.MaxLinesAdded = 1
+	if result.MaxLinesAdded == 0 {
+		result.MaxLinesAdded = 1
 	}
-	if stats.MaxLinesDeleted == 0 {
-		stats.MaxLinesDeleted = 1
+	if result.MaxLinesDeleted == 0 {
+		result.MaxLinesDeleted = 1
 	}
-	if stats.MaxNumFiles == 0 {
-		stats.MaxNumFiles = 1
+	if result.MaxNumFiles == 0 {
+		result.MaxNumFiles = 1
 	}
-	if stats.MaxUniqueChanges == 0 {
-		stats.MaxUniqueChanges = 1
+	if result.MaxUniqueChanges == 0 {
+		result.MaxUniqueChanges = 1
 	}
-	if stats.MaxNumDevelopers == 0 {
-		stats.MaxNumDevelopers = 1
+	if result.MaxNumDevelopers == 0 {
+		result.MaxNumDevelopers = 1
 	}
-	if stats.MaxAuthorExperience == 0 {
-		stats.MaxAuthorExperience = 1
+	if result.MaxAuthorExperience == 0 {
+		result.MaxAuthorExperience = 1
 	}
-	if stats.MaxEntropy == 0 {
-		stats.MaxEntropy = 1
+	if result.MaxEntropy == 0 {
+		result.MaxEntropy = 1
 	}
 
-	return stats
+	return result
 }
 
 // Close releases analyzer resources.
@@ -350,6 +382,25 @@ func (a *Analyzer) extractCommitFeatures(commit vcs.Commit) (rawCommit, error) {
 	}, nil
 }
 
+// filterCommitsByFiles filters commits to only those that touched the specified files.
+func (a *Analyzer) filterCommitsByFiles(commits []rawCommit, files []string) []rawCommit {
+	fileSet := make(map[string]bool, len(files))
+	for _, f := range files {
+		fileSet[f] = true
+	}
+
+	filtered := make([]rawCommit, 0, len(commits))
+	for _, commit := range commits {
+		for _, modifiedFile := range commit.features.FilesModified {
+			if fileSet[modifiedFile] {
+				filtered = append(filtered, commit)
+				break
+			}
+		}
+	}
+	return filtered
+}
+
 // reverseCommits reverses the commit slice in place for chronological processing.
 // Git log returns newest-first; we need oldest-first for state-dependent metrics.
 func reverseCommits(commits []rawCommit) {
@@ -406,6 +457,8 @@ func computeStateDependentFeatures(rawCommits []rawCommit) []CommitFeatures {
 }
 
 // buildAnalysis constructs the analysis result from processed commits.
+// Risk levels are assigned using percentile-based thresholds following
+// JIT defect prediction best practices (top 5% = high, top 20% = medium).
 func (a *Analyzer) buildAnalysis(commits []CommitFeatures) *Analysis {
 	analysis := NewAnalysis()
 	analysis.PeriodDays = a.days
@@ -417,14 +470,33 @@ func (a *Analyzer) buildAnalysis(commits []CommitFeatures) *Analysis {
 
 	analysis.Normalization = calculateNormalizationStats(commits)
 
-	var totalScore float64
-	scores := make([]float64, 0, len(commits))
+	// First pass: compute all risk scores
+	scores := make([]float64, len(commits))
+	for i, features := range commits {
+		scores[i] = CalculateRisk(features, a.weights, analysis.Normalization)
+		if features.IsFix {
+			analysis.Summary.BugFixCount++
+		}
+	}
 
-	for _, features := range commits {
-		risk := a.calculateCommitRisk(features, analysis.Normalization)
+	// Calculate percentile-based thresholds
+	sortedScores := make([]float64, len(scores))
+	copy(sortedScores, scores)
+	sort.Float64s(sortedScores)
+
+	analysis.RiskThresholds = RiskThresholds{
+		HighThreshold:   stats.Percentile(sortedScores, HighRiskPercentile),
+		MediumThreshold: stats.Percentile(sortedScores, MediumRiskPercentile),
+	}
+
+	// Second pass: assign risk levels using computed thresholds
+	var totalScore float64
+	for i, features := range commits {
+		score := scores[i]
+		totalScore += score
+
+		risk := a.buildCommitRisk(features, score, analysis.Normalization, analysis.RiskThresholds)
 		analysis.Commits = append(analysis.Commits, risk)
-		totalScore += risk.RiskScore
-		scores = append(scores, risk.RiskScore)
 
 		switch risk.RiskLevel {
 		case RiskLevelHigh:
@@ -433,10 +505,6 @@ func (a *Analyzer) buildAnalysis(commits []CommitFeatures) *Analysis {
 			analysis.Summary.MediumRiskCount++
 		case RiskLevelLow:
 			analysis.Summary.LowRiskCount++
-		}
-
-		if features.IsFix {
-			analysis.Summary.BugFixCount++
 		}
 	}
 
@@ -448,18 +516,15 @@ func (a *Analyzer) buildAnalysis(commits []CommitFeatures) *Analysis {
 	// Calculate summary statistics
 	analysis.Summary.TotalCommits = len(commits)
 	analysis.Summary.AvgRiskScore = totalScore / float64(len(commits))
-
-	sort.Float64s(scores)
-	analysis.Summary.P50RiskScore = stats.Percentile(scores, 50)
-	analysis.Summary.P95RiskScore = stats.Percentile(scores, 95)
+	analysis.Summary.P50RiskScore = stats.Percentile(sortedScores, 50)
+	analysis.Summary.P95RiskScore = stats.Percentile(sortedScores, 95)
 
 	return analysis
 }
 
-// calculateCommitRisk computes risk score and contributing factors for a single commit.
-func (a *Analyzer) calculateCommitRisk(features CommitFeatures, norm NormalizationStats) CommitRisk {
-	score := CalculateRisk(features, a.weights, norm)
-	level := GetRiskLevel(score)
+// buildCommitRisk constructs a CommitRisk from pre-computed score and thresholds.
+func (a *Analyzer) buildCommitRisk(features CommitFeatures, score float64, norm NormalizationStats, thresholds RiskThresholds) CommitRisk {
+	level := GetRiskLevel(score, thresholds)
 
 	factors := map[string]float64{
 		"fix":            boolToFloat(features.IsFix) * a.weights.FIX,

@@ -82,3 +82,25 @@ func ListFiles(t *testing.T, root string) []string {
 	}
 	return files
 }
+
+// RepoRoot finds the repository root by searching for .git directory.
+// Starts from the current working directory and walks up.
+func RepoRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd error: %v", err)
+	}
+
+	for {
+		gitPath := filepath.Join(dir, ".git")
+		if info, err := os.Stat(gitPath); err == nil && info.IsDir() {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("could not find repository root (.git directory)")
+		}
+		dir = parent
+	}
+}

@@ -1,9 +1,12 @@
 package graph
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/panbanda/omen/pkg/source"
 )
 
 func TestNew(t *testing.T) {
@@ -35,7 +38,7 @@ func TestNewWithOptions(t *testing.T) {
 	a.Close()
 }
 
-func TestAnalyzeProject_FileScope(t *testing.T) {
+func TestAnalyze_FileScope(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	file1 := filepath.Join(tmpDir, "a.go")
@@ -65,9 +68,9 @@ func helper() int {
 	a := New(WithScope(ScopeFile))
 	defer a.Close()
 
-	graph, err := a.AnalyzeProject([]string{file1, file2})
+	graph, err := a.Analyze(context.Background(), []string{file1, file2}, source.NewFilesystem())
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	if len(graph.Nodes) != 2 {
@@ -75,7 +78,7 @@ func helper() int {
 	}
 }
 
-func TestAnalyzeProject_FunctionScope(t *testing.T) {
+func TestAnalyze_FunctionScope(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	file1 := filepath.Join(tmpDir, "main.go")
@@ -96,9 +99,9 @@ func helper() int {
 	a := New(WithScope(ScopeFunction))
 	defer a.Close()
 
-	graph, err := a.AnalyzeProject([]string{file1})
+	graph, err := a.Analyze(context.Background(), []string{file1}, source.NewFilesystem())
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	if len(graph.Nodes) < 2 {
@@ -470,7 +473,7 @@ func TestEscapeMermaidLabel(t *testing.T) {
 	}
 }
 
-func TestAnalyzeProject_Ruby(t *testing.T) {
+func TestAnalyze_Ruby(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "test.rb")
 
@@ -495,9 +498,9 @@ Dog.new.speak
 	a := New(WithScope(ScopeModule))
 	defer a.Close()
 
-	graph, err := a.AnalyzeProject([]string{path})
+	graph, err := a.Analyze(context.Background(), []string{path}, source.NewFilesystem())
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	if graph == nil {
@@ -505,7 +508,7 @@ Dog.new.speak
 	}
 }
 
-func TestAnalyzeProject_Python(t *testing.T) {
+func TestAnalyze_Python(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "test.py")
 
@@ -527,9 +530,9 @@ d.speak()
 	a := New(WithScope(ScopeModule))
 	defer a.Close()
 
-	graph, err := a.AnalyzeProject([]string{path})
+	graph, err := a.Analyze(context.Background(), []string{path}, source.NewFilesystem())
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	if graph == nil {
@@ -537,7 +540,7 @@ d.speak()
 	}
 }
 
-func TestAnalyzeProject_TypeScript(t *testing.T) {
+func TestAnalyze_TypeScript(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "test.ts")
 
@@ -558,9 +561,9 @@ export const instance = new MyClass();
 	a := New(WithScope(ScopeFile))
 	defer a.Close()
 
-	graph, err := a.AnalyzeProject([]string{path})
+	graph, err := a.Analyze(context.Background(), []string{path}, source.NewFilesystem())
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	if graph == nil {
@@ -568,7 +571,7 @@ export const instance = new MyClass();
 	}
 }
 
-func TestAnalyzeProject_Java(t *testing.T) {
+func TestAnalyze_Java(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "Test.java")
 
@@ -591,9 +594,9 @@ public class Test {
 	a := New(WithScope(ScopeFile))
 	defer a.Close()
 
-	graph, err := a.AnalyzeProject([]string{path})
+	graph, err := a.Analyze(context.Background(), []string{path}, source.NewFilesystem())
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	if graph == nil {
@@ -601,7 +604,7 @@ public class Test {
 	}
 }
 
-func TestAnalyzeProject_Rust(t *testing.T) {
+func TestAnalyze_Rust(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "test.rs")
 
@@ -622,9 +625,9 @@ fn helper() {
 	a := New(WithScope(ScopeFile))
 	defer a.Close()
 
-	graph, err := a.AnalyzeProject([]string{path})
+	graph, err := a.Analyze(context.Background(), []string{path}, source.NewFilesystem())
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	if graph == nil {
@@ -726,13 +729,13 @@ func TestCalculateMetrics_LargeGraph(t *testing.T) {
 	}
 }
 
-func TestAnalyzeProject_EmptyFiles(t *testing.T) {
+func TestAnalyze_EmptyFiles(t *testing.T) {
 	a := New()
 	defer a.Close()
 
-	graph, err := a.AnalyzeProject([]string{})
+	graph, err := a.Analyze(context.Background(), []string{}, source.NewFilesystem())
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	if len(graph.Nodes) != 0 {

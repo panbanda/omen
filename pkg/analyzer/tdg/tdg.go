@@ -1,12 +1,13 @@
 package tdg
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/panbanda/omen/internal/fileproc"
+	"github.com/panbanda/omen/pkg/analyzer"
 )
 
 // Analyzer implements TDG analysis using heuristic methods.
@@ -14,6 +15,9 @@ type Analyzer struct {
 	config      Config
 	maxFileSize int64
 }
+
+// Compile-time check that Analyzer implements SourceFileAnalyzer.
+var _ analyzer.SourceFileAnalyzer[*Analysis] = (*Analyzer)(nil)
 
 // Option is a functional option for configuring Analyzer.
 type Option func(*Analyzer)
@@ -95,28 +99,11 @@ func (a *Analyzer) AnalyzeSource(source string, language Language, filePath stri
 	return score, nil
 }
 
-// AnalyzeProject analyzes all supported files in a directory.
-func (a *Analyzer) AnalyzeProject(dir string) (ProjectScore, error) {
-	return a.AnalyzeProjectWithProgress(dir, nil)
-}
+// filesystemSource reads files from the filesystem.
+type filesystemSource struct{}
 
-// AnalyzeProjectWithProgress analyzes all supported files with optional progress callback.
-func (a *Analyzer) AnalyzeProjectWithProgress(dir string, onProgress func()) (ProjectScore, error) {
-	files, err := a.discoverFiles(dir)
-	if err != nil {
-		return ProjectScore{}, err
-	}
-
-	return a.analyzeFiles(files, onProgress), nil
-}
-
-// analyzeFiles processes files in parallel and returns aggregated project score.
-func (a *Analyzer) analyzeFiles(files []string, onProgress func()) ProjectScore {
-	scores := fileproc.ForEachFileWithProgress(files, func(path string) (Score, error) {
-		return a.AnalyzeFile(path)
-	}, onProgress)
-
-	return AggregateProjectScore(scores)
+func (f filesystemSource) Read(path string) ([]byte, error) {
+	return os.ReadFile(path)
 }
 
 // Compare compares two files or directories.
@@ -132,9 +119,15 @@ func (a *Analyzer) Compare(path1, path2 string) (Comparison, error) {
 	}
 
 	var score1, score2 Score
+	ctx := context.Background()
+	src := filesystemSource{}
 
 	if info1.IsDir() {
-		project, err := a.AnalyzeProject(path1)
+		files, err := a.discoverFiles(path1)
+		if err != nil {
+			return Comparison{}, err
+		}
+		project, err := a.Analyze(ctx, files, src)
 		if err != nil {
 			return Comparison{}, err
 		}
@@ -147,7 +140,11 @@ func (a *Analyzer) Compare(path1, path2 string) (Comparison, error) {
 	}
 
 	if info2.IsDir() {
-		project, err := a.AnalyzeProject(path2)
+		files, err := a.discoverFiles(path2)
+		if err != nil {
+			return Comparison{}, err
+		}
+		project, err := a.Analyze(ctx, files, src)
 		if err != nil {
 			return Comparison{}, err
 		}
@@ -405,23 +402,51 @@ func (a *Analyzer) estimateDuplicationRatio(source string) float32 {
 }
 
 // detectCriticalDefects detects critical code defects.
+// Returns the count but no longer auto-fails - critical defects now apply
+// a penalty rather than zeroing the score.
 func (a *Analyzer) detectCriticalDefects(source string, language Language) (int, bool) {
 	count := 0
 
-	switch language {
-	case LanguageRust:
-		// Detect .unwrap() without context
-		count += strings.Count(source, ".unwrap()")
-		// Detect panic! macros
-		count += strings.Count(source, "panic!")
-	case LanguageGo:
-		// Detect naked panics in non-test code
-		if !strings.Contains(source, "func Test") {
-			count += strings.Count(source, "panic(")
+	// Count critical defects but don't use them for auto-fail
+	// String literals that contain "panic(" etc. should not be counted
+	lines := strings.Split(source, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// Skip comments and string literals
+		if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") {
+			continue
+		}
+		// Skip lines that are clearly string literals containing the pattern
+		if strings.Contains(trimmed, `"panic(`) || strings.Contains(trimmed, `'panic(`) {
+			continue
+		}
+		if strings.Contains(trimmed, `".unwrap()`) || strings.Contains(trimmed, `'.unwrap()`) {
+			continue
+		}
+
+		switch language {
+		case LanguageRust:
+			// Detect .unwrap() without context (actual calls, not in strings)
+			if strings.Contains(trimmed, ".unwrap()") {
+				count++
+			}
+			// Detect panic! macros
+			if strings.Contains(trimmed, "panic!") {
+				count++
+			}
+		case LanguageGo:
+			// Detect naked panics in non-test code (actual calls)
+			if !strings.Contains(source, "func Test") {
+				if strings.Contains(trimmed, "panic(") {
+					count++
+				}
+			}
 		}
 	}
 
-	return count, count > 0
+	// Return count but never auto-fail (HasCriticalDefects always false)
+	// Instead, critical defects contribute to complexity penalties
+	return count, false
 }
 
 // discoverFiles finds all analyzable files in a directory.
@@ -493,6 +518,41 @@ func (a *Analyzer) shouldAnalyzeFile(path string) bool {
 		".kts":   true,
 	}
 	return analyzableExts[ext]
+}
+
+// ContentSource is an alias for analyzer.ContentSource.
+type ContentSource = analyzer.ContentSource
+
+// Analyze processes files from a ContentSource and returns TDG analysis.
+func (a *Analyzer) Analyze(ctx context.Context, files []string, src ContentSource) (*Analysis, error) {
+	var scores []Score
+
+	for _, path := range files {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		content, err := src.Read(path)
+		if err != nil {
+			continue
+		}
+
+		if a.maxFileSize > 0 && int64(len(content)) > a.maxFileSize {
+			continue
+		}
+
+		language := LanguageFromExtension(path)
+		score, err := a.AnalyzeSource(string(content), language, path)
+		if err != nil {
+			continue
+		}
+		scores = append(scores, score)
+	}
+
+	analysis := AggregateProjectScore(scores)
+	return &analysis, nil
 }
 
 // Close releases any resources (implements interface compatibility).

@@ -1,9 +1,12 @@
 package complexity
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/panbanda/omen/pkg/source"
 )
 
 func TestNew(t *testing.T) {
@@ -185,7 +188,7 @@ function withIf(x: number): number {
 	}
 }
 
-func TestAnalyzeProject(t *testing.T) {
+func TestAnalyze(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create two test files
@@ -214,9 +217,9 @@ func b1() int { return 2 }
 	a := New()
 	defer a.Close()
 
-	analysis, err := a.AnalyzeProject([]string{file1, file2})
+	analysis, err := a.Analyze(context.Background(), []string{file1, file2}, source.NewFilesystem())
 	if err != nil {
-		t.Fatalf("AnalyzeProject failed: %v", err)
+		t.Fatalf("Analyze failed: %v", err)
 	}
 
 	if analysis.Summary.TotalFiles != 2 {

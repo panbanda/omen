@@ -6,6 +6,9 @@ import (
 	"strings"
 )
 
+// Analysis is an alias for ProjectScore to implement FileAnalyzer interface.
+type Analysis = ProjectScore
+
 // Grade represents a letter grade from A+ to F (PMAT-compatible).
 // Higher grades indicate better code quality.
 type Grade string
@@ -24,28 +27,28 @@ const (
 	GradeF      Grade = "F"
 )
 
-// GradeFromScore converts a 0-100 score to a letter grade.
+// GradeFromScore converts a 0-100 score to a letter grade using standard US academic grading.
 func GradeFromScore(score float32) Grade {
 	switch {
-	case score >= 95.0:
+	case score >= 97.0:
 		return GradeAPlus
-	case score >= 90.0:
+	case score >= 93.0:
 		return GradeA
-	case score >= 85.0:
+	case score >= 90.0:
 		return GradeAMinus
-	case score >= 80.0:
+	case score >= 87.0:
 		return GradeBPlus
-	case score >= 75.0:
+	case score >= 83.0:
 		return GradeB
-	case score >= 70.0:
+	case score >= 80.0:
 		return GradeBMinus
-	case score >= 65.0:
+	case score >= 77.0:
 		return GradeCPlus
-	case score >= 60.0:
+	case score >= 73.0:
 		return GradeC
-	case score >= 55.0:
+	case score >= 70.0:
 		return GradeCMinus
-	case score >= 50.0:
+	case score >= 60.0:
 		return GradeD
 	default:
 		return GradeF

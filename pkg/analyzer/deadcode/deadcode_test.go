@@ -1,6 +1,7 @@
 package deadcode
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -154,7 +155,7 @@ func unused() int {
 	a := New(WithConfidence(0.5)) // Lower confidence to catch more
 	defer a.Close()
 
-	analysis, err := a.AnalyzeProject([]string{file1, file2})
+	analysis, err := a.Analyze(context.Background(), []string{file1, file2})
 	if err != nil {
 		t.Fatalf("AnalyzeProject failed: %v", err)
 	}
@@ -450,7 +451,7 @@ func unused() {}
 	a := New(WithSkipCallGraph(), WithConfidence(0.5))
 	defer a.Close()
 
-	analysis, err := a.AnalyzeProject([]string{file1})
+	analysis, err := a.Analyze(context.Background(), []string{file1})
 	if err != nil {
 		t.Fatalf("AnalyzeProject failed: %v", err)
 	}
@@ -1014,7 +1015,7 @@ func TestAnalyzeProject_EmptyFiles(t *testing.T) {
 	a := New()
 	defer a.Close()
 
-	analysis, err := a.AnalyzeProject([]string{})
+	analysis, err := a.Analyze(context.Background(), []string{})
 	if err != nil {
 		t.Fatalf("AnalyzeProject failed: %v", err)
 	}

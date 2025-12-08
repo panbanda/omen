@@ -4,9 +4,9 @@ import (
 	"errors"
 	"time"
 
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
 // ErrDirtyWorkingDir is returned when the working directory has uncommitted changes.
@@ -118,6 +118,24 @@ func CheckoutCommit(repoPath, ref string) error {
 	return wt.Checkout(&git.CheckoutOptions{
 		Hash: *hash,
 	})
+}
+
+// GetTreeAtCommit returns the tree for a specific commit SHA.
+// This enables reading files from historical commits without checking out.
+func GetTreeAtCommit(repoPath string, sha string) (Tree, error) {
+	opener := NewGitOpener()
+	repo, err := opener.PlainOpen(repoPath)
+	if err != nil {
+		return nil, err
+	}
+
+	hash := plumbing.NewHash(sha)
+	commit, err := repo.CommitObject(hash)
+	if err != nil {
+		return nil, err
+	}
+
+	return commit.Tree()
 }
 
 // FindCommitsAtIntervals finds commits at regular intervals going back from now.

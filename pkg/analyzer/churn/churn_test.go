@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
 func TestNew(t *testing.T) {
@@ -163,7 +163,7 @@ func TestAnalyzer_AnalyzeRepo(t *testing.T) {
 			repoPath := tt.setupRepo(t, tmpDir)
 
 			analyzer := New(WithDays(tt.days))
-			result, err := analyzer.AnalyzeRepo(context.Background(), repoPath)
+			result, err := analyzer.Analyze(context.Background(), repoPath, nil)
 
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("AnalyzeRepo() error = %v, wantErr %v", err, tt.wantErr)
@@ -216,7 +216,7 @@ func TestAnalyzer_AnalyzeRepo_ChurnScores(t *testing.T) {
 	}
 
 	analyzer := New(WithDays(90))
-	result, err := analyzer.AnalyzeRepo(context.Background(), repoPath)
+	result, err := analyzer.Analyze(context.Background(), repoPath, nil)
 	if err != nil {
 		t.Fatalf("AnalyzeRepo() error = %v", err)
 	}
@@ -256,7 +256,7 @@ func TestAnalyzer_AnalyzeRepo_DateFiltering(t *testing.T) {
 	writeFileAndCommit(t, repo, repoPath, "recent.go", "package recent\n\nfunc New() {}\n", "Another recent change")
 
 	analyzer := New(WithDays(1))
-	result, err := analyzer.AnalyzeRepo(context.Background(), repoPath)
+	result, err := analyzer.Analyze(context.Background(), repoPath, nil)
 	if err != nil {
 		t.Fatalf("AnalyzeRepo() error = %v", err)
 	}
@@ -283,7 +283,7 @@ func TestAnalyzer_AnalyzeRepo_MultipleAuthors(t *testing.T) {
 	writeFileAndCommitWithAuthor(t, repo, repoPath, "shared.go", "package shared\n\nfunc A() {}\nfunc B() {}\n", "Author 3", "Charlie")
 
 	analyzer := New(WithDays(90))
-	result, err := analyzer.AnalyzeRepo(context.Background(), repoPath)
+	result, err := analyzer.Analyze(context.Background(), repoPath, nil)
 	if err != nil {
 		t.Fatalf("AnalyzeRepo() error = %v", err)
 	}
@@ -326,7 +326,7 @@ func TestAnalyzer_AnalyzeRepo_LineCounts(t *testing.T) {
 	writeFileAndCommit(t, repo, repoPath, "test.go", "package test\n\nfunc Sub() {\n}\n", "Replace with different function")
 
 	analyzer := New(WithDays(90))
-	result, err := analyzer.AnalyzeRepo(context.Background(), repoPath)
+	result, err := analyzer.Analyze(context.Background(), repoPath, nil)
 	if err != nil {
 		t.Fatalf("AnalyzeRepo() error = %v", err)
 	}
@@ -367,7 +367,7 @@ func TestAnalyzer_AnalyzeRepo_SummaryStatistics(t *testing.T) {
 	}
 
 	analyzer := New(WithDays(90))
-	result, err := analyzer.AnalyzeRepo(context.Background(), repoPath)
+	result, err := analyzer.Analyze(context.Background(), repoPath, nil)
 	if err != nil {
 		t.Fatalf("AnalyzeRepo() error = %v", err)
 	}
@@ -444,7 +444,7 @@ func TestAnalyzer_AnalyzeFiles(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			analyzer := New(WithDays(90))
-			result, err := analyzer.AnalyzeFiles(context.Background(), repoPath, tt.files)
+			result, err := analyzer.Analyze(context.Background(), repoPath, tt.files)
 			if err != nil {
 				t.Fatalf("AnalyzeFiles() error = %v", err)
 			}
@@ -478,7 +478,7 @@ func TestAnalyzer_AnalyzeRepo_FirstLastCommit(t *testing.T) {
 	writeFileAndCommit(t, repo, repoPath, "test.go", "package test\n\nfunc A() {}\nfunc B() {}\n", "Third commit")
 
 	analyzer := New(WithDays(90))
-	result, err := analyzer.AnalyzeRepo(context.Background(), repoPath)
+	result, err := analyzer.Analyze(context.Background(), repoPath, nil)
 	if err != nil {
 		t.Fatalf("AnalyzeRepo() error = %v", err)
 	}

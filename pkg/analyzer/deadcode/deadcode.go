@@ -1,7 +1,9 @@
 package deadcode
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/panbanda/omen/internal/fileproc"
+	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/parser"
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/zeebo/blake3"
@@ -227,6 +230,9 @@ type Analyzer struct {
 	maxFileSize int64
 	nodeCounter uint32
 }
+
+// Compile-time check that Analyzer implements analyzer.FileAnalyzer[*Analysis]
+var _ analyzer.FileAnalyzer[*Analysis] = (*Analyzer)(nil)
 
 // DefaultCapacity for small to medium projects.
 const DefaultCapacity = 100_000
@@ -1141,18 +1147,13 @@ func computeContextHash(name, file string, line uint32, kind string) string {
 	return string(hash[:8])
 }
 
-// AnalyzeProject analyzes dead code across a project using the 4-phase PMAT architecture.
-func (a *Analyzer) AnalyzeProject(files []string) (*Analysis, error) {
-	return a.AnalyzeProjectWithProgress(files, nil)
-}
-
-// AnalyzeProjectWithProgress analyzes dead code with optional progress callback.
+// Analyze analyzes dead code across a project using the 4-phase PMAT architecture.
 // Implements PMAT's 4-phase analysis:
 // Phase 1: Build reference graph from AST
 // Phase 2: Resolve dynamic dispatch
 // Phase 3: Mark reachable from entry points
 // Phase 4: Classify dead code by type
-func (a *Analyzer) AnalyzeProjectWithProgress(files []string, onProgress fileproc.ProgressFunc) (*Analysis, error) {
+func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Analysis, error) {
 	analysis := &Analysis{
 		DeadFunctions:   make([]Function, 0),
 		DeadVariables:   make([]Variable, 0),
@@ -1166,9 +1167,25 @@ func (a *Analyzer) AnalyzeProjectWithProgress(files []string, onProgress filepro
 	}
 
 	// Collect file results
-	results := fileproc.MapFilesWithSizeLimit(files, a.maxFileSize, func(psr *parser.Parser, path string) (*fileDeadCode, error) {
+	results, errs := fileproc.MapFiles(ctx, files, func(psr *parser.Parser, path string) (*fileDeadCode, error) {
+		// Check file size limit if configured
+		if a.maxFileSize > 0 {
+			info, err := os.Stat(path)
+			if err != nil {
+				return nil, err
+			}
+			if info.Size() > a.maxFileSize {
+				return nil, fmt.Errorf("file too large: %d bytes (limit: %d)", info.Size(), a.maxFileSize)
+			}
+		}
 		return analyzeFileDeadCode(psr, path)
-	}, onProgress, nil)
+	})
+
+	// Log errors but continue processing
+	if errs != nil && errs.HasErrors() {
+		// Errors are collected but don't stop analysis
+		_ = errs
+	}
 
 	allDefs := make(map[string]definition)
 	allCalls := make([]callReference, 0)

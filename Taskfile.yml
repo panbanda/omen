@@ -6,6 +6,11 @@ tasks:
     cmds:
       - lefthook install
 
+  build:
+    desc: Build the omen CLI
+    cmds:
+      - go build -o omen ./cmd/omen
+
   tidy:
     desc: Format code and tidy dependencies
     cmds:
@@ -20,6 +25,12 @@ tasks:
 
   test:
     desc: Run all checks and tests
+    cmds:
+      - task: lint
+      - go test ./...
+
+  test-race:
+    desc: Run tests with race detector (slower, for CI)
     cmds:
       - task: lint
       - go test -race ./...

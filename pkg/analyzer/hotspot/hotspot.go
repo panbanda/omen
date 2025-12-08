@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/panbanda/omen/internal/fileproc"
+	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/analyzer/churn"
 	"github.com/panbanda/omen/pkg/analyzer/complexity"
 	"github.com/panbanda/omen/pkg/parser"
@@ -21,6 +22,9 @@ type Analyzer struct {
 	churnDays   int
 	maxFileSize int64
 }
+
+// Compile-time check that Analyzer implements RepoAnalyzer.
+var _ analyzer.RepoAnalyzer[*Analysis] = (*Analyzer)(nil)
 
 // Option is a functional option for configuring Analyzer.
 type Option func(*Analyzer)
@@ -51,27 +55,27 @@ func New(opts ...Option) *Analyzer {
 	return a
 }
 
-// AnalyzeProject analyzes hotspots for a project.
-func (a *Analyzer) AnalyzeProject(ctx context.Context, repoPath string, files []string) (*Analysis, error) {
-	return a.AnalyzeProjectWithProgress(ctx, repoPath, files, nil)
-}
-
-// AnalyzeProjectWithProgress analyzes hotspots with optional progress callback.
-func (a *Analyzer) AnalyzeProjectWithProgress(ctx context.Context, repoPath string, files []string, onProgress fileproc.ProgressFunc) (*Analysis, error) {
+// Analyze analyzes hotspots for a repository, optionally filtering to specific files.
+// If files is nil or empty, all files in the repository are analyzed.
+func (a *Analyzer) Analyze(ctx context.Context, repoPath string, files []string) (*Analysis, error) {
 	// Get churn data
 	churnAnalyzer := churn.New(churn.WithDays(a.churnDays))
-	churnAnalysis, err := churnAnalyzer.AnalyzeRepo(ctx, repoPath)
+	churnAnalysis, err := churnAnalyzer.Analyze(ctx, repoPath, files)
 	if err != nil {
 		return nil, err
 	}
 
-	// Build churn lookup map
+	// Build churn lookup map and collect file paths
 	churnMap := make(map[string]*churn.FileMetrics)
+	var filesToAnalyze []string
 	for i := range churnAnalysis.Files {
 		f := &churnAnalysis.Files[i]
 		// Normalize paths for matching
 		churnMap[f.RelativePath] = f
 		churnMap[f.Path] = f
+		// Convert relative path to absolute for file processing
+		absPath := filepath.Join(repoPath, f.RelativePath)
+		filesToAnalyze = append(filesToAnalyze, absPath)
 	}
 
 	// Analyze complexity in parallel
@@ -82,7 +86,7 @@ func (a *Analyzer) AnalyzeProjectWithProgress(ctx context.Context, repoPath stri
 		totalFuncs    int
 	}
 
-	complexityResults := fileproc.MapFilesWithSizeLimit(files, a.maxFileSize, func(psr *parser.Parser, path string) (complexityResult, error) {
+	complexityResults, _ := fileproc.MapFilesWithSizeLimit(ctx, filesToAnalyze, a.maxFileSize, func(psr *parser.Parser, path string) (complexityResult, error) {
 		result, err := psr.ParseFile(path)
 		if err != nil {
 			return complexityResult{path: path}, nil // Skip unparseable files
@@ -109,13 +113,13 @@ func (a *Analyzer) AnalyzeProjectWithProgress(ctx context.Context, repoPath stri
 			avgCyclomatic: float64(totalCyc) / float64(len(functions)),
 			totalFuncs:    len(functions),
 		}, nil
-	}, onProgress, nil)
+	})
 
 	// Combine into hotspot scores using CDF-normalized values
 	analysis := &Analysis{
 		GeneratedAt: time.Now().UTC(),
 		PeriodDays:  a.churnDays,
-		Files:       make([]FileHotspot, 0, len(files)),
+		Files:       make([]FileHotspot, 0, len(filesToAnalyze)),
 	}
 
 	for _, cr := range complexityResults {

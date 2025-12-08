@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/panbanda/omen/internal/vcs"
+	"github.com/panbanda/omen/pkg/analyzer"
 )
 
 // DefaultGitTimeout is the default timeout for git operations.
@@ -17,6 +18,9 @@ type Analyzer struct {
 	minCochanges int
 	opener       vcs.Opener
 }
+
+// Compile-time check to ensure Analyzer implements RepoAnalyzer.
+var _ analyzer.RepoAnalyzer[*Analysis] = (*Analyzer)(nil)
 
 // Option is a functional option for configuring Analyzer.
 type Option func(*Analyzer)
@@ -60,15 +64,10 @@ func makeFilePair(a, b string) filePair {
 	return filePair{a: a, b: b}
 }
 
-// AnalyzeRepo analyzes temporal coupling for a repository.
-func (a *Analyzer) AnalyzeRepo(repoPath string) (*Analysis, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), DefaultGitTimeout)
-	defer cancel()
-	return a.AnalyzeRepoWithContext(ctx, repoPath)
-}
-
-// AnalyzeRepoWithContext analyzes temporal coupling with a context for cancellation/timeout.
-func (a *Analyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath string) (*Analysis, error) {
+// Analyze analyzes temporal coupling for a repository.
+// If files is nil or empty, all files in the repository are analyzed.
+// If files is provided, only coupling between those files is considered.
+func (a *Analyzer) Analyze(ctx context.Context, repoPath string, files []string) (*Analysis, error) {
 	repo, err := a.opener.PlainOpen(repoPath)
 	if err != nil {
 		return nil, err
@@ -82,6 +81,15 @@ func (a *Analyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath string) 
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	// Build file filter set if files are provided
+	var fileFilter map[string]bool
+	if len(files) > 0 {
+		fileFilter = make(map[string]bool, len(files))
+		for _, f := range files {
+			fileFilter[f] = true
+		}
 	}
 
 	// Track co-changes: filePair -> count
@@ -101,9 +109,13 @@ func (a *Analyzer) AnalyzeRepoWithContext(ctx context.Context, repoPath string) 
 			return nil // Skip commits we can't get stats for
 		}
 
-		// Collect files changed in this commit
+		// Collect files changed in this commit, filtered if needed
 		var changedFiles []string
 		for _, stat := range stats {
+			// Skip files not in filter if filter is specified
+			if fileFilter != nil && !fileFilter[stat.Name] {
+				continue
+			}
 			changedFiles = append(changedFiles, stat.Name)
 			fileCommits[stat.Name]++
 		}

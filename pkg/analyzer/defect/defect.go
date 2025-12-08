@@ -4,9 +4,11 @@ import (
 	"context"
 	"sort"
 
+	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/analyzer/churn"
 	"github.com/panbanda/omen/pkg/analyzer/complexity"
 	"github.com/panbanda/omen/pkg/analyzer/duplicates"
+	"github.com/panbanda/omen/pkg/source"
 	"github.com/panbanda/omen/pkg/stats"
 	"github.com/sourcegraph/conc"
 )
@@ -20,6 +22,9 @@ type Analyzer struct {
 	churn       *churn.Analyzer
 	duplicates  *duplicates.Analyzer
 }
+
+// Compile-time check that Analyzer implements RepoAnalyzer.
+var _ analyzer.RepoAnalyzer[*Analysis] = (*Analyzer)(nil)
 
 // Option is a functional option for configuring Analyzer.
 type Option func(*Analyzer)
@@ -68,8 +73,9 @@ func New(opts ...Option) *Analyzer {
 	return a
 }
 
-// AnalyzeProject predicts defects across a project.
-func (a *Analyzer) AnalyzeProject(ctx context.Context, repoPath string, files []string) (*Analysis, error) {
+// Analyze predicts defects across a repository.
+// If files is nil or empty, all files in the repository are analyzed.
+func (a *Analyzer) Analyze(ctx context.Context, repoPath string, files []string) (*Analysis, error) {
 	analysis := &Analysis{
 		Files:   make([]Score, 0),
 		Weights: a.weights,
@@ -83,19 +89,21 @@ func (a *Analyzer) AnalyzeProject(ctx context.Context, repoPath string, files []
 
 	wg := conc.NewWaitGroup()
 
+	fsSrc := source.NewFilesystem()
+
 	// Get complexity metrics
 	wg.Go(func() {
-		complexityAnalysis, complexityErr = a.complexity.AnalyzeProject(files)
+		complexityAnalysis, complexityErr = a.complexity.Analyze(ctx, files, fsSrc)
 	})
 
 	// Get churn metrics
 	wg.Go(func() {
-		churnAnalysis, churnErr = a.churn.AnalyzeFiles(ctx, repoPath, files)
+		churnAnalysis, churnErr = a.churn.Analyze(ctx, repoPath, files)
 	})
 
 	// Get duplicate metrics
 	wg.Go(func() {
-		dupAnalysis, dupErr = a.duplicates.AnalyzeProject(files)
+		dupAnalysis, dupErr = a.duplicates.Analyze(ctx, files, fsSrc)
 	})
 
 	wg.Wait()

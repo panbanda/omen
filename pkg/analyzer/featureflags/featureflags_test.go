@@ -1,11 +1,13 @@
 package featureflags
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
 
+	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -81,7 +83,7 @@ func TestAnalyzeEmptyProject(t *testing.T) {
 	require.NoError(t, err)
 	defer a.Close()
 
-	result, err := a.AnalyzeProject([]string{})
+	result, err := a.Analyze(context.Background(), []string{})
 	require.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Empty(t, result.Flags)
@@ -241,9 +243,11 @@ func TestProgressCallback(t *testing.T) {
 	}
 
 	var progressCount atomic.Int32
-	result, err := a.AnalyzeProjectWithProgress(files, func() {
+	tracker := analyzer.NewTracker(func(current, total int, path string) {
 		progressCount.Add(1)
 	})
+	ctx := analyzer.WithTracker(context.Background(), tracker)
+	result, err := a.Analyze(ctx, files)
 	require.NoError(t, err)
 	assert.NotNil(t, result)
 	// Progress callback should be called for each file
@@ -266,7 +270,7 @@ const flag3 = client.getTreatment(user, "flag-3");
 	err = os.WriteFile(path, []byte(content), 0644)
 	require.NoError(t, err)
 
-	result, err := a.AnalyzeProject([]string{path})
+	result, err := a.Analyze(context.Background(), []string{path})
 	require.NoError(t, err)
 
 	assert.Equal(t, 3, result.Summary.TotalFlags)

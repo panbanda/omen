@@ -3,6 +3,7 @@ package ownership
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"os/exec"
 	"sort"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/panbanda/omen/internal/fileproc"
 	"github.com/panbanda/omen/internal/vcs"
+	"github.com/panbanda/omen/pkg/analyzer"
 )
 
 // ErrGitNotFound is returned when git is not available in PATH.
@@ -108,6 +110,9 @@ type Analyzer struct {
 	opener         vcs.Opener
 }
 
+// Compile-time check that Analyzer implements RepoAnalyzer.
+var _ analyzer.RepoAnalyzer[*Analysis] = (*Analyzer)(nil)
+
 // Option is a functional option for configuring Analyzer.
 type Option func(*Analyzer)
 
@@ -138,17 +143,9 @@ func New(opts ...Option) *Analyzer {
 	return a
 }
 
-// AnalyzeRepo analyzes ownership for all files in a repository.
-func (a *Analyzer) AnalyzeRepo(repoPath string, files []string) (*Analysis, error) {
-	return a.AnalyzeRepoWithProgress(repoPath, files, nil)
-}
-
-// maxGitWorkers limits concurrent git blame processes to avoid FD exhaustion.
-// Git blame is I/O bound, so more workers don't help much beyond this point.
-const maxGitWorkers = 8
-
-// AnalyzeRepoWithProgress analyzes ownership with progress callback.
-func (a *Analyzer) AnalyzeRepoWithProgress(repoPath string, files []string, onProgress func()) (*Analysis, error) {
+// Analyze analyzes ownership for a repository, optionally filtering to specific files.
+// If files is nil or empty, all files in the repository are analyzed.
+func (a *Analyzer) Analyze(ctx context.Context, repoPath string, files []string) (*Analysis, error) {
 	// Check git is available (required for native blame)
 	if err := checkGitAvailable(); err != nil {
 		return nil, err
@@ -163,16 +160,10 @@ func (a *Analyzer) AnalyzeRepoWithProgress(repoPath string, files []string, onPr
 	// Get the actual repo root path - only open once, not per worker
 	actualRepoPath := repo.RepoPath()
 
-	// Process files in parallel with limited workers to avoid FD exhaustion
-	results := fileproc.ForEachFileN(
-		files,
-		maxGitWorkers,
-		func(file string) (*FileOwnership, error) {
-			return a.analyzeFileNative(actualRepoPath, file)
-		},
-		onProgress,
-		nil, // no error callback - silently skip failed files
-	)
+	// Process files in parallel
+	results, _ := fileproc.ForEachFile(ctx, files, func(file string) (*FileOwnership, error) {
+		return a.analyzeFileNative(actualRepoPath, file)
+	})
 
 	// Collect non-nil results
 	analysis := &Analysis{
