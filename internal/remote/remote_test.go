@@ -62,3 +62,61 @@ func TestParse_GitHubShorthand(t *testing.T) {
 		})
 	}
 }
+
+func TestParse_FullURLs(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantURL string
+		wantRef string
+	}{
+		{
+			name:    "github.com without scheme",
+			input:   "github.com/golang/go",
+			wantURL: "https://github.com/golang/go",
+			wantRef: "",
+		},
+		{
+			name:    "https URL",
+			input:   "https://github.com/kubernetes/kubernetes",
+			wantURL: "https://github.com/kubernetes/kubernetes",
+			wantRef: "",
+		},
+		{
+			name:    "gitlab URL",
+			input:   "https://gitlab.com/group/project",
+			wantURL: "https://gitlab.com/group/project",
+			wantRef: "",
+		},
+		{
+			name:    "SSH URL",
+			input:   "git@github.com:owner/repo.git",
+			wantURL: "git@github.com:owner/repo.git",
+			wantRef: "",
+		},
+		{
+			name:    "URL with ref",
+			input:   "github.com/golang/go@go1.21.0",
+			wantURL: "https://github.com/golang/go",
+			wantRef: "go1.21.0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src, err := Parse(tt.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if src == nil {
+				t.Fatal("expected Source, got nil")
+			}
+			if src.URL != tt.wantURL {
+				t.Errorf("URL = %q, want %q", src.URL, tt.wantURL)
+			}
+			if src.Ref != tt.wantRef {
+				t.Errorf("Ref = %q, want %q", src.Ref, tt.wantRef)
+			}
+		})
+	}
+}

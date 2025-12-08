@@ -20,17 +20,28 @@ func Parse(path string) (*Source, error) {
 		return nil, nil
 	}
 
-	// Extract ref from path@ref syntax
+	// Extract ref from path@ref syntax (but not for SSH URLs with @)
 	ref := ""
-	if idx := strings.LastIndex(path, "@"); idx != -1 {
-		ref = path[idx+1:]
-		path = path[:idx]
+	if !strings.HasPrefix(path, "git@") {
+		if idx := strings.LastIndex(path, "@"); idx != -1 {
+			ref = path[idx+1:]
+			path = path[:idx]
+		}
 	}
 
-	// Check for GitHub shorthand: owner/repo (exactly one slash, no dots before it)
+	// Check for GitHub shorthand: owner/repo
 	if isGitHubShorthand(path) {
 		return &Source{
 			URL: "https://github.com/" + path,
+			Ref: ref,
+		}, nil
+	}
+
+	// Check for full URL patterns
+	url := normalizeURL(path)
+	if url != "" {
+		return &Source{
+			URL: url,
 			Ref: ref,
 		}, nil
 	}
@@ -54,4 +65,24 @@ func isGitHubShorthand(path string) bool {
 	}
 	// Both parts must be non-empty
 	return slashIdx > 0 && slashIdx < len(path)-1
+}
+
+// normalizeURL converts various URL formats to a cloneable URL.
+func normalizeURL(path string) string {
+	// Already a full URL
+	if strings.HasPrefix(path, "https://") || strings.HasPrefix(path, "http://") {
+		return path
+	}
+
+	// SSH URL (git@host:path)
+	if strings.HasPrefix(path, "git@") {
+		return path
+	}
+
+	// Domain without scheme (github.com/owner/repo)
+	if strings.Contains(path, ".") && strings.Contains(path, "/") {
+		return "https://" + path
+	}
+
+	return ""
 }
