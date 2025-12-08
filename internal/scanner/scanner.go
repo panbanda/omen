@@ -6,7 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
+	"github.com/go-git/go-billy/v6/osfs"
+	"github.com/go-git/go-git/v6/plumbing/format/gitignore"
 	"github.com/panbanda/omen/pkg/config"
 	"github.com/panbanda/omen/pkg/parser"
 )
@@ -52,41 +53,16 @@ func (s *Scanner) loadExcludePatterns(root string) {
 		patterns = append(patterns, gitignore.ParsePattern(pattern, nil))
 	}
 
-	// Add .gitignore patterns if enabled
+	// Add .gitignore patterns if enabled using ReadPatterns which recursively
+	// reads all .gitignore files in the directory tree
 	if s.config.Exclude.Gitignore {
 		gitRoot := findGitRoot(root)
-
-		// Walk up to find all .gitignore files, stopping at git root
-		dir := root
-		for {
-			gitignorePath := filepath.Join(dir, ".gitignore")
-			if data, err := os.ReadFile(gitignorePath); err == nil {
-				// Compute domain as relative path from root
-				// For root .gitignore, domain should be nil (not []string{""})
-				var domain []string
-				relPath := strings.TrimPrefix(dir, root)
-				relPath = strings.TrimPrefix(relPath, string(filepath.Separator))
-				if relPath != "" {
-					domain = strings.Split(relPath, string(filepath.Separator))
-				}
-				for _, line := range strings.Split(string(data), "\n") {
-					line = strings.TrimSpace(line)
-					if line == "" || strings.HasPrefix(line, "#") {
-						continue
-					}
-					patterns = append(patterns, gitignore.ParsePattern(line, domain))
-				}
+		if gitRoot != "" {
+			// Use osfs rooted at git root to read all .gitignore files
+			fs := osfs.New(gitRoot)
+			if gitPatterns, err := gitignore.ReadPatterns(fs, nil); err == nil {
+				patterns = append(patterns, gitPatterns...)
 			}
-
-			// Stop at git root or filesystem root
-			if gitRoot != "" && dir == gitRoot {
-				break
-			}
-			parent := filepath.Dir(dir)
-			if parent == dir {
-				break
-			}
-			dir = parent
 		}
 	}
 

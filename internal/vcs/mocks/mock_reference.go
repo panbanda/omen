@@ -5,7 +5,7 @@
 package mocks
 
 import (
-	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v6/plumbing"
 	mock "github.com/stretchr/testify/mock"
 )
 

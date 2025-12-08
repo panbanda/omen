@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/panbanda/omen/internal/vcs"
 	"github.com/panbanda/omen/pkg/analyzer/complexity"
 	"github.com/panbanda/omen/pkg/parser"
