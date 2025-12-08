@@ -34,6 +34,23 @@ var analyzeCmd = &cobra.Command{
 	RunE:    runAnalyze,
 }
 
+// fullAnalysis holds comprehensive analysis results from all analyzers.
+type fullAnalysis struct {
+	Complexity       *complexity.Analysis   `json:"complexity,omitempty"`
+	SATD             *satd.Analysis         `json:"satd,omitempty"`
+	DeadCode         *deadcode.Analysis     `json:"dead_code,omitempty"`
+	Churn            *churn.Analysis        `json:"churn,omitempty"`
+	Clones           *duplicates.Analysis   `json:"clones,omitempty"`
+	Defect           *defect.Analysis       `json:"defect,omitempty"`
+	TDG              *tdg.ProjectScore      `json:"tdg,omitempty"`
+	Hotspots         *hotspot.Analysis      `json:"hotspots,omitempty"`
+	Smells           *smells.Analysis       `json:"smells,omitempty"`
+	Ownership        *ownership.Analysis    `json:"ownership,omitempty"`
+	TemporalCoupling *temporal.Analysis     `json:"temporal_coupling,omitempty"`
+	Cohesion         *cohesion.Analysis     `json:"cohesion,omitempty"`
+	FeatureFlags     *featureflags.Analysis `json:"feature_flags,omitempty"`
+}
+
 func init() {
 	// Persistent flags inherited by all analyzer subcommands
 	analyzeCmd.PersistentFlags().StringP("format", "f", "text", "Output format: text, json, markdown, toon")
@@ -100,23 +117,7 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 		excludeSet[e] = true
 	}
 
-	// Comprehensive analysis results
-	type FullAnalysis struct {
-		Complexity       *complexity.Analysis   `json:"complexity,omitempty"`
-		SATD             *satd.Analysis         `json:"satd,omitempty"`
-		DeadCode         *deadcode.Analysis     `json:"dead_code,omitempty"`
-		Churn            *churn.Analysis        `json:"churn,omitempty"`
-		Clones           *duplicates.Analysis   `json:"clones,omitempty"`
-		Defect           *defect.Analysis       `json:"defect,omitempty"`
-		TDG              *tdg.ProjectScore      `json:"tdg,omitempty"`
-		Hotspots         *hotspot.Analysis      `json:"hotspots,omitempty"`
-		Smells           *smells.Analysis       `json:"smells,omitempty"`
-		Ownership        *ownership.Analysis    `json:"ownership,omitempty"`
-		TemporalCoupling *temporal.Analysis     `json:"temporal_coupling,omitempty"`
-		Cohesion         *cohesion.Analysis     `json:"cohesion,omitempty"`
-		FeatureFlags     *featureflags.Analysis `json:"feature_flags,omitempty"`
-	}
-	results := FullAnalysis{}
+	results := fullAnalysis{}
 
 	startTime := time.Now()
 	color.Cyan("Running comprehensive analysis on %d files...\n", len(files))
@@ -247,25 +248,7 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 	return printAnalysisSummary(formatter, results)
 }
 
-func printAnalysisSummary(formatter *output.Formatter, results interface{}) error {
-	// Type assert to access fields
-	type FullAnalysis struct {
-		Complexity       *complexity.Analysis   `json:"complexity,omitempty"`
-		SATD             *satd.Analysis         `json:"satd,omitempty"`
-		DeadCode         *deadcode.Analysis     `json:"dead_code,omitempty"`
-		Churn            *churn.Analysis        `json:"churn,omitempty"`
-		Clones           *duplicates.Analysis   `json:"clones,omitempty"`
-		Defect           *defect.Analysis       `json:"defect,omitempty"`
-		TDG              *tdg.ProjectScore      `json:"tdg,omitempty"`
-		Hotspots         *hotspot.Analysis      `json:"hotspots,omitempty"`
-		Smells           *smells.Analysis       `json:"smells,omitempty"`
-		Ownership        *ownership.Analysis    `json:"ownership,omitempty"`
-		TemporalCoupling *temporal.Analysis     `json:"temporal_coupling,omitempty"`
-		Cohesion         *cohesion.Analysis     `json:"cohesion,omitempty"`
-		FeatureFlags     *featureflags.Analysis `json:"feature_flags,omitempty"`
-	}
-
-	r := results.(FullAnalysis)
+func printAnalysisSummary(formatter *output.Formatter, r fullAnalysis) error {
 	w := formatter.Writer()
 
 	if formatter.Colored() {
