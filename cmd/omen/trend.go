@@ -10,42 +10,28 @@ import (
 	"github.com/panbanda/omen/internal/output"
 	"github.com/panbanda/omen/internal/progress"
 	"github.com/panbanda/omen/pkg/analyzer/score"
-	"github.com/urfave/cli/v2"
+	"github.com/spf13/cobra"
 )
 
-func trendCmd() *cli.Command {
-	flags := append(outputFlags(),
-		&cli.StringFlag{
-			Name:    "since",
-			Aliases: []string{"s"},
-			Value:   "3m",
-			Usage:   "How far back to analyze (e.g., 3m, 6m, 1y, 2y, 30d, 4w)",
-		},
-		&cli.StringFlag{
-			Name:    "period",
-			Aliases: []string{"p"},
-			Value:   "weekly",
-			Usage:   "Sampling period (daily, weekly, monthly)",
-		},
-		&cli.BoolFlag{
-			Name:  "snap",
-			Usage: "Snap to period boundaries (1st of month, Monday)",
-		},
-	)
-	return &cli.Command{
-		Name:      "trend",
-		Aliases:   []string{"tr"},
-		Usage:     "Analyze repository score over time",
-		ArgsUsage: "[path...]",
-		Flags:     flags,
-		Action:    runTrendCmd,
-	}
+var trendCmd = &cobra.Command{
+	Use:     "trend [path...]",
+	Aliases: []string{"tr"},
+	Short:   "Analyze repository score over time",
+	RunE:    runTrend,
 }
 
-func runTrendCmd(c *cli.Context) error {
-	sinceStr := c.String("since")
-	period := c.String("period")
-	snap := c.Bool("snap")
+func init() {
+	trendCmd.Flags().StringP("since", "s", "3m", "How far back to analyze (e.g., 3m, 6m, 1y, 2y, 30d, 4w)")
+	trendCmd.Flags().StringP("period", "p", "weekly", "Sampling period (daily, weekly, monthly)")
+	trendCmd.Flags().Bool("snap", false, "Snap to period boundaries (1st of month, Monday)")
+
+	analyzeCmd.AddCommand(trendCmd)
+}
+
+func runTrend(cmd *cobra.Command, args []string) error {
+	sinceStr, _ := cmd.Flags().GetString("since")
+	period, _ := cmd.Flags().GetString("period")
+	snap, _ := cmd.Flags().GetBool("snap")
 
 	// Parse duration
 	since, err := score.ParseSince(sinceStr)
@@ -61,7 +47,7 @@ func runTrendCmd(c *cli.Context) error {
 		return fmt.Errorf("invalid --period: %s (use daily, weekly, or monthly)", period)
 	}
 
-	paths := getPaths(c)
+	paths := getPaths(args)
 	repoPath, err := filepath.Abs(paths[0])
 	if err != nil {
 		return fmt.Errorf("failed to resolve path: %w", err)
@@ -105,7 +91,7 @@ func runTrendCmd(c *cli.Context) error {
 		return nil
 	}
 
-	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(c)), getOutputFile(c), true)
+	formatter, err := output.NewFormatter(output.ParseFormat(getFormat(cmd)), getOutputFile(cmd), true)
 	if err != nil {
 		return err
 	}

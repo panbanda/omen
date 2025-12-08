@@ -3,10 +3,10 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/panbanda/omen/pkg/config"
-	"github.com/urfave/cli/v2"
 )
 
 // TestGetPaths verifies path handling from CLI arguments.
@@ -31,126 +31,20 @@ func TestGetPaths(t *testing.T) {
 			args:     []string{"/foo", "/bar"},
 			expected: []string{"/foo", "/bar"},
 		},
-		{
-			name:     "filters out flags",
-			args:     []string{"/foo", "-f", "json", "/bar"},
-			expected: []string{"/foo", "/bar"},
-		},
-		{
-			name:     "filters out format flag",
-			args:     []string{"/foo", "--format", "json"},
-			expected: []string{"/foo"},
-		},
-		{
-			name:     "filters out output flag",
-			args:     []string{"-o", "out.txt", "/foo"},
-			expected: []string{"/foo"},
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			app := &cli.App{
-				Action: func(c *cli.Context) error {
-					result := getPaths(c)
-					if len(result) != len(tt.expected) {
-						t.Errorf("getPaths() = %v, want %v", result, tt.expected)
-						return nil
-					}
-					for i := range result {
-						if result[i] != tt.expected[i] {
-							t.Errorf("getPaths()[%d] = %q, want %q", i, result[i], tt.expected[i])
-						}
-					}
-					return nil
-				},
+			result := getPaths(tt.args)
+			if len(result) != len(tt.expected) {
+				t.Errorf("getPaths() = %v, want %v", result, tt.expected)
+				return
 			}
-			args := append([]string{"test"}, tt.args...)
-			_ = app.Run(args)
-		})
-	}
-}
-
-// TestGetTrailingFlag verifies trailing flag parsing.
-func TestGetTrailingFlag(t *testing.T) {
-	tests := []struct {
-		name         string
-		args         []string
-		flagName     string
-		shortName    string
-		defaultValue string
-		expected     string
-	}{
-		{
-			name:         "no flag returns default",
-			args:         []string{},
-			flagName:     "format",
-			shortName:    "f",
-			defaultValue: "text",
-			expected:     "text",
-		},
-		{
-			name:         "long flag with space",
-			args:         []string{"--format", "json"},
-			flagName:     "format",
-			shortName:    "f",
-			defaultValue: "text",
-			expected:     "json",
-		},
-		{
-			name:         "short flag with space",
-			args:         []string{"-f", "markdown"},
-			flagName:     "format",
-			shortName:    "f",
-			defaultValue: "text",
-			expected:     "markdown",
-		},
-		{
-			name:         "long flag with equals",
-			args:         []string{"--format=toon"},
-			flagName:     "format",
-			shortName:    "f",
-			defaultValue: "text",
-			expected:     "toon",
-		},
-		{
-			name:         "short flag with equals",
-			args:         []string{"-f=json"},
-			flagName:     "format",
-			shortName:    "f",
-			defaultValue: "text",
-			expected:     "json",
-		},
-		{
-			name:         "trailing flag after positional",
-			args:         []string{".", "-f", "json"},
-			flagName:     "format",
-			shortName:    "f",
-			defaultValue: "text",
-			expected:     "json",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			app := &cli.App{
-				Flags: []cli.Flag{
-					&cli.StringFlag{
-						Name:    tt.flagName,
-						Aliases: []string{tt.shortName},
-						Value:   tt.defaultValue,
-					},
-				},
-				Action: func(c *cli.Context) error {
-					result := getTrailingFlag(c, tt.flagName, tt.shortName, tt.defaultValue)
-					if result != tt.expected {
-						t.Errorf("getTrailingFlag() = %q, want %q", result, tt.expected)
-					}
-					return nil
-				},
+			for i := range result {
+				if result[i] != tt.expected[i] {
+					t.Errorf("getPaths()[%d] = %q, want %q", i, result[i], tt.expected[i])
+				}
 			}
-			args := append([]string{"test"}, tt.args...)
-			_ = app.Run(args)
 		})
 	}
 }
@@ -177,26 +71,52 @@ func TestValidateDays(t *testing.T) {
 	}
 }
 
-// TestOutputFlags verifies the output flags are correctly defined.
-func TestOutputFlags(t *testing.T) {
-	flags := outputFlags()
-
-	if len(flags) != 3 {
-		t.Errorf("outputFlags() returned %d flags, want 3", len(flags))
+// TestTruncate verifies the truncate helper function.
+func TestTruncate(t *testing.T) {
+	tests := []struct {
+		input    string
+		maxLen   int
+		expected string
+	}{
+		{input: "hello", maxLen: 10, expected: "hello"},
+		{input: "hello world", maxLen: 8, expected: "hello..."},
+		{input: "", maxLen: 5, expected: ""},
+		{input: "hi", maxLen: 2, expected: "hi"},
 	}
 
-	flagNames := make(map[string]bool)
-	for _, f := range flags {
-		for _, name := range f.Names() {
-			flagNames[name] = true
+	for _, tt := range tests {
+		result := truncate(tt.input, tt.maxLen)
+		if result != tt.expected {
+			t.Errorf("truncate(%q, %d) = %q, want %q", tt.input, tt.maxLen, result, tt.expected)
 		}
 	}
+}
 
-	required := []string{"format", "f", "output", "o", "no-cache"}
-	for _, name := range required {
-		if !flagNames[name] {
-			t.Errorf("outputFlags() missing flag %q", name)
+// TestSanitizeID verifies the sanitizeID helper function.
+func TestSanitizeID(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{input: "simple", expected: "simple"},
+		{input: "with-dash", expected: "with_dash"},
+		{input: "with/slash", expected: "with_slash"},
+		{input: "with.dot", expected: "with_dot"},
+		{input: "with space", expected: "with_space"},
+	}
+
+	for _, tt := range tests {
+		result := sanitizeID(tt.input)
+		if result != tt.expected {
+			t.Errorf("sanitizeID(%q) = %q, want %q", tt.input, result, tt.expected)
 		}
+	}
+}
+
+// TestVersionVariable verifies version variables are defined.
+func TestVersionVariable(t *testing.T) {
+	if version == "" {
+		t.Error("version variable should have a default value")
 	}
 }
 
@@ -223,24 +143,9 @@ func complex() {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	app := &cli.App{
-		Name:     "omen",
-		Metadata: make(map[string]interface{}),
-		Commands: []*cli.Command{
-			{
-				Name: "analyze",
-				Subcommands: []*cli.Command{
-					{
-						Name:   "complexity",
-						Flags:  outputFlags(),
-						Action: runComplexityCmd,
-					},
-				},
-			},
-		},
-	}
-
-	err := app.Run([]string{"omen", "analyze", "complexity", "-f", "json", tmpDir})
+	// Reset root command for testing
+	rootCmd.SetArgs([]string{"analyze", "complexity", "-f", "json", tmpDir})
+	err := rootCmd.Execute()
 	if err != nil {
 		t.Fatalf("complexity command failed: %v", err)
 	}
@@ -266,24 +171,8 @@ func broken() {}
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	app := &cli.App{
-		Name:     "omen",
-		Metadata: make(map[string]interface{}),
-		Commands: []*cli.Command{
-			{
-				Name: "analyze",
-				Subcommands: []*cli.Command{
-					{
-						Name:   "satd",
-						Flags:  outputFlags(),
-						Action: runSATDCmd,
-					},
-				},
-			},
-		},
-	}
-
-	err := app.Run([]string{"omen", "analyze", "satd", "-f", "json", tmpDir})
+	rootCmd.SetArgs([]string{"analyze", "satd", "-f", "json", tmpDir})
+	err := rootCmd.Execute()
 	if err != nil {
 		t.Fatalf("satd command failed: %v", err)
 	}
@@ -307,24 +196,8 @@ func main() {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	app := &cli.App{
-		Name:     "omen",
-		Metadata: make(map[string]interface{}),
-		Commands: []*cli.Command{
-			{
-				Name: "analyze",
-				Subcommands: []*cli.Command{
-					{
-						Name:   "deadcode",
-						Flags:  outputFlags(),
-						Action: runDeadCodeCmd,
-					},
-				},
-			},
-		},
-	}
-
-	err := app.Run([]string{"omen", "analyze", "deadcode", "-f", "json", tmpDir})
+	rootCmd.SetArgs([]string{"analyze", "deadcode", "-f", "json", tmpDir})
+	err := rootCmd.Execute()
 	if err != nil {
 		t.Fatalf("deadcode command failed: %v", err)
 	}
@@ -351,24 +224,8 @@ func complex() {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	app := &cli.App{
-		Name:     "omen",
-		Metadata: make(map[string]interface{}),
-		Commands: []*cli.Command{
-			{
-				Name: "analyze",
-				Subcommands: []*cli.Command{
-					{
-						Name:   "tdg",
-						Flags:  outputFlags(),
-						Action: runTDGCmd,
-					},
-				},
-			},
-		},
-	}
-
-	err := app.Run([]string{"omen", "analyze", "tdg", "-f", "json", tmpDir})
+	rootCmd.SetArgs([]string{"analyze", "tdg", "-f", "json", tmpDir})
+	err := rootCmd.Execute()
 	if err != nil {
 		t.Fatalf("tdg command failed: %v", err)
 	}
@@ -378,34 +235,9 @@ func complex() {
 func TestNoFilesError(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	app := &cli.App{
-		Name:     "omen",
-		Metadata: make(map[string]interface{}),
-		Commands: []*cli.Command{
-			{
-				Name: "analyze",
-				Subcommands: []*cli.Command{
-					{
-						Name:   "complexity",
-						Flags:  outputFlags(),
-						Action: runComplexityCmd,
-					},
-				},
-			},
-		},
-	}
-
-	err := app.Run([]string{"omen", "analyze", "complexity", tmpDir})
+	rootCmd.SetArgs([]string{"analyze", "complexity", tmpDir})
 	// Should not crash, may return error for no files
-	_ = err
-}
-
-// TestVersionVariable verifies version variables are defined.
-func TestVersionVariable(t *testing.T) {
-	// These are set via ldflags at build time
-	if version == "" {
-		t.Error("version variable should have a default value")
-	}
+	_ = rootCmd.Execute()
 }
 
 // TestInitCommand verifies the init command creates a config file.
@@ -413,15 +245,8 @@ func TestInitCommand(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "omen.toml")
 
-	app := &cli.App{
-		Name:     "omen",
-		Metadata: make(map[string]interface{}),
-		Commands: []*cli.Command{
-			initCmd(),
-		},
-	}
-
-	err := app.Run([]string{"omen", "init", "-o", configPath})
+	rootCmd.SetArgs([]string{"init", "-o", configPath})
+	err := rootCmd.Execute()
 	if err != nil {
 		t.Fatalf("init command failed: %v", err)
 	}
@@ -444,7 +269,7 @@ func TestInitCommand(t *testing.T) {
 	// Verify it contains expected sections
 	contentStr := string(content)
 	for _, section := range []string{"[analysis]", "[thresholds]", "[cache]", "[output]"} {
-		if !contains(contentStr, section) {
+		if !strings.Contains(contentStr, section) {
 			t.Errorf("config file missing section %q", section)
 		}
 	}
@@ -460,15 +285,8 @@ func TestInitCommandRefusesOverwrite(t *testing.T) {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
-	app := &cli.App{
-		Name:     "omen",
-		Metadata: make(map[string]interface{}),
-		Commands: []*cli.Command{
-			initCmd(),
-		},
-	}
-
-	err := app.Run([]string{"omen", "init", "-o", configPath})
+	rootCmd.SetArgs([]string{"init", "-o", configPath})
+	err := rootCmd.Execute()
 	if err == nil {
 		t.Fatal("init command should have failed when file exists")
 	}
@@ -490,15 +308,8 @@ func TestInitCommandForce(t *testing.T) {
 		t.Fatalf("failed to create test file: %v", err)
 	}
 
-	app := &cli.App{
-		Name:     "omen",
-		Metadata: make(map[string]interface{}),
-		Commands: []*cli.Command{
-			initCmd(),
-		},
-	}
-
-	err := app.Run([]string{"omen", "init", "-o", configPath, "--force"})
+	rootCmd.SetArgs([]string{"init", "-o", configPath, "--force"})
+	err := rootCmd.Execute()
 	if err != nil {
 		t.Fatalf("init --force command failed: %v", err)
 	}
@@ -515,15 +326,8 @@ func TestInitCommandCreatesDirectory(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "subdir", "nested", "omen.toml")
 
-	app := &cli.App{
-		Name:     "omen",
-		Metadata: make(map[string]interface{}),
-		Commands: []*cli.Command{
-			initCmd(),
-		},
-	}
-
-	err := app.Run([]string{"omen", "init", "-o", configPath})
+	rootCmd.SetArgs([]string{"init", "-o", configPath})
+	err := rootCmd.Execute()
 	if err != nil {
 		t.Fatalf("init command failed: %v", err)
 	}
@@ -567,15 +371,8 @@ ttl = 24
 		t.Fatalf("failed to write config: %v", err)
 	}
 
-	app := &cli.App{
-		Name:     "omen",
-		Metadata: make(map[string]interface{}),
-		Commands: []*cli.Command{
-			configCmd(),
-		},
-	}
-
-	err := app.Run([]string{"omen", "config", "validate", "-c", configPath})
+	rootCmd.SetArgs([]string{"config", "validate", "-c", configPath})
+	err := rootCmd.Execute()
 	if err != nil {
 		t.Fatalf("config validate failed on valid config: %v", err)
 	}
@@ -595,15 +392,8 @@ duplicate_similarity = 1.5
 		t.Fatalf("failed to write config: %v", err)
 	}
 
-	app := &cli.App{
-		Name:     "omen",
-		Metadata: make(map[string]interface{}),
-		Commands: []*cli.Command{
-			configCmd(),
-		},
-	}
-
-	err := app.Run([]string{"omen", "config", "validate", "-c", configPath})
+	rootCmd.SetArgs([]string{"config", "validate", "-c", configPath})
+	err := rootCmd.Execute()
 	if err == nil {
 		t.Fatal("config validate should have failed on invalid config")
 	}
@@ -611,15 +401,8 @@ duplicate_similarity = 1.5
 
 // TestConfigValidateMissingFile verifies config validate handles missing files.
 func TestConfigValidateMissingFile(t *testing.T) {
-	app := &cli.App{
-		Name:     "omen",
-		Metadata: make(map[string]interface{}),
-		Commands: []*cli.Command{
-			configCmd(),
-		},
-	}
-
-	err := app.Run([]string{"omen", "config", "validate", "-c", "/nonexistent/path/omen.toml"})
+	rootCmd.SetArgs([]string{"config", "validate", "-c", "/nonexistent/path/omen.toml"})
+	err := rootCmd.Execute()
 	if err == nil {
 		t.Fatal("config validate should have failed for missing file")
 	}
@@ -627,16 +410,9 @@ func TestConfigValidateMissingFile(t *testing.T) {
 
 // TestConfigShowCommand verifies config show outputs configuration.
 func TestConfigShowCommand(t *testing.T) {
-	app := &cli.App{
-		Name:     "omen",
-		Metadata: make(map[string]interface{}),
-		Commands: []*cli.Command{
-			configCmd(),
-		},
-	}
-
+	rootCmd.SetArgs([]string{"config", "show"})
 	// Should not error when showing defaults
-	err := app.Run([]string{"omen", "config", "show"})
+	err := rootCmd.Execute()
 	if err != nil {
 		t.Fatalf("config show failed: %v", err)
 	}
@@ -655,7 +431,7 @@ func TestGenerateDefaultConfig(t *testing.T) {
 
 	// Verify it contains expected sections
 	for _, section := range []string{"[analysis]", "[thresholds]", "[duplicates]", "[exclude]", "[cache]", "[output]", "[feature_flags]"} {
-		if !contains(content, section) {
+		if !strings.Contains(content, section) {
 			t.Errorf("generated config missing section %q", section)
 		}
 	}
@@ -684,17 +460,4 @@ func TestFindConfigFile(t *testing.T) {
 	if result != "omen.toml" {
 		t.Errorf("FindConfigFile() = %q, want %q", result, "omen.toml")
 	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
-}
-
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
