@@ -56,6 +56,8 @@ func init() {
 	analyzeCmd.PersistentFlags().StringP("format", "f", "text", "Output format: text, json, markdown, toon")
 	analyzeCmd.PersistentFlags().StringP("output", "o", "", "Write output to file")
 	analyzeCmd.PersistentFlags().Bool("no-cache", false, "Disable caching")
+	analyzeCmd.PersistentFlags().String("ref", "", "Git ref (branch, tag, SHA) for remote repositories")
+	analyzeCmd.PersistentFlags().Bool("shallow", false, "Shallow clone (depth=1) for remote repos; disables git history analyzers")
 
 	// Local flags for analyze command itself
 	analyzeCmd.Flags().StringSlice("exclude", nil, "Analyzers to exclude (when running all)")
@@ -85,7 +87,15 @@ func getSort(cmd *cobra.Command, defaultValue string) string {
 }
 
 func runAnalyze(cmd *cobra.Command, args []string) error {
-	paths := getPaths(args)
+	ref, _ := cmd.Flags().GetString("ref")
+	shallow, _ := cmd.Flags().GetBool("shallow")
+
+	paths, cleanup, err := resolvePaths(cmd.Context(), args, ref, shallow)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
 	exclude, _ := cmd.Flags().GetStringSlice("exclude")
 
 	repoPath, err := filepath.Abs(paths[0])

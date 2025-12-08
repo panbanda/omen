@@ -32,7 +32,15 @@ func init() {
 }
 
 func runFeatureFlags(cmd *cobra.Command, args []string) error {
-	paths := getPaths(args)
+	ref, _ := cmd.Flags().GetString("ref")
+	shallow, _ := cmd.Flags().GetBool("shallow")
+
+	paths, cleanup, err := resolvePaths(cmd.Context(), args, ref, shallow)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
 	providers, _ := cmd.Flags().GetStringSlice("provider")
 	noGit, _ := cmd.Flags().GetBool("no-git")
 	minPriority, _ := cmd.Flags().GetString("min-priority")

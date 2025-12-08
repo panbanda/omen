@@ -26,7 +26,15 @@ func init() {
 }
 
 func runChurn(cmd *cobra.Command, args []string) error {
-	paths := getPaths(args)
+	ref, _ := cmd.Flags().GetString("ref")
+	shallow, _ := cmd.Flags().GetBool("shallow")
+
+	paths, cleanup, err := resolvePaths(cmd.Context(), args, ref, shallow)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
 	days, _ := cmd.Flags().GetInt("days")
 	topN, _ := cmd.Flags().GetInt("top")
 
