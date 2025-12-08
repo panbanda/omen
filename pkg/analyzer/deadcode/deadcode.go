@@ -11,6 +11,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/panbanda/omen/internal/fileproc"
+	"github.com/panbanda/omen/internal/semantic"
 	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/parser"
 	sitter "github.com/smacker/go-tree-sitter"
@@ -321,10 +322,22 @@ func analyzeFileDeadCode(psr *parser.Parser, path string) (*fileDeadCode, error)
 		typeImpls:         make([]typeImplementation, 0),
 		language:          result.Language,
 		unreachableBlocks: make([]UnreachableBlock, 0),
+		frameworkRefs:     make([]string, 0),
 	}
 
 	// Single unified AST walk to collect all information
 	collectAllInSinglePass(result, fdc)
+
+	// Extract indirect references using language-specific extractor
+	extractor := semantic.ForLanguage(result.Language)
+	if extractor != nil {
+		defer extractor.Close()
+
+		refs := extractor.ExtractRefs(result.Tree, result.Source)
+		for _, ref := range refs {
+			fdc.frameworkRefs = append(fdc.frameworkRefs, ref.Name)
+		}
+	}
 
 	return fdc, nil
 }
@@ -547,6 +560,7 @@ type fileDeadCode struct {
 	typeImpls         []typeImplementation // For VTable resolution
 	language          parser.Language
 	unreachableBlocks []UnreachableBlock
+	frameworkRefs     []string // Method names referenced by framework DSLs (callbacks, send, etc.)
 }
 
 type definition struct {
@@ -1189,6 +1203,7 @@ func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Analysis, erro
 
 	allDefs := make(map[string]definition)
 	allCalls := make([]callReference, 0)
+	frameworkRefs := make(map[string]bool) // Method names referenced by framework DSLs
 
 	for _, fdc := range results {
 		for name, def := range fdc.definitions {
@@ -1205,6 +1220,11 @@ func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Analysis, erro
 			}
 		}
 
+		// Collect framework references (callbacks, send targets, etc.)
+		for _, ref := range fdc.frameworkRefs {
+			frameworkRefs[ref] = true
+		}
+
 		// Collect unreachable blocks
 		analysis.UnreachableCode = append(analysis.UnreachableCode, fdc.unreachableBlocks...)
 		analysis.Summary.TotalUnreachableBlocks += len(fdc.unreachableBlocks)
@@ -1217,7 +1237,7 @@ func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Analysis, erro
 
 	if a.buildGraph {
 		// Phase 1: Build reference graph from AST
-		a.buildReferenceGraph(allDefs, allCalls)
+		a.buildReferenceGraph(allDefs, allCalls, frameworkRefs)
 
 		// Phase 2: Resolve dynamic dispatch
 		a.resolveDynamicCalls()
@@ -1238,6 +1258,10 @@ func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Analysis, erro
 			for name := range fdc.usages {
 				allUsages[name] = true
 			}
+		}
+		// Add framework references to usages (callbacks, send targets are considered used)
+		for ref := range frameworkRefs {
+			allUsages[ref] = true
 		}
 		a.findDeadCodeFromUsages(analysis, allDefs, allUsages)
 	}
@@ -1277,12 +1301,17 @@ func (a *Analyzer) registerMethodsInVTables(defs map[string]definition) {
 }
 
 // buildReferenceGraph constructs the cross-language reference graph (Phase 1).
-func (a *Analyzer) buildReferenceGraph(defs map[string]definition, calls []callReference) {
+// frameworkRefs contains method names referenced by framework DSLs (Rails callbacks, send, etc.)
+// These are treated as reachable from entry points since the framework calls them.
+func (a *Analyzer) buildReferenceGraph(defs map[string]definition, calls []callReference, frameworkRefs map[string]bool) {
 	// Create name to nodeID mapping
 	nameToNode := make(map[string]uint32)
 
 	// Add all definitions as nodes
 	for name, def := range defs {
+		// Methods referenced by framework DSLs are entry points
+		isFrameworkRef := frameworkRefs[name]
+
 		node := &ReferenceNode{
 			ID:         def.nodeID,
 			Name:       name,
@@ -1291,7 +1320,7 @@ func (a *Analyzer) buildReferenceGraph(defs map[string]definition, calls []callR
 			EndLine:    def.endLine,
 			Kind:       def.kind,
 			IsExported: def.exported,
-			IsEntry:    isEntryPoint(name, def),
+			IsEntry:    isEntryPoint(name, def) || isFrameworkRef,
 		}
 		a.references.AddNode(node)
 		nameToNode[name] = def.nodeID

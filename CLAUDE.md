@@ -68,6 +68,7 @@ Omen is a multi-language code analysis CLI built in Go. It uses tree-sitter for 
 - `mcpserver/` - MCP server implementation with tools and prompts
 - `service/` - High-level service layer coordinating analyzers
 - `vcs/` - Git operations (blame, log, diff)
+- `semantic/` - Language-aware semantic extraction for indirect function references (callbacks, decorators, dynamic dispatch)
 
 **CLI** (`cmd/omen/`) - Entry point using spf13/cobra with persistent flag inheritance
 
@@ -90,6 +91,8 @@ Omen is a multi-language code analysis CLI built in Go. It uses tree-sitter for 
 **Configuration**: Config loaded from `omen.toml` or `.omen/omen.toml`. See `omen.example.toml` for all options.
 
 **Tree-sitter queries**: Feature flag detection uses `.scm` query files in `pkg/analyzer/featureflags/queries/<lang>/<provider>.scm`. Queries must capture `@flag_key` for the flag identifier. Predicates like `#match?` and `#eq?` must be placed inline within patterns, and `FilterPredicates()` must be called to evaluate them.
+
+**Semantic extractors**: `internal/semantic/` provides language-aware extraction of indirect function references that bypass normal call graphs. Each language has a dedicated extractor (Go, Ruby, TypeScript) with embedded tree-sitter queries. Extractors return `[]Ref` where each `Ref` has a `Name` and `Kind` (RefCallback, RefDecorator, RefFunctionValue, RefDynamicCall). Used by the deadcode analyzer to reduce false positives for framework patterns.
 
 **MCP server**: Tools are registered in `internal/mcpserver/mcpserver.go`. Each tool has a description in `descriptions.go`. Prompts are stored as markdown files in `internal/mcpserver/prompts/` using `go:embed`.
 
