@@ -1,6 +1,10 @@
 package remote
 
 import (
+	"context"
+	"io"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -118,5 +122,32 @@ func TestParse_FullURLs(t *testing.T) {
 				t.Errorf("Ref = %q, want %q", src.Ref, tt.wantRef)
 			}
 		})
+	}
+}
+
+func TestSource_Clone(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	src := &Source{
+		URL: "https://github.com/octocat/Hello-World",
+		Ref: "",
+	}
+
+	ctx := context.Background()
+	err := src.Clone(ctx, io.Discard, false)
+	if err != nil {
+		t.Fatalf("Clone failed: %v", err)
+	}
+	defer src.Cleanup()
+
+	// Verify clone directory exists and contains .git
+	if src.CloneDir == "" {
+		t.Fatal("CloneDir not set")
+	}
+	gitDir := filepath.Join(src.CloneDir, ".git")
+	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
+		t.Errorf(".git directory not found in %s", src.CloneDir)
 	}
 }
