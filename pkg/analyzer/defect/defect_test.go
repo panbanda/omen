@@ -593,9 +593,12 @@ func simple() int {
 	if result.Weights.Coupling != expectedWeights.Coupling {
 		t.Errorf("Weights.Coupling = %v, want %v", result.Weights.Coupling, expectedWeights.Coupling)
 	}
+	if result.Weights.Ownership != expectedWeights.Ownership {
+		t.Errorf("Weights.Ownership = %v, want %v", result.Weights.Ownership, expectedWeights.Ownership)
+	}
 
 	// Weights should sum to 1.0
-	sum := result.Weights.Churn + result.Weights.Complexity + result.Weights.Duplication + result.Weights.Coupling
+	sum := result.Weights.Churn + result.Weights.Complexity + result.Weights.Duplication + result.Weights.Coupling + result.Weights.Ownership
 	if sum != 1.0 {
 		t.Errorf("Weights sum = %v, want 1.0", sum)
 	}

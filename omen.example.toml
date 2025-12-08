@@ -29,38 +29,68 @@ tdg_high_risk = 3.0
 # Respect .gitignore files (default: true)
 gitignore = true
 
-# File patterns to exclude (glob patterns)
-patterns = [
-    "*_test.go",
-    "*_test.ts",
-    "*_test.py",
-    "*.spec.ts",
-    "*.spec.js",
-    "*.min.js",
-    "*.min.css",
-    "*.generated.*",
-]
-
-# File extensions to exclude
-extensions = [
-    ".lock",
-    ".sum",
-    ".map",
-]
-
-# Directories to exclude
-dirs = [
-    "vendor",
-    "node_modules",
-    ".git",
-    ".omen",
-    "dist",
-    "build",
-    "target",
-    "__pycache__",
-    ".pytest_cache",
-    "coverage",
-]
+# File patterns to exclude (gitignore-style patterns)
+# These are the defaults - uncomment to customize
+# patterns = [
+#     # Test files
+#     "*_test.go",
+#     "*_test.ts",
+#     "*_test.py",
+#     "*.spec.ts",
+#     "*.spec.js",
+#     "*_spec.rb",
+#     "**/*_test/**",
+#     "**/test/**",
+#     "**/tests/**",
+#     "**/spec/**",
+#     # Minified assets
+#     "*.min.js",
+#     "*.min.css",
+#     # Lock files
+#     "*.lock",
+#     "go.sum",
+#     # Vendor directories
+#     "vendor/",
+#     "node_modules/",
+#     "third_party/",
+#     "external/",
+#     # Build/output directories
+#     ".git/",
+#     ".omen/",
+#     "dist/",
+#     "build/",
+#     "target/",
+#     "out/",
+#     "bin/",
+#     # Python
+#     "__pycache__/",
+#     ".venv/",
+#     "venv/",
+#     "site-packages/",
+#     # Ruby
+#     ".bundle/",
+#     "sorbet/",
+#     # Coverage/test output
+#     "coverage/",
+#     ".nyc_output/",
+#     # Auto-generated code
+#     "**/mocks/",
+#     "**/*.gen.go",
+#     "**/*.generated.go",
+#     "**/*.pb.go",
+#     "**/generated/",
+#     "**/gen/",
+#     "**/*.auto.ts",
+#     "**/*.g.dart",
+#     "*_generated.rb",
+#     # Schema/migration files
+#     "**/schema.rb",
+#     "**/structure.sql",
+#     # IDE directories
+#     ".idea/",
+#     ".vscode/",
+#     ".vs/",
+# ]
 
 [cache]
 enabled = true

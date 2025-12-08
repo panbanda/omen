@@ -21,6 +21,20 @@ const (
 	SeverityMedium   Severity = "medium"
 )
 
+// Weight returns a numeric weight for sorting (higher = more severe).
+func (s Severity) Weight() int {
+	switch s {
+	case SeverityCritical:
+		return 3
+	case SeverityHigh:
+		return 2
+	case SeverityMedium:
+		return 1
+	default:
+		return 0
+	}
+}
+
 // Smell represents a detected architectural smell.
 type Smell struct {
 	Type        Type     `json:"type"`

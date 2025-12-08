@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/panbanda/omen/pkg/analyzer"
@@ -718,6 +719,11 @@ func (a *Analyzer) Analyze(ctx context.Context, files []string, src ContentSourc
 	}
 	analysis.FilesWithDebt = len(filesWithDebtSet)
 	analysis.Summary.FilesWithSATD = len(filesWithDebtSet)
+
+	// Sort items by severity (critical first, then high, medium, low)
+	sort.Slice(analysis.Items, func(i, j int) bool {
+		return analysis.Items[i].Severity.Weight() > analysis.Items[j].Severity.Weight()
+	})
 
 	return analysis, nil
 }

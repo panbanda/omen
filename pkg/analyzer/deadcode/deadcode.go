@@ -693,6 +693,10 @@ func getClassNodeTypes(lang parser.Language) []string {
 		return []string{"class_declaration", "interface_declaration", "struct_declaration"}
 	case parser.LangCPP:
 		return []string{"class_specifier", "struct_specifier"}
+	case parser.LangRuby:
+		return []string{"class", "module", "singleton_class"}
+	case parser.LangPHP:
+		return []string{"class_declaration", "interface_declaration", "trait_declaration"}
 	default:
 		return []string{"class_declaration"}
 	}
@@ -793,6 +797,8 @@ var functionNodeTypes = map[string]bool{
 	"method":                  true,
 	"constructor_declaration": true,
 	"lambda_expression":       true,
+	// Ruby-specific
+	"singleton_method": true,
 }
 
 // isFunctionNode checks if a node type represents a function definition.
@@ -1461,9 +1467,12 @@ func IsTestFile(path string) bool {
 		strings.HasSuffix(path, ".test.js") ||
 		strings.HasSuffix(path, ".spec.ts") ||
 		strings.HasSuffix(path, ".spec.js") ||
+		strings.HasSuffix(path, "_spec.rb") ||
+		strings.HasSuffix(path, "_test.rb") ||
 		strings.Contains(path, "/test/") ||
 		strings.Contains(path, "/tests/") ||
-		strings.Contains(path, "/__tests__/")
+		strings.Contains(path, "/__tests__/") ||
+		strings.Contains(path, "/spec/")
 }
 
 // isFFIExported checks if a function is exported via FFI (CGO, pyo3, etc.).
