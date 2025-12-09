@@ -154,6 +154,13 @@ type ScoreInput struct {
 	AnalyzeInput
 }
 
+// ContextInput adds context options.
+type ContextInput struct {
+	Focus  string   `json:"focus" jsonschema:"File path, glob pattern, basename, or symbol name to focus on (required)."`
+	Paths  []string `json:"paths,omitempty" jsonschema:"Repository paths to search. Defaults to current directory."`
+	Format string   `json:"format,omitempty" jsonschema:"Output format: toon (default), json, or markdown."`
+}
+
 // Helper functions
 
 func getPaths(input AnalyzeInput) []string {
@@ -911,6 +918,70 @@ func handleAnalyzeScore(ctx context.Context, req *mcp.CallToolRequest, input Sco
 		score.WithMaxFileSize(cfg.Analysis.MaxFileSize),
 	)
 	result, err := analyzer.Analyze(ctx, scanResult.Files, source.NewFilesystem(), "")
+	if err != nil {
+		return toolError(err.Error())
+	}
+
+	return toolResult(result, format)
+}
+
+func handleGetContext(ctx context.Context, req *mcp.CallToolRequest, input ContextInput) (*mcp.CallToolResult, any, error) {
+	if input.Focus == "" {
+		return toolError("focus parameter is required")
+	}
+
+	paths := input.Paths
+	if len(paths) == 0 {
+		paths = []string{"."}
+	}
+	format := output.FormatTOON
+	switch input.Format {
+	case "json":
+		format = output.FormatJSON
+	case "markdown", "md":
+		format = output.FormatMarkdown
+	}
+
+	baseDir := paths[0]
+
+	scanner := scannerSvc.New()
+	scanResult, err := scanner.ScanPaths(paths)
+	if err != nil {
+		return toolError(err.Error())
+	}
+
+	svc := analysis.New()
+
+	// Generate repo map for symbol lookup
+	var repoMapResult *repomap.Map
+	if len(scanResult.Files) > 0 {
+		repoMapResult, _ = svc.AnalyzeRepoMap(ctx, scanResult.Files, analysis.RepoMapOptions{})
+	}
+
+	result, err := svc.FocusedContext(ctx, analysis.FocusedContextOptions{
+		Focus:   input.Focus,
+		BaseDir: baseDir,
+		RepoMap: repoMapResult,
+	})
+
+	// Handle ambiguous match specially - return candidates as structured error
+	if err != nil && result != nil && len(result.Candidates) > 0 {
+		candidates := struct {
+			Error      string                      `json:"error" toon:"error"`
+			Candidates []analysis.FocusedCandidate `json:"candidates" toon:"candidates"`
+		}{
+			Error:      "ambiguous match: multiple files or symbols found",
+			Candidates: result.Candidates,
+		}
+		text, _ := formatOutput(candidates, format)
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{
+				&mcp.TextContent{Text: text},
+			},
+			IsError: true,
+		}, nil, nil
+	}
+
 	if err != nil {
 		return toolError(err.Error())
 	}

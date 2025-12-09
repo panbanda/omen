@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/RoaringBitmap/roaring/v2 v2.14.4
+	github.com/bmatcuk/doublestar/v4 v4.9.1
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/fatih/color v1.18.0
 	github.com/go-git/go-billy/v6 v6.0.0-20251206100608-d4862421331a
