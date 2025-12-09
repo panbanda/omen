@@ -2,15 +2,18 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 
 	"github.com/fatih/color"
+	"github.com/panbanda/omen/internal/locator"
 	"github.com/panbanda/omen/internal/output"
 	"github.com/panbanda/omen/internal/progress"
 	"github.com/panbanda/omen/internal/service/analysis"
 	scannerSvc "github.com/panbanda/omen/internal/service/scanner"
 	"github.com/panbanda/omen/pkg/analyzer/graph"
+	"github.com/panbanda/omen/pkg/analyzer/repomap"
 	"github.com/spf13/cobra"
 )
 
@@ -29,6 +32,7 @@ var contextCmd = &cobra.Command{
 }
 
 func init() {
+	contextCmd.Flags().String("focus", "", "Focus on a specific file or symbol (file path, glob pattern, basename, or symbol name)")
 	contextCmd.Flags().Bool("include-metrics", false, "Include complexity and quality metrics")
 	contextCmd.Flags().Bool("include-graph", false, "Include dependency graph")
 	contextCmd.Flags().Bool("repo-map", false, "Generate PageRank-ranked symbol map")
@@ -40,11 +44,17 @@ func init() {
 
 func runContext(cmd *cobra.Command, args []string) error {
 	paths := getPaths(args)
+	focus, _ := cmd.Flags().GetString("focus")
 	includeMetrics, _ := cmd.Flags().GetBool("include-metrics")
 	includeGraph, _ := cmd.Flags().GetBool("include-graph")
 	repoMap, _ := cmd.Flags().GetBool("repo-map")
 	topN, _ := cmd.Flags().GetInt("top")
 	fullOutput, _ := cmd.Flags().GetBool("full")
+
+	// If --focus is provided, run focused context
+	if focus != "" {
+		return runFocusedContext(cmd, focus, paths)
+	}
 
 	scanSvc := scannerSvc.New()
 	scanResult, err := scanSvc.ScanPaths(paths)
@@ -203,6 +213,105 @@ func runContext(cmd *cobra.Command, args []string) error {
 			fmt.Printf("- **Total Files**: %d\n", rm.Summary.TotalFiles)
 			fmt.Printf("- **Max PageRank**: %.4f\n", rm.Summary.MaxPageRank)
 		}
+	}
+
+	return nil
+}
+
+func runFocusedContext(cmd *cobra.Command, focus string, paths []string) error {
+	baseDir := "."
+	if len(paths) > 0 {
+		baseDir = paths[0]
+	}
+
+	analysisSvc := analysis.New()
+
+	// Try without repo map first (exact path, glob, basename)
+	result, err := analysisSvc.FocusedContext(context.Background(), analysis.FocusedContextOptions{
+		Focus:   focus,
+		BaseDir: baseDir,
+	})
+
+	// If not found, try with repo map for symbol lookup
+	if errors.Is(err, locator.ErrNotFound) {
+		scanSvc := scannerSvc.New()
+		scanResult, scanErr := scanSvc.ScanPaths(paths)
+		if scanErr == nil && len(scanResult.Files) > 0 {
+			var repoMapResult *repomap.Map
+			repoMapResult, _ = analysisSvc.AnalyzeRepoMap(context.Background(), scanResult.Files, analysis.RepoMapOptions{})
+			if repoMapResult != nil {
+				result, err = analysisSvc.FocusedContext(context.Background(), analysis.FocusedContextOptions{
+					Focus:   focus,
+					BaseDir: baseDir,
+					RepoMap: repoMapResult,
+				})
+			}
+		}
+	}
+
+	// Handle ambiguous match
+	if err != nil && result != nil && len(result.Candidates) > 0 {
+		fmt.Println("# Ambiguous Match")
+		fmt.Println()
+		fmt.Printf("Multiple matches found for '%s'. Please be more specific:\n\n", focus)
+		for _, c := range result.Candidates {
+			if c.Path != "" {
+				fmt.Printf("- %s\n", c.Path)
+			} else {
+				fmt.Printf("- %s (%s) at %s:%d\n", c.Name, c.Kind, c.File, c.Line)
+			}
+		}
+		return nil
+	}
+
+	if err != nil {
+		return err
+	}
+
+	// Output focused context
+	fmt.Println("# Focused Context")
+	fmt.Println()
+
+	// Target information
+	fmt.Println("## Target")
+	if result.Target.Type == "file" {
+		fmt.Printf("- **Type**: file\n")
+		fmt.Printf("- **Path**: %s\n", result.Target.Path)
+	} else if result.Target.Type == "symbol" && result.Target.Symbol != nil {
+		fmt.Printf("- **Type**: symbol\n")
+		fmt.Printf("- **Name**: %s\n", result.Target.Symbol.Name)
+		fmt.Printf("- **Kind**: %s\n", result.Target.Symbol.Kind)
+		fmt.Printf("- **File**: %s\n", result.Target.Symbol.File)
+		fmt.Printf("- **Line**: %d\n", result.Target.Symbol.Line)
+	}
+	fmt.Println()
+
+	// Complexity
+	if result.Complexity != nil {
+		fmt.Println("## Complexity")
+		fmt.Printf("- **Cyclomatic Total**: %d\n", result.Complexity.CyclomaticTotal)
+		fmt.Printf("- **Cognitive Total**: %d\n", result.Complexity.CognitiveTotal)
+		if len(result.Complexity.TopFunctions) > 0 {
+			fmt.Println()
+			fmt.Println("### Functions")
+			fmt.Println("| Name | Line | Cyclomatic | Cognitive |")
+			fmt.Println("|------|------|------------|-----------|")
+			for _, fn := range result.Complexity.TopFunctions {
+				fmt.Printf("| %s | %d | %d | %d |\n", fn.Name, fn.Line, fn.Cyclomatic, fn.Cognitive)
+			}
+		}
+		fmt.Println()
+	}
+
+	// SATD markers
+	if len(result.SATD) > 0 {
+		fmt.Println("## Technical Debt")
+		fmt.Println("| Line | Type | Severity | Description |")
+		fmt.Println("|------|------|----------|-------------|")
+		for _, item := range result.SATD {
+			fmt.Printf("| %d | %s | %s | %s |\n", item.Line, item.Type, item.Severity, item.Content)
+		}
+		fmt.Println()
 	}
 
 	return nil

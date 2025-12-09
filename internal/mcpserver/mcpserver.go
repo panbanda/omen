@@ -138,4 +138,10 @@ func (s *Server) registerTools() {
 		Name:        "score_repository",
 		Description: describeScore(),
 	}, handleAnalyzeScore)
+
+	// Context
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name:        "get_context",
+		Description: describeContext(),
+	}, handleGetContext)
 }

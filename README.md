@@ -505,6 +505,7 @@ Omen includes a Model Context Protocol (MCP) server that exposes all analyzers a
 - `analyze_repo_map` - PageRank-ranked symbol map
 - `analyze_smells` - Architectural smell detection
 - `analyze_flags` - Feature flag detection and staleness
+- `get_context` - Deep context for a specific file or symbol
 
 Each tool includes detailed descriptions with interpretation guidance, helping LLMs understand what metrics mean and when to use each analyzer.
 

@@ -465,3 +465,38 @@ METRICS RETURNED:
 - commit: Git commit SHA (if available)
 - passed: Whether all thresholds met`
 }
+
+func describeContext() string {
+	return `Get deep context for a specific file or symbol before making changes.
+
+USE WHEN:
+- About to modify a file and need to understand its context
+- Need to understand a function's complexity, callers, and dependencies
+- Want to assess risk before touching unfamiliar code
+- Need focused analysis instead of whole-codebase metrics
+
+INPUT RESOLUTION:
+The focus parameter is resolved in this order:
+1. Exact file path - if file exists at path
+2. Glob pattern - if contains *, ?, or [ characters
+3. Basename search - if looks like filename (has extension)
+4. Symbol search - if repo map is available and name matches a symbol
+
+AMBIGUOUS MATCHES:
+If multiple files or symbols match, returns an error with candidates.
+Retry with a more specific path or the full symbol file:line.
+
+METRICS RETURNED:
+For files:
+- Complexity: cyclomatic/cognitive totals, per-function breakdown
+- Technical debt: SATD markers (TODO, FIXME, HACK) with line numbers
+
+For symbols:
+- Definition: file, line, kind (function/method/type)
+- Complexity: metrics for the specific function
+
+OUTPUT FORMATS:
+- toon (default): Structured key-value format
+- json: Machine-readable JSON
+- markdown: Human-readable with tables`
+}
