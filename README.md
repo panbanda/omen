@@ -174,6 +174,92 @@ This approach aligns with the 80/20 rule from defect prediction research: ~20% o
 </details>
 
 <details>
+<summary><strong>PR/Branch Diff Risk Analysis</strong> - Assess overall risk of a branch before merging</summary>
+
+While JIT analysis examines individual commits, diff analysis evaluates an entire branch's cumulative changes against a target branch. This gives reviewers a quick risk assessment before diving into code review.
+
+**Usage:**
+
+```bash
+# Compare current branch against main
+omen analyze diff --target main
+
+# Compare against a specific commit
+omen analyze diff --target abc123
+
+# Output as markdown for PR comments
+omen analyze diff --target main -f markdown
+```
+
+**Risk Factors:**
+
+| Factor | What it measures | Risk contribution |
+| ------ | ---------------- | ----------------- |
+| Lines Added | Total new code introduced | More code = more potential bugs |
+| Lines Deleted | Code removed | Generally reduces risk (less code) |
+| Files Modified | Spread of changes | More files = more potential for cascading issues |
+| Commits | Number of commits in branch | Many commits may indicate scope creep |
+| Entropy | How scattered changes are | High entropy = changes everywhere |
+
+**Risk Score Interpretation:**
+
+| Score | Level | Recommended Action |
+| ----- | ----- | ------------------ |
+| < 0.2 | LOW | Standard review process |
+| 0.2 - 0.5 | MEDIUM | Careful review, consider extra testing |
+| > 0.5 | HIGH | Thorough review, ensure comprehensive test coverage |
+
+**Example Output:**
+
+```
+Branch Diff Risk Analysis
+==========================
+
+Source:   feature/new-api
+Target:   main
+Base:     abc123def
+
+Risk Score: 0.31 (MEDIUM)
+
+Changes:
+  Lines Added:    63
+  Lines Deleted:  2
+  Files Modified: 2
+  Commits:        1
+
+Risk Factors:
+  entropy:        0.084
+  lines_added:    0.118
+  lines_deleted:  0.003
+  num_files:      0.050
+  commits:        0.005
+```
+
+**What to Look For:**
+
+- **High lines added, low deleted** - New feature, needs thorough review
+- **Balanced add/delete** - Refactoring, verify behavior unchanged
+- **Net code reduction** - Cleanup/simplification, generally positive
+- **High entropy** - Scattered changes, check for unrelated modifications
+- **Many files** - Wide impact, ensure integration testing
+
+**CI/CD Integration:**
+
+```yaml
+# Add to GitHub Actions workflow
+- name: PR Risk Assessment
+  run: |
+    omen analyze diff --target ${{ github.base_ref }} -f markdown >> $GITHUB_STEP_SUMMARY
+```
+
+**Why it matters:** Code review time is limited. Diff analysis helps reviewers prioritize their attention - a LOW risk PR with 10 lines changed needs less scrutiny than a MEDIUM risk PR touching 17 files. The entropy metric is particularly useful for catching PRs that bundle unrelated changes, which are harder to review and more likely to introduce bugs.
+
+> [!TIP]
+> Run `omen analyze diff` before creating a PR to understand how reviewers will perceive your changes. Consider splitting HIGH risk PRs into smaller, focused changes.
+
+</details>
+
+<details>
 <summary><strong>Technical Debt Gradient (TDG)</strong> - A composite "health score" for each file</summary>
 
 TDG combines multiple metrics into a single score (0-100 scale, higher is better):
@@ -642,6 +728,78 @@ Verify installation with `/skills` to see available Omen skills.
 
 Skills require the Omen MCP server to be configured (see MCP Server section above).
 
+## Real-World Repository Analysis Examples
+
+The [`examples/repos/`](examples/repos/) directory contains comprehensive health reports for popular open-source projects, demonstrating Omen's capabilities across different languages and project types.
+
+### Analyzed Repositories
+
+| Repository | Language | Health Score | Key Insights |
+|------------|----------|--------------|--------------|
+| [gin-gonic/gin](examples/repos/gin-gonic-gin.md) | Go | 95/100 | Exceptionally healthy web framework with zero duplication and clean architecture |
+| [excalidraw/excalidraw](examples/repos/excalidraw-excalidraw.md) | TypeScript | 86/100 | Highest-scoring repo with 100% coupling score; App.tsx needs refactoring |
+| [BurntSushi/ripgrep](examples/repos/burntSushi-ripgrep.md) | Rust | 76/100 | Mature codebase with excellent architecture; duplication in tests is intentional |
+| [tiangolo/fastapi](examples/repos/tiangolo-fastapi.md) | Python | 74/100 | Great complexity scores (98/100); duplication from versioned examples in docs |
+| [discourse/discourse](examples/repos/discourse-discourse.md) | Ruby | 69/100 | Largest codebase (10K+ files); excellent defect management despite size |
+
+### What the Reports Demonstrate
+
+**1. Health Score Breakdown**
+Each report shows how the composite score is calculated from individual components (complexity, duplication, SATD, coupling, etc.) and explains why certain scores are what they are.
+
+**2. Hotspot Analysis**
+Reports identify files with high churn AND high complexity - the most impactful refactoring targets. For example, gin's `tree.go` has a hotspot score of 0.54 due to its radix tree routing complexity.
+
+**3. Technical Debt Gradient (TDG)**
+Files are graded A-F based on accumulated technical debt. The reports explain what drives low grades and prioritize cleanup efforts.
+
+**4. PR Risk Analysis**
+Each report includes a real PR analysis demonstrating `omen analyze diff`:
+
+```bash
+omen analyze diff --target main -f markdown
+```
+
+Example from gin-gonic/gin (#4420 - add escaped path option):
+```
+Risk Score: 0.31 (MEDIUM)
+Lines Added:    63
+Lines Deleted:  2
+Files Modified: 2
+
+Risk Factors:
+  entropy:        0.084
+  lines_added:    0.118
+  num_files:      0.050
+```
+
+**Understanding Risk Factors:**
+- **Risk Score** - LOW (< 0.2), MEDIUM (0.2-0.5), HIGH (> 0.5)
+- **Entropy** - How scattered changes are (0 = concentrated, 1 = everywhere)
+- **Lines Added/Deleted Ratio** - Net code reduction is often a good sign
+- **Files Modified** - More files = more potential for cascading issues
+
+**5. CI/CD Integration**
+Reports include GitHub Actions workflow examples for quality gates and PR risk assessment.
+
+### Generating Your Own Reports
+
+Run a comprehensive analysis on any repository:
+
+```bash
+# Local repository
+omen score .
+omen analyze hotspot
+omen analyze tdg
+
+# Remote repository
+omen score facebook/react
+omen analyze hotspot kubernetes/kubernetes
+
+# PR risk before merging
+omen analyze diff --target main
+```
+
 ## Contributing
 
 1. Fork the repository
@@ -656,4 +814,4 @@ Omen draws heavy inspiration from [paiml-mcp-agent-toolkit](https://github.com/p
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+Apache License 2.0 - see [LICENSE](LICENSE) for details.
