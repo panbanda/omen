@@ -93,35 +93,37 @@ For symbols, you'll receive:
 Present focused context as:
 
 ```markdown
-# Context: `path/to/file.go`
+# Focused Context
 
-## Complexity Overview
-- **Total Cyclomatic**: 45
-- **Total Cognitive**: 62
-- **Risk Level**: MEDIUM
+## Target
+- **Type**: file
+- **Path**: path/to/file.go
 
-## Functions
+## Complexity
+- **Cyclomatic Total**: 45
+- **Cognitive Total**: 62
 
-| Function | Line | Cyclomatic | Cognitive | Status |
-|----------|------|------------|-----------|--------|
-| CreateUser | 25 | 8 | 12 | OK |
-| ValidateInput | 50 | 15 | 22 | WARNING |
-| ProcessOrder | 100 | 25 | 35 | CRITICAL |
+### Functions
+| Name | Line | Cyclomatic | Cognitive |
+|------|------|------------|-----------|
+| CreateUser | 25 | 8 | 12 |
+| ValidateInput | 50 | 15 | 22 |
+| ProcessOrder | 100 | 25 | 35 |
 
 ## Technical Debt
-
-| Line | Type | Content |
-|------|------|---------|
-| 72 | TODO | Add input validation |
-| 105 | FIXME | Race condition in concurrent access |
-| 150 | HACK | Workaround for API bug |
-
-## Recommendations
-
-1. **ProcessOrder** exceeds complexity thresholds - consider splitting
-2. **FIXME on line 105** indicates a known bug - review before changes
-3. Consider addressing TODO on line 72 while modifying this file
+| Line | Type | Severity | Description |
+|------|------|----------|-------------|
+| 72 | TODO | low | Add input validation |
+| 105 | FIXME | high | Race condition in concurrent access |
+| 150 | HACK | medium | Workaround for API bug |
 ```
+
+## Interpreting Results
+
+Use the complexity thresholds table to identify functions that need attention:
+- Functions exceeding cyclomatic >20 or cognitive >30 are critical refactoring candidates
+- High severity debt (FIXME, BUG) should be addressed before changes
+- Consider addressing low severity debt (TODO) while modifying the file
 
 ## Combining with Other Analysis
 

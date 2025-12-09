@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 
 	"github.com/panbanda/omen/internal/locator"
@@ -100,16 +101,14 @@ func (s *Service) FocusedContext(ctx context.Context, opts FocusedContextOptions
 		return nil, err
 	}
 
-	result := &FocusedContextResult{}
-
 	switch locatorResult.Type {
 	case locator.TargetFile:
 		return s.focusedContextForFile(ctx, locatorResult.Path, opts)
 	case locator.TargetSymbol:
 		return s.focusedContextForSymbol(ctx, locatorResult.Symbol, opts)
+	default:
+		return nil, fmt.Errorf("unrecognized target type: %s", locatorResult.Type)
 	}
-
-	return result, nil
 }
 
 func (s *Service) focusedContextForFile(ctx context.Context, path string, opts FocusedContextOptions) (*FocusedContextResult, error) {

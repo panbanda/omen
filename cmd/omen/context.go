@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 
 	"github.com/fatih/color"
+	"github.com/panbanda/omen/internal/locator"
 	"github.com/panbanda/omen/internal/output"
 	"github.com/panbanda/omen/internal/progress"
 	"github.com/panbanda/omen/internal/service/analysis"
@@ -222,26 +224,30 @@ func runFocusedContext(cmd *cobra.Command, focus string, paths []string) error {
 		baseDir = paths[0]
 	}
 
-	// Generate repo map for symbol resolution
-	scanSvc := scannerSvc.New()
-	scanResult, err := scanSvc.ScanPaths(paths)
-	if err != nil {
-		return err
-	}
-
 	analysisSvc := analysis.New()
 
-	// Generate repo map for symbol lookup
-	var repoMapResult *repomap.Map
-	if len(scanResult.Files) > 0 {
-		repoMapResult, _ = analysisSvc.AnalyzeRepoMap(context.Background(), scanResult.Files, analysis.RepoMapOptions{})
-	}
-
+	// Try without repo map first (exact path, glob, basename)
 	result, err := analysisSvc.FocusedContext(context.Background(), analysis.FocusedContextOptions{
 		Focus:   focus,
 		BaseDir: baseDir,
-		RepoMap: repoMapResult,
 	})
+
+	// If not found, try with repo map for symbol lookup
+	if errors.Is(err, locator.ErrNotFound) {
+		scanSvc := scannerSvc.New()
+		scanResult, scanErr := scanSvc.ScanPaths(paths)
+		if scanErr == nil && len(scanResult.Files) > 0 {
+			var repoMapResult *repomap.Map
+			repoMapResult, _ = analysisSvc.AnalyzeRepoMap(context.Background(), scanResult.Files, analysis.RepoMapOptions{})
+			if repoMapResult != nil {
+				result, err = analysisSvc.FocusedContext(context.Background(), analysis.FocusedContextOptions{
+					Focus:   focus,
+					BaseDir: baseDir,
+					RepoMap: repoMapResult,
+				})
+			}
+		}
+	}
 
 	// Handle ambiguous match
 	if err != nil && result != nil && len(result.Candidates) > 0 {

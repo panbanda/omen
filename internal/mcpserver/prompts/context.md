@@ -105,29 +105,25 @@ get_context:
 
 **Type**: [file | symbol]
 **Path**: [resolved file path]
-**Risk Level**: [LOW | MEDIUM | HIGH]
 
 ### Complexity Metrics
-
-| Function | Line | Cyclomatic | Cognitive | Verdict |
-|----------|------|------------|-----------|---------|
-| | | | | OK/WARN/CRITICAL |
 
 **Total Cyclomatic**: [sum]
 **Total Cognitive**: [sum]
 
-### Technical Debt
+| Function | Line | Cyclomatic | Cognitive |
+|----------|------|------------|-----------|
+| | | | |
 
-| Line | Marker | Severity | Content |
-|------|--------|----------|---------|
+### Technical Debt (SATD)
+
+| Line | Type | Severity | Content |
+|------|------|----------|---------|
 | | TODO/FIXME/HACK | low/medium/high/critical | |
 
-### Risk Assessment
+### Interpretation
 
-**Verdict**: [SAFE TO MODIFY | USE CAUTION | HIGH RISK]
-
-**Concerns**:
-- [List any complexity or debt issues]
-
-**Recommendations**:
-- [Suggestions based on findings]
+Based on complexity thresholds and debt markers, assess:
+- Functions exceeding thresholds need attention before changes
+- Critical/high severity debt should be addressed
+- Consider the combined risk when modifying this code

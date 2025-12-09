@@ -2,9 +2,11 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"sort"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/panbanda/omen/internal/locator"
 	"github.com/panbanda/omen/internal/output"
 	"github.com/panbanda/omen/internal/service/analysis"
 	scannerSvc "github.com/panbanda/omen/internal/service/scanner"
@@ -952,7 +954,7 @@ func handleGetContext(ctx context.Context, req *mcp.CallToolRequest, input Conte
 	})
 
 	// If not found, try with repo map for symbol lookup
-	if err != nil && err.Error() == "no file or symbol found" {
+	if errors.Is(err, locator.ErrNotFound) {
 		scanner := scannerSvc.New()
 		scanResult, scanErr := scanner.ScanPaths(paths)
 		if scanErr == nil && len(scanResult.Files) > 0 {
