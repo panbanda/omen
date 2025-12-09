@@ -102,8 +102,8 @@ func runContext(cmd *cobra.Command, args []string) error {
 		repoRoot, _ = filepath.Abs(".")
 	}
 
-	svc := analysis.New()
-	rankedFiles, sortErr := svc.SortFilesByHotspot(context.Background(), repoRoot, files, analysis.HotspotOptions{})
+	analysisSvc := analysis.New()
+	rankedFiles, sortErr := analysisSvc.SortFilesByHotspot(context.Background(), repoRoot, files, analysis.HotspotOptions{})
 
 	if sortErr == nil && len(rankedFiles) > 0 {
 		// Display sorted files with scores
@@ -120,6 +120,9 @@ func runContext(cmd *cobra.Command, args []string) error {
 		}
 	} else {
 		// Fallback: unsorted list (no git or error)
+		if sortErr != nil && verbose {
+			color.Yellow("Note: hotspot sorting unavailable (%v), showing unsorted file list", sortErr)
+		}
 		for i, f := range files {
 			if i >= maxFiles {
 				fmt.Printf("- ... and %d more files\n", len(files)-maxFiles)
@@ -132,8 +135,7 @@ func runContext(cmd *cobra.Command, args []string) error {
 	if includeMetrics {
 		fmt.Println()
 		fmt.Println("## Complexity Metrics")
-		svc := analysis.New()
-		cxResult, cxErr := svc.AnalyzeComplexity(context.Background(), files, analysis.ComplexityOptions{})
+		cxResult, cxErr := analysisSvc.AnalyzeComplexity(context.Background(), files, analysis.ComplexityOptions{})
 		if cxErr == nil {
 			fmt.Printf("- **Total Functions**: %d\n", cxResult.Summary.TotalFunctions)
 			fmt.Printf("- **Median Cyclomatic (P50)**: %d\n", cxResult.Summary.P50Cyclomatic)
@@ -148,8 +150,7 @@ func runContext(cmd *cobra.Command, args []string) error {
 	if includeGraph {
 		fmt.Println()
 		fmt.Println("## Dependency Graph")
-		graphSvc := analysis.New()
-		graphData, _, graphErr := graphSvc.AnalyzeGraph(context.Background(), files, analysis.GraphOptions{
+		graphData, _, graphErr := analysisSvc.AnalyzeGraph(context.Background(), files, analysis.GraphOptions{
 			Scope: graph.ScopeFile,
 		})
 		if graphErr == nil {
@@ -185,8 +186,7 @@ func runContext(cmd *cobra.Command, args []string) error {
 		fmt.Println("## Repository Map")
 
 		spinner := progress.NewSpinner("Generating repo map...")
-		rmSvc := analysis.New()
-		rm, rmErr := rmSvc.AnalyzeRepoMap(context.Background(), files, analysis.RepoMapOptions{Top: topN})
+		rm, rmErr := analysisSvc.AnalyzeRepoMap(context.Background(), files, analysis.RepoMapOptions{Top: topN})
 		spinner.FinishSuccess()
 
 		if rmErr == nil {
