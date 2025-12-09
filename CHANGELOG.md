@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.0](https://github.com/panbanda/omen/compare/omen-v2.0.0...omen-v2.1.0) (2025-12-09)
+
+
+### Features
+
+* **analyzer:** improve detection accuracy and add context window mode ([#139](https://github.com/panbanda/omen/issues/139)) ([dfb03d5](https://github.com/panbanda/omen/commit/dfb03d5adb7bd9b8ef7186ecd6528021025f881f))
+
 ## [2.0.0](https://github.com/panbanda/omen/compare/omen-v1.6.0...omen-v2.0.0) (2025-12-09)
 
 
