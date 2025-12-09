@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.0](https://github.com/panbanda/omen/compare/omen-v2.3.0...omen-v2.4.0) (2025-12-09)
+
+
+### Features
+
+* **scanner:** always exclude .omen directory regardless of config ([#148](https://github.com/panbanda/omen/issues/148)) ([ef15501](https://github.com/panbanda/omen/commit/ef1550169798ab824be7cb1bf2acd08fe87a396a))
+
 ## [2.3.0](https://github.com/panbanda/omen/compare/omen-v2.2.0...omen-v2.3.0) (2025-12-09)
 
 
