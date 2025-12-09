@@ -468,6 +468,20 @@ func LoadOrDefault() (*Config, error) {
 	return result.Config, nil
 }
 
+// DefaultExcludeDirPrefixes returns directory prefixes from the default exclusion patterns.
+// These are patterns ending in "/" that represent directories to exclude.
+// Used by analyzers that need to filter paths without full gitignore matching.
+func DefaultExcludeDirPrefixes() []string {
+	cfg := DefaultConfig()
+	var prefixes []string
+	for _, pattern := range cfg.Exclude.Patterns {
+		if len(pattern) > 0 && pattern[len(pattern)-1] == '/' {
+			prefixes = append(prefixes, pattern)
+		}
+	}
+	return prefixes
+}
+
 // ShouldExclude is deprecated. Use the scanner's gitignore-based matching instead.
 // This method is kept for backward compatibility but only does basic pattern matching.
 func (c *Config) ShouldExclude(path string) bool {
