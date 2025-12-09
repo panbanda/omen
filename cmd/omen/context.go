@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 
 	"github.com/fatih/color"
 	"github.com/panbanda/omen/internal/output"
@@ -80,19 +81,52 @@ func runContext(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Println()
 
-	// File structure with sensible limit
+	// File structure sorted by hotspot score (most problematic first)
 	fmt.Println("## File Structure")
+	fmt.Println("*Sorted by hotspot score (churn + complexity)*")
+	fmt.Println()
+
 	maxFiles := defaultMaxFiles
 	if fullOutput {
 		maxFiles = len(files)
 	}
 
-	for i, f := range files {
-		if i >= maxFiles {
-			fmt.Printf("- ... and %d more files\n", len(files)-maxFiles)
-			break
+	// Try to sort by hotspot score (requires git repo)
+	// Use ScanPathsForGit to find the git root
+	gitResult, gitErr := scanSvc.ScanPathsForGit(paths, false)
+	repoRoot := ""
+	if gitErr == nil && gitResult.RepoRoot != "" {
+		repoRoot = gitResult.RepoRoot
+	} else {
+		// Fallback to cwd if scanning didn't find repo root
+		repoRoot, _ = filepath.Abs(".")
+	}
+
+	svc := analysis.New()
+	rankedFiles, sortErr := svc.SortFilesByHotspot(context.Background(), repoRoot, files, analysis.HotspotOptions{})
+
+	if sortErr == nil && len(rankedFiles) > 0 {
+		// Display sorted files with scores
+		for i, rf := range rankedFiles {
+			if i >= maxFiles {
+				fmt.Printf("- ... and %d more files\n", len(rankedFiles)-maxFiles)
+				break
+			}
+			if rf.Score > 0 {
+				fmt.Printf("- %s (%.0f%%)\n", rf.Path, rf.Score*100)
+			} else {
+				fmt.Printf("- %s\n", rf.Path)
+			}
 		}
-		fmt.Printf("- %s\n", f)
+	} else {
+		// Fallback: unsorted list (no git or error)
+		for i, f := range files {
+			if i >= maxFiles {
+				fmt.Printf("- ... and %d more files\n", len(files)-maxFiles)
+				break
+			}
+			fmt.Printf("- %s\n", f)
+		}
 	}
 
 	if includeMetrics {

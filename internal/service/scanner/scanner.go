@@ -117,12 +117,12 @@ func (s *Service) findGitRoot(path string) (string, error) {
 	}
 
 	// Try to open git repo starting from path
-	_, err = s.opener.PlainOpenWithDetect(absPath)
+	repo, err := s.opener.PlainOpenWithDetect(absPath)
 	if err != nil {
 		return "", err
 	}
 
-	return absPath, nil
+	return repo.RepoPath(), nil
 }
 
 // FilterBySize filters files by maximum size.

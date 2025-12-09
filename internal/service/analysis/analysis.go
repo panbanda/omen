@@ -2,6 +2,7 @@ package analysis
 
 import (
 	"context"
+	"sort"
 
 	"github.com/panbanda/omen/internal/progress"
 	"github.com/panbanda/omen/internal/vcs"
@@ -336,6 +337,43 @@ func (s *Service) AnalyzeHotspots(ctx context.Context, repoPath string, files []
 		ctx = analyzer.WithTracker(ctx, tracker)
 	}
 	return hotspotAnalyzer.Analyze(ctx, repoPath, files)
+}
+
+// RankedFile represents a file with its hotspot score for sorting.
+type RankedFile struct {
+	Path  string
+	Score float64
+}
+
+// SortFilesByHotspot returns files sorted by hotspot score (highest first).
+// This combines churn and complexity to surface the most problematic files.
+func (s *Service) SortFilesByHotspot(ctx context.Context, repoPath string, files []string, opts HotspotOptions) ([]RankedFile, error) {
+	analysis, err := s.AnalyzeHotspots(ctx, repoPath, files, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build lookup from hotspot results
+	scoreMap := make(map[string]float64)
+	for _, hs := range analysis.Files {
+		scoreMap[hs.Path] = hs.HotspotScore
+	}
+
+	// Create ranked list
+	ranked := make([]RankedFile, 0, len(files))
+	for _, f := range files {
+		ranked = append(ranked, RankedFile{
+			Path:  f,
+			Score: scoreMap[f], // 0 if not in hotspots
+		})
+	}
+
+	// Sort by score descending
+	sort.Slice(ranked, func(i, j int) bool {
+		return ranked[i].Score > ranked[j].Score
+	})
+
+	return ranked, nil
 }
 
 // TemporalCouplingOptions configures temporal coupling analysis.
