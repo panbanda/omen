@@ -45,6 +45,7 @@ Omen is a multi-language code analysis CLI built in Go. It uses tree-sitter for 
 - `changes/` - JIT commit-level change risk (Kamei et al. 2013)
 - `churn/` - Git history file churn analysis
 - `cohesion/` - CK object-oriented metrics (LCOM, WMC, CBO, DIT)
+- `commit/` - Score trend analysis over git history
 - `complexity/` - Cyclomatic and cognitive complexity
 - `deadcode/` - Unused code detection
 - `defect/` - File-level defect probability (PMAT weights)
@@ -55,20 +56,24 @@ Omen is a multi-language code analysis CLI built in Go. It uses tree-sitter for 
 - `ownership/` - Code ownership and bus factor
 - `repomap/` - PageRank-weighted symbol map
 - `satd/` - Self-admitted technical debt detection
+- `score/` - Repository health scoring (0-100)
 - `smells/` - Architectural smell detection (cycles, hubs, god components)
 - `tdg/` - Technical Debt Gradient scores
 - `temporal/` - Temporal coupling analysis
 
 **Internal packages** (`internal/`) - implementation details:
-- `fileproc/` - Concurrent file processing utilities
-- `scanner/` - File discovery with configurable exclusion patterns
 - `cache/` - Result caching with Blake3 hashing
+- `fileproc/` - Concurrent file processing utilities
+- `locator/` - File and symbol location resolution
+- `mcpserver/` - MCP server implementation with tools and prompts
 - `output/` - Output formatting (text/JSON/markdown/toon)
 - `progress/` - Progress bars and spinners
-- `mcpserver/` - MCP server implementation with tools and prompts
-- `service/` - High-level service layer coordinating analyzers
-- `vcs/` - Git operations (blame, log, diff)
+- `remote/` - Remote repository cloning and handling
+- `scanner/` - File discovery with configurable exclusion patterns
 - `semantic/` - Language-aware semantic extraction for indirect function references (callbacks, decorators, dynamic dispatch)
+- `service/` - High-level service layer coordinating analyzers
+- `testutil/` - Test utilities
+- `vcs/` - Git operations (blame, log, diff)
 
 **CLI** (`cmd/omen/`) - Entry point using spf13/cobra with persistent flag inheritance
 
@@ -123,6 +128,7 @@ Analyzer subcommands (`omen analyze <subcommand>`):
 - `cohesion` / `ck` - CK object-oriented metrics
 - `lint-hotspot` / `lh` - Lint violation density
 - `flags` / `ff` - Feature flag detection and staleness analysis
+- `trend` - Score trends over git history
 
 **Global flags**: `--config`, `--verbose`, `--pprof`
 

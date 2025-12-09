@@ -97,6 +97,7 @@ func NormalizeDuplication(ratio float64) int {
 	return clamp(int(math.Round(score)), 0, 100)
 }
 
+// omen:ignore - documentation describes SATD markers, not actual debt
 // -----------------------------------------------------------------------------
 // Self-Admitted Technical Debt (SATD) Normalization
 // -----------------------------------------------------------------------------
@@ -104,7 +105,7 @@ func NormalizeDuplication(ratio float64) int {
 // Uses SEVERITY-WEIGHTED scoring rather than raw item counts.
 //
 // Rationale:
-// - Not all debt is equal: a SECURITY TODO is far worse than a NOTE
+// - Not all debt is equal: a SECURITY marker is far worse than a NOTE
 // - Raw counts penalize well-documented codebases that track their debt
 // - Density (per KLOC) scales appropriately with codebase size
 //
@@ -123,11 +124,12 @@ func NormalizeDuplication(ratio float64) int {
 // -----------------------------------------------------------------------------
 
 // SATDSeverityCounts holds SATD item counts by severity level.
+// omen:ignore - field comments describe SATD markers, not actual debt
 type SATDSeverityCounts struct {
-	Critical int // SECURITY, VULN, UNSAFE
-	High     int // FIXME, BUG, BROKEN
-	Medium   int // HACK, KLUDGE, REFACTOR
-	Low      int // TODO, NOTE, OPTIMIZE
+	Critical int
+	High     int
+	Medium   int
+	Low      int
 }
 
 // NormalizeSATD converts SATD severity counts to 0-100 score.

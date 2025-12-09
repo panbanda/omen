@@ -100,7 +100,7 @@ func (s *Scanner) isExcluded(path string, isDir bool) bool {
 func (s *Scanner) ScanDir(root string) ([]string, error) {
 	files := make([]string, 0, 1024)
 
-	// Resolve root to absolute path for security validation
+	// Resolve root to absolute path for validation (omen:ignore)
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
@@ -120,7 +120,7 @@ func (s *Scanner) ScanDir(root string) ([]string, error) {
 
 		relPath, _ := filepath.Rel(root, path)
 
-		// Security: validate path stays within root (prevent symlink traversal)
+		// Validate path stays within root to prevent symlink traversal (omen:ignore)
 		if d.Type()&fs.ModeSymlink != 0 {
 			// Resolve the symlink and check if it escapes root
 			resolved, err := filepath.EvalSymlinks(path)

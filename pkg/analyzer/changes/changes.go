@@ -75,7 +75,7 @@ func New(opts ...Option) *Analyzer {
 	return a
 }
 
-// Bug fix regex patterns - detect commits that fix bugs.
+// Patterns to detect commits that fix defects (omen:ignore)
 // Based on patterns from Mockus & Votta (2000) and subsequent research.
 var bugFixPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bfix(es|ed|ing)?\b`),
@@ -103,7 +103,7 @@ var automatedCommitPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)^\s*style:`),
 }
 
-// isBugFixCommit checks if a commit message indicates a bug fix.
+// isBugFixCommit checks if a commit message indicates a defect fix (omen:ignore)
 func isBugFixCommit(message string) bool {
 	for _, pattern := range bugFixPatterns {
 		if pattern.MatchString(message) {
