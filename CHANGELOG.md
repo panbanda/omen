@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.3](https://github.com/panbanda/omen/compare/omen-v2.4.2...omen-v2.4.3) (2025-12-09)
+
+
+### Bug Fixes
+
+* **churn:** rename TotalCommits to TotalFileChanges for clarity ([#156](https://github.com/panbanda/omen/issues/156)) ([3454d55](https://github.com/panbanda/omen/commit/3454d555a1a7865ffa278e07f161d706c2ba73d1))
+
 ## [2.4.2](https://github.com/panbanda/omen/compare/omen-v2.4.1...omen-v2.4.2) (2025-12-09)
 
 
