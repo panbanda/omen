@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.2](https://github.com/panbanda/omen/compare/omen-v2.4.1...omen-v2.4.2) (2025-12-09)
+
+
+### Bug Fixes
+
+* **score:** apply default exclusions to trend analysis ([#153](https://github.com/panbanda/omen/issues/153)) ([06433da](https://github.com/panbanda/omen/commit/06433da2915437ceb5079c1632decfb89f441d85))
+
 ## [2.4.1](https://github.com/panbanda/omen/compare/omen-v2.4.0...omen-v2.4.1) (2025-12-09)
 
 
