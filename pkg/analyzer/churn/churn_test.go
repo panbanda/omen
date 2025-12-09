@@ -193,8 +193,8 @@ func TestAnalyzer_AnalyzeRepo(t *testing.T) {
 				t.Error("RepositoryRoot should not be empty")
 			}
 
-			if tt.wantFiles > 0 && result.Summary.TotalCommits < tt.wantMinCommits {
-				t.Errorf("Summary.TotalCommits = %v, want >= %v", result.Summary.TotalCommits, tt.wantMinCommits)
+			if tt.wantFiles > 0 && result.Summary.TotalFileChanges < tt.wantMinCommits {
+				t.Errorf("Summary.TotalFileChanges = %v, want >= %v", result.Summary.TotalFileChanges, tt.wantMinCommits)
 			}
 		})
 	}
@@ -376,7 +376,7 @@ func TestAnalyzer_AnalyzeRepo_SummaryStatistics(t *testing.T) {
 		t.Error("AvgCommitsPerFile should not be 0")
 	}
 
-	expectedAvg := float64(result.Summary.TotalCommits) / float64(result.Summary.TotalFilesChanged)
+	expectedAvg := float64(result.Summary.TotalFileChanges) / float64(result.Summary.TotalFilesChanged)
 	if result.Summary.AvgCommitsPerFile != expectedAvg {
 		t.Errorf("AvgCommitsPerFile = %v, want %v", result.Summary.AvgCommitsPerFile, expectedAvg)
 	}
@@ -667,6 +667,44 @@ func TestSummary_IdentifyHotspotAndStableFiles(t *testing.T) {
 
 	if len(s.StableFiles) != 1 {
 		t.Errorf("StableFiles count = %d, want 1", len(s.StableFiles))
+	}
+}
+
+// TestSummary_TotalFileChanges_NotTotalCommits verifies the field name is clear.
+// TotalFileChanges represents the sum of file touches across all commits,
+// NOT the count of unique commits. This test ensures the misleading name is fixed.
+func TestSummary_TotalFileChanges_NotTotalCommits(t *testing.T) {
+	tmpDir := t.TempDir()
+	repoPath := filepath.Join(tmpDir, "repo")
+	repo := initGitRepo(t, repoPath)
+
+	// Create commits touching multiple files
+	// Commit 1: add file1 (initial commit, skipped - no parent)
+	// Commit 2: add file2 (file change: +1)
+	// Commit 3: update file1 (file change: +1)
+	// Commit 4: update file2 (file change: +1)
+	// Total file changes: 3
+	writeFileAndCommit(t, repo, repoPath, "file1.go", "package a\n", "Commit 1: add file1")
+	writeFileAndCommit(t, repo, repoPath, "file2.go", "package b\n", "Commit 2: add file2")
+	writeFileAndCommit(t, repo, repoPath, "file1.go", "package a\n\nfunc A() {}\n", "Commit 3: update file1")
+	writeFileAndCommit(t, repo, repoPath, "file2.go", "package b\n\nfunc B() {}\n", "Commit 4: update file2")
+
+	analyzer := New(WithDays(90))
+	result, err := analyzer.Analyze(context.Background(), repoPath, nil)
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+
+	// The field is named TotalFileChanges (not TotalCommits) to clarify it's the
+	// sum of file touches across commits, not the count of unique commits.
+	// With 4 commits but first skipped: 3 file changes total
+	if result.Summary.TotalFileChanges != 3 {
+		t.Errorf("Summary.TotalFileChanges = %d, want 3", result.Summary.TotalFileChanges)
+	}
+
+	// Verify it differs from number of unique files (2) and unique commits (3)
+	if result.Summary.TotalFilesChanged != 2 {
+		t.Errorf("Summary.TotalFilesChanged = %d, want 2", result.Summary.TotalFilesChanged)
 	}
 }
 

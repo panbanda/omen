@@ -294,9 +294,9 @@ func printAnalysisSummary(formatter *output.Formatter, r fullAnalysis) error {
 
 	if r.Churn != nil {
 		fmt.Fprintf(w, "\nFile Churn:\n")
-		fmt.Fprintf(w, "  Files: %d, Total Commits: %d, Authors: %d\n",
+		fmt.Fprintf(w, "  Files: %d, File Changes: %d, Authors: %d\n",
 			r.Churn.Summary.TotalFilesChanged,
-			r.Churn.Summary.TotalCommits,
+			r.Churn.Summary.TotalFileChanges,
 			len(r.Churn.Summary.AuthorContributions))
 	}
 
