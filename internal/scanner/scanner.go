@@ -73,6 +73,14 @@ func (s *Scanner) loadExcludePatterns(root string) {
 
 // isExcluded checks if a path matches any exclusion pattern.
 func (s *Scanner) isExcluded(path string, isDir bool) bool {
+	// Always exclude .omen directory (internal tool directory)
+	if isDir {
+		base := filepath.Base(path)
+		if base == ".omen" {
+			return true
+		}
+	}
+
 	if len(s.matchers) == 0 {
 		return false
 	}

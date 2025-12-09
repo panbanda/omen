@@ -3,6 +3,7 @@ package scanner
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/panbanda/omen/pkg/config"
@@ -105,6 +106,54 @@ func TestScanDirExcludesDirectories(t *testing.T) {
 		t.Errorf("ScanDir() found %d files, want 1 (excluded dirs should be skipped)", len(result))
 		for _, f := range result {
 			t.Logf("  Found: %s", f)
+		}
+	}
+}
+
+func TestScanDirAlwaysExcludesOmenDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create .omen directory with Go files
+	omenDir := filepath.Join(tmpDir, ".omen")
+	if err := os.MkdirAll(omenDir, 0755); err != nil {
+		t.Fatalf("Failed to create .omen directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(omenDir, "cache.go"), []byte("package cache\n"), 0644); err != nil {
+		t.Fatalf("Failed to create file: %v", err)
+	}
+
+	// Create a regular file
+	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main\n"), 0644); err != nil {
+		t.Fatalf("Failed to create file: %v", err)
+	}
+
+	// Use a config with empty exclude patterns to verify .omen is always excluded
+	cfg := &config.Config{
+		Exclude: config.ExcludeConfig{
+			Patterns:  []string{}, // No patterns
+			Gitignore: false,      // Disable gitignore
+		},
+	}
+
+	s := NewScanner(cfg)
+	result, err := s.ScanDir(tmpDir)
+	if err != nil {
+		t.Fatalf("ScanDir() error: %v", err)
+	}
+
+	// Should only find main.go, not files in .omen
+	if len(result) != 1 {
+		t.Errorf("ScanDir() found %d files, want 1 (files in .omen should be excluded)", len(result))
+		for _, f := range result {
+			t.Logf("  Found: %s", f)
+		}
+	}
+
+	// Verify no .omen files were found
+	for _, f := range result {
+		rel, _ := filepath.Rel(tmpDir, f)
+		if strings.HasPrefix(rel, ".omen") {
+			t.Errorf("Found file in .omen directory: %s", rel)
 		}
 	}
 }
