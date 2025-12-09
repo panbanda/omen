@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.0.0](https://github.com/panbanda/omen/compare/omen-v1.6.0...omen-v2.0.0) (2025-12-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** Internal CLI framework changed from urfave/cli to spf13/cobra. External CLI interface remains compatible.
+* Analyze methods now require ContentSource parameter
+
+### Features
+
+* **cli:** migrate from urfave/cli to spf13/cobra ([#137](https://github.com/panbanda/omen/issues/137)) ([a8ab119](https://github.com/panbanda/omen/commit/a8ab1190f192a7fd4193ac6afb6b412fb0da3ce1))
+* **deadcode:** improve React/JSX detection and semantic extraction ([#142](https://github.com/panbanda/omen/issues/142)) ([0b5a595](https://github.com/panbanda/omen/commit/0b5a5958e3571bc6afb79f8e38f68a0036ca31ee))
+* git-tree trend analysis, skills marketplace ([#135](https://github.com/panbanda/omen/issues/135)) ([8d457ff](https://github.com/panbanda/omen/commit/8d457ff13ad41999cead3b6f7c314cc24e2496c3))
+* **remote:** add remote repository scanning ([#138](https://github.com/panbanda/omen/issues/138)) ([5170ec9](https://github.com/panbanda/omen/commit/5170ec9d4d4d633d7467e20f4d88bc3e9a107d00))
+
 ## [1.6.0](https://github.com/panbanda/omen/compare/omen-v1.5.0...omen-v1.6.0) (2025-12-07)
 
 

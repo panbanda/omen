@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/panbanda/omen/compare/omen-skills-v1.3.0...omen-skills-v2.0.0) (2025-12-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* Analyze methods now require ContentSource parameter
+
+### Features
+
+* git-tree trend analysis, skills marketplace ([#135](https://github.com/panbanda/omen/issues/135)) ([8d457ff](https://github.com/panbanda/omen/commit/8d457ff13ad41999cead3b6f7c314cc24e2496c3))
+
 ## [1.3.0](https://github.com/panbanda/omen/compare/omen-skills-v1.2.1...omen-skills-v1.3.0) (2025-12-02)
 
 
