@@ -637,6 +637,45 @@ func TestLoadUnsupportedExtension(t *testing.T) {
 	}
 }
 
+func TestDefaultExcludeDirPrefixes(t *testing.T) {
+	prefixes := DefaultExcludeDirPrefixes()
+
+	// Should contain known directory prefixes from DefaultConfig
+	expectedPrefixes := []string{
+		"vendor/",
+		"node_modules/",
+		".git/",
+		".omen/",
+		"dist/",
+		"build/",
+		"target/",
+		"__pycache__/",
+		".venv/",
+		".bundle/",
+		".yarn/",
+	}
+
+	for _, want := range expectedPrefixes {
+		found := false
+		for _, got := range prefixes {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("DefaultExcludeDirPrefixes() missing %q", want)
+		}
+	}
+
+	// Should NOT contain file patterns (non-directory patterns)
+	for _, prefix := range prefixes {
+		if prefix[len(prefix)-1] != '/' {
+			t.Errorf("DefaultExcludeDirPrefixes() contains non-directory pattern %q", prefix)
+		}
+	}
+}
+
 func TestEffectiveWeights(t *testing.T) {
 	tests := []struct {
 		name           string
