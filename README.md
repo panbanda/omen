@@ -264,16 +264,17 @@ Risk Factors:
 
 TDG combines multiple metrics into a single score (0-100 scale, higher is better):
 
-| Component             | Weight | What it measures                        |
-| --------------------- | ------ | --------------------------------------- |
-| Structural Complexity | 20%    | Cyclomatic complexity and nesting depth |
-| Semantic Complexity   | 15%    | Cognitive complexity                    |
-| Duplication           | 15%    | Amount of cloned code                   |
-| Coupling              | 15%    | Dependencies on other modules           |
-| Hotspot               | 10%    | Churn x complexity interaction          |
-| Temporal Coupling     | 10%    | Co-change patterns with other files     |
-| Consistency           | 10%    | Code style and pattern adherence        |
-| Documentation         | 5%     | Comment coverage                        |
+| Component             | Max Points | What it measures                        |
+| --------------------- | ---------- | --------------------------------------- |
+| Structural Complexity | 20         | Cyclomatic complexity and nesting depth |
+| Semantic Complexity   | 15         | Cognitive complexity                    |
+| Duplication           | 15         | Amount of cloned code                   |
+| Coupling              | 15         | Dependencies on other modules           |
+| Hotspot               | 10         | Churn x complexity interaction          |
+| Temporal Coupling     | 10         | Co-change patterns with other files     |
+| Consistency           | 10         | Code style and pattern adherence        |
+| Entropy               | 10         | Pattern entropy and code uniformity     |
+| Documentation         | 5          | Comment coverage                        |
 
 **Why it matters:** Technical debt is like financial debt - a little is fine, too much kills you. [Cunningham coined the term in 1992](http://c2.com/doc/oopsla92.html), and [Kruchten et al. (2012)](https://ieeexplore.ieee.org/document/6336722) formalized how to measure and manage it. TDG gives you a single number to track over time and compare across files.
 
@@ -445,13 +446,13 @@ Feature flags are powerful but dangerous. They let you ship code without enablin
 
 Omen detects feature flag usage across popular providers:
 
-| Provider     | Languages                     | What it finds                                  |
-| ------------ | ----------------------------- | ---------------------------------------------- |
-| LaunchDarkly | JS/TS, Python, Go, Java, Ruby | `variation()`, `boolVariation()` calls         |
-| Split        | JS/TS, Python, Go, Java, Ruby | `getTreatment()` calls                         |
-| Unleash      | JS/TS, Python, Go, Java, Ruby | `isEnabled()`, `getVariant()` calls            |
-| PostHog      | JS/TS, Python, Go, Ruby       | `isFeatureEnabled()`, `getFeatureFlag()` calls |
-| Flipper      | Ruby                          | `enabled?()`, `Flipper.enabled?()` calls       |
+| Provider     | Languages                | What it finds                                  |
+| ------------ | ------------------------ | ---------------------------------------------- |
+| LaunchDarkly | JS/TS, Python, Go, Java  | `variation()`, `boolVariation()` calls         |
+| Split        | JS/TS, Python, Go        | `getTreatment()` calls                         |
+| Unleash      | JS/TS, Go                | `isEnabled()`, `getVariant()` calls            |
+| PostHog      | JS/TS, Python, Go, Java, Ruby | `isFeatureEnabled()`, `getFeatureFlag()` calls |
+| Flipper      | Ruby                     | `enabled?()`, `Flipper.enabled?()` calls       |
 
 For each flag, Omen reports:
 
@@ -591,6 +592,7 @@ Omen includes a Model Context Protocol (MCP) server that exposes all analyzers a
 - `analyze_repo_map` - PageRank-ranked symbol map
 - `analyze_smells` - Architectural smell detection
 - `analyze_flags` - Feature flag detection and staleness
+- `score_repository` - Composite health score (0-100)
 - `get_context` - Deep context for a specific file or symbol
 
 Each tool includes detailed descriptions with interpretation guidance, helping LLMs understand what metrics mean and when to use each analyzer.
@@ -606,7 +608,7 @@ Tool outputs default to [TOON (Token-Oriented Object Notation)](https://github.c
 
 ## Supported Languages
 
-Go, Rust, Python, TypeScript, JavaScript, TSX/JSX, Java, C, C++, C#, Ruby, PHP, Bash, and any other `tree-sitter` supported language
+Go, Rust, Python, TypeScript, JavaScript, TSX/JSX, Java, C, C++, C#, Ruby, PHP, Bash (and other languages supported by tree-sitter)
 
 ## Installation
 
@@ -676,6 +678,9 @@ omen init
 ```
 
 See [`omen.example.toml`](omen.example.toml) for all options.
+
+> [!TIP]
+> Using Claude Code? Run the `setup-config` skill to analyze your repository and generate an `omen.toml` with intelligent defaults for your tech stack, including detected feature flag providers and language-specific exclude patterns.
 
 ## MCP Server
 
@@ -798,6 +803,9 @@ omen analyze hotspot kubernetes/kubernetes
 
 # PR risk before merging
 omen analyze diff --target main
+
+# Track score trends over time
+omen analyze trend --period monthly --since 6m
 ```
 
 ## Contributing
