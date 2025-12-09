@@ -2,6 +2,7 @@ package vcs
 
 import (
 	"errors"
+	"sort"
 	"time"
 
 	"github.com/go-git/go-git/v6"
@@ -173,6 +174,13 @@ func FindCommitsAtIntervals(repoPath string, period string, since time.Duration,
 	if len(commits) == 0 {
 		return nil, nil
 	}
+
+	// Sort commits by date (newest first). go-git returns commits in graph traversal
+	// order which is NOT chronological - older commits by date can appear before
+	// newer ones in the iteration. findCommitAtOrAfter requires date-sorted order.
+	sort.Slice(commits, func(i, j int) bool {
+		return commits[i].Date.After(commits[j].Date)
+	})
 
 	// Generate interval boundaries
 	boundaries := generateBoundaries(period, since, snap)
