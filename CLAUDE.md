@@ -128,6 +128,18 @@ Analyzer subcommands (`omen analyze <subcommand>`):
 
 **Command flags** (on `analyze` and subcommands): `-f/--format` (text/json/markdown/toon), `-o/--output`, `--no-cache`
 
+## Development Workflow
+
+**Always use Test-Driven Development (TDD).** Use the `test-driven-development` skill when implementing new features or fixing bugs:
+
+1. RED: Write a failing test first
+2. Verify the test fails for the expected reason
+3. GREEN: Write minimal code to pass the test
+4. Verify all tests pass
+5. REFACTOR: Clean up while keeping tests green
+
+No production code without a failing test first.
+
 ## Supported Languages
 
 Go, Rust, Python, TypeScript, JavaScript, TSX/JSX, Java, C, C++, C#, Ruby, PHP, Bash

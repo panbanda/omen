@@ -1508,3 +1508,331 @@ function unusedHelper() {
 		t.Error("'unusedHelper' SHOULD be reported as dead (not called)")
 	}
 }
+
+func TestJavaScript_NamedExportsAreEntryPoints(t *testing.T) {
+	// Named exports in JavaScript modules are part of the public API
+	// and should be treated as entry points.
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "utils.js")
+
+	code := `// Utility module with named exports
+export function formatDate(date) {
+  return date.toISOString();
+}
+
+export const API_VERSION = '1.0.0';
+
+export function parseJSON(str) {
+  return JSON.parse(str);
+}
+
+function internalHelper() {
+  return null;
+}
+`
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New()
+	defer a.Close()
+
+	analysis, err := a.Analyze(context.Background(), []string{path})
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	deadNames := make(map[string]bool)
+	for _, fn := range analysis.DeadFunctions {
+		deadNames[fn.Name] = true
+	}
+
+	// Named exported functions should not be dead
+	if deadNames["formatDate"] {
+		t.Error("'formatDate' should not be reported as dead (named export)")
+	}
+	if deadNames["parseJSON"] {
+		t.Error("'parseJSON' should not be reported as dead (named export)")
+	}
+
+	// Internal helper functions SHOULD be dead if not called
+	if !deadNames["internalHelper"] {
+		t.Error("'internalHelper' SHOULD be reported as dead (not exported, not called)")
+	}
+}
+
+func TestGo_InitFunctionsAreEntryPoints(t *testing.T) {
+	// Go init() functions are called automatically and should be entry points.
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.go")
+
+	code := `package config
+
+var settings map[string]string
+
+func init() {
+	settings = make(map[string]string)
+	loadDefaults()
+}
+
+func loadDefaults() {
+	settings["timeout"] = "30s"
+}
+
+func unusedHelper() string {
+	return "unused"
+}
+`
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New()
+	defer a.Close()
+
+	analysis, err := a.Analyze(context.Background(), []string{path})
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	deadNames := make(map[string]bool)
+	for _, fn := range analysis.DeadFunctions {
+		deadNames[fn.Name] = true
+	}
+
+	// init() should not be dead (entry point)
+	if deadNames["init"] {
+		t.Error("'init' should not be reported as dead (Go entry point)")
+	}
+
+	// Functions called by init should not be dead
+	if deadNames["loadDefaults"] {
+		t.Error("'loadDefaults' should not be reported as dead (called by init)")
+	}
+
+	// Unused helpers SHOULD be dead
+	if !deadNames["unusedHelper"] {
+		t.Error("'unusedHelper' SHOULD be reported as dead (not called)")
+	}
+}
+
+func TestGo_HTTPHandlersAreEntryPoints(t *testing.T) {
+	// HTTP handlers registered with http.HandleFunc are entry points.
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "server.go")
+
+	code := `package main
+
+import "net/http"
+
+func main() {
+	http.HandleFunc("/health", healthHandler)
+	http.HandleFunc("/api/users", usersHandler)
+	http.ListenAndServe(":8080", nil)
+}
+
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+	w.Write([]byte("OK"))
+}
+
+func usersHandler(w http.ResponseWriter, r *http.Request) {
+	fetchUsers(w, r)
+}
+
+func fetchUsers(w http.ResponseWriter, r *http.Request) {
+	w.Write([]byte("[]"))
+}
+
+// unexported function not registered anywhere - should be dead
+// (doesn't end with Handler/handler suffix to avoid entry point heuristic)
+func unusedFunc(w http.ResponseWriter, r *http.Request) {
+	w.Write([]byte("unused"))
+}
+`
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New()
+	defer a.Close()
+
+	analysis, err := a.Analyze(context.Background(), []string{path})
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	deadNames := make(map[string]bool)
+	for _, fn := range analysis.DeadFunctions {
+		deadNames[fn.Name] = true
+	}
+
+	// main() should not be dead
+	if deadNames["main"] {
+		t.Error("'main' should not be reported as dead (Go entry point)")
+	}
+
+	// Handlers registered with http.HandleFunc should not be dead (exported = entry point)
+	if deadNames["healthHandler"] {
+		t.Error("'healthHandler' should not be reported as dead (registered handler)")
+	}
+	if deadNames["usersHandler"] {
+		t.Error("'usersHandler' should not be reported as dead (registered handler)")
+	}
+
+	// Functions called by handlers should not be dead (exported = entry point)
+	if deadNames["fetchUsers"] {
+		t.Error("'fetchUsers' should not be reported as dead (called by usersHandler)")
+	}
+
+	// Unexported functions that are NOT used SHOULD be dead
+	if !deadNames["unusedFunc"] {
+		t.Error("'unusedFunc' SHOULD be reported as dead (unexported, not used)")
+	}
+}
+
+func TestJavaScript_DefaultExportReferenceIsEntryPoint(t *testing.T) {
+	// React pattern: const MyComponent = () => {}; export default MyComponent;
+	// The variable MyComponent should be treated as an entry point because it's
+	// the default export of the module.
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "Component.js")
+
+	code := `import React from 'react';
+
+function helperOne() { return 1; }
+function helperTwo() { return 2; }
+
+const MyComponent = props => {
+  return <div>{helperOne()}</div>;
+};
+
+function unusedHelper() { return 'unused'; }
+
+export default MyComponent;`
+
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New()
+	defer a.Close()
+
+	analysis, err := a.Analyze(context.Background(), []string{path})
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	// Collect dead names for easier assertions
+	deadFunctions := make(map[string]bool)
+	for _, fn := range analysis.DeadFunctions {
+		deadFunctions[fn.Name] = true
+	}
+	deadVariables := make(map[string]bool)
+	for _, v := range analysis.DeadVariables {
+		deadVariables[v.Name] = true
+	}
+
+	// MyComponent is the default export - should NOT be dead
+	if deadVariables["MyComponent"] {
+		t.Error("'MyComponent' should not be reported as dead (default export reference)")
+	}
+
+	// helperOne is called by MyComponent - should NOT be dead
+	if deadFunctions["helperOne"] {
+		t.Error("'helperOne' should not be reported as dead (called by default export)")
+	}
+
+	// helperTwo is NOT called - SHOULD be dead
+	if !deadFunctions["helperTwo"] {
+		t.Error("'helperTwo' SHOULD be reported as dead (not called)")
+	}
+
+	// unusedHelper is NOT called - SHOULD be dead
+	if !deadFunctions["unusedHelper"] {
+		t.Error("'unusedHelper' SHOULD be reported as dead (not called)")
+	}
+}
+
+func TestJavaScript_NestedFunctionsInArrowComponent(t *testing.T) {
+	// React pattern: arrow function component with nested function declarations.
+	// When the component calls module-level helpers in its JSX return, those calls
+	// should be attributed to the component, not to the last nested function.
+	// This tests proper function context stack management.
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "Component.js")
+
+	// Using function names that don't trigger entry point heuristics (like "handle" prefix)
+	code := `import React from 'react';
+
+// Module-level helpers
+function formatPrice(n) { return '$' + n; }
+function formatDate(d) { return d.toISOString(); }
+
+const MyComponent = props => {
+  // Nested function inside arrow component
+  function clickAction() {
+    console.log('clicked');
+  }
+
+  // Another nested function (unused)
+  function submitAction() {
+    console.log('submitted');
+  }
+
+  // Calls to module-level helpers happen AFTER nested function definitions
+  // These should be attributed to MyComponent, not submitAction
+  return (
+    <div>
+      <span>{formatPrice(props.price)}</span>
+      <button onClick={clickAction}>Click</button>
+    </div>
+  );
+};
+
+function unusedHelper() { return 'unused'; }
+
+export default MyComponent;`
+
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New()
+	defer a.Close()
+
+	analysis, err := a.Analyze(context.Background(), []string{path})
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	// Collect dead names for easier assertions
+	deadFunctions := make(map[string]bool)
+	for _, fn := range analysis.DeadFunctions {
+		deadFunctions[fn.Name] = true
+	}
+
+	// formatPrice is called in JSX return of MyComponent - should NOT be dead
+	if deadFunctions["formatPrice"] {
+		t.Error("'formatPrice' should not be reported as dead (called by MyComponent in JSX)")
+	}
+
+	// formatDate is NOT called - SHOULD be dead
+	if !deadFunctions["formatDate"] {
+		t.Error("'formatDate' SHOULD be reported as dead (not called)")
+	}
+
+	// clickAction is used as onClick handler - should NOT be dead
+	if deadFunctions["clickAction"] {
+		t.Error("'clickAction' should not be reported as dead (used as onClick handler)")
+	}
+
+	// submitAction is NOT used - SHOULD be dead
+	if !deadFunctions["submitAction"] {
+		t.Error("'submitAction' SHOULD be reported as dead (not used)")
+	}
+
+	// unusedHelper is NOT called - SHOULD be dead
+	if !deadFunctions["unusedHelper"] {
+		t.Error("'unusedHelper' SHOULD be reported as dead (not called)")
+	}
+}

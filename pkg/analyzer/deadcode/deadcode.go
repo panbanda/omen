@@ -351,9 +351,6 @@ func collectAllInSinglePass(result *parser.ParseResult, fdc *fileDeadCode) {
 	classTypes := getClassNodeTypes(result.Language)
 	identTypes := map[string]bool{"identifier": true, "type_identifier": true, "field_identifier": true}
 
-	// For tracking current function context (used by collectCalls)
-	var currentFunction string
-
 	// For Go type implementations (method tracking)
 	typeMethods := make(map[string][]string)
 
@@ -370,58 +367,66 @@ func collectAllInSinglePass(result *parser.ParseResult, fdc *fileDeadCode) {
 		// Collect functions/methods
 		if isFunctionNode(nodeType, result.Language) {
 			nameNode := getFunctionNameNode(node, result.Language)
+			var name string
 			if nameNode != nil {
-				name := parser.GetNodeText(nameNode, source)
-				if name != "" {
-					isFFI := isFFIExported(node, source, result.Language)
-					receiverType := extractReceiverType(node, source, result.Language)
+				name = parser.GetNodeText(nameNode, source)
+			}
 
-					kind := "function"
-					if receiverType != "" {
-						kind = "method"
-						// Track method for Go type implementations
-						if result.Language == parser.LangGo {
-							typeMethods[receiverType] = append(typeMethods[receiverType], name)
-						}
+			// For arrow functions without a direct name, check if assigned to a variable
+			// Pattern: const MyComponent = () => {} -> name comes from variable_declarator
+			if name == "" && nodeType == "arrow_function" {
+				name = getArrowFunctionName(node, source)
+			}
+
+			if name != "" {
+				isFFI := isFFIExported(node, source, result.Language)
+				receiverType := extractReceiverType(node, source, result.Language)
+
+				kind := "function"
+				if receiverType != "" {
+					kind = "method"
+					// Track method for Go type implementations
+					if result.Language == parser.LangGo {
+						typeMethods[receiverType] = append(typeMethods[receiverType], name)
 					}
+				}
 
-					line := node.StartPoint().Row + 1
-					endLine := node.EndPoint().Row + 1
+				line := node.StartPoint().Row + 1
+				endLine := node.EndPoint().Row + 1
 
-					// Check if this is a default export (JS/TS: export default function)
-					defaultExport := isDefaultExportNode(node, result.Language)
+				// Check if this is a default export (JS/TS: export default function)
+				defaultExport := isDefaultExportNode(node, result.Language)
+				// Check if this is a named export (JS/TS: export function)
+				namedExport := isNamedExportNode(node, result.Language)
 
-					// Determine visibility - use Ruby visibility map if available
-					visibility := getVisibility(name, result.Language)
-					if rubyVisibility != nil {
-						if v, ok := rubyVisibility[line]; ok {
-							visibility = v
-						}
+				// Determine visibility - use Ruby visibility map if available
+				visibility := getVisibility(name, result.Language)
+				if rubyVisibility != nil {
+					if v, ok := rubyVisibility[line]; ok {
+						visibility = v
 					}
+				}
 
-					fdc.definitions[name] = definition{
-						name:            name,
-						kind:            kind,
-						file:            result.Path,
-						line:            line,
-						endLine:         endLine,
-						visibility:      visibility,
-						exported:        isExported(name, result.Language),
-						isDefaultExport: defaultExport,
-						isFFI:           isFFI,
-						isTestFile:      inTestFile,
-						contextHash:     computeContextHash(name, result.Path, line, kind),
-						receiverType:    receiverType,
-					}
+				fdc.definitions[name] = definition{
+					name:            name,
+					kind:            kind,
+					file:            result.Path,
+					line:            line,
+					endLine:         endLine,
+					visibility:      visibility,
+					exported:        isExported(name, result.Language),
+					isDefaultExport: defaultExport,
+					isNamedExport:   namedExport,
+					isFFI:           isFFI,
+					isTestFile:      inTestFile,
+					contextHash:     computeContextHash(name, result.Path, line, kind),
+					receiverType:    receiverType,
+				}
 
-					// Update current function context for call tracking
-					currentFunction = name
-
-					// Check for unreachable code in function body
-					if bodyNode := getFunctionBody(node); bodyNode != nil {
-						unreachable := findUnreachableInBlock(bodyNode, source, result.Language, result.Path)
-						fdc.unreachableBlocks = append(fdc.unreachableBlocks, unreachable...)
-					}
+				// Check for unreachable code in function body
+				if bodyNode := getFunctionBody(node); bodyNode != nil {
+					unreachable := findUnreachableInBlock(bodyNode, source, result.Language, result.Path)
+					fdc.unreachableBlocks = append(fdc.unreachableBlocks, unreachable...)
 				}
 			}
 		}
@@ -515,13 +520,17 @@ func collectAllInSinglePass(result *parser.ParseResult, fdc *fileDeadCode) {
 
 		if isCallNode {
 			callee, receiver := extractCalleeWithReceiver(node, source, result.Language)
-			if callee != "" && currentFunction != "" {
+			// Find the enclosing function by walking up the parent chain.
+			// This is more accurate than tracking currentFunction because nested
+			// functions don't corrupt the context for their siblings.
+			caller := findEnclosingFunctionName(node, source, result.Language)
+			if callee != "" && caller != "" {
 				refType := RefDirectCall
 				if receiver != "" {
 					refType = RefDynamicDispatch
 				}
 				fdc.calls = append(fdc.calls, callReference{
-					caller:   currentFunction,
+					caller:   caller,
 					callee:   callee,
 					line:     node.StartPoint().Row + 1,
 					refType:  refType,
@@ -533,17 +542,40 @@ func collectAllInSinglePass(result *parser.ParseResult, fdc *fileDeadCode) {
 		// Ruby implicit method calls: In Ruby, bare identifiers inside method bodies
 		// (body_statement) that aren't part of definitions are method calls.
 		// Example: `calculate_total` in `def process; calculate_total; end`
-		if result.Language == parser.LangRuby && nodeType == "identifier" && currentFunction != "" {
+		if result.Language == parser.LangRuby && nodeType == "identifier" {
 			parent := node.Parent()
 			if parent != nil && parent.Type() == "body_statement" {
-				// This identifier is directly inside a method body - it's an implicit method call
-				name := parser.GetNodeText(node, source)
-				fdc.calls = append(fdc.calls, callReference{
-					caller:  currentFunction,
-					callee:  name,
-					line:    node.StartPoint().Row + 1,
-					refType: RefDirectCall,
-				})
+				caller := findEnclosingFunctionName(node, source, result.Language)
+				if caller != "" {
+					// This identifier is directly inside a method body - it's an implicit method call
+					name := parser.GetNodeText(node, source)
+					fdc.calls = append(fdc.calls, callReference{
+						caller:  caller,
+						callee:  name,
+						line:    node.StartPoint().Row + 1,
+						refType: RefDirectCall,
+					})
+				}
+			}
+		}
+
+		// JSX function references: In React, identifiers inside jsx_expression nodes
+		// (like onClick={clickAction}) are function references passed as callbacks.
+		// These create an indirect call edge from the enclosing component to the referenced function.
+		if (result.Language == parser.LangTSX || result.Language == parser.LangJavaScript || result.Language == parser.LangTypeScript) &&
+			nodeType == "identifier" {
+			parent := node.Parent()
+			if parent != nil && parent.Type() == "jsx_expression" {
+				caller := findEnclosingFunctionName(node, source, result.Language)
+				if caller != "" {
+					name := parser.GetNodeText(node, source)
+					fdc.calls = append(fdc.calls, callReference{
+						caller:  caller,
+						callee:  name,
+						line:    node.StartPoint().Row + 1,
+						refType: RefIndirectCall,
+					})
+				}
 			}
 		}
 
@@ -558,6 +590,16 @@ func collectAllInSinglePass(result *parser.ParseResult, fdc *fileDeadCode) {
 					line:    node.StartPoint().Row + 1,
 					refType: RefImport,
 				})
+			}
+		}
+
+		// Detect JS/TS default export references: export default MyComponent
+		// This pattern exports an identifier by reference (not inline definition).
+		// The referenced identifier should be treated as an entry point.
+		if nodeType == "export_statement" &&
+			(result.Language == parser.LangJavaScript || result.Language == parser.LangTypeScript || result.Language == parser.LangTSX) {
+			if exportedName := extractDefaultExportReference(node, source); exportedName != "" {
+				fdc.frameworkRefs = append(fdc.frameworkRefs, exportedName)
 			}
 		}
 
@@ -614,6 +656,7 @@ type definition struct {
 	visibility      string
 	exported        bool
 	isDefaultExport bool // JS/TS: export default function/class
+	isNamedExport   bool // JS/TS: export function/const/class (named exports)
 	nodeID          uint32
 	isFFI           bool
 	isTestFile      bool
@@ -1231,6 +1274,114 @@ func isDefaultExportNode(node *sitter.Node, lang parser.Language) bool {
 	}
 
 	return false
+}
+
+// isNamedExportNode checks if a node is a named export (export function/const/class).
+// Named exports are part of a module's public API and should not be flagged as dead code.
+func isNamedExportNode(node *sitter.Node, lang parser.Language) bool {
+	// Only applies to JS/TS
+	if lang != parser.LangJavaScript && lang != parser.LangTypeScript && lang != parser.LangTSX {
+		return false
+	}
+
+	parent := node.Parent()
+	if parent == nil {
+		return false
+	}
+
+	// Direct parent is export_statement
+	if parent.Type() == "export_statement" {
+		// Check that it does NOT have "default" keyword (that would be a default export)
+		for i := range int(parent.ChildCount()) {
+			child := parent.Child(i)
+			if child.Type() == "default" {
+				return false // This is a default export, not a named export
+			}
+		}
+		return true // export_statement without "default" = named export
+	}
+
+	return false
+}
+
+// getArrowFunctionName gets the name of an arrow function from its parent variable declarator.
+// For pattern: const MyComponent = () => {} -> returns "MyComponent"
+func getArrowFunctionName(node *sitter.Node, source []byte) string {
+	parent := node.Parent()
+	if parent == nil {
+		return ""
+	}
+
+	// Check if parent is variable_declarator with this arrow function as the value
+	if parent.Type() == "variable_declarator" {
+		if nameNode := parent.ChildByFieldName("name"); nameNode != nil {
+			return parser.GetNodeText(nameNode, source)
+		}
+	}
+
+	return ""
+}
+
+// findEnclosingFunctionName walks up the AST parent chain to find the nearest
+// enclosing function and returns its name. This correctly handles nested functions
+// where calls should be attributed to the innermost enclosing function.
+func findEnclosingFunctionName(node *sitter.Node, source []byte, lang parser.Language) string {
+	current := node.Parent()
+	for current != nil {
+		nodeType := current.Type()
+		if isFunctionNode(nodeType, lang) {
+			// Found a function - get its name
+			nameNode := getFunctionNameNode(current, lang)
+			if nameNode != nil {
+				return parser.GetNodeText(nameNode, source)
+			}
+			// For arrow functions, check if assigned to a variable
+			if nodeType == "arrow_function" {
+				if name := getArrowFunctionName(current, source); name != "" {
+					return name
+				}
+			}
+			// If we found a function but couldn't get its name, keep looking
+			// (anonymous functions don't contribute to call graph)
+		}
+		current = current.Parent()
+	}
+	return ""
+}
+
+// extractDefaultExportReference extracts the identifier name from "export default <identifier>".
+// Returns empty string if this is not a default export reference pattern
+// (e.g., "export default function foo()" exports inline, not by reference).
+func extractDefaultExportReference(node *sitter.Node, source []byte) string {
+	// Look for pattern: export_statement -> default -> identifier
+	hasDefault := false
+	var identifierName string
+
+	for i := range int(node.ChildCount()) {
+		child := node.Child(i)
+		childType := child.Type()
+
+		if childType == "default" {
+			hasDefault = true
+		}
+
+		// If child is an identifier (not a function/class declaration), it's a reference
+		if childType == "identifier" && hasDefault {
+			identifierName = parser.GetNodeText(child, source)
+		}
+
+		// If child is a function_declaration or class_declaration, this is inline export
+		// (handled by isDefaultExportNode), not a reference export
+		if childType == "function_declaration" || childType == "class_declaration" ||
+			childType == "function_expression" || childType == "arrow_function" {
+			return "" // Inline definition, not a reference
+		}
+	}
+
+	if hasDefault && identifierName != "" {
+		return identifierName
+	}
+	return ""
 }
 
 // collectRubyVisibility builds a map of method start lines to their visibility.
@@ -2134,6 +2285,12 @@ func isJavaScriptEntryPoint(name string, def definition) bool {
 	// Default exports are entry points - they're the main export of a module
 	// and are typically imported from elsewhere
 	if def.isDefaultExport {
+		return true
+	}
+
+	// Named exports are entry points - they're part of the module's public API
+	// Examples: export function foo() {}, export const bar = () => {}
+	if def.isNamedExport {
 		return true
 	}
 
