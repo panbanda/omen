@@ -3,9 +3,11 @@ package score
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/panbanda/omen/internal/vcs"
+	"github.com/panbanda/omen/pkg/config"
 	"github.com/panbanda/omen/pkg/parser"
 	"github.com/panbanda/omen/pkg/source"
 )
@@ -196,10 +198,10 @@ func (t *TrendAnalyzer) AnalyzeTrendWithProgress(ctx context.Context, repoPath s
 			continue
 		}
 
-		// Filter to analyzable files
+		// Filter to analyzable files (respecting default exclusions)
 		var files []string
 		for _, e := range entries {
-			if !e.IsDir && parser.DetectLanguage(e.Path) != parser.LangUnknown {
+			if !e.IsDir && parser.DetectLanguage(e.Path) != parser.LangUnknown && !shouldExcludeFromTrend(e.Path) {
 				files = append(files, e.Path)
 			}
 		}
@@ -299,4 +301,15 @@ func ParseSince(s string) (time.Duration, error) {
 	default:
 		return 0, fmt.Errorf("invalid duration unit: %c (use m, y, w, or d)", unit)
 	}
+}
+
+// shouldExcludeFromTrend checks if a file path should be excluded from trend analysis.
+// Uses the same default exclusion patterns as the scanner.
+func shouldExcludeFromTrend(path string) bool {
+	for _, prefix := range config.DefaultExcludeDirPrefixes() {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
 }
