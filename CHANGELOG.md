@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.0](https://github.com/panbanda/omen/compare/omen-v2.2.0...omen-v2.3.0) (2025-12-09)
+
+
+### Features
+
+* **context:** add focused context for file and symbol analysis ([#146](https://github.com/panbanda/omen/issues/146)) ([d457e20](https://github.com/panbanda/omen/commit/d457e20b6640c7e21864cf63a72dfcfb9c1ef765))
+
 ## [2.2.0](https://github.com/panbanda/omen/compare/omen-v2.1.0...omen-v2.2.0) (2025-12-09)
 
 
