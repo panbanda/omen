@@ -11,6 +11,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring/v2"
 	"github.com/panbanda/omen/internal/fileproc"
+	"github.com/panbanda/omen/internal/semantic"
 	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/parser"
 	sitter "github.com/smacker/go-tree-sitter"
@@ -321,10 +322,22 @@ func analyzeFileDeadCode(psr *parser.Parser, path string) (*fileDeadCode, error)
 		typeImpls:         make([]typeImplementation, 0),
 		language:          result.Language,
 		unreachableBlocks: make([]UnreachableBlock, 0),
+		frameworkRefs:     make([]string, 0),
 	}
 
 	// Single unified AST walk to collect all information
 	collectAllInSinglePass(result, fdc)
+
+	// Extract indirect references using language-specific extractor
+	extractor := semantic.ForLanguage(result.Language)
+	if extractor != nil {
+		defer extractor.Close()
+
+		refs := extractor.ExtractRefs(result.Tree, result.Source)
+		for _, ref := range refs {
+			fdc.frameworkRefs = append(fdc.frameworkRefs, ref.Name)
+		}
+	}
 
 	return fdc, nil
 }
@@ -338,11 +351,14 @@ func collectAllInSinglePass(result *parser.ParseResult, fdc *fileDeadCode) {
 	classTypes := getClassNodeTypes(result.Language)
 	identTypes := map[string]bool{"identifier": true, "type_identifier": true, "field_identifier": true}
 
-	// For tracking current function context (used by collectCalls)
-	var currentFunction string
-
 	// For Go type implementations (method tracking)
 	typeMethods := make(map[string][]string)
+
+	// For Ruby, collect visibility information (private/public/protected)
+	var rubyVisibility map[uint32]string
+	if result.Language == parser.LangRuby {
+		rubyVisibility = collectRubyVisibility(root, result.Source)
+	}
 
 	parser.Walk(root, result.Source, func(node *sitter.Node, source []byte) bool {
 		nodeType := node.Type()
@@ -351,46 +367,66 @@ func collectAllInSinglePass(result *parser.ParseResult, fdc *fileDeadCode) {
 		// Collect functions/methods
 		if isFunctionNode(nodeType, result.Language) {
 			nameNode := getFunctionNameNode(node, result.Language)
+			var name string
 			if nameNode != nil {
-				name := parser.GetNodeText(nameNode, source)
-				if name != "" {
-					isFFI := isFFIExported(node, source, result.Language)
-					receiverType := extractReceiverType(node, source, result.Language)
+				name = parser.GetNodeText(nameNode, source)
+			}
 
-					kind := "function"
-					if receiverType != "" {
-						kind = "method"
-						// Track method for Go type implementations
-						if result.Language == parser.LangGo {
-							typeMethods[receiverType] = append(typeMethods[receiverType], name)
-						}
+			// For arrow functions without a direct name, check if assigned to a variable
+			// Pattern: const MyComponent = () => {} -> name comes from variable_declarator
+			if name == "" && nodeType == "arrow_function" {
+				name = getArrowFunctionName(node, source)
+			}
+
+			if name != "" {
+				isFFI := isFFIExported(node, source, result.Language)
+				receiverType := extractReceiverType(node, source, result.Language)
+
+				kind := "function"
+				if receiverType != "" {
+					kind = "method"
+					// Track method for Go type implementations
+					if result.Language == parser.LangGo {
+						typeMethods[receiverType] = append(typeMethods[receiverType], name)
 					}
+				}
 
-					line := node.StartPoint().Row + 1
-					endLine := node.EndPoint().Row + 1
+				line := node.StartPoint().Row + 1
+				endLine := node.EndPoint().Row + 1
 
-					fdc.definitions[name] = definition{
-						name:         name,
-						kind:         kind,
-						file:         result.Path,
-						line:         line,
-						endLine:      endLine,
-						visibility:   getVisibility(name, result.Language),
-						exported:     isExported(name, result.Language),
-						isFFI:        isFFI,
-						isTestFile:   inTestFile,
-						contextHash:  computeContextHash(name, result.Path, line, kind),
-						receiverType: receiverType,
+				// Check if this is a default export (JS/TS: export default function)
+				defaultExport := isDefaultExportNode(node, result.Language)
+				// Check if this is a named export (JS/TS: export function)
+				namedExport := isNamedExportNode(node, result.Language)
+
+				// Determine visibility - use Ruby visibility map if available
+				visibility := getVisibility(name, result.Language)
+				if rubyVisibility != nil {
+					if v, ok := rubyVisibility[line]; ok {
+						visibility = v
 					}
+				}
 
-					// Update current function context for call tracking
-					currentFunction = name
+				fdc.definitions[name] = definition{
+					name:            name,
+					kind:            kind,
+					file:            result.Path,
+					line:            line,
+					endLine:         endLine,
+					visibility:      visibility,
+					exported:        isExported(name, result.Language),
+					isDefaultExport: defaultExport,
+					isNamedExport:   namedExport,
+					isFFI:           isFFI,
+					isTestFile:      inTestFile,
+					contextHash:     computeContextHash(name, result.Path, line, kind),
+					receiverType:    receiverType,
+				}
 
-					// Check for unreachable code in function body
-					if bodyNode := getFunctionBody(node); bodyNode != nil {
-						unreachable := findUnreachableInBlock(bodyNode, source, result.Language, result.Path)
-						fdc.unreachableBlocks = append(fdc.unreachableBlocks, unreachable...)
-					}
+				// Check for unreachable code in function body
+				if bodyNode := getFunctionBody(node); bodyNode != nil {
+					unreachable := findUnreachableInBlock(bodyNode, source, result.Language, result.Path)
+					fdc.unreachableBlocks = append(fdc.unreachableBlocks, unreachable...)
 				}
 			}
 		}
@@ -460,7 +496,10 @@ func collectAllInSinglePass(result *parser.ParseResult, fdc *fileDeadCode) {
 		}
 
 		// === USAGES ===
-		if identTypes[nodeType] {
+		// Only count identifiers as usages if they're NOT part of a definition context.
+		// Without this check, every function/variable/class name gets marked as "used"
+		// because the definition's name node itself is an identifier.
+		if identTypes[nodeType] && !isDefinitionNameNode(node, result.Language) {
 			name := parser.GetNodeText(node, source)
 			fdc.usages[name] = true
 		}
@@ -474,21 +513,69 @@ func collectAllInSinglePass(result *parser.ParseResult, fdc *fileDeadCode) {
 		}
 
 		// === CALLS ===
-		// Detect function calls
-		if nodeType == "call_expression" || nodeType == "function_call" || nodeType == "invocation_expression" {
+		// Detect function calls (language-specific node types)
+		isCallNode := nodeType == "call_expression" || nodeType == "function_call" ||
+			nodeType == "invocation_expression" ||
+			nodeType == "call" || nodeType == "method_call" // Ruby
+
+		if isCallNode {
 			callee, receiver := extractCalleeWithReceiver(node, source, result.Language)
-			if callee != "" && currentFunction != "" {
+			// Find the enclosing function by walking up the parent chain.
+			// This is more accurate than tracking currentFunction because nested
+			// functions don't corrupt the context for their siblings.
+			caller := findEnclosingFunctionName(node, source, result.Language)
+			if callee != "" && caller != "" {
 				refType := RefDirectCall
 				if receiver != "" {
 					refType = RefDynamicDispatch
 				}
 				fdc.calls = append(fdc.calls, callReference{
-					caller:   currentFunction,
+					caller:   caller,
 					callee:   callee,
 					line:     node.StartPoint().Row + 1,
 					refType:  refType,
 					receiver: receiver,
 				})
+			}
+		}
+
+		// Ruby implicit method calls: In Ruby, bare identifiers inside method bodies
+		// (body_statement) that aren't part of definitions are method calls.
+		// Example: `calculate_total` in `def process; calculate_total; end`
+		if result.Language == parser.LangRuby && nodeType == "identifier" {
+			parent := node.Parent()
+			if parent != nil && parent.Type() == "body_statement" {
+				caller := findEnclosingFunctionName(node, source, result.Language)
+				if caller != "" {
+					// This identifier is directly inside a method body - it's an implicit method call
+					name := parser.GetNodeText(node, source)
+					fdc.calls = append(fdc.calls, callReference{
+						caller:  caller,
+						callee:  name,
+						line:    node.StartPoint().Row + 1,
+						refType: RefDirectCall,
+					})
+				}
+			}
+		}
+
+		// JSX function references: In React, identifiers inside jsx_expression nodes
+		// (like onClick={clickAction}) are function references passed as callbacks.
+		// These create an indirect call edge from the enclosing component to the referenced function.
+		if (result.Language == parser.LangTSX || result.Language == parser.LangJavaScript || result.Language == parser.LangTypeScript) &&
+			nodeType == "identifier" {
+			parent := node.Parent()
+			if parent != nil && parent.Type() == "jsx_expression" {
+				caller := findEnclosingFunctionName(node, source, result.Language)
+				if caller != "" {
+					name := parser.GetNodeText(node, source)
+					fdc.calls = append(fdc.calls, callReference{
+						caller:  caller,
+						callee:  name,
+						line:    node.StartPoint().Row + 1,
+						refType: RefIndirectCall,
+					})
+				}
 			}
 		}
 
@@ -503,6 +590,16 @@ func collectAllInSinglePass(result *parser.ParseResult, fdc *fileDeadCode) {
 					line:    node.StartPoint().Row + 1,
 					refType: RefImport,
 				})
+			}
+		}
+
+		// Detect JS/TS default export references: export default MyComponent
+		// This pattern exports an identifier by reference (not inline definition).
+		// The referenced identifier should be treated as an entry point.
+		if nodeType == "export_statement" &&
+			(result.Language == parser.LangJavaScript || result.Language == parser.LangTypeScript || result.Language == parser.LangTSX) {
+			if exportedName := extractDefaultExportReference(node, source); exportedName != "" {
+				fdc.frameworkRefs = append(fdc.frameworkRefs, exportedName)
 			}
 		}
 
@@ -547,21 +644,24 @@ type fileDeadCode struct {
 	typeImpls         []typeImplementation // For VTable resolution
 	language          parser.Language
 	unreachableBlocks []UnreachableBlock
+	frameworkRefs     []string // Method names referenced by framework DSLs (callbacks, send, etc.)
 }
 
 type definition struct {
-	name         string
-	kind         string // function, variable, class, method
-	file         string
-	line         uint32
-	endLine      uint32
-	visibility   string
-	exported     bool
-	nodeID       uint32
-	isFFI        bool
-	isTestFile   bool
-	contextHash  string
-	receiverType string // For methods: the type this method belongs to
+	name            string
+	kind            string // function, variable, class, method
+	file            string
+	line            uint32
+	endLine         uint32
+	visibility      string
+	exported        bool
+	isDefaultExport bool // JS/TS: export default function/class
+	isNamedExport   bool // JS/TS: export function/const/class (named exports)
+	nodeID          uint32
+	isFFI           bool
+	isTestFile      bool
+	contextHash     string
+	receiverType    string // For methods: the type this method belongs to
 }
 
 type callReference struct {
@@ -637,7 +737,21 @@ func extractReceiverType(node *sitter.Node, source []byte, lang parser.Language)
 }
 
 // extractCalleeWithReceiver extracts the function name and receiver type being called.
-func extractCalleeWithReceiver(node *sitter.Node, source []byte, _ parser.Language) (callee, receiver string) {
+func extractCalleeWithReceiver(node *sitter.Node, source []byte, lang parser.Language) (callee, receiver string) {
+	nodeType := node.Type()
+
+	// Ruby call nodes: call receiver.method(args)
+	// Ruby tree-sitter uses "method" field for the method name and "receiver" for the object
+	if lang == parser.LangRuby && (nodeType == "call" || nodeType == "method_call") {
+		if methodNode := node.ChildByFieldName("method"); methodNode != nil {
+			callee = parser.GetNodeText(methodNode, source)
+		}
+		if receiverNode := node.ChildByFieldName("receiver"); receiverNode != nil {
+			receiver = parser.GetNodeText(receiverNode, source)
+		}
+		return callee, receiver
+	}
+
 	if fnNode := node.ChildByFieldName("function"); fnNode != nil {
 		// Handle method calls: obj.method() -> extract "method" and "obj" type
 		if fnNode.Type() == "member_expression" || fnNode.Type() == "field_expression" ||
@@ -684,6 +798,130 @@ var functionNodeTypes = map[string]bool{
 // isFunctionNode checks if a node type represents a function definition.
 func isFunctionNode(nodeType string, _ parser.Language) bool {
 	return functionNodeTypes[nodeType]
+}
+
+// definitionParentTypes are node types that represent definitions.
+// If an identifier's parent is one of these and the identifier is the "name" field,
+// then the identifier is defining a symbol, not using one.
+var definitionParentTypes = map[string]bool{
+	// Functions
+	"function_declaration":      true,
+	"function_definition":       true,
+	"method_declaration":        true,
+	"method_definition":         true,
+	"function_item":             true,
+	"method":                    true,
+	"singleton_method":          true,
+	"arrow_function":            true,
+	"constructor_declaration":   true,
+	"lambda_expression":         true,
+	"function_signature":        true,
+	"abstract_method_signature": true,
+	// Variables
+	"variable_declarator":            true,
+	"short_var_declaration":          true,
+	"const_spec":                     true,
+	"var_spec":                       true,
+	"let_declaration":                true,
+	"const_declaration":              true,
+	"lexical_declaration":            true,
+	"assignment":                     true,
+	"local_variable_declaration":     true,
+	"field_declaration":              true,
+	"static_item":                    true,
+	"const_item":                     true,
+	"property_signature":             true,
+	"public_field_definition":        true,
+	"required_parameter":             true,
+	"optional_parameter":             true,
+	"formal_parameter":               true,
+	"simple_parameter":               true,
+	"formal_parameters":              true,
+	"parameter_declaration":          true,
+	"rest_pattern":                   true,
+	"method_parameters":              true,
+	"block_parameters":               true,
+	"optional_parameter_declaration": true,
+	"method_parameter":               true,
+	// Classes/Types
+	"class_declaration":      true,
+	"class_definition":       true,
+	"struct_item":            true,
+	"struct_declaration":     true,
+	"enum_item":              true,
+	"enum_declaration":       true,
+	"interface_declaration":  true,
+	"type_declaration":       true,
+	"type_alias":             true,
+	"type_alias_declaration": true,
+	"type_spec":              true,
+	"module":                 true,
+	"module_declaration":     true,
+	// Imports (we handle these separately via call tracking)
+	"import_specifier": true,
+	"namespace_import": true,
+	"named_imports":    true,
+}
+
+// isDefinitionNameNode checks if the given identifier node is the "name" part
+// of a definition (function name, variable name, class name, etc.).
+// This prevents counting the definition's own identifier as a "usage".
+func isDefinitionNameNode(node *sitter.Node, lang parser.Language) bool {
+	parent := node.Parent()
+	if parent == nil {
+		return false
+	}
+
+	parentType := parent.Type()
+
+	// Check if parent is a definition type
+	if !definitionParentTypes[parentType] {
+		return false
+	}
+
+	// Check if this node is the "name" field of the parent
+	nameNode := parent.ChildByFieldName("name")
+	if nameNode != nil && nameNode.Equal(node) {
+		return true
+	}
+
+	// Some languages use different field names
+	// Ruby uses "object" for singleton methods
+	if lang == parser.LangRuby && parentType == "singleton_method" {
+		// For singleton methods, both the object and name are definitions
+		if objNode := parent.ChildByFieldName("object"); objNode != nil && objNode.Equal(node) {
+			return true
+		}
+	}
+
+	// For variable declarators, the first identifier child is typically the name
+	if parentType == "variable_declarator" || parentType == "short_var_declaration" ||
+		parentType == "const_spec" || parentType == "var_spec" {
+		// Check if we're the left side (being assigned to)
+		for i := range int(parent.ChildCount()) {
+			child := parent.Child(i)
+			if child.Type() == "identifier" || child.Type() == "type_identifier" {
+				if child.Equal(node) {
+					return true
+				}
+				break // Only first identifier is the definition
+			}
+		}
+	}
+
+	// For assignment expressions, only the left side is a definition
+	if parentType == "assignment" || parentType == "assignment_expression" {
+		if leftNode := parent.ChildByFieldName("left"); leftNode != nil && leftNode.Equal(node) {
+			return true
+		}
+	}
+
+	// For parameters, the identifier is always a definition
+	if strings.Contains(parentType, "parameter") {
+		return true
+	}
+
+	return false
 }
 
 // getFunctionBody returns the body node of a function.
@@ -986,15 +1224,233 @@ func getVisibility(name string, lang parser.Language) string {
 }
 
 // isExported checks if a symbol is exported (can be used externally).
+// This is language-specific:
+// - Go: uppercase first letter means exported
+// - Python: no leading underscore means public
+// - Rust: pub keyword (checked elsewhere via visibility)
+// - Ruby: not private/protected means public
+// - JS/TS: module.exports or export keyword (checked elsewhere)
 func isExported(name string, lang parser.Language) bool {
 	switch lang {
 	case parser.LangGo:
 		return len(name) > 0 && name[0] >= 'A' && name[0] <= 'Z'
 	case parser.LangPython:
 		return len(name) == 0 || name[0] != '_'
+	case parser.LangRuby:
+		// In Ruby, we can't know from name alone. Return false and rely on visibility field.
+		return false
+	case parser.LangTypeScript, parser.LangJavaScript, parser.LangTSX:
+		// In JS/TS, exports are explicit. Return false and let semantic analysis handle it.
+		return false
 	default:
-		return true // Conservative default
+		// Conservative: assume not exported for languages we don't handle specially
+		return false
 	}
+}
+
+// isDefaultExportNode checks if a function/class node is a default export.
+// In JS/TS, this is "export default function Foo()" or "export default class Bar".
+// The AST structure is: export_statement -> (default) -> function_declaration/class_declaration
+func isDefaultExportNode(node *sitter.Node, lang parser.Language) bool {
+	// Only applies to JS/TS
+	if lang != parser.LangJavaScript && lang != parser.LangTypeScript && lang != parser.LangTSX {
+		return false
+	}
+
+	parent := node.Parent()
+	if parent == nil {
+		return false
+	}
+
+	// Direct parent is export_statement
+	if parent.Type() == "export_statement" {
+		// Check if this export statement has "default" keyword
+		for i := range int(parent.ChildCount()) {
+			child := parent.Child(i)
+			if child.Type() == "default" {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// isNamedExportNode checks if a node is a named export (export function/const/class).
+// Named exports are part of a module's public API and should not be flagged as dead code.
+func isNamedExportNode(node *sitter.Node, lang parser.Language) bool {
+	// Only applies to JS/TS
+	if lang != parser.LangJavaScript && lang != parser.LangTypeScript && lang != parser.LangTSX {
+		return false
+	}
+
+	parent := node.Parent()
+	if parent == nil {
+		return false
+	}
+
+	// Direct parent is export_statement
+	if parent.Type() == "export_statement" {
+		// Check that it does NOT have "default" keyword (that would be a default export)
+		for i := range int(parent.ChildCount()) {
+			child := parent.Child(i)
+			if child.Type() == "default" {
+				return false // This is a default export, not a named export
+			}
+		}
+		return true // export_statement without "default" = named export
+	}
+
+	return false
+}
+
+// getArrowFunctionName gets the name of an arrow function from its parent variable declarator.
+// For pattern: const MyComponent = () => {} -> returns "MyComponent"
+func getArrowFunctionName(node *sitter.Node, source []byte) string {
+	parent := node.Parent()
+	if parent == nil {
+		return ""
+	}
+
+	// Check if parent is variable_declarator with this arrow function as the value
+	if parent.Type() == "variable_declarator" {
+		if nameNode := parent.ChildByFieldName("name"); nameNode != nil {
+			return parser.GetNodeText(nameNode, source)
+		}
+	}
+
+	return ""
+}
+
+// findEnclosingFunctionName walks up the AST parent chain to find the nearest
+// enclosing function and returns its name. This correctly handles nested functions
+// where calls should be attributed to the innermost enclosing function.
+func findEnclosingFunctionName(node *sitter.Node, source []byte, lang parser.Language) string {
+	current := node.Parent()
+	for current != nil {
+		nodeType := current.Type()
+		if isFunctionNode(nodeType, lang) {
+			// Found a function - get its name
+			nameNode := getFunctionNameNode(current, lang)
+			if nameNode != nil {
+				return parser.GetNodeText(nameNode, source)
+			}
+			// For arrow functions, check if assigned to a variable
+			if nodeType == "arrow_function" {
+				if name := getArrowFunctionName(current, source); name != "" {
+					return name
+				}
+			}
+			// If we found a function but couldn't get its name, keep looking
+			// (anonymous functions don't contribute to call graph)
+		}
+		current = current.Parent()
+	}
+	return ""
+}
+
+// extractDefaultExportReference extracts the identifier name from "export default <identifier>".
+// Returns empty string if this is not a default export reference pattern
+// (e.g., "export default function foo()" exports inline, not by reference).
+func extractDefaultExportReference(node *sitter.Node, source []byte) string {
+	// Look for pattern: export_statement -> default -> identifier
+	hasDefault := false
+	var identifierName string
+
+	for i := range int(node.ChildCount()) {
+		child := node.Child(i)
+		childType := child.Type()
+
+		if childType == "default" {
+			hasDefault = true
+		}
+
+		// If child is an identifier (not a function/class declaration), it's a reference
+		if childType == "identifier" && hasDefault {
+			identifierName = parser.GetNodeText(child, source)
+		}
+
+		// If child is a function_declaration or class_declaration, this is inline export
+		// (handled by isDefaultExportNode), not a reference export
+		if childType == "function_declaration" || childType == "class_declaration" ||
+			childType == "function_expression" || childType == "arrow_function" {
+			return "" // Inline definition, not a reference
+		}
+	}
+
+	if hasDefault && identifierName != "" {
+		return identifierName
+	}
+	return ""
+}
+
+// collectRubyVisibility builds a map of method start lines to their visibility.
+// Ruby uses positional visibility modifiers (private, protected, public) that
+// affect all methods defined after them until another modifier is encountered.
+func collectRubyVisibility(root *sitter.Node, source []byte) map[uint32]string {
+	result := make(map[uint32]string)
+
+	// Walk through each class/module and track visibility state
+	var walkBodyStatement func(node *sitter.Node, currentVisibility string)
+	walkBodyStatement = func(node *sitter.Node, currentVisibility string) {
+		visibility := currentVisibility
+
+		// Iterate through children in order (not depth-first)
+		for i := range int(node.ChildCount()) {
+			child := node.Child(i)
+			childType := child.Type()
+
+			// Check for visibility modifiers
+			if childType == "identifier" {
+				text := parser.GetNodeText(child, source)
+				switch text {
+				case "private", "protected", "public":
+					visibility = text
+				}
+			}
+
+			// Record visibility for method definitions
+			if childType == "method" || childType == "singleton_method" {
+				line := child.StartPoint().Row + 1
+				result[line] = visibility
+			}
+
+			// Recurse into nested classes/modules
+			if childType == "class" || childType == "module" {
+				// Find the body_statement within this class/module
+				for j := range int(child.ChildCount()) {
+					grandchild := child.Child(j)
+					if grandchild.Type() == "body_statement" {
+						walkBodyStatement(grandchild, "public") // Reset to public for nested class
+					}
+				}
+			}
+		}
+	}
+
+	// Start by finding top-level classes/modules
+	var findClasses func(node *sitter.Node)
+	findClasses = func(node *sitter.Node) {
+		nodeType := node.Type()
+
+		if nodeType == "class" || nodeType == "module" {
+			// Find the body_statement
+			for i := range int(node.ChildCount()) {
+				child := node.Child(i)
+				if child.Type() == "body_statement" {
+					walkBodyStatement(child, "public")
+				}
+			}
+		}
+
+		// Continue searching for more classes
+		for i := range int(node.ChildCount()) {
+			findClasses(node.Child(i))
+		}
+	}
+
+	findClasses(root)
+	return result
 }
 
 // IsTestFile checks if a file is a test file.
@@ -1189,6 +1645,7 @@ func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Analysis, erro
 
 	allDefs := make(map[string]definition)
 	allCalls := make([]callReference, 0)
+	frameworkRefs := make(map[string]bool) // Method names referenced by framework DSLs
 
 	for _, fdc := range results {
 		for name, def := range fdc.definitions {
@@ -1205,6 +1662,11 @@ func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Analysis, erro
 			}
 		}
 
+		// Collect framework references (callbacks, send targets, etc.)
+		for _, ref := range fdc.frameworkRefs {
+			frameworkRefs[ref] = true
+		}
+
 		// Collect unreachable blocks
 		analysis.UnreachableCode = append(analysis.UnreachableCode, fdc.unreachableBlocks...)
 		analysis.Summary.TotalUnreachableBlocks += len(fdc.unreachableBlocks)
@@ -1217,7 +1679,7 @@ func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Analysis, erro
 
 	if a.buildGraph {
 		// Phase 1: Build reference graph from AST
-		a.buildReferenceGraph(allDefs, allCalls)
+		a.buildReferenceGraph(allDefs, allCalls, frameworkRefs)
 
 		// Phase 2: Resolve dynamic dispatch
 		a.resolveDynamicCalls()
@@ -1238,6 +1700,10 @@ func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Analysis, erro
 			for name := range fdc.usages {
 				allUsages[name] = true
 			}
+		}
+		// Add framework references to usages (callbacks, send targets are considered used)
+		for ref := range frameworkRefs {
+			allUsages[ref] = true
 		}
 		a.findDeadCodeFromUsages(analysis, allDefs, allUsages)
 	}
@@ -1277,12 +1743,17 @@ func (a *Analyzer) registerMethodsInVTables(defs map[string]definition) {
 }
 
 // buildReferenceGraph constructs the cross-language reference graph (Phase 1).
-func (a *Analyzer) buildReferenceGraph(defs map[string]definition, calls []callReference) {
+// frameworkRefs contains method names referenced by framework DSLs (Rails callbacks, send, etc.)
+// These are treated as reachable from entry points since the framework calls them.
+func (a *Analyzer) buildReferenceGraph(defs map[string]definition, calls []callReference, frameworkRefs map[string]bool) {
 	// Create name to nodeID mapping
 	nameToNode := make(map[string]uint32)
 
 	// Add all definitions as nodes
 	for name, def := range defs {
+		// Methods referenced by framework DSLs are entry points
+		isFrameworkRef := frameworkRefs[name]
+
 		node := &ReferenceNode{
 			ID:         def.nodeID,
 			Name:       name,
@@ -1291,7 +1762,7 @@ func (a *Analyzer) buildReferenceGraph(defs map[string]definition, calls []callR
 			EndLine:    def.endLine,
 			Kind:       def.kind,
 			IsExported: def.exported,
-			IsEntry:    isEntryPoint(name, def),
+			IsEntry:    isEntryPoint(name, def) || isFrameworkRef,
 		}
 		a.references.AddNode(node)
 		nameToNode[name] = def.nodeID
@@ -1660,47 +2131,204 @@ func (a *Analyzer) calculateConfidence(def definition) float64 {
 }
 
 // isEntryPoint determines if a function is an entry point.
+// Entry points are the roots of the call graph - functions that are called from
+// outside the analyzed codebase (framework callbacks, main functions, exports, etc.)
 func isEntryPoint(name string, def definition) bool {
 	// Standard entry points
 	if name == "main" || name == "init" || name == "Main" {
 		return true
 	}
+
 	// FFI exported functions are always entry points
 	if def.isFFI {
 		return true
 	}
-	// Exported symbols can be entry points
-	if def.exported {
-		return true
-	}
-	// Test functions (Go)
+
+	// Test functions are entry points (all languages)
 	if len(name) > 4 && (name[:4] == "Test" || name[:4] == "test") {
 		return true
 	}
+
 	// Benchmark functions (Go)
 	if len(name) > 9 && name[:9] == "Benchmark" {
 		return true
 	}
+
 	// Example functions (Go)
 	if len(name) > 7 && name[:7] == "Example" {
 		return true
 	}
+
 	// Fuzz functions (Go 1.18+)
 	if len(name) > 4 && name[:4] == "Fuzz" {
 		return true
 	}
+
 	// HTTP handlers (common patterns)
 	if isHTTPHandler(name) {
 		return true
 	}
+
 	// Event handlers and callbacks
 	if isEventHandler(name) {
 		return true
 	}
+
 	// Lifecycle methods
 	if isLifecycleMethod(name) {
 		return true
 	}
+
+	// Language-specific entry point rules
+	return isLanguageSpecificEntryPoint(name, def)
+}
+
+// isLanguageSpecificEntryPoint checks for language-specific entry point patterns.
+// This is where we diverge from the naive "exported = entry point" assumption.
+func isLanguageSpecificEntryPoint(name string, def definition) bool {
+	file := def.file
+
+	// Go: Exported symbols in library packages are entry points
+	// (they're part of the public API)
+	if strings.HasSuffix(file, ".go") && def.exported {
+		return true
+	}
+
+	// Rust: pub symbols are entry points
+	if strings.HasSuffix(file, ".rs") && def.exported {
+		return true
+	}
+
+	// Ruby: Only specific patterns are entry points, not all public methods
+	if strings.HasSuffix(file, ".rb") {
+		return isRubyEntryPoint(name, def)
+	}
+
+	// TypeScript/JavaScript: module.exports, default exports, and framework patterns
+	if strings.HasSuffix(file, ".ts") || strings.HasSuffix(file, ".tsx") ||
+		strings.HasSuffix(file, ".js") || strings.HasSuffix(file, ".jsx") {
+		return isJavaScriptEntryPoint(name, def)
+	}
+
+	// Python: __name__ == "__main__" blocks and public API
+	if strings.HasSuffix(file, ".py") && def.exported {
+		return true
+	}
+
+	return false
+}
+
+// isRubyEntryPoint checks if a Ruby method is an entry point.
+// In Ruby/Rails, entry points are framework callbacks and specific patterns.
+func isRubyEntryPoint(name string, def definition) bool {
+	// Rails controller actions are implicitly called by routes
+	// Match either /controllers/ directory or files ending in _controller.rb
+	isController := strings.Contains(def.file, "/controllers/") || strings.HasSuffix(def.file, "_controller.rb")
+	if isController {
+		// Public methods in controllers are routable actions
+		if def.visibility == "public" {
+			return true
+		}
+	}
+
+	// Rails model callbacks detected by semantic extractor are marked as references,
+	// so they'll be reachable. But certain patterns are always entry points:
+
+	// Rake tasks
+	if name == "perform" || name == "call" || name == "run" {
+		return true
+	}
+
+	// Sidekiq/ActiveJob workers
+	if strings.Contains(def.file, "/jobs/") || strings.Contains(def.file, "/workers/") {
+		if name == "perform" || name == "perform_async" {
+			return true
+		}
+	}
+
+	// GraphQL resolvers - public methods in GraphQL types are field resolvers
+	if strings.Contains(def.file, "/graphql/") {
+		// Named resolve methods
+		if name == "resolve" || strings.HasPrefix(name, "resolve_") {
+			return true
+		}
+		// Public methods in GraphQL type files are field resolvers called by framework
+		if strings.Contains(def.file, "/types/") && def.visibility == "public" {
+			return true
+		}
+	}
+
+	// Pundit policy methods - public methods in *_policy.rb are authorization checks
+	// called dynamically by Pundit (e.g., index?, show?, create?, update_user_roles?)
+	isPolicy := strings.Contains(def.file, "/policies/") || strings.HasSuffix(def.file, "_policy.rb")
+	if isPolicy && def.visibility == "public" {
+		return true
+	}
+
+	// Serializers
+	if strings.Contains(def.file, "/serializers/") {
+		return true // All methods in serializers are called by the framework
+	}
+
+	// Service objects (common pattern)
+	if strings.Contains(def.file, "/services/") {
+		if name == "call" || name == "perform" || name == "execute" || name == "run" {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isJavaScriptEntryPoint checks if a JS/TS function is an entry point.
+func isJavaScriptEntryPoint(name string, def definition) bool {
+	// Default exports are entry points - they're the main export of a module
+	// and are typically imported from elsewhere
+	if def.isDefaultExport {
+		return true
+	}
+
+	// Named exports are entry points - they're part of the module's public API
+	// Examples: export function foo() {}, export const bar = () => {}
+	if def.isNamedExport {
+		return true
+	}
+
+	// React components (capitalized functions in component directories)
+	if strings.Contains(def.file, "/components/") {
+		if len(name) > 0 && name[0] >= 'A' && name[0] <= 'Z' {
+			return true
+		}
+	}
+
+	// Next.js page functions
+	if strings.Contains(def.file, "/pages/") || strings.Contains(def.file, "/app/") {
+		if name == "default" || name == "getServerSideProps" || name == "getStaticProps" ||
+			name == "generateMetadata" || name == "generateStaticParams" {
+			return true
+		}
+	}
+
+	// API route handlers
+	if strings.Contains(def.file, "/api/") {
+		if name == "GET" || name == "POST" || name == "PUT" || name == "DELETE" ||
+			name == "PATCH" || name == "HEAD" || name == "OPTIONS" ||
+			name == "handler" || name == "default" {
+			return true
+		}
+	}
+
+	// Express/Koa middleware
+	if name == "middleware" || strings.HasSuffix(name, "Middleware") {
+		return true
+	}
+
+	// NestJS decorated methods are handled by semantic extractor,
+	// but module entry points are:
+	if strings.Contains(def.file, "/modules/") {
+		return true
+	}
+
 	return false
 }
 

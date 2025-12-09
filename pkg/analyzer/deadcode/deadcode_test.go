@@ -1027,3 +1027,812 @@ func TestAnalyzeProject_EmptyFiles(t *testing.T) {
 		t.Errorf("TotalFilesAnalyzed = %d, want 0", analysis.Summary.TotalFilesAnalyzed)
 	}
 }
+
+// Ruby-specific tests for call detection
+
+func TestRuby_ImplicitMethodCallsAreTracked(t *testing.T) {
+	// In Ruby, methods can call other methods without explicit receiver.
+	// These should be tracked as call edges so the called methods aren't
+	// incorrectly reported as dead code.
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "order.rb")
+
+	code := `class Order
+  def process
+    calculate_total
+    validate_items
+  end
+
+  def calculate_total
+    42
+  end
+
+  def validate_items
+    true
+  end
+
+  def unused_method
+    nil
+  end
+end
+`
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New()
+	defer a.Close()
+
+	result, err := a.AnalyzeFile(path)
+	if err != nil {
+		t.Fatalf("AnalyzeFile failed: %v", err)
+	}
+
+	// Should have 4 method definitions
+	if len(result.definitions) != 4 {
+		t.Errorf("len(definitions) = %d, want 4", len(result.definitions))
+	}
+
+	// Should track calls to calculate_total and validate_items
+	hasCalculateTotal := false
+	hasValidateItems := false
+	for _, call := range result.calls {
+		if call.callee == "calculate_total" {
+			hasCalculateTotal = true
+		}
+		if call.callee == "validate_items" {
+			hasValidateItems = true
+		}
+	}
+
+	if !hasCalculateTotal {
+		t.Error("expected call to 'calculate_total' to be tracked")
+	}
+	if !hasValidateItems {
+		t.Error("expected call to 'validate_items' to be tracked")
+	}
+}
+
+func TestRuby_ExplicitMethodCallsWithReceiverAreTracked(t *testing.T) {
+	// Ruby method calls with explicit receiver like obj.method() or self.method()
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "service.rb")
+
+	code := `class OrderService
+  def process(order)
+    order.validate
+    self.log_action
+  end
+
+  def log_action
+    puts "logged"
+  end
+end
+`
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New()
+	defer a.Close()
+
+	result, err := a.AnalyzeFile(path)
+	if err != nil {
+		t.Fatalf("AnalyzeFile failed: %v", err)
+	}
+
+	// Should track the call to log_action (via self.log_action)
+	hasLogAction := false
+	for _, call := range result.calls {
+		if call.callee == "log_action" {
+			hasLogAction = true
+		}
+	}
+
+	if !hasLogAction {
+		t.Error("expected call to 'log_action' (via self.log_action) to be tracked")
+	}
+}
+
+func TestRuby_DefinitionNamesNotCountedAsUsages(t *testing.T) {
+	// The name of a method/function definition should NOT count as a usage.
+	// Otherwise every defined symbol would appear "used" by its own definition.
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "model.rb")
+
+	code := `class User
+  def save
+    # does nothing
+  end
+end
+`
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New()
+	defer a.Close()
+
+	result, err := a.AnalyzeFile(path)
+	if err != nil {
+		t.Fatalf("AnalyzeFile failed: %v", err)
+	}
+
+	// 'save' should be in definitions but NOT in usages
+	if _, exists := result.definitions["save"]; !exists {
+		t.Error("'save' should be in definitions")
+	}
+	if result.usages["save"] {
+		t.Error("'save' should NOT be in usages (it's only defined, not called)")
+	}
+}
+
+func TestRuby_RailsControllerActionsAreEntryPoints(t *testing.T) {
+	// Rails controller actions are entry points (called by the framework)
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "users_controller.rb")
+
+	code := `class UsersController < ApplicationController
+  def index
+    @users = User.all
+  end
+
+  def show
+    @user = User.find(params[:id])
+  end
+
+  def create
+    @user = User.new(user_params)
+    @user.save
+  end
+
+  private
+
+  def user_params
+    params.require(:user).permit(:name)
+  end
+end
+`
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New(WithConfidence(0.5))
+	defer a.Close()
+
+	analysis, err := a.Analyze(context.Background(), []string{path})
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	// Controller actions (index, show, create) should NOT be reported as dead
+	deadNames := make(map[string]bool)
+	for _, fn := range analysis.DeadFunctions {
+		deadNames[fn.Name] = true
+	}
+
+	if deadNames["index"] {
+		t.Error("'index' should not be reported as dead (it's a controller action)")
+	}
+	if deadNames["show"] {
+		t.Error("'show' should not be reported as dead (it's a controller action)")
+	}
+	if deadNames["create"] {
+		t.Error("'create' should not be reported as dead (it's a controller action)")
+	}
+}
+
+func TestGo_DefinitionNamesNotCountedAsUsages(t *testing.T) {
+	// Same test for Go - definition names should not count as usages
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "helper.go")
+
+	code := `package main
+
+func unusedHelper() int {
+	return 42
+}
+`
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New()
+	defer a.Close()
+
+	result, err := a.AnalyzeFile(path)
+	if err != nil {
+		t.Fatalf("AnalyzeFile failed: %v", err)
+	}
+
+	// 'unusedHelper' should be in definitions but NOT in usages
+	if _, exists := result.definitions["unusedHelper"]; !exists {
+		t.Error("'unusedHelper' should be in definitions")
+	}
+	if result.usages["unusedHelper"] {
+		t.Error("'unusedHelper' should NOT be in usages (it's only defined, not called)")
+	}
+}
+
+func TestTypeScript_DecoratedMethodsAreEntryPoints(t *testing.T) {
+	// TypeScript methods with decorators (like NestJS @Get) are entry points
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "users.controller.ts")
+
+	code := `import { Controller, Get, Post } from '@nestjs/common';
+
+@Controller('users')
+class UsersController {
+  @Get()
+  findAll() {
+    return [];
+  }
+
+  @Post()
+  create() {
+    return {};
+  }
+
+  private unusedHelper() {
+    return null;
+  }
+}
+`
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New(WithConfidence(0.5))
+	defer a.Close()
+
+	analysis, err := a.Analyze(context.Background(), []string{path})
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	// Decorated methods should NOT be reported as dead
+	deadNames := make(map[string]bool)
+	for _, fn := range analysis.DeadFunctions {
+		deadNames[fn.Name] = true
+	}
+
+	if deadNames["findAll"] {
+		t.Error("'findAll' should not be reported as dead (it has @Get decorator)")
+	}
+	if deadNames["create"] {
+		t.Error("'create' should not be reported as dead (it has @Post decorator)")
+	}
+}
+
+func TestRuby_PunditPolicyMethodsAreEntryPoints(t *testing.T) {
+	// Pundit authorization framework calls policy methods dynamically based on
+	// controller actions. Methods ending in ? like index?, show?, create? etc.
+	// are entry points called by the framework.
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "user_policy.rb")
+
+	code := `class UserPolicy < ApplicationPolicy
+  def index?
+    user.admin?
+  end
+
+  def show?
+    user.admin? || record.owner == user
+  end
+
+  def create?
+    user.admin?
+  end
+
+  def update_user_roles?
+    manage_external_roles? || manage_internal_roles?
+  end
+
+  private
+
+  def manage_external_roles?
+    permission_checker.can?(:manage_external_roles)
+  end
+
+  def manage_internal_roles?
+    permission_checker.can?(:manage_internal_roles)
+  end
+
+  def helper_method
+    nil
+  end
+end
+`
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New()
+	defer a.Close()
+
+	analysis, err := a.Analyze(context.Background(), []string{path})
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	// Public methods in *_policy.rb files should NOT be reported as dead
+	// because they are dynamically called by Pundit
+	deadNames := make(map[string]bool)
+	for _, fn := range analysis.DeadFunctions {
+		deadNames[fn.Name] = true
+	}
+
+	// Public policy methods should not be dead
+	if deadNames["index?"] {
+		t.Error("'index?' should not be reported as dead (Pundit policy method)")
+	}
+	if deadNames["show?"] {
+		t.Error("'show?' should not be reported as dead (Pundit policy method)")
+	}
+	if deadNames["create?"] {
+		t.Error("'create?' should not be reported as dead (Pundit policy method)")
+	}
+	if deadNames["update_user_roles?"] {
+		t.Error("'update_user_roles?' should not be reported as dead (Pundit policy method)")
+	}
+
+	// Private helper methods that are called should not be dead
+	if deadNames["manage_external_roles?"] {
+		t.Error("'manage_external_roles?' should not be reported as dead (called by update_user_roles?)")
+	}
+	if deadNames["manage_internal_roles?"] {
+		t.Error("'manage_internal_roles?' should not be reported as dead (called by update_user_roles?)")
+	}
+
+	// But private methods that aren't called SHOULD be dead
+	if !deadNames["helper_method"] {
+		t.Error("'helper_method' SHOULD be reported as dead (private and unused)")
+	}
+}
+
+func TestRuby_GraphQLTypeMethodsAreEntryPoints(t *testing.T) {
+	// GraphQL type resolvers are public methods in GraphQL type classes that
+	// are called dynamically by the GraphQL framework.
+	tmpDir := t.TempDir()
+	graphqlDir := filepath.Join(tmpDir, "app", "graphql", "types")
+	if err := os.MkdirAll(graphqlDir, 0755); err != nil {
+		t.Fatalf("Failed to create graphql directory: %v", err)
+	}
+	path := filepath.Join(graphqlDir, "order_type.rb")
+
+	code := `class Types::OrderType < Types::BaseObject
+  field :id, ID, null: false
+  field :status, String, null: false
+  field :is_claimed_by_courier, Boolean, null: true
+
+  def is_claimed_by_courier
+    object.claimed_courier_order.present?
+  end
+
+  def status
+    object.status_label
+  end
+
+  private
+
+  def internal_helper
+    nil
+  end
+end
+`
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New()
+	defer a.Close()
+
+	analysis, err := a.Analyze(context.Background(), []string{path})
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	// Public methods in GraphQL types are resolvers called by the framework
+	deadNames := make(map[string]bool)
+	for _, fn := range analysis.DeadFunctions {
+		deadNames[fn.Name] = true
+	}
+
+	if deadNames["is_claimed_by_courier"] {
+		t.Error("'is_claimed_by_courier' should not be reported as dead (GraphQL resolver)")
+	}
+	if deadNames["status"] {
+		t.Error("'status' should not be reported as dead (GraphQL resolver)")
+	}
+
+	// Private helper methods that aren't called SHOULD be dead
+	if !deadNames["internal_helper"] {
+		t.Error("'internal_helper' SHOULD be reported as dead (private and unused)")
+	}
+}
+
+func TestJavaScript_DefaultExportsAreEntryPoints(t *testing.T) {
+	// Default exports in JavaScript/React are typically page components or
+	// module entry points that are imported elsewhere.
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "UserProfile.js")
+
+	code := `import React from 'react';
+
+export default function UserProfile(props) {
+  return (
+    <div>
+      <h1>{props.name}</h1>
+      {renderDetails(props)}
+    </div>
+  );
+}
+
+function renderDetails(props) {
+  return <p>{props.email}</p>;
+}
+
+function unusedHelper() {
+  return null;
+}
+`
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New()
+	defer a.Close()
+
+	analysis, err := a.Analyze(context.Background(), []string{path})
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	deadNames := make(map[string]bool)
+	for _, fn := range analysis.DeadFunctions {
+		deadNames[fn.Name] = true
+	}
+
+	// Default exported component should not be dead (it's an entry point)
+	if deadNames["UserProfile"] {
+		t.Error("'UserProfile' should not be reported as dead (default export)")
+	}
+
+	// Functions called by the default export should not be dead
+	if deadNames["renderDetails"] {
+		t.Error("'renderDetails' should not be reported as dead (called by UserProfile)")
+	}
+
+	// Unused helper functions SHOULD be dead
+	if !deadNames["unusedHelper"] {
+		t.Error("'unusedHelper' SHOULD be reported as dead (not called)")
+	}
+}
+
+func TestJavaScript_NamedExportsAreEntryPoints(t *testing.T) {
+	// Named exports in JavaScript modules are part of the public API
+	// and should be treated as entry points.
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "utils.js")
+
+	code := `// Utility module with named exports
+export function formatDate(date) {
+  return date.toISOString();
+}
+
+export const API_VERSION = '1.0.0';
+
+export function parseJSON(str) {
+  return JSON.parse(str);
+}
+
+function internalHelper() {
+  return null;
+}
+`
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New()
+	defer a.Close()
+
+	analysis, err := a.Analyze(context.Background(), []string{path})
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	deadNames := make(map[string]bool)
+	for _, fn := range analysis.DeadFunctions {
+		deadNames[fn.Name] = true
+	}
+
+	// Named exported functions should not be dead
+	if deadNames["formatDate"] {
+		t.Error("'formatDate' should not be reported as dead (named export)")
+	}
+	if deadNames["parseJSON"] {
+		t.Error("'parseJSON' should not be reported as dead (named export)")
+	}
+
+	// Internal helper functions SHOULD be dead if not called
+	if !deadNames["internalHelper"] {
+		t.Error("'internalHelper' SHOULD be reported as dead (not exported, not called)")
+	}
+}
+
+func TestGo_InitFunctionsAreEntryPoints(t *testing.T) {
+	// Go init() functions are called automatically and should be entry points.
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "config.go")
+
+	code := `package config
+
+var settings map[string]string
+
+func init() {
+	settings = make(map[string]string)
+	loadDefaults()
+}
+
+func loadDefaults() {
+	settings["timeout"] = "30s"
+}
+
+func unusedHelper() string {
+	return "unused"
+}
+`
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New()
+	defer a.Close()
+
+	analysis, err := a.Analyze(context.Background(), []string{path})
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	deadNames := make(map[string]bool)
+	for _, fn := range analysis.DeadFunctions {
+		deadNames[fn.Name] = true
+	}
+
+	// init() should not be dead (entry point)
+	if deadNames["init"] {
+		t.Error("'init' should not be reported as dead (Go entry point)")
+	}
+
+	// Functions called by init should not be dead
+	if deadNames["loadDefaults"] {
+		t.Error("'loadDefaults' should not be reported as dead (called by init)")
+	}
+
+	// Unused helpers SHOULD be dead
+	if !deadNames["unusedHelper"] {
+		t.Error("'unusedHelper' SHOULD be reported as dead (not called)")
+	}
+}
+
+func TestGo_HTTPHandlersAreEntryPoints(t *testing.T) {
+	// HTTP handlers registered with http.HandleFunc are entry points.
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "server.go")
+
+	code := `package main
+
+import "net/http"
+
+func main() {
+	http.HandleFunc("/health", healthHandler)
+	http.HandleFunc("/api/users", usersHandler)
+	http.ListenAndServe(":8080", nil)
+}
+
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+	w.Write([]byte("OK"))
+}
+
+func usersHandler(w http.ResponseWriter, r *http.Request) {
+	fetchUsers(w, r)
+}
+
+func fetchUsers(w http.ResponseWriter, r *http.Request) {
+	w.Write([]byte("[]"))
+}
+
+// unexported function not registered anywhere - should be dead
+// (doesn't end with Handler/handler suffix to avoid entry point heuristic)
+func unusedFunc(w http.ResponseWriter, r *http.Request) {
+	w.Write([]byte("unused"))
+}
+`
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New()
+	defer a.Close()
+
+	analysis, err := a.Analyze(context.Background(), []string{path})
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	deadNames := make(map[string]bool)
+	for _, fn := range analysis.DeadFunctions {
+		deadNames[fn.Name] = true
+	}
+
+	// main() should not be dead
+	if deadNames["main"] {
+		t.Error("'main' should not be reported as dead (Go entry point)")
+	}
+
+	// Handlers registered with http.HandleFunc should not be dead (exported = entry point)
+	if deadNames["healthHandler"] {
+		t.Error("'healthHandler' should not be reported as dead (registered handler)")
+	}
+	if deadNames["usersHandler"] {
+		t.Error("'usersHandler' should not be reported as dead (registered handler)")
+	}
+
+	// Functions called by handlers should not be dead (exported = entry point)
+	if deadNames["fetchUsers"] {
+		t.Error("'fetchUsers' should not be reported as dead (called by usersHandler)")
+	}
+
+	// Unexported functions that are NOT used SHOULD be dead
+	if !deadNames["unusedFunc"] {
+		t.Error("'unusedFunc' SHOULD be reported as dead (unexported, not used)")
+	}
+}
+
+func TestJavaScript_DefaultExportReferenceIsEntryPoint(t *testing.T) {
+	// React pattern: const MyComponent = () => {}; export default MyComponent;
+	// The variable MyComponent should be treated as an entry point because it's
+	// the default export of the module.
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "Component.js")
+
+	code := `import React from 'react';
+
+function helperOne() { return 1; }
+function helperTwo() { return 2; }
+
+const MyComponent = props => {
+  return <div>{helperOne()}</div>;
+};
+
+function unusedHelper() { return 'unused'; }
+
+export default MyComponent;`
+
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New()
+	defer a.Close()
+
+	analysis, err := a.Analyze(context.Background(), []string{path})
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	// Collect dead names for easier assertions
+	deadFunctions := make(map[string]bool)
+	for _, fn := range analysis.DeadFunctions {
+		deadFunctions[fn.Name] = true
+	}
+	deadVariables := make(map[string]bool)
+	for _, v := range analysis.DeadVariables {
+		deadVariables[v.Name] = true
+	}
+
+	// MyComponent is the default export - should NOT be dead
+	if deadVariables["MyComponent"] {
+		t.Error("'MyComponent' should not be reported as dead (default export reference)")
+	}
+
+	// helperOne is called by MyComponent - should NOT be dead
+	if deadFunctions["helperOne"] {
+		t.Error("'helperOne' should not be reported as dead (called by default export)")
+	}
+
+	// helperTwo is NOT called - SHOULD be dead
+	if !deadFunctions["helperTwo"] {
+		t.Error("'helperTwo' SHOULD be reported as dead (not called)")
+	}
+
+	// unusedHelper is NOT called - SHOULD be dead
+	if !deadFunctions["unusedHelper"] {
+		t.Error("'unusedHelper' SHOULD be reported as dead (not called)")
+	}
+}
+
+func TestJavaScript_NestedFunctionsInArrowComponent(t *testing.T) {
+	// React pattern: arrow function component with nested function declarations.
+	// When the component calls module-level helpers in its JSX return, those calls
+	// should be attributed to the component, not to the last nested function.
+	// This tests proper function context stack management.
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "Component.js")
+
+	// Using function names that don't trigger entry point heuristics (like "handle" prefix)
+	code := `import React from 'react';
+
+// Module-level helpers
+function formatPrice(n) { return '$' + n; }
+function formatDate(d) { return d.toISOString(); }
+
+const MyComponent = props => {
+  // Nested function inside arrow component
+  function clickAction() {
+    console.log('clicked');
+  }
+
+  // Another nested function (unused)
+  function submitAction() {
+    console.log('submitted');
+  }
+
+  // Calls to module-level helpers happen AFTER nested function definitions
+  // These should be attributed to MyComponent, not submitAction
+  return (
+    <div>
+      <span>{formatPrice(props.price)}</span>
+      <button onClick={clickAction}>Click</button>
+    </div>
+  );
+};
+
+function unusedHelper() { return 'unused'; }
+
+export default MyComponent;`
+
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New()
+	defer a.Close()
+
+	analysis, err := a.Analyze(context.Background(), []string{path})
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	// Collect dead names for easier assertions
+	deadFunctions := make(map[string]bool)
+	for _, fn := range analysis.DeadFunctions {
+		deadFunctions[fn.Name] = true
+	}
+
+	// formatPrice is called in JSX return of MyComponent - should NOT be dead
+	if deadFunctions["formatPrice"] {
+		t.Error("'formatPrice' should not be reported as dead (called by MyComponent in JSX)")
+	}
+
+	// formatDate is NOT called - SHOULD be dead
+	if !deadFunctions["formatDate"] {
+		t.Error("'formatDate' SHOULD be reported as dead (not called)")
+	}
+
+	// clickAction is used as onClick handler - should NOT be dead
+	if deadFunctions["clickAction"] {
+		t.Error("'clickAction' should not be reported as dead (used as onClick handler)")
+	}
+
+	// submitAction is NOT used - SHOULD be dead
+	if !deadFunctions["submitAction"] {
+		t.Error("'submitAction' SHOULD be reported as dead (not used)")
+	}
+
+	// unusedHelper is NOT called - SHOULD be dead
+	if !deadFunctions["unusedHelper"] {
+		t.Error("'unusedHelper' SHOULD be reported as dead (not called)")
+	}
+}
