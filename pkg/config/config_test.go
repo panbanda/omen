@@ -349,7 +349,15 @@ func TestExcludeConfigDefaults(t *testing.T) {
 	cfg := DefaultConfig()
 
 	// Check default excluded patterns (using gitignore-style syntax)
-	expectedPatterns := []string{"vendor/", "node_modules/", ".git/", "dist/", "build/", "*_test.go"}
+	expectedPatterns := []string{
+		"vendor/",
+		"node_modules/",
+		".git/",
+		"dist/",
+		"build/",
+		"*_test.go",
+		".yarn/", // yarn 2+ releases and plugins
+	}
 	for _, pattern := range expectedPatterns {
 		found := false
 		for _, p := range cfg.Exclude.Patterns {

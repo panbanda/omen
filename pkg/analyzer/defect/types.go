@@ -16,35 +16,41 @@ const (
 )
 
 // Weights defines the weights for defect prediction factors.
-// Based on empirical research (PMAT approach).
+// Based on empirical research (PMAT approach + ownership research).
+// Research shows ownership diffusion correlates with defects (Bird et al. 2011).
 type Weights struct {
-	Churn       float32 `json:"churn"`       // 0.35
-	Complexity  float32 `json:"complexity"`  // 0.30
-	Duplication float32 `json:"duplication"` // 0.25
+	Churn       float32 `json:"churn"`       // 0.30 (reduced from 0.35)
+	Complexity  float32 `json:"complexity"`  // 0.25 (reduced from 0.30)
+	Duplication float32 `json:"duplication"` // 0.20 (reduced from 0.25)
 	Coupling    float32 `json:"coupling"`    // 0.10
+	Ownership   float32 `json:"ownership"`   // 0.15 (new - ownership diffusion)
 }
 
 // DefaultWeights returns the standard weights.
+// Total must equal 1.0.
 func DefaultWeights() Weights {
 	return Weights{
-		Churn:       0.35,
-		Complexity:  0.30,
-		Duplication: 0.25,
+		Churn:       0.30,
+		Complexity:  0.25,
+		Duplication: 0.20,
 		Coupling:    0.10,
+		Ownership:   0.15,
 	}
 }
 
 // FileMetrics contains input metrics for defect prediction.
 type FileMetrics struct {
-	FilePath             string  `json:"file_path"`
-	ChurnScore           float32 `json:"churn_score"`       // 0.0 to 1.0
-	Complexity           float32 `json:"complexity"`        // Raw complexity
-	DuplicateRatio       float32 `json:"duplicate_ratio"`   // 0.0 to 1.0
-	AfferentCoupling     float32 `json:"afferent_coupling"` // Incoming deps
-	EfferentCoupling     float32 `json:"efferent_coupling"` // Outgoing deps
-	LinesOfCode          int     `json:"lines_of_code"`
-	CyclomaticComplexity uint32  `json:"cyclomatic_complexity"`
-	CognitiveComplexity  uint32  `json:"cognitive_complexity"`
+	FilePath               string  `json:"file_path"`
+	ChurnScore             float32 `json:"churn_score"`       // 0.0 to 1.0
+	Complexity             float32 `json:"complexity"`        // Raw complexity
+	DuplicateRatio         float32 `json:"duplicate_ratio"`   // 0.0 to 1.0
+	AfferentCoupling       float32 `json:"afferent_coupling"` // Incoming deps
+	EfferentCoupling       float32 `json:"efferent_coupling"` // Outgoing deps
+	LinesOfCode            int     `json:"lines_of_code"`
+	CyclomaticComplexity   uint32  `json:"cyclomatic_complexity"`
+	CognitiveComplexity    uint32  `json:"cognitive_complexity"`
+	OwnershipDiffusion     float32 `json:"ownership_diffusion"`     // Number of unique contributors
+	OwnershipConcentration float32 `json:"ownership_concentration"` // 0.0-1.0, low = diffuse ownership
 }
 
 // Score represents the prediction result for a file (internal format).
@@ -200,6 +206,25 @@ func NormalizeCoupling(rawScore float32) float32 {
 	return interpolateCDF(couplingPercentiles, rawScore)
 }
 
+// ownershipPercentiles maps contributor count to defect risk.
+// Based on Bird et al. (2011) research on ownership and defects.
+// More contributors = higher defect risk.
+var ownershipPercentiles = [][2]float32{
+	{1.0, 0.1},   // Single owner = low risk
+	{2.0, 0.3},   // 2 contributors = moderate
+	{3.0, 0.5},   // 3 contributors = medium
+	{5.0, 0.7},   // 5 contributors = elevated
+	{8.0, 0.85},  // 8 contributors = high
+	{12.0, 0.95}, // 12+ contributors = very high
+	{20.0, 1.0},  // 20+ contributors = maximum risk
+}
+
+// NormalizeOwnership normalizes ownership diffusion (contributor count).
+// Higher contributor count correlates with higher defect probability.
+func NormalizeOwnership(contributors float32) float32 {
+	return interpolateCDF(ownershipPercentiles, contributors)
+}
+
 // sigmoid applies sigmoid transformation for probability calibration.
 // Formula: 1 / (1 + exp(-10 * (rawScore - 0.5)))
 func sigmoid(rawScore float32) float32 {
@@ -237,19 +262,21 @@ func CalculateConfidence(m FileMetrics) float32 {
 }
 
 // CalculateProbability computes defect probability from metrics.
-// PMAT-compatible: uses CDF normalization and sigmoid transformation.
+// Uses CDF normalization, ownership research (Bird et al. 2011), and sigmoid transformation.
 func CalculateProbability(m FileMetrics, w Weights) float32 {
 	// Normalize using empirical CDFs
 	churnNorm := NormalizeChurn(m.ChurnScore)
 	complexityNorm := NormalizeComplexity(m.Complexity)
 	duplicateNorm := NormalizeDuplication(m.DuplicateRatio)
-	couplingNorm := NormalizeCoupling(m.AfferentCoupling) // PMAT uses afferent only
+	couplingNorm := NormalizeCoupling(m.AfferentCoupling)
+	ownershipNorm := NormalizeOwnership(m.OwnershipDiffusion)
 
 	// Weighted linear combination
 	rawScore := w.Churn*churnNorm +
 		w.Complexity*complexityNorm +
 		w.Duplication*duplicateNorm +
-		w.Coupling*couplingNorm
+		w.Coupling*couplingNorm +
+		w.Ownership*ownershipNorm
 
 	// Apply sigmoid for probability interpretation
 	return sigmoid(rawScore)

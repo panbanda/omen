@@ -132,6 +132,11 @@ func (a *Analyzer) AnalyzeGraph(g *graph.DependencyGraph) *Analysis {
 	// Calculate summary statistics
 	analysis.CalculateSummary()
 
+	// Sort smells by severity (critical first, then high, then medium)
+	sort.Slice(analysis.Smells, func(i, j int) bool {
+		return analysis.Smells[i].Severity.Weight() > analysis.Smells[j].Severity.Weight()
+	})
+
 	return analysis
 }
 

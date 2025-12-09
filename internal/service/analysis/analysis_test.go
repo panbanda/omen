@@ -876,3 +876,59 @@ func TestAnalyzeChurn_WithSpinner(t *testing.T) {
 		t.Fatal("expected non-nil result")
 	}
 }
+
+func TestSortFilesByHotspot(t *testing.T) {
+	repoPath := createTestGitRepo(t)
+
+	// Create a simple file (low complexity)
+	simpleFile := filepath.Join(repoPath, "simple.go")
+	if err := os.WriteFile(simpleFile, []byte("package main\nfunc simple() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a complex file (high complexity with many branches)
+	complexFile := filepath.Join(repoPath, "complex.go")
+	complexCode := `package main
+
+func complex(x, y, z int) int {
+	if x > 0 {
+		if y > 0 {
+			if z > 0 {
+				return x + y + z
+			} else {
+				return x + y
+			}
+		} else {
+			return x
+		}
+	} else if y > 0 {
+		return y
+	} else if z > 0 {
+		return z
+	}
+	return 0
+}
+`
+	if err := os.WriteFile(complexFile, []byte(complexCode), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	runGit(t, repoPath, "add", ".")
+	runGit(t, repoPath, "commit", "-m", "Add files")
+
+	svc := New()
+	files := []string{simpleFile, complexFile}
+
+	sorted, err := svc.SortFilesByHotspot(context.Background(), repoPath, files, HotspotOptions{Days: 365})
+	if err != nil {
+		t.Fatalf("SortFilesByHotspot() error = %v", err)
+	}
+
+	// Complex file should be first (higher hotspot score)
+	if len(sorted) != 2 {
+		t.Fatalf("expected 2 files, got %d", len(sorted))
+	}
+	if sorted[0].Path != complexFile {
+		t.Errorf("expected complex file first, got %s", sorted[0].Path)
+	}
+}

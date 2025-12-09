@@ -246,26 +246,60 @@ func DefaultConfig() *Config {
 				"*_test.py",
 				"*.spec.ts",
 				"*.spec.js",
+				"*_spec.rb",
+				"**/*_test/**",
+				"**/test/**",
+				"**/tests/**",
+				"**/spec/**",
 				// Minified assets
 				"*.min.js",
 				"*.min.css",
 				// Lock files
 				"*.lock",
 				"go.sum",
-				// Directories (trailing slash)
+				// Vendor directories
 				"vendor/",
 				"node_modules/",
+				"third_party/",
+				"external/",
+				// Build/output directories
 				".git/",
 				".omen/",
 				"dist/",
 				"build/",
 				"target/",
+				"out/",
+				"bin/",
+				// Python
 				"__pycache__/",
-				"coverage/",
+				".venv/",
+				"venv/",
+				"site-packages/",
+				// Ruby
 				".bundle/",
 				"sorbet/",
-				// Auto-generated mocks
+				// JavaScript/Node
+				".yarn/", // Yarn 2+ PnP releases and plugins
+				// Coverage/test output
+				"coverage/",
+				".nyc_output/",
+				// Auto-generated code
 				"**/mocks/",
+				"**/*.gen.go",
+				"**/*.generated.go",
+				"**/*.pb.go",
+				"**/generated/",
+				"**/gen/",
+				"**/*.auto.ts",
+				"**/*.g.dart",
+				"*_generated.rb",
+				// Schema/migration files (often auto-generated)
+				"**/schema.rb",
+				"**/structure.sql",
+				// IDE/editor directories
+				".idea/",
+				".vscode/",
+				".vs/",
 			},
 			Gitignore: true,
 		},

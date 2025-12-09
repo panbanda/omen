@@ -437,6 +437,29 @@ func TestGenerateDefaultConfig(t *testing.T) {
 	}
 }
 
+// TestScoreCommandFormatFlag verifies the score command supports format flag.
+func TestScoreCommandFormatFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	goFile := filepath.Join(tmpDir, "test.go")
+	content := `package main
+
+func simple() {
+	x := 1
+	_ = x
+}
+`
+	if err := os.WriteFile(goFile, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	// The score command should accept -f/--format flag
+	rootCmd.SetArgs([]string{"score", "-f", "json", tmpDir})
+	err := rootCmd.Execute()
+	if err != nil {
+		t.Fatalf("score command with -f flag failed: %v", err)
+	}
+}
+
 // TestFindConfigFile verifies config file discovery.
 func TestFindConfigFile(t *testing.T) {
 	tmpDir := t.TempDir()

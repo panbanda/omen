@@ -81,6 +81,7 @@ func analyzeParseResult(result *parser.ParseResult) *FileResult {
 	functions := parser.GetFunctions(result)
 	for _, fn := range functions {
 		fnComplexity := analyzeFunctionComplexity(fn, result)
+		fnComplexity.File = result.Path
 		fc.Functions = append(fc.Functions, fnComplexity)
 		fc.TotalCyclomatic += fnComplexity.Metrics.Cyclomatic
 		fc.TotalCognitive += fnComplexity.Metrics.Cognitive

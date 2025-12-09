@@ -257,3 +257,40 @@ func TestAnalyzeFile_UnsupportedLanguage(t *testing.T) {
 		t.Error("AnalyzeFile should fail for unsupported language")
 	}
 }
+
+func TestFunctionResult_FileField(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "test.go")
+
+	code := `package main
+
+func example() int {
+	return 42
+}
+`
+	if err := os.WriteFile(path, []byte(code), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	a := New()
+	defer a.Close()
+
+	result, err := a.AnalyzeFile(path)
+	if err != nil {
+		t.Fatalf("AnalyzeFile failed: %v", err)
+	}
+
+	if len(result.Functions) == 0 {
+		t.Fatal("Expected at least one function")
+	}
+
+	// Each function should have the File field populated with the source file path
+	for i, fn := range result.Functions {
+		if fn.File == "" {
+			t.Errorf("Functions[%d].File is empty, want %q", i, path)
+		}
+		if fn.File != path {
+			t.Errorf("Functions[%d].File = %q, want %q", i, fn.File, path)
+		}
+	}
+}

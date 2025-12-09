@@ -8,6 +8,7 @@ import (
 	"github.com/panbanda/omen/pkg/analyzer/churn"
 	"github.com/panbanda/omen/pkg/analyzer/complexity"
 	"github.com/panbanda/omen/pkg/analyzer/duplicates"
+	"github.com/panbanda/omen/pkg/analyzer/ownership"
 	"github.com/panbanda/omen/pkg/source"
 	"github.com/panbanda/omen/pkg/stats"
 	"github.com/sourcegraph/conc"
@@ -21,6 +22,7 @@ type Analyzer struct {
 	complexity  *complexity.Analyzer
 	churn       *churn.Analyzer
 	duplicates  *duplicates.Analyzer
+	ownership   *ownership.Analyzer
 }
 
 // Compile-time check that Analyzer implements RepoAnalyzer.
@@ -69,6 +71,7 @@ func New(opts ...Option) *Analyzer {
 		duplicates.WithSimilarityThreshold(0.8),
 		duplicates.WithMaxFileSize(a.maxFileSize),
 	)
+	a.ownership = ownership.New()
 
 	return a
 }
@@ -85,7 +88,8 @@ func (a *Analyzer) Analyze(ctx context.Context, repoPath string, files []string)
 	var complexityAnalysis *complexity.Analysis
 	var churnAnalysis *churn.Analysis
 	var dupAnalysis *duplicates.Analysis
-	var complexityErr, churnErr, dupErr error
+	var ownershipAnalysis *ownership.Analysis
+	var complexityErr, churnErr, dupErr, ownershipErr error
 
 	wg := conc.NewWaitGroup()
 
@@ -106,6 +110,11 @@ func (a *Analyzer) Analyze(ctx context.Context, repoPath string, files []string)
 		dupAnalysis, dupErr = a.duplicates.Analyze(ctx, files, fsSrc)
 	})
 
+	// Get ownership metrics (Bird et al. 2011 - ownership correlates with defects)
+	wg.Go(func() {
+		ownershipAnalysis, ownershipErr = a.ownership.Analyze(ctx, repoPath, files)
+	})
+
 	wg.Wait()
 
 	// Handle complexity error (required)
@@ -121,6 +130,11 @@ func (a *Analyzer) Analyze(ctx context.Context, repoPath string, files []string)
 	// Handle duplicate error (optional)
 	if dupErr != nil {
 		dupAnalysis = &duplicates.Analysis{}
+	}
+
+	// Handle ownership error (optional - might fail if not a git repo)
+	if ownershipErr != nil {
+		ownershipAnalysis = &ownership.Analysis{Files: []ownership.FileOwnership{}}
 	}
 
 	// Build lookup maps
@@ -142,6 +156,12 @@ func (a *Analyzer) Analyze(ctx context.Context, repoPath string, files []string)
 		if clone.FileA != clone.FileB {
 			dupByFile[clone.FileB] += float32(clone.LinesB)
 		}
+	}
+
+	ownershipByFile := make(map[string]*ownership.FileOwnership)
+	for i := range ownershipAnalysis.Files {
+		fo := &ownershipAnalysis.Files[i]
+		ownershipByFile[fo.Path] = fo
 	}
 
 	// Calculate defect probability for each file
@@ -192,6 +212,12 @@ func (a *Analyzer) Analyze(ctx context.Context, repoPath string, files []string)
 			}
 		}
 
+		// Get ownership diffusion (Bird et al. 2011 - more contributors = higher defect risk)
+		if fo, ok := ownershipByFile[path]; ok {
+			metrics.OwnershipDiffusion = float32(len(fo.Contributors))
+			metrics.OwnershipConcentration = float32(fo.Concentration)
+		}
+
 		// Calculate probability and confidence
 		prob := CalculateProbability(metrics, a.weights)
 		conf := CalculateConfidence(metrics)
@@ -202,6 +228,7 @@ func (a *Analyzer) Analyze(ctx context.Context, repoPath string, files []string)
 		complexityNorm := NormalizeComplexity(metrics.Complexity)
 		duplicateNorm := NormalizeDuplication(metrics.DuplicateRatio)
 		couplingNorm := NormalizeCoupling(metrics.AfferentCoupling)
+		ownershipNorm := NormalizeOwnership(metrics.OwnershipDiffusion)
 
 		score := Score{
 			FilePath:    path,
@@ -213,6 +240,7 @@ func (a *Analyzer) Analyze(ctx context.Context, repoPath string, files []string)
 				"complexity":  complexityNorm * a.weights.Complexity,
 				"duplication": duplicateNorm * a.weights.Duplication,
 				"coupling":    couplingNorm * a.weights.Coupling,
+				"ownership":   ownershipNorm * a.weights.Ownership,
 			},
 			Recommendations: generateRecommendations(metrics, prob),
 		}
@@ -273,6 +301,13 @@ func generateRecommendations(m FileMetrics, prob float32) []string {
 		recs = append(recs, "Complex control flow. Simplify conditional logic or extract helper functions.")
 	}
 
+	// Ownership recommendations (Bird et al. 2011)
+	if m.OwnershipDiffusion >= 8 {
+		recs = append(recs, "High contributor diffusion. Consider establishing clearer ownership or assigning a primary maintainer.")
+	} else if m.OwnershipDiffusion >= 5 {
+		recs = append(recs, "Moderate contributor diffusion. Document ownership responsibilities.")
+	}
+
 	if prob > 0.8 {
 		recs = append(recs, "CRITICAL: This file has very high defect probability. Prioritize review and testing.")
 	} else if prob > 0.6 {
@@ -290,4 +325,5 @@ func generateRecommendations(m FileMetrics, prob float32) []string {
 func (a *Analyzer) Close() {
 	a.complexity.Close()
 	a.duplicates.Close()
+	a.ownership.Close()
 }
