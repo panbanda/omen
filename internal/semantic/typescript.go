@@ -63,6 +63,7 @@ func (e *tsExtractor) ExtractRefs(tree *sitter.Tree, src []byte) []Ref {
 	// Extract function values
 	if e.funcValuesQuery != nil {
 		qc := sitter.NewQueryCursor()
+		defer qc.Close()
 		qc.Exec(e.funcValuesQuery, tree.RootNode())
 
 		for {
@@ -82,12 +83,12 @@ func (e *tsExtractor) ExtractRefs(tree *sitter.Tree, src []byte) []Ref {
 				}
 			}
 		}
-		qc.Close()
 	}
 
 	// Extract decorated methods
 	if e.decoratorsQuery != nil {
 		qc := sitter.NewQueryCursor()
+		defer qc.Close()
 		qc.Exec(e.decoratorsQuery, tree.RootNode())
 
 		for {
@@ -107,12 +108,12 @@ func (e *tsExtractor) ExtractRefs(tree *sitter.Tree, src []byte) []Ref {
 				}
 			}
 		}
-		qc.Close()
 	}
 
 	// Extract dynamic calls
 	if e.dynamicCallQuery != nil {
 		qc := sitter.NewQueryCursor()
+		defer qc.Close()
 		qc.Exec(e.dynamicCallQuery, tree.RootNode())
 
 		for {
@@ -132,7 +133,6 @@ func (e *tsExtractor) ExtractRefs(tree *sitter.Tree, src []byte) []Ref {
 				}
 			}
 		}
-		qc.Close()
 	}
 
 	return refs

@@ -55,6 +55,7 @@ func (e *rubyExtractor) ExtractRefs(tree *sitter.Tree, src []byte) []Ref {
 	// Extract callbacks
 	if e.callbackQuery != nil {
 		qc := sitter.NewQueryCursor()
+		defer qc.Close()
 		qc.Exec(e.callbackQuery, tree.RootNode())
 
 		for {
@@ -81,12 +82,12 @@ func (e *rubyExtractor) ExtractRefs(tree *sitter.Tree, src []byte) []Ref {
 				}
 			}
 		}
-		qc.Close()
 	}
 
 	// Extract dynamic calls
 	if e.dynamicCallsQuery != nil {
 		qc := sitter.NewQueryCursor()
+		defer qc.Close()
 		qc.Exec(e.dynamicCallsQuery, tree.RootNode())
 
 		for {
@@ -113,7 +114,6 @@ func (e *rubyExtractor) ExtractRefs(tree *sitter.Tree, src []byte) []Ref {
 				}
 			}
 		}
-		qc.Close()
 	}
 
 	return refs
