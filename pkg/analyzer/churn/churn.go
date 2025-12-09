@@ -158,7 +158,7 @@ func (a *Analyzer) Analyze(ctx context.Context, repoPath string, files []string)
 	}
 
 	filtered.Summary.TotalFilesChanged = len(filtered.Files)
-	filtered.Summary.TotalCommits = totalCommits
+	filtered.Summary.TotalFileChanges = totalCommits
 	filtered.Summary.TotalAdditions = totalAdded
 	filtered.Summary.TotalDeletions = totalDeleted
 
@@ -306,7 +306,7 @@ func buildAnalysis(fileMetrics map[string]*FileMetrics, absPath string, days int
 
 	// Build summary
 	analysis.Summary.TotalFilesChanged = len(analysis.Files)
-	analysis.Summary.TotalCommits = totalCommits
+	analysis.Summary.TotalFileChanges = totalCommits
 	analysis.Summary.TotalAdditions = totalAdded
 	analysis.Summary.TotalDeletions = totalDeleted
 

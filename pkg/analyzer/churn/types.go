@@ -101,7 +101,7 @@ func (f *FileMetrics) CalculateRelativeChurn(now time.Time) {
 // Summary provides aggregate statistics.
 type Summary struct {
 	// Required fields matching pmat
-	TotalCommits        int            `json:"total_commits"`
+	TotalFileChanges    int            `json:"total_file_changes"`
 	TotalFilesChanged   int            `json:"total_files_changed"`
 	HotspotFiles        []string       `json:"hotspot_files"`
 	StableFiles         []string       `json:"stable_files"`

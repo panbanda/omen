@@ -95,7 +95,7 @@ func runChurn(cmd *cobra.Command, args []string) error {
 		rows,
 		[]string{
 			fmt.Sprintf("Total Files: %d", result.Summary.TotalFilesChanged),
-			fmt.Sprintf("Total Commits: %d", result.Summary.TotalCommits),
+			fmt.Sprintf("File Changes: %d", result.Summary.TotalFileChanges),
 			fmt.Sprintf("Authors: %d", len(result.Summary.AuthorContributions)),
 			"",
 			fmt.Sprintf("Max: %.2f", result.Summary.MaxChurnScore),
