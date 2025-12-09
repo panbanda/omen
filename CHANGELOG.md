@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.1](https://github.com/panbanda/omen/compare/omen-v2.4.0...omen-v2.4.1) (2025-12-09)
+
+
+### Bug Fixes
+
+* **vcs:** sort commits by date in FindCommitsAtIntervals ([#151](https://github.com/panbanda/omen/issues/151)) ([0cb7178](https://github.com/panbanda/omen/commit/0cb7178e9d0468487df5020773cec59e378299bd))
+
 ## [2.4.0](https://github.com/panbanda/omen/compare/omen-v2.3.0...omen-v2.4.0) (2025-12-09)
 
 
