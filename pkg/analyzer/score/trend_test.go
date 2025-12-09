@@ -57,7 +57,7 @@ func TestTrendAnalysis_RespectsDefaultExclusions(t *testing.T) {
 	runGit(t, tmpDir, "config", "user.name", "Test User")
 
 	// NOTE: No .gitignore - the vendor/ files are COMMITTED to git
-	// This matches real repos like ms-monolith where vendor/assets/ is tracked
+	// This matches repos where vendor/ files are committed to git
 
 	// Create source files that should be analyzed
 	writeFile(t, tmpDir, "main.go", `package main
