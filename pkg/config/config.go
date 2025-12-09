@@ -278,6 +278,8 @@ func DefaultConfig() *Config {
 				// Ruby
 				".bundle/",
 				"sorbet/",
+				// JavaScript/Node
+				".yarn/", // Yarn 2+ PnP releases and plugins
 				// Coverage/test output
 				"coverage/",
 				".nyc_output/",
