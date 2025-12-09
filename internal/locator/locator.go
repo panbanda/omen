@@ -46,7 +46,6 @@ type Result struct {
 var (
 	ErrNotFound       = errors.New("no file or symbol found")
 	ErrAmbiguousMatch = errors.New("ambiguous match")
-	ErrTooManyMatches = errors.New("too many matches")
 )
 
 // Options configures the Locate behavior.
@@ -66,7 +65,7 @@ func WithBaseDir(dir string) Option {
 
 // Locate resolves a focus target to a file or symbol.
 // Resolution order: exact path -> glob -> basename -> symbol
-func Locate(focus string, files []string, repoMap *repomap.Map, opts ...Option) (*Result, error) {
+func Locate(focus string, repoMap *repomap.Map, opts ...Option) (*Result, error) {
 	options := &Options{
 		BaseDir: ".",
 	}

@@ -16,7 +16,7 @@ func TestLocate_ExactFilePath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := Locate(testFile, nil, nil)
+	result, err := Locate(testFile, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -30,7 +30,7 @@ func TestLocate_ExactFilePath(t *testing.T) {
 }
 
 func TestLocate_ExactFilePath_NotFound(t *testing.T) {
-	result, err := Locate("/nonexistent/path/file.go", nil, nil)
+	result, err := Locate("/nonexistent/path/file.go", nil)
 
 	// Should not be an error - just not found as exact path, will try other methods
 	// But with no files list and no repo map, should return not found error
@@ -53,7 +53,7 @@ func TestLocate_GlobPattern_SingleMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := Locate("**/user.go", nil, nil, WithBaseDir(tmpDir))
+	result, err := Locate("**/user.go", nil, WithBaseDir(tmpDir))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestLocate_GlobPattern_MultipleMatches(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := Locate("**/service.go", nil, nil, WithBaseDir(tmpDir))
+	result, err := Locate("**/service.go", nil, WithBaseDir(tmpDir))
 	if err != ErrAmbiguousMatch {
 		t.Fatalf("expected ErrAmbiguousMatch, got %v", err)
 	}
@@ -106,7 +106,7 @@ func TestLocate_Basename_SingleMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := Locate("unique_file.go", nil, nil, WithBaseDir(tmpDir))
+	result, err := Locate("unique_file.go", nil, WithBaseDir(tmpDir))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestLocate_Basename_MultipleMatches(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := Locate("handler.go", nil, nil, WithBaseDir(tmpDir))
+	result, err := Locate("handler.go", nil, WithBaseDir(tmpDir))
 	if err != ErrAmbiguousMatch {
 		t.Fatalf("expected ErrAmbiguousMatch, got %v", err)
 	}
@@ -156,7 +156,7 @@ func TestLocate_Symbol_SingleMatch(t *testing.T) {
 		},
 	}
 
-	result, err := Locate("CreateUser", nil, repoMap)
+	result, err := Locate("CreateUser", repoMap)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestLocate_Symbol_MultipleMatches(t *testing.T) {
 		},
 	}
 
-	result, err := Locate("CreateUser", nil, repoMap)
+	result, err := Locate("CreateUser", repoMap)
 	if err != ErrAmbiguousMatch {
 		t.Fatalf("expected ErrAmbiguousMatch, got %v", err)
 	}
@@ -203,7 +203,7 @@ func TestLocate_Symbol_NotFound(t *testing.T) {
 		},
 	}
 
-	_, err := Locate("NonExistent", nil, repoMap)
+	_, err := Locate("NonExistent", repoMap)
 	if err != ErrNotFound {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}

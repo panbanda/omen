@@ -16,26 +16,21 @@ type FocusedContextOptions struct {
 	Focus   string
 	BaseDir string
 	RepoMap *repomap.Map
-	Days    int // For churn/temporal coupling, default 30
 }
 
 // FocusedContextResult contains the focused context for a file or symbol.
 type FocusedContextResult struct {
 	Target     FocusedTarget
-	Risk       *RiskIndicators
 	Complexity *ComplexityInfo
 	SATD       []SATDItem
-	Warnings   []string
 	Candidates []FocusedCandidate // For ambiguous matches
 }
 
 // FocusedTarget identifies the resolved target.
 type FocusedTarget struct {
-	Type     string         // "file" or "symbol"
-	Path     string         // For files
-	Language string         // For files
-	Lines    int            // For files
-	Symbol   *FocusedSymbol // For symbols
+	Type   string         // "file" or "symbol"
+	Path   string         // For files
+	Symbol *FocusedSymbol // For symbols
 }
 
 // FocusedSymbol contains symbol details.
@@ -53,12 +48,6 @@ type FocusedCandidate struct {
 	File string
 	Line int
 	Kind string
-}
-
-// RiskIndicators contains risk scores for the target.
-type RiskIndicators struct {
-	HotspotScore      float64
-	DefectProbability float64
 }
 
 // ComplexityInfo contains complexity metrics.
@@ -92,7 +81,7 @@ func (s *Service) FocusedContext(ctx context.Context, opts FocusedContextOptions
 	}
 
 	// Resolve the focus target
-	locatorResult, err := locator.Locate(opts.Focus, nil, opts.RepoMap, locator.WithBaseDir(baseDir))
+	locatorResult, err := locator.Locate(opts.Focus, opts.RepoMap, locator.WithBaseDir(baseDir))
 	if err != nil {
 		// For ambiguous matches, return result with candidates
 		if err == locator.ErrAmbiguousMatch && locatorResult != nil {

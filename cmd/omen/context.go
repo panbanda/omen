@@ -308,14 +308,5 @@ func runFocusedContext(cmd *cobra.Command, focus string, paths []string) error {
 		fmt.Println()
 	}
 
-	// Warnings
-	if len(result.Warnings) > 0 {
-		fmt.Println("## Warnings")
-		for _, w := range result.Warnings {
-			fmt.Printf("- %s\n", w)
-		}
-		fmt.Println()
-	}
-
 	return nil
 }

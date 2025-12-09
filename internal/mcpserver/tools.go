@@ -943,26 +943,29 @@ func handleGetContext(ctx context.Context, req *mcp.CallToolRequest, input Conte
 	}
 
 	baseDir := paths[0]
-
-	scanner := scannerSvc.New()
-	scanResult, err := scanner.ScanPaths(paths)
-	if err != nil {
-		return toolError(err.Error())
-	}
-
 	svc := analysis.New()
 
-	// Generate repo map for symbol lookup
-	var repoMapResult *repomap.Map
-	if len(scanResult.Files) > 0 {
-		repoMapResult, _ = svc.AnalyzeRepoMap(ctx, scanResult.Files, analysis.RepoMapOptions{})
-	}
-
+	// Try without repo map first (exact path, glob, basename)
 	result, err := svc.FocusedContext(ctx, analysis.FocusedContextOptions{
 		Focus:   input.Focus,
 		BaseDir: baseDir,
-		RepoMap: repoMapResult,
 	})
+
+	// If not found, try with repo map for symbol lookup
+	if err != nil && err.Error() == "no file or symbol found" {
+		scanner := scannerSvc.New()
+		scanResult, scanErr := scanner.ScanPaths(paths)
+		if scanErr == nil && len(scanResult.Files) > 0 {
+			repoMapResult, _ := svc.AnalyzeRepoMap(ctx, scanResult.Files, analysis.RepoMapOptions{})
+			if repoMapResult != nil {
+				result, err = svc.FocusedContext(ctx, analysis.FocusedContextOptions{
+					Focus:   input.Focus,
+					BaseDir: baseDir,
+					RepoMap: repoMapResult,
+				})
+			}
+		}
+	}
 
 	// Handle ambiguous match specially - return candidates as structured error
 	if err != nil && result != nil && len(result.Candidates) > 0 {
