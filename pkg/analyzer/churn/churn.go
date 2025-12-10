@@ -2,15 +2,17 @@ package churn
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/panbanda/omen/internal/progress"
-	"github.com/panbanda/omen/internal/vcs"
 	"github.com/panbanda/omen/pkg/analyzer"
 )
 
@@ -21,7 +23,6 @@ const DefaultGitTimeout = 5 * time.Minute
 type Analyzer struct {
 	days    int
 	spinner *progress.Tracker
-	opener  vcs.Opener
 }
 
 // Compile-time check that Analyzer implements RepoAnalyzer.
@@ -46,19 +47,11 @@ func WithSpinner(spinner *progress.Tracker) Option {
 	}
 }
 
-// WithOpener sets the VCS opener (useful for testing).
-func WithOpener(opener vcs.Opener) Option {
-	return func(a *Analyzer) {
-		a.opener = opener
-	}
-}
-
 // New creates a new churn analyzer.
 func New(opts ...Option) *Analyzer {
 	a := &Analyzer{
 		days:    30,
 		spinner: nil,
-		opener:  vcs.DefaultOpener(),
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -74,43 +67,47 @@ func (a *Analyzer) Analyze(ctx context.Context, repoPath string, files []string)
 		defer cancel()
 	}
 
-	repo, err := a.opener.PlainOpen(repoPath)
-	if err != nil {
-		return nil, err
-	}
-
 	absPath, err := filepath.Abs(repoPath)
 	if err != nil {
 		absPath = repoPath
 	}
 
-	cutoff := time.Now().AddDate(0, 0, -a.days)
+	return a.analyze(ctx, repoPath, absPath, files)
+}
 
-	logIter, err := repo.Log(&vcs.LogOptions{
-		Since: &cutoff,
-	})
-	if err != nil {
+// analyze uses native git commands for performance.
+// git log --numstat is ~30x faster than go-git tree diffs.
+func (a *Analyzer) analyze(ctx context.Context, repoPath, absPath string, files []string) (*Analysis, error) {
+	cutoff := time.Now().AddDate(0, 0, -a.days)
+	sinceDate := cutoff.Format("2006-01-02")
+
+	// Build git log command
+	// Format: commit_hash|author_name|author_date
+	// Followed by numstat lines: added\tdeleted\tfilepath
+	args := []string{
+		"log",
+		"--numstat",
+		"--since=" + sinceDate,
+		"--format=%H|%aN|%aI",
+	}
+
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = repoPath
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		// Check if it's not a git repo
+		if strings.Contains(stderr.String(), "not a git repository") {
+			return nil, err
+		}
 		return nil, err
 	}
-	defer logIter.Close()
 
 	fileMetrics := make(map[string]*FileMetrics)
-
-	err = logIter.ForEach(func(commit vcs.Commit) error {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		if a.spinner != nil {
-			a.spinner.Tick()
-		}
-
-		return a.processCommit(commit, fileMetrics)
-	})
-
-	if err != nil {
+	if err := a.parseGitLogNumstat(&stdout, fileMetrics); err != nil {
 		return nil, err
 	}
 
@@ -121,7 +118,85 @@ func (a *Analyzer) Analyze(ctx context.Context, repoPath string, files []string)
 		return fullAnalysis, nil
 	}
 
-	// Filter to specified files
+	return a.filterAnalysis(fullAnalysis, repoPath, files)
+}
+
+// parseGitLogNumstat parses output from git log --numstat --format="%H|%aN|%aI".
+func (a *Analyzer) parseGitLogNumstat(r *bytes.Buffer, fileMetrics map[string]*FileMetrics) error {
+	scanner := bufio.NewScanner(r)
+
+	var currentHash, currentAuthor string
+	var currentTime time.Time
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// Skip empty lines
+		if line == "" {
+			continue
+		}
+
+		// Check if this is a commit line (contains |)
+		if strings.Contains(line, "|") {
+			parts := strings.SplitN(line, "|", 3)
+			if len(parts) == 3 {
+				currentHash = parts[0]
+				currentAuthor = parts[1]
+				currentTime, _ = time.Parse(time.RFC3339, parts[2])
+				_ = currentHash // unused but kept for potential future use
+				continue
+			}
+		}
+
+		// This is a numstat line: added\tdeleted\tfilepath
+		parts := strings.Split(line, "\t")
+		if len(parts) != 3 {
+			continue
+		}
+
+		addedStr, deletedStr, relativePath := parts[0], parts[1], parts[2]
+
+		// Skip binary files (shown as "-")
+		if addedStr == "-" || deletedStr == "-" {
+			continue
+		}
+
+		added, _ := strconv.Atoi(addedStr)
+		deleted, _ := strconv.Atoi(deletedStr)
+
+		if _, exists := fileMetrics[relativePath]; !exists {
+			fileMetrics[relativePath] = &FileMetrics{
+				Path:         "./" + relativePath,
+				RelativePath: relativePath,
+				AuthorCounts: make(map[string]int),
+				FirstCommit:  currentTime,
+				LastCommit:   currentTime,
+			}
+		}
+
+		fm := fileMetrics[relativePath]
+		fm.Commits++
+		fm.AuthorCounts[currentAuthor]++
+		fm.LinesAdded += added
+		fm.LinesDeleted += deleted
+
+		if currentTime.Before(fm.FirstCommit) {
+			fm.FirstCommit = currentTime
+		}
+		if currentTime.After(fm.LastCommit) {
+			fm.LastCommit = currentTime
+		}
+
+		if a.spinner != nil {
+			a.spinner.Tick()
+		}
+	}
+
+	return scanner.Err()
+}
+
+// filterAnalysis filters the analysis to only include specified files.
+func (a *Analyzer) filterAnalysis(fullAnalysis *Analysis, repoPath string, files []string) (*Analysis, error) {
 	fileSet := make(map[string]bool)
 	for _, f := range files {
 		rel, err := filepath.Rel(repoPath, f)
@@ -176,78 +251,6 @@ func (a *Analyzer) Analyze(ctx context.Context, repoPath string, files []string)
 
 // Close releases any resources held by the analyzer.
 func (a *Analyzer) Close() {
-}
-
-// processCommit extracts churn data from a single commit.
-func (a *Analyzer) processCommit(commit vcs.Commit, fileMetrics map[string]*FileMetrics) error {
-	if commit.NumParents() == 0 {
-		return nil
-	}
-
-	parent, err := commit.Parent(0)
-	if err != nil {
-		return nil
-	}
-
-	parentTree, err := parent.Tree()
-	if err != nil {
-		return nil
-	}
-
-	commitTree, err := commit.Tree()
-	if err != nil {
-		return nil
-	}
-
-	changes, err := parentTree.Diff(commitTree)
-	if err != nil {
-		return nil
-	}
-
-	for _, change := range changes {
-		relativePath := change.ToName()
-		if relativePath == "" {
-			relativePath = change.FromName() // Deleted file
-		}
-
-		if _, exists := fileMetrics[relativePath]; !exists {
-			fileMetrics[relativePath] = &FileMetrics{
-				Path:         "./" + relativePath, // pmat prefixes with ./
-				RelativePath: relativePath,
-				AuthorCounts: make(map[string]int),
-				FirstCommit:  commit.Author().When,
-				LastCommit:   commit.Author().When,
-			}
-		}
-
-		fm := fileMetrics[relativePath]
-		fm.Commits++
-		fm.AuthorCounts[commit.Author().Name]++
-
-		if commit.Author().When.Before(fm.FirstCommit) {
-			fm.FirstCommit = commit.Author().When
-		}
-		if commit.Author().When.After(fm.LastCommit) {
-			fm.LastCommit = commit.Author().When
-		}
-
-		patch, err := change.Patch()
-		if err == nil {
-			for _, filePatch := range patch.FilePatches() {
-				for _, chunk := range filePatch.Chunks() {
-					content := chunk.Content()
-					switch chunk.Type() {
-					case vcs.ChunkAdd:
-						fm.LinesAdded += countLines(content)
-					case vcs.ChunkDelete:
-						fm.LinesDeleted += countLines(content)
-					}
-				}
-			}
-		}
-	}
-
-	return nil
 }
 
 // buildAnalysis constructs the final analysis from collected metrics.
