@@ -466,6 +466,42 @@ METRICS RETURNED:
 - passed: Whether all thresholds met`
 }
 
+func describeTrend() string {
+	return `Analyzes repository health score trends over time using git history.
+
+USE WHEN:
+- Tracking code quality improvements or degradation over time
+- Preparing quarterly engineering reviews with historical data
+- Identifying when code quality changes occurred
+- Correlating score changes with releases or refactoring efforts
+- Generating health reports that need historical context
+
+INTERPRETING RESULTS:
+- Points: Score snapshots at regular intervals (daily/weekly/monthly)
+- Slope: Score change per period (positive = improving, negative = degrading)
+- R-squared: Goodness of fit (0-1), higher means more consistent trend
+- Correlation: -1 to 1, strength of linear relationship over time
+
+TREND PATTERNS:
+- Steady improvement (positive slope): refactoring efforts working
+- Steady decline (negative slope): technical debt accumulating
+- Flat trend (slope near 0): stable codebase, no major changes
+- High variance (low R-squared): inconsistent quality, investigate spikes
+
+COMPONENT TRENDS:
+Each component (complexity, duplication, SATD, etc.) has its own trend stats.
+Look for diverging trends - one component improving while others decline.
+
+METRICS RETURNED:
+- points: Array of {date, commit_sha, score, components}
+- slope, intercept, r_squared, correlation: Overall regression stats
+- component_trends: Per-component trend statistics
+- start_score, end_score, total_change: Summary values
+- period, since, snapped: Analysis parameters
+
+Requires git repository. Analysis time depends on history length and sampling period.`
+}
+
 func describeContext() string {
 	return `Get deep context for a specific file or symbol before making changes.
 

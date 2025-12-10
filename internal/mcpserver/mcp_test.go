@@ -51,6 +51,7 @@ func TestToolDescriptions(t *testing.T) {
 		"cohesion":         describeCohesion,
 		"repoMap":          describeRepoMap,
 		"smells":           describeSmells,
+		"trend":            describeTrend,
 	}
 
 	for name, fn := range descriptions {
@@ -228,6 +229,7 @@ func TestInputStructTags(t *testing.T) {
 		CohesionInput{},
 		RepoMapInput{},
 		SmellsInput{},
+		TrendInput{},
 	}
 
 	for _, input := range inputs {
@@ -276,6 +278,8 @@ func typeName(v interface{}) string {
 		return "RepoMapInput"
 	case SmellsInput:
 		return "SmellsInput"
+	case TrendInput:
+		return "TrendInput"
 	default:
 		return "Unknown"
 	}
