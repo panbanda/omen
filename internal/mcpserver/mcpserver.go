@@ -139,6 +139,12 @@ func (s *Server) registerTools() {
 		Description: describeScore(),
 	}, handleAnalyzeScore)
 
+	// Score trends over time
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name:        "analyze_trend",
+		Description: describeTrend(),
+	}, handleAnalyzeTrend)
+
 	// Context
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name:        "get_context",

@@ -3,8 +3,8 @@ name: health-report
 title: Health Report
 description: Generate an interactive HTML repository health report with visualizations. Use for stakeholder presentations, quarterly reviews, or comprehensive codebase health dashboards.
 arguments:
-  - name: target
-    description: "Repository to analyze: local path, GitHub shorthand (owner/repo), or GitHub URL"
+  - name: paths
+    description: Paths to analyze
     required: false
     default: "."
   - name: days
@@ -18,184 +18,317 @@ arguments:
   - name: trend_since
     description: "How far back for trend analysis: 3m, 6m, 1y, 2y, 10y"
     required: false
-    default: "10y"
+    default: "1y"
 ---
 
 # Repository Health Report
 
-Generate an interactive HTML repository health report for: {{.target}}
+Generate an interactive HTML repository health report for: {{.paths}}
 
-## Overview
+## When to Use
 
-Create a single self-contained HTML file with embedded CSS and JavaScript (using Chart.js from CDN) that provides a comprehensive visualization of repository health metrics.
+- Stakeholder presentations on code quality
+- Quarterly engineering reviews
+- Comprehensive codebase health dashboards
+- Before major releases to assess technical debt
+- New team member onboarding to understand codebase state
 
-## Target Repository
-
-This prompt works with both local and remote repositories:
-
-- **Local**: Current directory (default `.`) or specify a path
-- **Remote**: GitHub shorthand (`owner/repo`), full URL (`https://github.com/owner/repo`), or with ref (`owner/repo@branch`)
-
-When a remote repository is specified, omen will clone it to a temporary directory for analysis.
-
-## Required Analyses
-
-Run the following analyses and incorporate their results:
+## Workflow
 
 ### Step 1: Repository Score
-```bash
-omen score {{.target}} -f json
+```
+score_repository:
+  paths: {{.paths}}
 ```
 Get overall health score (0-100) and component breakdown.
 
 ### Step 2: Complexity Analysis
-```bash
-omen analyze complexity {{.target}} -f json
+```
+analyze_complexity:
+  paths: {{.paths}}
 ```
 Function-level cyclomatic and cognitive complexity metrics.
 
 ### Step 3: Hotspot Analysis
-```bash
-omen analyze hotspot {{.target}} --days {{.days}} -f json
+```
+analyze_hotspot:
+  paths: {{.paths}}
+  days: {{.days}}
 ```
 Files with high churn combined with high complexity.
 
 ### Step 4: Churn Analysis
-```bash
-omen analyze churn {{.target}} --days {{.days}} -f json
+```
+analyze_churn:
+  paths: {{.paths}}
+  days: {{.days}}
 ```
 Recent file change patterns and contributor activity.
 
 ### Step 5: Ownership Analysis
-```bash
-omen analyze ownership {{.target}} -f json
+```
+analyze_ownership:
+  paths: {{.paths}}
 ```
 Bus factor and knowledge silo identification.
 
 ### Step 6: SATD Analysis
-```bash
-omen analyze satd {{.target}} -f json
+```
+analyze_satd:
+  paths: {{.paths}}
 ```
 Self-admitted technical debt (TODO/FIXME/HACK markers).
 
 ### Step 7: Duplication Analysis
-```bash
-omen analyze duplicates {{.target}} -f json
+```
+analyze_duplicates:
+  paths: {{.paths}}
 ```
 Code clone detection and duplication ratio.
 
-### Step 8: Trend Analysis
-```bash
-omen analyze trend {{.target}} --since {{.trend_since}} --period {{.trend_period}} -f json
+### Step 8: Feature Flags Analysis
+```
+analyze_flags:
+  paths: {{.paths}}
+```
+Feature flag detection and staleness analysis.
+
+### Step 9: Architectural Smells
+```
+analyze_smells:
+  paths: {{.paths}}
+```
+Cyclic dependencies, god components, and coupling issues.
+
+### Step 10: Cohesion Analysis
+```
+analyze_cohesion:
+  paths: {{.paths}}
+```
+LCOM metrics for class/struct cohesion.
+
+### Step 11: Trend Analysis
+```
+analyze_trend:
+  paths: {{.paths}}
+  since: {{.trend_since}}
+  period: {{.trend_period}}
 ```
 Historical score trends over time.
 
-### Step 9: Historical Event Investigation
-
-For each significant score change (>=2 points) identified in the trend data:
-```bash
-git log --oneline --since="<date-1week>" --until="<date+1week>"
-```
-Correlate score changes with releases and code changes.
-
-## Report Structure
-
-### Header Section
-- Repository name and generation date
-- Large circular score visualization (0-100)
-- Key metadata: files analyzed, functions analyzed, threshold status
-- Overall trend indicator (improving/declining/stable)
-
-### Component Scores Section
-For each component (Complexity, Duplication, Cohesion, TDG, SATD, Coupling, Smells):
-- Score with color coding (green >80, yellow 60-80, red <60)
-- Progress bar visualization
-- Key metrics specific to that component
-- Definition box explaining what the metric measures
-
-### Historical Trends Section
-- Line chart showing overall score over time with trend line
-- Annotations on the chart marking significant score changes
-- Component trends chart showing individual metrics over time
-- Statistical summary: start score, end score, slope, R-squared
-- **Historical Events Table**: For each significant score change (>=2 points):
-  - Period and magnitude of change
-  - Primary driver (which component changed most)
-  - Key releases identified from git history
-  - Color-coded rows (red for drops, green for improvements)
-- **Component Events Table**: Major individual component changes
-- Insights box explaining patterns
-
-### Hotspots Section
-- Summary stats: total hotspots, max score, average score
-- Table of top 15 hotspots with file path and score
-- Definition and importance explanation
-
-### Code Churn Section
-- Summary stats: total changes, unique files, lines added/deleted
-- Table of highest-churning files
-- Top contributors by commit volume
-
-### Ownership Section
-- Bus factor score
-- Knowledge silo count and ratio
-- Chart showing top contributors by code ownership
-- Average contributors per file
-
-### SATD Section
-- Total items, files affected, critical/high counts
-- Doughnut charts for severity and category distribution
-- Table listing critical and high-priority items with file locations
-
-### Duplication Section
-- Duplication ratio percentage
-- Clone group statistics
-- Bar chart showing clone groups by size
-
-### Recommendations Section
-Three cards:
-- **High Priority**: Issues needing immediate attention
-- **Medium Priority**: Issues to address in upcoming sprints
-- **Ongoing Maintenance**: Metrics to monitor
-
-### Glossary Section
-Definition boxes for all technical terms used in the report
-
-## Design Requirements
-
-### Visual Style
-- Dark theme with GitHub-inspired color palette:
-  - Background: #0d1117 (primary), #161b22 (secondary), #21262d (tertiary)
-  - Text: #e6edf3 (primary), #8b949e (secondary)
-  - Accents: #3fb950 (green), #d29922 (yellow), #f85149 (red), #58a6ff (blue), #a371f7 (purple)
-- Cards with subtle borders (#30363d)
-- Responsive design with mobile breakpoints
-
-### Charts (Chart.js)
-- Load from CDN: `https://cdn.jsdelivr.net/npm/chart.js`
-- Load annotation plugin: `https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation`
-- Use annotations for marking significant events on trend charts
-- Consistent color scheme matching each component
-- Tooltips showing detailed values
-- Proper axis labels and legends
-
-### Tables
-- Hover highlighting
-- Badge components for severity levels (critical/high/medium/low)
-- Truncated file paths for readability
-
-### Interactive Elements
-- Collapsible sections where appropriate
-- Tab interfaces for switching between related views
-
 ## Output
 
-Save the report as `repository-health-report.html` in the repository root.
+### Repository Health Report
 
-The file must be completely self-contained:
-- All CSS embedded in `<style>` tags
-- All JavaScript embedded in `<script>` tags
-- Chart.js and plugins loaded from CDN
-- All analysis data embedded as JavaScript objects
-- Opens directly in any modern browser
-- Prints cleanly for PDF export
+**Scope**: {{.paths}}
+**Generated by**: [Omen](https://github.com/panbanda/omen)
+**Overall Score**: [0-100]
+**Status**: [Healthy | Needs Attention | Critical]
+
+---
+
+### Executive Summary
+
+| Metric | Score | Status |
+|--------|-------|--------|
+| Overall Health | | |
+| Complexity | | |
+| Duplication | | |
+| Technical Debt | | |
+| Coupling | | |
+| Cohesion | | |
+
+**Key Findings**:
+1. [Most critical issue]
+2. [Second priority]
+3. [Third priority]
+
+---
+
+### Component Scores
+
+For each component (Complexity, Duplication, Cohesion, TDG, SATD, Coupling, Smells):
+
+| Component | Score | Status | Key Metric |
+|-----------|-------|--------|------------|
+| Complexity | | | % functions over threshold |
+| Duplication | | | Duplication ratio |
+| SATD | | | Items per KLOC |
+| TDG | | | Average debt gradient |
+| Coupling | | | Cyclic dependency count |
+| Smells | | | Architectural issues |
+| Cohesion | | | Average LCOM |
+
+Score interpretation:
+- Green (>80): Healthy
+- Yellow (60-80): Needs attention
+- Red (<60): Critical
+
+---
+
+### Hotspots
+
+Files with high churn AND high complexity - prioritize these for refactoring:
+
+| File | Hotspot Score | Commits | Complexity | Risk |
+|------|---------------|---------|------------|------|
+| | | | | HIGH/MED/LOW |
+
+**Total Hotspots**: [count]
+**Average Score**: [score]
+
+---
+
+### Code Churn
+
+| Metric | Value |
+|--------|-------|
+| Total file changes | |
+| Unique files changed | |
+| Lines added | |
+| Lines deleted | |
+
+**Highest Churn Files**:
+| File | Commits | Added | Deleted | Authors |
+|------|---------|-------|---------|---------|
+| | | | | |
+
+**Top Contributors** (by commit volume):
+| Author | Commits | Files Touched |
+|--------|---------|---------------|
+| | | |
+
+---
+
+### Ownership
+
+| Metric | Value |
+|--------|-------|
+| Bus Factor | |
+| Knowledge Silos | |
+| Avg Contributors/File | |
+
+**Knowledge Silos** (single-owner files in critical paths):
+| File | Owner | Ownership % |
+|------|-------|-------------|
+| | | |
+
+---
+
+### Technical Debt (SATD)
+
+| Severity | Count |
+|----------|-------|
+| Critical | |
+| High | |
+| Medium | |
+| Low | |
+
+**Critical Items** (must address):
+| File | Line | Marker | Content |
+|------|------|--------|---------|
+| | | | |
+
+---
+
+### Duplication
+
+| Metric | Value |
+|--------|-------|
+| Duplication Ratio | % |
+| Clone Groups | |
+| Lines Duplicated | |
+
+**Largest Clone Groups**:
+| Size (lines) | Occurrences | Files |
+|--------------|-------------|-------|
+| | | |
+
+---
+
+### Feature Flags
+
+| Metric | Count |
+|--------|-------|
+| Total Flags | |
+| Total References | |
+| Stale Flags (>14 days) | |
+
+**By Priority**:
+| Priority | Count |
+|----------|-------|
+| Critical | |
+| High | |
+| Medium | |
+| Low | |
+
+**High-Priority Flags** (cleanup candidates):
+| Flag Key | Provider | Age (days) | File Spread | Priority |
+|----------|----------|------------|-------------|----------|
+| | | | | |
+
+---
+
+### Architectural Issues
+
+| Issue Type | Count | Severity |
+|------------|-------|----------|
+| Cyclic Dependencies | | Critical |
+| God Components | | High |
+| Hub Components | | High |
+| Unstable Dependencies | | Medium |
+
+---
+
+### Recommendations
+
+#### High Priority (This Sprint)
+Issues needing immediate attention:
+1. [Critical hotspots to refactor]
+2. [Cyclic dependencies to break]
+3. [Critical SATD to address]
+
+#### Medium Priority (Next 2-4 Sprints)
+Issues to address soon:
+1. [High-complexity functions]
+2. [Stale feature flags to remove]
+3. [Knowledge silos to document]
+
+#### Ongoing Maintenance
+Metrics to monitor:
+1. [Duplication ratio trend]
+2. [Complexity threshold violations]
+3. [Bus factor for critical files]
+
+---
+
+### Glossary
+
+| Term | Definition |
+|------|------------|
+| Hotspot | File with both high churn and high complexity |
+| Bus Factor | Minimum contributors whose departure would halt development |
+| SATD | Self-Admitted Technical Debt (TODO/FIXME/HACK markers) |
+| LCOM | Lack of Cohesion of Methods - measures class focus |
+| TDG | Technical Debt Gradient - comprehensive debt score |
+
+---
+
+## HTML Report Generation
+
+After gathering all data, generate a self-contained HTML file with:
+
+### Visual Requirements
+- Dark theme with GitHub-inspired colors
+- Background: #0d1117, #161b22, #21262d
+- Text: #e6edf3, #8b949e
+- Accents: #3fb950 (green), #d29922 (yellow), #f85149 (red), #58a6ff (blue)
+
+### Charts (Chart.js from CDN)
+- Circular gauge for overall score
+- Progress bars for component scores
+- Doughnut charts for distributions
+- Bar charts for comparisons
+
+### File Output
+Save as `repository-health-report.html` - self-contained with embedded CSS/JS.

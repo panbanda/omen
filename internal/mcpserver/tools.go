@@ -163,6 +163,14 @@ type ContextInput struct {
 	Format string   `json:"format,omitempty" jsonschema:"Output format: toon (default), json, or markdown."`
 }
 
+// TrendInput adds trend analysis options.
+type TrendInput struct {
+	AnalyzeInput
+	Since  string `json:"since,omitempty" jsonschema:"How far back to analyze (e.g., 3m, 6m, 1y, 2y). Default 1y."`
+	Period string `json:"period,omitempty" jsonschema:"Sampling period: daily, weekly, monthly. Default monthly."`
+	Snap   bool   `json:"snap,omitempty" jsonschema:"Snap to period boundaries (1st of month, Monday)."`
+}
+
 // Helper functions
 
 func getPaths(input AnalyzeInput) []string {
@@ -920,6 +928,53 @@ func handleAnalyzeScore(ctx context.Context, req *mcp.CallToolRequest, input Sco
 		score.WithMaxFileSize(cfg.Analysis.MaxFileSize),
 	)
 	result, err := analyzer.Analyze(ctx, scanResult.Files, source.NewFilesystem(), "")
+	if err != nil {
+		return toolError(err.Error())
+	}
+
+	return toolResult(result, format)
+}
+
+func handleAnalyzeTrend(ctx context.Context, req *mcp.CallToolRequest, input TrendInput) (*mcp.CallToolResult, any, error) {
+	paths := getPaths(input.AnalyzeInput)
+	format := getFormat(input.AnalyzeInput)
+
+	// Parse since duration (default 1y)
+	sinceStr := input.Since
+	if sinceStr == "" {
+		sinceStr = "1y"
+	}
+	since, err := score.ParseSince(sinceStr)
+	if err != nil {
+		return toolError("invalid since value: " + err.Error())
+	}
+
+	// Validate period (default monthly)
+	period := input.Period
+	if period == "" {
+		period = "monthly"
+	}
+	switch period {
+	case "daily", "weekly", "monthly":
+		// OK
+	default:
+		return toolError("invalid period: " + period + " (use daily, weekly, or monthly)")
+	}
+
+	scanner := scannerSvc.New()
+	scanResult, err := scanner.ScanPathsForGit(paths, true)
+	if err != nil {
+		return toolError(err.Error())
+	}
+
+	// Create trend analyzer
+	trendAnalyzer := score.NewTrendAnalyzer(
+		score.WithTrendPeriod(period),
+		score.WithTrendSince(since),
+		score.WithTrendSnap(input.Snap),
+	)
+
+	result, err := trendAnalyzer.AnalyzeTrend(ctx, scanResult.RepoRoot)
 	if err != nil {
 		return toolError(err.Error())
 	}
