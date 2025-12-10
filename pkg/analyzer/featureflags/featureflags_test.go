@@ -729,6 +729,7 @@ Flipper[:other_feature].enabled?
 
 	assert.Contains(t, flagKeys, "my_feature", "should detect Flipper.enabled?(:my_feature)")
 	assert.Contains(t, flagKeys, "other_feature", "should detect Flipper[:other_feature]")
+	assert.NotContains(t, flagKeys, "flag_name", "should NOT detect some_object.enabled?(:flag_name) as Flipper")
 	assert.Len(t, refs, 2, "should only detect 2 Flipper flags, not false positives")
 }
 
@@ -772,6 +773,9 @@ PostHog.is_feature_enabled("third_flag", user)
 	assert.Contains(t, flagKeys, "my_flag", "should detect posthog.is_feature_enabled(:my_flag)")
 	assert.Contains(t, flagKeys, "other_flag", "should detect client.get_feature_flag(\"other_flag\")")
 	assert.Contains(t, flagKeys, "third_flag", "should detect PostHog.is_feature_enabled(\"third_flag\")")
+	assert.NotContains(t, flagKeys, "first", "should NOT detect parts.try(:first) as PostHog")
+	assert.NotContains(t, flagKeys, "last", "should NOT detect array.try(:last) as PostHog")
+	assert.NotContains(t, flagKeys, "flag", "should NOT detect some_helper.is_feature_enabled(:flag) as PostHog")
 	assert.Len(t, refs, 3, "should only detect 3 PostHog flags, not false positives like .try(:first)")
 }
 

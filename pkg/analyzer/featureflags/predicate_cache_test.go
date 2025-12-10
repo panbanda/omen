@@ -217,3 +217,46 @@ func TestQuerySet_FilterPredicates_EqPredicate(t *testing.T) {
 		})
 	}
 }
+
+func TestQuerySet_FilterPredicates_MalformedRegex(t *testing.T) {
+	// Test that malformed regex in a query doesn't cause a panic
+	registry, err := NewQueryRegistry()
+	require.NoError(t, err)
+	defer registry.Close()
+
+	// Add a query with invalid regex - unclosed bracket
+	err = registry.AddQuery(parser.LangJavaScript, "bad-regex",
+		`((call_expression
+  function: (member_expression
+    property: (property_identifier) @method))
+  (#match? @method "[unclosed"))`)
+
+	// The query should still be added (regex compilation happens at match time for invalid patterns)
+	require.NoError(t, err)
+
+	queries := registry.GetQueries(parser.LangJavaScript, []string{"bad-regex"})
+	require.NotEmpty(t, queries)
+	qs := queries[0]
+
+	// Parse some JavaScript
+	p := parser.New()
+	defer p.Close()
+
+	code := []byte(`obj.someMethod()`)
+	result, err := p.Parse(code, parser.LangJavaScript, "test.js")
+	require.NoError(t, err)
+
+	cursor := sitter.NewQueryCursor()
+	defer cursor.Close()
+	cursor.Exec(qs.Query, result.Tree.RootNode())
+
+	// FilterPredicates should return nil for malformed regex (fails match)
+	for {
+		match, ok := cursor.NextMatch()
+		if !ok {
+			break
+		}
+		filtered := qs.FilterPredicates(match, code)
+		assert.Nil(t, filtered, "malformed regex should cause match to fail gracefully")
+	}
+}

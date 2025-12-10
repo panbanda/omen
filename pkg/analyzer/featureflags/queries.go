@@ -383,20 +383,15 @@ func (qs *QuerySet) FilterPredicates(m *sitter.QueryMatch, input []byte) *sitter
 			}
 
 			// Find the capture and check if it matches
-			found := false
 			for _, c := range m.Captures {
 				captureName := q.CaptureNameForId(c.Index)
 				if expectedCaptureName != captureName {
 					continue
 				}
-				found = true
 				if re.MatchString(c.Node.Content(input)) != isPositive {
 					return nil
 				}
 			}
-			// If the capture wasn't found, the predicate doesn't apply
-			// This can happen when a pattern has optional captures
-			_ = found
 		}
 	}
 

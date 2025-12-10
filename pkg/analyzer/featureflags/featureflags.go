@@ -248,54 +248,56 @@ func extractFlagKey(node *sitter.Node, source []byte) string {
 	return text
 }
 
+// conditionalNodeTypesCache holds pre-computed conditional node types per language.
+var conditionalNodeTypesCache = func() map[parser.Language]map[string]bool {
+	cache := make(map[parser.Language]map[string]bool)
+
+	// Common types shared across languages
+	common := []string{"if_statement", "if_expression", "switch_statement"}
+
+	// Language-specific types
+	langTypes := map[parser.Language][]string{
+		parser.LangGo:         {"expression_switch_statement", "type_switch_statement", "expression_case", "type_case"},
+		parser.LangPython:     {"match_statement", "case_clause", "conditional_expression"},
+		parser.LangJavaScript: {"switch_case", "ternary_expression"},
+		parser.LangTypeScript: {"switch_case", "ternary_expression"},
+		parser.LangTSX:        {"switch_case", "ternary_expression"},
+		parser.LangJava:       {"switch_expression", "switch_block_statement_group", "ternary_expression"},
+		parser.LangRuby:       {"if", "unless", "case", "when", "conditional"},
+		parser.LangC:          {"case_statement"},
+		parser.LangCPP:        {"case_statement"},
+		parser.LangCSharp:     {"switch_section", "conditional_expression"},
+	}
+
+	// Build cache for each language
+	for lang, types := range langTypes {
+		m := make(map[string]bool, len(common)+len(types))
+		for _, t := range common {
+			m[t] = true
+		}
+		for _, t := range types {
+			m[t] = true
+		}
+		cache[lang] = m
+	}
+
+	// Default for languages without specific types
+	defaultTypes := make(map[string]bool, len(common))
+	for _, t := range common {
+		defaultTypes[t] = true
+	}
+	cache[parser.Language("")] = defaultTypes
+
+	return cache
+}()
+
 // conditionalNodeTypes returns the set of AST node types that represent conditional constructs
 // for a specific language. This is used for nesting depth calculation.
 func conditionalNodeTypes(lang parser.Language) map[string]bool {
-	// Common types shared across languages
-	common := map[string]bool{
-		"if_statement":     true,
-		"if_expression":    true,
-		"switch_statement": true,
+	if types, ok := conditionalNodeTypesCache[lang]; ok {
+		return types
 	}
-
-	// Language-specific additions
-	switch lang {
-	case parser.LangGo:
-		common["expression_switch_statement"] = true
-		common["type_switch_statement"] = true
-		common["expression_case"] = true
-		common["type_case"] = true
-
-	case parser.LangPython:
-		common["match_statement"] = true
-		common["case_clause"] = true
-		common["conditional_expression"] = true // ternary: x if cond else y
-
-	case parser.LangJavaScript, parser.LangTypeScript, parser.LangTSX:
-		common["switch_case"] = true
-		common["ternary_expression"] = true
-
-	case parser.LangJava:
-		common["switch_expression"] = true
-		common["switch_block_statement_group"] = true // contains case label + statements
-		common["ternary_expression"] = true
-
-	case parser.LangRuby:
-		common["if"] = true     // Ruby's if block
-		common["unless"] = true // Ruby's unless block
-		common["case"] = true   // Ruby's case block
-		common["when"] = true   // Ruby's when clause
-		common["conditional"] = true
-
-	case parser.LangC, parser.LangCPP:
-		common["case_statement"] = true
-
-	case parser.LangCSharp:
-		common["switch_section"] = true
-		common["conditional_expression"] = true
-	}
-
-	return common
+	return conditionalNodeTypesCache[parser.Language("")]
 }
 
 // calculateNestingDepth determines how deeply nested a line is within conditionals.
