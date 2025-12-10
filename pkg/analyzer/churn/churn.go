@@ -2,10 +2,13 @@ package churn
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,9 +22,10 @@ const DefaultGitTimeout = 5 * time.Minute
 
 // Analyzer analyzes git commit history for file churn.
 type Analyzer struct {
-	days    int
-	spinner *progress.Tracker
-	opener  vcs.Opener
+	days      int
+	spinner   *progress.Tracker
+	opener    vcs.Opener
+	useNative bool // use native git commands for better performance
 }
 
 // Compile-time check that Analyzer implements RepoAnalyzer.
@@ -47,18 +51,28 @@ func WithSpinner(spinner *progress.Tracker) Option {
 }
 
 // WithOpener sets the VCS opener (useful for testing).
+// Using this option disables native git and falls back to go-git.
 func WithOpener(opener vcs.Opener) Option {
 	return func(a *Analyzer) {
 		a.opener = opener
+		a.useNative = false // custom opener means we're likely testing with mocks
+	}
+}
+
+// WithNativeGit forces use of native git commands (default: true).
+func WithNativeGit(use bool) Option {
+	return func(a *Analyzer) {
+		a.useNative = use
 	}
 }
 
 // New creates a new churn analyzer.
 func New(opts ...Option) *Analyzer {
 	a := &Analyzer{
-		days:    30,
-		spinner: nil,
-		opener:  vcs.DefaultOpener(),
+		days:      30,
+		spinner:   nil,
+		opener:    vcs.DefaultOpener(),
+		useNative: true, // default to fast native git
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -74,14 +88,144 @@ func (a *Analyzer) Analyze(ctx context.Context, repoPath string, files []string)
 		defer cancel()
 	}
 
-	repo, err := a.opener.PlainOpen(repoPath)
-	if err != nil {
-		return nil, err
-	}
-
 	absPath, err := filepath.Abs(repoPath)
 	if err != nil {
 		absPath = repoPath
+	}
+
+	// Use native git for much better performance on large repos
+	if a.useNative {
+		return a.analyzeNative(ctx, repoPath, absPath, files)
+	}
+
+	return a.analyzeGoGit(ctx, repoPath, absPath, files)
+}
+
+// analyzeNative uses native git commands for better performance.
+// git log --numstat is ~30x faster than go-git tree diffs.
+func (a *Analyzer) analyzeNative(ctx context.Context, repoPath, absPath string, files []string) (*Analysis, error) {
+	cutoff := time.Now().AddDate(0, 0, -a.days)
+	sinceDate := cutoff.Format("2006-01-02")
+
+	// Build git log command
+	// Format: commit_hash|author_name|author_date
+	// Followed by numstat lines: added\tdeleted\tfilepath
+	args := []string{
+		"log",
+		"--numstat",
+		"--since=" + sinceDate,
+		"--format=%H|%aN|%aI",
+	}
+
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = repoPath
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		// Check if it's not a git repo
+		if strings.Contains(stderr.String(), "not a git repository") {
+			return nil, err
+		}
+		return nil, err
+	}
+
+	fileMetrics := make(map[string]*FileMetrics)
+	if err := a.parseGitLogNumstat(&stdout, fileMetrics); err != nil {
+		return nil, err
+	}
+
+	fullAnalysis := buildAnalysis(fileMetrics, absPath, a.days)
+
+	// If no files specified, return full analysis
+	if len(files) == 0 {
+		return fullAnalysis, nil
+	}
+
+	return a.filterAnalysis(fullAnalysis, repoPath, files)
+}
+
+// parseGitLogNumstat parses output from git log --numstat --format="%H|%aN|%aI".
+func (a *Analyzer) parseGitLogNumstat(r *bytes.Buffer, fileMetrics map[string]*FileMetrics) error {
+	scanner := bufio.NewScanner(r)
+
+	var currentHash, currentAuthor string
+	var currentTime time.Time
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// Skip empty lines
+		if line == "" {
+			continue
+		}
+
+		// Check if this is a commit line (contains |)
+		if strings.Contains(line, "|") {
+			parts := strings.SplitN(line, "|", 3)
+			if len(parts) == 3 {
+				currentHash = parts[0]
+				currentAuthor = parts[1]
+				currentTime, _ = time.Parse(time.RFC3339, parts[2])
+				_ = currentHash // unused but kept for potential future use
+				continue
+			}
+		}
+
+		// This is a numstat line: added\tdeleted\tfilepath
+		parts := strings.Split(line, "\t")
+		if len(parts) != 3 {
+			continue
+		}
+
+		addedStr, deletedStr, relativePath := parts[0], parts[1], parts[2]
+
+		// Skip binary files (shown as "-")
+		if addedStr == "-" || deletedStr == "-" {
+			continue
+		}
+
+		added, _ := strconv.Atoi(addedStr)
+		deleted, _ := strconv.Atoi(deletedStr)
+
+		if _, exists := fileMetrics[relativePath]; !exists {
+			fileMetrics[relativePath] = &FileMetrics{
+				Path:         "./" + relativePath,
+				RelativePath: relativePath,
+				AuthorCounts: make(map[string]int),
+				FirstCommit:  currentTime,
+				LastCommit:   currentTime,
+			}
+		}
+
+		fm := fileMetrics[relativePath]
+		fm.Commits++
+		fm.AuthorCounts[currentAuthor]++
+		fm.LinesAdded += added
+		fm.LinesDeleted += deleted
+
+		if currentTime.Before(fm.FirstCommit) {
+			fm.FirstCommit = currentTime
+		}
+		if currentTime.After(fm.LastCommit) {
+			fm.LastCommit = currentTime
+		}
+
+		if a.spinner != nil {
+			a.spinner.Tick()
+		}
+	}
+
+	return scanner.Err()
+}
+
+// analyzeGoGit uses go-git for analysis (slower but works with mocked repos).
+func (a *Analyzer) analyzeGoGit(ctx context.Context, repoPath, absPath string, files []string) (*Analysis, error) {
+	repo, err := a.opener.PlainOpen(repoPath)
+	if err != nil {
+		return nil, err
 	}
 
 	cutoff := time.Now().AddDate(0, 0, -a.days)
@@ -121,7 +265,11 @@ func (a *Analyzer) Analyze(ctx context.Context, repoPath string, files []string)
 		return fullAnalysis, nil
 	}
 
-	// Filter to specified files
+	return a.filterAnalysis(fullAnalysis, repoPath, files)
+}
+
+// filterAnalysis filters the analysis to only include specified files.
+func (a *Analyzer) filterAnalysis(fullAnalysis *Analysis, repoPath string, files []string) (*Analysis, error) {
 	fileSet := make(map[string]bool)
 	for _, f := range files {
 		rel, err := filepath.Rel(repoPath, f)

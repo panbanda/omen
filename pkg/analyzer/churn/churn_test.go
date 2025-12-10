@@ -108,7 +108,7 @@ func TestAnalyzer_AnalyzeRepo(t *testing.T) {
 				return repoPath
 			},
 			days:      90,
-			wantFiles: 0,
+			wantFiles: 1, // initial commit is now counted with native git
 			wantErr:   false,
 		},
 		{
@@ -679,11 +679,11 @@ func TestSummary_TotalFileChanges_NotTotalCommits(t *testing.T) {
 	repo := initGitRepo(t, repoPath)
 
 	// Create commits touching multiple files
-	// Commit 1: add file1 (initial commit, skipped - no parent)
+	// Commit 1: add file1 (file change: +1)
 	// Commit 2: add file2 (file change: +1)
 	// Commit 3: update file1 (file change: +1)
 	// Commit 4: update file2 (file change: +1)
-	// Total file changes: 3
+	// Total file changes: 4
 	writeFileAndCommit(t, repo, repoPath, "file1.go", "package a\n", "Commit 1: add file1")
 	writeFileAndCommit(t, repo, repoPath, "file2.go", "package b\n", "Commit 2: add file2")
 	writeFileAndCommit(t, repo, repoPath, "file1.go", "package a\n\nfunc A() {}\n", "Commit 3: update file1")
@@ -697,12 +697,12 @@ func TestSummary_TotalFileChanges_NotTotalCommits(t *testing.T) {
 
 	// The field is named TotalFileChanges (not TotalCommits) to clarify it's the
 	// sum of file touches across commits, not the count of unique commits.
-	// With 4 commits but first skipped: 3 file changes total
-	if result.Summary.TotalFileChanges != 3 {
-		t.Errorf("Summary.TotalFileChanges = %d, want 3", result.Summary.TotalFileChanges)
+	// All 4 commits are counted (including initial commit).
+	if result.Summary.TotalFileChanges != 4 {
+		t.Errorf("Summary.TotalFileChanges = %d, want 4", result.Summary.TotalFileChanges)
 	}
 
-	// Verify it differs from number of unique files (2) and unique commits (3)
+	// Verify it differs from number of unique files (2) and unique commits (4)
 	if result.Summary.TotalFilesChanged != 2 {
 		t.Errorf("Summary.TotalFilesChanged = %d, want 2", result.Summary.TotalFilesChanged)
 	}
