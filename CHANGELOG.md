@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.6.2](https://github.com/panbanda/omen/compare/omen-v2.6.1...omen-v2.6.2) (2025-12-10)
+
+
+### Performance Improvements
+
+* **churn:** use native git for 20x faster history analysis ([#164](https://github.com/panbanda/omen/issues/164)) ([109086f](https://github.com/panbanda/omen/commit/109086f1f846a75664ec858d30f9c0416c063870))
+
 ## [2.6.1](https://github.com/panbanda/omen/compare/omen-v2.6.0...omen-v2.6.1) (2025-12-10)
 
 
