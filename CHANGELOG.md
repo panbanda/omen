@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.5.0](https://github.com/panbanda/omen/compare/omen-v2.4.3...omen-v2.5.0) (2025-12-10)
+
+
+### Features
+
+* **skills:** add health-report skill and MCP prompt ([#158](https://github.com/panbanda/omen/issues/158)) ([740e8de](https://github.com/panbanda/omen/commit/740e8de9b0723634ce7537adce0963676b05d5f4))
+
 ## [2.4.3](https://github.com/panbanda/omen/compare/omen-v2.4.2...omen-v2.4.3) (2025-12-09)
 
 
