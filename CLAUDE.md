@@ -69,6 +69,7 @@ Omen is a multi-language code analysis CLI built in Go. It uses tree-sitter for 
 - `output/` - Output formatting (text/JSON/markdown/toon)
 - `progress/` - Progress bars and spinners
 - `remote/` - Remote repository cloning and handling
+- `report/` - HTML report rendering and insight schema types
 - `scanner/` - File discovery with configurable exclusion patterns
 - `semantic/` - Language-aware semantic extraction for indirect function references (callbacks, decorators, dynamic dispatch)
 - `service/` - High-level service layer coordinating analyzers
@@ -109,6 +110,13 @@ Top-level commands:
 - `analyze` / `a` - Run analyzers (all if no subcommand, or specific one)
 - `context` / `ctx` - Deep context generation for LLMs
 - `mcp` - Start MCP server for LLM tool integration
+- `report` - Generate and manage HTML health reports
+
+Report subcommands (`omen report <subcommand>`):
+- `generate` - Run all analyzers and output JSON data files
+- `validate` - Validate data files against schemas
+- `render` - Combine data + insights into self-contained HTML
+- `serve` - Serve HTML with live re-render on request
 
 Analyzer subcommands (`omen analyze <subcommand>`):
 - `complexity` / `cx` - Cyclomatic and cognitive complexity

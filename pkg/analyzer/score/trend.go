@@ -275,8 +275,13 @@ func formatDuration(d time.Duration) string {
 	}
 }
 
-// ParseSince parses a duration string like "3m", "6m", "1y", "2y".
+// ParseSince parses a duration string like "3m", "6m", "1y", "2y", or "all".
 func ParseSince(s string) (time.Duration, error) {
+	// Special case for "all" - returns 10 years
+	if s == "all" {
+		return 10 * 365 * 24 * time.Hour, nil
+	}
+
 	if len(s) < 2 {
 		return 0, fmt.Errorf("invalid duration: %s", s)
 	}
@@ -299,7 +304,7 @@ func ParseSince(s string) (time.Duration, error) {
 	case 'd':
 		return time.Duration(n) * 24 * time.Hour, nil
 	default:
-		return 0, fmt.Errorf("invalid duration unit: %c (use m, y, w, or d)", unit)
+		return 0, fmt.Errorf("invalid duration unit: %c (use m, y, w, d, or 'all')", unit)
 	}
 }
 
