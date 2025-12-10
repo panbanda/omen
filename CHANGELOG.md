@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.6.1](https://github.com/panbanda/omen/compare/omen-v2.6.0...omen-v2.6.1) (2025-12-10)
+
+
+### Bug Fixes
+
+* **featureflags:** correct tree-sitter query predicate association ([#162](https://github.com/panbanda/omen/issues/162)) ([8989ac6](https://github.com/panbanda/omen/commit/8989ac6990f2bd45213911d8576a23a2292dd017))
+
 ## [2.6.0](https://github.com/panbanda/omen/compare/omen-v2.5.0...omen-v2.6.0) (2025-12-10)
 
 
