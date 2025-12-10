@@ -688,6 +688,93 @@ func TestLoadCustomProvider(t *testing.T) {
 	assert.True(t, found, "custom provider should be loaded for javascript")
 }
 
+// Test predicate filtering for Flipper - should NOT match generic Ruby method calls
+func TestFlipperPredicateFiltering(t *testing.T) {
+	a, err := New(
+		WithGitHistory(false),
+		WithProviders([]string{"flipper"}),
+	)
+	require.NoError(t, err)
+	defer a.Close()
+
+	// Create temp file with code that should NOT be detected as Flipper
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.rb")
+	content := `
+# This should NOT be detected - generic enabled? method, not Flipper
+class Feature
+  def enabled?
+    @enabled
+  end
+end
+
+# This should NOT be detected - random object with enabled? method
+some_object.enabled?(:flag_name)
+
+# This SHOULD be detected - actual Flipper usage
+Flipper.enabled?(:my_feature)
+Flipper[:other_feature].enabled?
+`
+	err = os.WriteFile(path, []byte(content), 0644)
+	require.NoError(t, err)
+
+	refs, err := a.AnalyzeFile(path)
+	require.NoError(t, err)
+
+	// Should only find actual Flipper flags, not false positives
+	var flagKeys []string
+	for _, ref := range refs {
+		flagKeys = append(flagKeys, ref.FlagKey)
+	}
+
+	assert.Contains(t, flagKeys, "my_feature", "should detect Flipper.enabled?(:my_feature)")
+	assert.Contains(t, flagKeys, "other_feature", "should detect Flipper[:other_feature]")
+	assert.Len(t, refs, 2, "should only detect 2 Flipper flags, not false positives")
+}
+
+// Test predicate filtering for PostHog - should NOT match generic Ruby method calls
+func TestPostHogPredicateFiltering(t *testing.T) {
+	a, err := New(
+		WithGitHistory(false),
+		WithProviders([]string{"posthog"}),
+	)
+	require.NoError(t, err)
+	defer a.Close()
+
+	// Create temp file with code that should NOT be detected as PostHog
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.rb")
+	content := `
+# This should NOT be detected - generic .try(:first) call
+parts.try(:first)
+array.try(:last)
+
+# This should NOT be detected - random object with is_feature_enabled
+some_helper.is_feature_enabled(:flag)
+
+# This SHOULD be detected - actual PostHog usage
+posthog.is_feature_enabled(:my_flag, distinct_id)
+client.get_feature_flag("other_flag", user)
+PostHog.is_feature_enabled("third_flag", user)
+`
+	err = os.WriteFile(path, []byte(content), 0644)
+	require.NoError(t, err)
+
+	refs, err := a.AnalyzeFile(path)
+	require.NoError(t, err)
+
+	// Should only find actual PostHog flags, not false positives
+	var flagKeys []string
+	for _, ref := range refs {
+		flagKeys = append(flagKeys, ref.FlagKey)
+	}
+
+	assert.Contains(t, flagKeys, "my_flag", "should detect posthog.is_feature_enabled(:my_flag)")
+	assert.Contains(t, flagKeys, "other_flag", "should detect client.get_feature_flag(\"other_flag\")")
+	assert.Contains(t, flagKeys, "third_flag", "should detect PostHog.is_feature_enabled(\"third_flag\")")
+	assert.Len(t, refs, 3, "should only detect 3 PostHog flags, not false positives like .try(:first)")
+}
+
 func TestCalculatePriority_AllLevels(t *testing.T) {
 	// Test with nil staleness
 	priority := CalculatePriority(nil, Complexity{

@@ -4,6 +4,7 @@ import (
 	"embed"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -20,6 +21,10 @@ type QuerySet struct {
 	Provider string
 	Query    *sitter.Query
 	Pattern  string // Original pattern for debugging
+
+	// cachedRegexes holds pre-compiled regexes for #match? predicates.
+	// Map: patternIndex -> stepIndex -> compiled regex
+	cachedRegexes map[uint32]map[int]*regexp.Regexp
 }
 
 // QueryRegistry manages all loaded queries organized by language and provider.
@@ -105,18 +110,60 @@ func (r *QueryRegistry) AddQuery(lang parser.Language, provider, pattern string)
 		return fmt.Errorf("compiling query for %s/%s: %w", lang, provider, err)
 	}
 
+	// Pre-compile regexes for #match? and #not-match? predicates
+	cachedRegexes := precompilePredicateRegexes(query)
+
 	if r.queries[lang] == nil {
 		r.queries[lang] = make(map[string]*QuerySet)
 	}
 
 	r.queries[lang][provider] = &QuerySet{
-		Language: lang,
-		Provider: provider,
-		Query:    query,
-		Pattern:  pattern,
+		Language:      lang,
+		Provider:      provider,
+		Query:         query,
+		Pattern:       pattern,
+		cachedRegexes: cachedRegexes,
 	}
 
 	return nil
+}
+
+// precompilePredicateRegexes extracts and compiles all regexes from #match? predicates.
+func precompilePredicateRegexes(query *sitter.Query) map[uint32]map[int]*regexp.Regexp {
+	result := make(map[uint32]map[int]*regexp.Regexp)
+
+	patternCount := query.PatternCount()
+	for patternIdx := uint32(0); patternIdx < patternCount; patternIdx++ {
+		predicates := query.PredicatesForPattern(patternIdx)
+		if len(predicates) == 0 {
+			continue
+		}
+
+		patternRegexes := make(map[int]*regexp.Regexp)
+
+		for stepIdx, steps := range predicates {
+			if len(steps) < 3 {
+				continue
+			}
+
+			operator := query.StringValueForId(steps[0].ValueId)
+			if operator != "match?" && operator != "not-match?" {
+				continue
+			}
+
+			// steps[2] contains the regex pattern
+			regexPattern := query.StringValueForId(steps[2].ValueId)
+			if re, err := regexp.Compile(regexPattern); err == nil {
+				patternRegexes[stepIdx] = re
+			}
+		}
+
+		if len(patternRegexes) > 0 {
+			result[patternIdx] = patternRegexes
+		}
+	}
+
+	return result
 }
 
 // GetQueries returns all queries for a language, optionally filtered by providers.
@@ -260,4 +307,98 @@ func normalizeLanguageForQueries(lang parser.Language) parser.Language {
 	default:
 		return lang
 	}
+}
+
+// FilterPredicates applies predicate filtering using pre-compiled regexes.
+// This avoids recompiling regexes on every match, which is a significant performance win.
+func (qs *QuerySet) FilterPredicates(m *sitter.QueryMatch, input []byte) *sitter.QueryMatch {
+	q := qs.Query
+
+	predicates := q.PredicatesForPattern(uint32(m.PatternIndex))
+	if len(predicates) == 0 {
+		return m
+	}
+
+	patternRegexes := qs.cachedRegexes[uint32(m.PatternIndex)]
+
+	for stepIdx, steps := range predicates {
+		if len(steps) < 3 {
+			continue
+		}
+
+		operator := q.StringValueForId(steps[0].ValueId)
+
+		switch operator {
+		case "eq?", "not-eq?":
+			isPositive := operator == "eq?"
+			expectedCaptureNameLeft := q.CaptureNameForId(steps[1].ValueId)
+
+			if steps[2].Type == sitter.QueryPredicateStepTypeCapture {
+				expectedCaptureNameRight := q.CaptureNameForId(steps[2].ValueId)
+				var nodeLeft, nodeRight *sitter.Node
+
+				for _, c := range m.Captures {
+					captureName := q.CaptureNameForId(c.Index)
+					if captureName == expectedCaptureNameLeft {
+						nodeLeft = c.Node
+					}
+					if captureName == expectedCaptureNameRight {
+						nodeRight = c.Node
+					}
+					if nodeLeft != nil && nodeRight != nil {
+						if (nodeLeft.Content(input) == nodeRight.Content(input)) != isPositive {
+							return nil
+						}
+						break
+					}
+				}
+			} else {
+				expectedValueRight := q.StringValueForId(steps[2].ValueId)
+				for _, c := range m.Captures {
+					captureName := q.CaptureNameForId(c.Index)
+					if expectedCaptureNameLeft != captureName {
+						continue
+					}
+					if (c.Node.Content(input) == expectedValueRight) != isPositive {
+						return nil
+					}
+				}
+			}
+
+		case "match?", "not-match?":
+			isPositive := operator == "match?"
+			expectedCaptureName := q.CaptureNameForId(steps[1].ValueId)
+
+			var re *regexp.Regexp
+			if patternRegexes != nil {
+				re = patternRegexes[stepIdx]
+			}
+			if re == nil {
+				regexPattern := q.StringValueForId(steps[2].ValueId)
+				var err error
+				re, err = regexp.Compile(regexPattern)
+				if err != nil {
+					return nil
+				}
+			}
+
+			// Find the capture and check if it matches
+			found := false
+			for _, c := range m.Captures {
+				captureName := q.CaptureNameForId(c.Index)
+				if expectedCaptureName != captureName {
+					continue
+				}
+				found = true
+				if re.MatchString(c.Node.Content(input)) != isPositive {
+					return nil
+				}
+			}
+			// If the capture wasn't found, the predicate doesn't apply
+			// This can happen when a pattern has optional captures
+			_ = found
+		}
+	}
+
+	return m
 }

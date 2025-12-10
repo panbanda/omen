@@ -162,9 +162,16 @@ func (a *Analyzer) analyzeFileWithParser(p *parser.Parser, path string) ([]Refer
 		}
 	}
 
-	// Calculate nesting depth for each reference
-	for i := range refs {
-		refs[i].NestingDepth = a.calculateNestingDepth(result, refs[i].Line)
+	// Calculate nesting depth for all references in a single AST walk
+	if len(refs) > 0 {
+		lines := make([]uint32, len(refs))
+		for i, ref := range refs {
+			lines[i] = ref.Line
+		}
+		depths := a.calculateNestingDepthBatch(result, lines)
+		for i := range refs {
+			refs[i].NestingDepth = depths[refs[i].Line]
+		}
 	}
 
 	// Deduplicate references by (file, line, column, flagKey)
@@ -202,8 +209,8 @@ func (a *Analyzer) executeQuery(qs *QuerySet, result *parser.ParseResult) []Refe
 			break
 		}
 
-		// Apply predicates like #match? and #eq? to filter matches
-		match = cursor.FilterPredicates(match, result.Source)
+		// Apply predicates using cached regexes to avoid recompilation overhead
+		match = qs.FilterPredicates(match, result.Source)
 		if match == nil {
 			continue
 		}
@@ -241,19 +248,60 @@ func extractFlagKey(node *sitter.Node, source []byte) string {
 	return text
 }
 
+// conditionalNodeTypes returns the set of AST node types that represent conditional constructs
+// for a specific language. This is used for nesting depth calculation.
+func conditionalNodeTypes(lang parser.Language) map[string]bool {
+	// Common types shared across languages
+	common := map[string]bool{
+		"if_statement":     true,
+		"if_expression":    true,
+		"switch_statement": true,
+	}
+
+	// Language-specific additions
+	switch lang {
+	case parser.LangGo:
+		common["expression_switch_statement"] = true
+		common["type_switch_statement"] = true
+		common["expression_case"] = true
+		common["type_case"] = true
+
+	case parser.LangPython:
+		common["match_statement"] = true
+		common["case_clause"] = true
+		common["conditional_expression"] = true // ternary: x if cond else y
+
+	case parser.LangJavaScript, parser.LangTypeScript, parser.LangTSX:
+		common["switch_case"] = true
+		common["ternary_expression"] = true
+
+	case parser.LangJava:
+		common["switch_expression"] = true
+		common["switch_block_statement_group"] = true // contains case label + statements
+		common["ternary_expression"] = true
+
+	case parser.LangRuby:
+		common["if"] = true     // Ruby's if block
+		common["unless"] = true // Ruby's unless block
+		common["case"] = true   // Ruby's case block
+		common["when"] = true   // Ruby's when clause
+		common["conditional"] = true
+
+	case parser.LangC, parser.LangCPP:
+		common["case_statement"] = true
+
+	case parser.LangCSharp:
+		common["switch_section"] = true
+		common["conditional_expression"] = true
+	}
+
+	return common
+}
+
 // calculateNestingDepth determines how deeply nested a line is within conditionals.
 func (a *Analyzer) calculateNestingDepth(result *parser.ParseResult, line uint32) int {
 	depth := 0
-	conditionalTypes := map[string]bool{
-		"if_statement":     true,
-		"if_expression":    true,
-		"if":               true, // Ruby
-		"unless":           true, // Ruby
-		"conditional":      true,
-		"switch_statement": true,
-		"case":             true,
-		"match_expression": true,
-	}
+	conditionalTypes := conditionalNodeTypes(result.Language)
 
 	parser.Walk(result.Tree.RootNode(), result.Source, func(node *sitter.Node, source []byte) bool {
 		startLine := uint32(node.StartPoint().Row) + 1
@@ -266,6 +314,41 @@ func (a *Analyzer) calculateNestingDepth(result *parser.ParseResult, line uint32
 	})
 
 	return depth
+}
+
+// calculateNestingDepthBatch calculates nesting depths for multiple lines in a single AST walk.
+// This is more efficient than calling calculateNestingDepth for each line individually.
+func (a *Analyzer) calculateNestingDepthBatch(result *parser.ParseResult, lines []uint32) map[uint32]int {
+	if len(lines) == 0 {
+		return make(map[uint32]int)
+	}
+
+	// Deduplicate lines to avoid counting the same line multiple times
+	depths := make(map[uint32]int, len(lines))
+	for _, line := range lines {
+		depths[line] = 0
+	}
+
+	conditionalTypes := conditionalNodeTypes(result.Language)
+
+	parser.Walk(result.Tree.RootNode(), result.Source, func(node *sitter.Node, source []byte) bool {
+		if !conditionalTypes[node.Type()] {
+			return true
+		}
+
+		startLine := uint32(node.StartPoint().Row) + 1
+		endLine := uint32(node.EndPoint().Row) + 1
+
+		// Iterate over unique lines only (keys in depths map)
+		for line := range depths {
+			if startLine <= line && line <= endLine {
+				depths[line]++
+			}
+		}
+		return true
+	})
+
+	return depths
 }
 
 // Analyze analyzes all files for feature flags.
