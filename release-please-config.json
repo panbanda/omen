@@ -4,7 +4,7 @@
       "release-type": "go",
       "component": "omen"
     },
-    ".claude-plugin": {
+    "plugin": {
       "release-type": "simple",
       "component": "omen-skills",
       "extra-files": [
@@ -15,8 +15,8 @@
         },
         {
           "type": "json",
-          "path": "marketplace.json",
-          "jsonpath": "$.plugins[0].version"
+          "path": "../.claude-plugin/marketplace.json",
+          "jsonpath": "$.metadata.version"
         }
       ]
     }
