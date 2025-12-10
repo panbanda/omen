@@ -180,7 +180,6 @@ func (s *Service) AnalyzeChurn(ctx context.Context, repoPath string, opts ChurnO
 
 	var analyzerOpts []churn.Option
 	analyzerOpts = append(analyzerOpts, churn.WithDays(days))
-	analyzerOpts = append(analyzerOpts, churn.WithOpener(s.opener))
 	if opts.Spinner != nil {
 		analyzerOpts = append(analyzerOpts, churn.WithSpinner(opts.Spinner))
 	}

@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/panbanda/omen/internal/progress"
-	"github.com/panbanda/omen/internal/vcs"
 	"github.com/panbanda/omen/pkg/analyzer"
 )
 
@@ -22,10 +21,8 @@ const DefaultGitTimeout = 5 * time.Minute
 
 // Analyzer analyzes git commit history for file churn.
 type Analyzer struct {
-	days      int
-	spinner   *progress.Tracker
-	opener    vcs.Opener
-	useNative bool // use native git commands for better performance
+	days    int
+	spinner *progress.Tracker
 }
 
 // Compile-time check that Analyzer implements RepoAnalyzer.
@@ -50,29 +47,11 @@ func WithSpinner(spinner *progress.Tracker) Option {
 	}
 }
 
-// WithOpener sets the VCS opener (useful for testing).
-// Using this option disables native git and falls back to go-git.
-func WithOpener(opener vcs.Opener) Option {
-	return func(a *Analyzer) {
-		a.opener = opener
-		a.useNative = false // custom opener means we're likely testing with mocks
-	}
-}
-
-// WithNativeGit forces use of native git commands (default: true).
-func WithNativeGit(use bool) Option {
-	return func(a *Analyzer) {
-		a.useNative = use
-	}
-}
-
 // New creates a new churn analyzer.
 func New(opts ...Option) *Analyzer {
 	a := &Analyzer{
-		days:      30,
-		spinner:   nil,
-		opener:    vcs.DefaultOpener(),
-		useNative: true, // default to fast native git
+		days:    30,
+		spinner: nil,
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -93,17 +72,12 @@ func (a *Analyzer) Analyze(ctx context.Context, repoPath string, files []string)
 		absPath = repoPath
 	}
 
-	// Use native git for much better performance on large repos
-	if a.useNative {
-		return a.analyzeNative(ctx, repoPath, absPath, files)
-	}
-
-	return a.analyzeGoGit(ctx, repoPath, absPath, files)
+	return a.analyze(ctx, repoPath, absPath, files)
 }
 
-// analyzeNative uses native git commands for better performance.
+// analyze uses native git commands for performance.
 // git log --numstat is ~30x faster than go-git tree diffs.
-func (a *Analyzer) analyzeNative(ctx context.Context, repoPath, absPath string, files []string) (*Analysis, error) {
+func (a *Analyzer) analyze(ctx context.Context, repoPath, absPath string, files []string) (*Analysis, error) {
 	cutoff := time.Now().AddDate(0, 0, -a.days)
 	sinceDate := cutoff.Format("2006-01-02")
 
@@ -221,53 +195,6 @@ func (a *Analyzer) parseGitLogNumstat(r *bytes.Buffer, fileMetrics map[string]*F
 	return scanner.Err()
 }
 
-// analyzeGoGit uses go-git for analysis (slower but works with mocked repos).
-func (a *Analyzer) analyzeGoGit(ctx context.Context, repoPath, absPath string, files []string) (*Analysis, error) {
-	repo, err := a.opener.PlainOpen(repoPath)
-	if err != nil {
-		return nil, err
-	}
-
-	cutoff := time.Now().AddDate(0, 0, -a.days)
-
-	logIter, err := repo.Log(&vcs.LogOptions{
-		Since: &cutoff,
-	})
-	if err != nil {
-		return nil, err
-	}
-	defer logIter.Close()
-
-	fileMetrics := make(map[string]*FileMetrics)
-
-	err = logIter.ForEach(func(commit vcs.Commit) error {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		if a.spinner != nil {
-			a.spinner.Tick()
-		}
-
-		return a.processCommit(commit, fileMetrics)
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	fullAnalysis := buildAnalysis(fileMetrics, absPath, a.days)
-
-	// If no files specified, return full analysis
-	if len(files) == 0 {
-		return fullAnalysis, nil
-	}
-
-	return a.filterAnalysis(fullAnalysis, repoPath, files)
-}
-
 // filterAnalysis filters the analysis to only include specified files.
 func (a *Analyzer) filterAnalysis(fullAnalysis *Analysis, repoPath string, files []string) (*Analysis, error) {
 	fileSet := make(map[string]bool)
@@ -324,78 +251,6 @@ func (a *Analyzer) filterAnalysis(fullAnalysis *Analysis, repoPath string, files
 
 // Close releases any resources held by the analyzer.
 func (a *Analyzer) Close() {
-}
-
-// processCommit extracts churn data from a single commit.
-func (a *Analyzer) processCommit(commit vcs.Commit, fileMetrics map[string]*FileMetrics) error {
-	if commit.NumParents() == 0 {
-		return nil
-	}
-
-	parent, err := commit.Parent(0)
-	if err != nil {
-		return nil
-	}
-
-	parentTree, err := parent.Tree()
-	if err != nil {
-		return nil
-	}
-
-	commitTree, err := commit.Tree()
-	if err != nil {
-		return nil
-	}
-
-	changes, err := parentTree.Diff(commitTree)
-	if err != nil {
-		return nil
-	}
-
-	for _, change := range changes {
-		relativePath := change.ToName()
-		if relativePath == "" {
-			relativePath = change.FromName() // Deleted file
-		}
-
-		if _, exists := fileMetrics[relativePath]; !exists {
-			fileMetrics[relativePath] = &FileMetrics{
-				Path:         "./" + relativePath, // pmat prefixes with ./
-				RelativePath: relativePath,
-				AuthorCounts: make(map[string]int),
-				FirstCommit:  commit.Author().When,
-				LastCommit:   commit.Author().When,
-			}
-		}
-
-		fm := fileMetrics[relativePath]
-		fm.Commits++
-		fm.AuthorCounts[commit.Author().Name]++
-
-		if commit.Author().When.Before(fm.FirstCommit) {
-			fm.FirstCommit = commit.Author().When
-		}
-		if commit.Author().When.After(fm.LastCommit) {
-			fm.LastCommit = commit.Author().When
-		}
-
-		patch, err := change.Patch()
-		if err == nil {
-			for _, filePatch := range patch.FilePatches() {
-				for _, chunk := range filePatch.Chunks() {
-					content := chunk.Content()
-					switch chunk.Type() {
-					case vcs.ChunkAdd:
-						fm.LinesAdded += countLines(content)
-					case vcs.ChunkDelete:
-						fm.LinesDeleted += countLines(content)
-					}
-				}
-			}
-		}
-	}
-
-	return nil
 }
 
 // buildAnalysis constructs the final analysis from collected metrics.
