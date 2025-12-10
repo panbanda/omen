@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.6.0](https://github.com/panbanda/omen/compare/omen-v2.5.0...omen-v2.6.0) (2025-12-10)
+
+
+### Features
+
+* **health-report:** add feature flags and convert skill to command ([#160](https://github.com/panbanda/omen/issues/160)) ([247e49b](https://github.com/panbanda/omen/commit/247e49ba08664077f2332955701ec02dccc6b75f))
+
 ## [2.5.0](https://github.com/panbanda/omen/compare/omen-v2.4.3...omen-v2.5.0) (2025-12-10)
 
 
