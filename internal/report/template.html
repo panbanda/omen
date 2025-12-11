@@ -940,11 +940,12 @@
         scoreAnnotations.forEach((ann, i) => {
             const labelIndex = findLabelIndex(trendsData.rawLabels, ann.date);
             if (labelIndex !== -1) {
+                const xLabel = trendsData.labels[labelIndex]; // Use formatted label for category scale
                 // Vertical line at the date
                 healthAnnotations['line' + i] = {
                     type: 'line',
-                    xMin: labelIndex,
-                    xMax: labelIndex,
+                    xMin: xLabel,
+                    xMax: xLabel,
                     borderColor: ann.change < 0 ? '#f8514988' : '#3fb95088',
                     borderWidth: 2,
                     borderDash: [6, 6]
@@ -952,7 +953,7 @@
                 // Label with the annotation text
                 healthAnnotations['label' + i] = {
                     type: 'label',
-                    xValue: labelIndex,
+                    xValue: xLabel,
                     yValue: trendsData.scores[labelIndex] + (i % 2 === 0 ? 3 : -3),
                     backgroundColor: ann.change < 0 ? '#f8514933' : '#3fb95033',
                     borderColor: ann.change < 0 ? '#f85149' : '#3fb950',
@@ -1056,18 +1057,19 @@
             annotations.forEach(ann => {
                 const labelIndex = findLabelIndex(componentLabelsRaw, ann.date);
                 if (labelIndex !== -1) {
+                    const xLabel = componentLabels[labelIndex]; // Use formatted label for category scale
                     const isDecline = ann.to < ann.from;
                     componentAnnotations['line' + annIndex] = {
                         type: 'line',
-                        xMin: labelIndex,
-                        xMax: labelIndex,
+                        xMin: xLabel,
+                        xMax: xLabel,
                         borderColor: color + '66',
                         borderWidth: 2,
                         borderDash: [4, 4]
                     };
                     componentAnnotations['label' + annIndex] = {
                         type: 'label',
-                        xValue: labelIndex,
+                        xValue: xLabel,
                         yValue: ann.to || (95 - (annIndex % 5) * 7),
                         backgroundColor: '#21262d',
                         borderColor: color,
@@ -1087,17 +1089,18 @@
         scoreAnnotations.forEach((ann, i) => {
             const labelIndex = findLabelIndex(componentLabelsRaw, ann.date);
             if (labelIndex !== -1) {
+                const xLabel = componentLabels[labelIndex]; // Use formatted label for category scale
                 componentAnnotations['line' + i] = {
                     type: 'line',
-                    xMin: labelIndex,
-                    xMax: labelIndex,
+                    xMin: xLabel,
+                    xMax: xLabel,
                     borderColor: ann.change < 0 ? '#f8514966' : '#3fb95066',
                     borderWidth: 1,
                     borderDash: [4, 4]
                 };
                 componentAnnotations['label' + i] = {
                     type: 'label',
-                    xValue: labelIndex,
+                    xValue: xLabel,
                     yValue: 95 - (i % 4) * 8,
                     backgroundColor: '#21262d',
                     borderColor: ann.change < 0 ? '#f85149' : '#3fb950',
