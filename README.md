@@ -12,6 +12,7 @@
 [![Release](https://img.shields.io/github/v/release/panbanda/omen)](https://github.com/panbanda/omen/releases)
 [![Go Reference](https://pkg.go.dev/badge/github.com/panbanda/omen.svg)](https://pkg.go.dev/github.com/panbanda/omen)
 [![Snyk Security](https://snyk.io/test/github/panbanda/omen/badge.svg)](https://snyk.io/test/github/panbanda/omen)
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fpanbanda%2Fomen.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fpanbanda%2Fomen?ref=badge_shield)
 
 **Your AI writes code without knowing where the landmines are.**
 
@@ -823,3 +824,6 @@ Omen draws heavy inspiration from [paiml-mcp-agent-toolkit](https://github.com/p
 ## License
 
 Apache License 2.0 - see [LICENSE](LICENSE) for details.
+
+
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fpanbanda%2Fomen.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fpanbanda%2Fomen?ref=badge_large)
