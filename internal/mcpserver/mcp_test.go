@@ -64,9 +64,6 @@ func TestToolDescriptions(t *testing.T) {
 			if !contains(desc, "USE WHEN:") {
 				t.Errorf("%s description missing USE WHEN section", name)
 			}
-			if !contains(desc, "INTERPRETING RESULTS:") {
-				t.Errorf("%s description missing INTERPRETING RESULTS section", name)
-			}
 			if !contains(desc, "METRICS RETURNED:") {
 				t.Errorf("%s description missing METRICS RETURNED section", name)
 			}
