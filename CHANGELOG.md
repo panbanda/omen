@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.6.3](https://github.com/panbanda/omen/compare/omen-v2.6.2...omen-v2.6.3) (2025-12-14)
+
+
+### Performance Improvements
+
+* **mcp:** reduce tool description context size by 43% ([#167](https://github.com/panbanda/omen/issues/167)) ([f96272e](https://github.com/panbanda/omen/commit/f96272e3e68813b2546a359d46847e800f27f135))
+
 ## [2.6.2](https://github.com/panbanda/omen/compare/omen-v2.6.1...omen-v2.6.2) (2025-12-10)
 
 
