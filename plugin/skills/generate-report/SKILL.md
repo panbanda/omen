@@ -9,19 +9,46 @@ Create a self-contained HTML repository health report with all analyzer data and
 
 ## Prerequisites
 
-Omen CLI must be installed and available in PATH.
+1. Omen CLI must be installed and available in PATH
+2. **omen.toml must exist** - If not, run the `omen:setup-config` skill first (see Step 0)
 
 ## Quick Start
 
 ```bash
-# Generate data files
+# 1. Check for config (if missing, run omen:setup-config skill)
+ls omen.toml .omen/omen.toml 2>/dev/null || echo "CONFIG MISSING - run omen:setup-config skill first"
+
+# 2. Generate data files
 omen report generate --since 1y .
 
-# Render to HTML
+# 3. Render to HTML
 omen report render -d ./omen-report-<date>/ -o health-report.html
 ```
 
 ## Full Workflow
+
+### Step 0: Ensure Configuration Exists
+
+Before generating a report, check if `omen.toml` or `.omen/omen.toml` exists in the target repository:
+
+```bash
+ls omen.toml .omen/omen.toml 2>/dev/null
+```
+
+**If no config exists**, run the `omen:setup-config` skill first. This is critical because without proper configuration:
+- Test files will be analyzed (inflating complexity/duplication)
+- Generated code will be included (mocks, protobufs)
+- Feature flag providers won't be detected
+- Language-specific exclusions won't be applied
+
+The `omen:setup-config` skill will:
+1. Detect primary languages
+2. Find test file patterns to exclude
+3. Identify generated code patterns
+4. Detect feature flag providers
+5. Enable cohesion scoring for OO-heavy codebases
+
+**Do not skip this step** - analyzing without proper exclusions produces misleading metrics.
 
 ### Step 1: Generate Data Files
 

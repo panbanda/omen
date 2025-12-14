@@ -7,6 +7,17 @@ description: Analyze Omen report data and generate insights that tell the story 
 
 You have JSON data files from Omen's analyzers. Your job is to find the story in this data and communicate it clearly to engineering leadership who need to make decisions about where to invest effort.
 
+## Data Quality Check
+
+Before analyzing, verify the report was generated with proper configuration. Check if test files or generated code are polluting the metrics:
+
+```bash
+# Check if test files appear in hotspots (they shouldn't)
+jq '.files[].path' <dir>/hotspots.json | grep -E '_test\.|_spec\.|\.test\.|\.spec\.' | head -5
+```
+
+If test files appear in analysis results, the report was likely generated without an `omen.toml`. The `omen:generate-report` skill should have run `omen:setup-config` first to create proper exclusion patterns. Metrics from unconfigured runs will be inflated and misleading.
+
 ## What You're Looking For
 
 The research behind these metrics tells us what predicts problems:
