@@ -443,7 +443,7 @@ func TestReportRenderWithFlagsInsight(t *testing.T) {
 		"duplicates.json": `{"clone_groups":[]}`,
 		"smells.json":     `{"smells":[]}`,
 		"cohesion.json":   `{"classes":[]}`,
-		"flags.json":      `{"flags":[{"key":"stale_feature","provider":"flipper","priority":"CRITICAL","age_days":3000}]}`,
+		"flags.json":      `{"flags":[{"flag_key":"stale_feature","provider":"flipper","priority":{"level":"CRITICAL","score":100},"complexity":{"file_spread":3},"staleness":{"introduced_at":"2016-10-19T00:00:00Z"}}]}`,
 	}
 
 	for name, content := range files {
