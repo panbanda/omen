@@ -471,9 +471,9 @@
 
         .tooltip::after {
             content: attr(data-tooltip);
-            position: absolute;
-            bottom: calc(100% + 8px);
-            left: 50%;
+            position: fixed;
+            top: var(--tooltip-top, 0);
+            left: var(--tooltip-left, 0);
             transform: translateX(-50%);
             background: var(--bg-primary);
             border: 1px solid var(--border-color);
@@ -484,33 +484,17 @@
             font-weight: 400;
             text-transform: none;
             letter-spacing: normal;
-            white-space: nowrap;
             max-width: 300px;
-            white-space: normal;
-            z-index: 1000;
+            z-index: 10000;
             opacity: 0;
             visibility: hidden;
             transition: opacity 0.15s, visibility 0.15s;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
             line-height: 1.4;
+            pointer-events: none;
         }
 
-        .tooltip::before {
-            content: '';
-            position: absolute;
-            bottom: calc(100% + 2px);
-            left: 50%;
-            transform: translateX(-50%);
-            border: 6px solid transparent;
-            border-top-color: var(--border-color);
-            z-index: 1001;
-            opacity: 0;
-            visibility: hidden;
-            transition: opacity 0.15s, visibility 0.15s;
-        }
-
-        .tooltip:hover::after,
-        .tooltip:hover::before {
+        .tooltip:hover::after {
             opacity: 1;
             visibility: visible;
         }
@@ -1665,6 +1649,15 @@
             }
             el.textContent = dateFns.formatDistanceToNow(date, { addSuffix: false });
             el.title = dateFns.format(date, 'MMM d, yyyy');
+        });
+
+        // Position tooltips near cursor
+        document.querySelectorAll('.tooltip').forEach(el => {
+            el.addEventListener('mouseenter', (e) => {
+                const rect = el.getBoundingClientRect();
+                el.style.setProperty('--tooltip-top', `${rect.bottom + 8}px`);
+                el.style.setProperty('--tooltip-left', `${rect.left + rect.width / 2}px`);
+            });
         });
 
         // Initialize Simple-DataTables on all data tables
