@@ -1,14 +1,19 @@
 package report
 
 import (
+	"bytes"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/renderer/html"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
@@ -28,6 +33,8 @@ type RenderData struct {
 	Churn              *ChurnData
 	Ownership          *OwnershipData
 	Duplicates         *DuplicatesData
+	Cohesion           *CohesionData
+	Flags              *FlagsData
 	Trend              *TrendData
 	Summary            *SummaryInsight
 	HotspotsInsight    *HotspotsInsight
@@ -36,6 +43,8 @@ type RenderData struct {
 	ChurnInsight       *ChurnInsight
 	DuplicationInsight *DuplicationInsight
 	ComponentsInsight  *ComponentsInsight
+	FlagsInsight       *FlagsInsight
+	OwnershipInsight   *OwnershipInsight
 	ComponentTrends    map[string]ComponentTrendStats
 	SATDStats          *SATDStats
 }
@@ -204,7 +213,29 @@ type Renderer struct {
 
 // NewRenderer creates a new renderer with the embedded template.
 func NewRenderer() (*Renderer, error) {
+	md := goldmark.New(
+		goldmark.WithExtensions(extension.GFM),
+		goldmark.WithRendererOptions(html.WithHardWraps()),
+	)
+
 	funcMap := template.FuncMap{
+		"relPath": func(path string, roots []string) string {
+			if len(roots) == 0 {
+				return path
+			}
+			root := roots[0]
+			if !strings.HasSuffix(root, "/") {
+				root += "/"
+			}
+			return strings.TrimPrefix(path, root)
+		},
+		"markdown": func(s string) template.HTML {
+			var buf bytes.Buffer
+			if err := md.Convert([]byte(s), &buf); err != nil {
+				return template.HTML(template.HTMLEscapeString(s))
+			}
+			return template.HTML(buf.String())
+		},
 		"scoreClass": func(score int) string {
 			if score >= 80 {
 				return "good"
@@ -225,6 +256,18 @@ func NewRenderer() (*Renderer, error) {
 				return "medium"
 			}
 			return "low"
+		},
+		"priorityBadge": func(priority string) string {
+			switch strings.ToUpper(priority) {
+			case "CRITICAL":
+				return "critical"
+			case "HIGH":
+				return "high"
+			case "MEDIUM":
+				return "medium"
+			default:
+				return "low"
+			}
 		},
 		"churnBadge": func(score float64) string {
 			// Churn scores are relative to repo max. P95 is typically ~0.01.
@@ -335,6 +378,32 @@ func NewRenderer() (*Renderer, error) {
 			default:
 				return "0"
 			}
+		},
+		"flagFilesTooltip": func(refs []FlagReference, roots []string) string {
+			if len(refs) == 0 {
+				return "No file references"
+			}
+			root := ""
+			if len(roots) > 0 {
+				root = roots[0]
+				if !strings.HasSuffix(root, "/") {
+					root += "/"
+				}
+			}
+			seen := make(map[string][]uint32)
+			for _, ref := range refs {
+				file := strings.TrimPrefix(ref.File, root)
+				seen[file] = append(seen[file], ref.Line)
+			}
+			var lines []string
+			for file, lineNums := range seen {
+				var lineStrs []string
+				for _, ln := range lineNums {
+					lineStrs = append(lineStrs, fmt.Sprintf("%d", ln))
+				}
+				lines = append(lines, fmt.Sprintf("%s:%s", file, strings.Join(lineStrs, ",")))
+			}
+			return strings.Join(lines, "\n")
 		},
 	}
 
@@ -489,6 +558,18 @@ func (r *Renderer) loadData(dataDir string) (*RenderData, error) {
 		data.Duplicates = duplicates
 	}
 
+	// Load cohesion (optional)
+	cohesion := &CohesionData{}
+	if err := loadJSON(filepath.Join(dataDir, "cohesion.json"), cohesion); err == nil {
+		data.Cohesion = cohesion
+	}
+
+	// Load flags (optional)
+	flags := &FlagsData{}
+	if err := loadJSON(filepath.Join(dataDir, "flags.json"), flags); err == nil {
+		data.Flags = flags
+	}
+
 	// Load trend (optional)
 	trend := &TrendData{}
 	if err := loadJSON(filepath.Join(dataDir, "trend.json"), trend); err == nil {
@@ -539,6 +620,18 @@ func (r *Renderer) loadData(dataDir string) (*RenderData, error) {
 		compInsight := &ComponentsInsight{}
 		if err := loadJSON(filepath.Join(insightsDir, "components.json"), compInsight); err == nil {
 			data.ComponentsInsight = compInsight
+		}
+
+		// Load flags insight
+		flagsInsight := &FlagsInsight{}
+		if err := loadJSON(filepath.Join(insightsDir, "flags.json"), flagsInsight); err == nil {
+			data.FlagsInsight = flagsInsight
+		}
+
+		// Load ownership insight
+		ownershipInsight := &OwnershipInsight{}
+		if err := loadJSON(filepath.Join(insightsDir, "ownership.json"), ownershipInsight); err == nil {
+			data.OwnershipInsight = ownershipInsight
 		}
 	}
 

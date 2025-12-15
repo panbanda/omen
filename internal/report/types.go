@@ -130,3 +130,85 @@ type ChurnInsight struct {
 type DuplicationInsight struct {
 	SectionInsight string `json:"section_insight"`
 }
+
+// FlagAnnotation represents an LLM comment on a feature flag.
+type FlagAnnotation struct {
+	Flag         string `json:"flag"`
+	Priority     string `json:"priority"`      // CRITICAL, HIGH, MEDIUM, LOW
+	IntroducedAt string `json:"introduced_at"` // ISO 8601 timestamp
+	Comment      string `json:"comment"`
+}
+
+// FlagsInsight contains feature flags analysis.
+type FlagsInsight struct {
+	SectionInsight  string           `json:"section_insight"`
+	ItemAnnotations []FlagAnnotation `json:"item_annotations"`
+}
+
+// FlagsData represents the flags.json structure.
+type FlagsData struct {
+	Flags   []FlagItem   `json:"flags"`
+	Summary FlagsSummary `json:"summary"`
+}
+
+// FlagItem represents a single feature flag.
+type FlagItem struct {
+	FlagKey    string          `json:"flag_key"`
+	Provider   string          `json:"provider"`
+	Priority   FlagPriority    `json:"priority"`
+	Complexity FlagComplexity  `json:"complexity"`
+	Staleness  FlagStaleness   `json:"staleness"`
+	References []FlagReference `json:"references,omitempty"`
+}
+
+// FlagReference represents a single occurrence of a feature flag in code.
+type FlagReference struct {
+	File   string `json:"file"`
+	Line   uint32 `json:"line"`
+	Column uint32 `json:"column"`
+}
+
+// FlagPriority contains flag priority scoring.
+type FlagPriority struct {
+	Score float64 `json:"score"`
+	Level string  `json:"level"`
+}
+
+// FlagComplexity contains flag complexity metrics.
+type FlagComplexity struct {
+	FileSpread int `json:"file_spread"`
+}
+
+// FlagStaleness contains flag staleness metrics.
+type FlagStaleness struct {
+	IntroducedAt string `json:"introduced_at"`
+}
+
+// FlagsSummary contains aggregate flag metrics.
+type FlagsSummary struct {
+	TotalFlags    int            `json:"total_flags"`
+	ByPriority    map[string]int `json:"by_priority"`
+	ByProvider    map[string]int `json:"by_provider"`
+	AvgFileSpread float64        `json:"avg_file_spread"`
+}
+
+// CohesionData represents the cohesion.json structure.
+type CohesionData struct {
+	Classes []CohesionClass `json:"classes"`
+}
+
+// CohesionClass represents a single class's CK metrics.
+type CohesionClass struct {
+	Path      string `json:"path"`
+	ClassName string `json:"class_name"`
+	Language  string `json:"language"`
+	WMC       int    `json:"wmc"`
+	CBO       int    `json:"cbo"`
+	RFC       int    `json:"rfc"`
+	LCOM      int    `json:"lcom"`
+	DIT       int    `json:"dit"`
+	NOC       int    `json:"noc"`
+	NOM       int    `json:"nom"`
+	NOF       int    `json:"nof"`
+	LOC       int    `json:"loc"`
+}

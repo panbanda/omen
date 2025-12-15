@@ -386,3 +386,96 @@ func TestReportServeRequiresDataFlag(t *testing.T) {
 		t.Errorf("error should mention --data flag, got: %v", err)
 	}
 }
+
+func TestReportValidateInvalidFlagsInsight(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create minimal valid data files
+	files := map[string]string{
+		"metadata.json":   `{"repository":"test","generated_at":"2024-12-10T00:00:00Z","since":"1y","omen_version":"1.0.0","paths":["."]}`,
+		"score.json":      `{"score":85,"passed":true}`,
+		"complexity.json": `{"files":[]}`,
+		"satd.json":       `{"items":[]}`,
+		"duplicates.json": `{"clone_groups":[]}`,
+		"smells.json":     `{"smells":[]}`,
+		"cohesion.json":   `{"classes":[]}`,
+		"flags.json":      `{"flags":[]}`,
+	}
+
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(tmpDir, name), []byte(content), 0644); err != nil {
+			t.Fatalf("failed to create %s: %v", name, err)
+		}
+	}
+
+	// Create insights directory with invalid flags.json
+	insightsDir := filepath.Join(tmpDir, "insights")
+	if err := os.MkdirAll(insightsDir, 0755); err != nil {
+		t.Fatalf("failed to create insights directory: %v", err)
+	}
+
+	// Invalid JSON
+	if err := os.WriteFile(filepath.Join(insightsDir, "flags.json"), []byte(`{invalid json}`), 0644); err != nil {
+		t.Fatalf("failed to create insights/flags.json: %v", err)
+	}
+
+	rootCmd.SetArgs([]string{"report", "validate", "-d", tmpDir})
+	err := rootCmd.Execute()
+	if err == nil {
+		t.Error("validate should fail with invalid insights/flags.json")
+	}
+	// Error returns count, detailed errors go to stderr
+	if err != nil && !strings.Contains(err.Error(), "validation failed") {
+		t.Errorf("error should mention validation failed, got: %v", err)
+	}
+}
+
+func TestReportRenderWithFlagsInsight(t *testing.T) {
+	tmpDir := t.TempDir()
+	outputFile := filepath.Join(tmpDir, "output.html")
+
+	// Create minimal valid data files
+	files := map[string]string{
+		"metadata.json":   `{"repository":"test-repo","generated_at":"2024-12-10T00:00:00Z","since":"1y","omen_version":"1.0.0","paths":["."]}`,
+		"score.json":      `{"score":85,"passed":true}`,
+		"complexity.json": `{"files":[]}`,
+		"satd.json":       `{"items":[]}`,
+		"duplicates.json": `{"clone_groups":[]}`,
+		"smells.json":     `{"smells":[]}`,
+		"cohesion.json":   `{"classes":[]}`,
+		"flags.json":      `{"flags":[{"flag_key":"stale_feature","provider":"flipper","priority":{"level":"CRITICAL","score":100},"complexity":{"file_spread":3},"staleness":{"introduced_at":"2016-10-19T00:00:00Z"}}]}`,
+	}
+
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(tmpDir, name), []byte(content), 0644); err != nil {
+			t.Fatalf("failed to create %s: %v", name, err)
+		}
+	}
+
+	// Create insights directory with flags.json
+	insightsDir := filepath.Join(tmpDir, "insights")
+	if err := os.MkdirAll(insightsDir, 0755); err != nil {
+		t.Fatalf("failed to create insights directory: %v", err)
+	}
+
+	flagsInsight := `{"section_insight":"11 feature flags are critically stale and should be removed.","item_annotations":[{"flag":"stale_feature","comment":"3000 days old - remove immediately"}]}`
+	if err := os.WriteFile(filepath.Join(insightsDir, "flags.json"), []byte(flagsInsight), 0644); err != nil {
+		t.Fatalf("failed to create insights/flags.json: %v", err)
+	}
+
+	rootCmd.SetArgs([]string{"report", "render", "-d", tmpDir, "-o", outputFile, "--skip-validate"})
+	err := rootCmd.Execute()
+	if err != nil {
+		t.Fatalf("render failed: %v", err)
+	}
+
+	// Verify output contains flags insight content
+	content, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatalf("failed to read output file: %v", err)
+	}
+
+	if !strings.Contains(string(content), "11 feature flags are critically stale") {
+		t.Error("output should contain flags insight section_insight")
+	}
+}
