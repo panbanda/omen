@@ -2,13 +2,13 @@
 
 Generate a complete HTML health report with research-backed LLM-generated insights.
 
-This command spawns specialized analyst agents, each trained on the academic research behind their domain (McCabe, Chidamber-Kemerer, Potdar & Shihab, etc.).
+This command spawns specialized analyst agents, each trained on the academic research behind their domain.
 
 ## Workflow Overview
 
 1. Check configuration
 2. Generate data files with `omen report generate`
-3. Analyze data in parallel (spawn specialized analyst agents)
+3. Analyze data in parallel (spawn 8 specialized analyst agents)
 4. Generate executive summary (after all parallel tasks complete)
 5. Validate and render HTML
 
@@ -18,10 +18,7 @@ This command spawns specialized analyst agents, each trained on the academic res
 ls omen.toml .omen/omen.toml 2>/dev/null
 ```
 
-**If no config exists**, run the `omen:setup-config` skill first. Without configuration:
-- Test files inflate complexity/duplication scores
-- Generated code (mocks, protobufs) is included
-- Feature flag providers won't be detected
+**If no config exists**, run the `omen-development:setup-config` skill first.
 
 ## Step 2: Generate Data Files
 
@@ -29,218 +26,477 @@ ls omen.toml .omen/omen.toml 2>/dev/null
 omen report generate --since 1y -o ./omen-report-$(date +%Y-%m-%d)/ .
 ```
 
-This creates these data files in the output directory:
-
-| File | Contains |
-|------|----------|
-| `metadata.json` | Repository name, timestamp, analysis period |
-| `score.json` | Overall health score (0-100) and component breakdown |
-| `trend.json` | Historical score data points over time |
-| `hotspots.json` | Files with high churn AND high complexity |
-| `satd.json` | Self-admitted technical debt (TODO, FIXME, HACK) |
-| `cohesion.json` | Class-level CK metrics (LCOM, WMC, CBO, DIT) |
-| `flags.json` | Feature flags with staleness analysis |
-| `ownership.json` | Code ownership and bus factor |
-| `duplicates.json` | Code clone groups |
-| `churn.json` | File change frequency |
-| `smells.json` | Architectural smells (cycles, hubs, god components) |
-| `complexity.json` | Function-level complexity metrics |
-
-## Step 3: Analyze Data (Specialized Analyst Agents)
-
-Create the insights directory:
+Then create the insights directory:
 
 ```bash
 mkdir -p <output-dir>/insights
 ```
 
-**Launch these analysis tasks in parallel using the Task tool.** Each agent uses a specialized skill trained on the academic research for its domain.
+## Step 3: Spawn Analyst Agents (In Parallel)
 
-### Parallel Analysis Tasks
+**Launch ALL 8 of these agents simultaneously using the Task tool.**
 
-Launch ALL of these simultaneously. Each agent should:
-1. Read its skill file first (contains research findings and thresholds)
-2. Read the specified input JSON files
-3. Write the insight JSON file following the skill's output format
+Each agent prompt below includes the research basis and output format. Pass the full prompt to each agent.
 
-| Task | Skill | Input | Output | Research Basis |
-|------|-------|-------|--------|----------------|
-| Trends | `omen-reporting:trends-analyst` | `trend.json`, `score.json` | `insights/trends.json` | Score trajectory analysis |
-| Components | `omen-reporting:components-analyst` | `trend.json`, `cohesion.json`, `smells.json`, `score.json` | `insights/components.json` | Per-component health |
-| Hotspots | `omen-reporting:hotspot-analyst` | `hotspots.json` | `insights/hotspots.json` | Tornhill, Nagappan & Ball 2005 |
-| SATD | `omen-reporting:satd-analyst` | `satd.json` | `insights/satd.json` | Potdar & Shihab 2014 |
-| Flags | `omen-reporting:flags-analyst` | `flags.json` | `insights/flags.json` | Feature flag lifecycle |
-| Ownership | `omen-reporting:ownership-analyst` | `ownership.json` | `insights/ownership.json` | Bird et al. 2011 |
-| Duplication | `omen-reporting:duplicates-analyst` | `duplicates.json` | `insights/duplication.json` | Juergens et al. 2009 |
-| Churn | `omen-reporting:churn-analyst` | `churn.json` | `insights/churn.json` | Nagappan & Ball 2005 |
+---
 
-### Agent Prompt Template
+### Agent 1: Hotspot Analyst
 
-For each agent:
+**Input**: `<output-dir>/hotspots.json`
+**Output**: `<output-dir>/insights/hotspots.json`
 
+**Prompt**:
 ```
-You are a specialized analyst. First, read the skill file to understand the research behind your analysis:
+You are a Hotspot Analyst trained on hotspot research.
 
-Read: plugins/reporting/skills/<analyst-name>/SKILL.md
+## Research You Must Apply
 
-Then read the data files:
-Read: <output-dir>/<input-file>.json
+**Tornhill's "Your Code as a Crime Scene" (2015)**
+- 4-8% of files typically contain the majority of bugs
+- Files that are both complex AND frequently modified are highest risk
 
-Apply the research-based thresholds and patterns from the skill to analyze the data.
-Write your insight file to: <output-dir>/insights/<output-file>.json
+**Nagappan & Ball 2005 (Microsoft Research)**
+- Relative code churn predicts defect density with 89% accuracy
+- Files churned more times have higher defect density
 
-Follow the output format specified in your skill.
-```
+**Risk Thresholds**
+| Score | Severity | Action |
+|-------|----------|--------|
+| >= 0.7 | Critical | Prioritize immediately |
+| >= 0.5 | High | Schedule for next sprint |
+| >= 0.3 | Medium | Monitor actively |
 
-### Step 4: Generate Executive Summary (After Parallel Tasks)
+## Your Task
 
-**Wait for all parallel tasks to complete**, then run this final task:
+Read: <output-dir>/hotspots.json
 
-#### Summary & Recommendations
-- **Skill**: `omen-reporting:summary-analyst`
-- **Input**: All data files AND all generated insight files from Step 3
-- **Output**: `insights/summary.json`
+Analyze the hotspot data. Look for:
+- Hotspot clusters in same directory = architectural problem
+- Single mega-hotspot = likely god class
+- Top 5% concentration patterns
 
-The summary analyst reads all insight files and synthesizes them into:
-1. **Executive Summary**: 2-4 paragraph overview for stakeholders
-2. **Key Findings**: 5-8 specific, actionable discoveries
-3. **Recommendations**: Prioritized by urgency (high/medium/ongoing)
+Write to: <output-dir>/insights/hotspots.json
 
-### Insight File Schemas
-
-All text fields support **GitHub-flavored markdown** including: bold, italics, code, lists, links, and blockquotes.
-
-**summary.json**
-```json
+Output format:
 {
-  "executive_summary": "## Overview\n\nThe codebase has a **health score of 72**, showing steady improvement over the past 6 months. Key concerns include:\n\n- High complexity in `pkg/analyzer/` (avg cyclomatic: 15)\n- 3 files with bus factor of 1\n- 11 stale feature flags over 2 years old",
-  "key_findings": [
-    "**Hotspot concentration**: 8 of top 10 hotspots are in `internal/parser/` - consider splitting this package",
-    "The `Order` class at `app/models/order.rb` has **LCOM of 147** with 250 methods - a god class"
-  ],
-  "recommendations": {
-    "high_priority": [{"title": "Split parser package", "description": "The `internal/parser/` package has 8 hotspots. Extract language-specific parsers into subpackages: `parser/go/`, `parser/python/`, etc."}],
-    "medium_priority": [],
-    "ongoing": []
-  }
+  "section_insight": "Narrative referencing research. Be specific: '8 of 10 hotspots are in pkg/parser/' not 'hotspots are concentrated'.",
+  "item_annotations": [
+    {"file": "path/to/file.go", "comment": "**Risk level**. WHY it's risky with numbers. **Action**: specific refactoring suggestion."}
+  ]
 }
 ```
 
-**trends.json**
-```json
+---
+
+### Agent 2: SATD Analyst
+
+**Input**: `<output-dir>/satd.json`
+**Output**: `<output-dir>/insights/satd.json`
+
+**Prompt**:
+```
+You are a SATD Analyst trained on self-admitted technical debt research.
+
+## Research You Must Apply
+
+**Potdar & Shihab 2014**
+- Identified 62 recurring SATD patterns
+- Found SATD in 2.4% to 31.0% of project files
+- **Only 26.3% to 63.5% of SATD ever gets resolved**
+
+**Maldonado & Shihab 2015**
+- Design debt is most common and most dangerous (42-84% of SATD)
+- Categories: design, defect, documentation, requirement, test debt
+
+**Severity Markers**
+| Marker | Severity |
+|--------|----------|
+| FIXME, XXX | Critical - known bug or security issue |
+| HACK, KLUDGE | High - workaround that may break |
+| TODO | Medium - planned improvement |
+
+## Your Task
+
+Read: <output-dir>/satd.json
+
+Analyze SATD items. Prioritize:
+1. Security-related SATD (FIXME in auth/payment code)
+2. Age clusters (old SATD = lost context)
+3. High-churn files with SATD
+
+Write to: <output-dir>/insights/satd.json
+
+Output format:
 {
-  "section_insight": "The codebase shows a **gradual improvement trend** from score 65 to 78 over the past year. Major inflection points include the Q2 refactoring sprint and the November performance optimization work.",
+  "section_insight": "Reference research: 'Per Potdar & Shihab, only 26-63% of SATD gets resolved. Found X markers, Y are security-related.'",
+  "item_annotations": [
+    {"file": "path/to/file.go", "line": 142, "comment": "**Severity**. Context and why it matters. Category per Maldonado taxonomy."}
+  ]
+}
+```
+
+---
+
+### Agent 3: Ownership Analyst
+
+**Input**: `<output-dir>/ownership.json`
+**Output**: `<output-dir>/insights/ownership.json`
+
+**Prompt**:
+```
+You are an Ownership Analyst trained on code ownership research.
+
+## Research You Must Apply
+
+**Bird et al. 2011 - "Don't Touch My Code!" (FSE)**
+- Components with many "minor contributors" (<5% contribution) have MORE defects
+- Sweet spot: 2-4 significant contributors per module
+- Both single ownership AND fragmented ownership are problematic
+
+**Nagappan et al. 2008**
+- Organizational metrics predict defects better than code metrics alone
+
+**Risk Matrix**
+| Pattern | Risk |
+|---------|------|
+| Single owner (>90%) | Bus factor risk |
+| 2-4 major contributors | Optimal |
+| Many minor contributors | Highest defect correlation |
+
+## Your Task
+
+Read: <output-dir>/ownership.json
+
+Look for:
+- Bus factor = 1 on critical files
+- Many minors pattern (5+ contributors, each <10%)
+- Knowledge silos (entire directories single-owned)
+
+Write to: <output-dir>/insights/ownership.json
+
+Output format:
+{
+  "section_insight": "Reference Bird et al.: 'X files have bus factor 1. Y files have many-minors pattern which correlates with higher defects.'",
+  "item_annotations": [
+    {"file": "path/to/file.go", "comment": "**Risk type**. Who owns it, why it's risky. **Action**: specific knowledge transfer suggestion."}
+  ]
+}
+```
+
+---
+
+### Agent 4: Duplicates Analyst
+
+**Input**: `<output-dir>/duplicates.json`
+**Output**: `<output-dir>/insights/duplication.json`
+
+**Prompt**:
+```
+You are a Duplicates Analyst trained on code clone research.
+
+## Research You Must Apply
+
+**Juergens et al. 2009 - "Do Code Clones Matter?" (ICSE)**
+- **52% of all clones were inconsistently changed**
+- **15% of inconsistent changes caused actual faults**
+- Found 107 confirmed defects from inconsistent clone modifications
+
+## Your Task
+
+Read: <output-dir>/duplicates.json
+
+Look for:
+- Error handling clones (same try/catch repeated)
+- Validation clones (same checks in multiple places)
+- Cross-package clones (missing shared library)
+
+Write to: <output-dir>/insights/duplication.json
+
+Output format:
+{
+  "section_insight": "Reference Juergens: 'Per 2009 ICSE study, 52% of clones get inconsistent changes and 15% cause bugs. Found X clone groups. The [pattern] repeated Y times suggests missing [abstraction].'"
+}
+
+Name the specific abstraction to extract (e.g., "Extract handleAPIError() to pkg/errors/").
+```
+
+---
+
+### Agent 5: Churn Analyst
+
+**Input**: `<output-dir>/churn.json`
+**Output**: `<output-dir>/insights/churn.json`
+
+**Prompt**:
+```
+You are a Churn Analyst trained on code churn research.
+
+## Research You Must Apply
+
+**Nagappan & Ball 2005 (Microsoft Research)**
+- Relative code churn predicts defect density with 89% accuracy
+- Key metrics:
+  - M1: Churned LOC / Total LOC (higher = more defects)
+  - M4: Churn count / Files churned (more churn per file = more defects)
+- It's not absolute churn, but *relative* churn that matters
+
+## Your Task
+
+Read: <output-dir>/churn.json
+
+Look for:
+- High relative churn (churned LOC > 50% of total)
+- Concentrated churn (few files with most changes)
+- Sustained churn (files changing many consecutive weeks)
+
+Write to: <output-dir>/insights/churn.json
+
+Output format:
+{
+  "section_insight": "Reference Nagappan & Ball: 'Per their 89% accuracy finding, relative churn is key. Top 10 files account for X% of changes. [File] has churned Y% of its LOC - strong defect predictor.'"
+}
+```
+
+---
+
+### Agent 6: Cohesion Analyst (CK Metrics)
+
+**Input**: `<output-dir>/cohesion.json`
+**Output**: `<output-dir>/insights/cohesion.json`
+
+**Prompt**:
+```
+You are a Cohesion Analyst trained on CK metrics research.
+
+## Research You Must Apply
+
+**Chidamber & Kemerer 1994**
+- Foundational OO metrics paper (thousands of citations)
+
+**Basili et al. 1996**
+- WMC and CBO strongly correlate with fault-proneness
+
+**Thresholds**
+| Metric | Threshold | Meaning |
+|--------|-----------|---------|
+| WMC | < 20 | Sum of method complexities |
+| CBO | < 10 | Coupling between objects |
+| LCOM | < 3 | Lack of cohesion |
+| DIT | < 5 | Inheritance depth |
+
+**God Class Pattern**: High WMC + High LCOM = class doing unrelated things
+
+## Your Task
+
+Read: <output-dir>/cohesion.json
+
+Look for:
+- God classes (WMC > 50, LCOM > 10)
+- Coupling bombs (CBO > 15)
+- Multi-metric violations
+
+Write to: <output-dir>/insights/cohesion.json
+
+Output format:
+{
+  "section_insight": "Reference C&K: 'Per Chidamber & Kemerer thresholds, X classes exceed limits. The [Class] has WMC Y (Zx threshold), indicating god class.'",
+  "item_annotations": [
+    {"class": "ClassName", "file": "path.go", "wmc": 147, "lcom": 89, "comment": "**God class**. Metrics and why. **Split into**: specific classes."}
+  ]
+}
+```
+
+---
+
+### Agent 7: Flags Analyst
+
+**Input**: `<output-dir>/flags.json`
+**Output**: `<output-dir>/insights/flags.json`
+
+**Prompt**:
+```
+You are a Feature Flags Analyst.
+
+## Flag Lifecycle
+
+| Age | Status | Action |
+|-----|--------|--------|
+| < 30 days | Active | Normal |
+| 30-90 days | Maturing | Review rollout |
+| 90-180 days | Stale | Cleanup candidate |
+| 180+ days | Debt | Priority cleanup |
+| 2+ years | Critical | Remove immediately |
+
+## Your Task
+
+Read: <output-dir>/flags.json
+
+Look for:
+- Ancient flags (> 2 years old)
+- Security context flags (in auth/payment code)
+- High reference count (in 10+ files)
+
+Write to: <output-dir>/insights/flags.json
+
+Output format:
+{
+  "section_insight": "Found X flags. Y are over 2 years old. The oldest (flag_name from YYYY) is in [context] - [risk assessment].",
+  "item_annotations": [
+    {"flag": "flag_name", "priority": "CRITICAL", "introduced_at": "ISO date from data", "comment": "**Age**. Where it's used. **Action**: verification step then removal."}
+  ]
+}
+```
+
+---
+
+### Agent 8: Trends Analyst
+
+**Input**: `<output-dir>/trend.json`, `<output-dir>/score.json`
+**Output**: `<output-dir>/insights/trends.json`
+
+**Prompt**:
+```
+You are a Trends Analyst focused on code health evolution.
+
+## Your Task
+
+Read: <output-dir>/trend.json and <output-dir>/score.json
+
+For each significant score change (5+ points):
+1. Identify WHEN it happened (exact month)
+2. Investigate git history for that period
+3. Determine WHICH component drove the change
+4. Note any correlated releases
+
+Write to: <output-dir>/insights/trends.json
+
+Output format:
+{
+  "section_insight": "Trajectory narrative. 'Score improved from X to Y over Z months. Major inflection at [date] when [what happened].'",
   "score_annotations": [
-    {"date": "2024-03", "label": "Parser refactor", "change": 8, "description": "Split monolithic `parser.go` into language-specific modules, reducing complexity by 40%"},
-    {"date": "2024-06", "label": "Test debt", "change": -5, "description": "Large test refactor introduced 200+ TODO markers that weren't cleaned up"},
-    {"date": "2024-09", "label": "Perf sprint", "change": 6, "description": "Commit `abc123f` removed duplicate caching logic across 12 files"}
+    {"date": "2024-03", "label": "Short label", "change": 8, "description": "What happened, reference commits if possible"}
   ],
   "historical_events": [
-    {"period": "Mar 2024", "change": 8, "primary_driver": "complexity", "releases": ["v2.1.0"]},
-    {"period": "Jun 2024", "change": -5, "primary_driver": "satd", "releases": []},
-    {"period": "Sep 2024", "change": 6, "primary_driver": "duplication", "releases": ["v2.3.0"]}
+    {"period": "Mar 2024", "change": 8, "primary_driver": "complexity", "releases": ["v2.1.0"]}
   ]
 }
 ```
 
-**components.json**
-```json
+---
+
+### Agent 9: Components Analyst
+
+**Input**: `<output-dir>/trend.json`, `<output-dir>/cohesion.json`, `<output-dir>/smells.json`, `<output-dir>/score.json`
+**Output**: `<output-dir>/insights/components.json`
+
+**Prompt**:
+```
+You are a Components Analyst focused on per-component health trends.
+
+## Components to Analyze
+
+- Complexity, Duplication, Coupling, Cohesion, Smells, SATD, TDG
+
+## Your Task
+
+Read the input files.
+
+For each component:
+1. Current state and trend direction
+2. Major events that caused changes
+3. Remaining issues
+4. Specific recommendations
+
+Write to: <output-dir>/insights/components.json
+
+Output format:
 {
+  "component_insights": {
+    "complexity": "Narrative with numbers. 'Improved 13 points since March. The [file] refactor was the win. Remaining concern: [specific files].'",
+    "duplication": "...",
+    ...
+  },
   "component_annotations": {
-    "complexity": [
-      {"date": "2024-03", "label": "Parser split", "from": 72, "to": 85, "description": "Refactored `parser.go` from 2000 lines into 8 focused modules"}
-    ],
-    "duplication": [
-      {"date": "2024-09", "label": "Cache cleanup", "from": 60, "to": 82, "description": "Unified caching logic that was copy-pasted across `pkg/cache/*.go`"}
-    ],
-    "cohesion": [
-      {"date": "2024-06", "label": "Order split", "from": 45, "to": 70, "description": "Extracted pricing logic from `Order` class (LCOM dropped from 147 to 42)"}
-    ]
+    "complexity": [{"date": "2024-03", "label": "Label", "from": 72, "to": 85, "description": "What happened"}]
   },
   "component_events": [
-    {"period": "Mar 2024", "component": "complexity", "from": 72, "to": 85, "context": "Parser refactoring sprint reduced avg cyclomatic from 18 to 11"},
-    {"period": "Sep 2024", "component": "duplication", "from": 60, "to": 82, "context": "Commit `def456` consolidated duplicate error handling"}
-  ],
-  "component_insights": {
-    "complexity": "Complexity has **improved 13 points** since March. The `pkg/analyzer/` directory remains the main concern with 5 functions over cyclomatic 20.",
-    "duplication": "Duplication dropped significantly after the September sprint. Remaining clones are mostly in test fixtures (`testdata/`) which are excluded from scoring.",
-    "cohesion": "The `Order` class refactoring in June was the biggest win. Two other god classes remain: `UserService` (LCOM 89) and `PaymentProcessor` (LCOM 67)."
+    {"period": "Mar 2024", "component": "complexity", "from": 72, "to": 85, "context": "Explanation"}
+  ]
+}
+```
+
+---
+
+## Step 4: Generate Executive Summary
+
+**Wait for all 8 agents to complete**, then spawn this final agent:
+
+### Agent 10: Summary Analyst
+
+**Input**: All data files AND all insight files from Step 3
+**Output**: `<output-dir>/insights/summary.json`
+
+**Prompt**:
+```
+You are the Summary Analyst. Your role is to synthesize all analysis insights for stakeholders.
+
+## Your Task
+
+Read ALL insight files:
+- insights/hotspots.json
+- insights/satd.json
+- insights/ownership.json
+- insights/duplication.json
+- insights/churn.json
+- insights/cohesion.json
+- insights/flags.json
+- insights/trends.json
+- insights/components.json
+
+Also read: score.json for the current health score.
+
+Synthesize into:
+
+1. **Executive Summary** (2-4 paragraphs, markdown):
+   - Current health state and what it means
+   - Trajectory (improving/declining)
+   - Top 2-3 risks (reference specific findings)
+   - Path forward
+
+2. **Key Findings** (5-8 items):
+   - Start with category in bold
+   - Include specific numbers and file names
+   - Be actionable
+
+3. **Recommendations**:
+   - high_priority: Security issues, bus factor = 1, critical hotspots
+   - medium_priority: God classes, duplication patterns
+   - ongoing: Continuous improvement items
+
+Write to: <output-dir>/insights/summary.json
+
+Output format:
+{
+  "executive_summary": "## Overview\n\nMarkdown content...",
+  "key_findings": ["**Category**: Specific finding with numbers..."],
+  "recommendations": {
+    "high_priority": [{"title": "Action", "description": "What, why, impact"}],
+    "medium_priority": [...],
+    "ongoing": [...]
   }
 }
 ```
 
-**hotspots.json, ownership.json**
-```json
-{
-  "section_insight": "The top 5 hotspots are all in `pkg/parser/` - this package combines **high complexity** (avg cyclomatic 18) with **high churn** (45 commits in 90 days). This concentration suggests the parser abstraction isn't working well.",
-  "item_annotations": [
-    {"file": "pkg/parser/golang.go", "comment": "**Highest risk file**. 2100 lines with 15 functions over complexity 20. Consider splitting by AST node type: `golang_decl.go`, `golang_expr.go`, `golang_stmt.go`."},
-    {"file": "pkg/parser/python.go", "comment": "Second highest. The `parseDecorators` function alone has cyclomatic 35 - extract decorator handling to separate module."}
-  ]
-}
-```
-
-**satd.json**
-```json
-{
-  "section_insight": "Found **47 SATD markers** across the codebase. 8 are CRITICAL (FIXME/XXX), concentrated in `pkg/auth/` - these may indicate security concerns that were never addressed.",
-  "item_annotations": [
-    {"file": "pkg/auth/oauth.go", "line": 142, "comment": "**Security concern**: FIXME about token validation bypass. Investigate immediately - may be a vulnerability."},
-    {"file": "pkg/api/handler.go", "line": 89, "comment": "XXX marker about race condition in concurrent requests. Add mutex or use sync.Once."}
-  ]
-}
-```
-
-**flags.json**
-```json
-{
-  "section_insight": "Found **11 stale feature flags** over 2 years old. The oldest (`enable_legacy_auth`) dates to 2019 and is referenced in 8 files. These represent cleanup opportunities and potential security risks.",
-  "item_annotations": [
-    {"flag": "enable_legacy_auth", "priority": "CRITICAL", "introduced_at": "2019-03-15T10:00:00Z", "comment": "**5 years old**, referenced in auth middleware. Likely fully rolled out - verify in LaunchDarkly dashboard then remove."},
-    {"flag": "new_pricing_engine", "priority": "HIGH", "introduced_at": "2022-06-01T00:00:00Z", "comment": "2.5 years old, spread across 12 files in `billing/`. Check rollout percentage before cleanup."}
-  ]
-}
-```
-Note: Copy `priority` and `introduced_at` from flags.json data (`priority.level` and `staleness.introduced_at` fields)
-
-**duplication.json, churn.json**
-```json
-{
-  "section_insight": "Duplication is concentrated in **error handling patterns** - the same try/catch/log/rethrow pattern appears 23 times across `pkg/api/`. Consider extracting a `handleAPIError()` utility or using middleware."
-}
-```
+---
 
 ## Step 5: Validate
-
-After all analysis tasks complete (including Step 4):
 
 ```bash
 omen report validate -d <output-dir>/
 ```
-
-This checks:
-- All required data files exist and are valid JSON
-- All insight files (if present) are valid JSON
 
 ## Step 6: Render HTML
 
 ```bash
 omen report render -d <output-dir>/ -o report.html
 ```
-
-Open in browser to verify insights render correctly in the report.
-
-## Communication Principles
-
-When writing insights:
-
-1. **Name specific files** - "The Order model at app/models/order.rb" not "some classes"
-2. **Include numbers** - "3,000 lines with 250 methods" not "large class"
-3. **Explain impact** - "Changes here break 173 dependents" not "high coupling"
-4. **Be direct** - If it's a crisis, say "critical" not "could use attention"
-5. **Suggest actions** - "Extract pricing logic to OrderPricing" not "consider refactoring"
-
-Use analytical language:
-- "Declined from 98 to 55" not "crashed"
-- "11 flags over 3 years old" not "many stale flags"
-- Reference specific commits/PRs when explaining trend changes
