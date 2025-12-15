@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.7.0](https://github.com/panbanda/omen/compare/omen-v2.6.3...omen-v2.7.0) (2025-12-15)
+
+
+### Features
+
+* **report:** add HTML health report generation ([#172](https://github.com/panbanda/omen/issues/172)) ([52b1a88](https://github.com/panbanda/omen/commit/52b1a8856c8bf1003f6c0d49201b345667904b68))
+
+
+### Bug Fixes
+
+* **release:** separate marketplace.json into own release-please package ([#173](https://github.com/panbanda/omen/issues/173)) ([75d5a54](https://github.com/panbanda/omen/commit/75d5a54d165ae4d8a004f4667b0c25f1bae60697))
+
 ## [2.6.3](https://github.com/panbanda/omen/compare/omen-v2.6.2...omen-v2.6.3) (2025-12-14)
 
 

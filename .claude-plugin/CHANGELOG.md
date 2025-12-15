@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.1](https://github.com/panbanda/omen/compare/omen-v2.0.0...omen-marketplace-v2.0.1) (2025-12-15)
+
+
+### Bug Fixes
+
+* **release:** separate marketplace.json into own release-please package ([#173](https://github.com/panbanda/omen/issues/173)) ([75d5a54](https://github.com/panbanda/omen/commit/75d5a54d165ae4d8a004f4667b0c25f1bae60697))
+
 ## [2.0.0](https://github.com/panbanda/omen/compare/omen-skills-v1.3.0...omen-skills-v2.0.0) (2025-12-09)
 
 
