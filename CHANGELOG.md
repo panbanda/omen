@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.8.0](https://github.com/panbanda/omen/compare/omen-v2.7.0...omen-v2.8.0) (2025-12-15)
+
+
+### Features
+
+* **report:** enhance HTML report with datatables, markdown, and generate-report command ([#176](https://github.com/panbanda/omen/issues/176)) ([76c4dd8](https://github.com/panbanda/omen/commit/76c4dd89a3c71dba782afb1f7182dc1da3aeac78))
+
 ## [2.7.0](https://github.com/panbanda/omen/compare/omen-v2.6.3...omen-v2.7.0) (2025-12-15)
 
 
