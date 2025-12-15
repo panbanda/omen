@@ -12,10 +12,17 @@
           "type": "json",
           "path": "plugin.json",
           "jsonpath": "$.version"
-        },
+        }
+      ]
+    },
+    ".claude-plugin": {
+      "release-type": "simple",
+      "component": "omen-marketplace",
+      "skip-github-release": true,
+      "extra-files": [
         {
           "type": "json",
-          "path": "../.claude-plugin/marketplace.json",
+          "path": "marketplace.json",
           "jsonpath": "$.metadata.version"
         }
       ]
