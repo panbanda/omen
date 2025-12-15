@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Repository Health Report - {{.Metadata.Repository}}</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Cpath fill='%237A4A22' d='M160 90C160 60 352 60 352 90L352 130L160 130Z'/%3E%3Crect fill='%235E3618' x='140' y='130' width='232' height='28' rx='14'/%3E%3Cellipse fill='%233B8C8E' cx='138' cy='220' rx='28' ry='42'/%3E%3Cellipse fill='%233B8C8E' cx='374' cy='220' rx='28' ry='42'/%3E%3Cpath fill='%234FA3A5' d='M128 180C128 130 384 130 384 180V360C384 410 128 410 128 360Z'/%3E%3Cellipse fill='%23FFFFFF' cx='220' cy='240' rx='34' ry='38'/%3E%3Cellipse fill='%23FFFFFF' cx='292' cy='240' rx='34' ry='38'/%3E%3Ccircle fill='%231B1B1B' cx='228' cy='252' r='10'/%3E%3Ccircle fill='%231B1B1B' cx='300' cy='252' r='10'/%3E%3Cellipse fill='%232A2A2A' cx='256' cy='286' rx='14' ry='10'/%3E%3Crect fill='%23F2F2F2' x='242' y='304' width='12' height='24' rx='3'/%3E%3Crect fill='%23F2F2F2' x='258' y='304' width='12' height='24' rx='3'/%3E%3Cg transform='translate(330 260)'%3E%3Ccircle fill='%23C9B36D' cx='0' cy='0' r='56'/%3E%3Ccircle fill='%23FFF6D5' cx='0' cy='0' r='42'/%3E%3Crect fill='%236A4020' x='40' y='40' width='90' height='14' rx='7' transform='rotate(35)'/%3E%3C/g%3E%3Cpath fill='%233B8C8E' d='M128 330C180 360 332 360 384 330V360C384 410 128 410 128 360Z' opacity='0.6'/%3E%3C/svg%3E">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/simple-datatables@9/dist/style.min.css">
@@ -705,35 +706,40 @@
             gap: 0.35rem;
         }
 
-        .report-branding {
-            display: flex;
-            flex-direction: column;
-            align-items: flex-end;
-            gap: 0.25rem;
-        }
-
         .report-branding a {
             color: var(--text-primary);
             text-decoration: none;
-            font-weight: 600;
-            font-size: 1.1rem;
             display: flex;
             align-items: center;
-            gap: 0.4rem;
+            gap: 0.5rem;
         }
 
         .report-branding a:hover {
             color: var(--accent-blue);
         }
 
-        .report-branding .tagline {
-            color: var(--text-secondary);
-            font-size: 0.75rem;
+        .branding-text {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            line-height: 1.2;
+            text-align: right;
+        }
+
+        .branding-name {
+            font-weight: 600;
+            font-size: 1rem;
+        }
+
+        .branding-version {
+            color: var(--text-muted);
+            font-size: 0.65rem;
+            opacity: 0.7;
         }
 
         .omen-logo {
-            width: 24px;
-            height: 24px;
+            width: 32px;
+            height: 32px;
         }
 
         /* Footer */
@@ -901,17 +907,11 @@
             </div>
             <div class="report-branding">
                 <a href="https://github.com/panbanda/omen" target="_blank">
-                    <svg class="omen-logo" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <circle cx="50" cy="50" r="45" stroke="currentColor" stroke-width="6"/>
-                        <circle cx="50" cy="50" r="20" fill="currentColor"/>
-                        <path d="M50 5 L50 25" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
-                        <path d="M50 75 L50 95" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
-                        <path d="M5 50 L25 50" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
-                        <path d="M75 50 L95 50" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
-                    </svg>
-                    Omen
+                    <span class="branding-text">
+                        <span class="branding-name">omen</span>
+                        <span class="branding-version">{{.Metadata.OmenVersion}}</span>
+                    </span>
                 </a>
-                <span class="tagline">Code Health Intelligence</span>
             </div>
         </header>
 
