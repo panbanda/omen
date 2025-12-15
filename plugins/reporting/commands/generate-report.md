@@ -14,24 +14,18 @@ Generate a complete HTML health report with LLM-generated insights.
 
 ## Step 3: Spawn Analysts (In Parallel)
 
-Launch all 9 agents simultaneously using the Task tool. Each reads its data file and writes an insight file.
-
-For each agent, provide:
-1. The data file path to read
-2. The insight file path to write
-3. The output format below
+Launch all 9 agents simultaneously using the Task tool.
 
 ---
 
 ### Hotspot Analyst
-**Read**: `<output-dir>/hotspots.json`
-**Write**: `<output-dir>/insights/hotspots.json`
+**Read**: `<dir>/hotspots.json` | **Write**: `<dir>/insights/hotspots.json`
 
 ```json
 {
-  "section_insight": "Narrative about patterns found, specific files, risk levels.",
+  "section_insight": "string - narrative about patterns",
   "item_annotations": [
-    {"file": "path/to/file.go", "comment": "Risk level. Why. Action."}
+    {"file": "path/to/file.go", "comment": "string"}
   ]
 }
 ```
@@ -39,14 +33,13 @@ For each agent, provide:
 ---
 
 ### SATD Analyst
-**Read**: `<output-dir>/satd.json`
-**Write**: `<output-dir>/insights/satd.json`
+**Read**: `<dir>/satd.json` | **Write**: `<dir>/insights/satd.json`
 
 ```json
 {
-  "section_insight": "Narrative about debt patterns, security concerns, age.",
+  "section_insight": "string",
   "item_annotations": [
-    {"file": "path/to/file.go", "line": 142, "comment": "Severity. Context. Action."}
+    {"file": "path/to/file.go", "line": 142, "comment": "string"}
   ]
 }
 ```
@@ -54,14 +47,13 @@ For each agent, provide:
 ---
 
 ### Ownership Analyst
-**Read**: `<output-dir>/ownership.json`
-**Write**: `<output-dir>/insights/ownership.json`
+**Read**: `<dir>/ownership.json` | **Write**: `<dir>/insights/ownership.json`
 
 ```json
 {
-  "section_insight": "Narrative about bus factor risks, knowledge silos.",
+  "section_insight": "string",
   "item_annotations": [
-    {"file": "path/to/file.go", "comment": "Risk type. Who owns it. Action."}
+    {"file": "path/to/file.go", "comment": "string"}
   ]
 }
 ```
@@ -69,53 +61,35 @@ For each agent, provide:
 ---
 
 ### Duplicates Analyst
-**Read**: `<output-dir>/duplicates.json`
-**Write**: `<output-dir>/insights/duplication.json`
+**Read**: `<dir>/duplicates.json` | **Write**: `<dir>/insights/duplication.json`
 
 ```json
 {
-  "section_insight": "Narrative about clone patterns and missing abstractions."
+  "section_insight": "string"
 }
 ```
 
 ---
 
 ### Churn Analyst
-**Read**: `<output-dir>/churn.json`
-**Write**: `<output-dir>/insights/churn.json`
+**Read**: `<dir>/churn.json` | **Write**: `<dir>/insights/churn.json`
 
 ```json
 {
-  "section_insight": "Narrative about churn concentration and instability patterns."
-}
-```
-
----
-
-### Cohesion Analyst
-**Read**: `<output-dir>/cohesion.json`
-**Write**: `<output-dir>/insights/cohesion.json`
-
-```json
-{
-  "section_insight": "Narrative about god classes and coupling issues.",
-  "item_annotations": [
-    {"class": "ClassName", "file": "path.go", "wmc": 147, "lcom": 89, "comment": "Issue. Split recommendation."}
-  ]
+  "section_insight": "string"
 }
 ```
 
 ---
 
 ### Flags Analyst
-**Read**: `<output-dir>/flags.json`
-**Write**: `<output-dir>/insights/flags.json`
+**Read**: `<dir>/flags.json` | **Write**: `<dir>/insights/flags.json`
 
 ```json
 {
-  "section_insight": "Narrative about stale flags and cleanup priorities.",
+  "section_insight": "string",
   "item_annotations": [
-    {"flag": "flag_name", "priority": "CRITICAL", "comment": "Age. Context. Removal steps."}
+    {"flag": "flag_name", "priority": "CRITICAL|HIGH|MEDIUM|LOW", "introduced_at": "ISO8601", "comment": "string"}
   ]
 }
 ```
@@ -123,14 +97,13 @@ For each agent, provide:
 ---
 
 ### Trends Analyst
-**Read**: `<output-dir>/trend.json`, `<output-dir>/score.json`
-**Write**: `<output-dir>/insights/trends.json`
+**Read**: `<dir>/trend.json`, `<dir>/score.json` | **Write**: `<dir>/insights/trends.json`
 
 ```json
 {
-  "section_insight": "Narrative about trajectory and inflection points.",
+  "section_insight": "string",
   "score_annotations": [
-    {"date": "2024-03", "label": "Short label", "change": 8, "description": "What happened"}
+    {"date": "2024-03", "label": "string", "change": 8, "description": "string"}
   ],
   "historical_events": [
     {"period": "Mar 2024", "change": 8, "primary_driver": "complexity", "releases": ["v2.1.0"]}
@@ -141,25 +114,39 @@ For each agent, provide:
 ---
 
 ### Components Analyst
-**Read**: `<output-dir>/trend.json`, `<output-dir>/cohesion.json`, `<output-dir>/smells.json`, `<output-dir>/score.json`
-**Write**: `<output-dir>/insights/components.json`
+**Read**: `<dir>/trend.json`, `<dir>/cohesion.json`, `<dir>/smells.json`, `<dir>/score.json` | **Write**: `<dir>/insights/components.json`
 
 ```json
 {
   "component_insights": {
-    "complexity": "Narrative about complexity trends.",
-    "duplication": "...",
-    "coupling": "...",
-    "cohesion": "...",
-    "smells": "...",
-    "satd": "...",
-    "tdg": "..."
+    "complexity": "string",
+    "duplication": "string",
+    "coupling": "string",
+    "cohesion": "string",
+    "smells": "string",
+    "satd": "string",
+    "tdg": "string"
   },
   "component_annotations": {
-    "complexity": [{"date": "2024-03", "label": "Label", "from": 72, "to": 85, "description": "What happened"}]
+    "complexity": [{"date": "2024-03", "label": "string", "from": 72, "to": 85, "description": "string"}]
   },
   "component_events": [
-    {"period": "Mar 2024", "component": "complexity", "from": 72, "to": 85, "context": "Explanation"}
+    {"period": "Mar 2024", "component": "complexity", "from": 72, "to": 85, "context": "string"}
+  ]
+}
+```
+
+---
+
+### Patterns Analyst
+**Read**: All data files | **Write**: `<dir>/insights/patterns.json`
+
+Look for cross-cutting observations that span multiple analysis types.
+
+```json
+{
+  "patterns": [
+    {"category": "string", "insight": "string"}
   ]
 }
 ```
@@ -168,21 +155,18 @@ For each agent, provide:
 
 ## Step 4: Summary (After All Complete)
 
-Wait for all 9 analysts to finish, then spawn the Summary Analyst.
+Wait for all analysts to finish, then spawn the Summary Analyst.
 
-**Read**: All insight files from `<output-dir>/insights/` plus `<output-dir>/score.json`
-**Write**: `<output-dir>/insights/summary.json`
+**Read**: All `<dir>/insights/*.json` plus `<dir>/score.json` | **Write**: `<dir>/insights/summary.json`
 
 ```json
 {
-  "executive_summary": "## Overview\n\nMarkdown narrative...",
-  "key_findings": [
-    "**Category**: Specific finding with numbers..."
-  ],
+  "executive_summary": "markdown string",
+  "key_findings": ["string", "string"],
   "recommendations": {
-    "high_priority": [{"title": "Action", "description": "What, why, impact"}],
-    "medium_priority": [...],
-    "ongoing": [...]
+    "high_priority": [{"title": "string", "description": "string"}],
+    "medium_priority": [{"title": "string", "description": "string"}],
+    "ongoing": [{"title": "string", "description": "string"}]
   }
 }
 ```
