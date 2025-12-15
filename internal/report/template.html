@@ -464,6 +464,23 @@
         .badge.medium { background: #58a6ff33; color: var(--accent-blue); }
         .badge.low { background: #3fb95033; color: var(--accent-green); }
 
+        .files-badge {
+            display: inline-block;
+            padding: 0.15rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            background: var(--bg-tertiary);
+            color: var(--accent-blue);
+            cursor: help;
+            border: 1px solid var(--border-color);
+        }
+
+        .files-badge:hover {
+            background: var(--bg-secondary);
+            border-color: var(--accent-blue);
+        }
+
         /* Tooltips */
         .tooltip {
             cursor: help;
@@ -491,6 +508,9 @@
 
         .tippy-content {
             padding: 0.5rem 0.75rem;
+            white-space: pre-wrap;
+            max-width: 500px;
+            word-break: break-all;
         }
 
         /* Narrative */
@@ -1069,7 +1089,7 @@
                     <tbody>
                         {{range .Hotspots.Files}}
                         <tr>
-                            <td><code>{{truncatePath .Path 60}}</code></td>
+                            <td><code>{{truncatePath (relPath .Path $.Metadata.Paths) 60}}</code></td>
                             <td><span class="badge {{hotspotBadge .HotspotScore}}">{{printf "%.3f" .HotspotScore}}</span></td>
                             <td>{{.Commits}}</td>
                             <td>{{printf "%.1f" .AvgCognitive}}</td>
@@ -1112,7 +1132,7 @@
                             <td><code>{{.FlagKey}}</code></td>
                             <td><span class="badge {{.Priority.Level | priorityBadge}}">{{.Priority.Level}}</span></td>
                             <td><span class="time-ago" data-timestamp="{{.Staleness.IntroducedAt}}"></span></td>
-                            <td>{{.Complexity.FileSpread}}</td>
+                            <td><span class="files-badge tooltip" data-tooltip="{{flagFilesTooltip .References $.Metadata.Paths}}">{{.Complexity.FileSpread}} file{{if ne .Complexity.FileSpread 1}}s{{end}}</span></td>
                             <td>{{.Provider}}</td>
                         </tr>
                         {{end}}
@@ -1228,7 +1248,7 @@
                         <tr>
                             <td><span class="badge {{lower .Severity}}">{{.Severity}}</span></td>
                             <td>{{.Category}}</td>
-                            <td><code>{{truncatePath .File 50}}</code></td>
+                            <td><code>{{truncatePath (relPath .File $.Metadata.Paths) 50}}</code></td>
                             <td>{{.Line}}</td>
                         </tr>
                         {{end}}
@@ -1645,15 +1665,6 @@
             el.title = dateFns.format(date, 'MMM d, yyyy');
         });
 
-        // Initialize tooltips with Tippy.js
-        tippy('.tooltip', {
-            content: (el) => el.getAttribute('data-tooltip'),
-            placement: 'bottom',
-            arrow: true,
-            maxWidth: 300,
-            appendTo: document.body
-        });
-
         // Initialize Simple-DataTables on all data tables
         const dataTableConfig = {
             perPage: 15,
@@ -1674,6 +1685,15 @@
             if (table && table.querySelector('tbody tr')) {
                 new simpleDatatables.DataTable(table, dataTableConfig);
             }
+        });
+
+        // Initialize tooltips with Tippy.js (after DataTables to catch cloned elements)
+        tippy('.tooltip', {
+            content: (el) => el.getAttribute('data-tooltip'),
+            placement: 'bottom',
+            arrow: true,
+            maxWidth: 300,
+            appendTo: document.body
         });
     </script>
 

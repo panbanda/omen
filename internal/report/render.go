@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"io"
 	"os"
@@ -218,6 +219,16 @@ func NewRenderer() (*Renderer, error) {
 	)
 
 	funcMap := template.FuncMap{
+		"relPath": func(path string, roots []string) string {
+			if len(roots) == 0 {
+				return path
+			}
+			root := roots[0]
+			if !strings.HasSuffix(root, "/") {
+				root += "/"
+			}
+			return strings.TrimPrefix(path, root)
+		},
 		"markdown": func(s string) template.HTML {
 			var buf bytes.Buffer
 			if err := md.Convert([]byte(s), &buf); err != nil {
@@ -367,6 +378,32 @@ func NewRenderer() (*Renderer, error) {
 			default:
 				return "0"
 			}
+		},
+		"flagFilesTooltip": func(refs []FlagReference, roots []string) string {
+			if len(refs) == 0 {
+				return "No file references"
+			}
+			root := ""
+			if len(roots) > 0 {
+				root = roots[0]
+				if !strings.HasSuffix(root, "/") {
+					root += "/"
+				}
+			}
+			seen := make(map[string][]uint32)
+			for _, ref := range refs {
+				file := strings.TrimPrefix(ref.File, root)
+				seen[file] = append(seen[file], ref.Line)
+			}
+			var lines []string
+			for file, lineNums := range seen {
+				var lineStrs []string
+				for _, ln := range lineNums {
+					lineStrs = append(lineStrs, fmt.Sprintf("%d", ln))
+				}
+				lines = append(lines, fmt.Sprintf("%s:%s", file, strings.Join(lineStrs, ",")))
+			}
+			return strings.Join(lines, "\n")
 		},
 	}
 

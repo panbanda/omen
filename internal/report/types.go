@@ -153,11 +153,19 @@ type FlagsData struct {
 
 // FlagItem represents a single feature flag.
 type FlagItem struct {
-	FlagKey    string         `json:"flag_key"`
-	Provider   string         `json:"provider"`
-	Priority   FlagPriority   `json:"priority"`
-	Complexity FlagComplexity `json:"complexity"`
-	Staleness  FlagStaleness  `json:"staleness"`
+	FlagKey    string          `json:"flag_key"`
+	Provider   string          `json:"provider"`
+	Priority   FlagPriority    `json:"priority"`
+	Complexity FlagComplexity  `json:"complexity"`
+	Staleness  FlagStaleness   `json:"staleness"`
+	References []FlagReference `json:"references,omitempty"`
+}
+
+// FlagReference represents a single occurrence of a feature flag in code.
+type FlagReference struct {
+	File   string `json:"file"`
+	Line   uint32 `json:"line"`
+	Column uint32 `json:"column"`
 }
 
 // FlagPriority contains flag priority scoring.
