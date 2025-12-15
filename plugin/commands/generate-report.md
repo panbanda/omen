@@ -79,32 +79,42 @@ Launch ALL of these simultaneously:
 #### Task 3: Hotspots Analysis
 - **Input**: `hotspots.json`
 - **Output**: `insights/hotspots.json`
-- **Prompt**: Analyze top hotspots. Identify patterns (are they concentrated in one area?). Write section insight and annotate top files with why they're risky and what to do.
+- **Prompt**: Analyze the hotspot data. Generate:
+  1. `section_insight`: Narrative about patterns (are hotspots concentrated? what's the risk?)
+  2. `item_annotations`: Array with top 5-10 hotspot files, each with `file` and `comment` explaining why it's risky and what to do about it
 
 #### Task 4: Technical Debt (SATD) Analysis
 - **Input**: `satd.json`
 - **Output**: `insights/satd.json`
-- **Prompt**: Analyze SATD items by severity and category. Prioritize security-related items. Write section insight and annotate critical items with context.
+- **Prompt**: Analyze SATD items by severity and category. Generate:
+  1. `section_insight`: Narrative about debt patterns (categories, severity distribution, security concerns)
+  2. `item_annotations`: Array with critical/high severity items, each with `file`, `line`, and `comment` explaining context and priority
 
 #### Task 5: Feature Flags Analysis
 - **Input**: `flags.json`
 - **Output**: `insights/flags.json`
-- **Prompt**: Analyze stale feature flags. Identify cleanup candidates. Write section insight about flag hygiene and annotate critical flags with recommended action.
+- **Prompt**: Analyze stale feature flags. Generate:
+  1. `section_insight`: Narrative about flag hygiene (how many stale, oldest flags, cleanup opportunities)
+  2. `item_annotations`: Array with CRITICAL and HIGH priority flags, each with `flag`, `priority`, `introduced_at` (copy from data), and `comment` with cleanup recommendation
 
 #### Task 6: Ownership Analysis
 - **Input**: `ownership.json`
 - **Output**: `insights/ownership.json`
-- **Prompt**: Analyze bus factor and knowledge silos. Identify files with single-owner risk. Write section insight and annotate high-risk files.
+- **Prompt**: Analyze bus factor and knowledge silos. Generate:
+  1. `section_insight`: Narrative about ownership risks (bus factor, silo count, key contributors)
+  2. `item_annotations`: Array with highest-risk files (single owner, critical code), each with `file` and `comment` explaining the risk
 
 #### Task 7: Duplication Analysis
 - **Input**: `duplicates.json`
 - **Output**: `insights/duplication.json`
-- **Prompt**: Analyze clone patterns. Identify what abstractions are missing. Write section insight about duplication patterns.
+- **Prompt**: Analyze clone patterns. Generate:
+  1. `section_insight`: Narrative about what's duplicated, what abstractions are missing, and which clone groups are highest priority to fix
 
 #### Task 8: Churn Analysis
 - **Input**: `churn.json`
 - **Output**: `insights/churn.json`
-- **Prompt**: Analyze file change patterns. Identify unstable areas. Write section insight about churn patterns.
+- **Prompt**: Analyze file change patterns. Generate:
+  1. `section_insight`: Narrative about churn patterns (which areas are unstable, who's changing what, any concerning trends)
 
 ### Step 3b: Generate Executive Summary (After Parallel Tasks)
 
@@ -197,13 +207,24 @@ All text fields support **GitHub-flavored markdown** including: bold, italics, c
 }
 ```
 
-**hotspots.json, satd.json, ownership.json**
+**hotspots.json, ownership.json**
 ```json
 {
   "section_insight": "The top 5 hotspots are all in `pkg/parser/` - this package combines **high complexity** (avg cyclomatic 18) with **high churn** (45 commits in 90 days). This concentration suggests the parser abstraction isn't working well.",
   "item_annotations": [
     {"file": "pkg/parser/golang.go", "comment": "**Highest risk file**. 2100 lines with 15 functions over complexity 20. Consider splitting by AST node type: `golang_decl.go`, `golang_expr.go`, `golang_stmt.go`."},
     {"file": "pkg/parser/python.go", "comment": "Second highest. The `parseDecorators` function alone has cyclomatic 35 - extract decorator handling to separate module."}
+  ]
+}
+```
+
+**satd.json**
+```json
+{
+  "section_insight": "Found **47 SATD markers** across the codebase. 8 are CRITICAL (FIXME/XXX), concentrated in `pkg/auth/` - these may indicate security concerns that were never addressed.",
+  "item_annotations": [
+    {"file": "pkg/auth/oauth.go", "line": 142, "comment": "**Security concern**: FIXME about token validation bypass. Investigate immediately - may be a vulnerability."},
+    {"file": "pkg/api/handler.go", "line": 89, "comment": "XXX marker about race condition in concurrent requests. Add mutex or use sync.Once."}
   ]
 }
 ```
