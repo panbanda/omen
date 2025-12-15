@@ -163,7 +163,7 @@ Each subagent should:
 }
 ```
 
-**hotspots.json, satd.json, ownership.json, flags.json**
+**hotspots.json, satd.json, ownership.json**
 ```json
 {
   "section_insight": "Pattern analysis narrative",
@@ -172,6 +172,17 @@ Each subagent should:
   ]
 }
 ```
+
+**flags.json**
+```json
+{
+  "section_insight": "Pattern analysis narrative",
+  "item_annotations": [
+    {"flag": "flag_name", "priority": "CRITICAL", "introduced_at": "2016-10-19T20:11:47Z", "comment": "Why this flag should be cleaned up"}
+  ]
+}
+```
+Note: Copy priority and introduced_at from flags.json data (staleness.introduced_at field)
 
 **duplication.json, churn.json**
 ```json

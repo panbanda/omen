@@ -133,8 +133,10 @@ type DuplicationInsight struct {
 
 // FlagAnnotation represents an LLM comment on a feature flag.
 type FlagAnnotation struct {
-	Flag    string `json:"flag"`
-	Comment string `json:"comment"`
+	Flag         string `json:"flag"`
+	Priority     string `json:"priority"`      // CRITICAL, HIGH, MEDIUM, LOW
+	IntroducedAt string `json:"introduced_at"` // ISO 8601 timestamp
+	Comment      string `json:"comment"`
 }
 
 // FlagsInsight contains feature flags analysis.

@@ -1,6 +1,7 @@
 package report
 
 import (
+	"bytes"
 	"embed"
 	"encoding/json"
 	"html/template"
@@ -9,6 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/renderer/html"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
@@ -28,6 +32,8 @@ type RenderData struct {
 	Churn              *ChurnData
 	Ownership          *OwnershipData
 	Duplicates         *DuplicatesData
+	Cohesion           *CohesionData
+	Flags              *FlagsData
 	Trend              *TrendData
 	Summary            *SummaryInsight
 	HotspotsInsight    *HotspotsInsight
@@ -37,6 +43,7 @@ type RenderData struct {
 	DuplicationInsight *DuplicationInsight
 	ComponentsInsight  *ComponentsInsight
 	FlagsInsight       *FlagsInsight
+	OwnershipInsight   *OwnershipInsight
 	ComponentTrends    map[string]ComponentTrendStats
 	SATDStats          *SATDStats
 }
@@ -174,6 +181,66 @@ type DuplicatesSummary struct {
 	DuplicationRatio float64 `json:"duplication_ratio"`
 }
 
+// CohesionData represents the cohesion.json structure.
+type CohesionData struct {
+	Classes []CohesionClass `json:"classes"`
+}
+
+// CohesionClass represents a single class's CK metrics.
+type CohesionClass struct {
+	Path      string `json:"path"`
+	ClassName string `json:"class_name"`
+	Language  string `json:"language"`
+	WMC       int    `json:"wmc"`
+	CBO       int    `json:"cbo"`
+	RFC       int    `json:"rfc"`
+	LCOM      int    `json:"lcom"`
+	DIT       int    `json:"dit"`
+	NOC       int    `json:"noc"`
+	NOM       int    `json:"nom"`
+	NOF       int    `json:"nof"`
+	LOC       int    `json:"loc"`
+}
+
+// FlagsData represents the flags.json structure.
+type FlagsData struct {
+	Flags   []FlagItem   `json:"flags"`
+	Summary FlagsSummary `json:"summary"`
+}
+
+// FlagItem represents a single feature flag.
+type FlagItem struct {
+	FlagKey    string         `json:"flag_key"`
+	Provider   string         `json:"provider"`
+	Priority   FlagPriority   `json:"priority"`
+	Complexity FlagComplexity `json:"complexity"`
+	Staleness  FlagStaleness  `json:"staleness"`
+}
+
+// FlagPriority contains flag priority scoring.
+type FlagPriority struct {
+	Score float64 `json:"score"`
+	Level string  `json:"level"`
+}
+
+// FlagComplexity contains flag complexity metrics.
+type FlagComplexity struct {
+	FileSpread int `json:"file_spread"`
+}
+
+// FlagStaleness contains flag staleness metrics.
+type FlagStaleness struct {
+	IntroducedAt string `json:"introduced_at"`
+}
+
+// FlagsSummary contains aggregate flag metrics.
+type FlagsSummary struct {
+	TotalFlags    int            `json:"total_flags"`
+	ByPriority    map[string]int `json:"by_priority"`
+	ByProvider    map[string]int `json:"by_provider"`
+	AvgFileSpread float64        `json:"avg_file_spread"`
+}
+
 // TrendData represents the trend.json structure.
 type TrendData struct {
 	Points          []TrendPoint                   `json:"points"`
@@ -205,7 +272,19 @@ type Renderer struct {
 
 // NewRenderer creates a new renderer with the embedded template.
 func NewRenderer() (*Renderer, error) {
+	md := goldmark.New(
+		goldmark.WithExtensions(extension.GFM),
+		goldmark.WithRendererOptions(html.WithHardWraps()),
+	)
+
 	funcMap := template.FuncMap{
+		"markdown": func(s string) template.HTML {
+			var buf bytes.Buffer
+			if err := md.Convert([]byte(s), &buf); err != nil {
+				return template.HTML(template.HTMLEscapeString(s))
+			}
+			return template.HTML(buf.String())
+		},
 		"scoreClass": func(score int) string {
 			if score >= 80 {
 				return "good"
@@ -226,6 +305,18 @@ func NewRenderer() (*Renderer, error) {
 				return "medium"
 			}
 			return "low"
+		},
+		"priorityBadge": func(priority string) string {
+			switch strings.ToUpper(priority) {
+			case "CRITICAL":
+				return "critical"
+			case "HIGH":
+				return "high"
+			case "MEDIUM":
+				return "medium"
+			default:
+				return "low"
+			}
 		},
 		"churnBadge": func(score float64) string {
 			// Churn scores are relative to repo max. P95 is typically ~0.01.
@@ -254,6 +345,16 @@ func NewRenderer() (*Renderer, error) {
 				}
 				return v
 			case []ChurnFile:
+				if len(v) > n {
+					return v[:n]
+				}
+				return v
+			case []CohesionClass:
+				if len(v) > n {
+					return v[:n]
+				}
+				return v
+			case []FlagItem:
 				if len(v) > n {
 					return v[:n]
 				}
@@ -490,6 +591,18 @@ func (r *Renderer) loadData(dataDir string) (*RenderData, error) {
 		data.Duplicates = duplicates
 	}
 
+	// Load cohesion (optional)
+	cohesion := &CohesionData{}
+	if err := loadJSON(filepath.Join(dataDir, "cohesion.json"), cohesion); err == nil {
+		data.Cohesion = cohesion
+	}
+
+	// Load flags (optional)
+	flags := &FlagsData{}
+	if err := loadJSON(filepath.Join(dataDir, "flags.json"), flags); err == nil {
+		data.Flags = flags
+	}
+
 	// Load trend (optional)
 	trend := &TrendData{}
 	if err := loadJSON(filepath.Join(dataDir, "trend.json"), trend); err == nil {
@@ -546,6 +659,12 @@ func (r *Renderer) loadData(dataDir string) (*RenderData, error) {
 		flagsInsight := &FlagsInsight{}
 		if err := loadJSON(filepath.Join(insightsDir, "flags.json"), flagsInsight); err == nil {
 			data.FlagsInsight = flagsInsight
+		}
+
+		// Load ownership insight
+		ownershipInsight := &OwnershipInsight{}
+		if err := loadJSON(filepath.Join(insightsDir, "ownership.json"), ownershipInsight); err == nil {
+			data.OwnershipInsight = ownershipInsight
 		}
 	}
 

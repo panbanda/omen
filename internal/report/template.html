@@ -6,6 +6,9 @@
     <title>Repository Health Report - {{.Metadata.Repository}}</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/simple-datatables@9/dist/style.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/simple-datatables@9"></script>
+    <script src="https://cdn.jsdelivr.net/npm/date-fns@4/cdn.min.js"></script>
     <style>
         :root {
             --bg-primary: #0d1117;
@@ -19,6 +22,7 @@
             --accent-red: #f85149;
             --accent-blue: #58a6ff;
             --accent-purple: #a371f7;
+            --sidebar-width: 220px;
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -30,36 +34,121 @@
             line-height: 1.6;
         }
 
-        .container { max-width: 1400px; margin: 0 auto; padding: 2rem; }
+        /* Sidebar Navigation */
+        .sidebar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: var(--sidebar-width);
+            height: 100vh;
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border-color);
+            padding: 1.5rem 0;
+            overflow-y: auto;
+            z-index: 100;
+        }
 
-        header {
-            text-align: center;
-            margin-bottom: 2rem;
-            padding-bottom: 1.5rem;
+        .sidebar-header {
+            padding: 0 1rem 1rem;
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 1rem;
+        }
+
+        .sidebar-header h2 {
+            font-size: 1rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        .sidebar-score {
+            font-size: 2rem;
+            font-weight: bold;
+            margin-top: 0.25rem;
+        }
+
+        .sidebar-score.good { color: var(--accent-green); }
+        .sidebar-score.warning { color: var(--accent-yellow); }
+        .sidebar-score.danger { color: var(--accent-red); }
+
+        .nav-section {
+            padding: 0.5rem 0;
+        }
+
+        .nav-section-title {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-secondary);
+            padding: 0.5rem 1rem;
+            margin-top: 0.5rem;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.85rem;
+            transition: all 0.15s;
+        }
+
+        .nav-item:hover {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        .nav-item.active {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border-left: 2px solid var(--accent-blue);
+        }
+
+        .nav-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .nav-dot.good { background: var(--accent-green); }
+        .nav-dot.warning { background: var(--accent-yellow); }
+        .nav-dot.danger { background: var(--accent-red); }
+        .nav-dot.neutral { background: var(--text-secondary); }
+
+        /* Main Content */
+        .main-content {
+            margin-left: var(--sidebar-width);
+            padding: 2rem 3rem;
+            max-width: 1400px;
+        }
+
+        /* Hero Section */
+        .hero {
+            display: grid;
+            grid-template-columns: 200px 280px 1fr;
+            gap: 2rem;
+            align-items: center;
+            margin-bottom: 3rem;
+            padding-bottom: 2rem;
             border-bottom: 1px solid var(--border-color);
         }
 
-        h1 { font-size: 2.5rem; margin-bottom: 0.5rem; }
-        .subtitle { color: var(--text-secondary); font-size: 1.1rem; }
-
-        .score-hero {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            gap: 3rem;
-            margin: 2rem 0;
-            flex-wrap: wrap;
+        .hero-score {
+            text-align: center;
         }
 
         .score-circle {
-            width: 180px;
-            height: 180px;
+            width: 160px;
+            height: 160px;
             border-radius: 50%;
             display: flex;
             flex-direction: column;
             justify-content: center;
             align-items: center;
             position: relative;
+            margin: 0 auto;
         }
 
         .score-circle.good {
@@ -75,143 +164,352 @@
         .score-circle::before {
             content: '';
             position: absolute;
-            width: 140px;
-            height: 140px;
+            width: 130px;
+            height: 130px;
             background: var(--bg-primary);
             border-radius: 50%;
         }
 
-        .score-value { position: relative; font-size: 3rem; font-weight: bold; z-index: 1; }
-        .score-label { position: relative; color: var(--text-secondary); font-size: 0.85rem; z-index: 1; }
+        .score-value { position: relative; font-size: 2.5rem; font-weight: bold; z-index: 1; }
+        .score-label { position: relative; color: var(--text-secondary); font-size: 0.8rem; z-index: 1; }
 
-        .score-meta { text-align: left; }
-        .score-meta p { margin: 0.5rem 0; color: var(--text-secondary); }
-        .score-meta strong { color: var(--text-primary); }
+        .hero-trend {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-top: 0.5rem;
+        }
+        .hero-trend.down { color: var(--accent-red); }
+        .hero-trend.up { color: var(--accent-green); }
 
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 1.5rem;
-            margin: 2rem 0;
+        .hero-radar {
+            height: 200px;
         }
 
+        .hero-metrics {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1rem;
+        }
+
+        .metric-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1rem;
+        }
+
+        .metric-card-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+        }
+
+        .metric-card-label {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-top: 0.25rem;
+        }
+
+        .metric-card-value.good { color: var(--accent-green); }
+        .metric-card-value.warning { color: var(--accent-yellow); }
+        .metric-card-value.danger { color: var(--accent-red); }
+
+        /* Section Styles */
+        .section {
+            margin: 2.5rem 0;
+            scroll-margin-top: 1rem;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+        }
+
+        .section-header h2 {
+            font-size: 1.4rem;
+            font-weight: 600;
+        }
+
+        .section-subtitle {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            margin-bottom: 1rem;
+        }
+
+        /* Cards */
         .card {
             background: var(--bg-secondary);
             border: 1px solid var(--border-color);
             border-radius: 8px;
             padding: 1.5rem;
+            margin-bottom: 1rem;
         }
 
-        .card h2 {
-            font-size: 1.2rem;
+        .card h3 {
+            font-size: 1rem;
             margin-bottom: 1rem;
+            color: var(--text-primary);
+        }
+
+        .card.highlight-red { border-left: 4px solid var(--accent-red); }
+        .card.highlight-yellow { border-left: 4px solid var(--accent-yellow); }
+        .card.highlight-green { border-left: 4px solid var(--accent-green); }
+        .card.highlight-blue { border-left: 4px solid var(--accent-blue); }
+
+        /* Recommendations List */
+        .recommendations-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .recommendation-category {
+            font-size: 0.85rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.75rem;
             display: flex;
             align-items: center;
             gap: 0.5rem;
         }
 
-        .card.highlight-red {
-            border-left: 4px solid var(--accent-red);
-        }
-        .card.highlight-yellow {
-            border-left: 4px solid var(--accent-yellow);
-        }
-        .card.highlight-green {
-            border-left: 4px solid var(--accent-green);
-        }
-
-        .metric {
-            display: flex;
-            justify-content: space-between;
-            padding: 0.5rem 0;
-            border-bottom: 1px solid var(--border-color);
-        }
-        .metric:last-child { border-bottom: none; }
-        .metric-label { color: var(--text-secondary); }
-        .metric-value { font-weight: 600; }
-        .metric-value.good { color: var(--accent-green); }
-        .metric-value.warning { color: var(--accent-yellow); }
-        .metric-value.danger { color: var(--accent-red); }
-
-        .progress-bar {
-            height: 8px;
-            background: var(--bg-tertiary);
-            border-radius: 4px;
-            overflow: hidden;
-            margin-top: 0.5rem;
-        }
-        .progress-fill { height: 100%; border-radius: 4px; }
-        .progress-fill.good { background: var(--accent-green); }
-        .progress-fill.warning { background: var(--accent-yellow); }
-        .progress-fill.danger { background: var(--accent-red); }
-
-        .chart-container {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 1.5rem;
-            margin: 2rem 0;
-        }
-        .chart-container h2 { margin-bottom: 1rem; }
-        .chart-wrapper { position: relative; height: 400px; }
-
-        .section { margin: 3rem 0; }
-        .section h2 {
-            font-size: 1.5rem;
-            margin-bottom: 1rem;
-            padding-bottom: 0.5rem;
+        .recommendation-item {
+            padding: 0.75rem 0;
             border-bottom: 1px solid var(--border-color);
         }
 
-        table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
-        th, td { padding: 0.75rem; text-align: left; border-bottom: 1px solid var(--border-color); }
-        th { background: var(--bg-tertiary); font-weight: 600; color: var(--text-secondary); }
-        tr:hover { background: var(--bg-tertiary); }
+        .recommendation-item:last-child { border-bottom: none; }
 
-        .badge {
-            display: inline-block;
-            padding: 0.25rem 0.5rem;
-            border-radius: 4px;
-            font-size: 0.8rem;
-            font-weight: 600;
+        .recommendation-item strong {
+            display: block;
+            margin-bottom: 0.25rem;
         }
-        .badge.critical { background: #f8514933; color: var(--accent-red); }
-        .badge.high { background: #d2992233; color: var(--accent-yellow); }
-        .badge.medium { background: #58a6ff33; color: var(--accent-blue); }
-        .badge.low { background: #3fb95033; color: var(--accent-green); }
 
+        .recommendation-item > div {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+
+        .recommendation-item > div p {
+            margin: 0.25rem 0;
+        }
+
+        .recommendation-item > div p:first-child {
+            margin-top: 0;
+        }
+
+        /* Stats Grid */
         .stat-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
             gap: 1rem;
             margin: 1rem 0;
         }
+
         .stat-box {
             background: var(--bg-tertiary);
             padding: 1rem;
             border-radius: 8px;
             text-align: center;
         }
-        .stat-box .value { font-size: 2rem; font-weight: bold; }
-        .stat-box .label { color: var(--text-secondary); font-size: 0.85rem; }
 
-        .trend-indicator {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.25rem;
-            font-size: 0.9rem;
+        .stat-box .value {
+            font-size: 1.75rem;
+            font-weight: bold;
         }
-        .trend-indicator.down { color: var(--accent-red); }
-        .trend-indicator.up { color: var(--accent-green); }
-        .trend-indicator.stable { color: var(--text-secondary); }
 
-        /* Collapsible sections */
+        .stat-box .label {
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+            margin-top: 0.25rem;
+        }
+
+        /* Tables */
+        .table-container {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        /* Simple-DataTables dark theme overrides */
+        .datatable-wrapper {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .datatable-top, .datatable-bottom {
+            padding: 0.75rem 1rem;
+            background: var(--bg-secondary);
+        }
+
+        .datatable-search input {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+            padding: 0.5rem 0.75rem;
+        }
+
+        .datatable-search input::placeholder {
+            color: var(--text-secondary);
+        }
+
+        .datatable-search input:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+        }
+
+        .datatable-selector {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+            padding: 0.25rem 0.5rem;
+        }
+
+        .datatable-info {
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+        }
+
+        .datatable-pagination-list {
+            display: flex;
+            gap: 0.25rem;
+        }
+
+        .datatable-pagination-list-item-link {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            color: var(--text-primary);
+            padding: 0.25rem 0.5rem;
+            text-decoration: none;
+        }
+
+        .datatable-pagination-list-item-link:hover {
+            background: var(--bg-primary);
+        }
+
+        .datatable-pagination-list-item.datatable-active .datatable-pagination-list-item-link {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+        }
+
+        .datatable-pagination-list-item.datatable-disabled .datatable-pagination-list-item-link {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Simple-DataTables header sorting */
+        .datatable-table th {
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .datatable-table th:hover {
+            color: var(--text-primary);
+        }
+
+        .datatable-sorter {
+            color: var(--text-secondary);
+        }
+
+        .datatable-sorter::before,
+        .datatable-sorter::after {
+            border-color: var(--text-secondary) transparent;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            padding: 0.75rem 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        th {
+            background: var(--bg-tertiary);
+            font-weight: 600;
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+
+        tr:hover td {
+            background: var(--bg-tertiary);
+        }
+
+        /* Badges */
+        .badge {
+            display: inline-block;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .badge.critical { background: #f8514933; color: var(--accent-red); }
+        .badge.high { background: #d2992233; color: var(--accent-yellow); }
+        .badge.medium { background: #58a6ff33; color: var(--accent-blue); }
+        .badge.low { background: #3fb95033; color: var(--accent-green); }
+
+        /* Narrative */
+        .narrative {
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+            line-height: 1.8;
+            white-space: pre-wrap;
+        }
+
+        /* Charts */
+        .chart-container {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin: 1rem 0;
+        }
+
+        .chart-container h3 {
+            margin-bottom: 1rem;
+            font-size: 1rem;
+        }
+
+        .chart-wrapper {
+            position: relative;
+            height: 350px;
+        }
+
+        /* Grid layouts */
+        .grid-2 {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1.5rem;
+        }
+
+        .grid-3 {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1rem;
+        }
+
+        /* Collapsible */
         .collapsible {
             background: var(--bg-secondary);
             border: 1px solid var(--border-color);
             border-radius: 8px;
             margin: 1rem 0;
         }
+
         .collapsible-header {
             display: flex;
             justify-content: space-between;
@@ -220,98 +518,317 @@
             cursor: pointer;
             user-select: none;
         }
-        .collapsible-header:hover { background: var(--bg-tertiary); border-radius: 8px; }
-        .collapsible-header h3 { margin: 0; font-size: 1.1rem; }
+
+        .collapsible-header:hover {
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+        }
+
+        .collapsible-header h3 {
+            margin: 0;
+            font-size: 1rem;
+        }
+
         .collapsible-toggle {
             color: var(--text-secondary);
             font-size: 1.2rem;
             transition: transform 0.2s;
         }
-        .collapsible.open .collapsible-toggle { transform: rotate(180deg); }
+
+        .collapsible.open .collapsible-toggle {
+            transform: rotate(180deg);
+        }
+
         .collapsible-content {
             display: none;
             padding: 0 1.5rem 1.5rem;
         }
-        .collapsible.open .collapsible-content { display: block; }
 
-        /* Story narrative styling */
-        .narrative {
-            color: var(--text-secondary);
-            font-size: 1rem;
-            line-height: 1.8;
-            white-space: pre-wrap;
+        .collapsible.open .collapsible-content {
+            display: block;
         }
 
+        /* Key Findings */
         .key-finding {
             padding: 0.75rem 0;
             border-bottom: 1px solid var(--border-color);
+            color: var(--text-secondary);
         }
-        .key-finding:last-child { border-bottom: none; }
 
-        .recommendation-item {
-            margin-bottom: 1rem;
+        .key-finding:last-child {
+            border-bottom: none;
         }
-        .recommendation-item:last-child { margin-bottom: 0; }
-        .recommendation-item strong { color: var(--text-primary); }
-        .recommendation-item p { color: var(--text-secondary); margin-top: 0.25rem; }
 
-        @media (max-width: 768px) {
-            .container { padding: 1rem; }
-            .score-hero { flex-direction: column; }
-            .chart-wrapper { height: 300px; }
-            table { font-size: 0.85rem; }
-            th, td { padding: 0.5rem; }
+        /* Progress bars */
+        .progress-bar {
+            height: 6px;
+            background: var(--bg-tertiary);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 0.5rem;
+        }
+
+        .progress-fill {
+            height: 100%;
+            border-radius: 3px;
+        }
+
+        .progress-fill.good { background: var(--accent-green); }
+        .progress-fill.warning { background: var(--accent-yellow); }
+        .progress-fill.danger { background: var(--accent-red); }
+
+        /* Component score cards */
+        .component-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1rem;
+        }
+
+        .component-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+
+        .component-card-name {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .component-card-score {
+            font-size: 1.25rem;
+            font-weight: bold;
+        }
+
+        .component-card-weight {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+
+        /* Footer */
+        footer {
+            text-align: center;
+            padding: 2rem;
+            border-top: 1px solid var(--border-color);
+            margin-top: 3rem;
+            color: var(--text-secondary);
+        }
+
+        footer a {
+            color: var(--accent-blue);
+        }
+
+        /* Responsive */
+        @media (max-width: 1200px) {
+            .hero {
+                grid-template-columns: 180px 1fr;
+            }
+            .hero-radar {
+                display: none;
+            }
+        }
+
+        @media (max-width: 900px) {
+            .sidebar {
+                display: none;
+            }
+            .main-content {
+                margin-left: 0;
+                padding: 1.5rem;
+            }
+            .hero {
+                grid-template-columns: 1fr;
+                text-align: center;
+            }
+            .hero-metrics {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            .recommendations-grid {
+                grid-template-columns: 1fr;
+            }
+            .grid-2, .grid-3 {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <!-- Header with Score -->
-        <header>
-            <h1>{{.Metadata.Repository}}</h1>
-            <p class="subtitle">Health Report | {{.Metadata.GeneratedAt.Format "January 2, 2006"}}</p>
-        </header>
-
-        <div class="score-hero">
-            <div class="score-circle {{.ScoreClass}}" style="--score: {{.Score.Score}}">
-                <span class="score-value">{{.Score.Score}}</span>
-                <span class="score-label">Health Score</span>
-            </div>
-            <div class="score-meta">
-                <p><strong>{{.Score.FilesAnalyzed}}</strong> files analyzed</p>
-                {{if .Score.Passed}}<p style="color: var(--accent-green);">All quality thresholds passed</p>{{end}}
-                {{if .Trend}}
-                <p class="trend-indicator {{if lt .Trend.Slope 0.0}}down{{else if gt .Trend.Slope 0.0}}up{{else}}stable{{end}}">
-                    {{if lt .Trend.Slope 0.0}}Declining{{else if gt .Trend.Slope 0.0}}Improving{{else}}Stable{{end}} over time
-                </p>
-                {{end}}
-            </div>
+    <!-- Sidebar Navigation -->
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <h2>Health Score</h2>
+            <div class="sidebar-score {{.ScoreClass}}">{{.Score.Score}}</div>
         </div>
 
-        <!-- THE STORY: Executive Summary (moved up) -->
+        <div class="nav-section">
+            <div class="nav-section-title">Overview</div>
+            <a href="#summary" class="nav-item">
+                <span class="nav-dot neutral"></span>
+                Executive Summary
+            </a>
+            <a href="#recommendations" class="nav-item">
+                <span class="nav-dot {{if .Summary}}{{if .Summary.Recommendations.HighPriority}}danger{{else}}good{{end}}{{else}}neutral{{end}}"></span>
+                Recommendations
+            </a>
+            <a href="#findings" class="nav-item">
+                <span class="nav-dot neutral"></span>
+                Key Findings
+            </a>
+        </div>
+
+        <div class="nav-section">
+            <div class="nav-section-title">Risk Areas</div>
+            {{if .Hotspots}}{{if .Hotspots.Files}}
+            <a href="#hotspots" class="nav-item">
+                <span class="nav-dot {{if gt (len .Hotspots.Files) 20}}danger{{else if gt (len .Hotspots.Files) 10}}warning{{else}}good{{end}}"></span>
+                Hotspots
+            </a>
+            {{end}}{{end}}
+            {{if .FlagsInsight}}
+            <a href="#flags" class="nav-item">
+                <span class="nav-dot warning"></span>
+                Feature Flags
+            </a>
+            {{end}}
+            {{if .Cohesion}}
+            <a href="#cohesion" class="nav-item">
+                <span class="nav-dot {{if lt (index .Score.Components "cohesion") 70}}danger{{else if lt (index .Score.Components "cohesion") 80}}warning{{else}}good{{end}}"></span>
+                Low Cohesion
+            </a>
+            {{end}}
+        </div>
+
+        <div class="nav-section">
+            <div class="nav-section-title">Technical Debt</div>
+            {{if .SATD}}{{if .SATD.Items}}
+            <a href="#satd" class="nav-item">
+                <span class="nav-dot {{if gt (countSeverity .SATD.Items "critical") 5}}danger{{else if gt (countSeverity .SATD.Items "critical") 0}}warning{{else}}good{{end}}"></span>
+                Known Issues
+            </a>
+            {{end}}{{end}}
+            {{if .Duplicates}}
+            <a href="#duplicates" class="nav-item">
+                <span class="nav-dot {{if gt .Duplicates.DuplicationRatio 15.0}}danger{{else if gt .Duplicates.DuplicationRatio 10.0}}warning{{else}}good{{end}}"></span>
+                Duplication
+            </a>
+            {{end}}
+        </div>
+
+        <div class="nav-section">
+            <div class="nav-section-title">Analysis</div>
+            {{if .Trend}}
+            <a href="#trends" class="nav-item">
+                <span class="nav-dot {{if lt .Trend.Slope -0.5}}danger{{else if lt .Trend.Slope 0.0}}warning{{else}}good{{end}}"></span>
+                Trends
+            </a>
+            {{end}}
+            {{if .Churn}}
+            <a href="#churn" class="nav-item">
+                <span class="nav-dot neutral"></span>
+                Change Activity
+            </a>
+            {{end}}
+            {{if .Ownership}}
+            <a href="#ownership" class="nav-item">
+                <span class="nav-dot {{if lt .Ownership.BusFactor 3}}danger{{else if lt .Ownership.BusFactor 5}}warning{{else}}good{{end}}"></span>
+                Ownership
+            </a>
+            {{end}}
+        </div>
+
+        <div class="nav-section">
+            <div class="nav-section-title">Reference</div>
+            <a href="#breakdown" class="nav-item">
+                <span class="nav-dot neutral"></span>
+                Score Breakdown
+            </a>
+            <a href="#glossary" class="nav-item">
+                <span class="nav-dot neutral"></span>
+                Glossary
+            </a>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Hero Section -->
+        <section class="hero">
+            <div class="hero-score">
+                <div class="score-circle {{.ScoreClass}}" style="--score: {{.Score.Score}}">
+                    <span class="score-value">{{.Score.Score}}</span>
+                    <span class="score-label">Health Score</span>
+                </div>
+                {{if .Trend}}
+                <div class="hero-trend {{if lt .Trend.Slope 0.0}}down{{else if gt .Trend.Slope 0.0}}up{{end}}">
+                    {{if lt .Trend.Slope 0.0}}Declining{{else if gt .Trend.Slope 0.0}}Improving{{else}}Stable{{end}} ({{printf "%.2f" .Trend.Slope}}/mo)
+                </div>
+                {{end}}
+            </div>
+
+            <div class="hero-radar">
+                <canvas id="radarChart"></canvas>
+            </div>
+
+            <div class="hero-metrics">
+                <div class="metric-card">
+                    <div class="metric-card-value">{{.Score.FilesAnalyzed}}</div>
+                    <div class="metric-card-label">Files Analyzed</div>
+                </div>
+                {{if .Hotspots}}{{if .Hotspots.Files}}
+                <div class="metric-card">
+                    <div class="metric-card-value {{if gt (len .Hotspots.Files) 20}}danger{{else if gt (len .Hotspots.Files) 10}}warning{{else}}good{{end}}">{{len .Hotspots.Files}}</div>
+                    <div class="metric-card-label">Hotspot Files</div>
+                </div>
+                {{end}}{{end}}
+                {{if .SATD}}{{if .SATD.Items}}
+                <div class="metric-card">
+                    <div class="metric-card-value {{if gt (countSeverity .SATD.Items "critical") 5}}danger{{else if gt (countSeverity .SATD.Items "critical") 0}}warning{{else}}good{{end}}">{{countSeverity .SATD.Items "critical"}}</div>
+                    <div class="metric-card-label">Critical Issues</div>
+                </div>
+                {{end}}{{end}}
+                {{if .Duplicates}}
+                <div class="metric-card">
+                    <div class="metric-card-value {{if gt .Duplicates.DuplicationRatio 15.0}}danger{{else if gt .Duplicates.DuplicationRatio 10.0}}warning{{else}}good{{end}}">{{printf "%.1f" .Duplicates.DuplicationRatio}}%</div>
+                    <div class="metric-card-label">Duplication</div>
+                </div>
+                {{end}}
+            </div>
+        </section>
+
+        <!-- Executive Summary -->
         {{if .Summary}}
         {{if .Summary.ExecutiveSummary}}
-        <section class="section">
-            <h2>The Story</h2>
+        <section id="summary" class="section">
+            <div class="section-header">
+                <h2>Executive Summary</h2>
+            </div>
             <div class="card">
-                <p class="narrative">{{.Summary.ExecutiveSummary}}</p>
+                <div class="narrative">{{.Summary.ExecutiveSummary | markdown}}</div>
             </div>
         </section>
         {{end}}
 
-        <!-- WHAT NEEDS ATTENTION: Recommendations (moved up from bottom!) -->
+        <!-- Recommendations -->
         {{if or .Summary.Recommendations.HighPriority .Summary.Recommendations.MediumPriority .Summary.Recommendations.Ongoing}}
-        <section class="section">
-            <h2>What Needs Attention</h2>
+        <section id="recommendations" class="section">
+            <div class="section-header">
+                <h2>Recommendations</h2>
+            </div>
+            <p class="section-subtitle">Prioritized actions to improve code health</p>
 
-            <div class="grid">
+            <div class="recommendations-list">
                 {{if .Summary.Recommendations.HighPriority}}
                 <div class="card highlight-red">
-                    <h2 style="color: var(--accent-red);">Address Soon</h2>
+                    <div class="recommendation-category" style="color: var(--accent-red);">
+                        <span class="nav-dot danger"></span>
+                        Critical - Address Soon
+                    </div>
                     {{range .Summary.Recommendations.HighPriority}}
                     <div class="recommendation-item">
                         <strong>{{.Title}}</strong>
-                        <p>{{.Description}}</p>
+                        <div>{{.Description | markdown}}</div>
                     </div>
                     {{end}}
                 </div>
@@ -319,23 +836,29 @@
 
                 {{if .Summary.Recommendations.MediumPriority}}
                 <div class="card highlight-yellow">
-                    <h2 style="color: var(--accent-yellow);">Worth Improving</h2>
+                    <div class="recommendation-category" style="color: var(--accent-yellow);">
+                        <span class="nav-dot warning"></span>
+                        Important - Plan For
+                    </div>
                     {{range .Summary.Recommendations.MediumPriority}}
                     <div class="recommendation-item">
                         <strong>{{.Title}}</strong>
-                        <p>{{.Description}}</p>
+                        <div>{{.Description | markdown}}</div>
                     </div>
                     {{end}}
                 </div>
                 {{end}}
 
                 {{if .Summary.Recommendations.Ongoing}}
-                <div class="card highlight-green">
-                    <h2 style="color: var(--accent-green);">Keep Doing</h2>
+                <div class="card highlight-blue">
+                    <div class="recommendation-category" style="color: var(--accent-blue);">
+                        <span class="nav-dot neutral"></span>
+                        Maintenance - Keep Doing
+                    </div>
                     {{range .Summary.Recommendations.Ongoing}}
                     <div class="recommendation-item">
                         <strong>{{.Title}}</strong>
-                        <p>{{.Description}}</p>
+                        <div>{{.Description | markdown}}</div>
                     </div>
                     {{end}}
                 </div>
@@ -344,10 +867,12 @@
         </section>
         {{end}}
 
-        <!-- KEY FINDINGS -->
+        <!-- Key Findings -->
         {{if .Summary.KeyFindings}}
-        <section class="section">
-            <h2>Key Findings</h2>
+        <section id="findings" class="section">
+            <div class="section-header">
+                <h2>Key Findings</h2>
+            </div>
             <div class="card">
                 {{range .Summary.KeyFindings}}
                 <div class="key-finding">{{.}}</div>
@@ -357,18 +882,18 @@
         {{end}}
         {{end}}
 
-        <!-- THE EVIDENCE -->
-
+        <!-- Hotspots -->
         {{if .Hotspots}}
         {{if .Hotspots.Files}}
-        <!-- Where to Focus (was Hotspots) -->
-        <section class="section">
-            <h2>Where to Focus</h2>
-            <p style="color: var(--text-secondary); margin-bottom: 1rem;">Files that are both complex and frequently changed - the highest risk for bugs.</p>
+        <section id="hotspots" class="section">
+            <div class="section-header">
+                <h2>Hotspots</h2>
+            </div>
+            <p class="section-subtitle">Files with both high complexity and frequent changes - highest risk for bugs</p>
 
             {{if .HotspotsInsight}}
             <div class="card" style="margin-bottom: 1.5rem;">
-                <p class="narrative">{{.HotspotsInsight.SectionInsight}}</p>
+                <div class="narrative">{{.HotspotsInsight.SectionInsight | markdown}}</div>
             </div>
             {{end}}
 
@@ -380,7 +905,7 @@
                 {{if .Hotspots.Summary}}
                 <div class="stat-box">
                     <div class="value">{{printf "%.2f" .Hotspots.Summary.MaxScore}}</div>
-                    <div class="label">Highest Risk Score</div>
+                    <div class="label">Highest Risk</div>
                 </div>
                 <div class="stat-box">
                     <div class="value">{{printf "%.2f" .Hotspots.Summary.AvgScore}}</div>
@@ -389,19 +914,18 @@
                 {{end}}
             </div>
 
-            <div class="card">
-                <h2>Top 15 Risk Areas</h2>
-                <table>
+            <div class="table-container">
+                <table id="hotspots-table">
                     <thead>
                         <tr>
                             <th>File</th>
-                            <th>Risk Score</th>
+                            <th>Risk</th>
                             <th>Changes</th>
                             <th>Complexity</th>
                         </tr>
                     </thead>
                     <tbody>
-                        {{range limit .Hotspots.Files 15}}
+                        {{range .Hotspots.Files}}
                         <tr>
                             <td><code>{{truncatePath .Path 60}}</code></td>
                             <td><span class="badge {{hotspotBadge .HotspotScore}}">{{printf "%.3f" .HotspotScore}}</span></td>
@@ -416,16 +940,100 @@
         {{end}}
         {{end}}
 
+        <!-- Feature Flags -->
+        {{if .FlagsInsight}}
+        <section id="flags" class="section">
+            <div class="section-header">
+                <h2>Feature Flags</h2>
+            </div>
+            <p class="section-subtitle">Stale feature flags that should be cleaned up</p>
+
+            <div class="card" style="margin-bottom: 1.5rem;">
+                <div class="narrative">{{.FlagsInsight.SectionInsight | markdown}}</div>
+            </div>
+
+            {{if .Flags}}{{if .Flags.Flags}}
+            <div class="table-container">
+                <table id="flags-table">
+                    <thead>
+                        <tr>
+                            <th>Flag</th>
+                            <th>Priority</th>
+                            <th>Age</th>
+                            <th>Files</th>
+                            <th>Provider</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .Flags.Flags}}
+                        <tr>
+                            <td><code>{{.FlagKey}}</code></td>
+                            <td><span class="badge {{.Priority.Level | priorityBadge}}">{{.Priority.Level}}</span></td>
+                            <td><span class="time-ago" data-timestamp="{{.Staleness.IntroducedAt}}"></span></td>
+                            <td>{{.Complexity.FileSpread}}</td>
+                            <td>{{.Provider}}</td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+            {{end}}{{end}}
+        </section>
+        {{end}}
+
+        <!-- Low Cohesion Classes -->
+        {{if .Cohesion}}
+        {{if .Cohesion.Classes}}
+        <section id="cohesion" class="section">
+            <div class="section-header">
+                <h2>Low Cohesion Classes</h2>
+            </div>
+            <p class="section-subtitle">Classes doing too many unrelated things - candidates for splitting</p>
+
+            {{if .ComponentsInsight}}{{if index .ComponentsInsight.ComponentInsights "cohesion"}}
+            <div class="card" style="margin-bottom: 1.5rem;">
+                <div class="narrative">{{index .ComponentsInsight.ComponentInsights "cohesion" | markdown}}</div>
+            </div>
+            {{end}}{{end}}
+
+            <div class="table-container">
+                <table id="cohesion-table">
+                    <thead>
+                        <tr>
+                            <th>Class</th>
+                            <th>LCOM</th>
+                            <th>WMC</th>
+                            <th>CBO</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .Cohesion.Classes}}
+                        <tr>
+                            <td><code>{{.ClassName}}</code></td>
+                            <td><span class="badge {{if gt .LCOM 50}}critical{{else if gt .LCOM 20}}high{{else}}medium{{end}}">{{.LCOM}}</span></td>
+                            <td>{{.WMC}}</td>
+                            <td>{{.CBO}}</td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+        {{end}}
+        {{end}}
+
+        <!-- SATD / Known Issues -->
         {{if .SATD}}
         {{if .SATD.Items}}
-        <!-- Known Issues (was SATD) -->
-        <section class="section">
-            <h2>Known Issues</h2>
-            <p style="color: var(--text-secondary); margin-bottom: 1rem;">Problems the team has documented but not yet fixed (TODO, FIXME, HACK comments).</p>
+        <section id="satd" class="section">
+            <div class="section-header">
+                <h2>Known Issues</h2>
+            </div>
+            <p class="section-subtitle">Problems the team has documented but not yet fixed (TODO, FIXME, HACK)</p>
 
             {{if .SATDInsight}}
             <div class="card" style="margin-bottom: 1.5rem;">
-                <p class="narrative">{{.SATDInsight.SectionInsight}}</p>
+                <div class="narrative">{{.SATDInsight.SectionInsight | markdown}}</div>
             </div>
             {{end}}
 
@@ -440,28 +1048,31 @@
                 </div>
                 <div class="stat-box">
                     <div class="value" style="color: var(--accent-yellow)">{{countSeverity .SATD.Items "high"}}</div>
-                    <div class="label">High Priority</div>
+                    <div class="label">High</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value" style="color: var(--accent-blue)">{{countSeverity .SATD.Items "medium"}}</div>
+                    <div class="label">Medium</div>
                 </div>
             </div>
 
-            <div class="grid">
-                <div class="chart-container" style="margin: 0;">
-                    <h2>By Severity</h2>
-                    <div class="chart-wrapper" style="height: 250px;">
+            <div class="grid-2">
+                <div class="chart-container">
+                    <h3>By Severity</h3>
+                    <div class="chart-wrapper" style="height: 220px;">
                         <canvas id="satdSeverityChart"></canvas>
                     </div>
                 </div>
-                <div class="chart-container" style="margin: 0;">
-                    <h2>By Category</h2>
-                    <div class="chart-wrapper" style="height: 250px;">
+                <div class="chart-container">
+                    <h3>By Category</h3>
+                    <div class="chart-wrapper" style="height: 220px;">
                         <canvas id="satdCategoryChart"></canvas>
                     </div>
                 </div>
             </div>
 
-            <div class="card">
-                <h2>Critical and High-Priority Items</h2>
-                <table>
+            <div class="table-container">
+                <table id="satd-table">
                     <thead>
                         <tr>
                             <th>Severity</th>
@@ -471,7 +1082,7 @@
                         </tr>
                     </thead>
                     <tbody>
-                        {{range filterSeverity .SATD.Items "critical" "high"}}
+                        {{range .SATD.Items}}
                         <tr>
                             <td><span class="badge {{lower .Severity}}">{{.Severity}}</span></td>
                             <td>{{.Category}}</td>
@@ -486,32 +1097,23 @@
         {{end}}
         {{end}}
 
-        {{if .FlagsInsight}}
-        <!-- Feature Flags -->
-        <section class="section">
-            <h2>Feature Flags</h2>
-            <p style="color: var(--text-secondary); margin-bottom: 1rem;">Stale feature flags that should be cleaned up.</p>
-            <div class="card" style="margin-bottom: 1.5rem;">
-                <p class="narrative">{{.FlagsInsight.SectionInsight}}</p>
-            </div>
-        </section>
-        {{end}}
-
+        <!-- Duplicates -->
         {{if .Duplicates}}
-        <!-- Duplicated Code -->
-        <section class="section">
-            <h2>Duplicated Code</h2>
-            <p style="color: var(--text-secondary); margin-bottom: 1rem;">Code that appears in multiple places - bugs fixed in one spot may need fixing elsewhere too.</p>
+        <section id="duplicates" class="section">
+            <div class="section-header">
+                <h2>Duplicated Code</h2>
+            </div>
+            <p class="section-subtitle">Code that appears in multiple places - bugs fixed in one spot may need fixing elsewhere</p>
 
             {{if .DuplicationInsight}}
             <div class="card" style="margin-bottom: 1.5rem;">
-                <p class="narrative">{{.DuplicationInsight.SectionInsight}}</p>
+                <div class="narrative">{{.DuplicationInsight.SectionInsight | markdown}}</div>
             </div>
             {{end}}
 
             <div class="stat-grid">
                 <div class="stat-box">
-                    <div class="value" style="color: var(--accent-yellow)">{{printf "%.1f" .Duplicates.DuplicationRatio}}%</div>
+                    <div class="value" style="color: {{if gt .Duplicates.DuplicationRatio 15.0}}var(--accent-red){{else if gt .Duplicates.DuplicationRatio 10.0}}var(--accent-yellow){{else}}var(--accent-green){{end}}">{{printf "%.1f" .Duplicates.DuplicationRatio}}%</div>
                     <div class="label">Duplication Rate</div>
                 </div>
                 <div class="stat-box">
@@ -530,53 +1132,92 @@
         </section>
         {{end}}
 
-        {{if .Ownership}}
-        <!-- Team Knowledge (was Ownership & Bus Factor) -->
-        <section class="section">
-            <h2>Team Knowledge</h2>
-            <p style="color: var(--text-secondary); margin-bottom: 1rem;">How knowledge is distributed across the team - concentrated knowledge is a risk if people leave.</p>
+        <!-- Trends -->
+        {{if .Trend}}
+        <section id="trends" class="section">
+            <div class="section-header">
+                <h2>Historical Trends</h2>
+            </div>
+            <p class="section-subtitle">How code quality has changed over time</p>
+
+            {{if .TrendsInsight}}
+            <div class="card" style="margin-bottom: 1.5rem;">
+                <div class="narrative">{{.TrendsInsight.SectionInsight | markdown}}</div>
+            </div>
+            {{end}}
 
             <div class="stat-grid">
                 <div class="stat-box">
-                    <div class="value" style="color: var(--accent-green)">{{.Ownership.BusFactor}}</div>
-                    <div class="label">Bus Factor</div>
+                    <div class="value">{{.Trend.StartScore}}</div>
+                    <div class="label">Starting Score</div>
                 </div>
                 <div class="stat-box">
-                    <div class="value" style="color: var(--accent-yellow)">{{.Ownership.KnowledgeSilos}}</div>
-                    <div class="label">Knowledge Silos</div>
+                    <div class="value">{{.Trend.EndScore}}</div>
+                    <div class="label">Current Score</div>
                 </div>
                 <div class="stat-box">
-                    <div class="value">{{.Ownership.TotalFiles}}</div>
-                    <div class="label">Total Files</div>
+                    <div class="value" style="color: {{if lt .Trend.Slope 0.0}}var(--accent-yellow){{else}}var(--accent-green){{end}}">{{printf "%+.2f" .Trend.Slope}}</div>
+                    <div class="label">Monthly Change</div>
                 </div>
-                {{if gt .Ownership.TotalFiles 0}}
                 <div class="stat-box">
-                    <div class="value" style="color: var(--accent-yellow)">{{printf "%.1f" (percent .Ownership.KnowledgeSilos .Ownership.TotalFiles)}}%</div>
-                    <div class="label">Files at Risk</div>
+                    <div class="value">{{printf "%.2f" .Trend.RSquared}}</div>
+                    <div class="label">Trend Fit (R2)</div>
                 </div>
-                {{end}}
             </div>
 
-            {{if .Ownership.TopOwners}}
             <div class="chart-container">
-                <h2>Top Contributors</h2>
-                <div class="chart-wrapper" style="height: 300px;">
-                    <canvas id="ownershipChart"></canvas>
+                <h3>Health Score Over Time</h3>
+                <div class="chart-wrapper">
+                    <canvas id="trendsChart"></canvas>
                 </div>
             </div>
+
+            <div class="chart-container">
+                <h3>Component Trends</h3>
+                <div class="chart-wrapper">
+                    <canvas id="componentTrendsChart"></canvas>
+                </div>
+            </div>
+
+            {{if .TrendsInsight}}
+            {{if .TrendsInsight.HistoricalEvents}}
+            <div class="card">
+                <h3>Notable Events</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Period</th>
+                            <th>Change</th>
+                            <th>Driver</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .TrendsInsight.HistoricalEvents}}
+                        <tr style="background: {{if lt .Change 0}}#f8514915{{else}}#3fb95015{{end}};">
+                            <td><strong>{{.Period}}</strong></td>
+                            <td><span class="badge {{if lt .Change -5}}critical{{else if lt .Change 0}}high{{else}}low{{end}}">{{if gt .Change 0}}+{{end}}{{.Change}} pts</span></td>
+                            <td>{{.PrimaryDriver}}</td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+            {{end}}
             {{end}}
         </section>
         {{end}}
 
+        <!-- Change Activity / Churn -->
         {{if .Churn}}
-        <!-- Change Activity (was Code Churn) -->
-        <section class="section">
-            <h2>Change Activity</h2>
-            <p style="color: var(--text-secondary); margin-bottom: 1rem;">How frequently code is being modified - high activity may indicate instability or active development.</p>
+        <section id="churn" class="section">
+            <div class="section-header">
+                <h2>Change Activity</h2>
+            </div>
+            <p class="section-subtitle">How frequently code is being modified</p>
 
             {{if .ChurnInsight}}
             <div class="card" style="margin-bottom: 1.5rem;">
-                <p class="narrative">{{.ChurnInsight.SectionInsight}}</p>
+                <div class="narrative">{{.ChurnInsight.SectionInsight | markdown}}</div>
             </div>
             {{end}}
 
@@ -600,9 +1241,8 @@
             </div>
 
             {{if .Churn.Files}}
-            <div class="card">
-                <h2>Most Frequently Changed Files</h2>
-                <table>
+            <div class="table-container">
+                <table id="churn-table">
                     <thead>
                         <tr>
                             <th>File</th>
@@ -612,7 +1252,7 @@
                         </tr>
                     </thead>
                     <tbody>
-                        {{range limit .Churn.Files 15}}
+                        {{range .Churn.Files}}
                         <tr>
                             <td><code>{{.File}}</code></td>
                             <td>{{.Commits}}</td>
@@ -627,267 +1267,178 @@
         </section>
         {{end}}
 
-        {{if .Trend}}
-        <!-- HISTORICAL CONTEXT -->
-        <section class="section">
-            <h2>Historical Context</h2>
-            <p style="color: var(--text-secondary); margin-bottom: 1rem;">How code quality has changed over time - trends reveal the impact of releases and refactoring.</p>
+        <!-- Ownership -->
+        {{if .Ownership}}
+        <section id="ownership" class="section">
+            <div class="section-header">
+                <h2>Code Ownership</h2>
+            </div>
+            <p class="section-subtitle">How knowledge is distributed - concentrated knowledge is a risk</p>
 
-            {{if .TrendsInsight}}
+            {{if .OwnershipInsight}}
             <div class="card" style="margin-bottom: 1.5rem;">
-                <p class="narrative">{{.TrendsInsight.SectionInsight}}</p>
+                <div class="narrative">{{.OwnershipInsight.SectionInsight | markdown}}</div>
             </div>
             {{end}}
 
             <div class="stat-grid">
                 <div class="stat-box">
-                    <div class="value" style="color: var(--accent-green)">{{.Trend.StartScore}}</div>
-                    <div class="label">Starting Score</div>
+                    <div class="value" style="color: {{if lt .Ownership.BusFactor 3}}var(--accent-red){{else if lt .Ownership.BusFactor 5}}var(--accent-yellow){{else}}var(--accent-green){{end}}">{{.Ownership.BusFactor}}</div>
+                    <div class="label">Bus Factor</div>
                 </div>
                 <div class="stat-box">
-                    <div class="value" style="color: var(--accent-green)">{{.Trend.EndScore}}</div>
-                    <div class="label">Current Score</div>
+                    <div class="value" style="color: var(--accent-yellow)">{{.Ownership.KnowledgeSilos}}</div>
+                    <div class="label">Knowledge Silos</div>
                 </div>
                 <div class="stat-box">
-                    <div class="value" style="color: {{if lt .Trend.Slope 0.0}}var(--accent-yellow){{else}}var(--accent-green){{end}}">{{printf "%.2f" .Trend.Slope}}</div>
-                    <div class="label">Monthly Change</div>
+                    <div class="value">{{.Ownership.TotalFiles}}</div>
+                    <div class="label">Total Files</div>
                 </div>
+                {{if gt .Ownership.TotalFiles 0}}
                 <div class="stat-box">
-                    <div class="value">{{printf "%.2f" .Trend.RSquared}}</div>
-                    <div class="label">Trend Fit</div>
+                    <div class="value" style="color: var(--accent-yellow)">{{printf "%.1f" (percent .Ownership.KnowledgeSilos .Ownership.TotalFiles)}}%</div>
+                    <div class="label">Files at Risk</div>
                 </div>
+                {{end}}
             </div>
 
+            {{if .Ownership.TopOwners}}
             <div class="chart-container">
-                <h2>Health Score Over Time</h2>
-                <div class="chart-wrapper">
-                    <canvas id="trendsChart"></canvas>
+                <h3>Top Contributors</h3>
+                <div class="chart-wrapper" style="height: 280px;">
+                    <canvas id="ownershipChart"></canvas>
                 </div>
-            </div>
-
-            <div class="chart-container">
-                <h2>Quality Components Over Time</h2>
-                <div class="chart-wrapper">
-                    <canvas id="componentTrendsChart"></canvas>
-                </div>
-            </div>
-
-            {{if .TrendsInsight}}
-            {{if .TrendsInsight.HistoricalEvents}}
-            <div class="card">
-                <h2>Notable Events</h2>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>When</th>
-                            <th>Change</th>
-                            <th>Primary Driver</th>
-                            <th>Related Releases</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {{range .TrendsInsight.HistoricalEvents}}
-                        <tr style="background: {{if lt .Change 0}}#f8514915{{else}}#3fb95015{{end}};">
-                            <td><strong>{{.Period}}</strong></td>
-                            <td><span class="badge {{if lt .Change -5}}critical{{else if lt .Change 0}}high{{else}}low{{end}}">{{if gt .Change 0}}+{{end}}{{.Change}} pts</span></td>
-                            <td>{{.PrimaryDriver}}</td>
-                            <td>{{range $i, $r := .Releases}}{{if $i}}, {{end}}{{$r}}{{end}}</td>
-                        </tr>
-                        {{end}}
-                    </tbody>
-                </table>
-            </div>
-            {{end}}
-            {{end}}
-
-            {{if .ComponentTrends}}
-            <div class="card">
-                <h2>Component Trends</h2>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Component</th>
-                            <th>Monthly Change</th>
-                            <th>Correlation</th>
-                            <th>Direction</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {{range $name, $trend := .ComponentTrends}}
-                        <tr>
-                            <td>{{$name | title}}</td>
-                            <td>{{printf "%.3f" $trend.Slope}}</td>
-                            <td>{{printf "%.2f" $trend.Correlation}}</td>
-                            <td>
-                                {{if lt $trend.Correlation -0.5}}<span class="trend-indicator down">Declining</span>
-                                {{else if gt $trend.Correlation 0.5}}<span class="trend-indicator up">Improving</span>
-                                {{else}}<span class="trend-indicator stable">Stable</span>{{end}}
-                            </td>
-                        </tr>
-                        {{end}}
-                    </tbody>
-                </table>
             </div>
             {{end}}
         </section>
         {{end}}
 
-        <!-- SCORE BREAKDOWN (moved down, collapsible) -->
-        <section class="section">
-            <h2>Score Breakdown</h2>
-            <p style="color: var(--text-secondary); margin-bottom: 1rem;">How the health score is calculated from individual quality components.</p>
+        <!-- Score Breakdown -->
+        <section id="breakdown" class="section">
+            <div class="section-header">
+                <h2>Score Breakdown</h2>
+            </div>
+            <p class="section-subtitle">How the health score is calculated from individual components</p>
 
-            <div class="collapsible open" id="scoreBreakdown">
-                <div class="collapsible-header" onclick="toggleCollapsible('scoreBreakdown')">
-                    <h3>Component Scores</h3>
-                    <span class="collapsible-toggle">&#9660;</span>
-                </div>
-                <div class="collapsible-content">
-                    <div class="grid">
-                        {{if index .Score.Components "complexity"}}
-                        <div class="card">
-                            <h2>Complexity (25%)</h2>
-                            <div class="metric">
-                                <span class="metric-label">Score</span>
-                                <span class="metric-value {{scoreClass (index .Score.Components "complexity")}}">{{index .Score.Components "complexity"}}</span>
-                            </div>
-                            <div class="progress-bar"><div class="progress-fill {{scoreClass (index .Score.Components "complexity")}}" style="width: {{index .Score.Components "complexity"}}%"></div></div>
-                            {{if .Complexity}}
-                            <div class="metric" style="margin-top: 0.5rem;">
-                                <span class="metric-label">Avg Cyclomatic</span>
-                                <span class="metric-value">{{printf "%.2f" .Complexity.AvgCyclomatic}}</span>
-                            </div>
-                            <div class="metric">
-                                <span class="metric-label">Avg Cognitive</span>
-                                <span class="metric-value">{{printf "%.2f" .Complexity.AvgCognitive}}</span>
-                            </div>
-                            {{end}}
-                        </div>
-                        {{end}}
-
-                        {{if index .Score.Components "duplication"}}
-                        <div class="card">
-                            <h2>Duplication (20%)</h2>
-                            <div class="metric">
-                                <span class="metric-label">Score</span>
-                                <span class="metric-value {{scoreClass (index .Score.Components "duplication")}}">{{index .Score.Components "duplication"}}</span>
-                            </div>
-                            <div class="progress-bar"><div class="progress-fill {{scoreClass (index .Score.Components "duplication")}}" style="width: {{index .Score.Components "duplication"}}%"></div></div>
-                            {{if .Duplicates}}
-                            <div class="metric" style="margin-top: 0.5rem;">
-                                <span class="metric-label">Duplication Ratio</span>
-                                <span class="metric-value">{{printf "%.2f" .Duplicates.DuplicationRatio}}%</span>
-                            </div>
-                            {{end}}
-                        </div>
-                        {{end}}
-
-                        {{if index .Score.Components "cohesion"}}
-                        <div class="card">
-                            <h2>Cohesion (15%)</h2>
-                            <div class="metric">
-                                <span class="metric-label">Score</span>
-                                <span class="metric-value {{scoreClass (index .Score.Components "cohesion")}}">{{index .Score.Components "cohesion"}}</span>
-                            </div>
-                            <div class="progress-bar"><div class="progress-fill {{scoreClass (index .Score.Components "cohesion")}}" style="width: {{index .Score.Components "cohesion"}}%"></div></div>
-                        </div>
-                        {{end}}
-
-                        {{if index .Score.Components "tdg"}}
-                        <div class="card">
-                            <h2>Debt Gradient (15%)</h2>
-                            <div class="metric">
-                                <span class="metric-label">Score</span>
-                                <span class="metric-value {{scoreClass (index .Score.Components "tdg")}}">{{index .Score.Components "tdg"}}</span>
-                            </div>
-                            <div class="progress-bar"><div class="progress-fill {{scoreClass (index .Score.Components "tdg")}}" style="width: {{index .Score.Components "tdg"}}%"></div></div>
-                        </div>
-                        {{end}}
-
-                        {{if index .Score.Components "satd"}}
-                        <div class="card">
-                            <h2>Known Debt (10%)</h2>
-                            <div class="metric">
-                                <span class="metric-label">Score</span>
-                                <span class="metric-value {{scoreClass (index .Score.Components "satd")}}">{{index .Score.Components "satd"}}</span>
-                            </div>
-                            <div class="progress-bar"><div class="progress-fill {{scoreClass (index .Score.Components "satd")}}" style="width: {{index .Score.Components "satd"}}%"></div></div>
-                        </div>
-                        {{end}}
-
-                        {{if index .Score.Components "coupling"}}
-                        <div class="card">
-                            <h2>Coupling (10%)</h2>
-                            <div class="metric">
-                                <span class="metric-label">Score</span>
-                                <span class="metric-value {{scoreClass (index .Score.Components "coupling")}}">{{index .Score.Components "coupling"}}</span>
-                            </div>
-                            <div class="progress-bar"><div class="progress-fill {{scoreClass (index .Score.Components "coupling")}}" style="width: {{index .Score.Components "coupling"}}%"></div></div>
-                        </div>
-                        {{end}}
-
-                        {{if index .Score.Components "smells"}}
-                        <div class="card">
-                            <h2>Code Smells (5%)</h2>
-                            <div class="metric">
-                                <span class="metric-label">Score</span>
-                                <span class="metric-value {{scoreClass (index .Score.Components "smells")}}">{{index .Score.Components "smells"}}</span>
-                            </div>
-                            <div class="progress-bar"><div class="progress-fill {{scoreClass (index .Score.Components "smells")}}" style="width: {{index .Score.Components "smells"}}%"></div></div>
-                        </div>
-                        {{end}}
+            <div class="grid-3">
+                {{if index .Score.Components "complexity"}}
+                <div class="component-card">
+                    <div class="component-card-header">
+                        <span class="component-card-name">Complexity</span>
+                        <span class="component-card-weight">25%</span>
                     </div>
+                    <div class="component-card-score {{scoreClass (index .Score.Components "complexity")}}">{{index .Score.Components "complexity"}}</div>
+                    <div class="progress-bar"><div class="progress-fill {{scoreClass (index .Score.Components "complexity")}}" style="width: {{index .Score.Components "complexity"}}%"></div></div>
                 </div>
+                {{end}}
+
+                {{if index .Score.Components "duplication"}}
+                <div class="component-card">
+                    <div class="component-card-header">
+                        <span class="component-card-name">Duplication</span>
+                        <span class="component-card-weight">20%</span>
+                    </div>
+                    <div class="component-card-score {{scoreClass (index .Score.Components "duplication")}}">{{index .Score.Components "duplication"}}</div>
+                    <div class="progress-bar"><div class="progress-fill {{scoreClass (index .Score.Components "duplication")}}" style="width: {{index .Score.Components "duplication"}}%"></div></div>
+                </div>
+                {{end}}
+
+                {{if index .Score.Components "cohesion"}}
+                <div class="component-card">
+                    <div class="component-card-header">
+                        <span class="component-card-name">Cohesion</span>
+                        <span class="component-card-weight">15%</span>
+                    </div>
+                    <div class="component-card-score {{scoreClass (index .Score.Components "cohesion")}}">{{index .Score.Components "cohesion"}}</div>
+                    <div class="progress-bar"><div class="progress-fill {{scoreClass (index .Score.Components "cohesion")}}" style="width: {{index .Score.Components "cohesion"}}%"></div></div>
+                </div>
+                {{end}}
+
+                {{if index .Score.Components "tdg"}}
+                <div class="component-card">
+                    <div class="component-card-header">
+                        <span class="component-card-name">Debt Gradient</span>
+                        <span class="component-card-weight">15%</span>
+                    </div>
+                    <div class="component-card-score {{scoreClass (index .Score.Components "tdg")}}">{{index .Score.Components "tdg"}}</div>
+                    <div class="progress-bar"><div class="progress-fill {{scoreClass (index .Score.Components "tdg")}}" style="width: {{index .Score.Components "tdg"}}%"></div></div>
+                </div>
+                {{end}}
+
+                {{if index .Score.Components "satd"}}
+                <div class="component-card">
+                    <div class="component-card-header">
+                        <span class="component-card-name">Known Debt</span>
+                        <span class="component-card-weight">10%</span>
+                    </div>
+                    <div class="component-card-score {{scoreClass (index .Score.Components "satd")}}">{{index .Score.Components "satd"}}</div>
+                    <div class="progress-bar"><div class="progress-fill {{scoreClass (index .Score.Components "satd")}}" style="width: {{index .Score.Components "satd"}}%"></div></div>
+                </div>
+                {{end}}
+
+                {{if index .Score.Components "coupling"}}
+                <div class="component-card">
+                    <div class="component-card-header">
+                        <span class="component-card-name">Coupling</span>
+                        <span class="component-card-weight">10%</span>
+                    </div>
+                    <div class="component-card-score {{scoreClass (index .Score.Components "coupling")}}">{{index .Score.Components "coupling"}}</div>
+                    <div class="progress-bar"><div class="progress-fill {{scoreClass (index .Score.Components "coupling")}}" style="width: {{index .Score.Components "coupling"}}%"></div></div>
+                </div>
+                {{end}}
+
+                {{if index .Score.Components "smells"}}
+                <div class="component-card">
+                    <div class="component-card-header">
+                        <span class="component-card-name">Code Smells</span>
+                        <span class="component-card-weight">5%</span>
+                    </div>
+                    <div class="component-card-score {{scoreClass (index .Score.Components "smells")}}">{{index .Score.Components "smells"}}</div>
+                    <div class="progress-bar"><div class="progress-fill {{scoreClass (index .Score.Components "smells")}}" style="width: {{index .Score.Components "smells"}}%"></div></div>
+                </div>
+                {{end}}
             </div>
         </section>
 
-        <!-- GLOSSARY (collapsible) -->
-        <section class="section">
-            <div class="collapsible" id="glossary">
-                <div class="collapsible-header" onclick="toggleCollapsible('glossary')">
+        <!-- Glossary -->
+        <section id="glossary" class="section">
+            <div class="collapsible" id="glossary-collapse">
+                <div class="collapsible-header" onclick="toggleCollapsible('glossary-collapse')">
                     <h3>Glossary of Terms</h3>
                     <span class="collapsible-toggle">&#9660;</span>
                 </div>
                 <div class="collapsible-content">
-                    <div class="grid">
+                    <div class="grid-2">
                         <div class="card">
-                            <h2>Health Score</h2>
+                            <h3>Health Score</h3>
                             <p style="color: var(--text-secondary);">A weighted composite metric (0-100) measuring overall code quality. Above 80 is good, 60-80 needs attention, below 60 is concerning.</p>
                         </div>
                         <div class="card">
-                            <h2>Hotspot</h2>
+                            <h3>Hotspot</h3>
                             <p style="color: var(--text-secondary);">A file that is both complex AND frequently changed. These are the highest-risk areas because they're hard to change safely but get changed often.</p>
                         </div>
                         <div class="card">
-                            <h2>Bus Factor</h2>
+                            <h3>Bus Factor</h3>
                             <p style="color: var(--text-secondary);">The minimum number of people who would need to leave before critical knowledge is lost. Higher is better; 1 is a serious risk.</p>
                         </div>
                         <div class="card">
-                            <h2>Knowledge Silo</h2>
+                            <h3>Knowledge Silo</h3>
                             <p style="color: var(--text-secondary);">A file that only one person has ever touched. If that person leaves, the knowledge goes with them.</p>
                         </div>
                         <div class="card">
-                            <h2>Cyclomatic Complexity</h2>
+                            <h3>Cyclomatic Complexity</h3>
                             <p style="color: var(--text-secondary);">The number of independent paths through code. More paths means more test cases needed and more ways things can go wrong.</p>
                         </div>
                         <div class="card">
-                            <h2>Cognitive Complexity</h2>
+                            <h3>Cognitive Complexity</h3>
                             <p style="color: var(--text-secondary);">How hard code is to understand. Accounts for nesting, breaks in flow, and things that make humans struggle to follow the logic.</p>
                         </div>
                         <div class="card">
-                            <h2>Code Churn</h2>
-                            <p style="color: var(--text-secondary);">How frequently files change. High churn might mean active development, or it might mean code that keeps breaking and needs fixing.</p>
-                        </div>
-                        <div class="card">
-                            <h2>Technical Debt</h2>
-                            <p style="color: var(--text-secondary);">The cost of rework caused by choosing quick solutions now instead of better approaches. Like financial debt, it accumulates interest over time.</p>
-                        </div>
-                        <div class="card">
-                            <h2>LCOM (Cohesion)</h2>
+                            <h3>LCOM (Cohesion)</h3>
                             <p style="color: var(--text-secondary);">How well a class's methods work together. High LCOM means methods don't share data - the class is probably doing too many unrelated things.</p>
                         </div>
                         <div class="card">
-                            <h2>CBO (Coupling)</h2>
+                            <h3>CBO (Coupling)</h3>
                             <p style="color: var(--text-secondary);">How many other classes a class depends on. High coupling means changes ripple through the codebase - everything is connected to everything.</p>
                         </div>
                     </div>
@@ -895,29 +1446,141 @@
             </div>
         </section>
 
-        <footer style="text-align: center; padding: 2rem; border-top: 1px solid var(--border-color); margin-top: 2rem; color: var(--text-secondary);">
-            <p>Generated using <a href="https://github.com/panbanda/omen" style="color: var(--accent-blue);">Omen</a></p>
+        <footer>
+            <p>Generated {{.Metadata.GeneratedAt.Format "January 2, 2006"}} using <a href="https://github.com/panbanda/omen">Omen</a></p>
         </footer>
-    </div>
+    </main>
 
     <script>
+        // Toggle collapsible sections
         function toggleCollapsible(id) {
             const el = document.getElementById(id);
             el.classList.toggle('open');
+        }
+
+        // Highlight active nav item on scroll
+        const sections = document.querySelectorAll('.section[id]');
+        const navItems = document.querySelectorAll('.nav-item');
+
+        window.addEventListener('scroll', () => {
+            let current = '';
+            sections.forEach(section => {
+                const sectionTop = section.offsetTop;
+                if (window.scrollY >= sectionTop - 100) {
+                    current = section.getAttribute('id');
+                }
+            });
+
+            navItems.forEach(item => {
+                item.classList.remove('active');
+                if (item.getAttribute('href') === '#' + current) {
+                    item.classList.add('active');
+                }
+            });
+        });
+
+        // Format large numbers with commas
+        document.querySelectorAll('.stat-box .value, .metric-card-value').forEach(el => {
+            const text = el.textContent.trim();
+            if (/^\d+$/.test(text)) {
+                el.textContent = parseInt(text, 10).toLocaleString();
+            }
+        });
+
+        // Render time-ago for timestamps using date-fns
+        document.querySelectorAll('.time-ago').forEach(el => {
+            const timestamp = el.dataset.timestamp;
+            if (!timestamp) {
+                el.textContent = '-';
+                return;
+            }
+            const date = new Date(timestamp);
+            if (isNaN(date.getTime())) {
+                el.textContent = '-';
+                return;
+            }
+            el.textContent = dateFns.formatDistanceToNow(date, { addSuffix: false });
+            el.title = dateFns.format(date, 'MMM d, yyyy');
+        });
+
+        // Initialize Simple-DataTables on all data tables
+        const dataTableConfig = {
+            perPage: 15,
+            perPageSelect: [10, 15, 25, 50, 100],
+            searchable: true,
+            sortable: true,
+            labels: {
+                placeholder: "Search...",
+                perPage: "entries per page",
+                noRows: "No entries found",
+                info: "Showing {start} to {end} of {rows} entries"
+            }
+        };
+
+        const tableIds = ['hotspots-table', 'flags-table', 'cohesion-table', 'satd-table', 'churn-table'];
+        tableIds.forEach(id => {
+            const table = document.getElementById(id);
+            if (table && table.querySelector('tbody tr')) {
+                new simpleDatatables.DataTable(table, dataTableConfig);
+            }
+        });
+    </script>
+
+    <!-- Radar Chart -->
+    <script>
+        Chart.defaults.color = '#8b949e';
+        Chart.defaults.borderColor = '#30363d';
+
+        const radarCtx = document.getElementById('radarChart');
+        if (radarCtx) {
+            new Chart(radarCtx, {
+                type: 'radar',
+                data: {
+                    labels: ['Complexity', 'Duplication', 'Cohesion', 'Coupling', 'Debt', 'Smells'],
+                    datasets: [{
+                        label: 'Score',
+                        data: [
+                            {{if index .Score.Components "complexity"}}{{index .Score.Components "complexity"}}{{else}}0{{end}},
+                            {{if index .Score.Components "duplication"}}{{index .Score.Components "duplication"}}{{else}}0{{end}},
+                            {{if index .Score.Components "cohesion"}}{{index .Score.Components "cohesion"}}{{else}}0{{end}},
+                            {{if index .Score.Components "coupling"}}{{index .Score.Components "coupling"}}{{else}}0{{end}},
+                            {{if index .Score.Components "satd"}}{{index .Score.Components "satd"}}{{else}}0{{end}},
+                            {{if index .Score.Components "smells"}}{{index .Score.Components "smells"}}{{else}}0{{end}}
+                        ],
+                        backgroundColor: '#58a6ff33',
+                        borderColor: '#58a6ff',
+                        borderWidth: 2,
+                        pointBackgroundColor: '#58a6ff'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        r: {
+                            beginAtZero: true,
+                            max: 100,
+                            ticks: { stepSize: 20, display: false },
+                            grid: { color: '#30363d' },
+                            angleLines: { color: '#30363d' },
+                            pointLabels: { font: { size: 10 } }
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false }
+                    }
+                }
+            });
         }
     </script>
 
     {{if .Trend}}
     <script>
-        Chart.defaults.color = '#8b949e';
-        Chart.defaults.borderColor = '#30363d';
-
         const trendsDataRaw = {
             labels: [{{range $i, $p := .Trend.Points}}{{if $i}}, {{end}}'{{$p.Date}}'{{end}}],
             scores: [{{range $i, $p := .Trend.Points}}{{if $i}}, {{end}}{{$p.Score}}{{end}}]
         };
 
-        // Format date labels as "Mon YYYY" (e.g., "Sep 2016")
         function formatDateLabel(isoDate) {
             const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
             const parts = isoDate.substring(0, 10).split('-');
@@ -930,7 +1593,6 @@
             scores: trendsDataRaw.scores
         };
 
-        // Score annotations from insights
         {{if .TrendsInsight}}
         {{if .TrendsInsight.ScoreAnnotations}}
         const scoreAnnotations = {{.TrendsInsight.ScoreAnnotations | json}};
@@ -941,18 +1603,15 @@
         const scoreAnnotations = [];
         {{end}}
 
-        // Helper to find label index by YYYY-MM prefix match (uses raw ISO dates)
         function findLabelIndex(rawLabels, datePrefix) {
             return rawLabels.findIndex(label => label.startsWith(datePrefix));
         }
 
-        // Build annotation config for health score chart
         const healthAnnotations = {};
         scoreAnnotations.forEach((ann, i) => {
             const labelIndex = findLabelIndex(trendsData.rawLabels, ann.date);
             if (labelIndex !== -1) {
-                const xLabel = trendsData.labels[labelIndex]; // Use formatted label for category scale
-                // Vertical line at the date
+                const xLabel = trendsData.labels[labelIndex];
                 healthAnnotations['line' + i] = {
                     type: 'line',
                     xMin: xLabel,
@@ -961,7 +1620,6 @@
                     borderWidth: 2,
                     borderDash: [6, 6]
                 };
-                // Label with the annotation text
                 healthAnnotations['label' + i] = {
                     type: 'label',
                     xValue: xLabel,
@@ -1011,7 +1669,7 @@
                         callbacks: {
                             afterBody: function(context) {
                                 const rawDate = trendsData.rawLabels[context[0].dataIndex];
-                                const datePrefix = rawDate.substring(0, 7); // YYYY-MM
+                                const datePrefix = rawDate.substring(0, 7);
                                 const ann = scoreAnnotations.find(a => a.date === datePrefix);
                                 if (ann) {
                                     return '\n' + ann.label + ': ' + ann.description;
@@ -1030,7 +1688,7 @@
                             maxRotation: 45,
                             minRotation: 45,
                             autoSkip: true,
-                            maxTicksLimit: 20
+                            maxTicksLimit: 15
                         }
                     },
                     y: {
@@ -1045,86 +1703,6 @@
         {{if .Trend.ComponentTrends}}
         const componentLabelsRaw = [{{range $i, $p := .Trend.Points}}{{if $i}}, {{end}}'{{$p.Date}}'{{end}}];
         const componentLabels = componentLabelsRaw.map(formatDateLabel);
-
-        // Component-specific colors for annotation matching
-        const componentColors = {
-            complexity: '#3fb950',
-            duplication: '#58a6ff',
-            coupling: '#d29922',
-            cohesion: '#a371f7',
-            smells: '#f85149',
-            satd: '#8b949e',
-            tdg: '#e6edf3'
-        };
-
-        // Build component annotations from insights
-        const componentAnnotations = {};
-        {{if .ComponentsInsight}}{{if .ComponentsInsight.ComponentAnnotations}}
-        const compAnnData = {{json .ComponentsInsight.ComponentAnnotations}};
-        let annIndex = 0;
-        Object.keys(compAnnData).forEach(comp => {
-            const annotations = compAnnData[comp] || [];
-            const color = componentColors[comp] || '#8b949e';
-            annotations.forEach(ann => {
-                const labelIndex = findLabelIndex(componentLabelsRaw, ann.date);
-                if (labelIndex !== -1) {
-                    const xLabel = componentLabels[labelIndex]; // Use formatted label for category scale
-                    const isDecline = ann.to < ann.from;
-                    componentAnnotations['line' + annIndex] = {
-                        type: 'line',
-                        xMin: xLabel,
-                        xMax: xLabel,
-                        borderColor: color + '66',
-                        borderWidth: 2,
-                        borderDash: [4, 4]
-                    };
-                    componentAnnotations['label' + annIndex] = {
-                        type: 'label',
-                        xValue: xLabel,
-                        yValue: ann.to || (95 - (annIndex % 5) * 7),
-                        backgroundColor: '#21262d',
-                        borderColor: color,
-                        borderWidth: 1,
-                        borderRadius: 4,
-                        color: '#e6edf3',
-                        font: { size: 8 },
-                        padding: 2,
-                        content: ann.label
-                    };
-                    annIndex++;
-                }
-            });
-        });
-        {{else}}
-        // Fallback to score annotations if no component annotations
-        scoreAnnotations.forEach((ann, i) => {
-            const labelIndex = findLabelIndex(componentLabelsRaw, ann.date);
-            if (labelIndex !== -1) {
-                const xLabel = componentLabels[labelIndex]; // Use formatted label for category scale
-                componentAnnotations['line' + i] = {
-                    type: 'line',
-                    xMin: xLabel,
-                    xMax: xLabel,
-                    borderColor: ann.change < 0 ? '#f8514966' : '#3fb95066',
-                    borderWidth: 1,
-                    borderDash: [4, 4]
-                };
-                componentAnnotations['label' + i] = {
-                    type: 'label',
-                    xValue: xLabel,
-                    yValue: 95 - (i % 4) * 8,
-                    backgroundColor: '#21262d',
-                    borderColor: ann.change < 0 ? '#f85149' : '#3fb950',
-                    borderWidth: 1,
-                    borderRadius: 4,
-                    color: '#e6edf3',
-                    font: { size: 9 },
-                    padding: 3,
-                    content: ann.label
-                };
-            }
-        });
-        {{end}}{{end}}
 
         new Chart(document.getElementById('componentTrendsChart'), {
             type: 'line',
@@ -1145,44 +1723,7 @@
                 maintainAspectRatio: false,
                 plugins: {
                     legend: { position: 'top' },
-                    tooltip: {
-                        mode: 'index',
-                        intersect: false,
-                        callbacks: {
-                            afterBody: function(context) {
-                                const rawDate = componentLabelsRaw[context[0].dataIndex];
-                                const datePrefix = rawDate.substring(0, 7); // YYYY-MM
-                                {{if .ComponentsInsight}}{{if .ComponentsInsight.ComponentAnnotations}}
-                                // Show all component annotations for this date
-                                const lines = [];
-                                Object.keys(compAnnData).forEach(comp => {
-                                    const anns = compAnnData[comp] || [];
-                                    anns.forEach(ann => {
-                                        if (ann.date === datePrefix) {
-                                            lines.push(comp + ': ' + ann.description);
-                                        }
-                                    });
-                                });
-                                return lines.length ? '\n' + lines.join('\n') : '';
-                                {{else}}
-                                const ann = scoreAnnotations.find(a => a.date === datePrefix);
-                                if (ann) {
-                                    return '\n' + ann.label + ': ' + ann.description;
-                                }
-                                return '';
-                                {{end}}{{else}}
-                                const ann = scoreAnnotations.find(a => a.date === datePrefix);
-                                if (ann) {
-                                    return '\n' + ann.label + ': ' + ann.description;
-                                }
-                                return '';
-                                {{end}}
-                            }
-                        }
-                    },
-                    annotation: {
-                        annotations: componentAnnotations
-                    }
+                    tooltip: { mode: 'index', intersect: false }
                 },
                 scales: {
                     x: {
@@ -1190,7 +1731,7 @@
                             maxRotation: 45,
                             minRotation: 45,
                             autoSkip: true,
-                            maxTicksLimit: 20
+                            maxTicksLimit: 15
                         }
                     },
                     y: { min: 50, max: 100, title: { display: true, text: 'Score' } }
@@ -1233,7 +1774,7 @@
         new Chart(document.getElementById('satdSeverityChart'), {
             type: 'doughnut',
             data: {
-                labels: ['Critical (' + satdItems.critical + ')', 'High (' + satdItems.high + ')', 'Medium (' + satdItems.medium + ')', 'Low (' + satdItems.low + ')'],
+                labels: ['Critical', 'High', 'Medium', 'Low'],
                 datasets: [{
                     data: [satdItems.critical, satdItems.high, satdItems.medium, satdItems.low],
                     backgroundColor: ['#f85149', '#d29922', '#58a6ff', '#3fb950']
@@ -1249,7 +1790,7 @@
         new Chart(document.getElementById('satdCategoryChart'), {
             type: 'doughnut',
             data: {
-                labels: Object.keys(satdItems.categories).map(k => k + ' (' + satdItems.categories[k] + ')'),
+                labels: Object.keys(satdItems.categories),
                 datasets: [{
                     data: Object.values(satdItems.categories),
                     backgroundColor: ['#58a6ff', '#3fb950', '#a371f7', '#d29922', '#f85149', '#8b949e']
@@ -1264,16 +1805,5 @@
     </script>
     {{end}}
     {{end}}
-
-    <script>
-    // Format large numbers with locale-aware formatting (commas)
-    document.querySelectorAll('.stat-box .value').forEach(el => {
-        const text = el.textContent.trim();
-        // Match pure integers (no decimals, no % sign)
-        if (/^\d+$/.test(text)) {
-            el.textContent = parseInt(text, 10).toLocaleString();
-        }
-    });
-    </script>
 </body>
 </html>
