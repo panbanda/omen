@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -303,13 +304,13 @@ func TestReportRenderCreatesHTML(t *testing.T) {
 	}
 
 	// Check for basic HTML structure
-	if !contains(string(content), "<!DOCTYPE html>") {
+	if !strings.Contains(string(content), "<!DOCTYPE html>") {
 		t.Error("output should contain DOCTYPE")
 	}
-	if !contains(string(content), "test-repo") {
+	if !strings.Contains(string(content), "test-repo") {
 		t.Error("output should contain repository name")
 	}
-	if !contains(string(content), "85") {
+	if !strings.Contains(string(content), "85") {
 		t.Error("output should contain score")
 	}
 }
@@ -364,26 +365,16 @@ func TestReportRenderWithInsights(t *testing.T) {
 		t.Fatalf("failed to read output file: %v", err)
 	}
 
-	if !contains(string(content), "Test summary") {
+	if !strings.Contains(string(content), "Test summary") {
 		t.Error("output should contain executive summary from insights")
 	}
 }
 
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsAt(s, substr))
-}
-
-func containsAt(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
-
 func TestReportServeRequiresDataFlag(t *testing.T) {
-	// Reset the data flag
+	// Save and restore flag value
+	oldDataDir := reportDataDir
+	t.Cleanup(func() { reportDataDir = oldDataDir })
+
 	reportDataDir = ""
 	rootCmd.SetArgs([]string{"report", "serve"})
 	err := rootCmd.Execute()
@@ -391,7 +382,7 @@ func TestReportServeRequiresDataFlag(t *testing.T) {
 		t.Error("serve should fail without --data flag")
 	}
 	// Check that error message mentions --data flag
-	if err != nil && !contains(err.Error(), "--data") {
+	if err != nil && !strings.Contains(err.Error(), "--data") {
 		t.Errorf("error should mention --data flag, got: %v", err)
 	}
 }

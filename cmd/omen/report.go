@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/panbanda/omen/internal/progress"
@@ -114,6 +116,9 @@ func init() {
 
 func runReportGenerate(cmd *cobra.Command, args []string) error {
 	paths := getPaths(args)
+	if len(paths) == 0 {
+		return fmt.Errorf("no paths provided")
+	}
 
 	// Determine output directory
 	outputDir := reportOutputDir
@@ -536,7 +541,8 @@ func runReportServe(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create HTTP handler that re-renders on each request
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if err := renderer.Render(dataDir, w); err != nil {
 			http.Error(w, fmt.Sprintf("render error: %v", err), http.StatusInternalServerError)
@@ -544,9 +550,37 @@ func runReportServe(cmd *cobra.Command, args []string) error {
 	})
 
 	addr := fmt.Sprintf(":%d", reportPort)
+	server := &http.Server{
+		Addr:    addr,
+		Handler: mux,
+	}
+
+	// Handle graceful shutdown
+	done := make(chan struct{})
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+
+		fmt.Println("\nShutting down server...")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := server.Shutdown(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "Server shutdown error: %v\n", err)
+		}
+		close(done)
+	}()
+
 	fmt.Printf("Serving report at http://localhost%s\n", addr)
 	fmt.Println("Press Ctrl+C to stop")
-	return http.ListenAndServe(addr, nil)
+
+	if err := server.ListenAndServe(); err != http.ErrServerClosed {
+		return err
+	}
+
+	<-done
+	return nil
 }
 
 // reportAnalysisData holds results from all analyzers
