@@ -9,6 +9,8 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/simple-datatables@9/dist/style.min.css">
     <script src="https://cdn.jsdelivr.net/npm/simple-datatables@9"></script>
     <script src="https://cdn.jsdelivr.net/npm/date-fns@4/cdn.min.js"></script>
+    <script src="https://unpkg.com/@popperjs/core@2"></script>
+    <script src="https://unpkg.com/tippy.js@6"></script>
     <style>
         :root {
             --bg-primary: #0d1117;
@@ -464,39 +466,31 @@
 
         /* Tooltips */
         .tooltip {
-            position: relative;
             cursor: help;
             border-bottom: 1px dotted var(--text-secondary);
         }
 
-        .tooltip::after {
-            content: attr(data-tooltip);
-            position: fixed;
-            top: var(--tooltip-top, 0);
-            left: var(--tooltip-left, 0);
-            transform: translateX(-50%);
+        /* Tippy.js dark theme */
+        .tippy-box {
             background: var(--bg-primary);
             border: 1px solid var(--border-color);
             color: var(--text-primary);
-            padding: 0.5rem 0.75rem;
-            border-radius: 6px;
             font-size: 0.8rem;
             font-weight: 400;
-            text-transform: none;
-            letter-spacing: normal;
-            max-width: 300px;
-            z-index: 10000;
-            opacity: 0;
-            visibility: hidden;
-            transition: opacity 0.15s, visibility 0.15s;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
             line-height: 1.4;
-            pointer-events: none;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
         }
 
-        .tooltip:hover::after {
-            opacity: 1;
-            visibility: visible;
+        .tippy-box[data-placement^='top'] > .tippy-arrow::before {
+            border-top-color: var(--border-color);
+        }
+
+        .tippy-box[data-placement^='bottom'] > .tippy-arrow::before {
+            border-bottom-color: var(--border-color);
+        }
+
+        .tippy-content {
+            padding: 0.5rem 0.75rem;
         }
 
         /* Narrative */
@@ -1651,13 +1645,13 @@
             el.title = dateFns.format(date, 'MMM d, yyyy');
         });
 
-        // Position tooltips near cursor
-        document.querySelectorAll('.tooltip').forEach(el => {
-            el.addEventListener('mouseenter', (e) => {
-                const rect = el.getBoundingClientRect();
-                el.style.setProperty('--tooltip-top', `${rect.bottom + 8}px`);
-                el.style.setProperty('--tooltip-left', `${rect.left + rect.width / 2}px`);
-            });
+        // Initialize tooltips with Tippy.js
+        tippy('.tooltip', {
+            content: (el) => el.getAttribute('data-tooltip'),
+            placement: 'bottom',
+            arrow: true,
+            maxWidth: 300,
+            appendTo: document.body
         });
 
         // Initialize Simple-DataTables on all data tables
