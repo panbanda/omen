@@ -607,6 +607,84 @@
             color: var(--text-secondary);
         }
 
+        /* Report Header */
+        .report-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            padding-bottom: 1.5rem;
+            margin-bottom: 2rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .report-title {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .report-title h1 {
+            font-size: 1.75rem;
+            font-weight: 600;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .report-title h1 code {
+            font-weight: 500;
+            color: var(--accent-blue);
+            background: var(--bg-tertiary);
+            padding: 0.1rem 0.4rem;
+            border-radius: 4px;
+            font-size: 1.5rem;
+        }
+
+        .report-meta {
+            display: flex;
+            gap: 1.5rem;
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+        }
+
+        .report-meta-item {
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+
+        .report-branding {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 0.25rem;
+        }
+
+        .report-branding a {
+            color: var(--text-primary);
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 1.1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .report-branding a:hover {
+            color: var(--accent-blue);
+        }
+
+        .report-branding .tagline {
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+        }
+
+        .omen-logo {
+            width: 24px;
+            height: 24px;
+        }
+
         /* Footer */
         footer {
             text-align: center;
@@ -753,6 +831,39 @@
 
     <!-- Main Content -->
     <main class="main-content">
+        <!-- Report Header -->
+        <header class="report-header">
+            <div class="report-title">
+                <h1>Health Report: <code>{{.Metadata.Repository}}</code></h1>
+                <div class="report-meta">
+                    <span class="report-meta-item">
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 0 1-.557 1.392l-2.5-1A.751.751 0 0 1 7 8.25v-3.5a.75.75 0 0 1 1.5 0Z"></path></svg>
+                        {{.Metadata.GeneratedAt.Format "Jan 2, 2006 3:04 PM"}}
+                    </span>
+                    {{if .Metadata.Since}}
+                    <span class="report-meta-item">
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M5.75 0a.75.75 0 0 1 .75.75V2h3V.75a.75.75 0 0 1 1.5 0V2h1.25c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 12.25 16H3.75A1.75 1.75 0 0 1 2 14.25V3.75C2 2.784 2.784 2 3.75 2H5V.75A.75.75 0 0 1 5.75 0Zm-2 5.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25Z"></path></svg>
+                        {{.Metadata.Since}} history
+                    </span>
+                    {{end}}
+                </div>
+            </div>
+            <div class="report-branding">
+                <a href="https://github.com/panbanda/omen" target="_blank">
+                    <svg class="omen-logo" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <circle cx="50" cy="50" r="45" stroke="currentColor" stroke-width="6"/>
+                        <circle cx="50" cy="50" r="20" fill="currentColor"/>
+                        <path d="M50 5 L50 25" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+                        <path d="M50 75 L50 95" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+                        <path d="M5 50 L25 50" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+                        <path d="M75 50 L95 50" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+                    </svg>
+                    Omen
+                </a>
+                <span class="tagline">Code Health Intelligence</span>
+            </div>
+        </header>
+
         <!-- Hero Section -->
         <section class="hero">
             <div class="hero-score">
