@@ -130,3 +130,15 @@ type ChurnInsight struct {
 type DuplicationInsight struct {
 	SectionInsight string `json:"section_insight"`
 }
+
+// FlagAnnotation represents an LLM comment on a feature flag.
+type FlagAnnotation struct {
+	Flag    string `json:"flag"`
+	Comment string `json:"comment"`
+}
+
+// FlagsInsight contains feature flags analysis.
+type FlagsInsight struct {
+	SectionInsight  string           `json:"section_insight"`
+	ItemAnnotations []FlagAnnotation `json:"item_annotations"`
+}

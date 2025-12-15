@@ -486,6 +486,17 @@
         {{end}}
         {{end}}
 
+        {{if .FlagsInsight}}
+        <!-- Feature Flags -->
+        <section class="section">
+            <h2>Feature Flags</h2>
+            <p style="color: var(--text-secondary); margin-bottom: 1rem;">Stale feature flags that should be cleaned up.</p>
+            <div class="card" style="margin-bottom: 1.5rem;">
+                <p class="narrative">{{.FlagsInsight.SectionInsight}}</p>
+            </div>
+        </section>
+        {{end}}
+
         {{if .Duplicates}}
         <!-- Duplicated Code -->
         <section class="section">

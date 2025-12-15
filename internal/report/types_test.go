@@ -229,3 +229,33 @@ func TestSATDInsightMarshaling(t *testing.T) {
 		t.Errorf("ItemAnnotations[0].Line = %d, want 142", unmarshaled.ItemAnnotations[0].Line)
 	}
 }
+
+func TestFlagsInsightMarshaling(t *testing.T) {
+	insight := FlagsInsight{
+		SectionInsight: "11 feature flags are critically stale.",
+		ItemAnnotations: []FlagAnnotation{
+			{Flag: "connect", Comment: "3,371 days old - remove immediately"},
+			{Flag: "new_checkout", Comment: "1,456 days old - likely safe to remove"},
+		},
+	}
+
+	data, err := json.Marshal(insight)
+	if err != nil {
+		t.Fatalf("failed to marshal FlagsInsight: %v", err)
+	}
+
+	var unmarshaled FlagsInsight
+	if err := json.Unmarshal(data, &unmarshaled); err != nil {
+		t.Fatalf("failed to unmarshal FlagsInsight: %v", err)
+	}
+
+	if unmarshaled.SectionInsight != insight.SectionInsight {
+		t.Errorf("SectionInsight = %q, want %q", unmarshaled.SectionInsight, insight.SectionInsight)
+	}
+	if len(unmarshaled.ItemAnnotations) != 2 {
+		t.Errorf("ItemAnnotations length = %d, want 2", len(unmarshaled.ItemAnnotations))
+	}
+	if unmarshaled.ItemAnnotations[0].Flag != "connect" {
+		t.Errorf("ItemAnnotations[0].Flag = %q, want %q", unmarshaled.ItemAnnotations[0].Flag, "connect")
+	}
+}

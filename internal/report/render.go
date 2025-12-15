@@ -36,6 +36,7 @@ type RenderData struct {
 	ChurnInsight       *ChurnInsight
 	DuplicationInsight *DuplicationInsight
 	ComponentsInsight  *ComponentsInsight
+	FlagsInsight       *FlagsInsight
 	ComponentTrends    map[string]ComponentTrendStats
 	SATDStats          *SATDStats
 }
@@ -539,6 +540,12 @@ func (r *Renderer) loadData(dataDir string) (*RenderData, error) {
 		compInsight := &ComponentsInsight{}
 		if err := loadJSON(filepath.Join(insightsDir, "components.json"), compInsight); err == nil {
 			data.ComponentsInsight = compInsight
+		}
+
+		// Load flags insight
+		flagsInsight := &FlagsInsight{}
+		if err := loadJSON(filepath.Join(insightsDir, "flags.json"), flagsInsight); err == nil {
+			data.FlagsInsight = flagsInsight
 		}
 	}
 

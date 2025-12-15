@@ -465,6 +465,7 @@ func runReportValidate(cmd *cobra.Command, args []string) error {
 			"satd.json",
 			"churn.json",
 			"duplication.json",
+			"flags.json",
 		}
 
 		for _, file := range insightFiles {
