@@ -1,14 +1,16 @@
 # Generate Health Report
 
-Generate a complete HTML health report with LLM-generated insights.
+Generate a complete HTML health report with research-backed LLM-generated insights.
+
+This command spawns specialized analyst agents, each trained on the academic research behind their domain (McCabe, Chidamber-Kemerer, Potdar & Shihab, etc.).
 
 ## Workflow Overview
 
 1. Check configuration
 2. Generate data files with `omen report generate`
-3. Analyze data in parallel (spawn subagents for 8 analysis tasks)
-3b. Generate executive summary (after all parallel tasks complete)
-4. Validate and render HTML
+3. Analyze data in parallel (spawn specialized analyst agents)
+4. Generate executive summary (after all parallel tasks complete)
+5. Validate and render HTML
 
 ## Step 1: Check Configuration
 
@@ -44,7 +46,7 @@ This creates these data files in the output directory:
 | `smells.json` | Architectural smells (cycles, hubs, god components) |
 | `complexity.json` | Function-level complexity metrics |
 
-## Step 3: Analyze Data (Parallel Subagents)
+## Step 3: Analyze Data (Specialized Analyst Agents)
 
 Create the insights directory:
 
@@ -52,97 +54,57 @@ Create the insights directory:
 mkdir -p <output-dir>/insights
 ```
 
-**Launch these analysis tasks in parallel using the Task tool.** Each subagent analyzes specific data files and produces one insight file.
+**Launch these analysis tasks in parallel using the Task tool.** Each agent uses a specialized skill trained on the academic research for its domain.
 
 ### Parallel Analysis Tasks
 
-Launch ALL of these simultaneously:
+Launch ALL of these simultaneously. Each agent should:
+1. Read its skill file first (contains research findings and thresholds)
+2. Read the specified input JSON files
+3. Write the insight JSON file following the skill's output format
 
-#### Task 1: Trends Analysis
-- **Input**: `trend.json`, `score.json`
-- **Output**: `insights/trends.json`
-- **Prompt**: Analyze historical score trajectory. For each significant drop or improvement (5+ points):
-  1. Investigate git history for that period to find what changed
-  2. Create a score annotation with date, short label, and detailed description
-  3. Create a historical event entry with period, change amount, primary driver, and any releases
-  Include at least 3-5 annotations for the most significant changes.
+| Task | Skill | Input | Output | Research Basis |
+|------|-------|-------|--------|----------------|
+| Trends | `omen-reporting:trends-analyst` | `trend.json`, `score.json` | `insights/trends.json` | Score trajectory analysis |
+| Components | `omen-reporting:components-analyst` | `trend.json`, `cohesion.json`, `smells.json`, `score.json` | `insights/components.json` | Per-component health |
+| Hotspots | `omen-reporting:hotspot-analyst` | `hotspots.json` | `insights/hotspots.json` | Tornhill, Nagappan & Ball 2005 |
+| SATD | `omen-reporting:satd-analyst` | `satd.json` | `insights/satd.json` | Potdar & Shihab 2014 |
+| Flags | `omen-reporting:flags-analyst` | `flags.json` | `insights/flags.json` | Feature flag lifecycle |
+| Ownership | `omen-reporting:ownership-analyst` | `ownership.json` | `insights/ownership.json` | Bird et al. 2011 |
+| Duplication | `omen-reporting:duplicates-analyst` | `duplicates.json` | `insights/duplication.json` | Juergens et al. 2009 |
+| Churn | `omen-reporting:churn-analyst` | `churn.json` | `insights/churn.json` | Nagappan & Ball 2005 |
 
-#### Task 2: Components Analysis
-- **Input**: `trend.json`, `cohesion.json`, `smells.json`, `score.json`
-- **Output**: `insights/components.json`
-- **Prompt**: Analyze per-component trends (complexity, duplication, coupling, cohesion, smells, satd). For each component:
-  1. Write a `component_insights[component]` narrative explaining the trend
-  2. Create `component_annotations[component]` entries for significant changes with date, label, from/to scores, and description
-  3. Create `component_events` entries for the most impactful changes across all components
-  Reference specific commits/PRs when explaining what caused score changes. Identify problematic classes with high LCOM, dangerous hubs, and architectural smells.
+### Agent Prompt Template
 
-#### Task 3: Hotspots Analysis
-- **Input**: `hotspots.json`
-- **Output**: `insights/hotspots.json`
-- **Prompt**: Analyze the hotspot data. Generate:
-  1. `section_insight`: Narrative about patterns (are hotspots concentrated? what's the risk?)
-  2. `item_annotations`: Array with top 5-10 hotspot files, each with `file` and `comment` explaining why it's risky and what to do about it
+For each agent:
 
-#### Task 4: Technical Debt (SATD) Analysis
-- **Input**: `satd.json`
-- **Output**: `insights/satd.json`
-- **Prompt**: Analyze SATD items by severity and category. Generate:
-  1. `section_insight`: Narrative about debt patterns (categories, severity distribution, security concerns)
-  2. `item_annotations`: Array with critical/high severity items, each with `file`, `line`, and `comment` explaining context and priority
+```
+You are a specialized analyst. First, read the skill file to understand the research behind your analysis:
 
-#### Task 5: Feature Flags Analysis
-- **Input**: `flags.json`
-- **Output**: `insights/flags.json`
-- **Prompt**: Analyze stale feature flags. Generate:
-  1. `section_insight`: Narrative about flag hygiene (how many stale, oldest flags, cleanup opportunities)
-  2. `item_annotations`: Array with CRITICAL and HIGH priority flags, each with `flag`, `priority`, `introduced_at` (copy from data), and `comment` with cleanup recommendation
+Read: plugins/reporting/skills/<analyst-name>/SKILL.md
 
-#### Task 6: Ownership Analysis
-- **Input**: `ownership.json`
-- **Output**: `insights/ownership.json`
-- **Prompt**: Analyze bus factor and knowledge silos. Generate:
-  1. `section_insight`: Narrative about ownership risks (bus factor, silo count, key contributors)
-  2. `item_annotations`: Array with highest-risk files (single owner, critical code), each with `file` and `comment` explaining the risk
+Then read the data files:
+Read: <output-dir>/<input-file>.json
 
-#### Task 7: Duplication Analysis
-- **Input**: `duplicates.json`
-- **Output**: `insights/duplication.json`
-- **Prompt**: Analyze clone patterns. Generate:
-  1. `section_insight`: Narrative about what's duplicated, what abstractions are missing, and which clone groups are highest priority to fix
+Apply the research-based thresholds and patterns from the skill to analyze the data.
+Write your insight file to: <output-dir>/insights/<output-file>.json
 
-#### Task 8: Churn Analysis
-- **Input**: `churn.json`
-- **Output**: `insights/churn.json`
-- **Prompt**: Analyze file change patterns. Generate:
-  1. `section_insight`: Narrative about churn patterns (which areas are unstable, who's changing what, any concerning trends)
+Follow the output format specified in your skill.
+```
 
-### Step 3b: Generate Executive Summary (After Parallel Tasks)
+### Step 4: Generate Executive Summary (After Parallel Tasks)
 
 **Wait for all parallel tasks to complete**, then run this final task:
 
 #### Summary & Recommendations
+- **Skill**: `omen-reporting:summary-analyst`
 - **Input**: All data files AND all generated insight files from Step 3
 - **Output**: `insights/summary.json`
-- **Prompt**: Read ALL the generated insight files first. Then synthesize them into:
-  1. **Executive Summary** (markdown supported): A comprehensive 2-4 paragraph overview covering:
-     - Current health state and trajectory (from trends insight)
-     - Most critical risk areas (from hotspots, satd, flags insights)
-     - Key architectural concerns (from components insight)
-     - Ownership/bus factor risks (from ownership insight)
-  2. **Key Findings**: 5-8 specific, actionable findings with file names and numbers. Use markdown for emphasis.
-  3. **Recommendations**: Prioritized by urgency. Each recommendation should have a clear title and description with specific files/actions. Use markdown for code references and emphasis.
 
-  The summary should synthesize and reference specific findings from each insight file - not just repeat the data.
-
-### Subagent Instructions Template
-
-Each subagent should:
-
-1. Read the specified input JSON files
-2. Analyze patterns and identify the story in the data
-3. Write the insight JSON file following the schema below
-4. Use analytical language (facts, numbers, specific files)
-5. Name specific files/classes, not vague references
+The summary analyst reads all insight files and synthesizes them into:
+1. **Executive Summary**: 2-4 paragraph overview for stakeholders
+2. **Key Findings**: 5-8 specific, actionable discoveries
+3. **Recommendations**: Prioritized by urgency (high/medium/ongoing)
 
 ### Insight File Schemas
 
@@ -248,9 +210,9 @@ Note: Copy `priority` and `introduced_at` from flags.json data (`priority.level`
 }
 ```
 
-## Step 4: Validate
+## Step 5: Validate
 
-After all analysis tasks complete (including Step 3b):
+After all analysis tasks complete (including Step 4):
 
 ```bash
 omen report validate -d <output-dir>/
@@ -260,7 +222,7 @@ This checks:
 - All required data files exist and are valid JSON
 - All insight files (if present) are valid JSON
 
-## Step 5: Render HTML
+## Step 6: Render HTML
 
 ```bash
 omen report render -d <output-dir>/ -o report.html
