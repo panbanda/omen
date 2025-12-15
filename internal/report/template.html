@@ -1,0 +1,1268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Repository Health Report - {{.Metadata.Repository}}</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
+    <style>
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --border-color: #30363d;
+            --accent-green: #3fb950;
+            --accent-yellow: #d29922;
+            --accent-red: #f85149;
+            --accent-blue: #58a6ff;
+            --accent-purple: #a371f7;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+        }
+
+        .container { max-width: 1400px; margin: 0 auto; padding: 2rem; }
+
+        header {
+            text-align: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        h1 { font-size: 2.5rem; margin-bottom: 0.5rem; }
+        .subtitle { color: var(--text-secondary); font-size: 1.1rem; }
+
+        .score-hero {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 3rem;
+            margin: 2rem 0;
+            flex-wrap: wrap;
+        }
+
+        .score-circle {
+            width: 180px;
+            height: 180px;
+            border-radius: 50%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+        }
+
+        .score-circle.good {
+            background: conic-gradient(var(--accent-green) 0deg, var(--accent-green) calc(var(--score) * 3.6deg), var(--bg-tertiary) calc(var(--score) * 3.6deg));
+        }
+        .score-circle.warning {
+            background: conic-gradient(var(--accent-yellow) 0deg, var(--accent-yellow) calc(var(--score) * 3.6deg), var(--bg-tertiary) calc(var(--score) * 3.6deg));
+        }
+        .score-circle.danger {
+            background: conic-gradient(var(--accent-red) 0deg, var(--accent-red) calc(var(--score) * 3.6deg), var(--bg-tertiary) calc(var(--score) * 3.6deg));
+        }
+
+        .score-circle::before {
+            content: '';
+            position: absolute;
+            width: 140px;
+            height: 140px;
+            background: var(--bg-primary);
+            border-radius: 50%;
+        }
+
+        .score-value { position: relative; font-size: 3rem; font-weight: bold; z-index: 1; }
+        .score-label { position: relative; color: var(--text-secondary); font-size: 0.85rem; z-index: 1; }
+
+        .score-meta { text-align: left; }
+        .score-meta p { margin: 0.5rem 0; color: var(--text-secondary); }
+        .score-meta strong { color: var(--text-primary); }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin: 2rem 0;
+        }
+
+        .card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1.5rem;
+        }
+
+        .card h2 {
+            font-size: 1.2rem;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .card.highlight-red {
+            border-left: 4px solid var(--accent-red);
+        }
+        .card.highlight-yellow {
+            border-left: 4px solid var(--accent-yellow);
+        }
+        .card.highlight-green {
+            border-left: 4px solid var(--accent-green);
+        }
+
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .metric:last-child { border-bottom: none; }
+        .metric-label { color: var(--text-secondary); }
+        .metric-value { font-weight: 600; }
+        .metric-value.good { color: var(--accent-green); }
+        .metric-value.warning { color: var(--accent-yellow); }
+        .metric-value.danger { color: var(--accent-red); }
+
+        .progress-bar {
+            height: 8px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 0.5rem;
+        }
+        .progress-fill { height: 100%; border-radius: 4px; }
+        .progress-fill.good { background: var(--accent-green); }
+        .progress-fill.warning { background: var(--accent-yellow); }
+        .progress-fill.danger { background: var(--accent-red); }
+
+        .chart-container {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin: 2rem 0;
+        }
+        .chart-container h2 { margin-bottom: 1rem; }
+        .chart-wrapper { position: relative; height: 400px; }
+
+        .section { margin: 3rem 0; }
+        .section h2 {
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+        th, td { padding: 0.75rem; text-align: left; border-bottom: 1px solid var(--border-color); }
+        th { background: var(--bg-tertiary); font-weight: 600; color: var(--text-secondary); }
+        tr:hover { background: var(--bg-tertiary); }
+
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+        .badge.critical { background: #f8514933; color: var(--accent-red); }
+        .badge.high { background: #d2992233; color: var(--accent-yellow); }
+        .badge.medium { background: #58a6ff33; color: var(--accent-blue); }
+        .badge.low { background: #3fb95033; color: var(--accent-green); }
+
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 1rem;
+            margin: 1rem 0;
+        }
+        .stat-box {
+            background: var(--bg-tertiary);
+            padding: 1rem;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .stat-box .value { font-size: 2rem; font-weight: bold; }
+        .stat-box .label { color: var(--text-secondary); font-size: 0.85rem; }
+
+        .trend-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            font-size: 0.9rem;
+        }
+        .trend-indicator.down { color: var(--accent-red); }
+        .trend-indicator.up { color: var(--accent-green); }
+        .trend-indicator.stable { color: var(--text-secondary); }
+
+        /* Collapsible sections */
+        .collapsible {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            margin: 1rem 0;
+        }
+        .collapsible-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 1.5rem;
+            cursor: pointer;
+            user-select: none;
+        }
+        .collapsible-header:hover { background: var(--bg-tertiary); border-radius: 8px; }
+        .collapsible-header h3 { margin: 0; font-size: 1.1rem; }
+        .collapsible-toggle {
+            color: var(--text-secondary);
+            font-size: 1.2rem;
+            transition: transform 0.2s;
+        }
+        .collapsible.open .collapsible-toggle { transform: rotate(180deg); }
+        .collapsible-content {
+            display: none;
+            padding: 0 1.5rem 1.5rem;
+        }
+        .collapsible.open .collapsible-content { display: block; }
+
+        /* Story narrative styling */
+        .narrative {
+            color: var(--text-secondary);
+            font-size: 1rem;
+            line-height: 1.8;
+            white-space: pre-wrap;
+        }
+
+        .key-finding {
+            padding: 0.75rem 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .key-finding:last-child { border-bottom: none; }
+
+        .recommendation-item {
+            margin-bottom: 1rem;
+        }
+        .recommendation-item:last-child { margin-bottom: 0; }
+        .recommendation-item strong { color: var(--text-primary); }
+        .recommendation-item p { color: var(--text-secondary); margin-top: 0.25rem; }
+
+        @media (max-width: 768px) {
+            .container { padding: 1rem; }
+            .score-hero { flex-direction: column; }
+            .chart-wrapper { height: 300px; }
+            table { font-size: 0.85rem; }
+            th, td { padding: 0.5rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header with Score -->
+        <header>
+            <h1>{{.Metadata.Repository}}</h1>
+            <p class="subtitle">Health Report | {{.Metadata.GeneratedAt.Format "January 2, 2006"}}</p>
+        </header>
+
+        <div class="score-hero">
+            <div class="score-circle {{.ScoreClass}}" style="--score: {{.Score.Score}}">
+                <span class="score-value">{{.Score.Score}}</span>
+                <span class="score-label">Health Score</span>
+            </div>
+            <div class="score-meta">
+                <p><strong>{{.Score.FilesAnalyzed}}</strong> files analyzed</p>
+                {{if .Score.Passed}}<p style="color: var(--accent-green);">All quality thresholds passed</p>{{end}}
+                {{if .Trend}}
+                <p class="trend-indicator {{if lt .Trend.Slope 0.0}}down{{else if gt .Trend.Slope 0.0}}up{{else}}stable{{end}}">
+                    {{if lt .Trend.Slope 0.0}}Declining{{else if gt .Trend.Slope 0.0}}Improving{{else}}Stable{{end}} over time
+                </p>
+                {{end}}
+            </div>
+        </div>
+
+        <!-- THE STORY: Executive Summary (moved up) -->
+        {{if .Summary}}
+        {{if .Summary.ExecutiveSummary}}
+        <section class="section">
+            <h2>The Story</h2>
+            <div class="card">
+                <p class="narrative">{{.Summary.ExecutiveSummary}}</p>
+            </div>
+        </section>
+        {{end}}
+
+        <!-- WHAT NEEDS ATTENTION: Recommendations (moved up from bottom!) -->
+        {{if or .Summary.Recommendations.HighPriority .Summary.Recommendations.MediumPriority .Summary.Recommendations.Ongoing}}
+        <section class="section">
+            <h2>What Needs Attention</h2>
+
+            <div class="grid">
+                {{if .Summary.Recommendations.HighPriority}}
+                <div class="card highlight-red">
+                    <h2 style="color: var(--accent-red);">Address Soon</h2>
+                    {{range .Summary.Recommendations.HighPriority}}
+                    <div class="recommendation-item">
+                        <strong>{{.Title}}</strong>
+                        <p>{{.Description}}</p>
+                    </div>
+                    {{end}}
+                </div>
+                {{end}}
+
+                {{if .Summary.Recommendations.MediumPriority}}
+                <div class="card highlight-yellow">
+                    <h2 style="color: var(--accent-yellow);">Worth Improving</h2>
+                    {{range .Summary.Recommendations.MediumPriority}}
+                    <div class="recommendation-item">
+                        <strong>{{.Title}}</strong>
+                        <p>{{.Description}}</p>
+                    </div>
+                    {{end}}
+                </div>
+                {{end}}
+
+                {{if .Summary.Recommendations.Ongoing}}
+                <div class="card highlight-green">
+                    <h2 style="color: var(--accent-green);">Keep Doing</h2>
+                    {{range .Summary.Recommendations.Ongoing}}
+                    <div class="recommendation-item">
+                        <strong>{{.Title}}</strong>
+                        <p>{{.Description}}</p>
+                    </div>
+                    {{end}}
+                </div>
+                {{end}}
+            </div>
+        </section>
+        {{end}}
+
+        <!-- KEY FINDINGS -->
+        {{if .Summary.KeyFindings}}
+        <section class="section">
+            <h2>Key Findings</h2>
+            <div class="card">
+                {{range .Summary.KeyFindings}}
+                <div class="key-finding">{{.}}</div>
+                {{end}}
+            </div>
+        </section>
+        {{end}}
+        {{end}}
+
+        <!-- THE EVIDENCE -->
+
+        {{if .Hotspots}}
+        {{if .Hotspots.Files}}
+        <!-- Where to Focus (was Hotspots) -->
+        <section class="section">
+            <h2>Where to Focus</h2>
+            <p style="color: var(--text-secondary); margin-bottom: 1rem;">Files that are both complex and frequently changed - the highest risk for bugs.</p>
+
+            {{if .HotspotsInsight}}
+            <div class="card" style="margin-bottom: 1.5rem;">
+                <p class="narrative">{{.HotspotsInsight.SectionInsight}}</p>
+            </div>
+            {{end}}
+
+            <div class="stat-grid">
+                <div class="stat-box">
+                    <div class="value">{{len .Hotspots.Files}}</div>
+                    <div class="label">Hotspot Files</div>
+                </div>
+                {{if .Hotspots.Summary}}
+                <div class="stat-box">
+                    <div class="value">{{printf "%.2f" .Hotspots.Summary.MaxScore}}</div>
+                    <div class="label">Highest Risk Score</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value">{{printf "%.2f" .Hotspots.Summary.AvgScore}}</div>
+                    <div class="label">Average Risk</div>
+                </div>
+                {{end}}
+            </div>
+
+            <div class="card">
+                <h2>Top 15 Risk Areas</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>File</th>
+                            <th>Risk Score</th>
+                            <th>Changes</th>
+                            <th>Complexity</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range limit .Hotspots.Files 15}}
+                        <tr>
+                            <td><code>{{truncatePath .Path 60}}</code></td>
+                            <td><span class="badge {{hotspotBadge .HotspotScore}}">{{printf "%.3f" .HotspotScore}}</span></td>
+                            <td>{{.Commits}}</td>
+                            <td>{{printf "%.1f" .AvgCognitive}}</td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+        {{end}}
+        {{end}}
+
+        {{if .SATD}}
+        {{if .SATD.Items}}
+        <!-- Known Issues (was SATD) -->
+        <section class="section">
+            <h2>Known Issues</h2>
+            <p style="color: var(--text-secondary); margin-bottom: 1rem;">Problems the team has documented but not yet fixed (TODO, FIXME, HACK comments).</p>
+
+            {{if .SATDInsight}}
+            <div class="card" style="margin-bottom: 1.5rem;">
+                <p class="narrative">{{.SATDInsight.SectionInsight}}</p>
+            </div>
+            {{end}}
+
+            <div class="stat-grid">
+                <div class="stat-box">
+                    <div class="value">{{len .SATD.Items}}</div>
+                    <div class="label">Total Issues</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value" style="color: var(--accent-red)">{{countSeverity .SATD.Items "critical"}}</div>
+                    <div class="label">Critical</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value" style="color: var(--accent-yellow)">{{countSeverity .SATD.Items "high"}}</div>
+                    <div class="label">High Priority</div>
+                </div>
+            </div>
+
+            <div class="grid">
+                <div class="chart-container" style="margin: 0;">
+                    <h2>By Severity</h2>
+                    <div class="chart-wrapper" style="height: 250px;">
+                        <canvas id="satdSeverityChart"></canvas>
+                    </div>
+                </div>
+                <div class="chart-container" style="margin: 0;">
+                    <h2>By Category</h2>
+                    <div class="chart-wrapper" style="height: 250px;">
+                        <canvas id="satdCategoryChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Critical and High-Priority Items</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Severity</th>
+                            <th>Category</th>
+                            <th>File</th>
+                            <th>Line</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range filterSeverity .SATD.Items "critical" "high"}}
+                        <tr>
+                            <td><span class="badge {{lower .Severity}}">{{.Severity}}</span></td>
+                            <td>{{.Category}}</td>
+                            <td><code>{{truncatePath .File 50}}</code></td>
+                            <td>{{.Line}}</td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+        {{end}}
+        {{end}}
+
+        {{if .Duplicates}}
+        <!-- Duplicated Code -->
+        <section class="section">
+            <h2>Duplicated Code</h2>
+            <p style="color: var(--text-secondary); margin-bottom: 1rem;">Code that appears in multiple places - bugs fixed in one spot may need fixing elsewhere too.</p>
+
+            {{if .DuplicationInsight}}
+            <div class="card" style="margin-bottom: 1.5rem;">
+                <p class="narrative">{{.DuplicationInsight.SectionInsight}}</p>
+            </div>
+            {{end}}
+
+            <div class="stat-grid">
+                <div class="stat-box">
+                    <div class="value" style="color: var(--accent-yellow)">{{printf "%.1f" .Duplicates.DuplicationRatio}}%</div>
+                    <div class="label">Duplication Rate</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value">{{.Duplicates.CloneGroups}}</div>
+                    <div class="label">Clone Groups</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value">{{.Duplicates.DuplicateLines}}</div>
+                    <div class="label">Duplicate Lines</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value">{{.Duplicates.TotalLines}}</div>
+                    <div class="label">Total Lines</div>
+                </div>
+            </div>
+        </section>
+        {{end}}
+
+        {{if .Ownership}}
+        <!-- Team Knowledge (was Ownership & Bus Factor) -->
+        <section class="section">
+            <h2>Team Knowledge</h2>
+            <p style="color: var(--text-secondary); margin-bottom: 1rem;">How knowledge is distributed across the team - concentrated knowledge is a risk if people leave.</p>
+
+            <div class="stat-grid">
+                <div class="stat-box">
+                    <div class="value" style="color: var(--accent-green)">{{.Ownership.BusFactor}}</div>
+                    <div class="label">Bus Factor</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value" style="color: var(--accent-yellow)">{{.Ownership.KnowledgeSilos}}</div>
+                    <div class="label">Knowledge Silos</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value">{{.Ownership.TotalFiles}}</div>
+                    <div class="label">Total Files</div>
+                </div>
+                {{if gt .Ownership.TotalFiles 0}}
+                <div class="stat-box">
+                    <div class="value" style="color: var(--accent-yellow)">{{printf "%.1f" (percent .Ownership.KnowledgeSilos .Ownership.TotalFiles)}}%</div>
+                    <div class="label">Files at Risk</div>
+                </div>
+                {{end}}
+            </div>
+
+            {{if .Ownership.TopOwners}}
+            <div class="chart-container">
+                <h2>Top Contributors</h2>
+                <div class="chart-wrapper" style="height: 300px;">
+                    <canvas id="ownershipChart"></canvas>
+                </div>
+            </div>
+            {{end}}
+        </section>
+        {{end}}
+
+        {{if .Churn}}
+        <!-- Change Activity (was Code Churn) -->
+        <section class="section">
+            <h2>Change Activity</h2>
+            <p style="color: var(--text-secondary); margin-bottom: 1rem;">How frequently code is being modified - high activity may indicate instability or active development.</p>
+
+            {{if .ChurnInsight}}
+            <div class="card" style="margin-bottom: 1.5rem;">
+                <p class="narrative">{{.ChurnInsight.SectionInsight}}</p>
+            </div>
+            {{end}}
+
+            <div class="stat-grid">
+                <div class="stat-box">
+                    <div class="value">{{.Churn.Summary.TotalCommits}}</div>
+                    <div class="label">Total Changes</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value">{{.Churn.Summary.UniqueFiles}}</div>
+                    <div class="label">Files Changed</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value">{{.Churn.Summary.TotalAdded}}</div>
+                    <div class="label">Lines Added</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value">{{.Churn.Summary.TotalDeleted}}</div>
+                    <div class="label">Lines Deleted</div>
+                </div>
+            </div>
+
+            {{if .Churn.Files}}
+            <div class="card">
+                <h2>Most Frequently Changed Files</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>File</th>
+                            <th>Changes</th>
+                            <th>Contributors</th>
+                            <th>Churn Score</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range limit .Churn.Files 15}}
+                        <tr>
+                            <td><code>{{.File}}</code></td>
+                            <td>{{.Commits}}</td>
+                            <td>{{len .Authors}}</td>
+                            <td><span class="badge {{churnBadge .ChurnScore}}">{{printf "%.3f" .ChurnScore}}</span></td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+            {{end}}
+        </section>
+        {{end}}
+
+        {{if .Trend}}
+        <!-- HISTORICAL CONTEXT -->
+        <section class="section">
+            <h2>Historical Context</h2>
+            <p style="color: var(--text-secondary); margin-bottom: 1rem;">How code quality has changed over time - trends reveal the impact of releases and refactoring.</p>
+
+            {{if .TrendsInsight}}
+            <div class="card" style="margin-bottom: 1.5rem;">
+                <p class="narrative">{{.TrendsInsight.SectionInsight}}</p>
+            </div>
+            {{end}}
+
+            <div class="stat-grid">
+                <div class="stat-box">
+                    <div class="value" style="color: var(--accent-green)">{{.Trend.StartScore}}</div>
+                    <div class="label">Starting Score</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value" style="color: var(--accent-green)">{{.Trend.EndScore}}</div>
+                    <div class="label">Current Score</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value" style="color: {{if lt .Trend.Slope 0.0}}var(--accent-yellow){{else}}var(--accent-green){{end}}">{{printf "%.2f" .Trend.Slope}}</div>
+                    <div class="label">Monthly Change</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value">{{printf "%.2f" .Trend.RSquared}}</div>
+                    <div class="label">Trend Fit</div>
+                </div>
+            </div>
+
+            <div class="chart-container">
+                <h2>Health Score Over Time</h2>
+                <div class="chart-wrapper">
+                    <canvas id="trendsChart"></canvas>
+                </div>
+            </div>
+
+            <div class="chart-container">
+                <h2>Quality Components Over Time</h2>
+                <div class="chart-wrapper">
+                    <canvas id="componentTrendsChart"></canvas>
+                </div>
+            </div>
+
+            {{if .TrendsInsight}}
+            {{if .TrendsInsight.HistoricalEvents}}
+            <div class="card">
+                <h2>Notable Events</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>When</th>
+                            <th>Change</th>
+                            <th>Primary Driver</th>
+                            <th>Related Releases</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .TrendsInsight.HistoricalEvents}}
+                        <tr style="background: {{if lt .Change 0}}#f8514915{{else}}#3fb95015{{end}};">
+                            <td><strong>{{.Period}}</strong></td>
+                            <td><span class="badge {{if lt .Change -5}}critical{{else if lt .Change 0}}high{{else}}low{{end}}">{{if gt .Change 0}}+{{end}}{{.Change}} pts</span></td>
+                            <td>{{.PrimaryDriver}}</td>
+                            <td>{{range $i, $r := .Releases}}{{if $i}}, {{end}}{{$r}}{{end}}</td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+            {{end}}
+            {{end}}
+
+            {{if .ComponentTrends}}
+            <div class="card">
+                <h2>Component Trends</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Component</th>
+                            <th>Monthly Change</th>
+                            <th>Correlation</th>
+                            <th>Direction</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range $name, $trend := .ComponentTrends}}
+                        <tr>
+                            <td>{{$name | title}}</td>
+                            <td>{{printf "%.3f" $trend.Slope}}</td>
+                            <td>{{printf "%.2f" $trend.Correlation}}</td>
+                            <td>
+                                {{if lt $trend.Correlation -0.5}}<span class="trend-indicator down">Declining</span>
+                                {{else if gt $trend.Correlation 0.5}}<span class="trend-indicator up">Improving</span>
+                                {{else}}<span class="trend-indicator stable">Stable</span>{{end}}
+                            </td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+            {{end}}
+        </section>
+        {{end}}
+
+        <!-- SCORE BREAKDOWN (moved down, collapsible) -->
+        <section class="section">
+            <h2>Score Breakdown</h2>
+            <p style="color: var(--text-secondary); margin-bottom: 1rem;">How the health score is calculated from individual quality components.</p>
+
+            <div class="collapsible open" id="scoreBreakdown">
+                <div class="collapsible-header" onclick="toggleCollapsible('scoreBreakdown')">
+                    <h3>Component Scores</h3>
+                    <span class="collapsible-toggle">&#9660;</span>
+                </div>
+                <div class="collapsible-content">
+                    <div class="grid">
+                        {{if index .Score.Components "complexity"}}
+                        <div class="card">
+                            <h2>Complexity (25%)</h2>
+                            <div class="metric">
+                                <span class="metric-label">Score</span>
+                                <span class="metric-value {{scoreClass (index .Score.Components "complexity")}}">{{index .Score.Components "complexity"}}</span>
+                            </div>
+                            <div class="progress-bar"><div class="progress-fill {{scoreClass (index .Score.Components "complexity")}}" style="width: {{index .Score.Components "complexity"}}%"></div></div>
+                            {{if .Complexity}}
+                            <div class="metric" style="margin-top: 0.5rem;">
+                                <span class="metric-label">Avg Cyclomatic</span>
+                                <span class="metric-value">{{printf "%.2f" .Complexity.AvgCyclomatic}}</span>
+                            </div>
+                            <div class="metric">
+                                <span class="metric-label">Avg Cognitive</span>
+                                <span class="metric-value">{{printf "%.2f" .Complexity.AvgCognitive}}</span>
+                            </div>
+                            {{end}}
+                        </div>
+                        {{end}}
+
+                        {{if index .Score.Components "duplication"}}
+                        <div class="card">
+                            <h2>Duplication (20%)</h2>
+                            <div class="metric">
+                                <span class="metric-label">Score</span>
+                                <span class="metric-value {{scoreClass (index .Score.Components "duplication")}}">{{index .Score.Components "duplication"}}</span>
+                            </div>
+                            <div class="progress-bar"><div class="progress-fill {{scoreClass (index .Score.Components "duplication")}}" style="width: {{index .Score.Components "duplication"}}%"></div></div>
+                            {{if .Duplicates}}
+                            <div class="metric" style="margin-top: 0.5rem;">
+                                <span class="metric-label">Duplication Ratio</span>
+                                <span class="metric-value">{{printf "%.2f" .Duplicates.DuplicationRatio}}%</span>
+                            </div>
+                            {{end}}
+                        </div>
+                        {{end}}
+
+                        {{if index .Score.Components "cohesion"}}
+                        <div class="card">
+                            <h2>Cohesion (15%)</h2>
+                            <div class="metric">
+                                <span class="metric-label">Score</span>
+                                <span class="metric-value {{scoreClass (index .Score.Components "cohesion")}}">{{index .Score.Components "cohesion"}}</span>
+                            </div>
+                            <div class="progress-bar"><div class="progress-fill {{scoreClass (index .Score.Components "cohesion")}}" style="width: {{index .Score.Components "cohesion"}}%"></div></div>
+                        </div>
+                        {{end}}
+
+                        {{if index .Score.Components "tdg"}}
+                        <div class="card">
+                            <h2>Debt Gradient (15%)</h2>
+                            <div class="metric">
+                                <span class="metric-label">Score</span>
+                                <span class="metric-value {{scoreClass (index .Score.Components "tdg")}}">{{index .Score.Components "tdg"}}</span>
+                            </div>
+                            <div class="progress-bar"><div class="progress-fill {{scoreClass (index .Score.Components "tdg")}}" style="width: {{index .Score.Components "tdg"}}%"></div></div>
+                        </div>
+                        {{end}}
+
+                        {{if index .Score.Components "satd"}}
+                        <div class="card">
+                            <h2>Known Debt (10%)</h2>
+                            <div class="metric">
+                                <span class="metric-label">Score</span>
+                                <span class="metric-value {{scoreClass (index .Score.Components "satd")}}">{{index .Score.Components "satd"}}</span>
+                            </div>
+                            <div class="progress-bar"><div class="progress-fill {{scoreClass (index .Score.Components "satd")}}" style="width: {{index .Score.Components "satd"}}%"></div></div>
+                        </div>
+                        {{end}}
+
+                        {{if index .Score.Components "coupling"}}
+                        <div class="card">
+                            <h2>Coupling (10%)</h2>
+                            <div class="metric">
+                                <span class="metric-label">Score</span>
+                                <span class="metric-value {{scoreClass (index .Score.Components "coupling")}}">{{index .Score.Components "coupling"}}</span>
+                            </div>
+                            <div class="progress-bar"><div class="progress-fill {{scoreClass (index .Score.Components "coupling")}}" style="width: {{index .Score.Components "coupling"}}%"></div></div>
+                        </div>
+                        {{end}}
+
+                        {{if index .Score.Components "smells"}}
+                        <div class="card">
+                            <h2>Code Smells (5%)</h2>
+                            <div class="metric">
+                                <span class="metric-label">Score</span>
+                                <span class="metric-value {{scoreClass (index .Score.Components "smells")}}">{{index .Score.Components "smells"}}</span>
+                            </div>
+                            <div class="progress-bar"><div class="progress-fill {{scoreClass (index .Score.Components "smells")}}" style="width: {{index .Score.Components "smells"}}%"></div></div>
+                        </div>
+                        {{end}}
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- GLOSSARY (collapsible) -->
+        <section class="section">
+            <div class="collapsible" id="glossary">
+                <div class="collapsible-header" onclick="toggleCollapsible('glossary')">
+                    <h3>Glossary of Terms</h3>
+                    <span class="collapsible-toggle">&#9660;</span>
+                </div>
+                <div class="collapsible-content">
+                    <div class="grid">
+                        <div class="card">
+                            <h2>Health Score</h2>
+                            <p style="color: var(--text-secondary);">A weighted composite metric (0-100) measuring overall code quality. Above 80 is good, 60-80 needs attention, below 60 is concerning.</p>
+                        </div>
+                        <div class="card">
+                            <h2>Hotspot</h2>
+                            <p style="color: var(--text-secondary);">A file that is both complex AND frequently changed. These are the highest-risk areas because they're hard to change safely but get changed often.</p>
+                        </div>
+                        <div class="card">
+                            <h2>Bus Factor</h2>
+                            <p style="color: var(--text-secondary);">The minimum number of people who would need to leave before critical knowledge is lost. Higher is better; 1 is a serious risk.</p>
+                        </div>
+                        <div class="card">
+                            <h2>Knowledge Silo</h2>
+                            <p style="color: var(--text-secondary);">A file that only one person has ever touched. If that person leaves, the knowledge goes with them.</p>
+                        </div>
+                        <div class="card">
+                            <h2>Cyclomatic Complexity</h2>
+                            <p style="color: var(--text-secondary);">The number of independent paths through code. More paths means more test cases needed and more ways things can go wrong.</p>
+                        </div>
+                        <div class="card">
+                            <h2>Cognitive Complexity</h2>
+                            <p style="color: var(--text-secondary);">How hard code is to understand. Accounts for nesting, breaks in flow, and things that make humans struggle to follow the logic.</p>
+                        </div>
+                        <div class="card">
+                            <h2>Code Churn</h2>
+                            <p style="color: var(--text-secondary);">How frequently files change. High churn might mean active development, or it might mean code that keeps breaking and needs fixing.</p>
+                        </div>
+                        <div class="card">
+                            <h2>Technical Debt</h2>
+                            <p style="color: var(--text-secondary);">The cost of rework caused by choosing quick solutions now instead of better approaches. Like financial debt, it accumulates interest over time.</p>
+                        </div>
+                        <div class="card">
+                            <h2>LCOM (Cohesion)</h2>
+                            <p style="color: var(--text-secondary);">How well a class's methods work together. High LCOM means methods don't share data - the class is probably doing too many unrelated things.</p>
+                        </div>
+                        <div class="card">
+                            <h2>CBO (Coupling)</h2>
+                            <p style="color: var(--text-secondary);">How many other classes a class depends on. High coupling means changes ripple through the codebase - everything is connected to everything.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <footer style="text-align: center; padding: 2rem; border-top: 1px solid var(--border-color); margin-top: 2rem; color: var(--text-secondary);">
+            <p>Generated using <a href="https://github.com/panbanda/omen" style="color: var(--accent-blue);">Omen</a></p>
+        </footer>
+    </div>
+
+    <script>
+        function toggleCollapsible(id) {
+            const el = document.getElementById(id);
+            el.classList.toggle('open');
+        }
+    </script>
+
+    {{if .Trend}}
+    <script>
+        Chart.defaults.color = '#8b949e';
+        Chart.defaults.borderColor = '#30363d';
+
+        const trendsDataRaw = {
+            labels: [{{range $i, $p := .Trend.Points}}{{if $i}}, {{end}}'{{$p.Date}}'{{end}}],
+            scores: [{{range $i, $p := .Trend.Points}}{{if $i}}, {{end}}{{$p.Score}}{{end}}]
+        };
+
+        // Format date labels as "Mon YYYY" (e.g., "Sep 2016")
+        function formatDateLabel(isoDate) {
+            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            const parts = isoDate.substring(0, 10).split('-');
+            return months[parseInt(parts[1], 10) - 1] + ' ' + parts[0];
+        }
+
+        const trendsData = {
+            labels: trendsDataRaw.labels.map(formatDateLabel),
+            rawLabels: trendsDataRaw.labels,
+            scores: trendsDataRaw.scores
+        };
+
+        // Score annotations from insights
+        {{if .TrendsInsight}}
+        {{if .TrendsInsight.ScoreAnnotations}}
+        const scoreAnnotations = {{.TrendsInsight.ScoreAnnotations | json}};
+        {{else}}
+        const scoreAnnotations = [];
+        {{end}}
+        {{else}}
+        const scoreAnnotations = [];
+        {{end}}
+
+        // Helper to find label index by YYYY-MM prefix match (uses raw ISO dates)
+        function findLabelIndex(rawLabels, datePrefix) {
+            return rawLabels.findIndex(label => label.startsWith(datePrefix));
+        }
+
+        // Build annotation config for health score chart
+        const healthAnnotations = {};
+        scoreAnnotations.forEach((ann, i) => {
+            const labelIndex = findLabelIndex(trendsData.rawLabels, ann.date);
+            if (labelIndex !== -1) {
+                const xLabel = trendsData.labels[labelIndex]; // Use formatted label for category scale
+                // Vertical line at the date
+                healthAnnotations['line' + i] = {
+                    type: 'line',
+                    xMin: xLabel,
+                    xMax: xLabel,
+                    borderColor: ann.change < 0 ? '#f8514988' : '#3fb95088',
+                    borderWidth: 2,
+                    borderDash: [6, 6]
+                };
+                // Label with the annotation text
+                healthAnnotations['label' + i] = {
+                    type: 'label',
+                    xValue: xLabel,
+                    yValue: trendsData.scores[labelIndex] + (i % 2 === 0 ? 3 : -3),
+                    backgroundColor: ann.change < 0 ? '#f8514933' : '#3fb95033',
+                    borderColor: ann.change < 0 ? '#f85149' : '#3fb950',
+                    borderWidth: 1,
+                    borderRadius: 4,
+                    color: '#e6edf3',
+                    font: { size: 10 },
+                    padding: 4,
+                    content: ann.label
+                };
+            }
+        });
+
+        new Chart(document.getElementById('trendsChart'), {
+            type: 'line',
+            data: {
+                labels: trendsData.labels,
+                datasets: [{
+                    label: 'Health Score',
+                    data: trendsData.scores,
+                    borderColor: '#58a6ff',
+                    backgroundColor: '#58a6ff33',
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 4,
+                    pointHoverRadius: 6
+                }, {
+                    label: 'Trend Line',
+                    data: trendsData.labels.map((_, i) => {{.Trend.Intercept}} + ({{.Trend.Slope}} * i)),
+                    borderColor: '#d2992288',
+                    borderDash: [5, 5],
+                    pointRadius: 0,
+                    fill: false
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'top' },
+                    tooltip: {
+                        mode: 'index',
+                        intersect: false,
+                        callbacks: {
+                            afterBody: function(context) {
+                                const rawDate = trendsData.rawLabels[context[0].dataIndex];
+                                const datePrefix = rawDate.substring(0, 7); // YYYY-MM
+                                const ann = scoreAnnotations.find(a => a.date === datePrefix);
+                                if (ann) {
+                                    return '\n' + ann.label + ': ' + ann.description;
+                                }
+                                return '';
+                            }
+                        }
+                    },
+                    annotation: {
+                        annotations: healthAnnotations
+                    }
+                },
+                scales: {
+                    x: {
+                        ticks: {
+                            maxRotation: 45,
+                            minRotation: 45,
+                            autoSkip: true,
+                            maxTicksLimit: 20
+                        }
+                    },
+                    y: {
+                        min: Math.min(...trendsData.scores) - 5,
+                        max: Math.max(...trendsData.scores) + 5,
+                        title: { display: true, text: 'Score' }
+                    }
+                }
+            }
+        });
+
+        {{if .Trend.ComponentTrends}}
+        const componentLabelsRaw = [{{range $i, $p := .Trend.Points}}{{if $i}}, {{end}}'{{$p.Date}}'{{end}}];
+        const componentLabels = componentLabelsRaw.map(formatDateLabel);
+
+        // Component-specific colors for annotation matching
+        const componentColors = {
+            complexity: '#3fb950',
+            duplication: '#58a6ff',
+            coupling: '#d29922',
+            cohesion: '#a371f7',
+            smells: '#f85149',
+            satd: '#8b949e',
+            tdg: '#e6edf3'
+        };
+
+        // Build component annotations from insights
+        const componentAnnotations = {};
+        {{if .ComponentsInsight}}{{if .ComponentsInsight.ComponentAnnotations}}
+        const compAnnData = {{json .ComponentsInsight.ComponentAnnotations}};
+        let annIndex = 0;
+        Object.keys(compAnnData).forEach(comp => {
+            const annotations = compAnnData[comp] || [];
+            const color = componentColors[comp] || '#8b949e';
+            annotations.forEach(ann => {
+                const labelIndex = findLabelIndex(componentLabelsRaw, ann.date);
+                if (labelIndex !== -1) {
+                    const xLabel = componentLabels[labelIndex]; // Use formatted label for category scale
+                    const isDecline = ann.to < ann.from;
+                    componentAnnotations['line' + annIndex] = {
+                        type: 'line',
+                        xMin: xLabel,
+                        xMax: xLabel,
+                        borderColor: color + '66',
+                        borderWidth: 2,
+                        borderDash: [4, 4]
+                    };
+                    componentAnnotations['label' + annIndex] = {
+                        type: 'label',
+                        xValue: xLabel,
+                        yValue: ann.to || (95 - (annIndex % 5) * 7),
+                        backgroundColor: '#21262d',
+                        borderColor: color,
+                        borderWidth: 1,
+                        borderRadius: 4,
+                        color: '#e6edf3',
+                        font: { size: 8 },
+                        padding: 2,
+                        content: ann.label
+                    };
+                    annIndex++;
+                }
+            });
+        });
+        {{else}}
+        // Fallback to score annotations if no component annotations
+        scoreAnnotations.forEach((ann, i) => {
+            const labelIndex = findLabelIndex(componentLabelsRaw, ann.date);
+            if (labelIndex !== -1) {
+                const xLabel = componentLabels[labelIndex]; // Use formatted label for category scale
+                componentAnnotations['line' + i] = {
+                    type: 'line',
+                    xMin: xLabel,
+                    xMax: xLabel,
+                    borderColor: ann.change < 0 ? '#f8514966' : '#3fb95066',
+                    borderWidth: 1,
+                    borderDash: [4, 4]
+                };
+                componentAnnotations['label' + i] = {
+                    type: 'label',
+                    xValue: xLabel,
+                    yValue: 95 - (i % 4) * 8,
+                    backgroundColor: '#21262d',
+                    borderColor: ann.change < 0 ? '#f85149' : '#3fb950',
+                    borderWidth: 1,
+                    borderRadius: 4,
+                    color: '#e6edf3',
+                    font: { size: 9 },
+                    padding: 3,
+                    content: ann.label
+                };
+            }
+        });
+        {{end}}{{end}}
+
+        new Chart(document.getElementById('componentTrendsChart'), {
+            type: 'line',
+            data: {
+                labels: componentLabels,
+                datasets: [
+                    {{range $i, $p := .Trend.Points}}{{if eq $i 0}}
+                    { label: 'Complexity', data: [{{range $j, $pt := $.Trend.Points}}{{if $j}}, {{end}}{{index $pt.Components "complexity"}}{{end}}], borderColor: '#3fb950', tension: 0.3, pointRadius: 2 },
+                    { label: 'Duplication', data: [{{range $j, $pt := $.Trend.Points}}{{if $j}}, {{end}}{{index $pt.Components "duplication"}}{{end}}], borderColor: '#58a6ff', tension: 0.3, pointRadius: 2 },
+                    { label: 'Coupling', data: [{{range $j, $pt := $.Trend.Points}}{{if $j}}, {{end}}{{index $pt.Components "coupling"}}{{end}}], borderColor: '#d29922', tension: 0.3, pointRadius: 2 },
+                    { label: 'Cohesion', data: [{{range $j, $pt := $.Trend.Points}}{{if $j}}, {{end}}{{index $pt.Components "cohesion"}}{{end}}], borderColor: '#a371f7', tension: 0.3, pointRadius: 2 },
+                    { label: 'Smells', data: [{{range $j, $pt := $.Trend.Points}}{{if $j}}, {{end}}{{index $pt.Components "smells"}}{{end}}], borderColor: '#f85149', tension: 0.3, pointRadius: 2 }
+                    {{end}}{{end}}
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'top' },
+                    tooltip: {
+                        mode: 'index',
+                        intersect: false,
+                        callbacks: {
+                            afterBody: function(context) {
+                                const rawDate = componentLabelsRaw[context[0].dataIndex];
+                                const datePrefix = rawDate.substring(0, 7); // YYYY-MM
+                                {{if .ComponentsInsight}}{{if .ComponentsInsight.ComponentAnnotations}}
+                                // Show all component annotations for this date
+                                const lines = [];
+                                Object.keys(compAnnData).forEach(comp => {
+                                    const anns = compAnnData[comp] || [];
+                                    anns.forEach(ann => {
+                                        if (ann.date === datePrefix) {
+                                            lines.push(comp + ': ' + ann.description);
+                                        }
+                                    });
+                                });
+                                return lines.length ? '\n' + lines.join('\n') : '';
+                                {{else}}
+                                const ann = scoreAnnotations.find(a => a.date === datePrefix);
+                                if (ann) {
+                                    return '\n' + ann.label + ': ' + ann.description;
+                                }
+                                return '';
+                                {{end}}{{else}}
+                                const ann = scoreAnnotations.find(a => a.date === datePrefix);
+                                if (ann) {
+                                    return '\n' + ann.label + ': ' + ann.description;
+                                }
+                                return '';
+                                {{end}}
+                            }
+                        }
+                    },
+                    annotation: {
+                        annotations: componentAnnotations
+                    }
+                },
+                scales: {
+                    x: {
+                        ticks: {
+                            maxRotation: 45,
+                            minRotation: 45,
+                            autoSkip: true,
+                            maxTicksLimit: 20
+                        }
+                    },
+                    y: { min: 50, max: 100, title: { display: true, text: 'Score' } }
+                }
+            }
+        });
+        {{end}}
+    </script>
+    {{end}}
+
+    {{if .Ownership}}
+    {{if .Ownership.TopOwners}}
+    <script>
+        new Chart(document.getElementById('ownershipChart'), {
+            type: 'bar',
+            data: {
+                labels: [{{range $i, $o := .Ownership.TopOwners}}{{if $i}}, {{end}}'{{$o.Name}}'{{end}}],
+                datasets: [{
+                    label: 'Files Owned',
+                    data: [{{range $i, $o := .Ownership.TopOwners}}{{if $i}}, {{end}}{{$o.FilesOwned}}{{end}}],
+                    backgroundColor: ['#58a6ff', '#3fb950', '#d29922', '#a371f7', '#f85149', '#8b949e', '#58a6ff', '#3fb950', '#d29922', '#a371f7']
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                indexAxis: 'y',
+                plugins: { legend: { display: false } }
+            }
+        });
+    </script>
+    {{end}}
+    {{end}}
+
+    {{if .SATD}}
+    {{if .SATD.Items}}
+    <script>
+        const satdItems = {{.SATDStats | json}};
+
+        new Chart(document.getElementById('satdSeverityChart'), {
+            type: 'doughnut',
+            data: {
+                labels: ['Critical (' + satdItems.critical + ')', 'High (' + satdItems.high + ')', 'Medium (' + satdItems.medium + ')', 'Low (' + satdItems.low + ')'],
+                datasets: [{
+                    data: [satdItems.critical, satdItems.high, satdItems.medium, satdItems.low],
+                    backgroundColor: ['#f85149', '#d29922', '#58a6ff', '#3fb950']
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { position: 'right' } }
+            }
+        });
+
+        new Chart(document.getElementById('satdCategoryChart'), {
+            type: 'doughnut',
+            data: {
+                labels: Object.keys(satdItems.categories).map(k => k + ' (' + satdItems.categories[k] + ')'),
+                datasets: [{
+                    data: Object.values(satdItems.categories),
+                    backgroundColor: ['#58a6ff', '#3fb950', '#a371f7', '#d29922', '#f85149', '#8b949e']
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { position: 'right' } }
+            }
+        });
+    </script>
+    {{end}}
+    {{end}}
+
+    <script>
+    // Format large numbers with locale-aware formatting (commas)
+    document.querySelectorAll('.stat-box .value').forEach(el => {
+        const text = el.textContent.trim();
+        // Match pure integers (no decimals, no % sign)
+        if (/^\d+$/.test(text)) {
+            el.textContent = parseInt(text, 10).toLocaleString();
+        }
+    });
+    </script>
+</body>
+</html>
