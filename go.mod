@@ -26,7 +26,7 @@ require (
 	github.com/toon-format/toon-go v0.0.0-20251108125615-44b4cd22477f
 	github.com/yuin/goldmark v1.7.13
 	github.com/zeebo/blake3 v0.2.4
-	golang.org/x/text v0.31.0
+	golang.org/x/text v0.32.0
 	gonum.org/v1/gonum v0.16.0
 	gopkg.in/yaml.v3 v3.0.1
 )
