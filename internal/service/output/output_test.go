@@ -12,14 +12,8 @@ func TestNew(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	if svc == nil {
-		t.Fatal("New() returned nil")
-	}
-	if svc.format != FormatText {
-		t.Errorf("expected default format %v, got %v", FormatText, svc.format)
-	}
-	if svc.colored != true {
-		t.Error("expected default colored = true")
+	if svc == nil || svc.format != FormatText || !svc.colored {
+		t.Fatal("New() returned nil or has wrong defaults")
 	}
 }
 

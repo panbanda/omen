@@ -333,3 +333,255 @@ func ForEachFileWithResource[T any, R any](
 	}
 	return results, errs
 }
+
+// MapFilesIndexed processes files in parallel using indexed result collection
+// to eliminate mutex contention. Results are returned in the same order as input files.
+// Progress is tracked via context using analyzer.WithTracker.
+func MapFilesIndexed[T any](ctx context.Context, files []string, fn func(*parser.Parser, string) (T, error)) ([]T, *ProcessingErrors) {
+	return MapFilesIndexedWithSizeLimit(ctx, files, 0, fn)
+}
+
+// MapFilesIndexedWithSizeLimit processes files in parallel using indexed result collection,
+// skipping files that exceed maxSize. If maxSize is 0, no limit is enforced.
+// Results are returned in the same order as input files (zero value for skipped/errored files).
+func MapFilesIndexedWithSizeLimit[T any](ctx context.Context, files []string, maxSize int64, fn func(*parser.Parser, string) (T, error)) ([]T, *ProcessingErrors) {
+	if len(files) == 0 {
+		return nil, nil
+	}
+
+	maxWorkers := runtime.NumCPU() * DefaultWorkerMultiplier
+	// Pre-allocate results slice - no mutex needed with indexed assignment
+	results := make([]T, len(files))
+	errs := &ProcessingErrors{}
+
+	tracker := analyzer.TrackerFromContext(ctx)
+	if tracker != nil {
+		tracker.Add(len(files))
+	}
+
+	p := pool.New().WithMaxGoroutines(maxWorkers).WithContext(ctx)
+	for i, path := range files {
+		// Capture loop variables
+		idx := i
+		filePath := path
+
+		p.Go(func(ctx context.Context) error {
+			defer func() {
+				if tracker != nil {
+					tracker.Tick(filePath)
+				}
+			}()
+
+			// Check for cancellation before processing
+			select {
+			case <-ctx.Done():
+				errs.Add(filePath, ctx.Err())
+				return ctx.Err()
+			default:
+			}
+
+			// Check file size before processing
+			if maxSize > 0 {
+				info, err := os.Stat(filePath)
+				if err != nil {
+					errs.Add(filePath, err)
+					return nil
+				}
+				if info.Size() > maxSize {
+					errs.Add(filePath, fmt.Errorf("file too large: %d bytes (limit: %d)", info.Size(), maxSize))
+					return nil
+				}
+			}
+
+			psr := parser.New()
+			defer psr.Close()
+
+			result, err := fn(psr, filePath)
+			if err != nil {
+				errs.Add(filePath, err)
+				return nil
+			}
+
+			// Indexed assignment - no mutex needed
+			results[idx] = result
+			return nil
+		})
+	}
+	_ = p.Wait()
+
+	if !errs.HasErrors() {
+		return results, nil
+	}
+	return results, errs
+}
+
+// ForEachFileIndexed processes files in parallel using indexed result collection.
+// No parser is provided; use this for non-AST operations.
+// Results are returned in the same order as input files.
+func ForEachFileIndexed[T any](ctx context.Context, files []string, fn func(string) (T, error)) ([]T, *ProcessingErrors) {
+	if len(files) == 0 {
+		return nil, nil
+	}
+
+	maxWorkers := runtime.NumCPU() * DefaultWorkerMultiplier
+	results := make([]T, len(files))
+	errs := &ProcessingErrors{}
+
+	tracker := analyzer.TrackerFromContext(ctx)
+	if tracker != nil {
+		tracker.Add(len(files))
+	}
+
+	p := pool.New().WithMaxGoroutines(maxWorkers).WithContext(ctx)
+	for i, path := range files {
+		idx := i
+		filePath := path
+
+		p.Go(func(ctx context.Context) error {
+			defer func() {
+				if tracker != nil {
+					tracker.Tick(filePath)
+				}
+			}()
+
+			select {
+			case <-ctx.Done():
+				errs.Add(filePath, ctx.Err())
+				return ctx.Err()
+			default:
+			}
+
+			result, err := fn(filePath)
+			if err != nil {
+				errs.Add(filePath, err)
+				return nil
+			}
+
+			results[idx] = result
+			return nil
+		})
+	}
+	_ = p.Wait()
+
+	if !errs.HasErrors() {
+		return results, nil
+	}
+	return results, errs
+}
+
+// parserPool provides per-worker parser pooling to reduce CGO overhead.
+type parserPool struct {
+	parsers chan *parser.Parser
+	size    int
+}
+
+// newParserPool creates a pool of parsers for concurrent use.
+func newParserPool(size int) *parserPool {
+	pp := &parserPool{
+		parsers: make(chan *parser.Parser, size),
+		size:    size,
+	}
+	// Pre-populate the pool
+	for i := 0; i < size; i++ {
+		pp.parsers <- parser.New()
+	}
+	return pp
+}
+
+// get retrieves a parser from the pool.
+func (pp *parserPool) get() *parser.Parser {
+	return <-pp.parsers
+}
+
+// put returns a parser to the pool.
+func (pp *parserPool) put(psr *parser.Parser) {
+	pp.parsers <- psr
+}
+
+// close releases all parsers in the pool.
+func (pp *parserPool) close() {
+	close(pp.parsers)
+	for psr := range pp.parsers {
+		psr.Close()
+	}
+}
+
+// MapFilesPooled processes files in parallel using a shared parser pool.
+// This reduces CGO overhead by reusing parsers across multiple files.
+// Results are returned in the same order as input files.
+func MapFilesPooled[T any](ctx context.Context, files []string, fn func(*parser.Parser, string) (T, error)) ([]T, *ProcessingErrors) {
+	return MapFilesPooledWithSizeLimit(ctx, files, 0, fn)
+}
+
+// MapFilesPooledWithSizeLimit processes files using a shared parser pool,
+// skipping files that exceed maxSize. If maxSize is 0, no limit is enforced.
+func MapFilesPooledWithSizeLimit[T any](ctx context.Context, files []string, maxSize int64, fn func(*parser.Parser, string) (T, error)) ([]T, *ProcessingErrors) {
+	if len(files) == 0 {
+		return nil, nil
+	}
+
+	maxWorkers := runtime.NumCPU() * DefaultWorkerMultiplier
+	results := make([]T, len(files))
+	errs := &ProcessingErrors{}
+
+	// Create parser pool with one parser per worker
+	parserPl := newParserPool(maxWorkers)
+	defer parserPl.close()
+
+	tracker := analyzer.TrackerFromContext(ctx)
+	if tracker != nil {
+		tracker.Add(len(files))
+	}
+
+	p := pool.New().WithMaxGoroutines(maxWorkers).WithContext(ctx)
+	for i, path := range files {
+		idx := i
+		filePath := path
+
+		p.Go(func(ctx context.Context) error {
+			defer func() {
+				if tracker != nil {
+					tracker.Tick(filePath)
+				}
+			}()
+
+			select {
+			case <-ctx.Done():
+				errs.Add(filePath, ctx.Err())
+				return ctx.Err()
+			default:
+			}
+
+			if maxSize > 0 {
+				info, err := os.Stat(filePath)
+				if err != nil {
+					errs.Add(filePath, err)
+					return nil
+				}
+				if info.Size() > maxSize {
+					errs.Add(filePath, fmt.Errorf("file too large: %d bytes (limit: %d)", info.Size(), maxSize))
+					return nil
+				}
+			}
+
+			// Get parser from pool instead of creating new one
+			psr := parserPl.get()
+			defer parserPl.put(psr)
+
+			result, err := fn(psr, filePath)
+			if err != nil {
+				errs.Add(filePath, err)
+				return nil
+			}
+
+			results[idx] = result
+			return nil
+		})
+	}
+	_ = p.Wait()
+
+	if !errs.HasErrors() {
+		return results, nil
+	}
+	return results, errs
+}

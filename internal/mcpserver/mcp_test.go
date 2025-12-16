@@ -17,11 +17,8 @@ import (
 // TestServerCreation verifies the MCP server can be created without panicking.
 func TestServerCreation(t *testing.T) {
 	server := NewServer("1.0.0-test")
-	if server == nil {
-		t.Fatal("NewServer() returned nil")
-	}
-	if server.server == nil {
-		t.Fatal("NewServer().server is nil")
+	if server == nil || server.server == nil {
+		t.Fatal("NewServer() returned nil or has nil internal server")
 	}
 }
 
@@ -161,11 +158,8 @@ func TestToolError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("toolError returned unexpected error: %v", err)
 	}
-	if result == nil {
-		t.Fatal("toolError returned nil result")
-	}
-	if !result.IsError {
-		t.Error("toolError result.IsError should be true")
+	if result == nil || !result.IsError {
+		t.Fatal("toolError returned nil or IsError is false")
 	}
 	if len(result.Content) == 0 {
 		t.Fatal("toolError result has no content")
@@ -189,14 +183,8 @@ func TestToolResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("toolResult returned error: %v", err)
 	}
-	if result == nil {
-		t.Fatal("toolResult returned nil")
-	}
-	if result.IsError {
-		t.Error("toolResult.IsError should be false")
-	}
-	if len(result.Content) == 0 {
-		t.Fatal("toolResult has no content")
+	if result == nil || result.IsError || len(result.Content) == 0 {
+		t.Fatal("toolResult returned nil, IsError, or empty content")
 	}
 	textContent, ok := result.Content[0].(*mcp.TextContent)
 	if !ok {

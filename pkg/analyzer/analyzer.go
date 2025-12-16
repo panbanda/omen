@@ -1,13 +1,15 @@
 // Package analyzer defines interfaces for code analysis.
 package analyzer
 
-import "context"
+import (
+	"context"
 
-// ContentSource provides file content for source-based analysis.
-// Implementations may read from filesystem, git trees, or other sources.
-type ContentSource interface {
-	Read(path string) ([]byte, error)
-}
+	"github.com/panbanda/omen/pkg/source"
+)
+
+// ContentSource is an alias for source.ContentSource for backward compatibility.
+// New code should import from pkg/source directly.
+type ContentSource = source.ContentSource
 
 // FileAnalyzer analyzes source code files.
 // T is the result type returned by the analyzer.

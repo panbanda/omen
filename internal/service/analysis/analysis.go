@@ -2,11 +2,14 @@ package analysis
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/go-git/go-git/v6/plumbing/format/gitignore"
+	"github.com/panbanda/omen/internal/cache"
 	"github.com/panbanda/omen/internal/progress"
 	"github.com/panbanda/omen/internal/vcs"
 	"github.com/panbanda/omen/pkg/analyzer"
@@ -35,6 +38,7 @@ import (
 type Service struct {
 	config *config.Config
 	opener vcs.Opener
+	cache  *cache.Cache
 }
 
 // Option configures a Service.
@@ -52,6 +56,28 @@ func WithOpener(opener vcs.Opener) Option {
 	return func(s *Service) {
 		s.opener = opener
 	}
+}
+
+// WithCache sets the cache for storing analysis results.
+func WithCache(c *cache.Cache) Option {
+	return func(s *Service) {
+		s.cache = c
+	}
+}
+
+// cacheKey generates a unique key for caching analysis results.
+// The key is based on the analyzer name and sorted file paths.
+func (s *Service) cacheKey(analyzerName string, files []string) string {
+	// Sort files for consistent key generation
+	sorted := make([]string, len(files))
+	copy(sorted, files)
+	sort.Strings(sorted)
+
+	// Create hash of analyzer + files
+	h := sha256.New()
+	h.Write([]byte(analyzerName))
+	h.Write([]byte(strings.Join(sorted, "\n")))
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // New creates a new analysis service.

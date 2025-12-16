@@ -12,14 +12,8 @@ import (
 
 func TestNew(t *testing.T) {
 	a := New()
-	if a == nil {
-		t.Fatal("New() returned nil")
-	}
-	if len(a.patterns) == 0 {
-		t.Error("analyzer should have default patterns")
-	}
-	if !a.includeTests {
-		t.Error("includeTests should default to true")
+	if a == nil || len(a.patterns) == 0 || !a.includeTests {
+		t.Fatal("New() returned nil, has no patterns, or includeTests is false")
 	}
 }
 

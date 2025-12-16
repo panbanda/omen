@@ -12,17 +12,8 @@ import (
 
 func TestNew(t *testing.T) {
 	analyzer := New(WithChurnDays(90))
-	if analyzer == nil {
-		t.Fatal("New() returned nil")
-	}
-	if analyzer.complexity == nil {
-		t.Error("analyzer.complexity is nil")
-	}
-	if analyzer.churn == nil {
-		t.Error("analyzer.churn is nil")
-	}
-	if analyzer.duplicates == nil {
-		t.Error("analyzer.duplicates is nil")
+	if analyzer == nil || analyzer.complexity == nil || analyzer.churn == nil || analyzer.duplicates == nil {
+		t.Fatal("New() returned nil or has nil sub-analyzers")
 	}
 
 	expectedWeights := DefaultWeights()
@@ -61,16 +52,8 @@ func TestAnalyzer_AnalyzeProject_EmptyFiles(t *testing.T) {
 		t.Fatalf("Analyze() error = %v", err)
 	}
 
-	if result == nil {
-		t.Fatal("Analyze() returned nil result")
-	}
-
-	if result.Summary.TotalFiles != 0 {
-		t.Errorf("TotalFiles = %v, want 0", result.Summary.TotalFiles)
-	}
-
-	if result.Summary.AvgProbability != 0 {
-		t.Errorf("AvgProbability = %v, want 0", result.Summary.AvgProbability)
+	if result == nil || result.Summary.TotalFiles != 0 || result.Summary.AvgProbability != 0 {
+		t.Fatalf("Analyze() returned nil or unexpected summary values")
 	}
 }
 

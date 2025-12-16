@@ -9,19 +9,8 @@ import (
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 
-	if cfg == nil {
-		t.Fatal("DefaultConfig() returned nil")
-	}
-
-	// Check analysis defaults
-	if !cfg.Analysis.Complexity {
-		t.Error("Analysis.Complexity should be true by default")
-	}
-	if !cfg.Analysis.SATD {
-		t.Error("Analysis.SATD should be true by default")
-	}
-	if !cfg.Analysis.DeadCode {
-		t.Error("Analysis.DeadCode should be true by default")
+	if cfg == nil || !cfg.Analysis.Complexity || !cfg.Analysis.SATD || !cfg.Analysis.DeadCode {
+		t.Fatal("DefaultConfig() returned nil or has wrong analysis defaults")
 	}
 	if cfg.Analysis.ChurnDays != 30 {
 		t.Errorf("Analysis.ChurnDays = %d, want 30", cfg.Analysis.ChurnDays)
@@ -229,13 +218,8 @@ func TestLoadOrDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadOrDefault() returned error: %v", err)
 	}
-	if cfg == nil {
-		t.Fatal("LoadOrDefault() returned nil")
-	}
-
-	// Should have default values
-	if cfg.Analysis.ChurnDays != 30 {
-		t.Errorf("LoadOrDefault() returned non-default ChurnDays: %d", cfg.Analysis.ChurnDays)
+	if cfg == nil || cfg.Analysis.ChurnDays != 30 {
+		t.Fatalf("LoadOrDefault() returned nil or non-default ChurnDays")
 	}
 }
 

@@ -12,14 +12,8 @@ import (
 
 func TestNew(t *testing.T) {
 	svc := New()
-	if svc == nil {
-		t.Fatal("New() returned nil")
-	}
-	if svc.config == nil {
-		t.Error("config should not be nil")
-	}
-	if svc.opener == nil {
-		t.Error("opener should not be nil")
+	if svc == nil || svc.config == nil || svc.opener == nil {
+		t.Fatal("New() returned nil or has nil config/opener")
 	}
 }
 

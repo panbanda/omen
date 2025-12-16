@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/panbanda/omen/pkg/source"
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/bash"
 	"github.com/smacker/go-tree-sitter/c"
@@ -119,10 +120,9 @@ func (p *Parser) Parse(source []byte, lang Language, path string) (*ParseResult,
 	}, nil
 }
 
-// ContentSource provides file content.
-type ContentSource interface {
-	Read(path string) ([]byte, error)
-}
+// ContentSource is an alias for source.ContentSource for backward compatibility.
+// New code should import from pkg/source directly.
+type ContentSource = source.ContentSource
 
 // ParseFromSource parses a file using a ContentSource instead of filesystem.
 func (p *Parser) ParseFromSource(src ContentSource, path string) (*ParseResult, error) {

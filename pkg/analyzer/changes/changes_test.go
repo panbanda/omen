@@ -386,14 +386,16 @@ func TestAnalyzer_AuthorExperience_TemporalOrder(t *testing.T) {
 	}
 
 	if commit1 == nil || commit4 == nil {
-		t.Fatalf("Could not find expected commits")
+		t.Fatalf("Could not find expected commits (commit1=%v, commit4=%v)", commit1, commit4)
 	}
 
 	// Experience factor = (1.0 - normalized_exp) * weight
 	// First commit (commit 1): AuthorExperience=0, factor = (1.0 - 0) * 0.05 = 0.05 (HIGH)
 	// Last commit (commit 4): AuthorExperience=3, factor = (1.0 - 1) * 0.05 = 0 (LOW)
-	firstExpFactor := commit1.ContributingFactors["experience"]
-	lastExpFactor := commit4.ContributingFactors["experience"]
+	// At this point we know commit1 and commit4 are not nil due to the check above
+	var firstExpFactor, lastExpFactor float64
+	firstExpFactor = commit1.ContributingFactors["experience"]
+	lastExpFactor = commit4.ContributingFactors["experience"]
 
 	t.Logf("Commit 1 (first, oldest): experience factor = %.4f", firstExpFactor)
 	t.Logf("Commit 4 (last, newest): experience factor = %.4f", lastExpFactor)
