@@ -1,5 +1,21 @@
 # Changelog
 
+## [3.0.0](https://github.com/panbanda/omen/compare/omen-v2.8.0...omen-v3.0.0) (2025-12-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **plugins:** plugin/ renamed to plugins/development/
+
+### Features
+
+* **plugins:** restructure plugins and add research-backed analyst agents ([#179](https://github.com/panbanda/omen/issues/179)) ([696c000](https://github.com/panbanda/omen/commit/696c00094060f5d8034d3a0f4ac4b523b01a10b6))
+
+
+### Bug Fixes
+
+* **report:** use analysis.Service for all analyzers in report generate ([#180](https://github.com/panbanda/omen/issues/180)) ([8e41471](https://github.com/panbanda/omen/commit/8e41471453012f044de7f67e656ad5c665144620))
+
 ## [2.8.0](https://github.com/panbanda/omen/compare/omen-v2.7.0...omen-v2.8.0) (2025-12-15)
 
 
