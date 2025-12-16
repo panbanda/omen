@@ -14,159 +14,78 @@ Generate a complete HTML health report with LLM-generated insights.
 
 ## Step 3: Spawn Analysts (In Parallel)
 
-Launch all 9 agents simultaneously using the Task tool.
+Use the Task tool to spawn all 9 agents simultaneously. Each agent reads its data file and writes an insight file with the schema below.
 
 ---
 
-### Hotspot Analyst
-**Read**: `<dir>/hotspots.json` | **Write**: `<dir>/insights/hotspots.json`
-
+**Use the hotspot-analyst agent** to analyze `<dir>/hotspots.json` and write `<dir>/insights/hotspots.json`:
 ```json
-{
-  "section_insight": "string - narrative about patterns",
-  "item_annotations": [
-    {"file": "path/to/file.go", "comment": "string"}
-  ]
-}
+{"section_insight": "string", "item_annotations": [{"file": "path", "comment": "string"}]}
 ```
 
 ---
 
-### SATD Analyst
-**Read**: `<dir>/satd.json` | **Write**: `<dir>/insights/satd.json`
-
+**Use the satd-analyst agent** to analyze `<dir>/satd.json` and write `<dir>/insights/satd.json`:
 ```json
-{
-  "section_insight": "string",
-  "item_annotations": [
-    {"file": "path/to/file.go", "line": 142, "comment": "string"}
-  ]
-}
+{"section_insight": "string", "item_annotations": [{"file": "path", "line": 0, "comment": "string"}]}
 ```
 
 ---
 
-### Ownership Analyst
-**Read**: `<dir>/ownership.json` | **Write**: `<dir>/insights/ownership.json`
-
+**Use the ownership-analyst agent** to analyze `<dir>/ownership.json` and write `<dir>/insights/ownership.json`:
 ```json
-{
-  "section_insight": "string",
-  "item_annotations": [
-    {"file": "path/to/file.go", "comment": "string"}
-  ]
-}
+{"section_insight": "string", "item_annotations": [{"file": "path", "comment": "string"}]}
 ```
 
 ---
 
-### Duplicates Analyst
-**Read**: `<dir>/duplicates.json` | **Write**: `<dir>/insights/duplication.json`
-
+**Use the duplicates-analyst agent** to analyze `<dir>/duplicates.json` and write `<dir>/insights/duplication.json`:
 ```json
-{
-  "section_insight": "string"
-}
+{"section_insight": "string"}
 ```
 
 ---
 
-### Churn Analyst
-**Read**: `<dir>/churn.json` | **Write**: `<dir>/insights/churn.json`
-
+**Use the churn-analyst agent** to analyze `<dir>/churn.json` and write `<dir>/insights/churn.json`:
 ```json
-{
-  "section_insight": "string"
-}
+{"section_insight": "string"}
 ```
 
 ---
 
-### Flags Analyst
-**Read**: `<dir>/flags.json` | **Write**: `<dir>/insights/flags.json`
-
+**Use the flags-analyst agent** to analyze `<dir>/flags.json` and write `<dir>/insights/flags.json`:
 ```json
-{
-  "section_insight": "string",
-  "item_annotations": [
-    {"flag": "flag_name", "priority": "CRITICAL|HIGH|MEDIUM|LOW", "introduced_at": "ISO8601", "comment": "string"}
-  ]
-}
+{"section_insight": "string", "item_annotations": [{"flag": "name", "priority": "CRITICAL|HIGH|MEDIUM|LOW", "introduced_at": "ISO8601", "comment": "string"}]}
 ```
 
 ---
 
-### Trends Analyst
-**Read**: `<dir>/trend.json`, `<dir>/score.json` | **Write**: `<dir>/insights/trends.json`
-
+**Use the trends-analyst agent** to analyze `<dir>/trend.json` and `<dir>/score.json`, write `<dir>/insights/trends.json`:
 ```json
-{
-  "section_insight": "string",
-  "score_annotations": [
-    {"date": "2024-03", "label": "string", "change": 8, "description": "string"}
-  ],
-  "historical_events": [
-    {"period": "Mar 2024", "change": 8, "primary_driver": "complexity", "releases": ["v2.1.0"]}
-  ]
-}
+{"section_insight": "string", "score_annotations": [{"date": "2024-03", "label": "string", "change": 0, "description": "string"}], "historical_events": [{"period": "Mar 2024", "change": 0, "primary_driver": "complexity", "releases": ["v1.0"]}]}
 ```
 
 ---
 
-### Components Analyst
-**Read**: `<dir>/trend.json`, `<dir>/cohesion.json`, `<dir>/smells.json`, `<dir>/score.json` | **Write**: `<dir>/insights/components.json`
-
+**Use the components-analyst agent** to analyze `<dir>/trend.json`, `<dir>/cohesion.json`, `<dir>/smells.json`, `<dir>/score.json` and write `<dir>/insights/components.json`:
 ```json
-{
-  "component_insights": {
-    "complexity": "string",
-    "duplication": "string",
-    "coupling": "string",
-    "cohesion": "string",
-    "smells": "string",
-    "satd": "string",
-    "tdg": "string"
-  },
-  "component_annotations": {
-    "complexity": [{"date": "2024-03", "label": "string", "from": 72, "to": 85, "description": "string"}]
-  },
-  "component_events": [
-    {"period": "Mar 2024", "component": "complexity", "from": 72, "to": 85, "context": "string"}
-  ]
-}
+{"component_insights": {"complexity": "string", "duplication": "string", "coupling": "string", "cohesion": "string", "smells": "string", "satd": "string", "tdg": "string"}, "component_annotations": {"complexity": [{"date": "2024-03", "label": "string", "from": 0, "to": 0, "description": "string"}]}, "component_events": [{"period": "Mar 2024", "component": "complexity", "from": 0, "to": 0, "context": "string"}]}
 ```
 
 ---
 
-### Patterns Analyst
-**Read**: All data files | **Write**: `<dir>/insights/patterns.json`
-
-Look for cross-cutting observations that span multiple analysis types.
-
+**Use the patterns-analyst agent** to analyze all data files and write `<dir>/insights/patterns.json`:
 ```json
-{
-  "patterns": [
-    {"category": "string", "insight": "string"}
-  ]
-}
+{"patterns": [{"category": "string", "insight": "string"}]}
 ```
 
 ---
 
 ## Step 4: Summary (After All Complete)
 
-Wait for all analysts to finish, then spawn the Summary Analyst.
+Wait for all 9 analysts to finish, then:
 
-**Read**: All `<dir>/insights/*.json` plus `<dir>/score.json` | **Write**: `<dir>/insights/summary.json`
-
+**Use the summary-analyst agent** to read all `<dir>/insights/*.json` plus `<dir>/score.json` and write `<dir>/insights/summary.json`:
 ```json
-{
-  "executive_summary": "markdown string",
-  "key_findings": ["string", "string"],
-  "recommendations": {
-    "high_priority": [{"title": "string", "description": "string"}],
-    "medium_priority": [{"title": "string", "description": "string"}],
-    "ongoing": [{"title": "string", "description": "string"}]
-  }
-}
+{"executive_summary": "markdown", "key_findings": ["string"], "recommendations": {"high_priority": [{"title": "string", "description": "string"}], "medium_priority": [], "ongoing": []}}
 ```
