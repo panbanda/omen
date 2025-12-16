@@ -2,7 +2,7 @@
 
 # Omen
 
-<img src="assets/omen-logo.png" alt="Omen - Code Analysis CLI" width="100%">
+<img src="assets/omen-logo.jpg" alt="Omen - Code Analysis CLI" width="100%">
 
 [![Go Version](https://img.shields.io/github/go-mod/go-version/panbanda/omen)](https://go.dev/)
 [![License](https://img.shields.io/github/license/panbanda/omen)](https://github.com/panbanda/omen/blob/main/LICENSE)
@@ -605,6 +605,10 @@ Tool outputs default to [TOON (Token-Oriented Object Notation)](https://github.c
 > Configure omen as an MCP server in your AI assistant to enable natural language queries like "find the most complex functions" or "show me technical debt hotspots."
 
 </details>
+
+<div align="center">
+<img src="assets/omen-context.jpg" alt="Code Only vs Omen Context" width="100%">
+</div>
 
 ## Supported Languages
 
