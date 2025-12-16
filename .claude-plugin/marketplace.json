@@ -4,14 +4,19 @@
     "name": "Panbanda"
   },
   "metadata": {
-    "description": "Code analysis skills for Claude Code: complexity hotspots, tech debt, defect prediction, architecture review, and more",
-    "version": "3.0.0"
+    "description": "Code analysis tools and skills for Claude Code",
+    "version": "4.0.0"
   },
   "plugins": [
     {
-      "name": "omen",
-      "source": "./plugin",
-      "description": "Code analysis skills for Claude Code: complexity hotspots, tech debt, defect prediction, architecture review, and more"
+      "name": "omen-development",
+      "source": "./plugins/development",
+      "description": "Code analysis skills for active development: find bugs, assess impact, plan refactoring, audit architecture, and more"
+    },
+    {
+      "name": "omen-reporting",
+      "source": "./plugins/reporting",
+      "description": "Generate comprehensive HTML health reports with research-backed insights from specialized domain analysts"
     }
   ]
 }

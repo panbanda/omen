@@ -1,0 +1,19 @@
+{
+  "name": "omen-development",
+  "description": "Code analysis skills for active development: find bugs, assess impact, plan refactoring, audit architecture, and more",
+  "version": "1.0.0",
+  "author": {
+    "name": "Jonathan Reyes",
+    "email": "me@jonathanreyes.com"
+  },
+  "homepage": "https://github.com/panbanda/omen",
+  "repository": "https://github.com/panbanda/omen",
+  "license": "Apache-2.0",
+  "keywords": [
+    "code-analysis",
+    "development",
+    "refactoring",
+    "architecture",
+    "code-review"
+  ]
+}
