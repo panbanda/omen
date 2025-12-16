@@ -1013,3 +1013,246 @@ func TestAnalyzeTrend_NonGitDir(t *testing.T) {
 		t.Error("expected error for non-git directory")
 	}
 }
+
+func TestAnalyzeChanges_ExcludePatterns(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Initialize git repo
+	runGit(t, tmpDir, "init")
+	runGit(t, tmpDir, "config", "user.email", "test@test.com")
+	runGit(t, tmpDir, "config", "user.name", "Test User")
+
+	// Create files: test.go (included), README.md (excluded)
+	goFile := filepath.Join(tmpDir, "test.go")
+	if err := os.WriteFile(goFile, []byte("package main\nfunc test() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	readmeFile := filepath.Join(tmpDir, "README.md")
+	if err := os.WriteFile(readmeFile, []byte("# Test\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	runGit(t, tmpDir, "add", ".")
+	runGit(t, tmpDir, "commit", "-m", "Initial commit")
+
+	// Make changes to both files
+	if err := os.WriteFile(goFile, []byte("package main\nfunc test() { x := 1; _ = x }\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(readmeFile, []byte("# Test\nUpdated\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	runGit(t, tmpDir, "add", ".")
+	runGit(t, tmpDir, "commit", "-m", "Second commit")
+
+	// Create config with exclude pattern for README.md
+	cfg := config.DefaultConfig()
+	cfg.Exclude.Patterns = []string{"README.md"}
+
+	svc := New(WithConfig(cfg))
+	result, err := svc.AnalyzeChanges(context.Background(), tmpDir, ChangesOptions{
+		Days: 365,
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeChanges() error = %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+
+	// Check that no commit has README.md in FilesModified
+	for _, c := range result.Commits {
+		for _, f := range c.FilesModified {
+			if f == "README.md" {
+				t.Errorf("Commit %s has README.md in FilesModified, should be excluded", c.CommitHash)
+			}
+		}
+	}
+
+	// Check that test.go IS in at least one commit's FilesModified
+	foundTestGo := false
+	for _, c := range result.Commits {
+		for _, f := range c.FilesModified {
+			if f == "test.go" {
+				foundTestGo = true
+				break
+			}
+		}
+		if foundTestGo {
+			break
+		}
+	}
+	if !foundTestGo {
+		t.Error("test.go should be in at least one commit's FilesModified")
+	}
+}
+
+func TestAnalyzeTemporalCoupling_ExcludePatterns(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Initialize git repo
+	runGit(t, tmpDir, "init")
+	runGit(t, tmpDir, "config", "user.email", "test@test.com")
+	runGit(t, tmpDir, "config", "user.name", "Test User")
+
+	// Create files that will be committed together to create coupling
+	goFile := filepath.Join(tmpDir, "main.go")
+	helperFile := filepath.Join(tmpDir, "helper.go")
+	readmeFile := filepath.Join(tmpDir, "README.md")
+
+	// Commit 1: all files together
+	if err := os.WriteFile(goFile, []byte("package main\nfunc main() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(helperFile, []byte("package main\nfunc helper() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(readmeFile, []byte("# README\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, tmpDir, "add", ".")
+	runGit(t, tmpDir, "commit", "-m", "Commit 1")
+
+	// Commit 2: change all files together again
+	if err := os.WriteFile(goFile, []byte("package main\nfunc main() { x := 1; _ = x }\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(helperFile, []byte("package main\nfunc helper() { y := 2; _ = y }\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(readmeFile, []byte("# README\nUpdated\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, tmpDir, "add", ".")
+	runGit(t, tmpDir, "commit", "-m", "Commit 2")
+
+	// Commit 3: change all files together again (need 3 cochanges for default min)
+	if err := os.WriteFile(goFile, []byte("package main\nfunc main() { x := 1; x++; _ = x }\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(helperFile, []byte("package main\nfunc helper() { y := 2; y++; _ = y }\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(readmeFile, []byte("# README\nUpdated again\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, tmpDir, "add", ".")
+	runGit(t, tmpDir, "commit", "-m", "Commit 3")
+
+	// Create config with exclude pattern for README.md
+	cfg := config.DefaultConfig()
+	cfg.Exclude.Patterns = []string{"README.md"}
+
+	svc := New(WithConfig(cfg))
+	result, err := svc.AnalyzeTemporalCoupling(context.Background(), tmpDir, TemporalCouplingOptions{
+		Days:         365,
+		MinCochanges: 2, // Lower threshold to catch couplings
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeTemporalCoupling() error = %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+
+	// Check that no coupling involves README.md
+	for _, c := range result.Couplings {
+		if c.FileA == "README.md" || c.FileB == "README.md" {
+			t.Errorf("Coupling involving README.md should be excluded: %s <-> %s", c.FileA, c.FileB)
+		}
+	}
+
+	// Check that main.go <-> helper.go coupling IS present
+	foundGoCouple := false
+	for _, c := range result.Couplings {
+		if (c.FileA == "main.go" && c.FileB == "helper.go") ||
+			(c.FileA == "helper.go" && c.FileB == "main.go") {
+			foundGoCouple = true
+			break
+		}
+	}
+	if !foundGoCouple {
+		t.Error("Expected coupling between main.go and helper.go")
+	}
+}
+
+func TestAnalyzeChurn_ExcludePatterns(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Initialize git repo
+	runGit(t, tmpDir, "init")
+	runGit(t, tmpDir, "config", "user.email", "test@test.com")
+	runGit(t, tmpDir, "config", "user.name", "Test User")
+
+	// Create files: test.go (included), README.md and go.mod (excluded)
+	goFile := filepath.Join(tmpDir, "test.go")
+	if err := os.WriteFile(goFile, []byte("package main\nfunc test() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	readmeFile := filepath.Join(tmpDir, "README.md")
+	if err := os.WriteFile(readmeFile, []byte("# Test\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	goModFile := filepath.Join(tmpDir, "go.mod")
+	if err := os.WriteFile(goModFile, []byte("module test\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	runGit(t, tmpDir, "add", ".")
+	runGit(t, tmpDir, "commit", "-m", "Initial commit")
+
+	// Make changes to all files
+	if err := os.WriteFile(goFile, []byte("package main\nfunc test() { x := 1; _ = x }\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(readmeFile, []byte("# Test\nUpdated\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(goModFile, []byte("module test\ngo 1.21\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	runGit(t, tmpDir, "add", ".")
+	runGit(t, tmpDir, "commit", "-m", "Second commit")
+
+	// Create config with exclude patterns
+	cfg := config.DefaultConfig()
+	cfg.Exclude.Patterns = []string{"README.md", "go.mod"}
+
+	svc := New(WithConfig(cfg))
+	result, err := svc.AnalyzeChurn(context.Background(), tmpDir, ChurnOptions{
+		Days: 365,
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeChurn() error = %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+
+	// Check that excluded files are not in results
+	for _, f := range result.Files {
+		if f.RelativePath == "README.md" {
+			t.Error("README.md should be excluded but was found in results")
+		}
+		if f.RelativePath == "go.mod" {
+			t.Error("go.mod should be excluded but was found in results")
+		}
+	}
+
+	// Check that test.go IS in results
+	found := false
+	for _, f := range result.Files {
+		if f.RelativePath == "test.go" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("test.go should be in results but was not found")
+	}
+}

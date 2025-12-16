@@ -50,6 +50,15 @@ patterns = [
 
     # Lock files
     "go.sum",
+    "go.mod",
+
+    # Documentation
+    "**/README.md",
+    "**/CHANGELOG.md",
+
+    # Release please
+    ".release-please-manifest.json",
+    "release-please-config.json",
 ]
 
 [cache]

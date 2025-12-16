@@ -2,8 +2,11 @@ package analysis
 
 import (
 	"context"
+	"path/filepath"
 	"sort"
+	"strings"
 
+	"github.com/go-git/go-git/v6/plumbing/format/gitignore"
 	"github.com/panbanda/omen/internal/progress"
 	"github.com/panbanda/omen/internal/vcs"
 	"github.com/panbanda/omen/pkg/analyzer"
@@ -65,6 +68,25 @@ func New(opts ...Option) *Service {
 		opt(s)
 	}
 	return s
+}
+
+// createExcludeMatcher creates a gitignore matcher from config exclude patterns.
+func (s *Service) createExcludeMatcher() gitignore.Matcher {
+	var patterns []gitignore.Pattern
+	for _, pattern := range s.config.Exclude.Patterns {
+		patterns = append(patterns, gitignore.ParsePattern(pattern, nil))
+	}
+	return gitignore.NewMatcher(patterns)
+}
+
+// shouldExcludePath checks if a path should be excluded based on config patterns.
+func (s *Service) shouldExcludePath(path string) bool {
+	matcher := s.createExcludeMatcher()
+	// Clean the path and split into components for gitignore matching
+	cleanPath := filepath.Clean(path)
+	cleanPath = strings.TrimPrefix(cleanPath, "./")
+	parts := strings.Split(cleanPath, string(filepath.Separator))
+	return matcher.Match(parts, false)
 }
 
 // ComplexityOptions configures complexity analysis.
@@ -188,7 +210,31 @@ func (s *Service) AnalyzeChurn(ctx context.Context, repoPath string, opts ChurnO
 	churnAnalyzer := churn.New(analyzerOpts...)
 	defer churnAnalyzer.Close()
 
-	return churnAnalyzer.Analyze(ctx, repoPath, nil)
+	result, err := churnAnalyzer.Analyze(ctx, repoPath, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter out excluded files
+	result = s.filterChurnResults(result)
+	return result, nil
+}
+
+// filterChurnResults removes files matching exclude patterns from churn analysis.
+func (s *Service) filterChurnResults(result *churn.Analysis) *churn.Analysis {
+	if result == nil || len(s.config.Exclude.Patterns) == 0 {
+		return result
+	}
+
+	filtered := make([]churn.FileMetrics, 0, len(result.Files))
+	for _, f := range result.Files {
+		if !s.shouldExcludePath(f.RelativePath) {
+			filtered = append(filtered, f)
+		}
+	}
+	result.Files = filtered
+	result.Summary.TotalFilesChanged = len(filtered)
+	return result
 }
 
 // DuplicatesOptions configures duplicate detection.
@@ -399,7 +445,31 @@ func (s *Service) AnalyzeTemporalCoupling(ctx context.Context, repoPath string, 
 		temporal.WithOpener(s.opener))
 	defer tcAnalyzer.Close()
 
-	return tcAnalyzer.Analyze(ctx, repoPath, nil)
+	result, err := tcAnalyzer.Analyze(ctx, repoPath, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter out couplings involving excluded files
+	result = s.filterTemporalCouplingResults(result)
+	return result, nil
+}
+
+// filterTemporalCouplingResults removes couplings involving excluded files.
+func (s *Service) filterTemporalCouplingResults(result *temporal.Analysis) *temporal.Analysis {
+	if result == nil || len(s.config.Exclude.Patterns) == 0 {
+		return result
+	}
+
+	filtered := make([]temporal.FileCoupling, 0, len(result.Couplings))
+	for _, c := range result.Couplings {
+		if !s.shouldExcludePath(c.FileA) && !s.shouldExcludePath(c.FileB) {
+			filtered = append(filtered, c)
+		}
+	}
+	result.Couplings = filtered
+	result.Summary.TotalCouplings = len(filtered)
+	return result
 }
 
 // OwnershipOptions configures ownership analysis.
@@ -494,7 +564,32 @@ func (s *Service) AnalyzeChanges(ctx context.Context, repoPath string, opts Chan
 	changesAnalyzer := changes.New(analyzerOpts...)
 	defer changesAnalyzer.Close()
 
-	return changesAnalyzer.Analyze(ctx, repoPath, nil)
+	result, err := changesAnalyzer.Analyze(ctx, repoPath, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter out excluded files from commits
+	result = s.filterChangesResults(result)
+	return result, nil
+}
+
+// filterChangesResults removes excluded files from commit FilesModified lists.
+func (s *Service) filterChangesResults(result *changes.Analysis) *changes.Analysis {
+	if result == nil || len(s.config.Exclude.Patterns) == 0 {
+		return result
+	}
+
+	for i := range result.Commits {
+		filtered := make([]string, 0, len(result.Commits[i].FilesModified))
+		for _, f := range result.Commits[i].FilesModified {
+			if !s.shouldExcludePath(f) {
+				filtered = append(filtered, f)
+			}
+		}
+		result.Commits[i].FilesModified = filtered
+	}
+	return result
 }
 
 // SmellOptions configures architectural smell detection.
