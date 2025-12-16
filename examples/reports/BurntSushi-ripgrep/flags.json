@@ -1,0 +1,17 @@
+{
+  "generated_at": "2025-12-16T02:34:54.627590803Z",
+  "flags": [],
+  "summary": {
+    "total_flags": 0,
+    "total_references": 0,
+    "by_priority": {
+      "CRITICAL": 0,
+      "HIGH": 0,
+      "LOW": 0,
+      "MEDIUM": 0
+    },
+    "by_provider": {},
+    "avg_file_spread": 0,
+    "max_file_spread": 0
+  }
+}

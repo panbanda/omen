@@ -1,0 +1,192 @@
+{
+  "items": [
+    {
+      "category": "security",
+      "severity": "critical",
+      "file": "/tmp/omen-267094167/gin.go",
+      "line": 797,
+      "description": "characters from path strings,",
+      "marker": "UNKNOWN",
+      "context_hash": "9dbf1e826d62b13f3b8d4dbe03d1be36"
+    },
+    {
+      "category": "defect",
+      "severity": "high",
+      "file": "/tmp/omen-267094167/recovery.go",
+      "line": 61,
+      "description": "connection, as it is not really a",
+      "marker": "UNKNOWN",
+      "context_hash": "f5ebe8326d97a79f5a21c35033b3b178"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-267094167/gin.go",
+      "line": 629,
+      "description": "this method will block the calling goroutine indefinitely unless an error happens.",
+      "marker": "NOTE",
+      "context_hash": "ce66c7d7e09bdf3232313bfacb5d5445"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-267094167/context.go",
+      "line": 804,
+      "description": "When using sonic or go-json as JSON encoder, they do not propagate the http.MaxBytesError error",
+      "marker": "NOTE",
+      "context_hash": "681c5e457a550f301dbc0c42ed83dd34"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-267094167/gin.go",
+      "line": 539,
+      "description": "this method will block the calling goroutine indefinitely unless an error happens.",
+      "marker": "NOTE",
+      "context_hash": "b7697661241833ae7b0587fc71ab8090"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-267094167/gin.go",
+      "line": 560,
+      "description": "this method will block the calling goroutine indefinitely unless an error happens.",
+      "marker": "NOTE",
+      "context_hash": "93398c5f391a013a3541a99a9e9f4e59"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-267094167/gin.go",
+      "line": 580,
+      "description": "this method will block the calling goroutine indefinitely unless an error happens.",
+      "marker": "NOTE",
+      "context_hash": "94cbf551963a9ced1044b3678a4c41ea"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-267094167/gin.go",
+      "line": 606,
+      "description": "this method will block the calling goroutine indefinitely unless an error happens.",
+      "marker": "NOTE",
+      "context_hash": "4cf83eb7a57969f48f60dab5c642e698"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-267094167/context.go",
+      "line": 202,
+      "description": "that this will not stop the current handler.",
+      "marker": "NOTE",
+      "context_hash": "307fdc0c1226c959b19003d338df91fb"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-267094167/context.go",
+      "line": 915,
+      "description": "This method reads the body before binding. So you should use",
+      "marker": "NOTE",
+      "context_hash": "9f364ab2bfb8b31aa1c2b5b6aa4637cf"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-267094167/ginS/gins.go",
+      "line": 135,
+      "description": "this method will block the calling goroutine indefinitely unless an error happens.",
+      "marker": "NOTE",
+      "context_hash": "1985415adac5da9907e78c3249829d48"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-267094167/ginS/gins.go",
+      "line": 142,
+      "description": "this method will block the calling goroutine indefinitely unless an error happens.",
+      "marker": "NOTE",
+      "context_hash": "9533f9aae6ade5a31b4eb86f28c2ad8d"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-267094167/ginS/gins.go",
+      "line": 149,
+      "description": "this method will block the calling goroutine indefinitely unless an error happens.",
+      "marker": "NOTE",
+      "context_hash": "6627d38fc2c9ced000acffdb2b1e622e"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-267094167/ginS/gins.go",
+      "line": 156,
+      "description": "the method will block the calling goroutine indefinitely unless an error happens.",
+      "marker": "NOTE",
+      "context_hash": "d07ab6cca56fe38669ed376f92c20617"
+    },
+    {
+      "category": "test",
+      "severity": "low",
+      "file": "/tmp/omen-267094167/mode.go",
+      "line": 24,
+      "description": "// TestMode indicates gin mode is test.",
+      "marker": "TEST",
+      "context_hash": "78c7edd0b90517fdb1fa492316f4b084"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-267094167/mode.go",
+      "line": 36,
+      "description": "that both Logger and Recovery provides custom ways to configure their",
+      "marker": "NOTE",
+      "context_hash": "3de067749cb8e11a9bd607853141c445"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-267094167/context.go",
+      "line": 247,
+      "description": "to call Error for each error that occurred during the resolution of a request.",
+      "marker": "UNKNOWN",
+      "context_hash": "d40da4876d69ea5752439dbb0fe1cd1e"
+    },
+    {
+      "category": "test",
+      "severity": "low",
+      "file": "/tmp/omen-267094167/test_helpers.go",
+      "line": 15,
+      "description": "// along with a context, for example, to test middleware that doesn't depend on",
+      "marker": "TEST",
+      "context_hash": "36e695ae67a55bf568e52a66c91a53d8"
+    }
+  ],
+  "summary": {
+    "total_items": 18,
+    "by_severity": {
+      "critical": 1,
+      "high": 1,
+      "low": 16
+    },
+    "by_category": {
+      "defect": 1,
+      "design": 14,
+      "security": 1,
+      "test": 2
+    },
+    "by_file": {
+      "/tmp/omen-267094167/context.go": 4,
+      "/tmp/omen-267094167/gin.go": 6,
+      "/tmp/omen-267094167/ginS/gins.go": 4,
+      "/tmp/omen-267094167/mode.go": 2,
+      "/tmp/omen-267094167/recovery.go": 1,
+      "/tmp/omen-267094167/test_helpers.go": 1
+    },
+    "files_with_satd": 6
+  },
+  "total_files_analyzed": 55,
+  "files_with_debt": 6,
+  "analyzed_at": "0001-01-01T00:00:00Z"
+}

@@ -1,0 +1,20 @@
+{
+  "clones": [],
+  "summary": {
+    "total_clones": 0,
+    "total_groups": 0,
+    "type1_count": 0,
+    "type2_count": 0,
+    "type3_count": 0,
+    "duplicated_lines": 0,
+    "total_lines": 4047,
+    "duplication_ratio": 0,
+    "file_occurrences": {},
+    "avg_similarity": 0,
+    "p50_similarity": 0,
+    "p95_similarity": 0
+  },
+  "total_files_scanned": 55,
+  "min_lines": 6,
+  "threshold": 0.8
+}

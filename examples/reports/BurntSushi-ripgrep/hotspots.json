@@ -1,0 +1,634 @@
+{
+  "generated_at": "2025-12-16T02:34:55.398622342Z",
+  "period_days": 180,
+  "files": [
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/complete/fish.rs",
+      "hotspot_score": 0.6324555320336759,
+      "churn_score": 0.5,
+      "complexity_score": 0.8,
+      "commits": 2,
+      "avg_cognitive": 10,
+      "avg_cyclomatic": 6,
+      "total_functions": 1
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/hiargs.rs",
+      "hotspot_score": 0.615178384246752,
+      "churn_score": 0.8733333333333333,
+      "complexity_score": 0.4333333333333333,
+      "commits": 8,
+      "avg_cognitive": 4.333333333333333,
+      "avg_cyclomatic": 3.8222222222222224,
+      "total_functions": 45
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/complete/powershell.rs",
+      "hotspot_score": 0.5916079783099616,
+      "churn_score": 0.5,
+      "complexity_score": 0.7,
+      "commits": 2,
+      "avg_cognitive": 7,
+      "avg_cyclomatic": 5,
+      "total_functions": 1
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/main.rs",
+      "hotspot_score": 0.5838742081211422,
+      "churn_score": 0.5,
+      "complexity_score": 0.6818181818181818,
+      "commits": 2,
+      "avg_cognitive": 6.818181818181818,
+      "avg_cyclomatic": 5.363636363636363,
+      "total_functions": 11
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/globset/src/glob.rs",
+      "hotspot_score": 0.5740135237289525,
+      "churn_score": 0.8,
+      "complexity_score": 0.41186440677966096,
+      "commits": 6,
+      "avg_cognitive": 4.11864406779661,
+      "avg_cyclomatic": 2.694915254237288,
+      "total_functions": 59
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/doc/man.rs",
+      "hotspot_score": 0.5477225575051661,
+      "churn_score": 0.5,
+      "complexity_score": 0.6,
+      "commits": 2,
+      "avg_cognitive": 6,
+      "avg_cyclomatic": 5.5,
+      "total_functions": 2
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/searcher/src/searcher/core.rs",
+      "hotspot_score": 0.518411033833193,
+      "churn_score": 0.5,
+      "complexity_score": 0.5375,
+      "commits": 2,
+      "avg_cognitive": 5.375,
+      "avg_cyclomatic": 3.9375,
+      "total_functions": 32
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/doc/help.rs",
+      "hotspot_score": 0.4929503017546495,
+      "churn_score": 0.3,
+      "complexity_score": 0.81,
+      "commits": 1,
+      "avg_cognitive": 10.5,
+      "avg_cyclomatic": 5.833333333333333,
+      "total_functions": 6
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/ignore/examples/walk.rs",
+      "hotspot_score": 0.4929503017546495,
+      "churn_score": 0.3,
+      "complexity_score": 0.81,
+      "commits": 1,
+      "avg_cognitive": 10.5,
+      "avg_cyclomatic": 5,
+      "total_functions": 2
+    },
+    {
+      "path": "/tmp/omen-2461860455/tests/misc.rs",
+      "hotspot_score": 0.45,
+      "churn_score": 0.675,
+      "complexity_score": 0.3,
+      "commits": 4,
+      "avg_cognitive": 3,
+      "avg_cyclomatic": 2,
+      "total_functions": 1
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/regex/src/ban.rs",
+      "hotspot_score": 0.412310562561766,
+      "churn_score": 0.3,
+      "complexity_score": 0.5666666666666667,
+      "commits": 1,
+      "avg_cognitive": 5.666666666666667,
+      "avg_cyclomatic": 4.333333333333333,
+      "total_functions": 3
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/ignore/src/dir.rs",
+      "hotspot_score": 0.3951316644589048,
+      "churn_score": 0.8,
+      "complexity_score": 0.19516129032258067,
+      "commits": 6,
+      "avg_cognitive": 1.9516129032258065,
+      "avg_cyclomatic": 2.338709677419355,
+      "total_functions": 62
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/ignore/src/walk.rs",
+      "hotspot_score": 0.3541462698089314,
+      "churn_score": 0.85,
+      "complexity_score": 0.14755244755244756,
+      "commits": 7,
+      "avg_cognitive": 1.4755244755244756,
+      "avg_cyclomatic": 1.8881118881118881,
+      "total_functions": 143
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/searcher/src/searcher/glue.rs",
+      "hotspot_score": 0.3456073558887954,
+      "churn_score": 0.75,
+      "complexity_score": 0.15925925925925927,
+      "commits": 5,
+      "avg_cognitive": 1.5925925925925926,
+      "avg_cyclomatic": 1.9074074074074074,
+      "total_functions": 54
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/ignore/src/gitignore.rs",
+      "hotspot_score": 0.34540168728799714,
+      "churn_score": 0.675,
+      "complexity_score": 0.17674418604651165,
+      "commits": 4,
+      "avg_cognitive": 1.7674418604651163,
+      "avg_cyclomatic": 2.116279069767442,
+      "total_functions": 43
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/globset/src/pathutil.rs",
+      "hotspot_score": 0.33541019662496846,
+      "churn_score": 0.5,
+      "complexity_score": 0.225,
+      "commits": 2,
+      "avg_cognitive": 2.25,
+      "avg_cyclomatic": 3.25,
+      "total_functions": 4
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/matcher/src/interpolate.rs",
+      "hotspot_score": 0.33166247903553997,
+      "churn_score": 0.3,
+      "complexity_score": 0.36666666666666664,
+      "commits": 1,
+      "avg_cognitive": 3.6666666666666665,
+      "avg_cyclomatic": 3.6666666666666665,
+      "total_functions": 6
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/printer/src/standard.rs",
+      "hotspot_score": 0.32674868918230254,
+      "churn_score": 0.75,
+      "complexity_score": 0.1423529411764706,
+      "commits": 5,
+      "avg_cognitive": 1.423529411764706,
+      "avg_cyclomatic": 1.5941176470588236,
+      "total_functions": 170
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/regex/src/config.rs",
+      "hotspot_score": 0.31937438845342625,
+      "churn_score": 0.3,
+      "complexity_score": 0.33999999999999997,
+      "commits": 1,
+      "avg_cognitive": 3.4,
+      "avg_cyclomatic": 2.6,
+      "total_functions": 15
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/globset/src/lib.rs",
+      "hotspot_score": 0.3183289703016886,
+      "churn_score": 0.92,
+      "complexity_score": 0.1101449275362319,
+      "commits": 10,
+      "avg_cognitive": 1.1014492753623188,
+      "avg_cyclomatic": 1.7971014492753623,
+      "total_functions": 69
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/parse.rs",
+      "hotspot_score": 0.3171564839225546,
+      "churn_score": 0.3,
+      "complexity_score": 0.3352941176470588,
+      "commits": 1,
+      "avg_cognitive": 3.3529411764705883,
+      "avg_cyclomatic": 2.8823529411764706,
+      "total_functions": 17
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/ignore/src/default_types.rs",
+      "hotspot_score": 0.3117691453623979,
+      "churn_score": 0.972,
+      "complexity_score": 0.1,
+      "commits": 18,
+      "avg_cognitive": 1,
+      "avg_cyclomatic": 2,
+      "total_functions": 1
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/printer/src/hyperlink/mod.rs",
+      "hotspot_score": 0.2996596709057576,
+      "churn_score": 0.5,
+      "complexity_score": 0.1795918367346939,
+      "commits": 2,
+      "avg_cognitive": 1.7959183673469388,
+      "avg_cyclomatic": 1.8775510204081634,
+      "total_functions": 49
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/ignore/src/lib.rs",
+      "hotspot_score": 0.28660575211055545,
+      "churn_score": 0.5,
+      "complexity_score": 0.16428571428571428,
+      "commits": 2,
+      "avg_cognitive": 1.6428571428571428,
+      "avg_cyclomatic": 2.0357142857142856,
+      "total_functions": 28
+    },
+    {
+      "path": "/tmp/omen-2461860455/build.rs",
+      "hotspot_score": 0.2581988897471611,
+      "churn_score": 0.5,
+      "complexity_score": 0.13333333333333333,
+      "commits": 2,
+      "avg_cognitive": 1.3333333333333333,
+      "avg_cyclomatic": 2.3333333333333335,
+      "total_functions": 3
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/ignore/src/types.rs",
+      "hotspot_score": 0.257390753524675,
+      "churn_score": 0.3,
+      "complexity_score": 0.22083333333333335,
+      "commits": 1,
+      "avg_cognitive": 2.2083333333333335,
+      "avg_cyclomatic": 2.4583333333333335,
+      "total_functions": 24
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/printer/src/util.rs",
+      "hotspot_score": 0.25523098781859765,
+      "churn_score": 0.6,
+      "complexity_score": 0.10857142857142857,
+      "commits": 3,
+      "avg_cognitive": 1.0857142857142856,
+      "avg_cyclomatic": 1.8285714285714285,
+      "total_functions": 35
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/regex/src/strip.rs",
+      "hotspot_score": 0.253546276418555,
+      "churn_score": 0.3,
+      "complexity_score": 0.2142857142857143,
+      "commits": 1,
+      "avg_cognitive": 2.142857142857143,
+      "avg_cyclomatic": 2.142857142857143,
+      "total_functions": 7
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/search.rs",
+      "hotspot_score": 0.2522624895547565,
+      "churn_score": 0.5,
+      "complexity_score": 0.1272727272727273,
+      "commits": 2,
+      "avg_cognitive": 1.2727272727272727,
+      "avg_cyclomatic": 1.5454545454545454,
+      "total_functions": 22
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/printer/src/summary.rs",
+      "hotspot_score": 0.24600252311574033,
+      "churn_score": 0.675,
+      "complexity_score": 0.08965517241379312,
+      "commits": 4,
+      "avg_cognitive": 0.896551724137931,
+      "avg_cyclomatic": 1.5862068965517242,
+      "total_functions": 58
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/cli/src/decompress.rs",
+      "hotspot_score": 0.2327373340628157,
+      "churn_score": 0.5,
+      "complexity_score": 0.10833333333333334,
+      "commits": 2,
+      "avg_cognitive": 1.0833333333333333,
+      "avg_cyclomatic": 1.6666666666666667,
+      "total_functions": 24
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/printer/src/color.rs",
+      "hotspot_score": 0.23008949665421113,
+      "churn_score": 0.5,
+      "complexity_score": 0.10588235294117648,
+      "commits": 2,
+      "avg_cognitive": 1.0588235294117647,
+      "avg_cyclomatic": 1.8235294117647058,
+      "total_functions": 17
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/config.rs",
+      "hotspot_score": 0.22360679774997896,
+      "churn_score": 0.3,
+      "complexity_score": 0.16666666666666669,
+      "commits": 1,
+      "avg_cognitive": 1.6666666666666667,
+      "avg_cyclomatic": 2.5,
+      "total_functions": 6
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/printer/src/json.rs",
+      "hotspot_score": 0.21213203435596426,
+      "churn_score": 0.75,
+      "complexity_score": 0.06,
+      "commits": 5,
+      "avg_cognitive": 0.6,
+      "avg_cyclomatic": 1.4285714285714286,
+      "total_functions": 35
+    },
+    {
+      "path": "/tmp/omen-2461860455/tests/util.rs",
+      "hotspot_score": 0.20380986614602722,
+      "churn_score": 0.6,
+      "complexity_score": 0.06923076923076923,
+      "commits": 3,
+      "avg_cognitive": 0.6923076923076923,
+      "avg_cyclomatic": 1.3846153846153846,
+      "total_functions": 39
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/regex/src/literal.rs",
+      "hotspot_score": 0.19922928422374983,
+      "churn_score": 0.3,
+      "complexity_score": 0.13230769230769232,
+      "commits": 1,
+      "avg_cognitive": 1.323076923076923,
+      "avg_cyclomatic": 1.8461538461538463,
+      "total_functions": 65
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/searcher/src/searcher/mod.rs",
+      "hotspot_score": 0.19667039757680582,
+      "churn_score": 0.5,
+      "complexity_score": 0.07735849056603775,
+      "commits": 2,
+      "avg_cognitive": 0.7735849056603774,
+      "avg_cyclomatic": 1.6037735849056605,
+      "total_functions": 53
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/doc/version.rs",
+      "hotspot_score": 0.18371173070873836,
+      "churn_score": 0.3,
+      "complexity_score": 0.1125,
+      "commits": 1,
+      "avg_cognitive": 1.125,
+      "avg_cyclomatic": 1.75,
+      "total_functions": 8
+    },
+    {
+      "path": "/tmp/omen-2461860455/tests/json.rs",
+      "hotspot_score": 0.1767766952966369,
+      "churn_score": 0.5,
+      "complexity_score": 0.0625,
+      "commits": 2,
+      "avg_cognitive": 0.625,
+      "avg_cyclomatic": 1.625,
+      "total_functions": 8
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/searcher/examples/search-stdin.rs",
+      "hotspot_score": 0.17320508075688773,
+      "churn_score": 0.3,
+      "complexity_score": 0.1,
+      "commits": 1,
+      "avg_cognitive": 1,
+      "avg_cyclomatic": 2,
+      "total_functions": 2
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/printer/src/jsont.rs",
+      "hotspot_score": 0.17078251276599332,
+      "churn_score": 0.5,
+      "complexity_score": 0.05833333333333334,
+      "commits": 2,
+      "avg_cognitive": 0.5833333333333334,
+      "avg_cyclomatic": 1.5833333333333333,
+      "total_functions": 12
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/pcre2/src/matcher.rs",
+      "hotspot_score": 0.16803361008336118,
+      "churn_score": 0.3,
+      "complexity_score": 0.09411764705882353,
+      "commits": 1,
+      "avg_cognitive": 0.9411764705882353,
+      "avg_cyclomatic": 1.4705882352941178,
+      "total_functions": 34
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/cli/src/lib.rs",
+      "hotspot_score": 0.16035674514745463,
+      "churn_score": 0.3,
+      "complexity_score": 0.08571428571428572,
+      "commits": 1,
+      "avg_cognitive": 0.8571428571428571,
+      "avg_cyclomatic": 2.857142857142857,
+      "total_functions": 7
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/searcher/src/line_buffer.rs",
+      "hotspot_score": 0.15986105077709065,
+      "churn_score": 0.6,
+      "complexity_score": 0.0425925925925926,
+      "commits": 3,
+      "avg_cognitive": 0.42592592592592593,
+      "avg_cyclomatic": 1.3518518518518519,
+      "total_functions": 54
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/cli/src/hostname.rs",
+      "hotspot_score": 0.1414213562373095,
+      "churn_score": 0.3,
+      "complexity_score": 0.06666666666666667,
+      "commits": 1,
+      "avg_cognitive": 0.6666666666666666,
+      "avg_cyclomatic": 1.6666666666666667,
+      "total_functions": 3
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/lowargs.rs",
+      "hotspot_score": 0.1284523257866513,
+      "churn_score": 0.3,
+      "complexity_score": 0.05500000000000001,
+      "commits": 1,
+      "avg_cognitive": 0.55,
+      "avg_cyclomatic": 1.5,
+      "total_functions": 20
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/defs.rs",
+      "hotspot_score": 0.104277534014896,
+      "churn_score": 0.936,
+      "complexity_score": 0.01161731207289294,
+      "commits": 12,
+      "avg_cognitive": 0.11617312072892938,
+      "avg_cyclomatic": 1.0580865603644647,
+      "total_functions": 878
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/regex/src/matcher.rs",
+      "hotspot_score": 0.10215078369104982,
+      "churn_score": 0.3,
+      "complexity_score": 0.034782608695652174,
+      "commits": 1,
+      "avg_cognitive": 0.34782608695652173,
+      "avg_cyclomatic": 1.2173913043478262,
+      "total_functions": 46
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/mod.rs",
+      "hotspot_score": 0.1,
+      "churn_score": 0.3,
+      "complexity_score": 0.03333333333333333,
+      "commits": 1,
+      "avg_cognitive": 0.3333333333333333,
+      "avg_cyclomatic": 1.3333333333333333,
+      "total_functions": 9
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/ignore/src/overrides.rs",
+      "hotspot_score": 0.08257228238447704,
+      "churn_score": 0.5,
+      "complexity_score": 0.013636363636363636,
+      "commits": 2,
+      "avg_cognitive": 0.13636363636363635,
+      "avg_cyclomatic": 1.2272727272727273,
+      "total_functions": 22
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/complete/zsh.rs",
+      "hotspot_score": 0,
+      "churn_score": 0.3,
+      "complexity_score": 0,
+      "commits": 1,
+      "avg_cognitive": 0,
+      "avg_cyclomatic": 1,
+      "total_functions": 1
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/ignore/tests/gitignore_matched_path_or_any_parents_tests.rs",
+      "hotspot_score": 0,
+      "churn_score": 0.3,
+      "complexity_score": 0,
+      "commits": 1,
+      "avg_cognitive": 0,
+      "avg_cyclomatic": 1,
+      "total_functions": 6
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/searcher/src/lib.rs",
+      "hotspot_score": 0,
+      "churn_score": 0.3,
+      "complexity_score": 0,
+      "commits": 1,
+      "avg_cognitive": 0,
+      "avg_cyclomatic": 0,
+      "total_functions": 0
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/messages.rs",
+      "hotspot_score": 0,
+      "churn_score": 0.3,
+      "complexity_score": 0,
+      "commits": 1,
+      "avg_cognitive": 0,
+      "avg_cyclomatic": 1,
+      "total_functions": 6
+    },
+    {
+      "path": "/tmp/omen-2461860455/fuzz/fuzz_targets/fuzz_glob.rs",
+      "hotspot_score": 0,
+      "churn_score": 0.3,
+      "complexity_score": 0,
+      "commits": 1,
+      "avg_cognitive": 0,
+      "avg_cyclomatic": 0,
+      "total_functions": 0
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/ignore/tests/gitignore_skip_bom.rs",
+      "hotspot_score": 0,
+      "churn_score": 0.3,
+      "complexity_score": 0,
+      "commits": 1,
+      "avg_cognitive": 0,
+      "avg_cyclomatic": 1,
+      "total_functions": 1
+    },
+    {
+      "path": "/tmp/omen-2461860455/tests/binary.rs",
+      "hotspot_score": 0,
+      "churn_score": 0.5,
+      "complexity_score": 0,
+      "commits": 2,
+      "avg_cognitive": 0,
+      "avg_cyclomatic": 0,
+      "total_functions": 0
+    },
+    {
+      "path": "/tmp/omen-2461860455/pkg/brew/ripgrep-bin.rb",
+      "hotspot_score": 0,
+      "churn_score": 0.5,
+      "complexity_score": 0,
+      "commits": 2,
+      "avg_cognitive": 0,
+      "avg_cyclomatic": 1,
+      "total_functions": 1
+    },
+    {
+      "path": "/tmp/omen-2461860455/tests/feature.rs",
+      "hotspot_score": 0,
+      "churn_score": 0.6,
+      "complexity_score": 0,
+      "commits": 3,
+      "avg_cognitive": 0,
+      "avg_cyclomatic": 0,
+      "total_functions": 0
+    },
+    {
+      "path": "/tmp/omen-2461860455/tests/regression.rs",
+      "hotspot_score": 0,
+      "churn_score": 0.976,
+      "complexity_score": 0,
+      "commits": 19,
+      "avg_cognitive": 0,
+      "avg_cyclomatic": 0,
+      "total_functions": 0
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/printer/src/lib.rs",
+      "hotspot_score": 0,
+      "churn_score": 0.6,
+      "complexity_score": 0,
+      "commits": 3,
+      "avg_cognitive": 0,
+      "avg_cyclomatic": 0,
+      "total_functions": 0
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/printer/src/hyperlink/aliases.rs",
+      "hotspot_score": 0,
+      "churn_score": 0.6,
+      "complexity_score": 0,
+      "commits": 3,
+      "avg_cognitive": 0,
+      "avg_cyclomatic": 1,
+      "total_functions": 2
+    }
+  ],
+  "summary": {
+    "total_files": 62,
+    "hotspot_count": 11,
+    "max_hotspot_score": 0.6324555320336759,
+    "avg_hotspot_score": 0.24308041896440824,
+    "p50_hotspot_score": 0.2327373340628157,
+    "p90_hotspot_score": 0.518411033833193
+  }
+}

@@ -1,0 +1,4013 @@
+{
+  "generated_at": "2025-12-16T02:34:05.829461312Z",
+  "files": [
+    {
+      "path": "/tmp/omen-267094167/codec/json/json.go",
+      "primary_owner": "Tim",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 21,
+      "contributors": [
+        {
+          "name": "Tim",
+          "email": "xuchonglei@126.com",
+          "lines_owned": 21,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-267094167/codec/json/sonic.go",
+      "primary_owner": "Tim",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 22,
+      "contributors": [
+        {
+          "name": "Tim",
+          "email": "xuchonglei@126.com",
+          "lines_owned": 22,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-267094167/codec/json/jsoniter.go",
+      "primary_owner": "Tim",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 22,
+      "contributors": [
+        {
+          "name": "Tim",
+          "email": "xuchonglei@126.com",
+          "lines_owned": 22,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-267094167/codec/json/go_json.go",
+      "primary_owner": "Tim",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 21,
+      "contributors": [
+        {
+          "name": "Tim",
+          "email": "xuchonglei@126.com",
+          "lines_owned": 21,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-267094167/codec/json/api.go",
+      "primary_owner": "Tim",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 43,
+      "contributors": [
+        {
+          "name": "Tim",
+          "email": "xuchonglei@126.com",
+          "lines_owned": 43,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-267094167/internal/fs/fs.go",
+      "primary_owner": "sunshineplan",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 11,
+      "contributors": [
+        {
+          "name": "sunshineplan",
+          "email": "sunshineplan@users.noreply.github.com",
+          "lines_owned": 11,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/plain.go",
+      "primary_owner": "guonaihong",
+      "ownership_percent": 96.66666666666667,
+      "concentration": 0.9666666666666667,
+      "total_lines": 30,
+      "contributors": [
+        {
+          "name": "guonaihong",
+          "email": "guonaihong@qq.com",
+          "lines_owned": 29,
+          "percentage": 96.66666666666667
+        },
+        {
+          "name": "Flc゛",
+          "email": "four_leaf_clover@foxmail.com",
+          "lines_owned": 1,
+          "percentage": 3.3333333333333335
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/uri.go",
+      "primary_owner": "thinkerou",
+      "ownership_percent": 90,
+      "concentration": 0.9,
+      "total_lines": 10,
+      "contributors": [
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 9,
+          "percentage": 90
+        },
+        {
+          "name": "Matthieu MOREL",
+          "email": "mmorel-35@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 10
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/binding_nomsgpack.go",
+      "primary_owner": "Antoine GIRARD",
+      "ownership_percent": 81.11111111111111,
+      "concentration": 0.8111111111111111,
+      "total_lines": 90,
+      "contributors": [
+        {
+          "name": "Antoine GIRARD",
+          "email": "sapk@users.noreply.github.com",
+          "lines_owned": 73,
+          "percentage": 81.11111111111111
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 7,
+          "percentage": 7.777777777777778
+        },
+        {
+          "name": "Valentine Oragbakosi",
+          "email": "valentine13400@gmail.com",
+          "lines_owned": 4,
+          "percentage": 4.444444444444445
+        },
+        {
+          "name": "Vincent Bernat",
+          "email": "vincent@bernat.ch",
+          "lines_owned": 2,
+          "percentage": 2.2222222222222223
+        },
+        {
+          "name": "Helios",
+          "email": "674876158@qq.com",
+          "lines_owned": 2,
+          "percentage": 2.2222222222222223
+        },
+        {
+          "name": "jincheng9",
+          "email": "perfume0607@gmail.com",
+          "lines_owned": 1,
+          "percentage": 1.1111111111111112
+        },
+        {
+          "name": "guonaihong",
+          "email": "guonaihong@qq.com",
+          "lines_owned": 1,
+          "percentage": 1.1111111111111112
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/render/toml.go",
+      "primary_owner": "Valentine Oragbakosi",
+      "ownership_percent": 75,
+      "concentration": 0.75,
+      "total_lines": 20,
+      "contributors": [
+        {
+          "name": "Valentine Oragbakosi",
+          "email": "valentine13400@gmail.com",
+          "lines_owned": 15,
+          "percentage": 75
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 3,
+          "percentage": 15
+        },
+        {
+          "name": "Varus Hsu",
+          "email": "varushsu@gmail.com",
+          "lines_owned": 2,
+          "percentage": 10
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/yaml.go",
+      "primary_owner": "Gordon Tyler",
+      "ownership_percent": 73.68421052631578,
+      "concentration": 0.7368421052631579,
+      "total_lines": 19,
+      "contributors": [
+        {
+          "name": "Gordon Tyler",
+          "email": "gordon@doxxx.net",
+          "lines_owned": 14,
+          "percentage": 73.68421052631578
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 4,
+          "percentage": 21.052631578947366
+        },
+        {
+          "name": "M. Ilham Surya Pratama",
+          "email": "ilhamsurya26@gmail.com",
+          "lines_owned": 1,
+          "percentage": 5.263157894736842
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/query.go",
+      "primary_owner": "Eason Lin",
+      "ownership_percent": 72.72727272727273,
+      "concentration": 0.7272727272727273,
+      "total_lines": 11,
+      "contributors": [
+        {
+          "name": "Eason Lin",
+          "email": "easonlin404@gmail.com",
+          "lines_owned": 8,
+          "percentage": 72.72727272727273
+        },
+        {
+          "name": "Bo-Yi Wu",
+          "email": "appleboy.tw@gmail.com",
+          "lines_owned": 2,
+          "percentage": 18.181818181818183
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 1,
+          "percentage": 9.090909090909092
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/doc.go",
+      "primary_owner": "諏訪原慶斗",
+      "ownership_percent": 69.23076923076923,
+      "concentration": 0.6923076923076923,
+      "total_lines": 13,
+      "contributors": [
+        {
+          "name": "諏訪原慶斗",
+          "email": "131525647+suwakei@users.noreply.github.com",
+          "lines_owned": 9,
+          "percentage": 69.23076923076923
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 4,
+          "percentage": 30.76923076923077
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/header.go",
+      "primary_owner": "guonaihong",
+      "ownership_percent": 68.42105263157895,
+      "concentration": 0.6842105263157895,
+      "total_lines": 19,
+      "contributors": [
+        {
+          "name": "guonaihong",
+          "email": "guonaihong@qq.com",
+          "lines_owned": 13,
+          "percentage": 68.42105263157895
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 5,
+          "percentage": 26.31578947368421
+        },
+        {
+          "name": "heige",
+          "email": "daheige@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 5.263157894736842
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/render/redirect.go",
+      "primary_owner": "Manu Mtz-Almeida",
+      "ownership_percent": 66.66666666666666,
+      "concentration": 0.6666666666666665,
+      "total_lines": 18,
+      "contributors": [
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 12,
+          "percentage": 66.66666666666666
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 3,
+          "percentage": 16.666666666666664
+        },
+        {
+          "name": "Dan Markham",
+          "email": "dmarkham@gmail.com",
+          "lines_owned": 1,
+          "percentage": 5.555555555555555
+        },
+        {
+          "name": "Javier Provecho Fernandez",
+          "email": "javiertitan@gmail.com",
+          "lines_owned": 1,
+          "percentage": 5.555555555555555
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 1,
+          "percentage": 5.555555555555555
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/fs.go",
+      "primary_owner": "Johannes Eiglsperger",
+      "ownership_percent": 66.66666666666666,
+      "concentration": 0.6666666666666665,
+      "total_lines": 30,
+      "contributors": [
+        {
+          "name": "Johannes Eiglsperger",
+          "email": "je@eigsys.de",
+          "lines_owned": 20,
+          "percentage": 66.66666666666666
+        },
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 6,
+          "percentage": 20
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 3,
+          "percentage": 10
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 1,
+          "percentage": 3.3333333333333335
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/multipart_form_mapping.go",
+      "primary_owner": "Dmitry Kutakov",
+      "ownership_percent": 65.3061224489796,
+      "concentration": 0.653061224489796,
+      "total_lines": 49,
+      "contributors": [
+        {
+          "name": "Dmitry Kutakov",
+          "email": "vkd.castle@gmail.com",
+          "lines_owned": 32,
+          "percentage": 65.3061224489796
+        },
+        {
+          "name": "heige",
+          "email": "daheige@users.noreply.github.com",
+          "lines_owned": 8,
+          "percentage": 16.3265306122449
+        },
+        {
+          "name": "axiaoxin",
+          "email": "254606826@qq.com",
+          "lines_owned": 8,
+          "percentage": 16.3265306122449
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 1,
+          "percentage": 2.0408163265306123
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/version.go",
+      "primary_owner": "田欧",
+      "ownership_percent": 60,
+      "concentration": 0.6,
+      "total_lines": 5,
+      "contributors": [
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 3,
+          "percentage": 60
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 1,
+          "percentage": 20
+        },
+        {
+          "name": "Bo-Yi Wu",
+          "email": "appleboy.tw@gmail.com",
+          "lines_owned": 1,
+          "percentage": 20
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/toml.go",
+      "primary_owner": "Valentine Oragbakosi",
+      "ownership_percent": 57.89473684210527,
+      "concentration": 0.5789473684210527,
+      "total_lines": 19,
+      "contributors": [
+        {
+          "name": "Valentine Oragbakosi",
+          "email": "valentine13400@gmail.com",
+          "lines_owned": 11,
+          "percentage": 57.89473684210527
+        },
+        {
+          "name": "Heliner",
+          "email": "32272517+Heliner@users.noreply.github.com",
+          "lines_owned": 4,
+          "percentage": 21.052631578947366
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 3,
+          "percentage": 15.789473684210526
+        },
+        {
+          "name": "revevide",
+          "email": "158151416+revevide@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 5.263157894736842
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/utils.go",
+      "primary_owner": "Manu Mtz-Almeida",
+      "ownership_percent": 57.01754385964912,
+      "concentration": 0.5701754385964912,
+      "total_lines": 114,
+      "contributors": [
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 65,
+          "percentage": 57.01754385964912
+        },
+        {
+          "name": "OHZEKI Naoki",
+          "email": "0h23k1.n40k1@gmail.com",
+          "lines_owned": 11,
+          "percentage": 9.649122807017543
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 11,
+          "percentage": 9.649122807017543
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 9,
+          "percentage": 7.894736842105263
+        },
+        {
+          "name": "metal A-wing",
+          "email": "freedom.awing.777@gmail.com",
+          "lines_owned": 7,
+          "percentage": 6.140350877192982
+        },
+        {
+          "name": "Manu Mtz.-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 3,
+          "percentage": 2.631578947368421
+        },
+        {
+          "name": "xyb",
+          "email": "xyb4638@gmail.com",
+          "lines_owned": 3,
+          "percentage": 2.631578947368421
+        },
+        {
+          "name": "Bo-Yi Wu",
+          "email": "appleboy.tw@gmail.com",
+          "lines_owned": 2,
+          "percentage": 1.7543859649122806
+        },
+        {
+          "name": "Weilin Shi",
+          "email": "934587911@qq.com",
+          "lines_owned": 1,
+          "percentage": 0.8771929824561403
+        },
+        {
+          "name": "Javier Provecho Fernandez",
+          "email": "javiertitan@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.8771929824561403
+        },
+        {
+          "name": "Rafal Zajac",
+          "email": "rzajac@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.8771929824561403
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/form.go",
+      "primary_owner": "Manu Mtz-Almeida",
+      "ownership_percent": 55.55555555555556,
+      "concentration": 0.5555555555555556,
+      "total_lines": 36,
+      "contributors": [
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 20,
+          "percentage": 55.55555555555556
+        },
+        {
+          "name": "Flc゛",
+          "email": "four_leaf_clover@foxmail.com",
+          "lines_owned": 4,
+          "percentage": 11.11111111111111
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 4,
+          "percentage": 11.11111111111111
+        },
+        {
+          "name": "Dmitry Kutakov",
+          "email": "vkd.castle@gmail.com",
+          "lines_owned": 3,
+          "percentage": 8.333333333333332
+        },
+        {
+          "name": "Matthieu MOREL",
+          "email": "mmorel-35@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 5.555555555555555
+        },
+        {
+          "name": "Ngalim Siregar",
+          "email": "ngalim.siregar@gmail.com",
+          "lines_owned": 1,
+          "percentage": 2.7777777777777777
+        },
+        {
+          "name": "tyltr",
+          "email": "31768692+tylitianrui@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 2.7777777777777777
+        },
+        {
+          "name": "George Kirilenko",
+          "email": "necryin@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 2.7777777777777777
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/render/protobuf.go",
+      "primary_owner": "aljun",
+      "ownership_percent": 55.00000000000001,
+      "concentration": 0.55,
+      "total_lines": 20,
+      "contributors": [
+        {
+          "name": "aljun",
+          "email": "salameryy@163.com",
+          "lines_owned": 11,
+          "percentage": 55.00000000000001
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 4,
+          "percentage": 20
+        },
+        {
+          "name": "Dmitry Kutakov",
+          "email": "vkd.castle@gmail.com",
+          "lines_owned": 2,
+          "percentage": 10
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 2,
+          "percentage": 10
+        },
+        {
+          "name": "Matthieu MOREL",
+          "email": "mmorel-35@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 5
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/render/render.go",
+      "primary_owner": "jessetang",
+      "ownership_percent": 53.333333333333336,
+      "concentration": 0.5333333333333333,
+      "total_lines": 30,
+      "contributors": [
+        {
+          "name": "jessetang",
+          "email": "1430482733@qq.com",
+          "lines_owned": 16,
+          "percentage": 53.333333333333336
+        },
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 9,
+          "percentage": 30
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 3,
+          "percentage": 10
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 1,
+          "percentage": 3.3333333333333335
+        },
+        {
+          "name": "Javier Provecho Fernandez",
+          "email": "javiertitan@gmail.com",
+          "lines_owned": 1,
+          "percentage": 3.3333333333333335
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/xml.go",
+      "primary_owner": "Manu Mtz-Almeida",
+      "ownership_percent": 52.63157894736842,
+      "concentration": 0.5263157894736842,
+      "total_lines": 19,
+      "contributors": [
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 10,
+          "percentage": 52.63157894736842
+        },
+        {
+          "name": "JINNOUCHI Yasushi",
+          "email": "delphinus@remora.cx",
+          "lines_owned": 5,
+          "percentage": 26.31578947368421
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 4,
+          "percentage": 21.052631578947366
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/render/reader.go",
+      "primary_owner": "Jean-Christophe Lebreton",
+      "ownership_percent": 51.61290322580645,
+      "concentration": 0.5161290322580645,
+      "total_lines": 31,
+      "contributors": [
+        {
+          "name": "Jean-Christophe Lebreton",
+          "email": "jclebreton@gmail.com",
+          "lines_owned": 16,
+          "percentage": 51.61290322580645
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 4,
+          "percentage": 12.903225806451612
+        },
+        {
+          "name": "Name",
+          "email": "1911860538@qq.com",
+          "lines_owned": 4,
+          "percentage": 12.903225806451612
+        },
+        {
+          "name": "Segev Finer",
+          "email": "segev208@gmail.com",
+          "lines_owned": 2,
+          "percentage": 6.451612903225806
+        },
+        {
+          "name": "Dmitry Kutakov",
+          "email": "vkd.castle@gmail.com",
+          "lines_owned": 2,
+          "percentage": 6.451612903225806
+        },
+        {
+          "name": "songjiayang",
+          "email": "songjiayang@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 6.451612903225806
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 1,
+          "percentage": 3.225806451612903
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/render/xml.go",
+      "primary_owner": "Manu Mtz-Almeida",
+      "ownership_percent": 50,
+      "concentration": 0.5,
+      "total_lines": 16,
+      "contributors": [
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 8,
+          "percentage": 50
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 3,
+          "percentage": 18.75
+        },
+        {
+          "name": "Javier Provecho Fernandez",
+          "email": "javiertitan@gmail.com",
+          "lines_owned": 3,
+          "percentage": 18.75
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 2,
+          "percentage": 12.5
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/errors.go",
+      "primary_owner": "Manu Mtz-Almeida",
+      "ownership_percent": 48.333333333333336,
+      "concentration": 0.48333333333333334,
+      "total_lines": 120,
+      "contributors": [
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 58,
+          "percentage": 48.333333333333336
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 24,
+          "percentage": 20
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 11,
+          "percentage": 9.166666666666666
+        },
+        {
+          "name": "bestgopher",
+          "email": "84328409@qq.com",
+          "lines_owned": 9,
+          "percentage": 7.5
+        },
+        {
+          "name": "root@andrea:~#",
+          "email": "crypto.andrea@protonmail.ch",
+          "lines_owned": 3,
+          "percentage": 2.5
+        },
+        {
+          "name": "Tim",
+          "email": "xuchonglei@126.com",
+          "lines_owned": 3,
+          "percentage": 2.5
+        },
+        {
+          "name": "guonaihong",
+          "email": "guonaihong@qq.com",
+          "lines_owned": 2,
+          "percentage": 1.6666666666666667
+        },
+        {
+          "name": "Georges Varouchas",
+          "email": "georges.varouchas@gmail.com",
+          "lines_owned": 2,
+          "percentage": 1.6666666666666667
+        },
+        {
+          "name": "Boris Borshevsky",
+          "email": "BorisBorshevsky@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.8333333333333334
+        },
+        {
+          "name": "Tevin Jeffrey",
+          "email": "tev.jeffrey@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.8333333333333334
+        },
+        {
+          "name": "Manu Mtz.-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.8333333333333334
+        },
+        {
+          "name": "Orkhan Alikhanov",
+          "email": "Orkhan.Alikhanov@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.8333333333333334
+        },
+        {
+          "name": "Javier Provecho Fernandez",
+          "email": "javiertitan@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.8333333333333334
+        },
+        {
+          "name": "Riverside",
+          "email": "wangyb65@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.8333333333333334
+        },
+        {
+          "name": "Jesse",
+          "email": "1430482733@qq.com",
+          "lines_owned": 1,
+          "percentage": 0.8333333333333334
+        },
+        {
+          "name": "Tommy Chu",
+          "email": "tommychu2256@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.8333333333333334
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/ginS/gins.go",
+      "primary_owner": "Manu Mtz-Almeida",
+      "ownership_percent": 47.05882352941176,
+      "concentration": 0.4705882352941176,
+      "total_lines": 102,
+      "contributors": [
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 48,
+          "percentage": 47.05882352941176
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 19,
+          "percentage": 18.627450980392158
+        },
+        {
+          "name": "vz",
+          "email": "vzvway@gmail.com",
+          "lines_owned": 16,
+          "percentage": 15.686274509803921
+        },
+        {
+          "name": "Barnabus",
+          "email": "jbampton@users.noreply.github.com",
+          "lines_owned": 5,
+          "percentage": 4.901960784313726
+        },
+        {
+          "name": "sunshineplan",
+          "email": "sunshineplan@users.noreply.github.com",
+          "lines_owned": 3,
+          "percentage": 2.941176470588235
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 3,
+          "percentage": 2.941176470588235
+        },
+        {
+          "name": "Name",
+          "email": "1911860538@qq.com",
+          "lines_owned": 3,
+          "percentage": 2.941176470588235
+        },
+        {
+          "name": "jincheng9",
+          "email": "perfume0607@gmail.com",
+          "lines_owned": 2,
+          "percentage": 1.9607843137254901
+        },
+        {
+          "name": "jarodsong6",
+          "email": "jarodsong6@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.9803921568627451
+        },
+        {
+          "name": "Dmitry Dorogin",
+          "email": "dmirogin@ya.ru",
+          "lines_owned": 1,
+          "percentage": 0.9803921568627451
+        },
+        {
+          "name": "NezhaFan",
+          "email": "z772532526@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.9803921568627451
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/routergroup.go",
+      "primary_owner": "Manu Mtz-Almeida",
+      "ownership_percent": 45.2513966480447,
+      "concentration": 0.45251396648044695,
+      "total_lines": 179,
+      "contributors": [
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 81,
+          "percentage": 45.2513966480447
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 30,
+          "percentage": 16.75977653631285
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 12,
+          "percentage": 6.70391061452514
+        },
+        {
+          "name": "thinkgo",
+          "email": "49174849+thinkgos@users.noreply.github.com",
+          "lines_owned": 11,
+          "percentage": 6.145251396648044
+        },
+        {
+          "name": "heige",
+          "email": "daheige@users.noreply.github.com",
+          "lines_owned": 10,
+          "percentage": 5.58659217877095
+        },
+        {
+          "name": "Dave Rolsky",
+          "email": "autarch@urth.org",
+          "lines_owned": 7,
+          "percentage": 3.910614525139665
+        },
+        {
+          "name": "Alireza (Pure)",
+          "email": "alireza1377eftekhari@gmail.com",
+          "lines_owned": 6,
+          "percentage": 3.35195530726257
+        },
+        {
+          "name": "MetalBreaker",
+          "email": "johnymichelson@gmail.com",
+          "lines_owned": 4,
+          "percentage": 2.2346368715083798
+        },
+        {
+          "name": "Javier Provecho Fernandez",
+          "email": "javiertitan@gmail.com",
+          "lines_owned": 3,
+          "percentage": 1.675977653631285
+        },
+        {
+          "name": "Shamus Taylor",
+          "email": "Shamus03@me.com",
+          "lines_owned": 3,
+          "percentage": 1.675977653631285
+        },
+        {
+          "name": "Konstantin Runov",
+          "email": "101004736+runebone@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 1.1173184357541899
+        },
+        {
+          "name": "Barnabus",
+          "email": "jbampton@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 1.1173184357541899
+        },
+        {
+          "name": "John Bampton",
+          "email": "jbampton@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 1.1173184357541899
+        },
+        {
+          "name": "bestgopher",
+          "email": "84328409@qq.com",
+          "lines_owned": 1,
+          "percentage": 0.5586592178770949
+        },
+        {
+          "name": "Sai",
+          "email": "sairoutine@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.5586592178770949
+        },
+        {
+          "name": "Johannes Eiglsperger",
+          "email": "je@eigsys.de",
+          "lines_owned": 1,
+          "percentage": 0.5586592178770949
+        },
+        {
+          "name": "MW Lim",
+          "email": "williamchange@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.5586592178770949
+        },
+        {
+          "name": "Jesse",
+          "email": "1430482733@qq.com",
+          "lines_owned": 1,
+          "percentage": 0.5586592178770949
+        },
+        {
+          "name": "Lanco",
+          "email": "35420416+lancoLiu@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.5586592178770949
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/logger.go",
+      "primary_owner": "Sai",
+      "ownership_percent": 45.248868778280546,
+      "concentration": 0.45248868778280543,
+      "total_lines": 221,
+      "contributors": [
+        {
+          "name": "Sai",
+          "email": "sairoutine@gmail.com",
+          "lines_owned": 100,
+          "percentage": 45.248868778280546
+        },
+        {
+          "name": "ljz",
+          "email": "641390597@qq.com",
+          "lines_owned": 29,
+          "percentage": 13.122171945701359
+        },
+        {
+          "name": "Ghobad",
+          "email": "ghobad.vm@gmail.com",
+          "lines_owned": 24,
+          "percentage": 10.85972850678733
+        },
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 18,
+          "percentage": 8.144796380090497
+        },
+        {
+          "name": "Shuo",
+          "email": "openset.wang@gmail.com",
+          "lines_owned": 10,
+          "percentage": 4.524886877828054
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 8,
+          "percentage": 3.619909502262444
+        },
+        {
+          "name": "Roman Zaynetdinov",
+          "email": "roman.zaynetdinov@lekane.com",
+          "lines_owned": 6,
+          "percentage": 2.7149321266968327
+        },
+        {
+          "name": "Bo-Yi Wu",
+          "email": "appleboy.tw@gmail.com",
+          "lines_owned": 4,
+          "percentage": 1.809954751131222
+        },
+        {
+          "name": "Roy Lou",
+          "email": "roylou@gmail.com",
+          "lines_owned": 3,
+          "percentage": 1.3574660633484164
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 3,
+          "percentage": 1.3574660633484164
+        },
+        {
+          "name": "Viral Parmar",
+          "email": "viralparmarme@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.904977375565611
+        },
+        {
+          "name": "mstmdev",
+          "email": "mstmdev@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.904977375565611
+        },
+        {
+          "name": "jincheng9",
+          "email": "perfume0607@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.904977375565611
+        },
+        {
+          "name": "Pierre Massat",
+          "email": "pierre@massat.io",
+          "lines_owned": 2,
+          "percentage": 0.904977375565611
+        },
+        {
+          "name": "Javier Provecho Fernandez",
+          "email": "javiertitan@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.904977375565611
+        },
+        {
+          "name": "Olivier Robardet",
+          "email": "orobardet@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 0.904977375565611
+        },
+        {
+          "name": "Barnabus",
+          "email": "jbampton@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.4524886877828055
+        },
+        {
+          "name": "Adam Zielinski",
+          "email": "MusicAdam@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.4524886877828055
+        },
+        {
+          "name": "Flc゛",
+          "email": "four_leaf_clover@foxmail.com",
+          "lines_owned": 1,
+          "percentage": 0.4524886877828055
+        },
+        {
+          "name": "Leon cap",
+          "email": "wangyinneng@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.4524886877828055
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/test_helpers.go",
+      "primary_owner": "Wayne Aki",
+      "ownership_percent": 45.23809523809524,
+      "concentration": 0.4523809523809524,
+      "total_lines": 42,
+      "contributors": [
+        {
+          "name": "Wayne Aki",
+          "email": "111057868+Planckbaka@users.noreply.github.com",
+          "lines_owned": 19,
+          "percentage": 45.23809523809524
+        },
+        {
+          "name": "諏訪原慶斗",
+          "email": "131525647+suwakei@users.noreply.github.com",
+          "lines_owned": 9,
+          "percentage": 21.428571428571427
+        },
+        {
+          "name": "RoCry",
+          "email": "crysheen@gmail.com",
+          "lines_owned": 6,
+          "percentage": 14.285714285714285
+        },
+        {
+          "name": "Yehezkiel Syamsuhadi",
+          "email": "ybs@ybs.im",
+          "lines_owned": 5,
+          "percentage": 11.904761904761903
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 2,
+          "percentage": 4.761904761904762
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 1,
+          "percentage": 2.380952380952381
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/msgpack.go",
+      "primary_owner": "Harindu Perera",
+      "ownership_percent": 45,
+      "concentration": 0.45,
+      "total_lines": 20,
+      "contributors": [
+        {
+          "name": "Harindu Perera",
+          "email": "harinduenator@gmail.com",
+          "lines_owned": 9,
+          "percentage": 45
+        },
+        {
+          "name": "JINNOUCHI Yasushi",
+          "email": "delphinus@remora.cx",
+          "lines_owned": 6,
+          "percentage": 30
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 5,
+          "percentage": 25
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/render/msgpack.go",
+      "primary_owner": "Harindu Perera",
+      "ownership_percent": 44,
+      "concentration": 0.44,
+      "total_lines": 25,
+      "contributors": [
+        {
+          "name": "Harindu Perera",
+          "email": "harinduenator@gmail.com",
+          "lines_owned": 11,
+          "percentage": 44
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 6,
+          "percentage": 24
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 4,
+          "percentage": 16
+        },
+        {
+          "name": "ziheng",
+          "email": "zihenglv@gmail.com",
+          "lines_owned": 2,
+          "percentage": 8
+        },
+        {
+          "name": "Antoine GIRARD",
+          "email": "sapk@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 8
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/response_writer.go",
+      "primary_owner": "Manu Mtz-Almeida",
+      "ownership_percent": 43.18181818181818,
+      "concentration": 0.4318181818181818,
+      "total_lines": 88,
+      "contributors": [
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 38,
+          "percentage": 43.18181818181818
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 16,
+          "percentage": 18.181818181818183
+        },
+        {
+          "name": "mstmdev",
+          "email": "mstmdev@gmail.com",
+          "lines_owned": 8,
+          "percentage": 9.090909090909092
+        },
+        {
+          "name": "Dan Markham",
+          "email": "dmarkham@gmail.com",
+          "lines_owned": 7,
+          "percentage": 7.954545454545454
+        },
+        {
+          "name": "Bo-Yi Wu",
+          "email": "appleboy.tw@gmail.com",
+          "lines_owned": 4,
+          "percentage": 4.545454545454546
+        },
+        {
+          "name": "Matt Newberry",
+          "email": "mnewberry@opentable.com",
+          "lines_owned": 4,
+          "percentage": 4.545454545454546
+        },
+        {
+          "name": "olebedev",
+          "email": "oolebedev@gmail.com",
+          "lines_owned": 3,
+          "percentage": 3.4090909090909087
+        },
+        {
+          "name": "David Desmarais-Michaud",
+          "email": "desmarais.michaud.david@gmail.com",
+          "lines_owned": 2,
+          "percentage": 2.272727272727273
+        },
+        {
+          "name": "諏訪原慶斗",
+          "email": "131525647+suwakei@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 2.272727272727273
+        },
+        {
+          "name": "zhanweidu",
+          "email": "zhanweidu@163.com",
+          "lines_owned": 1,
+          "percentage": 1.1363636363636365
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 1,
+          "percentage": 1.1363636363636365
+        },
+        {
+          "name": "Alireza (Pure)",
+          "email": "alireza1377eftekhari@gmail.com",
+          "lines_owned": 1,
+          "percentage": 1.1363636363636365
+        },
+        {
+          "name": "Jesse",
+          "email": "1430482733@qq.com",
+          "lines_owned": 1,
+          "percentage": 1.1363636363636365
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/internal/bytesconv/bytesconv.go",
+      "primary_owner": "hopehook",
+      "ownership_percent": 41.66666666666667,
+      "concentration": 0.41666666666666674,
+      "total_lines": 12,
+      "contributors": [
+        {
+          "name": "hopehook",
+          "email": "hopehook@qq.com",
+          "lines_owned": 5,
+          "percentage": 41.66666666666667
+        },
+        {
+          "name": "Andy Pan",
+          "email": "panjf2000@gmail.com",
+          "lines_owned": 5,
+          "percentage": 41.66666666666667
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 2,
+          "percentage": 16.666666666666664
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/render/text.go",
+      "primary_owner": "Manu Mtz-Almeida",
+      "ownership_percent": 40,
+      "concentration": 0.4,
+      "total_lines": 25,
+      "contributors": [
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 10,
+          "percentage": 40
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 5,
+          "percentage": 20
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 3,
+          "percentage": 12
+        },
+        {
+          "name": "Dmitry Kutakov",
+          "email": "vkd.castle@gmail.com",
+          "lines_owned": 3,
+          "percentage": 12
+        },
+        {
+          "name": "xyb",
+          "email": "xyb4638@gmail.com",
+          "lines_owned": 2,
+          "percentage": 8
+        },
+        {
+          "name": "Javier Provecho Fernandez",
+          "email": "javiertitan@gmail.com",
+          "lines_owned": 2,
+          "percentage": 8
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/render/yaml.go",
+      "primary_owner": "Javier Provecho",
+      "ownership_percent": 40,
+      "concentration": 0.4,
+      "total_lines": 20,
+      "contributors": [
+        {
+          "name": "Javier Provecho",
+          "email": "javiertitan@gmail.com",
+          "lines_owned": 8,
+          "percentage": 40
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 3,
+          "percentage": 15
+        },
+        {
+          "name": "Javier Provecho Fernandez",
+          "email": "javiertitan@gmail.com",
+          "lines_owned": 3,
+          "percentage": 15
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 2,
+          "percentage": 10
+        },
+        {
+          "name": "Dmitry Kutakov",
+          "email": "vkd.castle@gmail.com",
+          "lines_owned": 2,
+          "percentage": 10
+        },
+        {
+          "name": "M. Ilham Surya Pratama",
+          "email": "ilhamsurya26@gmail.com",
+          "lines_owned": 1,
+          "percentage": 5
+        },
+        {
+          "name": "Vincent Bernat",
+          "email": "vincent@bernat.ch",
+          "lines_owned": 1,
+          "percentage": 5
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/deprecated.go",
+      "primary_owner": "Javier Provecho",
+      "ownership_percent": 40,
+      "concentration": 0.4,
+      "total_lines": 15,
+      "contributors": [
+        {
+          "name": "Javier Provecho",
+          "email": "javiertitan@gmail.com",
+          "lines_owned": 6,
+          "percentage": 40
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 3,
+          "percentage": 20
+        },
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 2,
+          "percentage": 13.333333333333334
+        },
+        {
+          "name": "Flc゛",
+          "email": "four_leaf_clover@foxmail.com",
+          "lines_owned": 2,
+          "percentage": 13.333333333333334
+        },
+        {
+          "name": "Javier Provecho Fernandez",
+          "email": "javiertitan@gmail.com",
+          "lines_owned": 1,
+          "percentage": 6.666666666666667
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 1,
+          "percentage": 6.666666666666667
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/debug.go",
+      "primary_owner": "Manu Mtz-Almeida",
+      "ownership_percent": 40,
+      "concentration": 0.4,
+      "total_lines": 70,
+      "contributors": [
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 28,
+          "percentage": 40
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 14,
+          "percentage": 20
+        },
+        {
+          "name": "Jose Diaz-Gonzalez",
+          "email": "email@josediazgonzalez.com",
+          "lines_owned": 9,
+          "percentage": 12.857142857142856
+        },
+        {
+          "name": "Jérôme Laforge",
+          "email": "jerome-laforge@users.noreply.github.com",
+          "lines_owned": 5,
+          "percentage": 7.142857142857142
+        },
+        {
+          "name": "OHZEKI Naoki",
+          "email": "0h23k1.n40k1@gmail.com",
+          "lines_owned": 3,
+          "percentage": 4.285714285714286
+        },
+        {
+          "name": "tyltr",
+          "email": "31768692+tylitianrui@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 2.857142857142857
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 2,
+          "percentage": 2.857142857142857
+        },
+        {
+          "name": "Bo-Yi Wu",
+          "email": "appleboy.tw@gmail.com",
+          "lines_owned": 2,
+          "percentage": 2.857142857142857
+        },
+        {
+          "name": "Kostadin Plachkov",
+          "email": "20207730+kplachkov@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 2.857142857142857
+        },
+        {
+          "name": "Flc゛",
+          "email": "four_leaf_clover@foxmail.com",
+          "lines_owned": 1,
+          "percentage": 1.4285714285714286
+        },
+        {
+          "name": "guonaihong",
+          "email": "guonaihong@qq.com",
+          "lines_owned": 1,
+          "percentage": 1.4285714285714286
+        },
+        {
+          "name": "Mike Stipicevic",
+          "email": "mst@ableton.com",
+          "lines_owned": 1,
+          "percentage": 1.4285714285714286
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/render/data.go",
+      "primary_owner": "Javier Provecho Fernandez",
+      "ownership_percent": 40,
+      "concentration": 0.4,
+      "total_lines": 15,
+      "contributors": [
+        {
+          "name": "Javier Provecho Fernandez",
+          "email": "javiertitan@gmail.com",
+          "lines_owned": 6,
+          "percentage": 40
+        },
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 5,
+          "percentage": 33.33333333333333
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 3,
+          "percentage": 20
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 1,
+          "percentage": 6.666666666666667
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/path.go",
+      "primary_owner": "Manu Mtz-Almeida",
+      "ownership_percent": 38.35616438356164,
+      "concentration": 0.3835616438356164,
+      "total_lines": 146,
+      "contributors": [
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 56,
+          "percentage": 38.35616438356164
+        },
+        {
+          "name": "Name",
+          "email": "1911860538@qq.com",
+          "lines_owned": 39,
+          "percentage": 26.71232876712329
+        },
+        {
+          "name": "Bo-Yi Wu",
+          "email": "appleboy.tw@gmail.com",
+          "lines_owned": 17,
+          "percentage": 11.643835616438356
+        },
+        {
+          "name": "Andy Pan",
+          "email": "panjf2000@gmail.com",
+          "lines_owned": 15,
+          "percentage": 10.273972602739725
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 10,
+          "percentage": 6.8493150684931505
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 5,
+          "percentage": 3.4246575342465753
+        },
+        {
+          "name": "Javier Provecho Fernandez",
+          "email": "javiertitan@gmail.com",
+          "lines_owned": 4,
+          "percentage": 2.73972602739726
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/render/html.go",
+      "primary_owner": "田欧",
+      "ownership_percent": 37.878787878787875,
+      "concentration": 0.37878787878787873,
+      "total_lines": 66,
+      "contributors": [
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 25,
+          "percentage": 37.878787878787875
+        },
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 17,
+          "percentage": 25.757575757575758
+        },
+        {
+          "name": "sunshineplan",
+          "email": "sunshineplan@users.noreply.github.com",
+          "lines_owned": 11,
+          "percentage": 16.666666666666664
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 5,
+          "percentage": 7.575757575757576
+        },
+        {
+          "name": "Thomas Boerger",
+          "email": "thomas@webhippie.de",
+          "lines_owned": 4,
+          "percentage": 6.0606060606060606
+        },
+        {
+          "name": "Javier Provecho Fernandez",
+          "email": "javiertitan@gmail.com",
+          "lines_owned": 4,
+          "percentage": 6.0606060606060606
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/auth.go",
+      "primary_owner": "Manu Mtz-Almeida",
+      "ownership_percent": 37.03703703703704,
+      "concentration": 0.3703703703703704,
+      "total_lines": 81,
+      "contributors": [
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 30,
+          "percentage": 37.03703703703704
+        },
+        {
+          "name": "Endless Paradox",
+          "email": "129645532+EndlessParadox1@users.noreply.github.com",
+          "lines_owned": 19,
+          "percentage": 23.456790123456788
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 18,
+          "percentage": 22.22222222222222
+        },
+        {
+          "name": "Frank Bille",
+          "email": "github@frankbille.dk",
+          "lines_owned": 5,
+          "percentage": 6.172839506172839
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 4,
+          "percentage": 4.938271604938271
+        },
+        {
+          "name": "Andy Pan",
+          "email": "panjf2000@gmail.com",
+          "lines_owned": 2,
+          "percentage": 2.4691358024691357
+        },
+        {
+          "name": "Snawoot",
+          "email": "vladislav-ex-github@vm-0.com",
+          "lines_owned": 1,
+          "percentage": 1.2345679012345678
+        },
+        {
+          "name": "Lanco",
+          "email": "35420416+lancoLiu@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 1.2345679012345678
+        },
+        {
+          "name": "Bo-Yi Wu",
+          "email": "appleboy.tw@gmail.com",
+          "lines_owned": 1,
+          "percentage": 1.2345679012345678
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/protobuf.go",
+      "primary_owner": "zhing",
+      "ownership_percent": 36,
+      "concentration": 0.36,
+      "total_lines": 25,
+      "contributors": [
+        {
+          "name": "zhing",
+          "email": "zqwillseven@gmail.com",
+          "lines_owned": 9,
+          "percentage": 36
+        },
+        {
+          "name": "Tevic",
+          "email": "tevic.tt@gmail.com",
+          "lines_owned": 5,
+          "percentage": 20
+        },
+        {
+          "name": "JINNOUCHI Yasushi",
+          "email": "delphinus@remora.cx",
+          "lines_owned": 3,
+          "percentage": 12
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 3,
+          "percentage": 12
+        },
+        {
+          "name": "Qt",
+          "email": "golang.chen@gmail.com",
+          "lines_owned": 2,
+          "percentage": 8
+        },
+        {
+          "name": "NezhaFan",
+          "email": "z772532526@gmail.com",
+          "lines_owned": 1,
+          "percentage": 4
+        },
+        {
+          "name": "Matthieu MOREL",
+          "email": "mmorel-35@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 4
+        },
+        {
+          "name": "Javier Provecho Fernandez",
+          "email": "javiertitan@gmail.com",
+          "lines_owned": 1,
+          "percentage": 4
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/tree.go",
+      "primary_owner": "thinkerou",
+      "ownership_percent": 35.33123028391167,
+      "concentration": 0.35331230283911674,
+      "total_lines": 634,
+      "contributors": [
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 224,
+          "percentage": 35.33123028391167
+        },
+        {
+          "name": "Bo-Yi Wu",
+          "email": "appleboy.tw@gmail.com",
+          "lines_owned": 155,
+          "percentage": 24.44794952681388
+        },
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 72,
+          "percentage": 11.35646687697161
+        },
+        {
+          "name": "Ross Wolf",
+          "email": "31489089+rw-access@users.noreply.github.com",
+          "lines_owned": 43,
+          "percentage": 6.782334384858044
+        },
+        {
+          "name": "Zhu Xi",
+          "email": "zhuxi910511@163.com",
+          "lines_owned": 37,
+          "percentage": 5.83596214511041
+        },
+        {
+          "name": "Ibraheem Ahmed",
+          "email": "ibrah1440@gmail.com",
+          "lines_owned": 17,
+          "percentage": 2.6813880126182967
+        },
+        {
+          "name": "Georgi Dimitrov",
+          "email": "82881135+georgijd-form3@users.noreply.github.com",
+          "lines_owned": 11,
+          "percentage": 1.7350157728706623
+        },
+        {
+          "name": "Roman Zaynetdinov",
+          "email": "627197+zaynetro@users.noreply.github.com",
+          "lines_owned": 10,
+          "percentage": 1.5772870662460567
+        },
+        {
+          "name": "Kristian Svalland",
+          "email": "54534849+kristiansvalland@users.noreply.github.com",
+          "lines_owned": 9,
+          "percentage": 1.4195583596214512
+        },
+        {
+          "name": "wssccc",
+          "email": "wssccc@qq.com",
+          "lines_owned": 9,
+          "percentage": 1.4195583596214512
+        },
+        {
+          "name": "qm012",
+          "email": "67568757+qm012@users.noreply.github.com",
+          "lines_owned": 6,
+          "percentage": 0.9463722397476341
+        },
+        {
+          "name": "Serica",
+          "email": "943914044@qq.com",
+          "lines_owned": 5,
+          "percentage": 0.7886435331230284
+        },
+        {
+          "name": "Name",
+          "email": "1911860538@qq.com",
+          "lines_owned": 5,
+          "percentage": 0.7886435331230284
+        },
+        {
+          "name": "Javier Provecho Fernandez",
+          "email": "javiertitan@gmail.com",
+          "lines_owned": 5,
+          "percentage": 0.7886435331230284
+        },
+        {
+          "name": "Endless Paradox",
+          "email": "endlessparadox250@gmail.com",
+          "lines_owned": 4,
+          "percentage": 0.6309148264984227
+        },
+        {
+          "name": "bestgopher",
+          "email": "84328409@qq.com",
+          "lines_owned": 3,
+          "percentage": 0.47318611987381703
+        },
+        {
+          "name": "Manu Mtz.-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 3,
+          "percentage": 0.47318611987381703
+        },
+        {
+          "name": "Prakhar Gurunani",
+          "email": "prakhargurunani@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.31545741324921134
+        },
+        {
+          "name": "bbiao",
+          "email": "bbbiao@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.31545741324921134
+        },
+        {
+          "name": "LanLanceYuan",
+          "email": "92938836+L2ncE@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 0.31545741324921134
+        },
+        {
+          "name": "Ashwani",
+          "email": "ashwanisharma686@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.31545741324921134
+        },
+        {
+          "name": "MichaelDeSteven",
+          "email": "51652084+MichaelDeSteven@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 0.31545741324921134
+        },
+        {
+          "name": "Sergey Egorov",
+          "email": "egorovhome@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.15772870662460567
+        },
+        {
+          "name": "jincheng9",
+          "email": "perfume0607@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.15772870662460567
+        },
+        {
+          "name": "youzeliang",
+          "email": "youzel@126.com",
+          "lines_owned": 1,
+          "percentage": 0.15772870662460567
+        },
+        {
+          "name": "vinhha96",
+          "email": "anhvinha1@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.15772870662460567
+        },
+        {
+          "name": "Mike",
+          "email": "38686456+icy4ever@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.15772870662460567
+        },
+        {
+          "name": "Xinyu Kuo",
+          "email": "gxylong@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.15772870662460567
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/context_appengine.go",
+      "primary_owner": "thinkerou",
+      "ownership_percent": 33.33333333333333,
+      "concentration": 0.33333333333333326,
+      "total_lines": 6,
+      "contributors": [
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 2,
+          "percentage": 33.33333333333333
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 2,
+          "percentage": 33.33333333333333
+        },
+        {
+          "name": "Javier Provecho Fernandez",
+          "email": "javiertitan@gmail.com",
+          "lines_owned": 1,
+          "percentage": 16.666666666666664
+        },
+        {
+          "name": "Alessandro (Ale) Segala",
+          "email": "43508+ItalyPaleAle@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 16.666666666666664
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/default_validator.go",
+      "primary_owner": "wuhuizuo",
+      "ownership_percent": 33.33333333333333,
+      "concentration": 0.33333333333333326,
+      "total_lines": 63,
+      "contributors": [
+        {
+          "name": "wuhuizuo",
+          "email": "wuhuizuo@126.com",
+          "lines_owned": 21,
+          "percentage": 33.33333333333333
+        },
+        {
+          "name": "Name",
+          "email": "1911860538@qq.com",
+          "lines_owned": 9,
+          "percentage": 14.285714285714285
+        },
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 8,
+          "percentage": 12.698412698412698
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 6,
+          "percentage": 9.523809523809524
+        },
+        {
+          "name": "Suhas Karanth",
+          "email": "sudo-suhas@users.noreply.github.com",
+          "lines_owned": 5,
+          "percentage": 7.936507936507936
+        },
+        {
+          "name": "edebernis",
+          "email": "emeric.debernis@gmail.com",
+          "lines_owned": 4,
+          "percentage": 6.349206349206349
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 3,
+          "percentage": 4.761904761904762
+        },
+        {
+          "name": "Alonso Villegas",
+          "email": "alonsovillegas816@gmail.com",
+          "lines_owned": 3,
+          "percentage": 4.761904761904762
+        },
+        {
+          "name": "Xudong Cai",
+          "email": "fifsky@gmail.com",
+          "lines_owned": 1,
+          "percentage": 1.5873015873015872
+        },
+        {
+          "name": "ziheng",
+          "email": "zihenglv@gmail.com",
+          "lines_owned": 1,
+          "percentage": 1.5873015873015872
+        },
+        {
+          "name": "Jesse",
+          "email": "1430482733@qq.com",
+          "lines_owned": 1,
+          "percentage": 1.5873015873015872
+        },
+        {
+          "name": "iamhesir",
+          "email": "78344375+iamhesir@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 1.5873015873015872
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/recovery.go",
+      "primary_owner": "Name",
+      "ownership_percent": 33.33333333333333,
+      "concentration": 0.33333333333333326,
+      "total_lines": 147,
+      "contributors": [
+        {
+          "name": "Name",
+          "email": "1911860538@qq.com",
+          "lines_owned": 49,
+          "percentage": 33.33333333333333
+        },
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 45,
+          "percentage": 30.612244897959183
+        },
+        {
+          "name": "Justin Israel",
+          "email": "justinisrael@gmail.com",
+          "lines_owned": 14,
+          "percentage": 9.523809523809524
+        },
+        {
+          "name": "Johnny Dallas",
+          "email": "johnnydallas0308@gmail.com",
+          "lines_owned": 12,
+          "percentage": 8.16326530612245
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 4,
+          "percentage": 2.7210884353741496
+        },
+        {
+          "name": "Matthieu MOREL",
+          "email": "mmorel-35@users.noreply.github.com",
+          "lines_owned": 3,
+          "percentage": 2.0408163265306123
+        },
+        {
+          "name": "ziheng",
+          "email": "zihenglv@gmail.com",
+          "lines_owned": 3,
+          "percentage": 2.0408163265306123
+        },
+        {
+          "name": "lgbgbl",
+          "email": "65756378+lgbgbl@users.noreply.github.com",
+          "lines_owned": 3,
+          "percentage": 2.0408163265306123
+        },
+        {
+          "name": "Manu Mtz.-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 3,
+          "percentage": 2.0408163265306123
+        },
+        {
+          "name": "Yilong Li",
+          "email": "mondaycha@outlook.com",
+          "lines_owned": 2,
+          "percentage": 1.3605442176870748
+        },
+        {
+          "name": "hellojukay",
+          "email": "hellojukay@163.com",
+          "lines_owned": 2,
+          "percentage": 1.3605442176870748
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.6802721088435374
+        },
+        {
+          "name": "Riverside",
+          "email": "wangyb65@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.6802721088435374
+        },
+        {
+          "name": "Edward Betts",
+          "email": "edward@4angle.com",
+          "lines_owned": 1,
+          "percentage": 0.6802721088435374
+        },
+        {
+          "name": "Bo-Yi Wu",
+          "email": "appleboy.tw@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.6802721088435374
+        },
+        {
+          "name": "Dustin Decker",
+          "email": "dustindecker@protonmail.com",
+          "lines_owned": 1,
+          "percentage": 0.6802721088435374
+        },
+        {
+          "name": "Eason Lin",
+          "email": "easonlin404@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.6802721088435374
+        },
+        {
+          "name": "jincheng9",
+          "email": "perfume0607@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.6802721088435374
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/form_mapping.go",
+      "primary_owner": "Dmitry Kutakov",
+      "ownership_percent": 31.01449275362319,
+      "concentration": 0.3101449275362319,
+      "total_lines": 345,
+      "contributors": [
+        {
+          "name": "Dmitry Kutakov",
+          "email": "vkd.castle@gmail.com",
+          "lines_owned": 107,
+          "percentage": 31.01449275362319
+        },
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 48,
+          "percentage": 13.91304347826087
+        },
+        {
+          "name": "Jo YoHan",
+          "email": "37216082+slowhigh@users.noreply.github.com",
+          "lines_owned": 27,
+          "percentage": 7.82608695652174
+        },
+        {
+          "name": "takanuva15",
+          "email": "6986426+takanuva15@users.noreply.github.com",
+          "lines_owned": 24,
+          "percentage": 6.956521739130435
+        },
+        {
+          "name": "guonaihong",
+          "email": "guonaihong@qq.com",
+          "lines_owned": 21,
+          "percentage": 6.086956521739131
+        },
+        {
+          "name": "Alessandro (Ale) Segala",
+          "email": "43508+ItalyPaleAle@users.noreply.github.com",
+          "lines_owned": 20,
+          "percentage": 5.797101449275362
+        },
+        {
+          "name": "dkkb",
+          "email": "82504881+dkkb@users.noreply.github.com",
+          "lines_owned": 13,
+          "percentage": 3.768115942028986
+        },
+        {
+          "name": "Andrey Nering",
+          "email": "andrey.nering@gmail.com",
+          "lines_owned": 12,
+          "percentage": 3.4782608695652173
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 10,
+          "percentage": 2.898550724637681
+        },
+        {
+          "name": "axiaoxin",
+          "email": "254606826@qq.com",
+          "lines_owned": 9,
+          "percentage": 2.608695652173913
+        },
+        {
+          "name": "Name",
+          "email": "1911860538@qq.com",
+          "lines_owned": 8,
+          "percentage": 2.318840579710145
+        },
+        {
+          "name": "heige",
+          "email": "daheige@users.noreply.github.com",
+          "lines_owned": 8,
+          "percentage": 2.318840579710145
+        },
+        {
+          "name": "delphinus",
+          "email": "delphinus@remora.cx",
+          "lines_owned": 5,
+          "percentage": 1.4492753623188406
+        },
+        {
+          "name": "bruceNu1l",
+          "email": "144002160+bruceNu1l@users.noreply.github.com",
+          "lines_owned": 4,
+          "percentage": 1.1594202898550725
+        },
+        {
+          "name": "Omkar P",
+          "email": "45419097+omkar-foss@users.noreply.github.com",
+          "lines_owned": 4,
+          "percentage": 1.1594202898550725
+        },
+        {
+          "name": "clearcode",
+          "email": "34591322+clearcodecn@users.noreply.github.com",
+          "lines_owned": 3,
+          "percentage": 0.8695652173913043
+        },
+        {
+          "name": "Tim",
+          "email": "xuchonglei@126.com",
+          "lines_owned": 3,
+          "percentage": 0.8695652173913043
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.5797101449275363
+        },
+        {
+          "name": "Ahmad Saeed Goda",
+          "email": "ahmad.saeed.goda@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.5797101449275363
+        },
+        {
+          "name": "Alexander Melentyev",
+          "email": "55826637+alexander-melentyev@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 0.5797101449275363
+        },
+        {
+          "name": "lgbgbl",
+          "email": "65756378+lgbgbl@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 0.5797101449275363
+        },
+        {
+          "name": "russcoss",
+          "email": "russcoss@outlook.com",
+          "lines_owned": 2,
+          "percentage": 0.5797101449275363
+        },
+        {
+          "name": "Kirill Motkov",
+          "email": "motkov.kirill@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.2898550724637681
+        },
+        {
+          "name": "Leon cap",
+          "email": "wangyinneng@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.2898550724637681
+        },
+        {
+          "name": "voidman",
+          "email": "retmain@foxmail.com",
+          "lines_owned": 1,
+          "percentage": 0.2898550724637681
+        },
+        {
+          "name": "chainhelen",
+          "email": "chainhelen@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.2898550724637681
+        },
+        {
+          "name": "Matthieu MOREL",
+          "email": "mmorel-35@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.2898550724637681
+        },
+        {
+          "name": "Andy Pan",
+          "email": "panjf2000@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.2898550724637681
+        },
+        {
+          "name": "Alexander Lokhman",
+          "email": "alex.lokhman@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.2898550724637681
+        },
+        {
+          "name": "John Bampton",
+          "email": "jbampton@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.2898550724637681
+        },
+        {
+          "name": "lantw44",
+          "email": "lantw44@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.2898550724637681
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/json.go",
+      "primary_owner": "Manu Mtz-Almeida",
+      "ownership_percent": 25.71428571428571,
+      "concentration": 0.2571428571428571,
+      "total_lines": 35,
+      "contributors": [
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 9,
+          "percentage": 25.71428571428571
+        },
+        {
+          "name": "Krzysztof Szafrański",
+          "email": "k.p.szafranski@gmail.com",
+          "lines_owned": 7,
+          "percentage": 20
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 5,
+          "percentage": 14.285714285714285
+        },
+        {
+          "name": "JINNOUCHI Yasushi",
+          "email": "delphinus@remora.cx",
+          "lines_owned": 4,
+          "percentage": 11.428571428571429
+        },
+        {
+          "name": "Qt",
+          "email": "golang.chen@gmail.com",
+          "lines_owned": 2,
+          "percentage": 5.714285714285714
+        },
+        {
+          "name": "Suhas Karanth",
+          "email": "sudo-suhas@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 5.714285714285714
+        },
+        {
+          "name": "Tim",
+          "email": "xuchonglei@126.com",
+          "lines_owned": 2,
+          "percentage": 5.714285714285714
+        },
+        {
+          "name": "whirosan",
+          "email": "whirosan@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 5.714285714285714
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 1,
+          "percentage": 2.857142857142857
+        },
+        {
+          "name": "mllu",
+          "email": "mornlyn@gmail.com",
+          "lines_owned": 1,
+          "percentage": 2.857142857142857
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/binding.go",
+      "primary_owner": "Manu Mtz-Almeida",
+      "ownership_percent": 25,
+      "concentration": 0.25,
+      "total_lines": 96,
+      "contributors": [
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 24,
+          "percentage": 25
+        },
+        {
+          "name": "Suhas Karanth",
+          "email": "sudo-suhas@users.noreply.github.com",
+          "lines_owned": 13,
+          "percentage": 13.541666666666666
+        },
+        {
+          "name": "ssfyn",
+          "email": "a@fyn.pw",
+          "lines_owned": 12,
+          "percentage": 12.5
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 12,
+          "percentage": 12.5
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 11,
+          "percentage": 11.458333333333332
+        },
+        {
+          "name": "JINNOUCHI Yasushi",
+          "email": "delphinus@remora.cx",
+          "lines_owned": 4,
+          "percentage": 4.166666666666666
+        },
+        {
+          "name": "Valentine Oragbakosi",
+          "email": "valentine13400@gmail.com",
+          "lines_owned": 3,
+          "percentage": 3.125
+        },
+        {
+          "name": "Boyi Wu",
+          "email": "p581581@gmail.com",
+          "lines_owned": 3,
+          "percentage": 3.125
+        },
+        {
+          "name": "Vincent Bernat",
+          "email": "vincent@bernat.ch",
+          "lines_owned": 2,
+          "percentage": 2.083333333333333
+        },
+        {
+          "name": "wuhuizuo",
+          "email": "wuhuizuo@126.com",
+          "lines_owned": 2,
+          "percentage": 2.083333333333333
+        },
+        {
+          "name": "Gordon Tyler",
+          "email": "gordon@doxxx.net",
+          "lines_owned": 2,
+          "percentage": 2.083333333333333
+        },
+        {
+          "name": "Harindu Perera",
+          "email": "harinduenator@gmail.com",
+          "lines_owned": 2,
+          "percentage": 2.083333333333333
+        },
+        {
+          "name": "Helios",
+          "email": "674876158@qq.com",
+          "lines_owned": 2,
+          "percentage": 2.083333333333333
+        },
+        {
+          "name": "Barnabus",
+          "email": "jbampton@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 1.0416666666666665
+        },
+        {
+          "name": "jincheng9",
+          "email": "perfume0607@gmail.com",
+          "lines_owned": 1,
+          "percentage": 1.0416666666666665
+        },
+        {
+          "name": "guonaihong",
+          "email": "guonaihong@qq.com",
+          "lines_owned": 1,
+          "percentage": 1.0416666666666665
+        },
+        {
+          "name": "zhing",
+          "email": "zqwillseven@gmail.com",
+          "lines_owned": 1,
+          "percentage": 1.0416666666666665
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/mode.go",
+      "primary_owner": "Manu Mtz-Almeida",
+      "ownership_percent": 21.73913043478261,
+      "concentration": 0.21739130434782608,
+      "total_lines": 69,
+      "contributors": [
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 15,
+          "percentage": 21.73913043478261
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 8,
+          "percentage": 11.594202898550725
+        },
+        {
+          "name": "Kostadin Plachkov",
+          "email": "20207730+kplachkov@users.noreply.github.com",
+          "lines_owned": 6,
+          "percentage": 8.695652173913043
+        },
+        {
+          "name": "micanzhang",
+          "email": "micanzhang@gmail.com",
+          "lines_owned": 5,
+          "percentage": 7.246376811594203
+        },
+        {
+          "name": "Manu Mtz.-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 4,
+          "percentage": 5.797101449275362
+        },
+        {
+          "name": "Krzysztof Szafrański",
+          "email": "k.p.szafranski@gmail.com",
+          "lines_owned": 4,
+          "percentage": 5.797101449275362
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 4,
+          "percentage": 5.797101449275362
+        },
+        {
+          "name": "Sergey Fedchenko",
+          "email": "seregayoga@bk.ru",
+          "lines_owned": 3,
+          "percentage": 4.3478260869565215
+        },
+        {
+          "name": "Bo-Yi Wu",
+          "email": "appleboy.tw@gmail.com",
+          "lines_owned": 3,
+          "percentage": 4.3478260869565215
+        },
+        {
+          "name": "David Zhang",
+          "email": "crispgm@gmail.com",
+          "lines_owned": 3,
+          "percentage": 4.3478260869565215
+        },
+        {
+          "name": "Flc゛",
+          "email": "four_leaf_clover@foxmail.com",
+          "lines_owned": 3,
+          "percentage": 4.3478260869565215
+        },
+        {
+          "name": "whirosan",
+          "email": "whirosan@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 2.898550724637681
+        },
+        {
+          "name": "root@andrea:~#",
+          "email": "crypto.andrea@protonmail.ch",
+          "lines_owned": 2,
+          "percentage": 2.898550724637681
+        },
+        {
+          "name": "maskpp",
+          "email": "maskpp266@gmail.com",
+          "lines_owned": 1,
+          "percentage": 1.4492753623188406
+        },
+        {
+          "name": "bestgopher",
+          "email": "84328409@qq.com",
+          "lines_owned": 1,
+          "percentage": 1.4492753623188406
+        },
+        {
+          "name": "Rubi",
+          "email": "14269809+codenoid@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 1.4492753623188406
+        },
+        {
+          "name": "Ivan Chen",
+          "email": "allenivan@gmail.com",
+          "lines_owned": 1,
+          "percentage": 1.4492753623188406
+        },
+        {
+          "name": "jincheng9",
+          "email": "perfume0607@gmail.com",
+          "lines_owned": 1,
+          "percentage": 1.4492753623188406
+        },
+        {
+          "name": "Sai",
+          "email": "sairoutine@gmail.com",
+          "lines_owned": 1,
+          "percentage": 1.4492753623188406
+        },
+        {
+          "name": "Boris Borshevsky",
+          "email": "BorisBorshevsky@gmail.com",
+          "lines_owned": 1,
+          "percentage": 1.4492753623188406
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/gin.go",
+      "primary_owner": "Manu Mtz-Almeida",
+      "ownership_percent": 17.34006734006734,
+      "concentration": 0.1734006734006734,
+      "total_lines": 594,
+      "contributors": [
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 103,
+          "percentage": 17.34006734006734
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 67,
+          "percentage": 11.27946127946128
+        },
+        {
+          "name": "Notealot",
+          "email": "714804968@qq.com",
+          "lines_owned": 60,
+          "percentage": 10.1010101010101
+        },
+        {
+          "name": "Manu MA",
+          "email": "manu.mtza@gmail.com",
+          "lines_owned": 35,
+          "percentage": 5.892255892255893
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 31,
+          "percentage": 5.218855218855219
+        },
+        {
+          "name": "Bo-Yi Wu",
+          "email": "appleboy.tw@gmail.com",
+          "lines_owned": 27,
+          "percentage": 4.545454545454546
+        },
+        {
+          "name": "mstmdev",
+          "email": "mstmdev@gmail.com",
+          "lines_owned": 14,
+          "percentage": 2.356902356902357
+        },
+        {
+          "name": "wssccc",
+          "email": "wssccc@qq.com",
+          "lines_owned": 14,
+          "percentage": 2.356902356902357
+        },
+        {
+          "name": "Yoshiki Nakagawa",
+          "email": "yyoshiki41@gmail.com",
+          "lines_owned": 13,
+          "percentage": 2.1885521885521886
+        },
+        {
+          "name": "Aeddis Desauw",
+          "email": "89919264+ldesauw@users.noreply.github.com",
+          "lines_owned": 12,
+          "percentage": 2.0202020202020203
+        },
+        {
+          "name": "Name",
+          "email": "1911860538@qq.com",
+          "lines_owned": 11,
+          "percentage": 1.8518518518518516
+        },
+        {
+          "name": "Flc゛",
+          "email": "four_leaf_clover@foxmail.com",
+          "lines_owned": 11,
+          "percentage": 1.8518518518518516
+        },
+        {
+          "name": "Ngalim Siregar",
+          "email": "ngalim.siregar@gmail.com",
+          "lines_owned": 11,
+          "percentage": 1.8518518518518516
+        },
+        {
+          "name": "jincheng9",
+          "email": "perfume0607@gmail.com",
+          "lines_owned": 10,
+          "percentage": 1.6835016835016834
+        },
+        {
+          "name": "sunshineplan",
+          "email": "sunshineplan@users.noreply.github.com",
+          "lines_owned": 10,
+          "percentage": 1.6835016835016834
+        },
+        {
+          "name": "Thomas Schaffer",
+          "email": "loopfz@gmail.com",
+          "lines_owned": 9,
+          "percentage": 1.5151515151515151
+        },
+        {
+          "name": "Boris Borshevsky",
+          "email": "BorisBorshevsky@gmail.com",
+          "lines_owned": 9,
+          "percentage": 1.5151515151515151
+        },
+        {
+          "name": "Lanco",
+          "email": "35420416+lancoLiu@users.noreply.github.com",
+          "lines_owned": 9,
+          "percentage": 1.5151515151515151
+        },
+        {
+          "name": "Gabriel Augendre",
+          "email": "gabriel@augendre.info",
+          "lines_owned": 9,
+          "percentage": 1.5151515151515151
+        },
+        {
+          "name": "涛叔",
+          "email": "hi@taoshu.in",
+          "lines_owned": 8,
+          "percentage": 1.3468013468013467
+        },
+        {
+          "name": "Alessandro (Ale) Segala",
+          "email": "43508+ItalyPaleAle@users.noreply.github.com",
+          "lines_owned": 8,
+          "percentage": 1.3468013468013467
+        },
+        {
+          "name": "Zhu Xi",
+          "email": "zhuxi910511@163.com",
+          "lines_owned": 7,
+          "percentage": 1.1784511784511784
+        },
+        {
+          "name": "Tudor Roman",
+          "email": "tudurom@gmail.com",
+          "lines_owned": 7,
+          "percentage": 1.1784511784511784
+        },
+        {
+          "name": "Manjusaka",
+          "email": "lizheao940510@gmail.com",
+          "lines_owned": 7,
+          "percentage": 1.1784511784511784
+        },
+        {
+          "name": "Weilin Shi",
+          "email": "934587911@qq.com",
+          "lines_owned": 6,
+          "percentage": 1.0101010101010102
+        },
+        {
+          "name": "Thomas Boerger",
+          "email": "thomas@webhippie.de",
+          "lines_owned": 6,
+          "percentage": 1.0101010101010102
+        },
+        {
+          "name": "yiranzai",
+          "email": "wuqingdzx@gmail.com",
+          "lines_owned": 6,
+          "percentage": 1.0101010101010102
+        },
+        {
+          "name": "Pawan Kalyan",
+          "email": "91543630+pawannn@users.noreply.github.com",
+          "lines_owned": 6,
+          "percentage": 1.0101010101010102
+        },
+        {
+          "name": "Sergey Egorov",
+          "email": "egorovhome@gmail.com",
+          "lines_owned": 5,
+          "percentage": 0.8417508417508417
+        },
+        {
+          "name": "Roman Zaynetdinov",
+          "email": "627197+zaynetro@users.noreply.github.com",
+          "lines_owned": 5,
+          "percentage": 0.8417508417508417
+        },
+        {
+          "name": "Adonis",
+          "email": "donileo@gmail.com",
+          "lines_owned": 5,
+          "percentage": 0.8417508417508417
+        },
+        {
+          "name": "Manu Mtz.-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 5,
+          "percentage": 0.8417508417508417
+        },
+        {
+          "name": "Dmitry Kutakov",
+          "email": "vkd.castle@gmail.com",
+          "lines_owned": 5,
+          "percentage": 0.8417508417508417
+        },
+        {
+          "name": "Eason Lin",
+          "email": "easonlin404@gmail.com",
+          "lines_owned": 4,
+          "percentage": 0.6734006734006733
+        },
+        {
+          "name": "Riverside",
+          "email": "wangyb65@gmail.com",
+          "lines_owned": 4,
+          "percentage": 0.6734006734006733
+        },
+        {
+          "name": "RoCry",
+          "email": "crysheen@gmail.com",
+          "lines_owned": 3,
+          "percentage": 0.5050505050505051
+        },
+        {
+          "name": "Franz Bettag",
+          "email": "franz@bett.ag",
+          "lines_owned": 3,
+          "percentage": 0.5050505050505051
+        },
+        {
+          "name": "Dylan Maassen van den Brink",
+          "email": "dylan@mvdb.eu",
+          "lines_owned": 3,
+          "percentage": 0.5050505050505051
+        },
+        {
+          "name": "Daniel M. Lambea",
+          "email": "dmlambea@gmail.com",
+          "lines_owned": 3,
+          "percentage": 0.5050505050505051
+        },
+        {
+          "name": "Andy Brody",
+          "email": "ab@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 0.33670033670033667
+        },
+        {
+          "name": "bound2",
+          "email": "9380102+bound2@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 0.33670033670033667
+        },
+        {
+          "name": "Andy Pan",
+          "email": "panjf2000@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.33670033670033667
+        },
+        {
+          "name": "eqsdxr",
+          "email": "rxdsqe@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.33670033670033667
+        },
+        {
+          "name": "wei",
+          "email": "wei840222@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.33670033670033667
+        },
+        {
+          "name": "Kyle Mcgill",
+          "email": "email@kylescottmcgill.com",
+          "lines_owned": 2,
+          "percentage": 0.33670033670033667
+        },
+        {
+          "name": "sope",
+          "email": "shenshouer@163.com",
+          "lines_owned": 2,
+          "percentage": 0.33670033670033667
+        },
+        {
+          "name": "Javier Provecho Fernandez",
+          "email": "javiertitan@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.16835016835016833
+        },
+        {
+          "name": "Eric_Lee",
+          "email": "xplzv@126.com",
+          "lines_owned": 1,
+          "percentage": 0.16835016835016833
+        },
+        {
+          "name": "Pierre-Henri Symoneaux",
+          "email": "phsym@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.16835016835016833
+        },
+        {
+          "name": "Oskar Karpiński",
+          "email": "me@medzik.dev",
+          "lines_owned": 1,
+          "percentage": 0.16835016835016833
+        },
+        {
+          "name": "Ryan J. Yoder",
+          "email": "me@ryanjyoder.com",
+          "lines_owned": 1,
+          "percentage": 0.16835016835016833
+        },
+        {
+          "name": "Jesse",
+          "email": "1430482733@qq.com",
+          "lines_owned": 1,
+          "percentage": 0.16835016835016833
+        },
+        {
+          "name": "ziheng",
+          "email": "zihenglv@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.16835016835016833
+        },
+        {
+          "name": "chainhelen",
+          "email": "chainhelen@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.16835016835016833
+        },
+        {
+          "name": "Pedro Aguiar",
+          "email": "72931357+codespearhead@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.16835016835016833
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/context.go",
+      "primary_owner": "Manu Mtz-Almeida",
+      "ownership_percent": 17.159763313609467,
+      "concentration": 0.17159763313609466,
+      "total_lines": 1014,
+      "contributors": [
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 174,
+          "percentage": 17.159763313609467
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 99,
+          "percentage": 9.763313609467456
+        },
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 47,
+          "percentage": 4.6351084812623276
+        },
+        {
+          "name": "Konovalov Maxim",
+          "email": "43151027+KaymeKaydex@users.noreply.github.com",
+          "lines_owned": 46,
+          "percentage": 4.536489151873767
+        },
+        {
+          "name": "Manu Mtz.-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 43,
+          "percentage": 4.240631163708087
+        },
+        {
+          "name": "Bo-Yi Wu",
+          "email": "appleboy.tw@gmail.com",
+          "lines_owned": 39,
+          "percentage": 3.8461538461538463
+        },
+        {
+          "name": "Name",
+          "email": "1911860538@qq.com",
+          "lines_owned": 35,
+          "percentage": 3.451676528599606
+        },
+        {
+          "name": "Javier Provecho Fernandez",
+          "email": "javiertitan@gmail.com",
+          "lines_owned": 33,
+          "percentage": 3.2544378698224854
+        },
+        {
+          "name": "wanghaolong613",
+          "email": "wanghaolong613@163.com",
+          "lines_owned": 32,
+          "percentage": 3.155818540433925
+        },
+        {
+          "name": "AtoriUzawa",
+          "email": "110576658+AtoriUzawa@users.noreply.github.com",
+          "lines_owned": 30,
+          "percentage": 2.9585798816568047
+        },
+        {
+          "name": "Alexander Melentyev",
+          "email": "55826637+alexander-melentyev@users.noreply.github.com",
+          "lines_owned": 24,
+          "percentage": 2.366863905325444
+        },
+        {
+          "name": "Eason Lin",
+          "email": "easonlin404@gmail.com",
+          "lines_owned": 22,
+          "percentage": 2.1696252465483234
+        },
+        {
+          "name": "Alessandro (Ale) Segala",
+          "email": "43508+ItalyPaleAle@users.noreply.github.com",
+          "lines_owned": 18,
+          "percentage": 1.7751479289940828
+        },
+        {
+          "name": "RedCrazyGhost",
+          "email": "49381700+RedCrazyGhost@users.noreply.github.com",
+          "lines_owned": 14,
+          "percentage": 1.3806706114398422
+        },
+        {
+          "name": "JINNOUCHI Yasushi",
+          "email": "delphinus@remora.cx",
+          "lines_owned": 14,
+          "percentage": 1.3806706114398422
+        },
+        {
+          "name": "wei",
+          "email": "wei840222@gmail.com",
+          "lines_owned": 13,
+          "percentage": 1.282051282051282
+        },
+        {
+          "name": "Notealot",
+          "email": "714804968@qq.com",
+          "lines_owned": 13,
+          "percentage": 1.282051282051282
+        },
+        {
+          "name": "guonaihong",
+          "email": "guonaihong@qq.com",
+          "lines_owned": 12,
+          "percentage": 1.183431952662722
+        },
+        {
+          "name": "Valentine Oragbakosi",
+          "email": "valentine13400@gmail.com",
+          "lines_owned": 10,
+          "percentage": 0.9861932938856016
+        },
+        {
+          "name": "Andrey Nering",
+          "email": "andrey.nering@gmail.com",
+          "lines_owned": 10,
+          "percentage": 0.9861932938856016
+        },
+        {
+          "name": "Manu MA",
+          "email": "manu.mtza@gmail.com",
+          "lines_owned": 10,
+          "percentage": 0.9861932938856016
+        },
+        {
+          "name": "CC11001100",
+          "email": "CC11001100@qq.com",
+          "lines_owned": 9,
+          "percentage": 0.8875739644970414
+        },
+        {
+          "name": "Bence Vidosits",
+          "email": "38434845+bvidosits@users.noreply.github.com",
+          "lines_owned": 9,
+          "percentage": 0.8875739644970414
+        },
+        {
+          "name": "NARITA",
+          "email": "58836324+Narita-1095305@users.noreply.github.com",
+          "lines_owned": 9,
+          "percentage": 0.8875739644970414
+        },
+        {
+          "name": "Jean-Christophe Lebreton",
+          "email": "jclebreton@gmail.com",
+          "lines_owned": 8,
+          "percentage": 0.7889546351084813
+        },
+        {
+          "name": "Flc゛",
+          "email": "four_leaf_clover@foxmail.com",
+          "lines_owned": 8,
+          "percentage": 0.7889546351084813
+        },
+        {
+          "name": "Suhas Karanth",
+          "email": "sudo-suhas@users.noreply.github.com",
+          "lines_owned": 8,
+          "percentage": 0.7889546351084813
+        },
+        {
+          "name": "Luis GG",
+          "email": "lggomez@users.noreply.github.com",
+          "lines_owned": 7,
+          "percentage": 0.6903353057199211
+        },
+        {
+          "name": "filikos",
+          "email": "11477309+filikos@users.noreply.github.com",
+          "lines_owned": 7,
+          "percentage": 0.6903353057199211
+        },
+        {
+          "name": "Spyder01",
+          "email": "45194214+Spyder01@users.noreply.github.com",
+          "lines_owned": 7,
+          "percentage": 0.6903353057199211
+        },
+        {
+          "name": "NezhaFan",
+          "email": "z772532526@gmail.com",
+          "lines_owned": 7,
+          "percentage": 0.6903353057199211
+        },
+        {
+          "name": "David Irvine",
+          "email": "aviddiviner@gmail.com",
+          "lines_owned": 6,
+          "percentage": 0.591715976331361
+        },
+        {
+          "name": "Roman Zaynetdinov",
+          "email": "627197+zaynetro@users.noreply.github.com",
+          "lines_owned": 6,
+          "percentage": 0.591715976331361
+        },
+        {
+          "name": "John Bampton",
+          "email": "jbampton@users.noreply.github.com",
+          "lines_owned": 6,
+          "percentage": 0.591715976331361
+        },
+        {
+          "name": "jincheng9",
+          "email": "perfume0607@gmail.com",
+          "lines_owned": 6,
+          "percentage": 0.591715976331361
+        },
+        {
+          "name": "Nikifor Seryakov",
+          "email": "nikandfor@gmail.com",
+          "lines_owned": 6,
+          "percentage": 0.591715976331361
+        },
+        {
+          "name": "Rahul Datta Roy",
+          "email": "rahuldroy@users.noreply.github.com",
+          "lines_owned": 6,
+          "percentage": 0.591715976331361
+        },
+        {
+          "name": "Equim",
+          "email": "sayaka@ekyu.moe",
+          "lines_owned": 5,
+          "percentage": 0.4930966469428008
+        },
+        {
+          "name": "Gordon Tyler",
+          "email": "gordon@doxxx.net",
+          "lines_owned": 5,
+          "percentage": 0.4930966469428008
+        },
+        {
+          "name": "Denny Septian Panggabean",
+          "email": "97607754+ddevsr@users.noreply.github.com",
+          "lines_owned": 5,
+          "percentage": 0.4930966469428008
+        },
+        {
+          "name": "Daniel Krom",
+          "email": "kromdan@gmail.com",
+          "lines_owned": 5,
+          "percentage": 0.4930966469428008
+        },
+        {
+          "name": "Waynerv",
+          "email": "ampedee@gmail.com",
+          "lines_owned": 5,
+          "percentage": 0.4930966469428008
+        },
+        {
+          "name": "Zhu Xi",
+          "email": "zhuxi910511@163.com",
+          "lines_owned": 4,
+          "percentage": 0.39447731755424065
+        },
+        {
+          "name": "Motoyasu Saburi",
+          "email": "kumagoro_alice@yahoo.co.jp",
+          "lines_owned": 4,
+          "percentage": 0.39447731755424065
+        },
+        {
+          "name": "syssam",
+          "email": "s.y.s.sam.sys@gmail.com",
+          "lines_owned": 4,
+          "percentage": 0.39447731755424065
+        },
+        {
+          "name": "Faisal Alam",
+          "email": "ifaisalalam@gmail.com",
+          "lines_owned": 4,
+          "percentage": 0.39447731755424065
+        },
+        {
+          "name": "zero11-0203",
+          "email": "93071220+zero11-0203@users.noreply.github.com",
+          "lines_owned": 4,
+          "percentage": 0.39447731755424065
+        },
+        {
+          "name": "Emmanuel Goh",
+          "email": "emmanuel@visenze.com",
+          "lines_owned": 4,
+          "percentage": 0.39447731755424065
+        },
+        {
+          "name": "Dan Markham",
+          "email": "dmarkham@gmail.com",
+          "lines_owned": 4,
+          "percentage": 0.39447731755424065
+        },
+        {
+          "name": "Javier Provecho",
+          "email": "javiertitan@gmail.com",
+          "lines_owned": 4,
+          "percentage": 0.39447731755424065
+        },
+        {
+          "name": "linfangrong",
+          "email": "linfangrong.liuxin@qq.com",
+          "lines_owned": 4,
+          "percentage": 0.39447731755424065
+        },
+        {
+          "name": "Damon Zhao",
+          "email": "yijun.zhao@outlook.com",
+          "lines_owned": 4,
+          "percentage": 0.39447731755424065
+        },
+        {
+          "name": "Ammar Bandukwala",
+          "email": "ammar@ammar.io",
+          "lines_owned": 3,
+          "percentage": 0.2958579881656805
+        },
+        {
+          "name": "metal A-wing",
+          "email": "freedom.awing.777@gmail.com",
+          "lines_owned": 3,
+          "percentage": 0.2958579881656805
+        },
+        {
+          "name": "pjgg",
+          "email": "pablo.gonzalez.granados@gmail.com",
+          "lines_owned": 3,
+          "percentage": 0.2958579881656805
+        },
+        {
+          "name": "ijaa",
+          "email": "kailiu2013@gmail.com",
+          "lines_owned": 3,
+          "percentage": 0.2958579881656805
+        },
+        {
+          "name": "Florian Polster",
+          "email": "couchpolster@icqmail.com",
+          "lines_owned": 3,
+          "percentage": 0.2958579881656805
+        },
+        {
+          "name": "haesuo566",
+          "email": "102643523+haesuo566@users.noreply.github.com",
+          "lines_owned": 3,
+          "percentage": 0.2958579881656805
+        },
+        {
+          "name": "Dmitry Kutakov",
+          "email": "vkd.castle@gmail.com",
+          "lines_owned": 3,
+          "percentage": 0.2958579881656805
+        },
+        {
+          "name": "Rex Lee(李俊)",
+          "email": "duguying2008@gmail.com",
+          "lines_owned": 3,
+          "percentage": 0.2958579881656805
+        },
+        {
+          "name": "Ismail Gjevori",
+          "email": "isgjevori@protonmail.com",
+          "lines_owned": 3,
+          "percentage": 0.2958579881656805
+        },
+        {
+          "name": "Farmer.Chillax",
+          "email": "48387781+FarmerChillax@users.noreply.github.com",
+          "lines_owned": 3,
+          "percentage": 0.2958579881656805
+        },
+        {
+          "name": "Vladislav Dmitriyev",
+          "email": "d7vladislav@gmail.com",
+          "lines_owned": 3,
+          "percentage": 0.2958579881656805
+        },
+        {
+          "name": "solos",
+          "email": "lxl1217@gmail.com",
+          "lines_owned": 3,
+          "percentage": 0.2958579881656805
+        },
+        {
+          "name": "tyltr",
+          "email": "31768692+tylitianrui@users.noreply.github.com",
+          "lines_owned": 3,
+          "percentage": 0.2958579881656805
+        },
+        {
+          "name": "Matthieu MOREL",
+          "email": "mmorel-35@users.noreply.github.com",
+          "lines_owned": 3,
+          "percentage": 0.2958579881656805
+        },
+        {
+          "name": "Brian Wigginton",
+          "email": "brianwigginton@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.19723865877712032
+        },
+        {
+          "name": "youngxhui",
+          "email": "youngxhui@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.19723865877712032
+        },
+        {
+          "name": "51pwn",
+          "email": "18223385+hktalent@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 0.19723865877712032
+        },
+        {
+          "name": "Erik Bender",
+          "email": "erik.bender@develerik.dev",
+          "lines_owned": 2,
+          "percentage": 0.19723865877712032
+        },
+        {
+          "name": "Cookiery",
+          "email": "33125275+Cookiery@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 0.19723865877712032
+        },
+        {
+          "name": "Qt",
+          "email": "golang.chen@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.19723865877712032
+        },
+        {
+          "name": "cui",
+          "email": "cuiweixie@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.19723865877712032
+        },
+        {
+          "name": "Mohana sai krishna Kandula",
+          "email": "73701479+mskKandula@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 0.19723865877712032
+        },
+        {
+          "name": "An Xiao (Luffy)",
+          "email": "hac@zju.edu.cn",
+          "lines_owned": 2,
+          "percentage": 0.19723865877712032
+        },
+        {
+          "name": "ziheng",
+          "email": "zihenglv@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.19723865877712032
+        },
+        {
+          "name": "Noah Yao",
+          "email": "hi@noahyao.me",
+          "lines_owned": 2,
+          "percentage": 0.19723865877712032
+        },
+        {
+          "name": "qingmu",
+          "email": "gxylong@126.com",
+          "lines_owned": 2,
+          "percentage": 0.19723865877712032
+        },
+        {
+          "name": "collinmsn",
+          "email": "4130944@qq.com",
+          "lines_owned": 2,
+          "percentage": 0.19723865877712032
+        },
+        {
+          "name": "senhtry",
+          "email": "w169q169@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.19723865877712032
+        },
+        {
+          "name": "kaiiak",
+          "email": "aNxFi37X@outlook.com",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "Karthik Reddy Puli",
+          "email": "47525322+KarthikReddyPuli@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "Alexander Nyquist",
+          "email": "nyquist.alexander@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "adrianiacobghiula",
+          "email": "2491756+adrianiacobghiula@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "letreturn",
+          "email": "letreturn@outlook.com",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "Kamron Batman",
+          "email": "kamronbatman@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "Dmitry Dorogin",
+          "email": "dmirogin@ya.ru",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "Michael Puncel",
+          "email": "mpuncel@squareup.com",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "joeADSP",
+          "email": "75027008+joeADSP@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "AcoNCodes",
+          "email": "acongame@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "Remco",
+          "email": "remco@dutchcoders.io",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "Donn Pebe",
+          "email": "iam@donnpebe.com",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "Himanshu Mishra",
+          "email": "OrkoHunter@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "Egor Seredin",
+          "email": "4819888+agmt@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "ahuigo",
+          "email": "1781999+ahuigo@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "mbesancon",
+          "email": "mathieu.besancon@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "Jordan Day",
+          "email": "jordan0day@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "Xinyu Kuo",
+          "email": "gxylong@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "Maxime Soulé",
+          "email": "btik-git@scoubidou.com",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "willnewrelic",
+          "email": "will@newrelic.com",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "Adriano Sela Aviles",
+          "email": "adriano.selaviles@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "Roy Lou",
+          "email": "roylou@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "Barnabus",
+          "email": "jbampton@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "Kirill Motkov",
+          "email": "motkov.kirill@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "TotomiEcio",
+          "email": "63461656+TotomiEcio@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        },
+        {
+          "name": "Daniel M. Lambea",
+          "email": "dmlambea@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.09861932938856016
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-267094167/render/json.go",
+      "primary_owner": "田欧",
+      "ownership_percent": 14.399999999999999,
+      "concentration": 0.144,
+      "total_lines": 125,
+      "contributors": [
+        {
+          "name": "田欧",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 18,
+          "percentage": 14.399999999999999
+        },
+        {
+          "name": "Dmitry Kutakov",
+          "email": "vkd.castle@gmail.com",
+          "lines_owned": 14,
+          "percentage": 11.200000000000001
+        },
+        {
+          "name": "senhtry",
+          "email": "w169q169@gmail.com",
+          "lines_owned": 12,
+          "percentage": 9.6
+        },
+        {
+          "name": "Eason Lin",
+          "email": "easonlin404@gmail.com",
+          "lines_owned": 10,
+          "percentage": 8
+        },
+        {
+          "name": "Dan Markham",
+          "email": "dmarkham@gmail.com",
+          "lines_owned": 10,
+          "percentage": 8
+        },
+        {
+          "name": "thinkerou",
+          "email": "thinkerou@gmail.com",
+          "lines_owned": 8,
+          "percentage": 6.4
+        },
+        {
+          "name": "Name",
+          "email": "1911860538@qq.com",
+          "lines_owned": 8,
+          "percentage": 6.4
+        },
+        {
+          "name": "Rex Lee(李俊)",
+          "email": "duguying2008@gmail.com",
+          "lines_owned": 7,
+          "percentage": 5.6000000000000005
+        },
+        {
+          "name": "Tim",
+          "email": "xuchonglei@126.com",
+          "lines_owned": 7,
+          "percentage": 5.6000000000000005
+        },
+        {
+          "name": "Javier Provecho Fernandez",
+          "email": "javiertitan@gmail.com",
+          "lines_owned": 6,
+          "percentage": 4.8
+        },
+        {
+          "name": "Lanco",
+          "email": "35420416+lancoLiu@users.noreply.github.com",
+          "lines_owned": 5,
+          "percentage": 4
+        },
+        {
+          "name": "Manu Mtz-Almeida",
+          "email": "manu.valladolid@gmail.com",
+          "lines_owned": 4,
+          "percentage": 3.2
+        },
+        {
+          "name": "Andy Pan",
+          "email": "panjf2000@gmail.com",
+          "lines_owned": 4,
+          "percentage": 3.2
+        },
+        {
+          "name": "heige",
+          "email": "daheige@users.noreply.github.com",
+          "lines_owned": 3,
+          "percentage": 2.4
+        },
+        {
+          "name": "Kaushik Neelichetty",
+          "email": "kaushikneelichetty6132@gmail.com",
+          "lines_owned": 3,
+          "percentage": 2.4
+        },
+        {
+          "name": "chriswhelix",
+          "email": "chris.williams@helix.com",
+          "lines_owned": 2,
+          "percentage": 1.6
+        },
+        {
+          "name": "Matthieu MOREL",
+          "email": "mmorel-35@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 1.6
+        },
+        {
+          "name": "Vladislav Dmitriyev",
+          "email": "d7vladislav@gmail.com",
+          "lines_owned": 2,
+          "percentage": 1.6
+        }
+      ],
+      "is_silo": false
+    }
+  ],
+  "summary": {
+    "total_files": 55,
+    "bus_factor": 7,
+    "silo_count": 6,
+    "avg_contributors": 10.436363636363636,
+    "max_concentration": 1,
+    "top_contributors": [
+      "Manu Mtz-Almeida",
+      "thinkerou",
+      "田欧",
+      "Bo-Yi Wu",
+      "Dmitry Kutakov"
+    ]
+  }
+}

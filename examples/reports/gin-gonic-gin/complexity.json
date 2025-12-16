@@ -1,0 +1,6587 @@
+{
+  "files": [
+    {
+      "path": "/tmp/omen-267094167/binding/binding.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Default",
+          "file": "/tmp/omen-267094167/binding/binding.go",
+          "start_line": 93,
+          "end_line": 116,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 24
+          }
+        },
+        {
+          "name": "validate",
+          "file": "/tmp/omen-267094167/binding/binding.go",
+          "start_line": 118,
+          "end_line": 123,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        }
+      ],
+      "total_cyclomatic": 5,
+      "total_cognitive": 2,
+      "avg_cyclomatic": 2.5,
+      "avg_cognitive": 1,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/auth.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "searchCredential",
+          "file": "/tmp/omen-267094167/auth.go",
+          "start_line": 32,
+          "end_line": 42,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 4,
+            "max_nesting": 4,
+            "lines": 11
+          }
+        },
+        {
+          "name": "BasicAuthForRealm",
+          "file": "/tmp/omen-267094167/auth.go",
+          "start_line": 48,
+          "end_line": 68,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "max_nesting": 3,
+            "lines": 21
+          }
+        },
+        {
+          "name": "BasicAuth",
+          "file": "/tmp/omen-267094167/auth.go",
+          "start_line": 72,
+          "end_line": 74,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "processAccounts",
+          "file": "/tmp/omen-267094167/auth.go",
+          "start_line": 76,
+          "end_line": 89,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 14
+          }
+        },
+        {
+          "name": "authorizationHeader",
+          "file": "/tmp/omen-267094167/auth.go",
+          "start_line": 91,
+          "end_line": 94,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "BasicAuthForProxy",
+          "file": "/tmp/omen-267094167/auth.go",
+          "start_line": 98,
+          "end_line": 116,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "max_nesting": 3,
+            "lines": 19
+          }
+        }
+      ],
+      "total_cyclomatic": 14,
+      "total_cognitive": 9,
+      "avg_cyclomatic": 2.3333333333333335,
+      "avg_cognitive": 1.5,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/binding_nomsgpack.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Default",
+          "file": "/tmp/omen-267094167/binding/binding_nomsgpack.go",
+          "start_line": 89,
+          "end_line": 110,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 22
+          }
+        },
+        {
+          "name": "validate",
+          "file": "/tmp/omen-267094167/binding/binding_nomsgpack.go",
+          "start_line": 112,
+          "end_line": 117,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        }
+      ],
+      "total_cyclomatic": 5,
+      "total_cognitive": 2,
+      "avg_cyclomatic": 2.5,
+      "avg_cognitive": 1,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/form.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Name",
+          "file": "/tmp/omen-267094167/binding/form.go",
+          "start_line": 20,
+          "end_line": 22,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Bind",
+          "file": "/tmp/omen-267094167/binding/form.go",
+          "start_line": 24,
+          "end_line": 35,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 3,
+            "max_nesting": 2,
+            "lines": 12
+          }
+        },
+        {
+          "name": "Name",
+          "file": "/tmp/omen-267094167/binding/form.go",
+          "start_line": 37,
+          "end_line": 39,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Bind",
+          "file": "/tmp/omen-267094167/binding/form.go",
+          "start_line": 41,
+          "end_line": 49,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "max_nesting": 2,
+            "lines": 9
+          }
+        },
+        {
+          "name": "Name",
+          "file": "/tmp/omen-267094167/binding/form.go",
+          "start_line": 51,
+          "end_line": 53,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Bind",
+          "file": "/tmp/omen-267094167/binding/form.go",
+          "start_line": 55,
+          "end_line": 64,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "max_nesting": 2,
+            "lines": 10
+          }
+        }
+      ],
+      "total_cyclomatic": 14,
+      "total_cognitive": 7,
+      "avg_cyclomatic": 2.3333333333333335,
+      "avg_cognitive": 1.1666666666666667,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/msgpack.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Name",
+          "file": "/tmp/omen-267094167/binding/msgpack.go",
+          "start_line": 19,
+          "end_line": 21,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Bind",
+          "file": "/tmp/omen-267094167/binding/msgpack.go",
+          "start_line": 23,
+          "end_line": 25,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "BindBody",
+          "file": "/tmp/omen-267094167/binding/msgpack.go",
+          "start_line": 27,
+          "end_line": 29,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "decodeMsgPack",
+          "file": "/tmp/omen-267094167/binding/msgpack.go",
+          "start_line": 31,
+          "end_line": 37,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 7
+          }
+        }
+      ],
+      "total_cyclomatic": 5,
+      "total_cognitive": 1,
+      "avg_cyclomatic": 1.25,
+      "avg_cognitive": 0.25,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/header.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Name",
+          "file": "/tmp/omen-267094167/binding/header.go",
+          "start_line": 15,
+          "end_line": 17,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Bind",
+          "file": "/tmp/omen-267094167/binding/header.go",
+          "start_line": 19,
+          "end_line": 25,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 7
+          }
+        },
+        {
+          "name": "mapHeader",
+          "file": "/tmp/omen-267094167/binding/header.go",
+          "start_line": 27,
+          "end_line": 29,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "TrySet",
+          "file": "/tmp/omen-267094167/binding/header.go",
+          "start_line": 35,
+          "end_line": 37,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        }
+      ],
+      "total_cyclomatic": 5,
+      "total_cognitive": 1,
+      "avg_cyclomatic": 1.25,
+      "avg_cognitive": 0.25,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/default_validator.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Error",
+          "file": "/tmp/omen-267094167/binding/default_validator.go",
+          "start_line": 24,
+          "end_line": 39,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 7,
+            "max_nesting": 6,
+            "lines": 16
+          }
+        },
+        {
+          "name": "ValidateStruct",
+          "file": "/tmp/omen-267094167/binding/default_validator.go",
+          "start_line": 44,
+          "end_line": 73,
+          "metrics": {
+            "cyclomatic": 7,
+            "cognitive": 6,
+            "max_nesting": 4,
+            "lines": 30
+          }
+        },
+        {
+          "name": "validateStruct",
+          "file": "/tmp/omen-267094167/binding/default_validator.go",
+          "start_line": 76,
+          "end_line": 79,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "Engine",
+          "file": "/tmp/omen-267094167/binding/default_validator.go",
+          "start_line": 85,
+          "end_line": 88,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "lazyinit",
+          "file": "/tmp/omen-267094167/binding/default_validator.go",
+          "start_line": 90,
+          "end_line": 95,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 1,
+            "lines": 6
+          }
+        }
+      ],
+      "total_cyclomatic": 15,
+      "total_cognitive": 13,
+      "avg_cyclomatic": 3,
+      "avg_cognitive": 2.6,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/protobuf.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Name",
+          "file": "/tmp/omen-267094167/binding/protobuf.go",
+          "start_line": 17,
+          "end_line": 19,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Bind",
+          "file": "/tmp/omen-267094167/binding/protobuf.go",
+          "start_line": 21,
+          "end_line": 27,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 7
+          }
+        },
+        {
+          "name": "BindBody",
+          "file": "/tmp/omen-267094167/binding/protobuf.go",
+          "start_line": 29,
+          "end_line": 41,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "max_nesting": 2,
+            "lines": 13
+          }
+        }
+      ],
+      "total_cyclomatic": 6,
+      "total_cognitive": 3,
+      "avg_cyclomatic": 2,
+      "avg_cognitive": 1,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/toml.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Name",
+          "file": "/tmp/omen-267094167/binding/toml.go",
+          "start_line": 17,
+          "end_line": 19,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Bind",
+          "file": "/tmp/omen-267094167/binding/toml.go",
+          "start_line": 21,
+          "end_line": 23,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "BindBody",
+          "file": "/tmp/omen-267094167/binding/toml.go",
+          "start_line": 25,
+          "end_line": 27,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "decodeToml",
+          "file": "/tmp/omen-267094167/binding/toml.go",
+          "start_line": 29,
+          "end_line": 35,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 7
+          }
+        }
+      ],
+      "total_cyclomatic": 5,
+      "total_cognitive": 1,
+      "avg_cyclomatic": 1.25,
+      "avg_cognitive": 0.25,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/yaml.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Name",
+          "file": "/tmp/omen-267094167/binding/yaml.go",
+          "start_line": 17,
+          "end_line": 19,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Bind",
+          "file": "/tmp/omen-267094167/binding/yaml.go",
+          "start_line": 21,
+          "end_line": 23,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "BindBody",
+          "file": "/tmp/omen-267094167/binding/yaml.go",
+          "start_line": 25,
+          "end_line": 27,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "decodeYAML",
+          "file": "/tmp/omen-267094167/binding/yaml.go",
+          "start_line": 29,
+          "end_line": 35,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 7
+          }
+        }
+      ],
+      "total_cyclomatic": 5,
+      "total_cognitive": 1,
+      "avg_cyclomatic": 1.25,
+      "avg_cognitive": 0.25,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/json.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Name",
+          "file": "/tmp/omen-267094167/binding/json.go",
+          "start_line": 29,
+          "end_line": 31,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Bind",
+          "file": "/tmp/omen-267094167/binding/json.go",
+          "start_line": 33,
+          "end_line": 38,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        },
+        {
+          "name": "BindBody",
+          "file": "/tmp/omen-267094167/binding/json.go",
+          "start_line": 40,
+          "end_line": 42,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "decodeJSON",
+          "file": "/tmp/omen-267094167/binding/json.go",
+          "start_line": 44,
+          "end_line": 56,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 3,
+            "max_nesting": 2,
+            "lines": 13
+          }
+        }
+      ],
+      "total_cyclomatic": 9,
+      "total_cognitive": 4,
+      "avg_cyclomatic": 2.25,
+      "avg_cognitive": 1,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/codec/json/jsoniter.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "init",
+          "file": "/tmp/omen-267094167/codec/json/jsoniter.go",
+          "start_line": 18,
+          "end_line": 20,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Marshal",
+          "file": "/tmp/omen-267094167/codec/json/jsoniter.go",
+          "start_line": 26,
+          "end_line": 28,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Unmarshal",
+          "file": "/tmp/omen-267094167/codec/json/jsoniter.go",
+          "start_line": 30,
+          "end_line": 32,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "MarshalIndent",
+          "file": "/tmp/omen-267094167/codec/json/jsoniter.go",
+          "start_line": 34,
+          "end_line": 36,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "NewEncoder",
+          "file": "/tmp/omen-267094167/codec/json/jsoniter.go",
+          "start_line": 38,
+          "end_line": 40,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "NewDecoder",
+          "file": "/tmp/omen-267094167/codec/json/jsoniter.go",
+          "start_line": 42,
+          "end_line": 44,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        }
+      ],
+      "total_cyclomatic": 6,
+      "total_cognitive": 0,
+      "avg_cyclomatic": 1,
+      "avg_cognitive": 0,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/context_appengine.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "init",
+          "file": "/tmp/omen-267094167/context_appengine.go",
+          "start_line": 9,
+          "end_line": 11,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        }
+      ],
+      "total_cyclomatic": 1,
+      "total_cognitive": 0,
+      "avg_cyclomatic": 1,
+      "avg_cognitive": 0,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/query.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Name",
+          "file": "/tmp/omen-267094167/binding/query.go",
+          "start_line": 11,
+          "end_line": 13,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Bind",
+          "file": "/tmp/omen-267094167/binding/query.go",
+          "start_line": 15,
+          "end_line": 21,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 7
+          }
+        }
+      ],
+      "total_cyclomatic": 3,
+      "total_cognitive": 1,
+      "avg_cyclomatic": 1.5,
+      "avg_cognitive": 0.5,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/multipart_form_mapping.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "TrySet",
+          "file": "/tmp/omen-267094167/binding/multipart_form_mapping.go",
+          "start_line": 27,
+          "end_line": 33,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 7
+          }
+        },
+        {
+          "name": "setByMultipartFormFile",
+          "file": "/tmp/omen-267094167/binding/multipart_form_mapping.go",
+          "start_line": 35,
+          "end_line": 61,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 27
+          }
+        },
+        {
+          "name": "setArrayOfMultipartFormFiles",
+          "file": "/tmp/omen-267094167/binding/multipart_form_mapping.go",
+          "start_line": 63,
+          "end_line": 74,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 4,
+            "max_nesting": 4,
+            "lines": 12
+          }
+        }
+      ],
+      "total_cyclomatic": 13,
+      "total_cognitive": 6,
+      "avg_cyclomatic": 4.333333333333333,
+      "avg_cognitive": 2,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/deprecated.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "BindWith",
+          "file": "/tmp/omen-267094167/deprecated.go",
+          "start_line": 17,
+          "end_line": 23,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 7
+          }
+        }
+      ],
+      "total_cyclomatic": 1,
+      "total_cognitive": 0,
+      "avg_cyclomatic": 1,
+      "avg_cognitive": 0,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/uri.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Name",
+          "file": "/tmp/omen-267094167/binding/uri.go",
+          "start_line": 9,
+          "end_line": 11,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "BindUri",
+          "file": "/tmp/omen-267094167/binding/uri.go",
+          "start_line": 13,
+          "end_line": 18,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        }
+      ],
+      "total_cyclomatic": 3,
+      "total_cognitive": 1,
+      "avg_cyclomatic": 1.5,
+      "avg_cognitive": 0.5,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/fs.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Open",
+          "file": "/tmp/omen-267094167/fs.go",
+          "start_line": 18,
+          "end_line": 25,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 8
+          }
+        },
+        {
+          "name": "Readdir",
+          "file": "/tmp/omen-267094167/fs.go",
+          "start_line": 33,
+          "end_line": 36,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "Dir",
+          "file": "/tmp/omen-267094167/fs.go",
+          "start_line": 42,
+          "end_line": 50,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 9
+          }
+        }
+      ],
+      "total_cyclomatic": 5,
+      "total_cognitive": 2,
+      "avg_cyclomatic": 1.6666666666666667,
+      "avg_cognitive": 0.6666666666666666,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/codec/json/sonic.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "init",
+          "file": "/tmp/omen-267094167/codec/json/sonic.go",
+          "start_line": 18,
+          "end_line": 20,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Marshal",
+          "file": "/tmp/omen-267094167/codec/json/sonic.go",
+          "start_line": 26,
+          "end_line": 28,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Unmarshal",
+          "file": "/tmp/omen-267094167/codec/json/sonic.go",
+          "start_line": 30,
+          "end_line": 32,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "MarshalIndent",
+          "file": "/tmp/omen-267094167/codec/json/sonic.go",
+          "start_line": 34,
+          "end_line": 36,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "NewEncoder",
+          "file": "/tmp/omen-267094167/codec/json/sonic.go",
+          "start_line": 38,
+          "end_line": 40,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "NewDecoder",
+          "file": "/tmp/omen-267094167/codec/json/sonic.go",
+          "start_line": 42,
+          "end_line": 44,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        }
+      ],
+      "total_cyclomatic": 6,
+      "total_cognitive": 0,
+      "avg_cyclomatic": 1,
+      "avg_cognitive": 0,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/plain.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Name",
+          "file": "/tmp/omen-267094167/binding/plain.go",
+          "start_line": 14,
+          "end_line": 16,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Bind",
+          "file": "/tmp/omen-267094167/binding/plain.go",
+          "start_line": 18,
+          "end_line": 25,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 8
+          }
+        },
+        {
+          "name": "BindBody",
+          "file": "/tmp/omen-267094167/binding/plain.go",
+          "start_line": 27,
+          "end_line": 29,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "decodePlain",
+          "file": "/tmp/omen-267094167/binding/plain.go",
+          "start_line": 31,
+          "end_line": 56,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 6,
+            "max_nesting": 4,
+            "lines": 26
+          }
+        }
+      ],
+      "total_cyclomatic": 10,
+      "total_cognitive": 7,
+      "avg_cyclomatic": 2.5,
+      "avg_cognitive": 1.75,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/codec/json/api.go",
+      "language": "go",
+      "functions": [],
+      "total_cyclomatic": 0,
+      "total_cognitive": 0,
+      "avg_cyclomatic": 0,
+      "avg_cognitive": 0,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/xml.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Name",
+          "file": "/tmp/omen-267094167/binding/xml.go",
+          "start_line": 16,
+          "end_line": 18,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Bind",
+          "file": "/tmp/omen-267094167/binding/xml.go",
+          "start_line": 20,
+          "end_line": 22,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "BindBody",
+          "file": "/tmp/omen-267094167/binding/xml.go",
+          "start_line": 24,
+          "end_line": 26,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "decodeXML",
+          "file": "/tmp/omen-267094167/binding/xml.go",
+          "start_line": 28,
+          "end_line": 34,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 7
+          }
+        }
+      ],
+      "total_cyclomatic": 5,
+      "total_cognitive": 1,
+      "avg_cyclomatic": 1.25,
+      "avg_cognitive": 0.25,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/doc.go",
+      "language": "go",
+      "functions": [],
+      "total_cyclomatic": 0,
+      "total_cognitive": 0,
+      "avg_cyclomatic": 0,
+      "avg_cognitive": 0,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/codec/json/go_json.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "init",
+          "file": "/tmp/omen-267094167/codec/json/go_json.go",
+          "start_line": 18,
+          "end_line": 20,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Marshal",
+          "file": "/tmp/omen-267094167/codec/json/go_json.go",
+          "start_line": 24,
+          "end_line": 26,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Unmarshal",
+          "file": "/tmp/omen-267094167/codec/json/go_json.go",
+          "start_line": 28,
+          "end_line": 30,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "MarshalIndent",
+          "file": "/tmp/omen-267094167/codec/json/go_json.go",
+          "start_line": 32,
+          "end_line": 34,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "NewEncoder",
+          "file": "/tmp/omen-267094167/codec/json/go_json.go",
+          "start_line": 36,
+          "end_line": 38,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "NewDecoder",
+          "file": "/tmp/omen-267094167/codec/json/go_json.go",
+          "start_line": 40,
+          "end_line": 42,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        }
+      ],
+      "total_cyclomatic": 6,
+      "total_cognitive": 0,
+      "avg_cyclomatic": 1,
+      "avg_cognitive": 0,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/internal/bytesconv/bytesconv.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "StringToBytes",
+          "file": "/tmp/omen-267094167/internal/bytesconv/bytesconv.go",
+          "start_line": 13,
+          "end_line": 15,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "BytesToString",
+          "file": "/tmp/omen-267094167/internal/bytesconv/bytesconv.go",
+          "start_line": 19,
+          "end_line": 21,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        }
+      ],
+      "total_cyclomatic": 2,
+      "total_cognitive": 0,
+      "avg_cyclomatic": 1,
+      "avg_cognitive": 0,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/render/msgpack.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "WriteContentType",
+          "file": "/tmp/omen-267094167/render/msgpack.go",
+          "start_line": 29,
+          "end_line": 31,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Render",
+          "file": "/tmp/omen-267094167/render/msgpack.go",
+          "start_line": 34,
+          "end_line": 36,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "WriteMsgPack",
+          "file": "/tmp/omen-267094167/render/msgpack.go",
+          "start_line": 39,
+          "end_line": 43,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 5
+          }
+        }
+      ],
+      "total_cyclomatic": 3,
+      "total_cognitive": 0,
+      "avg_cyclomatic": 1,
+      "avg_cognitive": 0,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/render/render.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "writeContentType",
+          "file": "/tmp/omen-267094167/render/render.go",
+          "start_line": 36,
+          "end_line": 41,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        }
+      ],
+      "total_cyclomatic": 2,
+      "total_cognitive": 1,
+      "avg_cyclomatic": 2,
+      "avg_cognitive": 1,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/render/xml.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Render",
+          "file": "/tmp/omen-267094167/render/xml.go",
+          "start_line": 20,
+          "end_line": 23,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "WriteContentType",
+          "file": "/tmp/omen-267094167/render/xml.go",
+          "start_line": 26,
+          "end_line": 28,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        }
+      ],
+      "total_cyclomatic": 2,
+      "total_cognitive": 0,
+      "avg_cyclomatic": 1,
+      "avg_cognitive": 0,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/debug.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "IsDebugging",
+          "file": "/tmp/omen-267094167/debug.go",
+          "start_line": 22,
+          "end_line": 24,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "debugPrintRoute",
+          "file": "/tmp/omen-267094167/debug.go",
+          "start_line": 32,
+          "end_line": 42,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 3,
+            "max_nesting": 4,
+            "lines": 11
+          }
+        },
+        {
+          "name": "debugPrintLoadTemplate",
+          "file": "/tmp/omen-267094167/debug.go",
+          "start_line": 44,
+          "end_line": 54,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 3,
+            "max_nesting": 4,
+            "lines": 11
+          }
+        },
+        {
+          "name": "debugPrint",
+          "file": "/tmp/omen-267094167/debug.go",
+          "start_line": 56,
+          "end_line": 70,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 3,
+            "max_nesting": 2,
+            "lines": 15
+          }
+        },
+        {
+          "name": "getMinVer",
+          "file": "/tmp/omen-267094167/debug.go",
+          "start_line": 72,
+          "end_line": 79,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 8
+          }
+        },
+        {
+          "name": "debugPrintWARNINGDefault",
+          "file": "/tmp/omen-267094167/debug.go",
+          "start_line": 81,
+          "end_line": 90,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 10
+          }
+        },
+        {
+          "name": "debugPrintWARNINGNew",
+          "file": "/tmp/omen-267094167/debug.go",
+          "start_line": 92,
+          "end_line": 98,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 7
+          }
+        },
+        {
+          "name": "debugPrintWARNINGSetHTMLTemplate",
+          "file": "/tmp/omen-267094167/debug.go",
+          "start_line": 100,
+          "end_line": 108,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 9
+          }
+        },
+        {
+          "name": "debugPrintError",
+          "file": "/tmp/omen-267094167/debug.go",
+          "start_line": 110,
+          "end_line": 114,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 5
+          }
+        }
+      ],
+      "total_cyclomatic": 21,
+      "total_cognitive": 12,
+      "avg_cyclomatic": 2.3333333333333335,
+      "avg_cognitive": 1.3333333333333333,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/codec/json/json.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "init",
+          "file": "/tmp/omen-267094167/codec/json/json.go",
+          "start_line": 17,
+          "end_line": 19,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Marshal",
+          "file": "/tmp/omen-267094167/codec/json/json.go",
+          "start_line": 23,
+          "end_line": 25,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Unmarshal",
+          "file": "/tmp/omen-267094167/codec/json/json.go",
+          "start_line": 27,
+          "end_line": 29,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "MarshalIndent",
+          "file": "/tmp/omen-267094167/codec/json/json.go",
+          "start_line": 31,
+          "end_line": 33,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "NewEncoder",
+          "file": "/tmp/omen-267094167/codec/json/json.go",
+          "start_line": 35,
+          "end_line": 37,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "NewDecoder",
+          "file": "/tmp/omen-267094167/codec/json/json.go",
+          "start_line": 39,
+          "end_line": 41,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        }
+      ],
+      "total_cyclomatic": 6,
+      "total_cognitive": 0,
+      "avg_cyclomatic": 1,
+      "avg_cognitive": 0,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/ginS/gins.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "LoadHTMLGlob",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 20,
+          "end_line": 22,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "LoadHTMLFiles",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 25,
+          "end_line": 27,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "LoadHTMLFS",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 30,
+          "end_line": 32,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "SetHTMLTemplate",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 35,
+          "end_line": 37,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "NoRoute",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 40,
+          "end_line": 42,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "NoMethod",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 45,
+          "end_line": 47,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Group",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 51,
+          "end_line": 53,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Handle",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 56,
+          "end_line": 58,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "POST",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 61,
+          "end_line": 63,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GET",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 66,
+          "end_line": 68,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "DELETE",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 71,
+          "end_line": 73,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "PATCH",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 76,
+          "end_line": 78,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "PUT",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 81,
+          "end_line": 83,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "OPTIONS",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 86,
+          "end_line": 88,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "HEAD",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 91,
+          "end_line": 93,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Any",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 96,
+          "end_line": 98,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "StaticFile",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 101,
+          "end_line": 103,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Static",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 112,
+          "end_line": 114,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "StaticFS",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 117,
+          "end_line": 119,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Use",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 124,
+          "end_line": 126,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Routes",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 129,
+          "end_line": 131,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Run",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 136,
+          "end_line": 138,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "RunTLS",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 143,
+          "end_line": 145,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "RunUnix",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 150,
+          "end_line": 152,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "RunFd",
+          "file": "/tmp/omen-267094167/ginS/gins.go",
+          "start_line": 157,
+          "end_line": 159,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        }
+      ],
+      "total_cyclomatic": 25,
+      "total_cognitive": 0,
+      "avg_cyclomatic": 1,
+      "avg_cognitive": 0,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/internal/fs/fs.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Open",
+          "file": "/tmp/omen-267094167/internal/fs/fs.go",
+          "start_line": 14,
+          "end_line": 21,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 8
+          }
+        }
+      ],
+      "total_cyclomatic": 2,
+      "total_cognitive": 1,
+      "avg_cyclomatic": 2,
+      "avg_cognitive": 1,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/errors.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "SetType",
+          "file": "/tmp/omen-267094167/errors.go",
+          "start_line": 45,
+          "end_line": 48,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "SetMeta",
+          "file": "/tmp/omen-267094167/errors.go",
+          "start_line": 51,
+          "end_line": 54,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "JSON",
+          "file": "/tmp/omen-267094167/errors.go",
+          "start_line": 57,
+          "end_line": 76,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 4,
+            "max_nesting": 4,
+            "lines": 20
+          }
+        },
+        {
+          "name": "MarshalJSON",
+          "file": "/tmp/omen-267094167/errors.go",
+          "start_line": 79,
+          "end_line": 81,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Error",
+          "file": "/tmp/omen-267094167/errors.go",
+          "start_line": 84,
+          "end_line": 86,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "IsType",
+          "file": "/tmp/omen-267094167/errors.go",
+          "start_line": 89,
+          "end_line": 91,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Unwrap",
+          "file": "/tmp/omen-267094167/errors.go",
+          "start_line": 94,
+          "end_line": 96,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "ByType",
+          "file": "/tmp/omen-267094167/errors.go",
+          "start_line": 100,
+          "end_line": 114,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 5,
+            "max_nesting": 4,
+            "lines": 15
+          }
+        },
+        {
+          "name": "Last",
+          "file": "/tmp/omen-267094167/errors.go",
+          "start_line": 118,
+          "end_line": 123,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        },
+        {
+          "name": "Errors",
+          "file": "/tmp/omen-267094167/errors.go",
+          "start_line": 132,
+          "end_line": 141,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "max_nesting": 2,
+            "lines": 10
+          }
+        },
+        {
+          "name": "JSON",
+          "file": "/tmp/omen-267094167/errors.go",
+          "start_line": 143,
+          "end_line": 156,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 14
+          }
+        },
+        {
+          "name": "MarshalJSON",
+          "file": "/tmp/omen-267094167/errors.go",
+          "start_line": 159,
+          "end_line": 161,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "String",
+          "file": "/tmp/omen-267094167/errors.go",
+          "start_line": 163,
+          "end_line": 175,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 4,
+            "max_nesting": 4,
+            "lines": 13
+          }
+        }
+      ],
+      "total_cyclomatic": 29,
+      "total_cognitive": 17,
+      "avg_cyclomatic": 2.230769230769231,
+      "avg_cognitive": 1.3076923076923077,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/render/reader.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Render",
+          "file": "/tmp/omen-267094167/render/reader.go",
+          "start_line": 22,
+          "end_line": 33,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 3,
+            "max_nesting": 4,
+            "lines": 12
+          }
+        },
+        {
+          "name": "WriteContentType",
+          "file": "/tmp/omen-267094167/render/reader.go",
+          "start_line": 36,
+          "end_line": 38,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "writeHeaders",
+          "file": "/tmp/omen-267094167/render/reader.go",
+          "start_line": 41,
+          "end_line": 48,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 3,
+            "max_nesting": 4,
+            "lines": 8
+          }
+        }
+      ],
+      "total_cyclomatic": 7,
+      "total_cognitive": 6,
+      "avg_cyclomatic": 2.3333333333333335,
+      "avg_cognitive": 2,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/render/protobuf.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Render",
+          "file": "/tmp/omen-267094167/render/protobuf.go",
+          "start_line": 21,
+          "end_line": 31,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 11
+          }
+        },
+        {
+          "name": "WriteContentType",
+          "file": "/tmp/omen-267094167/render/protobuf.go",
+          "start_line": 34,
+          "end_line": 36,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        }
+      ],
+      "total_cyclomatic": 3,
+      "total_cognitive": 1,
+      "avg_cyclomatic": 1.5,
+      "avg_cognitive": 0.5,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/render/redirect.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Render",
+          "file": "/tmp/omen-267094167/render/redirect.go",
+          "start_line": 20,
+          "end_line": 26,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 7
+          }
+        },
+        {
+          "name": "WriteContentType",
+          "file": "/tmp/omen-267094167/render/redirect.go",
+          "start_line": 29,
+          "end_line": 29,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 1
+          }
+        }
+      ],
+      "total_cyclomatic": 5,
+      "total_cognitive": 1,
+      "avg_cyclomatic": 2.5,
+      "avg_cognitive": 0.5,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/render/text.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Render",
+          "file": "/tmp/omen-267094167/render/text.go",
+          "start_line": 23,
+          "end_line": 25,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "WriteContentType",
+          "file": "/tmp/omen-267094167/render/text.go",
+          "start_line": 28,
+          "end_line": 30,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "WriteString",
+          "file": "/tmp/omen-267094167/render/text.go",
+          "start_line": 33,
+          "end_line": 41,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 9
+          }
+        }
+      ],
+      "total_cyclomatic": 4,
+      "total_cognitive": 1,
+      "avg_cyclomatic": 1.3333333333333333,
+      "avg_cognitive": 0.3333333333333333,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/render/data.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Render",
+          "file": "/tmp/omen-267094167/render/data.go",
+          "start_line": 16,
+          "end_line": 20,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 5
+          }
+        },
+        {
+          "name": "WriteContentType",
+          "file": "/tmp/omen-267094167/render/data.go",
+          "start_line": 23,
+          "end_line": 25,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        }
+      ],
+      "total_cyclomatic": 2,
+      "total_cognitive": 0,
+      "avg_cyclomatic": 1,
+      "avg_cognitive": 0,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/render/toml.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Render",
+          "file": "/tmp/omen-267094167/render/toml.go",
+          "start_line": 21,
+          "end_line": 31,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 11
+          }
+        },
+        {
+          "name": "WriteContentType",
+          "file": "/tmp/omen-267094167/render/toml.go",
+          "start_line": 34,
+          "end_line": 36,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        }
+      ],
+      "total_cyclomatic": 3,
+      "total_cognitive": 1,
+      "avg_cyclomatic": 1.5,
+      "avg_cognitive": 0.5,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/render/yaml.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Render",
+          "file": "/tmp/omen-267094167/render/yaml.go",
+          "start_line": 21,
+          "end_line": 31,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 11
+          }
+        },
+        {
+          "name": "WriteContentType",
+          "file": "/tmp/omen-267094167/render/yaml.go",
+          "start_line": 34,
+          "end_line": 36,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        }
+      ],
+      "total_cyclomatic": 3,
+      "total_cognitive": 1,
+      "avg_cyclomatic": 1.5,
+      "avg_cognitive": 0.5,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/version.go",
+      "language": "go",
+      "functions": [],
+      "total_cyclomatic": 0,
+      "total_cognitive": 0,
+      "avg_cyclomatic": 0,
+      "avg_cognitive": 0,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/render/html.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Instance",
+          "file": "/tmp/omen-267094167/render/html.go",
+          "start_line": 54,
+          "end_line": 60,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 7
+          }
+        },
+        {
+          "name": "Instance",
+          "file": "/tmp/omen-267094167/render/html.go",
+          "start_line": 63,
+          "end_line": 69,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 7
+          }
+        },
+        {
+          "name": "loadTemplate",
+          "file": "/tmp/omen-267094167/render/html.go",
+          "start_line": 71,
+          "end_line": 86,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 4,
+            "max_nesting": 2,
+            "lines": 16
+          }
+        },
+        {
+          "name": "Render",
+          "file": "/tmp/omen-267094167/render/html.go",
+          "start_line": 89,
+          "end_line": 96,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 8
+          }
+        },
+        {
+          "name": "WriteContentType",
+          "file": "/tmp/omen-267094167/render/html.go",
+          "start_line": 99,
+          "end_line": 101,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        }
+      ],
+      "total_cyclomatic": 11,
+      "total_cognitive": 5,
+      "avg_cyclomatic": 2.2,
+      "avg_cognitive": 1,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/routergroup.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Use",
+          "file": "/tmp/omen-267094167/routergroup.go",
+          "start_line": 65,
+          "end_line": 68,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "Group",
+          "file": "/tmp/omen-267094167/routergroup.go",
+          "start_line": 72,
+          "end_line": 78,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 7
+          }
+        },
+        {
+          "name": "BasePath",
+          "file": "/tmp/omen-267094167/routergroup.go",
+          "start_line": 82,
+          "end_line": 84,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "handle",
+          "file": "/tmp/omen-267094167/routergroup.go",
+          "start_line": 86,
+          "end_line": 91,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 6
+          }
+        },
+        {
+          "name": "Handle",
+          "file": "/tmp/omen-267094167/routergroup.go",
+          "start_line": 103,
+          "end_line": 108,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        },
+        {
+          "name": "POST",
+          "file": "/tmp/omen-267094167/routergroup.go",
+          "start_line": 111,
+          "end_line": 113,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GET",
+          "file": "/tmp/omen-267094167/routergroup.go",
+          "start_line": 116,
+          "end_line": 118,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "DELETE",
+          "file": "/tmp/omen-267094167/routergroup.go",
+          "start_line": 121,
+          "end_line": 123,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "PATCH",
+          "file": "/tmp/omen-267094167/routergroup.go",
+          "start_line": 126,
+          "end_line": 128,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "PUT",
+          "file": "/tmp/omen-267094167/routergroup.go",
+          "start_line": 131,
+          "end_line": 133,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "OPTIONS",
+          "file": "/tmp/omen-267094167/routergroup.go",
+          "start_line": 136,
+          "end_line": 138,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "HEAD",
+          "file": "/tmp/omen-267094167/routergroup.go",
+          "start_line": 141,
+          "end_line": 143,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Any",
+          "file": "/tmp/omen-267094167/routergroup.go",
+          "start_line": 147,
+          "end_line": 153,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 7
+          }
+        },
+        {
+          "name": "Match",
+          "file": "/tmp/omen-267094167/routergroup.go",
+          "start_line": 156,
+          "end_line": 162,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 7
+          }
+        },
+        {
+          "name": "StaticFile",
+          "file": "/tmp/omen-267094167/routergroup.go",
+          "start_line": 166,
+          "end_line": 170,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 1,
+            "lines": 5
+          }
+        },
+        {
+          "name": "StaticFileFS",
+          "file": "/tmp/omen-267094167/routergroup.go",
+          "start_line": 175,
+          "end_line": 179,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 1,
+            "lines": 5
+          }
+        },
+        {
+          "name": "staticFileHandler",
+          "file": "/tmp/omen-267094167/routergroup.go",
+          "start_line": 181,
+          "end_line": 188,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 8
+          }
+        },
+        {
+          "name": "Static",
+          "file": "/tmp/omen-267094167/routergroup.go",
+          "start_line": 197,
+          "end_line": 199,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "StaticFS",
+          "file": "/tmp/omen-267094167/routergroup.go",
+          "start_line": 203,
+          "end_line": 214,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 12
+          }
+        },
+        {
+          "name": "createStaticHandler",
+          "file": "/tmp/omen-267094167/routergroup.go",
+          "start_line": 216,
+          "end_line": 239,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "max_nesting": 3,
+            "lines": 24
+          }
+        },
+        {
+          "name": "combineHandlers",
+          "file": "/tmp/omen-267094167/routergroup.go",
+          "start_line": 241,
+          "end_line": 248,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 8
+          }
+        },
+        {
+          "name": "calculateAbsolutePath",
+          "file": "/tmp/omen-267094167/routergroup.go",
+          "start_line": 250,
+          "end_line": 252,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "returnObj",
+          "file": "/tmp/omen-267094167/routergroup.go",
+          "start_line": 254,
+          "end_line": 259,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        }
+      ],
+      "total_cyclomatic": 33,
+      "total_cognitive": 8,
+      "avg_cyclomatic": 1.434782608695652,
+      "avg_cognitive": 0.34782608695652173,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/recovery.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Recovery",
+          "file": "/tmp/omen-267094167/recovery.go",
+          "start_line": 35,
+          "end_line": 37,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "CustomRecovery",
+          "file": "/tmp/omen-267094167/recovery.go",
+          "start_line": 40,
+          "end_line": 42,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "RecoveryWithWriter",
+          "file": "/tmp/omen-267094167/recovery.go",
+          "start_line": 45,
+          "end_line": 50,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        },
+        {
+          "name": "CustomRecoveryWithWriter",
+          "file": "/tmp/omen-267094167/recovery.go",
+          "start_line": 53,
+          "end_line": 99,
+          "metrics": {
+            "cyclomatic": 13,
+            "cognitive": 24,
+            "max_nesting": 10,
+            "lines": 47
+          }
+        },
+        {
+          "name": "secureRequestDump",
+          "file": "/tmp/omen-267094167/recovery.go",
+          "start_line": 105,
+          "end_line": 114,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 3,
+            "max_nesting": 4,
+            "lines": 10
+          }
+        },
+        {
+          "name": "defaultHandleRecovery",
+          "file": "/tmp/omen-267094167/recovery.go",
+          "start_line": 116,
+          "end_line": 118,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "stack",
+          "file": "/tmp/omen-267094167/recovery.go",
+          "start_line": 121,
+          "end_line": 147,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 15,
+            "max_nesting": 6,
+            "lines": 27
+          }
+        },
+        {
+          "name": "readNthLine",
+          "file": "/tmp/omen-267094167/recovery.go",
+          "start_line": 153,
+          "end_line": 176,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 6,
+            "max_nesting": 4,
+            "lines": 24
+          }
+        },
+        {
+          "name": "function",
+          "file": "/tmp/omen-267094167/recovery.go",
+          "start_line": 179,
+          "end_line": 201,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 3,
+            "max_nesting": 2,
+            "lines": 23
+          }
+        },
+        {
+          "name": "timeFormat",
+          "file": "/tmp/omen-267094167/recovery.go",
+          "start_line": 204,
+          "end_line": 206,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        }
+      ],
+      "total_cyclomatic": 37,
+      "total_cognitive": 52,
+      "avg_cyclomatic": 3.7,
+      "avg_cognitive": 5.2,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/response_writer.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Unwrap",
+          "file": "/tmp/omen-267094167/response_writer.go",
+          "start_line": 57,
+          "end_line": 59,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "reset",
+          "file": "/tmp/omen-267094167/response_writer.go",
+          "start_line": 61,
+          "end_line": 65,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 5
+          }
+        },
+        {
+          "name": "WriteHeader",
+          "file": "/tmp/omen-267094167/response_writer.go",
+          "start_line": 67,
+          "end_line": 75,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 3,
+            "max_nesting": 4,
+            "lines": 9
+          }
+        },
+        {
+          "name": "WriteHeaderNow",
+          "file": "/tmp/omen-267094167/response_writer.go",
+          "start_line": 77,
+          "end_line": 82,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        },
+        {
+          "name": "Write",
+          "file": "/tmp/omen-267094167/response_writer.go",
+          "start_line": 84,
+          "end_line": 89,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 6
+          }
+        },
+        {
+          "name": "WriteString",
+          "file": "/tmp/omen-267094167/response_writer.go",
+          "start_line": 91,
+          "end_line": 96,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 6
+          }
+        },
+        {
+          "name": "Status",
+          "file": "/tmp/omen-267094167/response_writer.go",
+          "start_line": 98,
+          "end_line": 100,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Size",
+          "file": "/tmp/omen-267094167/response_writer.go",
+          "start_line": 102,
+          "end_line": 104,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Written",
+          "file": "/tmp/omen-267094167/response_writer.go",
+          "start_line": 106,
+          "end_line": 108,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Hijack",
+          "file": "/tmp/omen-267094167/response_writer.go",
+          "start_line": 111,
+          "end_line": 121,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "max_nesting": 2,
+            "lines": 11
+          }
+        },
+        {
+          "name": "CloseNotify",
+          "file": "/tmp/omen-267094167/response_writer.go",
+          "start_line": 124,
+          "end_line": 126,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Flush",
+          "file": "/tmp/omen-267094167/response_writer.go",
+          "start_line": 129,
+          "end_line": 132,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "Pusher",
+          "file": "/tmp/omen-267094167/response_writer.go",
+          "start_line": 134,
+          "end_line": 139,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        }
+      ],
+      "total_cyclomatic": 20,
+      "total_cognitive": 7,
+      "avg_cyclomatic": 1.5384615384615385,
+      "avg_cognitive": 0.5384615384615384,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/utils.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Bind",
+          "file": "/tmp/omen-267094167/utils.go",
+          "start_line": 23,
+          "end_line": 38,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "max_nesting": 3,
+            "lines": 16
+          }
+        },
+        {
+          "name": "WrapF",
+          "file": "/tmp/omen-267094167/utils.go",
+          "start_line": 41,
+          "end_line": 45,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 1,
+            "lines": 5
+          }
+        },
+        {
+          "name": "WrapH",
+          "file": "/tmp/omen-267094167/utils.go",
+          "start_line": 48,
+          "end_line": 52,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 1,
+            "lines": 5
+          }
+        },
+        {
+          "name": "MarshalXML",
+          "file": "/tmp/omen-267094167/utils.go",
+          "start_line": 58,
+          "end_line": 77,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 4,
+            "max_nesting": 4,
+            "lines": 20
+          }
+        },
+        {
+          "name": "assert1",
+          "file": "/tmp/omen-267094167/utils.go",
+          "start_line": 79,
+          "end_line": 83,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 5
+          }
+        },
+        {
+          "name": "filterFlags",
+          "file": "/tmp/omen-267094167/utils.go",
+          "start_line": 85,
+          "end_line": 92,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 3,
+            "max_nesting": 4,
+            "lines": 8
+          }
+        },
+        {
+          "name": "chooseData",
+          "file": "/tmp/omen-267094167/utils.go",
+          "start_line": 94,
+          "end_line": 102,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "max_nesting": 2,
+            "lines": 9
+          }
+        },
+        {
+          "name": "parseAccept",
+          "file": "/tmp/omen-267094167/utils.go",
+          "start_line": 104,
+          "end_line": 116,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 5,
+            "max_nesting": 4,
+            "lines": 13
+          }
+        },
+        {
+          "name": "lastChar",
+          "file": "/tmp/omen-267094167/utils.go",
+          "start_line": 118,
+          "end_line": 123,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        },
+        {
+          "name": "nameOfFunction",
+          "file": "/tmp/omen-267094167/utils.go",
+          "start_line": 125,
+          "end_line": 127,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "joinPaths",
+          "file": "/tmp/omen-267094167/utils.go",
+          "start_line": 129,
+          "end_line": 139,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 2,
+            "max_nesting": 2,
+            "lines": 11
+          }
+        },
+        {
+          "name": "resolveAddress",
+          "file": "/tmp/omen-267094167/utils.go",
+          "start_line": 141,
+          "end_line": 155,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 15
+          }
+        },
+        {
+          "name": "isASCII",
+          "file": "/tmp/omen-267094167/utils.go",
+          "start_line": 158,
+          "end_line": 165,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 3,
+            "max_nesting": 4,
+            "lines": 8
+          }
+        },
+        {
+          "name": "safeInt8",
+          "file": "/tmp/omen-267094167/utils.go",
+          "start_line": 168,
+          "end_line": 173,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        },
+        {
+          "name": "safeUint16",
+          "file": "/tmp/omen-267094167/utils.go",
+          "start_line": 176,
+          "end_line": 181,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        }
+      ],
+      "total_cyclomatic": 39,
+      "total_cognitive": 26,
+      "avg_cyclomatic": 2.6,
+      "avg_cognitive": 1.7333333333333334,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/test_helpers.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "CreateTestContext",
+          "file": "/tmp/omen-267094167/test_helpers.go",
+          "start_line": 17,
+          "end_line": 23,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 7
+          }
+        },
+        {
+          "name": "CreateTestContextOnly",
+          "file": "/tmp/omen-267094167/test_helpers.go",
+          "start_line": 30,
+          "end_line": 35,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 6
+          }
+        },
+        {
+          "name": "waitForServerReady",
+          "file": "/tmp/omen-267094167/test_helpers.go",
+          "start_line": 39,
+          "end_line": 60,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 5,
+            "max_nesting": 4,
+            "lines": 22
+          }
+        }
+      ],
+      "total_cyclomatic": 6,
+      "total_cognitive": 5,
+      "avg_cyclomatic": 2,
+      "avg_cognitive": 1.6666666666666667,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/mode.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "init",
+          "file": "/tmp/omen-267094167/mode.go",
+          "start_line": 52,
+          "end_line": 55,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "SetMode",
+          "file": "/tmp/omen-267094167/mode.go",
+          "start_line": 58,
+          "end_line": 78,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 3,
+            "max_nesting": 4,
+            "lines": 21
+          }
+        },
+        {
+          "name": "DisableBindValidation",
+          "file": "/tmp/omen-267094167/mode.go",
+          "start_line": 81,
+          "end_line": 83,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "EnableJsonDecoderUseNumber",
+          "file": "/tmp/omen-267094167/mode.go",
+          "start_line": 87,
+          "end_line": 89,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "EnableJsonDecoderDisallowUnknownFields",
+          "file": "/tmp/omen-267094167/mode.go",
+          "start_line": 93,
+          "end_line": 95,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Mode",
+          "file": "/tmp/omen-267094167/mode.go",
+          "start_line": 98,
+          "end_line": 100,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        }
+      ],
+      "total_cyclomatic": 9,
+      "total_cognitive": 3,
+      "avg_cyclomatic": 1.5,
+      "avg_cognitive": 0.5,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/render/json.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Render",
+          "file": "/tmp/omen-267094167/render/json.go",
+          "start_line": 57,
+          "end_line": 59,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "WriteContentType",
+          "file": "/tmp/omen-267094167/render/json.go",
+          "start_line": 62,
+          "end_line": 64,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "WriteJSON",
+          "file": "/tmp/omen-267094167/render/json.go",
+          "start_line": 67,
+          "end_line": 75,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 9
+          }
+        },
+        {
+          "name": "Render",
+          "file": "/tmp/omen-267094167/render/json.go",
+          "start_line": 78,
+          "end_line": 86,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 9
+          }
+        },
+        {
+          "name": "WriteContentType",
+          "file": "/tmp/omen-267094167/render/json.go",
+          "start_line": 89,
+          "end_line": 91,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Render",
+          "file": "/tmp/omen-267094167/render/json.go",
+          "start_line": 94,
+          "end_line": 109,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 4,
+            "max_nesting": 4,
+            "lines": 16
+          }
+        },
+        {
+          "name": "WriteContentType",
+          "file": "/tmp/omen-267094167/render/json.go",
+          "start_line": 112,
+          "end_line": 114,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Render",
+          "file": "/tmp/omen-267094167/render/json.go",
+          "start_line": 117,
+          "end_line": 147,
+          "metrics": {
+            "cyclomatic": 7,
+            "cognitive": 6,
+            "max_nesting": 2,
+            "lines": 31
+          }
+        },
+        {
+          "name": "WriteContentType",
+          "file": "/tmp/omen-267094167/render/json.go",
+          "start_line": 150,
+          "end_line": 152,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Render",
+          "file": "/tmp/omen-267094167/render/json.go",
+          "start_line": 155,
+          "end_line": 176,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 4,
+            "max_nesting": 4,
+            "lines": 22
+          }
+        },
+        {
+          "name": "WriteContentType",
+          "file": "/tmp/omen-267094167/render/json.go",
+          "start_line": 179,
+          "end_line": 181,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Render",
+          "file": "/tmp/omen-267094167/render/json.go",
+          "start_line": 184,
+          "end_line": 189,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 6
+          }
+        },
+        {
+          "name": "WriteContentType",
+          "file": "/tmp/omen-267094167/render/json.go",
+          "start_line": 192,
+          "end_line": 194,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        }
+      ],
+      "total_cyclomatic": 28,
+      "total_cognitive": 16,
+      "avg_cyclomatic": 2.1538461538461537,
+      "avg_cognitive": 1.2307692307692308,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/logger.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "StatusCodeColor",
+          "file": "/tmp/omen-267094167/logger.go",
+          "start_line": 89,
+          "end_line": 104,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 0,
+            "max_nesting": 1,
+            "lines": 16
+          }
+        },
+        {
+          "name": "LatencyColor",
+          "file": "/tmp/omen-267094167/logger.go",
+          "start_line": 107,
+          "end_line": 125,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 0,
+            "max_nesting": 1,
+            "lines": 19
+          }
+        },
+        {
+          "name": "MethodColor",
+          "file": "/tmp/omen-267094167/logger.go",
+          "start_line": 128,
+          "end_line": 149,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 0,
+            "max_nesting": 1,
+            "lines": 22
+          }
+        },
+        {
+          "name": "ResetColor",
+          "file": "/tmp/omen-267094167/logger.go",
+          "start_line": 152,
+          "end_line": 154,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "IsOutputColor",
+          "file": "/tmp/omen-267094167/logger.go",
+          "start_line": 157,
+          "end_line": 159,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "DisableConsoleColor",
+          "file": "/tmp/omen-267094167/logger.go",
+          "start_line": 192,
+          "end_line": 194,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "ForceConsoleColor",
+          "file": "/tmp/omen-267094167/logger.go",
+          "start_line": 197,
+          "end_line": 199,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "ErrorLogger",
+          "file": "/tmp/omen-267094167/logger.go",
+          "start_line": 202,
+          "end_line": 204,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "ErrorLoggerT",
+          "file": "/tmp/omen-267094167/logger.go",
+          "start_line": 207,
+          "end_line": 215,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 3,
+            "lines": 9
+          }
+        },
+        {
+          "name": "Logger",
+          "file": "/tmp/omen-267094167/logger.go",
+          "start_line": 219,
+          "end_line": 221,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "LoggerWithFormatter",
+          "file": "/tmp/omen-267094167/logger.go",
+          "start_line": 224,
+          "end_line": 228,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 5
+          }
+        },
+        {
+          "name": "LoggerWithWriter",
+          "file": "/tmp/omen-267094167/logger.go",
+          "start_line": 232,
+          "end_line": 237,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 6
+          }
+        },
+        {
+          "name": "LoggerWithConfig",
+          "file": "/tmp/omen-267094167/logger.go",
+          "start_line": 240,
+          "end_line": 309,
+          "metrics": {
+            "cyclomatic": 13,
+            "cognitive": 8,
+            "max_nesting": 4,
+            "lines": 70
+          }
+        }
+      ],
+      "total_cyclomatic": 35,
+      "total_cognitive": 9,
+      "avg_cyclomatic": 2.6923076923076925,
+      "avg_cognitive": 0.6923076923076923,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/form_mapping.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "mapURI",
+          "file": "/tmp/omen-267094167/binding/form_mapping.go",
+          "start_line": 31,
+          "end_line": 33,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "mapForm",
+          "file": "/tmp/omen-267094167/binding/form_mapping.go",
+          "start_line": 35,
+          "end_line": 37,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "MapFormWithTag",
+          "file": "/tmp/omen-267094167/binding/form_mapping.go",
+          "start_line": 39,
+          "end_line": 41,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "mapFormByTag",
+          "file": "/tmp/omen-267094167/binding/form_mapping.go",
+          "start_line": 45,
+          "end_line": 62,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 4,
+            "max_nesting": 4,
+            "lines": 18
+          }
+        },
+        {
+          "name": "TrySet",
+          "file": "/tmp/omen-267094167/binding/form_mapping.go",
+          "start_line": 74,
+          "end_line": 76,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "mappingByPtr",
+          "file": "/tmp/omen-267094167/binding/form_mapping.go",
+          "start_line": 78,
+          "end_line": 81,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "mapping",
+          "file": "/tmp/omen-267094167/binding/form_mapping.go",
+          "start_line": 83,
+          "end_line": 135,
+          "metrics": {
+            "cyclomatic": 17,
+            "cognitive": 26,
+            "max_nesting": 6,
+            "lines": 53
+          }
+        },
+        {
+          "name": "tryToSetValue",
+          "file": "/tmp/omen-267094167/binding/form_mapping.go",
+          "start_line": 142,
+          "end_line": 175,
+          "metrics": {
+            "cyclomatic": 10,
+            "cognitive": 12,
+            "max_nesting": 8,
+            "lines": 34
+          }
+        },
+        {
+          "name": "trySetCustom",
+          "file": "/tmp/omen-267094167/binding/form_mapping.go",
+          "start_line": 186,
+          "end_line": 192,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 0,
+            "max_nesting": 1,
+            "lines": 7
+          }
+        },
+        {
+          "name": "trySplit",
+          "file": "/tmp/omen-267094167/binding/form_mapping.go",
+          "start_line": 194,
+          "end_line": 224,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 3,
+            "max_nesting": 2,
+            "lines": 31
+          }
+        },
+        {
+          "name": "setByForm",
+          "file": "/tmp/omen-267094167/binding/form_mapping.go",
+          "start_line": 226,
+          "end_line": 300,
+          "metrics": {
+            "cyclomatic": 21,
+            "cognitive": 21,
+            "max_nesting": 4,
+            "lines": 75
+          }
+        },
+        {
+          "name": "setWithProperType",
+          "file": "/tmp/omen-267094167/binding/form_mapping.go",
+          "start_line": 302,
+          "end_line": 360,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 2,
+            "max_nesting": 2,
+            "lines": 59
+          }
+        },
+        {
+          "name": "setIntField",
+          "file": "/tmp/omen-267094167/binding/form_mapping.go",
+          "start_line": 362,
+          "end_line": 371,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "max_nesting": 2,
+            "lines": 10
+          }
+        },
+        {
+          "name": "setUintField",
+          "file": "/tmp/omen-267094167/binding/form_mapping.go",
+          "start_line": 373,
+          "end_line": 382,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "max_nesting": 2,
+            "lines": 10
+          }
+        },
+        {
+          "name": "setBoolField",
+          "file": "/tmp/omen-267094167/binding/form_mapping.go",
+          "start_line": 384,
+          "end_line": 393,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "max_nesting": 2,
+            "lines": 10
+          }
+        },
+        {
+          "name": "setFloatField",
+          "file": "/tmp/omen-267094167/binding/form_mapping.go",
+          "start_line": 395,
+          "end_line": 404,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "max_nesting": 2,
+            "lines": 10
+          }
+        },
+        {
+          "name": "setTimeField",
+          "file": "/tmp/omen-267094167/binding/form_mapping.go",
+          "start_line": 406,
+          "end_line": 460,
+          "metrics": {
+            "cyclomatic": 10,
+            "cognitive": 8,
+            "max_nesting": 4,
+            "lines": 55
+          }
+        },
+        {
+          "name": "setArray",
+          "file": "/tmp/omen-267094167/binding/form_mapping.go",
+          "start_line": 462,
+          "end_line": 470,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 3,
+            "max_nesting": 4,
+            "lines": 9
+          }
+        },
+        {
+          "name": "setSlice",
+          "file": "/tmp/omen-267094167/binding/form_mapping.go",
+          "start_line": 472,
+          "end_line": 480,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 9
+          }
+        },
+        {
+          "name": "setTimeDuration",
+          "file": "/tmp/omen-267094167/binding/form_mapping.go",
+          "start_line": 482,
+          "end_line": 493,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "max_nesting": 2,
+            "lines": 12
+          }
+        },
+        {
+          "name": "head",
+          "file": "/tmp/omen-267094167/binding/form_mapping.go",
+          "start_line": 495,
+          "end_line": 498,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "setFormMap",
+          "file": "/tmp/omen-267094167/binding/form_mapping.go",
+          "start_line": 500,
+          "end_line": 522,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 5,
+            "max_nesting": 4,
+            "lines": 23
+          }
+        }
+      ],
+      "total_cyclomatic": 108,
+      "total_cognitive": 95,
+      "avg_cyclomatic": 4.909090909090909,
+      "avg_cognitive": 4.318181818181818,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/path.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "cleanPath",
+          "file": "/tmp/omen-267094167/path.go",
+          "start_line": 23,
+          "end_line": 124,
+          "metrics": {
+            "cyclomatic": 24,
+            "cognitive": 24,
+            "max_nesting": 8,
+            "lines": 102
+          }
+        },
+        {
+          "name": "bufApp",
+          "file": "/tmp/omen-267094167/path.go",
+          "start_line": 128,
+          "end_line": 151,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 5,
+            "max_nesting": 4,
+            "lines": 24
+          }
+        },
+        {
+          "name": "removeRepeatedChar",
+          "file": "/tmp/omen-267094167/path.go",
+          "start_line": 155,
+          "end_line": 203,
+          "metrics": {
+            "cyclomatic": 10,
+            "cognitive": 14,
+            "max_nesting": 6,
+            "lines": 49
+          }
+        }
+      ],
+      "total_cyclomatic": 38,
+      "total_cognitive": 43,
+      "avg_cyclomatic": 12.666666666666666,
+      "avg_cognitive": 14.333333333333334,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/tree.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Get",
+          "file": "/tmp/omen-267094167/tree.go",
+          "start_line": 29,
+          "end_line": 36,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 3,
+            "max_nesting": 4,
+            "lines": 8
+          }
+        },
+        {
+          "name": "ByName",
+          "file": "/tmp/omen-267094167/tree.go",
+          "start_line": 40,
+          "end_line": 43,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "get",
+          "file": "/tmp/omen-267094167/tree.go",
+          "start_line": 52,
+          "end_line": 59,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 3,
+            "max_nesting": 4,
+            "lines": 8
+          }
+        },
+        {
+          "name": "longestCommonPrefix",
+          "file": "/tmp/omen-267094167/tree.go",
+          "start_line": 61,
+          "end_line": 68,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 8
+          }
+        },
+        {
+          "name": "addChild",
+          "file": "/tmp/omen-267094167/tree.go",
+          "start_line": 71,
+          "end_line": 78,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 8
+          }
+        },
+        {
+          "name": "countParams",
+          "file": "/tmp/omen-267094167/tree.go",
+          "start_line": 80,
+          "end_line": 84,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 5
+          }
+        },
+        {
+          "name": "countSections",
+          "file": "/tmp/omen-267094167/tree.go",
+          "start_line": 86,
+          "end_line": 88,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "incrementChildPrio",
+          "file": "/tmp/omen-267094167/tree.go",
+          "start_line": 111,
+          "end_line": 131,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 2,
+            "max_nesting": 2,
+            "lines": 21
+          }
+        },
+        {
+          "name": "addRoute",
+          "file": "/tmp/omen-267094167/tree.go",
+          "start_line": 135,
+          "end_line": 249,
+          "metrics": {
+            "cyclomatic": 22,
+            "cognitive": 50,
+            "max_nesting": 9,
+            "lines": 115
+          }
+        },
+        {
+          "name": "findWildcard",
+          "file": "/tmp/omen-267094167/tree.go",
+          "start_line": 253,
+          "end_line": 286,
+          "metrics": {
+            "cyclomatic": 9,
+            "cognitive": 22,
+            "max_nesting": 6,
+            "lines": 34
+          }
+        },
+        {
+          "name": "insertChild",
+          "file": "/tmp/omen-267094167/tree.go",
+          "start_line": 288,
+          "end_line": 397,
+          "metrics": {
+            "cyclomatic": 14,
+            "cognitive": 31,
+            "max_nesting": 6,
+            "lines": 110
+          }
+        },
+        {
+          "name": "getValue",
+          "file": "/tmp/omen-267094167/tree.go",
+          "start_line": 418,
+          "end_line": 665,
+          "metrics": {
+            "cyclomatic": 59,
+            "cognitive": 203,
+            "max_nesting": 16,
+            "lines": 248
+          }
+        },
+        {
+          "name": "findCaseInsensitivePath",
+          "file": "/tmp/omen-267094167/tree.go",
+          "start_line": 671,
+          "end_line": 689,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 19
+          }
+        },
+        {
+          "name": "shiftNRuneBytes",
+          "file": "/tmp/omen-267094167/tree.go",
+          "start_line": 692,
+          "end_line": 705,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 0,
+            "max_nesting": 1,
+            "lines": 14
+          }
+        },
+        {
+          "name": "findCaseInsensitivePathRec",
+          "file": "/tmp/omen-267094167/tree.go",
+          "start_line": 708,
+          "end_line": 890,
+          "metrics": {
+            "cyclomatic": 46,
+            "cognitive": 131,
+            "max_nesting": 12,
+            "lines": 183
+          }
+        }
+      ],
+      "total_cyclomatic": 173,
+      "total_cognitive": 448,
+      "avg_cyclomatic": 11.533333333333333,
+      "avg_cognitive": 29.866666666666667,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/gin.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "Last",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 60,
+          "end_line": 65,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        },
+        {
+          "name": "New",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 202,
+          "end_line": 233,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 1,
+            "lines": 32
+          }
+        },
+        {
+          "name": "Default",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 236,
+          "end_line": 241,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 6
+          }
+        },
+        {
+          "name": "Handler",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 243,
+          "end_line": 250,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 8
+          }
+        },
+        {
+          "name": "allocateContext",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 252,
+          "end_line": 256,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 5
+          }
+        },
+        {
+          "name": "Delims",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 259,
+          "end_line": 262,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "SecureJsonPrefix",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 265,
+          "end_line": 268,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "LoadHTMLGlob",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 272,
+          "end_line": 284,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 13
+          }
+        },
+        {
+          "name": "LoadHTMLFiles",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 288,
+          "end_line": 296,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 9
+          }
+        },
+        {
+          "name": "LoadHTMLFS",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 300,
+          "end_line": 309,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 10
+          }
+        },
+        {
+          "name": "SetHTMLTemplate",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 312,
+          "end_line": 318,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 7
+          }
+        },
+        {
+          "name": "SetFuncMap",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 321,
+          "end_line": 323,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "NoRoute",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 326,
+          "end_line": 329,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "NoMethod",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 332,
+          "end_line": 335,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "Use",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 340,
+          "end_line": 345,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 6
+          }
+        },
+        {
+          "name": "With",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 348,
+          "end_line": 354,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 7
+          }
+        },
+        {
+          "name": "rebuild404Handlers",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 356,
+          "end_line": 358,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "rebuild405Handlers",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 360,
+          "end_line": 362,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "addRoute",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 364,
+          "end_line": 386,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 3,
+            "max_nesting": 2,
+            "lines": 23
+          }
+        },
+        {
+          "name": "Routes",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 390,
+          "end_line": 395,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        },
+        {
+          "name": "iterate",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 397,
+          "end_line": 412,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "max_nesting": 2,
+            "lines": 16
+          }
+        },
+        {
+          "name": "prepareTrustedCIDRs",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 414,
+          "end_line": 441,
+          "metrics": {
+            "cyclomatic": 7,
+            "cognitive": 9,
+            "max_nesting": 6,
+            "lines": 28
+          }
+        },
+        {
+          "name": "SetTrustedProxies",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 451,
+          "end_line": 454,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "isUnsafeTrustedProxies",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 457,
+          "end_line": 459,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "parseTrustedProxies",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 462,
+          "end_line": 466,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 5
+          }
+        },
+        {
+          "name": "isTrustedProxy",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 469,
+          "end_line": 479,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 4,
+            "max_nesting": 4,
+            "lines": 11
+          }
+        },
+        {
+          "name": "validateHeader",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 482,
+          "end_line": 501,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 9,
+            "max_nesting": 4,
+            "lines": 20
+          }
+        },
+        {
+          "name": "updateRouteTree",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 504,
+          "end_line": 514,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "max_nesting": 2,
+            "lines": 11
+          }
+        },
+        {
+          "name": "updateRouteTrees",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 517,
+          "end_line": 521,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 5
+          }
+        },
+        {
+          "name": "parseIP",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 525,
+          "end_line": 535,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 11
+          }
+        },
+        {
+          "name": "Run",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 540,
+          "end_line": 556,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 17
+          }
+        },
+        {
+          "name": "RunTLS",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 561,
+          "end_line": 576,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 16
+          }
+        },
+        {
+          "name": "RunUnix",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 581,
+          "end_line": 602,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "max_nesting": 2,
+            "lines": 22
+          }
+        },
+        {
+          "name": "RunFd",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 607,
+          "end_line": 625,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "max_nesting": 2,
+            "lines": 19
+          }
+        },
+        {
+          "name": "RunQUIC",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 630,
+          "end_line": 641,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 12
+          }
+        },
+        {
+          "name": "RunListener",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 645,
+          "end_line": 659,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 15
+          }
+        },
+        {
+          "name": "ServeHTTP",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 662,
+          "end_line": 675,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 1,
+            "lines": 14
+          }
+        },
+        {
+          "name": "HandleContext",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 680,
+          "end_line": 688,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 9
+          }
+        },
+        {
+          "name": "handleHTTPRequest",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 690,
+          "end_line": 760,
+          "metrics": {
+            "cyclomatic": 21,
+            "cognitive": 39,
+            "max_nesting": 6,
+            "lines": 71
+          }
+        },
+        {
+          "name": "serveError",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 764,
+          "end_line": 779,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 4,
+            "max_nesting": 4,
+            "lines": 16
+          }
+        },
+        {
+          "name": "redirectTrailingSlash",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 781,
+          "end_line": 795,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 2,
+            "max_nesting": 2,
+            "lines": 15
+          }
+        },
+        {
+          "name": "sanitizePathChars",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 799,
+          "end_line": 806,
+          "metrics": {
+            "cyclomatic": 9,
+            "cognitive": 1,
+            "max_nesting": 3,
+            "lines": 8
+          }
+        },
+        {
+          "name": "redirectFixedPath",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 808,
+          "end_line": 818,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 11
+          }
+        },
+        {
+          "name": "redirectRequest",
+          "file": "/tmp/omen-267094167/gin.go",
+          "start_line": 820,
+          "end_line": 832,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 13
+          }
+        }
+      ],
+      "total_cyclomatic": 120,
+      "total_cognitive": 95,
+      "avg_cyclomatic": 2.727272727272727,
+      "avg_cognitive": 2.159090909090909,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/context.go",
+      "language": "go",
+      "functions": [
+        {
+          "name": "reset",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 102,
+          "end_line": 117,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 16
+          }
+        },
+        {
+          "name": "Copy",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 121,
+          "end_line": 144,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 24
+          }
+        },
+        {
+          "name": "HandlerName",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 148,
+          "end_line": 150,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "HandlerNames",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 154,
+          "end_line": 163,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 6,
+            "max_nesting": 4,
+            "lines": 10
+          }
+        },
+        {
+          "name": "Handler",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 166,
+          "end_line": 168,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "FullPath",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 176,
+          "end_line": 178,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Next",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 187,
+          "end_line": 195,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 3,
+            "max_nesting": 4,
+            "lines": 9
+          }
+        },
+        {
+          "name": "IsAborted",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 198,
+          "end_line": 200,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Abort",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 206,
+          "end_line": 208,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "AbortWithStatus",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 212,
+          "end_line": 216,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 5
+          }
+        },
+        {
+          "name": "AbortWithStatusPureJSON",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 221,
+          "end_line": 224,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "AbortWithStatusJSON",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 229,
+          "end_line": 232,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "AbortWithError",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 237,
+          "end_line": 240,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "Error",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 251,
+          "end_line": 267,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "max_nesting": 2,
+            "lines": 17
+          }
+        },
+        {
+          "name": "Set",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 275,
+          "end_line": 283,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 9
+          }
+        },
+        {
+          "name": "Get",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 287,
+          "end_line": 292,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 6
+          }
+        },
+        {
+          "name": "MustGet",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 295,
+          "end_line": 300,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        },
+        {
+          "name": "getTyped",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 302,
+          "end_line": 307,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        },
+        {
+          "name": "GetString",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 310,
+          "end_line": 312,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetBool",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 315,
+          "end_line": 317,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetInt",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 320,
+          "end_line": 322,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetInt8",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 325,
+          "end_line": 327,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetInt16",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 330,
+          "end_line": 332,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetInt32",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 335,
+          "end_line": 337,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetInt64",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 340,
+          "end_line": 342,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetUint",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 345,
+          "end_line": 347,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetUint8",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 350,
+          "end_line": 352,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetUint16",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 355,
+          "end_line": 357,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetUint32",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 360,
+          "end_line": 362,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetUint64",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 365,
+          "end_line": 367,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetFloat32",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 370,
+          "end_line": 372,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetFloat64",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 375,
+          "end_line": 377,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetTime",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 380,
+          "end_line": 382,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetDuration",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 385,
+          "end_line": 387,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetIntSlice",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 390,
+          "end_line": 392,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetInt8Slice",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 395,
+          "end_line": 397,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetInt16Slice",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 400,
+          "end_line": 402,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetInt32Slice",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 405,
+          "end_line": 407,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetInt64Slice",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 410,
+          "end_line": 412,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetUintSlice",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 415,
+          "end_line": 417,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetUint8Slice",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 420,
+          "end_line": 422,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetUint16Slice",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 425,
+          "end_line": 427,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetUint32Slice",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 430,
+          "end_line": 432,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetUint64Slice",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 435,
+          "end_line": 437,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetFloat32Slice",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 440,
+          "end_line": 442,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetFloat64Slice",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 445,
+          "end_line": 447,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetStringSlice",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 450,
+          "end_line": 452,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetStringMap",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 455,
+          "end_line": 457,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetStringMapString",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 460,
+          "end_line": 462,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetStringMapStringSlice",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 465,
+          "end_line": 467,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Delete",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 471,
+          "end_line": 477,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 7
+          }
+        },
+        {
+          "name": "Param",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 492,
+          "end_line": 494,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "AddParam",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 501,
+          "end_line": 503,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Query",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 514,
+          "end_line": 517,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "DefaultQuery",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 527,
+          "end_line": 532,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        },
+        {
+          "name": "GetQuery",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 543,
+          "end_line": 548,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        },
+        {
+          "name": "QueryArray",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 552,
+          "end_line": 555,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "initQueryCache",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 557,
+          "end_line": 565,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 3,
+            "max_nesting": 4,
+            "lines": 9
+          }
+        },
+        {
+          "name": "GetQueryArray",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 569,
+          "end_line": 573,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 5
+          }
+        },
+        {
+          "name": "QueryMap",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 576,
+          "end_line": 579,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "GetQueryMap",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 583,
+          "end_line": 586,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "PostForm",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 590,
+          "end_line": 593,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "DefaultPostForm",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 598,
+          "end_line": 603,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        },
+        {
+          "name": "GetPostForm",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 613,
+          "end_line": 618,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        },
+        {
+          "name": "PostFormArray",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 622,
+          "end_line": 625,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "initFormCache",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 627,
+          "end_line": 638,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 6,
+            "max_nesting": 6,
+            "lines": 12
+          }
+        },
+        {
+          "name": "GetPostFormArray",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 642,
+          "end_line": 646,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 5
+          }
+        },
+        {
+          "name": "PostFormMap",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 649,
+          "end_line": 652,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "GetPostFormMap",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 656,
+          "end_line": 659,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "getMapFromFormData",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 663,
+          "end_line": 684,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 13,
+            "max_nesting": 4,
+            "lines": 22
+          }
+        },
+        {
+          "name": "FormFile",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 687,
+          "end_line": 699,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 4,
+            "max_nesting": 4,
+            "lines": 13
+          }
+        },
+        {
+          "name": "MultipartForm",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 702,
+          "end_line": 705,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "SaveUploadedFile",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 708,
+          "end_line": 735,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 5,
+            "max_nesting": 2,
+            "lines": 28
+          }
+        },
+        {
+          "name": "Bind",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 746,
+          "end_line": 749,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "BindJSON",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 752,
+          "end_line": 754,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "BindXML",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 757,
+          "end_line": 759,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "BindQuery",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 762,
+          "end_line": 764,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "BindYAML",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 767,
+          "end_line": 769,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "BindTOML",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 772,
+          "end_line": 774,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "BindPlain",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 777,
+          "end_line": 779,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "BindHeader",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 782,
+          "end_line": 784,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "BindUri",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 788,
+          "end_line": 794,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 7
+          }
+        },
+        {
+          "name": "MustBindWith",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 799,
+          "end_line": 816,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 1,
+            "max_nesting": 3,
+            "lines": 18
+          }
+        },
+        {
+          "name": "ShouldBind",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 827,
+          "end_line": 830,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "ShouldBindJSON",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 856,
+          "end_line": 858,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "ShouldBindXML",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 862,
+          "end_line": 864,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "ShouldBindQuery",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 868,
+          "end_line": 870,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "ShouldBindYAML",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 874,
+          "end_line": 876,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "ShouldBindTOML",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 880,
+          "end_line": 882,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "ShouldBindPlain",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 886,
+          "end_line": 888,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "ShouldBindHeader",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 892,
+          "end_line": 894,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "ShouldBindUri",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 898,
+          "end_line": 904,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 7
+          }
+        },
+        {
+          "name": "ShouldBindWith",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 908,
+          "end_line": 910,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "ShouldBindBodyWith",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 917,
+          "end_line": 932,
+          "metrics": {
+            "cyclomatic": 5,
+            "cognitive": 6,
+            "max_nesting": 4,
+            "lines": 16
+          }
+        },
+        {
+          "name": "ShouldBindBodyWithJSON",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 935,
+          "end_line": 937,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "ShouldBindBodyWithXML",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 940,
+          "end_line": 942,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "ShouldBindBodyWithYAML",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 945,
+          "end_line": 947,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "ShouldBindBodyWithTOML",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 950,
+          "end_line": 952,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "ShouldBindBodyWithPlain",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 955,
+          "end_line": 957,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "ClientIP",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 964,
+          "end_line": 999,
+          "metrics": {
+            "cyclomatic": 11,
+            "cognitive": 13,
+            "max_nesting": 6,
+            "lines": 36
+          }
+        },
+        {
+          "name": "RemoteIP",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1002,
+          "end_line": 1008,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 7
+          }
+        },
+        {
+          "name": "ContentType",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1011,
+          "end_line": 1013,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "IsWebsocket",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1017,
+          "end_line": 1023,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 7
+          }
+        },
+        {
+          "name": "requestHeader",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1025,
+          "end_line": 1027,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "bodyAllowedForStatus",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1034,
+          "end_line": 1044,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 0,
+            "max_nesting": 1,
+            "lines": 11
+          }
+        },
+        {
+          "name": "Status",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1047,
+          "end_line": 1049,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Header",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1054,
+          "end_line": 1060,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 7
+          }
+        },
+        {
+          "name": "GetHeader",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1063,
+          "end_line": 1065,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "GetRawData",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1068,
+          "end_line": 1073,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        },
+        {
+          "name": "SetSameSite",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1076,
+          "end_line": 1078,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "SetCookie",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1083,
+          "end_line": 1097,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 15
+          }
+        },
+        {
+          "name": "SetCookieData",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1102,
+          "end_line": 1110,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "max_nesting": 2,
+            "lines": 9
+          }
+        },
+        {
+          "name": "Cookie",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1116,
+          "end_line": 1123,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 8
+          }
+        },
+        {
+          "name": "Render",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1126,
+          "end_line": 1140,
+          "metrics": {
+            "cyclomatic": 3,
+            "cognitive": 2,
+            "max_nesting": 2,
+            "lines": 15
+          }
+        },
+        {
+          "name": "HTML",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1145,
+          "end_line": 1148,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 4
+          }
+        },
+        {
+          "name": "IndentedJSON",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1154,
+          "end_line": 1156,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "SecureJSON",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1161,
+          "end_line": 1163,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "JSONP",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1168,
+          "end_line": 1175,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 8
+          }
+        },
+        {
+          "name": "JSON",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1179,
+          "end_line": 1181,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "AsciiJSON",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1185,
+          "end_line": 1187,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "PureJSON",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1191,
+          "end_line": 1193,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "XML",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1197,
+          "end_line": 1199,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "YAML",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1202,
+          "end_line": 1204,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "TOML",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1207,
+          "end_line": 1209,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "ProtoBuf",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1212,
+          "end_line": 1214,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "String",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1217,
+          "end_line": 1219,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "Redirect",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1222,
+          "end_line": 1228,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 7
+          }
+        },
+        {
+          "name": "Data",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1231,
+          "end_line": 1236,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 6
+          }
+        },
+        {
+          "name": "DataFromReader",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1239,
+          "end_line": 1246,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 8
+          }
+        },
+        {
+          "name": "File",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1249,
+          "end_line": 1251,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "FileFromFS",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1254,
+          "end_line": 1262,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 1,
+            "lines": 9
+          }
+        },
+        {
+          "name": "escapeQuotes",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1266,
+          "end_line": 1268,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "FileAttachment",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1272,
+          "end_line": 1279,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 8
+          }
+        },
+        {
+          "name": "SSEvent",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1282,
+          "end_line": 1287,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 6
+          }
+        },
+        {
+          "name": "Stream",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1291,
+          "end_line": 1306,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 3,
+            "max_nesting": 4,
+            "lines": 16
+          }
+        },
+        {
+          "name": "Negotiate",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1326,
+          "end_line": 1355,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 0,
+            "max_nesting": 1,
+            "lines": 30
+          }
+        },
+        {
+          "name": "NegotiateFormat",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1358,
+          "end_line": 1386,
+          "metrics": {
+            "cyclomatic": 11,
+            "cognitive": 24,
+            "max_nesting": 8,
+            "lines": 29
+          }
+        },
+        {
+          "name": "SetAccepted",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1389,
+          "end_line": 1391,
+          "metrics": {
+            "cyclomatic": 1,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 3
+          }
+        },
+        {
+          "name": "hasRequestContext",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1398,
+          "end_line": 1402,
+          "metrics": {
+            "cyclomatic": 4,
+            "cognitive": 0,
+            "max_nesting": 0,
+            "lines": 5
+          }
+        },
+        {
+          "name": "Deadline",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1405,
+          "end_line": 1410,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        },
+        {
+          "name": "Done",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1413,
+          "end_line": 1418,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        },
+        {
+          "name": "Err",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1421,
+          "end_line": 1426,
+          "metrics": {
+            "cyclomatic": 2,
+            "cognitive": 1,
+            "max_nesting": 2,
+            "lines": 6
+          }
+        },
+        {
+          "name": "Value",
+          "file": "/tmp/omen-267094167/context.go",
+          "start_line": 1431,
+          "end_line": 1447,
+          "metrics": {
+            "cyclomatic": 6,
+            "cognitive": 6,
+            "max_nesting": 4,
+            "lines": 17
+          }
+        }
+      ],
+      "total_cyclomatic": 235,
+      "total_cognitive": 120,
+      "avg_cyclomatic": 1.6433566433566433,
+      "avg_cognitive": 0.8391608391608392,
+      "max_cyclomatic": 0,
+      "max_cognitive": 0,
+      "violation_count": 0
+    }
+  ],
+  "summary": {
+    "total_files": 55,
+    "total_functions": 488,
+    "avg_cyclomatic": 2.372950819672131,
+    "avg_cognitive": 2.122950819672131,
+    "max_cyclomatic": 59,
+    "max_cognitive": 203,
+    "p50_cyclomatic": 1,
+    "p90_cyclomatic": 4,
+    "p95_cyclomatic": 6,
+    "p50_cognitive": 0,
+    "p90_cognitive": 3,
+    "p95_cognitive": 6,
+    "violation_count": 0
+  }
+}

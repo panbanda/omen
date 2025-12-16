@@ -39,6 +39,8 @@ var (
 	reportOutputFile   string
 	reportSkipValidate bool
 	reportPort         int
+	reportRef          string
+	reportShallow      bool
 )
 
 var reportCmd = &cobra.Command{
@@ -91,6 +93,8 @@ func init() {
 	// Generate command flags
 	reportGenerateCmd.Flags().StringVarP(&reportOutputDir, "output", "o", "", "Output directory (default: ./omen-report-<date>/)")
 	reportGenerateCmd.Flags().StringVar(&reportSince, "since", "1y", "Time period for historical analysis (3m, 6m, 1y, 2y, all)")
+	reportGenerateCmd.Flags().StringVar(&reportRef, "ref", "", "Git ref (branch, tag, commit) for remote repos")
+	reportGenerateCmd.Flags().BoolVar(&reportShallow, "shallow", false, "Use shallow clone (faster, but disables git-history analyzers)")
 
 	// Validate command flags
 	reportValidateCmd.Flags().StringVarP(&reportDataDir, "data", "d", "", "Input data directory")
@@ -115,7 +119,12 @@ func init() {
 }
 
 func runReportGenerate(cmd *cobra.Command, args []string) error {
-	paths := getPaths(args)
+	paths, cleanup, err := resolvePaths(cmd.Context(), args, reportRef, reportShallow)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
 	if len(paths) == 0 {
 		return fmt.Errorf("no paths provided")
 	}

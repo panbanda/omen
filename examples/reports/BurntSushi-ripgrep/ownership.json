@@ -1,0 +1,3395 @@
+{
+  "generated_at": "2025-12-16T02:34:54.347522017Z",
+  "files": [
+    {
+      "path": "/tmp/omen-2461860455/crates/globset/src/fnv.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 18,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 18,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/searcher/examples/search-stdin.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 20,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 20,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/complete/encodings.sh",
+      "primary_owner": "Jan Verbeek",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 28,
+      "contributors": [
+        {
+          "name": "Jan Verbeek",
+          "email": "jan.verbeek@posteo.nl",
+          "lines_owned": 28,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/tests/macros.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 45,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 45,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/pcre2/src/error.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 32,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 32,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/cli/src/pattern.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 139,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 139,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/regex/src/strip.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 131,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 131,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/tests/binary.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 379,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 379,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/tests/multiline.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 99,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 99,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/tests/hay.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 16,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 16,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/searcher/src/sink.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 536,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 536,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/searcher/src/lines.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 362,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 362,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/cli/src/escape.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 121,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 121,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/searcher/src/macros.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 20,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 20,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/searcher/src/testutil.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 624,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 624,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/pcre2/src/matcher.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 398,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 398,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/doc/help.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 204,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 204,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/regex/src/non_matching.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 108,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 108,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/doc/mod.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 33,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 33,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/doc/man.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 82,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 82,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/searcher/src/lib.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 86,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 86,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/doc/version.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 115,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 115,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/tests/tests.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 20,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 20,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/pcre2/src/lib.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 12,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 12,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/complete/bash.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 88,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 88,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/regex/src/error.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 69,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 69,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/ignore/src/pathutil.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 100,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 100,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/regex/src/ast.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 150,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 150,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/grep/examples/simplegrep.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 50,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 50,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/ignore/tests/gitignore_skip_bom.rs",
+      "primary_owner": "Stephen Albert-Moore",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 12,
+      "contributors": [
+        {
+          "name": "Stephen Albert-Moore",
+          "email": "stephen.albert-moore@georgfischer.com",
+          "lines_owned": 12,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/globset/benches/bench.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 80,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 80,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/searcher/src/searcher/mmap.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 81,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 81,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/grep/src/lib.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 17,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 17,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/fuzz/fuzz_targets/fuzz_glob.rs",
+      "primary_owner": "William Johnson",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 13,
+      "contributors": [
+        {
+          "name": "William Johnson",
+          "email": "wjohnson@whamcloud.com",
+          "lines_owned": 13,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/printer/src/path.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 142,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 142,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/regex/src/ban.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 57,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 57,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/regex/src/lib.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 16,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 16,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/printer/src/stats.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 115,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 115,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/matcher/tests/tests.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 2,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 2,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/matcher/tests/util.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 59,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 59,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/matcher/tests/test_matcher.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 192,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 192,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/printer/src/macros.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 100,
+      "concentration": 1,
+      "total_lines": 19,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 19,
+          "percentage": 100
+        }
+      ],
+      "is_silo": true
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/searcher/src/searcher/glue.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 99.76470588235294,
+      "concentration": 0.9976470588235294,
+      "total_lines": 1275,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 1272,
+          "percentage": 99.76470588235294
+        },
+        {
+          "name": "Pavel Safronov",
+          "email": "pv.safronov@gmail.com",
+          "lines_owned": 3,
+          "percentage": 0.2352941176470588
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/regex/src/literal.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 99.74391805377721,
+      "concentration": 0.997439180537772,
+      "total_lines": 781,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 779,
+          "percentage": 99.74391805377721
+        },
+        {
+          "name": "tgolang",
+          "email": "154592711+tgolang@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.12804097311139565
+        },
+        {
+          "name": "Ludi Rehak",
+          "email": "ludi317@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.12804097311139565
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/parse.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 99.73118279569893,
+      "concentration": 0.9973118279569892,
+      "total_lines": 372,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 371,
+          "percentage": 99.73118279569893
+        },
+        {
+          "name": "redistay",
+          "email": "165581775+redistay@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.2688172043010753
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/hiargs.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 99.67558799675588,
+      "concentration": 0.9967558799675588,
+      "total_lines": 1233,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 1229,
+          "percentage": 99.67558799675588
+        },
+        {
+          "name": "SuperSpecialSweet",
+          "email": "39995589+freejool@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 0.16220600162206003
+        },
+        {
+          "name": "Stephan Badragan",
+          "email": "stephan.badragan@everbridge.com",
+          "lines_owned": 1,
+          "percentage": 0.08110300081103002
+        },
+        {
+          "name": "Pavel Safronov",
+          "email": "pv.safronov@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.08110300081103002
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/regex/src/config.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 99.66216216216216,
+      "concentration": 0.9966216216216216,
+      "total_lines": 296,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 295,
+          "percentage": 99.66216216216216
+        },
+        {
+          "name": "tgolang",
+          "email": "154592711+tgolang@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.33783783783783783
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/matcher/src/interpolate.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 99.62121212121212,
+      "concentration": 0.9962121212121212,
+      "total_lines": 264,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 263,
+          "percentage": 99.62121212121212
+        },
+        {
+          "name": "Martin Michlmayr",
+          "email": "tbm@cyrius.com",
+          "lines_owned": 1,
+          "percentage": 0.3787878787878788
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/regex/src/matcher.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 99.44444444444444,
+      "concentration": 0.9944444444444445,
+      "total_lines": 540,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 537,
+          "percentage": 99.44444444444444
+        },
+        {
+          "name": "Marco Ieni",
+          "email": "11428655+MarcoIeni@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 0.3703703703703704
+        },
+        {
+          "name": "Martin Michlmayr",
+          "email": "tbm@cyrius.com",
+          "lines_owned": 1,
+          "percentage": 0.1851851851851852
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/matcher/src/lib.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 99.37444146559427,
+      "concentration": 0.9937444146559428,
+      "total_lines": 1119,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 1112,
+          "percentage": 99.37444146559427
+        },
+        {
+          "name": "Thayne McCombs",
+          "email": "astrothayne@gmail.com",
+          "lines_owned": 7,
+          "percentage": 0.6255585344057194
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/haystack.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 99.19354838709677,
+      "concentration": 0.9919354838709676,
+      "total_lines": 124,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 123,
+          "percentage": 99.19354838709677
+        },
+        {
+          "name": "Kian-Meng Ang",
+          "email": "kianmeng.ang@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.8064516129032258
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/globset/src/pathutil.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 98.9795918367347,
+      "concentration": 0.989795918367347,
+      "total_lines": 98,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 97,
+          "percentage": 98.9795918367347
+        },
+        {
+          "name": "cuishuang",
+          "email": "imcusg@gmail.com",
+          "lines_owned": 1,
+          "percentage": 1.0204081632653061
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/searcher/src/line_buffer.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 98.92904953145917,
+      "concentration": 0.9892904953145917,
+      "total_lines": 747,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 739,
+          "percentage": 98.92904953145917
+        },
+        {
+          "name": "Riccardo Attilio Galli",
+          "email": "riccardo@sideralis.org",
+          "lines_owned": 7,
+          "percentage": 0.9370816599732262
+        },
+        {
+          "name": "aricha1940",
+          "email": "aricha1940@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.13386880856760375
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/complete/powershell.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 98.4375,
+      "concentration": 0.984375,
+      "total_lines": 64,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 63,
+          "percentage": 98.4375
+        },
+        {
+          "name": "Hamir Mahal",
+          "email": "hamirmahal@gmail.com",
+          "lines_owned": 1,
+          "percentage": 1.5625
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/defs.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 98.17052122885744,
+      "concentration": 0.9817052122885744,
+      "total_lines": 5794,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 5688,
+          "percentage": 98.17052122885744
+        },
+        {
+          "name": "emrebengue",
+          "email": "emrebengue@gmail.com",
+          "lines_owned": 35,
+          "percentage": 0.6040731791508458
+        },
+        {
+          "name": "Lucas Trzesniewski",
+          "email": "lucas.trzesniewski@gmail.com",
+          "lines_owned": 22,
+          "percentage": 0.37970314118053156
+        },
+        {
+          "name": "Jan Verbeek",
+          "email": "jan.verbeek@posteo.nl",
+          "lines_owned": 14,
+          "percentage": 0.2416292716603383
+        },
+        {
+          "name": "Lucas Garron",
+          "email": "code@garron.net",
+          "lines_owned": 14,
+          "percentage": 0.2416292716603383
+        },
+        {
+          "name": "Ilya Grigoriev",
+          "email": "ilyagr@users.noreply.github.com",
+          "lines_owned": 12,
+          "percentage": 0.20711080428028997
+        },
+        {
+          "name": "Pavel Safronov",
+          "email": "pv.safronov@gmail.com",
+          "lines_owned": 4,
+          "percentage": 0.06903693476009665
+        },
+        {
+          "name": "Cort Spellman",
+          "email": "spellman.cort@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.01725923369002416
+        },
+        {
+          "name": "NicoElbers",
+          "email": "119488797+NicoElbers@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.01725923369002416
+        },
+        {
+          "name": "Tor Shepherd",
+          "email": "tor.aksel.shepherd@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.01725923369002416
+        },
+        {
+          "name": "Wilfred Hughes",
+          "email": "me@wilfred.me.uk",
+          "lines_owned": 1,
+          "percentage": 0.01725923369002416
+        },
+        {
+          "name": "Jon Jensen",
+          "email": "jon@swelter.net",
+          "lines_owned": 1,
+          "percentage": 0.01725923369002416
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/printer/src/jsont.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 98.11320754716981,
+      "concentration": 0.9811320754716981,
+      "total_lines": 212,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 208,
+          "percentage": 98.11320754716981
+        },
+        {
+          "name": "Stephan Badragan",
+          "email": "stephan.badragan@everbridge.com",
+          "lines_owned": 3,
+          "percentage": 1.4150943396226416
+        },
+        {
+          "name": "Lucas Trzesniewski",
+          "email": "lucas.trzesniewski@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.4716981132075472
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/cli/src/human.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 98.0392156862745,
+      "concentration": 0.9803921568627451,
+      "total_lines": 102,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 100,
+          "percentage": 98.0392156862745
+        },
+        {
+          "name": "Martin Michlmayr",
+          "email": "tbm@cyrius.com",
+          "lines_owned": 1,
+          "percentage": 0.9803921568627451
+        },
+        {
+          "name": "zhimoe",
+          "email": "xiongwengui67@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.9803921568627451
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/lowargs.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 97.6782752902156,
+      "concentration": 0.976782752902156,
+      "total_lines": 603,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 589,
+          "percentage": 97.6782752902156
+        },
+        {
+          "name": "xtqqczze",
+          "email": "45661989+xtqqczze@users.noreply.github.com",
+          "lines_owned": 14,
+          "percentage": 2.321724709784411
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/printer/src/lib.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 97.6470588235294,
+      "concentration": 0.9764705882352941,
+      "total_lines": 85,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 83,
+          "percentage": 97.6470588235294
+        },
+        {
+          "name": "Lucas Trzesniewski",
+          "email": "lucas.trzesniewski@gmail.com",
+          "lines_owned": 2,
+          "percentage": 2.3529411764705883
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/cli/src/lib.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 97.42489270386267,
+      "concentration": 0.9742489270386266,
+      "total_lines": 233,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 227,
+          "percentage": 97.42489270386267
+        },
+        {
+          "name": "Kian-Meng Ang",
+          "email": "kianmeng.ang@gmail.com",
+          "lines_owned": 3,
+          "percentage": 1.2875536480686696
+        },
+        {
+          "name": "Martin Nordholts",
+          "email": "enselic@gmail.com",
+          "lines_owned": 3,
+          "percentage": 1.2875536480686696
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/config.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 96.92307692307692,
+      "concentration": 0.9692307692307692,
+      "total_lines": 130,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 126,
+          "percentage": 96.92307692307692
+        },
+        {
+          "name": "mi-wada",
+          "email": "49638956+mi-wada@users.noreply.github.com",
+          "lines_owned": 4,
+          "percentage": 3.076923076923077
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/cli/src/hostname.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 96.875,
+      "concentration": 0.96875,
+      "total_lines": 64,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 62,
+          "percentage": 96.875
+        },
+        {
+          "name": "Nicolas Holzschuch",
+          "email": "n.holzschuch@free.fr",
+          "lines_owned": 2,
+          "percentage": 3.125
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/printer/src/summary.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 96.55913978494624,
+      "concentration": 0.9655913978494624,
+      "total_lines": 930,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 898,
+          "percentage": 96.55913978494624
+        },
+        {
+          "name": "Lucas Trzesniewski",
+          "email": "lucas.trzesniewski@gmail.com",
+          "lines_owned": 22,
+          "percentage": 2.3655913978494625
+        },
+        {
+          "name": "Collin Styles",
+          "email": "collingstyles@gmail.com",
+          "lines_owned": 6,
+          "percentage": 0.6451612903225806
+        },
+        {
+          "name": "Mika Dede",
+          "email": "xervondev@gmail.com",
+          "lines_owned": 3,
+          "percentage": 0.3225806451612903
+        },
+        {
+          "name": "Kian-Meng Ang",
+          "email": "kianmeng.ang@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.10752688172043011
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/main.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 95.41984732824427,
+      "concentration": 0.9541984732824428,
+      "total_lines": 393,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 375,
+          "percentage": 95.41984732824427
+        },
+        {
+          "name": "Ed Page",
+          "email": "eopage@gmail.com",
+          "lines_owned": 7,
+          "percentage": 1.7811704834605597
+        },
+        {
+          "name": "nguyenvukhang",
+          "email": "brew4k@gmail.com",
+          "lines_owned": 6,
+          "percentage": 1.5267175572519083
+        },
+        {
+          "name": "goto-engineering",
+          "email": "goto@gotoengineering.io",
+          "lines_owned": 3,
+          "percentage": 0.7633587786259541
+        },
+        {
+          "name": "Aleksey Vasilenko",
+          "email": "aleksey.vasilenko@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.2544529262086514
+        },
+        {
+          "name": "robert-bryson",
+          "email": "robert.bryson@gsa.gov",
+          "lines_owned": 1,
+          "percentage": 0.2544529262086514
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/ci/utils.sh",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 95.23809523809523,
+      "concentration": 0.9523809523809522,
+      "total_lines": 84,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 80,
+          "percentage": 95.23809523809523
+        },
+        {
+          "name": "Lilian A. Moraru",
+          "email": "lilian.moraru90@gmail.com",
+          "lines_owned": 3,
+          "percentage": 3.571428571428571
+        },
+        {
+          "name": "Taiki Endo",
+          "email": "te316e89@gmail.com",
+          "lines_owned": 1,
+          "percentage": 1.1904761904761905
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/ignore/examples/walk.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 95.23809523809523,
+      "concentration": 0.9523809523809522,
+      "total_lines": 42,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 40,
+          "percentage": 95.23809523809523
+        },
+        {
+          "name": "Lucas Trzesniewski",
+          "email": "lucas.trzesniewski@gmail.com",
+          "lines_owned": 2,
+          "percentage": 4.761904761904762
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/printer/src/util.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 94.76987447698745,
+      "concentration": 0.9476987447698746,
+      "total_lines": 478,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 453,
+          "percentage": 94.76987447698745
+        },
+        {
+          "name": "Isaac",
+          "email": "IsaacOscar@live.com.au",
+          "lines_owned": 17,
+          "percentage": 3.556485355648536
+        },
+        {
+          "name": "Lucas Trzesniewski",
+          "email": "lucas.trzesniewski@gmail.com",
+          "lines_owned": 8,
+          "percentage": 1.6736401673640167
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/search.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 94.60227272727273,
+      "concentration": 0.9460227272727273,
+      "total_lines": 352,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 333,
+          "percentage": 94.60227272727273
+        },
+        {
+          "name": "Vasili Revelas",
+          "email": "vasili.revelas@gmail.com",
+          "lines_owned": 17,
+          "percentage": 4.829545454545454
+        },
+        {
+          "name": "Hamir Mahal",
+          "email": "hamirmahal@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.5681818181818182
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/mod.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 93.75,
+      "concentration": 0.9375,
+      "total_lines": 256,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 240,
+          "percentage": 93.75
+        },
+        {
+          "name": "Jan Verbeek",
+          "email": "jan.verbeek@posteo.nl",
+          "lines_owned": 16,
+          "percentage": 6.25
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/printer/src/counter.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 93.33333333333333,
+      "concentration": 0.9333333333333332,
+      "total_lines": 60,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 56,
+          "percentage": 93.33333333333333
+        },
+        {
+          "name": "Lucas Trzesniewski",
+          "email": "lucas.trzesniewski@gmail.com",
+          "lines_owned": 4,
+          "percentage": 6.666666666666667
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/logger.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 92.45283018867924,
+      "concentration": 0.9245283018867925,
+      "total_lines": 53,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 49,
+          "percentage": 92.45283018867924
+        },
+        {
+          "name": "Garrett Thornburg",
+          "email": "film42@gmail.com",
+          "lines_owned": 4,
+          "percentage": 7.547169811320755
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/printer/src/color.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 92.4092409240924,
+      "concentration": 0.9240924092409241,
+      "total_lines": 303,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 280,
+          "percentage": 92.4092409240924
+        },
+        {
+          "name": "emrebengue",
+          "email": "emrebengue@gmail.com",
+          "lines_owned": 13,
+          "percentage": 4.29042904290429
+        },
+        {
+          "name": "Tor Shepherd",
+          "email": "tor.aksel.shepherd@gmail.com",
+          "lines_owned": 10,
+          "percentage": 3.3003300330033
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/printer/src/standard.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 90.29535864978902,
+      "concentration": 0.9029535864978903,
+      "total_lines": 3318,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 2996,
+          "percentage": 90.29535864978902
+        },
+        {
+          "name": "Pavel Safronov",
+          "email": "pv.safronov@gmail.com",
+          "lines_owned": 152,
+          "percentage": 4.581072935503315
+        },
+        {
+          "name": "Lucas Trzesniewski",
+          "email": "lucas.trzesniewski@gmail.com",
+          "lines_owned": 88,
+          "percentage": 2.652200120554551
+        },
+        {
+          "name": "Isaac",
+          "email": "IsaacOscar@live.com.au",
+          "lines_owned": 31,
+          "percentage": 0.9342977697408076
+        },
+        {
+          "name": "Pen Tree",
+          "email": "appletree2479@outlook.com",
+          "lines_owned": 28,
+          "percentage": 0.8438818565400843
+        },
+        {
+          "name": "emrebengue",
+          "email": "emrebengue@gmail.com",
+          "lines_owned": 20,
+          "percentage": 0.6027727546714888
+        },
+        {
+          "name": "ChristopherYoung",
+          "email": "joundanger@icloud.com",
+          "lines_owned": 2,
+          "percentage": 0.06027727546714888
+        },
+        {
+          "name": "Kian-Meng Ang",
+          "email": "kianmeng.ang@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.03013863773357444
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/cli/src/wtr.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 89.36170212765957,
+      "concentration": 0.8936170212765957,
+      "total_lines": 94,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 84,
+          "percentage": 89.36170212765957
+        },
+        {
+          "name": "Lucas Trzesniewski",
+          "email": "lucas.trzesniewski@gmail.com",
+          "lines_owned": 10,
+          "percentage": 10.638297872340425
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/searcher/src/searcher/mod.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 88.75140607424072,
+      "concentration": 0.8875140607424072,
+      "total_lines": 889,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 789,
+          "percentage": 88.75140607424072
+        },
+        {
+          "name": "Pavel Safronov",
+          "email": "pv.safronov@gmail.com",
+          "lines_owned": 31,
+          "percentage": 3.487064116985377
+        },
+        {
+          "name": "lesnyrumcajs",
+          "email": "lesny.rumcajs@gmail.com",
+          "lines_owned": 29,
+          "percentage": 3.262092238470191
+        },
+        {
+          "name": "Edoardo Pirovano",
+          "email": "edoardo.pirovano@gmail.com",
+          "lines_owned": 19,
+          "percentage": 2.1372328458942635
+        },
+        {
+          "name": "Alessandro Menezes",
+          "email": "alessandroasm@gmail.com",
+          "lines_owned": 18,
+          "percentage": 2.0247469066366706
+        },
+        {
+          "name": "Vasili Revelas",
+          "email": "vasili.revelas@gmail.com",
+          "lines_owned": 3,
+          "percentage": 0.3374578177727784
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/tests/misc.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 88.47980997624703,
+      "concentration": 0.8847980997624703,
+      "total_lines": 842,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 745,
+          "percentage": 88.47980997624703
+        },
+        {
+          "name": "nguyenvukhang",
+          "email": "brew4k@gmail.com",
+          "lines_owned": 31,
+          "percentage": 3.681710213776722
+        },
+        {
+          "name": "dana",
+          "email": "dana@dana.is",
+          "lines_owned": 25,
+          "percentage": 2.9691211401425175
+        },
+        {
+          "name": "Vishva Natarajan",
+          "email": "vishvanatarajan@gmail.com",
+          "lines_owned": 11,
+          "percentage": 1.3064133016627077
+        },
+        {
+          "name": "Collin Styles",
+          "email": "collingstyles@gmail.com",
+          "lines_owned": 11,
+          "percentage": 1.3064133016627077
+        },
+        {
+          "name": "Wieland Hoffmann",
+          "email": "themineo@gmail.com",
+          "lines_owned": 10,
+          "percentage": 1.187648456057007
+        },
+        {
+          "name": "mariano-m13",
+          "email": "127398726+mariano-m13@users.noreply.github.com",
+          "lines_owned": 6,
+          "percentage": 0.7125890736342043
+        },
+        {
+          "name": "Younes El-karama",
+          "email": "yelkarama@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 0.23752969121140144
+        },
+        {
+          "name": "Paul A. Patience",
+          "email": "62469505+paulapatience@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.11876484560570072
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/complete/mod.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 87.5,
+      "concentration": 0.875,
+      "total_lines": 8,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 7,
+          "percentage": 87.5
+        },
+        {
+          "name": "Jan Verbeek",
+          "email": "jan.verbeek@posteo.nl",
+          "lines_owned": 1,
+          "percentage": 12.5
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/cli/src/decompress.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 87.07482993197279,
+      "concentration": 0.8707482993197279,
+      "total_lines": 441,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 384,
+          "percentage": 87.07482993197279
+        },
+        {
+          "name": "Seth Stadick",
+          "email": "sstadick@gmail.com",
+          "lines_owned": 27,
+          "percentage": 6.122448979591836
+        },
+        {
+          "name": "Vasili Revelas",
+          "email": "vasili.revelas@gmail.com",
+          "lines_owned": 20,
+          "percentage": 4.535147392290249
+        },
+        {
+          "name": "mataha",
+          "email": "mataha@users.noreply.github.com",
+          "lines_owned": 4,
+          "percentage": 0.9070294784580499
+        },
+        {
+          "name": "dana",
+          "email": "dana@dana.is",
+          "lines_owned": 2,
+          "percentage": 0.45351473922902497
+        },
+        {
+          "name": "cuishuang",
+          "email": "imcusg@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.22675736961451248
+        },
+        {
+          "name": "Kian-Meng Ang",
+          "email": "kianmeng.ang@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.22675736961451248
+        },
+        {
+          "name": "Lucas Trzesniewski",
+          "email": "lucas.trzesniewski@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.22675736961451248
+        },
+        {
+          "name": "Wieland Hoffmann",
+          "email": "themineo@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.22675736961451248
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/ignore/src/lib.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 86.86868686868688,
+      "concentration": 0.8686868686868688,
+      "total_lines": 396,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 344,
+          "percentage": 86.86868686868688
+        },
+        {
+          "name": "Ed Page",
+          "email": "eopage@gmail.com",
+          "lines_owned": 48,
+          "percentage": 12.121212121212121
+        },
+        {
+          "name": "Jacob Wahlgren",
+          "email": "jacob.wahlgren@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.5050505050505051
+        },
+        {
+          "name": "Martin Lindhe",
+          "email": "martin-commit@ubique.se",
+          "lines_owned": 1,
+          "percentage": 0.25252525252525254
+        },
+        {
+          "name": "wang384670111",
+          "email": "384670111@qq.com",
+          "lines_owned": 1,
+          "percentage": 0.25252525252525254
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/printer/src/json.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 86.66666666666667,
+      "concentration": 0.8666666666666667,
+      "total_lines": 915,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 793,
+          "percentage": 86.66666666666667
+        },
+        {
+          "name": "Stephan Badragan",
+          "email": "stephan.badragan@everbridge.com",
+          "lines_owned": 93,
+          "percentage": 10.163934426229508
+        },
+        {
+          "name": "Pen Tree",
+          "email": "appletree2479@outlook.com",
+          "lines_owned": 26,
+          "percentage": 2.841530054644809
+        },
+        {
+          "name": "Alex Touchet",
+          "email": "alextouchet@outlook.com",
+          "lines_owned": 1,
+          "percentage": 0.1092896174863388
+        },
+        {
+          "name": "Kian-Meng Ang",
+          "email": "kianmeng.ang@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.1092896174863388
+        },
+        {
+          "name": "Lucas Trzesniewski",
+          "email": "lucas.trzesniewski@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.1092896174863388
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/messages.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 85.14851485148515,
+      "concentration": 0.8514851485148515,
+      "total_lines": 101,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 86,
+          "percentage": 85.14851485148515
+        },
+        {
+          "name": "Garrett Thornburg",
+          "email": "film42@gmail.com",
+          "lines_owned": 8,
+          "percentage": 7.920792079207921
+        },
+        {
+          "name": "wang384670111",
+          "email": "384670111@qq.com",
+          "lines_owned": 6,
+          "percentage": 5.9405940594059405
+        },
+        {
+          "name": "tgolang",
+          "email": "154592711+tgolang@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.9900990099009901
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/tests/regression.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 83.60402165506574,
+      "concentration": 0.8360402165506574,
+      "total_lines": 1293,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 1081,
+          "percentage": 83.60402165506574
+        },
+        {
+          "name": "ChristopherYoung",
+          "email": "joundanger@icloud.com",
+          "lines_owned": 88,
+          "percentage": 6.805877803557618
+        },
+        {
+          "name": "Gal Ofri",
+          "email": "galmenashofri@gmail.com",
+          "lines_owned": 26,
+          "percentage": 2.010827532869296
+        },
+        {
+          "name": "mostafa",
+          "email": "mostafayounis630@gmail.com",
+          "lines_owned": 19,
+          "percentage": 1.4694508894044858
+        },
+        {
+          "name": "Pen Tree",
+          "email": "appletree2479@outlook.com",
+          "lines_owned": 19,
+          "percentage": 1.4694508894044858
+        },
+        {
+          "name": "Mika Dede",
+          "email": "xervondev@gmail.com",
+          "lines_owned": 12,
+          "percentage": 0.9280742459396751
+        },
+        {
+          "name": "Thilo Uttendorfer",
+          "email": "tlo@sengaya.de",
+          "lines_owned": 10,
+          "percentage": 0.7733952049497294
+        },
+        {
+          "name": "Richard Sternagel",
+          "email": "rsternagel@gmail.com",
+          "lines_owned": 10,
+          "percentage": 0.7733952049497294
+        },
+        {
+          "name": "David Torosyan",
+          "email": "davidtorosyan.git@gmail.com",
+          "lines_owned": 10,
+          "percentage": 0.7733952049497294
+        },
+        {
+          "name": "Alessandro Menezes",
+          "email": "alessandroasm@gmail.com",
+          "lines_owned": 6,
+          "percentage": 0.46403712296983757
+        },
+        {
+          "name": "Jakub Wieczorek",
+          "email": "jakub.adam.wieczorek@gmail.com",
+          "lines_owned": 5,
+          "percentage": 0.3866976024748647
+        },
+        {
+          "name": "goto-engineering",
+          "email": "goto@gotoengineering.io",
+          "lines_owned": 2,
+          "percentage": 0.15467904098994587
+        },
+        {
+          "name": "Tor Shepherd",
+          "email": "tor.aksel.shepherd@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.07733952049497293
+        },
+        {
+          "name": "Ninan John",
+          "email": "jninan@thoughtworks.com",
+          "lines_owned": 1,
+          "percentage": 0.07733952049497293
+        },
+        {
+          "name": "Lucas Trzesniewski",
+          "email": "lucas.trzesniewski@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.07733952049497293
+        },
+        {
+          "name": "Younes El-karama",
+          "email": "yelkarama@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.07733952049497293
+        },
+        {
+          "name": "Johannes Altmanninger",
+          "email": "aclopte@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.07733952049497293
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/tests/util.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 83.20610687022901,
+      "concentration": 0.83206106870229,
+      "total_lines": 393,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 327,
+          "percentage": 83.20610687022901
+        },
+        {
+          "name": "Younes El-karama",
+          "email": "yelkarama@users.noreply.github.com",
+          "lines_owned": 21,
+          "percentage": 5.343511450381679
+        },
+        {
+          "name": "Jon Surrell",
+          "email": "jon.surrell@automattic.com",
+          "lines_owned": 18,
+          "percentage": 4.580152671755725
+        },
+        {
+          "name": "Sebastian Nowicki",
+          "email": "sebnow@gmail.com",
+          "lines_owned": 12,
+          "percentage": 3.0534351145038165
+        },
+        {
+          "name": "Eric Kidd",
+          "email": "git@randomhacks.net",
+          "lines_owned": 6,
+          "percentage": 1.5267175572519083
+        },
+        {
+          "name": "Marc Tiehuis",
+          "email": "marctiehuis@gmail.com",
+          "lines_owned": 5,
+          "percentage": 1.2722646310432568
+        },
+        {
+          "name": "Andre Bogus",
+          "email": "bogusandre@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.5089058524173028
+        },
+        {
+          "name": "wang384670111",
+          "email": "384670111@qq.com",
+          "lines_owned": 1,
+          "percentage": 0.2544529262086514
+        },
+        {
+          "name": "Hamir Mahal",
+          "email": "hamirmahal@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.2544529262086514
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/searcher/src/searcher/core.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 82.20183486238533,
+      "concentration": 0.8220183486238533,
+      "total_lines": 545,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 448,
+          "percentage": 82.20183486238533
+        },
+        {
+          "name": "Pavel Safronov",
+          "email": "pv.safronov@gmail.com",
+          "lines_owned": 66,
+          "percentage": 12.110091743119266
+        },
+        {
+          "name": "Edoardo Pirovano",
+          "email": "edoardo.pirovano@gmail.com",
+          "lines_owned": 31,
+          "percentage": 5.688073394495413
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/ignore/src/types.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 81.54897494305239,
+      "concentration": 0.8154897494305239,
+      "total_lines": 439,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 358,
+          "percentage": 81.54897494305239
+        },
+        {
+          "name": "Ian Kerins",
+          "email": "ianskerins@gmail.com",
+          "lines_owned": 62,
+          "percentage": 14.123006833712983
+        },
+        {
+          "name": "kotborealis",
+          "email": "kotborealis@awooo.ru",
+          "lines_owned": 11,
+          "percentage": 2.5056947608200453
+        },
+        {
+          "name": "Awad Mackie",
+          "email": "firesock.serwalek@gmail.com",
+          "lines_owned": 5,
+          "percentage": 1.1389521640091116
+        },
+        {
+          "name": "Balaji Sivaraman",
+          "email": "balaji@balajisivaraman.com",
+          "lines_owned": 2,
+          "percentage": 0.45558086560364464
+        },
+        {
+          "name": "Martin Michlmayr",
+          "email": "tbm@cyrius.com",
+          "lines_owned": 1,
+          "percentage": 0.22779043280182232
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/tests/feature.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 79.93384785005513,
+      "concentration": 0.7993384785005513,
+      "total_lines": 907,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 725,
+          "percentage": 79.93384785005513
+        },
+        {
+          "name": "Anthony Huang",
+          "email": "anthony.huang@affirm.com",
+          "lines_owned": 79,
+          "percentage": 8.710033076074973
+        },
+        {
+          "name": "Mohammad AlSaleh",
+          "email": "CE.Mohammad.AlSaleh@gmail.com",
+          "lines_owned": 30,
+          "percentage": 3.307607497243661
+        },
+        {
+          "name": "goto-engineering",
+          "email": "goto@gotoengineering.io",
+          "lines_owned": 30,
+          "percentage": 3.307607497243661
+        },
+        {
+          "name": "lesnyrumcajs",
+          "email": "lesny.rumcajs@gmail.com",
+          "lines_owned": 17,
+          "percentage": 1.8743109151047408
+        },
+        {
+          "name": "nguyenvukhang",
+          "email": "brew4k@gmail.com",
+          "lines_owned": 11,
+          "percentage": 1.2127894156560088
+        },
+        {
+          "name": "Naveen Nathan",
+          "email": "naveen@lastninja.net",
+          "lines_owned": 8,
+          "percentage": 0.8820286659316428
+        },
+        {
+          "name": "Edoardo Pirovano",
+          "email": "edoardo.pirovano@gmail.com",
+          "lines_owned": 5,
+          "percentage": 0.5512679162072767
+        },
+        {
+          "name": "Younes El-karama",
+          "email": "yelkarama@users.noreply.github.com",
+          "lines_owned": 2,
+          "percentage": 0.2205071664829107
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/tests/json.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 79.81927710843374,
+      "concentration": 0.7981927710843374,
+      "total_lines": 332,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 265,
+          "percentage": 79.81927710843374
+        },
+        {
+          "name": "Stephan Badragan",
+          "email": "stephan.badragan@everbridge.com",
+          "lines_owned": 62,
+          "percentage": 18.67469879518072
+        },
+        {
+          "name": "Hamir Mahal",
+          "email": "hamirmahal@gmail.com",
+          "lines_owned": 5,
+          "percentage": 1.5060240963855422
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/ignore/src/gitignore.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 78.94736842105263,
+      "concentration": 0.7894736842105263,
+      "total_lines": 684,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 540,
+          "percentage": 78.94736842105263
+        },
+        {
+          "name": "David Torosyan",
+          "email": "davidtorosyan.git@gmail.com",
+          "lines_owned": 29,
+          "percentage": 4.239766081871345
+        },
+        {
+          "name": "Behnam Esfahbod ✅",
+          "email": "behnam@zwnj.org",
+          "lines_owned": 28,
+          "percentage": 4.093567251461988
+        },
+        {
+          "name": "mostafa",
+          "email": "mostafayounis630@gmail.com",
+          "lines_owned": 21,
+          "percentage": 3.070175438596491
+        },
+        {
+          "name": "Peter S Panov",
+          "email": "peter@sipan.org",
+          "lines_owned": 19,
+          "percentage": 2.7777777777777777
+        },
+        {
+          "name": "Kento Okamoto",
+          "email": "kentokamoto@protonmail.com",
+          "lines_owned": 13,
+          "percentage": 1.9005847953216373
+        },
+        {
+          "name": "dana",
+          "email": "dana@dana.is",
+          "lines_owned": 12,
+          "percentage": 1.7543859649122806
+        },
+        {
+          "name": "Behnam Esfahbod",
+          "email": "behnam@zwnj.org",
+          "lines_owned": 7,
+          "percentage": 1.023391812865497
+        },
+        {
+          "name": "Stephen Albert-Moore",
+          "email": "stephen.albert-moore@georgfischer.com",
+          "lines_owned": 4,
+          "percentage": 0.5847953216374269
+        },
+        {
+          "name": "Brian Malehorn",
+          "email": "bmalehorn@gmail.com",
+          "lines_owned": 4,
+          "percentage": 0.5847953216374269
+        },
+        {
+          "name": "Todd Walton",
+          "email": "tdwalton@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.29239766081871343
+        },
+        {
+          "name": "Eric Arellano",
+          "email": "ericarellano@me.com",
+          "lines_owned": 1,
+          "percentage": 0.14619883040935672
+        },
+        {
+          "name": "FlorentBecker",
+          "email": "florent.becker@ens-lyon.org",
+          "lines_owned": 1,
+          "percentage": 0.14619883040935672
+        },
+        {
+          "name": "Brian Campbell",
+          "email": "lambda@continuation.org",
+          "lines_owned": 1,
+          "percentage": 0.14619883040935672
+        },
+        {
+          "name": "Balaji Sivaraman",
+          "email": "balaji@balajisivaraman.com",
+          "lines_owned": 1,
+          "percentage": 0.14619883040935672
+        },
+        {
+          "name": "Garrett Squire",
+          "email": "garrettsquire@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.14619883040935672
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/globset/src/lib.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 78.53658536585367,
+      "concentration": 0.7853658536585367,
+      "total_lines": 820,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 644,
+          "percentage": 78.53658536585367
+        },
+        {
+          "name": "Thayne McCombs",
+          "email": "astrothayne@gmail.com",
+          "lines_owned": 52,
+          "percentage": 6.341463414634147
+        },
+        {
+          "name": "piegames",
+          "email": "git@piegames.de",
+          "lines_owned": 25,
+          "percentage": 3.048780487804878
+        },
+        {
+          "name": "Ben Heidemann",
+          "email": "ben@heidemann.dev",
+          "lines_owned": 16,
+          "percentage": 1.951219512195122
+        },
+        {
+          "name": "Alexander Weiss",
+          "email": "alex@weissfam.de",
+          "lines_owned": 13,
+          "percentage": 1.5853658536585367
+        },
+        {
+          "name": "squidfunk",
+          "email": "martin.donath@squidfunk.com",
+          "lines_owned": 10,
+          "percentage": 1.2195121951219512
+        },
+        {
+          "name": "William Johnson",
+          "email": "wjohnson@whamcloud.com",
+          "lines_owned": 9,
+          "percentage": 1.097560975609756
+        },
+        {
+          "name": "Martin Pool",
+          "email": "mbp@sourcefrog.net",
+          "lines_owned": 9,
+          "percentage": 1.097560975609756
+        },
+        {
+          "name": "Jonas Platte",
+          "email": "jplatte+git@posteo.de",
+          "lines_owned": 8,
+          "percentage": 0.975609756097561
+        },
+        {
+          "name": "Brian Malehorn",
+          "email": "bmalehorn@gmail.com",
+          "lines_owned": 8,
+          "percentage": 0.975609756097561
+        },
+        {
+          "name": "Balaji Sivaraman",
+          "email": "balaji@balajisivaraman.com",
+          "lines_owned": 8,
+          "percentage": 0.975609756097561
+        },
+        {
+          "name": "Sergio Benitez",
+          "email": "SergioBenitez@users.noreply.github.com",
+          "lines_owned": 7,
+          "percentage": 0.853658536585366
+        },
+        {
+          "name": "Luke Sandberg",
+          "email": "lukeisandberg@gmail.com",
+          "lines_owned": 5,
+          "percentage": 0.6097560975609756
+        },
+        {
+          "name": "Lucien Greathouse",
+          "email": "me@lpghatguy.com",
+          "lines_owned": 2,
+          "percentage": 0.24390243902439024
+        },
+        {
+          "name": "Martin Michlmayr",
+          "email": "tbm@cyrius.com",
+          "lines_owned": 2,
+          "percentage": 0.24390243902439024
+        },
+        {
+          "name": "David Tolnay",
+          "email": "dtolnay@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.12195121951219512
+        },
+        {
+          "name": "FlorentBecker",
+          "email": "florent.becker@ens-lyon.org",
+          "lines_owned": 1,
+          "percentage": 0.12195121951219512
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/ignore/src/dir.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 76.67910447761194,
+      "concentration": 0.7667910447761195,
+      "total_lines": 1072,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 822,
+          "percentage": 76.67910447761194
+        },
+        {
+          "name": "Johannes Altmanninger",
+          "email": "aclopte@gmail.com",
+          "lines_owned": 111,
+          "percentage": 10.354477611940299
+        },
+        {
+          "name": "ptzz",
+          "email": "ponca707@gmail.com",
+          "lines_owned": 56,
+          "percentage": 5.223880597014925
+        },
+        {
+          "name": "ChristopherYoung",
+          "email": "joundanger@icloud.com",
+          "lines_owned": 14,
+          "percentage": 1.3059701492537312
+        },
+        {
+          "name": "sharkdp",
+          "email": "davidpeter@web.de",
+          "lines_owned": 14,
+          "percentage": 1.3059701492537312
+        },
+        {
+          "name": "fe9lix",
+          "email": "fe9lix@googlemail.com",
+          "lines_owned": 12,
+          "percentage": 1.1194029850746268
+        },
+        {
+          "name": "Matt Kulukundis",
+          "email": "matt.fowles@gmail.com",
+          "lines_owned": 11,
+          "percentage": 1.0261194029850746
+        },
+        {
+          "name": "David Torosyan",
+          "email": "davidtorosyan.git@gmail.com",
+          "lines_owned": 10,
+          "percentage": 0.9328358208955223
+        },
+        {
+          "name": "Thilo Uttendorfer",
+          "email": "tlo@sengaya.de",
+          "lines_owned": 7,
+          "percentage": 0.6529850746268656
+        },
+        {
+          "name": "Josh Triplett",
+          "email": "josh@joshtriplett.org",
+          "lines_owned": 5,
+          "percentage": 0.46641791044776115
+        },
+        {
+          "name": "Ian McKellar",
+          "email": "ian@mckellar.org",
+          "lines_owned": 5,
+          "percentage": 0.46641791044776115
+        },
+        {
+          "name": "David Peter",
+          "email": "sharkdp@users.noreply.github.com",
+          "lines_owned": 4,
+          "percentage": 0.3731343283582089
+        },
+        {
+          "name": "phiresky",
+          "email": "phireskyde+gh@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.09328358208955223
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/ignore/src/overrides.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 75.87719298245614,
+      "concentration": 0.7587719298245613,
+      "total_lines": 228,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 173,
+          "percentage": 75.87719298245614
+        },
+        {
+          "name": "mostafa",
+          "email": "mostafayounis630@gmail.com",
+          "lines_owned": 25,
+          "percentage": 10.964912280701753
+        },
+        {
+          "name": "Peter S Panov",
+          "email": "peter@sipan.org",
+          "lines_owned": 18,
+          "percentage": 7.894736842105263
+        },
+        {
+          "name": "David Torosyan",
+          "email": "davidtorosyan.git@gmail.com",
+          "lines_owned": 5,
+          "percentage": 2.1929824561403506
+        },
+        {
+          "name": "Balaji Sivaraman",
+          "email": "balaji@balajisivaraman.com",
+          "lines_owned": 3,
+          "percentage": 1.3157894736842104
+        },
+        {
+          "name": "dana",
+          "email": "dana@dana.is",
+          "lines_owned": 2,
+          "percentage": 0.8771929824561403
+        },
+        {
+          "name": "Garrett Squire",
+          "email": "garrettsquire@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.43859649122807015
+        },
+        {
+          "name": "Christian Vallentin",
+          "email": "vallentinsource@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.43859649122807015
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/cli/src/process.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 74.79674796747967,
+      "concentration": 0.7479674796747967,
+      "total_lines": 246,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 184,
+          "percentage": 74.79674796747967
+        },
+        {
+          "name": "Vasili Revelas",
+          "email": "vasili.revelas@gmail.com",
+          "lines_owned": 61,
+          "percentage": 24.796747967479675
+        },
+        {
+          "name": "Kian-Meng Ang",
+          "email": "kianmeng.ang@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.40650406504065045
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/ignore/src/walk.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 73.97119341563786,
+      "concentration": 0.7397119341563786,
+      "total_lines": 1944,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 1438,
+          "percentage": 73.97119341563786
+        },
+        {
+          "name": "Tavian Barnes",
+          "email": "tavianator@tavianator.com",
+          "lines_owned": 86,
+          "percentage": 4.423868312757202
+        },
+        {
+          "name": "Ed Page",
+          "email": "eopage@gmail.com",
+          "lines_owned": 84,
+          "percentage": 4.320987654320987
+        },
+        {
+          "name": "Alvaro Parker",
+          "email": "aparkerdf@protonmail.com",
+          "lines_owned": 79,
+          "percentage": 4.063786008230453
+        },
+        {
+          "name": "Casey Rodarmor",
+          "email": "casey@rodarmor.com",
+          "lines_owned": 53,
+          "percentage": 2.7263374485596708
+        },
+        {
+          "name": "tiehuis",
+          "email": "marctiehuis@gmail.com",
+          "lines_owned": 33,
+          "percentage": 1.6975308641975309
+        },
+        {
+          "name": "ptzz",
+          "email": "ponca707@gmail.com",
+          "lines_owned": 24,
+          "percentage": 1.2345679012345678
+        },
+        {
+          "name": "Alex Burka",
+          "email": "alex@alexburka.com",
+          "lines_owned": 20,
+          "percentage": 1.02880658436214
+        },
+        {
+          "name": "David Peter",
+          "email": "sharkdp@users.noreply.github.com",
+          "lines_owned": 16,
+          "percentage": 0.823045267489712
+        },
+        {
+          "name": "Richard Khoury",
+          "email": "richen.khoury@gmail.com",
+          "lines_owned": 15,
+          "percentage": 0.7716049382716049
+        },
+        {
+          "name": "Jakub Wieczorek",
+          "email": "jakub.adam.wieczorek@gmail.com",
+          "lines_owned": 14,
+          "percentage": 0.720164609053498
+        },
+        {
+          "name": "zsugabubus",
+          "email": "zsugabubus@users.noreply.github.com",
+          "lines_owned": 13,
+          "percentage": 0.668724279835391
+        },
+        {
+          "name": "phiresky",
+          "email": "phireskyde+gh@gmail.com",
+          "lines_owned": 12,
+          "percentage": 0.6172839506172839
+        },
+        {
+          "name": "Tiziano Santoro",
+          "email": "tiziano88@gmail.com",
+          "lines_owned": 10,
+          "percentage": 0.51440329218107
+        },
+        {
+          "name": "Aaron Power",
+          "email": "Aaronepower@users.noreply.github.com",
+          "lines_owned": 10,
+          "percentage": 0.51440329218107
+        },
+        {
+          "name": "Jordan Danford",
+          "email": "jordandanford@gmail.com",
+          "lines_owned": 9,
+          "percentage": 0.4629629629629629
+        },
+        {
+          "name": "Marc Tiehuis",
+          "email": "marctiehuis@gmail.com",
+          "lines_owned": 9,
+          "percentage": 0.4629629629629629
+        },
+        {
+          "name": "David Torosyan",
+          "email": "davidtorosyan.git@gmail.com",
+          "lines_owned": 6,
+          "percentage": 0.30864197530864196
+        },
+        {
+          "name": "Thomas Otto",
+          "email": "th1000s@posteo.net",
+          "lines_owned": 4,
+          "percentage": 0.205761316872428
+        },
+        {
+          "name": "Martin Pool",
+          "email": "mbp@sourcefrog.net",
+          "lines_owned": 4,
+          "percentage": 0.205761316872428
+        },
+        {
+          "name": "Balaji Sivaraman",
+          "email": "balaji@balajisivaraman.com",
+          "lines_owned": 2,
+          "percentage": 0.102880658436214
+        },
+        {
+          "name": "cgzones",
+          "email": "cgzones@googlemail.com",
+          "lines_owned": 1,
+          "percentage": 0.051440329218107
+        },
+        {
+          "name": "Dave Rolsky",
+          "email": "autarch@urth.org",
+          "lines_owned": 1,
+          "percentage": 0.051440329218107
+        },
+        {
+          "name": "Alex Povel",
+          "email": "git@alexpovel.de",
+          "lines_owned": 1,
+          "percentage": 0.051440329218107
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/globset/src/glob.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 73.54260089686099,
+      "concentration": 0.7354260089686099,
+      "total_lines": 1338,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 984,
+          "percentage": 73.54260089686099
+        },
+        {
+          "name": "mostafa",
+          "email": "mostafayounis630@gmail.com",
+          "lines_owned": 110,
+          "percentage": 8.221225710014949
+        },
+        {
+          "name": "Brian Malehorn",
+          "email": "bmalehorn@gmail.com",
+          "lines_owned": 81,
+          "percentage": 6.053811659192825
+        },
+        {
+          "name": "Luke Sandberg",
+          "email": "lukeisandberg@gmail.com",
+          "lines_owned": 40,
+          "percentage": 2.9895366218236172
+        },
+        {
+          "name": "Alex Rawson",
+          "email": "ajzecrom@gmail.com",
+          "lines_owned": 22,
+          "percentage": 1.6442451420029895
+        },
+        {
+          "name": "Andres Suarez",
+          "email": "zertosh@gmail.com",
+          "lines_owned": 16,
+          "percentage": 1.195814648729447
+        },
+        {
+          "name": "piegames",
+          "email": "git@piegames.de",
+          "lines_owned": 14,
+          "percentage": 1.046337817638266
+        },
+        {
+          "name": "dana",
+          "email": "dana@dana.is",
+          "lines_owned": 13,
+          "percentage": 0.9715994020926756
+        },
+        {
+          "name": "squidfunk",
+          "email": "martin.donath@squidfunk.com",
+          "lines_owned": 12,
+          "percentage": 0.8968609865470852
+        },
+        {
+          "name": "Balaji Sivaraman",
+          "email": "balaji@balajisivaraman.com",
+          "lines_owned": 10,
+          "percentage": 0.7473841554559043
+        },
+        {
+          "name": "Tobias Decking",
+          "email": "Tobias.Decking@gmail.com",
+          "lines_owned": 7,
+          "percentage": 0.523168908819133
+        },
+        {
+          "name": "Marc Tiehuis",
+          "email": "marctiehuis@gmail.com",
+          "lines_owned": 6,
+          "percentage": 0.4484304932735426
+        },
+        {
+          "name": "Behnam Esfahbod",
+          "email": "behnam@zwnj.org",
+          "lines_owned": 5,
+          "percentage": 0.37369207772795215
+        },
+        {
+          "name": "William Johnson",
+          "email": "wjohnson@whamcloud.com",
+          "lines_owned": 4,
+          "percentage": 0.29895366218236175
+        },
+        {
+          "name": "Lucien Greathouse",
+          "email": "me@lpghatguy.com",
+          "lines_owned": 3,
+          "percentage": 0.2242152466367713
+        },
+        {
+          "name": "Ben Heidemann",
+          "email": "ben@heidemann.dev",
+          "lines_owned": 3,
+          "percentage": 0.2242152466367713
+        },
+        {
+          "name": "Manfred Endres",
+          "email": "manfred.endres@tslarusso.de",
+          "lines_owned": 3,
+          "percentage": 0.2242152466367713
+        },
+        {
+          "name": "Martin Pool",
+          "email": "mbp@sourcefrog.net",
+          "lines_owned": 2,
+          "percentage": 0.14947683109118087
+        },
+        {
+          "name": "Stu Hood",
+          "email": "stuhood@twitter.com",
+          "lines_owned": 1,
+          "percentage": 0.07473841554559044
+        },
+        {
+          "name": "Martin Lindhe",
+          "email": "martin-commit@ubique.se",
+          "lines_owned": 1,
+          "percentage": 0.07473841554559044
+        },
+        {
+          "name": "Martin Michlmayr",
+          "email": "tbm@cyrius.com",
+          "lines_owned": 1,
+          "percentage": 0.07473841554559044
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/printer/src/hyperlink/mod.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 71.49028077753779,
+      "concentration": 0.714902807775378,
+      "total_lines": 926,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 662,
+          "percentage": 71.49028077753779
+        },
+        {
+          "name": "Lucas Trzesniewski",
+          "email": "lucas.trzesniewski@gmail.com",
+          "lines_owned": 255,
+          "percentage": 27.5377969762419
+        },
+        {
+          "name": "Nicolas Holzschuch",
+          "email": "n.holzschuch@free.fr",
+          "lines_owned": 5,
+          "percentage": 0.5399568034557235
+        },
+        {
+          "name": "dana",
+          "email": "dana@dana.is",
+          "lines_owned": 4,
+          "percentage": 0.4319654427645789
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/complete/fish.rs",
+      "primary_owner": "Jan Verbeek",
+      "ownership_percent": 70.6896551724138,
+      "concentration": 0.7068965517241379,
+      "total_lines": 58,
+      "contributors": [
+        {
+          "name": "Jan Verbeek",
+          "email": "jan.verbeek@posteo.nl",
+          "lines_owned": 41,
+          "percentage": 70.6896551724138
+        },
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 17,
+          "percentage": 29.310344827586203
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/printer/src/hyperlink/aliases.rs",
+      "primary_owner": "dana",
+      "ownership_percent": 63.29113924050633,
+      "concentration": 0.6329113924050633,
+      "total_lines": 79,
+      "contributors": [
+        {
+          "name": "dana",
+          "email": "dana@dana.is",
+          "lines_owned": 50,
+          "percentage": 63.29113924050633
+        },
+        {
+          "name": "Lucas Trzesniewski",
+          "email": "lucas.trzesniewski@gmail.com",
+          "lines_owned": 24,
+          "percentage": 30.37974683544304
+        },
+        {
+          "name": "Enoch",
+          "email": "enoch965@gmail.com",
+          "lines_owned": 5,
+          "percentage": 6.329113924050633
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/core/flags/complete/zsh.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 62.96296296296296,
+      "concentration": 0.6296296296296297,
+      "total_lines": 27,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 17,
+          "percentage": 62.96296296296296
+        },
+        {
+          "name": "dana",
+          "email": "dana@dana.is",
+          "lines_owned": 10,
+          "percentage": 37.03703703703704
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/build.rs",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 60.86956521739131,
+      "concentration": 0.6086956521739131,
+      "total_lines": 46,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 28,
+          "percentage": 60.86956521739131
+        },
+        {
+          "name": "kevichi7",
+          "email": "haminoooin@gmail.com",
+          "lines_owned": 17,
+          "percentage": 36.95652173913043
+        },
+        {
+          "name": "Hamir Mahal",
+          "email": "hamirmahal@gmail.com",
+          "lines_owned": 1,
+          "percentage": 2.1739130434782608
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/pkg/brew/ripgrep-bin.rb",
+      "primary_owner": "Andrew Gallant",
+      "ownership_percent": 57.89473684210527,
+      "concentration": 0.5789473684210527,
+      "total_lines": 19,
+      "contributors": [
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 11,
+          "percentage": 57.89473684210527
+        },
+        {
+          "name": "Francois Ferrand",
+          "email": "francois.ferrand@parrot.com",
+          "lines_owned": 5,
+          "percentage": 26.31578947368421
+        },
+        {
+          "name": "Colin Kennedy",
+          "email": "moshen.colin@gmail.com",
+          "lines_owned": 2,
+          "percentage": 10.526315789473683
+        },
+        {
+          "name": "David Stangl",
+          "email": "david.stangl@student.hpi.de",
+          "lines_owned": 1,
+          "percentage": 5.263157894736842
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/ignore/src/default_types.rs",
+      "primary_owner": "kotborealis",
+      "ownership_percent": 52.94117647058824,
+      "concentration": 0.5294117647058824,
+      "total_lines": 357,
+      "contributors": [
+        {
+          "name": "kotborealis",
+          "email": "kotborealis@awooo.ru",
+          "lines_owned": 189,
+          "percentage": 52.94117647058824
+        },
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 97,
+          "percentage": 27.170868347338935
+        },
+        {
+          "name": "Armin Brauns",
+          "email": "armin.brauns@embedded-solutions.at",
+          "lines_owned": 12,
+          "percentage": 3.361344537815126
+        },
+        {
+          "name": "mataha",
+          "email": "mataha@users.noreply.github.com",
+          "lines_owned": 7,
+          "percentage": 1.9607843137254901
+        },
+        {
+          "name": "Linda_pp",
+          "email": "rhysd@users.noreply.github.com",
+          "lines_owned": 7,
+          "percentage": 1.9607843137254901
+        },
+        {
+          "name": "Malte",
+          "email": "mal-tee@mailbox.org",
+          "lines_owned": 5,
+          "percentage": 1.400560224089636
+        },
+        {
+          "name": "Ulysse Buonomo",
+          "email": "buonomo.ulysse@gmail.com",
+          "lines_owned": 4,
+          "percentage": 1.1204481792717087
+        },
+        {
+          "name": "Juan Francisco Cantero Hurtado",
+          "email": "iam@juanfra.info",
+          "lines_owned": 3,
+          "percentage": 0.8403361344537815
+        },
+        {
+          "name": "James Moberg",
+          "email": "james@sunstarmedia.com",
+          "lines_owned": 2,
+          "percentage": 0.5602240896358543
+        },
+        {
+          "name": "Matrix Dai",
+          "email": "matrix.dai@aurea.com",
+          "lines_owned": 2,
+          "percentage": 0.5602240896358543
+        },
+        {
+          "name": "Porkepix",
+          "email": "porkepix@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.5602240896358543
+        },
+        {
+          "name": "Keith Smiley",
+          "email": "keithbsmiley@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.5602240896358543
+        },
+        {
+          "name": "Lilian A. Moraru",
+          "email": "lilian.moraru90+github@gmail.com",
+          "lines_owned": 2,
+          "percentage": 0.5602240896358543
+        },
+        {
+          "name": "Cristián Maureira-Fredes",
+          "email": "Cristian.Maureira-Fredes@qt.io",
+          "lines_owned": 2,
+          "percentage": 0.5602240896358543
+        },
+        {
+          "name": "Yochem van Rosmalen",
+          "email": "yochem@icloud.com",
+          "lines_owned": 1,
+          "percentage": 0.2801120448179272
+        },
+        {
+          "name": "Andrew McNulty",
+          "email": "amcn102@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.2801120448179272
+        },
+        {
+          "name": "f3rn0s",
+          "email": "finn@volkis.com.au",
+          "lines_owned": 1,
+          "percentage": 0.2801120448179272
+        },
+        {
+          "name": "Thomas Weißschuh",
+          "email": "thomas@t-8ch.de",
+          "lines_owned": 1,
+          "percentage": 0.2801120448179272
+        },
+        {
+          "name": "bbb651",
+          "email": "bar.ye651@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.2801120448179272
+        },
+        {
+          "name": "Thomas ten Cate",
+          "email": "ttencate@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.2801120448179272
+        },
+        {
+          "name": "Patrick Williams",
+          "email": "patrick@stwcx.xyz",
+          "lines_owned": 1,
+          "percentage": 0.2801120448179272
+        },
+        {
+          "name": "Vidar",
+          "email": "vidar.asberg@pm.me",
+          "lines_owned": 1,
+          "percentage": 0.2801120448179272
+        },
+        {
+          "name": "Marco Ieni",
+          "email": "11428655+MarcoIeni@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.2801120448179272
+        },
+        {
+          "name": "Tomek",
+          "email": "tolek@tuta.com",
+          "lines_owned": 1,
+          "percentage": 0.2801120448179272
+        },
+        {
+          "name": "Melvin Wang",
+          "email": "melvin.mc.wang@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.2801120448179272
+        },
+        {
+          "name": "Vincent Bockaert",
+          "email": "vincent.bockaert@proton.me",
+          "lines_owned": 1,
+          "percentage": 0.2801120448179272
+        },
+        {
+          "name": "Christoph Badura",
+          "email": "bad@bsd.de",
+          "lines_owned": 1,
+          "percentage": 0.2801120448179272
+        },
+        {
+          "name": "Zach Ahn",
+          "email": "engineering@zachahn.com",
+          "lines_owned": 1,
+          "percentage": 0.2801120448179272
+        },
+        {
+          "name": "Pierre Rouleau",
+          "email": "prouleau001@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.2801120448179272
+        },
+        {
+          "name": "Colin Heffernan",
+          "email": "colinpheffernan@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.2801120448179272
+        },
+        {
+          "name": "Vadim Kostin",
+          "email": "adin.vadim@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.2801120448179272
+        },
+        {
+          "name": "Jorge Gomez",
+          "email": "jgart@dismail.de",
+          "lines_owned": 1,
+          "percentage": 0.2801120448179272
+        },
+        {
+          "name": "Luke Hannan",
+          "email": "22576145+luhann@users.noreply.github.com",
+          "lines_owned": 1,
+          "percentage": 0.2801120448179272
+        },
+        {
+          "name": "Dmitry Gerasimov",
+          "email": "di.gerasimov@gmail.com",
+          "lines_owned": 1,
+          "percentage": 0.2801120448179272
+        },
+        {
+          "name": "amesgen",
+          "email": "amesgen@amesgen.de",
+          "lines_owned": 1,
+          "percentage": 0.2801120448179272
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/ignore/tests/gitignore_matched_path_or_any_parents_tests.rs",
+      "primary_owner": "Behnam Esfahbod",
+      "ownership_percent": 40.458015267175576,
+      "concentration": 0.40458015267175573,
+      "total_lines": 262,
+      "contributors": [
+        {
+          "name": "Behnam Esfahbod",
+          "email": "behnam@zwnj.org",
+          "lines_owned": 106,
+          "percentage": 40.458015267175576
+        },
+        {
+          "name": "Behnam Esfahbod ✅",
+          "email": "behnam@zwnj.org",
+          "lines_owned": 95,
+          "percentage": 36.25954198473282
+        },
+        {
+          "name": "Andrew Gallant",
+          "email": "jamslam@gmail.com",
+          "lines_owned": 53,
+          "percentage": 20.229007633587788
+        },
+        {
+          "name": "dana",
+          "email": "dana@dana.is",
+          "lines_owned": 8,
+          "percentage": 3.0534351145038165
+        }
+      ],
+      "is_silo": false
+    },
+    {
+      "path": "/tmp/omen-2461860455/crates/globset/src/serde_impl.rs",
+      "primary_owner": "Jérome Eertmans",
+      "ownership_percent": 39.743589743589745,
+      "concentration": 0.39743589743589747,
+      "total_lines": 78,
+      "contributors": [
+        {
+          "name": "Jérome Eertmans",
+          "email": "jeertmans@icloud.com",
+          "lines_owned": 31,
+          "percentage": 39.743589743589745
+        },
+        {
+          "name": "David Tolnay",
+          "email": "dtolnay@gmail.com",
+          "lines_owned": 28,
+          "percentage": 35.8974358974359
+        },
+        {
+          "name": "Lucien Greathouse",
+          "email": "me@lpghatguy.com",
+          "lines_owned": 19,
+          "percentage": 24.358974358974358
+        }
+      ],
+      "is_silo": false
+    }
+  ],
+  "summary": {
+    "total_files": 103,
+    "bus_factor": 1,
+    "silo_count": 42,
+    "avg_contributors": 3.796116504854369,
+    "max_concentration": 1,
+    "top_contributors": [
+      "Andrew Gallant",
+      "Lucas Trzesniewski",
+      "Pavel Safronov",
+      "kotborealis",
+      "mostafa"
+    ]
+  }
+}

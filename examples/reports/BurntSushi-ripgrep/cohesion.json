@@ -1,0 +1,53 @@
+{
+  "generated_at": "2025-12-16T02:34:53.580568417Z",
+  "classes": [
+    {
+      "path": "/tmp/omen-2461860455/pkg/brew/ripgrep-bin.rb",
+      "class_name": "RipgrepBin",
+      "language": "ruby",
+      "start_line": 1,
+      "end_line": 23,
+      "wmc": 1,
+      "cbo": 13,
+      "rfc": 1,
+      "lcom": 1,
+      "dit": 0,
+      "noc": 0,
+      "nom": 1,
+      "nof": 0,
+      "loc": 23,
+      "methods": [
+        "install"
+      ],
+      "coupled_classes": [
+        "zsh_completion",
+        "homepage",
+        "url",
+        "sha256",
+        "conflicts_with",
+        "install",
+        "bash_completion",
+        "version",
+        "desc",
+        "mac?",
+        "linux?",
+        "bin",
+        "man1"
+      ]
+    }
+  ],
+  "summary": {
+    "total_classes": 1,
+    "total_files": 1,
+    "avg_wmc": 1,
+    "avg_cbo": 13,
+    "avg_rfc": 1,
+    "avg_lcom": 1,
+    "max_wmc": 1,
+    "max_cbo": 13,
+    "max_rfc": 1,
+    "max_lcom": 1,
+    "max_dit": 0,
+    "low_cohesion_count": 0
+  }
+}

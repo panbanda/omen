@@ -1,0 +1,143 @@
+{
+  "points": [
+    {
+      "date": "2025-06-21T11:38:28+07:00",
+      "commit_sha": "cf47752",
+      "score": 84,
+      "components": {
+        "complexity": 99,
+        "duplication": 42,
+        "satd": 94,
+        "tdg": 93,
+        "coupling": 75,
+        "smells": 100,
+        "cohesion": 100
+      }
+    },
+    {
+      "date": "2025-07-19T14:58:12+08:00",
+      "commit_sha": "ad4f436",
+      "score": 84,
+      "components": {
+        "complexity": 99,
+        "duplication": 43,
+        "satd": 94,
+        "tdg": 93,
+        "coupling": 75,
+        "smells": 100,
+        "cohesion": 100
+      }
+    },
+    {
+      "date": "2025-09-14T07:25:36+08:00",
+      "commit_sha": "e7693e6",
+      "score": 84,
+      "components": {
+        "complexity": 99,
+        "duplication": 44,
+        "satd": 94,
+        "tdg": 93,
+        "coupling": 75,
+        "smells": 100,
+        "cohesion": 100
+      }
+    },
+    {
+      "date": "2025-09-19T08:35:34+08:00",
+      "commit_sha": "9b1e353",
+      "score": 85,
+      "components": {
+        "complexity": 99,
+        "duplication": 45,
+        "satd": 94,
+        "tdg": 93,
+        "coupling": 75,
+        "smells": 100,
+        "cohesion": 100
+      }
+    },
+    {
+      "date": "2025-10-17T08:51:34+05:30",
+      "commit_sha": "38e7651",
+      "score": 85,
+      "components": {
+        "complexity": 99,
+        "duplication": 45,
+        "satd": 93,
+        "tdg": 93,
+        "coupling": 75,
+        "smells": 100,
+        "cohesion": 100
+      }
+    },
+    {
+      "date": "2025-11-18T23:05:54+08:00",
+      "commit_sha": "e88fc89",
+      "score": 84,
+      "components": {
+        "complexity": 99,
+        "duplication": 43,
+        "satd": 93,
+        "tdg": 93,
+        "coupling": 75,
+        "smells": 100,
+        "cohesion": 100
+      }
+    }
+  ],
+  "slope": 0.1142857142857143,
+  "intercept": 84.04761904761904,
+  "r_squared": 0.17142857142857149,
+  "correlation": 0.4140393356054125,
+  "component_trends": {
+    "complexity": {
+      "Slope": 0,
+      "Intercept": 99,
+      "RSquared": 0,
+      "Correlation": 0
+    },
+    "duplication": {
+      "Slope": 0.34285714285714286,
+      "Intercept": 42.80952380952381,
+      "RSquared": 0.28051948051947906,
+      "Correlation": 0.5296408977028497
+    },
+    "satd": {
+      "Slope": -0.2285714285714286,
+      "Intercept": 94.23809523809524,
+      "RSquared": 0.6857142857142857,
+      "Correlation": -0.828078671210825
+    },
+    "tdg": {
+      "Slope": 0,
+      "Intercept": 93,
+      "RSquared": 0,
+      "Correlation": 0
+    },
+    "coupling": {
+      "Slope": 0,
+      "Intercept": 75,
+      "RSquared": 0,
+      "Correlation": 0
+    },
+    "smells": {
+      "Slope": 0,
+      "Intercept": 100,
+      "RSquared": 0,
+      "Correlation": 0
+    },
+    "cohesion": {
+      "Slope": 0,
+      "Intercept": 100,
+      "RSquared": 0,
+      "Correlation": 0
+    }
+  },
+  "start_score": 84,
+  "end_score": 84,
+  "total_change": 0,
+  "period": "monthly",
+  "since": "6m",
+  "snapped": false,
+  "analyzed_at": "2025-12-16T02:34:14.931906646Z"
+}

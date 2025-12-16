@@ -1,0 +1,59 @@
+{
+  "score": 76,
+  "components": {
+    "complexity": 98,
+    "duplication": 0,
+    "satd": 77,
+    "tdg": 89,
+    "coupling": 100,
+    "smells": 100,
+    "cohesion": 100
+  },
+  "cohesion_included": true,
+  "weights": {
+    "complexity": 0.25,
+    "duplication": 0.2,
+    "satd": 0.1,
+    "tdg": 0.15,
+    "coupling": 0.1,
+    "smells": 0.05,
+    "cohesion": 0.15
+  },
+  "files_analyzed": 103,
+  "thresholds": {
+    "cohesion": {
+      "min": 0,
+      "passed": true
+    },
+    "complexity": {
+      "min": 0,
+      "passed": true
+    },
+    "coupling": {
+      "min": 0,
+      "passed": true
+    },
+    "duplication": {
+      "min": 0,
+      "passed": true
+    },
+    "satd": {
+      "min": 0,
+      "passed": true
+    },
+    "score": {
+      "min": 0,
+      "passed": true
+    },
+    "smells": {
+      "min": 0,
+      "passed": true
+    },
+    "tdg": {
+      "min": 0,
+      "passed": true
+    }
+  },
+  "passed": true,
+  "timestamp": "2025-12-16T02:34:53.580759144Z"
+}

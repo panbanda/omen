@@ -1,0 +1,143 @@
+{
+  "points": [
+    {
+      "date": "2025-06-22T01:36:07+05:30",
+      "commit_sha": "60aa9f1",
+      "score": 76,
+      "components": {
+        "complexity": 98,
+        "duplication": 0,
+        "satd": 78,
+        "tdg": 89,
+        "coupling": 100,
+        "smells": 100,
+        "cohesion": 100
+      }
+    },
+    {
+      "date": "2025-07-20T23:38:31+02:00",
+      "commit_sha": "e166f27",
+      "score": 76,
+      "components": {
+        "complexity": 98,
+        "duplication": 0,
+        "satd": 78,
+        "tdg": 89,
+        "coupling": 100,
+        "smells": 100,
+        "cohesion": 100
+      }
+    },
+    {
+      "date": "2025-08-19T16:07:07-04:00",
+      "commit_sha": "2ebd768",
+      "score": 76,
+      "components": {
+        "complexity": 98,
+        "duplication": 0,
+        "satd": 78,
+        "tdg": 89,
+        "coupling": 100,
+        "smells": 100,
+        "cohesion": 100
+      }
+    },
+    {
+      "date": "2025-09-19T17:17:20-04:00",
+      "commit_sha": "bb8172f",
+      "score": 76,
+      "components": {
+        "complexity": 98,
+        "duplication": 0,
+        "satd": 78,
+        "tdg": 89,
+        "coupling": 100,
+        "smells": 100,
+        "cohesion": 100
+      }
+    },
+    {
+      "date": "2025-10-17T10:27:19-04:00",
+      "commit_sha": "b3dc4b0",
+      "score": 76,
+      "components": {
+        "complexity": 98,
+        "duplication": 0,
+        "satd": 77,
+        "tdg": 89,
+        "coupling": 100,
+        "smells": 100,
+        "cohesion": 100
+      }
+    },
+    {
+      "date": "2025-11-29T19:11:38Z",
+      "commit_sha": "cd1f981",
+      "score": 76,
+      "components": {
+        "complexity": 98,
+        "duplication": 0,
+        "satd": 77,
+        "tdg": 89,
+        "coupling": 100,
+        "smells": 100,
+        "cohesion": 100
+      }
+    }
+  ],
+  "slope": 0,
+  "intercept": 76,
+  "r_squared": 0,
+  "correlation": 0,
+  "component_trends": {
+    "complexity": {
+      "Slope": 0,
+      "Intercept": 98,
+      "RSquared": 0,
+      "Correlation": 0
+    },
+    "duplication": {
+      "Slope": 0,
+      "Intercept": 0,
+      "RSquared": 0,
+      "Correlation": 0
+    },
+    "satd": {
+      "Slope": -0.2285714285714286,
+      "Intercept": 78.23809523809524,
+      "RSquared": 0.6857142857142857,
+      "Correlation": -0.828078671210825
+    },
+    "tdg": {
+      "Slope": 0,
+      "Intercept": 89,
+      "RSquared": 0,
+      "Correlation": 0
+    },
+    "coupling": {
+      "Slope": 0,
+      "Intercept": 100,
+      "RSquared": 0,
+      "Correlation": 0
+    },
+    "smells": {
+      "Slope": 0,
+      "Intercept": 100,
+      "RSquared": 0,
+      "Correlation": 0
+    },
+    "cohesion": {
+      "Slope": 0,
+      "Intercept": 100,
+      "RSquared": 0,
+      "Correlation": 0
+    }
+  },
+  "start_score": 76,
+  "end_score": 76,
+  "total_change": 0,
+  "period": "monthly",
+  "since": "6m",
+  "snapped": false,
+  "analyzed_at": "2025-12-16T02:35:09.058523107Z"
+}

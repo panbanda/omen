@@ -1,0 +1,953 @@
+{
+  "generated_at": "2025-12-16T02:34:55.655704821Z",
+  "smells": [],
+  "components": [
+    {
+      "id": "/tmp/omen-2461860455/build.rs",
+      "name": "/tmp/omen-2461860455/build.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/ci/utils.sh",
+      "name": "/tmp/omen-2461860455/ci/utils.sh",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/cli/src/decompress.rs",
+      "name": "/tmp/omen-2461860455/crates/cli/src/decompress.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/cli/src/escape.rs",
+      "name": "/tmp/omen-2461860455/crates/cli/src/escape.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/cli/src/hostname.rs",
+      "name": "/tmp/omen-2461860455/crates/cli/src/hostname.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/cli/src/human.rs",
+      "name": "/tmp/omen-2461860455/crates/cli/src/human.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/cli/src/lib.rs",
+      "name": "/tmp/omen-2461860455/crates/cli/src/lib.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/cli/src/pattern.rs",
+      "name": "/tmp/omen-2461860455/crates/cli/src/pattern.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/cli/src/process.rs",
+      "name": "/tmp/omen-2461860455/crates/cli/src/process.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/cli/src/wtr.rs",
+      "name": "/tmp/omen-2461860455/crates/cli/src/wtr.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/core/flags/complete/bash.rs",
+      "name": "/tmp/omen-2461860455/crates/core/flags/complete/bash.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/core/flags/complete/encodings.sh",
+      "name": "/tmp/omen-2461860455/crates/core/flags/complete/encodings.sh",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/core/flags/complete/fish.rs",
+      "name": "/tmp/omen-2461860455/crates/core/flags/complete/fish.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/core/flags/complete/mod.rs",
+      "name": "/tmp/omen-2461860455/crates/core/flags/complete/mod.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/core/flags/complete/powershell.rs",
+      "name": "/tmp/omen-2461860455/crates/core/flags/complete/powershell.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/core/flags/complete/zsh.rs",
+      "name": "/tmp/omen-2461860455/crates/core/flags/complete/zsh.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/core/flags/config.rs",
+      "name": "/tmp/omen-2461860455/crates/core/flags/config.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/core/flags/defs.rs",
+      "name": "/tmp/omen-2461860455/crates/core/flags/defs.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/core/flags/doc/help.rs",
+      "name": "/tmp/omen-2461860455/crates/core/flags/doc/help.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/core/flags/doc/man.rs",
+      "name": "/tmp/omen-2461860455/crates/core/flags/doc/man.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/core/flags/doc/mod.rs",
+      "name": "/tmp/omen-2461860455/crates/core/flags/doc/mod.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/core/flags/doc/version.rs",
+      "name": "/tmp/omen-2461860455/crates/core/flags/doc/version.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/core/flags/hiargs.rs",
+      "name": "/tmp/omen-2461860455/crates/core/flags/hiargs.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/core/flags/lowargs.rs",
+      "name": "/tmp/omen-2461860455/crates/core/flags/lowargs.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/core/flags/mod.rs",
+      "name": "/tmp/omen-2461860455/crates/core/flags/mod.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/core/flags/parse.rs",
+      "name": "/tmp/omen-2461860455/crates/core/flags/parse.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/core/haystack.rs",
+      "name": "/tmp/omen-2461860455/crates/core/haystack.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/core/logger.rs",
+      "name": "/tmp/omen-2461860455/crates/core/logger.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/core/main.rs",
+      "name": "/tmp/omen-2461860455/crates/core/main.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/core/messages.rs",
+      "name": "/tmp/omen-2461860455/crates/core/messages.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/core/search.rs",
+      "name": "/tmp/omen-2461860455/crates/core/search.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/globset/benches/bench.rs",
+      "name": "/tmp/omen-2461860455/crates/globset/benches/bench.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/globset/src/fnv.rs",
+      "name": "/tmp/omen-2461860455/crates/globset/src/fnv.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/globset/src/glob.rs",
+      "name": "/tmp/omen-2461860455/crates/globset/src/glob.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/globset/src/lib.rs",
+      "name": "/tmp/omen-2461860455/crates/globset/src/lib.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/globset/src/pathutil.rs",
+      "name": "/tmp/omen-2461860455/crates/globset/src/pathutil.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/globset/src/serde_impl.rs",
+      "name": "/tmp/omen-2461860455/crates/globset/src/serde_impl.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/grep/examples/simplegrep.rs",
+      "name": "/tmp/omen-2461860455/crates/grep/examples/simplegrep.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/grep/src/lib.rs",
+      "name": "/tmp/omen-2461860455/crates/grep/src/lib.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/ignore/examples/walk.rs",
+      "name": "/tmp/omen-2461860455/crates/ignore/examples/walk.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/ignore/src/default_types.rs",
+      "name": "/tmp/omen-2461860455/crates/ignore/src/default_types.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/ignore/src/dir.rs",
+      "name": "/tmp/omen-2461860455/crates/ignore/src/dir.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/ignore/src/gitignore.rs",
+      "name": "/tmp/omen-2461860455/crates/ignore/src/gitignore.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/ignore/src/lib.rs",
+      "name": "/tmp/omen-2461860455/crates/ignore/src/lib.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/ignore/src/overrides.rs",
+      "name": "/tmp/omen-2461860455/crates/ignore/src/overrides.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/ignore/src/pathutil.rs",
+      "name": "/tmp/omen-2461860455/crates/ignore/src/pathutil.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/ignore/src/types.rs",
+      "name": "/tmp/omen-2461860455/crates/ignore/src/types.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/ignore/src/walk.rs",
+      "name": "/tmp/omen-2461860455/crates/ignore/src/walk.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/ignore/tests/gitignore_matched_path_or_any_parents_tests.rs",
+      "name": "/tmp/omen-2461860455/crates/ignore/tests/gitignore_matched_path_or_any_parents_tests.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/ignore/tests/gitignore_skip_bom.rs",
+      "name": "/tmp/omen-2461860455/crates/ignore/tests/gitignore_skip_bom.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/matcher/src/interpolate.rs",
+      "name": "/tmp/omen-2461860455/crates/matcher/src/interpolate.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/matcher/src/lib.rs",
+      "name": "/tmp/omen-2461860455/crates/matcher/src/lib.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/matcher/tests/test_matcher.rs",
+      "name": "/tmp/omen-2461860455/crates/matcher/tests/test_matcher.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/matcher/tests/tests.rs",
+      "name": "/tmp/omen-2461860455/crates/matcher/tests/tests.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/matcher/tests/util.rs",
+      "name": "/tmp/omen-2461860455/crates/matcher/tests/util.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/pcre2/src/error.rs",
+      "name": "/tmp/omen-2461860455/crates/pcre2/src/error.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/pcre2/src/lib.rs",
+      "name": "/tmp/omen-2461860455/crates/pcre2/src/lib.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/pcre2/src/matcher.rs",
+      "name": "/tmp/omen-2461860455/crates/pcre2/src/matcher.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/printer/src/color.rs",
+      "name": "/tmp/omen-2461860455/crates/printer/src/color.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/printer/src/counter.rs",
+      "name": "/tmp/omen-2461860455/crates/printer/src/counter.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/printer/src/hyperlink/aliases.rs",
+      "name": "/tmp/omen-2461860455/crates/printer/src/hyperlink/aliases.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/printer/src/hyperlink/mod.rs",
+      "name": "/tmp/omen-2461860455/crates/printer/src/hyperlink/mod.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/printer/src/json.rs",
+      "name": "/tmp/omen-2461860455/crates/printer/src/json.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/printer/src/jsont.rs",
+      "name": "/tmp/omen-2461860455/crates/printer/src/jsont.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/printer/src/lib.rs",
+      "name": "/tmp/omen-2461860455/crates/printer/src/lib.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/printer/src/macros.rs",
+      "name": "/tmp/omen-2461860455/crates/printer/src/macros.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/printer/src/path.rs",
+      "name": "/tmp/omen-2461860455/crates/printer/src/path.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/printer/src/standard.rs",
+      "name": "/tmp/omen-2461860455/crates/printer/src/standard.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/printer/src/stats.rs",
+      "name": "/tmp/omen-2461860455/crates/printer/src/stats.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/printer/src/summary.rs",
+      "name": "/tmp/omen-2461860455/crates/printer/src/summary.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/printer/src/util.rs",
+      "name": "/tmp/omen-2461860455/crates/printer/src/util.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/regex/src/ast.rs",
+      "name": "/tmp/omen-2461860455/crates/regex/src/ast.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/regex/src/ban.rs",
+      "name": "/tmp/omen-2461860455/crates/regex/src/ban.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/regex/src/config.rs",
+      "name": "/tmp/omen-2461860455/crates/regex/src/config.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/regex/src/error.rs",
+      "name": "/tmp/omen-2461860455/crates/regex/src/error.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/regex/src/lib.rs",
+      "name": "/tmp/omen-2461860455/crates/regex/src/lib.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/regex/src/literal.rs",
+      "name": "/tmp/omen-2461860455/crates/regex/src/literal.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/regex/src/matcher.rs",
+      "name": "/tmp/omen-2461860455/crates/regex/src/matcher.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/regex/src/non_matching.rs",
+      "name": "/tmp/omen-2461860455/crates/regex/src/non_matching.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/regex/src/strip.rs",
+      "name": "/tmp/omen-2461860455/crates/regex/src/strip.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/searcher/examples/search-stdin.rs",
+      "name": "/tmp/omen-2461860455/crates/searcher/examples/search-stdin.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/searcher/src/lib.rs",
+      "name": "/tmp/omen-2461860455/crates/searcher/src/lib.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/searcher/src/line_buffer.rs",
+      "name": "/tmp/omen-2461860455/crates/searcher/src/line_buffer.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/searcher/src/lines.rs",
+      "name": "/tmp/omen-2461860455/crates/searcher/src/lines.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/searcher/src/macros.rs",
+      "name": "/tmp/omen-2461860455/crates/searcher/src/macros.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/searcher/src/searcher/core.rs",
+      "name": "/tmp/omen-2461860455/crates/searcher/src/searcher/core.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/searcher/src/searcher/glue.rs",
+      "name": "/tmp/omen-2461860455/crates/searcher/src/searcher/glue.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/searcher/src/searcher/mmap.rs",
+      "name": "/tmp/omen-2461860455/crates/searcher/src/searcher/mmap.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/searcher/src/searcher/mod.rs",
+      "name": "/tmp/omen-2461860455/crates/searcher/src/searcher/mod.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/searcher/src/sink.rs",
+      "name": "/tmp/omen-2461860455/crates/searcher/src/sink.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/crates/searcher/src/testutil.rs",
+      "name": "/tmp/omen-2461860455/crates/searcher/src/testutil.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/fuzz/fuzz_targets/fuzz_glob.rs",
+      "name": "/tmp/omen-2461860455/fuzz/fuzz_targets/fuzz_glob.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/pkg/brew/ripgrep-bin.rb",
+      "name": "/tmp/omen-2461860455/pkg/brew/ripgrep-bin.rb",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/tests/binary.rs",
+      "name": "/tmp/omen-2461860455/tests/binary.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/tests/feature.rs",
+      "name": "/tmp/omen-2461860455/tests/feature.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/tests/hay.rs",
+      "name": "/tmp/omen-2461860455/tests/hay.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/tests/json.rs",
+      "name": "/tmp/omen-2461860455/tests/json.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/tests/macros.rs",
+      "name": "/tmp/omen-2461860455/tests/macros.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/tests/misc.rs",
+      "name": "/tmp/omen-2461860455/tests/misc.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/tests/multiline.rs",
+      "name": "/tmp/omen-2461860455/tests/multiline.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/tests/regression.rs",
+      "name": "/tmp/omen-2461860455/tests/regression.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/tests/tests.rs",
+      "name": "/tmp/omen-2461860455/tests/tests.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-2461860455/tests/util.rs",
+      "name": "/tmp/omen-2461860455/tests/util.rs",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    }
+  ],
+  "summary": {
+    "total_smells": 0,
+    "cyclic_count": 0,
+    "hub_count": 0,
+    "unstable_count": 0,
+    "god_count": 0,
+    "critical_count": 0,
+    "high_count": 0,
+    "medium_count": 0,
+    "total_components": 103,
+    "average_instability": 0
+  },
+  "thresholds": {
+    "hub_threshold": 20,
+    "god_fan_in_threshold": 10,
+    "god_fan_out_threshold": 10,
+    "instability_difference": 0.4,
+    "stable_threshold": 0.3,
+    "unstable_threshold": 0.7
+  }
+}

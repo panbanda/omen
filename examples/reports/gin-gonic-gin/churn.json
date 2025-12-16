@@ -1,0 +1,1093 @@
+{
+  "generated_at": "2025-12-16T02:34:05.715047481Z",
+  "period_days": 180,
+  "repository_root": "/tmp/omen-267094167",
+  "files": [
+    {
+      "path": "./go.sum",
+      "relative_path": "go.sum",
+      "commit_count": 22,
+      "unique_authors": [
+        "dependabot[bot]",
+        "appleboy",
+        "Bo-Yi Wu",
+        "Flc゛",
+        "M. Ilham Surya Pratama"
+      ],
+      "additions": 120,
+      "deletions": 133,
+      "churn_score": 0.8713136729222519,
+      "first_seen": "2025-06-21T11:38:28+07:00",
+      "last_modified": "2025-12-02T20:09:41+08:00",
+      "total_loc": 95,
+      "relative_churn": 2.663157894736842,
+      "churn_rate": 0.0162387676508344,
+      "change_frequency": 0.13414634146341464,
+      "days_active": 164
+    },
+    {
+      "path": "./go.mod",
+      "relative_path": "go.mod",
+      "commit_count": 22,
+      "unique_authors": [
+        "M. Ilham Surya Pratama",
+        "dependabot[bot]",
+        "appleboy",
+        "Bo-Yi Wu",
+        "Flc゛"
+      ],
+      "additions": 54,
+      "deletions": 58,
+      "churn_score": 0.7201072386058981,
+      "first_seen": "2025-06-21T11:38:28+07:00",
+      "last_modified": "2025-12-02T20:09:41+08:00",
+      "total_loc": 42,
+      "relative_churn": 2.6666666666666665,
+      "churn_rate": 0.016260162601626015,
+      "change_frequency": 0.13414634146341464,
+      "days_active": 164
+    },
+    {
+      "path": "./context_test.go",
+      "relative_path": "context_test.go",
+      "commit_count": 10,
+      "unique_authors": [
+        "Leon cap",
+        "Denny Septian Panggabean",
+        "Bo-Yi Wu",
+        "Name",
+        "Spyder01",
+        "goldlinker",
+        "Flc゛"
+      ],
+      "additions": 363,
+      "deletions": 10,
+      "churn_score": 0.6727272727272727,
+      "first_seen": "2025-07-13T08:40:35+07:00",
+      "last_modified": "2025-11-15T19:21:42+08:00",
+      "total_loc": 3679,
+      "relative_churn": 0.10138624626257135,
+      "churn_rate": 0.0008110899701005708,
+      "change_frequency": 0.08,
+      "days_active": 125
+    },
+    {
+      "path": "./context.go",
+      "relative_path": "context.go",
+      "commit_count": 12,
+      "unique_authors": [
+        "AtoriUzawa",
+        "wanghaolong613",
+        "Spyder01",
+        "cui",
+        "Denny Septian Panggabean",
+        "OHZEKI Naoki",
+        "Bo-Yi Wu",
+        "Name",
+        "letreturn"
+      ],
+      "additions": 131,
+      "deletions": 69,
+      "churn_score": 0.541749939068974,
+      "first_seen": "2025-07-13T08:40:35+07:00",
+      "last_modified": "2025-12-12T14:43:25+09:00",
+      "total_loc": 1447,
+      "relative_churn": 0.138217000691085,
+      "churn_rate": 0.0009093223729676645,
+      "change_frequency": 0.07894736842105263,
+      "days_active": 152
+    },
+    {
+      "path": "./README.md",
+      "relative_path": "README.md",
+      "commit_count": 6,
+      "unique_authors": [
+        "Bo-Yi Wu",
+        "Denny Septian Panggabean"
+      ],
+      "additions": 128,
+      "deletions": 74,
+      "churn_score": 0.38025834755057275,
+      "first_seen": "2025-07-07T16:20:47+07:00",
+      "last_modified": "2025-11-07T11:57:12+08:00",
+      "total_loc": 227,
+      "relative_churn": 0.8898678414096917,
+      "churn_rate": 0.00729399870007944,
+      "change_frequency": 0.04918032786885246,
+      "days_active": 122
+    },
+    {
+      "path": "./.github/workflows/gin.yml",
+      "relative_path": ".github/workflows/gin.yml",
+      "commit_count": 9,
+      "unique_authors": [
+        "dependabot[bot]",
+        "Bo-Yi Wu",
+        "Flc゛"
+      ],
+      "additions": 31,
+      "deletions": 31,
+      "churn_score": 0.3119424811113819,
+      "first_seen": "2025-09-14T07:25:36+08:00",
+      "last_modified": "2025-11-26T23:33:08+08:00",
+      "total_loc": 83,
+      "relative_churn": 0.7469879518072289,
+      "churn_rate": 0.010232711668592177,
+      "change_frequency": 0.1232876712328767,
+      "days_active": 73
+    },
+    {
+      "path": "./ginS/gins_test.go",
+      "relative_path": "ginS/gins_test.go",
+      "commit_count": 1,
+      "unique_authors": [
+        "Milad"
+      ],
+      "additions": 246,
+      "deletions": 0,
+      "churn_score": 0.2910796977821107,
+      "first_seen": "2025-11-27T18:31:57+03:30",
+      "last_modified": "2025-11-27T18:31:57+03:30",
+      "total_loc": 246,
+      "relative_churn": 1,
+      "churn_rate": 1,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./gin_test.go",
+      "relative_path": "gin_test.go",
+      "commit_count": 3,
+      "unique_authors": [
+        "Wayne Aki",
+        "Aeddis Desauw",
+        "Pawan Kalyan"
+      ],
+      "additions": 171,
+      "deletions": 0,
+      "churn_score": 0.2651961979039727,
+      "first_seen": "2025-11-16T06:52:07+05:30",
+      "last_modified": "2025-11-30T15:38:07+08:00",
+      "total_loc": 1086,
+      "relative_churn": 0.1574585635359116,
+      "churn_rate": 0.011247040252565113,
+      "change_frequency": 0.21428571428571427,
+      "days_active": 14
+    },
+    {
+      "path": "./recovery_test.go",
+      "relative_path": "recovery_test.go",
+      "commit_count": 3,
+      "unique_authors": [
+        "Name",
+        "Yilong Li"
+      ],
+      "additions": 136,
+      "deletions": 33,
+      "churn_score": 0.26305142578601026,
+      "first_seen": "2025-08-02T12:30:14+08:00",
+      "last_modified": "2025-12-12T13:42:03+08:00",
+      "total_loc": 368,
+      "relative_churn": 0.4592391304347826,
+      "churn_rate": 0.0034790843214756255,
+      "change_frequency": 0.022727272727272728,
+      "days_active": 132
+    },
+    {
+      "path": "./gin.go",
+      "relative_path": "gin.go",
+      "commit_count": 5,
+      "unique_authors": [
+        "Pawan Kalyan",
+        "Bo-Yi Wu",
+        "Aeddis Desauw",
+        "Name"
+      ],
+      "additions": 64,
+      "deletions": 20,
+      "churn_score": 0.22644406531805994,
+      "first_seen": "2025-11-07T12:01:19+08:00",
+      "last_modified": "2025-11-27T10:55:34+01:00",
+      "total_loc": 832,
+      "relative_churn": 0.10096153846153846,
+      "churn_rate": 0.005048076923076923,
+      "change_frequency": 0.25,
+      "days_active": 20
+    },
+    {
+      "path": "./response_writer_test.go",
+      "relative_path": "response_writer_test.go",
+      "commit_count": 2,
+      "unique_authors": [
+        "Bo-Yi Wu",
+        "諏訪原慶斗"
+      ],
+      "additions": 128,
+      "deletions": 0,
+      "churn_score": 0.1918108700950524,
+      "first_seen": "2025-08-02T13:16:58+09:00",
+      "last_modified": "2025-09-26T08:13:39+08:00",
+      "total_loc": 317,
+      "relative_churn": 0.4037854889589905,
+      "churn_rate": 0.007477509054796121,
+      "change_frequency": 0.037037037037037035,
+      "days_active": 54
+    },
+    {
+      "path": "./recovery.go",
+      "relative_path": "recovery.go",
+      "commit_count": 3,
+      "unique_authors": [
+        "Name",
+        "Yilong Li"
+      ],
+      "additions": 63,
+      "deletions": 33,
+      "churn_score": 0.1847672434803802,
+      "first_seen": "2025-08-02T12:30:14+08:00",
+      "last_modified": "2025-12-12T13:42:03+08:00",
+      "total_loc": 206,
+      "relative_churn": 0.46601941747572817,
+      "churn_rate": 0.00353045013239188,
+      "change_frequency": 0.022727272727272728,
+      "days_active": 132
+    },
+    {
+      "path": "./binding/form_mapping_test.go",
+      "relative_path": "binding/form_mapping_test.go",
+      "commit_count": 2,
+      "unique_authors": [
+        "guonaihong",
+        "Name"
+      ],
+      "additions": 119,
+      "deletions": 0,
+      "churn_score": 0.18215939556422128,
+      "first_seen": "2025-10-11T19:20:41+08:00",
+      "last_modified": "2025-12-03T19:18:10+08:00",
+      "total_loc": 756,
+      "relative_churn": 0.1574074074074074,
+      "churn_rate": 0.0030270655270655273,
+      "change_frequency": 0.038461538461538464,
+      "days_active": 52
+    },
+    {
+      "path": "./.github/workflows/trivy-scan.yml",
+      "relative_path": ".github/workflows/trivy-scan.yml",
+      "commit_count": 4,
+      "unique_authors": [
+        "dependabot[bot]",
+        "Bo-Yi Wu"
+      ],
+      "additions": 61,
+      "deletions": 5,
+      "churn_score": 0.17986838898367047,
+      "first_seen": "2025-11-06T14:15:50+08:00",
+      "last_modified": "2025-11-26T23:33:08+08:00",
+      "total_loc": 56,
+      "relative_churn": 1.1785714285714286,
+      "churn_rate": 0.05892857142857143,
+      "change_frequency": 0.2,
+      "days_active": 20
+    },
+    {
+      "path": "./CHANGELOG.md",
+      "relative_path": "CHANGELOG.md",
+      "commit_count": 2,
+      "unique_authors": [
+        "Bo-Yi Wu"
+      ],
+      "additions": 95,
+      "deletions": 1,
+      "churn_score": 0.15749451620765295,
+      "first_seen": "2025-09-20T19:32:43+08:00",
+      "last_modified": "2025-09-20T19:38:42+08:00",
+      "total_loc": 753,
+      "relative_churn": 0.12749003984063745,
+      "churn_rate": 0.12749003984063745,
+      "change_frequency": 2,
+      "days_active": 1
+    },
+    {
+      "path": "./tree.go",
+      "relative_path": "tree.go",
+      "commit_count": 4,
+      "unique_authors": [
+        "OHZEKI Naoki",
+        "Bo-Yi Wu",
+        "Name"
+      ],
+      "additions": 16,
+      "deletions": 26,
+      "churn_score": 0.1541311235681209,
+      "first_seen": "2025-09-19T08:35:34+08:00",
+      "last_modified": "2025-12-12T14:43:25+09:00",
+      "total_loc": 890,
+      "relative_churn": 0.04719101123595506,
+      "churn_rate": 0.0005617977528089888,
+      "change_frequency": 0.047619047619047616,
+      "days_active": 84
+    },
+    {
+      "path": "./binding/form_mapping.go",
+      "relative_path": "binding/form_mapping.go",
+      "commit_count": 4,
+      "unique_authors": [
+        "russcoss",
+        "Leon cap",
+        "guonaihong",
+        "Name"
+      ],
+      "additions": 27,
+      "deletions": 13,
+      "churn_score": 0.15198635145015843,
+      "first_seen": "2025-07-19T14:58:12+08:00",
+      "last_modified": "2025-12-03T19:18:10+08:00",
+      "total_loc": 522,
+      "relative_churn": 0.07662835249042145,
+      "churn_rate": 0.000559331040076069,
+      "change_frequency": 0.029197080291970802,
+      "days_active": 137
+    },
+    {
+      "path": "./CONTRIBUTING.md",
+      "relative_path": "CONTRIBUTING.md",
+      "commit_count": 3,
+      "unique_authors": [
+        "Bo-Yi Wu",
+        "appleboy"
+      ],
+      "additions": 39,
+      "deletions": 11,
+      "churn_score": 0.1354374847672435,
+      "first_seen": "2025-09-20T20:58:46+08:00",
+      "last_modified": "2025-09-21T17:48:39+08:00",
+      "total_loc": 41,
+      "relative_churn": 1.2195121951219512,
+      "churn_rate": 1.2195121951219512,
+      "change_frequency": 3,
+      "days_active": 1
+    },
+    {
+      "path": "./.github/workflows/goreleaser.yml",
+      "relative_path": ".github/workflows/goreleaser.yml",
+      "commit_count": 4,
+      "unique_authors": [
+        "dependabot[bot]",
+        "Denny Septian Panggabean"
+      ],
+      "additions": 8,
+      "deletions": 3,
+      "churn_score": 0.12088715573970266,
+      "first_seen": "2025-07-26T20:02:59+07:00",
+      "last_modified": "2025-11-26T23:33:08+08:00",
+      "total_loc": 36,
+      "relative_churn": 0.3055555555555556,
+      "churn_rate": 0.002484191508581753,
+      "change_frequency": 0.032520325203252036,
+      "days_active": 123
+    },
+    {
+      "path": "./debug.go",
+      "relative_path": "debug.go",
+      "commit_count": 4,
+      "unique_authors": [
+        "OHZEKI Naoki",
+        "Bo-Yi Wu",
+        "諏訪原慶斗"
+      ],
+      "additions": 6,
+      "deletions": 4,
+      "churn_score": 0.11981476968072141,
+      "first_seen": "2025-07-17T20:51:40+09:00",
+      "last_modified": "2025-12-05T12:18:08+09:00",
+      "total_loc": 114,
+      "relative_churn": 0.08771929824561403,
+      "churn_rate": 0.0006265664160401002,
+      "change_frequency": 0.02857142857142857,
+      "days_active": 140
+    },
+    {
+      "path": "./path_test.go",
+      "relative_path": "path_test.go",
+      "commit_count": 2,
+      "unique_authors": [
+        "Name",
+        "efcking"
+      ],
+      "additions": 50,
+      "deletions": 3,
+      "churn_score": 0.11138191567145991,
+      "first_seen": "2025-11-15T19:22:18+08:00",
+      "last_modified": "2025-11-26T23:32:18+08:00",
+      "total_loc": 192,
+      "relative_churn": 0.2760416666666667,
+      "churn_rate": 0.02509469696969697,
+      "change_frequency": 0.18181818181818182,
+      "days_active": 11
+    },
+    {
+      "path": "./test_helpers.go",
+      "relative_path": "test_helpers.go",
+      "commit_count": 2,
+      "unique_authors": [
+        "Wayne Aki",
+        "諏訪原慶斗"
+      ],
+      "additions": 39,
+      "deletions": 3,
+      "churn_score": 0.09958566902266634,
+      "first_seen": "2025-08-02T13:23:20+09:00",
+      "last_modified": "2025-11-30T15:38:07+08:00",
+      "total_loc": 60,
+      "relative_churn": 0.7,
+      "churn_rate": 0.005833333333333333,
+      "change_frequency": 0.016666666666666666,
+      "days_active": 120
+    },
+    {
+      "path": "./logger.go",
+      "relative_path": "logger.go",
+      "commit_count": 2,
+      "unique_authors": [
+        "ljz",
+        "Leon cap"
+      ],
+      "additions": 34,
+      "deletions": 6,
+      "churn_score": 0.09744089690470387,
+      "first_seen": "2025-07-19T14:58:12+08:00",
+      "last_modified": "2025-10-05T11:23:57+08:00",
+      "total_loc": 309,
+      "relative_churn": 0.12944983818770225,
+      "churn_rate": 0.0016811667297104188,
+      "change_frequency": 0.025974025974025976,
+      "days_active": 77
+    },
+    {
+      "path": "./gin_integration_test.go",
+      "relative_path": "gin_integration_test.go",
+      "commit_count": 2,
+      "unique_authors": [
+        "Wayne Aki",
+        "Bo-Yi Wu"
+      ],
+      "additions": 22,
+      "deletions": 15,
+      "churn_score": 0.09422373872776017,
+      "first_seen": "2025-11-15T19:21:42+08:00",
+      "last_modified": "2025-11-30T15:38:07+08:00",
+      "total_loc": 607,
+      "relative_churn": 0.060955518945634266,
+      "churn_rate": 0.004353965638973876,
+      "change_frequency": 0.14285714285714285,
+      "days_active": 14
+    },
+    {
+      "path": "./debug_test.go",
+      "relative_path": "debug_test.go",
+      "commit_count": 2,
+      "unique_authors": [
+        "OHZEKI Naoki",
+        "Bo-Yi Wu"
+      ],
+      "additions": 24,
+      "deletions": 12,
+      "churn_score": 0.09315135266877894,
+      "first_seen": "2025-10-08T08:30:45+08:00",
+      "last_modified": "2025-12-05T12:18:08+09:00",
+      "total_loc": 180,
+      "relative_churn": 0.2,
+      "churn_rate": 0.003448275862068966,
+      "change_frequency": 0.034482758620689655,
+      "days_active": 58
+    },
+    {
+      "path": "./.github/ISSUE_TEMPLATE/bug-report.yaml",
+      "relative_path": ".github/ISSUE_TEMPLATE/bug-report.yaml",
+      "commit_count": 1,
+      "unique_authors": [
+        "Bo-Yi Wu"
+      ],
+      "additions": 60,
+      "deletions": 0,
+      "churn_score": 0.09161589081160126,
+      "first_seen": "2025-09-21T12:48:19+08:00",
+      "last_modified": "2025-09-21T12:48:19+08:00",
+      "total_loc": 60,
+      "relative_churn": 1,
+      "churn_rate": 1,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./.github/workflows/codeql.yml",
+      "relative_path": ".github/workflows/codeql.yml",
+      "commit_count": 3,
+      "unique_authors": [
+        "dependabot[bot]"
+      ],
+      "additions": 4,
+      "deletions": 4,
+      "churn_score": 0.09039727029003167,
+      "first_seen": "2025-09-21T21:18:25+08:00",
+      "last_modified": "2025-11-26T23:33:08+08:00",
+      "total_loc": 49,
+      "relative_churn": 0.16326530612244897,
+      "churn_rate": 0.002473716759431045,
+      "change_frequency": 0.045454545454545456,
+      "days_active": 66
+    },
+    {
+      "path": "./path.go",
+      "relative_path": "path.go",
+      "commit_count": 1,
+      "unique_authors": [
+        "Name"
+      ],
+      "additions": 54,
+      "deletions": 1,
+      "churn_score": 0.0862539605166951,
+      "first_seen": "2025-11-26T23:32:18+08:00",
+      "last_modified": "2025-11-26T23:32:18+08:00",
+      "total_loc": 203,
+      "relative_churn": 0.270935960591133,
+      "churn_rate": 0.270935960591133,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./logger_test.go",
+      "relative_path": "logger_test.go",
+      "commit_count": 2,
+      "unique_authors": [
+        "letreturn",
+        "ljz"
+      ],
+      "additions": 23,
+      "deletions": 6,
+      "churn_score": 0.08564465025591031,
+      "first_seen": "2025-10-05T11:23:57+08:00",
+      "last_modified": "2025-10-14T22:37:07+08:00",
+      "total_loc": 473,
+      "relative_churn": 0.0613107822410148,
+      "churn_rate": 0.006812309137890533,
+      "change_frequency": 0.2222222222222222,
+      "days_active": 9
+    },
+    {
+      "path": "./internal/bytesconv/bytesconv_test.go",
+      "relative_path": "internal/bytesconv/bytesconv_test.go",
+      "commit_count": 2,
+      "unique_authors": [
+        "Milad",
+        "reddaisyy"
+      ],
+      "additions": 23,
+      "deletions": 4,
+      "churn_score": 0.08349987813794785,
+      "first_seen": "2025-10-09T11:36:56+08:00",
+      "last_modified": "2025-11-30T10:55:46+03:30",
+      "total_loc": 124,
+      "relative_churn": 0.21774193548387097,
+      "churn_rate": 0.004187344913151364,
+      "change_frequency": 0.038461538461538464,
+      "days_active": 52
+    },
+    {
+      "path": "./.github/ISSUE_TEMPLATE.md",
+      "relative_path": ".github/ISSUE_TEMPLATE.md",
+      "commit_count": 1,
+      "unique_authors": [
+        "Bo-Yi Wu"
+      ],
+      "additions": 0,
+      "deletions": 49,
+      "churn_score": 0.0798196441628077,
+      "first_seen": "2025-09-21T12:48:19+08:00",
+      "last_modified": "2025-09-21T12:48:19+08:00",
+      "loc_read_error": true,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./.golangci.yml",
+      "relative_path": ".golangci.yml",
+      "commit_count": 2,
+      "unique_authors": [
+        "Bo-Yi Wu"
+      ],
+      "additions": 2,
+      "deletions": 13,
+      "churn_score": 0.07063124543017305,
+      "first_seen": "2025-11-15T19:21:42+08:00",
+      "last_modified": "2025-11-15T23:03:32+08:00",
+      "total_loc": 75,
+      "relative_churn": 0.2,
+      "churn_rate": 0.2,
+      "change_frequency": 2,
+      "days_active": 1
+    },
+    {
+      "path": "./utils_test.go",
+      "relative_path": "utils_test.go",
+      "commit_count": 2,
+      "unique_authors": [
+        "OHZEKI Naoki",
+        "efcking"
+      ],
+      "additions": 12,
+      "deletions": 1,
+      "churn_score": 0.06848647331221058,
+      "first_seen": "2025-11-15T19:22:18+08:00",
+      "last_modified": "2025-12-12T14:43:25+09:00",
+      "total_loc": 161,
+      "relative_churn": 0.08074534161490683,
+      "churn_rate": 0.003105590062111801,
+      "change_frequency": 0.07692307692307693,
+      "days_active": 26
+    },
+    {
+      "path": "./response_writer.go",
+      "relative_path": "response_writer.go",
+      "commit_count": 2,
+      "unique_authors": [
+        "Bo-Yi Wu",
+        "諏訪原慶斗"
+      ],
+      "additions": 10,
+      "deletions": 2,
+      "churn_score": 0.06741408725322934,
+      "first_seen": "2025-08-02T13:16:58+09:00",
+      "last_modified": "2025-09-26T08:13:39+08:00",
+      "total_loc": 139,
+      "relative_churn": 0.08633093525179857,
+      "churn_rate": 0.001598721023181455,
+      "change_frequency": 0.037037037037037035,
+      "days_active": 54
+    },
+    {
+      "path": "./context_file_test.go",
+      "relative_path": "context_file_test.go",
+      "commit_count": 1,
+      "unique_authors": [
+        "Leon cap"
+      ],
+      "additions": 35,
+      "deletions": 0,
+      "churn_score": 0.06480623933707043,
+      "first_seen": "2025-07-22T21:38:32+08:00",
+      "last_modified": "2025-07-22T21:38:32+08:00",
+      "total_loc": 35,
+      "relative_churn": 1,
+      "churn_rate": 1,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./routergroup_test.go",
+      "relative_path": "routergroup_test.go",
+      "commit_count": 1,
+      "unique_authors": [
+        "chenhuiluo"
+      ],
+      "additions": 24,
+      "deletions": 0,
+      "churn_score": 0.05300999268827687,
+      "first_seen": "2025-07-19T15:49:41+08:00",
+      "last_modified": "2025-07-19T15:49:41+08:00",
+      "total_loc": 219,
+      "relative_churn": 0.1095890410958904,
+      "churn_rate": 0.1095890410958904,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./.github/ISSUE_TEMPLATE/feature-request.yaml",
+      "relative_path": ".github/ISSUE_TEMPLATE/feature-request.yaml",
+      "commit_count": 1,
+      "unique_authors": [
+        "Bo-Yi Wu"
+      ],
+      "additions": 18,
+      "deletions": 0,
+      "churn_score": 0.04657567633438947,
+      "first_seen": "2025-09-21T12:48:19+08:00",
+      "last_modified": "2025-09-21T12:48:19+08:00",
+      "total_loc": 18,
+      "relative_churn": 1,
+      "churn_rate": 1,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./utils.go",
+      "relative_path": "utils.go",
+      "commit_count": 1,
+      "unique_authors": [
+        "OHZEKI Naoki"
+      ],
+      "additions": 17,
+      "deletions": 0,
+      "churn_score": 0.04550329027540824,
+      "first_seen": "2025-12-12T14:43:25+09:00",
+      "last_modified": "2025-12-12T14:43:25+09:00",
+      "total_loc": 181,
+      "relative_churn": 0.09392265193370165,
+      "churn_rate": 0.09392265193370165,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./doc.go",
+      "relative_path": "doc.go",
+      "commit_count": 1,
+      "unique_authors": [
+        "諏訪原慶斗"
+      ],
+      "additions": 16,
+      "deletions": 0,
+      "churn_score": 0.04443090421642701,
+      "first_seen": "2025-07-13T10:43:32+09:00",
+      "last_modified": "2025-07-13T10:43:32+09:00",
+      "total_loc": 22,
+      "relative_churn": 0.7272727272727273,
+      "churn_rate": 0.7272727272727273,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./.github/PULL_REQUEST_TEMPLATE.md",
+      "relative_path": ".github/PULL_REQUEST_TEMPLATE.md",
+      "commit_count": 1,
+      "unique_authors": [
+        "Bo-Yi Wu"
+      ],
+      "additions": 9,
+      "deletions": 6,
+      "churn_score": 0.04335851815744577,
+      "first_seen": "2025-09-21T12:48:19+08:00",
+      "last_modified": "2025-09-21T12:48:19+08:00",
+      "total_loc": 10,
+      "relative_churn": 1.5,
+      "churn_rate": 1.5,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./ginS/gins.go",
+      "relative_path": "ginS/gins.go",
+      "commit_count": 1,
+      "unique_authors": [
+        "Name"
+      ],
+      "additions": 3,
+      "deletions": 11,
+      "churn_score": 0.04228613209846453,
+      "first_seen": "2025-09-21T17:41:54+08:00",
+      "last_modified": "2025-09-21T17:41:54+08:00",
+      "total_loc": 159,
+      "relative_churn": 0.0880503144654088,
+      "churn_rate": 0.0880503144654088,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./.github/dependabot.yml",
+      "relative_path": ".github/dependabot.yml",
+      "commit_count": 1,
+      "unique_authors": [
+        "Bo-Yi Wu"
+      ],
+      "additions": 8,
+      "deletions": 4,
+      "churn_score": 0.04014135998050207,
+      "first_seen": "2025-09-21T21:11:11+08:00",
+      "last_modified": "2025-09-21T21:11:11+08:00",
+      "total_loc": 14,
+      "relative_churn": 0.8571428571428571,
+      "churn_rate": 0.8571428571428571,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./.github/ISSUE_TEMPLATE/config.yml",
+      "relative_path": ".github/ISSUE_TEMPLATE/config.yml",
+      "commit_count": 1,
+      "unique_authors": [
+        "Bo-Yi Wu"
+      ],
+      "additions": 11,
+      "deletions": 0,
+      "churn_score": 0.03906897392152084,
+      "first_seen": "2025-09-21T12:48:19+08:00",
+      "last_modified": "2025-09-21T12:48:19+08:00",
+      "total_loc": 11,
+      "relative_churn": 1,
+      "churn_rate": 1,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./render/render_test.go",
+      "relative_path": "render/render_test.go",
+      "commit_count": 1,
+      "unique_authors": [
+        "M. Ilham Surya Pratama"
+      ],
+      "additions": 8,
+      "deletions": 1,
+      "churn_score": 0.03692420180355837,
+      "first_seen": "2025-06-21T11:38:28+07:00",
+      "last_modified": "2025-06-21T11:38:28+07:00",
+      "total_loc": 628,
+      "relative_churn": 0.014331210191082803,
+      "churn_rate": 0.014331210191082803,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./render/reader.go",
+      "relative_path": "render/reader.go",
+      "commit_count": 1,
+      "unique_authors": [
+        "Name"
+      ],
+      "additions": 4,
+      "deletions": 4,
+      "churn_score": 0.03585181574457714,
+      "first_seen": "2025-09-19T08:39:17+08:00",
+      "last_modified": "2025-09-19T08:39:17+08:00",
+      "total_loc": 48,
+      "relative_churn": 0.16666666666666666,
+      "churn_rate": 0.16666666666666666,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./binding/form_mapping_benchmark_test.go",
+      "relative_path": "binding/form_mapping_benchmark_test.go",
+      "commit_count": 1,
+      "unique_authors": [
+        "efcking"
+      ],
+      "additions": 2,
+      "deletions": 2,
+      "churn_score": 0.03156227150865221,
+      "first_seen": "2025-11-15T19:22:18+08:00",
+      "last_modified": "2025-11-15T19:22:18+08:00",
+      "total_loc": 67,
+      "relative_churn": 0.05970149253731343,
+      "churn_rate": 0.05970149253731343,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./render/toml.go",
+      "relative_path": "render/toml.go",
+      "commit_count": 1,
+      "unique_authors": [
+        "Varus Hsu"
+      ],
+      "additions": 2,
+      "deletions": 2,
+      "churn_score": 0.03156227150865221,
+      "first_seen": "2025-08-02T12:27:59+08:00",
+      "last_modified": "2025-08-02T12:27:59+08:00",
+      "total_loc": 36,
+      "relative_churn": 0.1111111111111111,
+      "churn_rate": 0.1111111111111111,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./binding/default_validator_benchmark_test.go",
+      "relative_path": "binding/default_validator_benchmark_test.go",
+      "commit_count": 1,
+      "unique_authors": [
+        "efcking"
+      ],
+      "additions": 1,
+      "deletions": 2,
+      "churn_score": 0.030489885449670972,
+      "first_seen": "2025-11-15T19:22:18+08:00",
+      "last_modified": "2025-11-15T19:22:18+08:00",
+      "total_loc": 27,
+      "relative_churn": 0.1111111111111111,
+      "churn_rate": 0.1111111111111111,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./version.go",
+      "relative_path": "version.go",
+      "commit_count": 1,
+      "unique_authors": [
+        "Bo-Yi Wu"
+      ],
+      "additions": 1,
+      "deletions": 1,
+      "churn_score": 0.029417499390689737,
+      "first_seen": "2025-09-20T19:38:42+08:00",
+      "last_modified": "2025-09-20T19:38:42+08:00",
+      "total_loc": 8,
+      "relative_churn": 0.25,
+      "churn_rate": 0.25,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./benchmarks_test.go",
+      "relative_path": "benchmarks_test.go",
+      "commit_count": 1,
+      "unique_authors": [
+        "Meng Xun"
+      ],
+      "additions": 1,
+      "deletions": 1,
+      "churn_score": 0.029417499390689737,
+      "first_seen": "2025-09-26T08:15:35+08:00",
+      "last_modified": "2025-09-26T08:15:35+08:00",
+      "total_loc": 160,
+      "relative_churn": 0.0125,
+      "churn_rate": 0.0125,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./mode.go",
+      "relative_path": "mode.go",
+      "commit_count": 1,
+      "unique_authors": [
+        "maskpp"
+      ],
+      "additions": 1,
+      "deletions": 1,
+      "churn_score": 0.029417499390689737,
+      "first_seen": "2025-07-19T15:07:44+08:00",
+      "last_modified": "2025-07-19T15:07:44+08:00",
+      "total_loc": 100,
+      "relative_churn": 0.02,
+      "churn_rate": 0.02,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./binding/yaml.go",
+      "relative_path": "binding/yaml.go",
+      "commit_count": 1,
+      "unique_authors": [
+        "M. Ilham Surya Pratama"
+      ],
+      "additions": 1,
+      "deletions": 1,
+      "churn_score": 0.029417499390689737,
+      "first_seen": "2025-06-21T11:38:28+07:00",
+      "last_modified": "2025-06-21T11:38:28+07:00",
+      "total_loc": 35,
+      "relative_churn": 0.05714285714285714,
+      "churn_rate": 0.05714285714285714,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./testdata/test_file.txt",
+      "relative_path": "testdata/test_file.txt",
+      "commit_count": 1,
+      "unique_authors": [
+        "Leon cap"
+      ],
+      "additions": 2,
+      "deletions": 0,
+      "churn_score": 0.029417499390689737,
+      "first_seen": "2025-07-22T21:38:32+08:00",
+      "last_modified": "2025-07-22T21:38:32+08:00",
+      "total_loc": 2,
+      "relative_churn": 1,
+      "churn_rate": 1,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./render/yaml.go",
+      "relative_path": "render/yaml.go",
+      "commit_count": 1,
+      "unique_authors": [
+        "M. Ilham Surya Pratama"
+      ],
+      "additions": 1,
+      "deletions": 1,
+      "churn_score": 0.029417499390689737,
+      "first_seen": "2025-06-21T11:38:28+07:00",
+      "last_modified": "2025-06-21T11:38:28+07:00",
+      "total_loc": 36,
+      "relative_churn": 0.05555555555555555,
+      "churn_rate": 0.05555555555555555,
+      "change_frequency": 1,
+      "days_active": 1
+    }
+  ],
+  "summary": {
+    "total_file_changes": 171,
+    "total_files_changed": 54,
+    "hotspot_files": [
+      "./go.sum",
+      "./go.mod",
+      "./context_test.go",
+      "./context.go"
+    ],
+    "stable_files": [
+      "./render/yaml.go",
+      "./testdata/test_file.txt",
+      "./binding/yaml.go",
+      "./mode.go",
+      "./benchmarks_test.go",
+      "./version.go",
+      "./binding/default_validator_benchmark_test.go",
+      "./render/toml.go",
+      "./binding/form_mapping_benchmark_test.go",
+      "./render/reader.go"
+    ],
+    "author_contributions": {
+      "Aeddis Desauw": 2,
+      "AtoriUzawa": 1,
+      "Bo-Yi Wu": 35,
+      "Denny Septian Panggabean": 5,
+      "Flc゛": 4,
+      "Leon cap": 5,
+      "M. Ilham Surya Pratama": 5,
+      "Meng Xun": 1,
+      "Milad": 2,
+      "Name": 21,
+      "OHZEKI Naoki": 7,
+      "Pawan Kalyan": 2,
+      "Spyder01": 2,
+      "Varus Hsu": 1,
+      "Wayne Aki": 3,
+      "Yilong Li": 2,
+      "appleboy": 3,
+      "chenhuiluo": 1,
+      "cui": 1,
+      "dependabot[bot]": 48,
+      "efcking": 4,
+      "goldlinker": 1,
+      "guonaihong": 2,
+      "letreturn": 2,
+      "ljz": 2,
+      "maskpp": 1,
+      "reddaisyy": 1,
+      "russcoss": 1,
+      "wanghaolong613": 1,
+      "諏訪原慶斗": 5
+    },
+    "mean_churn_score": 0.15007131186755848,
+    "variance_churn_score": 0.03184420007972534,
+    "stddev_churn_score": 0.1784494328366592,
+    "total_additions": 2528,
+    "total_deletions": 680,
+    "avg_commits_per_file": 3.1666666666666665,
+    "max_churn_score": 0.8713136729222519,
+    "p50_churn_score": 0.09039727029003167,
+    "p95_churn_score": 0.6727272727272727
+  }
+}

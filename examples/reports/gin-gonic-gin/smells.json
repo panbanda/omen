@@ -1,0 +1,521 @@
+{
+  "generated_at": "2025-12-16T02:34:05.968022513Z",
+  "smells": [],
+  "components": [
+    {
+      "id": "/tmp/omen-267094167/render/json.go",
+      "name": "/tmp/omen-267094167/render/json.go",
+      "fan_in": 0,
+      "fan_out": 1,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/context.go",
+      "name": "/tmp/omen-267094167/context.go",
+      "fan_in": 0,
+      "fan_out": 3,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/routergroup.go",
+      "name": "/tmp/omen-267094167/routergroup.go",
+      "fan_in": 0,
+      "fan_out": 1,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/response_writer.go",
+      "name": "/tmp/omen-267094167/response_writer.go",
+      "fan_in": 0,
+      "fan_out": 2,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/binding/form.go",
+      "name": "/tmp/omen-267094167/binding/form.go",
+      "fan_in": 0,
+      "fan_out": 1,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/binding/form_mapping.go",
+      "name": "/tmp/omen-267094167/binding/form_mapping.go",
+      "fan_in": 0,
+      "fan_out": 1,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/render/reader.go",
+      "name": "/tmp/omen-267094167/render/reader.go",
+      "fan_in": 0,
+      "fan_out": 1,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/binding/json.go",
+      "name": "/tmp/omen-267094167/binding/json.go",
+      "fan_in": 0,
+      "fan_out": 3,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/binding/msgpack.go",
+      "name": "/tmp/omen-267094167/binding/msgpack.go",
+      "fan_in": 0,
+      "fan_out": 2,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/binding/multipart_form_mapping.go",
+      "name": "/tmp/omen-267094167/binding/multipart_form_mapping.go",
+      "fan_in": 0,
+      "fan_out": 1,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/binding/plain.go",
+      "name": "/tmp/omen-267094167/binding/plain.go",
+      "fan_in": 0,
+      "fan_out": 1,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/binding/protobuf.go",
+      "name": "/tmp/omen-267094167/binding/protobuf.go",
+      "fan_in": 0,
+      "fan_out": 2,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/utils.go",
+      "name": "/tmp/omen-267094167/utils.go",
+      "fan_in": 0,
+      "fan_out": 1,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/gin.go",
+      "name": "/tmp/omen-267094167/gin.go",
+      "fan_in": 0,
+      "fan_out": 1,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/codec/json/go_json.go",
+      "name": "/tmp/omen-267094167/codec/json/go_json.go",
+      "fan_in": 0,
+      "fan_out": 1,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/binding/xml.go",
+      "name": "/tmp/omen-267094167/binding/xml.go",
+      "fan_in": 0,
+      "fan_out": 2,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/binding/yaml.go",
+      "name": "/tmp/omen-267094167/binding/yaml.go",
+      "fan_in": 0,
+      "fan_out": 2,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/codec/json/api.go",
+      "name": "/tmp/omen-267094167/codec/json/api.go",
+      "fan_in": 0,
+      "fan_out": 1,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/recovery.go",
+      "name": "/tmp/omen-267094167/recovery.go",
+      "fan_in": 0,
+      "fan_out": 4,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/codec/json/json.go",
+      "name": "/tmp/omen-267094167/codec/json/json.go",
+      "fan_in": 0,
+      "fan_out": 1,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/codec/json/jsoniter.go",
+      "name": "/tmp/omen-267094167/codec/json/jsoniter.go",
+      "fan_in": 0,
+      "fan_out": 1,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/codec/json/sonic.go",
+      "name": "/tmp/omen-267094167/codec/json/sonic.go",
+      "fan_in": 0,
+      "fan_out": 1,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/binding/toml.go",
+      "name": "/tmp/omen-267094167/binding/toml.go",
+      "fan_in": 0,
+      "fan_out": 2,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/mode.go",
+      "name": "/tmp/omen-267094167/mode.go",
+      "fan_in": 0,
+      "fan_out": 1,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/deprecated.go",
+      "name": "/tmp/omen-267094167/deprecated.go",
+      "fan_in": 0,
+      "fan_out": 1,
+      "instability": 1,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/logger.go",
+      "name": "/tmp/omen-267094167/logger.go",
+      "fan_in": 3,
+      "fan_out": 1,
+      "instability": 0.25,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/doc.go",
+      "name": "/tmp/omen-267094167/doc.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/render/protobuf.go",
+      "name": "/tmp/omen-267094167/render/protobuf.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/fs.go",
+      "name": "/tmp/omen-267094167/fs.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/auth.go",
+      "name": "/tmp/omen-267094167/auth.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/ginS/gins.go",
+      "name": "/tmp/omen-267094167/ginS/gins.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/internal/bytesconv/bytesconv.go",
+      "name": "/tmp/omen-267094167/internal/bytesconv/bytesconv.go",
+      "fan_in": 7,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/internal/fs/fs.go",
+      "name": "/tmp/omen-267094167/internal/fs/fs.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/debug.go",
+      "name": "/tmp/omen-267094167/debug.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/context_appengine.go",
+      "name": "/tmp/omen-267094167/context_appengine.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/path.go",
+      "name": "/tmp/omen-267094167/path.go",
+      "fan_in": 3,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/binding/uri.go",
+      "name": "/tmp/omen-267094167/binding/uri.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/render/data.go",
+      "name": "/tmp/omen-267094167/render/data.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/render/html.go",
+      "name": "/tmp/omen-267094167/render/html.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/binding/query.go",
+      "name": "/tmp/omen-267094167/binding/query.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/render/msgpack.go",
+      "name": "/tmp/omen-267094167/render/msgpack.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/errors.go",
+      "name": "/tmp/omen-267094167/errors.go",
+      "fan_in": 8,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/binding/header.go",
+      "name": "/tmp/omen-267094167/binding/header.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/render/redirect.go",
+      "name": "/tmp/omen-267094167/render/redirect.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/render/render.go",
+      "name": "/tmp/omen-267094167/render/render.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/render/text.go",
+      "name": "/tmp/omen-267094167/render/text.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/render/toml.go",
+      "name": "/tmp/omen-267094167/render/toml.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/render/xml.go",
+      "name": "/tmp/omen-267094167/render/xml.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/render/yaml.go",
+      "name": "/tmp/omen-267094167/render/yaml.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/binding/default_validator.go",
+      "name": "/tmp/omen-267094167/binding/default_validator.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/binding/binding_nomsgpack.go",
+      "name": "/tmp/omen-267094167/binding/binding_nomsgpack.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/test_helpers.go",
+      "name": "/tmp/omen-267094167/test_helpers.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/tree.go",
+      "name": "/tmp/omen-267094167/tree.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/binding/binding.go",
+      "name": "/tmp/omen-267094167/binding/binding.go",
+      "fan_in": 0,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    },
+    {
+      "id": "/tmp/omen-267094167/version.go",
+      "name": "/tmp/omen-267094167/version.go",
+      "fan_in": 18,
+      "fan_out": 0,
+      "instability": 0,
+      "is_hub": false,
+      "is_god": false
+    }
+  ],
+  "summary": {
+    "total_smells": 0,
+    "cyclic_count": 0,
+    "hub_count": 0,
+    "unstable_count": 0,
+    "god_count": 0,
+    "critical_count": 0,
+    "high_count": 0,
+    "medium_count": 0,
+    "total_components": 55,
+    "average_instability": 0.4590909090909091
+  },
+  "thresholds": {
+    "hub_threshold": 20,
+    "god_fan_in_threshold": 10,
+    "god_fan_out_threshold": 10,
+    "instability_difference": 0.4,
+    "stable_threshold": 0.3,
+    "unstable_threshold": 0.7
+  }
+}

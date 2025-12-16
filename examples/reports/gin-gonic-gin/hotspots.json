@@ -1,0 +1,204 @@
+{
+  "generated_at": "2025-12-16T02:34:05.853157935Z",
+  "period_days": 180,
+  "files": [
+    {
+      "path": "/tmp/omen-267094167/tree.go",
+      "hotspot_score": 0.8131605007623034,
+      "churn_score": 0.675,
+      "complexity_score": 0.9796,
+      "commits": 4,
+      "avg_cognitive": 29.866666666666667,
+      "avg_cyclomatic": 11.533333333333333,
+      "total_functions": 15
+    },
+    {
+      "path": "/tmp/omen-267094167/recovery.go",
+      "hotspot_score": 0.5585696017507576,
+      "churn_score": 0.6,
+      "complexity_score": 0.52,
+      "commits": 3,
+      "avg_cognitive": 5.2,
+      "avg_cyclomatic": 3.7,
+      "total_functions": 10
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/form_mapping.go",
+      "hotspot_score": 0.5398863516771588,
+      "churn_score": 0.675,
+      "complexity_score": 0.4318181818181818,
+      "commits": 4,
+      "avg_cognitive": 4.318181818181818,
+      "avg_cyclomatic": 4.909090909090909,
+      "total_functions": 22
+    },
+    {
+      "path": "/tmp/omen-267094167/path.go",
+      "hotspot_score": 0.5157518783291051,
+      "churn_score": 0.3,
+      "complexity_score": 0.8866666666666667,
+      "commits": 1,
+      "avg_cognitive": 14.333333333333334,
+      "avg_cyclomatic": 12.666666666666666,
+      "total_functions": 3
+    },
+    {
+      "path": "/tmp/omen-267094167/gin.go",
+      "hotspot_score": 0.4024075274914949,
+      "churn_score": 0.75,
+      "complexity_score": 0.21590909090909094,
+      "commits": 5,
+      "avg_cognitive": 2.159090909090909,
+      "avg_cyclomatic": 2.727272727272727,
+      "total_functions": 44
+    },
+    {
+      "path": "/tmp/omen-267094167/debug.go",
+      "hotspot_score": 0.30000000000000004,
+      "churn_score": 0.675,
+      "complexity_score": 0.13333333333333333,
+      "commits": 4,
+      "avg_cognitive": 1.3333333333333333,
+      "avg_cyclomatic": 2.3333333333333335,
+      "total_functions": 9
+    },
+    {
+      "path": "/tmp/omen-267094167/test_helpers.go",
+      "hotspot_score": 0.2886751345948129,
+      "churn_score": 0.5,
+      "complexity_score": 0.16666666666666669,
+      "commits": 2,
+      "avg_cognitive": 1.6666666666666667,
+      "avg_cyclomatic": 2,
+      "total_functions": 3
+    },
+    {
+      "path": "/tmp/omen-267094167/context.go",
+      "hotspot_score": 0.2802596198981483,
+      "churn_score": 0.936,
+      "complexity_score": 0.08391608391608392,
+      "commits": 12,
+      "avg_cognitive": 0.8391608391608392,
+      "avg_cyclomatic": 1.6433566433566433,
+      "total_functions": 143
+    },
+    {
+      "path": "/tmp/omen-267094167/render/reader.go",
+      "hotspot_score": 0.2449489742783178,
+      "churn_score": 0.3,
+      "complexity_score": 0.2,
+      "commits": 1,
+      "avg_cognitive": 2,
+      "avg_cyclomatic": 2.3333333333333335,
+      "total_functions": 3
+    },
+    {
+      "path": "/tmp/omen-267094167/utils.go",
+      "hotspot_score": 0.22803508501982758,
+      "churn_score": 0.3,
+      "complexity_score": 0.17333333333333334,
+      "commits": 1,
+      "avg_cognitive": 1.7333333333333334,
+      "avg_cyclomatic": 2.6,
+      "total_functions": 15
+    },
+    {
+      "path": "/tmp/omen-267094167/logger.go",
+      "hotspot_score": 0.1860521018838127,
+      "churn_score": 0.5,
+      "complexity_score": 0.06923076923076923,
+      "commits": 2,
+      "avg_cognitive": 0.6923076923076923,
+      "avg_cyclomatic": 2.6923076923076925,
+      "total_functions": 13
+    },
+    {
+      "path": "/tmp/omen-267094167/response_writer.go",
+      "hotspot_score": 0.1640825308284734,
+      "churn_score": 0.5,
+      "complexity_score": 0.05384615384615385,
+      "commits": 2,
+      "avg_cognitive": 0.5384615384615384,
+      "avg_cyclomatic": 1.5384615384615385,
+      "total_functions": 13
+    },
+    {
+      "path": "/tmp/omen-267094167/mode.go",
+      "hotspot_score": 0.1224744871391589,
+      "churn_score": 0.3,
+      "complexity_score": 0.05,
+      "commits": 1,
+      "avg_cognitive": 0.5,
+      "avg_cyclomatic": 1.5,
+      "total_functions": 6
+    },
+    {
+      "path": "/tmp/omen-267094167/render/yaml.go",
+      "hotspot_score": 0.1224744871391589,
+      "churn_score": 0.3,
+      "complexity_score": 0.05,
+      "commits": 1,
+      "avg_cognitive": 0.5,
+      "avg_cyclomatic": 1.5,
+      "total_functions": 2
+    },
+    {
+      "path": "/tmp/omen-267094167/render/toml.go",
+      "hotspot_score": 0.1224744871391589,
+      "churn_score": 0.3,
+      "complexity_score": 0.05,
+      "commits": 1,
+      "avg_cognitive": 0.5,
+      "avg_cyclomatic": 1.5,
+      "total_functions": 2
+    },
+    {
+      "path": "/tmp/omen-267094167/binding/yaml.go",
+      "hotspot_score": 0.08660254037844387,
+      "churn_score": 0.3,
+      "complexity_score": 0.025,
+      "commits": 1,
+      "avg_cognitive": 0.25,
+      "avg_cyclomatic": 1.25,
+      "total_functions": 4
+    },
+    {
+      "path": "/tmp/omen-267094167/ginS/gins.go",
+      "hotspot_score": 0,
+      "churn_score": 0.3,
+      "complexity_score": 0,
+      "commits": 1,
+      "avg_cognitive": 0,
+      "avg_cyclomatic": 1,
+      "total_functions": 25
+    },
+    {
+      "path": "/tmp/omen-267094167/doc.go",
+      "hotspot_score": 0,
+      "churn_score": 0.3,
+      "complexity_score": 0,
+      "commits": 1,
+      "avg_cognitive": 0,
+      "avg_cyclomatic": 0,
+      "total_functions": 0
+    },
+    {
+      "path": "/tmp/omen-267094167/version.go",
+      "hotspot_score": 0,
+      "churn_score": 0.3,
+      "complexity_score": 0,
+      "commits": 1,
+      "avg_cognitive": 0,
+      "avg_cyclomatic": 0,
+      "total_functions": 0
+    }
+  ],
+  "summary": {
+    "total_files": 19,
+    "hotspot_count": 5,
+    "max_hotspot_score": 0.8131605007623034,
+    "avg_hotspot_score": 0.261887121490007,
+    "p50_hotspot_score": 0.22803508501982758,
+    "p90_hotspot_score": 0.5585696017507576
+  }
+}

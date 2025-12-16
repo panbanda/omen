@@ -1,0 +1,1582 @@
+{
+  "items": [
+    {
+      "category": "security",
+      "severity": "critical",
+      "file": "/tmp/omen-2461860455/crates/cli/src/decompress.rs",
+      "line": 409,
+      "description": "security",
+      "marker": "SECURITY",
+      "context_hash": "cac5b7de9ef5d5e70e91e8f6b2e4afc8"
+    },
+    {
+      "category": "security",
+      "severity": "critical",
+      "file": "/tmp/omen-2461860455/crates/cli/src/decompress.rs",
+      "line": 121,
+      "description": "security",
+      "marker": "SECURITY",
+      "context_hash": "4ebdad3b530252bb422412950e8c18dd"
+    },
+    {
+      "category": "security",
+      "severity": "critical",
+      "file": "/tmp/omen-2461860455/crates/cli/src/decompress.rs",
+      "line": 91,
+      "description": "security",
+      "marker": "SECURITY",
+      "context_hash": "e5d00bee7b881a55540fc318a69fdd81"
+    },
+    {
+      "category": "security",
+      "severity": "critical",
+      "file": "/tmp/omen-2461860455/crates/cli/src/decompress.rs",
+      "line": 438,
+      "description": "security",
+      "marker": "SECURITY",
+      "context_hash": "a1235004027571cee8bae0040b067a25"
+    },
+    {
+      "category": "defect",
+      "severity": "high",
+      "file": "/tmp/omen-2461860455/crates/core/main.rs",
+      "line": 128,
+      "description": "pipe means graceful termination.",
+      "marker": "UNKNOWN",
+      "context_hash": "a555c59b82815edd551192315c09b7b6"
+    },
+    {
+      "category": "defect",
+      "severity": "high",
+      "file": "/tmp/omen-2461860455/crates/core/main.rs",
+      "line": 251,
+      "description": "pipe means graceful termination.",
+      "marker": "UNKNOWN",
+      "context_hash": "9a697773d3fb4b5e7004283a58a8f55c"
+    },
+    {
+      "category": "defect",
+      "severity": "high",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/searcher/core.rs",
+      "line": 683,
+      "description": "FIXME",
+      "marker": "FIXME",
+      "context_hash": "d5d118e529bd7614f9bb98296e665d9b"
+    },
+    {
+      "category": "defect",
+      "severity": "high",
+      "file": "/tmp/omen-2461860455/crates/core/flags/mod.rs",
+      "line": 275,
+      "description": ", and thus a",
+      "marker": "BUG",
+      "context_hash": "1b05b77b7beb4f186074fa8b54aef1b6"
+    },
+    {
+      "category": "defect",
+      "severity": "high",
+      "file": "/tmp/omen-2461860455/crates/core/main.rs",
+      "line": 47,
+      "description": "pipe error. In this case, we generally want",
+      "marker": "UNKNOWN",
+      "context_hash": "3af85bfe31159bddd83778ce89f21ec0"
+    },
+    {
+      "category": "defect",
+      "severity": "high",
+      "file": "/tmp/omen-2461860455/crates/printer/src/summary.rs",
+      "line": 743,
+      "description": ".",
+      "marker": "BUG",
+      "context_hash": "42fa02d154cd409a1fe1eecfd25bd346"
+    },
+    {
+      "category": "defect",
+      "severity": "high",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/dir.rs",
+      "line": 480,
+      "description": ". It should do fine until we overhaul",
+      "marker": "BUG",
+      "context_hash": "a0456ded65f11b8a42eb458c7c9a9815"
+    },
+    {
+      "category": "defect",
+      "severity": "high",
+      "file": "/tmp/omen-2461860455/crates/printer/src/standard.rs",
+      "line": 973,
+      "description": "since we should be using matched_fast",
+      "marker": "BUG",
+      "context_hash": "66b7803c14e966faa315df6129ddfc8c"
+    },
+    {
+      "category": "defect",
+      "severity": "high",
+      "file": "/tmp/omen-2461860455/crates/core/main.rs",
+      "line": 205,
+      "description": "pipe means graceful termination.",
+      "marker": "UNKNOWN",
+      "context_hash": "750a65256a48f1f397f5686334d6b007"
+    },
+    {
+      "category": "defect",
+      "severity": "high",
+      "file": "/tmp/omen-2461860455/crates/regex/src/non_matching.rs",
+      "line": 31,
+      "description": "FIXME",
+      "marker": "FIXME",
+      "context_hash": "1efb795ab23fc864d0024fd42b3ae7e3"
+    },
+    {
+      "category": "defect",
+      "severity": "high",
+      "file": "/tmp/omen-2461860455/crates/core/main.rs",
+      "line": 318,
+      "description": "pipe means graceful termination, so fall through.",
+      "marker": "UNKNOWN",
+      "context_hash": "480f2258688be55314a832129ac90459"
+    },
+    {
+      "category": "defect",
+      "severity": "high",
+      "file": "/tmp/omen-2461860455/crates/pcre2/src/matcher.rs",
+      "line": 114,
+      "description": "will probably never be fixed.",
+      "marker": "BUG",
+      "context_hash": "d1cd0036a01dee49e66a47bc0834bac9"
+    },
+    {
+      "category": "defect",
+      "severity": "high",
+      "file": "/tmp/omen-2461860455/crates/cli/src/process.rs",
+      "line": 235,
+      "description": "pipe",
+      "marker": "UNKNOWN",
+      "context_hash": "9161821393d5191a7341e5bcbb2f6e61"
+    },
+    {
+      "category": "defect",
+      "severity": "high",
+      "file": "/tmp/omen-2461860455/crates/core/messages.rs",
+      "line": 45,
+      "description": "pipe error. And when that",
+      "marker": "UNKNOWN",
+      "context_hash": "8eaa67d16335262977d9b880424d2636"
+    },
+    {
+      "category": "defect",
+      "severity": "high",
+      "file": "/tmp/omen-2461860455/crates/globset/src/glob.rs",
+      "line": 593,
+      "description": "in the parser",
+      "marker": "BUG",
+      "context_hash": "9881a116d60cad6e81ec1f3ecf0375f3"
+    },
+    {
+      "category": "defect",
+      "severity": "high",
+      "file": "/tmp/omen-2461860455/crates/core/flags/mod.rs",
+      "line": 292,
+      "description": ", and thus a",
+      "marker": "BUG",
+      "context_hash": "99629f22fbec526219fd1d67907cf89b"
+    },
+    {
+      "category": "defect",
+      "severity": "high",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/dir.rs",
+      "line": 619,
+      "description": "to use this without also calling `current_dir()`",
+      "marker": "BUG",
+      "context_hash": "e4dd06f51c0e014613c0bc6fec773eba"
+    },
+    {
+      "category": "design",
+      "severity": "medium",
+      "file": "/tmp/omen-2461860455/crates/printer/src/util.rs",
+      "line": 491,
+      "description": "kludge",
+      "marker": "UNKNOWN",
+      "context_hash": "f402cfc97f4b1c3db33f52c3aa8e6433"
+    },
+    {
+      "category": "design",
+      "severity": "medium",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/walk.rs",
+      "line": 1346,
+      "description": "once traversal is finished. This can be achieved",
+      "marker": "CLEANUP",
+      "context_hash": "e98e5f3e75010ea5f563ef92163f9b37"
+    },
+    {
+      "category": "design",
+      "severity": "medium",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/walk.rs",
+      "line": 1348,
+      "description": "for every thread that is launched).",
+      "marker": "CLEANUP",
+      "context_hash": "0747b5d016879677ed13bdede30bcafa"
+    },
+    {
+      "category": "design",
+      "severity": "medium",
+      "file": "/tmp/omen-2461860455/crates/printer/src/lib.rs",
+      "line": 80,
+      "description": "kludge",
+      "marker": "UNKNOWN",
+      "context_hash": "ae082b725e6789ff997437ae1c201488"
+    },
+    {
+      "category": "design",
+      "severity": "medium",
+      "file": "/tmp/omen-2461860455/crates/printer/src/lib.rs",
+      "line": 82,
+      "description": "the various 'grep' interfaces to account for it, but it would",
+      "marker": "REFACTOR",
+      "context_hash": "ee4b7d834878596839da0ed655bb396c"
+    },
+    {
+      "category": "design",
+      "severity": "medium",
+      "file": "/tmp/omen-2461860455/crates/printer/src/lib.rs",
+      "line": 86,
+      "description": "kludge",
+      "marker": "UNKNOWN",
+      "context_hash": "cedabc170db8b292c150f4bbbbdc993e"
+    },
+    {
+      "category": "design",
+      "severity": "medium",
+      "file": "/tmp/omen-2461860455/crates/printer/src/summary.rs",
+      "line": 660,
+      "description": "kludge",
+      "marker": "UNKNOWN",
+      "context_hash": "d7cb7b6b2e13240f49ec45351a4d7d83"
+    },
+    {
+      "category": "design",
+      "severity": "medium",
+      "file": "/tmp/omen-2461860455/crates/cli/src/escape.rs",
+      "line": 75,
+      "description": "that this first lossily decodes the given OS string as UTF-8. That",
+      "marker": "NOTE",
+      "context_hash": "15c4580e68fcfcafbf9a75a880f67d0d"
+    },
+    {
+      "category": "test",
+      "severity": "medium",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/testutil.rs",
+      "line": 313,
+      "description": "failing",
+      "marker": "TEST",
+      "context_hash": "4b7ba091812f4cb55555e0359d05f247"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/walk.rs",
+      "line": 967,
+      "description": "that the errors for reading entries that may not satisfy the",
+      "marker": "NOTE",
+      "context_hash": "6dcb2624e5973de2e6be6a91bd0ba59c"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/matcher/src/lib.rs",
+      "line": 998,
+      "description": "that the end location reported by this method may be less than the",
+      "marker": "NOTE",
+      "context_hash": "9f30c6e70346bc06cd1ce1b56f2881d9"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/core/flags/mod.rs",
+      "line": 62,
+      "description": "that each implementation of this trait requires a long flag name,",
+      "marker": "NOTE",
+      "context_hash": "4a2c1dcc2b21715f9a82629fc30218f1"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/core/flags/lowargs.rs",
+      "line": 607,
+      "description": "that this may return an empty `Vec`.",
+      "marker": "NOTE",
+      "context_hash": "64e31b6231c997b33d8f2a18ec4e87bf"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/core/haystack.rs",
+      "line": 128,
+      "description": "that ripgrep does not see through shell globbing. e.g.,",
+      "marker": "NOTE",
+      "context_hash": "bbd775ac3336a9ef3b3651ad678646fa"
+    },
+    {
+      "category": "performance",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/core/main.rs",
+      "line": 29,
+      "description": "slow",
+      "marker": "UNKNOWN",
+      "context_hash": "f395a3e53b3cc185d44af6d25872acda"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/core/flags/lowargs.rs",
+      "line": 573,
+      "description": "that this may return an empty `Vec`.",
+      "marker": "NOTE",
+      "context_hash": "7b16cde44d1b8d507b07b02eb57aa7ef"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/core/flags/lowargs.rs",
+      "line": 503,
+      "description": "that this may return a `Some` variant with zero bytes.",
+      "marker": "NOTE",
+      "context_hash": "95c1becf18c1d1b301b3a65beea7f60d"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/core/flags/lowargs.rs",
+      "line": 431,
+      "description": "that there is a subtle difference between `Some(0)` and `None`. In the",
+      "marker": "NOTE",
+      "context_hash": "7ada624be12cfb941415e4afeb2ea281"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/core/flags/lowargs.rs",
+      "line": 148,
+      "description": "that -h/--help and -V/--version are not included in this because",
+      "marker": "NOTE",
+      "context_hash": "f743cf21487b6c567620daab3847d4a3"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/core/flags/hiargs.rs",
+      "line": 1095,
+      "description": "that we specifically use `!paths[0].is_dir()` here",
+      "marker": "NOTE",
+      "context_hash": "24ad0e292d65ba2078342a0082ff6a7c"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/core/main.rs",
+      "line": 376,
+      "description": "behind the short circuiting is to ensure there is as little as possible",
+      "marker": "UNKNOWN",
+      "context_hash": "ff02387a83ccc14e60e842fc1a919fdb"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/core/main.rs",
+      "line": 430,
+      "description": "that callers should probably ignore this errror, since",
+      "marker": "NOTE",
+      "context_hash": "ff8f6780ab8888bd7de400a1c82dd155"
+    },
+    {
+      "category": "performance",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/core/flags/hiargs.rs",
+      "line": 1009,
+      "description": "slow",
+      "marker": "UNKNOWN",
+      "context_hash": "30e1506d4371ad6b541c7fa02799e31c"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/core/messages.rs",
+      "line": 121,
+      "description": "that this is overridden if `messages` is disabled. Namely, if",
+      "marker": "NOTE",
+      "context_hash": "e167f62660268e478ea2f290d20a216f"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/core/search.rs",
+      "line": 121,
+      "description": "that if a preprocessor command is set, then it overrides this",
+      "marker": "NOTE",
+      "context_hash": "63375931d03b68ddf074512defde31ec"
+    },
+    {
+      "category": "test",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/globset/src/glob.rs",
+      "line": 13,
+      "description": "/// possible to test whether any of those patterns matches by looking up a",
+      "marker": "TEST",
+      "context_hash": "328abd108899998b9290bb04def2da07"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/globset/src/glob.rs",
+      "line": 41,
+      "description": "that this is a necessary but NOT sufficient criterion.",
+      "marker": "NOTE",
+      "context_hash": "cf726a78f3fc5b7415ef51206dddf24d"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/globset/src/glob.rs",
+      "line": 314,
+      "description": "that regular expressions for globs are intended to be matched on",
+      "marker": "NOTE",
+      "context_hash": "3ce8b7970da6db06a6e50981d71597d3"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/globset/src/glob.rs",
+      "line": 349,
+      "description": "that this extension returned differs from the extension that",
+      "marker": "NOTE",
+      "context_hash": "3ad7238bae6e3c27cb5f3566507b11b0"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/globset/src/glob.rs",
+      "line": 505,
+      "description": "that this will return None if any match of the basename tokens",
+      "marker": "NOTE",
+      "context_hash": "c0c3546444c0fa30c80aa74a872db6b3"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/core/flags/hiargs.rs",
+      "line": 948,
+      "description": "that the state values may change throughout the lifetime of",
+      "marker": "NOTE",
+      "context_hash": "45d8a63536c5804b88df2fa0ab3454db"
+    },
+    {
+      "category": "test",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/globset/src/lib.rs",
+      "line": 377,
+      "description": "/// assert!(!set.matches_all(\"test.rs\"));",
+      "marker": "TEST",
+      "context_hash": "481ebc7b2d87cee4e3067ea3b995d3fb"
+    },
+    {
+      "category": "requirement",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/globset/src/lib.rs",
+      "line": 903,
+      "description": "In the next semver breaking release, we should drop this pool and",
+      "marker": "TODO",
+      "context_hash": "1c86425c565eb8dfe6b1e24c194c1849"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/globset/src/lib.rs",
+      "line": 1039,
+      "description": "that ! does not need escaping because it is only special",
+      "marker": "NOTE",
+      "context_hash": "cdde83d2f95299b3e476ecd1e08a0173"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/globset/src/pathutil.rs",
+      "line": 30,
+      "description": "that this does NOT match the semantics of std::path::Path::extension.",
+      "marker": "NOTE",
+      "context_hash": "5564f4e960df51df1656d8d0d90e2f50"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/default_types.rs",
+      "line": 6,
+      "description": "this list, please file a PR:",
+      "marker": "UNKNOWN",
+      "context_hash": "b5a67a11b72eb5929468c65b3a6ae68c"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/default_types.rs",
+      "line": 204,
+      "description": "that PHP 6 doesn't exist",
+      "marker": "NOTE",
+      "context_hash": "ff6a3e3e0f0e4b79193f10234a5eefe0"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/dir.rs",
+      "line": 101,
+      "description": "that this is never used during matching, only when adding new",
+      "marker": "NOTE",
+      "context_hash": "29deb1ed4a60d76eb49f71018fdb366b"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/dir.rs",
+      "line": 176,
+      "description": "that this can only be called on an `Ignore` matcher with no",
+      "marker": "NOTE",
+      "context_hash": "43fecbeda90d1fe0fa6e265dec2a1cb0"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/dir.rs",
+      "line": 248,
+      "description": "that all I/O errors are completely ignored.",
+      "marker": "NOTE",
+      "context_hash": "486ca6a45f5d20f462d88076a9857eea"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/core/flags/hiargs.rs",
+      "line": 933,
+      "description": "that on",
+      "marker": "NOTE",
+      "context_hash": "3df176c777d8ace76c801f6e155166af"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/core/flags/hiargs.rs",
+      "line": 29,
+      "description": "here is that high level arguments generally",
+      "marker": "UNKNOWN",
+      "context_hash": "804670803b2d51d723af9243562d4246"
+    },
+    {
+      "category": "performance",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/dir.rs",
+      "line": 865,
+      "description": "slow",
+      "marker": "UNKNOWN",
+      "context_hash": "25d8b75acbcd68030c20733520544697"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/gitignore.rs",
+      "line": 101,
+      "description": "that I/O errors are ignored. For more granular control over",
+      "marker": "NOTE",
+      "context_hash": "fc20fb6aafde727bb35ba8548d49f883"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/gitignore.rs",
+      "line": 206,
+      "description": "This method is more expensive than walking the directory hierarchy",
+      "marker": "NOTE",
+      "context_hash": "844f90061d9f8cb3ede95168b2c0f9f3"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/gitignore.rs",
+      "line": 321,
+      "description": "that paths are always matched relative",
+      "marker": "NOTE",
+      "context_hash": "0c011a109996c0df896095bd10feaa4f"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/gitignore.rs",
+      "line": 361,
+      "description": "that this ignores the path given to this builder's constructor",
+      "marker": "NOTE",
+      "context_hash": "17545c7059be95a6c11fe25bdaca45a7"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/gitignore.rs",
+      "line": 389,
+      "description": "that partial errors can be returned. For example, if there was",
+      "marker": "NOTE",
+      "context_hash": "f367cc20dbed3ff4eacf264efef625ee"
+    },
+    {
+      "category": "requirement",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/gitignore.rs",
+      "line": 540,
+      "description": "This should not return a `Result`. Fix this in the next semver",
+      "marker": "TODO",
+      "context_hash": "79b6adea10d493e6836b60949b12e1c4"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/gitignore.rs",
+      "line": 569,
+      "description": "that the file path returned may not exist.",
+      "marker": "NOTE",
+      "context_hash": "a01b4637df1e58e880a101386d411e62"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/overrides.rs",
+      "line": 20,
+      "description": "that not all matches necessarily correspond to a specific glob. For",
+      "marker": "NOTE",
+      "context_hash": "deb1d3488d6835eed0dffdf57d72bd14"
+    },
+    {
+      "category": "requirement",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/overrides.rs",
+      "line": 157,
+      "description": "This should not return a `Result`. Fix this in the next semver",
+      "marker": "TODO",
+      "context_hash": "5eddd12779d7dcebacc004e24d7ad103"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/types.rs",
+      "line": 61,
+      "description": "we only select `foo`, not `bar`.",
+      "marker": "NOTE",
+      "context_hash": "9b20f88ea4893c14a9a00523d057c7a8"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/types.rs",
+      "line": 103,
+      "description": "that not all matches necessarily correspond to a specific glob.",
+      "marker": "NOTE",
+      "context_hash": "84a87e13b483c05904e934608bf58b1a"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/types.rs",
+      "line": 179,
+      "description": "Temporary",
+      "marker": "TEMP",
+      "context_hash": "2880c262bd10356092ed6a799032a083"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/walk.rs",
+      "line": 452,
+      "description": "that",
+      "marker": "NOTE",
+      "context_hash": "c72c7cd13b6f2416c229eb8de9aa28c1"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/walk.rs",
+      "line": 464,
+      "description": "that precedence between",
+      "marker": "NOTE",
+      "context_hash": "4d51c32a358af7d2b0d719a1171d9f79"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/walk.rs",
+      "line": 544,
+      "description": "that if you want to traverse multiple different directories, it",
+      "marker": "NOTE",
+      "context_hash": "361a429d9ef999c3688d141ee00f4ba2"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/walk.rs",
+      "line": 622,
+      "description": "that this *doesn't* return something that implements `Iterator`.",
+      "marker": "NOTE",
+      "context_hash": "20fd3994c1531b044a442150e4098111"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/walk.rs",
+      "line": 696,
+      "description": "that this only has an effect when using `build_parallel`.",
+      "marker": "NOTE",
+      "context_hash": "c7c4c0f0c3d1d3620c214c42b2aac122"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/walk.rs",
+      "line": 712,
+      "description": "that the error may indicate *partial* failure. For",
+      "marker": "NOTE",
+      "context_hash": "b2c35ab9ceb8b00c66d033727aec4273"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/walk.rs",
+      "line": 899,
+      "description": "that this is not used in the parallel iterator.",
+      "marker": "NOTE",
+      "context_hash": "308f6770c4076cebdbb4aefb35eeb0f9"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/walk.rs",
+      "line": 918,
+      "description": "that this is not used in the parallel iterator.",
+      "marker": "NOTE",
+      "context_hash": "785cf51a72b9f4e046f558ee040dcd67"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/core/flags/doc/version.rs",
+      "line": 127,
+      "description": "that",
+      "marker": "NOTE",
+      "context_hash": "f67527025aae00d9430067f27900879b"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/walk.rs",
+      "line": 970,
+      "description": "also that only one filter predicate can be applied to a",
+      "marker": "NOTE",
+      "context_hash": "e5df1c25c0708345004fef5043c7ce5d"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/walk.rs",
+      "line": 1050,
+      "description": "that this uses default settings, which include respecting",
+      "marker": "NOTE",
+      "context_hash": "f1cc92c7c5354df760bd02f35f0ee73e"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/walk.rs",
+      "line": 1236,
+      "description": "that this is an inherently asynchronous action. It is possible",
+      "marker": "NOTE",
+      "context_hash": "8f0b5d7723f1a522cb8cc8afb9ef665d"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/core/flags/complete/powershell.rs",
+      "line": 41,
+      "description": "that these completions are based on what was produced for ripgrep \u003c=13",
+      "marker": "NOTE",
+      "context_hash": "7bbf3c59452eb4aff67beb8ba99acd84"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/core/flags/complete/bash.rs",
+      "line": 61,
+      "description": "that these completions are based on what was produced for ripgrep \u003c=13",
+      "marker": "NOTE",
+      "context_hash": "f6b9f45b936240668e20acd7a0ad3ac4"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/walk.rs",
+      "line": 1362,
+      "description": "// Send the initial set of root paths to the pool of workers. Note",
+      "marker": "NOTE",
+      "context_hash": "cd5d8cdb28893fb622018955cbf61b15"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/walk.rs",
+      "line": 1479,
+      "description": "that this only applies to entries at depth 0. On all other",
+      "marker": "NOTE",
+      "context_hash": "521a54e94a705123d9aad644671374f9"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/walk.rs",
+      "line": 1589,
+      "description": "that a worker is *both* a producer and a consumer.",
+      "marker": "NOTE",
+      "context_hash": "3086a0dda18cef22f2ba27d98cfe4808"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/ignore/src/walk.rs",
+      "line": 1600,
+      "description": "/// Whether all workers should terminate at the next opportunity. Note",
+      "marker": "NOTE",
+      "context_hash": "591e0abac838077a4ee456deb1bcee7e"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/matcher/src/lib.rs",
+      "line": 375,
+      "description": "that this trait explicitly does not provide a way to construct a new",
+      "marker": "NOTE",
+      "context_hash": "378a51501c32d03fd5d32ab8bb66e80c"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/matcher/src/lib.rs",
+      "line": 404,
+      "description": "that capturing groups that have non-zero length but otherwise",
+      "marker": "NOTE",
+      "context_hash": "b24bf49f233086db6d0e34befbb4ec04"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/matcher/src/lib.rs",
+      "line": 414,
+      "description": "If you're looking for a convenient way to perform replacements",
+      "marker": "NOTE",
+      "context_hash": "4653d84853bfab138003cba122f056e9"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/matcher/src/lib.rs",
+      "line": 436,
+      "description": "that the capture group match indices are resolved by slicing",
+      "marker": "NOTE",
+      "context_hash": "6d466337680c924e8b344577cfa4e27a"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/matcher/src/lib.rs",
+      "line": 883,
+      "description": "that if implementors seek to support capturing groups, then they",
+      "marker": "NOTE",
+      "context_hash": "8842fa36cb111b705aa0764f44c22bae"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/core/flags/mod.rs",
+      "line": 255,
+      "description": "that the CLI doesn't directly support negated switches. For example,",
+      "marker": "NOTE",
+      "context_hash": "165bc3e8a150c3f8c9a35c411b4c5328"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/matcher/src/lib.rs",
+      "line": 1020,
+      "description": "that the end location reported by this method may be less than the",
+      "marker": "NOTE",
+      "context_hash": "93bacf0971573e57cf3525919bf2ede0"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/matcher/src/lib.rs",
+      "line": 1121,
+      "description": "that while this method may report false positives, it must never",
+      "marker": "NOTE",
+      "context_hash": "59736b0273ef3d92444b17d8ca306baa"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/pcre2/src/matcher.rs",
+      "line": 112,
+      "description": "that the implementation of this is not perfect. Namely, `\\p{Ll}`",
+      "marker": "NOTE",
+      "context_hash": "0df01f8574f7cf5b2dec3793e73da12f"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/cli/src/process.rs",
+      "line": 125,
+      "description": "that when enabled, this may require launching an additional",
+      "marker": "NOTE",
+      "context_hash": "c66c640223136e2cf4052a65437b9ec3"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/pcre2/src/matcher.rs",
+      "line": 218,
+      "description": "that when UTF matching mode is enabled, every search performed",
+      "marker": "NOTE",
+      "context_hash": "e9da98607a36c36128727d8253e4ffcb"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/pcre2/src/matcher.rs",
+      "line": 383,
+      "description": "that not all capturing groups are guaranteed to be present in a match.",
+      "marker": "NOTE",
+      "context_hash": "71e6712e08eebc97abf739a7d423272d"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/printer/src/hyperlink/mod.rs",
+      "line": 800,
+      "description": "that the following URL syntax also seems to be valid?",
+      "marker": "NOTE",
+      "context_hash": "ff5b8a0f43477fcdd1a54a743cda4428"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/printer/src/hyperlink/mod.rs",
+      "line": 807,
+      "description": "that the file://C:/dir/file.txt syntax is not correct,",
+      "marker": "NOTE",
+      "context_hash": "66984c5a2113634ce1e87be0464b4149"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/printer/src/json.rs",
+      "line": 270,
+      "description": "that it is possible for this array to be empty,",
+      "marker": "NOTE",
+      "context_hash": "80f0d319c7d7110f02f5280946301ecd"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/printer/src/json.rs",
+      "line": 300,
+      "description": "that it is possible for this array to be",
+      "marker": "NOTE",
+      "context_hash": "b725172cef36ff2877e709f1395012e7"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/cli/src/pattern.rs",
+      "line": 118,
+      "description": "that this routine uses its own internal buffer, so the caller should",
+      "marker": "NOTE",
+      "context_hash": "a624efa1d6f9a5f5bf65f3b81421a4d6"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/cli/src/lib.rs",
+      "line": 287,
+      "description": "that this is now just a wrapper around",
+      "marker": "NOTE",
+      "context_hash": "399411472ba788b97d2e82f7cd2a4c64"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/cli/src/lib.rs",
+      "line": 274,
+      "description": "that this is now just a wrapper around",
+      "marker": "NOTE",
+      "context_hash": "918c97145c9320f86ad08f61ee8955b2"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/cli/src/lib.rs",
+      "line": 255,
+      "description": "that this is now just a wrapper around",
+      "marker": "NOTE",
+      "context_hash": "8f5ab38686415e779a4ee5d3605377cb"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/printer/src/standard.rs",
+      "line": 1569,
+      "description": "that this doesn't just return whether the searcher is in multi",
+      "marker": "NOTE",
+      "context_hash": "2afeedc042f0227c46e8f93784c4b88f"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/printer/src/summary.rs",
+      "line": 86,
+      "description": "that if `stats` is enabled, then searching continues in order to",
+      "marker": "NOTE",
+      "context_hash": "7e1cf1facf908cb97403cd72091ad465"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/printer/src/summary.rs",
+      "line": 92,
+      "description": "that if `stats` is enabled, then searching continues in order to",
+      "marker": "NOTE",
+      "context_hash": "56a8ec1226b528bdc2d618708e6ffb69"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/printer/src/summary.rs",
+      "line": 262,
+      "description": "that some output modes, such as `CountMatches`, automatically",
+      "marker": "NOTE",
+      "context_hash": "b1b80564f4d97be3cd8836dc230325cd"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/printer/src/summary.rs",
+      "line": 536,
+      "description": "that this doesn't just return whether the searcher is in multi",
+      "marker": "NOTE",
+      "context_hash": "14e231d899d1c3a4b531ef9968f5d3e0"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/cli/src/lib.rs",
+      "line": 160,
+      "description": "that this isn't perfect and essentially corresponds to a heuristic.",
+      "marker": "NOTE",
+      "context_hash": "e832cfce715373a100baff3a0c9bd808"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/cli/src/lib.rs",
+      "line": 69,
+      "description": "the use of a raw string!",
+      "marker": "NOTE",
+      "context_hash": "c51756676a34853b3f9a7797b2bf6c5a"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/printer/src/util.rs",
+      "line": 342,
+      "description": "that a hyperlink may not be able to be created from a path.",
+      "marker": "NOTE",
+      "context_hash": "021fee2973358453f2df2c5321310f21"
+    },
+    {
+      "category": "performance",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/printer/src/util.rs",
+      "line": 409,
+      "description": "slow",
+      "marker": "UNKNOWN",
+      "context_hash": "6d8260e9c62741e743a8d1c406367ac2"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/cli/src/decompress.rs",
+      "line": 442,
+      "description": "that this could still return a relative path if PATH contains a",
+      "marker": "NOTE",
+      "context_hash": "caeb51bcbaeb1a134113f8cff5662c58"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/regex/src/config.rs",
+      "line": 99,
+      "description": "here is that if this returns true, then it is safe",
+      "marker": "UNKNOWN",
+      "context_hash": "b75c2820a7cb2b22859e39ee9543995f"
+    },
+    {
+      "category": "performance",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/regex/src/config.rs",
+      "line": 270,
+      "description": "slow",
+      "marker": "UNKNOWN",
+      "context_hash": "0d3e2604b19683b5f6883ea7e21539ea"
+    },
+    {
+      "category": "performance",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/regex/src/config.rs",
+      "line": 271,
+      "description": "slow",
+      "marker": "UNKNOWN",
+      "context_hash": "0f5c68677218490e948a6aecf5d11e43"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/regex/src/literal.rs",
+      "line": 17,
+      "description": "underlying the validity of this technique is the fact",
+      "marker": "UNKNOWN",
+      "context_hash": "b5d003786e07cf47a7fbff63f09d0039"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/regex/src/literal.rs",
+      "line": 51,
+      "description": "that this requires the actual regex that will be used for a search",
+      "marker": "NOTE",
+      "context_hash": "32f903e451ad97a2300d82096eca71bd"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/regex/src/literal.rs",
+      "line": 103,
+      "description": "here is that the pattern",
+      "marker": "UNKNOWN",
+      "context_hash": "3efb6eccbd7d1fbb8413df0f350c1b3a"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/regex/src/literal.rs",
+      "line": 202,
+      "description": "that this also includes",
+      "marker": "NOTE",
+      "context_hash": "0ea220dd2055db9716c3fa0d0e0a5cd7"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/regex/src/literal.rs",
+      "line": 221,
+      "description": "that 'cross' also dispatches based on whether we're",
+      "marker": "NOTE",
+      "context_hash": "292321ae53b8ece17336a9661868f23e"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/regex/src/literal.rs",
+      "line": 402,
+      "description": "is that we'd rather trim down",
+      "marker": "UNKNOWN",
+      "context_hash": "27167c7c913d3d0aab7ea5daf8654282"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/regex/src/matcher.rs",
+      "line": 77,
+      "description": "applies.)",
+      "marker": "UNKNOWN",
+      "context_hash": "822d26ff7a05da5e13c2e25873c4c4c8"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/regex/src/matcher.rs",
+      "line": 219,
+      "description": "that this is a *per thread* limit. There is no way to set a global",
+      "marker": "NOTE",
+      "context_hash": "c0290259273983ffdf4bcf827e13f3e9"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/regex/src/matcher.rs",
+      "line": 250,
+      "description": "that a nest limit of `0` will return a nest limit error for most",
+      "marker": "NOTE",
+      "context_hash": "873cf86f6772eec186eb7e1757d63576"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/regex/src/matcher.rs",
+      "line": 275,
+      "description": "` (when `\\n` is the line terminator), but the pattern `a\\nb`",
+      "marker": "UNKNOWN",
+      "context_hash": "5ffd6ade7bf439d6668efe510ee44d46"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/regex/src/matcher.rs",
+      "line": 317,
+      "description": "that if you do not wish to set the line terminator but would",
+      "marker": "NOTE",
+      "context_hash": "4a4fdf987ea1078f6dbf3a2c61df5e02"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/regex/src/matcher.rs",
+      "line": 516,
+      "description": "that not all capturing groups are guaranteed to be present in a match.",
+      "marker": "NOTE",
+      "context_hash": "972f7fe9628aac5145031379fdfad892"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/cli/src/decompress.rs",
+      "line": 413,
+      "description": "that this could still return a relative path if PATH contains a",
+      "marker": "NOTE",
+      "context_hash": "7f706b038defea3ee0cc460de0213518"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/regex/src/strip.rs",
+      "line": 21,
+      "description": "that as of regex 1.9, this routine could theoretically be implemented",
+      "marker": "NOTE",
+      "context_hash": "2abcb1056e86953d835453002ee077ee"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/line_buffer.rs",
+      "line": 177,
+      "description": "that this setting only applies to the amount of *additional*",
+      "marker": "NOTE",
+      "context_hash": "ebd8cc2f9c60c1793c649159fb38ede4"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/line_buffer.rs",
+      "line": 249,
+      "description": "that if this line buffer's binary detection is set to",
+      "marker": "NOTE",
+      "context_hash": "58b36b2bccf605f3b7a9750d473e20e6"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/line_buffer.rs",
+      "line": 399,
+      "description": "that if this line buffer's binary detection is set to",
+      "marker": "NOTE",
+      "context_hash": "d0c1ce07c5a0437c8e02330edb5c2cbc"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/cli/src/decompress.rs",
+      "line": 317,
+      "description": "that if you need to decompress multiple files, it is better to use",
+      "marker": "NOTE",
+      "context_hash": "2efd5f6e6ff41742af7c5fbbd183d98c"
+    },
+    {
+      "category": "performance",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/searcher/core.rs",
+      "line": 688,
+      "description": "slow",
+      "marker": "UNKNOWN",
+      "context_hash": "22dcc6180a733966747fe7445028db55"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/searcher/glue.rs",
+      "line": 238,
+      "description": "that we do not technically require strict overlap here.",
+      "marker": "NOTE",
+      "context_hash": "bb3230775a3ffc13af5aa279c495df14"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/searcher/mod.rs",
+      "line": 578,
+      "description": "that `0` is a legal value. This will cause the searcher to",
+      "marker": "NOTE",
+      "context_hash": "e6fb9824dc2e33f13900928a655ed74d"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/searcher/mod.rs",
+      "line": 882,
+      "description": "that `0` is a legal value. This will cause the searcher to",
+      "marker": "NOTE",
+      "context_hash": "45a945c82b82504d1185d5a487999a98"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/sink.rs",
+      "line": 356,
+      "description": "that since this is an absolute byte offset, it cannot be relied",
+      "marker": "NOTE",
+      "context_hash": "70d052716c47fd0917902ea57a97ddac"
+    },
+    {
+      "category": "requirement",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/sink.rs",
+      "line": 607,
+      "description": "In theory, it should be possible to amortize",
+      "marker": "TODO",
+      "context_hash": "cdd814a9b567c5743421c9e7f036d49a"
+    },
+    {
+      "category": "test",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/testutil.rs",
+      "line": 201,
+      "description": "/// The tester works by assuming you want to test all pertinent code paths.",
+      "marker": "TEST",
+      "context_hash": "6008912fa7e2725cac48fac64fa3dd1c"
+    },
+    {
+      "category": "test",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/testutil.rs",
+      "line": 248,
+      "description": "/// Execute the test. If the test succeeds, then this returns successfully.",
+      "marker": "TEST",
+      "context_hash": "b44b307d7f28ca187a65ef3e20919ec0"
+    },
+    {
+      "category": "test",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/testutil.rs",
+      "line": 249,
+      "description": "/// If the test fails, then it panics with an informative message.",
+      "marker": "TEST",
+      "context_hash": "e6898503fe4e895e65331c4b4f00a712"
+    },
+    {
+      "category": "test",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/testutil.rs",
+      "line": 298,
+      "description": "/// By default, no filter is present. When a filter is set, only test",
+      "marker": "TEST",
+      "context_hash": "eb10552f970040acfa321834799b886f"
+    },
+    {
+      "category": "test",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/testutil.rs",
+      "line": 302,
+      "description": "/// printf debugging and only want one particular test configuration to",
+      "marker": "TEST",
+      "context_hash": "6014234521d932dbc8b98a5b3fbcae30"
+    },
+    {
+      "category": "test",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/testutil.rs",
+      "line": 310,
+      "description": "/// When set, the labels for all test configurations are printed before",
+      "marker": "TEST",
+      "context_hash": "a47db57e372b43dcc24778c035deb524"
+    },
+    {
+      "category": "test",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/testutil.rs",
+      "line": 311,
+      "description": "/// executing any test.",
+      "marker": "TEST",
+      "context_hash": "90aafd06c001acf9795ca1af6a8ded61"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/cli/src/decompress.rs",
+      "line": 269,
+      "description": "that when enabled, this may require launching an additional",
+      "marker": "NOTE",
+      "context_hash": "ae40a8af68f241c556e41970bdd8790e"
+    },
+    {
+      "category": "test",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/testutil.rs",
+      "line": 314,
+      "description": "/// want to use `cargo test -- --nocapture`.",
+      "marker": "TEST",
+      "context_hash": "5ced01e1a206a1febae6233a0d2b071e"
+    },
+    {
+      "category": "test",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/testutil.rs",
+      "line": 362,
+      "description": "/// Whether to test search with line numbers or not.",
+      "marker": "TEST",
+      "context_hash": "f14a197ed59de9453e170eeb2edd83c4"
+    },
+    {
+      "category": "test",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/testutil.rs",
+      "line": 372,
+      "description": "/// Whether to test search using the line-by-line searcher or not.",
+      "marker": "TEST",
+      "context_hash": "219159b27f9a4de36d15c7433eb9381b"
+    },
+    {
+      "category": "test",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/testutil.rs",
+      "line": 380,
+      "description": "/// Whether to test search using the multi line searcher or not.",
+      "marker": "TEST",
+      "context_hash": "9750fedaf17d52ce58cca5d2c2d33e8a"
+    },
+    {
+      "category": "test",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/testutil.rs",
+      "line": 408,
+      "description": "/// Whether to automatically attempt to test the heap limit setting or not.",
+      "marker": "TEST",
+      "context_hash": "2023111c1022abd037ae692b62d4cc4e"
+    },
+    {
+      "category": "test",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/testutil.rs",
+      "line": 410,
+      "description": "/// By default, one of the test configurations includes setting the heap",
+      "marker": "TEST",
+      "context_hash": "6d8a0b11180fbd8efe3bb292912d3a12"
+    },
+    {
+      "category": "test",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/testutil.rs",
+      "line": 416,
+      "description": "/// test.",
+      "marker": "TEST",
+      "context_hash": "66cd116f88b560e5ebfc54215cb534a5"
+    },
+    {
+      "category": "design",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/testutil.rs",
+      "line": 465,
+      "description": "that this must account for whether the test is using multi line",
+      "marker": "NOTE",
+      "context_hash": "c9460a0674b670359c6d507dbd568ffa"
+    },
+    {
+      "category": "test",
+      "severity": "low",
+      "file": "/tmp/omen-2461860455/crates/searcher/src/testutil.rs",
+      "line": 501,
+      "description": "/// of executing `test`.",
+      "marker": "TEST",
+      "context_hash": "5d68b61cce44dd5270dff43c88ac987d"
+    }
+  ],
+  "summary": {
+    "total_items": 168,
+    "by_severity": {
+      "critical": 4,
+      "high": 17,
+      "low": 138,
+      "medium": 9
+    },
+    "by_category": {
+      "defect": 17,
+      "design": 118,
+      "performance": 7,
+      "requirement": 4,
+      "security": 4,
+      "test": 18
+    },
+    "by_file": {
+      "/tmp/omen-2461860455/crates/cli/src/decompress.rs": 8,
+      "/tmp/omen-2461860455/crates/cli/src/escape.rs": 1,
+      "/tmp/omen-2461860455/crates/cli/src/lib.rs": 5,
+      "/tmp/omen-2461860455/crates/cli/src/pattern.rs": 1,
+      "/tmp/omen-2461860455/crates/cli/src/process.rs": 2,
+      "/tmp/omen-2461860455/crates/core/flags/complete/bash.rs": 1,
+      "/tmp/omen-2461860455/crates/core/flags/complete/powershell.rs": 1,
+      "/tmp/omen-2461860455/crates/core/flags/doc/version.rs": 1,
+      "/tmp/omen-2461860455/crates/core/flags/hiargs.rs": 5,
+      "/tmp/omen-2461860455/crates/core/flags/lowargs.rs": 5,
+      "/tmp/omen-2461860455/crates/core/flags/mod.rs": 4,
+      "/tmp/omen-2461860455/crates/core/haystack.rs": 1,
+      "/tmp/omen-2461860455/crates/core/main.rs": 8,
+      "/tmp/omen-2461860455/crates/core/messages.rs": 2,
+      "/tmp/omen-2461860455/crates/core/search.rs": 1,
+      "/tmp/omen-2461860455/crates/globset/src/glob.rs": 6,
+      "/tmp/omen-2461860455/crates/globset/src/lib.rs": 3,
+      "/tmp/omen-2461860455/crates/globset/src/pathutil.rs": 1,
+      "/tmp/omen-2461860455/crates/ignore/src/default_types.rs": 2,
+      "/tmp/omen-2461860455/crates/ignore/src/dir.rs": 6,
+      "/tmp/omen-2461860455/crates/ignore/src/gitignore.rs": 7,
+      "/tmp/omen-2461860455/crates/ignore/src/overrides.rs": 2,
+      "/tmp/omen-2461860455/crates/ignore/src/types.rs": 3,
+      "/tmp/omen-2461860455/crates/ignore/src/walk.rs": 18,
+      "/tmp/omen-2461860455/crates/matcher/src/lib.rs": 8,
+      "/tmp/omen-2461860455/crates/pcre2/src/matcher.rs": 4,
+      "/tmp/omen-2461860455/crates/printer/src/hyperlink/mod.rs": 2,
+      "/tmp/omen-2461860455/crates/printer/src/json.rs": 2,
+      "/tmp/omen-2461860455/crates/printer/src/lib.rs": 3,
+      "/tmp/omen-2461860455/crates/printer/src/standard.rs": 2,
+      "/tmp/omen-2461860455/crates/printer/src/summary.rs": 6,
+      "/tmp/omen-2461860455/crates/printer/src/util.rs": 3,
+      "/tmp/omen-2461860455/crates/regex/src/config.rs": 3,
+      "/tmp/omen-2461860455/crates/regex/src/literal.rs": 6,
+      "/tmp/omen-2461860455/crates/regex/src/matcher.rs": 6,
+      "/tmp/omen-2461860455/crates/regex/src/non_matching.rs": 1,
+      "/tmp/omen-2461860455/crates/regex/src/strip.rs": 1,
+      "/tmp/omen-2461860455/crates/searcher/src/line_buffer.rs": 3,
+      "/tmp/omen-2461860455/crates/searcher/src/searcher/core.rs": 2,
+      "/tmp/omen-2461860455/crates/searcher/src/searcher/glue.rs": 1,
+      "/tmp/omen-2461860455/crates/searcher/src/searcher/mod.rs": 2,
+      "/tmp/omen-2461860455/crates/searcher/src/sink.rs": 2,
+      "/tmp/omen-2461860455/crates/searcher/src/testutil.rs": 17
+    },
+    "files_with_satd": 43
+  },
+  "total_files_analyzed": 103,
+  "files_with_debt": 43,
+  "analyzed_at": "0001-01-01T00:00:00Z"
+}

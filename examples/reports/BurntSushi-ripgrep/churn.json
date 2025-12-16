@@ -1,0 +1,1878 @@
+{
+  "generated_at": "2025-12-16T02:34:54.141304901Z",
+  "period_days": 180,
+  "repository_root": "/tmp/omen-2461860455",
+  "files": [
+    {
+      "path": "./Cargo.lock",
+      "relative_path": "Cargo.lock",
+      "commit_count": 25,
+      "unique_authors": [
+        "Andrew Gallant",
+        "Aleksey Vasilenko",
+        "William Johnson"
+      ],
+      "additions": 301,
+      "deletions": 287,
+      "churn_score": 0.775,
+      "first_seen": "2024-01-24T11:15:22-05:00",
+      "last_modified": "2025-10-30T13:30:14-04:00",
+      "total_loc": 570,
+      "relative_churn": 1.0315789473684212,
+      "churn_rate": 0.0015993472052223583,
+      "change_frequency": 0.03875968992248062,
+      "days_active": 645
+    },
+    {
+      "path": "./CHANGELOG.md",
+      "relative_path": "CHANGELOG.md",
+      "commit_count": 40,
+      "unique_authors": [
+        "emrebengue",
+        "Tor Shepherd",
+        "Ilya Grigoriev",
+        "Josh Cotton",
+        "Lucas Trzesniewski",
+        "Christoph Badura",
+        "Matt Kulukundis",
+        "Jan Verbeek",
+        "mariano-m13",
+        "Luke Sandberg",
+        "Stephan Badragan",
+        "Stephen Albert-Moore",
+        "Isaac",
+        "dana",
+        "Thomas Otto",
+        "ChristopherYoung",
+        "Ian McKellar",
+        "Andrew Gallant",
+        "Pavel Safronov"
+      ],
+      "additions": 142,
+      "deletions": 13,
+      "churn_score": 0.7054421768707483,
+      "first_seen": "2024-01-09T22:16:02+01:00",
+      "last_modified": "2025-10-30T09:49:05-07:00",
+      "total_loc": 1845,
+      "relative_churn": 0.08401084010840108,
+      "churn_rate": 0.00012748230668953124,
+      "change_frequency": 0.06069802731411229,
+      "days_active": 659
+    },
+    {
+      "path": "./tests/regression.rs",
+      "relative_path": "tests/regression.rs",
+      "commit_count": 19,
+      "unique_authors": [
+        "Andrew Gallant",
+        "mostafa",
+        "Pavel Safronov",
+        "Tor Shepherd",
+        "ChristopherYoung"
+      ],
+      "additions": 519,
+      "deletions": 19,
+      "churn_score": 0.6509863945578231,
+      "first_seen": "2024-06-21T15:11:25-04:00",
+      "last_modified": "2025-10-15T18:08:30-04:00",
+      "total_loc": 1719,
+      "relative_churn": 0.31297265852239675,
+      "churn_rate": 0.0006506708077388706,
+      "change_frequency": 0.0395010395010395,
+      "days_active": 481
+    },
+    {
+      "path": "./crates/printer/src/standard.rs",
+      "relative_path": "crates/printer/src/standard.rs",
+      "commit_count": 5,
+      "unique_authors": [
+        "Andrew Gallant",
+        "Isaac",
+        "Pavel Safronov",
+        "emrebengue",
+        "ChristopherYoung"
+      ],
+      "additions": 242,
+      "deletions": 97,
+      "churn_score": 0.3056122448979592,
+      "first_seen": "2024-11-29T16:44:28+08:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 3987,
+      "relative_churn": 0.08502633559066967,
+      "churn_rate": 0.0002892052230975159,
+      "change_frequency": 0.017006802721088437,
+      "days_active": 294
+    },
+    {
+      "path": "./crates/core/flags/defs.rs",
+      "relative_path": "crates/core/flags/defs.rs",
+      "commit_count": 12,
+      "unique_authors": [
+        "Tor Shepherd",
+        "Andrew Gallant",
+        "Pavel Safronov",
+        "Ilya Grigoriev",
+        "Lucas Trzesniewski",
+        "emrebengue",
+        "Lucas Garron"
+      ],
+      "additions": 136,
+      "deletions": 36,
+      "churn_score": 0.2970068027210884,
+      "first_seen": "2024-06-21T15:11:25-04:00",
+      "last_modified": "2025-10-10T21:44:50-04:00",
+      "total_loc": 7775,
+      "relative_churn": 0.02212218649517685,
+      "churn_rate": 0.000046475181712556404,
+      "change_frequency": 0.025210084033613446,
+      "days_active": 476
+    },
+    {
+      "path": "./crates/ignore/src/default_types.rs",
+      "relative_path": "crates/ignore/src/default_types.rs",
+      "commit_count": 18,
+      "unique_authors": [
+        "Dmitry Gerasimov",
+        "Melvin Wang",
+        "Thomas ten Cate",
+        "Andrew McNulty",
+        "Christoph Badura",
+        "Jorge Gomez",
+        "Cristián Maureira-Fredes",
+        "Porkepix",
+        "Tomek",
+        "James Moberg",
+        "Lilian A. Moraru",
+        "Colin Heffernan",
+        "f3rn0s",
+        "Zach Ahn",
+        "Keith Smiley",
+        "Luke Hannan",
+        "bbb651",
+        "Thomas Weißschuh"
+      ],
+      "additions": 22,
+      "deletions": 11,
+      "churn_score": 0.29244897959183674,
+      "first_seen": "2024-01-31T13:11:13-08:00",
+      "last_modified": "2025-10-22T07:18:30-05:00",
+      "total_loc": 363,
+      "relative_churn": 0.09090909090909091,
+      "churn_rate": 0.00014452955629426219,
+      "change_frequency": 0.028616852146263912,
+      "days_active": 629
+    },
+    {
+      "path": "./crates/globset/src/lib.rs",
+      "relative_path": "crates/globset/src/lib.rs",
+      "commit_count": 10,
+      "unique_authors": [
+        "Andrew Gallant",
+        "Ben Heidemann",
+        "David Tolnay",
+        "Alexander Weiss",
+        "Luke Sandberg",
+        "squidfunk",
+        "Thayne McCombs",
+        "William Johnson"
+      ],
+      "additions": 145,
+      "deletions": 41,
+      "churn_score": 0.27653061224489794,
+      "first_seen": "2024-01-24T11:15:22-05:00",
+      "last_modified": "2025-10-17T10:27:19-04:00",
+      "total_loc": 1139,
+      "relative_churn": 0.16330114135206322,
+      "churn_rate": 0.0002587973713978815,
+      "change_frequency": 0.01584786053882726,
+      "days_active": 631
+    },
+    {
+      "path": "./crates/globset/src/glob.rs",
+      "relative_path": "crates/globset/src/glob.rs",
+      "commit_count": 6,
+      "unique_authors": [
+        "Andrew Gallant",
+        "mostafa",
+        "Ben Heidemann",
+        "Luke Sandberg",
+        "squidfunk",
+        "William Johnson"
+      ],
+      "additions": 193,
+      "deletions": 65,
+      "churn_score": 0.2655102040816326,
+      "first_seen": "2024-01-24T11:15:22-05:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 1686,
+      "relative_churn": 0.15302491103202848,
+      "churn_rate": 0.00025335250170865643,
+      "change_frequency": 0.009933774834437087,
+      "days_active": 604
+    },
+    {
+      "path": "./crates/ignore/src/walk.rs",
+      "relative_path": "crates/ignore/src/walk.rs",
+      "commit_count": 7,
+      "unique_authors": [
+        "Alvaro Parker",
+        "Martin Pool",
+        "Alex Povel",
+        "Thomas Otto",
+        "Andrew Gallant"
+      ],
+      "additions": 202,
+      "deletions": 18,
+      "churn_score": 0.25465986394557827,
+      "first_seen": "2024-07-03T22:05:09+02:00",
+      "last_modified": "2025-10-15T18:08:30-04:00",
+      "total_loc": 2494,
+      "relative_churn": 0.08821170809943865,
+      "churn_rate": 0.00018808466545722528,
+      "change_frequency": 0.014925373134328358,
+      "days_active": 469
+    },
+    {
+      "path": "./crates/printer/src/json.rs",
+      "relative_path": "crates/printer/src/json.rs",
+      "commit_count": 5,
+      "unique_authors": [
+        "Lucas Trzesniewski",
+        "Stephan Badragan",
+        "Andrew Gallant"
+      ],
+      "additions": 119,
+      "deletions": 89,
+      "churn_score": 0.2164965986394558,
+      "first_seen": "2024-09-08T01:59:46-07:00",
+      "last_modified": "2025-10-15T21:05:29-04:00",
+      "total_loc": 1057,
+      "relative_churn": 0.1967833491012299,
+      "churn_rate": 0.0004895108186597759,
+      "change_frequency": 0.012437810945273632,
+      "days_active": 402
+    },
+    {
+      "path": "./crates/ignore/src/dir.rs",
+      "relative_path": "crates/ignore/src/dir.rs",
+      "commit_count": 6,
+      "unique_authors": [
+        "Ian McKellar",
+        "Andrew Gallant",
+        "Matt Kulukundis",
+        "ChristopherYoung"
+      ],
+      "additions": 119,
+      "deletions": 36,
+      "churn_score": 0.1954421768707483,
+      "first_seen": "2024-06-22T05:22:18-04:00",
+      "last_modified": "2025-10-30T09:49:05-07:00",
+      "total_loc": 1305,
+      "relative_churn": 0.11877394636015326,
+      "churn_rate": 0.000239947366384148,
+      "change_frequency": 0.012121212121212121,
+      "days_active": 495
+    },
+    {
+      "path": "./Cargo.toml",
+      "relative_path": "Cargo.toml",
+      "commit_count": 11,
+      "unique_authors": [
+        "Aleksey Vasilenko",
+        "William Johnson",
+        "Andrew Gallant"
+      ],
+      "additions": 12,
+      "deletions": 15,
+      "churn_score": 0.18336734693877552,
+      "first_seen": "2024-01-24T11:15:22-05:00",
+      "last_modified": "2025-10-22T08:30:04-04:00",
+      "total_loc": 117,
+      "relative_churn": 0.23076923076923078,
+      "churn_rate": 0.000362844702467344,
+      "change_frequency": 0.01729559748427673,
+      "days_active": 636
+    },
+    {
+      "path": "./crates/grep/Cargo.toml",
+      "relative_path": "crates/grep/Cargo.toml",
+      "commit_count": 11,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 11,
+      "deletions": 11,
+      "churn_score": 0.17996598639455783,
+      "first_seen": "2025-09-07T15:07:45-04:00",
+      "last_modified": "2025-10-22T08:28:53-04:00",
+      "total_loc": 33,
+      "relative_churn": 0.6666666666666666,
+      "churn_rate": 0.01515151515151515,
+      "change_frequency": 0.25,
+      "days_active": 44
+    },
+    {
+      "path": "./crates/core/flags/hiargs.rs",
+      "relative_path": "crates/core/flags/hiargs.rs",
+      "commit_count": 8,
+      "unique_authors": [
+        "Andrew Gallant",
+        "Pavel Safronov",
+        "Stephan Badragan"
+      ],
+      "additions": 25,
+      "deletions": 16,
+      "churn_score": 0.14789115646258502,
+      "first_seen": "2024-09-08T01:59:46-07:00",
+      "last_modified": "2025-10-15T18:08:30-04:00",
+      "total_loc": 1480,
+      "relative_churn": 0.027702702702702704,
+      "churn_rate": 0.00006891219577786742,
+      "change_frequency": 0.01990049751243781,
+      "days_active": 402
+    },
+    {
+      "path": "./tests/binary.rs",
+      "relative_path": "tests/binary.rs",
+      "commit_count": 2,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 166,
+      "deletions": 4,
+      "churn_score": 0.14564625850340135,
+      "first_seen": "2025-08-17T16:14:51-04:00",
+      "last_modified": "2025-09-22T17:02:01-04:00",
+      "total_loc": 468,
+      "relative_churn": 0.36324786324786323,
+      "churn_rate": 0.010090218423551756,
+      "change_frequency": 0.05555555555555555,
+      "days_active": 36
+    },
+    {
+      "path": "./README.md",
+      "relative_path": "README.md",
+      "commit_count": 7,
+      "unique_authors": [
+        "Andrew Gallant",
+        "wackget",
+        "Nadir Ishiguro"
+      ],
+      "additions": 38,
+      "deletions": 21,
+      "churn_score": 0.1451360544217687,
+      "first_seen": "2025-01-30T17:00:18Z",
+      "last_modified": "2025-09-24T08:10:23-04:00",
+      "total_loc": 541,
+      "relative_churn": 0.10905730129390019,
+      "churn_rate": 0.00046210720887245846,
+      "change_frequency": 0.029661016949152543,
+      "days_active": 236
+    },
+    {
+      "path": "./fuzz/Cargo.lock",
+      "relative_path": "fuzz/Cargo.lock",
+      "commit_count": 1,
+      "unique_authors": [
+        "William Johnson"
+      ],
+      "additions": 188,
+      "deletions": 0,
+      "churn_score": 0.14289115646258504,
+      "first_seen": "2024-01-24T11:15:22-05:00",
+      "last_modified": "2024-01-24T11:15:22-05:00",
+      "total_loc": 188,
+      "relative_churn": 1,
+      "churn_rate": 1,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/printer/Cargo.toml",
+      "relative_path": "crates/printer/Cargo.toml",
+      "commit_count": 8,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 8,
+      "deletions": 8,
+      "churn_score": 0.1308843537414966,
+      "first_seen": "2025-09-07T15:07:45-04:00",
+      "last_modified": "2025-10-22T08:28:06-04:00",
+      "total_loc": 43,
+      "relative_churn": 0.37209302325581395,
+      "churn_rate": 0.008456659619450317,
+      "change_frequency": 0.18181818181818182,
+      "days_active": 44
+    },
+    {
+      "path": "./crates/printer/src/hyperlink/aliases.rs",
+      "relative_path": "crates/printer/src/hyperlink/aliases.rs",
+      "commit_count": 3,
+      "unique_authors": [
+        "Enoch",
+        "dana",
+        "Lucas Trzesniewski"
+      ],
+      "additions": 106,
+      "deletions": 14,
+      "churn_score": 0.1266326530612245,
+      "first_seen": "2025-07-13T01:50:38-05:00",
+      "last_modified": "2025-10-17T11:59:17-07:00",
+      "total_loc": 92,
+      "relative_churn": 1.3043478260869565,
+      "churn_rate": 0.01358695652173913,
+      "change_frequency": 0.03125,
+      "days_active": 96
+    },
+    {
+      "path": "./crates/printer/src/summary.rs",
+      "relative_path": "crates/printer/src/summary.rs",
+      "commit_count": 4,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 36,
+      "deletions": 52,
+      "churn_score": 0.1198639455782313,
+      "first_seen": "2025-08-19T20:51:43-04:00",
+      "last_modified": "2025-10-04T08:55:37-04:00",
+      "total_loc": 1150,
+      "relative_churn": 0.07652173913043478,
+      "churn_rate": 0.0017004830917874394,
+      "change_frequency": 0.08888888888888889,
+      "days_active": 45
+    },
+    {
+      "path": "./crates/searcher/src/searcher/core.rs",
+      "relative_path": "crates/searcher/src/searcher/core.rs",
+      "commit_count": 2,
+      "unique_authors": [
+        "Andrew Gallant",
+        "Pavel Safronov"
+      ],
+      "additions": 96,
+      "deletions": 24,
+      "churn_score": 0.1116326530612245,
+      "first_seen": "2025-07-06T17:37:07Z",
+      "last_modified": "2025-10-14T13:46:02-04:00",
+      "total_loc": 713,
+      "relative_churn": 0.16830294530154277,
+      "churn_rate": 0.0016830294530154276,
+      "change_frequency": 0.02,
+      "days_active": 100
+    },
+    {
+      "path": "./crates/printer/src/{hyperlink.rs =\u003e hyperlink/mod.rs}",
+      "relative_path": "crates/printer/src/{hyperlink.rs =\u003e hyperlink/mod.rs}",
+      "commit_count": 1,
+      "unique_authors": [
+        "Lucas Trzesniewski"
+      ],
+      "additions": 129,
+      "deletions": 9,
+      "churn_score": 0.10887755102040818,
+      "first_seen": "2025-07-16T21:53:43+02:00",
+      "last_modified": "2025-07-16T21:53:43+02:00",
+      "loc_read_error": true,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./.github/workflows/ci.yml",
+      "relative_path": ".github/workflows/ci.yml",
+      "commit_count": 5,
+      "unique_authors": [
+        "mariano-m13",
+        "Andrew Gallant",
+        "Josh Cotton",
+        "William Johnson"
+      ],
+      "additions": 37,
+      "deletions": 5,
+      "churn_score": 0.10357142857142856,
+      "first_seen": "2024-01-24T11:15:22-05:00",
+      "last_modified": "2025-10-04T07:31:11+02:00",
+      "total_loc": 264,
+      "relative_churn": 0.1590909090909091,
+      "churn_rate": 0.0002574286554869079,
+      "change_frequency": 0.008090614886731391,
+      "days_active": 618
+    },
+    {
+      "path": "./.github/workflows/release.yml",
+      "relative_path": ".github/workflows/release.yml",
+      "commit_count": 5,
+      "unique_authors": [
+        "Andrew Gallant",
+        "mariano-m13",
+        "Josh Cotton"
+      ],
+      "additions": 20,
+      "deletions": 18,
+      "churn_score": 0.10085034013605443,
+      "first_seen": "2025-04-29T13:33:21-07:00",
+      "last_modified": "2025-10-15T22:45:20-04:00",
+      "total_loc": 373,
+      "relative_churn": 0.10187667560321716,
+      "churn_rate": 0.0006028205656995098,
+      "change_frequency": 0.029585798816568046,
+      "days_active": 169
+    },
+    {
+      "path": "./crates/searcher/src/searcher/glue.rs",
+      "relative_path": "crates/searcher/src/searcher/glue.rs",
+      "commit_count": 5,
+      "unique_authors": [
+        "Andrew Gallant",
+        "Pavel Safronov"
+      ],
+      "additions": 19,
+      "deletions": 12,
+      "churn_score": 0.09608843537414966,
+      "first_seen": "2025-07-06T17:37:07Z",
+      "last_modified": "2025-10-19T10:38:23-04:00",
+      "total_loc": 1549,
+      "relative_churn": 0.020012911555842477,
+      "churn_rate": 0.00019243184188310074,
+      "change_frequency": 0.04807692307692308,
+      "days_active": 104
+    },
+    {
+      "path": "./tests/misc.rs",
+      "relative_path": "tests/misc.rs",
+      "commit_count": 4,
+      "unique_authors": [
+        "Andrew Gallant",
+        "mariano-m13",
+        "Vishva Natarajan"
+      ],
+      "additions": 25,
+      "deletions": 13,
+      "churn_score": 0.08585034013605441,
+      "first_seen": "2025-06-22T01:36:07+05:30",
+      "last_modified": "2025-10-10T21:10:49-04:00",
+      "total_loc": 1142,
+      "relative_churn": 0.03327495621716287,
+      "churn_rate": 0.00029977438033480065,
+      "change_frequency": 0.036036036036036036,
+      "days_active": 111
+    },
+    {
+      "path": "./crates/ignore/src/gitignore.rs",
+      "relative_path": "crates/ignore/src/gitignore.rs",
+      "commit_count": 4,
+      "unique_authors": [
+        "Andrew Gallant",
+        "mostafa",
+        "Stephen Albert-Moore"
+      ],
+      "additions": 34,
+      "deletions": 2,
+      "churn_score": 0.08448979591836735,
+      "first_seen": "2024-04-17T16:58:23-04:00",
+      "last_modified": "2025-10-15T18:08:30-04:00",
+      "total_loc": 849,
+      "relative_churn": 0.04240282685512368,
+      "churn_rate": 0.00007766085504601407,
+      "change_frequency": 0.007326007326007326,
+      "days_active": 546
+    },
+    {
+      "path": "./tests/json.rs",
+      "relative_path": "tests/json.rs",
+      "commit_count": 2,
+      "unique_authors": [
+        "Hamir Mahal",
+        "Stephan Badragan"
+      ],
+      "additions": 74,
+      "deletions": 6,
+      "churn_score": 0.084421768707483,
+      "first_seen": "2024-09-08T01:59:46-07:00",
+      "last_modified": "2024-10-16T09:03:15-07:00",
+      "total_loc": 441,
+      "relative_churn": 0.18140589569160998,
+      "churn_rate": 0.004773839360305526,
+      "change_frequency": 0.05263157894736842,
+      "days_active": 38
+    },
+    {
+      "path": "./crates/searcher/Cargo.toml",
+      "relative_path": "crates/searcher/Cargo.toml",
+      "commit_count": 5,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 5,
+      "deletions": 5,
+      "churn_score": 0.08180272108843537,
+      "first_seen": "2025-09-07T15:07:45-04:00",
+      "last_modified": "2025-10-22T08:25:01-04:00",
+      "total_loc": 32,
+      "relative_churn": 0.3125,
+      "churn_rate": 0.007102272727272727,
+      "change_frequency": 0.11363636363636363,
+      "days_active": 44
+    },
+    {
+      "path": "./crates/ignore/Cargo.toml",
+      "relative_path": "crates/ignore/Cargo.toml",
+      "commit_count": 5,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 5,
+      "deletions": 5,
+      "churn_score": 0.08180272108843537,
+      "first_seen": "2025-09-07T15:07:45-04:00",
+      "last_modified": "2025-10-30T13:30:14-04:00",
+      "total_loc": 44,
+      "relative_churn": 0.22727272727272727,
+      "churn_rate": 0.00437062937062937,
+      "change_frequency": 0.09615384615384616,
+      "days_active": 52
+    },
+    {
+      "path": "./crates/searcher/src/line_buffer.rs",
+      "relative_path": "crates/searcher/src/line_buffer.rs",
+      "commit_count": 3,
+      "unique_authors": [
+        "Andrew Gallant",
+        "Riccardo Attilio Galli"
+      ],
+      "additions": 29,
+      "deletions": 21,
+      "churn_score": 0.07901360544217687,
+      "first_seen": "2024-02-04T09:53:39-08:00",
+      "last_modified": "2025-10-19T10:38:23-04:00",
+      "total_loc": 965,
+      "relative_churn": 0.05181347150259067,
+      "churn_rate": 0.00008330140112956699,
+      "change_frequency": 0.00482315112540193,
+      "days_active": 622
+    },
+    {
+      "path": "./crates/printer/src/util.rs",
+      "relative_path": "crates/printer/src/util.rs",
+      "commit_count": 3,
+      "unique_authors": [
+        "Andrew Gallant",
+        "Isaac"
+      ],
+      "additions": 31,
+      "deletions": 12,
+      "churn_score": 0.0742517006802721,
+      "first_seen": "2025-07-09T22:46:40+10:00",
+      "last_modified": "2025-10-12T16:29:10-04:00",
+      "total_loc": 608,
+      "relative_churn": 0.07072368421052631,
+      "churn_rate": 0.0007444598337950139,
+      "change_frequency": 0.031578947368421054,
+      "days_active": 95
+    },
+    {
+      "path": "./crates/printer/src/hyperlink_aliases.rs",
+      "relative_path": "crates/printer/src/hyperlink_aliases.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "Lucas Trzesniewski"
+      ],
+      "additions": 0,
+      "deletions": 85,
+      "churn_score": 0.07282312925170067,
+      "first_seen": "2025-07-16T21:53:43+02:00",
+      "last_modified": "2025-07-16T21:53:43+02:00",
+      "loc_read_error": true,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/printer/src/hyperlink.rs",
+      "relative_path": "crates/printer/src/hyperlink.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "Lucas Trzesniewski"
+      ],
+      "additions": 56,
+      "deletions": 26,
+      "churn_score": 0.07078231292517007,
+      "first_seen": "2024-08-03T18:21:07+02:00",
+      "last_modified": "2024-08-03T18:21:07+02:00",
+      "loc_read_error": true,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/globset/Cargo.toml",
+      "relative_path": "crates/globset/Cargo.toml",
+      "commit_count": 4,
+      "unique_authors": [
+        "Andrew Gallant",
+        "William Johnson"
+      ],
+      "additions": 5,
+      "deletions": 3,
+      "churn_score": 0.0654421768707483,
+      "first_seen": "2024-01-24T11:15:22-05:00",
+      "last_modified": "2025-10-22T08:23:57-04:00",
+      "total_loc": 49,
+      "relative_churn": 0.16326530612244897,
+      "churn_rate": 0.0002567064561673726,
+      "change_frequency": 0.006289308176100629,
+      "days_active": 636
+    },
+    {
+      "path": "./crates/cli/Cargo.toml",
+      "relative_path": "crates/cli/Cargo.toml",
+      "commit_count": 4,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 4,
+      "deletions": 4,
+      "churn_score": 0.0654421768707483,
+      "first_seen": "2025-09-07T15:07:45-04:00",
+      "last_modified": "2025-10-22T08:24:51-04:00",
+      "total_loc": 26,
+      "relative_churn": 0.3076923076923077,
+      "churn_rate": 0.006993006993006993,
+      "change_frequency": 0.09090909090909091,
+      "days_active": 44
+    },
+    {
+      "path": "./crates/core/flags/complete/rg.zsh",
+      "relative_path": "crates/core/flags/complete/rg.zsh",
+      "commit_count": 2,
+      "unique_authors": [
+        "dana",
+        "emrebengue"
+      ],
+      "additions": 48,
+      "deletions": 2,
+      "churn_score": 0.06401360544217688,
+      "first_seen": "2025-07-13T01:50:38-05:00",
+      "last_modified": "2025-07-23T21:45:17-04:00",
+      "total_loc": 691,
+      "relative_churn": 0.0723589001447178,
+      "churn_rate": 0.00723589001447178,
+      "change_frequency": 0.2,
+      "days_active": 10
+    },
+    {
+      "path": "./crates/core/search.rs",
+      "relative_path": "crates/core/search.rs",
+      "commit_count": 2,
+      "unique_authors": [
+        "Andrew Gallant",
+        "Hamir Mahal"
+      ],
+      "additions": 23,
+      "deletions": 21,
+      "churn_score": 0.05993197278911565,
+      "first_seen": "2024-10-16T09:03:15-07:00",
+      "last_modified": "2025-10-12T14:18:14-04:00",
+      "total_loc": 449,
+      "relative_churn": 0.09799554565701558,
+      "churn_rate": 0.0002714558051440875,
+      "change_frequency": 0.00554016620498615,
+      "days_active": 361
+    },
+    {
+      "path": "./crates/core/flags/lowargs.rs",
+      "relative_path": "crates/core/flags/lowargs.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "xtqqczze"
+      ],
+      "additions": 14,
+      "deletions": 49,
+      "churn_score": 0.05785714285714286,
+      "first_seen": "2025-11-29T19:11:38Z",
+      "last_modified": "2025-11-29T19:11:38Z",
+      "total_loc": 723,
+      "relative_churn": 0.08713692946058091,
+      "churn_rate": 0.08713692946058091,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/searcher/src/searcher/mod.rs",
+      "relative_path": "crates/searcher/src/searcher/mod.rs",
+      "commit_count": 2,
+      "unique_authors": [
+        "Andrew Gallant",
+        "Pavel Safronov"
+      ],
+      "additions": 37,
+      "deletions": 3,
+      "churn_score": 0.0572108843537415,
+      "first_seen": "2025-07-06T17:37:07Z",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 1088,
+      "relative_churn": 0.03676470588235294,
+      "churn_rate": 0.0004901960784313725,
+      "change_frequency": 0.02666666666666667,
+      "days_active": 75
+    },
+    {
+      "path": "./crates/printer/src/lib.rs",
+      "relative_path": "crates/printer/src/lib.rs",
+      "commit_count": 3,
+      "unique_authors": [
+        "Andrew Gallant",
+        "Lucas Trzesniewski"
+      ],
+      "additions": 7,
+      "deletions": 8,
+      "churn_score": 0.05520408163265306,
+      "first_seen": "2025-07-16T21:53:43+02:00",
+      "last_modified": "2025-10-22T07:47:07-04:00",
+      "total_loc": 103,
+      "relative_churn": 0.14563106796116504,
+      "churn_rate": 0.001501351216094485,
+      "change_frequency": 0.030927835051546393,
+      "days_active": 97
+    },
+    {
+      "path": "./tests/feature.rs",
+      "relative_path": "tests/feature.rs",
+      "commit_count": 3,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 6,
+      "deletions": 6,
+      "churn_score": 0.05316326530612245,
+      "first_seen": "2025-09-19T17:17:20-04:00",
+      "last_modified": "2025-10-10T21:36:59-04:00",
+      "total_loc": 1174,
+      "relative_churn": 0.010221465076660987,
+      "churn_rate": 0.0004867364322219518,
+      "change_frequency": 0.14285714285714285,
+      "days_active": 21
+    },
+    {
+      "path": "./crates/printer/src/color.rs",
+      "relative_path": "crates/printer/src/color.rs",
+      "commit_count": 2,
+      "unique_authors": [
+        "emrebengue",
+        "Tor Shepherd"
+      ],
+      "additions": 27,
+      "deletions": 7,
+      "churn_score": 0.05312925170068027,
+      "first_seen": "2024-06-21T15:11:25-04:00",
+      "last_modified": "2025-07-23T21:45:17-04:00",
+      "total_loc": 396,
+      "relative_churn": 0.08585858585858586,
+      "churn_rate": 0.00021626847823321376,
+      "change_frequency": 0.005037783375314861,
+      "days_active": 397
+    },
+    {
+      "path": "./FAQ.md",
+      "relative_path": "FAQ.md",
+      "commit_count": 3,
+      "unique_authors": [
+        "emrebengue",
+        "Wilfred Hughes",
+        "Tor Shepherd"
+      ],
+      "additions": 5,
+      "deletions": 5,
+      "churn_score": 0.05180272108843537,
+      "first_seen": "2024-06-21T15:11:25-04:00",
+      "last_modified": "2025-07-23T21:45:17-04:00",
+      "total_loc": 1063,
+      "relative_churn": 0.00940733772342427,
+      "churn_rate": 0.00002369606479451957,
+      "change_frequency": 0.007556675062972292,
+      "days_active": 397
+    },
+    {
+      "path": "./crates/ignore/src/overrides.rs",
+      "relative_path": "crates/ignore/src/overrides.rs",
+      "commit_count": 2,
+      "unique_authors": [
+        "Andrew Gallant",
+        "mostafa"
+      ],
+      "additions": 29,
+      "deletions": 3,
+      "churn_score": 0.0517687074829932,
+      "first_seen": "2025-09-12T22:53:35+03:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 293,
+      "relative_churn": 0.10921501706484642,
+      "churn_rate": 0.015602145294978059,
+      "change_frequency": 0.2857142857142857,
+      "days_active": 7
+    },
+    {
+      "path": "./tests/util.rs",
+      "relative_path": "tests/util.rs",
+      "commit_count": 3,
+      "unique_authors": [
+        "Andrew Gallant",
+        "Hamir Mahal",
+        "wang384670111"
+      ],
+      "additions": 6,
+      "deletions": 3,
+      "churn_score": 0.05112244897959184,
+      "first_seen": "2024-01-08T16:10:57+08:00",
+      "last_modified": "2025-10-10T21:10:49-04:00",
+      "total_loc": 511,
+      "relative_churn": 0.01761252446183953,
+      "churn_rate": 0.000027476637225958705,
+      "change_frequency": 0.0046801872074883,
+      "days_active": 641
+    },
+    {
+      "path": "./fuzz/README.md",
+      "relative_path": "fuzz/README.md",
+      "commit_count": 1,
+      "unique_authors": [
+        "William Johnson"
+      ],
+      "additions": 52,
+      "deletions": 0,
+      "churn_score": 0.05037414965986395,
+      "first_seen": "2024-01-24T11:15:22-05:00",
+      "last_modified": "2024-01-24T11:15:22-05:00",
+      "total_loc": 52,
+      "relative_churn": 1,
+      "churn_rate": 1,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./build.rs",
+      "relative_path": "build.rs",
+      "commit_count": 2,
+      "unique_authors": [
+        "kevichi7",
+        "Hamir Mahal"
+      ],
+      "additions": 22,
+      "deletions": 7,
+      "churn_score": 0.04972789115646259,
+      "first_seen": "2024-10-16T09:03:15-07:00",
+      "last_modified": "2025-05-29T20:33:35+08:00",
+      "total_loc": 61,
+      "relative_churn": 0.47540983606557374,
+      "churn_rate": 0.002122365339578454,
+      "change_frequency": 0.008928571428571428,
+      "days_active": 224
+    },
+    {
+      "path": "./crates/pcre2/Cargo.toml",
+      "relative_path": "crates/pcre2/Cargo.toml",
+      "commit_count": 3,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 3,
+      "deletions": 3,
+      "churn_score": 0.04908163265306122,
+      "first_seen": "2025-09-07T15:07:45-04:00",
+      "last_modified": "2025-10-15T23:01:07-04:00",
+      "total_loc": 19,
+      "relative_churn": 0.3157894736842105,
+      "churn_rate": 0.008310249307479223,
+      "change_frequency": 0.07894736842105263,
+      "days_active": 38
+    },
+    {
+      "path": "./crates/regex/Cargo.toml",
+      "relative_path": "crates/regex/Cargo.toml",
+      "commit_count": 3,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 3,
+      "deletions": 3,
+      "churn_score": 0.04908163265306122,
+      "first_seen": "2025-09-07T15:07:45-04:00",
+      "last_modified": "2025-10-15T23:00:22-04:00",
+      "total_loc": 21,
+      "relative_churn": 0.2857142857142857,
+      "churn_rate": 0.007518796992481203,
+      "change_frequency": 0.07894736842105263,
+      "days_active": 38
+    },
+    {
+      "path": "./fuzz/Cargo.toml",
+      "relative_path": "fuzz/Cargo.toml",
+      "commit_count": 2,
+      "unique_authors": [
+        "Andrew Gallant",
+        "William Johnson"
+      ],
+      "additions": 26,
+      "deletions": 1,
+      "churn_score": 0.04836734693877551,
+      "first_seen": "2024-01-24T11:15:22-05:00",
+      "last_modified": "2025-09-07T15:07:45-04:00",
+      "total_loc": 25,
+      "relative_churn": 1.08,
+      "churn_rate": 0.0018243243243243243,
+      "change_frequency": 0.0033783783783783786,
+      "days_active": 592
+    },
+    {
+      "path": "./ci/build-and-publish-m2",
+      "relative_path": "ci/build-and-publish-m2",
+      "commit_count": 1,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 0,
+      "deletions": 43,
+      "churn_score": 0.04425170068027211,
+      "first_seen": "2025-09-22T09:13:44-04:00",
+      "last_modified": "2025-09-22T09:13:44-04:00",
+      "loc_read_error": true,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/ignore/tests/gitignore_matched_path_or_any_parents_tests.rs",
+      "relative_path": "crates/ignore/tests/gitignore_matched_path_or_any_parents_tests.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 30,
+      "deletions": 10,
+      "churn_score": 0.0422108843537415,
+      "first_seen": "2025-09-19T17:17:20-04:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 318,
+      "relative_churn": 0.12578616352201258,
+      "churn_rate": 0.12578616352201258,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/globset/src/pathutil.rs",
+      "relative_path": "crates/globset/src/pathutil.rs",
+      "commit_count": 2,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 10,
+      "deletions": 6,
+      "churn_score": 0.0408843537414966,
+      "first_seen": "2025-08-17T17:18:27-04:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 133,
+      "relative_churn": 0.12030075187969924,
+      "churn_rate": 0.0037593984962406013,
+      "change_frequency": 0.0625,
+      "days_active": 32
+    },
+    {
+      "path": "./crates/core/flags/complete/fish.rs",
+      "relative_path": "crates/core/flags/complete/fish.rs",
+      "commit_count": 2,
+      "unique_authors": [
+        "Andrew Gallant",
+        "Jan Verbeek"
+      ],
+      "additions": 11,
+      "deletions": 4,
+      "churn_score": 0.04020408163265306,
+      "first_seen": "2024-01-09T22:16:02+01:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 75,
+      "relative_churn": 0.2,
+      "churn_rate": 0.00032310177705977385,
+      "change_frequency": 0.0032310177705977385,
+      "days_active": 619
+    },
+    {
+      "path": "./pkg/brew/ripgrep-bin.rb",
+      "relative_path": "pkg/brew/ripgrep-bin.rb",
+      "commit_count": 2,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 5,
+      "deletions": 5,
+      "churn_score": 0.036802721088435374,
+      "first_seen": "2025-10-15T23:31:35-04:00",
+      "last_modified": "2025-10-22T09:01:12-04:00",
+      "total_loc": 23,
+      "relative_churn": 0.43478260869565216,
+      "churn_rate": 0.07246376811594203,
+      "change_frequency": 0.3333333333333333,
+      "days_active": 6
+    },
+    {
+      "path": "./crates/printer/src/hyperlink/mod.rs",
+      "relative_path": "crates/printer/src/hyperlink/mod.rs",
+      "commit_count": 2,
+      "unique_authors": [
+        "Andrew Gallant",
+        "dana"
+      ],
+      "additions": 8,
+      "deletions": 2,
+      "churn_score": 0.036802721088435374,
+      "first_seen": "2025-07-13T01:50:38-05:00",
+      "last_modified": "2025-09-07T15:07:45-04:00",
+      "total_loc": 1165,
+      "relative_churn": 0.008583690987124463,
+      "churn_rate": 0.00015328019619865113,
+      "change_frequency": 0.03571428571428571,
+      "days_active": 56
+    },
+    {
+      "path": "./crates/core/flags/complete/prelude.fish",
+      "relative_path": "crates/core/flags/complete/prelude.fish",
+      "commit_count": 1,
+      "unique_authors": [
+        "Jan Verbeek"
+      ],
+      "additions": 31,
+      "deletions": 0,
+      "churn_score": 0.03608843537414966,
+      "first_seen": "2024-01-09T22:16:02+01:00",
+      "last_modified": "2024-01-09T22:16:02+01:00",
+      "total_loc": 31,
+      "relative_churn": 1,
+      "churn_rate": 1,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/ignore/src/lib.rs",
+      "relative_path": "crates/ignore/src/lib.rs",
+      "commit_count": 2,
+      "unique_authors": [
+        "Andrew Gallant",
+        "wang384670111"
+      ],
+      "additions": 2,
+      "deletions": 6,
+      "churn_score": 0.0354421768707483,
+      "first_seen": "2024-01-08T16:10:57+08:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 544,
+      "relative_churn": 0.014705882352941176,
+      "churn_rate": 0.000023719165085388994,
+      "change_frequency": 0.0032258064516129032,
+      "days_active": 620
+    },
+    {
+      "path": "./crates/core/flags/doc/man.rs",
+      "relative_path": "crates/core/flags/doc/man.rs",
+      "commit_count": 2,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 3,
+      "deletions": 3,
+      "churn_score": 0.034081632653061224,
+      "first_seen": "2025-09-06T14:50:22-04:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 110,
+      "relative_churn": 0.05454545454545454,
+      "churn_rate": 0.004195804195804196,
+      "change_frequency": 0.15384615384615385,
+      "days_active": 13
+    },
+    {
+      "path": "./crates/printer/src/jsont.rs",
+      "relative_path": "crates/printer/src/jsont.rs",
+      "commit_count": 2,
+      "unique_authors": [
+        "Lucas Trzesniewski",
+        "Stephan Badragan"
+      ],
+      "additions": 5,
+      "deletions": 1,
+      "churn_score": 0.034081632653061224,
+      "first_seen": "2024-09-08T01:59:46-07:00",
+      "last_modified": "2025-09-21T15:15:48+02:00",
+      "total_loc": 294,
+      "relative_churn": 0.02040816326530612,
+      "churn_rate": 0.00005398984990821725,
+      "change_frequency": 0.005291005291005291,
+      "days_active": 378
+    },
+    {
+      "path": "./crates/core/flags/complete/powershell.rs",
+      "relative_path": "crates/core/flags/complete/powershell.rs",
+      "commit_count": 2,
+      "unique_authors": [
+        "Andrew Gallant",
+        "Hamir Mahal"
+      ],
+      "additions": 2,
+      "deletions": 3,
+      "churn_score": 0.03340136054421769,
+      "first_seen": "2024-10-16T09:03:15-07:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 85,
+      "relative_churn": 0.058823529411764705,
+      "churn_rate": 0.00017403411068569438,
+      "change_frequency": 0.005917159763313609,
+      "days_active": 338
+    },
+    {
+      "path": "./crates/core/main.rs",
+      "relative_path": "crates/core/main.rs",
+      "commit_count": 2,
+      "unique_authors": [
+        "Aleksey Vasilenko",
+        "robert-bryson"
+      ],
+      "additions": 2,
+      "deletions": 2,
+      "churn_score": 0.03272108843537415,
+      "first_seen": "2024-05-02T11:08:57-07:00",
+      "last_modified": "2024-09-12T17:27:46+03:00",
+      "total_loc": 483,
+      "relative_churn": 0.008281573498964804,
+      "churn_rate": 0.00006273919317397578,
+      "change_frequency": 0.015151515151515152,
+      "days_active": 132
+    },
+    {
+      "path": "./crates/matcher/Cargo.toml",
+      "relative_path": "crates/matcher/Cargo.toml",
+      "commit_count": 2,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 2,
+      "deletions": 2,
+      "churn_score": 0.03272108843537415,
+      "first_seen": "2025-09-07T15:07:45-04:00",
+      "last_modified": "2025-10-15T22:59:35-04:00",
+      "total_loc": 25,
+      "relative_churn": 0.16,
+      "churn_rate": 0.004210526315789474,
+      "change_frequency": 0.05263157894736842,
+      "days_active": 38
+    },
+    {
+      "path": "./crates/cli/src/decompress.rs",
+      "relative_path": "crates/cli/src/decompress.rs",
+      "commit_count": 2,
+      "unique_authors": [
+        "Andrew Gallant",
+        "Lucas Trzesniewski"
+      ],
+      "additions": 3,
+      "deletions": 1,
+      "churn_score": 0.03272108843537415,
+      "first_seen": "2025-09-21T15:15:48+02:00",
+      "last_modified": "2025-09-22T21:38:08-04:00",
+      "total_loc": 532,
+      "relative_churn": 0.007518796992481203,
+      "churn_rate": 0.007518796992481203,
+      "change_frequency": 2,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/core/flags/doc/template.rg.1",
+      "relative_path": "crates/core/flags/doc/template.rg.1",
+      "commit_count": 2,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 2,
+      "deletions": 2,
+      "churn_score": 0.03272108843537415,
+      "first_seen": "2025-10-15T22:54:11-04:00",
+      "last_modified": "2025-10-22T08:23:05-04:00",
+      "total_loc": 424,
+      "relative_churn": 0.009433962264150943,
+      "churn_rate": 0.001572327044025157,
+      "change_frequency": 0.3333333333333333,
+      "days_active": 6
+    },
+    {
+      "path": "./RELEASE-CHECKLIST.md",
+      "relative_path": "RELEASE-CHECKLIST.md",
+      "commit_count": 2,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 1,
+      "deletions": 3,
+      "churn_score": 0.03272108843537415,
+      "first_seen": "2025-09-22T09:13:44-04:00",
+      "last_modified": "2025-10-15T22:54:51-04:00",
+      "total_loc": 57,
+      "relative_churn": 0.07017543859649122,
+      "churn_rate": 0.003051106025934401,
+      "change_frequency": 0.08695652173913043,
+      "days_active": 23
+    },
+    {
+      "path": "./fuzz/fuzz_targets/fuzz_glob.rs",
+      "relative_path": "fuzz/fuzz_targets/fuzz_glob.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "William Johnson"
+      ],
+      "additions": 22,
+      "deletions": 0,
+      "churn_score": 0.029965986394557824,
+      "first_seen": "2024-01-24T11:15:22-05:00",
+      "last_modified": "2024-01-24T11:15:22-05:00",
+      "total_loc": 22,
+      "relative_churn": 1,
+      "churn_rate": 1,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/ignore/tests/gitignore_skip_bom.rs",
+      "relative_path": "crates/ignore/tests/gitignore_skip_bom.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "Stephen Albert-Moore"
+      ],
+      "additions": 17,
+      "deletions": 0,
+      "churn_score": 0.026564625850340137,
+      "first_seen": "2024-04-17T16:58:23-04:00",
+      "last_modified": "2024-04-17T16:58:23-04:00",
+      "total_loc": 17,
+      "relative_churn": 1,
+      "churn_rate": 1,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/regex/src/matcher.rs",
+      "relative_path": "crates/regex/src/matcher.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 8,
+      "deletions": 6,
+      "churn_score": 0.024523809523809524,
+      "first_seen": "2025-09-19T17:17:20-04:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 670,
+      "relative_churn": 0.020895522388059702,
+      "churn_rate": 0.020895522388059702,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/core/messages.rs",
+      "relative_path": "crates/core/messages.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "wang384670111"
+      ],
+      "additions": 6,
+      "deletions": 6,
+      "churn_score": 0.02316326530612245,
+      "first_seen": "2024-01-08T16:10:57+08:00",
+      "last_modified": "2024-01-08T16:10:57+08:00",
+      "total_loc": 139,
+      "relative_churn": 0.08633093525179857,
+      "churn_rate": 0.08633093525179857,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/cli/src/lib.rs",
+      "relative_path": "crates/cli/src/lib.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 6,
+      "deletions": 6,
+      "churn_score": 0.02316326530612245,
+      "first_seen": "2025-09-19T17:17:20-04:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 295,
+      "relative_churn": 0.04067796610169491,
+      "churn_rate": 0.04067796610169491,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/core/flags/complete/zsh.rs",
+      "relative_path": "crates/core/flags/complete/zsh.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "dana"
+      ],
+      "additions": 10,
+      "deletions": 1,
+      "churn_score": 0.02248299319727891,
+      "first_seen": "2025-07-13T01:50:38-05:00",
+      "last_modified": "2025-07-13T01:50:38-05:00",
+      "total_loc": 32,
+      "relative_churn": 0.34375,
+      "churn_rate": 0.34375,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/regex/src/literal.rs",
+      "relative_path": "crates/regex/src/literal.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 2,
+      "deletions": 7,
+      "churn_score": 0.021122448979591837,
+      "first_seen": "2025-09-19T17:17:20-04:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 1016,
+      "relative_churn": 0.008858267716535433,
+      "churn_rate": 0.008858267716535433,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/pcre2/src/matcher.rs",
+      "relative_path": "crates/pcre2/src/matcher.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 6,
+      "deletions": 1,
+      "churn_score": 0.019761904761904762,
+      "first_seen": "2025-07-27T15:08:09-04:00",
+      "last_modified": "2025-07-27T15:08:09-04:00",
+      "total_loc": 505,
+      "relative_churn": 0.013861386138613862,
+      "churn_rate": 0.013861386138613862,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/regex/src/config.rs",
+      "relative_path": "crates/regex/src/config.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 1,
+      "deletions": 5,
+      "churn_score": 0.019081632653061224,
+      "first_seen": "2025-09-19T17:17:20-04:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 356,
+      "relative_churn": 0.016853932584269662,
+      "churn_rate": 0.016853932584269662,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/core/flags/doc/version.rs",
+      "relative_path": "crates/core/flags/doc/version.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 1,
+      "deletions": 5,
+      "churn_score": 0.019081632653061224,
+      "first_seen": "2025-09-19T17:17:20-04:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 173,
+      "relative_churn": 0.03468208092485549,
+      "churn_rate": 0.03468208092485549,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/searcher/examples/search-stdin.rs",
+      "relative_path": "crates/searcher/examples/search-stdin.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 2,
+      "deletions": 2,
+      "churn_score": 0.01772108843537415,
+      "first_seen": "2025-09-19T17:17:20-04:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 34,
+      "relative_churn": 0.11764705882352941,
+      "churn_rate": 0.11764705882352941,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./fuzz/.gitignore",
+      "relative_path": "fuzz/.gitignore",
+      "commit_count": 1,
+      "unique_authors": [
+        "William Johnson"
+      ],
+      "additions": 4,
+      "deletions": 0,
+      "churn_score": 0.01772108843537415,
+      "first_seen": "2024-01-24T11:15:22-05:00",
+      "last_modified": "2024-01-24T11:15:22-05:00",
+      "total_loc": 4,
+      "relative_churn": 1,
+      "churn_rate": 1,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/searcher/src/lib.rs",
+      "relative_path": "crates/searcher/src/lib.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 2,
+      "deletions": 2,
+      "churn_score": 0.01772108843537415,
+      "first_seen": "2025-09-19T17:17:20-04:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 106,
+      "relative_churn": 0.03773584905660377,
+      "churn_rate": 0.03773584905660377,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/ignore/examples/walk.rs",
+      "relative_path": "crates/ignore/examples/walk.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "Lucas Trzesniewski"
+      ],
+      "additions": 2,
+      "deletions": 2,
+      "churn_score": 0.01772108843537415,
+      "first_seen": "2025-09-21T15:15:48+02:00",
+      "last_modified": "2025-09-21T15:15:48+02:00",
+      "total_loc": 64,
+      "relative_churn": 0.0625,
+      "churn_rate": 0.0625,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/matcher/src/interpolate.rs",
+      "relative_path": "crates/matcher/src/interpolate.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 1,
+      "deletions": 1,
+      "churn_score": 0.016360544217687074,
+      "first_seen": "2025-09-19T17:17:20-04:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 331,
+      "relative_churn": 0.006042296072507553,
+      "churn_rate": 0.006042296072507553,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/core/flags/parse.rs",
+      "relative_path": "crates/core/flags/parse.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 1,
+      "deletions": 1,
+      "churn_score": 0.016360544217687074,
+      "first_seen": "2025-09-19T17:17:20-04:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 476,
+      "relative_churn": 0.004201680672268907,
+      "churn_rate": 0.004201680672268907,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/cli/src/hostname.rs",
+      "relative_path": "crates/cli/src/hostname.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 1,
+      "deletions": 1,
+      "churn_score": 0.016360544217687074,
+      "first_seen": "2025-09-19T17:17:20-04:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 85,
+      "relative_churn": 0.023529411764705882,
+      "churn_rate": 0.023529411764705882,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./ci/ubuntu-install-packages",
+      "relative_path": "ci/ubuntu-install-packages",
+      "commit_count": 1,
+      "unique_authors": [
+        "William Johnson"
+      ],
+      "additions": 1,
+      "deletions": 1,
+      "churn_score": 0.016360544217687074,
+      "first_seen": "2024-01-24T11:15:22-05:00",
+      "last_modified": "2024-01-24T11:15:22-05:00",
+      "total_loc": 14,
+      "relative_churn": 0.14285714285714285,
+      "churn_rate": 0.14285714285714285,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/regex/src/ban.rs",
+      "relative_path": "crates/regex/src/ban.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 1,
+      "deletions": 1,
+      "churn_score": 0.016360544217687074,
+      "first_seen": "2025-09-07T15:07:45-04:00",
+      "last_modified": "2025-09-07T15:07:45-04:00",
+      "total_loc": 83,
+      "relative_churn": 0.024096385542168676,
+      "churn_rate": 0.024096385542168676,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/regex/src/strip.rs",
+      "relative_path": "crates/regex/src/strip.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 1,
+      "deletions": 1,
+      "churn_score": 0.016360544217687074,
+      "first_seen": "2025-09-19T17:17:20-04:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 170,
+      "relative_churn": 0.011764705882352941,
+      "churn_rate": 0.011764705882352941,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/ignore/tests/gitignore_skip_bom.gitignore",
+      "relative_path": "crates/ignore/tests/gitignore_skip_bom.gitignore",
+      "commit_count": 1,
+      "unique_authors": [
+        "Stephen Albert-Moore"
+      ],
+      "additions": 2,
+      "deletions": 0,
+      "churn_score": 0.016360544217687074,
+      "first_seen": "2024-04-17T16:58:23-04:00",
+      "last_modified": "2024-04-17T16:58:23-04:00",
+      "total_loc": 2,
+      "relative_churn": 1,
+      "churn_rate": 1,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/core/flags/config.rs",
+      "relative_path": "crates/core/flags/config.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 1,
+      "deletions": 1,
+      "churn_score": 0.016360544217687074,
+      "first_seen": "2025-09-19T17:17:20-04:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 170,
+      "relative_churn": 0.011764705882352941,
+      "churn_rate": 0.011764705882352941,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/ignore/src/types.rs",
+      "relative_path": "crates/ignore/src/types.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 1,
+      "deletions": 1,
+      "churn_score": 0.016360544217687074,
+      "first_seen": "2025-09-19T17:17:20-04:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 584,
+      "relative_churn": 0.003424657534246575,
+      "churn_rate": 0.003424657534246575,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/core/flags/mod.rs",
+      "relative_path": "crates/core/flags/mod.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 1,
+      "deletions": 1,
+      "churn_score": 0.016360544217687074,
+      "first_seen": "2025-09-19T17:17:20-04:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 302,
+      "relative_churn": 0.006622516556291391,
+      "churn_rate": 0.006622516556291391,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./crates/core/flags/doc/help.rs",
+      "relative_path": "crates/core/flags/doc/help.rs",
+      "commit_count": 1,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 1,
+      "deletions": 1,
+      "churn_score": 0.016360544217687074,
+      "first_seen": "2025-09-19T17:17:20-04:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 259,
+      "relative_churn": 0.007722007722007722,
+      "churn_rate": 0.007722007722007722,
+      "change_frequency": 1,
+      "days_active": 1
+    },
+    {
+      "path": "./rustfmt.toml",
+      "relative_path": "rustfmt.toml",
+      "commit_count": 1,
+      "unique_authors": [
+        "Andrew Gallant"
+      ],
+      "additions": 1,
+      "deletions": 0,
+      "churn_score": 0.015680272108843537,
+      "first_seen": "2025-09-19T17:17:20-04:00",
+      "last_modified": "2025-09-19T17:17:20-04:00",
+      "total_loc": 3,
+      "relative_churn": 0.3333333333333333,
+      "churn_rate": 0.3333333333333333,
+      "change_frequency": 1,
+      "days_active": 1
+    }
+  ],
+  "summary": {
+    "total_file_changes": 351,
+    "total_files_changed": 93,
+    "hotspot_files": [
+      "./Cargo.lock",
+      "./CHANGELOG.md",
+      "./tests/regression.rs"
+    ],
+    "stable_files": [
+      "./rustfmt.toml",
+      "./crates/core/flags/doc/help.rs",
+      "./crates/core/flags/mod.rs",
+      "./crates/ignore/src/types.rs",
+      "./crates/core/flags/config.rs",
+      "./crates/ignore/tests/gitignore_skip_bom.gitignore",
+      "./crates/regex/src/strip.rs",
+      "./crates/regex/src/ban.rs",
+      "./ci/ubuntu-install-packages",
+      "./crates/cli/src/hostname.rs"
+    ],
+    "author_contributions": {
+      "Aleksey Vasilenko": 3,
+      "Alex Povel": 1,
+      "Alexander Weiss": 1,
+      "Alvaro Parker": 1,
+      "Andrew Gallant": 213,
+      "Andrew McNulty": 1,
+      "Ben Heidemann": 2,
+      "Christoph Badura": 2,
+      "ChristopherYoung": 4,
+      "Colin Heffernan": 1,
+      "Cristián Maureira-Fredes": 1,
+      "David Tolnay": 1,
+      "Dmitry Gerasimov": 1,
+      "Enoch": 1,
+      "Hamir Mahal": 5,
+      "Ian McKellar": 2,
+      "Ilya Grigoriev": 2,
+      "Isaac": 3,
+      "James Moberg": 1,
+      "Jan Verbeek": 3,
+      "Jorge Gomez": 1,
+      "Josh Cotton": 3,
+      "Keith Smiley": 1,
+      "Lilian A. Moraru": 1,
+      "Lucas Garron": 1,
+      "Lucas Trzesniewski": 11,
+      "Luke Hannan": 1,
+      "Luke Sandberg": 3,
+      "Martin Pool": 1,
+      "Matt Kulukundis": 2,
+      "Melvin Wang": 1,
+      "Nadir Ishiguro": 1,
+      "Pavel Safronov": 8,
+      "Porkepix": 1,
+      "Riccardo Attilio Galli": 1,
+      "Stephan Badragan": 5,
+      "Stephen Albert-Moore": 4,
+      "Thayne McCombs": 1,
+      "Thomas Otto": 2,
+      "Thomas Weißschuh": 1,
+      "Thomas ten Cate": 1,
+      "Tomek": 1,
+      "Tor Shepherd": 5,
+      "Vishva Natarajan": 1,
+      "Wilfred Hughes": 1,
+      "William Johnson": 12,
+      "Zach Ahn": 1,
+      "bbb651": 1,
+      "dana": 5,
+      "emrebengue": 6,
+      "f3rn0s": 1,
+      "kevichi7": 1,
+      "mariano-m13": 4,
+      "mostafa": 4,
+      "robert-bryson": 1,
+      "squidfunk": 2,
+      "wackget": 1,
+      "wang384670111": 3,
+      "xtqqczze": 1
+    },
+    "mean_churn_score": 0.09462036427474217,
+    "variance_churn_score": 0.017695669946620262,
+    "stddev_churn_score": 0.1330250726239992,
+    "total_additions": 3826,
+    "total_deletions": 1370,
+    "avg_commits_per_file": 3.774193548387097,
+    "max_churn_score": 0.775,
+    "p50_churn_score": 0.05037414965986395,
+    "p95_churn_score": 0.2970068027210884
+  }
+}
