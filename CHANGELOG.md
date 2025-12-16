@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.1.0](https://github.com/panbanda/omen/compare/omen-v3.0.0...omen-v3.1.0) (2025-12-16)
+
+
+### Features
+
+* **report:** add component annotations to trend chart ([#182](https://github.com/panbanda/omen/issues/182)) ([313d325](https://github.com/panbanda/omen/commit/313d3257f6ca5ebb3360f299d3f9b7aafbaa56ee))
+
+
+### Bug Fixes
+
+* apply exclude patterns to git-based analyzers ([#183](https://github.com/panbanda/omen/issues/183)) ([d782f11](https://github.com/panbanda/omen/commit/d782f11485dd6ad6e8ff5d8d32c2bc4b0b31599f))
+
 ## [3.0.0](https://github.com/panbanda/omen/compare/omen-v2.8.0...omen-v3.0.0) (2025-12-16)
 
 
