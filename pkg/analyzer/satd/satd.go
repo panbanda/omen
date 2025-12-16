@@ -143,12 +143,11 @@ func defaultTestPatterns() []*regexp.Regexp {
 	}
 }
 
-// omen:ignore - documentation describes SATD markers, not actual debt
 // defaultPatterns returns the standard SATD detection patterns.
-// Severity levels: Critical (security), High (defects), Medium (design), Low (todos)
+// Severity levels: Critical (security), High (defects), Medium (design), Low (todos) omen:ignore
 func defaultPatterns() []pattern {
 	return []pattern{
-		// Critical severity - Security concerns
+		// Critical severity - Security concerns omen:ignore
 		{regexp.MustCompile(`(?i)\b(SECURITY|VULN|VULNERABILITY|CVE|XSS)\b[:\s]*(.+)?`), CategorySecurity, SeverityCritical},
 		{regexp.MustCompile(`(?i)\bUNSAFE\b[:\s]*(.+)?`), CategorySecurity, SeverityCritical},
 
