@@ -1178,6 +1178,112 @@ func TestAnalyzeTemporalCoupling_ExcludePatterns(t *testing.T) {
 	}
 }
 
+func TestAnalyzeHotspots_NilFiles(t *testing.T) {
+	repoPath := createTestGitRepo(t)
+
+	svc := New()
+	// Pass nil for files - should analyze all churned files from git history
+	result, err := svc.AnalyzeHotspots(context.Background(), repoPath, nil, HotspotOptions{
+		Days: 365,
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeHotspots() error = %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	// Should have at least one file (test.go from createTestGitRepo)
+	if len(result.Files) == 0 {
+		t.Error("expected at least one file in hotspot results when files=nil")
+	}
+}
+
+func TestAnalyzeHotspots_ExcludePatterns(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Initialize git repo
+	runGit(t, tmpDir, "init")
+	runGit(t, tmpDir, "config", "user.email", "test@test.com")
+	runGit(t, tmpDir, "config", "user.name", "Test User")
+
+	// Create files: test.go (included), README.md (excluded)
+	goFile := filepath.Join(tmpDir, "test.go")
+	if err := os.WriteFile(goFile, []byte(`package main
+
+func test() {
+	x := 1
+	if x > 0 {
+		x++
+	}
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	readmeFile := filepath.Join(tmpDir, "README.md")
+	if err := os.WriteFile(readmeFile, []byte("# Test\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	runGit(t, tmpDir, "add", ".")
+	runGit(t, tmpDir, "commit", "-m", "Initial commit")
+
+	// Make changes to both files
+	if err := os.WriteFile(goFile, []byte(`package main
+
+func test() {
+	x := 1
+	if x > 0 {
+		x++
+		x--
+	}
+}
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(readmeFile, []byte("# Test\nUpdated\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	runGit(t, tmpDir, "add", ".")
+	runGit(t, tmpDir, "commit", "-m", "Second commit")
+
+	// Create config with exclude pattern for README.md
+	cfg := config.DefaultConfig()
+	cfg.Exclude.Patterns = []string{"README.md"}
+
+	svc := New(WithConfig(cfg))
+	// Pass nil to analyze all churned files
+	result, err := svc.AnalyzeHotspots(context.Background(), tmpDir, nil, HotspotOptions{
+		Days: 365,
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeHotspots() error = %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+
+	// Check that README.md is NOT in results (excluded)
+	for _, f := range result.Files {
+		if f.Path == "README.md" || filepath.Base(f.Path) == "README.md" {
+			t.Error("README.md should be excluded but was found in results")
+		}
+	}
+
+	// Check that test.go IS in results
+	found := false
+	for _, f := range result.Files {
+		if f.Path == "test.go" || filepath.Base(f.Path) == "test.go" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("test.go should be in results but was not found")
+	}
+}
+
 func TestAnalyzeChurn_ExcludePatterns(t *testing.T) {
 	tmpDir := t.TempDir()
 

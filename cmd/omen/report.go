@@ -187,7 +187,7 @@ func runReportGenerate(cmd *cobra.Command, args []string) error {
 	// Hotspot analyzer
 	wg.Go(func() {
 		defer tracker.Tick()
-		result, err := svc.AnalyzeHotspots(context.Background(), paths[0], scanResult.Files, analysis.HotspotOptions{
+		result, err := svc.AnalyzeHotspots(context.Background(), paths[0], nil, analysis.HotspotOptions{
 			Days: days,
 		})
 		if err != nil {
