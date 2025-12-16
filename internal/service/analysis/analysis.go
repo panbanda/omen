@@ -20,6 +20,7 @@ import (
 	"github.com/panbanda/omen/pkg/analyzer/ownership"
 	"github.com/panbanda/omen/pkg/analyzer/repomap"
 	"github.com/panbanda/omen/pkg/analyzer/satd"
+	"github.com/panbanda/omen/pkg/analyzer/score"
 	"github.com/panbanda/omen/pkg/analyzer/smells"
 	"github.com/panbanda/omen/pkg/analyzer/tdg"
 	"github.com/panbanda/omen/pkg/analyzer/temporal"
@@ -623,4 +624,75 @@ func (e *PatternError) Error() string {
 
 func (e *PatternError) Unwrap() error {
 	return e.Err
+}
+
+// ScoreOptions configures score analysis.
+type ScoreOptions struct {
+	ChurnDays   int
+	MaxFileSize int64
+}
+
+// AnalyzeScore computes a composite repository health score (0-100).
+func (s *Service) AnalyzeScore(ctx context.Context, files []string, opts ScoreOptions) (*score.Result, error) {
+	churnDays := opts.ChurnDays
+	if churnDays <= 0 {
+		churnDays = s.config.Analysis.ChurnDays
+	}
+
+	maxFileSize := opts.MaxFileSize
+	if maxFileSize <= 0 {
+		maxFileSize = s.config.Analysis.MaxFileSize
+	}
+
+	analyzer := score.New(
+		score.WithChurnDays(churnDays),
+		score.WithMaxFileSize(maxFileSize),
+	)
+	return analyzer.Analyze(ctx, files, source.NewFilesystem(), "")
+}
+
+// TrendOptions configures trend analysis.
+type TrendOptions struct {
+	Period      string
+	Since       string
+	Snap        bool
+	ChurnDays   int
+	MaxFileSize int64
+}
+
+// AnalyzeTrend analyzes score trends over git history.
+func (s *Service) AnalyzeTrend(ctx context.Context, repoPath string, opts TrendOptions) (*score.TrendResult, error) {
+	period := opts.Period
+	if period == "" {
+		period = "monthly"
+	}
+
+	sinceStr := opts.Since
+	if sinceStr == "" {
+		sinceStr = "1y"
+	}
+
+	sinceDuration, err := score.ParseSince(sinceStr)
+	if err != nil {
+		return nil, err
+	}
+
+	churnDays := opts.ChurnDays
+	if churnDays <= 0 {
+		churnDays = s.config.Analysis.ChurnDays
+	}
+
+	maxFileSize := opts.MaxFileSize
+	if maxFileSize <= 0 {
+		maxFileSize = s.config.Analysis.MaxFileSize
+	}
+
+	analyzer := score.NewTrendAnalyzer(
+		score.WithTrendPeriod(period),
+		score.WithTrendSince(sinceDuration),
+		score.WithTrendSnap(opts.Snap),
+		score.WithTrendChurnDays(churnDays),
+		score.WithTrendMaxFileSize(maxFileSize),
+	)
+	return analyzer.AnalyzeTrend(ctx, repoPath)
 }
