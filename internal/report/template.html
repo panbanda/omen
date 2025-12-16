@@ -1889,6 +1889,16 @@
         const scoreAnnotations = [];
         {{end}}
 
+        {{if .ComponentsInsight}}
+        {{if .ComponentsInsight.ComponentAnnotations}}
+        const componentAnnotations = {{.ComponentsInsight.ComponentAnnotations | json}};
+        {{else}}
+        const componentAnnotations = {};
+        {{end}}
+        {{else}}
+        const componentAnnotations = {};
+        {{end}}
+
         function findLabelIndex(rawLabels, datePrefix) {
             return rawLabels.findIndex(label => label.startsWith(datePrefix));
         }
@@ -1958,7 +1968,23 @@
                                 const datePrefix = rawDate.substring(0, 7);
                                 const ann = scoreAnnotations.find(a => a.date === datePrefix);
                                 if (ann) {
-                                    return '\n' + ann.label + ': ' + ann.description;
+                                    const maxWidth = 60;
+                                    const words = ann.description.split(' ');
+                                    const lines = [ann.label + ':'];
+                                    let currentLine = '';
+
+                                    words.forEach(word => {
+                                        const testLine = currentLine ? currentLine + ' ' + word : word;
+                                        if (testLine.length > maxWidth) {
+                                            if (currentLine) lines.push(currentLine);
+                                            currentLine = word;
+                                        } else {
+                                            currentLine = testLine;
+                                        }
+                                    });
+                                    if (currentLine) lines.push(currentLine);
+
+                                    return '\n' + lines.join('\n');
                                 }
                                 return '';
                             }
@@ -1990,6 +2016,48 @@
         const componentLabelsRaw = [{{range $i, $p := .Trend.Points}}{{if $i}}, {{end}}'{{$p.Date}}'{{end}}];
         const componentLabels = componentLabelsRaw.map(formatDateLabel);
 
+        const componentColors = {
+            'complexity': '#3fb950',
+            'duplication': '#58a6ff',
+            'coupling': '#d29922',
+            'cohesion': '#a371f7',
+            'smells': '#f85149'
+        };
+
+        const componentChartAnnotations = {};
+        Object.keys(componentAnnotations).forEach(componentName => {
+            const events = componentAnnotations[componentName];
+            const color = componentColors[componentName] || '#8b949e';
+            events.forEach((ann, i) => {
+                const key = componentName + '_' + i;
+                const labelIndex = findLabelIndex(componentLabelsRaw, ann.date);
+                if (labelIndex !== -1) {
+                    const xLabel = componentLabels[labelIndex];
+                    componentChartAnnotations['line_' + key] = {
+                        type: 'line',
+                        xMin: xLabel,
+                        xMax: xLabel,
+                        borderColor: color + '88',
+                        borderWidth: 2,
+                        borderDash: [6, 6]
+                    };
+                    componentChartAnnotations['label_' + key] = {
+                        type: 'label',
+                        xValue: xLabel,
+                        yValue: 95 - (Object.keys(componentAnnotations).indexOf(componentName) * 2),
+                        backgroundColor: color + '33',
+                        borderColor: color,
+                        borderWidth: 1,
+                        borderRadius: 4,
+                        color: '#e6edf3',
+                        font: { size: 10 },
+                        padding: 4,
+                        content: ann.label
+                    };
+                }
+            });
+        });
+
         new Chart(document.getElementById('componentTrendsChart'), {
             type: 'line',
             data: {
@@ -2009,7 +2077,29 @@
                 maintainAspectRatio: false,
                 plugins: {
                     legend: { position: 'top' },
-                    tooltip: { mode: 'index', intersect: false }
+                    tooltip: {
+                        mode: 'index',
+                        intersect: false,
+                        callbacks: {
+                            afterBody: function(context) {
+                                const rawDate = componentLabelsRaw[context[0].dataIndex];
+                                const datePrefix = rawDate.substring(0, 7);
+                                const results = [];
+                                Object.keys(componentAnnotations).forEach(componentName => {
+                                    const events = componentAnnotations[componentName];
+                                    const event = events.find(e => e.date === datePrefix);
+                                    if (event) {
+                                        results.push('\n' + componentName.toUpperCase() + ': ' + event.label);
+                                        results.push(event.description);
+                                    }
+                                });
+                                return results.length > 0 ? '\n' + results.join('\n') : '';
+                            }
+                        }
+                    },
+                    annotation: {
+                        annotations: componentChartAnnotations
+                    }
                 },
                 scales: {
                     x: {
