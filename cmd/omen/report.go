@@ -16,6 +16,7 @@ import (
 
 	"github.com/panbanda/omen/internal/progress"
 	"github.com/panbanda/omen/internal/report"
+	"github.com/panbanda/omen/internal/service/analysis"
 	scannerSvc "github.com/panbanda/omen/internal/service/scanner"
 	"github.com/panbanda/omen/pkg/analyzer/churn"
 	"github.com/panbanda/omen/pkg/analyzer/cohesion"
@@ -27,7 +28,6 @@ import (
 	"github.com/panbanda/omen/pkg/analyzer/satd"
 	"github.com/panbanda/omen/pkg/analyzer/score"
 	"github.com/panbanda/omen/pkg/analyzer/smells"
-	"github.com/panbanda/omen/pkg/source"
 	"github.com/sourcegraph/conc"
 	"github.com/spf13/cobra"
 )
@@ -137,17 +137,15 @@ func runReportGenerate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid --since value: %w", err)
 	}
 
-	sinceDuration, err := score.ParseSince(reportSince)
-	if err != nil {
-		return fmt.Errorf("invalid --since value: %w", err)
-	}
-
 	// Get files for analysis
 	scanSvc := scannerSvc.New()
 	scanResult, err := scanSvc.ScanPaths(paths)
 	if err != nil {
 		return fmt.Errorf("failed to scan paths: %w", err)
 	}
+
+	// Create analysis service (loads config including custom providers)
+	svc := analysis.New()
 
 	// Run analyzers concurrently with progress tracking
 	const numAnalyzers = 11
@@ -161,8 +159,9 @@ func runReportGenerate(cmd *cobra.Command, args []string) error {
 	// Score analyzer
 	wg.Go(func() {
 		defer tracker.Tick()
-		analyzer := score.New(score.WithChurnDays(days))
-		result, err := analyzer.Analyze(context.Background(), scanResult.Files, source.NewFilesystem(), "")
+		result, err := svc.AnalyzeScore(context.Background(), scanResult.Files, analysis.ScoreOptions{
+			ChurnDays: days,
+		})
 		if err != nil {
 			errMu.Lock()
 			analysisErrors = append(analysisErrors, fmt.Errorf("score: %w", err))
@@ -175,9 +174,7 @@ func runReportGenerate(cmd *cobra.Command, args []string) error {
 	// Complexity analyzer
 	wg.Go(func() {
 		defer tracker.Tick()
-		analyzer := complexity.New()
-		defer analyzer.Close()
-		result, err := analyzer.Analyze(context.Background(), scanResult.Files, source.NewFilesystem())
+		result, err := svc.AnalyzeComplexity(context.Background(), scanResult.Files, analysis.ComplexityOptions{})
 		if err != nil {
 			errMu.Lock()
 			analysisErrors = append(analysisErrors, fmt.Errorf("complexity: %w", err))
@@ -190,9 +187,9 @@ func runReportGenerate(cmd *cobra.Command, args []string) error {
 	// Hotspot analyzer
 	wg.Go(func() {
 		defer tracker.Tick()
-		analyzer := hotspot.New(hotspot.WithChurnDays(days))
-		defer analyzer.Close()
-		result, err := analyzer.Analyze(context.Background(), paths[0], nil)
+		result, err := svc.AnalyzeHotspots(context.Background(), paths[0], scanResult.Files, analysis.HotspotOptions{
+			Days: days,
+		})
 		if err != nil {
 			errMu.Lock()
 			analysisErrors = append(analysisErrors, fmt.Errorf("hotspot: %w", err))
@@ -205,8 +202,9 @@ func runReportGenerate(cmd *cobra.Command, args []string) error {
 	// Churn analyzer
 	wg.Go(func() {
 		defer tracker.Tick()
-		analyzer := churn.New(churn.WithDays(days))
-		result, err := analyzer.Analyze(context.Background(), paths[0], nil)
+		result, err := svc.AnalyzeChurn(context.Background(), paths[0], analysis.ChurnOptions{
+			Days: days,
+		})
 		if err != nil {
 			errMu.Lock()
 			analysisErrors = append(analysisErrors, fmt.Errorf("churn: %w", err))
@@ -219,8 +217,7 @@ func runReportGenerate(cmd *cobra.Command, args []string) error {
 	// Ownership analyzer
 	wg.Go(func() {
 		defer tracker.Tick()
-		analyzer := ownership.New()
-		result, err := analyzer.Analyze(context.Background(), paths[0], nil)
+		result, err := svc.AnalyzeOwnership(context.Background(), paths[0], scanResult.Files, analysis.OwnershipOptions{})
 		if err != nil {
 			errMu.Lock()
 			analysisErrors = append(analysisErrors, fmt.Errorf("ownership: %w", err))
@@ -233,9 +230,7 @@ func runReportGenerate(cmd *cobra.Command, args []string) error {
 	// SATD analyzer
 	wg.Go(func() {
 		defer tracker.Tick()
-		analyzer := satd.New()
-		defer analyzer.Close()
-		result, err := analyzer.Analyze(context.Background(), scanResult.Files, source.NewFilesystem())
+		result, err := svc.AnalyzeSATD(context.Background(), scanResult.Files, analysis.SATDOptions{})
 		if err != nil {
 			errMu.Lock()
 			analysisErrors = append(analysisErrors, fmt.Errorf("satd: %w", err))
@@ -248,9 +243,7 @@ func runReportGenerate(cmd *cobra.Command, args []string) error {
 	// Duplicates analyzer
 	wg.Go(func() {
 		defer tracker.Tick()
-		analyzer := duplicates.New()
-		defer analyzer.Close()
-		result, err := analyzer.Analyze(context.Background(), scanResult.Files, source.NewFilesystem())
+		result, err := svc.AnalyzeDuplicates(context.Background(), scanResult.Files, analysis.DuplicatesOptions{})
 		if err != nil {
 			errMu.Lock()
 			analysisErrors = append(analysisErrors, fmt.Errorf("duplicates: %w", err))
@@ -263,15 +256,9 @@ func runReportGenerate(cmd *cobra.Command, args []string) error {
 	// Feature flags analyzer
 	wg.Go(func() {
 		defer tracker.Tick()
-		analyzer, err := featureflags.New()
-		if err != nil {
-			errMu.Lock()
-			analysisErrors = append(analysisErrors, fmt.Errorf("featureflags init: %w", err))
-			errMu.Unlock()
-			return
-		}
-		defer analyzer.Close()
-		result, err := analyzer.Analyze(context.Background(), scanResult.Files)
+		result, err := svc.AnalyzeFeatureFlags(context.Background(), scanResult.Files, analysis.FeatureFlagOptions{
+			IncludeGit: true,
+		})
 		if err != nil {
 			errMu.Lock()
 			analysisErrors = append(analysisErrors, fmt.Errorf("featureflags: %w", err))
@@ -284,8 +271,7 @@ func runReportGenerate(cmd *cobra.Command, args []string) error {
 	// Smells analyzer
 	wg.Go(func() {
 		defer tracker.Tick()
-		analyzer := smells.New()
-		result, err := analyzer.Analyze(context.Background(), scanResult.Files)
+		result, err := svc.AnalyzeSmells(context.Background(), scanResult.Files, analysis.SmellOptions{})
 		if err != nil {
 			errMu.Lock()
 			analysisErrors = append(analysisErrors, fmt.Errorf("smells: %w", err))
@@ -298,9 +284,7 @@ func runReportGenerate(cmd *cobra.Command, args []string) error {
 	// Cohesion analyzer
 	wg.Go(func() {
 		defer tracker.Tick()
-		analyzer := cohesion.New()
-		defer analyzer.Close()
-		result, err := analyzer.Analyze(context.Background(), scanResult.Files, source.NewFilesystem())
+		result, err := svc.AnalyzeCohesion(context.Background(), scanResult.Files, analysis.CohesionOptions{})
 		if err != nil {
 			errMu.Lock()
 			analysisErrors = append(analysisErrors, fmt.Errorf("cohesion: %w", err))
@@ -313,12 +297,11 @@ func runReportGenerate(cmd *cobra.Command, args []string) error {
 	// Trend analyzer
 	wg.Go(func() {
 		defer tracker.Tick()
-		analyzer := score.NewTrendAnalyzer(
-			score.WithTrendSince(sinceDuration),
-			score.WithTrendPeriod("monthly"),
-			score.WithTrendChurnDays(days),
-		)
-		result, err := analyzer.AnalyzeTrend(context.Background(), paths[0])
+		result, err := svc.AnalyzeTrend(context.Background(), paths[0], analysis.TrendOptions{
+			Since:     reportSince,
+			Period:    "monthly",
+			ChurnDays: days,
+		})
 		if err != nil {
 			errMu.Lock()
 			analysisErrors = append(analysisErrors, fmt.Errorf("trend: %w", err))

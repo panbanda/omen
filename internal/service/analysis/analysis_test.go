@@ -932,3 +932,84 @@ func complex(x, y, z int) int {
 		t.Errorf("expected complex file first, got %s", sorted[0].Path)
 	}
 }
+
+func TestAnalyzeScore(t *testing.T) {
+	goFile := createTestGoFile(t, `package main
+
+func simple() {
+	x := 1
+	if x > 0 {
+		x++
+	}
+}
+`)
+
+	svc := New()
+	result, err := svc.AnalyzeScore(context.Background(), []string{goFile}, ScoreOptions{})
+	if err != nil {
+		t.Fatalf("AnalyzeScore() error = %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	// Score should be between 0 and 100
+	if result.Score < 0 || result.Score > 100 {
+		t.Errorf("score should be between 0 and 100, got %d", result.Score)
+	}
+}
+
+func TestAnalyzeScore_WithChurnDays(t *testing.T) {
+	goFile := createTestGoFile(t, `package main
+func test() {}
+`)
+
+	svc := New()
+	result, err := svc.AnalyzeScore(context.Background(), []string{goFile}, ScoreOptions{
+		ChurnDays: 90,
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeScore() error = %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+}
+
+func TestAnalyzeTrend(t *testing.T) {
+	repoPath := createTestGitRepo(t)
+
+	svc := New()
+	result, err := svc.AnalyzeTrend(context.Background(), repoPath, TrendOptions{
+		Period: "monthly",
+		Since:  "3m",
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeTrend() error = %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+}
+
+func TestAnalyzeTrend_DefaultOptions(t *testing.T) {
+	repoPath := createTestGitRepo(t)
+
+	svc := New()
+	result, err := svc.AnalyzeTrend(context.Background(), repoPath, TrendOptions{})
+	if err != nil {
+		t.Fatalf("AnalyzeTrend() error = %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+}
+
+func TestAnalyzeTrend_NonGitDir(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	svc := New()
+	_, err := svc.AnalyzeTrend(context.Background(), tmpDir, TrendOptions{})
+	if err == nil {
+		t.Error("expected error for non-git directory")
+	}
+}
