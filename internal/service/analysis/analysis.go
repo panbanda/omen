@@ -382,7 +382,38 @@ func (s *Service) AnalyzeHotspots(ctx context.Context, repoPath string, files []
 		})
 		ctx = analyzer.WithTracker(ctx, tracker)
 	}
-	return hotspotAnalyzer.Analyze(ctx, repoPath, files)
+	result, err := hotspotAnalyzer.Analyze(ctx, repoPath, files)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter out excluded files
+	result = s.filterHotspotResults(result, repoPath)
+	return result, nil
+}
+
+// filterHotspotResults removes files matching exclude patterns from hotspot analysis.
+func (s *Service) filterHotspotResults(result *hotspot.Analysis, repoPath string) *hotspot.Analysis {
+	if result == nil || len(s.config.Exclude.Patterns) == 0 {
+		return result
+	}
+
+	filtered := make([]hotspot.FileHotspot, 0, len(result.Files))
+	for _, f := range result.Files {
+		// Convert absolute path to relative for pattern matching
+		relPath := f.Path
+		if filepath.IsAbs(f.Path) {
+			if rel, err := filepath.Rel(repoPath, f.Path); err == nil {
+				relPath = rel
+			}
+		}
+		if !s.shouldExcludePath(relPath) {
+			filtered = append(filtered, f)
+		}
+	}
+	result.Files = filtered
+	result.CalculateSummary()
+	return result
 }
 
 // RankedFile represents a file with its hotspot score for sorting.
