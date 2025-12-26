@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -66,17 +67,25 @@ func WithCache(c *cache.Cache) Option {
 }
 
 // cacheKey generates a unique key for caching analysis results.
-// The key is based on the analyzer name and sorted file paths.
-func (s *Service) cacheKey(analyzerName string, files []string) string {
+// The key is based on the analyzer name, sorted file paths, and options.
+func (s *Service) cacheKey(analyzerName string, files []string, opts any) string {
 	// Sort files for consistent key generation
 	sorted := make([]string, len(files))
 	copy(sorted, files)
 	sort.Strings(sorted)
 
-	// Create hash of analyzer + files
+	// Create hash of analyzer + files + options
 	h := sha256.New()
 	h.Write([]byte(analyzerName))
 	h.Write([]byte(strings.Join(sorted, "\n")))
+
+	// Include options in key (serialize to JSON for consistent hashing)
+	if opts != nil {
+		if optsJSON, err := json.Marshal(opts); err == nil {
+			h.Write(optsJSON)
+		}
+	}
+
 	return hex.EncodeToString(h.Sum(nil))
 }
 
@@ -124,8 +133,47 @@ type ComplexityOptions struct {
 	OnProgress          func()
 }
 
+// complexityCacheOpts contains only the cacheable fields from ComplexityOptions.
+type complexityCacheOpts struct {
+	CyclomaticThreshold int   `json:"cyclomatic_threshold"`
+	CognitiveThreshold  int   `json:"cognitive_threshold"`
+	FunctionsOnly       bool  `json:"functions_only"`
+	MaxFileSize         int64 `json:"max_file_size"`
+}
+
+// computeFilesHash computes a combined hash of all file contents for cache invalidation.
+func computeFilesHash(files []string) string {
+	h := sha256.New()
+	for _, f := range files {
+		if hash, err := cache.HashFile(f); err == nil {
+			h.Write([]byte(hash))
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // AnalyzeComplexity runs complexity analysis on the given files.
 func (s *Service) AnalyzeComplexity(ctx context.Context, files []string, opts ComplexityOptions) (*complexity.Analysis, error) {
+	// Build cacheable options (excludes OnProgress callback)
+	cacheOpts := complexityCacheOpts{
+		CyclomaticThreshold: opts.CyclomaticThreshold,
+		CognitiveThreshold:  opts.CognitiveThreshold,
+		FunctionsOnly:       opts.FunctionsOnly,
+		MaxFileSize:         opts.MaxFileSize,
+	}
+
+	// Check cache first
+	cacheKey := s.cacheKey("complexity", files, cacheOpts)
+	if s.cache != nil {
+		filesHash := computeFilesHash(files)
+		if data, ok := s.cache.GetWithHash(cacheKey, filesHash); ok {
+			var result complexity.Analysis
+			if err := json.Unmarshal(data, &result); err == nil {
+				return &result, nil
+			}
+		}
+	}
+
 	var analyzerOpts []complexity.Option
 	if opts.MaxFileSize > 0 {
 		analyzerOpts = append(analyzerOpts, complexity.WithMaxFileSize(opts.MaxFileSize))
@@ -142,7 +190,20 @@ func (s *Service) AnalyzeComplexity(ctx context.Context, files []string, opts Co
 		})
 		ctx = analyzer.WithTracker(ctx, tracker)
 	}
-	return cxAnalyzer.Analyze(ctx, files, source.NewFilesystem())
+	result, err := cxAnalyzer.Analyze(ctx, files, source.NewFilesystem())
+	if err != nil {
+		return nil, err
+	}
+
+	// Store in cache
+	if s.cache != nil {
+		if data, err := json.Marshal(result); err == nil {
+			filesHash := computeFilesHash(files)
+			s.cache.SetWithHash(cacheKey, filesHash, data)
+		}
+	}
+
+	return result, nil
 }
 
 // SATDOptions configures SATD analysis.
