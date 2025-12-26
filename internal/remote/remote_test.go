@@ -57,11 +57,8 @@ func TestParse_GitHubShorthand(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if src == nil {
-				t.Fatal("expected Source, got nil")
-			}
-			if src.URL != tt.wantURL {
-				t.Errorf("URL = %q, want %q", src.URL, tt.wantURL)
+			if src == nil || src.URL != tt.wantURL {
+				t.Fatalf("expected Source with URL %q, got %v", tt.wantURL, src)
 			}
 			if src.Ref != tt.wantRef {
 				t.Errorf("Ref = %q, want %q", src.Ref, tt.wantRef)
@@ -115,11 +112,8 @@ func TestParse_FullURLs(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if src == nil {
-				t.Fatal("expected Source, got nil")
-			}
-			if src.URL != tt.wantURL {
-				t.Errorf("URL = %q, want %q", src.URL, tt.wantURL)
+			if src == nil || src.URL != tt.wantURL {
+				t.Fatalf("expected Source with URL %q, got %v", tt.wantURL, src)
 			}
 			if src.Ref != tt.wantRef {
 				t.Errorf("Ref = %q, want %q", src.Ref, tt.wantRef)

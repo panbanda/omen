@@ -7,13 +7,13 @@ import (
 
 	"github.com/panbanda/omen/pkg/analyzer"
 	"github.com/panbanda/omen/pkg/parser"
+	"github.com/panbanda/omen/pkg/source"
 	"github.com/sourcegraph/conc/pool"
 )
 
-// ContentSource provides file content.
-type ContentSource interface {
-	Read(path string) ([]byte, error)
-}
+// ContentSource is an alias for source.ContentSource for backward compatibility.
+// New code should import from pkg/source directly.
+type ContentSource = source.ContentSource
 
 // fileWithContent holds a file path and its content.
 type fileWithContent struct {

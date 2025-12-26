@@ -11,17 +11,8 @@ import (
 
 func TestNew(t *testing.T) {
 	a := New()
-	if a == nil {
-		t.Fatal("New() returned nil")
-	}
-	if a.parser == nil {
-		t.Error("analyzer.parser is nil")
-	}
-	if a.confidence != 0.8 {
-		t.Errorf("default confidence = %f, want 0.8", a.confidence)
-	}
-	if !a.buildGraph {
-		t.Error("buildGraph should default to true")
+	if a == nil || a.parser == nil || a.confidence != 0.8 || !a.buildGraph {
+		t.Fatal("New() returned nil or has invalid defaults")
 	}
 	a.Close()
 }
@@ -1020,11 +1011,8 @@ func TestAnalyzeProject_EmptyFiles(t *testing.T) {
 		t.Fatalf("AnalyzeProject failed: %v", err)
 	}
 
-	if analysis == nil {
-		t.Fatal("Expected non-nil analysis")
-	}
-	if analysis.Summary.TotalFilesAnalyzed != 0 {
-		t.Errorf("TotalFilesAnalyzed = %d, want 0", analysis.Summary.TotalFilesAnalyzed)
+	if analysis == nil || analysis.Summary.TotalFilesAnalyzed != 0 {
+		t.Fatalf("Expected non-nil analysis with 0 files, got %v", analysis)
 	}
 }
 

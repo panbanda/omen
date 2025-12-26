@@ -43,11 +43,8 @@ func TestNew(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			analyzer := New(WithDays(tt.days))
-			if analyzer == nil {
-				t.Fatal("New() returned nil")
-			}
-			if analyzer.days != tt.wantDays {
-				t.Errorf("analyzer.days = %v, want %v", analyzer.days, tt.wantDays)
+			if analyzer == nil || analyzer.days != tt.wantDays {
+				t.Fatalf("New() returned nil or days = %v, want %v", analyzer.days, tt.wantDays)
 			}
 			if analyzer.spinner != nil {
 				t.Error("analyzer.spinner should be nil by default")
@@ -173,12 +170,8 @@ func TestAnalyzer_AnalyzeRepo(t *testing.T) {
 				return
 			}
 
-			if result == nil {
-				t.Fatal("AnalyzeRepo() returned nil result")
-			}
-
-			if len(result.Files) != tt.wantFiles {
-				t.Errorf("Files count = %v, want %v", len(result.Files), tt.wantFiles)
+			if result == nil || len(result.Files) != tt.wantFiles {
+				t.Fatalf("AnalyzeRepo() returned nil or Files count = %v, want %v", len(result.Files), tt.wantFiles)
 			}
 
 			if result.Summary.TotalFilesChanged != tt.wantFiles {
@@ -296,12 +289,8 @@ func TestAnalyzer_AnalyzeRepo_MultipleAuthors(t *testing.T) {
 		}
 	}
 
-	if sharedFile == nil {
-		t.Fatal("shared.go not found in results")
-	}
-
-	if len(sharedFile.UniqueAuthors) != 3 {
-		t.Errorf("UniqueAuthors = %v, want 3", len(sharedFile.UniqueAuthors))
+	if sharedFile == nil || len(sharedFile.UniqueAuthors) != 3 {
+		t.Fatalf("shared.go not found or UniqueAuthors = %v, want 3", len(sharedFile.UniqueAuthors))
 	}
 
 	if len(sharedFile.AuthorCounts) != 3 {

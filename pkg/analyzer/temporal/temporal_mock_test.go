@@ -27,11 +27,8 @@ func TestTemporalCouplingAnalyzer_WithMockOpener(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Analyze() error = %v", err)
 	}
-	if result == nil {
-		t.Fatal("Expected non-nil result")
-	}
-	if result.PeriodDays != 30 {
-		t.Errorf("PeriodDays = %d, want 30", result.PeriodDays)
+	if result == nil || result.PeriodDays != 30 {
+		t.Fatalf("Expected non-nil result with PeriodDays=30, got %v", result)
 	}
 }
 

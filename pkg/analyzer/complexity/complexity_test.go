@@ -11,22 +11,16 @@ import (
 
 func TestNew(t *testing.T) {
 	a := New()
-	if a == nil {
-		t.Fatal("New() returned nil")
-	}
-	if a.parser == nil {
-		t.Error("analyzer.parser is nil")
+	if a == nil || a.parser == nil {
+		t.Fatal("New() returned nil or parser is nil")
 	}
 	a.Close()
 }
 
 func TestNewWithMaxFileSize(t *testing.T) {
 	a := New(WithMaxFileSize(1024))
-	if a == nil {
-		t.Fatal("New(WithMaxFileSize) returned nil")
-	}
-	if a.maxFileSize != 1024 {
-		t.Errorf("maxFileSize = %d, want 1024", a.maxFileSize)
+	if a == nil || a.maxFileSize != 1024 {
+		t.Fatalf("New(WithMaxFileSize) returned nil or maxFileSize = %d, want 1024", a.maxFileSize)
 	}
 	a.Close()
 }

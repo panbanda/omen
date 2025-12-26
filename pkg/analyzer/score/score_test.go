@@ -6,13 +6,8 @@ import (
 
 func TestAnalyzer_New(t *testing.T) {
 	a := New()
-	if a == nil {
-		t.Fatal("New() returned nil")
-	}
-	// Check defaults
-	w := a.weights
-	if w.Complexity != 0.25 {
-		t.Errorf("default complexity weight = %f, want 0.25", w.Complexity)
+	if a == nil || a.weights.Complexity != 0.25 {
+		t.Fatalf("New() returned nil or has wrong defaults (want complexity weight 0.25)")
 	}
 }
 

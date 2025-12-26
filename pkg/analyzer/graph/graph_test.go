@@ -11,11 +11,8 @@ import (
 
 func TestNew(t *testing.T) {
 	a := New()
-	if a == nil {
-		t.Fatal("New() returned nil")
-	}
-	if a.parser == nil {
-		t.Error("analyzer.parser is nil")
+	if a == nil || a.parser == nil {
+		t.Fatal("New() returned nil or parser is nil")
 	}
 	if a.scope != ScopeFunction {
 		t.Errorf("default scope = %v, want %v", a.scope, ScopeFunction)

@@ -13,11 +13,8 @@ import (
 func TestNewScanner(t *testing.T) {
 	// With nil config
 	s := NewScanner(nil)
-	if s == nil {
-		t.Fatal("NewScanner(nil) returned nil")
-	}
-	if s.config == nil {
-		t.Error("scanner.config should not be nil when passing nil")
+	if s == nil || s.config == nil {
+		t.Fatal("NewScanner(nil) returned nil or has nil config")
 	}
 
 	// With explicit config

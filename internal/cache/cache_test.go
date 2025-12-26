@@ -15,11 +15,8 @@ func TestNew(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error: %v", err)
 	}
-	if c == nil {
-		t.Fatal("New() returned nil")
-	}
-	if !c.enabled {
-		t.Error("cache should be enabled")
+	if c == nil || !c.enabled {
+		t.Fatal("New() returned nil or disabled cache")
 	}
 
 	// Test disabled cache

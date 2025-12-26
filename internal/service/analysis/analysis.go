@@ -2,11 +2,16 @@ package analysis
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/go-git/go-git/v6/plumbing/format/gitignore"
+	"github.com/panbanda/omen/internal/cache"
 	"github.com/panbanda/omen/internal/progress"
 	"github.com/panbanda/omen/internal/vcs"
 	"github.com/panbanda/omen/pkg/analyzer"
@@ -35,6 +40,7 @@ import (
 type Service struct {
 	config *config.Config
 	opener vcs.Opener
+	cache  *cache.Cache
 }
 
 // Option configures a Service.
@@ -54,6 +60,36 @@ func WithOpener(opener vcs.Opener) Option {
 	}
 }
 
+// WithCache sets the cache for storing analysis results.
+func WithCache(c *cache.Cache) Option {
+	return func(s *Service) {
+		s.cache = c
+	}
+}
+
+// cacheKey generates a unique key for caching analysis results.
+// The key is based on the analyzer name, sorted file paths, and options.
+func (s *Service) cacheKey(analyzerName string, files []string, opts any) string {
+	// Sort files for consistent key generation
+	sorted := make([]string, len(files))
+	copy(sorted, files)
+	sort.Strings(sorted)
+
+	// Create hash of analyzer + files + options
+	h := sha256.New()
+	h.Write([]byte(analyzerName))
+	h.Write([]byte(strings.Join(sorted, "\n")))
+
+	// Include options in key (serialize to JSON for consistent hashing)
+	if opts != nil {
+		if optsJSON, err := json.Marshal(opts); err == nil {
+			h.Write(optsJSON)
+		}
+	}
+
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // New creates a new analysis service.
 func New(opts ...Option) *Service {
 	cfg, _ := config.LoadOrDefault()
@@ -68,6 +104,14 @@ func New(opts ...Option) *Service {
 		opt(s)
 	}
 	return s
+}
+
+// Close releases any resources held by the service.
+// Currently a no-op but provided for future extensibility.
+func (s *Service) Close() error {
+	// Cache is file-based and doesn't need cleanup.
+	// This method exists for API completeness and future extensibility.
+	return nil
 }
 
 // createExcludeMatcher creates a gitignore matcher from config exclude patterns.
@@ -98,8 +142,60 @@ type ComplexityOptions struct {
 	OnProgress          func()
 }
 
+// complexityCacheOpts contains only the cacheable fields from ComplexityOptions.
+type complexityCacheOpts struct {
+	CyclomaticThreshold int   `json:"cyclomatic_threshold"`
+	CognitiveThreshold  int   `json:"cognitive_threshold"`
+	FunctionsOnly       bool  `json:"functions_only"`
+	MaxFileSize         int64 `json:"max_file_size"`
+}
+
+// computeFilesHash computes a combined hash of all file contents for cache invalidation.
+// Returns an error if any file fails to hash, ensuring we don't silently skip files.
+func computeFilesHash(files []string) (string, error) {
+	h := sha256.New()
+	for _, f := range files {
+		hash, err := cache.HashFile(f)
+		if err != nil {
+			return "", fmt.Errorf("failed to hash file %s: %w", f, err)
+		}
+		h.Write([]byte(hash))
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
 // AnalyzeComplexity runs complexity analysis on the given files.
 func (s *Service) AnalyzeComplexity(ctx context.Context, files []string, opts ComplexityOptions) (*complexity.Analysis, error) {
+	// Build cacheable options (excludes OnProgress callback)
+	cacheOpts := complexityCacheOpts{
+		CyclomaticThreshold: opts.CyclomaticThreshold,
+		CognitiveThreshold:  opts.CognitiveThreshold,
+		FunctionsOnly:       opts.FunctionsOnly,
+		MaxFileSize:         opts.MaxFileSize,
+	}
+
+	// Compute cache key and files hash once for both retrieval and storage
+	cacheKey := s.cacheKey("complexity", files, cacheOpts)
+	var filesHash string
+	if s.cache != nil {
+		var err error
+		filesHash, err = computeFilesHash(files)
+		if err != nil {
+			// If we can't hash files, skip caching but continue with analysis
+			filesHash = ""
+		}
+	}
+
+	// Check cache first
+	if s.cache != nil && filesHash != "" {
+		if data, ok := s.cache.GetWithHash(cacheKey, filesHash); ok {
+			var result complexity.Analysis
+			if err := json.Unmarshal(data, &result); err == nil {
+				return &result, nil
+			}
+		}
+	}
+
 	var analyzerOpts []complexity.Option
 	if opts.MaxFileSize > 0 {
 		analyzerOpts = append(analyzerOpts, complexity.WithMaxFileSize(opts.MaxFileSize))
@@ -116,7 +212,19 @@ func (s *Service) AnalyzeComplexity(ctx context.Context, files []string, opts Co
 		})
 		ctx = analyzer.WithTracker(ctx, tracker)
 	}
-	return cxAnalyzer.Analyze(ctx, files, source.NewFilesystem())
+	result, err := cxAnalyzer.Analyze(ctx, files, source.NewFilesystem())
+	if err != nil {
+		return nil, err
+	}
+
+	// Store in cache (reuse filesHash computed earlier)
+	if s.cache != nil && filesHash != "" {
+		if data, err := json.Marshal(result); err == nil {
+			s.cache.SetWithHash(cacheKey, filesHash, data)
+		}
+	}
+
+	return result, nil
 }
 
 // SATDOptions configures SATD analysis.
