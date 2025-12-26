@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.2.0](https://github.com/panbanda/omen/compare/omen-v3.1.0...omen-v3.2.0) (2025-12-26)
+
+
+### Features
+
+* implement result caching for complexity analysis ([#190](https://github.com/panbanda/omen/issues/190)) ([8c009d9](https://github.com/panbanda/omen/commit/8c009d9f3ecee33eab7c09de69fec4771aad5070))
+
+
+### Bug Fixes
+
+* **hotspot:** apply exclude patterns to hotspot analysis ([#189](https://github.com/panbanda/omen/issues/189)) ([98a0437](https://github.com/panbanda/omen/commit/98a0437e563e7a8864e63bc11ca36d41a970ac83))
+
 ## [3.1.0](https://github.com/panbanda/omen/compare/omen-v3.0.0...omen-v3.1.0) (2025-12-16)
 
 
