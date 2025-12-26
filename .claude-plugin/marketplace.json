@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Code analysis tools and skills for Claude Code",
-    "version": "6.0.0"
+    "version": "7.0.0"
   },
   "plugins": [
     {
