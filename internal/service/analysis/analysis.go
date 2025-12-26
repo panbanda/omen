@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -105,6 +106,14 @@ func New(opts ...Option) *Service {
 	return s
 }
 
+// Close releases any resources held by the service.
+// Currently a no-op but provided for future extensibility.
+func (s *Service) Close() error {
+	// Cache is file-based and doesn't need cleanup.
+	// This method exists for API completeness and future extensibility.
+	return nil
+}
+
 // createExcludeMatcher creates a gitignore matcher from config exclude patterns.
 func (s *Service) createExcludeMatcher() gitignore.Matcher {
 	var patterns []gitignore.Pattern
@@ -142,14 +151,17 @@ type complexityCacheOpts struct {
 }
 
 // computeFilesHash computes a combined hash of all file contents for cache invalidation.
-func computeFilesHash(files []string) string {
+// Returns an error if any file fails to hash, ensuring we don't silently skip files.
+func computeFilesHash(files []string) (string, error) {
 	h := sha256.New()
 	for _, f := range files {
-		if hash, err := cache.HashFile(f); err == nil {
-			h.Write([]byte(hash))
+		hash, err := cache.HashFile(f)
+		if err != nil {
+			return "", fmt.Errorf("failed to hash file %s: %w", f, err)
 		}
+		h.Write([]byte(hash))
 	}
-	return hex.EncodeToString(h.Sum(nil))
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // AnalyzeComplexity runs complexity analysis on the given files.
@@ -162,10 +174,20 @@ func (s *Service) AnalyzeComplexity(ctx context.Context, files []string, opts Co
 		MaxFileSize:         opts.MaxFileSize,
 	}
 
-	// Check cache first
+	// Compute cache key and files hash once for both retrieval and storage
 	cacheKey := s.cacheKey("complexity", files, cacheOpts)
+	var filesHash string
 	if s.cache != nil {
-		filesHash := computeFilesHash(files)
+		var err error
+		filesHash, err = computeFilesHash(files)
+		if err != nil {
+			// If we can't hash files, skip caching but continue with analysis
+			filesHash = ""
+		}
+	}
+
+	// Check cache first
+	if s.cache != nil && filesHash != "" {
 		if data, ok := s.cache.GetWithHash(cacheKey, filesHash); ok {
 			var result complexity.Analysis
 			if err := json.Unmarshal(data, &result); err == nil {
@@ -195,10 +217,9 @@ func (s *Service) AnalyzeComplexity(ctx context.Context, files []string, opts Co
 		return nil, err
 	}
 
-	// Store in cache
-	if s.cache != nil {
+	// Store in cache (reuse filesHash computed earlier)
+	if s.cache != nil && filesHash != "" {
 		if data, err := json.Marshal(result); err == nil {
-			filesHash := computeFilesHash(files)
 			s.cache.SetWithHash(cacheKey, filesHash, data)
 		}
 	}

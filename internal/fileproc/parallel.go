@@ -471,8 +471,11 @@ func ForEachFileIndexed[T any](ctx context.Context, files []string, fn func(stri
 
 // parserPool provides per-worker parser pooling to reduce CGO overhead.
 type parserPool struct {
-	parsers chan *parser.Parser
-	size    int
+	parsers    chan *parser.Parser
+	size       int
+	inUse      atomic.Int32
+	closed     atomic.Bool
+	closeMutex sync.Mutex
 }
 
 // newParserPool creates a pool of parsers for concurrent use.
@@ -490,16 +493,39 @@ func newParserPool(size int) *parserPool {
 
 // get retrieves a parser from the pool.
 func (pp *parserPool) get() *parser.Parser {
+	pp.inUse.Add(1)
 	return <-pp.parsers
 }
 
 // put returns a parser to the pool.
+// Safe to call even after close() has been called.
 func (pp *parserPool) put(psr *parser.Parser) {
-	pp.parsers <- psr
+	pp.closeMutex.Lock()
+	defer pp.closeMutex.Unlock()
+
+	if pp.closed.Load() {
+		// Pool is closed, close the parser directly
+		psr.Close()
+	} else {
+		pp.parsers <- psr
+	}
+	pp.inUse.Add(-1)
 }
 
 // close releases all parsers in the pool.
+// Waits for all checked-out parsers to be returned before closing.
 func (pp *parserPool) close() {
+	pp.closeMutex.Lock()
+	pp.closed.Store(true)
+	pp.closeMutex.Unlock()
+
+	// Wait for all in-use parsers to be returned
+	// They will be closed in put() since we set closed=true
+	for pp.inUse.Load() > 0 {
+		runtime.Gosched()
+	}
+
+	// Now safely drain and close remaining parsers in the channel
 	close(pp.parsers)
 	for psr := range pp.parsers {
 		psr.Close()
