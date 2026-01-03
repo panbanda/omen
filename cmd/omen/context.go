@@ -38,6 +38,7 @@ func init() {
 	contextCmd.Flags().Bool("include-metrics", false, "Include complexity and quality metrics")
 	contextCmd.Flags().Bool("include-graph", false, "Include dependency graph")
 	contextCmd.Flags().Bool("include-calls", false, "Include callers/callees for focused context (enables code navigation)")
+	contextCmd.Flags().Bool("include-tests", false, "Include related test files in focused context")
 	contextCmd.Flags().Bool("repo-map", false, "Generate PageRank-ranked symbol map")
 	contextCmd.Flags().Int("top", defaultMaxSymbols, "Number of top symbols to include in repo map")
 	contextCmd.Flags().Bool("full", false, "Include all files without limits (use analyzers directly for detailed output)")
@@ -66,7 +67,8 @@ func runContext(cmd *cobra.Command, args []string) error {
 	// If --focus is provided, run focused context
 	if focus != "" {
 		includeCalls, _ := cmd.Flags().GetBool("include-calls")
-		return runFocusedContext(cmd, focus, paths, includeCalls)
+		includeTests, _ := cmd.Flags().GetBool("include-tests")
+		return runFocusedContext(cmd, focus, paths, includeCalls, includeTests)
 	}
 
 	scanSvc := scannerSvc.New()
@@ -231,7 +233,7 @@ func runContext(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runFocusedContext(cmd *cobra.Command, focus string, paths []string, includeCalls bool) error {
+func runFocusedContext(cmd *cobra.Command, focus string, paths []string, includeCalls, includeTests bool) error {
 	baseDir := "."
 	if len(paths) > 0 {
 		baseDir = paths[0]
@@ -244,6 +246,7 @@ func runFocusedContext(cmd *cobra.Command, focus string, paths []string, include
 		Focus:        focus,
 		BaseDir:      baseDir,
 		IncludeGraph: includeCalls,
+		IncludeTests: includeTests,
 	})
 
 	// If not found, try with repo map for symbol lookup
@@ -259,6 +262,7 @@ func runFocusedContext(cmd *cobra.Command, focus string, paths []string, include
 					BaseDir:      baseDir,
 					RepoMap:      repoMapResult,
 					IncludeGraph: includeCalls,
+					IncludeTests: includeTests,
 				})
 			}
 		}
@@ -366,6 +370,13 @@ func runFocusedContext(cmd *cobra.Command, focus string, paths []string, include
 			}
 			fmt.Println()
 		}
+	}
+
+	// Related test file
+	if result.RelatedTestFile != "" {
+		fmt.Println("## Related Test File")
+		fmt.Printf("- **Path**: %s\n", result.RelatedTestFile)
+		fmt.Println()
 	}
 
 	return nil

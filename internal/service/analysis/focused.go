@@ -21,15 +21,17 @@ type FocusedContextOptions struct {
 	BaseDir      string
 	RepoMap      *repomap.Map
 	IncludeGraph bool // Include callers/callees from dependency graph
+	IncludeTests bool // Include related test files
 }
 
 // FocusedContextResult contains the focused context for a file or symbol.
 type FocusedContextResult struct {
-	Target     FocusedTarget
-	Complexity *ComplexityInfo
-	SATD       []SATDItem
-	Candidates []FocusedCandidate // For ambiguous matches
-	CallGraph  *CallGraphInfo     // Callers and callees (when IncludeGraph=true)
+	Target          FocusedTarget
+	Complexity      *ComplexityInfo
+	SATD            []SATDItem
+	Candidates      []FocusedCandidate // For ambiguous matches
+	CallGraph       *CallGraphInfo     // Callers and callees (when IncludeGraph=true)
+	RelatedTestFile string             // Path to related test file (when IncludeTests=true)
 }
 
 // CallGraphInfo contains caller/callee information for code navigation.
@@ -193,6 +195,16 @@ func (s *Service) focusedContextForFile(ctx context.Context, path string, opts F
 		result.CallGraph = s.buildCallGraphForFile(ctx, path, opts.BaseDir)
 	}
 
+	// Find related test file if requested
+	if opts.IncludeTests {
+		baseDir := opts.BaseDir
+		if baseDir == "" {
+			baseDir = filepath.Dir(path)
+		}
+		candidates, _ := s.scanSourceFiles(baseDir)
+		result.RelatedTestFile = findRelatedTestFile(path, candidates)
+	}
+
 	return result, nil
 }
 
@@ -238,6 +250,16 @@ func (s *Service) focusedContextForSymbol(ctx context.Context, sym *locator.Symb
 	// Get call graph if requested
 	if opts.IncludeGraph {
 		result.CallGraph = s.buildCallGraphForSymbol(ctx, sym, opts.BaseDir)
+	}
+
+	// Find related test file if requested
+	if opts.IncludeTests {
+		baseDir := opts.BaseDir
+		if baseDir == "" {
+			baseDir = filepath.Dir(sym.File)
+		}
+		candidates, _ := s.scanSourceFiles(baseDir)
+		result.RelatedTestFile = findRelatedTestFile(sym.File, candidates)
 	}
 
 	return result, nil
@@ -407,7 +429,7 @@ func (s *Service) scanSourceFiles(baseDir string) ([]string, error) {
 		if info.IsDir() {
 			// Skip hidden directories and common non-source dirs
 			name := info.Name()
-			if strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules" {
+			if name != "." && name != ".." && (strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules") {
 				return filepath.SkipDir
 			}
 			return nil
