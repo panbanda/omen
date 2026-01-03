@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 
 	"github.com/fatih/color"
@@ -38,6 +41,8 @@ func init() {
 	contextCmd.Flags().Bool("repo-map", false, "Generate PageRank-ranked symbol map")
 	contextCmd.Flags().Int("top", defaultMaxSymbols, "Number of top symbols to include in repo map")
 	contextCmd.Flags().Bool("full", false, "Include all files without limits (use analyzers directly for detailed output)")
+	contextCmd.Flags().Bool("tokens", false, "Show estimated token count and budget usage")
+	contextCmd.Flags().Int("budget", 128000, "Token budget for estimation (default: 128k)")
 
 	rootCmd.AddCommand(contextCmd)
 }
@@ -50,10 +55,25 @@ func runContext(cmd *cobra.Command, args []string) error {
 	repoMap, _ := cmd.Flags().GetBool("repo-map")
 	topN, _ := cmd.Flags().GetInt("top")
 	fullOutput, _ := cmd.Flags().GetBool("full")
+	showTokens, _ := cmd.Flags().GetBool("tokens")
+	tokenBudget, _ := cmd.Flags().GetInt("budget")
+
+	// Set up output capture for token counting
+	var buf bytes.Buffer
+	var writer io.Writer = os.Stdout
+	if showTokens {
+		writer = io.MultiWriter(os.Stdout, &buf)
+	}
+	printFn := func(format string, a ...interface{}) {
+		fmt.Fprintf(writer, format, a...)
+	}
+	printLn := func(a ...interface{}) {
+		fmt.Fprintln(writer, a...)
+	}
 
 	// If --focus is provided, run focused context
 	if focus != "" {
-		return runFocusedContext(cmd, focus, paths)
+		return runFocusedContext(cmd, focus, paths, showTokens, tokenBudget)
 	}
 
 	scanSvc := scannerSvc.New()
@@ -77,24 +97,24 @@ func runContext(cmd *cobra.Command, args []string) error {
 	defer formatter.Close()
 
 	// Output project structure
-	fmt.Println("# Project Context")
-	fmt.Println()
-	fmt.Println("## Overview")
-	fmt.Printf("- **Paths**: %v\n", paths)
-	fmt.Printf("- **Total Files**: %d\n", len(files))
-	fmt.Println()
+	printLn("# Project Context")
+	printLn()
+	printLn("## Overview")
+	printFn("- **Paths**: %v\n", paths)
+	printFn("- **Total Files**: %d\n", len(files))
+	printLn()
 
 	// Language distribution
-	fmt.Println("## Language Distribution")
+	printLn("## Language Distribution")
 	for lang, langFiles := range langGroups {
-		fmt.Printf("- **%s**: %d files\n", lang, len(langFiles))
+		printFn("- **%s**: %d files\n", lang, len(langFiles))
 	}
-	fmt.Println()
+	printLn()
 
 	// File structure sorted by hotspot score (most problematic first)
-	fmt.Println("## File Structure")
-	fmt.Println("*Sorted by hotspot score (churn + complexity)*")
-	fmt.Println()
+	printLn("## File Structure")
+	printLn("*Sorted by hotspot score (churn + complexity)*")
+	printLn()
 
 	maxFiles := defaultMaxFiles
 	if fullOutput {
@@ -119,13 +139,13 @@ func runContext(cmd *cobra.Command, args []string) error {
 		// Display sorted files with scores
 		for i, rf := range rankedFiles {
 			if i >= maxFiles {
-				fmt.Printf("- ... and %d more files\n", len(rankedFiles)-maxFiles)
+				printFn("- ... and %d more files\n", len(rankedFiles)-maxFiles)
 				break
 			}
 			if rf.Score > 0 {
-				fmt.Printf("- %s (%.0f%%)\n", rf.Path, rf.Score*100)
+				printFn("- %s (%.0f%%)\n", rf.Path, rf.Score*100)
 			} else {
-				fmt.Printf("- %s\n", rf.Path)
+				printFn("- %s\n", rf.Path)
 			}
 		}
 	} else {
@@ -135,37 +155,37 @@ func runContext(cmd *cobra.Command, args []string) error {
 		}
 		for i, f := range files {
 			if i >= maxFiles {
-				fmt.Printf("- ... and %d more files\n", len(files)-maxFiles)
+				printFn("- ... and %d more files\n", len(files)-maxFiles)
 				break
 			}
-			fmt.Printf("- %s\n", f)
+			printFn("- %s\n", f)
 		}
 	}
 
 	if includeMetrics {
-		fmt.Println()
-		fmt.Println("## Complexity Metrics")
+		printLn()
+		printLn("## Complexity Metrics")
 		cxResult, cxErr := analysisSvc.AnalyzeComplexity(context.Background(), files, analysis.ComplexityOptions{})
 		if cxErr == nil {
-			fmt.Printf("- **Total Functions**: %d\n", cxResult.Summary.TotalFunctions)
-			fmt.Printf("- **Median Cyclomatic (P50)**: %d\n", cxResult.Summary.P50Cyclomatic)
-			fmt.Printf("- **Median Cognitive (P50)**: %d\n", cxResult.Summary.P50Cognitive)
-			fmt.Printf("- **90th Percentile Cyclomatic**: %d\n", cxResult.Summary.P90Cyclomatic)
-			fmt.Printf("- **90th Percentile Cognitive**: %d\n", cxResult.Summary.P90Cognitive)
-			fmt.Printf("- **Max Cyclomatic**: %d\n", cxResult.Summary.MaxCyclomatic)
-			fmt.Printf("- **Max Cognitive**: %d\n", cxResult.Summary.MaxCognitive)
+			printFn("- **Total Functions**: %d\n", cxResult.Summary.TotalFunctions)
+			printFn("- **Median Cyclomatic (P50)**: %d\n", cxResult.Summary.P50Cyclomatic)
+			printFn("- **Median Cognitive (P50)**: %d\n", cxResult.Summary.P50Cognitive)
+			printFn("- **90th Percentile Cyclomatic**: %d\n", cxResult.Summary.P90Cyclomatic)
+			printFn("- **90th Percentile Cognitive**: %d\n", cxResult.Summary.P90Cognitive)
+			printFn("- **Max Cyclomatic**: %d\n", cxResult.Summary.MaxCyclomatic)
+			printFn("- **Max Cognitive**: %d\n", cxResult.Summary.MaxCognitive)
 		}
 	}
 
 	if includeGraph {
-		fmt.Println()
-		fmt.Println("## Dependency Graph")
+		printLn()
+		printLn("## Dependency Graph")
 		graphData, _, graphErr := analysisSvc.AnalyzeGraph(context.Background(), files, analysis.GraphOptions{
 			Scope: graph.ScopeFile,
 		})
 		if graphErr == nil {
-			fmt.Println("```mermaid")
-			fmt.Println("graph TD")
+			printLn("```mermaid")
+			printLn("graph TD")
 
 			maxNodes := defaultMaxGraphNodes
 			if fullOutput {
@@ -174,10 +194,10 @@ func runContext(cmd *cobra.Command, args []string) error {
 
 			for i, node := range graphData.Nodes {
 				if i >= maxNodes {
-					fmt.Printf("    truncated[... and %d more nodes]\n", len(graphData.Nodes)-maxNodes)
+					printFn("    truncated[... and %d more nodes]\n", len(graphData.Nodes)-maxNodes)
 					break
 				}
-				fmt.Printf("    %s[%s]\n", sanitizeID(node.ID), node.Name)
+				printFn("    %s[%s]\n", sanitizeID(node.ID), node.Name)
 			}
 
 			maxEdges := maxNodes * 2
@@ -185,15 +205,15 @@ func runContext(cmd *cobra.Command, args []string) error {
 				if i >= maxEdges {
 					break
 				}
-				fmt.Printf("    %s --> %s\n", sanitizeID(edge.From), sanitizeID(edge.To))
+				printFn("    %s --> %s\n", sanitizeID(edge.From), sanitizeID(edge.To))
 			}
-			fmt.Println("```")
+			printLn("```")
 		}
 	}
 
 	if repoMap {
-		fmt.Println()
-		fmt.Println("## Repository Map")
+		printLn()
+		printLn("## Repository Map")
 
 		spinner := progress.NewSpinner("Generating repo map...")
 		rm, rmErr := analysisSvc.AnalyzeRepoMap(context.Background(), files, analysis.RepoMapOptions{Top: topN})
@@ -201,24 +221,48 @@ func runContext(cmd *cobra.Command, args []string) error {
 
 		if rmErr == nil {
 			topSymbols := rm.TopN(topN)
-			fmt.Printf("Top %d symbols by PageRank:\n\n", len(topSymbols))
-			fmt.Println("| Symbol | Kind | File | Line | PageRank |")
-			fmt.Println("|--------|------|------|------|----------|")
+			printFn("Top %d symbols by PageRank:\n\n", len(topSymbols))
+			printLn("| Symbol | Kind | File | Line | PageRank |")
+			printLn("|--------|------|------|------|----------|")
 			for _, s := range topSymbols {
-				fmt.Printf("| %s | %s | %s | %d | %.4f |\n",
+				printFn("| %s | %s | %s | %d | %.4f |\n",
 					s.Name, s.Kind, s.File, s.Line, s.PageRank)
 			}
-			fmt.Println()
-			fmt.Printf("- **Total Symbols**: %d\n", rm.Summary.TotalSymbols)
-			fmt.Printf("- **Total Files**: %d\n", rm.Summary.TotalFiles)
-			fmt.Printf("- **Max PageRank**: %.4f\n", rm.Summary.MaxPageRank)
+			printLn()
+			printFn("- **Total Symbols**: %d\n", rm.Summary.TotalSymbols)
+			printFn("- **Total Files**: %d\n", rm.Summary.TotalFiles)
+			printFn("- **Max PageRank**: %.4f\n", rm.Summary.MaxPageRank)
 		}
+	}
+
+	// Show token budget info if requested
+	if showTokens {
+		info := output.GetTokenBudgetInfo(buf.String(), tokenBudget)
+		fmt.Println()
+		fmt.Println("---")
+		fmt.Printf("**Token Estimate**: %s / %s (%.1f%% of budget)\n",
+			output.FormatTokenCount(info.Tokens),
+			info.BudgetLabel,
+			info.UsagePercent)
 	}
 
 	return nil
 }
 
-func runFocusedContext(cmd *cobra.Command, focus string, paths []string) error {
+func runFocusedContext(cmd *cobra.Command, focus string, paths []string, showTokens bool, tokenBudget int) error {
+	// Set up output capture for token counting
+	var buf bytes.Buffer
+	var writer io.Writer = os.Stdout
+	if showTokens {
+		writer = io.MultiWriter(os.Stdout, &buf)
+	}
+	printFn := func(format string, a ...interface{}) {
+		fmt.Fprintf(writer, format, a...)
+	}
+	printLn := func(a ...interface{}) {
+		fmt.Fprintln(writer, a...)
+	}
+
 	baseDir := "."
 	if len(paths) > 0 {
 		baseDir = paths[0]
@@ -251,14 +295,14 @@ func runFocusedContext(cmd *cobra.Command, focus string, paths []string) error {
 
 	// Handle ambiguous match
 	if err != nil && result != nil && len(result.Candidates) > 0 {
-		fmt.Println("# Ambiguous Match")
-		fmt.Println()
-		fmt.Printf("Multiple matches found for '%s'. Please be more specific:\n\n", focus)
+		printLn("# Ambiguous Match")
+		printLn()
+		printFn("Multiple matches found for '%s'. Please be more specific:\n\n", focus)
 		for _, c := range result.Candidates {
 			if c.Path != "" {
-				fmt.Printf("- %s\n", c.Path)
+				printFn("- %s\n", c.Path)
 			} else {
-				fmt.Printf("- %s (%s) at %s:%d\n", c.Name, c.Kind, c.File, c.Line)
+				printFn("- %s (%s) at %s:%d\n", c.Name, c.Kind, c.File, c.Line)
 			}
 		}
 		return nil
@@ -269,49 +313,60 @@ func runFocusedContext(cmd *cobra.Command, focus string, paths []string) error {
 	}
 
 	// Output focused context
-	fmt.Println("# Focused Context")
-	fmt.Println()
+	printLn("# Focused Context")
+	printLn()
 
 	// Target information
-	fmt.Println("## Target")
+	printLn("## Target")
 	if result.Target.Type == "file" {
-		fmt.Printf("- **Type**: file\n")
-		fmt.Printf("- **Path**: %s\n", result.Target.Path)
+		printFn("- **Type**: file\n")
+		printFn("- **Path**: %s\n", result.Target.Path)
 	} else if result.Target.Type == "symbol" && result.Target.Symbol != nil {
-		fmt.Printf("- **Type**: symbol\n")
-		fmt.Printf("- **Name**: %s\n", result.Target.Symbol.Name)
-		fmt.Printf("- **Kind**: %s\n", result.Target.Symbol.Kind)
-		fmt.Printf("- **File**: %s\n", result.Target.Symbol.File)
-		fmt.Printf("- **Line**: %d\n", result.Target.Symbol.Line)
+		printFn("- **Type**: symbol\n")
+		printFn("- **Name**: %s\n", result.Target.Symbol.Name)
+		printFn("- **Kind**: %s\n", result.Target.Symbol.Kind)
+		printFn("- **File**: %s\n", result.Target.Symbol.File)
+		printFn("- **Line**: %d\n", result.Target.Symbol.Line)
 	}
-	fmt.Println()
+	printLn()
 
 	// Complexity
 	if result.Complexity != nil {
-		fmt.Println("## Complexity")
-		fmt.Printf("- **Cyclomatic Total**: %d\n", result.Complexity.CyclomaticTotal)
-		fmt.Printf("- **Cognitive Total**: %d\n", result.Complexity.CognitiveTotal)
+		printLn("## Complexity")
+		printFn("- **Cyclomatic Total**: %d\n", result.Complexity.CyclomaticTotal)
+		printFn("- **Cognitive Total**: %d\n", result.Complexity.CognitiveTotal)
 		if len(result.Complexity.TopFunctions) > 0 {
-			fmt.Println()
-			fmt.Println("### Functions")
-			fmt.Println("| Name | Line | Cyclomatic | Cognitive |")
-			fmt.Println("|------|------|------------|-----------|")
+			printLn()
+			printLn("### Functions")
+			printLn("| Name | Line | Cyclomatic | Cognitive |")
+			printLn("|------|------|------------|-----------|")
 			for _, fn := range result.Complexity.TopFunctions {
-				fmt.Printf("| %s | %d | %d | %d |\n", fn.Name, fn.Line, fn.Cyclomatic, fn.Cognitive)
+				printFn("| %s | %d | %d | %d |\n", fn.Name, fn.Line, fn.Cyclomatic, fn.Cognitive)
 			}
 		}
-		fmt.Println()
+		printLn()
 	}
 
 	// SATD markers
 	if len(result.SATD) > 0 {
-		fmt.Println("## Technical Debt")
-		fmt.Println("| Line | Type | Severity | Description |")
-		fmt.Println("|------|------|----------|-------------|")
+		printLn("## Technical Debt")
+		printLn("| Line | Type | Severity | Description |")
+		printLn("|------|------|----------|-------------|")
 		for _, item := range result.SATD {
-			fmt.Printf("| %d | %s | %s | %s |\n", item.Line, item.Type, item.Severity, item.Content)
+			printFn("| %d | %s | %s | %s |\n", item.Line, item.Type, item.Severity, item.Content)
 		}
+		printLn()
+	}
+
+	// Show token budget info if requested
+	if showTokens {
+		info := output.GetTokenBudgetInfo(buf.String(), tokenBudget)
 		fmt.Println()
+		fmt.Println("---")
+		fmt.Printf("**Token Estimate**: %s / %s (%.1f%% of budget)\n",
+			output.FormatTokenCount(info.Tokens),
+			info.BudgetLabel,
+			info.UsagePercent)
 	}
 
 	return nil
