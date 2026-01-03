@@ -300,7 +300,7 @@ type FunctionNode struct {
 	StartLine  uint32
 	EndLine    uint32
 	Parameters []string
-	Signature  string       // Full function signature (without body)
+	Signature  string // Full function signature (without body)
 	Body       *sitter.Node
 }
 
