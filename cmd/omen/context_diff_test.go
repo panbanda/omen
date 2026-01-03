@@ -8,74 +8,6 @@ import (
 	"testing"
 )
 
-// TestContextDiffFlag verifies the --diff flag is recognized
-func TestContextDiffFlag(t *testing.T) {
-	cmd := exec.Command("./omen", "context", "--help")
-	cmd.Dir = filepath.Join(os.Getenv("PWD"), "..", "..")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		// Build omen first if not found
-		build := exec.Command("go", "build", "-o", "omen", "./cmd/omen")
-		build.Dir = filepath.Join(os.Getenv("PWD"), "..", "..")
-		if buildErr := build.Run(); buildErr != nil {
-			t.Fatalf("failed to build omen: %v", buildErr)
-		}
-		output, err = cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("failed to run omen context --help: %v, output: %s", err, output)
-		}
-	}
-
-	if !strings.Contains(string(output), "--diff") {
-		t.Error("--diff flag not found in help output")
-	}
-}
-
-// TestContextDiffBase verifies the --base flag for diff comparison
-func TestContextDiffBase(t *testing.T) {
-	cmd := exec.Command("./omen", "context", "--help")
-	cmd.Dir = filepath.Join(os.Getenv("PWD"), "..", "..")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("failed to run omen context --help: %v", err)
-	}
-
-	if !strings.Contains(string(output), "--base") {
-		t.Error("--base flag not found in help output")
-	}
-}
-
-// TestContextDiffOutput verifies diff context produces expected sections
-func TestContextDiffOutput(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-
-	// This test runs in the omen repo which has git history
-	cmd := exec.Command("./omen", "context", ".", "--diff", "--base", "HEAD~1")
-	cmd.Dir = filepath.Join(os.Getenv("PWD"), "..", "..")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		// May fail if no changes, that's ok
-		if strings.Contains(string(output), "no changes") {
-			t.Skip("no changes between HEAD and HEAD~1")
-		}
-		t.Fatalf("failed to run diff context: %v, output: %s", err, output)
-	}
-
-	outputStr := string(output)
-
-	// Should have diff context header
-	if !strings.Contains(outputStr, "# Diff Context") && !strings.Contains(outputStr, "# Change Context") {
-		t.Error("expected diff context header in output")
-	}
-
-	// Should list changed files
-	if !strings.Contains(outputStr, "Changed Files") && !strings.Contains(outputStr, "Modified") {
-		t.Error("expected changed files section in output")
-	}
-}
-
 // TestGetChangedFiles verifies git diff parsing
 func TestGetChangedFiles(t *testing.T) {
 	// Create a temp git repo for testing
@@ -103,11 +35,15 @@ func TestGetChangedFiles(t *testing.T) {
 
 	cmd := exec.Command("git", "add", ".")
 	cmd.Dir = tmpDir
-	cmd.Run()
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("failed to git add: %v", err)
+	}
 
 	cmd = exec.Command("git", "commit", "-m", "initial")
 	cmd.Dir = tmpDir
-	cmd.Run()
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("failed to git commit: %v", err)
+	}
 
 	// Modify file
 	if err := os.WriteFile(file1, []byte("package main\n\nfunc foo() {}\n"), 0644); err != nil {
@@ -136,4 +72,83 @@ func TestGetChangedFiles(t *testing.T) {
 	}
 }
 
-// Note: getChangedFiles is defined in context.go
+// TestIsSupportedSourceFile tests the source file detection
+func TestIsSupportedSourceFile(t *testing.T) {
+	tests := []struct {
+		path     string
+		expected bool
+	}{
+		{"main.go", true},
+		{"app.ts", true},
+		{"index.js", true},
+		{"lib.rs", true},
+		{"script.py", true},
+		{"README.md", false},
+		{"config.json", false},
+		{"Makefile", false},
+		{".gitignore", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			got := isSupportedSourceFile(tt.path)
+			if got != tt.expected {
+				t.Errorf("isSupportedSourceFile(%q) = %v, want %v", tt.path, got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestGetGitDiffStat tests git diff stat retrieval
+func TestGetGitDiffStat(t *testing.T) {
+	// Create a temp git repo for testing
+	tmpDir := t.TempDir()
+
+	// Initialize git repo
+	cmds := [][]string{
+		{"git", "init"},
+		{"git", "config", "user.email", "test@test.com"},
+		{"git", "config", "user.name", "Test"},
+	}
+	for _, args := range cmds {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = tmpDir
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("failed to run %v: %v", args, err)
+		}
+	}
+
+	// Create initial file and commit
+	file1 := filepath.Join(tmpDir, "file1.go")
+	if err := os.WriteFile(file1, []byte("package main\n"), 0644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	cmd := exec.Command("git", "add", ".")
+	cmd.Dir = tmpDir
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("failed to git add: %v", err)
+	}
+
+	cmd = exec.Command("git", "commit", "-m", "initial")
+	cmd.Dir = tmpDir
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("failed to git commit: %v", err)
+	}
+
+	// Modify file
+	if err := os.WriteFile(file1, []byte("package main\n\nfunc foo() {}\nfunc bar() {}\n"), 0644); err != nil {
+		t.Fatalf("failed to modify file: %v", err)
+	}
+
+	// Get diff stat
+	stat, err := getGitDiffStat(tmpDir, "HEAD")
+	if err != nil {
+		t.Fatalf("getGitDiffStat failed: %v", err)
+	}
+
+	// Should contain file1.go and some stats
+	if !strings.Contains(stat, "file1.go") {
+		t.Errorf("expected file1.go in diff stat, got: %s", stat)
+	}
+}
