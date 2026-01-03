@@ -35,6 +35,7 @@ func init() {
 	contextCmd.Flags().String("focus", "", "Focus on a specific file or symbol (file path, glob pattern, basename, or symbol name)")
 	contextCmd.Flags().Bool("include-metrics", false, "Include complexity and quality metrics")
 	contextCmd.Flags().Bool("include-graph", false, "Include dependency graph")
+	contextCmd.Flags().Bool("include-calls", false, "Include callers/callees for focused context (enables code navigation)")
 	contextCmd.Flags().Bool("repo-map", false, "Generate PageRank-ranked symbol map")
 	contextCmd.Flags().Int("top", defaultMaxSymbols, "Number of top symbols to include in repo map")
 	contextCmd.Flags().Bool("full", false, "Include all files without limits (use analyzers directly for detailed output)")
@@ -53,7 +54,8 @@ func runContext(cmd *cobra.Command, args []string) error {
 
 	// If --focus is provided, run focused context
 	if focus != "" {
-		return runFocusedContext(cmd, focus, paths)
+		includeCalls, _ := cmd.Flags().GetBool("include-calls")
+		return runFocusedContext(cmd, focus, paths, includeCalls)
 	}
 
 	scanSvc := scannerSvc.New()
@@ -218,7 +220,7 @@ func runContext(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runFocusedContext(cmd *cobra.Command, focus string, paths []string) error {
+func runFocusedContext(cmd *cobra.Command, focus string, paths []string, includeCalls bool) error {
 	baseDir := "."
 	if len(paths) > 0 {
 		baseDir = paths[0]
@@ -228,8 +230,9 @@ func runFocusedContext(cmd *cobra.Command, focus string, paths []string) error {
 
 	// Try without repo map first (exact path, glob, basename)
 	result, err := analysisSvc.FocusedContext(context.Background(), analysis.FocusedContextOptions{
-		Focus:   focus,
-		BaseDir: baseDir,
+		Focus:        focus,
+		BaseDir:      baseDir,
+		IncludeGraph: includeCalls,
 	})
 
 	// If not found, try with repo map for symbol lookup
@@ -241,9 +244,10 @@ func runFocusedContext(cmd *cobra.Command, focus string, paths []string) error {
 			repoMapResult, _ = analysisSvc.AnalyzeRepoMap(context.Background(), scanResult.Files, analysis.RepoMapOptions{})
 			if repoMapResult != nil {
 				result, err = analysisSvc.FocusedContext(context.Background(), analysis.FocusedContextOptions{
-					Focus:   focus,
-					BaseDir: baseDir,
-					RepoMap: repoMapResult,
+					Focus:        focus,
+					BaseDir:      baseDir,
+					RepoMap:      repoMapResult,
+					IncludeGraph: includeCalls,
 				})
 			}
 		}
@@ -312,6 +316,45 @@ func runFocusedContext(cmd *cobra.Command, focus string, paths []string) error {
 			fmt.Printf("| %d | %s | %s | %s |\n", item.Line, item.Type, item.Severity, item.Content)
 		}
 		fmt.Println()
+	}
+
+	// Call graph (callers/callees)
+	if result.CallGraph != nil {
+		if len(result.CallGraph.Callers) > 0 {
+			fmt.Println("## Callers")
+			fmt.Println("*Functions that call this symbol:*")
+			fmt.Println()
+			fmt.Println("| Function | File | Line |")
+			fmt.Println("|----------|------|------|")
+			for _, caller := range result.CallGraph.Callers {
+				fmt.Printf("| %s | %s | %d |\n", caller.Name, caller.File, caller.Line)
+			}
+			fmt.Println()
+		}
+
+		if len(result.CallGraph.Callees) > 0 {
+			fmt.Println("## Callees")
+			fmt.Println("*Functions called by this symbol:*")
+			fmt.Println()
+			fmt.Println("| Function | File | Line |")
+			fmt.Println("|----------|------|------|")
+			for _, callee := range result.CallGraph.Callees {
+				fmt.Printf("| %s | %s | %d |\n", callee.Name, callee.File, callee.Line)
+			}
+			fmt.Println()
+		}
+
+		if len(result.CallGraph.InternalCalls) > 0 {
+			fmt.Println("## Internal Calls")
+			fmt.Println("*Function calls within this file:*")
+			fmt.Println()
+			fmt.Println("| From | To |")
+			fmt.Println("|------|-----|")
+			for _, call := range result.CallGraph.InternalCalls {
+				fmt.Printf("| %s (line %d) | %s (line %d) |\n", call.From.Name, call.From.Line, call.To.Name, call.To.Line)
+			}
+			fmt.Println()
+		}
 	}
 
 	return nil
