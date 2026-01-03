@@ -17,7 +17,44 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Default limits for context output to keep it LLM-friendly
+// TierLimits defines output limits for each context tier
+type TierLimits struct {
+	MaxFiles      int
+	MaxGraphNodes int
+	MaxSymbols    int
+}
+
+// getTierLimits returns the limits for a given tier.
+// Tiers help optimize context for different LLM context window sizes:
+// - essential: For 8-16k contexts, only the most important info
+// - standard: For 32-128k contexts, balanced output
+// - full: For 200k+ contexts, everything included
+func getTierLimits(tier string) TierLimits {
+	switch tier {
+	case "essential":
+		return TierLimits{
+			MaxFiles:      20,
+			MaxGraphNodes: 10,
+			MaxSymbols:    10,
+		}
+	case "full":
+		return TierLimits{
+			MaxFiles:      0, // unlimited
+			MaxGraphNodes: 0,
+			MaxSymbols:    0,
+		}
+	case "standard", "":
+		fallthrough
+	default:
+		return TierLimits{
+			MaxFiles:      100,
+			MaxGraphNodes: 50,
+			MaxSymbols:    50,
+		}
+	}
+}
+
+// Default limits (standard tier) for context output to keep it LLM-friendly
 const (
 	defaultMaxFiles      = 100
 	defaultMaxGraphNodes = 50
@@ -38,6 +75,7 @@ func init() {
 	contextCmd.Flags().Bool("repo-map", false, "Generate PageRank-ranked symbol map")
 	contextCmd.Flags().Int("top", defaultMaxSymbols, "Number of top symbols to include in repo map")
 	contextCmd.Flags().Bool("full", false, "Include all files without limits (use analyzers directly for detailed output)")
+	contextCmd.Flags().String("tier", "standard", "Output tier: essential (8-16k contexts), standard (32-128k), full (200k+)")
 
 	rootCmd.AddCommand(contextCmd)
 }
@@ -50,6 +88,13 @@ func runContext(cmd *cobra.Command, args []string) error {
 	repoMap, _ := cmd.Flags().GetBool("repo-map")
 	topN, _ := cmd.Flags().GetInt("top")
 	fullOutput, _ := cmd.Flags().GetBool("full")
+	tier, _ := cmd.Flags().GetString("tier")
+
+	// Get tier limits (--full overrides to full tier)
+	if fullOutput {
+		tier = "full"
+	}
+	limits := getTierLimits(tier)
 
 	// If --focus is provided, run focused context
 	if focus != "" {
@@ -96,9 +141,9 @@ func runContext(cmd *cobra.Command, args []string) error {
 	fmt.Println("*Sorted by hotspot score (churn + complexity)*")
 	fmt.Println()
 
-	maxFiles := defaultMaxFiles
-	if fullOutput {
-		maxFiles = len(files)
+	maxFiles := limits.MaxFiles
+	if maxFiles == 0 {
+		maxFiles = len(files) // unlimited
 	}
 
 	// Try to sort by hotspot score (requires git repo)
@@ -167,9 +212,9 @@ func runContext(cmd *cobra.Command, args []string) error {
 			fmt.Println("```mermaid")
 			fmt.Println("graph TD")
 
-			maxNodes := defaultMaxGraphNodes
-			if fullOutput {
-				maxNodes = len(graphData.Nodes)
+			maxNodes := limits.MaxGraphNodes
+			if maxNodes == 0 {
+				maxNodes = len(graphData.Nodes) // unlimited
 			}
 
 			for i, node := range graphData.Nodes {
@@ -195,12 +240,18 @@ func runContext(cmd *cobra.Command, args []string) error {
 		fmt.Println()
 		fmt.Println("## Repository Map")
 
+		// Use tier limit for symbols if --top wasn't explicitly set
+		symbolLimit := topN
+		if limits.MaxSymbols > 0 && symbolLimit > limits.MaxSymbols {
+			symbolLimit = limits.MaxSymbols
+		}
+
 		spinner := progress.NewSpinner("Generating repo map...")
-		rm, rmErr := analysisSvc.AnalyzeRepoMap(context.Background(), files, analysis.RepoMapOptions{Top: topN})
+		rm, rmErr := analysisSvc.AnalyzeRepoMap(context.Background(), files, analysis.RepoMapOptions{Top: symbolLimit})
 		spinner.FinishSuccess()
 
 		if rmErr == nil {
-			topSymbols := rm.TopN(topN)
+			topSymbols := rm.TopN(symbolLimit)
 			fmt.Printf("Top %d symbols by PageRank:\n\n", len(topSymbols))
 			fmt.Println("| Symbol | Kind | File | Line | PageRank |")
 			fmt.Println("|--------|------|------|------|----------|")
