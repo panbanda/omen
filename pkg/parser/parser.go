@@ -300,6 +300,7 @@ type FunctionNode struct {
 	StartLine  uint32
 	EndLine    uint32
 	Parameters []string
+	Signature  string // Full function signature (without body)
 	Body       *sitter.Node
 }
 
@@ -409,7 +410,95 @@ func extractFunction(node *sitter.Node, source []byte, lang Language) *FunctionN
 		fn.Body = node.ChildByFieldName("body_statement")
 	}
 
+	// Extract function signature (declaration without body)
+	fn.Signature = extractSignature(node, source, lang, fn.Body)
+
 	return fn
+}
+
+// extractSignature extracts the function signature (declaration without body).
+func extractSignature(node *sitter.Node, source []byte, lang Language, body *sitter.Node) string {
+	// Get the full function text
+	fullText := GetNodeText(node, source)
+	if fullText == "" {
+		return ""
+	}
+
+	// If no body, use the full text
+	if body == nil {
+		return normalizeSignature(fullText)
+	}
+
+	// Calculate body offset relative to function start
+	funcStart := node.StartByte()
+	bodyStart := body.StartByte()
+
+	if bodyStart <= funcStart {
+		return normalizeSignature(fullText)
+	}
+
+	// Get text before body
+	sigEnd := bodyStart - funcStart
+	if sigEnd > uint32(len(fullText)) {
+		sigEnd = uint32(len(fullText))
+	}
+
+	signature := strings.TrimSpace(fullText[:sigEnd])
+
+	// Language-specific cleanup
+	switch lang {
+	case LangGo:
+		// Go: remove trailing opening brace if present
+		signature = strings.TrimSuffix(signature, "{")
+		signature = strings.TrimSpace(signature)
+	case LangPython:
+		// Python: remove trailing colon
+		signature = strings.TrimSuffix(signature, ":")
+		signature = strings.TrimSpace(signature)
+	case LangTypeScript, LangJavaScript, LangTSX:
+		// JS/TS: remove trailing opening brace
+		signature = strings.TrimSuffix(signature, "{")
+		signature = strings.TrimSpace(signature)
+	case LangRust:
+		// Rust: remove trailing opening brace
+		signature = strings.TrimSuffix(signature, "{")
+		signature = strings.TrimSpace(signature)
+	case LangJava, LangCSharp:
+		// Java/C#: remove trailing opening brace
+		signature = strings.TrimSuffix(signature, "{")
+		signature = strings.TrimSpace(signature)
+	case LangC, LangCPP:
+		// C/C++: remove trailing opening brace
+		signature = strings.TrimSuffix(signature, "{")
+		signature = strings.TrimSpace(signature)
+	case LangRuby:
+		// Ruby: keep as-is (no special cleanup needed)
+	case LangPHP:
+		// PHP: remove trailing opening brace
+		signature = strings.TrimSuffix(signature, "{")
+		signature = strings.TrimSpace(signature)
+	}
+
+	return normalizeSignature(signature)
+}
+
+// normalizeSignature cleans up a signature string for display.
+func normalizeSignature(sig string) string {
+	// Replace multiple whitespace with single space
+	var result strings.Builder
+	lastWasSpace := false
+	for _, r := range sig {
+		if r == '\n' || r == '\r' || r == '\t' || r == ' ' {
+			if !lastWasSpace {
+				result.WriteRune(' ')
+				lastWasSpace = true
+			}
+		} else {
+			result.WriteRune(r)
+			lastWasSpace = false
+		}
+	}
+	return strings.TrimSpace(result.String())
 }
 
 // ClassNode represents a parsed class/struct.

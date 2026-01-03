@@ -99,6 +99,14 @@ func (a *Analyzer) Analyze(ctx context.Context, files []string) (*Map, error) {
 
 // generateSignature creates a signature string for a node.
 func generateSignature(node graph.Node) string {
+	// Use extracted signature from attributes if available
+	if node.Attributes != nil {
+		if sig, ok := node.Attributes["signature"]; ok && sig != "" {
+			return sig
+		}
+	}
+
+	// Fallback to simple signature
 	switch node.Type {
 	case graph.NodeFunction:
 		return "func " + node.Name + "()"

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/fatih/color"
 	"github.com/panbanda/omen/internal/locator"
@@ -72,10 +74,14 @@ func init() {
 	contextCmd.Flags().String("focus", "", "Focus on a specific file or symbol (file path, glob pattern, basename, or symbol name)")
 	contextCmd.Flags().Bool("include-metrics", false, "Include complexity and quality metrics")
 	contextCmd.Flags().Bool("include-graph", false, "Include dependency graph")
+	contextCmd.Flags().Bool("include-calls", false, "Include callers/callees for focused context (enables code navigation)")
+	contextCmd.Flags().Bool("include-tests", false, "Include related test files in focused context")
 	contextCmd.Flags().Bool("repo-map", false, "Generate PageRank-ranked symbol map")
 	contextCmd.Flags().Int("top", defaultMaxSymbols, "Number of top symbols to include in repo map")
 	contextCmd.Flags().Bool("full", false, "Include all files without limits (use analyzers directly for detailed output)")
 	contextCmd.Flags().String("tier", "standard", "Output tier: essential (8-16k contexts), standard (32-128k), full (200k+)")
+	contextCmd.Flags().Bool("diff", false, "Show context for changed files (for PR review)")
+	contextCmd.Flags().String("base", "main", "Base branch/ref for diff comparison (default: main)")
 
 	rootCmd.AddCommand(contextCmd)
 }
@@ -89,6 +95,8 @@ func runContext(cmd *cobra.Command, args []string) error {
 	topN, _ := cmd.Flags().GetInt("top")
 	fullOutput, _ := cmd.Flags().GetBool("full")
 	tier, _ := cmd.Flags().GetString("tier")
+	diffMode, _ := cmd.Flags().GetBool("diff")
+	baseRef, _ := cmd.Flags().GetString("base")
 
 	// Get tier limits (--full overrides to full tier)
 	if fullOutput {
@@ -96,9 +104,16 @@ func runContext(cmd *cobra.Command, args []string) error {
 	}
 	limits := getTierLimits(tier)
 
+	// If --diff is provided, run diff context for PR review
+	if diffMode {
+		return runDiffContext(cmd, paths, baseRef)
+	}
+
 	// If --focus is provided, run focused context
 	if focus != "" {
-		return runFocusedContext(cmd, focus, paths)
+		includeCalls, _ := cmd.Flags().GetBool("include-calls")
+		includeTests, _ := cmd.Flags().GetBool("include-tests")
+		return runFocusedContext(cmd, focus, paths, includeCalls, includeTests)
 	}
 
 	scanSvc := scannerSvc.New()
@@ -269,7 +284,7 @@ func runContext(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runFocusedContext(cmd *cobra.Command, focus string, paths []string) error {
+func runFocusedContext(cmd *cobra.Command, focus string, paths []string, includeCalls, includeTests bool) error {
 	baseDir := "."
 	if len(paths) > 0 {
 		baseDir = paths[0]
@@ -279,8 +294,10 @@ func runFocusedContext(cmd *cobra.Command, focus string, paths []string) error {
 
 	// Try without repo map first (exact path, glob, basename)
 	result, err := analysisSvc.FocusedContext(context.Background(), analysis.FocusedContextOptions{
-		Focus:   focus,
-		BaseDir: baseDir,
+		Focus:        focus,
+		BaseDir:      baseDir,
+		IncludeGraph: includeCalls,
+		IncludeTests: includeTests,
 	})
 
 	// If not found, try with repo map for symbol lookup
@@ -292,9 +309,11 @@ func runFocusedContext(cmd *cobra.Command, focus string, paths []string) error {
 			repoMapResult, _ = analysisSvc.AnalyzeRepoMap(context.Background(), scanResult.Files, analysis.RepoMapOptions{})
 			if repoMapResult != nil {
 				result, err = analysisSvc.FocusedContext(context.Background(), analysis.FocusedContextOptions{
-					Focus:   focus,
-					BaseDir: baseDir,
-					RepoMap: repoMapResult,
+					Focus:        focus,
+					BaseDir:      baseDir,
+					RepoMap:      repoMapResult,
+					IncludeGraph: includeCalls,
+					IncludeTests: includeTests,
 				})
 			}
 		}
@@ -365,5 +384,200 @@ func runFocusedContext(cmd *cobra.Command, focus string, paths []string) error {
 		fmt.Println()
 	}
 
+	// Call graph (callers/callees)
+	if result.CallGraph != nil {
+		if len(result.CallGraph.Callers) > 0 {
+			fmt.Println("## Callers")
+			fmt.Println("*Functions that call this symbol:*")
+			fmt.Println()
+			fmt.Println("| Function | File | Line |")
+			fmt.Println("|----------|------|------|")
+			for _, caller := range result.CallGraph.Callers {
+				fmt.Printf("| %s | %s | %d |\n", caller.Name, caller.File, caller.Line)
+			}
+			fmt.Println()
+		}
+
+		if len(result.CallGraph.Callees) > 0 {
+			fmt.Println("## Callees")
+			fmt.Println("*Functions called by this symbol:*")
+			fmt.Println()
+			fmt.Println("| Function | File | Line |")
+			fmt.Println("|----------|------|------|")
+			for _, callee := range result.CallGraph.Callees {
+				fmt.Printf("| %s | %s | %d |\n", callee.Name, callee.File, callee.Line)
+			}
+			fmt.Println()
+		}
+
+		if len(result.CallGraph.InternalCalls) > 0 {
+			fmt.Println("## Internal Calls")
+			fmt.Println("*Function calls within this file:*")
+			fmt.Println()
+			fmt.Println("| From | To |")
+			fmt.Println("|------|-----|")
+			for _, call := range result.CallGraph.InternalCalls {
+				fmt.Printf("| %s (line %d) | %s (line %d) |\n", call.From.Name, call.From.Line, call.To.Name, call.To.Line)
+			}
+			fmt.Println()
+		}
+	}
+
+	// Related test file
+	if result.RelatedTestFile != "" {
+		fmt.Println("## Related Test File")
+		fmt.Printf("- **Path**: %s\n", result.RelatedTestFile)
+		fmt.Println()
+	}
+
 	return nil
+}
+
+// runDiffContext generates context for changed files, useful for PR review.
+// It shows what files changed and provides focused context for each.
+func runDiffContext(cmd *cobra.Command, paths []string, baseRef string) error {
+	baseDir := "."
+	if len(paths) > 0 {
+		baseDir = paths[0]
+	}
+
+	// Get changed files
+	changedFiles, err := getChangedFiles(baseDir, baseRef)
+	if err != nil {
+		return fmt.Errorf("failed to get changed files: %w", err)
+	}
+
+	if len(changedFiles) == 0 {
+		color.Yellow("No changes found compared to %s", baseRef)
+		return nil
+	}
+
+	fmt.Println("# Diff Context")
+	fmt.Println()
+	fmt.Printf("Comparing to: **%s**\n", baseRef)
+	fmt.Println()
+
+	// List changed files
+	fmt.Println("## Changed Files")
+	for _, f := range changedFiles {
+		relPath, _ := filepath.Rel(baseDir, f)
+		if relPath == "" {
+			relPath = f
+		}
+		fmt.Printf("- %s\n", relPath)
+	}
+	fmt.Println()
+
+	// Show git diff summary
+	fmt.Println("## Diff Summary")
+	fmt.Println("```diff")
+	diffOutput, diffErr := getGitDiffStat(baseDir, baseRef)
+	if diffErr == nil {
+		fmt.Print(diffOutput)
+	}
+	fmt.Println("```")
+	fmt.Println()
+
+	// For each changed file, show focused context
+	analysisSvc := analysis.New()
+	for _, file := range changedFiles {
+		// Skip non-source files
+		if !isSupportedSourceFile(file) {
+			continue
+		}
+
+		relPath, _ := filepath.Rel(baseDir, file)
+		if relPath == "" {
+			relPath = file
+		}
+
+		fmt.Printf("## File: %s\n", relPath)
+		fmt.Println()
+
+		result, focusErr := analysisSvc.FocusedContext(context.Background(), analysis.FocusedContextOptions{
+			Focus:   file,
+			BaseDir: baseDir,
+		})
+
+		if focusErr != nil {
+			fmt.Printf("*Could not analyze: %v*\n\n", focusErr)
+			continue
+		}
+
+		// Show complexity
+		if result.Complexity != nil {
+			fmt.Printf("- **Cyclomatic**: %d\n", result.Complexity.CyclomaticTotal)
+			fmt.Printf("- **Cognitive**: %d\n", result.Complexity.CognitiveTotal)
+			if len(result.Complexity.TopFunctions) > 0 {
+				fmt.Println()
+				fmt.Println("### Functions")
+				fmt.Println("| Name | Line | Cyclomatic | Cognitive |")
+				fmt.Println("|------|------|------------|-----------|")
+				for _, fn := range result.Complexity.TopFunctions {
+					fmt.Printf("| %s | %d | %d | %d |\n", fn.Name, fn.Line, fn.Cyclomatic, fn.Cognitive)
+				}
+			}
+		}
+
+		// Show SATD markers
+		if len(result.SATD) > 0 {
+			fmt.Println()
+			fmt.Println("### Technical Debt")
+			for _, item := range result.SATD {
+				fmt.Printf("- Line %d: [%s] %s\n", item.Line, item.Type, item.Content)
+			}
+		}
+
+		fmt.Println()
+	}
+
+	return nil
+}
+
+// getChangedFiles returns files changed since the given base ref.
+func getChangedFiles(repoPath, baseRef string) ([]string, error) {
+	// First try committed changes
+	cmd := exec.Command("git", "diff", "--name-only", baseRef)
+	cmd.Dir = repoPath
+	output, err := cmd.Output()
+	if err != nil {
+		// Fallback to uncommitted changes
+		cmd = exec.Command("git", "diff", "--name-only")
+		cmd.Dir = repoPath
+		output, err = cmd.Output()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if line != "" {
+			files = append(files, filepath.Join(repoPath, line))
+		}
+	}
+	return files, nil
+}
+
+// getGitDiffStat returns the git diff --stat output.
+func getGitDiffStat(repoPath, baseRef string) (string, error) {
+	cmd := exec.Command("git", "diff", "--stat", baseRef)
+	cmd.Dir = repoPath
+	output, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return string(output), nil
+}
+
+// isSupportedSourceFile checks if a file is a supported source file.
+func isSupportedSourceFile(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	supported := map[string]bool{
+		".go": true, ".rs": true, ".py": true, ".ts": true, ".tsx": true,
+		".js": true, ".jsx": true, ".java": true, ".c": true, ".cpp": true,
+		".cc": true, ".h": true, ".hpp": true, ".cs": true, ".rb": true,
+		".php": true, ".sh": true, ".bash": true,
+	}
+	return supported[ext]
 }

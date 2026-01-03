@@ -1282,13 +1282,20 @@ func (a *Analyzer) analyzeFileGraphFromContent(path string, content []byte) (fil
 		functions := parser.GetFunctions(result)
 		for _, fn := range functions {
 			nodeID := path + ":" + fn.Name
-			fd.nodes = append(fd.nodes, Node{
+			node := Node{
 				ID:   nodeID,
 				Name: fn.Name,
 				Type: NodeFunction,
 				File: path,
 				Line: fn.StartLine,
-			})
+			}
+			// Store signature in attributes if present
+			if fn.Signature != "" {
+				node.Attributes = map[string]string{
+					"signature": fn.Signature,
+				}
+			}
+			fd.nodes = append(fd.nodes, node)
 			fd.calls[nodeID] = extractCalls(fn.Body, result.Source)
 		}
 
