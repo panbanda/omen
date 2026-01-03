@@ -1,5 +1,15 @@
 # Changelog
 
+## [3.3.0](https://github.com/panbanda/omen/compare/omen-v3.2.0...omen-v3.3.0) (2026-01-03)
+
+
+### Features
+
+* **context:** add callers/callees to focused context for LLM code navigation ([#195](https://github.com/panbanda/omen/issues/195)) ([c1d4578](https://github.com/panbanda/omen/commit/c1d45788309a472f4b75c590b52ac74360230507))
+* **context:** add diff context for PR review ([#199](https://github.com/panbanda/omen/issues/199)) ([31f3704](https://github.com/panbanda/omen/commit/31f3704948226dfe37b6ce51cc15df5865c458a0))
+* **context:** add related test files to focused context ([#200](https://github.com/panbanda/omen/issues/200)) ([08514d9](https://github.com/panbanda/omen/commit/08514d9f4fc7c0da340a2c3535d01a31168a7198))
+* **repomap:** add function signatures with types ([#196](https://github.com/panbanda/omen/issues/196)) ([34521ad](https://github.com/panbanda/omen/commit/34521ad9d79b2888da2180476394cde5599fe95a))
+
 ## [3.2.0](https://github.com/panbanda/omen/compare/omen-v3.1.0...omen-v3.2.0) (2025-12-26)
 
 
