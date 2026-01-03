@@ -1,5 +1,35 @@
 # Changelog
 
+## [8.0.0](https://github.com/panbanda/omen/compare/omen-marketplace-v7.0.0...omen-marketplace-v8.0.0) (2026-01-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* **plugins:** plugin/ renamed to plugins/development/
+* Analyze methods now require ContentSource parameter
+
+### Features
+
+* git-tree trend analysis, skills marketplace ([#135](https://github.com/panbanda/omen/issues/135)) ([8d457ff](https://github.com/panbanda/omen/commit/8d457ff13ad41999cead3b6f7c314cc24e2496c3))
+* **mcp:** add prompts and skills plugin ([0326af1](https://github.com/panbanda/omen/commit/0326af1da931c83db1fa9aa016051bc425a53d6a))
+* **mcp:** add prompts and skills plugin ([bf12602](https://github.com/panbanda/omen/commit/bf12602a949db3e77eb9a51c0c55edd1241ca381))
+* **plugins:** restructure plugins and add research-backed analyst agents ([#179](https://github.com/panbanda/omen/issues/179)) ([696c000](https://github.com/panbanda/omen/commit/696c00094060f5d8034d3a0f4ac4b523b01a10b6))
+* **skills:** trigger minor version bump ([#127](https://github.com/panbanda/omen/issues/127)) ([4a72df4](https://github.com/panbanda/omen/commit/4a72df486ab93770bfa27753e381a3f25ff48466))
+* trigger 0.2.0 release ([525996b](https://github.com/panbanda/omen/commit/525996b8760591070a51682b65c00ec5e00ef084))
+* trigger 0.2.0 release ([a24d9bf](https://github.com/panbanda/omen/commit/a24d9bfd0a7cd389cad4327da8b0f666c9b566b4))
+
+
+### Bug Fixes
+
+* final release trigger ([ed5cf8b](https://github.com/panbanda/omen/commit/ed5cf8baf4e9afc65cfe73a429ee98ee8290182c))
+* final release trigger ([0e9eb61](https://github.com/panbanda/omen/commit/0e9eb618f00df0e6c00db5c31f4ff4549aa0b602))
+* **plugin:** use correct source field name in marketplace config ([#123](https://github.com/panbanda/omen/issues/123)) ([a0850ba](https://github.com/panbanda/omen/commit/a0850ba81bb7bd550182e40275803a121107e747))
+* **plugin:** use remote git URL for marketplace source ([#121](https://github.com/panbanda/omen/issues/121)) ([8362306](https://github.com/panbanda/omen/commit/836230628df633b41d76dcd23daa42ad1db8d2af))
+* **release:** separate marketplace.json into own release-please package ([#173](https://github.com/panbanda/omen/issues/173)) ([75d5a54](https://github.com/panbanda/omen/commit/75d5a54d165ae4d8a004f4667b0c25f1bae60697))
+* retrigger release-please ([83a725c](https://github.com/panbanda/omen/commit/83a725ca2450bffae12f4a87ab42286cd864efb5))
+* retrigger release-please ([3949a4f](https://github.com/panbanda/omen/commit/3949a4fa56838cc73ec48ef4b014555cbef97630))
+* trigger release ([4b99bd1](https://github.com/panbanda/omen/commit/4b99bd1f05a556b009e286a55812c12a2909e98b))
+
 ## [7.0.0](https://github.com/panbanda/omen/compare/omen-marketplace-v6.0.0...omen-marketplace-v7.0.0) (2026-01-03)
 
 
