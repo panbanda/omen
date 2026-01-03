@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/fatih/color"
 	"github.com/panbanda/omen/internal/locator"
@@ -39,6 +41,8 @@ func init() {
 	contextCmd.Flags().Bool("repo-map", false, "Generate PageRank-ranked symbol map")
 	contextCmd.Flags().Int("top", defaultMaxSymbols, "Number of top symbols to include in repo map")
 	contextCmd.Flags().Bool("full", false, "Include all files without limits (use analyzers directly for detailed output)")
+	contextCmd.Flags().Bool("diff", false, "Show context for changed files (for PR review)")
+	contextCmd.Flags().String("base", "main", "Base branch/ref for diff comparison (default: main)")
 
 	rootCmd.AddCommand(contextCmd)
 }
@@ -51,6 +55,13 @@ func runContext(cmd *cobra.Command, args []string) error {
 	repoMap, _ := cmd.Flags().GetBool("repo-map")
 	topN, _ := cmd.Flags().GetInt("top")
 	fullOutput, _ := cmd.Flags().GetBool("full")
+	diffMode, _ := cmd.Flags().GetBool("diff")
+	baseRef, _ := cmd.Flags().GetString("base")
+
+	// If --diff is provided, run diff context for PR review
+	if diffMode {
+		return runDiffContext(cmd, paths, baseRef)
+	}
 
 	// If --focus is provided, run focused context
 	if focus != "" {
@@ -358,4 +369,153 @@ func runFocusedContext(cmd *cobra.Command, focus string, paths []string, include
 	}
 
 	return nil
+}
+
+// runDiffContext generates context for changed files, useful for PR review.
+// It shows what files changed and provides focused context for each.
+func runDiffContext(cmd *cobra.Command, paths []string, baseRef string) error {
+	baseDir := "."
+	if len(paths) > 0 {
+		baseDir = paths[0]
+	}
+
+	// Get changed files
+	changedFiles, err := getChangedFiles(baseDir, baseRef)
+	if err != nil {
+		return fmt.Errorf("failed to get changed files: %w", err)
+	}
+
+	if len(changedFiles) == 0 {
+		color.Yellow("No changes found compared to %s", baseRef)
+		return nil
+	}
+
+	fmt.Println("# Diff Context")
+	fmt.Println()
+	fmt.Printf("Comparing to: **%s**\n", baseRef)
+	fmt.Println()
+
+	// List changed files
+	fmt.Println("## Changed Files")
+	for _, f := range changedFiles {
+		relPath, _ := filepath.Rel(baseDir, f)
+		if relPath == "" {
+			relPath = f
+		}
+		fmt.Printf("- %s\n", relPath)
+	}
+	fmt.Println()
+
+	// Show git diff summary
+	fmt.Println("## Diff Summary")
+	fmt.Println("```diff")
+	diffOutput, diffErr := getGitDiffStat(baseDir, baseRef)
+	if diffErr == nil {
+		fmt.Print(diffOutput)
+	}
+	fmt.Println("```")
+	fmt.Println()
+
+	// For each changed file, show focused context
+	analysisSvc := analysis.New()
+	for _, file := range changedFiles {
+		// Skip non-source files
+		if !isSupportedSourceFile(file) {
+			continue
+		}
+
+		relPath, _ := filepath.Rel(baseDir, file)
+		if relPath == "" {
+			relPath = file
+		}
+
+		fmt.Printf("## File: %s\n", relPath)
+		fmt.Println()
+
+		result, focusErr := analysisSvc.FocusedContext(context.Background(), analysis.FocusedContextOptions{
+			Focus:   file,
+			BaseDir: baseDir,
+		})
+
+		if focusErr != nil {
+			fmt.Printf("*Could not analyze: %v*\n\n", focusErr)
+			continue
+		}
+
+		// Show complexity
+		if result.Complexity != nil {
+			fmt.Printf("- **Cyclomatic**: %d\n", result.Complexity.CyclomaticTotal)
+			fmt.Printf("- **Cognitive**: %d\n", result.Complexity.CognitiveTotal)
+			if len(result.Complexity.TopFunctions) > 0 {
+				fmt.Println()
+				fmt.Println("### Functions")
+				fmt.Println("| Name | Line | Cyclomatic | Cognitive |")
+				fmt.Println("|------|------|------------|-----------|")
+				for _, fn := range result.Complexity.TopFunctions {
+					fmt.Printf("| %s | %d | %d | %d |\n", fn.Name, fn.Line, fn.Cyclomatic, fn.Cognitive)
+				}
+			}
+		}
+
+		// Show SATD markers
+		if len(result.SATD) > 0 {
+			fmt.Println()
+			fmt.Println("### Technical Debt")
+			for _, item := range result.SATD {
+				fmt.Printf("- Line %d: [%s] %s\n", item.Line, item.Type, item.Content)
+			}
+		}
+
+		fmt.Println()
+	}
+
+	return nil
+}
+
+// getChangedFiles returns files changed since the given base ref.
+func getChangedFiles(repoPath, baseRef string) ([]string, error) {
+	// First try committed changes
+	cmd := exec.Command("git", "diff", "--name-only", baseRef)
+	cmd.Dir = repoPath
+	output, err := cmd.Output()
+	if err != nil {
+		// Fallback to uncommitted changes
+		cmd = exec.Command("git", "diff", "--name-only")
+		cmd.Dir = repoPath
+		output, err = cmd.Output()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if line != "" {
+			files = append(files, filepath.Join(repoPath, line))
+		}
+	}
+	return files, nil
+}
+
+// getGitDiffStat returns the git diff --stat output.
+func getGitDiffStat(repoPath, baseRef string) (string, error) {
+	cmd := exec.Command("git", "diff", "--stat", baseRef)
+	cmd.Dir = repoPath
+	output, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return string(output), nil
+}
+
+// isSupportedSourceFile checks if a file is a supported source file.
+func isSupportedSourceFile(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	supported := map[string]bool{
+		".go": true, ".rs": true, ".py": true, ".ts": true, ".tsx": true,
+		".js": true, ".jsx": true, ".java": true, ".c": true, ".cpp": true,
+		".cc": true, ".h": true, ".hpp": true, ".cs": true, ".rb": true,
+		".php": true, ".sh": true, ".bash": true,
+	}
+	return supported[ext]
 }
