@@ -10,7 +10,6 @@ import (
 	"github.com/fatih/color"
 	"github.com/olekukonko/tablewriter"
 	"github.com/olekukonko/tablewriter/tw"
-	toon "github.com/toon-format/toon-go"
 )
 
 // Format represents an output format.
@@ -20,7 +19,6 @@ const (
 	FormatText     Format = "text"
 	FormatJSON     Format = "json"
 	FormatMarkdown Format = "markdown"
-	FormatTOON     Format = "toon"
 )
 
 // ParseFormat converts a string to Format, defaulting to text.
@@ -30,8 +28,6 @@ func ParseFormat(s string) Format {
 		return FormatJSON
 	case "markdown", "md":
 		return FormatMarkdown
-	case "toon":
-		return FormatTOON
 	default:
 		return FormatText
 	}
@@ -41,7 +37,7 @@ func ParseFormat(s string) Format {
 type Renderable interface {
 	RenderText(w io.Writer, colored bool) error
 	RenderMarkdown(w io.Writer) error
-	// RenderData returns the underlying data for JSON/TOON serialization.
+	// RenderData returns the underlying data for JSON serialization.
 	RenderData() any
 }
 
@@ -112,8 +108,6 @@ func (f *Formatter) render(r Renderable) error {
 	switch f.format {
 	case FormatJSON:
 		return f.outputJSON(r.RenderData())
-	case FormatTOON:
-		return f.outputTOON(r.RenderData())
 	case FormatMarkdown:
 		return r.RenderMarkdown(f.writer)
 	default:
@@ -126,8 +120,6 @@ func (f *Formatter) outputRaw(data any) error {
 	switch f.format {
 	case FormatJSON:
 		return f.outputJSON(data)
-	case FormatTOON:
-		return f.outputTOON(data)
 	case FormatMarkdown:
 		fmt.Fprintln(f.writer, "```json")
 		if err := f.outputJSON(data); err != nil {
@@ -147,27 +139,13 @@ func (f *Formatter) outputJSON(data any) error {
 	return encoder.Encode(data)
 }
 
-// outputTOON writes data in TOON format.
-func (f *Formatter) outputTOON(data any) error {
-	out, err := toon.Marshal(data, toon.WithIndent(2))
-	if err != nil {
-		return err
-	}
-	_, err = f.writer.Write(out)
-	if err != nil {
-		return err
-	}
-	fmt.Fprintln(f.writer)
-	return nil
-}
-
 // Table is a Renderable table with headers, rows, and optional footer.
 type Table struct {
-	Title   string     `json:"-" toon:"-"`
-	Headers []string   `json:"-" toon:"-"`
-	Rows    [][]string `json:"-" toon:"-"`
-	Footer  []string   `json:"-" toon:"-"`
-	Data    any        `json:"data,omitempty" toon:"data"`
+	Title   string     `json:"-"`
+	Headers []string   `json:"-"`
+	Rows    [][]string `json:"-"`
+	Footer  []string   `json:"-"`
+	Data    any        `json:"data,omitempty"`
 }
 
 // NewTable creates a table that wraps structured data for serialization.
@@ -282,10 +260,10 @@ func (t *Table) RenderMarkdown(w io.Writer) error {
 
 // Section is a Renderable titled section with content and subsections.
 type Section struct {
-	Title    string    `json:"title,omitempty" toon:"title"`
-	Content  string    `json:"content,omitempty" toon:"content"`
-	Sections []Section `json:"sections,omitempty" toon:"sections"`
-	Data     any       `json:"data,omitempty" toon:"data"`
+	Title    string    `json:"title,omitempty"`
+	Content  string    `json:"content,omitempty"`
+	Sections []Section `json:"sections,omitempty"`
+	Data     any       `json:"data,omitempty"`
 }
 
 func (s *Section) RenderData() any {
@@ -348,9 +326,9 @@ func (s *Section) renderMarkdownAtLevel(w io.Writer, level int) error {
 
 // Report is a compound Renderable containing multiple sections and tables.
 type Report struct {
-	Title    string       `json:"title,omitempty" toon:"title"`
-	Sections []Renderable `json:"-" toon:"-"`
-	Data     any          `json:"data,omitempty" toon:"data"`
+	Title    string       `json:"title,omitempty"`
+	Sections []Renderable `json:"-"`
+	Data     any          `json:"data,omitempty"`
 }
 
 func (r *Report) RenderData() any {

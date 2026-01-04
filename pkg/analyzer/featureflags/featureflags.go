@@ -305,11 +305,11 @@ func (a *Analyzer) calculateNestingDepth(result *parser.ParseResult, line uint32
 	depth := 0
 	conditionalTypes := conditionalNodeTypes(result.Language)
 
-	parser.Walk(result.Tree.RootNode(), result.Source, func(node *sitter.Node, source []byte) bool {
+	parser.WalkTyped(result.Tree.RootNode(), result.Source, func(node *sitter.Node, nodeType string, source []byte) bool {
 		startLine := uint32(node.StartPoint().Row) + 1
 		endLine := uint32(node.EndPoint().Row) + 1
 
-		if conditionalTypes[node.Type()] && startLine <= line && line <= endLine {
+		if conditionalTypes[nodeType] && startLine <= line && line <= endLine {
 			depth++
 		}
 		return true
@@ -333,8 +333,8 @@ func (a *Analyzer) calculateNestingDepthBatch(result *parser.ParseResult, lines 
 
 	conditionalTypes := conditionalNodeTypes(result.Language)
 
-	parser.Walk(result.Tree.RootNode(), result.Source, func(node *sitter.Node, source []byte) bool {
-		if !conditionalTypes[node.Type()] {
+	parser.WalkTyped(result.Tree.RootNode(), result.Source, func(node *sitter.Node, nodeType string, source []byte) bool {
+		if !conditionalTypes[nodeType] {
 			return true
 		}
 

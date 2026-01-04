@@ -106,14 +106,16 @@ func extractImports(result *parser.ParseResult) []string {
 	root := result.Tree.RootNode()
 
 	importTypes := getImportNodeTypes(result.Language)
+	importTypeSet := make(map[string]bool, len(importTypes))
+	for _, it := range importTypes {
+		importTypeSet[it] = true
+	}
 
-	parser.Walk(root, result.Source, func(node *sitter.Node, source []byte) bool {
-		for _, it := range importTypes {
-			if node.Type() == it {
-				imp := extractImportPath(node, source, result.Language)
-				if imp != "" {
-					imports = append(imports, imp)
-				}
+	parser.WalkTyped(root, result.Source, func(node *sitter.Node, nodeType string, source []byte) bool {
+		if importTypeSet[nodeType] {
+			imp := extractImportPath(node, source, result.Language)
+			if imp != "" {
+				imports = append(imports, imp)
 			}
 		}
 		return true
@@ -213,17 +215,19 @@ func extractCalls(body *sitter.Node, source []byte) []string {
 	}
 
 	var calls []string
-	callTypes := []string{"call_expression", "function_call", "method_call"}
+	callTypes := map[string]bool{
+		"call_expression": true,
+		"function_call":   true,
+		"method_call":     true,
+	}
 
-	parser.Walk(body, source, func(node *sitter.Node, src []byte) bool {
-		for _, ct := range callTypes {
-			if node.Type() == ct {
-				// Extract function name
-				if fnNode := node.ChildByFieldName("function"); fnNode != nil {
-					calls = append(calls, parser.GetNodeText(fnNode, src))
-				} else if fnNode := node.ChildByFieldName("name"); fnNode != nil {
-					calls = append(calls, parser.GetNodeText(fnNode, src))
-				}
+	parser.WalkTyped(body, source, func(node *sitter.Node, nodeType string, src []byte) bool {
+		if callTypes[nodeType] {
+			// Extract function name
+			if fnNode := node.ChildByFieldName("function"); fnNode != nil {
+				calls = append(calls, parser.GetNodeText(fnNode, src))
+			} else if fnNode := node.ChildByFieldName("name"); fnNode != nil {
+				calls = append(calls, parser.GetNodeText(fnNode, src))
 			}
 		}
 		return true
@@ -272,8 +276,7 @@ func extractRubyClassDefinitions(root *sitter.Node, source []byte) ([]string, ma
 	var classes []string
 	classSet := make(map[string]bool)
 
-	parser.Walk(root, source, func(node *sitter.Node, src []byte) bool {
-		nodeType := node.Type()
+	parser.WalkTyped(root, source, func(node *sitter.Node, nodeType string, src []byte) bool {
 		if nodeType == "class" || nodeType == "module" {
 			// Find the constant (class/module name) child
 			for i := 0; i < int(node.ChildCount()); i++ {
@@ -305,9 +308,7 @@ func extractRubyClassDefinitions(root *sitter.Node, source []byte) ([]string, ma
 
 // extractRubyClassReferences finds class/constant references in Ruby code.
 func extractRubyClassReferences(root *sitter.Node, source []byte, refs map[string]bool, defined map[string]bool) {
-	parser.Walk(root, source, func(node *sitter.Node, src []byte) bool {
-		nodeType := node.Type()
-
+	parser.WalkTyped(root, source, func(node *sitter.Node, nodeType string, src []byte) bool {
 		switch nodeType {
 		case "superclass":
 			// Inheritance: class Foo < Bar
@@ -385,8 +386,8 @@ func extractPythonClassDefinitions(root *sitter.Node, source []byte) ([]string, 
 	var classes []string
 	classSet := make(map[string]bool)
 
-	parser.Walk(root, source, func(node *sitter.Node, src []byte) bool {
-		if node.Type() == "class_definition" {
+	parser.WalkTyped(root, source, func(node *sitter.Node, nodeType string, src []byte) bool {
+		if nodeType == "class_definition" {
 			if nameNode := node.ChildByFieldName("name"); nameNode != nil {
 				name := parser.GetNodeText(nameNode, src)
 				if name != "" && !classSet[name] {
@@ -403,9 +404,7 @@ func extractPythonClassDefinitions(root *sitter.Node, source []byte) ([]string, 
 
 // extractPythonClassReferences finds class references in Python code.
 func extractPythonClassReferences(root *sitter.Node, source []byte, refs map[string]bool, defined map[string]bool) {
-	parser.Walk(root, source, func(node *sitter.Node, src []byte) bool {
-		nodeType := node.Type()
-
+	parser.WalkTyped(root, source, func(node *sitter.Node, nodeType string, src []byte) bool {
 		switch nodeType {
 		case "class_definition":
 			// Check for base classes
@@ -458,10 +457,10 @@ func extractFullConstantName(node *sitter.Node, source []byte) string {
 
 // extractConstantsFromNode extracts all constant names from a node tree.
 func extractConstantsFromNode(node *sitter.Node, source []byte, refs map[string]bool) {
-	parser.Walk(node, source, func(n *sitter.Node, src []byte) bool {
-		if n.Type() == "constant" {
+	parser.WalkTyped(node, source, func(n *sitter.Node, nodeType string, src []byte) bool {
+		if nodeType == "constant" {
 			refs[parser.GetNodeText(n, src)] = true
-		} else if n.Type() == "scope_resolution" {
+		} else if nodeType == "scope_resolution" {
 			refs[extractFullConstantName(n, src)] = true
 			return false // Don't descend into scope_resolution children
 		}
@@ -471,8 +470,8 @@ func extractConstantsFromNode(node *sitter.Node, source []byte, refs map[string]
 
 // extractIdentifiersFromNode extracts identifier names from a node tree (for Python).
 func extractIdentifiersFromNode(node *sitter.Node, source []byte, refs map[string]bool) {
-	parser.Walk(node, source, func(n *sitter.Node, src []byte) bool {
-		if n.Type() == "identifier" {
+	parser.WalkTyped(node, source, func(n *sitter.Node, nodeType string, src []byte) bool {
+		if nodeType == "identifier" {
 			name := parser.GetNodeText(n, src)
 			// Heuristic: class names start with uppercase
 			if len(name) > 0 && name[0] >= 'A' && name[0] <= 'Z' {

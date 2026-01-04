@@ -122,19 +122,6 @@ func TestFormatData_Markdown(t *testing.T) {
 	}
 }
 
-func TestFormatData_TOON(t *testing.T) {
-	svc, _ := New(WithFormat(FormatTOON))
-	data := map[string]int{"count": 42}
-
-	result, err := svc.FormatData(data)
-	if err != nil {
-		t.Fatalf("FormatData() error = %v", err)
-	}
-	if result == "" {
-		t.Error("expected non-empty result")
-	}
-}
-
 func TestFormatData_Text(t *testing.T) {
 	svc, _ := New(WithFormat(FormatText))
 	data := map[string]int{"count": 42}
@@ -193,7 +180,6 @@ func TestParseFormat(t *testing.T) {
 		{"text", FormatText},
 		{"json", FormatJSON},
 		{"markdown", FormatMarkdown},
-		{"toon", FormatTOON},
 		{"", FormatText},
 		{"unknown", FormatText},
 	}
@@ -308,17 +294,6 @@ func TestOutputTable_Markdown(t *testing.T) {
 func TestFormatData_InvalidJSON(t *testing.T) {
 	svc, _ := New(WithFormat(FormatJSON))
 	// Create a channel which can't be marshaled to JSON
-	data := make(chan int)
-
-	_, err := svc.FormatData(data)
-	if err == nil {
-		t.Error("expected error for unmarshallable data")
-	}
-}
-
-func TestFormatData_InvalidTOON(t *testing.T) {
-	svc, _ := New(WithFormat(FormatTOON))
-	// Create a channel which can't be marshaled to TOON
 	data := make(chan int)
 
 	_, err := svc.FormatData(data)

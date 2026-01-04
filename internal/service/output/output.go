@@ -1,11 +1,11 @@
 package output
 
 import (
+	"encoding/json"
 	"io"
 	"os"
 
 	"github.com/panbanda/omen/internal/output"
-	toon "github.com/toon-format/toon-go"
 )
 
 // Format represents output format.
@@ -16,7 +16,6 @@ const (
 	FormatText     = output.FormatText
 	FormatJSON     = output.FormatJSON
 	FormatMarkdown = output.FormatMarkdown
-	FormatTOON     = output.FormatTOON
 )
 
 // Service handles output formatting.
@@ -110,31 +109,14 @@ func (s *Service) Colored() bool {
 
 // FormatData formats data according to the service's format.
 func (s *Service) FormatData(data any) (string, error) {
+	out, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return "", err
+	}
 	switch s.format {
-	case FormatJSON:
-		out, err := toon.Marshal(data, toon.WithIndent(2))
-		if err != nil {
-			return "", err
-		}
-		return string(out), nil
 	case FormatMarkdown:
-		out, err := toon.Marshal(data, toon.WithIndent(2))
-		if err != nil {
-			return "", err
-		}
-		return "```\n" + string(out) + "\n```", nil
-	case FormatTOON:
-		out, err := toon.Marshal(data, toon.WithIndent(2))
-		if err != nil {
-			return "", err
-		}
-		return string(out), nil
+		return "```json\n" + string(out) + "\n```", nil
 	default:
-		// Text format - use toon as fallback
-		out, err := toon.Marshal(data, toon.WithIndent(2))
-		if err != nil {
-			return "", err
-		}
 		return string(out), nil
 	}
 }
