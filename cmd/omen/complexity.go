@@ -72,7 +72,6 @@ func runComplexity(cmd *cobra.Command, args []string) error {
 	defer formatter.Close()
 
 	var rows [][]string
-	var warnings []string
 
 	for _, fc := range result.Files {
 		if functionsOnly {
@@ -82,13 +81,9 @@ func runComplexity(cmd *cobra.Command, args []string) error {
 
 				if fn.Metrics.Cyclomatic > uint32(cycThreshold) {
 					cycColor = color.RedString("%d", fn.Metrics.Cyclomatic)
-					warnings = append(warnings, fmt.Sprintf("%s:%d %s - cyclomatic complexity %d exceeds threshold %d",
-						fc.Path, fn.StartLine, fn.Name, fn.Metrics.Cyclomatic, cycThreshold))
 				}
 				if fn.Metrics.Cognitive > uint32(cogThreshold) {
 					cogColor = color.RedString("%d", fn.Metrics.Cognitive)
-					warnings = append(warnings, fmt.Sprintf("%s:%d %s - cognitive complexity %d exceeds threshold %d",
-						fc.Path, fn.StartLine, fn.Name, fn.Metrics.Cognitive, cogThreshold))
 				}
 
 				rows = append(rows, []string{
