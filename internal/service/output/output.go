@@ -13,7 +13,6 @@ type Format = output.Format
 
 // Supported formats (re-exported for convenience).
 const (
-	FormatText     = output.FormatText
 	FormatJSON     = output.FormatJSON
 	FormatMarkdown = output.FormatMarkdown
 )
@@ -61,9 +60,9 @@ func WithFile(path string) Option {
 // New creates a new output service.
 func New(opts ...Option) (*Service, error) {
 	s := &Service{
-		format:  FormatText,
+		format:  FormatMarkdown,
 		writer:  os.Stdout,
-		colored: true,
+		colored: false,
 	}
 
 	for _, opt := range opts {

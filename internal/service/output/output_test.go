@@ -12,7 +12,7 @@ func TestNew(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	if svc == nil || svc.format != FormatText || !svc.colored {
+	if svc == nil || svc.format != FormatMarkdown {
 		t.Fatal("New() returned nil or has wrong defaults")
 	}
 }
@@ -122,8 +122,8 @@ func TestFormatData_Markdown(t *testing.T) {
 	}
 }
 
-func TestFormatData_Text(t *testing.T) {
-	svc, _ := New(WithFormat(FormatText))
+func TestFormatData_MarkdownDefault(t *testing.T) {
+	svc, _ := New(WithFormat(FormatMarkdown))
 	data := map[string]int{"count": 42}
 
 	result, err := svc.FormatData(data)
@@ -177,11 +177,11 @@ func TestParseFormat(t *testing.T) {
 		input    string
 		expected Format
 	}{
-		{"text", FormatText},
+		{"text", FormatMarkdown},
 		{"json", FormatJSON},
 		{"markdown", FormatMarkdown},
-		{"", FormatText},
-		{"unknown", FormatText},
+		{"", FormatMarkdown},
+		{"unknown", FormatMarkdown},
 	}
 
 	for _, tt := range tests {
@@ -211,7 +211,7 @@ func TestOutputTable(t *testing.T) {
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "table.txt")
 
-	svc, _ := New(WithFile(filePath), WithFormat(FormatText))
+	svc, _ := New(WithFile(filePath), WithFormat(FormatMarkdown))
 	defer svc.Close()
 
 	table := NewTable(

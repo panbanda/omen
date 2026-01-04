@@ -144,17 +144,5 @@ func runComplexity(cmd *cobra.Command, args []string) error {
 		result,
 	)
 
-	if err := formatter.Output(table); err != nil {
-		return err
-	}
-
-	if len(warnings) > 0 && formatter.Format() == output.FormatText {
-		fmt.Println()
-		color.Yellow("Warnings (%d):", len(warnings))
-		for _, w := range warnings {
-			fmt.Printf("  - %s\n", w)
-		}
-	}
-
-	return nil
+	return formatter.Output(table)
 }

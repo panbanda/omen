@@ -683,12 +683,12 @@ func TestScanPathsForGit(t *testing.T) {
 	}
 }
 
-// TestToolResultTextFormat tests text format output.
-func TestToolResultTextFormat(t *testing.T) {
+// TestToolResultMarkdownFormat tests markdown format output.
+func TestToolResultMarkdownFormat(t *testing.T) {
 	data := map[string]interface{}{
 		"key": "value",
 	}
-	result, _, err := toolResult(data, output.FormatText)
+	result, _, err := toolResult(data, output.FormatMarkdown)
 	if err != nil {
 		t.Fatalf("toolResult returned error: %v", err)
 	}

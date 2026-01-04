@@ -14,16 +14,14 @@ func TestParseFormat(t *testing.T) {
 		input string
 		want  Format
 	}{
-		{"text", FormatText},
-		{"TEXT", FormatText},
 		{"json", FormatJSON},
 		{"JSON", FormatJSON},
 		{"markdown", FormatMarkdown},
 		{"md", FormatMarkdown},
 		{"MARKDOWN", FormatMarkdown},
-		{"", FormatText},
-		{"invalid", FormatText},
-		{"unknown", FormatText},
+		{"", FormatMarkdown},
+		{"text", FormatMarkdown},
+		{"invalid", FormatMarkdown},
 	}
 
 	for _, tt := range tests {
@@ -43,9 +41,8 @@ func TestNewFormatter(t *testing.T) {
 		output  string
 		colored bool
 	}{
-		{"text_stdout_colored", FormatText, "", true},
-		{"json_stdout_nocolor", FormatJSON, "", false},
 		{"markdown_stdout_colored", FormatMarkdown, "", true},
+		{"json_stdout_nocolor", FormatJSON, "", false},
 	}
 
 	for _, tt := range tests {
@@ -102,7 +99,7 @@ func TestNewFormatterWithFile(t *testing.T) {
 }
 
 func TestNewFormatterInvalidPath(t *testing.T) {
-	_, err := NewFormatter(FormatText, "/nonexistent/directory/file.txt", false)
+	_, err := NewFormatter(FormatMarkdown, "/nonexistent/directory/file.txt", false)
 	if err == nil {
 		t.Error("NewFormatter() should error for invalid path")
 	}
@@ -110,7 +107,7 @@ func TestNewFormatterInvalidPath(t *testing.T) {
 
 func TestFormatterClose(t *testing.T) {
 	t.Run("close_stdout", func(t *testing.T) {
-		f, err := NewFormatter(FormatText, "", false)
+		f, err := NewFormatter(FormatMarkdown, "", false)
 		if err != nil {
 			t.Fatalf("NewFormatter() error: %v", err)
 		}
@@ -150,87 +147,6 @@ func TestFormatterGetters(t *testing.T) {
 
 	if f.Writer() == nil {
 		t.Error("Writer() should not be nil")
-	}
-}
-
-func TestTableRenderText(t *testing.T) {
-	tests := []struct {
-		name    string
-		table   *Table
-		colored bool
-		want    []string
-	}{
-		{
-			name: "simple_table",
-			table: NewTable(
-				"Test Results",
-				[]string{"File", "Status", "Score"},
-				[][]string{
-					{"file1.go", "Pass", "100"},
-					{"file2.go", "Fail", "50"},
-				},
-				nil,
-				nil,
-			),
-			colored: false,
-			want:    []string{"Test Results", "FILE", "STATUS", "SCORE", "file1.go", "Pass", "100"},
-		},
-		{
-			name: "table_with_footer",
-			table: NewTable(
-				"Summary",
-				[]string{"Metric", "Value"},
-				[][]string{
-					{"Total", "10"},
-					{"Passed", "8"},
-				},
-				[]string{"Success Rate", "80%"},
-				nil,
-			),
-			colored: false,
-			want:    []string{"Summary", "METRIC", "VALUE", "Total", "10", "80%"},
-		},
-		{
-			name: "empty_table",
-			table: NewTable(
-				"Empty",
-				[]string{"Col1", "Col2"},
-				[][]string{},
-				nil,
-				nil,
-			),
-			colored: false,
-			want:    []string{"Empty", "COL 1", "COL 2"},
-		},
-		{
-			name: "no_title",
-			table: NewTable(
-				"",
-				[]string{"A", "B"},
-				[][]string{{"1", "2"}},
-				nil,
-				nil,
-			),
-			colored: false,
-			want:    []string{"A", "B", "1", "2"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var buf bytes.Buffer
-			err := tt.table.RenderText(&buf, tt.colored)
-			if err != nil {
-				t.Fatalf("RenderText() error: %v", err)
-			}
-
-			output := buf.String()
-			for _, want := range tt.want {
-				if !strings.Contains(output, want) {
-					t.Errorf("RenderText() missing %q in output:\n%s", want, output)
-				}
-			}
-		})
 	}
 }
 
@@ -353,73 +269,6 @@ func TestTableRenderData(t *testing.T) {
 	})
 }
 
-func TestSectionRenderText(t *testing.T) {
-	tests := []struct {
-		name    string
-		section *Section
-		colored bool
-		want    []string
-	}{
-		{
-			name: "simple_section",
-			section: &Section{
-				Title:   "Overview",
-				Content: "This is the content.",
-			},
-			colored: false,
-			want:    []string{"Overview", "===", "This is the content."},
-		},
-		{
-			name: "nested_sections",
-			section: &Section{
-				Title:   "Parent",
-				Content: "Parent content",
-				Sections: []Section{
-					{
-						Title:   "Child",
-						Content: "Child content",
-					},
-				},
-			},
-			colored: false,
-			want:    []string{"Parent", "===", "Parent content", "Child", "---", "Child content"},
-		},
-		{
-			name: "no_title",
-			section: &Section{
-				Content: "Just content",
-			},
-			colored: false,
-			want:    []string{"Just content"},
-		},
-		{
-			name: "no_content",
-			section: &Section{
-				Title: "Just Title",
-			},
-			colored: false,
-			want:    []string{"Just Title", "==="},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var buf bytes.Buffer
-			err := tt.section.RenderText(&buf, tt.colored)
-			if err != nil {
-				t.Fatalf("RenderText() error: %v", err)
-			}
-
-			output := buf.String()
-			for _, want := range tt.want {
-				if !strings.Contains(output, want) {
-					t.Errorf("RenderText() missing %q in output:\n%s", want, output)
-				}
-			}
-		})
-	}
-}
-
 func TestSectionRenderMarkdown(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -496,39 +345,6 @@ func TestSectionRenderData(t *testing.T) {
 	})
 }
 
-func TestReportRenderText(t *testing.T) {
-	report := &Report{
-		Title: "Analysis Report",
-		Sections: []Renderable{
-			&Section{
-				Title:   "Summary",
-				Content: "Overall summary",
-			},
-			NewTable(
-				"Results",
-				[]string{"File", "Score"},
-				[][]string{{"test.go", "100"}},
-				nil,
-				nil,
-			),
-		},
-	}
-
-	var buf bytes.Buffer
-	err := report.RenderText(&buf, false)
-	if err != nil {
-		t.Fatalf("RenderText() error: %v", err)
-	}
-
-	output := buf.String()
-	want := []string{"Analysis Report", "Summary", "Overall summary", "Results", "FILE", "SCORE", "test.go", "100"}
-	for _, w := range want {
-		if !strings.Contains(output, w) {
-			t.Errorf("RenderText() missing %q in output:\n%s", w, output)
-		}
-	}
-}
-
 func TestReportRenderMarkdown(t *testing.T) {
 	report := &Report{
 		Title: "Report Title",
@@ -601,7 +417,7 @@ func TestFormatterOutputRenderable(t *testing.T) {
 	}{
 		{
 			name:   "text_table",
-			format: FormatText,
+			format: FormatMarkdown,
 			data:   NewTable("Test", []string{"A"}, [][]string{{"1"}}, nil, nil),
 		},
 		{
@@ -616,7 +432,7 @@ func TestFormatterOutputRenderable(t *testing.T) {
 		},
 		{
 			name:   "text_section",
-			format: FormatText,
+			format: FormatMarkdown,
 			data:   &Section{Title: "Test", Content: "Content"},
 		},
 		{
@@ -668,7 +484,7 @@ func TestFormatterOutputRaw(t *testing.T) {
 		},
 		{
 			name:   "text_default",
-			format: FormatText,
+			format: FormatMarkdown,
 			data:   map[string]bool{"enabled": true},
 		},
 	}
@@ -788,7 +604,7 @@ func TestFormatterMessageMethods(t *testing.T) {
 			tmpDir := t.TempDir()
 			outputPath := filepath.Join(tmpDir, "output.txt")
 
-			f, err := NewFormatter(FormatText, outputPath, tt.colored)
+			f, err := NewFormatter(FormatMarkdown, outputPath, tt.colored)
 			if err != nil {
 				t.Fatalf("NewFormatter() error: %v", err)
 			}
@@ -850,7 +666,7 @@ func TestFormatterOutputEmptyData(t *testing.T) {
 		},
 		{
 			name:   "empty_section",
-			format: FormatText,
+			format: FormatMarkdown,
 			data:   &Section{},
 		},
 		{
@@ -896,65 +712,6 @@ func TestFormatterNilInputs(t *testing.T) {
 	}
 }
 
-func TestTableRenderTextColored(t *testing.T) {
-	table := NewTable(
-		"Colored Output",
-		[]string{"Name", "Value"},
-		[][]string{{"test", "123"}},
-		nil,
-		nil,
-	)
-
-	var buf bytes.Buffer
-	err := table.RenderText(&buf, true)
-	if err != nil {
-		t.Fatalf("RenderText() error: %v", err)
-	}
-
-	output := buf.String()
-	if len(output) == 0 {
-		t.Error("RenderText() with colored=true should produce output")
-	}
-}
-
-func TestSectionRenderTextColored(t *testing.T) {
-	section := &Section{
-		Title:   "Colored Section",
-		Content: "Some content",
-	}
-
-	var buf bytes.Buffer
-	err := section.RenderText(&buf, true)
-	if err != nil {
-		t.Fatalf("RenderText() error: %v", err)
-	}
-
-	output := buf.String()
-	if len(output) == 0 {
-		t.Error("RenderText() with colored=true should produce output")
-	}
-}
-
-func TestReportRenderTextColored(t *testing.T) {
-	report := &Report{
-		Title: "Colored Report",
-		Sections: []Renderable{
-			&Section{Title: "Section", Content: "Content"},
-		},
-	}
-
-	var buf bytes.Buffer
-	err := report.RenderText(&buf, true)
-	if err != nil {
-		t.Fatalf("RenderText() error: %v", err)
-	}
-
-	output := buf.String()
-	if len(output) == 0 {
-		t.Error("RenderText() with colored=true should produce output")
-	}
-}
-
 func TestFormatterComplexReport(t *testing.T) {
 	report := &Report{
 		Title: "Comprehensive Analysis",
@@ -983,7 +740,7 @@ func TestFormatterComplexReport(t *testing.T) {
 		},
 	}
 
-	formats := []Format{FormatText, FormatJSON, FormatMarkdown}
+	formats := []Format{FormatMarkdown, FormatJSON, FormatMarkdown}
 
 	for _, format := range formats {
 		t.Run(string(format), func(t *testing.T) {
@@ -1052,7 +809,7 @@ func TestFormatterMultipleOutputs(t *testing.T) {
 	tmpDir := t.TempDir()
 	outputPath := filepath.Join(tmpDir, "multiple.txt")
 
-	f, err := NewFormatter(FormatText, outputPath, false)
+	f, err := NewFormatter(FormatMarkdown, outputPath, false)
 	if err != nil {
 		t.Fatalf("NewFormatter() error: %v", err)
 	}

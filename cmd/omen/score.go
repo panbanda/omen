@@ -30,7 +30,7 @@ var scoreTrendCmd = &cobra.Command{
 }
 
 func init() {
-	scoreCmd.PersistentFlags().StringP("format", "f", "text", "Output format: text, json, markdown")
+	scoreCmd.PersistentFlags().StringP("format", "f", "markdown", "Output format: markdown, json")
 	scoreCmd.PersistentFlags().StringP("output", "o", "", "Write output to file")
 
 	scoreCmd.Flags().Int("min-score", 0, "Minimum composite score (0-100)")

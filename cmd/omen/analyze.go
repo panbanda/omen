@@ -53,7 +53,7 @@ type fullAnalysis struct {
 
 func init() {
 	// Persistent flags inherited by all analyzer subcommands
-	analyzeCmd.PersistentFlags().StringP("format", "f", "text", "Output format: text, json, markdown")
+	analyzeCmd.PersistentFlags().StringP("format", "f", "markdown", "Output format: markdown, json")
 	analyzeCmd.PersistentFlags().StringP("output", "o", "", "Write output to file")
 	analyzeCmd.PersistentFlags().Bool("no-cache", false, "Disable caching")
 	analyzeCmd.PersistentFlags().String("ref", "", "Git ref (branch, tag, SHA) for remote repositories")
