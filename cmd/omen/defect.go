@@ -74,8 +74,8 @@ func runDefect(cmd *cobra.Command, args []string) error {
 		return result.Files[i].Probability > result.Files[j].Probability
 	})
 
-	// For JSON/TOON, output pmat-compatible format
-	if formatter.Format() == output.FormatJSON || formatter.Format() == output.FormatTOON {
+	// For JSON, output pmat-compatible format
+	if formatter.Format() == output.FormatJSON {
 		report := result.ToReport()
 		return formatter.Output(report)
 	}

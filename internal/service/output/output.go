@@ -1,11 +1,11 @@
 package output
 
 import (
+	"encoding/json"
 	"io"
 	"os"
 
 	"github.com/panbanda/omen/internal/output"
-	toon "github.com/toon-format/toon-go"
 )
 
 // Format represents output format.
@@ -13,10 +13,8 @@ type Format = output.Format
 
 // Supported formats (re-exported for convenience).
 const (
-	FormatText     = output.FormatText
 	FormatJSON     = output.FormatJSON
 	FormatMarkdown = output.FormatMarkdown
-	FormatTOON     = output.FormatTOON
 )
 
 // Service handles output formatting.
@@ -62,9 +60,9 @@ func WithFile(path string) Option {
 // New creates a new output service.
 func New(opts ...Option) (*Service, error) {
 	s := &Service{
-		format:  FormatText,
+		format:  FormatMarkdown,
 		writer:  os.Stdout,
-		colored: true,
+		colored: false,
 	}
 
 	for _, opt := range opts {
@@ -110,31 +108,14 @@ func (s *Service) Colored() bool {
 
 // FormatData formats data according to the service's format.
 func (s *Service) FormatData(data any) (string, error) {
+	out, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return "", err
+	}
 	switch s.format {
-	case FormatJSON:
-		out, err := toon.Marshal(data, toon.WithIndent(2))
-		if err != nil {
-			return "", err
-		}
-		return string(out), nil
 	case FormatMarkdown:
-		out, err := toon.Marshal(data, toon.WithIndent(2))
-		if err != nil {
-			return "", err
-		}
-		return "```\n" + string(out) + "\n```", nil
-	case FormatTOON:
-		out, err := toon.Marshal(data, toon.WithIndent(2))
-		if err != nil {
-			return "", err
-		}
-		return string(out), nil
+		return "```json\n" + string(out) + "\n```", nil
 	default:
-		// Text format - use toon as fallback
-		out, err := toon.Marshal(data, toon.WithIndent(2))
-		if err != nil {
-			return "", err
-		}
 		return string(out), nil
 	}
 }

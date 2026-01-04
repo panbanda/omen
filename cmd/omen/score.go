@@ -30,7 +30,7 @@ var scoreTrendCmd = &cobra.Command{
 }
 
 func init() {
-	scoreCmd.PersistentFlags().StringP("format", "f", "text", "Output format: text, json, markdown, toon")
+	scoreCmd.PersistentFlags().StringP("format", "f", "markdown", "Output format: markdown, json")
 	scoreCmd.PersistentFlags().StringP("output", "o", "", "Write output to file")
 
 	scoreCmd.Flags().Int("min-score", 0, "Minimum composite score (0-100)")
@@ -121,7 +121,7 @@ func runScore(cmd *cobra.Command, args []string) error {
 
 	// Output based on format
 	format := getFormat(cmd)
-	if format == "json" || format == "toon" {
+	if format == "json" {
 		if err := formatter.Output(result); err != nil {
 			return err
 		}
@@ -362,7 +362,7 @@ func runScoreTrend(cmd *cobra.Command, args []string) error {
 
 	format := getFormat(cmd)
 	switch format {
-	case "json", "toon":
+	case "json":
 		if err := formatter.Output(result); err != nil {
 			return err
 		}

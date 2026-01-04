@@ -68,28 +68,19 @@ func runDuplicates(cmd *cobra.Command, args []string) error {
 	}
 	defer formatter.Close()
 
-	// For JSON/TOON, output pmat-compatible format
-	if formatter.Format() == output.FormatJSON || formatter.Format() == output.FormatTOON {
+	// For JSON, output pmat-compatible format
+	if formatter.Format() == output.FormatJSON {
 		report := result.ToReport()
 		return formatter.Output(report)
 	}
 
 	if len(result.Clones) == 0 {
-		if formatter.Format() == output.FormatText {
-			color.Green("No code duplicates found above %.0f%% similarity threshold", threshold*100)
-		}
 		return formatter.Output(result)
 	}
 
 	var rows [][]string
 	for _, clone := range result.Clones {
 		simStr := fmt.Sprintf("%.0f%%", clone.Similarity*100)
-		if clone.Similarity >= 0.95 {
-			simStr = color.RedString(simStr)
-		} else if clone.Similarity >= 0.85 {
-			simStr = color.YellowString(simStr)
-		}
-
 		rows = append(rows, []string{
 			fmt.Sprintf("%s:%d-%d", clone.FileA, clone.StartLineA, clone.EndLineA),
 			fmt.Sprintf("%s:%d-%d", clone.FileB, clone.StartLineB, clone.EndLineB),

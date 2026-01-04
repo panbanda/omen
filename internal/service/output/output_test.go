@@ -12,7 +12,7 @@ func TestNew(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	if svc == nil || svc.format != FormatText || !svc.colored {
+	if svc == nil || svc.format != FormatMarkdown {
 		t.Fatal("New() returned nil or has wrong defaults")
 	}
 }
@@ -122,21 +122,8 @@ func TestFormatData_Markdown(t *testing.T) {
 	}
 }
 
-func TestFormatData_TOON(t *testing.T) {
-	svc, _ := New(WithFormat(FormatTOON))
-	data := map[string]int{"count": 42}
-
-	result, err := svc.FormatData(data)
-	if err != nil {
-		t.Fatalf("FormatData() error = %v", err)
-	}
-	if result == "" {
-		t.Error("expected non-empty result")
-	}
-}
-
-func TestFormatData_Text(t *testing.T) {
-	svc, _ := New(WithFormat(FormatText))
+func TestFormatData_MarkdownDefault(t *testing.T) {
+	svc, _ := New(WithFormat(FormatMarkdown))
 	data := map[string]int{"count": 42}
 
 	result, err := svc.FormatData(data)
@@ -190,12 +177,11 @@ func TestParseFormat(t *testing.T) {
 		input    string
 		expected Format
 	}{
-		{"text", FormatText},
+		{"text", FormatMarkdown},
 		{"json", FormatJSON},
 		{"markdown", FormatMarkdown},
-		{"toon", FormatTOON},
-		{"", FormatText},
-		{"unknown", FormatText},
+		{"", FormatMarkdown},
+		{"unknown", FormatMarkdown},
 	}
 
 	for _, tt := range tests {
@@ -225,7 +211,7 @@ func TestOutputTable(t *testing.T) {
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "table.txt")
 
-	svc, _ := New(WithFile(filePath), WithFormat(FormatText))
+	svc, _ := New(WithFile(filePath), WithFormat(FormatMarkdown))
 	defer svc.Close()
 
 	table := NewTable(
@@ -308,17 +294,6 @@ func TestOutputTable_Markdown(t *testing.T) {
 func TestFormatData_InvalidJSON(t *testing.T) {
 	svc, _ := New(WithFormat(FormatJSON))
 	// Create a channel which can't be marshaled to JSON
-	data := make(chan int)
-
-	_, err := svc.FormatData(data)
-	if err == nil {
-		t.Error("expected error for unmarshallable data")
-	}
-}
-
-func TestFormatData_InvalidTOON(t *testing.T) {
-	svc, _ := New(WithFormat(FormatTOON))
-	// Create a channel which can't be marshaled to TOON
 	data := make(chan int)
 
 	_, err := svc.FormatData(data)

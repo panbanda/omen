@@ -23,7 +23,6 @@ require (
 	github.com/sourcegraph/conc v0.3.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
-	github.com/toon-format/toon-go v0.0.0-20251108125615-44b4cd22477f
 	github.com/yuin/goldmark v1.7.13
 	github.com/zeebo/blake3 v0.2.4
 	golang.org/x/text v0.32.0

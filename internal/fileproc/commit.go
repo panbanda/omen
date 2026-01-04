@@ -111,3 +111,84 @@ func MapSourceFilesWithSizeLimit[T any](
 
 	return results
 }
+
+// MapSourceFilesPooled processes files from a ContentSource using a parser pool.
+// This is more efficient than MapSourceFiles for large file sets since it reuses
+// parsers instead of creating a new one per file.
+// Progress is tracked via context using analyzer.WithTracker.
+func MapSourceFilesPooled[T any](
+	ctx context.Context,
+	files []string,
+	src ContentSource,
+	maxSize int64,
+	fn func(*parser.Parser, string, []byte) (T, error),
+) []T {
+	if len(files) == 0 {
+		return nil
+	}
+
+	// Read all file content sequentially to avoid concurrent access to git trees
+	filesWithContent := make([]fileWithContent, 0, len(files))
+	for _, path := range files {
+		content, err := src.Read(path)
+		if err != nil {
+			continue
+		}
+		if maxSize > 0 && int64(len(content)) > maxSize {
+			continue
+		}
+		filesWithContent = append(filesWithContent, fileWithContent{
+			path:    path,
+			content: content,
+		})
+	}
+
+	if len(filesWithContent) == 0 {
+		return nil
+	}
+
+	maxWorkers := runtime.NumCPU() * DefaultWorkerMultiplier
+	results := make([]T, len(filesWithContent))
+
+	// Use parser pool from parallel.go
+	parserPl := newParserPool(maxWorkers)
+	defer parserPl.close()
+
+	tracker := analyzer.TrackerFromContext(ctx)
+	if tracker != nil {
+		tracker.Add(len(filesWithContent))
+	}
+
+	p := pool.New().WithMaxGoroutines(maxWorkers).WithContext(ctx)
+	for i, fc := range filesWithContent {
+		idx := i
+		fileContent := fc
+		p.Go(func(ctx context.Context) error {
+			defer func() {
+				if tracker != nil {
+					tracker.Tick(fileContent.path)
+				}
+			}()
+
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+
+			psr := parserPl.get()
+			defer parserPl.put(psr)
+
+			result, err := fn(psr, fileContent.path, fileContent.content)
+			if err != nil {
+				return nil
+			}
+
+			results[idx] = result
+			return nil
+		})
+	}
+	_ = p.Wait()
+
+	return results
+}

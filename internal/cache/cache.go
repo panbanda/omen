@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/zeebo/blake3"
@@ -15,6 +16,7 @@ type Cache struct {
 	dir     string
 	ttl     time.Duration
 	enabled bool
+	maxSize int64 // Maximum cache size in bytes (0 = unlimited)
 }
 
 // Entry represents a cached analysis result.
@@ -24,8 +26,19 @@ type Entry struct {
 	Data      []byte    `json:"data"`
 }
 
+// Option is a functional option for configuring Cache.
+type Option func(*Cache)
+
+// WithMaxSize sets the maximum cache size in bytes.
+// When exceeded, oldest entries are evicted before writing new ones.
+func WithMaxSize(maxBytes int64) Option {
+	return func(c *Cache) {
+		c.maxSize = maxBytes
+	}
+}
+
 // New creates a new cache instance.
-func New(dir string, ttlHours int, enabled bool) (*Cache, error) {
+func New(dir string, ttlHours int, enabled bool, opts ...Option) (*Cache, error) {
 	if !enabled {
 		return &Cache{enabled: false}, nil
 	}
@@ -35,11 +48,15 @@ func New(dir string, ttlHours int, enabled bool) (*Cache, error) {
 		return nil, err
 	}
 
-	return &Cache{
+	c := &Cache{
 		dir:     dir,
 		ttl:     time.Duration(ttlHours) * time.Hour,
 		enabled: true,
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c, nil
 }
 
 // HashFile computes a BLAKE3 hash of a file's contents.
@@ -130,6 +147,13 @@ func (c *Cache) Set(key string, data []byte) error {
 		return err
 	}
 
+	// Check size limit before writing
+	if c.maxSize > 0 {
+		if err := c.ensureSpace(int64(len(entryData))); err != nil {
+			return err
+		}
+	}
+
 	return os.WriteFile(c.keyPath(key), entryData, 0600)
 }
 
@@ -148,6 +172,13 @@ func (c *Cache) SetWithHash(key, hash string, data []byte) error {
 	entryData, err := json.Marshal(entry)
 	if err != nil {
 		return err
+	}
+
+	// Check size limit before writing
+	if c.maxSize > 0 {
+		if err := c.ensureSpace(int64(len(entryData))); err != nil {
+			return err
+		}
 	}
 
 	return os.WriteFile(c.keyPath(key), entryData, 0600)
@@ -182,6 +213,64 @@ type Stats struct {
 	TotalSize int64         `json:"total_size"`
 	OldestAge time.Duration `json:"oldest_age"`
 	NewestAge time.Duration `json:"newest_age"`
+}
+
+// cacheEntry holds info about a cache file for eviction purposes.
+type cacheEntry struct {
+	path    string
+	modTime time.Time
+	size    int64
+}
+
+// ensureSpace evicts oldest entries until there's room for newEntrySize bytes.
+func (c *Cache) ensureSpace(newEntrySize int64) error {
+	if c.maxSize <= 0 {
+		return nil
+	}
+
+	var entries []cacheEntry
+	var totalSize int64
+
+	err := filepath.Walk(c.dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // Skip files we can't access
+		}
+		if info.IsDir() || filepath.Ext(path) != ".json" {
+			return nil
+		}
+		entries = append(entries, cacheEntry{
+			path:    path,
+			modTime: info.ModTime(),
+			size:    info.Size(),
+		})
+		totalSize += info.Size()
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	// Check if we need to evict
+	if totalSize+newEntrySize <= c.maxSize {
+		return nil
+	}
+
+	// Sort by modification time (oldest first)
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].modTime.Before(entries[j].modTime)
+	})
+
+	// Evict oldest entries until we have enough space
+	for _, entry := range entries {
+		if totalSize+newEntrySize <= c.maxSize {
+			break
+		}
+		if err := os.Remove(entry.path); err == nil {
+			totalSize -= entry.size
+		}
+	}
+
+	return nil
 }
 
 // GetStats returns statistics about the cache.

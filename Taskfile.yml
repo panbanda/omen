@@ -19,7 +19,7 @@ tasks:
       - go vet ./...
 
   lint:
-    desc: Run golangci-lint
+    desc: Run golangci-lint with strict settings
     cmds:
       - golangci-lint run
 
@@ -34,3 +34,80 @@ tasks:
     cmds:
       - task: lint
       - go test -race ./...
+
+  test-cover:
+    desc: Run tests with coverage report
+    cmds:
+      - go test -coverprofile=coverage.out ./...
+      - go tool cover -func=coverage.out
+      - go tool cover -html=coverage.out -o coverage.html
+      - echo "Coverage report: coverage.html"
+
+  security:
+    desc: Run security scanning (govulncheck + gosec)
+    cmds:
+      - echo "Running govulncheck..."
+      - govulncheck ./...
+      - echo "Running gosec..."
+      - gosec -quiet ./...
+
+  vuln:
+    desc: Check for known vulnerabilities in dependencies
+    cmds:
+      - govulncheck ./...
+
+  complexity:
+    desc: Check code complexity using omen
+    cmds:
+      - task: build
+      - echo "Checking cyclomatic complexity (threshold: 15)..."
+      - ./omen analyze complexity --top 10
+      - echo ""
+      - echo "Functions exceeding threshold:"
+      - ./omen analyze complexity --format json | jq -r '.files[].functions[] | select(.cyclomatic > 15) | "\(.file):\(.line) \(.name) (cyclomatic: \(.cyclomatic))"' || true
+
+  circular:
+    desc: Check for circular dependencies
+    cmds:
+      - task: build
+      - ./omen analyze smells
+
+  quality:
+    desc: Run all quality checks (lint, security, complexity, circular)
+    cmds:
+      - task: lint
+      - task: security
+      - task: complexity
+      - task: circular
+
+  sbom:
+    desc: Generate Software Bill of Materials
+    cmds:
+      - syft packages dir:. -o cyclonedx-json=sbom.cdx.json
+      - syft packages dir:. -o spdx-json=sbom.spdx.json
+      - echo "Generated: sbom.cdx.json, sbom.spdx.json"
+
+  deps:
+    desc: Check for outdated and deprecated dependencies
+    cmds:
+      - echo "Checking for updates..."
+      - go list -m -u -json all | jq -r 'select(.Update != null) | "\(.Path): \(.Version) -> \(.Update.Version)"'
+      - echo ""
+      - echo "Checking for deprecated packages..."
+      - go list -m -u -json all | jq -r 'select(.Deprecated != null) | "\(.Path): DEPRECATED - \(.Deprecated)"'
+
+  check:
+    desc: Run all CI checks locally
+    cmds:
+      - task: tidy
+      - task: lint
+      - task: test-race
+      - task: security
+      - task: complexity
+      - task: circular
+      - echo "All checks passed!"
+
+  ci:
+    desc: Alias for check (run all CI checks)
+    cmds:
+      - task: check

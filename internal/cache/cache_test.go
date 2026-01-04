@@ -425,3 +425,116 @@ func TestSpecialCharactersInKey(t *testing.T) {
 		})
 	}
 }
+
+func TestWithMaxSize(t *testing.T) {
+	tmpDir := t.TempDir()
+	maxSize := int64(500) // 500 bytes max
+
+	c, err := New(filepath.Join(tmpDir, "cache"), 24, true, WithMaxSize(maxSize))
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	if c.maxSize != maxSize {
+		t.Errorf("maxSize = %d, want %d", c.maxSize, maxSize)
+	}
+}
+
+func TestEnsureSpace_NoEviction(t *testing.T) {
+	tmpDir := t.TempDir()
+	maxSize := int64(10000) // Large enough for all entries
+
+	c, err := New(filepath.Join(tmpDir, "cache"), 24, true, WithMaxSize(maxSize))
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	// Add a few small entries
+	for i := 0; i < 3; i++ {
+		key := string(rune('a' + i))
+		if err := c.Set(key, []byte("small")); err != nil {
+			t.Fatalf("Set() error: %v", err)
+		}
+	}
+
+	// All entries should still exist
+	for i := 0; i < 3; i++ {
+		key := string(rune('a' + i))
+		if _, ok := c.Get(key); !ok {
+			t.Errorf("Entry %q should exist", key)
+		}
+	}
+}
+
+func TestEnsureSpace_Eviction(t *testing.T) {
+	tmpDir := t.TempDir()
+	// Very small max size to force eviction
+	maxSize := int64(200)
+
+	c, err := New(filepath.Join(tmpDir, "cache"), 24, true, WithMaxSize(maxSize))
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	// Add first entry
+	data1 := []byte("first entry data that takes some space")
+	if err := c.Set("first", data1); err != nil {
+		t.Fatalf("Set() error: %v", err)
+	}
+
+	// Wait briefly to ensure different mod times
+	time.Sleep(10 * time.Millisecond)
+
+	// Add second entry (should trigger eviction of first)
+	data2 := []byte("second entry data that also takes space")
+	if err := c.Set("second", data2); err != nil {
+		t.Fatalf("Set() error: %v", err)
+	}
+
+	// Wait briefly
+	time.Sleep(10 * time.Millisecond)
+
+	// Add third entry (should trigger more eviction)
+	data3 := []byte("third entry data")
+	if err := c.Set("third", data3); err != nil {
+		t.Fatalf("Set() error: %v", err)
+	}
+
+	// Get stats to verify we're under the limit
+	stats, err := c.GetStats()
+	if err != nil {
+		t.Fatalf("GetStats() error: %v", err)
+	}
+
+	// Total size should be at or under the max size
+	// (we allow being slightly over because we check before writing)
+	if stats.TotalSize > maxSize+100 {
+		t.Errorf("TotalSize = %d, should be close to maxSize %d", stats.TotalSize, maxSize)
+	}
+}
+
+func TestEnsureSpace_UnlimitedCache(t *testing.T) {
+	tmpDir := t.TempDir()
+	// maxSize = 0 means unlimited
+	c, err := New(filepath.Join(tmpDir, "cache"), 24, true)
+	if err != nil {
+		t.Fatalf("New() error: %v", err)
+	}
+
+	// Add many entries - none should be evicted
+	for i := 0; i < 10; i++ {
+		key := string(rune('a' + i))
+		data := []byte("data for " + key)
+		if err := c.Set(key, data); err != nil {
+			t.Fatalf("Set() error: %v", err)
+		}
+	}
+
+	// All should still exist
+	for i := 0; i < 10; i++ {
+		key := string(rune('a' + i))
+		if _, ok := c.Get(key); !ok {
+			t.Errorf("Entry %q should exist in unlimited cache", key)
+		}
+	}
+}

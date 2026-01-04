@@ -11,7 +11,6 @@ import (
 	"github.com/panbanda/omen/internal/progress"
 	"github.com/panbanda/omen/internal/service/analysis"
 	scannerSvc "github.com/panbanda/omen/internal/service/scanner"
-	"github.com/panbanda/omen/pkg/analyzer/tdg"
 	"github.com/spf13/cobra"
 )
 
@@ -66,8 +65,8 @@ func runTDG(cmd *cobra.Command, args []string) error {
 	}
 	defer formatter.Close()
 
-	// For JSON/TOON, output pmat-compatible format
-	if formatter.Format() == output.FormatJSON || formatter.Format() == output.FormatTOON {
+	// For JSON, output pmat-compatible format
+	if formatter.Format() == output.FormatJSON {
 		report := project.ToReport(hotspots)
 		return formatter.Output(report)
 	}
@@ -138,40 +137,5 @@ func runTDG(cmd *cobra.Command, args []string) error {
 		project,
 	)
 
-	if err := formatter.Output(table); err != nil {
-		return err
-	}
-
-	// Display grade distribution
-	if formatter.Format() == output.FormatText && len(project.GradeDistribution) > 0 {
-		fmt.Fprintln(formatter.Writer())
-		if formatter.Colored() {
-			color.Cyan("Grade Distribution:")
-		} else {
-			fmt.Fprintln(formatter.Writer(), "Grade Distribution:")
-		}
-
-		gradeOrder := []tdg.Grade{
-			tdg.GradeAPlus,
-			tdg.GradeA,
-			tdg.GradeAMinus,
-			tdg.GradeBPlus,
-			tdg.GradeB,
-			tdg.GradeBMinus,
-			tdg.GradeCPlus,
-			tdg.GradeC,
-			tdg.GradeCMinus,
-			tdg.GradeD,
-			tdg.GradeF,
-		}
-
-		for _, grade := range gradeOrder {
-			if count := project.GradeDistribution[grade]; count > 0 {
-				percentage := float64(count) / float64(project.TotalFiles) * 100
-				fmt.Fprintf(formatter.Writer(), "- %s: %d files (%.1f%%)\n", grade, count, percentage)
-			}
-		}
-	}
-
-	return nil
+	return formatter.Output(table)
 }

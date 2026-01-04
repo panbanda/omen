@@ -133,12 +133,11 @@ func TestGetFormat(t *testing.T) {
 		format   string
 		expected output.Format
 	}{
-		{"empty defaults to toon", "", output.FormatTOON},
+		{"empty defaults to json", "", output.FormatJSON},
 		{"json format", "json", output.FormatJSON},
 		{"markdown format", "markdown", output.FormatMarkdown},
 		{"md alias", "md", output.FormatMarkdown},
-		{"toon explicit", "toon", output.FormatTOON},
-		{"unknown defaults to toon", "xml", output.FormatTOON},
+		{"unknown defaults to json", "xml", output.FormatJSON},
 	}
 
 	for _, tt := range tests {
@@ -658,7 +657,7 @@ func TestFormatOutput(t *testing.T) {
 		"value": 123,
 	}
 
-	formats := []string{"", "toon", "json", "markdown"}
+	formats := []string{"", "json", "markdown"}
 	for _, format := range formats {
 		t.Run(format, func(t *testing.T) {
 			input := AnalyzeInput{Format: format}
@@ -684,12 +683,12 @@ func TestScanPathsForGit(t *testing.T) {
 	}
 }
 
-// TestToolResultTextFormat tests text format output.
-func TestToolResultTextFormat(t *testing.T) {
+// TestToolResultMarkdownFormat tests markdown format output.
+func TestToolResultMarkdownFormat(t *testing.T) {
 	data := map[string]interface{}{
 		"key": "value",
 	}
-	result, _, err := toolResult(data, output.FormatText)
+	result, _, err := toolResult(data, output.FormatMarkdown)
 	if err != nil {
 		t.Fatalf("toolResult returned error: %v", err)
 	}

@@ -66,8 +66,8 @@ func runDeadCode(cmd *cobra.Command, args []string) error {
 	}
 	defer formatter.Close()
 
-	// For JSON/TOON, output pmat-compatible format
-	if formatter.Format() == output.FormatJSON || formatter.Format() == output.FormatTOON {
+	// For JSON, output pmat-compatible format
+	if formatter.Format() == output.FormatJSON {
 		pmatResult := deadcode.NewReport()
 		pmatResult.FromAnalysis(result)
 		return formatter.Output(pmatResult)

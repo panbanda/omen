@@ -70,12 +70,12 @@ func runGraph(cmd *cobra.Command, args []string) error {
 	}
 	defer formatter.Close()
 
-	// For JSON/TOON, output structured data
-	if formatter.Format() == output.FormatJSON || formatter.Format() == output.FormatTOON {
+	// For JSON, output structured data
+	if formatter.Format() == output.FormatJSON {
 		if includeMetrics && metrics != nil {
 			return formatter.Output(struct {
-				Graph   *graph.DependencyGraph `json:"graph" toon:"graph"`
-				Metrics *graph.Metrics         `json:"metrics" toon:"metrics"`
+				Graph   *graph.DependencyGraph `json:"graph"`
+				Metrics *graph.Metrics         `json:"metrics"`
 			}{graphResult, metrics})
 		}
 		return formatter.Output(graphResult)
