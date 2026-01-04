@@ -121,7 +121,8 @@ func extractCalls(result *parser.ParseResult) []ast.CallInfo {
 		return nil
 	}
 
-	parser.WalkTyped(root, result.Source, func(node *sitter.Node, nodeType string, source []byte) bool {
+	parser.Walk(root, result.Source, func(node *sitter.Node, source []byte) bool {
+		nodeType := node.Type()
 		for _, ct := range callTypes {
 			if nodeType == ct {
 				call := extractCall(node, source, result.Language, result.Path)
@@ -259,7 +260,8 @@ func extractImports(result *parser.ParseResult) []ast.Import {
 		return nil
 	}
 
-	parser.WalkTyped(root, result.Source, func(node *sitter.Node, nodeType string, source []byte) bool {
+	parser.Walk(root, result.Source, func(node *sitter.Node, source []byte) bool {
+		nodeType := node.Type()
 		for _, it := range importTypes {
 			if nodeType == it {
 				extracted := extractImport(node, source, result.Language, result.Path)
@@ -311,8 +313,8 @@ func extractImport(node *sitter.Node, source []byte, lang parser.Language, path 
 	switch lang {
 	case parser.LangGo:
 		// Handle both single imports and import blocks
-		parser.WalkTyped(node, source, func(n *sitter.Node, nodeType string, src []byte) bool {
-			if nodeType == "import_spec" {
+		parser.Walk(node, source, func(n *sitter.Node, src []byte) bool {
+			if n.Type() == "import_spec" {
 				imp := ast.Import{Pos: pos}
 				if pathNode := n.ChildByFieldName("path"); pathNode != nil {
 					// Remove quotes from import path
@@ -331,7 +333,8 @@ func extractImport(node *sitter.Node, source []byte, lang parser.Language, path 
 	case parser.LangPython:
 		if node.Type() == "import_statement" {
 			// import module
-			parser.WalkTyped(node, source, func(n *sitter.Node, nodeType string, src []byte) bool {
+			parser.Walk(node, source, func(n *sitter.Node, src []byte) bool {
+				nodeType := n.Type()
 				if nodeType == "dotted_name" || nodeType == "aliased_import" {
 					imp := ast.Import{Pos: pos}
 					if nodeType == "aliased_import" {
@@ -371,8 +374,8 @@ func extractImport(node *sitter.Node, source []byte, lang parser.Language, path 
 		}
 
 	case parser.LangJava:
-		parser.WalkTyped(node, source, func(n *sitter.Node, nodeType string, src []byte) bool {
-			if nodeType == "scoped_identifier" {
+		parser.Walk(node, source, func(n *sitter.Node, src []byte) bool {
+			if n.Type() == "scoped_identifier" {
 				imp := ast.Import{
 					Path: parser.GetNodeText(n, src),
 					Pos:  pos,

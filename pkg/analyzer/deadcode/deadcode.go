@@ -360,7 +360,9 @@ func collectAllInSinglePass(result *parser.ParseResult, fdc *fileDeadCode) {
 		rubyVisibility = collectRubyVisibility(root, result.Source)
 	}
 
-	parser.WalkTyped(root, result.Source, func(node *sitter.Node, nodeType string, source []byte) bool {
+	parser.Walk(root, result.Source, func(node *sitter.Node, source []byte) bool {
+		nodeType := node.Type()
+
 		// === DEFINITIONS ===
 		// Collect functions/methods
 		if isFunctionNode(nodeType, result.Language) {
@@ -617,8 +619,8 @@ func collectAllInSinglePass(result *parser.ParseResult, fdc *fileDeadCode) {
 
 // collectTSHeritageClause extracts interface implementations from TypeScript heritage clause.
 func collectTSHeritageClause(heritage *sitter.Node, source []byte, className string, fdc *fileDeadCode) {
-	parser.WalkTyped(heritage, source, func(child *sitter.Node, childType string, _ []byte) bool {
-		if childType == "implements_clause" {
+	parser.Walk(heritage, source, func(child *sitter.Node, _ []byte) bool {
+		if child.Type() == "implements_clause" {
 			for i := range int(child.ChildCount()) {
 				typeNode := child.Child(i)
 				if typeNode.Type() == "type_identifier" {

@@ -38,4 +38,4 @@ For Go-specific analysis requiring type information, use the goast provider.
 
 - Parse time: ~1-5ms per file (varies by size/language)
 - Memory: ~100KB per parsed tree
-- CGO overhead: ~10us per node.Type() call (use WalkTyped to cache)
+- CGO overhead: ~10us per node.Type() call (cache locally if checking multiple times)

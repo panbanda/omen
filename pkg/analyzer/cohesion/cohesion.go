@@ -227,8 +227,8 @@ func extractTypeList(node *sitter.Node, source []byte) []string {
 // extractHeritageTypes extracts types from TS/JS heritage clauses.
 func extractHeritageTypes(node *sitter.Node, source []byte) []string {
 	var types []string
-	parser.WalkTyped(node, source, func(n *sitter.Node, nodeType string, s []byte) bool {
-		if nodeType == "identifier" || nodeType == "type_identifier" {
+	parser.Walk(node, source, func(n *sitter.Node, s []byte) bool {
+		if n.Type() == "identifier" || n.Type() == "type_identifier" {
 			name := parser.GetNodeText(n, s)
 			if name != "" && name != "extends" && name != "implements" {
 				types = append(types, name)
@@ -257,8 +257,8 @@ func extractArgumentList(node *sitter.Node, source []byte) []string {
 // extractBaseClasses extracts base classes from C++ base_class_clause.
 func extractBaseClasses(node *sitter.Node, source []byte) []string {
 	var bases []string
-	parser.WalkTyped(node, source, func(n *sitter.Node, nodeType string, s []byte) bool {
-		if nodeType == "type_identifier" || nodeType == "identifier" {
+	parser.Walk(node, source, func(n *sitter.Node, s []byte) bool {
+		if n.Type() == "type_identifier" || n.Type() == "identifier" {
 			name := parser.GetNodeText(n, s)
 			// Filter out access specifiers
 			if name != "" && name != "public" && name != "private" && name != "protected" {
@@ -294,8 +294,8 @@ func findClassNode(result *parser.ParseResult, className string) *sitter.Node {
 	var found *sitter.Node
 	root := result.Tree.RootNode()
 
-	parser.WalkTyped(root, result.Source, func(node *sitter.Node, nodeType string, source []byte) bool {
-		if isClassNode(nodeType, result.Language) {
+	parser.Walk(root, result.Source, func(node *sitter.Node, source []byte) bool {
+		if isClassNode(node.Type(), result.Language) {
 			if nameNode := node.ChildByFieldName("name"); nameNode != nil {
 				if parser.GetNodeText(nameNode, source) == className {
 					found = node
@@ -384,9 +384,9 @@ func extractMethodsFromClass(classNode *sitter.Node, result *parser.ParseResult)
 
 	methodTypes := getMethodNodeTypes(result.Language)
 
-	parser.WalkTyped(classNode, result.Source, func(node *sitter.Node, nodeType string, source []byte) bool {
+	parser.Walk(classNode, result.Source, func(node *sitter.Node, source []byte) bool {
 		for _, mt := range methodTypes {
-			if nodeType == mt {
+			if node.Type() == mt {
 				m := methodInfo{
 					usedFields: make(map[string]bool),
 				}
@@ -441,9 +441,9 @@ func extractFieldsFromClass(classNode *sitter.Node, result *parser.ParseResult) 
 	var fields []string
 	fieldTypes := getFieldNodeTypes(result.Language)
 
-	parser.WalkTyped(classNode, result.Source, func(node *sitter.Node, nodeType string, source []byte) bool {
+	parser.Walk(classNode, result.Source, func(node *sitter.Node, source []byte) bool {
 		for _, ft := range fieldTypes {
-			if nodeType == ft {
+			if node.Type() == ft {
 				name := extractFieldName(node, source, result.Language)
 				if name != "" {
 					fields = append(fields, name)
@@ -518,11 +518,11 @@ func extractFieldName(node *sitter.Node, source []byte, lang parser.Language) st
 func findFieldsUsedByMethod(methodNode *sitter.Node, result *parser.ParseResult) map[string]bool {
 	fields := make(map[string]bool)
 
-	parser.WalkTyped(methodNode, result.Source, func(node *sitter.Node, nodeType string, source []byte) bool {
+	parser.Walk(methodNode, result.Source, func(node *sitter.Node, source []byte) bool {
 		switch result.Language {
 		case parser.LangPython:
 			// self.field
-			if nodeType == "attribute" {
+			if node.Type() == "attribute" {
 				obj := node.ChildByFieldName("object")
 				attr := node.ChildByFieldName("attribute")
 				if obj != nil && attr != nil {
@@ -533,12 +533,12 @@ func findFieldsUsedByMethod(methodNode *sitter.Node, result *parser.ParseResult)
 			}
 		case parser.LangRuby:
 			// @field
-			if nodeType == "instance_variable" {
+			if node.Type() == "instance_variable" {
 				fields[parser.GetNodeText(node, source)] = true
 			}
 		case parser.LangJava, parser.LangCSharp, parser.LangTypeScript, parser.LangJavaScript, parser.LangTSX:
 			// this.field or just field (requires context)
-			if nodeType == "member_expression" || nodeType == "member_access_expression" {
+			if node.Type() == "member_expression" || node.Type() == "member_access_expression" {
 				obj := node.ChildByFieldName("object")
 				prop := node.ChildByFieldName("property")
 				if obj != nil && prop != nil {
@@ -558,9 +558,9 @@ func findFieldsUsedByMethod(methodNode *sitter.Node, result *parser.ParseResult)
 func extractCalledMethods(classNode *sitter.Node, result *parser.ParseResult) []string {
 	called := make(map[string]bool)
 
-	parser.WalkTyped(classNode, result.Source, func(node *sitter.Node, nodeType string, source []byte) bool {
-		if nodeType == "call_expression" || nodeType == "method_call" ||
-			nodeType == "invocation_expression" {
+	parser.Walk(classNode, result.Source, func(node *sitter.Node, source []byte) bool {
+		if node.Type() == "call_expression" || node.Type() == "method_call" ||
+			node.Type() == "invocation_expression" {
 			if fnNode := node.ChildByFieldName("function"); fnNode != nil {
 				called[parser.GetNodeText(fnNode, source)] = true
 			}
@@ -582,21 +582,19 @@ func extractCalledMethods(classNode *sitter.Node, result *parser.ParseResult) []
 func extractCoupledClasses(classNode *sitter.Node, result *parser.ParseResult) []string {
 	coupled := make(map[string]bool)
 
-	typeNodeTypes := map[string]bool{
-		"type_identifier": true,
-		"class_type":      true,
-		"simple_type":     true,
-		"named_type":      true,
-		"type_name":       true,
-		"identifier":      true,
+	typeNodeTypes := []string{
+		"type_identifier", "class_type", "simple_type",
+		"named_type", "type_name", "identifier",
 	}
 
-	parser.WalkTyped(classNode, result.Source, func(node *sitter.Node, nodeType string, source []byte) bool {
-		if typeNodeTypes[nodeType] {
-			name := parser.GetNodeText(node, source)
-			// Filter out primitives and common types
-			if !isPrimitiveType(name) && len(name) > 1 {
-				coupled[name] = true
+	parser.Walk(classNode, result.Source, func(node *sitter.Node, source []byte) bool {
+		for _, tt := range typeNodeTypes {
+			if node.Type() == tt {
+				name := parser.GetNodeText(node, source)
+				// Filter out primitives and common types
+				if !isPrimitiveType(name) && len(name) > 1 {
+					coupled[name] = true
+				}
 			}
 		}
 		return true
@@ -633,33 +631,23 @@ func isPrimitiveType(name string) bool {
 func calculateNodeComplexity(node *sitter.Node, lang parser.Language) int {
 	complexity := 1 // Base complexity
 
-	decisionTypes := map[string]bool{
-		"if_statement":           true,
-		"if_expression":          true,
-		"if":                     true,
-		"for_statement":          true,
-		"for_expression":         true,
-		"for":                    true,
-		"while_statement":        true,
-		"while_expression":       true,
-		"while":                  true,
-		"switch_statement":       true,
-		"match_expression":       true,
-		"case_clause":            true,
-		"case_statement":         true,
-		"catch_clause":           true,
-		"except_clause":          true,
-		"conditional_expression": true,
-		"ternary_expression":     true,
-		"&&":                     true,
-		"||":                     true,
-		"and":                    true,
-		"or":                     true,
+	decisionTypes := []string{
+		"if_statement", "if_expression", "if",
+		"for_statement", "for_expression", "for",
+		"while_statement", "while_expression", "while",
+		"switch_statement", "match_expression",
+		"case_clause", "case_statement",
+		"catch_clause", "except_clause",
+		"conditional_expression", "ternary_expression",
+		"&&", "||", "and", "or",
 	}
 
-	parser.WalkTyped(node, nil, func(n *sitter.Node, nodeType string, source []byte) bool {
-		if decisionTypes[nodeType] {
-			complexity++
+	parser.Walk(node, nil, func(n *sitter.Node, source []byte) bool {
+		for _, dt := range decisionTypes {
+			if n.Type() == dt {
+				complexity++
+				break
+			}
 		}
 		return true
 	})
@@ -851,8 +839,8 @@ func extractInheritanceInfoFromContent(psr *parser.Parser, path string, content 
 	var infos []inheritanceInfo
 	root := result.Tree.RootNode()
 
-	parser.WalkTyped(root, result.Source, func(node *sitter.Node, nodeType string, source []byte) bool {
-		if isClassNode(nodeType, result.Language) {
+	parser.Walk(root, result.Source, func(node *sitter.Node, source []byte) bool {
+		if isClassNode(node.Type(), result.Language) {
 			info := inheritanceInfo{file: path}
 
 			// Get class name
