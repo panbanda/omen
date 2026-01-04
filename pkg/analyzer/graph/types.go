@@ -2,12 +2,12 @@ package graph
 
 // Node represents a node in the dependency graph.
 type Node struct {
-	ID         string            `json:"id" toon:"id"`
-	Name       string            `json:"name" toon:"name"`
-	Type       NodeType          `json:"type" toon:"type"` // file, function, class, module
-	File       string            `json:"file" toon:"file"`
-	Line       uint32            `json:"line,omitempty" toon:"line,omitempty"`
-	Attributes map[string]string `json:"attributes,omitempty" toon:"attributes,omitempty"`
+	ID         string            `json:"id"`
+	Name       string            `json:"name"`
+	Type       NodeType          `json:"type"` // file, function, class, module
+	File       string            `json:"file"`
+	Line       uint32            `json:"line,omitempty"`
+	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
 // NodeType represents the type of graph node.
@@ -30,10 +30,10 @@ func (n NodeType) String() string {
 
 // Edge represents a dependency between nodes.
 type Edge struct {
-	From   string   `json:"from" toon:"from"`
-	To     string   `json:"to" toon:"to"`
-	Type   EdgeType `json:"type" toon:"type"`
-	Weight float64  `json:"weight,omitempty" toon:"weight,omitempty"`
+	From   string   `json:"from"`
+	To     string   `json:"to"`
+	Type   EdgeType `json:"type"`
+	Weight float64  `json:"weight,omitempty"`
 }
 
 // EdgeType represents the type of dependency.
@@ -55,8 +55,8 @@ func (e EdgeType) String() string {
 
 // DependencyGraph represents the full graph structure.
 type DependencyGraph struct {
-	Nodes []Node `json:"nodes" toon:"nodes"`
-	Edges []Edge `json:"edges" toon:"edges"`
+	Nodes []Node `json:"nodes"`
+	Edges []Edge `json:"edges"`
 }
 
 // NewDependencyGraph creates an empty graph.
@@ -79,55 +79,55 @@ func (g *DependencyGraph) AddEdge(edge Edge) {
 
 // Metrics represents centrality and other graph metrics.
 type Metrics struct {
-	NodeMetrics []NodeMetric `json:"node_metrics" toon:"node_metrics"`
-	Summary     Summary      `json:"summary" toon:"summary"`
+	NodeMetrics []NodeMetric `json:"node_metrics"`
+	Summary     Summary      `json:"summary"`
 }
 
 // NodeMetric represents computed metrics for a single node.
 type NodeMetric struct {
-	NodeID                string  `json:"node_id" toon:"node_id"`
-	Name                  string  `json:"name" toon:"name"`
-	PageRank              float64 `json:"pagerank" toon:"pagerank"`
-	BetweennessCentrality float64 `json:"betweenness_centrality" toon:"betweenness_centrality"`
-	ClosenessCentrality   float64 `json:"closeness_centrality" toon:"closeness_centrality"`
-	EigenvectorCentrality float64 `json:"eigenvector_centrality" toon:"eigenvector_centrality"`
-	HarmonicCentrality    float64 `json:"harmonic_centrality" toon:"harmonic_centrality"`
-	InDegree              int     `json:"in_degree" toon:"in_degree"`
-	OutDegree             int     `json:"out_degree" toon:"out_degree"`
-	ClusteringCoef        float64 `json:"clustering_coefficient" toon:"clustering_coefficient"`
-	CommunityID           int     `json:"community_id,omitempty" toon:"community_id,omitempty"`
+	NodeID                string  `json:"node_id"`
+	Name                  string  `json:"name"`
+	PageRank              float64 `json:"pagerank"`
+	BetweennessCentrality float64 `json:"betweenness_centrality"`
+	ClosenessCentrality   float64 `json:"closeness_centrality"`
+	EigenvectorCentrality float64 `json:"eigenvector_centrality"`
+	HarmonicCentrality    float64 `json:"harmonic_centrality"`
+	InDegree              int     `json:"in_degree"`
+	OutDegree             int     `json:"out_degree"`
+	ClusteringCoef        float64 `json:"clustering_coefficient"`
+	CommunityID           int     `json:"community_id,omitempty"`
 }
 
 // Summary provides aggregate graph statistics.
 type Summary struct {
-	TotalNodes                  int      `json:"total_nodes" toon:"total_nodes"`
-	TotalEdges                  int      `json:"total_edges" toon:"total_edges"`
-	AvgDegree                   float64  `json:"avg_degree" toon:"avg_degree"`
-	Density                     float64  `json:"density" toon:"density"`
-	Components                  int      `json:"components" toon:"components"`
-	LargestComponent            int      `json:"largest_component" toon:"largest_component"`
-	StronglyConnectedComponents int      `json:"strongly_connected_components" toon:"strongly_connected_components"`
-	CycleCount                  int      `json:"cycle_count" toon:"cycle_count"`
-	CycleNodes                  []string `json:"cycle_nodes,omitempty" toon:"cycle_nodes,omitempty"`
-	IsCyclic                    bool     `json:"is_cyclic" toon:"is_cyclic"`
-	Diameter                    int      `json:"diameter,omitempty" toon:"diameter,omitempty"`
-	Radius                      int      `json:"radius,omitempty" toon:"radius,omitempty"`
-	ClusteringCoefficient       float64  `json:"clustering_coefficient" toon:"clustering_coefficient"`
-	Assortativity               float64  `json:"assortativity" toon:"assortativity"`
-	Transitivity                float64  `json:"transitivity" toon:"transitivity"`
-	Reciprocity                 float64  `json:"reciprocity,omitempty" toon:"reciprocity,omitempty"`
-	Modularity                  float64  `json:"modularity,omitempty" toon:"modularity,omitempty"`
-	CommunityCount              int      `json:"community_count,omitempty" toon:"community_count,omitempty"`
+	TotalNodes                  int      `json:"total_nodes"`
+	TotalEdges                  int      `json:"total_edges"`
+	AvgDegree                   float64  `json:"avg_degree"`
+	Density                     float64  `json:"density"`
+	Components                  int      `json:"components"`
+	LargestComponent            int      `json:"largest_component"`
+	StronglyConnectedComponents int      `json:"strongly_connected_components"`
+	CycleCount                  int      `json:"cycle_count"`
+	CycleNodes                  []string `json:"cycle_nodes,omitempty"`
+	IsCyclic                    bool     `json:"is_cyclic"`
+	Diameter                    int      `json:"diameter,omitempty"`
+	Radius                      int      `json:"radius,omitempty"`
+	ClusteringCoefficient       float64  `json:"clustering_coefficient"`
+	Assortativity               float64  `json:"assortativity"`
+	Transitivity                float64  `json:"transitivity"`
+	Reciprocity                 float64  `json:"reciprocity,omitempty"`
+	Modularity                  float64  `json:"modularity,omitempty"`
+	CommunityCount              int      `json:"community_count,omitempty"`
 }
 
 // MermaidOptions configures Mermaid diagram generation.
 type MermaidOptions struct {
-	MaxNodes       int              `json:"max_nodes" toon:"max_nodes"`
-	MaxEdges       int              `json:"max_edges" toon:"max_edges"`
-	ShowComplexity bool             `json:"show_complexity" toon:"show_complexity"`
-	GroupByModule  bool             `json:"group_by_module" toon:"group_by_module"`
-	NodeComplexity map[string]int   `json:"node_complexity,omitempty" toon:"node_complexity,omitempty"`
-	Direction      MermaidDirection `json:"direction" toon:"direction"`
+	MaxNodes       int              `json:"max_nodes"`
+	MaxEdges       int              `json:"max_edges"`
+	ShowComplexity bool             `json:"show_complexity"`
+	GroupByModule  bool             `json:"group_by_module"`
+	NodeComplexity map[string]int   `json:"node_complexity,omitempty"`
+	Direction      MermaidDirection `json:"direction"`
 }
 
 // MermaidDirection specifies the graph direction.

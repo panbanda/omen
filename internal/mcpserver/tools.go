@@ -2,7 +2,10 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"math"
+	"reflect"
 	"sort"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -22,7 +25,6 @@ import (
 	"github.com/panbanda/omen/pkg/analyzer/tdg"
 	"github.com/panbanda/omen/pkg/config"
 	"github.com/panbanda/omen/pkg/source"
-	toon "github.com/toon-format/toon-go"
 )
 
 // Common input structures for tools
@@ -30,7 +32,7 @@ import (
 // AnalyzeInput is the base input for all analyze tools.
 type AnalyzeInput struct {
 	Paths  []string `json:"paths,omitempty" jsonschema:"Paths to analyze. Defaults to current directory if empty."`
-	Format string   `json:"format,omitempty" jsonschema:"Output format: toon (default), json, or markdown."`
+	Format string   `json:"format,omitempty" jsonschema:"Output format: json (default) or markdown."`
 }
 
 // ComplexityInput adds complexity-specific options.
@@ -160,7 +162,7 @@ type ScoreInput struct {
 type ContextInput struct {
 	Focus  string   `json:"focus" jsonschema:"File path, glob pattern, basename, or symbol name to focus on (required)."`
 	Paths  []string `json:"paths,omitempty" jsonschema:"Repository paths to search. Defaults to current directory."`
-	Format string   `json:"format,omitempty" jsonschema:"Output format: toon (default), json, or markdown."`
+	Format string   `json:"format,omitempty" jsonschema:"Output format: json (default) or markdown."`
 }
 
 // TrendInput adds trend analysis options.
@@ -182,34 +184,107 @@ func getPaths(input AnalyzeInput) []string {
 
 func getFormat(input AnalyzeInput) output.Format {
 	switch input.Format {
-	case "json":
-		return output.FormatJSON
 	case "markdown", "md":
 		return output.FormatMarkdown
 	default:
-		return output.FormatTOON
+		return output.FormatJSON
+	}
+}
+
+// sanitizeForJSON replaces Inf and NaN float values with null-safe alternatives.
+func sanitizeForJSON(v any) any {
+	if v == nil {
+		return nil
+	}
+	val := reflect.ValueOf(v)
+	return sanitizeValue(val)
+}
+
+func sanitizeValue(v reflect.Value) any {
+	if !v.IsValid() {
+		return nil
+	}
+
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Interface:
+		if v.IsNil() {
+			return nil
+		}
+		return sanitizeValue(v.Elem())
+
+	case reflect.Float32, reflect.Float64:
+		f := v.Float()
+		if math.IsInf(f, 0) || math.IsNaN(f) {
+			return nil
+		}
+		return f
+
+	case reflect.Slice:
+		if v.IsNil() {
+			return nil
+		}
+		result := make([]any, v.Len())
+		for i := 0; i < v.Len(); i++ {
+			result[i] = sanitizeValue(v.Index(i))
+		}
+		return result
+
+	case reflect.Map:
+		if v.IsNil() {
+			return nil
+		}
+		result := make(map[string]any)
+		for _, key := range v.MapKeys() {
+			keyStr := key.String()
+			result[keyStr] = sanitizeValue(v.MapIndex(key))
+		}
+		return result
+
+	case reflect.Struct:
+		result := make(map[string]any)
+		t := v.Type()
+		for i := 0; i < v.NumField(); i++ {
+			field := t.Field(i)
+			if !field.IsExported() {
+				continue
+			}
+			tag := field.Tag.Get("json")
+			name := field.Name
+			if tag != "" && tag != "-" {
+				if idx := len(tag); idx > 0 {
+					for j, c := range tag {
+						if c == ',' {
+							idx = j
+							break
+						}
+					}
+					if idx > 0 {
+						name = tag[:idx]
+					}
+				}
+			}
+			if tag == "-" {
+				continue
+			}
+			result[name] = sanitizeValue(v.Field(i))
+		}
+		return result
+
+	default:
+		return v.Interface()
 	}
 }
 
 func formatOutput(data any, format output.Format) (string, error) {
+	sanitized := sanitizeForJSON(data)
+	out, err := json.MarshalIndent(sanitized, "", "  ")
+	if err != nil {
+		return "", err
+	}
 	switch format {
-	case output.FormatJSON:
-		out, err := toon.Marshal(data, toon.WithIndent(2))
-		if err != nil {
-			return "", err
-		}
-		return string(out), nil
 	case output.FormatMarkdown:
-		out, err := toon.Marshal(data, toon.WithIndent(2))
-		if err != nil {
-			return "", err
-		}
-		return "```\n" + string(out) + "\n```", nil
+		return "```json\n" + string(out) + "\n```", nil
 	default:
-		out, err := toon.Marshal(data, toon.WithIndent(2))
-		if err != nil {
-			return "", err
-		}
 		return string(out), nil
 	}
 }
@@ -263,8 +338,8 @@ func handleAnalyzeComplexity(ctx context.Context, req *mcp.CallToolRequest, inpu
 			functions = append(functions, f.Functions...)
 		}
 		out := struct {
-			Functions []complexity.FunctionResult `json:"functions" toon:"functions"`
-			Summary   complexity.Summary          `json:"summary" toon:"summary"`
+			Functions []complexity.FunctionResult `json:"functions"`
+			Summary   complexity.Summary          `json:"summary"`
 		}{functions, result.Summary}
 		return toolResult(out, format)
 	}
@@ -524,11 +599,11 @@ func handleAnalyzeTDG(ctx context.Context, req *mcp.CallToolRequest, input TDGIn
 	if input.ShowPenalties {
 		type HotspotWithPenalties struct {
 			tdg.Hotspot
-			Penalties []tdg.PenaltyAttribution `json:"penalties,omitempty" toon:"penalties,omitempty"`
+			Penalties []tdg.PenaltyAttribution `json:"penalties,omitempty"`
 		}
 		type ReportWithPenalties struct {
-			Summary  tdg.Summary            `json:"summary" toon:"summary"`
-			Hotspots []HotspotWithPenalties `json:"hotspots" toon:"hotspots"`
+			Summary  tdg.Summary            `json:"summary"`
+			Hotspots []HotspotWithPenalties `json:"hotspots"`
 		}
 
 		penaltyMap := make(map[string][]tdg.PenaltyAttribution)
@@ -586,8 +661,8 @@ func handleAnalyzeGraph(ctx context.Context, req *mcp.CallToolRequest, input Gra
 
 	if input.IncludeMetrics {
 		result := struct {
-			Graph   *graph.DependencyGraph `json:"graph" toon:"graph"`
-			Metrics *graph.Metrics         `json:"metrics" toon:"metrics"`
+			Graph   *graph.DependencyGraph `json:"graph"`
+			Metrics *graph.Metrics         `json:"metrics"`
 		}{depGraph, metrics}
 		return toolResult(result, format)
 	}
@@ -783,8 +858,8 @@ func handleAnalyzeRepoMap(ctx context.Context, req *mcp.CallToolRequest, input R
 	topSymbols := rm.TopN(top)
 
 	result := struct {
-		Symbols []repomap.Symbol `json:"symbols" toon:"symbols"`
-		Summary repomap.Summary  `json:"summary" toon:"summary"`
+		Symbols []repomap.Symbol `json:"symbols"`
+		Summary repomap.Summary  `json:"summary"`
 	}{
 		Symbols: topSymbols,
 		Summary: rm.Summary,
@@ -991,10 +1066,8 @@ func handleGetContext(ctx context.Context, req *mcp.CallToolRequest, input Conte
 	if len(paths) == 0 {
 		paths = []string{"."}
 	}
-	format := output.FormatTOON
+	format := output.FormatJSON
 	switch input.Format {
-	case "json":
-		format = output.FormatJSON
 	case "markdown", "md":
 		format = output.FormatMarkdown
 	}
@@ -1027,8 +1100,8 @@ func handleGetContext(ctx context.Context, req *mcp.CallToolRequest, input Conte
 	// Handle ambiguous match specially - return candidates as structured error
 	if err != nil && result != nil && len(result.Candidates) > 0 {
 		candidates := struct {
-			Error      string                      `json:"error" toon:"error"`
-			Candidates []analysis.FocusedCandidate `json:"candidates" toon:"candidates"`
+			Error      string                      `json:"error"`
+			Candidates []analysis.FocusedCandidate `json:"candidates"`
 		}{
 			Error:      "ambiguous match: multiple files or symbols found",
 			Candidates: result.Candidates,

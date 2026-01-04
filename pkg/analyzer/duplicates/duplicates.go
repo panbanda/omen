@@ -18,6 +18,13 @@ import (
 	"github.com/zeebo/blake3"
 )
 
+// builderPool reduces allocations in normalizeCode by reusing strings.Builder instances.
+var builderPool = sync.Pool{
+	New: func() interface{} {
+		return &strings.Builder{}
+	},
+}
+
 // Analyzer detects code clones using MinHash with LSH for efficient candidate filtering.
 type Analyzer struct {
 	parser      *parser.Parser
@@ -472,7 +479,12 @@ func (a *Analyzer) createFragment(path string, startLine, endLine int, lines []s
 // normalizeCode normalizes code for comparison.
 func (a *Analyzer) normalizeCode(code string) string {
 	lines := strings.Split(code, "\n")
-	var normalized []string
+
+	sb := builderPool.Get().(*strings.Builder)
+	sb.Reset()
+	defer builderPool.Put(sb)
+
+	first := true
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
@@ -481,9 +493,13 @@ func (a *Analyzer) normalizeCode(code string) string {
 		if a.config.IgnoreComments && isComment(trimmed) {
 			continue
 		}
-		normalized = append(normalized, trimmed)
+		if !first {
+			sb.WriteByte('\n')
+		}
+		sb.WriteString(trimmed)
+		first = false
 	}
-	return strings.Join(normalized, "\n")
+	return sb.String()
 }
 
 // normalizeTokens applies identifier and literal normalization.

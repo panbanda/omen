@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	toon "github.com/toon-format/toon-go"
 )
 
 func TestParseFormat(t *testing.T) {
@@ -23,8 +21,6 @@ func TestParseFormat(t *testing.T) {
 		{"markdown", FormatMarkdown},
 		{"md", FormatMarkdown},
 		{"MARKDOWN", FormatMarkdown},
-		{"toon", FormatTOON},
-		{"TOON", FormatTOON},
 		{"", FormatText},
 		{"invalid", FormatText},
 		{"unknown", FormatText},
@@ -50,7 +46,6 @@ func TestNewFormatter(t *testing.T) {
 		{"text_stdout_colored", FormatText, "", true},
 		{"json_stdout_nocolor", FormatJSON, "", false},
 		{"markdown_stdout_colored", FormatMarkdown, "", true},
-		{"toon_stdout_colored", FormatTOON, "", true},
 	}
 
 	for _, tt := range tests {
@@ -620,11 +615,6 @@ func TestFormatterOutputRenderable(t *testing.T) {
 			data:   NewTable("Test", []string{"A"}, [][]string{{"1"}}, nil, nil),
 		},
 		{
-			name:   "toon_table",
-			format: FormatTOON,
-			data:   NewTable("Test", []string{"A"}, [][]string{{"1"}}, nil, nil),
-		},
-		{
 			name:   "text_section",
 			format: FormatText,
 			data:   &Section{Title: "Test", Content: "Content"},
@@ -667,8 +657,8 @@ func TestFormatterOutputRaw(t *testing.T) {
 			data:   map[string]string{"key": "value"},
 		},
 		{
-			name:   "toon_struct",
-			format: FormatTOON,
+			name:   "json_struct",
+			format: FormatJSON,
 			data:   struct{ Name string }{Name: "test"},
 		},
 		{
@@ -750,49 +740,6 @@ func TestFormatterOutputJSON(t *testing.T) {
 
 	if result["value"].(float64) != 123 {
 		t.Errorf("value = %v, want 123", result["value"])
-	}
-}
-
-func TestFormatterOutputTOON(t *testing.T) {
-	tmpDir := t.TempDir()
-	outputPath := filepath.Join(tmpDir, "test.toon")
-
-	f, err := NewFormatter(FormatTOON, outputPath, false)
-	if err != nil {
-		t.Fatalf("NewFormatter() error: %v", err)
-	}
-	defer f.Close()
-
-	type TestData struct {
-		Name  string `toon:"name"`
-		Count int    `toon:"count"`
-	}
-
-	data := TestData{Name: "test", Count: 42}
-
-	err = f.outputTOON(data)
-	if err != nil {
-		t.Fatalf("outputTOON() error: %v", err)
-	}
-
-	f.Close()
-
-	content, err := os.ReadFile(outputPath)
-	if err != nil {
-		t.Fatalf("ReadFile() error: %v", err)
-	}
-
-	var result TestData
-	if err := toon.Unmarshal(content, &result); err != nil {
-		t.Fatalf("toon.Unmarshal() error: %v", err)
-	}
-
-	if result.Name != "test" {
-		t.Errorf("Name = %v, want test", result.Name)
-	}
-
-	if result.Count != 42 {
-		t.Errorf("Count = %v, want 42", result.Count)
 	}
 }
 
@@ -1036,7 +983,7 @@ func TestFormatterComplexReport(t *testing.T) {
 		},
 	}
 
-	formats := []Format{FormatText, FormatJSON, FormatMarkdown, FormatTOON}
+	formats := []Format{FormatText, FormatJSON, FormatMarkdown}
 
 	for _, format := range formats {
 		t.Run(string(format), func(t *testing.T) {

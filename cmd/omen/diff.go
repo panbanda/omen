@@ -63,7 +63,7 @@ func runDiff(cmd *cobra.Command, args []string) error {
 	defer formatter.Close()
 
 	format := getFormat(cmd)
-	if format == "json" || format == "toon" {
+	if format == "json" {
 		return formatter.Output(result)
 	}
 

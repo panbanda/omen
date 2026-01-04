@@ -53,7 +53,7 @@ type fullAnalysis struct {
 
 func init() {
 	// Persistent flags inherited by all analyzer subcommands
-	analyzeCmd.PersistentFlags().StringP("format", "f", "text", "Output format: text, json, markdown, toon")
+	analyzeCmd.PersistentFlags().StringP("format", "f", "text", "Output format: text, json, markdown")
 	analyzeCmd.PersistentFlags().StringP("output", "o", "", "Write output to file")
 	analyzeCmd.PersistentFlags().Bool("no-cache", false, "Disable caching")
 	analyzeCmd.PersistentFlags().String("ref", "", "Git ref (branch, tag, SHA) for remote repositories")
@@ -249,8 +249,8 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 	elapsed := time.Since(startTime)
 	fmt.Printf("\nAnalysis completed in %s\n\n", elapsed.Round(time.Millisecond))
 
-	// For JSON/TOON, output raw results
-	if formatter.Format() == output.FormatJSON || formatter.Format() == output.FormatTOON {
+	// For JSON, output raw results
+	if formatter.Format() == output.FormatJSON {
 		return formatter.Output(results)
 	}
 

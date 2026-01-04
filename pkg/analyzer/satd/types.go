@@ -5,7 +5,7 @@ import "time"
 // Category represents the type of technical debt. omen:ignore
 type Category string
 
-// String implements fmt.Stringer for toon serialization.
+// String implements fmt.Stringer for json serialization.
 func (d Category) String() string {
 	return string(d)
 }
@@ -22,7 +22,7 @@ const (
 // Severity represents the urgency of addressing the debt.
 type Severity string
 
-// String implements fmt.Stringer for toon serialization.
+// String implements fmt.Stringer for json serialization.
 func (s Severity) String() string {
 	return string(s)
 }
@@ -36,17 +36,17 @@ const (
 
 // Item represents a single SATD item found in code.
 type Item struct {
-	Category    Category   `json:"category" toon:"category"`
-	Severity    Severity   `json:"severity" toon:"severity"`
-	File        string     `json:"file" toon:"file"`
-	Line        uint32     `json:"line" toon:"line"`
-	Description string     `json:"description" toon:"description"`
-	Marker      string     `json:"marker" toon:"marker"` // TODO, FIXME, HACK, etc.
-	Text        string     `json:"text,omitempty" toon:"text,omitempty"`
-	Column      uint32     `json:"column,omitempty" toon:"column,omitempty"`
-	ContextHash string     `json:"context_hash,omitempty" toon:"context_hash,omitempty"` // BLAKE3 hash for identity tracking
-	Author      string     `json:"author,omitempty" toon:"author,omitempty"`
-	Date        *time.Time `json:"date,omitempty" toon:"date,omitempty"`
+	Category    Category   `json:"category"`
+	Severity    Severity   `json:"severity"`
+	File        string     `json:"file"`
+	Line        uint32     `json:"line"`
+	Description string     `json:"description"`
+	Marker      string     `json:"marker"` // TODO, FIXME, HACK, etc.
+	Text        string     `json:"text,omitempty"`
+	Column      uint32     `json:"column,omitempty"`
+	ContextHash string     `json:"context_hash,omitempty"` // BLAKE3 hash for identity tracking
+	Author      string     `json:"author,omitempty"`
+	Date        *time.Time `json:"date,omitempty"`
 }
 
 // Analysis represents the full SATD analysis result.

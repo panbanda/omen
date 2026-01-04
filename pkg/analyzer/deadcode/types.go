@@ -82,25 +82,25 @@ func (i ItemType) String() string {
 
 // Item represents an individual dead code item within a file.
 type Item struct {
-	Type   ItemType `json:"item_type" toon:"item_type"`
-	Name   string   `json:"name" toon:"name"`
-	Line   uint32   `json:"line" toon:"line"`
-	Reason string   `json:"reason" toon:"reason"`
+	Type   ItemType `json:"item_type"`
+	Name   string   `json:"name"`
+	Line   uint32   `json:"line"`
+	Reason string   `json:"reason"`
 }
 
 // FileMetrics contains file-level dead code metrics with items.
 type FileMetrics struct {
-	Path              string          `json:"path" toon:"path"`
-	DeadLines         int             `json:"dead_lines" toon:"dead_lines"`
-	TotalLines        int             `json:"total_lines" toon:"total_lines"`
-	DeadPercentage    float32         `json:"dead_percentage" toon:"dead_percentage"`
-	DeadFunctions     int             `json:"dead_functions" toon:"dead_functions"`
-	DeadClasses       int             `json:"dead_classes" toon:"dead_classes"`
-	DeadModules       int             `json:"dead_modules" toon:"dead_modules"`
-	UnreachableBlocks int             `json:"unreachable_blocks" toon:"unreachable_blocks"`
-	DeadScore         float32         `json:"dead_score" toon:"dead_score"`
-	Confidence        ConfidenceLevel `json:"confidence" toon:"confidence"`
-	Items             []Item          `json:"items" toon:"items"`
+	Path              string          `json:"path"`
+	DeadLines         int             `json:"dead_lines"`
+	TotalLines        int             `json:"total_lines"`
+	DeadPercentage    float32         `json:"dead_percentage"`
+	DeadFunctions     int             `json:"dead_functions"`
+	DeadClasses       int             `json:"dead_classes"`
+	DeadModules       int             `json:"dead_modules"`
+	UnreachableBlocks int             `json:"unreachable_blocks"`
+	DeadScore         float32         `json:"dead_score"`
+	Confidence        ConfidenceLevel `json:"confidence"`
+	Items             []Item          `json:"items"`
 }
 
 // CalculateScore calculates the dead code score using weighted algorithm.
@@ -166,21 +166,21 @@ func (f *FileMetrics) AddItem(item Item) {
 
 // RankingSummary provides aggregate statistics.
 type RankingSummary struct {
-	TotalFilesAnalyzed int     `json:"total_files_analyzed" toon:"total_files_analyzed"`
-	FilesWithDeadCode  int     `json:"files_with_dead_code" toon:"files_with_dead_code"`
-	TotalDeadLines     int     `json:"total_dead_lines" toon:"total_dead_lines"`
-	DeadPercentage     float32 `json:"dead_percentage" toon:"dead_percentage"`
-	DeadFunctions      int     `json:"dead_functions" toon:"dead_functions"`
-	DeadClasses        int     `json:"dead_classes" toon:"dead_classes"`
-	DeadModules        int     `json:"dead_modules" toon:"dead_modules"`
-	UnreachableBlocks  int     `json:"unreachable_blocks" toon:"unreachable_blocks"`
+	TotalFilesAnalyzed int     `json:"total_files_analyzed"`
+	FilesWithDeadCode  int     `json:"files_with_dead_code"`
+	TotalDeadLines     int     `json:"total_dead_lines"`
+	DeadPercentage     float32 `json:"dead_percentage"`
+	DeadFunctions      int     `json:"dead_functions"`
+	DeadClasses        int     `json:"dead_classes"`
+	DeadModules        int     `json:"dead_modules"`
+	UnreachableBlocks  int     `json:"unreachable_blocks"`
 }
 
 // AnalysisConfig holds configuration for dead code analysis.
 type AnalysisConfig struct {
-	IncludeUnreachable bool `json:"include_unreachable" toon:"include_unreachable"`
-	IncludeTests       bool `json:"include_tests" toon:"include_tests"`
-	MinDeadLines       int  `json:"min_dead_lines" toon:"min_dead_lines"`
+	IncludeUnreachable bool `json:"include_unreachable"`
+	IncludeTests       bool `json:"include_tests"`
+	MinDeadLines       int  `json:"min_dead_lines"`
 }
 
 // ReferenceType classifies the relationship between code elements.
@@ -218,31 +218,31 @@ func (k Kind) String() string {
 
 // ReferenceEdge represents a relationship between two code elements.
 type ReferenceEdge struct {
-	From       uint32        `json:"from" toon:"from"`
-	To         uint32        `json:"to" toon:"to"`
-	Type       ReferenceType `json:"type" toon:"type"`
-	Confidence float64       `json:"confidence" toon:"confidence"`
+	From       uint32        `json:"from"`
+	To         uint32        `json:"to"`
+	Type       ReferenceType `json:"type"`
+	Confidence float64       `json:"confidence"`
 }
 
 // ReferenceNode represents a code element in the reference graph.
 type ReferenceNode struct {
-	ID         uint32 `json:"id" toon:"id"`
-	Name       string `json:"name" toon:"name"`
-	File       string `json:"file" toon:"file"`
-	Line       uint32 `json:"line" toon:"line"`
-	EndLine    uint32 `json:"end_line" toon:"end_line"`
-	Kind       string `json:"kind" toon:"kind"` // function, class, variable
-	Language   string `json:"language" toon:"language"`
-	IsExported bool   `json:"is_exported" toon:"is_exported"`
-	IsEntry    bool   `json:"is_entry" toon:"is_entry"`
+	ID         uint32 `json:"id"`
+	Name       string `json:"name"`
+	File       string `json:"file"`
+	Line       uint32 `json:"line"`
+	EndLine    uint32 `json:"end_line"`
+	Kind       string `json:"kind"` // function, class, variable
+	Language   string `json:"language"`
+	IsExported bool   `json:"is_exported"`
+	IsEntry    bool   `json:"is_entry"`
 }
 
 // CallGraph represents the reference graph for reachability analysis.
 type CallGraph struct {
-	Nodes       map[uint32]*ReferenceNode `json:"nodes" toon:"-"`
-	Edges       []ReferenceEdge           `json:"edges" toon:"edges"`
-	EntryPoints []uint32                  `json:"entry_points" toon:"entry_points"`
-	EdgeIndex   map[uint32][]int          `json:"-" toon:"-"` // node -> edge indices (outgoing)
+	Nodes       map[uint32]*ReferenceNode `json:"nodes"`
+	Edges       []ReferenceEdge           `json:"edges"`
+	EntryPoints []uint32                  `json:"entry_points"`
+	EdgeIndex   map[uint32][]int          `json:"-"` // node -> edge indices (outgoing)
 }
 
 // NewCallGraph creates an initialized call graph.
@@ -282,17 +282,17 @@ func (g *CallGraph) GetOutgoingEdges(nodeID uint32) []ReferenceEdge {
 
 // Function represents an unused function detected in the codebase.
 type Function struct {
-	Name             string          `json:"name" toon:"name"`
-	File             string          `json:"file" toon:"file"`
-	Line             uint32          `json:"line" toon:"line"`
-	EndLine          uint32          `json:"end_line" toon:"end_line"`
-	Visibility       string          `json:"visibility" toon:"visibility"` // public, private, internal
-	Confidence       float64         `json:"confidence" toon:"confidence"` // 0.0-1.0, how certain we are it's dead
-	ConfidenceLevel  ConfidenceLevel `json:"confidence_level" toon:"confidence_level"`
-	ConfidenceReason string          `json:"confidence_reason" toon:"confidence_reason"` // Why we have this confidence level
-	Reason           string          `json:"reason" toon:"reason"`                       // Why it's considered dead
-	Kind             Kind            `json:"kind,omitempty" toon:"kind,omitempty"`
-	NodeID           uint32          `json:"node_id,omitempty" toon:"node_id,omitempty"`
+	Name             string          `json:"name"`
+	File             string          `json:"file"`
+	Line             uint32          `json:"line"`
+	EndLine          uint32          `json:"end_line"`
+	Visibility       string          `json:"visibility"` // public, private, internal
+	Confidence       float64         `json:"confidence"` // 0.0-1.0, how certain we are it's dead
+	ConfidenceLevel  ConfidenceLevel `json:"confidence_level"`
+	ConfidenceReason string          `json:"confidence_reason"` // Why we have this confidence level
+	Reason           string          `json:"reason"`            // Why it's considered dead
+	Kind             Kind            `json:"kind,omitempty"`
+	NodeID           uint32          `json:"node_id,omitempty"`
 }
 
 // SetConfidenceLevel sets the confidence level and reason based on the numeric confidence.
@@ -313,17 +313,17 @@ func (f *Function) SetConfidenceLevel() {
 
 // Class represents an unused class/struct/type.
 type Class struct {
-	Name             string          `json:"name" toon:"name"`
-	File             string          `json:"file" toon:"file"`
-	Line             uint32          `json:"line" toon:"line"`
-	EndLine          uint32          `json:"end_line" toon:"end_line"`
-	Visibility       string          `json:"visibility" toon:"visibility"`
-	Confidence       float64         `json:"confidence" toon:"confidence"`
-	ConfidenceLevel  ConfidenceLevel `json:"confidence_level" toon:"confidence_level"`
-	ConfidenceReason string          `json:"confidence_reason" toon:"confidence_reason"`
-	Reason           string          `json:"reason" toon:"reason"`
-	Kind             Kind            `json:"kind,omitempty" toon:"kind,omitempty"`
-	NodeID           uint32          `json:"node_id,omitempty" toon:"node_id,omitempty"`
+	Name             string          `json:"name"`
+	File             string          `json:"file"`
+	Line             uint32          `json:"line"`
+	EndLine          uint32          `json:"end_line"`
+	Visibility       string          `json:"visibility"`
+	Confidence       float64         `json:"confidence"`
+	ConfidenceLevel  ConfidenceLevel `json:"confidence_level"`
+	ConfidenceReason string          `json:"confidence_reason"`
+	Reason           string          `json:"reason"`
+	Kind             Kind            `json:"kind,omitempty"`
+	NodeID           uint32          `json:"node_id,omitempty"`
 }
 
 // SetConfidenceLevel sets the confidence level and reason based on the numeric confidence.
@@ -344,16 +344,16 @@ func (c *Class) SetConfidenceLevel() {
 
 // Variable represents an unused variable.
 type Variable struct {
-	Name             string          `json:"name" toon:"name"`
-	File             string          `json:"file" toon:"file"`
-	Line             uint32          `json:"line" toon:"line"`
-	Visibility       string          `json:"visibility" toon:"visibility"`
-	Confidence       float64         `json:"confidence" toon:"confidence"`
-	ConfidenceLevel  ConfidenceLevel `json:"confidence_level" toon:"confidence_level"`
-	ConfidenceReason string          `json:"confidence_reason" toon:"confidence_reason"`
-	Reason           string          `json:"reason,omitempty" toon:"reason,omitempty"`
-	Kind             Kind            `json:"kind,omitempty" toon:"kind,omitempty"`
-	NodeID           uint32          `json:"node_id,omitempty" toon:"node_id,omitempty"`
+	Name             string          `json:"name"`
+	File             string          `json:"file"`
+	Line             uint32          `json:"line"`
+	Visibility       string          `json:"visibility"`
+	Confidence       float64         `json:"confidence"`
+	ConfidenceLevel  ConfidenceLevel `json:"confidence_level"`
+	ConfidenceReason string          `json:"confidence_reason"`
+	Reason           string          `json:"reason,omitempty"`
+	Kind             Kind            `json:"kind,omitempty"`
+	NodeID           uint32          `json:"node_id,omitempty"`
 }
 
 // SetConfidenceLevel sets the confidence level and reason based on the numeric confidence.
@@ -374,28 +374,28 @@ func (v *Variable) SetConfidenceLevel() {
 
 // UnreachableBlock represents code that can never execute.
 type UnreachableBlock struct {
-	File      string `json:"file" toon:"file"`
-	StartLine uint32 `json:"start_line" toon:"start_line"`
-	EndLine   uint32 `json:"end_line" toon:"end_line"`
-	Reason    string `json:"reason" toon:"reason"` // e.g., "after return", "dead branch"
+	File      string `json:"file"`
+	StartLine uint32 `json:"start_line"`
+	EndLine   uint32 `json:"end_line"`
+	Reason    string `json:"reason"` // e.g., "after return", "dead branch"
 }
 
 // Summary provides aggregate statistics.
 type Summary struct {
-	TotalDeadFunctions     int            `json:"total_dead_functions" toon:"total_dead_functions"`
-	TotalDeadVariables     int            `json:"total_dead_variables" toon:"total_dead_variables"`
-	TotalDeadClasses       int            `json:"total_dead_classes" toon:"total_dead_classes"`
-	TotalUnreachableBlocks int            `json:"total_unreachable_blocks" toon:"total_unreachable_blocks"`
-	TotalUnreachableLines  int            `json:"total_unreachable_lines" toon:"total_unreachable_lines"`
-	DeadCodePercentage     float64        `json:"dead_code_percentage" toon:"dead_code_percentage"`
-	ByFile                 map[string]int `json:"by_file" toon:"by_file"`
-	ByKind                 map[Kind]int   `json:"by_kind,omitempty" toon:"-"`
-	TotalFilesAnalyzed     int            `json:"total_files_analyzed" toon:"total_files_analyzed"`
-	TotalLinesAnalyzed     int            `json:"total_lines_analyzed" toon:"total_lines_analyzed"`
-	TotalNodesInGraph      int            `json:"total_nodes_in_graph,omitempty" toon:"total_nodes_in_graph,omitempty"`
-	ReachableNodes         int            `json:"reachable_nodes,omitempty" toon:"reachable_nodes,omitempty"`
-	UnreachableNodes       int            `json:"unreachable_nodes,omitempty" toon:"unreachable_nodes,omitempty"`
-	ConfidenceLevel        float64        `json:"confidence_level,omitempty" toon:"confidence_level,omitempty"`
+	TotalDeadFunctions     int            `json:"total_dead_functions"`
+	TotalDeadVariables     int            `json:"total_dead_variables"`
+	TotalDeadClasses       int            `json:"total_dead_classes"`
+	TotalUnreachableBlocks int            `json:"total_unreachable_blocks"`
+	TotalUnreachableLines  int            `json:"total_unreachable_lines"`
+	DeadCodePercentage     float64        `json:"dead_code_percentage"`
+	ByFile                 map[string]int `json:"by_file"`
+	ByKind                 map[Kind]int   `json:"by_kind,omitempty"`
+	TotalFilesAnalyzed     int            `json:"total_files_analyzed"`
+	TotalLinesAnalyzed     int            `json:"total_lines_analyzed"`
+	TotalNodesInGraph      int            `json:"total_nodes_in_graph,omitempty"`
+	ReachableNodes         int            `json:"reachable_nodes,omitempty"`
+	UnreachableNodes       int            `json:"unreachable_nodes,omitempty"`
+	ConfidenceLevel        float64        `json:"confidence_level,omitempty"`
 }
 
 // NewSummary creates an initialized summary.
@@ -471,22 +471,22 @@ func (s *Summary) CalculatePercentage() {
 
 // Analysis represents the full dead code detection result.
 type Analysis struct {
-	DeadFunctions   []Function         `json:"dead_functions" toon:"dead_functions"`
-	DeadVariables   []Variable         `json:"dead_variables" toon:"dead_variables"`
-	DeadClasses     []Class            `json:"dead_classes,omitempty" toon:"dead_classes,omitempty"`
-	UnreachableCode []UnreachableBlock `json:"unreachable_code" toon:"unreachable_code"`
-	Summary         Summary            `json:"summary" toon:"summary"`
-	CallGraph       *CallGraph         `json:"call_graph,omitempty" toon:"-"`
+	DeadFunctions   []Function         `json:"dead_functions"`
+	DeadVariables   []Variable         `json:"dead_variables"`
+	DeadClasses     []Class            `json:"dead_classes,omitempty"`
+	UnreachableCode []UnreachableBlock `json:"unreachable_code"`
+	Summary         Summary            `json:"summary"`
+	CallGraph       *CallGraph         `json:"call_graph,omitempty"`
 }
 
 // Report is the output format for dead code analysis.
 type Report struct {
-	Summary           RankingSummary `json:"summary" toon:"summary"`
-	Files             []FileMetrics  `json:"files" toon:"files"`
-	TotalFiles        int            `json:"total_files" toon:"total_files"`
-	AnalyzedFiles     int            `json:"analyzed_files" toon:"analyzed_files"`
-	AnalysisTimestamp time.Time      `json:"analysis_timestamp,omitempty" toon:"analysis_timestamp,omitempty"`
-	Config            AnalysisConfig `json:"config,omitempty" toon:"config,omitempty"`
+	Summary           RankingSummary `json:"summary"`
+	Files             []FileMetrics  `json:"files"`
+	TotalFiles        int            `json:"total_files"`
+	AnalyzedFiles     int            `json:"analyzed_files"`
+	AnalysisTimestamp time.Time      `json:"analysis_timestamp,omitempty"`
+	Config            AnalysisConfig `json:"config,omitempty"`
 }
 
 // NewReport creates a new dead code report.

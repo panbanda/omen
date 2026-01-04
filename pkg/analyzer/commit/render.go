@@ -105,32 +105,32 @@ func (t *TrendAnalysis) RenderMarkdown(w io.Writer) error {
 	return nil
 }
 
-// RenderData implements output.Renderable for JSON/TOON output.
+// RenderData implements output.Renderable for JSON output.
 func (t *TrendAnalysis) RenderData() any {
 	type trendData struct {
 		TimeRange struct {
-			Start time.Time `json:"start" toon:"start"`
-			End   time.Time `json:"end" toon:"end"`
-		} `json:"time_range" toon:"time_range"`
-		Commits             int     `json:"commits" toon:"commits"`
-		AvgCyclomaticStart  float64 `json:"avg_cyclomatic_start" toon:"avg_cyclomatic_start"`
-		AvgCyclomaticEnd    float64 `json:"avg_cyclomatic_end" toon:"avg_cyclomatic_end"`
-		AvgCyclomaticDelta  float64 `json:"avg_cyclomatic_delta" toon:"avg_cyclomatic_delta"`
-		AvgCognitiveStart   float64 `json:"avg_cognitive_start" toon:"avg_cognitive_start"`
-		AvgCognitiveEnd     float64 `json:"avg_cognitive_end" toon:"avg_cognitive_end"`
-		AvgCognitiveDelta   float64 `json:"avg_cognitive_delta" toon:"avg_cognitive_delta"`
-		TotalFilesStart     float64 `json:"total_files_start" toon:"total_files_start"`
-		TotalFilesEnd       float64 `json:"total_files_end" toon:"total_files_end"`
-		TotalFilesDelta     float64 `json:"total_files_delta" toon:"total_files_delta"`
-		TotalFunctionsStart float64 `json:"total_functions_start" toon:"total_functions_start"`
-		TotalFunctionsEnd   float64 `json:"total_functions_end" toon:"total_functions_end"`
-		TotalFunctionsDelta float64 `json:"total_functions_delta" toon:"total_functions_delta"`
+			Start time.Time `json:"start"`
+			End   time.Time `json:"end"`
+		} `json:"time_range"`
+		Commits             int     `json:"commits"`
+		AvgCyclomaticStart  float64 `json:"avg_cyclomatic_start"`
+		AvgCyclomaticEnd    float64 `json:"avg_cyclomatic_end"`
+		AvgCyclomaticDelta  float64 `json:"avg_cyclomatic_delta"`
+		AvgCognitiveStart   float64 `json:"avg_cognitive_start"`
+		AvgCognitiveEnd     float64 `json:"avg_cognitive_end"`
+		AvgCognitiveDelta   float64 `json:"avg_cognitive_delta"`
+		TotalFilesStart     float64 `json:"total_files_start"`
+		TotalFilesEnd       float64 `json:"total_files_end"`
+		TotalFilesDelta     float64 `json:"total_files_delta"`
+		TotalFunctionsStart float64 `json:"total_functions_start"`
+		TotalFunctionsEnd   float64 `json:"total_functions_end"`
+		TotalFunctionsDelta float64 `json:"total_functions_delta"`
 		DetailedTrends      struct {
-			AvgCyclomatic  Trend `json:"avg_cyclomatic" toon:"avg_cyclomatic"`
-			AvgCognitive   Trend `json:"avg_cognitive" toon:"avg_cognitive"`
-			TotalFiles     Trend `json:"total_files" toon:"total_files"`
-			TotalFunctions Trend `json:"total_functions" toon:"total_functions"`
-		} `json:"detailed_trends" toon:"detailed_trends"`
+			AvgCyclomatic  Trend `json:"avg_cyclomatic"`
+			AvgCognitive   Trend `json:"avg_cognitive"`
+			TotalFiles     Trend `json:"total_files"`
+			TotalFunctions Trend `json:"total_functions"`
+		} `json:"detailed_trends"`
 	}
 
 	if len(t.Commits) == 0 {
