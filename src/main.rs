@@ -106,7 +106,13 @@ fn run(cli: Cli) -> omen::core::Result<()> {
         Command::All(_args) => {
             use serde_json::{json, Value};
             let file_set = FileSet::from_path(&cli.path, &config)?;
-            let ctx = AnalysisContext::new(&file_set, &config, Some(&cli.path));
+            let git_root = omen::git::GitRepo::open(&cli.path)
+                .ok()
+                .map(|r| r.root().to_path_buf());
+            let mut ctx = AnalysisContext::new(&file_set, &config, Some(&cli.path));
+            if let Some(ref git_path) = git_root {
+                ctx = ctx.with_git_path(git_path);
+            }
 
             let mut results: Vec<Value> = Vec::new();
 
@@ -158,7 +164,12 @@ fn run_analyzer<A: Analyzer + Default>(
     format: Format,
 ) -> omen::core::Result<()> {
     let file_set = FileSet::from_path(path, config)?;
-    let ctx = AnalysisContext::new(&file_set, config, Some(path));
+    let mut ctx = AnalysisContext::new(&file_set, config, Some(path));
+    // Try to find git root for this path
+    if let Ok(repo) = omen::git::GitRepo::open(path) {
+        let git_root = repo.root().to_path_buf();
+        ctx = ctx.with_git_path(Box::leak(Box::new(git_root)));
+    }
     let analyzer = A::default();
     let result = analyzer.analyze(&ctx)?;
     format.format(&result, &mut stdout())?;
