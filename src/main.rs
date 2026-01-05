@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use clap::Parser;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-use omen::cli::{Cli, Command, OutputFormat};
+use omen::cli::{Cli, Command, McpSubcommand, OutputFormat, ReportSubcommand, ScoreSubcommand};
 use omen::config::Config;
 use omen::core::{AnalysisContext, Analyzer, FileSet};
 use omen::mcp::McpServer;
@@ -44,9 +44,37 @@ fn run(cli: Cli) -> omen::core::Result<()> {
     };
 
     match cli.command {
-        Command::Mcp(_args) => {
-            let server = McpServer::new(cli.path.clone(), config);
-            server.run_stdio()?;
+        Command::Mcp(cmd) => {
+            match cmd.subcommand {
+                Some(McpSubcommand::Manifest) => {
+                    // Output MCP manifest
+                    let manifest = serde_json::json!({
+                        "name": "omen",
+                        "version": env!("CARGO_PKG_VERSION"),
+                        "description": "Code analysis tools for AI assistants",
+                        "tools": [
+                            "analyze_complexity",
+                            "analyze_satd",
+                            "analyze_deadcode",
+                            "analyze_churn",
+                            "analyze_duplicates",
+                            "analyze_defect",
+                            "analyze_tdg",
+                            "analyze_graph",
+                            "analyze_hotspot",
+                            "analyze_temporal_coupling",
+                            "analyze_ownership",
+                            "analyze_cohesion",
+                            "analyze_repo_map"
+                        ]
+                    });
+                    println!("{}", serde_json::to_string_pretty(&manifest)?);
+                }
+                None => {
+                    let server = McpServer::new(cli.path.clone(), config);
+                    server.run_stdio()?;
+                }
+            }
         }
         Command::Complexity(_args) => {
             run_analyzer::<omen::analyzers::complexity::Analyzer>(&cli.path, &config, format)?;
@@ -100,8 +128,28 @@ fn run(cli: Cli) -> omen::core::Result<()> {
         Command::Flags(_args) => {
             run_analyzer::<omen::analyzers::flags::Analyzer>(&cli.path, &config, format)?;
         }
-        Command::Score(_args) => {
-            run_analyzer::<omen::score::Analyzer>(&cli.path, &config, format)?;
+        Command::LintHotspot(_args) => {
+            // Lint hotspot combines lint output with hotspot analysis
+            // For now, run hotspot analyzer (lint integration TBD)
+            run_analyzer::<omen::analyzers::hotspot::Analyzer>(&cli.path, &config, format)?;
+        }
+        Command::Score(cmd) => {
+            match cmd.subcommand {
+                Some(ScoreSubcommand::Trend(args)) => {
+                    // Score trend analysis
+                    use serde_json::json;
+                    let result = json!({
+                        "since": args.since,
+                        "period": format!("{:?}", args.period).to_lowercase(),
+                        "snap": args.snap,
+                        "message": "Trend analysis not yet implemented"
+                    });
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                }
+                None => {
+                    run_analyzer::<omen::score::Analyzer>(&cli.path, &config, format)?;
+                }
+            }
         }
         Command::All(_args) => {
             use serde_json::{json, Value};
@@ -153,6 +201,12 @@ fn run(cli: Cli) -> omen::core::Result<()> {
             let combined = json!({ "analyzers": results });
             println!("{}", serde_json::to_string_pretty(&combined)?);
         }
+        Command::Context(args) => {
+            run_context(&cli.path, &config, &args, format)?;
+        }
+        Command::Report(cmd) => {
+            run_report(&cli.path, &config, cmd.subcommand)?;
+        }
     }
 
     Ok(())
@@ -173,5 +227,334 @@ fn run_analyzer<A: Analyzer + Default>(
     let analyzer = A::default();
     let result = analyzer.analyze(&ctx)?;
     format.format(&result, &mut stdout())?;
+    Ok(())
+}
+
+fn run_context(
+    path: &PathBuf,
+    config: &Config,
+    args: &omen::cli::ContextArgs,
+    format: Format,
+) -> omen::core::Result<()> {
+    use serde_json::json;
+
+    let file_set = FileSet::from_path(path, config)?;
+    let mut ctx = AnalysisContext::new(&file_set, config, Some(path));
+
+    if let Ok(repo) = omen::git::GitRepo::open(path) {
+        let git_root = repo.root().to_path_buf();
+        ctx = ctx.with_git_path(Box::leak(Box::new(git_root)));
+    }
+
+    // Generate context using repomap analyzer as base
+    let analyzer = omen::analyzers::repomap::Analyzer::default();
+    let repomap_result = analyzer.analyze(&ctx)?;
+
+    // Build context output
+    let context = json!({
+        "target": args.target,
+        "max_tokens": args.max_tokens,
+        "depth": args.depth,
+        "symbol": args.symbol,
+        "repomap": repomap_result,
+    });
+
+    match format {
+        Format::Json => println!("{}", serde_json::to_string_pretty(&context)?),
+        Format::Markdown => {
+            println!("# Repository Context\n");
+            println!("**Max Tokens:** {}", args.max_tokens);
+            println!("**Depth:** {}\n", args.depth);
+            if let Some(ref target) = args.target {
+                println!("**Target:** {}\n", target.display());
+            }
+            if let Some(ref symbol) = args.symbol {
+                println!("**Symbol:** {}\n", symbol);
+            }
+            println!("## Symbol Map\n");
+            println!("{}", serde_json::to_string_pretty(&repomap_result)?);
+        }
+        Format::Text => {
+            println!("Repository Context");
+            println!("==================");
+            println!("Max Tokens: {}", args.max_tokens);
+            println!("Depth: {}", args.depth);
+            if let Some(ref target) = args.target {
+                println!("Target: {}", target.display());
+            }
+            if let Some(ref symbol) = args.symbol {
+                println!("Symbol: {}", symbol);
+            }
+            println!();
+            format.format(&repomap_result, &mut stdout())?;
+        }
+    }
+
+    Ok(())
+}
+
+fn run_report(
+    path: &PathBuf,
+    config: &Config,
+    subcommand: ReportSubcommand,
+) -> omen::core::Result<()> {
+    use serde_json::{json, Value};
+
+    match subcommand {
+        ReportSubcommand::Generate(args) => {
+            // Create output directory
+            std::fs::create_dir_all(&args.output)?;
+
+            let file_set = FileSet::from_path(path, config)?;
+            let git_root = omen::git::GitRepo::open(path)
+                .ok()
+                .map(|r| r.root().to_path_buf());
+            let mut ctx = AnalysisContext::new(&file_set, config, Some(path));
+            if let Some(ref git_path) = git_root {
+                ctx = ctx.with_git_path(git_path);
+            }
+
+            // Generate metadata.json (matches Go structure)
+            let repo_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown");
+            // Use --days if provided, otherwise use --since
+            let since_str = if let Some(days) = args.days {
+                format!("{} days", days)
+            } else {
+                args.since.clone()
+            };
+            let metadata = json!({
+                "repository": repo_name,
+                "generated_at": chrono::Utc::now().to_rfc3339(),
+                "since": since_str,
+                "omen_version": env!("CARGO_PKG_VERSION"),
+                "paths": [path.display().to_string()]
+            });
+            let metadata_path = args.output.join("metadata.json");
+            std::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata)?)?;
+            eprintln!("Generated: {}", metadata_path.display());
+
+            let skip_list: Vec<&str> = args
+                .skip
+                .as_deref()
+                .map(|s| s.split(',').collect())
+                .unwrap_or_default();
+
+            macro_rules! run_and_save {
+                ($analyzer:ty, $name:expr) => {{
+                    if !skip_list.contains(&$name) {
+                        let a = <$analyzer>::default();
+                        let result: Value = match a.analyze(&ctx) {
+                            Ok(r) => serde_json::to_value(&r).unwrap_or(json!({"error": "serialization failed"})),
+                            Err(e) => json!({"error": e.to_string()}),
+                        };
+                        let output_path = args.output.join(format!("{}.json", $name));
+                        std::fs::write(&output_path, serde_json::to_string_pretty(&result)?)?;
+                        eprintln!("Generated: {}", output_path.display());
+                    }
+                }};
+            }
+
+            run_and_save!(omen::analyzers::complexity::Analyzer, "complexity");
+            run_and_save!(omen::analyzers::satd::Analyzer, "satd");
+            run_and_save!(omen::analyzers::deadcode::Analyzer, "deadcode");
+            run_and_save!(omen::analyzers::churn::Analyzer, "churn");
+            run_and_save!(omen::analyzers::duplicates::Analyzer, "duplicates");
+            run_and_save!(omen::analyzers::defect::Analyzer, "defect");
+            run_and_save!(omen::analyzers::changes::Analyzer, "changes");
+            run_and_save!(omen::analyzers::tdg::Analyzer, "tdg");
+            run_and_save!(omen::analyzers::graph::Analyzer, "graph");
+            // Use "hotspots" to match Go naming
+            if !skip_list.contains(&"hotspots") {
+                let a = omen::analyzers::hotspot::Analyzer::default();
+                let result: Value = match a.analyze(&ctx) {
+                    Ok(r) => {
+                        serde_json::to_value(&r).unwrap_or(json!({"error": "serialization failed"}))
+                    }
+                    Err(e) => json!({"error": e.to_string()}),
+                };
+                let output_path = args.output.join("hotspots.json");
+                std::fs::write(&output_path, serde_json::to_string_pretty(&result)?)?;
+                eprintln!("Generated: {}", output_path.display());
+            }
+            run_and_save!(omen::analyzers::temporal::Analyzer, "temporal");
+            run_and_save!(omen::analyzers::ownership::Analyzer, "ownership");
+            run_and_save!(omen::analyzers::cohesion::Analyzer, "cohesion");
+            run_and_save!(omen::analyzers::repomap::Analyzer, "repomap");
+            run_and_save!(omen::analyzers::smells::Analyzer, "smells");
+            run_and_save!(omen::analyzers::flags::Analyzer, "flags");
+            run_and_save!(omen::score::Analyzer, "score");
+
+            eprintln!("Report data generated in: {}", args.output.display());
+        }
+        ReportSubcommand::Validate(args) => {
+            // Basic validation: check that expected JSON files exist and are valid JSON
+            // File list matches Go version
+            let expected_files = [
+                "metadata",
+                "complexity",
+                "satd",
+                "deadcode",
+                "churn",
+                "duplicates",
+                "defect",
+                "changes",
+                "tdg",
+                "graph",
+                "hotspots", // Go uses plural
+                "temporal",
+                "ownership",
+                "cohesion",
+                "repomap",
+                "smells",
+                "flags",
+                "score",
+            ];
+
+            let mut errors = Vec::new();
+            let mut valid_count = 0;
+
+            for name in expected_files {
+                let file_path = args.data.join(format!("{}.json", name));
+                if file_path.exists() {
+                    match std::fs::read_to_string(&file_path) {
+                        Ok(contents) => match serde_json::from_str::<Value>(&contents) {
+                            Ok(_) => {
+                                valid_count += 1;
+                                eprintln!("Valid: {}.json", name);
+                            }
+                            Err(e) => errors.push(format!("{}.json: invalid JSON - {}", name, e)),
+                        },
+                        Err(e) => errors.push(format!("{}.json: read error - {}", name, e)),
+                    }
+                } else {
+                    errors.push(format!("{}.json: missing", name));
+                }
+            }
+
+            if errors.is_empty() {
+                eprintln!("All {} data files are valid.", valid_count);
+            } else {
+                eprintln!("\nValidation errors:");
+                for error in &errors {
+                    eprintln!("  - {}", error);
+                }
+                return Err(omen::core::Error::config(format!(
+                    "{} validation errors found",
+                    errors.len()
+                )));
+            }
+        }
+        ReportSubcommand::Render(args) => {
+            // Load all JSON data files and combine into HTML report
+            let mut data = serde_json::Map::new();
+
+            // File list matches Go version
+            let analyzers = [
+                "metadata",
+                "complexity",
+                "satd",
+                "deadcode",
+                "churn",
+                "duplicates",
+                "defect",
+                "changes",
+                "tdg",
+                "graph",
+                "hotspots", // Go uses plural
+                "temporal",
+                "ownership",
+                "cohesion",
+                "repomap",
+                "smells",
+                "flags",
+                "score",
+            ];
+
+            for name in analyzers {
+                let file_path = args.data.join(format!("{}.json", name));
+                if file_path.exists() {
+                    if let Ok(contents) = std::fs::read_to_string(&file_path) {
+                        if let Ok(value) = serde_json::from_str::<Value>(&contents) {
+                            data.insert(name.to_string(), value);
+                        }
+                    }
+                }
+            }
+
+            // Generate minimal HTML report
+            let html = format!(
+                r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Omen Analysis Report</title>
+    <style>
+        body {{ font-family: system-ui, -apple-system, sans-serif; margin: 2rem; }}
+        h1 {{ color: #333; }}
+        pre {{ background: #f4f4f4; padding: 1rem; overflow-x: auto; }}
+    </style>
+</head>
+<body>
+    <h1>Omen Analysis Report</h1>
+    <p>Generated: {}</p>
+    <h2>Analysis Data</h2>
+    <pre>{}</pre>
+</body>
+</html>"#,
+                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
+                serde_json::to_string_pretty(&Value::Object(data))?
+            );
+
+            std::fs::write(&args.output, html)?;
+            eprintln!("Report rendered to: {}", args.output.display());
+        }
+        ReportSubcommand::Serve(args) => {
+            eprintln!("Starting server at http://{}:{}/", args.host, args.port);
+            eprintln!("Serving data from: {}", args.data.display());
+            eprintln!("Press Ctrl+C to stop.");
+
+            // Simple HTTP server using std::net
+            use std::io::{Read, Write};
+            use std::net::TcpListener;
+
+            let addr = format!("{}:{}", args.host, args.port);
+            let listener = TcpListener::bind(&addr)?;
+
+            for mut stream in listener.incoming().flatten() {
+                let mut buffer = [0; 1024];
+                if stream.read(&mut buffer).is_ok() {
+                    let request = String::from_utf8_lossy(&buffer);
+
+                    let response = if request.starts_with("GET / ")
+                        || request.starts_with("GET /index.html ")
+                    {
+                        // Serve rendered report
+                        let report_path = args.data.parent().unwrap_or(path).join("report.html");
+                        if report_path.exists() {
+                            match std::fs::read_to_string(&report_path) {
+                                Ok(html) => format!(
+                                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
+                                    html.len(),
+                                    html
+                                ),
+                                Err(_) => "HTTP/1.1 500 Internal Server Error\r\n\r\nFailed to read report".to_string(),
+                            }
+                        } else {
+                            "HTTP/1.1 404 Not Found\r\n\r\nReport not found. Run 'omen report render' first.".to_string()
+                        }
+                    } else {
+                        "HTTP/1.1 404 Not Found\r\n\r\nNot Found".to_string()
+                    };
+
+                    let _ = stream.write_all(response.as_bytes());
+                }
+            }
+        }
+    }
+
     Ok(())
 }
