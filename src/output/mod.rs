@@ -206,3 +206,250 @@ fn format_value_as_text<W: Write>(value: &Value, writer: &mut W, indent: usize) 
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_format_default_is_json() {
+        assert!(matches!(Format::default(), Format::Json));
+    }
+
+    #[test]
+    fn test_format_json_simple_object() {
+        let value = json!({"name": "test", "count": 42});
+        let mut buf = Vec::new();
+        Format::Json.format_value(&value, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("\"name\": \"test\""));
+        assert!(output.contains("\"count\": 42"));
+    }
+
+    #[test]
+    fn test_format_json_nested() {
+        let value = json!({"outer": {"inner": 123}});
+        let mut buf = Vec::new();
+        Format::Json.format_value(&value, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("outer"));
+        assert!(output.contains("inner"));
+        assert!(output.contains("123"));
+    }
+
+    #[test]
+    fn test_format_markdown_simple_object() {
+        let value = json!({"file_name": "test.rs", "score": 95});
+        let mut buf = Vec::new();
+        Format::Markdown.format_value(&value, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("File Name"));
+        assert!(output.contains("test.rs"));
+        assert!(output.contains("95"));
+    }
+
+    #[test]
+    fn test_format_markdown_nested_object() {
+        let value = json!({"summary": {"total": 10, "passed": 8}});
+        let mut buf = Vec::new();
+        Format::Markdown.format_value(&value, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("# Summary"));
+    }
+
+    #[test]
+    fn test_format_markdown_array_as_table() {
+        let value = json!([
+            {"name": "a", "value": 1},
+            {"name": "b", "value": 2}
+        ]);
+        let mut buf = Vec::new();
+        Format::Markdown.format_value(&value, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        // Should be formatted as markdown table
+        assert!(output.contains("|"));
+        assert!(output.contains("---"));
+    }
+
+    #[test]
+    fn test_format_markdown_empty_array() {
+        let value = json!([]);
+        let mut buf = Vec::new();
+        Format::Markdown.format_value(&value, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("_No items_"));
+    }
+
+    #[test]
+    fn test_format_markdown_non_table_array() {
+        let value = json!([
+            {"nested": {"deep": 1}},
+            {"nested": {"deep": 2}}
+        ]);
+        let mut buf = Vec::new();
+        Format::Markdown.format_value(&value, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("---"));
+    }
+
+    #[test]
+    fn test_format_text_simple_object() {
+        let value = json!({"file_name": "test.rs", "score": 95});
+        let mut buf = Vec::new();
+        Format::Text.format_value(&value, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("File Name: test.rs"));
+        assert!(output.contains("Score: 95"));
+    }
+
+    #[test]
+    fn test_format_text_nested_object() {
+        let value = json!({"summary": {"total": 10}});
+        let mut buf = Vec::new();
+        Format::Text.format_value(&value, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("Summary:"));
+        assert!(output.contains("Total: 10"));
+    }
+
+    #[test]
+    fn test_format_text_array() {
+        let value = json!([{"name": "a"}, {"name": "b"}]);
+        let mut buf = Vec::new();
+        Format::Text.format_value(&value, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("[0]"));
+        assert!(output.contains("[1]"));
+    }
+
+    #[test]
+    fn test_format_key_snake_case() {
+        assert_eq!(format_key("file_name"), "File Name");
+        assert_eq!(format_key("total_count"), "Total Count");
+    }
+
+    #[test]
+    fn test_format_key_single_word() {
+        assert_eq!(format_key("name"), "Name");
+        assert_eq!(format_key("score"), "Score");
+    }
+
+    #[test]
+    fn test_format_scalar_string() {
+        let v = json!("hello");
+        assert_eq!(format_scalar(&v), "hello");
+    }
+
+    #[test]
+    fn test_format_scalar_integer() {
+        let v = json!(42);
+        assert_eq!(format_scalar(&v), "42");
+    }
+
+    #[test]
+    fn test_format_scalar_float() {
+        let v = json!(2.5);
+        assert_eq!(format_scalar(&v), "2.50");
+    }
+
+    #[test]
+    fn test_format_scalar_float_whole() {
+        let v = json!(10.0);
+        assert_eq!(format_scalar(&v), "10");
+    }
+
+    #[test]
+    fn test_format_scalar_bool() {
+        assert_eq!(format_scalar(&json!(true)), "Yes");
+        assert_eq!(format_scalar(&json!(false)), "No");
+    }
+
+    #[test]
+    fn test_format_scalar_null() {
+        assert_eq!(format_scalar(&json!(null)), "-");
+    }
+
+    #[test]
+    fn test_is_table_compatible_empty() {
+        let arr: Vec<Value> = vec![];
+        assert!(!is_table_compatible(&arr));
+    }
+
+    #[test]
+    fn test_is_table_compatible_flat_objects() {
+        let arr = vec![json!({"a": 1}), json!({"a": 2})];
+        assert!(is_table_compatible(&arr));
+    }
+
+    #[test]
+    fn test_is_table_compatible_nested_objects() {
+        let arr = vec![json!({"a": {"b": 1}}), json!({"a": {"b": 2}})];
+        assert!(!is_table_compatible(&arr));
+    }
+
+    #[test]
+    fn test_is_table_compatible_non_objects() {
+        let arr = vec![json!(1), json!(2)];
+        assert!(!is_table_compatible(&arr));
+    }
+
+    #[test]
+    fn test_format_as_table() {
+        let arr = vec![
+            json!({"name": "a", "value": 1}),
+            json!({"name": "b", "value": 2}),
+        ];
+        let mut buf = Vec::new();
+        format_as_table(&arr, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("| Name |"));
+        assert!(output.contains("| --- |"));
+        assert!(output.contains("| a |"));
+        assert!(output.contains("| b |"));
+    }
+
+    #[test]
+    fn test_format_as_table_empty() {
+        let arr: Vec<Value> = vec![];
+        let mut buf = Vec::new();
+        format_as_table(&arr, &mut buf).unwrap();
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_format_serialize() {
+        #[derive(Serialize)]
+        struct TestData {
+            name: String,
+            count: i32,
+        }
+        let data = TestData {
+            name: "test".to_string(),
+            count: 42,
+        };
+        let mut buf = Vec::new();
+        Format::Json.format(&data, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("\"name\": \"test\""));
+        assert!(output.contains("\"count\": 42"));
+    }
+
+    #[test]
+    fn test_format_text_scalar_at_root() {
+        let value = json!("just a string");
+        let mut buf = Vec::new();
+        Format::Text.format_value(&value, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("just a string"));
+    }
+
+    #[test]
+    fn test_format_markdown_scalar_at_root() {
+        let value = json!("just a string");
+        let mut buf = Vec::new();
+        Format::Markdown.format_value(&value, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("just a string"));
+    }
+}

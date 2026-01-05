@@ -120,7 +120,8 @@ impl Analyzer {
 
             // Extract classes from file
             if let Ok(parse_result) = parser.parse(&source, lang, path) {
-                let classes = extract_classes_from_file(path, &source, parse_result.tree.as_ref(), lang);
+                let classes =
+                    extract_classes_from_file(path, &source, parse_result.tree.as_ref(), lang);
                 all_classes.extend(classes);
             }
         }
@@ -235,9 +236,7 @@ fn extract_classes_recursive(
 /// Checks if a node type represents a class.
 fn is_class_node(node_type: &str, lang: Language) -> bool {
     match lang {
-        Language::Java => {
-            node_type == "class_declaration" || node_type == "interface_declaration"
-        }
+        Language::Java => node_type == "class_declaration" || node_type == "interface_declaration",
         Language::TypeScript | Language::JavaScript => {
             node_type == "class_declaration" || node_type == "class"
         }
@@ -247,9 +246,7 @@ fn is_class_node(node_type: &str, lang: Language) -> bool {
         }
         Language::Cpp => node_type == "class_specifier" || node_type == "struct_specifier",
         Language::Ruby => node_type == "class" || node_type == "module",
-        Language::Php => {
-            node_type == "class_declaration" || node_type == "interface_declaration"
-        }
+        Language::Php => node_type == "class_declaration" || node_type == "interface_declaration",
         _ => false,
     }
 }
@@ -303,7 +300,10 @@ fn extract_class_metrics(
         violations.push(format!("CBO {} exceeds threshold {}", cbo, CBO_THRESHOLD));
     }
     if lcom > LCOM_THRESHOLD {
-        violations.push(format!("LCOM {} exceeds threshold {}", lcom, LCOM_THRESHOLD));
+        violations.push(format!(
+            "LCOM {} exceeds threshold {}",
+            lcom, LCOM_THRESHOLD
+        ));
     }
 
     Some(ClassMetrics {
@@ -517,10 +517,7 @@ fn find_field_accesses(
                     }
                 }
             }
-            Language::Java
-            | Language::CSharp
-            | Language::TypeScript
-            | Language::JavaScript => {
+            Language::Java | Language::CSharp | Language::TypeScript | Language::JavaScript => {
                 if node.kind() == "member_expression" || node.kind() == "member_access_expression" {
                     if let (Some(obj), Some(prop)) = (
                         node.child_by_field_name("object"),

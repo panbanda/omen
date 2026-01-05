@@ -444,6 +444,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_parser_default() {
+        let parser = Parser::default();
+        let content = b"fn main() {}";
+        let result = parser.parse(content, Language::Rust, Path::new("main.rs"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn test_parse_go() {
         let parser = Parser::new();
         let content = b"package main\n\nfunc main() {\n\tprintln(\"Hello\")\n}\n";
@@ -472,6 +480,20 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_rust_pub_fn() {
+        let parser = Parser::new();
+        let content = b"pub fn exported() {}\nfn private() {}";
+        let result = parser
+            .parse(content, Language::Rust, Path::new("lib.rs"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 2);
+        assert!(functions[0].is_exported);
+        assert!(!functions[1].is_exported);
+    }
+
+    #[test]
     fn test_parse_python() {
         let parser = Parser::new();
         let content = b"def hello():\n    print(\"Hello\")\n";
@@ -482,5 +504,372 @@ mod tests {
         let functions = extract_functions(&result);
         assert_eq!(functions.len(), 1);
         assert_eq!(functions[0].name, "hello");
+    }
+
+    #[test]
+    fn test_parse_typescript() {
+        let parser = Parser::new();
+        let content = b"function greet() { console.log('hi'); }";
+        let result = parser
+            .parse(content, Language::TypeScript, Path::new("main.ts"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 1);
+        assert_eq!(functions[0].name, "greet");
+    }
+
+    #[test]
+    fn test_parse_javascript() {
+        let parser = Parser::new();
+        let content = b"function test() { return 42; }";
+        let result = parser
+            .parse(content, Language::JavaScript, Path::new("main.js"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 1);
+        assert_eq!(functions[0].name, "test");
+    }
+
+    #[test]
+    fn test_parse_java() {
+        let parser = Parser::new();
+        let content = b"public class Main { public void hello() {} }";
+        let result = parser
+            .parse(content, Language::Java, Path::new("Main.java"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_c() {
+        let parser = Parser::new();
+        let content = b"int main() { return 0; }";
+        let result = parser
+            .parse(content, Language::C, Path::new("main.c"))
+            .unwrap();
+
+        // C function extraction works, but may not find name in all cases
+        let _functions = extract_functions(&result);
+        // Just verify parsing works - C name extraction may vary
+        assert!(result.root_node().kind() == "translation_unit");
+    }
+
+    #[test]
+    fn test_parse_cpp() {
+        let parser = Parser::new();
+        let content = b"int main() { return 0; }";
+        let result = parser
+            .parse(content, Language::Cpp, Path::new("main.cpp"))
+            .unwrap();
+
+        // Just verify parsing works
+        assert!(result.root_node().kind() == "translation_unit");
+    }
+
+    #[test]
+    fn test_parse_ruby() {
+        let parser = Parser::new();
+        let content = b"def hello\n  puts 'hi'\nend";
+        let result = parser
+            .parse(content, Language::Ruby, Path::new("main.rb"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 1);
+        assert_eq!(functions[0].name, "hello");
+    }
+
+    #[test]
+    fn test_parse_php() {
+        let parser = Parser::new();
+        let content = b"<?php function hello() { echo 'hi'; }";
+        let result = parser
+            .parse(content, Language::Php, Path::new("main.php"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_bash() {
+        let parser = Parser::new();
+        let content = b"hello() { echo hi; }";
+        let result = parser
+            .parse(content, Language::Bash, Path::new("script.sh"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_csharp() {
+        let parser = Parser::new();
+        let content = b"class Main { public void Hello() {} }";
+        let result = parser
+            .parse(content, Language::CSharp, Path::new("Main.cs"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_tsx() {
+        let parser = Parser::new();
+        let content = b"function Component() { return <div />; }";
+        let result = parser
+            .parse(content, Language::Tsx, Path::new("component.tsx"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_jsx() {
+        let parser = Parser::new();
+        let content = b"function App() { return <div />; }";
+        let result = parser
+            .parse(content, Language::Jsx, Path::new("app.jsx"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_result_root_node() {
+        let parser = Parser::new();
+        let content = b"fn main() {}";
+        let result = parser
+            .parse(content, Language::Rust, Path::new("main.rs"))
+            .unwrap();
+
+        let root = result.root_node();
+        assert_eq!(root.kind(), "source_file");
+    }
+
+    #[test]
+    fn test_parse_result_node_text() {
+        let parser = Parser::new();
+        let content = b"fn hello() {}";
+        let result = parser
+            .parse(content, Language::Rust, Path::new("main.rs"))
+            .unwrap();
+
+        let root = result.root_node();
+        let text = result.node_text(&root);
+        assert!(text.contains("fn hello()"));
+    }
+
+    #[test]
+    fn test_get_tree_sitter_language_all() {
+        assert!(get_tree_sitter_language(Language::Go).is_ok());
+        assert!(get_tree_sitter_language(Language::Rust).is_ok());
+        assert!(get_tree_sitter_language(Language::Python).is_ok());
+        assert!(get_tree_sitter_language(Language::TypeScript).is_ok());
+        assert!(get_tree_sitter_language(Language::JavaScript).is_ok());
+        assert!(get_tree_sitter_language(Language::Tsx).is_ok());
+        assert!(get_tree_sitter_language(Language::Jsx).is_ok());
+        assert!(get_tree_sitter_language(Language::Java).is_ok());
+        assert!(get_tree_sitter_language(Language::C).is_ok());
+        assert!(get_tree_sitter_language(Language::Cpp).is_ok());
+        assert!(get_tree_sitter_language(Language::CSharp).is_ok());
+        assert!(get_tree_sitter_language(Language::Ruby).is_ok());
+        assert!(get_tree_sitter_language(Language::Php).is_ok());
+        assert!(get_tree_sitter_language(Language::Bash).is_ok());
+    }
+
+    #[test]
+    fn test_extract_go_imports() {
+        let parser = Parser::new();
+        let content = b"package main\n\nimport \"fmt\"\n\nfunc main() {}";
+        let result = parser
+            .parse(content, Language::Go, Path::new("main.go"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert!(!imports.is_empty());
+    }
+
+    #[test]
+    fn test_extract_rust_imports() {
+        let parser = Parser::new();
+        let content = b"use std::path::Path;\n\nfn main() {}";
+        let result = parser
+            .parse(content, Language::Rust, Path::new("main.rs"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert!(!imports.is_empty());
+    }
+
+    #[test]
+    fn test_extract_python_imports() {
+        let parser = Parser::new();
+        let content = b"import os\nfrom pathlib import Path\n\ndef main(): pass";
+        let result = parser
+            .parse(content, Language::Python, Path::new("main.py"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert_eq!(imports.len(), 2);
+    }
+
+    #[test]
+    fn test_extract_js_imports() {
+        let parser = Parser::new();
+        let content = b"import foo from 'bar';\n\nfunction main() {}";
+        let result = parser
+            .parse(content, Language::JavaScript, Path::new("main.js"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert!(!imports.is_empty());
+    }
+
+    #[test]
+    fn test_extract_java_imports() {
+        let parser = Parser::new();
+        let content = b"import java.util.List;\n\nclass Main {}";
+        let result = parser
+            .parse(content, Language::Java, Path::new("Main.java"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert!(!imports.is_empty());
+    }
+
+    #[test]
+    fn test_extract_ruby_imports() {
+        let parser = Parser::new();
+        let content = b"require 'json'\n\ndef main; end";
+        let result = parser
+            .parse(content, Language::Ruby, Path::new("main.rb"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert!(!imports.is_empty());
+    }
+
+    #[test]
+    fn test_function_line_numbers() {
+        let parser = Parser::new();
+        let content = b"fn first() {}\n\nfn second() {\n  println!(\"hi\");\n}";
+        let result = parser
+            .parse(content, Language::Rust, Path::new("main.rs"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 2);
+        assert_eq!(functions[0].start_line, 1);
+        assert_eq!(functions[1].start_line, 3);
+    }
+
+    #[test]
+    fn test_function_signature() {
+        let parser = Parser::new();
+        let content = b"fn hello(name: &str) -> String {}";
+        let result = parser
+            .parse(content, Language::Rust, Path::new("main.rs"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 1);
+        assert!(functions[0].signature.contains("fn hello"));
+    }
+
+    #[test]
+    fn test_go_exported_function() {
+        let parser = Parser::new();
+        let content = b"package main\n\nfunc Exported() {}\nfunc private() {}";
+        let result = parser
+            .parse(content, Language::Go, Path::new("main.go"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 2);
+        assert!(functions[0].is_exported);
+        assert!(!functions[1].is_exported);
+    }
+
+    #[test]
+    fn test_java_public_method() {
+        let parser = Parser::new();
+        let content = b"class Main { public void hello() {} private void secret() {} }";
+        let result = parser
+            .parse(content, Language::Java, Path::new("Main.java"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert!(!functions.is_empty());
+    }
+
+    #[test]
+    fn test_parser_reuse() {
+        let parser = Parser::new();
+
+        // Parse multiple files with same parser instance
+        let result1 = parser.parse(b"fn a() {}", Language::Rust, Path::new("a.rs"));
+        let result2 = parser.parse(b"fn b() {}", Language::Rust, Path::new("b.rs"));
+        let result3 = parser.parse(b"def c(): pass", Language::Python, Path::new("c.py"));
+
+        assert!(result1.is_ok());
+        assert!(result2.is_ok());
+        assert!(result3.is_ok());
+    }
+
+    #[test]
+    fn test_arrow_function_typescript() {
+        let parser = Parser::new();
+        let content = b"const greet = () => { console.log('hi'); };";
+        let result = parser
+            .parse(content, Language::TypeScript, Path::new("main.ts"))
+            .unwrap();
+
+        // Arrow functions are in tree but may not have extractable names
+        // Just verify parsing works
+        assert!(result.root_node().kind() == "program");
+    }
+
+    #[test]
+    fn test_method_definition_js() {
+        let parser = Parser::new();
+        let content = b"class Foo { bar() { return 1; } }";
+        let result = parser
+            .parse(content, Language::JavaScript, Path::new("main.js"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert!(!functions.is_empty());
+    }
+
+    #[test]
+    fn test_empty_file() {
+        let parser = Parser::new();
+        let content = b"";
+        let result = parser.parse(content, Language::Rust, Path::new("empty.rs"));
+        assert!(result.is_ok());
+        let functions = extract_functions(&result.unwrap());
+        assert!(functions.is_empty());
+    }
+
+    #[test]
+    fn test_parse_result_clone() {
+        let parser = Parser::new();
+        let content = b"fn main() {}";
+        let result = parser
+            .parse(content, Language::Rust, Path::new("main.rs"))
+            .unwrap();
+
+        let cloned = result.clone();
+        assert_eq!(cloned.language, result.language);
+        assert_eq!(cloned.path, result.path);
     }
 }

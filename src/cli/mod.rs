@@ -322,3 +322,383 @@ impl Cli {
         Self::parse()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn test_cli_verify() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn test_cli_default_path() {
+        let cli = Cli::try_parse_from(["omen", "complexity"]).unwrap();
+        assert_eq!(cli.path, std::path::PathBuf::from("."));
+    }
+
+    #[test]
+    fn test_cli_custom_path() {
+        let cli = Cli::try_parse_from(["omen", "-p", "/tmp", "complexity"]).unwrap();
+        assert_eq!(cli.path, std::path::PathBuf::from("/tmp"));
+    }
+
+    #[test]
+    fn test_cli_format_json() {
+        let cli = Cli::try_parse_from(["omen", "-f", "json", "complexity"]).unwrap();
+        assert!(matches!(cli.format, OutputFormat::Json));
+    }
+
+    #[test]
+    fn test_cli_format_markdown() {
+        let cli = Cli::try_parse_from(["omen", "-f", "markdown", "complexity"]).unwrap();
+        assert!(matches!(cli.format, OutputFormat::Markdown));
+    }
+
+    #[test]
+    fn test_cli_format_text() {
+        let cli = Cli::try_parse_from(["omen", "-f", "text", "complexity"]).unwrap();
+        assert!(matches!(cli.format, OutputFormat::Text));
+    }
+
+    #[test]
+    fn test_cli_config_flag() {
+        let cli = Cli::try_parse_from(["omen", "-c", "config.toml", "complexity"]).unwrap();
+        assert_eq!(cli.config, Some(std::path::PathBuf::from("config.toml")));
+    }
+
+    #[test]
+    fn test_cli_verbose_flag() {
+        let cli = Cli::try_parse_from(["omen", "-v", "complexity"]).unwrap();
+        assert!(cli.verbose);
+    }
+
+    #[test]
+    fn test_cli_jobs_flag() {
+        let cli = Cli::try_parse_from(["omen", "-j", "4", "complexity"]).unwrap();
+        assert_eq!(cli.jobs, Some(4));
+    }
+
+    #[test]
+    fn test_command_complexity() {
+        let cli = Cli::try_parse_from(["omen", "complexity"]).unwrap();
+        assert!(matches!(cli.command, Command::Complexity(_)));
+    }
+
+    #[test]
+    fn test_command_satd() {
+        let cli = Cli::try_parse_from(["omen", "satd"]).unwrap();
+        assert!(matches!(cli.command, Command::Satd(_)));
+    }
+
+    #[test]
+    fn test_command_deadcode() {
+        let cli = Cli::try_parse_from(["omen", "deadcode"]).unwrap();
+        assert!(matches!(cli.command, Command::Deadcode(_)));
+    }
+
+    #[test]
+    fn test_command_churn() {
+        let cli = Cli::try_parse_from(["omen", "churn"]).unwrap();
+        assert!(matches!(cli.command, Command::Churn(_)));
+    }
+
+    #[test]
+    fn test_command_clones() {
+        let cli = Cli::try_parse_from(["omen", "clones"]).unwrap();
+        assert!(matches!(cli.command, Command::Clones(_)));
+    }
+
+    #[test]
+    fn test_command_defect() {
+        let cli = Cli::try_parse_from(["omen", "defect"]).unwrap();
+        assert!(matches!(cli.command, Command::Defect(_)));
+    }
+
+    #[test]
+    fn test_command_changes() {
+        let cli = Cli::try_parse_from(["omen", "changes"]).unwrap();
+        assert!(matches!(cli.command, Command::Changes(_)));
+    }
+
+    #[test]
+    fn test_command_diff() {
+        let cli = Cli::try_parse_from(["omen", "diff", "--base", "main"]).unwrap();
+        assert!(matches!(cli.command, Command::Diff(_)));
+    }
+
+    #[test]
+    fn test_command_tdg() {
+        let cli = Cli::try_parse_from(["omen", "tdg"]).unwrap();
+        assert!(matches!(cli.command, Command::Tdg(_)));
+    }
+
+    #[test]
+    fn test_command_graph() {
+        let cli = Cli::try_parse_from(["omen", "graph"]).unwrap();
+        assert!(matches!(cli.command, Command::Graph(_)));
+    }
+
+    #[test]
+    fn test_command_hotspot() {
+        let cli = Cli::try_parse_from(["omen", "hotspot"]).unwrap();
+        assert!(matches!(cli.command, Command::Hotspot(_)));
+    }
+
+    #[test]
+    fn test_command_temporal() {
+        let cli = Cli::try_parse_from(["omen", "temporal"]).unwrap();
+        assert!(matches!(cli.command, Command::Temporal(_)));
+    }
+
+    #[test]
+    fn test_command_ownership() {
+        let cli = Cli::try_parse_from(["omen", "ownership"]).unwrap();
+        assert!(matches!(cli.command, Command::Ownership(_)));
+    }
+
+    #[test]
+    fn test_command_cohesion() {
+        let cli = Cli::try_parse_from(["omen", "cohesion"]).unwrap();
+        assert!(matches!(cli.command, Command::Cohesion(_)));
+    }
+
+    #[test]
+    fn test_command_repomap() {
+        let cli = Cli::try_parse_from(["omen", "repomap"]).unwrap();
+        assert!(matches!(cli.command, Command::Repomap(_)));
+    }
+
+    #[test]
+    fn test_command_smells() {
+        let cli = Cli::try_parse_from(["omen", "smells"]).unwrap();
+        assert!(matches!(cli.command, Command::Smells(_)));
+    }
+
+    #[test]
+    fn test_command_flags() {
+        let cli = Cli::try_parse_from(["omen", "flags"]).unwrap();
+        assert!(matches!(cli.command, Command::Flags(_)));
+    }
+
+    #[test]
+    fn test_command_score() {
+        let cli = Cli::try_parse_from(["omen", "score"]).unwrap();
+        assert!(matches!(cli.command, Command::Score(_)));
+    }
+
+    #[test]
+    fn test_command_mcp() {
+        let cli = Cli::try_parse_from(["omen", "mcp"]).unwrap();
+        assert!(matches!(cli.command, Command::Mcp(_)));
+    }
+
+    #[test]
+    fn test_command_all() {
+        let cli = Cli::try_parse_from(["omen", "all"]).unwrap();
+        assert!(matches!(cli.command, Command::All(_)));
+    }
+
+    #[test]
+    fn test_churn_days_default() {
+        let cli = Cli::try_parse_from(["omen", "churn"]).unwrap();
+        if let Command::Churn(args) = cli.command {
+            assert_eq!(args.days, 365);
+        }
+    }
+
+    #[test]
+    fn test_churn_days_custom() {
+        let cli = Cli::try_parse_from(["omen", "churn", "--days", "30"]).unwrap();
+        if let Command::Churn(args) = cli.command {
+            assert_eq!(args.days, 30);
+        }
+    }
+
+    #[test]
+    fn test_clones_min_tokens() {
+        let cli = Cli::try_parse_from(["omen", "clones", "--min-tokens", "100"]).unwrap();
+        if let Command::Clones(args) = cli.command {
+            assert_eq!(args.min_tokens, 100);
+        }
+    }
+
+    #[test]
+    fn test_clones_similarity() {
+        let cli = Cli::try_parse_from(["omen", "clones", "--similarity", "0.9"]).unwrap();
+        if let Command::Clones(args) = cli.command {
+            assert!((args.similarity - 0.9).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn test_defect_risk_threshold() {
+        let cli = Cli::try_parse_from(["omen", "defect", "--risk-threshold", "0.7"]).unwrap();
+        if let Command::Defect(args) = cli.command {
+            assert!((args.risk_threshold - 0.7).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn test_diff_base_and_head() {
+        let cli =
+            Cli::try_parse_from(["omen", "diff", "--base", "main", "--head", "feature"]).unwrap();
+        if let Command::Diff(args) = cli.command {
+            assert_eq!(args.base, "main");
+            assert_eq!(args.head, "feature");
+        }
+    }
+
+    #[test]
+    fn test_hotspot_complexity_weight() {
+        let cli = Cli::try_parse_from(["omen", "hotspot", "--complexity-weight", "0.7"]).unwrap();
+        if let Command::Hotspot(args) = cli.command {
+            assert!((args.complexity_weight - 0.7).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn test_temporal_min_coupling() {
+        let cli = Cli::try_parse_from(["omen", "temporal", "--min-coupling", "0.6"]).unwrap();
+        if let Command::Temporal(args) = cli.command {
+            assert!((args.min_coupling - 0.6).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn test_ownership_bus_factor_threshold() {
+        let cli =
+            Cli::try_parse_from(["omen", "ownership", "--bus-factor-threshold", "3"]).unwrap();
+        if let Command::Ownership(args) = cli.command {
+            assert_eq!(args.bus_factor_threshold, 3);
+        }
+    }
+
+    #[test]
+    fn test_repomap_max_symbols() {
+        let cli = Cli::try_parse_from(["omen", "repomap", "--max-symbols", "200"]).unwrap();
+        if let Command::Repomap(args) = cli.command {
+            assert_eq!(args.max_symbols, 200);
+        }
+    }
+
+    #[test]
+    fn test_repomap_damping() {
+        let cli = Cli::try_parse_from(["omen", "repomap", "--damping", "0.9"]).unwrap();
+        if let Command::Repomap(args) = cli.command {
+            assert!((args.damping - 0.9).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn test_flags_provider() {
+        let cli = Cli::try_parse_from(["omen", "flags", "--provider", "launchdarkly"]).unwrap();
+        if let Command::Flags(args) = cli.command {
+            assert_eq!(args.provider, Some("launchdarkly".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_flags_stale_days() {
+        let cli = Cli::try_parse_from(["omen", "flags", "--stale-days", "60"]).unwrap();
+        if let Command::Flags(args) = cli.command {
+            assert_eq!(args.stale_days, 60);
+        }
+    }
+
+    #[test]
+    fn test_mcp_transport_stdio() {
+        let cli = Cli::try_parse_from(["omen", "mcp", "--transport", "stdio"]).unwrap();
+        if let Command::Mcp(args) = cli.command {
+            assert!(matches!(args.transport, McpTransport::Stdio));
+        }
+    }
+
+    #[test]
+    fn test_mcp_transport_sse() {
+        let cli = Cli::try_parse_from(["omen", "mcp", "--transport", "sse"]).unwrap();
+        if let Command::Mcp(args) = cli.command {
+            assert!(matches!(args.transport, McpTransport::Sse));
+        }
+    }
+
+    #[test]
+    fn test_mcp_port() {
+        let cli = Cli::try_parse_from(["omen", "mcp", "--port", "8080"]).unwrap();
+        if let Command::Mcp(args) = cli.command {
+            assert_eq!(args.port, 8080);
+        }
+    }
+
+    #[test]
+    fn test_mcp_host() {
+        let cli = Cli::try_parse_from(["omen", "mcp", "--host", "0.0.0.0"]).unwrap();
+        if let Command::Mcp(args) = cli.command {
+            assert_eq!(args.host, "0.0.0.0");
+        }
+    }
+
+    #[test]
+    fn test_all_skip() {
+        let cli = Cli::try_parse_from(["omen", "all", "--skip", "complexity,satd"]).unwrap();
+        if let Command::All(args) = cli.command {
+            assert_eq!(args.skip, Some("complexity,satd".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_analyzer_args_glob() {
+        let cli = Cli::try_parse_from(["omen", "complexity", "-g", "*.rs"]).unwrap();
+        if let Command::Complexity(args) = cli.command {
+            assert_eq!(args.glob, Some("*.rs".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_analyzer_args_exclude() {
+        let cli = Cli::try_parse_from(["omen", "complexity", "-e", "test"]).unwrap();
+        if let Command::Complexity(args) = cli.command {
+            assert_eq!(args.exclude, Some("test".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_analyzer_args_threshold() {
+        let cli = Cli::try_parse_from(["omen", "complexity", "-t", "10.0"]).unwrap();
+        if let Command::Complexity(args) = cli.command {
+            assert!((args.threshold.unwrap() - 10.0).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn test_analyzer_args_limit() {
+        let cli = Cli::try_parse_from(["omen", "complexity", "-n", "20"]).unwrap();
+        if let Command::Complexity(args) = cli.command {
+            assert_eq!(args.limit, Some(20));
+        }
+    }
+
+    #[test]
+    fn test_analyzer_args_sort_asc() {
+        let cli = Cli::try_parse_from(["omen", "complexity", "--sort", "asc"]).unwrap();
+        if let Command::Complexity(args) = cli.command {
+            assert!(matches!(args.sort, Some(SortOrder::Asc)));
+        }
+    }
+
+    #[test]
+    fn test_analyzer_args_sort_desc() {
+        let cli = Cli::try_parse_from(["omen", "complexity", "--sort", "desc"]).unwrap();
+        if let Command::Complexity(args) = cli.command {
+            assert!(matches!(args.sort, Some(SortOrder::Desc)));
+        }
+    }
+
+    #[test]
+    fn test_output_format_default() {
+        let cli = Cli::try_parse_from(["omen", "complexity"]).unwrap();
+        assert!(matches!(cli.format, OutputFormat::Json));
+    }
+}

@@ -478,7 +478,8 @@ fn extract_call_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<Stri
             // For method calls like obj.method(), get the method name
             if kind == "selector_expression" || kind == "member_expression" {
                 // Get the rightmost identifier
-                if let Some(right) = child.child_by_field_name("field")
+                if let Some(right) = child
+                    .child_by_field_name("field")
                     .or_else(|| child.child_by_field_name("property"))
                     .or_else(|| child.child(child.child_count().saturating_sub(1)))
                 {
@@ -490,7 +491,7 @@ fn extract_call_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<Stri
             if kind == "function" {
                 let text = child.utf8_text(source).ok()?;
                 // Extract just the function name, not the full path
-                return Some(text.split('.').last()?.to_string());
+                return Some(text.split('.').next_back()?.to_string());
             }
         }
     }

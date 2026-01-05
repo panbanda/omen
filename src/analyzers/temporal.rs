@@ -174,9 +174,10 @@ impl AnalyzerTrait for Analyzer {
     }
 
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
-        let git_path = ctx.git_path.as_ref().ok_or_else(|| {
-            Error::git("Temporal coupling analysis requires git history")
-        })?;
+        let git_path = ctx
+            .git_path
+            .as_ref()
+            .ok_or_else(|| Error::git("Temporal coupling analysis requires git history"))?;
 
         let git_repo = GitRepo::open(git_path)?;
         self.analyze_with_git(&git_repo, ctx.root)

@@ -128,7 +128,9 @@ impl Analyzer {
 
                 for cap in pattern.regex.captures_iter(&content) {
                     if let Some(key_match) = cap.name("key") {
-                        let key = key_match.as_str().trim_matches(|c| c == '"' || c == '\'' || c == ':');
+                        let key = key_match
+                            .as_str()
+                            .trim_matches(|c| c == '"' || c == '\'' || c == ':');
 
                         // Calculate line number
                         let line = content[..key_match.start()]
@@ -169,7 +171,11 @@ impl Analyzer {
 
         for (key, refs) in flags_map {
             let provider = refs.first().map(|r| r.provider.clone()).unwrap_or_default();
-            let file_spread = refs.iter().map(|r| &r.file).collect::<std::collections::HashSet<_>>().len();
+            let file_spread = refs
+                .iter()
+                .map(|r| &r.file)
+                .collect::<std::collections::HashSet<_>>()
+                .len();
 
             // Calculate staleness from git if available
             let (first_seen, last_seen, age_days, stale) = if let Some(ref repo) = git_repo {
@@ -199,12 +205,10 @@ impl Analyzer {
         }
 
         // Sort by staleness (stale first, then by age)
-        flags.sort_by(|a, b| {
-            match (a.stale, b.stale) {
-                (true, false) => std::cmp::Ordering::Less,
-                (false, true) => std::cmp::Ordering::Greater,
-                _ => b.age_days.cmp(&a.age_days),
-            }
+        flags.sort_by(|a, b| match (a.stale, b.stale) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => b.age_days.cmp(&a.age_days),
         });
 
         let summary = calculate_summary(&flags);
@@ -307,7 +311,9 @@ fn build_patterns() -> Vec<FlagPattern> {
     let mut patterns = Vec::new();
 
     // LaunchDarkly patterns
-    if let Ok(re) = Regex::new(r#"(?:variation|boolVariation|stringVariation|intVariation|floatVariation|jsonVariation)\s*\(\s*["'](?P<key>[^"']+)["']"#) {
+    if let Ok(re) = Regex::new(
+        r#"(?:variation|boolVariation|stringVariation|intVariation|floatVariation|jsonVariation)\s*\(\s*["'](?P<key>[^"']+)["']"#,
+    ) {
         patterns.push(FlagPattern {
             provider: "launchdarkly".to_string(),
             regex: re,
@@ -315,7 +321,9 @@ fn build_patterns() -> Vec<FlagPattern> {
     }
 
     // Flipper (Ruby) patterns
-    if let Ok(re) = Regex::new(r#"Flipper(?:\[|\.enabled\?\s*\(\s*):?(?P<key>[a-zA-Z_][a-zA-Z0-9_]*)"#) {
+    if let Ok(re) =
+        Regex::new(r#"Flipper(?:\[|\.enabled\?\s*\(\s*):?(?P<key>[a-zA-Z_][a-zA-Z0-9_]*)"#)
+    {
         patterns.push(FlagPattern {
             provider: "flipper".to_string(),
             regex: re,
@@ -323,7 +331,9 @@ fn build_patterns() -> Vec<FlagPattern> {
     }
 
     // Split patterns
-    if let Ok(re) = Regex::new(r#"(?:getTreatment|get_treatment)\s*\([^,]*,\s*["'](?P<key>[^"']+)["']"#) {
+    if let Ok(re) =
+        Regex::new(r#"(?:getTreatment|get_treatment)\s*\([^,]*,\s*["'](?P<key>[^"']+)["']"#)
+    {
         patterns.push(FlagPattern {
             provider: "split".to_string(),
             regex: re,
@@ -339,7 +349,9 @@ fn build_patterns() -> Vec<FlagPattern> {
     }
 
     // Generic feature flag patterns
-    if let Ok(re) = Regex::new(r#"(?i)(?:feature_flag|featureFlag|is_feature_enabled|isFeatureEnabled|feature_enabled\?|check_feature)\s*\(?["':]+(?P<key>[a-zA-Z_][a-zA-Z0-9_-]*)["']?\)?"#) {
+    if let Ok(re) = Regex::new(
+        r#"(?i)(?:feature_flag|featureFlag|is_feature_enabled|isFeatureEnabled|feature_enabled\?|check_feature)\s*\(?["':]+(?P<key>[a-zA-Z_][a-zA-Z0-9_-]*)["']?\)?"#,
+    ) {
         patterns.push(FlagPattern {
             provider: "generic".to_string(),
             regex: re,
@@ -347,7 +359,9 @@ fn build_patterns() -> Vec<FlagPattern> {
     }
 
     // ENV-based feature flags
-    if let Ok(re) = Regex::new(r#"(?:ENV|process\.env|os\.environ)\s*\[?\s*["'](?P<key>FEATURE_[A-Z_]+)["']"#) {
+    if let Ok(re) =
+        Regex::new(r#"(?:ENV|process\.env|os\.environ)\s*\[?\s*["'](?P<key>FEATURE_[A-Z_]+)["']"#)
+    {
         patterns.push(FlagPattern {
             provider: "env".to_string(),
             regex: re,
@@ -455,12 +469,21 @@ mod tests {
     #[test]
     fn test_launchdarkly_pattern() {
         let patterns = build_patterns();
-        let ld_pattern = patterns.iter().find(|p| p.provider == "launchdarkly").unwrap();
+        let ld_pattern = patterns
+            .iter()
+            .find(|p| p.provider == "launchdarkly")
+            .unwrap();
 
         let test_cases = vec![
-            (r#"client.boolVariation("my-flag", user, false)"#, Some("my-flag")),
+            (
+                r#"client.boolVariation("my-flag", user, false)"#,
+                Some("my-flag"),
+            ),
             (r#"variation('feature-x', ctx, true)"#, Some("feature-x")),
-            (r#"stringVariation("test_flag", user, "")"#, Some("test_flag")),
+            (
+                r#"stringVariation("test_flag", user, "")"#,
+                Some("test_flag"),
+            ),
             (r#"something else"#, None),
         ];
 
@@ -559,12 +582,10 @@ mod tests {
         let flag = FeatureFlag {
             key: "test-flag".to_string(),
             provider: "launchdarkly".to_string(),
-            references: vec![
-                FlagReferenceOutput {
-                    file: "src/main.rs".to_string(),
-                    line: 10,
-                },
-            ],
+            references: vec![FlagReferenceOutput {
+                file: "src/main.rs".to_string(),
+                line: 10,
+            }],
             first_seen: Some("2024-01-01T00:00:00Z".to_string()),
             last_seen: Some("2024-01-15T00:00:00Z".to_string()),
             age_days: 15,
@@ -605,7 +626,10 @@ mod tests {
 
         let test_cases = vec![
             (r#"ENV["FEATURE_NEW_UI"]"#, Some("FEATURE_NEW_UI")),
-            (r#"process.env['FEATURE_DARK_MODE']"#, Some("FEATURE_DARK_MODE")),
+            (
+                r#"process.env['FEATURE_DARK_MODE']"#,
+                Some("FEATURE_DARK_MODE"),
+            ),
         ];
 
         for (input, expected) in test_cases {

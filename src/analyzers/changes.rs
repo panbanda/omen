@@ -103,9 +103,9 @@ impl AnalyzerTrait for Analyzer {
     }
 
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
-        let git_path = ctx.git_path.ok_or_else(|| {
-            crate::core::Error::git("Changes analyzer requires a git repository")
-        })?;
+        let git_path = ctx
+            .git_path
+            .ok_or_else(|| crate::core::Error::git("Changes analyzer requires a git repository"))?;
 
         // Get commits from last N days
         let raw_commits = collect_commit_data(git_path, self.days)?;
@@ -168,7 +168,13 @@ impl AnalyzerTrait for Analyzer {
                     RiskLevel::Low => low_risk_count += 1,
                 }
 
-                build_commit_risk(features, score, &self.weights, &normalization, &risk_thresholds)
+                build_commit_risk(
+                    features,
+                    score,
+                    &self.weights,
+                    &normalization,
+                    &risk_thresholds,
+                )
             })
             .collect();
 
@@ -565,11 +571,7 @@ fn calculate_normalization_stats(commits: &[CommitFeatures]) -> NormalizationSta
 }
 
 /// Calculate risk score for a commit.
-fn calculate_risk(
-    features: &CommitFeatures,
-    weights: &Weights,
-    norm: &NormalizationStats,
-) -> f64 {
+fn calculate_risk(features: &CommitFeatures, weights: &Weights, norm: &NormalizationStats) -> f64 {
     // Automated commits are inherently low risk
     if features.is_automated {
         return 0.05;
@@ -1065,13 +1067,13 @@ impl Analyzer {
 /// These represent sensible PR size limits where exceeding them indicates high risk.
 fn diff_normalization() -> NormalizationStats {
     NormalizationStats {
-        max_lines_added: 400,    // PRs > 400 lines are hard to review
-        max_lines_deleted: 200,  // Large deletions warrant attention
-        max_num_files: 15,       // PRs touching > 15 files are risky
-        max_unique_changes: 10,  // > 10 commits suggests scope creep
-        max_num_developers: 3,   // Multiple authors can indicate coordination issues
+        max_lines_added: 400,   // PRs > 400 lines are hard to review
+        max_lines_deleted: 200, // Large deletions warrant attention
+        max_num_files: 15,      // PRs touching > 15 files are risky
+        max_unique_changes: 10, // > 10 commits suggests scope creep
+        max_num_developers: 3,  // Multiple authors can indicate coordination issues
         max_author_experience: 100,
-        max_entropy: 3.0,        // Lower threshold - scattered changes are risky
+        max_entropy: 3.0, // Lower threshold - scattered changes are risky
     }
 }
 
@@ -1235,11 +1237,15 @@ fn generate_diff_recommendations(
     }
 
     if factors.get("entropy").copied().unwrap_or(0.0) > 0.15 {
-        recs.push("Changes scattered across many files - ensure they're logically related".to_string());
+        recs.push(
+            "Changes scattered across many files - ensure they're logically related".to_string(),
+        );
     }
 
     if score >= 0.7 {
-        recs.push("HIGH RISK: Consider extra review scrutiny and comprehensive testing".to_string());
+        recs.push(
+            "HIGH RISK: Consider extra review scrutiny and comprehensive testing".to_string(),
+        );
     } else if score >= 0.5 {
         recs.push("Elevated risk: Add additional reviewers or testing".to_string());
     }

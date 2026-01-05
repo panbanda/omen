@@ -165,10 +165,11 @@ impl Analyzer {
 
                 if lang == "python" {
                     // Python function ends at dedent or new def/class
-                    let is_dedent = !trimmed.is_empty()
-                        && !line.starts_with(' ')
-                        && !line.starts_with('\t');
-                    let is_new_block = trimmed.starts_with("def ") || trimmed.starts_with("class ") || i == lines.len() - 1;
+                    let is_dedent =
+                        !trimmed.is_empty() && !line.starts_with(' ') && !line.starts_with('\t');
+                    let is_new_block = trimmed.starts_with("def ")
+                        || trimmed.starts_with("class ")
+                        || i == lines.len() - 1;
 
                     if is_dedent && is_new_block {
                         // End of function
@@ -546,8 +547,7 @@ impl Analyzer {
         let mut hotspots: Vec<Hotspot> = file_stats
             .into_iter()
             .map(|(file, (lines, groups_set))| {
-                let severity =
-                    (lines as f64 + 1.0).ln() * (groups_set.len() as f64).sqrt();
+                let severity = (lines as f64 + 1.0).ln() * (groups_set.len() as f64).sqrt();
                 Hotspot {
                     file,
                     duplicate_lines: lines,
@@ -557,7 +557,11 @@ impl Analyzer {
             })
             .collect();
 
-        hotspots.sort_by(|a, b| b.severity.partial_cmp(&a.severity).unwrap_or(std::cmp::Ordering::Equal));
+        hotspots.sort_by(|a, b| {
+            b.severity
+                .partial_cmp(&a.severity)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         if hotspots.len() > 10 {
             hotspots.truncate(10);
@@ -653,8 +657,7 @@ impl AnalyzerTrait for Analyzer {
         // Calculate statistics
         if !clones.is_empty() {
             let mut similarities: Vec<f64> = clones.iter().map(|c| c.similarity).collect();
-            summary.avg_similarity =
-                similarities.iter().sum::<f64>() / similarities.len() as f64;
+            summary.avg_similarity = similarities.iter().sum::<f64>() / similarities.len() as f64;
 
             similarities.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             summary.p50_similarity = percentile(&similarities, 50.0);
@@ -800,9 +803,15 @@ pub struct AnalysisSummary {
 impl AnalysisSummary {
     fn add_clone(&mut self, clone: &Clone) {
         self.total_clones += 1;
-        *self.file_occurrences.entry(clone.file_a.clone()).or_default() += 1;
+        *self
+            .file_occurrences
+            .entry(clone.file_a.clone())
+            .or_default() += 1;
         if clone.file_a != clone.file_b {
-            *self.file_occurrences.entry(clone.file_b.clone()).or_default() += 1;
+            *self
+                .file_occurrences
+                .entry(clone.file_b.clone())
+                .or_default() += 1;
         }
         self.duplicated_lines += clone.lines_a + clone.lines_b;
 
@@ -949,10 +958,53 @@ fn is_literal(token: &str) -> bool {
 fn is_operator_or_delimiter(token: &str) -> bool {
     matches!(
         token,
-        "+" | "-" | "*" | "/" | "%" | "=" | "==" | "!=" | "<" | ">" | "<=" | ">=" | "&&" | "||"
-            | "!" | "&" | "|" | "^" | "<<" | ">>" | "+=" | "-=" | "*=" | "/=" | "%=" | "&="
-            | "|=" | "^=" | "<<=" | ">>=" | "++" | "--" | "->" | "=>" | "::" | ".." | "..."
-            | "?" | ":" | "(" | ")" | "[" | "]" | "{" | "}" | "," | ";" | "."
+        "+" | "-"
+            | "*"
+            | "/"
+            | "%"
+            | "="
+            | "=="
+            | "!="
+            | "<"
+            | ">"
+            | "<="
+            | ">="
+            | "&&"
+            | "||"
+            | "!"
+            | "&"
+            | "|"
+            | "^"
+            | "<<"
+            | ">>"
+            | "+="
+            | "-="
+            | "*="
+            | "/="
+            | "%="
+            | "&="
+            | "|="
+            | "^="
+            | "<<="
+            | ">>="
+            | "++"
+            | "--"
+            | "->"
+            | "=>"
+            | "::"
+            | ".."
+            | "..."
+            | "?"
+            | ":"
+            | "("
+            | ")"
+            | "["
+            | "]"
+            | "{"
+            | "}"
+            | ","
+            | ";"
+            | "."
     )
 }
 

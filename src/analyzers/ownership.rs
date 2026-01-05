@@ -219,9 +219,10 @@ impl AnalyzerTrait for Analyzer {
     }
 
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
-        let git_path = ctx.git_path.as_ref().ok_or_else(|| {
-            Error::git("Ownership analysis requires git history")
-        })?;
+        let git_path = ctx
+            .git_path
+            .as_ref()
+            .ok_or_else(|| Error::git("Ownership analysis requires git history"))?;
 
         self.analyze_repo(git_path)
     }
@@ -291,14 +292,15 @@ fn calculate_bus_factor(contributor_lines: &HashMap<String, u32>) -> usize {
 fn get_top_contributors(contributor_lines: &HashMap<String, u32>, n: usize) -> Vec<String> {
     let mut sorted: Vec<_> = contributor_lines.iter().collect();
     sorted.sort_by(|a, b| b.1.cmp(a.1));
-    sorted.into_iter().take(n).map(|(name, _)| name.clone()).collect()
+    sorted
+        .into_iter()
+        .take(n)
+        .map(|(name, _)| name.clone())
+        .collect()
 }
 
 /// Calculates summary statistics.
-fn calculate_summary(
-    files: &[FileOwnership],
-    all_contributors: &HashMap<String, u32>,
-) -> Summary {
+fn calculate_summary(files: &[FileOwnership], all_contributors: &HashMap<String, u32>) -> Summary {
     if files.is_empty() {
         return Summary::default();
     }
@@ -313,10 +315,7 @@ fn calculate_summary(
     let total_contributors: usize = files.iter().map(|f| f.contributors.len()).sum();
     let avg_contributors = total_contributors as f64 / files.len() as f64;
 
-    let max_concentration = files
-        .iter()
-        .map(|f| f.concentration)
-        .fold(0.0, f64::max);
+    let max_concentration = files.iter().map(|f| f.concentration).fold(0.0, f64::max);
 
     let bus_factor = calculate_bus_factor(all_contributors);
     let top_contributors = get_top_contributors(all_contributors, 5);

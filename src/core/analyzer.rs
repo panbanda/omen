@@ -162,6 +162,7 @@ mod duration_serde {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn test_summary_new() {
@@ -169,5 +170,102 @@ mod tests {
         assert_eq!(summary.files_analyzed, 10);
         assert_eq!(summary.issues_found, 5);
         assert_eq!(summary.duration, Duration::from_millis(100));
+    }
+
+    #[test]
+    fn test_summary_default() {
+        let summary = Summary::default();
+        assert_eq!(summary.files_analyzed, 0);
+        assert_eq!(summary.issues_found, 0);
+        assert_eq!(summary.duration, Duration::ZERO);
+    }
+
+    #[test]
+    fn test_summary_serialization() {
+        let summary = Summary::new(10, 5, Duration::from_secs(1));
+        let json = serde_json::to_string(&summary).unwrap();
+        assert!(json.contains("\"files_analyzed\":10"));
+        assert!(json.contains("\"issues_found\":5"));
+        assert!(json.contains("\"duration\":1.0"));
+    }
+
+    #[test]
+    fn test_analysis_context_new() {
+        let temp_dir = TempDir::new().unwrap();
+        std::fs::write(temp_dir.path().join("test.rs"), "fn main() {}").unwrap();
+        let config = Config::default();
+        let files = FileSet::from_path(temp_dir.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&files, &config, Some(temp_dir.path()));
+        assert_eq!(ctx.root, temp_dir.path());
+        assert!(ctx.git_path.is_none());
+    }
+
+    #[test]
+    fn test_analysis_context_with_git_path() {
+        let temp_dir = TempDir::new().unwrap();
+        std::fs::write(temp_dir.path().join("test.rs"), "fn main() {}").unwrap();
+        let config = Config::default();
+        let files = FileSet::from_path(temp_dir.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&files, &config, Some(temp_dir.path()))
+            .with_git_path(temp_dir.path());
+        assert_eq!(ctx.git_path, Some(temp_dir.path()));
+    }
+
+    #[test]
+    fn test_analysis_context_open_git_no_path() {
+        let temp_dir = TempDir::new().unwrap();
+        std::fs::write(temp_dir.path().join("test.rs"), "fn main() {}").unwrap();
+        let config = Config::default();
+        let files = FileSet::from_path(temp_dir.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&files, &config, Some(temp_dir.path()));
+        let result = ctx.open_git().unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_analysis_context_report_progress_no_callback() {
+        let temp_dir = TempDir::new().unwrap();
+        std::fs::write(temp_dir.path().join("test.rs"), "fn main() {}").unwrap();
+        let config = Config::default();
+        let files = FileSet::from_path(temp_dir.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&files, &config, Some(temp_dir.path()));
+        // Should not panic
+        ctx.report_progress(5, 10);
+    }
+
+    #[test]
+    fn test_analysis_context_with_progress() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let temp_dir = TempDir::new().unwrap();
+        std::fs::write(temp_dir.path().join("test.rs"), "fn main() {}").unwrap();
+        let config = Config::default();
+        let files = FileSet::from_path(temp_dir.path(), &config).unwrap();
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_clone = counter.clone();
+
+        let ctx = AnalysisContext::new(&files, &config, Some(temp_dir.path())).with_progress(
+            move |current, _total| {
+                counter_clone.store(current, Ordering::SeqCst);
+            },
+        );
+
+        ctx.report_progress(42, 100);
+        assert_eq!(counter.load(Ordering::SeqCst), 42);
+    }
+
+    #[test]
+    fn test_analysis_result_new() {
+        #[derive(serde::Serialize)]
+        struct TestData {
+            value: i32,
+        }
+        let data = TestData { value: 42 };
+        let summary = Summary::new(1, 0, Duration::ZERO);
+        let result = AnalysisResult::new("test", &data, summary).unwrap();
+        assert_eq!(result.analyzer, "test");
+        assert_eq!(result.data["value"], 42);
     }
 }

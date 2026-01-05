@@ -118,7 +118,12 @@ impl Analyzer {
     }
 
     /// Analyze source code and return its TDG score.
-    pub fn analyze_source(&self, source: &str, language: Language, file_path: &str) -> Result<Score> {
+    pub fn analyze_source(
+        &self,
+        source: &str,
+        language: Language,
+        file_path: &str,
+    ) -> Result<Score> {
         let mut penalties = Vec::new();
 
         let mut score = Score::new();
@@ -127,10 +132,8 @@ impl Analyzer {
         score.file_path = file_path.to_string();
 
         // Analyze each component
-        score.structural_complexity =
-            self.analyze_structural_complexity(source, &mut penalties);
-        score.semantic_complexity =
-            self.analyze_semantic_complexity(source, &mut penalties);
+        score.structural_complexity = self.analyze_structural_complexity(source, &mut penalties);
+        score.semantic_complexity = self.analyze_semantic_complexity(source, &mut penalties);
         score.duplication_ratio = self.analyze_duplication(source, &mut penalties);
         score.coupling_score = self.analyze_coupling(source);
         score.doc_coverage = self.analyze_documentation(source, language);

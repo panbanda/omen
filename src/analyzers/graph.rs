@@ -112,9 +112,7 @@ impl Analyzer {
                 let imports = extract_imports(&result);
                 let resolved: Vec<String> = imports
                     .iter()
-                    .filter_map(|imp| {
-                        self.resolve_import(&imp.path, rel_path, root, files)
-                    })
+                    .filter_map(|imp| self.resolve_import(&imp.path, rel_path, root, files))
                     .collect();
                 file_imports.insert(path_str, resolved);
             }
@@ -171,7 +169,11 @@ impl Analyzer {
         }
 
         // Sort by PageRank descending
-        nodes.sort_by(|a, b| b.pagerank.partial_cmp(&a.pagerank).unwrap_or(std::cmp::Ordering::Equal));
+        nodes.sort_by(|a, b| {
+            b.pagerank
+                .partial_cmp(&a.pagerank)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // Build edges list
         let edges: Vec<Edge> = graph
@@ -225,7 +227,9 @@ impl Analyzer {
             if let Some(parent) = from_file.parent() {
                 let resolved = parent.join(import_path);
                 // Try with common extensions
-                for ext in &["", ".rs", ".go", ".py", ".ts", ".tsx", ".js", ".jsx", ".java"] {
+                for ext in &[
+                    "", ".rs", ".go", ".py", ".ts", ".tsx", ".js", ".jsx", ".java",
+                ] {
                     let with_ext = if ext.is_empty() {
                         resolved.clone()
                     } else {
@@ -405,8 +409,7 @@ impl Analyzer {
         sccs.into_iter()
             .filter(|scc| {
                 // Only include SCCs with multiple nodes or self-loops
-                scc.len() > 1
-                    || (scc.len() == 1 && graph.contains_edge(scc[0], scc[0]))
+                scc.len() > 1 || (scc.len() == 1 && graph.contains_edge(scc[0], scc[0]))
             })
             .map(|scc| scc.into_iter().map(|idx| graph[idx].clone()).collect())
             .collect()
@@ -435,7 +438,10 @@ impl Analyzer {
 
         // Add edges
         for edge in &analysis.edges {
-            if let (Some(from_id), Some(to_id)) = (node_ids.get(edge.from.as_str()), node_ids.get(edge.to.as_str())) {
+            if let (Some(from_id), Some(to_id)) = (
+                node_ids.get(edge.from.as_str()),
+                node_ids.get(edge.to.as_str()),
+            ) {
                 output.push_str(&format!("    {} --> {}\n", from_id, to_id));
             }
         }
@@ -486,7 +492,10 @@ impl Analyzer {
 
         // Add edges
         for edge in &analysis.edges {
-            if let (Some(from_id), Some(to_id)) = (node_ids.get(edge.from.as_str()), node_ids.get(edge.to.as_str())) {
+            if let (Some(from_id), Some(to_id)) = (
+                node_ids.get(edge.from.as_str()),
+                node_ids.get(edge.to.as_str()),
+            ) {
                 output.push_str(&format!("    {} -> {};\n", from_id, to_id));
             }
         }
@@ -497,8 +506,7 @@ impl Analyzer {
 }
 
 fn sanitize_mermaid_label(s: &str) -> String {
-    s.replace(['/', '.', '-'], "_")
-        .replace('"', "'")
+    s.replace(['/', '.', '-'], "_").replace('"', "'")
 }
 
 impl AnalyzerTrait for Analyzer {
@@ -586,7 +594,7 @@ mod tests {
         let ranks = analyzer.calculate_pagerank(&graph);
         assert_eq!(ranks.len(), 1);
         // Single node with no incoming edges converges to (1-d)/n = 0.15
-        for (_, &rank) in &ranks {
+        for &rank in ranks.values() {
             assert!((rank - 0.15).abs() < 0.001);
         }
     }
@@ -628,7 +636,10 @@ mod tests {
 
         let betweenness = analyzer.calculate_betweenness(&graph);
         // Node b is on all shortest paths from a to c
-        assert!(betweenness[&b] > 0.0, "Central node should have positive betweenness");
+        assert!(
+            betweenness[&b] > 0.0,
+            "Central node should have positive betweenness"
+        );
     }
 
     #[test]
@@ -757,8 +768,14 @@ mod tests {
                 },
             ],
             edges: vec![
-                Edge { from: "a.rs".to_string(), to: "b.rs".to_string() },
-                Edge { from: "b.rs".to_string(), to: "a.rs".to_string() },
+                Edge {
+                    from: "a.rs".to_string(),
+                    to: "b.rs".to_string(),
+                },
+                Edge {
+                    from: "b.rs".to_string(),
+                    to: "a.rs".to_string(),
+                },
             ],
             cycles: vec![vec!["a.rs".to_string(), "b.rs".to_string()]],
             summary: AnalysisSummary::default(),

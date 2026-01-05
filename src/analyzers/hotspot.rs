@@ -121,13 +121,16 @@ impl Analyzer {
         for commit in &commits {
             for file_change in &commit.files {
                 let path_str = file_change.path.to_string_lossy().to_string();
-                let entry = file_churn.entry(path_str.clone()).or_insert_with(|| FileChurn {
-                    path: path_str.clone(),
-                    commits: 0,
-                    churn_score: 0.0,
-                });
+                let entry = file_churn
+                    .entry(path_str.clone())
+                    .or_insert_with(|| FileChurn {
+                        path: path_str.clone(),
+                        commits: 0,
+                        churn_score: 0.0,
+                    });
                 entry.commits += 1;
-                entry.churn_score += 1.0 + (file_change.additions + file_change.deletions) as f64 / 100.0;
+                entry.churn_score +=
+                    1.0 + (file_change.additions + file_change.deletions) as f64 / 100.0;
             }
         }
 
@@ -175,10 +178,8 @@ impl Analyzer {
         complexity: &[FileComplexity],
     ) -> Result<Analysis> {
         // Build complexity lookup by file path
-        let complexity_map: HashMap<&str, &FileComplexity> = complexity
-            .iter()
-            .map(|f| (f.path.as_str(), f))
-            .collect();
+        let complexity_map: HashMap<&str, &FileComplexity> =
+            complexity.iter().map(|f| (f.path.as_str(), f)).collect();
 
         // Calculate percentiles
         let churn_scores: Vec<f64> = churn.iter().map(|f| f.churn_score).collect();
@@ -193,7 +194,8 @@ impl Analyzer {
             // Find matching complexity data
             if let Some(cx) = complexity_map.get(file.path.as_str()) {
                 let churn_pct = percentile_rank(&churn_scores, file.churn_score);
-                let complexity_pct = percentile_rank(&complexity_scores, cx.total_cyclomatic as f64);
+                let complexity_pct =
+                    percentile_rank(&complexity_scores, cx.total_cyclomatic as f64);
 
                 // Only include files above minimum thresholds
                 if churn_pct >= self.config.min_churn_percentile
@@ -217,13 +219,23 @@ impl Analyzer {
         }
 
         // Sort by score descending
-        hotspots.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        hotspots.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // Calculate summary
         let summary = AnalysisSummary {
             total_hotspots: hotspots.len(),
-            critical_count: hotspots.iter().filter(|h| matches!(h.severity, Severity::Critical)).count(),
-            high_count: hotspots.iter().filter(|h| matches!(h.severity, Severity::High)).count(),
+            critical_count: hotspots
+                .iter()
+                .filter(|h| matches!(h.severity, Severity::Critical))
+                .count(),
+            high_count: hotspots
+                .iter()
+                .filter(|h| matches!(h.severity, Severity::High))
+                .count(),
         };
 
         Ok(Analysis { hotspots, summary })
@@ -265,7 +277,10 @@ fn percentile_rank(values: &[f64], value: f64) -> f64 {
     }
 
     let count_below = values.iter().filter(|&&v| v < value).count();
-    let count_equal = values.iter().filter(|&&v| (v - value).abs() < f64::EPSILON).count();
+    let count_equal = values
+        .iter()
+        .filter(|&&v| (v - value).abs() < f64::EPSILON)
+        .count();
 
     100.0 * (count_below as f64 + 0.5 * count_equal as f64) / values.len() as f64
 }
@@ -419,10 +434,19 @@ mod tests {
     #[test]
     fn test_severity_classification() {
         let analyzer = Analyzer::new();
-        assert!(matches!(analyzer.classify_severity(0.90), Severity::Critical));
-        assert!(matches!(analyzer.classify_severity(0.81), Severity::Critical));
+        assert!(matches!(
+            analyzer.classify_severity(0.90),
+            Severity::Critical
+        ));
+        assert!(matches!(
+            analyzer.classify_severity(0.81),
+            Severity::Critical
+        ));
         assert!(matches!(analyzer.classify_severity(0.70), Severity::High));
-        assert!(matches!(analyzer.classify_severity(0.50), Severity::Moderate));
+        assert!(matches!(
+            analyzer.classify_severity(0.50),
+            Severity::Moderate
+        ));
         assert!(matches!(analyzer.classify_severity(0.20), Severity::Low));
     }
 
@@ -459,8 +483,8 @@ mod tests {
 
         // Create files where only one is above 50th percentile in both
         let churn = vec![
-            make_churn_file("low.rs", 5, 10.0),     // Low churn
-            make_churn_file("high.rs", 50, 200.0),  // High churn
+            make_churn_file("low.rs", 5, 10.0),    // Low churn
+            make_churn_file("high.rs", 50, 200.0), // High churn
         ];
         let complexity = vec![
             make_complexity_file("low.rs", 2),   // Low complexity
@@ -509,13 +533,13 @@ mod tests {
 
         let churn = vec![
             make_churn_file("critical.rs", 100, 500.0), // P90 churn
-            make_churn_file("high.rs", 50, 250.0),       // P70 churn
-            make_churn_file("low.rs", 5, 25.0),          // P10 churn
+            make_churn_file("high.rs", 50, 250.0),      // P70 churn
+            make_churn_file("low.rs", 5, 25.0),         // P10 churn
         ];
         let complexity = vec![
             make_complexity_file("critical.rs", 50), // P90 complexity
-            make_complexity_file("high.rs", 25),      // P70 complexity
-            make_complexity_file("low.rs", 5),        // P10 complexity
+            make_complexity_file("high.rs", 25),     // P70 complexity
+            make_complexity_file("low.rs", 5),       // P10 complexity
         ];
 
         let result = analyzer.combine_analyses(&churn, &complexity).unwrap();

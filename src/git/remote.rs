@@ -137,6 +137,33 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_full_url_with_ref() {
+        let (url, reference) = parse_remote_url("https://github.com/owner/repo@main").unwrap();
+        assert_eq!(url, "https://github.com/owner/repo");
+        assert_eq!(reference, Some("main".to_string()));
+    }
+
+    #[test]
+    fn test_parse_http_url() {
+        let (url, reference) = parse_remote_url("http://example.com/repo").unwrap();
+        assert_eq!(url, "http://example.com/repo");
+        assert!(reference.is_none());
+    }
+
+    #[test]
+    fn test_parse_github_domain_url() {
+        let (url, reference) = parse_remote_url("github.com/owner/repo").unwrap();
+        assert_eq!(url, "https://github.com/owner/repo");
+        assert!(reference.is_none());
+    }
+
+    #[test]
+    fn test_parse_invalid_url() {
+        let result = parse_remote_url("invalid");
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_sanitize_repo_name() {
         assert_eq!(
             sanitize_repo_name("https://github.com/owner/repo"),
@@ -146,5 +173,33 @@ mod tests {
             sanitize_repo_name("https://github.com/owner/repo.git"),
             "owner-repo"
         );
+    }
+
+    #[test]
+    fn test_sanitize_repo_name_trailing_slash() {
+        assert_eq!(
+            sanitize_repo_name("https://github.com/owner/repo/"),
+            "owner-repo"
+        );
+    }
+
+    #[test]
+    fn test_clone_options_default() {
+        let opts = CloneOptions::default();
+        assert!(!opts.shallow);
+        assert!(opts.reference.is_none());
+        assert!(opts.target.is_none());
+    }
+
+    #[test]
+    fn test_clone_options_custom() {
+        let opts = CloneOptions {
+            shallow: true,
+            reference: Some("v1.0.0".to_string()),
+            target: Some(PathBuf::from("/tmp/test")),
+        };
+        assert!(opts.shallow);
+        assert_eq!(opts.reference, Some("v1.0.0".to_string()));
+        assert_eq!(opts.target, Some(PathBuf::from("/tmp/test")));
     }
 }

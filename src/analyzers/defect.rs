@@ -110,11 +110,7 @@ impl Analyzer {
     }
 
     /// Get file metrics from git for defect prediction.
-    fn get_file_metrics(
-        &self,
-        git_path: &std::path::Path,
-        file_path: &str,
-    ) -> FileMetrics {
+    fn get_file_metrics(&self, git_path: &std::path::Path, file_path: &str) -> FileMetrics {
         let mut metrics = FileMetrics {
             file_path: file_path.to_string(),
             ..Default::default()
@@ -134,9 +130,7 @@ impl Analyzer {
             .output()
         {
             if output.status.success() {
-                let commit_count = String::from_utf8_lossy(&output.stdout)
-                    .lines()
-                    .count();
+                let commit_count = String::from_utf8_lossy(&output.stdout).lines().count();
                 // Normalize churn score (max ~20 commits/month = high churn)
                 metrics.churn_score = (commit_count as f32 / 20.0).min(1.0);
             }
@@ -144,13 +138,7 @@ impl Analyzer {
 
         // Get contributor count for ownership diffusion
         if let Ok(output) = Command::new("git")
-            .args([
-                "shortlog",
-                "-sn",
-                "--all",
-                "--",
-                file_path,
-            ])
+            .args(["shortlog", "-sn", "--all", "--", file_path])
             .current_dir(git_path)
             .output()
         {
@@ -222,7 +210,9 @@ impl Analyzer {
         let mut recs = Vec::new();
 
         if metrics.churn_score > 0.7 {
-            recs.push("High churn detected. Consider stabilizing with better test coverage.".to_string());
+            recs.push(
+                "High churn detected. Consider stabilizing with better test coverage.".to_string(),
+            );
         }
 
         if metrics.complexity > 20.0 {
@@ -238,13 +228,20 @@ impl Analyzer {
         }
 
         if metrics.ownership_diffusion >= 8.0 {
-            recs.push("High contributor diffusion. Consider establishing clearer ownership.".to_string());
+            recs.push(
+                "High contributor diffusion. Consider establishing clearer ownership.".to_string(),
+            );
         } else if metrics.ownership_diffusion >= 5.0 {
-            recs.push("Moderate contributor diffusion. Document ownership responsibilities.".to_string());
+            recs.push(
+                "Moderate contributor diffusion. Document ownership responsibilities.".to_string(),
+            );
         }
 
         if prob > 0.8 {
-            recs.push("CRITICAL: Very high defect probability. Prioritize review and testing.".to_string());
+            recs.push(
+                "CRITICAL: Very high defect probability. Prioritize review and testing."
+                    .to_string(),
+            );
         } else if prob > 0.6 {
             recs.push("HIGH RISK: Schedule a code review and add comprehensive tests.".to_string());
         }
@@ -273,9 +270,9 @@ impl AnalyzerTrait for Analyzer {
     }
 
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
-        let git_path = ctx.git_path.ok_or_else(|| {
-            crate::core::Error::git("Defect analyzer requires a git repository")
-        })?;
+        let git_path = ctx
+            .git_path
+            .ok_or_else(|| crate::core::Error::git("Defect analyzer requires a git repository"))?;
 
         let mut files = Vec::new();
         let mut total_prob = 0.0f32;
@@ -303,11 +300,26 @@ impl AnalyzerTrait for Analyzer {
 
             let w = &self.config.weights;
             let contributing_factors = HashMap::from([
-                ("churn".to_string(), normalize_churn(metrics.churn_score) * w.churn),
-                ("complexity".to_string(), normalize_complexity(metrics.complexity) * w.complexity),
-                ("duplication".to_string(), normalize_duplication(metrics.duplicate_ratio) * w.duplication),
-                ("coupling".to_string(), normalize_coupling(metrics.afferent_coupling) * w.coupling),
-                ("ownership".to_string(), normalize_ownership(metrics.ownership_diffusion) * w.ownership),
+                (
+                    "churn".to_string(),
+                    normalize_churn(metrics.churn_score) * w.churn,
+                ),
+                (
+                    "complexity".to_string(),
+                    normalize_complexity(metrics.complexity) * w.complexity,
+                ),
+                (
+                    "duplication".to_string(),
+                    normalize_duplication(metrics.duplicate_ratio) * w.duplication,
+                ),
+                (
+                    "coupling".to_string(),
+                    normalize_coupling(metrics.afferent_coupling) * w.coupling,
+                ),
+                (
+                    "ownership".to_string(),
+                    normalize_ownership(metrics.ownership_diffusion) * w.ownership,
+                ),
             ]);
 
             let recommendations = self.generate_recommendations(&metrics, prob);
@@ -408,20 +420,40 @@ pub struct Summary {
 // PMAT-compatible CDF percentile tables for normalization
 
 const CHURN_PERCENTILES: &[[f32; 2]] = &[
-    [0.0, 0.0], [0.1, 0.05], [0.2, 0.15], [0.3, 0.30],
-    [0.4, 0.50], [0.5, 0.70], [0.6, 0.85], [0.7, 0.93],
-    [0.8, 0.97], [1.0, 1.0],
+    [0.0, 0.0],
+    [0.1, 0.05],
+    [0.2, 0.15],
+    [0.3, 0.30],
+    [0.4, 0.50],
+    [0.5, 0.70],
+    [0.6, 0.85],
+    [0.7, 0.93],
+    [0.8, 0.97],
+    [1.0, 1.0],
 ];
 
 const COMPLEXITY_PERCENTILES: &[[f32; 2]] = &[
-    [1.0, 0.1], [2.0, 0.2], [3.0, 0.3], [5.0, 0.5],
-    [7.0, 0.7], [10.0, 0.8], [15.0, 0.9], [20.0, 0.95],
-    [30.0, 0.98], [50.0, 1.0],
+    [1.0, 0.1],
+    [2.0, 0.2],
+    [3.0, 0.3],
+    [5.0, 0.5],
+    [7.0, 0.7],
+    [10.0, 0.8],
+    [15.0, 0.9],
+    [20.0, 0.95],
+    [30.0, 0.98],
+    [50.0, 1.0],
 ];
 
 const COUPLING_PERCENTILES: &[[f32; 2]] = &[
-    [0.0, 0.1], [1.0, 0.3], [2.0, 0.5], [3.0, 0.7],
-    [5.0, 0.8], [8.0, 0.9], [12.0, 0.95], [20.0, 1.0],
+    [0.0, 0.1],
+    [1.0, 0.3],
+    [2.0, 0.5],
+    [3.0, 0.7],
+    [5.0, 0.8],
+    [8.0, 0.9],
+    [12.0, 0.95],
+    [20.0, 1.0],
 ];
 
 const OWNERSHIP_PERCENTILES: &[[f32; 2]] = &[
@@ -504,8 +536,11 @@ mod tests {
     #[test]
     fn test_default_weights() {
         let weights = Weights::default();
-        let total = weights.churn + weights.complexity + weights.duplication
-            + weights.coupling + weights.ownership;
+        let total = weights.churn
+            + weights.complexity
+            + weights.duplication
+            + weights.coupling
+            + weights.ownership;
         assert!((total - 1.0).abs() < 0.001);
     }
 

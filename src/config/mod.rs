@@ -275,6 +275,7 @@ impl std::str::FromStr for OutputFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn test_default_config() {
@@ -295,5 +296,171 @@ mod tests {
             OutputFormat::Markdown
         );
         assert!("unknown".parse::<OutputFormat>().is_err());
+    }
+
+    #[test]
+    fn test_output_format_text() {
+        assert_eq!("text".parse::<OutputFormat>().unwrap(), OutputFormat::Text);
+        assert_eq!("txt".parse::<OutputFormat>().unwrap(), OutputFormat::Text);
+        assert_eq!("TEXT".parse::<OutputFormat>().unwrap(), OutputFormat::Text);
+    }
+
+    #[test]
+    fn test_config_from_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("omen.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+[complexity]
+cyclomatic_warn = 15
+cyclomatic_error = 25
+"#,
+        )
+        .unwrap();
+
+        let config = Config::from_file(&config_path).unwrap();
+        assert_eq!(config.complexity.cyclomatic_warn, 15);
+        assert_eq!(config.complexity.cyclomatic_error, 25);
+    }
+
+    #[test]
+    fn test_config_load_alias() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("test.toml");
+        std::fs::write(&config_path, "[churn]\ntop = 50").unwrap();
+
+        let config = Config::load(&config_path).unwrap();
+        assert_eq!(config.churn.top, 50);
+    }
+
+    #[test]
+    fn test_config_load_default_omen_toml() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("omen.toml");
+        std::fs::write(&config_path, "[duplicates]\nmin_tokens = 100").unwrap();
+
+        let config = Config::load_default(temp_dir.path()).unwrap();
+        assert_eq!(config.duplicates.min_tokens, 100);
+    }
+
+    #[test]
+    fn test_config_load_default_dot_omen() {
+        let temp_dir = TempDir::new().unwrap();
+        let dot_omen = temp_dir.path().join(".omen");
+        std::fs::create_dir(&dot_omen).unwrap();
+        std::fs::write(dot_omen.join("omen.toml"), "[hotspot]\ntop = 30").unwrap();
+
+        let config = Config::load_default(temp_dir.path()).unwrap();
+        assert_eq!(config.hotspot.top, 30);
+    }
+
+    #[test]
+    fn test_config_load_default_no_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = Config::load_default(temp_dir.path()).unwrap();
+        // Should return default config
+        assert_eq!(config.complexity.cyclomatic_warn, 10);
+    }
+
+    #[test]
+    fn test_config_load_from_dir_alias() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = Config::load_from_dir(temp_dir.path()).unwrap();
+        assert_eq!(config.churn.since, "6m");
+    }
+
+    #[test]
+    fn test_config_default_toml() {
+        let content = Config::default_toml();
+        assert!(!content.is_empty());
+    }
+
+    #[test]
+    fn test_complexity_config_default() {
+        let config = ComplexityConfig::default();
+        assert_eq!(config.cyclomatic_warn, 10);
+        assert_eq!(config.cyclomatic_error, 20);
+        assert_eq!(config.cognitive_warn, 15);
+        assert_eq!(config.cognitive_error, 30);
+        assert_eq!(config.max_nesting, 5);
+    }
+
+    #[test]
+    fn test_satd_config_default() {
+        let config = SatdConfig::default();
+        assert!(config.categories.contains(&"design".to_string()));
+        assert!(config.categories.contains(&"defect".to_string()));
+        assert!(config.custom_markers.is_empty());
+    }
+
+    #[test]
+    fn test_churn_config_default() {
+        let config = ChurnConfig::default();
+        assert_eq!(config.since, "6m");
+        assert_eq!(config.top, 20);
+    }
+
+    #[test]
+    fn test_duplicates_config_default() {
+        let config = DuplicatesConfig::default();
+        assert_eq!(config.min_tokens, 50);
+        assert_eq!(config.min_similarity, 0.9);
+    }
+
+    #[test]
+    fn test_hotspot_config_default() {
+        let config = HotspotConfig::default();
+        assert_eq!(config.top, 20);
+    }
+
+    #[test]
+    fn test_score_config_default() {
+        let config = ScoreConfig::default();
+        assert!(config.fail_under.is_none());
+    }
+
+    #[test]
+    fn test_output_config_default() {
+        let config = OutputConfig::default();
+        assert_eq!(config.format, OutputFormat::Text);
+        assert!(config.color);
+    }
+
+    #[test]
+    fn test_output_format_default() {
+        assert_eq!(OutputFormat::default(), OutputFormat::Text);
+    }
+
+    #[test]
+    fn test_config_serialization() {
+        let config = Config::default();
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("complexity"));
+        assert!(json.contains("cyclomatic_warn"));
+    }
+
+    #[test]
+    fn test_config_with_exclude_patterns() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("omen.toml");
+        std::fs::write(
+            &config_path,
+            r#"
+exclude = ["target/**", "node_modules/**"]
+"#,
+        )
+        .unwrap();
+
+        let config = Config::from_file(&config_path).unwrap();
+        assert_eq!(config.exclude_patterns.len(), 2);
+        assert!(config.exclude_patterns.contains(&"target/**".to_string()));
+    }
+
+    #[test]
+    fn test_feature_flags_config_default() {
+        let config = FeatureFlagsConfig::default();
+        assert_eq!(config.stale_days, 0);
+        assert!(config.custom_providers.is_empty());
     }
 }

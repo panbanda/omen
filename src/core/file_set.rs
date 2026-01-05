@@ -185,4 +185,149 @@ mod tests {
         let rust_files = file_set.filter_by_language(Language::Rust);
         assert_eq!(rust_files.len(), 1);
     }
+
+    #[test]
+    fn test_file_set_root() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("main.rs"), "fn main() {}").unwrap();
+        let file_set = FileSet::from_path_default(temp.path()).unwrap();
+        assert_eq!(file_set.root(), temp.path().canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_file_set_files() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("a.rs"), "").unwrap();
+        std::fs::write(temp.path().join("b.rs"), "").unwrap();
+        let file_set = FileSet::from_path_default(temp.path()).unwrap();
+        assert_eq!(file_set.files().len(), 2);
+    }
+
+    #[test]
+    fn test_file_set_iter() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("test.py"), "").unwrap();
+        let file_set = FileSet::from_path_default(temp.path()).unwrap();
+        assert_eq!(file_set.iter().count(), 1);
+    }
+
+    #[test]
+    fn test_file_set_into_iter() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("test.java"), "").unwrap();
+        let file_set = FileSet::from_path_default(temp.path()).unwrap();
+        let files: Vec<_> = file_set.into_iter().collect();
+        assert_eq!(files.len(), 1);
+    }
+
+    #[test]
+    fn test_file_set_ref_into_iter() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("test.js"), "").unwrap();
+        let file_set = FileSet::from_path_default(temp.path()).unwrap();
+        let files: Vec<_> = (&file_set).into_iter().collect();
+        assert_eq!(files.len(), 1);
+    }
+
+    #[test]
+    fn test_file_set_group_by_language() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("a.rs"), "").unwrap();
+        std::fs::write(temp.path().join("b.rs"), "").unwrap();
+        std::fs::write(temp.path().join("c.py"), "").unwrap();
+
+        let file_set = FileSet::from_path_default(temp.path()).unwrap();
+        let groups = file_set.group_by_language();
+
+        assert_eq!(groups.get(&Language::Rust).map(|v| v.len()), Some(2));
+        assert_eq!(groups.get(&Language::Python).map(|v| v.len()), Some(1));
+    }
+
+    #[test]
+    fn test_file_set_relative_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let subdir = temp.path().join("src");
+        std::fs::create_dir(&subdir).unwrap();
+        std::fs::write(subdir.join("main.rs"), "").unwrap();
+
+        let file_set = FileSet::from_path_default(temp.path()).unwrap();
+        let abs_path = subdir.join("main.rs").canonicalize().unwrap();
+        let rel_path = file_set.relative_path(&abs_path);
+
+        assert!(rel_path.to_string_lossy().contains("main.rs"));
+    }
+
+    #[test]
+    fn test_file_set_relative_path_outside_root() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("test.rs"), "").unwrap();
+        let file_set = FileSet::from_path_default(temp.path()).unwrap();
+
+        let outside_path = PathBuf::from("/tmp/other/file.rs");
+        let rel_path = file_set.relative_path(&outside_path);
+        assert_eq!(rel_path, outside_path);
+    }
+
+    #[test]
+    fn test_file_set_from_path_with_config() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("main.rs"), "").unwrap();
+        let config = Config::default();
+        let file_set = FileSet::from_path(temp.path(), &config).unwrap();
+        assert_eq!(file_set.len(), 1);
+    }
+
+    #[test]
+    fn test_file_set_with_exclude_patterns() {
+        let temp = tempfile::tempdir().unwrap();
+        let src_dir = temp.path().join("src");
+        let target_dir = temp.path().join("target");
+        std::fs::create_dir(&src_dir).unwrap();
+        std::fs::create_dir(&target_dir).unwrap();
+        std::fs::write(src_dir.join("main.rs"), "").unwrap();
+        std::fs::write(target_dir.join("generated.rs"), "").unwrap();
+
+        let file_set =
+            FileSet::from_path_with_patterns(temp.path(), vec!["**/target/**".to_string()])
+                .unwrap();
+
+        // Only src/main.rs should be included
+        assert_eq!(file_set.len(), 1);
+        let files: Vec<_> = file_set.iter().collect();
+        assert!(files[0].to_string_lossy().contains("main.rs"));
+    }
+
+    #[test]
+    fn test_file_set_clone() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("test.rs"), "").unwrap();
+        let file_set = FileSet::from_path_default(temp.path()).unwrap();
+        let cloned = file_set.clone();
+        assert_eq!(cloned.len(), file_set.len());
+        assert_eq!(cloned.root(), file_set.root());
+    }
+
+    #[test]
+    fn test_file_set_debug() {
+        let temp = tempfile::tempdir().unwrap();
+        let file_set = FileSet::from_path_default(temp.path()).unwrap();
+        let debug_str = format!("{:?}", file_set);
+        assert!(debug_str.contains("FileSet"));
+    }
+
+    #[test]
+    fn test_file_set_sorted() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("z.rs"), "").unwrap();
+        std::fs::write(temp.path().join("a.rs"), "").unwrap();
+        std::fs::write(temp.path().join("m.rs"), "").unwrap();
+
+        let file_set = FileSet::from_path_default(temp.path()).unwrap();
+        let files: Vec<_> = file_set.files().iter().collect();
+
+        // Files should be sorted
+        for i in 0..files.len() - 1 {
+            assert!(files[i] < files[i + 1]);
+        }
+    }
 }

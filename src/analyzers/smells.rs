@@ -147,10 +147,7 @@ impl Analyzer {
 
             // Extract imports
             let imports = extract_imports(&parse_result);
-            let import_paths: Vec<String> = imports
-                .into_iter()
-                .map(|imp| imp.path)
-                .collect();
+            let import_paths: Vec<String> = imports.into_iter().map(|imp| imp.path).collect();
 
             file_imports.insert(rel_path, import_paths);
         }
@@ -211,10 +208,8 @@ impl Analyzer {
         let sccs = tarjan_scc(&graph);
         for scc in sccs {
             if scc.len() > 1 {
-                let component_names: Vec<String> = scc
-                    .iter()
-                    .map(|&idx| graph[idx].clone())
-                    .collect();
+                let component_names: Vec<String> =
+                    scc.iter().map(|&idx| graph[idx].clone()).collect();
 
                 smells.push(Smell {
                     smell_type: SmellType::CyclicDependency,
@@ -285,10 +280,8 @@ impl Analyzer {
         }
 
         // 4. Detect unstable dependencies
-        let component_map: HashMap<String, &ComponentMetrics> = components
-            .iter()
-            .map(|c| (c.id.clone(), c))
-            .collect();
+        let component_map: HashMap<String, &ComponentMetrics> =
+            components.iter().map(|c| (c.id.clone(), c)).collect();
 
         for (from_file, imports) in &file_imports {
             let from_cm = match component_map.get(from_file) {
@@ -302,7 +295,9 @@ impl Analyzer {
                     *cm
                 } else {
                     // Try to find by suffix
-                    let found = node_indices.keys().find(|k| k.ends_with(import) || k.contains(import));
+                    let found = node_indices
+                        .keys()
+                        .find(|k| k.ends_with(import) || k.contains(import));
                     if let Some(key) = found {
                         match component_map.get(key) {
                             Some(cm) => *cm,
