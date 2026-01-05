@@ -942,3 +942,360 @@ mod tests {
         assert!(norm.max_entropy >= 0.5);
     }
 }
+
+// ============================================================================
+// Diff Analysis - Branch diff risk for PR review
+// ============================================================================
+
+/// Result of analyzing a branch diff.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiffResult {
+    pub generated_at: DateTime<Utc>,
+    pub source_branch: String,
+    pub target_branch: String,
+    pub merge_base: String,
+    pub score: f64,
+    pub level: RiskLevel,
+    pub lines_added: i32,
+    pub lines_deleted: i32,
+    pub files_modified: i32,
+    pub commits: i32,
+    pub factors: HashMap<String, f64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub recommendations: Vec<String>,
+}
+
+impl Analyzer {
+    /// Analyze the diff between current branch and target branch.
+    /// If target is empty, auto-detects the default branch (main/master).
+    pub fn analyze_diff(&self, repo_path: &Path, target: Option<&str>) -> Result<DiffResult> {
+        // Get current branch name
+        let source_branch = get_current_branch(repo_path)?;
+
+        // Auto-detect target if not specified
+        let target_branch = match target {
+            Some(t) => t.to_string(),
+            None => detect_default_branch(repo_path)?,
+        };
+
+        // Find merge-base
+        let merge_base = get_merge_base(repo_path, &target_branch, "HEAD")?;
+
+        // Get diff stats
+        let (lines_added, lines_deleted, files_modified) = get_diff_stats(repo_path, &merge_base)?;
+
+        // Count commits between merge-base and HEAD
+        let commit_count = get_commit_count(repo_path, &merge_base)?;
+
+        // Get lines per file for entropy calculation
+        let lines_per_file = get_lines_per_file(repo_path, &merge_base)?;
+        let entropy = calculate_entropy(&lines_per_file);
+
+        // Use fixed thresholds for diff analysis (sensible PR size limits)
+        let norm = diff_normalization();
+
+        // Build features for risk calculation
+        let features = CommitFeatures {
+            lines_added,
+            lines_deleted,
+            num_files: files_modified,
+            entropy,
+            unique_changes: commit_count,
+            is_fix: false,
+            is_automated: false,
+            ..Default::default()
+        };
+
+        // Calculate risk score
+        let score = calculate_risk(&features, &self.weights, &norm);
+        let thresholds = RiskThresholds::default();
+        let level = get_risk_level(score, &thresholds);
+
+        // Build contributing factors
+        let mut factors = HashMap::new();
+        factors.insert(
+            "entropy".to_string(),
+            safe_normalize(entropy, norm.max_entropy) * self.weights.entropy,
+        );
+        factors.insert(
+            "lines_added".to_string(),
+            safe_normalize_int(lines_added, norm.max_lines_added) * self.weights.la,
+        );
+        factors.insert(
+            "lines_deleted".to_string(),
+            safe_normalize_int(lines_deleted, norm.max_lines_deleted) * self.weights.ld,
+        );
+        factors.insert(
+            "num_files".to_string(),
+            safe_normalize_int(files_modified, norm.max_num_files) * self.weights.nf,
+        );
+        factors.insert(
+            "commits".to_string(),
+            safe_normalize_int(commit_count, norm.max_unique_changes) * self.weights.nuc,
+        );
+
+        // Generate recommendations
+        let recommendations = generate_diff_recommendations(
+            lines_added,
+            lines_deleted,
+            files_modified,
+            commit_count,
+            score,
+            &factors,
+        );
+
+        Ok(DiffResult {
+            generated_at: Utc::now(),
+            source_branch,
+            target_branch,
+            merge_base,
+            score,
+            level,
+            lines_added,
+            lines_deleted,
+            files_modified,
+            commits: commit_count,
+            factors,
+            recommendations,
+        })
+    }
+}
+
+/// Fixed thresholds for branch diff analysis.
+/// These represent sensible PR size limits where exceeding them indicates high risk.
+fn diff_normalization() -> NormalizationStats {
+    NormalizationStats {
+        max_lines_added: 400,    // PRs > 400 lines are hard to review
+        max_lines_deleted: 200,  // Large deletions warrant attention
+        max_num_files: 15,       // PRs touching > 15 files are risky
+        max_unique_changes: 10,  // > 10 commits suggests scope creep
+        max_num_developers: 3,   // Multiple authors can indicate coordination issues
+        max_author_experience: 100,
+        max_entropy: 3.0,        // Lower threshold - scattered changes are risky
+    }
+}
+
+fn get_current_branch(repo_path: &Path) -> Result<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| crate::core::Error::git(format!("Failed to get current branch: {}", e)))?;
+
+    if !output.status.success() {
+        return Err(crate::core::Error::git("Failed to get current branch"));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn detect_default_branch(repo_path: &Path) -> Result<String> {
+    // Try main first
+    for branch in ["main", "master", "origin/main", "origin/master"] {
+        let status = Command::new("git")
+            .args(["rev-parse", "--verify", branch])
+            .current_dir(repo_path)
+            .output();
+
+        if let Ok(output) = status {
+            if output.status.success() {
+                return Ok(branch.to_string());
+            }
+        }
+    }
+
+    Err(crate::core::Error::git(
+        "Could not detect default branch (main/master)",
+    ))
+}
+
+fn get_merge_base(repo_path: &Path, ref1: &str, ref2: &str) -> Result<String> {
+    let output = Command::new("git")
+        .args(["merge-base", ref1, ref2])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| crate::core::Error::git(format!("Failed to get merge-base: {}", e)))?;
+
+    if !output.status.success() {
+        return Err(crate::core::Error::git("Failed to get merge-base"));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn get_diff_stats(repo_path: &Path, merge_base: &str) -> Result<(i32, i32, i32)> {
+    let output = Command::new("git")
+        .args(["diff", "--numstat", &format!("{}..HEAD", merge_base)])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| crate::core::Error::git(format!("Failed to get diff stats: {}", e)))?;
+
+    if !output.status.success() {
+        return Err(crate::core::Error::git("Failed to get diff stats"));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut added = 0;
+    let mut deleted = 0;
+    let mut files = 0;
+
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 2 {
+            added += parts[0].parse::<i32>().unwrap_or(0);
+            deleted += parts[1].parse::<i32>().unwrap_or(0);
+            files += 1;
+        }
+    }
+
+    Ok((added, deleted, files))
+}
+
+fn get_commit_count(repo_path: &Path, merge_base: &str) -> Result<i32> {
+    let output = Command::new("git")
+        .args(["rev-list", "--count", &format!("{}..HEAD", merge_base)])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| crate::core::Error::git(format!("Failed to count commits: {}", e)))?;
+
+    if !output.status.success() {
+        return Err(crate::core::Error::git("Failed to count commits"));
+    }
+
+    let count_str = String::from_utf8_lossy(&output.stdout);
+    count_str
+        .trim()
+        .parse()
+        .map_err(|_| crate::core::Error::git("Failed to parse commit count"))
+}
+
+fn get_lines_per_file(repo_path: &Path, merge_base: &str) -> Result<HashMap<String, i32>> {
+    let output = Command::new("git")
+        .args(["diff", "--numstat", &format!("{}..HEAD", merge_base)])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| crate::core::Error::git(format!("Failed to get lines per file: {}", e)))?;
+
+    if !output.status.success() {
+        return Ok(HashMap::new());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut result = HashMap::new();
+
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() >= 3 {
+            let added: i32 = parts[0].parse().unwrap_or(0);
+            let deleted: i32 = parts[1].parse().unwrap_or(0);
+            let file = parts[2].to_string();
+            result.insert(file, added + deleted);
+        }
+    }
+
+    Ok(result)
+}
+
+fn generate_diff_recommendations(
+    lines_added: i32,
+    lines_deleted: i32,
+    files_modified: i32,
+    commits: i32,
+    score: f64,
+    factors: &HashMap<String, f64>,
+) -> Vec<String> {
+    let mut recs = Vec::new();
+
+    if lines_added > 400 {
+        recs.push(format!(
+            "Large PR with {} lines added - consider splitting into smaller changes",
+            lines_added
+        ));
+    }
+
+    if lines_deleted > 200 {
+        recs.push(format!(
+            "Large deletion of {} lines - ensure no accidental removals",
+            lines_deleted
+        ));
+    }
+
+    if files_modified > 15 {
+        recs.push(format!(
+            "PR touches {} files - may be difficult to review thoroughly",
+            files_modified
+        ));
+    }
+
+    if commits > 10 {
+        recs.push(format!(
+            "PR contains {} commits - consider squashing or splitting",
+            commits
+        ));
+    }
+
+    if factors.get("entropy").copied().unwrap_or(0.0) > 0.15 {
+        recs.push("Changes scattered across many files - ensure they're logically related".to_string());
+    }
+
+    if score >= 0.7 {
+        recs.push("HIGH RISK: Consider extra review scrutiny and comprehensive testing".to_string());
+    } else if score >= 0.5 {
+        recs.push("Elevated risk: Add additional reviewers or testing".to_string());
+    }
+
+    if recs.is_empty() {
+        recs.push("PR is well-scoped - standard review process recommended".to_string());
+    }
+
+    recs
+}
+
+#[cfg(test)]
+mod diff_tests {
+    use super::*;
+
+    #[test]
+    fn test_diff_normalization() {
+        let norm = diff_normalization();
+        assert_eq!(norm.max_lines_added, 400);
+        assert_eq!(norm.max_lines_deleted, 200);
+        assert_eq!(norm.max_num_files, 15);
+        assert_eq!(norm.max_unique_changes, 10);
+    }
+
+    #[test]
+    fn test_diff_recommendations_large_pr() {
+        let factors = HashMap::new();
+        let recs = generate_diff_recommendations(500, 50, 5, 3, 0.4, &factors);
+        assert!(recs.iter().any(|r| r.contains("Large PR")));
+    }
+
+    #[test]
+    fn test_diff_recommendations_many_files() {
+        let factors = HashMap::new();
+        let recs = generate_diff_recommendations(100, 50, 20, 3, 0.4, &factors);
+        assert!(recs.iter().any(|r| r.contains("touches")));
+    }
+
+    #[test]
+    fn test_diff_recommendations_many_commits() {
+        let factors = HashMap::new();
+        let recs = generate_diff_recommendations(100, 50, 5, 15, 0.4, &factors);
+        assert!(recs.iter().any(|r| r.contains("commits")));
+    }
+
+    #[test]
+    fn test_diff_recommendations_high_risk() {
+        let factors = HashMap::new();
+        let recs = generate_diff_recommendations(100, 50, 5, 3, 0.75, &factors);
+        assert!(recs.iter().any(|r| r.contains("HIGH RISK")));
+    }
+
+    #[test]
+    fn test_diff_recommendations_low_risk() {
+        let factors = HashMap::new();
+        let recs = generate_diff_recommendations(50, 20, 3, 2, 0.2, &factors);
+        assert!(recs.iter().any(|r| r.contains("well-scoped")));
+    }
+}
