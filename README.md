@@ -4,7 +4,7 @@
 
 <img src="assets/omen-logo.jpg" alt="Omen - Code Analysis CLI" width="100%">
 
-[![Rust Version](https://img.shields.io/badge/rust-1.75%2B-orange)](https://www.rust-lang.org/)
+[![Rust Version](https://img.shields.io/badge/rust-1.85%2B-orange)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/github/license/panbanda/omen)](https://github.com/panbanda/omen/blob/main/LICENSE)
 [![CI](https://github.com/panbanda/omen/actions/workflows/ci.yml/badge.svg)](https://github.com/panbanda/omen/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/panbanda/omen/graph/badge.svg)](https://codecov.io/gh/panbanda/omen)
