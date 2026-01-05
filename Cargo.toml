@@ -2,7 +2,7 @@
 name = "omen"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.92"
 authors = ["Panbanda"]
 license = "Apache-2.0"
 description = "Multi-language code analysis CLI for AI assistants"
