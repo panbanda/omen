@@ -2,22 +2,21 @@ pre-commit:
   parallel: true
   commands:
     fmt:
-      glob: "*.go"
-      run: gofmt -l -w {staged_files}
+      glob: "*.rs"
+      run: cargo fmt
       stage_fixed: true
     lint:
-      glob: "*.go"
-      run: golangci-lint run --fix
+      glob: "*.rs"
+      run: cargo clippy --all-targets --all-features --fix --allow-dirty --allow-staged -- -D warnings
       stage_fixed: true
     tidy:
-      run: go mod tidy
-      stage_fixed: true
+      run: cargo check --all-features
 
 pre-push:
   parallel: true
   commands:
     test:
-      run: go test ./...
-    score:
-      run: ./omen score
-      fail_text: "Repository score below threshold"
+      run: cargo test --all-features
+    coverage:
+      run: cargo llvm-cov --all-features --fail-under-lines 95
+      fail_text: "Coverage below 95% threshold"
