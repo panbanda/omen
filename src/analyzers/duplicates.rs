@@ -5,6 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::RwLock;
 
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -72,6 +73,9 @@ pub struct Analyzer {
     config: Config,
     max_file_size: usize,
     identifier_counter: AtomicU32,
+    /// Maps identifiers to their canonical names (VAR_N) for normalization.
+    /// This ensures the same identifier always gets the same canonical name.
+    identifier_map: RwLock<HashMap<String, String>>,
 }
 
 impl Default for Analyzer {
@@ -86,6 +90,7 @@ impl Analyzer {
             config: Config::default(),
             max_file_size: 0, // No limit
             identifier_counter: AtomicU32::new(0),
+            identifier_map: RwLock::new(HashMap::new()),
         }
     }
 
@@ -145,6 +150,7 @@ impl Analyzer {
         let mut func_start_line = 0;
         let mut func_lines: Vec<&str> = Vec::new();
         let mut brace_depth = 0;
+        let mut end_depth = 0; // For Ruby's end keyword
 
         for (i, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
@@ -158,6 +164,8 @@ impl Analyzer {
                         line.matches('{').count() as i32 - line.matches('}').count() as i32;
                     if lang == "python" {
                         brace_depth = 1; // Python uses indentation
+                    } else if lang == "ruby" {
+                        end_depth = 1; // Ruby uses end keyword
                     }
                 }
             } else {
@@ -188,6 +196,41 @@ impl Analyzer {
                             func_lines = vec![line];
                         } else {
                             in_function = false;
+                        }
+                    }
+                } else if lang == "ruby" {
+                    // Ruby uses 'end' keyword to close blocks
+                    // Track nested blocks (def, class, module, if, unless, case, while, until, for, begin, do)
+                    let block_starters = [
+                        "def ", "class ", "module ", "if ", "unless ", "case ", "while ", "until ",
+                        "for ", "begin", "do",
+                    ];
+                    for starter in &block_starters {
+                        if trimmed.starts_with(starter)
+                            || trimmed.contains(&format!(" {} ", starter.trim()))
+                        {
+                            end_depth += 1;
+                            break;
+                        }
+                    }
+                    // Also check for inline block starters like "x.each do"
+                    if trimmed.ends_with(" do") || trimmed.ends_with(" do |") {
+                        end_depth += 1;
+                    }
+                    // Check for 'end' keyword
+                    if trimmed == "end" || trimmed.starts_with("end ") || trimmed.ends_with(" end")
+                    {
+                        end_depth -= 1;
+                        if end_depth <= 0 {
+                            // End of function
+                            if let Some(frag) =
+                                self.create_fragment(path, func_start_line, i, &func_lines)
+                            {
+                                fragments.push(frag);
+                            }
+                            in_function = false;
+                            func_lines.clear();
+                            end_depth = 0;
                         }
                     }
                 } else {
@@ -307,13 +350,38 @@ impl Analyzer {
             return Some(token.to_string());
         }
 
-        // Identifiers
+        // Identifiers - use canonical name mapping
         if self.config.normalize_identifiers {
-            let id = self.identifier_counter.fetch_add(1, Ordering::Relaxed);
-            return Some(format!("VAR_{}", id));
+            return Some(self.canonicalize_identifier(token));
         }
 
         Some(token.to_string())
+    }
+
+    /// Canonicalize an identifier to a canonical name (VAR_N).
+    /// Ensures the same identifier always gets the same canonical name.
+    fn canonicalize_identifier(&self, name: &str) -> String {
+        // First try to read from the map
+        {
+            let map = self.identifier_map.read().unwrap();
+            if let Some(canonical) = map.get(name) {
+                return canonical.clone();
+            }
+        }
+
+        // Not found, acquire write lock and insert
+        let mut map = self.identifier_map.write().unwrap();
+
+        // Double-check after acquiring write lock (another thread may have inserted)
+        if let Some(canonical) = map.get(name) {
+            return canonical.clone();
+        }
+
+        // Create new canonical name
+        let id = self.identifier_counter.fetch_add(1, Ordering::Relaxed);
+        let canonical = format!("VAR_{}", id);
+        map.insert(name.to_string(), canonical.clone());
+        canonical
     }
 
     /// Compute MinHash signature for a token sequence.
@@ -871,21 +939,24 @@ fn is_function_start(line: &str, lang: &str) -> bool {
         "go" => line.starts_with("func ") && line.contains('('),
         "rust" => line.contains("fn ") && line.contains('('),
         "python" => line.starts_with("def ") && line.contains('('),
+        "ruby" => line.starts_with("def ") || line.starts_with("def self."),
         "typescript" | "javascript" => {
             line.contains("function ")
                 || line.contains("=> {")
                 || (line.contains('(') && line.contains(") {"))
         }
         "c" | "cpp" => line.contains('(') && (line.contains(") {") || line.ends_with('{')),
-        "java" => {
+        "java" | "kotlin" => {
             (line.contains("void ")
                 || line.contains("int ")
                 || line.contains("String ")
+                || line.contains("fun ")
                 || line.contains("public ")
                 || line.contains("private ")
                 || line.contains("protected "))
                 && line.contains('(')
         }
+        "php" => line.contains("function ") && line.contains('('),
         _ => false,
     }
 }
@@ -1244,6 +1315,10 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config as CoreConfig;
+    use crate::core::FileSet;
+    use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn test_analyzer_creation() {
@@ -1324,6 +1399,7 @@ mod tests {
         assert_eq!(detect_language("app.py"), "python");
         assert_eq!(detect_language("app.ts"), "typescript");
         assert_eq!(detect_language("app.js"), "javascript");
+        assert_eq!(detect_language("app.rb"), "ruby");
         assert_eq!(detect_language("unknown.xyz"), "unknown");
     }
 
@@ -1358,6 +1434,20 @@ mod tests {
     }
 
     #[test]
+    fn test_minhash_similarity_different() {
+        let analyzer = Analyzer::new();
+
+        // Completely different tokens should have similarity 0
+        let tokens1: Vec<String> = (0..60).map(|i| format!("alpha{}", i)).collect();
+        let tokens2: Vec<String> = (0..60).map(|i| format!("beta{}", i)).collect();
+        let sig1 = analyzer.compute_minhash(&tokens1);
+        let sig2 = analyzer.compute_minhash(&tokens2);
+
+        let similarity = sig1.jaccard_similarity(&sig2);
+        assert!(similarity < 0.1); // Should be very low
+    }
+
+    #[test]
     fn test_percentile() {
         let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         assert!((percentile(&values, 50.0) - 3.0).abs() < 0.001);
@@ -1378,5 +1468,196 @@ mod tests {
         let normalized = analyzer.normalize_code(code);
         assert!(!normalized.contains("// comment"));
         assert!(normalized.contains("func main()"));
+    }
+
+    #[test]
+    fn test_canonicalize_identifier_consistency() {
+        let analyzer = Analyzer::new();
+
+        // Same identifier should always get the same canonical name
+        let name1 = analyzer.canonicalize_identifier("myVariable");
+        let name2 = analyzer.canonicalize_identifier("myVariable");
+        let name3 = analyzer.canonicalize_identifier("otherVariable");
+        let name4 = analyzer.canonicalize_identifier("myVariable");
+
+        assert_eq!(name1, name2);
+        assert_eq!(name1, name4);
+        assert_ne!(name1, name3);
+    }
+
+    #[test]
+    fn test_is_function_start_go() {
+        assert!(is_function_start("func main() {", "go"));
+        assert!(is_function_start("func (s *Server) Start()", "go"));
+        assert!(!is_function_start("var x = 1", "go"));
+    }
+
+    #[test]
+    fn test_is_function_start_rust() {
+        assert!(is_function_start("fn main() {", "rust"));
+        assert!(is_function_start("pub fn analyze(&self) {", "rust"));
+        assert!(!is_function_start("let x = 1", "rust"));
+    }
+
+    #[test]
+    fn test_is_function_start_python() {
+        assert!(is_function_start("def my_func():", "python"));
+        assert!(is_function_start("def __init__(self):", "python"));
+        assert!(!is_function_start("class MyClass:", "python"));
+    }
+
+    #[test]
+    fn test_is_function_start_ruby() {
+        assert!(is_function_start("def my_method", "ruby"));
+        assert!(is_function_start("def self.class_method", "ruby"));
+        assert!(!is_function_start("class MyClass", "ruby"));
+    }
+
+    #[test]
+    fn test_is_function_start_javascript() {
+        assert!(is_function_start("function hello() {", "javascript"));
+        assert!(is_function_start("const x = () => {", "javascript"));
+        assert!(!is_function_start("const x = 1", "javascript"));
+    }
+
+    /// Test from Go: exact clones should be detected
+    #[test]
+    fn test_analyze_exact_clones() {
+        let tmp_dir = TempDir::new().unwrap();
+
+        // Create two files with identical functions
+        let code = r#"package main
+
+func duplicate() int {
+    x := 1
+    y := 2
+    z := 3
+    result := x + y + z
+    if result > 5 {
+        return result
+    }
+    return 0
+}
+"#;
+        let file1 = tmp_dir.path().join("a.go");
+        let file2 = tmp_dir.path().join("b.go");
+        fs::write(&file1, code).unwrap();
+        fs::write(&file2, code).unwrap();
+
+        let analyzer = Analyzer::new()
+            .with_min_tokens(10)
+            .with_similarity_threshold(0.8);
+
+        let config = CoreConfig::default();
+        let file_set = FileSet::from_path(tmp_dir.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&file_set, &config, Some(tmp_dir.path()));
+
+        let analysis = analyzer.analyze(&ctx).unwrap();
+
+        assert_eq!(analysis.total_files_scanned, 2);
+        // Should find at least one clone group
+        assert!(
+            !analysis.groups.is_empty(),
+            "Expected at least 1 clone group, got {}",
+            analysis.groups.len()
+        );
+    }
+
+    /// Test from Go: no clones should be found for different code
+    #[test]
+    fn test_analyze_no_clones() {
+        let tmp_dir = TempDir::new().unwrap();
+
+        let file1 = tmp_dir.path().join("a.go");
+        let code1 = r#"package main
+
+func funcA() int {
+    return 1
+}
+"#;
+        fs::write(&file1, code1).unwrap();
+
+        let file2 = tmp_dir.path().join("b.go");
+        let code2 = r#"package main
+
+func funcB() string {
+    return "hello"
+}
+"#;
+        fs::write(&file2, code2).unwrap();
+
+        let analyzer = Analyzer::new().with_min_tokens(50); // High threshold to avoid small matches
+
+        let config = CoreConfig::default();
+        let file_set = FileSet::from_path(tmp_dir.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&file_set, &config, Some(tmp_dir.path()));
+
+        let analysis = analyzer.analyze(&ctx).unwrap();
+
+        assert_eq!(analysis.clones.len(), 0, "expected no clones");
+    }
+
+    /// Test from Go: empty files should not produce clones
+    #[test]
+    fn test_analyze_empty_files() {
+        let tmp_dir = TempDir::new().unwrap();
+
+        let file1 = tmp_dir.path().join("a.go");
+        fs::write(&file1, "package main\n").unwrap();
+
+        let analyzer = Analyzer::new();
+
+        let config = CoreConfig::default();
+        let file_set = FileSet::from_path(tmp_dir.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&file_set, &config, Some(tmp_dir.path()));
+
+        let analysis = analyzer.analyze(&ctx).unwrap();
+
+        assert_eq!(
+            analysis.clones.len(),
+            0,
+            "expected no clones from minimal file"
+        );
+    }
+
+    #[test]
+    fn test_summary_add_clone() {
+        let mut summary = AnalysisSummary::default();
+
+        let clone = Clone {
+            clone_type: CloneType::Type1,
+            similarity: 0.95,
+            file_a: "a.go".to_string(),
+            file_b: "b.go".to_string(),
+            start_line_a: 1,
+            end_line_a: 10,
+            start_line_b: 1,
+            end_line_b: 10,
+            lines_a: 10,
+            lines_b: 10,
+            group_id: 1,
+        };
+
+        summary.add_clone(&clone);
+
+        assert_eq!(summary.total_clones, 1);
+        assert_eq!(summary.type1_count, 1);
+        assert_eq!(summary.duplicated_lines, 20);
+    }
+
+    #[test]
+    fn test_config_defaults() {
+        let cfg = Config::default();
+
+        assert!(cfg.min_tokens > 0, "MinTokens should be positive");
+        assert!(
+            cfg.similarity_threshold > 0.0 && cfg.similarity_threshold <= 1.0,
+            "SimilarityThreshold should be in (0, 1]"
+        );
+        assert!(
+            cfg.num_hash_functions > 0,
+            "NumHashFunctions should be positive"
+        );
+        assert!(cfg.num_bands > 0, "NumBands should be positive");
     }
 }
