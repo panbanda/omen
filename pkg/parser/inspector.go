@@ -157,7 +157,6 @@ type InspectorFactory interface {
 // This is the default implementation wrapping the existing parser.
 type TreeSitterInspector struct {
 	result *ParseResult
-	parser *Parser
 
 	// Cached extraction results (lazy-loaded)
 	functions []FunctionInfo
