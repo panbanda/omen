@@ -70,8 +70,8 @@ fn run(cli: Cli) -> omen::core::Result<()> {
             run_analyzer::<omen::analyzers::changes::Analyzer>(&cli.path, &config, format)?;
         }
         Command::Diff(_args) => {
-            // TODO: Implement diff analyzer
-            eprintln!("Diff analyzer not yet implemented");
+            // Diff uses the changes analyzer - base/head filtering TBD
+            run_analyzer::<omen::analyzers::changes::Analyzer>(&cli.path, &config, format)?;
         }
         Command::Tdg(_args) => {
             run_analyzer::<omen::analyzers::tdg::Analyzer>(&cli.path, &config, format)?;
@@ -104,8 +104,48 @@ fn run(cli: Cli) -> omen::core::Result<()> {
             run_analyzer::<omen::score::Analyzer>(&cli.path, &config, format)?;
         }
         Command::All(_args) => {
-            // TODO: Run all analyzers
-            eprintln!("All analyzers not yet implemented");
+            use serde_json::{json, Value};
+            let file_set = FileSet::from_path(&cli.path, &config)?;
+            let ctx = AnalysisContext::new(&file_set, &config, Some(&cli.path));
+
+            let mut results: Vec<Value> = Vec::new();
+
+            macro_rules! run_and_collect {
+                ($analyzer:ty, $name:expr) => {{
+                    let a = <$analyzer>::default();
+                    match a.analyze(&ctx) {
+                        Ok(result) => {
+                            if let Ok(v) = serde_json::to_value(&result) {
+                                results.push(json!({ "analyzer": $name, "result": v }));
+                            }
+                        }
+                        Err(e) => {
+                            results.push(json!({ "analyzer": $name, "error": e.to_string() }));
+                        }
+                    }
+                }};
+            }
+
+            run_and_collect!(omen::analyzers::complexity::Analyzer, "complexity");
+            run_and_collect!(omen::analyzers::satd::Analyzer, "satd");
+            run_and_collect!(omen::analyzers::deadcode::Analyzer, "deadcode");
+            run_and_collect!(omen::analyzers::churn::Analyzer, "churn");
+            run_and_collect!(omen::analyzers::duplicates::Analyzer, "duplicates");
+            run_and_collect!(omen::analyzers::defect::Analyzer, "defect");
+            run_and_collect!(omen::analyzers::changes::Analyzer, "changes");
+            run_and_collect!(omen::analyzers::tdg::Analyzer, "tdg");
+            run_and_collect!(omen::analyzers::graph::Analyzer, "graph");
+            run_and_collect!(omen::analyzers::hotspot::Analyzer, "hotspot");
+            run_and_collect!(omen::analyzers::temporal::Analyzer, "temporal");
+            run_and_collect!(omen::analyzers::ownership::Analyzer, "ownership");
+            run_and_collect!(omen::analyzers::cohesion::Analyzer, "cohesion");
+            run_and_collect!(omen::analyzers::repomap::Analyzer, "repomap");
+            run_and_collect!(omen::analyzers::smells::Analyzer, "smells");
+            run_and_collect!(omen::analyzers::flags::Analyzer, "flags");
+            run_and_collect!(omen::score::Analyzer, "score");
+
+            let combined = json!({ "analyzers": results });
+            println!("{}", serde_json::to_string_pretty(&combined)?);
         }
     }
 
