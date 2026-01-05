@@ -40,7 +40,7 @@ jobs:
         run: cargo build --release
 
   coverage:
-    name: Coverage
+    name: Coverage (95% minimum)
     runs-on: ubuntu-latest
 
     steps:
@@ -57,6 +57,9 @@ jobs:
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Check coverage threshold (95%)
+        run: cargo llvm-cov --all-features --fail-under-lines 95
 
       - name: Generate coverage report
         run: cargo llvm-cov --all-features --lcov --output-path lcov.info
