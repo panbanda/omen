@@ -4,14 +4,12 @@
 
 <img src="assets/omen-logo.jpg" alt="Omen - Code Analysis CLI" width="100%">
 
-[![Go Version](https://img.shields.io/github/go-mod/go-version/panbanda/omen)](https://go.dev/)
+[![Rust Version](https://img.shields.io/badge/rust-1.75%2B-orange)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/github/license/panbanda/omen)](https://github.com/panbanda/omen/blob/main/LICENSE)
-[![CI](https://github.com/panbanda/omen/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/panbanda/omen/actions/workflows/ci.yml)
+[![CI](https://github.com/panbanda/omen/actions/workflows/ci.yml/badge.svg)](https://github.com/panbanda/omen/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/panbanda/omen/graph/badge.svg)](https://codecov.io/gh/panbanda/omen)
-[![Go Report Card](https://goreportcard.com/badge/github.com/panbanda/omen)](https://goreportcard.com/report/github.com/panbanda/omen)
 [![Release](https://img.shields.io/github/v/release/panbanda/omen)](https://github.com/panbanda/omen/releases)
-[![Go Reference](https://pkg.go.dev/badge/github.com/panbanda/omen.svg)](https://pkg.go.dev/github.com/panbanda/omen)
-[![Snyk Security](https://snyk.io/test/github/panbanda/omen/badge.svg)](https://snyk.io/test/github/panbanda/omen)
+[![Crates.io](https://img.shields.io/crates/v/omen)](https://crates.io/crates/omen)
 
 **Your AI writes code without knowing where the landmines are.**
 
@@ -622,10 +620,10 @@ Go, Rust, Python, TypeScript, JavaScript, TSX/JSX, Java, C, C++, C#, Ruby, PHP, 
 brew install panbanda/omen/omen
 ```
 
-### Go Install
+### Cargo Install
 
 ```bash
-go install github.com/panbanda/omen/cmd/omen@latest
+cargo install omen
 ```
 
 ### Download Binary
@@ -637,7 +635,8 @@ Download pre-built binaries from the [releases page](https://github.com/panbanda
 ```bash
 git clone https://github.com/panbanda/omen.git
 cd omen
-go build -o omen ./cmd/omen
+cargo build --release
+# Binary at target/release/omen
 ```
 
 ## Quick Start
