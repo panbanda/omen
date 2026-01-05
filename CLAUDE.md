@@ -154,6 +154,36 @@ Analyzer subcommands (`omen analyze <subcommand>`):
 
 No production code without a failing test first.
 
+### Inspector Interface Testing
+
+When adding or modifying Inspector functionality, ensure tests exist for:
+
+1. **Per-language tests** for each Inspector method:
+   - `GetFunctions()` - Extract function/method definitions
+   - `GetClasses()` - Extract class/struct/interface definitions
+   - `GetImports()` - Extract import/use statements
+   - `GetSymbols()` - Extract all defined symbols
+   - `GetCallGraph()` - Extract function call relationships
+
+2. **Cross-cutting concerns**:
+   - Visibility detection (public/private/internal)
+   - Export status detection
+   - Location accuracy (line numbers, columns)
+   - Signature extraction
+
+3. **Edge cases**:
+   - Empty files
+   - Nested structures (classes in classes, functions in functions)
+   - Anonymous functions
+   - Decorators/annotations
+
+Run inspector tests with:
+```bash
+go test ./pkg/parser/... -run TestTreeSitterInspector -v
+```
+
+**New language support requires inspector tests.** When adding a new language to `GetTreeSitterLanguage()`, you must also add corresponding inspector tests that cover all methods and edge cases for that language.
+
 ## Supported Languages
 
 Go, Rust, Python, TypeScript, JavaScript, TSX/JSX, Java, C, C++, C#, Ruby, PHP, Bash
