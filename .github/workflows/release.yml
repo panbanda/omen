@@ -85,7 +85,7 @@ jobs:
           cp target/${{ matrix.target }}/release/omen dist/
           cd dist
           tar -czvf "${ARCHIVE_NAME}.tar.gz" omen
-          sha256sum "${ARCHIVE_NAME}.tar.gz" > "${ARCHIVE_NAME}.tar.gz.sha256"
+          shasum -a 256 "${ARCHIVE_NAME}.tar.gz" > "${ARCHIVE_NAME}.tar.gz.sha256"
 
       - name: Upload release assets
         env:
