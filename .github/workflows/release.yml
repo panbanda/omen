@@ -46,7 +46,7 @@ jobs:
             os: ubuntu-24.04-arm
             archive: tar.gz
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-14
             archive: tar.gz
           - target: aarch64-apple-darwin
             os: macos-latest
