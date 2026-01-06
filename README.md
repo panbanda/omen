@@ -9,7 +9,7 @@
 [![CI](https://github.com/panbanda/omen/actions/workflows/ci.yml/badge.svg)](https://github.com/panbanda/omen/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/panbanda/omen/graph/badge.svg)](https://codecov.io/gh/panbanda/omen)
 [![Release](https://img.shields.io/github/v/release/panbanda/omen)](https://github.com/panbanda/omen/releases)
-[![Crates.io](https://img.shields.io/crates/v/omen)](https://crates.io/crates/omen)
+[![Crates.io](https://img.shields.io/crates/v/omen-cli)](https://crates.io/crates/omen-cli)
 
 **Your AI writes code without knowing where the landmines are.**
 
