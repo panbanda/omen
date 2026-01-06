@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.2](https://github.com/panbanda/omen/compare/omen-v4.0.1...omen-v4.0.2) (2026-01-06)
+
+
+### Bug Fixes
+
+* **ci:** explicitly add cross-compilation target with rustup ([5fb3efd](https://github.com/panbanda/omen/commit/5fb3efdc226b4ca41734f15271ff8806606f12fe))
+
 ## [4.0.1](https://github.com/panbanda/omen/compare/omen-v4.0.0...omen-v4.0.1) (2026-01-06)
 
 
