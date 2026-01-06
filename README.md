@@ -626,6 +626,24 @@ brew install panbanda/omen/omen
 cargo install omen
 ```
 
+### Docker
+
+```bash
+# Pull the latest image
+docker pull ghcr.io/panbanda/omen:latest
+
+# Run analysis on current directory
+docker run --rm -v "$(pwd):/repo" ghcr.io/panbanda/omen:latest analyze /repo
+
+# Run specific analyzer
+docker run --rm -v "$(pwd):/repo" ghcr.io/panbanda/omen:latest complexity /repo
+
+# Get repository score
+docker run --rm -v "$(pwd):/repo" ghcr.io/panbanda/omen:latest score /repo
+```
+
+Multi-arch images are available for `linux/amd64` and `linux/arm64`.
+
 ### Download Binary
 
 Download pre-built binaries from the [releases page](https://github.com/panbanda/omen/releases).
