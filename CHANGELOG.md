@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.3](https://github.com/panbanda/omen/compare/omen-v4.0.2...omen-v4.0.3) (2026-01-06)
+
+
+### Bug Fixes
+
+* **ci:** use shasum for cross-platform checksum generation ([de77430](https://github.com/panbanda/omen/commit/de77430bec2e03bc736746ce833fb277d23633d0))
+
 ## [4.0.2](https://github.com/panbanda/omen/compare/omen-v4.0.1...omen-v4.0.2) (2026-01-06)
 
 
