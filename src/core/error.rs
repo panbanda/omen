@@ -61,6 +61,16 @@ pub enum Error {
     /// Threshold violation (for CI/CD integration).
     #[error("Threshold violation: {message}")]
     ThresholdViolation { message: String, score: f64 },
+
+    /// Template rendering error.
+    #[error("Template error: {0}")]
+    Template(String),
+}
+
+impl From<minijinja::Error> for Error {
+    fn from(err: minijinja::Error) -> Self {
+        Self::Template(err.to_string())
+    }
 }
 
 impl Error {

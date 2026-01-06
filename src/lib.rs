@@ -30,6 +30,7 @@ pub mod git;
 pub mod mcp;
 pub mod output;
 pub mod parser;
+pub mod report;
 pub mod score;
 
 pub use core::{AnalysisContext, AnalysisResult, Analyzer};

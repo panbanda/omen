@@ -449,68 +449,11 @@ fn run_report(
             }
         }
         ReportSubcommand::Render(args) => {
-            // Load all JSON data files and combine into HTML report
-            let mut data = serde_json::Map::new();
+            // Use the HTML report renderer (matches Go 3.x version)
+            use omen::report::Renderer;
 
-            // File list matches Go version
-            let analyzers = [
-                "metadata",
-                "complexity",
-                "satd",
-                "deadcode",
-                "churn",
-                "duplicates",
-                "defect",
-                "changes",
-                "tdg",
-                "graph",
-                "hotspots", // Go uses plural
-                "temporal",
-                "ownership",
-                "cohesion",
-                "repomap",
-                "smells",
-                "flags",
-                "score",
-            ];
-
-            for name in analyzers {
-                let file_path = args.data.join(format!("{}.json", name));
-                if file_path.exists() {
-                    if let Ok(contents) = std::fs::read_to_string(&file_path) {
-                        if let Ok(value) = serde_json::from_str::<Value>(&contents) {
-                            data.insert(name.to_string(), value);
-                        }
-                    }
-                }
-            }
-
-            // Generate minimal HTML report
-            let html = format!(
-                r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Omen Analysis Report</title>
-    <style>
-        body {{ font-family: system-ui, -apple-system, sans-serif; margin: 2rem; }}
-        h1 {{ color: #333; }}
-        pre {{ background: #f4f4f4; padding: 1rem; overflow-x: auto; }}
-    </style>
-</head>
-<body>
-    <h1>Omen Analysis Report</h1>
-    <p>Generated: {}</p>
-    <h2>Analysis Data</h2>
-    <pre>{}</pre>
-</body>
-</html>"#,
-                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
-                serde_json::to_string_pretty(&Value::Object(data))?
-            );
-
-            std::fs::write(&args.output, html)?;
+            let renderer = Renderer::new()?;
+            renderer.render_to_file(&args.data, &args.output)?;
             eprintln!("Report rendered to: {}", args.output.display());
         }
         ReportSubcommand::Serve(args) => {
