@@ -184,6 +184,93 @@ jobs:
             git push
           fi
 
+  docker:
+    name: Build Docker Images
+    needs: [release-please, build]
+    if: ${{ needs.release-please.outputs.release_created }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            platform: linux/amd64
+            arch: amd64
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            platform: linux/arm64
+            arch: arm64
+            os: ubuntu-24.04-arm
+
+    runs-on: ${{ matrix.os }}
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+
+      - name: Download release artifact
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ needs.release-please.outputs.tag_name }}"
+          VERSION="${TAG#omen-v}"
+          gh release download "$TAG" --pattern "omen_${VERSION}_${{ matrix.target }}.tar.gz"
+          tar xzf "omen_${VERSION}_${{ matrix.target }}.tar.gz" omen
+          chmod +x omen
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        env:
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          VERSION="${TAG#omen-v}"
+          docker build --platform ${{ matrix.platform }} -t ghcr.io/panbanda/omen:${VERSION}-${{ matrix.arch }} .
+          docker push ghcr.io/panbanda/omen:${VERSION}-${{ matrix.arch }}
+
+  docker-manifest:
+    name: Create Docker Manifest
+    needs: [release-please, docker]
+    if: ${{ needs.release-please.outputs.release_created }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      packages: write
+
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push manifest
+        env:
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          VERSION="${TAG#omen-v}"
+          docker manifest create ghcr.io/panbanda/omen:${VERSION} \
+            ghcr.io/panbanda/omen:${VERSION}-amd64 \
+            ghcr.io/panbanda/omen:${VERSION}-arm64
+          docker manifest push ghcr.io/panbanda/omen:${VERSION}
+
+          docker manifest create ghcr.io/panbanda/omen:latest \
+            ghcr.io/panbanda/omen:${VERSION}-amd64 \
+            ghcr.io/panbanda/omen:${VERSION}-arm64
+          docker manifest push ghcr.io/panbanda/omen:latest
+
   mcp-registry:
     name: Publish MCP Manifest
     needs: [release-please, build]
