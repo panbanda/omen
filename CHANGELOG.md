@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.5](https://github.com/panbanda/omen/compare/omen-v4.0.4...omen-v4.0.5) (2026-01-06)
+
+
+### Bug Fixes
+
+* update MCP manifest comment to reflect registry status ([1c200e7](https://github.com/panbanda/omen/commit/1c200e74891eecf7b64408c0cb7a312b8625fbe6))
+
 ## [4.0.4](https://github.com/panbanda/omen/compare/omen-v4.0.3...omen-v4.0.4) (2026-01-06)
 
 
