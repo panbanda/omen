@@ -11,6 +11,7 @@ use std::path::Path;
 
 use chrono::Utc;
 use ignore::WalkBuilder;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::analyzers::complexity;
@@ -155,18 +156,22 @@ impl Analyzer {
         files: &[std::path::PathBuf],
         root: &Path,
     ) -> Result<Vec<FileComplexity>> {
-        let mut results = Vec::new();
-
-        for file in files {
-            if let Ok(result) = self.complexity_analyzer.analyze_file(file) {
-                let rel_path = file.strip_prefix(root).unwrap_or(file);
-                results.push(FileComplexity {
-                    path: rel_path.to_string_lossy().to_string(),
-                    total_cyclomatic: result.total_cyclomatic,
-                    avg_cyclomatic: result.avg_cyclomatic,
-                });
-            }
-        }
+        let results: Vec<FileComplexity> = files
+            .par_iter()
+            .filter_map(|file| {
+                self.complexity_analyzer
+                    .analyze_file(file)
+                    .ok()
+                    .map(|result| {
+                        let rel_path = file.strip_prefix(root).unwrap_or(file);
+                        FileComplexity {
+                            path: rel_path.to_string_lossy().to_string(),
+                            total_cyclomatic: result.total_cyclomatic,
+                            avg_cyclomatic: result.avg_cyclomatic,
+                        }
+                    })
+            })
+            .collect();
 
         Ok(results)
     }

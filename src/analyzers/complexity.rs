@@ -56,8 +56,24 @@ impl Analyzer {
         }
     }
 
+    /// Maximum file size to analyze (1MB). Larger files are likely minified bundles.
+    const MAX_FILE_SIZE: u64 = 1_000_000;
+
     /// Analyze complexity for a single file.
     pub fn analyze_file(&self, path: &std::path::Path) -> Result<FileResult> {
+        // Skip files that are too large (likely minified bundles)
+        if let Ok(metadata) = std::fs::metadata(path) {
+            if metadata.len() > Self::MAX_FILE_SIZE {
+                return Err(crate::core::Error::Parse {
+                    path: path.to_path_buf(),
+                    message: format!(
+                        "File too large: {} bytes (max {})",
+                        metadata.len(),
+                        Self::MAX_FILE_SIZE
+                    ),
+                });
+            }
+        }
         let result = self.parser.parse_file(path)?;
         Ok(analyze_parse_result(&result))
     }
@@ -79,12 +95,9 @@ impl AnalyzerTrait for Analyzer {
 
         let results: Vec<FileResult> = ctx
             .files
-            .iter()
-            .par_bridge()
-            .filter_map(|path| {
-                ctx.report_progress(0, ctx.files.len());
-                self.analyze_file(path).ok()
-            })
+            .files()
+            .par_iter()
+            .filter_map(|path| self.analyze_file(path).ok())
             .collect();
 
         let summary = build_summary(&results);
@@ -285,19 +298,20 @@ fn find_function_at_line<'a>(
 
 /// Count decision points for cyclomatic complexity.
 fn count_decision_points(node: &tree_sitter::Node<'_>, source: &[u8], lang: Language) -> u32 {
-    let decision_types: std::collections::HashSet<_> =
-        get_decision_node_types(lang).iter().copied().collect();
+    // Get the static slice of decision types - no allocation needed
+    let decision_types = get_decision_node_types(lang);
     let mut count = 0;
 
     fn visit(
         node: &tree_sitter::Node<'_>,
         source: &[u8],
-        decision_types: &std::collections::HashSet<&str>,
+        decision_types: &[&str],
         count: &mut u32,
     ) {
         let kind = node.kind();
 
-        if decision_types.contains(kind) {
+        // Use slice contains - O(n) but n is small (typically < 15 items)
+        if decision_types.contains(&kind) {
             *count += 1;
         }
 
@@ -315,7 +329,7 @@ fn count_decision_points(node: &tree_sitter::Node<'_>, source: &[u8], lang: Lang
         }
     }
 
-    visit(node, source, &decision_types, &mut count);
+    visit(node, source, decision_types, &mut count);
     count
 }
 
@@ -326,31 +340,40 @@ fn calculate_cognitive_complexity(
     lang: Language,
     depth: u32,
 ) -> u32 {
-    let nesting_types: std::collections::HashSet<_> =
-        get_nesting_node_types(lang).iter().copied().collect();
-    let flat_types: std::collections::HashSet<_> =
-        get_flat_node_types(lang).iter().copied().collect();
+    // Get static slices once - no allocation needed
+    let nesting_types = get_nesting_node_types(lang);
+    let flat_types = get_flat_node_types(lang);
 
-    let mut complexity = 0;
+    fn visit(
+        node: &tree_sitter::Node<'_>,
+        nesting_types: &[&str],
+        flat_types: &[&str],
+        depth: u32,
+    ) -> u32 {
+        let mut complexity = 0;
 
-    for child in node.children(&mut node.walk()) {
-        let kind = child.kind();
+        for child in node.children(&mut node.walk()) {
+            let kind = child.kind();
 
-        if nesting_types.contains(kind) {
-            // Nesting construct: add base + depth penalty
-            complexity += 1 + depth;
-            complexity += calculate_cognitive_complexity(&child, _source, lang, depth + 1);
-        } else if flat_types.contains(kind) {
-            // Flat construct: add base + depth penalty without increasing depth
-            complexity += 1 + depth;
-            complexity += calculate_cognitive_complexity(&child, _source, lang, depth);
-        } else {
-            // Continue at same depth
-            complexity += calculate_cognitive_complexity(&child, _source, lang, depth);
+            // Use slice contains - O(n) but n is small (typically < 10 items)
+            if nesting_types.contains(&kind) {
+                // Nesting construct: add base + depth penalty
+                complexity += 1 + depth;
+                complexity += visit(&child, nesting_types, flat_types, depth + 1);
+            } else if flat_types.contains(&kind) {
+                // Flat construct: add base + depth penalty without increasing depth
+                complexity += 1 + depth;
+                complexity += visit(&child, nesting_types, flat_types, depth);
+            } else {
+                // Continue at same depth
+                complexity += visit(&child, nesting_types, flat_types, depth);
+            }
         }
+
+        complexity
     }
 
-    complexity
+    visit(node, nesting_types, flat_types, depth)
 }
 
 /// Calculate maximum nesting depth.
