@@ -237,5 +237,5 @@ Generated omen.toml with:
 - Cohesion scoring: enabled
 - Exclude patterns: 12 patterns
 
-Run `omen analyze` to verify the configuration works for your project.
+Run `omen all` to verify the configuration works for your project.
 ```

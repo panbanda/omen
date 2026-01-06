@@ -27,13 +27,13 @@ Use the Omen CLI to analyze historical scores:
 
 ```bash
 # Last 3 months, weekly sampling (default)
-omen analyze trend --since 3m
+omen score trend --since 3m
 
 # Last 6 months for quarterly report
-omen analyze trend --since 6m --period monthly
+omen score trend --since 6m --period monthly
 
 # Full year for annual review
-omen analyze trend --since 1y --period monthly
+omen score trend --since 1y --period monthly
 ```
 
 **Parameters:**
@@ -142,11 +142,11 @@ Add trend checks to release pipelines:
 
 ```bash
 # Fail if score dropped more than 5 points in last month
-omen analyze trend --since 1m --format json | \
+omen score trend --since 1m -f json | \
   jq -e '.total_change >= -5'
 
 # Generate trend report for release notes
-omen analyze trend --since 3m --format markdown > TREND_REPORT.md
+omen score trend --since 3m -f markdown > TREND_REPORT.md
 ```
 
 ## Interpreting Patterns
