@@ -623,7 +623,7 @@ brew install panbanda/omen/omen
 ### Cargo Install
 
 ```bash
-cargo install omen
+cargo install omen-cli
 ```
 
 ### Docker
