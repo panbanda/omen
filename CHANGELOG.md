@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.1](https://github.com/panbanda/omen/compare/omen-v4.0.0...omen-v4.0.1) (2026-01-06)
+
+
+### Bug Fixes
+
+* **ci:** replace retired macos-13 runner with macos-14 ([#214](https://github.com/panbanda/omen/issues/214)) ([7086f4f](https://github.com/panbanda/omen/commit/7086f4fb069d8973fed806a88420f8c49a859aec))
+
 ## [4.0.0](https://github.com/panbanda/omen/compare/omen-v3.3.0...omen-v4.0.0) (2026-01-06)
 
 
