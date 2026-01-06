@@ -3,7 +3,7 @@
   "extends": [
     "config:recommended",
     ":semanticCommits",
-    ":separateMajorMinorPatchReleases",
+    ":separateMajorReleases",
     "schedule:weekly"
   ],
   "labels": ["dependencies"],
