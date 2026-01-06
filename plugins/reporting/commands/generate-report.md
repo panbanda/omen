@@ -5,7 +5,7 @@ Generate a complete HTML health report with LLM-generated insights.
 ## Workflow
 
 1. Check for `omen.toml` or `.omen/omen.toml`. If missing, run `omen-development:setup-config` first.
-2. Generate data: `omen report generate --since 1y -o ./omen-report-$(date +%Y-%m-%d)/ .`
+2. Generate data: `omen report generate --since 1y -o ./omen-report-$(date +%Y-%m-%d)/`
 3. Create insights dir: `mkdir -p <output-dir>/insights`
 4. Spawn analyst agents in parallel (Step 3)
 5. Wait for all to complete, then spawn summary agent (Step 4)
