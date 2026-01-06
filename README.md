@@ -166,7 +166,7 @@ This approach aligns with the 80/20 rule from defect prediction research: ~20% o
 **Why it matters:** [Kamei et al. (2013)](https://ieeexplore.ieee.org/document/6341763) demonstrated that JIT prediction catches risky changes at commit time, before bugs propagate. Their effort-aware approach uses ranking rather than fixed thresholds, focusing limited review resources on the riskiest ~20% of commits. [Zeng et al. (2021)](https://ieeexplore.ieee.org/document/9463091) showed that simple JIT models match deep learning accuracy (~65%) with better interpretability.
 
 > [!TIP]
-> Run `omen analyze changes` before merging PRs to identify commits needing extra review.
+> Run `omen changes` before merging PRs to identify commits needing extra review.
 
 </details>
 
@@ -179,13 +179,13 @@ While JIT analysis examines individual commits, diff analysis evaluates an entir
 
 ```bash
 # Compare current branch against main
-omen analyze diff --target main
+omen diff --target main
 
 # Compare against a specific commit
-omen analyze diff --target abc123
+omen diff --target abc123
 
 # Output as markdown for PR comments
-omen analyze diff --target main -f markdown
+omen diff --target main -f markdown
 ```
 
 **Risk Factors:**
@@ -246,13 +246,13 @@ Risk Factors:
 # Add to GitHub Actions workflow
 - name: PR Risk Assessment
   run: |
-    omen analyze diff --target ${{ github.base_ref }} -f markdown >> $GITHUB_STEP_SUMMARY
+    omen diff --target ${{ github.base_ref }} -f markdown >> $GITHUB_STEP_SUMMARY
 ```
 
 **Why it matters:** Code review time is limited. Diff analysis helps reviewers prioritize their attention - a LOW risk PR with 10 lines changed needs less scrutiny than a MEDIUM risk PR touching 17 files. The entropy metric is particularly useful for catching PRs that bundle unrelated changes, which are harder to review and more likely to introduce bugs.
 
 > [!TIP]
-> Run `omen analyze diff` before creating a PR to understand how reviewers will perceive your changes. Consider splitting HIGH risk PRs into smaller, focused changes.
+> Run `omen diff` before creating a PR to understand how reviewers will perceive your changes. Consider splitting HIGH risk PRs into smaller, focused changes.
 
 </details>
 
@@ -523,10 +523,10 @@ TDG (Technical Debt Gradient) provides a complementary view by analyzing structu
 
 ```bash
 # Compute repository score
-omen score .
+omen score
 
 # JSON output for CI integration
-omen score . -f json
+omen -f json score
 ```
 
 **Adjusting thresholds:**
@@ -660,10 +660,10 @@ cargo build --release
 
 ```bash
 # Run all analyzers
-omen analyze
+omen all
 
 # Check out the analyzers
-omen analyze --help
+omen --help
 ```
 
 ## Remote Repository Scanning
@@ -672,19 +672,19 @@ Analyze any public GitHub repository without cloning it manually:
 
 ```bash
 # GitHub shorthand
-omen analyze complexity facebook/react
-omen analyze satd kubernetes/kubernetes
+omen -p facebook/react complexity
+omen -p kubernetes/kubernetes satd
 
 # With specific ref (branch, tag, or commit SHA)
-omen analyze agentgateway/agentgateway@v0.1.0
-omen analyze owner/repo --ref feature-branch
+omen -p agentgateway/agentgateway --ref v0.1.0 all
+omen -p owner/repo --ref feature-branch all
 
 # Full URLs
-omen analyze github.com/golang/go
-omen analyze https://github.com/vercel/next.js
+omen -p github.com/golang/go all
+omen -p https://github.com/vercel/next.js all
 
 # Shallow clone for faster analysis (static analyzers only)
-omen analyze facebook/react --shallow
+omen -p facebook/react --shallow all
 ```
 
 Omen clones to a temp directory, runs analysis, and cleans up automatically. The `--shallow` flag uses `git clone --depth 1` for faster clones but disables git-history-based analyzers (churn, ownership, hotspot, temporal coupling, changes).
@@ -779,10 +779,10 @@ Reports identify files with high churn AND high complexity - the most impactful 
 Files are graded A-F based on accumulated technical debt. The reports explain what drives low grades and prioritize cleanup efforts.
 
 **4. PR Risk Analysis**
-Each report includes a real PR analysis demonstrating `omen analyze diff`:
+Each report includes a real PR analysis demonstrating `omen diff`:
 
 ```bash
-omen analyze diff --target main -f markdown
+omen diff --target main -f markdown
 ```
 
 Example from gin-gonic/gin (#4420 - add escaped path option):
@@ -813,19 +813,19 @@ Run a comprehensive analysis on any repository:
 
 ```bash
 # Local repository
-omen score .
-omen analyze hotspot
-omen analyze tdg
+omen score
+omen hotspot
+omen tdg
 
 # Remote repository
-omen score facebook/react
-omen analyze hotspot kubernetes/kubernetes
+omen -p facebook/react score
+omen -p kubernetes/kubernetes hotspot
 
 # PR risk before merging
-omen analyze diff --target main
+omen diff --target main
 
 # Track score trends over time
-omen analyze trend --period monthly --since 6m
+omen score trend --period monthly --since 6m
 ```
 
 ## Contributing

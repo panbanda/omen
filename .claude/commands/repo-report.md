@@ -38,14 +38,14 @@ Use the defaults if the user selects them or doesn't have a preference.
 Run the following omen analyses and incorporate their results:
 
 1. **Repository Score**: `omen score` - Get overall health score and component breakdown
-2. **Complexity**: `omen analyze complexity` - Function-level cyclomatic and cognitive complexity
-3. **Hotspots**: `omen analyze hotspot` - Files with high churn + high complexity
-4. **Churn**: `omen analyze churn` - Recent file change patterns (30 days)
-5. **Ownership**: `omen analyze ownership` - Bus factor and knowledge silos
-6. **SATD**: `omen analyze satd` - Self-admitted technical debt (TODO/FIXME/HACK)
-7. **Duplication**: `omen analyze duplicates` - Code clone detection
-8. **Feature Flags**: `omen analyze flags` - Feature flag detection and staleness analysis
-9. **Trends**: `omen analyze trend --since 10y --period monthly` - Historical score trends
+2. **Complexity**: `omen complexity` - Function-level cyclomatic and cognitive complexity
+3. **Hotspots**: `omen hotspot` - Files with high churn + high complexity
+4. **Churn**: `omen churn` - Recent file change patterns (30 days)
+5. **Ownership**: `omen ownership` - Bus factor and knowledge silos
+6. **SATD**: `omen satd` - Self-admitted technical debt (TODO/FIXME/HACK)
+7. **Duplication**: `omen clones` - Code clone detection
+8. **Feature Flags**: `omen flags` - Feature flag detection and staleness analysis
+9. **Trends**: `omen score trend --since 10y --period monthly` - Historical score trends
 
 ## Report Structure
 
@@ -183,41 +183,41 @@ Parse the argument to determine the target repository:
 
 ### Step 2: Gather Analysis Data
 
-Run all required analyses in JSON format. Replace `<target>` with the repository path or GitHub reference:
+Run all required analyses in JSON format. Replace `<target>` with the repository path or GitHub reference (use `-p` flag):
 
 ```bash
 # Repository score
-omen score <target> -f json > /tmp/score.json
+omen -p <target> -f json score > /tmp/score.json
 
 # Complexity analysis
-omen analyze complexity <target> -f json > /tmp/complexity.json
+omen -p <target> -f json complexity > /tmp/complexity.json
 
 # Hotspot analysis
-omen analyze hotspot <target> -f json > /tmp/hotspot.json
+omen -p <target> -f json hotspot > /tmp/hotspot.json
 
 # Churn analysis (30 days)
-omen analyze churn <target> -f json > /tmp/churn.json
+omen -p <target> -f json churn > /tmp/churn.json
 
 # Ownership analysis
-omen analyze ownership <target> -f json > /tmp/ownership.json
+omen -p <target> -f json ownership > /tmp/ownership.json
 
 # SATD analysis
-omen analyze satd <target> -f json > /tmp/satd.json
+omen -p <target> -f json satd > /tmp/satd.json
 
 # Duplication analysis
-omen analyze duplicates <target> -f json > /tmp/duplicates.json
+omen -p <target> -f json clones > /tmp/duplicates.json
 
 # Feature flags analysis
-omen analyze flags <target> -f json > /tmp/flags.json
+omen -p <target> -f json flags > /tmp/flags.json
 
 # Trend analysis (historical)
-omen analyze trend <target> --since 10y --period monthly -f json > /tmp/trend.json
+omen -p <target> -f json score trend --since 10y --period monthly > /tmp/trend.json
 ```
 
 Examples:
-- Local: `omen score . -f json`
-- Remote: `omen score golang/go -f json`
-- Remote with ref: `omen score facebook/react@v18.2.0 -f json`
+- Local: `omen -f json score`
+- Remote: `omen -p golang/go -f json score`
+- Remote with ref: `omen -p facebook/react --ref v18.2.0 -f json score`
 
 ### Step 3: Identify Significant Events
 
