@@ -47,9 +47,10 @@ fn run(cli: Cli) -> omen::core::Result<()> {
         Command::Mcp(cmd) => {
             match cmd.subcommand {
                 Some(McpSubcommand::Manifest) => {
-                    // Output MCP manifest
+                    // Output MCP manifest for registry.modelcontextprotocol.io
                     let manifest = serde_json::json!({
-                        "name": "omen",
+                        "$schema": "https://registry.modelcontextprotocol.io/schemas/server.json",
+                        "name": "panbanda/omen",
                         "version": env!("CARGO_PKG_VERSION"),
                         "description": "Code analysis tools for AI assistants",
                         "tools": [
