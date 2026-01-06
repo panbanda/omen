@@ -1,5 +1,26 @@
 # Changelog
 
+## [4.0.0](https://github.com/panbanda/omen/compare/omen-v3.3.0...omen-v4.0.0) (2026-01-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* This release removes the Go implementation entirely and replaces it with a pure Rust implementation.
+
+### Features
+
+* complete Rust rewrite of Omen CLI ([#204](https://github.com/panbanda/omen/issues/204)) ([7d26fe2](https://github.com/panbanda/omen/commit/7d26fe2a2ec198fa4306165e3fdc9ec31fa866b4))
+* efficiency optimizations, AST abstraction, and LLM prompt improvements ([#202](https://github.com/panbanda/omen/issues/202)) ([c8cabb4](https://github.com/panbanda/omen/commit/c8cabb4ed3e1d7a0433b46037610ff0322487a9a))
+* **parser:** add Inspector interface with comprehensive tests ([#203](https://github.com/panbanda/omen/issues/203)) ([78e4075](https://github.com/panbanda/omen/commit/78e4075a77aad530d98e4baf6b7ec479978c7459))
+
+
+### Bug Fixes
+
+* added rust logo ([#206](https://github.com/panbanda/omen/issues/206)) ([51c98e7](https://github.com/panbanda/omen/commit/51c98e746cba12148f8515e17264ef68d8bf3dc0))
+* **ci:** add Docker builds and reset release manifest ([#207](https://github.com/panbanda/omen/issues/207)) ([6986e62](https://github.com/panbanda/omen/commit/6986e621bf56aca9f90408928fce1eb8a093c4fc))
+* rename crate to omen-cli and reset version for release-please ([#208](https://github.com/panbanda/omen/issues/208)) ([cd68273](https://github.com/panbanda/omen/commit/cd68273e84cfd8ed41a56ccd0cac5240f1c8069b))
+* **renovate:** replace invalid preset with :separateMajorReleases ([#211](https://github.com/panbanda/omen/issues/211)) ([18bd757](https://github.com/panbanda/omen/commit/18bd757c8e5a98fa07492f9f3d8a4130dddce896))
+
 ## [3.3.0](https://github.com/panbanda/omen/compare/omen-v3.2.0...omen-v3.3.0) (2026-01-03)
 
 
