@@ -1,7 +1,7 @@
 {
   "packages": {
     ".": {
-      "release-type": "go",
+      "release-type": "rust",
       "component": "omen"
     },
     "plugin": {

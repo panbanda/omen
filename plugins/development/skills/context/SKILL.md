@@ -15,7 +15,7 @@ Get metrics before modifying: `{{.focus}}`
 ## Quick Start
 
 ```bash
-omen context --focus "{{.focus}}" --format json
+omen -f json context --symbol "{{.focus}}"
 ```
 
 ## What You Get

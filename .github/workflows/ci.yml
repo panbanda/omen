@@ -4,10 +4,15 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
 
 jobs:
   test:
@@ -21,39 +26,50 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
-        with:
-          go-version: stable
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Test
-        run: go test -race ./...
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@v2
 
-      - name: Build
-        run: go build -o omen ./cmd/omen
+      - name: Run tests
+        run: cargo test --all-features
+
+      - name: Build release
+        run: cargo build --release
 
   coverage:
-    name: Coverage
+    name: Coverage (69% minimum)
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          go-version: stable
+          components: llvm-tools-preview
 
-      - name: Test with coverage
-        run: go test -race -coverprofile=coverage.out ./...
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Check coverage threshold (69%)
+        run: cargo llvm-cov --all-features --ignore-filename-regex 'main\.rs$' --fail-under-lines 69
+
+      - name: Generate coverage report
+        run: cargo llvm-cov --all-features --ignore-filename-regex 'main\.rs$' --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info
 
   lint:
     name: Lint
@@ -61,14 +77,35 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          go-version: stable
+          components: clippy, rustfmt
 
-      - name: Lint
-        uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
-        with:
-          version: latest
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features
+
+  msrv:
+    name: MSRV (1.92.0)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.92.0
+
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check MSRV
+        run: cargo check --all-features

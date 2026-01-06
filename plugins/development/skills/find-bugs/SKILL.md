@@ -16,14 +16,14 @@ Hunt for bugs in: `{{.paths}}`
 ## Quick Start
 
 ```bash
-# Get high-risk files
-omen analyze defect --high-risk-only --format json
+# Get high-risk files (threshold 0.8 = high risk)
+omen -f json defect --risk-threshold 0.8
 
 # Find hotspots
-omen analyze hotspot --days 30 --format json
+omen -f json hotspot --days 30
 
 # Check for explicit markers
-omen analyze satd --format json | jq '.items[] | select(.category == "defect")'
+omen -f json satd | jq '.items[] | select(.category == "defect")'
 ```
 
 ## Priority Order

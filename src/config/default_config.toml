@@ -1,0 +1,55 @@
+# Omen Configuration
+# See https://github.com/panbanda/omen for documentation
+
+# File exclusion patterns (glob)
+exclude = [
+    "**/vendor/**",
+    "**/node_modules/**",
+    "**/.git/**",
+    "**/target/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/*.min.js",
+    "**/*.generated.*",
+]
+
+[complexity]
+cyclomatic_warn = 10
+cyclomatic_error = 20
+cognitive_warn = 15
+cognitive_error = 30
+max_nesting = 5
+
+[satd]
+categories = ["design", "defect", "requirement", "test", "performance", "security"]
+custom_markers = []
+
+[churn]
+since = "6m"
+top = 20
+
+[duplicates]
+min_tokens = 50
+min_similarity = 0.9
+
+[hotspot]
+top = 20
+
+[score]
+# fail_under = 80
+
+[score.thresholds]
+# complexity = 85
+# duplication = 65
+# satd = 75
+# tdg = 70
+# coupling = 70
+# smells = 90
+# cohesion = 70
+
+[feature_flags]
+stale_days = 90
+
+[output]
+format = "text"
+color = true

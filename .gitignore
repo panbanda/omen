@@ -46,3 +46,10 @@ requirements/
 
 .devcontainer/
 docs/plans/*
+
+# Rust
+target/
+Cargo.lock
+
+# Claude Flow
+.claude-flow/

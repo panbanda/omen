@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use Omen in your research, please cite it as below."
+type: software
+title: "Omen: Multi-language Code Analysis CLI"
+version: 4.0.0
+date-released: 2025-01-06
+url: "https://github.com/panbanda/omen"
+repository-code: "https://github.com/panbanda/omen"
+license: Apache-2.0
+authors:
+  - name: "Panbanda"
+keywords:
+  - code-analysis
+  - technical-debt
+  - software-quality
+  - complexity-metrics
+  - rust
+  - tree-sitter
+abstract: >
+  Omen is a multi-language code analysis CLI for AI assistants. It provides
+  cyclomatic and cognitive complexity analysis, technical debt detection,
+  code clone detection, churn and hotspot analysis, dependency graphing,
+  and repository health scoring across 13 programming languages.

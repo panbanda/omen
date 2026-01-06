@@ -1,167 +1,123 @@
-# Omen CLI Configuration
-# Copy this file to omen.toml or .omen/omen.toml
+# Omen Configuration (Rust CLI)
+# Copy to omen.toml or .omen/omen.toml and customize
+# Documentation: https://github.com/panbanda/omen
 
-[analysis]
-# Enable/disable specific analyzers when running `omen analyze` without subcommand
-complexity = true
-satd = true
-dead_code = true
-churn = true
-duplicates = true
-defect = true      # File-level defect probability (PMAT)
-tdg = true
-graph = true
-lint_hotspot = true
-context = true
-churn_days = 30    # Days of git history to analyze
-# max_file_size = 10485760  # Skip files larger than 10MB (0 = no limit)
+# Exclude patterns (glob) - files/directories to skip during analysis
+exclude_patterns = [
+    # Test files
+    "*_test.rs",
+    "*_test.go",
+    "**/*_test.py",
+    "**/*.test.ts",
+    "**/*.test.js",
+    "**/*.spec.ts",
+    "**/*.spec.js",
+    "tests/**",
+    "test/**",
+    "**/testdata/**",
 
-[thresholds]
-cyclomatic_complexity = 10
-cognitive_complexity = 15
-duplicate_min_lines = 6
-duplicate_similarity = 0.8
-dead_code_confidence = 0.8
-defect_high_risk = 0.6
-tdg_high_risk = 3.0
+    # Generated code
+    "**/mocks/**",
+    "**/*.pb.go",
+    "**/*.gen.go",
+    "**/*.generated.*",
 
-[exclude]
-# Respect .gitignore files (default: true)
-gitignore = true
+    # Dependencies
+    "vendor/**",
+    "node_modules/**",
+    "**/site-packages/**",
 
-# File patterns to exclude (gitignore-style patterns)
-# These are the defaults - uncomment to customize
-# patterns = [
-#     # Test files
-#     "*_test.go",
-#     "*_test.ts",
-#     "*_test.py",
-#     "*.spec.ts",
-#     "*.spec.js",
-#     "*_spec.rb",
-#     "**/*_test/**",
-#     "**/test/**",
-#     "**/tests/**",
-#     "**/spec/**",
-#     # Minified assets
-#     "*.min.js",
-#     "*.min.css",
-#     # Lock files
-#     "*.lock",
-#     "go.sum",
-#     # Vendor directories
-#     "vendor/",
-#     "node_modules/",
-#     "third_party/",
-#     "external/",
-#     # Build/output directories
-#     ".git/",
-#     ".omen/",
-#     "dist/",
-#     "build/",
-#     "target/",
-#     "out/",
-#     "bin/",
-#     # Python
-#     "__pycache__/",
-#     ".venv/",
-#     "venv/",
-#     "site-packages/",
-#     # Ruby
-#     ".bundle/",
-#     "sorbet/",
-#     # Coverage/test output
-#     "coverage/",
-#     ".nyc_output/",
-#     # Auto-generated code
-#     "**/mocks/",
-#     "**/*.gen.go",
-#     "**/*.generated.go",
-#     "**/*.pb.go",
-#     "**/generated/",
-#     "**/gen/",
-#     "**/*.auto.ts",
-#     "**/*.g.dart",
-#     "*_generated.rb",
-#     # Schema/migration files
-#     "**/schema.rb",
-#     "**/structure.sql",
-#     # IDE directories
-#     ".idea/",
-#     ".vscode/",
-#     ".vs/",
-# ]
+    # Build/output directories
+    "target/**",
+    "dist/**",
+    "build/**",
+    "bin/**",
+    ".git/**",
+    ".omen/**",
 
-[cache]
-enabled = true
-dir = ".omen/cache"
-ttl = 24  # hours
+    # Lock files
+    "Cargo.lock",
+    "go.sum",
+    "package-lock.json",
+    "yarn.lock",
+    "poetry.lock",
 
-[output]
-format = "text"  # text, json, markdown, toon
-color = true
-verbose = false
+    # Documentation (optional - remove if you want to analyze docs)
+    # "**/README.md",
+    # "**/CHANGELOG.md",
+]
 
-[feature_flags]
-# Providers to detect (empty = all)
-# Available: launchdarkly, split, unleash, posthog, flipper
-providers = []
+# Complexity analysis thresholds
+[complexity]
+# Cyclomatic complexity warning threshold (default: 10)
+cyclomatic_warn = 10
+# Cyclomatic complexity error threshold (default: 20)
+cyclomatic_error = 20
+# Cognitive complexity warning threshold (default: 15)
+cognitive_warn = 15
+# Cognitive complexity error threshold (default: 30)
+cognitive_error = 30
+# Maximum nesting depth (default: 4)
+max_nesting = 4
 
-[feature_flags.expected_ttl]
-# Expected time-to-live for release flags (days)
-release = 14
-# Expected time-to-live for experiment flags (days)
-experiment = 90
+# Self-Admitted Technical Debt (SATD) detection
+[satd]
+# Categories to detect: design, defect, requirement, test, performance, security
+categories = ["design", "defect", "requirement", "test", "performance", "security"]
+# Custom markers beyond the default (TODO, FIXME, HACK, BUG, etc.)
+custom_markers = []
 
-# Repository score settings
+# Git churn analysis
+[churn]
+# Time period to analyze: "1m", "3m", "6m", "1y", "2y", "all"
+since = "6m"
+# Number of top churned files to report
+top = 20
+
+# Code clone/duplicate detection (MinHash + LSH)
+[duplicates]
+# Minimum tokens for a code block to be considered for clone detection
+min_tokens = 50
+# Minimum similarity threshold (0.0 - 1.0)
+min_similarity = 0.9
+
+# Hotspot analysis (churn x complexity)
+[hotspot]
+# Number of top hotspots to report
+top = 20
+
+# Repository health score
 [score]
-# Enable cohesion in composite score (for OO-heavy codebases).
-# When true, weights are automatically redistributed to include cohesion at 15%.
-enable_cohesion = false
+# Fail CI if score is below this threshold (optional)
+# fail_under = 70.0
 
-# Weights for composite score (must sum to 1.0)
-# When enable_cohesion = true, these weights are scaled down by 0.85 and
-# cohesion is added at 0.15.
-# Note: Defect prediction is excluded from composite scoring because it requires
-# git history (churn data) which isn't available during trend analysis. Use
-# `omen analyze defect` for standalone defect prediction.
-[score.weights]
-complexity = 0.25
-duplication = 0.20
-satd = 0.10       # Self-Admitted Technical Debt (TODO/FIXME markers)
-tdg = 0.15        # Technical Debt Gradient (comprehensive debt score)
-coupling = 0.10
-smells = 0.05
-cohesion = 0.15   # Or set to 0.0 if enable_cohesion = false
-
-# Minimum acceptable scores (0 = no enforcement)
+# Individual component score thresholds
 [score.thresholds]
-score = 0
-complexity = 0
-duplication = 0
-satd = 0
-tdg = 0
-coupling = 0
-smells = 0
-cohesion = 0
+complexity = 85.0
+duplication = 65.0
+satd = 80.0
+tdg = 90.0
+coupling = 70.0
+smells = 90.0
+cohesion = 80.0
 
-# Custom providers define tree-sitter queries for proprietary feature flag systems.
-# Each custom provider needs:
-#   - name: Provider identifier (used in --provider flag)
-#   - languages: List of languages this query applies to (go, ruby, python, javascript, etc.)
-#   - query: Tree-sitter query pattern with @flag_key capture for the flag identifier
-#
-# Example: Custom provider for a Ruby Feature class wrapping Flipper/PostHog
+# Feature flag detection
+[feature_flags]
+# Days before a flag is considered stale
+stale_days = 90
+
+# Custom feature flag providers (for in-house systems)
 # [[feature_flags.custom_providers]]
-# name = "feature"
-# languages = ["ruby"]
+# name = "my_feature_system"
+# languages = ["ruby", "python"]
 # query = '''
 # (call
 #   receiver: (constant) @receiver
 #   (#eq? @receiver "Feature")
 #   method: (identifier) @method
-#   (#match? @method "^(enabled\\?|get_feature_flag)$")
+#   (#match? @method "^enabled\\?$")
 #   arguments: (argument_list
 #     .
 #     (simple_symbol) @flag_key))
 # '''
+custom_providers = []
