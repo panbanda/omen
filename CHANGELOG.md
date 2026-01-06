@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.4](https://github.com/panbanda/omen/compare/omen-v4.0.3...omen-v4.0.4) (2026-01-06)
+
+
+### Bug Fixes
+
+* **mcp:** add schema and fix name format for MCP registry ([78b741a](https://github.com/panbanda/omen/commit/78b741a6b20df52373780db2d48db684a6080e88))
+
 ## [4.0.3](https://github.com/panbanda/omen/compare/omen-v4.0.2...omen-v4.0.3) (2026-01-06)
 
 
