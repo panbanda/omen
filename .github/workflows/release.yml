@@ -275,7 +275,9 @@ jobs:
   mcp-registry:
     name: Publish MCP Manifest
     needs: [release-please, build]
-    if: ${{ needs.release-please.outputs.release_created }}
+    # Disabled: MCP registry now requires MCPB bundle format with URLs containing "mcp"
+    # TODO: Create proper .mcpb bundles for MCP registry support
+    if: false
     runs-on: ubuntu-latest
 
     permissions:
