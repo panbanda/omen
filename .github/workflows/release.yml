@@ -65,8 +65,9 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+
+      - name: Add cross-compilation target
+        run: rustup target add ${{ matrix.target }}
 
       - name: Cache cargo registry and build
         uses: Swatinem/rust-cache@v2
