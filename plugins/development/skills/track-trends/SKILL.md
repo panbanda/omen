@@ -142,11 +142,11 @@ Add trend checks to release pipelines:
 
 ```bash
 # Fail if score dropped more than 5 points in last month
-omen score trend --since 1m -f json | \
+omen -f json score trend --since 1m | \
   jq -e '.total_change >= -5'
 
 # Generate trend report for release notes
-omen score trend --since 3m -f markdown > TREND_REPORT.md
+omen -f markdown score trend --since 3m > TREND_REPORT.md
 ```
 
 ## Interpreting Patterns

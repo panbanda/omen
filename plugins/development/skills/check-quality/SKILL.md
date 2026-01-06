@@ -17,13 +17,13 @@ Assess quality of: `{{.paths}}`
 
 ```bash
 # Get health score (0-100)
-omen score -f json
+omen -f json score
 
 # Check complexity violations
-omen complexity -f json | jq '.files[].functions[] | select(.metrics.cyclomatic > 15)'
+omen -f json complexity | jq '.files[].functions[] | select(.metrics.cyclomatic > 15)'
 
 # Find architectural smells
-omen smells -f json
+omen -f json smells
 ```
 
 ## Score Interpretation

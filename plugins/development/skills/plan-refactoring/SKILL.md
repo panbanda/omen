@@ -17,13 +17,13 @@ Find refactoring targets in: `{{.paths}}`
 
 ```bash
 # Find hotspots (high churn + complexity)
-omen hotspot -n 10 -f json
+omen -f json hotspot -n 10
 
 # Find code clones
-omen clones --min-tokens 50 -f json
+omen -f json clones --min-tokens 50
 
 # Find acknowledged debt
-omen satd -f json | jq '.items[] | select(.category == "design")'
+omen -f json satd | jq '.items[] | select(.category == "design")'
 ```
 
 ## Priority Matrix

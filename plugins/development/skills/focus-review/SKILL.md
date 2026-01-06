@@ -16,13 +16,13 @@ Review focus for: `{{.changed_files}}`
 
 ```bash
 # Check risk of changed files
-omen defect -p "{{.changed_files}}" -f json
+omen -p "{{.changed_files}}" -f json defect
 
 # Check complexity
-omen complexity -p "{{.changed_files}}" -f json
+omen -p "{{.changed_files}}" -f json complexity
 
 # Check for new debt
-omen satd -p "{{.changed_files}}" -f json
+omen -p "{{.changed_files}}" -f json satd
 ```
 
 ## Review Checklist
