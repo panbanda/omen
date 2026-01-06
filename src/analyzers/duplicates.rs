@@ -4,8 +4,6 @@
 //! then verifies with actual Jaccard similarity calculation.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::RwLock;
 
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -72,10 +70,6 @@ impl Default for Config {
 pub struct Analyzer {
     config: Config,
     max_file_size: usize,
-    identifier_counter: AtomicU32,
-    /// Maps identifiers to their canonical names (VAR_N) for normalization.
-    /// This ensures the same identifier always gets the same canonical name.
-    identifier_map: RwLock<HashMap<String, String>>,
 }
 
 impl Default for Analyzer {
@@ -89,8 +83,6 @@ impl Analyzer {
         Self {
             config: Config::default(),
             max_file_size: 0, // No limit
-            identifier_counter: AtomicU32::new(0),
-            identifier_map: RwLock::new(HashMap::new()),
         }
     }
 
@@ -278,7 +270,11 @@ impl Analyzer {
         // Normalize and tokenize
         let normalized = self.normalize_code(&content);
         let tokens = tokenize(&normalized);
-        let normalized_tokens = self.normalize_tokens(&tokens);
+
+        // Normalize tokens with a FRESH identifier map for each fragment.
+        // This ensures structurally identical code in different files produces
+        // identical token sequences, enabling proper similarity detection.
+        let normalized_tokens = normalize_tokens_fresh(&tokens, &self.config);
 
         // Check minimum token count
         if normalized_tokens.len() < self.config.min_tokens {
@@ -316,72 +312,6 @@ impl Analyzer {
         }
 
         result
-    }
-
-    /// Apply identifier and literal normalization to tokens.
-    fn normalize_tokens(&self, tokens: &[String]) -> Vec<String> {
-        tokens
-            .iter()
-            .filter_map(|token| self.normalize_token(token))
-            .collect()
-    }
-
-    /// Normalize a single token.
-    fn normalize_token(&self, token: &str) -> Option<String> {
-        if token.is_empty() {
-            return None;
-        }
-
-        // Keywords are not normalized
-        if is_keyword(token) {
-            return Some(token.to_string());
-        }
-
-        // Literals
-        if is_literal(token) {
-            if self.config.normalize_literals {
-                return Some("LITERAL".to_string());
-            }
-            return Some(token.to_string());
-        }
-
-        // Operators and delimiters are not normalized
-        if is_operator_or_delimiter(token) {
-            return Some(token.to_string());
-        }
-
-        // Identifiers - use canonical name mapping
-        if self.config.normalize_identifiers {
-            return Some(self.canonicalize_identifier(token));
-        }
-
-        Some(token.to_string())
-    }
-
-    /// Canonicalize an identifier to a canonical name (VAR_N).
-    /// Ensures the same identifier always gets the same canonical name.
-    fn canonicalize_identifier(&self, name: &str) -> String {
-        // First try to read from the map
-        {
-            let map = self.identifier_map.read().unwrap();
-            if let Some(canonical) = map.get(name) {
-                return canonical.clone();
-            }
-        }
-
-        // Not found, acquire write lock and insert
-        let mut map = self.identifier_map.write().unwrap();
-
-        // Double-check after acquiring write lock (another thread may have inserted)
-        if let Some(canonical) = map.get(name) {
-            return canonical.clone();
-        }
-
-        // Create new canonical name
-        let id = self.identifier_counter.fetch_add(1, Ordering::Relaxed);
-        let canonical = format!("VAR_{}", id);
-        map.insert(name.to_string(), canonical.clone());
-        canonical
     }
 
     /// Compute MinHash signature for a token sequence.
@@ -1025,6 +955,54 @@ fn is_literal(token: &str) -> bool {
     false
 }
 
+/// Normalize tokens with a fresh identifier map.
+/// Each fragment gets its own identifier numbering, so structurally identical
+/// code in different files will produce identical token sequences.
+fn normalize_tokens_fresh(tokens: &[String], config: &Config) -> Vec<String> {
+    let mut identifier_map: HashMap<String, String> = HashMap::new();
+    let mut counter = 0u32;
+
+    tokens
+        .iter()
+        .filter_map(|token| {
+            if token.is_empty() {
+                return None;
+            }
+
+            // Keywords are not normalized
+            if is_keyword(token) {
+                return Some(token.clone());
+            }
+
+            // Literals
+            if is_literal(token) {
+                if config.normalize_literals {
+                    return Some("LITERAL".to_string());
+                }
+                return Some(token.clone());
+            }
+
+            // Operators and delimiters are not normalized
+            if is_operator_or_delimiter(token) {
+                return Some(token.clone());
+            }
+
+            // Identifiers - use per-fragment canonical name
+            if config.normalize_identifiers {
+                if let Some(canonical) = identifier_map.get(token) {
+                    return Some(canonical.clone());
+                }
+                let canonical = format!("VAR_{}", counter);
+                counter += 1;
+                identifier_map.insert(token.clone(), canonical.clone());
+                return Some(canonical);
+            }
+
+            Some(token.clone())
+        })
+        .collect()
+}
+
 /// Check if a token is an operator or delimiter.
 fn is_operator_or_delimiter(token: &str) -> bool {
     matches!(
@@ -1472,17 +1450,23 @@ mod tests {
 
     #[test]
     fn test_canonicalize_identifier_consistency() {
-        let analyzer = Analyzer::new();
+        let config = Config::default();
 
-        // Same identifier should always get the same canonical name
-        let name1 = analyzer.canonicalize_identifier("myVariable");
-        let name2 = analyzer.canonicalize_identifier("myVariable");
-        let name3 = analyzer.canonicalize_identifier("otherVariable");
-        let name4 = analyzer.canonicalize_identifier("myVariable");
+        // Same identifier within a fragment should get the same canonical name
+        let tokens = vec![
+            "myVariable".to_string(),
+            "otherVariable".to_string(),
+            "myVariable".to_string(),
+            "myVariable".to_string(),
+        ];
+        let normalized = normalize_tokens_fresh(&tokens, &config);
 
-        assert_eq!(name1, name2);
-        assert_eq!(name1, name4);
-        assert_ne!(name1, name3);
+        // myVariable appears first -> VAR_0
+        // otherVariable appears second -> VAR_1
+        assert_eq!(normalized[0], "VAR_0");
+        assert_eq!(normalized[1], "VAR_1");
+        assert_eq!(normalized[2], "VAR_0"); // Same as first
+        assert_eq!(normalized[3], "VAR_0"); // Same as first
     }
 
     #[test]
@@ -1511,6 +1495,155 @@ mod tests {
         assert!(is_function_start("def my_method", "ruby"));
         assert!(is_function_start("def self.class_method", "ruby"));
         assert!(!is_function_start("class MyClass", "ruby"));
+    }
+
+    /// Test Ruby fragment extraction works correctly.
+    #[test]
+    fn test_ruby_fragment_extraction() {
+        let analyzer = Analyzer::new().with_min_tokens(5);
+
+        let code = r#"class UserService
+  def find_user(email)
+    return @cache[email] if @cache[email]
+    user = @repo.find(email)
+    if user
+      @cache[email] = user
+      return user
+    end
+    nil
+  end
+end
+"#;
+        let fragments = analyzer.extract_fragments("test.rb", code.as_bytes());
+
+        // We should extract the find_user method as a fragment
+        assert!(
+            !fragments.is_empty(),
+            "Should extract at least one fragment from Ruby file"
+        );
+
+        // The fragment should contain the full method (lines 2-11)
+        let frag = &fragments[0];
+        assert!(
+            frag.tokens.len() >= 10,
+            "Ruby method should have at least 10 tokens, got {}",
+            frag.tokens.len()
+        );
+    }
+
+    /// Test Ruby token normalization produces identical tokens for structurally identical code.
+    #[test]
+    fn test_ruby_token_similarity() {
+        let analyzer = Analyzer::new().with_min_tokens(5);
+
+        let code1 = r#"def find_user(email)
+  return @cache[email] if @cache[email]
+  user = @repo.find(email)
+  if user
+    @cache[email] = user
+    return user
+  end
+  nil
+end
+"#;
+        let code2 = r#"def find_product(sku)
+  return @cache[sku] if @cache[sku]
+  product = @repo.find(sku)
+  if product
+    @cache[sku] = product
+    return product
+  end
+  nil
+end
+"#;
+        let frags1 = analyzer.extract_fragments("a.rb", code1.as_bytes());
+        let frags2 = analyzer.extract_fragments("b.rb", code2.as_bytes());
+
+        assert!(!frags1.is_empty(), "Should extract fragment from code1");
+        assert!(!frags2.is_empty(), "Should extract fragment from code2");
+
+        // Per-fragment normalization means structurally identical code produces
+        // identical token sequences
+        assert_eq!(
+            frags1[0].tokens, frags2[0].tokens,
+            "Structurally identical Ruby methods should produce identical normalized tokens"
+        );
+
+        let sig1 = analyzer.compute_minhash(&frags1[0].tokens);
+        let sig2 = analyzer.compute_minhash(&frags2[0].tokens);
+        let similarity = sig1.jaccard_similarity(&sig2);
+
+        // Identical tokens should produce perfect similarity
+        assert!(
+            (similarity - 1.0).abs() < 0.001,
+            "Expected similarity = 1.0, got {:.2}",
+            similarity
+        );
+    }
+
+    /// Ruby functions should be detected as clones when they have similar structure
+    #[test]
+    fn test_analyze_ruby_clones() {
+        let tmp_dir = TempDir::new().unwrap();
+
+        // Two Ruby files with structurally similar methods
+        let code1 = r#"class UserService
+  def find_user_by_email(email)
+    return @cache[email] if @cache[email]
+    user = @repository.find_by(email: email)
+    if user
+      @cache[email] = user
+      @logger.info("Found user")
+      @metrics.increment(:user_found)
+      return user
+    end
+    @logger.warn("User not found")
+    @metrics.increment(:user_not_found)
+    nil
+  end
+end
+"#;
+        let code2 = r#"class ProductService
+  def find_product_by_sku(sku)
+    return @cache[sku] if @cache[sku]
+    product = @repository.find_by(sku: sku)
+    if product
+      @cache[sku] = product
+      @logger.info("Found product")
+      @metrics.increment(:product_found)
+      return product
+    end
+    @logger.warn("Product not found")
+    @metrics.increment(:product_not_found)
+    nil
+  end
+end
+"#;
+
+        let file1 = tmp_dir.path().join("user_service.rb");
+        let file2 = tmp_dir.path().join("product_service.rb");
+        fs::write(&file1, code1).unwrap();
+        fs::write(&file2, code2).unwrap();
+
+        let analyzer = Analyzer::new()
+            .with_min_tokens(15)
+            .with_similarity_threshold(0.7);
+
+        let config = CoreConfig::default();
+        let file_set = FileSet::from_path(tmp_dir.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&file_set, &config, Some(tmp_dir.path()));
+
+        let analysis = analyzer.analyze(&ctx).unwrap();
+
+        assert_eq!(analysis.total_files_scanned, 2, "expected 2 files scanned");
+        // Should detect the similar Ruby methods as clones
+        assert!(
+            !analysis.groups.is_empty(),
+            "Expected at least 1 clone group for similar Ruby methods, got 0. \
+             Summary: total_lines={}, duplicated_lines={}",
+            analysis.summary.total_lines,
+            analysis.summary.duplicated_lines
+        );
     }
 
     #[test]

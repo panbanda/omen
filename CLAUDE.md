@@ -6,145 +6,123 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Setup git hooks (run once after clone)
-task setup
+lefthook install
 
-# Format, vet, and tidy dependencies
-task tidy
+# Format code
+cargo fmt
 
 # Run linter
-task lint
+cargo clippy --all-targets --all-features -- -D warnings
 
-# Run all checks and tests
-task test
-
-# Build the CLI
-go build -o omen ./cmd/omen
-
-# Run a single test
-go test ./pkg/analyzer/complexity -run TestComplexity
-
-# Run tests with verbose output
-go test -v ./pkg/analyzer/...
+# Run all tests
+cargo test
 
 # Run tests with coverage
-go test -coverprofile=/tmp/cover.out ./pkg/analyzer/complexity/... && go tool cover -func=/tmp/cover.out
+cargo llvm-cov --all-features --ignore-filename-regex 'main\.rs$'
+
+# Build release binary
+cargo build --release
+
+# Run a single test
+cargo test test_complexity_simple
+
+# Run tests for a specific module
+cargo test analyzers::complexity
 ```
 
 ## Architecture
 
-Omen is a multi-language code analysis CLI built in Go. It uses tree-sitter for parsing source code across 13 languages.
+Omen is a multi-language code analysis CLI built in Rust. It uses tree-sitter for parsing source code across 13 languages.
 
-### Package Structure
+### Module Structure
 
-**Public packages** (`pkg/`) - stable API for external consumers:
-- `pkg/parser/` - Tree-sitter wrapper for multi-language AST parsing
-- `pkg/config/` - Configuration loading (TOML/YAML/JSON via koanf)
-- `pkg/analyzer/<name>/` - Each analyzer is a self-contained package with co-located types
-
-**Analyzer packages** (`pkg/analyzer/`):
-- `changes/` - JIT commit-level change risk (Kamei et al. 2013)
-- `churn/` - Git history file churn analysis
-- `cohesion/` - CK object-oriented metrics (LCOM, WMC, CBO, DIT)
-- `commit/` - Score trend analysis over git history
-- `complexity/` - Cyclomatic and cognitive complexity
-- `deadcode/` - Unused code detection
-- `defect/` - File-level defect probability (PMAT weights)
-- `duplicates/` - Code clone detection
-- `featureflags/` - Feature flag detection with tree-sitter queries
-- `graph/` - Dependency graph generation
-- `hotspot/` - High churn + high complexity files
-- `ownership/` - Code ownership and bus factor
-- `repomap/` - PageRank-weighted symbol map
-- `satd/` - Self-admitted technical debt detection
-- `score/` - Repository health scoring (0-100)
-- `smells/` - Architectural smell detection (cycles, hubs, god components)
-- `tdg/` - Technical Debt Gradient scores
-- `temporal/` - Temporal coupling analysis
-
-**Internal packages** (`internal/`) - implementation details:
-- `cache/` - Result caching with Blake3 hashing
-- `fileproc/` - Concurrent file processing utilities
-- `locator/` - File and symbol location resolution
-- `mcpserver/` - MCP server implementation with tools and prompts
-- `output/` - Output formatting (text/JSON/markdown/toon)
-- `progress/` - Progress bars and spinners
-- `remote/` - Remote repository cloning and handling
-- `report/` - HTML report rendering and insight schema types
-- `scanner/` - File discovery with configurable exclusion patterns
-- `semantic/` - Language-aware semantic extraction for indirect function references (callbacks, decorators, dynamic dispatch)
-- `service/` - High-level service layer coordinating analyzers
-- `testutil/` - Test utilities
-- `vcs/` - Git operations (blame, log, diff)
-
-**CLI** (`cmd/omen/`) - Entry point using spf13/cobra with persistent flag inheritance
+```
+src/
+  cli/           - CLI entry point using clap
+  config/        - Configuration loading (TOML)
+  core/          - Core types and traits
+  analyzers/     - Analysis implementations
+    complexity/  - Cyclomatic and cognitive complexity
+    satd/        - Self-admitted technical debt
+    deadcode/    - Unused code detection
+    churn/       - Git history file churn
+    clones/      - Code clone detection (MinHash+LSH)
+    defect/      - Defect probability (PMAT)
+    changes/     - JIT commit-level risk
+    diff/        - PR/branch diff analysis
+    tdg/         - Technical Debt Gradient
+    graph/       - Dependency graph (Mermaid)
+    hotspot/     - High churn + complexity
+    temporal/    - Temporal coupling
+    ownership/   - Code ownership and bus factor
+    cohesion/    - CK metrics (WMC, CBO, RFC, LCOM4, DIT, NOC)
+    repomap/     - PageRank-ranked symbols
+    smells/      - Architectural smells (Tarjan SCC)
+    flags/       - Feature flag detection
+    lint_hotspot/- Lint violation density
+  git/           - Git operations (log, blame, diff)
+  parser/        - Tree-sitter wrapper
+  mcp/           - MCP server for LLM integration
+  output/        - Output formatting (JSON/Markdown/text)
+  score/         - Repository health scoring
+```
 
 ### Key Patterns
 
-**Analyzer pattern**: Each analyzer in `pkg/analyzer/<name>/` follows the same structure:
-1. Create analyzer with `New()` plus functional options
-2. Analyze single file with `AnalyzeFile(path)`
-3. Analyze project with `AnalyzeProject(path)` or `AnalyzeProjectWithProgress(path, progressFn)`
-4. Close with `Close()` to release parser resources
-5. Types are co-located in the same package (no separate models package)
+**Analyzer pattern**: Each analyzer module follows the same structure:
+1. Public `analyze()` function taking path and options
+2. Returns a result struct with analysis data
+3. Implements `Serialize` for JSON output
+4. Uses rayon for parallel file processing
 
-**Multi-language parsing**: `pkg/parser/parser.go` contains `DetectLanguage()` which maps file extensions to tree-sitter parsers. Add new language support by extending `GetTreeSitterLanguage()`, `getFunctionNodeTypes()`, and `getClassNodeTypes()`.
+**Multi-language parsing**: `parser/mod.rs` contains `Language` enum and `Parser` struct. Add new language support by:
+1. Adding variant to `Language` enum
+2. Implementing tree-sitter grammar in `parser()`
+3. Adding node types in extraction functions
 
-**Concurrent file processing**: `internal/fileproc/` provides generic parallel processing:
-- `MapFiles[T]` - For AST-based analyzers (parser provided per worker)
-- `ForEachFile[T]` - For non-AST operations (e.g., SATD regex scanning)
-- Both use 2x NumCPU workers, optimal for mixed I/O and CGO workloads
+**Concurrent file processing**: Uses rayon's parallel iterators:
+```rust
+files.par_iter()
+    .filter_map(|path| analyze_file(path).ok())
+    .collect()
+```
 
 **Configuration**: Config loaded from `omen.toml` or `.omen/omen.toml`. See `omen.example.toml` for all options.
 
-**Tree-sitter queries**: Feature flag detection uses `.scm` query files in `pkg/analyzer/featureflags/queries/<lang>/<provider>.scm`. Queries must capture `@flag_key` for the flag identifier. Predicates like `#match?` and `#eq?` must be placed inline within patterns, and `FilterPredicates()` must be called to evaluate them.
-
-**Semantic extractors**: `internal/semantic/` provides language-aware extraction of indirect function references that bypass normal call graphs. Each language has a dedicated extractor (Go, Ruby, TypeScript) with embedded tree-sitter queries. Extractors return `[]Ref` where each `Ref` has a `Name` and `Kind` (RefCallback, RefDecorator, RefFunctionValue, RefDynamicCall). Used by the deadcode analyzer to reduce false positives for framework patterns.
-
-**MCP server**: Tools are registered in `internal/mcpserver/mcpserver.go`. Each tool has a description in `descriptions.go`. Prompts are stored as markdown files in `internal/mcpserver/prompts/` using `go:embed`.
-
-**Skills**: Claude Code skills live in `skills/<skill-name>/SKILL.md`. Register the repository as a plugin marketplace with `/plugin marketplace add panbanda/omen`, then install skills with `/plugin install <skill-name>@omen` (e.g., `/plugin install find-bugs@omen`).
+**MCP server**: JSON-RPC server in `mcp/` module exposing all analyzers as tools for LLM integration.
 
 ### CLI Commands
 
-Top-level commands:
-- `analyze` / `a` - Run analyzers (all if no subcommand, or specific one)
-- `context` / `ctx` - Deep context generation for LLMs
-- `mcp` - Start MCP server for LLM tool integration
-- `report` - Generate and manage HTML health reports
+Top-level commands (flat structure):
+- `complexity` - Cyclomatic and cognitive complexity
+- `satd` - Self-admitted technical debt
+- `deadcode` - Unused code detection
+- `churn` - Git history file churn
+- `clones` - Code clone detection
+- `defect` - Defect probability prediction
+- `changes` - Commit-level change risk (JIT)
+- `diff` - Branch diff risk analysis
+- `tdg` - Technical Debt Gradient
+- `graph` - Dependency graph
+- `hotspot` - High churn + complexity files
+- `temporal` - Temporal coupling
+- `ownership` - Code ownership and bus factor
+- `cohesion` - CK object-oriented metrics
+- `repomap` - PageRank-ranked symbol map
+- `smells` - Architectural smell detection
+- `flags` - Feature flag detection
+- `lint-hotspot` - Lint violation density
+- `score` - Repository health score
+- `all` - Run all analyzers
+- `context` - Deep context for LLMs
+- `report` - HTML health reports
+- `mcp` - Start MCP server
 
-Report subcommands (`omen report <subcommand>`):
-- `generate` - Run all analyzers and output JSON data files
-- `validate` - Validate data files against schemas
-- `render` - Combine data + insights into self-contained HTML
-- `serve` - Serve HTML with live re-render on request
-
-Analyzer subcommands (`omen analyze <subcommand>`):
-- `complexity` / `cx` - Cyclomatic and cognitive complexity
-- `satd` / `debt` - Self-admitted technical debt detection
-- `deadcode` / `dc` - Unused code detection
-- `churn` - Git history analysis for file churn
-- `duplicates` / `dup` - Code clone detection
-- `defect` / `predict` - File-level defect probability (PMAT weights)
-- `changes` / `jit` - Commit-level change risk analysis (Kamei et al. 2013)
-- `diff` / `pr` - Branch diff risk analysis for PR review
-- `tdg` - Technical Debt Gradient scores
-- `graph` / `dag` - Dependency graph (Mermaid output)
-- `hotspot` / `hs` - High churn + high complexity files
-- `smells` - Architectural smell detection (cycles, hubs, god components)
-- `temporal-coupling` / `tc` - Files that change together
-- `ownership` / `own` / `bus-factor` - Code ownership and bus factor
-- `cohesion` / `ck` - CK object-oriented metrics
-- `lint-hotspot` / `lh` - Lint violation density
-- `flags` / `ff` - Feature flag detection and staleness analysis
-- `trend` - Score trends over git history
-
-**Global flags**: `--config`, `--verbose`, `--pprof`
-
-**Command flags** (on `analyze` and subcommands): `-f/--format` (text/json/markdown/toon), `-o/--output`, `--no-cache`
+**Global flags**: `-p/--path`, `-f/--format`, `-c/--config`, `-v/--verbose`, `-j/--jobs`, `--no-cache`, `--ref`, `--shallow`
 
 ## Development Workflow
 
-**Always use Test-Driven Development (TDD).** Use the `test-driven-development` skill when implementing new features or fixing bugs:
+**Always use Test-Driven Development (TDD):**
 
 1. RED: Write a failing test first
 2. Verify the test fails for the expected reason
@@ -154,35 +132,29 @@ Analyzer subcommands (`omen analyze <subcommand>`):
 
 No production code without a failing test first.
 
-### Inspector Interface Testing
+### Test Organization
 
-When adding or modifying Inspector functionality, ensure tests exist for:
+Tests are co-located with source files using `#[cfg(test)]` modules:
 
-1. **Per-language tests** for each Inspector method:
-   - `GetFunctions()` - Extract function/method definitions
-   - `GetClasses()` - Extract class/struct/interface definitions
-   - `GetImports()` - Extract import/use statements
-   - `GetSymbols()` - Extract all defined symbols
-   - `GetCallGraph()` - Extract function call relationships
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-2. **Cross-cutting concerns**:
-   - Visibility detection (public/private/internal)
-   - Export status detection
-   - Location accuracy (line numbers, columns)
-   - Signature extraction
-
-3. **Edge cases**:
-   - Empty files
-   - Nested structures (classes in classes, functions in functions)
-   - Anonymous functions
-   - Decorators/annotations
-
-Run inspector tests with:
-```bash
-go test ./pkg/parser/... -run TestTreeSitterInspector -v
+    #[test]
+    fn test_feature() {
+        // ...
+    }
+}
 ```
 
-**New language support requires inspector tests.** When adding a new language to `GetTreeSitterLanguage()`, you must also add corresponding inspector tests that cover all methods and edge cases for that language.
+Integration tests live in `tests/` directory.
+
+### Coverage Requirements
+
+- Minimum 69% line coverage enforced by CI
+- Run `cargo llvm-cov` to check coverage locally
+- Coverage report excludes `main.rs`
 
 ## Supported Languages
 
