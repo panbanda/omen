@@ -7,7 +7,6 @@
 [![Rust Version](https://img.shields.io/badge/rust-1.92%2B-orange)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/github/license/panbanda/omen)](https://github.com/panbanda/omen/blob/main/LICENSE)
 [![CI](https://github.com/panbanda/omen/actions/workflows/ci.yml/badge.svg)](https://github.com/panbanda/omen/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/panbanda/omen/graph/badge.svg)](https://codecov.io/gh/panbanda/omen)
 [![Release](https://img.shields.io/github/v/release/panbanda/omen)](https://github.com/panbanda/omen/releases)
 [![Crates.io](https://img.shields.io/crates/v/omen-cli)](https://crates.io/crates/omen-cli)
 
