@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 
 use crate::config::Config;
 use crate::core::{AnalysisContext, Analyzer, FileSet, Result};
+use crate::git::GitRepo;
 
 /// MCP Server for LLM tool integration.
 pub struct McpServer {
@@ -322,7 +323,13 @@ impl McpServer {
         let file_set = FileSet::from_path(&path, &self.config)
             .map_err(|e| format!("Failed to create file set: {}", e))?;
 
-        let ctx = AnalysisContext::new(&file_set, &self.config, Some(&self.root_path));
+        // Try to open a git repository at the path
+        let git_root = GitRepo::open(&path).ok().map(|r| r.root().to_path_buf());
+
+        let mut ctx = AnalysisContext::new(&file_set, &self.config, Some(&self.root_path));
+        if let Some(ref git_path) = git_root {
+            ctx = ctx.with_git_path(git_path);
+        }
 
         let result = match tool_name {
             "complexity" => self.run_analyzer::<crate::analyzers::complexity::Analyzer>(&ctx),
@@ -668,5 +675,114 @@ mod tests {
                 tool.get("name").unwrap()
             );
         }
+    }
+
+    fn create_git_test_server() -> (McpServer, TempDir) {
+        use std::process::Command;
+
+        let temp_dir = TempDir::new().unwrap();
+
+        // Initialize git repo
+        Command::new("git")
+            .args(["init"])
+            .current_dir(temp_dir.path())
+            .output()
+            .expect("Failed to init git repo");
+
+        // Configure git user for commits
+        Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(temp_dir.path())
+            .output()
+            .expect("Failed to configure git email");
+
+        Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(temp_dir.path())
+            .output()
+            .expect("Failed to configure git name");
+
+        // Create and commit a test file
+        std::fs::write(temp_dir.path().join("test.rs"), "fn main() {}").unwrap();
+
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(temp_dir.path())
+            .output()
+            .expect("Failed to git add");
+
+        Command::new("git")
+            .args(["commit", "-m", "Initial commit"])
+            .current_dir(temp_dir.path())
+            .output()
+            .expect("Failed to git commit");
+
+        let config = Config::default();
+        let server = McpServer::new(temp_dir.path().to_path_buf(), config);
+        (server, temp_dir)
+    }
+
+    #[test]
+    fn test_handle_tool_call_ownership_with_git() {
+        let (server, temp_dir) = create_git_test_server();
+
+        let params = json!({
+            "name": "ownership",
+            "arguments": {"path": temp_dir.path().to_str().unwrap()}
+        });
+        let result = server.handle_tool_call(Some(params));
+        assert!(
+            result.is_ok(),
+            "ownership tool should succeed with git history: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_handle_tool_call_churn_with_git() {
+        let (server, temp_dir) = create_git_test_server();
+
+        let params = json!({
+            "name": "churn",
+            "arguments": {"path": temp_dir.path().to_str().unwrap()}
+        });
+        let result = server.handle_tool_call(Some(params));
+        assert!(
+            result.is_ok(),
+            "churn tool should succeed with git history: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_handle_tool_call_hotspot_with_git() {
+        let (server, temp_dir) = create_git_test_server();
+
+        let params = json!({
+            "name": "hotspot",
+            "arguments": {"path": temp_dir.path().to_str().unwrap()}
+        });
+        let result = server.handle_tool_call(Some(params));
+        assert!(
+            result.is_ok(),
+            "hotspot tool should succeed with git history: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_handle_tool_call_temporal_with_git() {
+        let (server, temp_dir) = create_git_test_server();
+
+        let params = json!({
+            "name": "temporal",
+            "arguments": {"path": temp_dir.path().to_str().unwrap()}
+        });
+        let result = server.handle_tool_call(Some(params));
+        assert!(
+            result.is_ok(),
+            "temporal tool should succeed with git history: {:?}",
+            result.err()
+        );
     }
 }
