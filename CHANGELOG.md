@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.0](https://github.com/panbanda/omen/compare/omen-v4.0.5...omen-v4.1.0) (2026-01-06)
+
+
+### Features
+
+* **report:** add HTML report rendering matching Go 3.x version ([#224](https://github.com/panbanda/omen/issues/224)) ([3af50da](https://github.com/panbanda/omen/commit/3af50da6abb6a100bb40ce5440cd90aa38c4f6bc))
+
 ## [4.0.5](https://github.com/panbanda/omen/compare/omen-v4.0.4...omen-v4.0.5) (2026-01-06)
 
 
