@@ -12,7 +12,7 @@ use crate::core::{Error, Result};
 
 pub use blame::BlameInfo;
 pub use log::{Commit, CommitStats, FileChange};
-pub use remote::clone_remote;
+pub use remote::{clone_remote, is_remote_repo, CloneOptions};
 
 /// Git repository wrapper for analysis operations.
 pub struct GitRepo {

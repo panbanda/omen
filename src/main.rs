@@ -10,6 +10,7 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use omen::cli::{Cli, Command, McpSubcommand, OutputFormat, ReportSubcommand, ScoreSubcommand};
 use omen::config::Config;
 use omen::core::{AnalysisContext, Analyzer, FileSet};
+use omen::git::{clone_remote, is_remote_repo, CloneOptions};
 use omen::mcp::McpServer;
 use omen::output::Format;
 
@@ -31,10 +32,61 @@ fn main() -> ExitCode {
     }
 }
 
+/// Resolve the repository path, cloning if it's a remote reference.
+/// Returns (resolved_path, cleanup_path) where cleanup_path is Some if we cloned a temp repo.
+fn resolve_repo_path(cli: &Cli) -> omen::core::Result<(PathBuf, Option<PathBuf>)> {
+    let path_str = cli.path.to_string_lossy();
+
+    if is_remote_repo(&path_str) {
+        eprintln!("Cloning remote repository: {}", path_str);
+
+        let options = CloneOptions {
+            shallow: cli.shallow,
+            reference: cli.git_ref.clone(),
+            target: None, // Use default temp directory
+        };
+
+        let cloned_path = clone_remote(&path_str, options)?;
+        eprintln!("Cloned to: {}", cloned_path.display());
+
+        if cli.shallow {
+            eprintln!(
+                "Note: Using shallow clone. Git history-based analyzers (churn, ownership, hotspot, temporal) will have limited data."
+            );
+        }
+
+        Ok((cloned_path.clone(), Some(cloned_path)))
+    } else {
+        Ok((cli.path.clone(), None))
+    }
+}
+
+/// Clean up a cloned repository directory.
+fn cleanup_repo(path: &PathBuf) {
+    if let Err(e) = std::fs::remove_dir_all(path) {
+        eprintln!("Warning: Failed to clean up cloned repository: {}", e);
+    }
+}
+
 fn run(cli: Cli) -> omen::core::Result<()> {
+    // Resolve repository path (clone if remote)
+    let (path, cleanup_path) = resolve_repo_path(&cli)?;
+
+    // Use a closure to ensure cleanup happens even on error
+    let result = run_with_path(&cli, &path);
+
+    // Clean up cloned repository if we created one
+    if let Some(ref cleanup) = cleanup_path {
+        cleanup_repo(cleanup);
+    }
+
+    result
+}
+
+fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
     let config = match &cli.config {
-        Some(path) => Config::from_file(path)?,
-        None => Config::load_default(&cli.path)?,
+        Some(config_path) => Config::from_file(config_path)?,
+        None => Config::load_default(path)?,
     };
 
     let format = match cli.format {
@@ -43,7 +95,7 @@ fn run(cli: Cli) -> omen::core::Result<()> {
         OutputFormat::Text => Format::Text,
     };
 
-    match cli.command {
+    match &cli.command {
         Command::Mcp(cmd) => {
             match cmd.subcommand {
                 Some(McpSubcommand::Manifest) => {
@@ -72,70 +124,70 @@ fn run(cli: Cli) -> omen::core::Result<()> {
                     println!("{}", serde_json::to_string_pretty(&manifest)?);
                 }
                 None => {
-                    let server = McpServer::new(cli.path.clone(), config);
+                    let server = McpServer::new(path.clone(), config);
                     server.run_stdio()?;
                 }
             }
         }
         Command::Complexity(_args) => {
-            run_analyzer::<omen::analyzers::complexity::Analyzer>(&cli.path, &config, format)?;
+            run_analyzer::<omen::analyzers::complexity::Analyzer>(path, &config, format)?;
         }
         Command::Satd(_args) => {
-            run_analyzer::<omen::analyzers::satd::Analyzer>(&cli.path, &config, format)?;
+            run_analyzer::<omen::analyzers::satd::Analyzer>(path, &config, format)?;
         }
         Command::Deadcode(_args) => {
-            run_analyzer::<omen::analyzers::deadcode::Analyzer>(&cli.path, &config, format)?;
+            run_analyzer::<omen::analyzers::deadcode::Analyzer>(path, &config, format)?;
         }
         Command::Churn(_args) => {
-            run_analyzer::<omen::analyzers::churn::Analyzer>(&cli.path, &config, format)?;
+            run_analyzer::<omen::analyzers::churn::Analyzer>(path, &config, format)?;
         }
         Command::Clones(_args) => {
-            run_analyzer::<omen::analyzers::duplicates::Analyzer>(&cli.path, &config, format)?;
+            run_analyzer::<omen::analyzers::duplicates::Analyzer>(path, &config, format)?;
         }
         Command::Defect(_args) => {
-            run_analyzer::<omen::analyzers::defect::Analyzer>(&cli.path, &config, format)?;
+            run_analyzer::<omen::analyzers::defect::Analyzer>(path, &config, format)?;
         }
         Command::Changes(_args) => {
-            run_analyzer::<omen::analyzers::changes::Analyzer>(&cli.path, &config, format)?;
+            run_analyzer::<omen::analyzers::changes::Analyzer>(path, &config, format)?;
         }
         Command::Diff(_args) => {
             // Diff uses the changes analyzer - base/head filtering TBD
-            run_analyzer::<omen::analyzers::changes::Analyzer>(&cli.path, &config, format)?;
+            run_analyzer::<omen::analyzers::changes::Analyzer>(path, &config, format)?;
         }
         Command::Tdg(_args) => {
-            run_analyzer::<omen::analyzers::tdg::Analyzer>(&cli.path, &config, format)?;
+            run_analyzer::<omen::analyzers::tdg::Analyzer>(path, &config, format)?;
         }
         Command::Graph(_args) => {
-            run_analyzer::<omen::analyzers::graph::Analyzer>(&cli.path, &config, format)?;
+            run_analyzer::<omen::analyzers::graph::Analyzer>(path, &config, format)?;
         }
         Command::Hotspot(_args) => {
-            run_analyzer::<omen::analyzers::hotspot::Analyzer>(&cli.path, &config, format)?;
+            run_analyzer::<omen::analyzers::hotspot::Analyzer>(path, &config, format)?;
         }
         Command::Temporal(_args) => {
-            run_analyzer::<omen::analyzers::temporal::Analyzer>(&cli.path, &config, format)?;
+            run_analyzer::<omen::analyzers::temporal::Analyzer>(path, &config, format)?;
         }
         Command::Ownership(_args) => {
-            run_analyzer::<omen::analyzers::ownership::Analyzer>(&cli.path, &config, format)?;
+            run_analyzer::<omen::analyzers::ownership::Analyzer>(path, &config, format)?;
         }
         Command::Cohesion(_args) => {
-            run_analyzer::<omen::analyzers::cohesion::Analyzer>(&cli.path, &config, format)?;
+            run_analyzer::<omen::analyzers::cohesion::Analyzer>(path, &config, format)?;
         }
         Command::Repomap(_args) => {
-            run_analyzer::<omen::analyzers::repomap::Analyzer>(&cli.path, &config, format)?;
+            run_analyzer::<omen::analyzers::repomap::Analyzer>(path, &config, format)?;
         }
         Command::Smells(_args) => {
-            run_analyzer::<omen::analyzers::smells::Analyzer>(&cli.path, &config, format)?;
+            run_analyzer::<omen::analyzers::smells::Analyzer>(path, &config, format)?;
         }
         Command::Flags(_args) => {
-            run_analyzer::<omen::analyzers::flags::Analyzer>(&cli.path, &config, format)?;
+            run_analyzer::<omen::analyzers::flags::Analyzer>(path, &config, format)?;
         }
         Command::LintHotspot(_args) => {
             // Lint hotspot combines lint output with hotspot analysis
             // For now, run hotspot analyzer (lint integration TBD)
-            run_analyzer::<omen::analyzers::hotspot::Analyzer>(&cli.path, &config, format)?;
+            run_analyzer::<omen::analyzers::hotspot::Analyzer>(path, &config, format)?;
         }
         Command::Score(cmd) => {
-            match cmd.subcommand {
+            match &cmd.subcommand {
                 Some(ScoreSubcommand::Trend(args)) => {
                     // Score trend analysis
                     use serde_json::json;
@@ -148,17 +200,17 @@ fn run(cli: Cli) -> omen::core::Result<()> {
                     println!("{}", serde_json::to_string_pretty(&result)?);
                 }
                 None => {
-                    run_analyzer::<omen::score::Analyzer>(&cli.path, &config, format)?;
+                    run_analyzer::<omen::score::Analyzer>(path, &config, format)?;
                 }
             }
         }
         Command::All(_args) => {
             use serde_json::{json, Value};
-            let file_set = FileSet::from_path(&cli.path, &config)?;
-            let git_root = omen::git::GitRepo::open(&cli.path)
+            let file_set = FileSet::from_path(path, &config)?;
+            let git_root = omen::git::GitRepo::open(path)
                 .ok()
                 .map(|r| r.root().to_path_buf());
-            let mut ctx = AnalysisContext::new(&file_set, &config, Some(&cli.path));
+            let mut ctx = AnalysisContext::new(&file_set, &config, Some(path));
             if let Some(ref git_path) = git_root {
                 ctx = ctx.with_git_path(git_path);
             }
@@ -203,10 +255,10 @@ fn run(cli: Cli) -> omen::core::Result<()> {
             println!("{}", serde_json::to_string_pretty(&combined)?);
         }
         Command::Context(args) => {
-            run_context(&cli.path, &config, &args, format)?;
+            run_context(path, &config, args, format)?;
         }
         Command::Report(cmd) => {
-            run_report(&cli.path, &config, cmd.subcommand)?;
+            run_report(path, &config, &cmd.subcommand)?;
         }
     }
 
@@ -297,7 +349,7 @@ fn run_context(
 fn run_report(
     path: &PathBuf,
     config: &Config,
-    subcommand: ReportSubcommand,
+    subcommand: &ReportSubcommand,
 ) -> omen::core::Result<()> {
     use serde_json::{json, Value};
 

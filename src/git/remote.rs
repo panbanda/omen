@@ -15,6 +15,72 @@ pub struct CloneOptions {
     pub target: Option<PathBuf>,
 }
 
+/// Check if a path string looks like a remote repository reference.
+///
+/// Returns true for:
+/// - GitHub shorthand: `owner/repo`, `owner/repo@ref`
+/// - Full URLs: `https://github.com/owner/repo`
+/// - GitHub domain: `github.com/owner/repo`
+///
+/// Returns false for:
+/// - Local paths: `.`, `./src`, `/home/user/project`
+/// - Single words without slashes: `myproject`
+/// - Paths that exist on the local filesystem
+pub fn is_remote_repo(path: &str) -> bool {
+    // Empty or current directory
+    if path.is_empty() || path == "." {
+        return false;
+    }
+
+    // Full URLs are definitely remote
+    if path.starts_with("http://") || path.starts_with("https://") {
+        return true;
+    }
+
+    // github.com/ prefix
+    if path.starts_with("github.com/") {
+        return true;
+    }
+
+    // Check for owner/repo pattern (not a local path)
+    // Local paths typically start with ., /, ~, or contain multiple slashes
+    if path.starts_with('.')
+        || path.starts_with('/')
+        || path.starts_with('~')
+        || path.starts_with('\\')
+    {
+        return false;
+    }
+
+    // Check for Windows-style absolute paths (C:\, D:\, etc.)
+    if path.len() >= 2 && path.chars().nth(1) == Some(':') {
+        return false;
+    }
+
+    // If the path exists locally, it's not a remote repo
+    if Path::new(path).exists() {
+        return false;
+    }
+
+    // Now check for owner/repo pattern: exactly one slash (or one slash before @)
+    let base = if let Some(at_pos) = path.rfind('@') {
+        &path[..at_pos]
+    } else {
+        path
+    };
+
+    // Count slashes - owner/repo has exactly one
+    let slash_count = base.chars().filter(|&c| c == '/').count();
+
+    // Must have exactly one slash and both parts non-empty
+    if slash_count == 1 {
+        let parts: Vec<&str> = base.split('/').collect();
+        return parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty();
+    }
+
+    false
+}
+
 /// Clone a remote repository.
 ///
 /// Supports:
@@ -30,19 +96,30 @@ pub fn clone_remote(url: &str, options: CloneOptions) -> Result<PathBuf> {
         temp_dir.join(sanitize_repo_name(&repo_url))
     });
 
-    // Use gix for cloning
-    let mut prepare = gix::prepare_clone(repo_url.clone(), &target)
-        .map_err(|e| Error::Remote(format!("Failed to prepare clone: {e}")))?;
-
-    if options.shallow {
-        prepare = prepare.with_shallow(gix::remote::fetch::Shallow::DepthAtRemote(
-            std::num::NonZeroU32::new(1).unwrap(),
-        ));
+    // Clean up existing directory if it exists (from a previous run)
+    if target.exists() {
+        std::fs::remove_dir_all(&target).ok();
     }
 
-    let (_repo, _outcome) = prepare
-        .fetch_only(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)
-        .map_err(|e| Error::Remote(format!("Failed to clone: {e}")))?;
+    // Determine clone depth args
+    let mut args = vec!["clone"];
+    if options.shallow {
+        args.push("--depth");
+        args.push("1");
+    }
+    args.push(&repo_url);
+    args.push(target.to_str().unwrap_or_default());
+
+    // Clone using git command (more reliable for working tree checkout)
+    let output = std::process::Command::new("git")
+        .args(&args)
+        .output()
+        .map_err(|e| Error::Remote(format!("Failed to run git clone: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(Error::Remote(format!("Git clone failed: {stderr}")));
+    }
 
     // Checkout the specific reference if provided
     let ref_to_checkout = reference.or(options.reference);
@@ -201,5 +278,88 @@ mod tests {
         assert!(opts.shallow);
         assert_eq!(opts.reference, Some("v1.0.0".to_string()));
         assert_eq!(opts.target, Some(PathBuf::from("/tmp/test")));
+    }
+
+    #[test]
+    fn test_is_remote_repo_github_shorthand() {
+        assert!(is_remote_repo("owner/repo"));
+        assert!(is_remote_repo("facebook/react"));
+        assert!(is_remote_repo("kubernetes/kubernetes"));
+    }
+
+    #[test]
+    fn test_is_remote_repo_github_shorthand_with_ref() {
+        assert!(is_remote_repo("owner/repo@v1.0.0"));
+        assert!(is_remote_repo("owner/repo@main"));
+        assert!(is_remote_repo("owner/repo@feature-branch"));
+    }
+
+    #[test]
+    fn test_is_remote_repo_full_urls() {
+        assert!(is_remote_repo("https://github.com/owner/repo"));
+        assert!(is_remote_repo("http://github.com/owner/repo"));
+        assert!(is_remote_repo("https://gitlab.com/owner/repo"));
+    }
+
+    #[test]
+    fn test_is_remote_repo_github_domain() {
+        assert!(is_remote_repo("github.com/owner/repo"));
+        assert!(is_remote_repo("github.com/facebook/react"));
+    }
+
+    #[test]
+    fn test_is_remote_repo_local_paths() {
+        assert!(!is_remote_repo("."));
+        assert!(!is_remote_repo("./src"));
+        assert!(!is_remote_repo("../other"));
+        assert!(!is_remote_repo("/home/user/project"));
+        assert!(!is_remote_repo("/tmp/repo"));
+        assert!(!is_remote_repo("~/projects/myrepo"));
+    }
+
+    #[test]
+    fn test_is_remote_repo_relative_paths() {
+        // Paths starting with ./ are always local
+        assert!(!is_remote_repo("./owner/repo"));
+        assert!(!is_remote_repo("./src/main"));
+        assert!(!is_remote_repo("../parent/repo"));
+    }
+
+    #[test]
+    fn test_is_remote_repo_existing_local_path() {
+        // Create a temp directory that looks like owner/repo but exists locally
+        let temp = tempfile::tempdir().unwrap();
+        let owner_dir = temp.path().join("testowner");
+        let repo_dir = owner_dir.join("testrepo");
+        std::fs::create_dir_all(&repo_dir).unwrap();
+
+        // Get the relative path string
+        let cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp.path()).unwrap();
+
+        // testowner/testrepo exists locally, so should NOT be treated as remote
+        assert!(!is_remote_repo("testowner/testrepo"));
+
+        // nonexistent/path does NOT exist locally and has owner/repo pattern
+        assert!(is_remote_repo("nonexistent/path"));
+
+        std::env::set_current_dir(cwd).unwrap();
+    }
+
+    #[test]
+    fn test_is_remote_repo_single_word() {
+        assert!(!is_remote_repo("myproject"));
+        assert!(!is_remote_repo("repo"));
+    }
+
+    #[test]
+    fn test_is_remote_repo_empty() {
+        assert!(!is_remote_repo(""));
+    }
+
+    #[test]
+    fn test_is_remote_repo_windows_paths() {
+        assert!(!is_remote_repo("C:\\Users\\project"));
+        assert!(!is_remote_repo("D:\\repos\\myrepo"));
     }
 }
