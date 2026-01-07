@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.2.0](https://github.com/panbanda/omen/compare/omen-v4.1.0...omen-v4.2.0) (2026-01-07)
+
+
+### Features
+
+* **remote:** implement remote repository scanning for CLI ([#228](https://github.com/panbanda/omen/issues/228)) ([4a48633](https://github.com/panbanda/omen/commit/4a486330f04c3cbaa13d8ef3615b83e1869517e6))
+
+
+### Bug Fixes
+
+* **mcp:** set git_path for git-requiring analyzers + fix docs ([#226](https://github.com/panbanda/omen/issues/226)) ([0dafa0e](https://github.com/panbanda/omen/commit/0dafa0ee636e11c5664a05975dec71fcc5dbfd2d))
+
 ## [4.1.0](https://github.com/panbanda/omen/compare/omen-v4.0.5...omen-v4.1.0) (2026-01-06)
 
 
