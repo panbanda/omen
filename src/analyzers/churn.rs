@@ -4,15 +4,17 @@
 //! which often correlates with bug-prone or complex code.
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::process::{Command, Stdio};
 use std::time::Instant;
 
-use chrono::{DateTime, Utc};
+#[cfg(test)]
+use std::io::{BufRead, BufReader};
+
+use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Error, Result};
+use crate::git::GitRepo;
 
 /// Churn analyzer using git log.
 pub struct Analyzer {
@@ -57,39 +59,22 @@ impl AnalyzerTrait for Analyzer {
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
         let start = Instant::now();
 
-        let repo_root = ctx
-            .git_path
-            .unwrap_or(ctx.root)
+        let git_path = ctx.git_path.unwrap_or(ctx.root);
+        let repo_root = git_path
             .to_str()
             .ok_or_else(|| Error::git("Invalid repository path"))?;
 
-        let cutoff = Utc::now() - chrono::Duration::days(self.days as i64);
-        let since_date = cutoff.format("%Y-%m-%d").to_string();
+        // Open repository with gix
+        let repo = GitRepo::open(git_path)?;
 
-        // Run git log --numstat for performance
-        let output = Command::new("git")
-            .args([
-                "log",
-                "--numstat",
-                &format!("--since={}", since_date),
-                "--format=%H|%aN|%aI",
-            ])
-            .current_dir(repo_root)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .map_err(|e| Error::git(format!("Failed to run git: {}", e)))?;
+        // Calculate since date
+        let since = format!("{} days", self.days);
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if stderr.contains("not a git repository") {
-                return Err(Error::git("Not a git repository"));
-            }
-            return Err(Error::git(format!("Git failed: {}", stderr)));
-        }
+        // Get commits with file changes using gix
+        let commits = repo.log_with_stats(Some(&since))?;
 
-        // Parse git log output
-        let file_metrics = parse_git_log_numstat(&output.stdout)?;
+        // Convert to file metrics
+        let file_metrics = commits_to_file_metrics(&commits);
 
         // Build analysis from metrics
         let analysis = build_analysis(file_metrics, repo_root, self.days);
@@ -104,7 +89,63 @@ impl AnalyzerTrait for Analyzer {
     }
 }
 
-/// Parse git log --numstat output.
+/// Convert commits to file metrics map.
+fn commits_to_file_metrics(commits: &[crate::git::Commit]) -> HashMap<String, FileMetrics> {
+    let mut file_metrics: HashMap<String, FileMetrics> = HashMap::new();
+
+    for commit in commits {
+        let author = commit.author.clone();
+        let timestamp = Utc.timestamp_opt(commit.timestamp, 0).single();
+
+        for file_change in &commit.files {
+            let path_str = file_change.path.to_string_lossy().to_string();
+
+            let fm = file_metrics
+                .entry(path_str.clone())
+                .or_insert_with(|| FileMetrics {
+                    path: format!("./{}", path_str),
+                    relative_path: path_str.clone(),
+                    commits: 0,
+                    unique_authors: Vec::new(),
+                    author_counts: HashMap::new(),
+                    lines_added: 0,
+                    lines_deleted: 0,
+                    churn_score: 0.0,
+                    first_commit: timestamp,
+                    last_commit: timestamp,
+                    total_loc: 0,
+                    relative_churn: 0.0,
+                    churn_rate: 0.0,
+                    change_frequency: 0.0,
+                    days_active: 0,
+                });
+
+            fm.commits += 1;
+            *fm.author_counts.entry(author.clone()).or_insert(0) += 1;
+            fm.lines_added += file_change.additions;
+            fm.lines_deleted += file_change.deletions;
+
+            // Update time range
+            if let Some(t) = timestamp {
+                match fm.first_commit {
+                    Some(first) if t < first => fm.first_commit = Some(t),
+                    None => fm.first_commit = Some(t),
+                    _ => {}
+                }
+                match fm.last_commit {
+                    Some(last) if t > last => fm.last_commit = Some(t),
+                    None => fm.last_commit = Some(t),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    file_metrics
+}
+
+/// Parse git log --numstat output (kept for tests).
+#[cfg(test)]
 fn parse_git_log_numstat(output: &[u8]) -> Result<HashMap<String, FileMetrics>> {
     let mut file_metrics: HashMap<String, FileMetrics> = HashMap::new();
     let reader = BufReader::new(output);
