@@ -8,11 +8,12 @@
 //! - Ownership: Contributor diffusion (Bird et al. 2011)
 
 use std::collections::HashMap;
-use std::process::Command;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result};
+use crate::git::GitRepo;
 
 /// Risk level categories (PMAT-compatible).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,38 +117,28 @@ impl Analyzer {
             ..Default::default()
         };
 
-        // Get churn metrics from git log
-        if let Ok(output) = Command::new("git")
-            .args([
-                "log",
-                "--oneline",
-                &format!("--since={} days ago", self.config.churn_days),
-                "--follow",
-                "--",
-                file_path,
-            ])
-            .current_dir(git_path)
-            .output()
-        {
-            if output.status.success() {
-                let commit_count = String::from_utf8_lossy(&output.stdout).lines().count();
+        // Get churn and ownership metrics from gix
+        if let Ok(repo) = GitRepo::open(git_path) {
+            let since = format!("{} days", self.config.churn_days);
+            if let Ok(commits) = repo.log_with_stats(Some(&since)) {
+                // Count commits touching this file
+                let file_pathbuf = PathBuf::from(file_path);
+                let commit_count = commits
+                    .iter()
+                    .filter(|c| c.files.iter().any(|f| f.path == file_pathbuf))
+                    .count();
                 // Normalize churn score (max ~20 commits/month = high churn)
                 metrics.churn_score = (commit_count as f32 / 20.0).min(1.0);
-            }
-        }
 
-        // Get contributor count for ownership diffusion
-        if let Ok(output) = Command::new("git")
-            .args(["shortlog", "-sn", "--all", "--", file_path])
-            .current_dir(git_path)
-            .output()
-        {
-            if output.status.success() {
-                let contributor_count = String::from_utf8_lossy(&output.stdout)
-                    .lines()
-                    .filter(|l| !l.trim().is_empty())
-                    .count();
-                metrics.ownership_diffusion = contributor_count as f32;
+                // Count unique contributors to this file (from all history we have)
+                let mut contributors: std::collections::HashSet<&str> =
+                    std::collections::HashSet::new();
+                for commit in &commits {
+                    if commit.files.iter().any(|f| f.path == file_pathbuf) {
+                        contributors.insert(&commit.author);
+                    }
+                }
+                metrics.ownership_diffusion = contributors.len() as f32;
             }
         }
 

@@ -11,7 +11,7 @@ use gix::Repository;
 use crate::core::{Error, Result};
 
 pub use blame::BlameInfo;
-pub use log::{Commit, CommitStats, FileChange};
+pub use log::{ChangeType, Commit, CommitStats, FileChange};
 pub use remote::{clone_remote, is_remote_repo, CloneOptions};
 
 /// Git repository wrapper for analysis operations.
@@ -78,6 +78,11 @@ impl GitRepo {
         log::get_log(&self.repo, since, paths)
     }
 
+    /// Get commit log with file change statistics (equivalent to git log --numstat).
+    pub fn log_with_stats(&self, since: Option<&str>) -> Result<Vec<Commit>> {
+        log::get_log_with_stats(&self.repo, since)
+    }
+
     /// Get blame information for a file.
     pub fn blame(&self, path: &Path) -> Result<BlameInfo> {
         blame::get_blame(&self.repo, &self.root, path)
@@ -96,6 +101,16 @@ impl GitRepo {
     /// Get the merge base between two refs.
     pub fn merge_base(&self, ref1: &str, ref2: &str) -> Result<String> {
         log::get_merge_base(&self.repo, ref1, ref2)
+    }
+
+    /// Check if a ref (branch, tag, etc.) exists.
+    pub fn ref_exists(&self, refname: &str) -> bool {
+        self.repo.rev_parse_single(refname.as_bytes()).is_ok()
+    }
+
+    /// Count commits between two refs (equivalent to git rev-list --count from..to).
+    pub fn commit_count(&self, from: &str, to: &str) -> Result<i32> {
+        log::get_commit_count(&self.repo, from, to)
     }
 }
 
@@ -221,7 +236,7 @@ mod tests {
         init_git_repo(temp.path());
         make_commit(temp.path(), "Initial commit");
         let repo = GitRepo::open(temp.path()).unwrap();
-        let result = repo.log(Some("1 week ago"), None);
+        let result = repo.log(Some("7 days"), None);
         assert!(result.is_ok());
     }
 
@@ -232,18 +247,37 @@ mod tests {
         make_commit(temp.path(), "Initial commit");
         let repo = GitRepo::open(temp.path()).unwrap();
         let sha = repo.head_sha().unwrap();
-        // commit_stats is a placeholder that returns an error
+        // commit_stats works with gix
         let result = repo.commit_stats(&sha);
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 
     #[test]
     fn test_git_repo_diff_stats() {
         let temp = tempfile::tempdir().unwrap();
         init_git_repo(temp.path());
+
+        // Create first commit with a file
+        let file_path = temp.path().join("test.rs");
+        std::fs::write(&file_path, "fn main() {}").unwrap();
+        Command::new("git")
+            .args(["add", "test.rs"])
+            .current_dir(temp.path())
+            .output()
+            .expect("failed to add file");
         make_commit(temp.path(), "Initial commit");
+
+        // Create second commit with modification
+        std::fs::write(&file_path, "fn main() { println!(\"hello\"); }").unwrap();
+        Command::new("git")
+            .args(["add", "test.rs"])
+            .current_dir(temp.path())
+            .output()
+            .expect("failed to add file");
+        make_commit(temp.path(), "Second commit");
+
         let repo = GitRepo::open(temp.path()).unwrap();
-        // diff_stats is a placeholder that returns empty Vec
+        // diff_stats works with gix when there are two commits
         let result = repo.diff_stats("HEAD~1", "HEAD");
         assert!(result.is_ok());
     }
@@ -254,9 +288,12 @@ mod tests {
         init_git_repo(temp.path());
         make_commit(temp.path(), "Initial commit");
         let repo = GitRepo::open(temp.path()).unwrap();
-        // merge_base is a placeholder that returns an error
+        // merge_base works with gix
         let result = repo.merge_base("HEAD", "HEAD");
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        // Merge base of HEAD with itself is HEAD
+        let sha = repo.head_sha().unwrap();
+        assert_eq!(result.unwrap(), sha);
     }
 
     #[test]

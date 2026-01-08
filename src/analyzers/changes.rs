@@ -5,13 +5,13 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::process::Command;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result};
+use crate::git::GitRepo;
 
 /// Weights for change-level defect prediction features.
 /// Based on Kamei et al. (2013) and Zeng et al. (2021).
@@ -367,29 +367,65 @@ fn is_automated_commit(message: &str) -> bool {
     patterns.iter().any(|p| p.is_match(message))
 }
 
-/// Collect commit data from git log.
+/// Collect commit data from git log using gix.
 fn collect_commit_data(git_path: &Path, days: u32) -> Result<Vec<RawCommit>> {
-    // Get commits from last N days with numstat
-    let output = Command::new("git")
-        .args([
-            "log",
-            "--format=%H|%an|%aI|%s",
-            "--numstat",
-            &format!("--since={} days ago", days),
-        ])
-        .current_dir(git_path)
-        .output()
-        .map_err(|e| crate::core::Error::git(format!("Failed to run git log: {}", e)))?;
+    let repo = GitRepo::open(git_path)?;
+    let since = format!("{} days", days);
+    let commits = repo.log_with_stats(Some(&since))?;
 
-    if !output.status.success() {
-        return Err(crate::core::Error::git("git log failed"));
+    commits_to_raw_commits(&commits)
+}
+
+/// Convert gix Commits to RawCommits for risk analysis.
+fn commits_to_raw_commits(commits: &[crate::git::Commit]) -> Result<Vec<RawCommit>> {
+    let mut raw_commits = Vec::new();
+
+    for commit in commits {
+        let timestamp = Utc.timestamp_opt(commit.timestamp, 0).single();
+        let message = truncate_message(&commit.message);
+
+        let mut lines_per_file: HashMap<String, i32> = HashMap::new();
+        let mut lines_added = 0i32;
+        let mut lines_deleted = 0i32;
+        let mut files_modified = Vec::new();
+
+        for file_change in &commit.files {
+            let path_str = file_change.path.to_string_lossy().to_string();
+            let added = file_change.additions as i32;
+            let deleted = file_change.deletions as i32;
+
+            lines_added += added;
+            lines_deleted += deleted;
+            files_modified.push(path_str.clone());
+            *lines_per_file.entry(path_str).or_insert(0) += added + deleted;
+        }
+
+        let entropy = calculate_entropy(&lines_per_file);
+
+        raw_commits.push(RawCommit {
+            features: CommitFeatures {
+                commit_hash: commit.sha.clone(),
+                author: commit.author.clone(),
+                message: message.clone(),
+                timestamp: timestamp.unwrap_or_else(Utc::now),
+                is_fix: is_bug_fix_commit(&message),
+                is_automated: is_automated_commit(&message),
+                entropy,
+                lines_added,
+                lines_deleted,
+                num_files: files_modified.len() as i32,
+                files_modified,
+                ..Default::default()
+            },
+            lines_per_file,
+        });
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_git_log(&stdout)
+    Ok(raw_commits)
 }
 
 /// Parse git log output into raw commits.
+#[cfg(test)]
 fn parse_git_log(output: &str) -> Result<Vec<RawCommit>> {
     let mut commits = Vec::new();
     let mut current: Option<RawCommit> = None;
@@ -1078,31 +1114,16 @@ fn diff_normalization() -> NormalizationStats {
 }
 
 fn get_current_branch(repo_path: &Path) -> Result<String> {
-    let output = Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(repo_path)
-        .output()
-        .map_err(|e| crate::core::Error::git(format!("Failed to get current branch: {}", e)))?;
-
-    if !output.status.success() {
-        return Err(crate::core::Error::git("Failed to get current branch"));
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    let repo = GitRepo::open(repo_path)?;
+    repo.current_branch()
 }
 
 fn detect_default_branch(repo_path: &Path) -> Result<String> {
+    let repo = GitRepo::open(repo_path)?;
     // Try main first
     for branch in ["main", "master", "origin/main", "origin/master"] {
-        let status = Command::new("git")
-            .args(["rev-parse", "--verify", branch])
-            .current_dir(repo_path)
-            .output();
-
-        if let Ok(output) = status {
-            if output.status.success() {
-                return Ok(branch.to_string());
-            }
+        if repo.ref_exists(branch) {
+            return Ok(branch.to_string());
         }
     }
 
@@ -1112,87 +1133,39 @@ fn detect_default_branch(repo_path: &Path) -> Result<String> {
 }
 
 fn get_merge_base(repo_path: &Path, ref1: &str, ref2: &str) -> Result<String> {
-    let output = Command::new("git")
-        .args(["merge-base", ref1, ref2])
-        .current_dir(repo_path)
-        .output()
-        .map_err(|e| crate::core::Error::git(format!("Failed to get merge-base: {}", e)))?;
-
-    if !output.status.success() {
-        return Err(crate::core::Error::git("Failed to get merge-base"));
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    let repo = GitRepo::open(repo_path)?;
+    repo.merge_base(ref1, ref2)
 }
 
 fn get_diff_stats(repo_path: &Path, merge_base: &str) -> Result<(i32, i32, i32)> {
-    let output = Command::new("git")
-        .args(["diff", "--numstat", &format!("{}..HEAD", merge_base)])
-        .current_dir(repo_path)
-        .output()
-        .map_err(|e| crate::core::Error::git(format!("Failed to get diff stats: {}", e)))?;
+    let repo = GitRepo::open(repo_path)?;
+    let changes = repo.diff_stats(merge_base, "HEAD")?;
 
-    if !output.status.success() {
-        return Err(crate::core::Error::git("Failed to get diff stats"));
+    let mut added = 0i32;
+    let mut deleted = 0i32;
+
+    for change in &changes {
+        added += change.additions as i32;
+        deleted += change.deletions as i32;
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut added = 0;
-    let mut deleted = 0;
-    let mut files = 0;
-
-    for line in stdout.lines() {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 2 {
-            added += parts[0].parse::<i32>().unwrap_or(0);
-            deleted += parts[1].parse::<i32>().unwrap_or(0);
-            files += 1;
-        }
-    }
-
-    Ok((added, deleted, files))
+    Ok((added, deleted, changes.len() as i32))
 }
 
 fn get_commit_count(repo_path: &Path, merge_base: &str) -> Result<i32> {
-    let output = Command::new("git")
-        .args(["rev-list", "--count", &format!("{}..HEAD", merge_base)])
-        .current_dir(repo_path)
-        .output()
-        .map_err(|e| crate::core::Error::git(format!("Failed to count commits: {}", e)))?;
-
-    if !output.status.success() {
-        return Err(crate::core::Error::git("Failed to count commits"));
-    }
-
-    let count_str = String::from_utf8_lossy(&output.stdout);
-    count_str
-        .trim()
-        .parse()
-        .map_err(|_| crate::core::Error::git("Failed to parse commit count"))
+    let repo = GitRepo::open(repo_path)?;
+    repo.commit_count(merge_base, "HEAD")
 }
 
 fn get_lines_per_file(repo_path: &Path, merge_base: &str) -> Result<HashMap<String, i32>> {
-    let output = Command::new("git")
-        .args(["diff", "--numstat", &format!("{}..HEAD", merge_base)])
-        .current_dir(repo_path)
-        .output()
-        .map_err(|e| crate::core::Error::git(format!("Failed to get lines per file: {}", e)))?;
+    let repo = GitRepo::open(repo_path)?;
+    let changes = repo.diff_stats(merge_base, "HEAD")?;
 
-    if !output.status.success() {
-        return Ok(HashMap::new());
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
     let mut result = HashMap::new();
-
-    for line in stdout.lines() {
-        let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() >= 3 {
-            let added: i32 = parts[0].parse().unwrap_or(0);
-            let deleted: i32 = parts[1].parse().unwrap_or(0);
-            let file = parts[2].to_string();
-            result.insert(file, added + deleted);
-        }
+    for change in changes {
+        let path_str = change.path.to_string_lossy().to_string();
+        let lines = change.additions as i32 + change.deletions as i32;
+        result.insert(path_str, lines);
     }
 
     Ok(result)
