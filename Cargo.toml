@@ -97,6 +97,13 @@ memmap2 = "0.9"
 bstr = "1.11"
 unicode-width = "0.2"
 
+# Semantic search
+ort = { version = "2.0.0-rc.11", default-features = false, features = ["std", "download-binaries", "tls-native", "ndarray"] }
+rusqlite = { version = "0.33", features = ["bundled"] }
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
+ndarray = "0.17"
+dirs = "6.0"
+
 [dev-dependencies]
 # Testing
 insta = { version = "1.41", features = ["json", "yaml"] }

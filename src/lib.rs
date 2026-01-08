@@ -32,5 +32,6 @@ pub mod output;
 pub mod parser;
 pub mod report;
 pub mod score;
+pub mod semantic;
 
 pub use core::{AnalysisContext, AnalysisResult, Analyzer};

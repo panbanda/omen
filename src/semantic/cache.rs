@@ -1,0 +1,511 @@
+//! SQLite cache for embedding vectors and symbol metadata.
+//!
+//! Stores embeddings keyed by (file_path, symbol_name, content_hash) for efficient
+//! retrieval and staleness detection.
+
+use std::path::Path;
+
+use rusqlite::{params, Connection, OptionalExtension};
+
+use crate::core::{Error, Result};
+
+/// SQLite cache for embeddings.
+pub struct EmbeddingCache {
+    conn: Connection,
+}
+
+/// A cached symbol with its embedding.
+#[derive(Debug, Clone)]
+pub struct CachedSymbol {
+    pub file_path: String,
+    pub symbol_name: String,
+    pub symbol_type: String,
+    pub signature: String,
+    pub start_line: u32,
+    pub end_line: u32,
+    pub content_hash: String,
+    pub embedding: Vec<f32>,
+}
+
+impl EmbeddingCache {
+    /// Open or create an embedding cache at the given path.
+    pub fn open(path: &Path) -> Result<Self> {
+        let conn = Connection::open(path).map_err(|e| {
+            Error::analysis(format!(
+                "Failed to open cache database {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+
+        let cache = Self { conn };
+        cache.init_schema()?;
+        Ok(cache)
+    }
+
+    /// Create an in-memory cache (useful for testing).
+    pub fn in_memory() -> Result<Self> {
+        let conn = Connection::open_in_memory()
+            .map_err(|e| Error::analysis(format!("Failed to create in-memory database: {}", e)))?;
+
+        let cache = Self { conn };
+        cache.init_schema()?;
+        Ok(cache)
+    }
+
+    /// Initialize the database schema.
+    fn init_schema(&self) -> Result<()> {
+        self.conn
+            .execute_batch(
+                r#"
+                CREATE TABLE IF NOT EXISTS symbols (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_path TEXT NOT NULL,
+                    symbol_name TEXT NOT NULL,
+                    symbol_type TEXT NOT NULL,
+                    signature TEXT NOT NULL,
+                    start_line INTEGER NOT NULL,
+                    end_line INTEGER NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    embedding BLOB NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(file_path, symbol_name)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_symbols_file_path ON symbols(file_path);
+                CREATE INDEX IF NOT EXISTS idx_symbols_content_hash ON symbols(content_hash);
+
+                CREATE TABLE IF NOT EXISTS files (
+                    file_path TEXT PRIMARY KEY,
+                    file_hash TEXT NOT NULL,
+                    indexed_at TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+            "#,
+            )
+            .map_err(|e| Error::analysis(format!("Failed to initialize cache schema: {}", e)))?;
+        Ok(())
+    }
+
+    /// Insert or update a symbol in the cache.
+    pub fn upsert_symbol(&self, symbol: &CachedSymbol) -> Result<()> {
+        let embedding_bytes = embedding_to_bytes(&symbol.embedding);
+
+        self.conn
+            .execute(
+                r#"
+                INSERT INTO symbols (file_path, symbol_name, symbol_type, signature, start_line, end_line, content_hash, embedding)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                ON CONFLICT(file_path, symbol_name) DO UPDATE SET
+                    symbol_type = excluded.symbol_type,
+                    signature = excluded.signature,
+                    start_line = excluded.start_line,
+                    end_line = excluded.end_line,
+                    content_hash = excluded.content_hash,
+                    embedding = excluded.embedding,
+                    created_at = CURRENT_TIMESTAMP
+            "#,
+                params![
+                    symbol.file_path,
+                    symbol.symbol_name,
+                    symbol.symbol_type,
+                    symbol.signature,
+                    symbol.start_line,
+                    symbol.end_line,
+                    symbol.content_hash,
+                    embedding_bytes,
+                ],
+            )
+            .map_err(|e| Error::analysis(format!("Failed to upsert symbol: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Get a symbol from the cache by file path and symbol name.
+    pub fn get_symbol(&self, file_path: &str, symbol_name: &str) -> Result<Option<CachedSymbol>> {
+        let result = self
+            .conn
+            .query_row(
+                "SELECT file_path, symbol_name, symbol_type, signature, start_line, end_line, content_hash, embedding FROM symbols WHERE file_path = ?1 AND symbol_name = ?2",
+                params![file_path, symbol_name],
+                |row| {
+                    let embedding_bytes: Vec<u8> = row.get(7)?;
+                    Ok(CachedSymbol {
+                        file_path: row.get(0)?,
+                        symbol_name: row.get(1)?,
+                        symbol_type: row.get(2)?,
+                        signature: row.get(3)?,
+                        start_line: row.get(4)?,
+                        end_line: row.get(5)?,
+                        content_hash: row.get(6)?,
+                        embedding: bytes_to_embedding(&embedding_bytes),
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| Error::analysis(format!("Failed to get symbol: {}", e)))?;
+
+        Ok(result)
+    }
+
+    /// Get all symbols from the cache.
+    pub fn get_all_symbols(&self) -> Result<Vec<CachedSymbol>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT file_path, symbol_name, symbol_type, signature, start_line, end_line, content_hash, embedding FROM symbols")
+            .map_err(|e| Error::analysis(format!("Failed to prepare query: {}", e)))?;
+
+        let symbols = stmt
+            .query_map([], |row| {
+                let embedding_bytes: Vec<u8> = row.get(7)?;
+                Ok(CachedSymbol {
+                    file_path: row.get(0)?,
+                    symbol_name: row.get(1)?,
+                    symbol_type: row.get(2)?,
+                    signature: row.get(3)?,
+                    start_line: row.get(4)?,
+                    end_line: row.get(5)?,
+                    content_hash: row.get(6)?,
+                    embedding: bytes_to_embedding(&embedding_bytes),
+                })
+            })
+            .map_err(|e| Error::analysis(format!("Failed to query symbols: {}", e)))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(symbols)
+    }
+
+    /// Get all symbols for a specific file.
+    pub fn get_symbols_for_file(&self, file_path: &str) -> Result<Vec<CachedSymbol>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT file_path, symbol_name, symbol_type, signature, start_line, end_line, content_hash, embedding FROM symbols WHERE file_path = ?1")
+            .map_err(|e| Error::analysis(format!("Failed to prepare query: {}", e)))?;
+
+        let symbols = stmt
+            .query_map(params![file_path], |row| {
+                let embedding_bytes: Vec<u8> = row.get(7)?;
+                Ok(CachedSymbol {
+                    file_path: row.get(0)?,
+                    symbol_name: row.get(1)?,
+                    symbol_type: row.get(2)?,
+                    signature: row.get(3)?,
+                    start_line: row.get(4)?,
+                    end_line: row.get(5)?,
+                    content_hash: row.get(6)?,
+                    embedding: bytes_to_embedding(&embedding_bytes),
+                })
+            })
+            .map_err(|e| Error::analysis(format!("Failed to query symbols: {}", e)))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(symbols)
+    }
+
+    /// Delete all symbols for a file.
+    pub fn delete_file_symbols(&self, file_path: &str) -> Result<()> {
+        self.conn
+            .execute(
+                "DELETE FROM symbols WHERE file_path = ?1",
+                params![file_path],
+            )
+            .map_err(|e| Error::analysis(format!("Failed to delete symbols: {}", e)))?;
+        Ok(())
+    }
+
+    /// Record that a file has been indexed.
+    pub fn record_file_indexed(&self, file_path: &str, file_hash: &str) -> Result<()> {
+        self.conn
+            .execute(
+                r#"
+                INSERT INTO files (file_path, file_hash)
+                VALUES (?1, ?2)
+                ON CONFLICT(file_path) DO UPDATE SET
+                    file_hash = excluded.file_hash,
+                    indexed_at = CURRENT_TIMESTAMP
+            "#,
+                params![file_path, file_hash],
+            )
+            .map_err(|e| Error::analysis(format!("Failed to record file indexed: {}", e)))?;
+        Ok(())
+    }
+
+    /// Get the stored hash for a file.
+    pub fn get_file_hash(&self, file_path: &str) -> Result<Option<String>> {
+        let result = self
+            .conn
+            .query_row(
+                "SELECT file_hash FROM files WHERE file_path = ?1",
+                params![file_path],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| Error::analysis(format!("Failed to get file hash: {}", e)))?;
+
+        Ok(result)
+    }
+
+    /// Remove a file from the files table.
+    pub fn remove_file(&self, file_path: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM files WHERE file_path = ?1", params![file_path])
+            .map_err(|e| Error::analysis(format!("Failed to remove file: {}", e)))?;
+        self.delete_file_symbols(file_path)?;
+        Ok(())
+    }
+
+    /// Get all indexed file paths.
+    pub fn get_all_indexed_files(&self) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT file_path FROM files")
+            .map_err(|e| Error::analysis(format!("Failed to prepare query: {}", e)))?;
+
+        let files = stmt
+            .query_map([], |row| row.get(0))
+            .map_err(|e| Error::analysis(format!("Failed to query files: {}", e)))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(files)
+    }
+
+    /// Get the number of cached symbols.
+    pub fn symbol_count(&self) -> Result<usize> {
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))
+            .map_err(|e| Error::analysis(format!("Failed to count symbols: {}", e)))?;
+        Ok(count as usize)
+    }
+}
+
+/// Convert an embedding vector to bytes for storage.
+fn embedding_to_bytes(embedding: &[f32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(embedding.len() * 4);
+    for val in embedding {
+        bytes.extend_from_slice(&val.to_le_bytes());
+    }
+    bytes
+}
+
+/// Convert bytes back to an embedding vector.
+fn bytes_to_embedding(bytes: &[u8]) -> Vec<f32> {
+    let mut embedding = Vec::with_capacity(bytes.len() / 4);
+    for chunk in bytes.chunks_exact(4) {
+        let val = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        embedding.push(val);
+    }
+    embedding
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_symbol() -> CachedSymbol {
+        CachedSymbol {
+            file_path: "src/main.rs".to_string(),
+            symbol_name: "test_func".to_string(),
+            symbol_type: "function".to_string(),
+            signature: "fn test_func()".to_string(),
+            start_line: 1,
+            end_line: 5,
+            content_hash: "abc123".to_string(),
+            embedding: vec![0.1, 0.2, 0.3, 0.4],
+        }
+    }
+
+    #[test]
+    fn test_cache_creation() {
+        let cache = EmbeddingCache::in_memory().unwrap();
+        assert_eq!(cache.symbol_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_upsert_and_get_symbol() {
+        let cache = EmbeddingCache::in_memory().unwrap();
+        let symbol = create_test_symbol();
+
+        cache.upsert_symbol(&symbol).unwrap();
+
+        let retrieved = cache
+            .get_symbol(&symbol.file_path, &symbol.symbol_name)
+            .unwrap()
+            .unwrap();
+        assert_eq!(retrieved.file_path, symbol.file_path);
+        assert_eq!(retrieved.symbol_name, symbol.symbol_name);
+        assert_eq!(retrieved.embedding, symbol.embedding);
+    }
+
+    #[test]
+    fn test_upsert_updates_existing() {
+        let cache = EmbeddingCache::in_memory().unwrap();
+        let mut symbol = create_test_symbol();
+
+        cache.upsert_symbol(&symbol).unwrap();
+
+        symbol.content_hash = "new_hash".to_string();
+        symbol.embedding = vec![0.5, 0.6, 0.7, 0.8];
+        cache.upsert_symbol(&symbol).unwrap();
+
+        let retrieved = cache
+            .get_symbol(&symbol.file_path, &symbol.symbol_name)
+            .unwrap()
+            .unwrap();
+        assert_eq!(retrieved.content_hash, "new_hash");
+        assert_eq!(retrieved.embedding, vec![0.5, 0.6, 0.7, 0.8]);
+        assert_eq!(cache.symbol_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_get_nonexistent_symbol() {
+        let cache = EmbeddingCache::in_memory().unwrap();
+        let result = cache.get_symbol("nonexistent", "func").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_get_all_symbols() {
+        let cache = EmbeddingCache::in_memory().unwrap();
+
+        let symbol1 = CachedSymbol {
+            file_path: "src/a.rs".to_string(),
+            symbol_name: "func_a".to_string(),
+            symbol_type: "function".to_string(),
+            signature: "fn func_a()".to_string(),
+            start_line: 1,
+            end_line: 5,
+            content_hash: "hash1".to_string(),
+            embedding: vec![0.1, 0.2],
+        };
+
+        let symbol2 = CachedSymbol {
+            file_path: "src/b.rs".to_string(),
+            symbol_name: "func_b".to_string(),
+            symbol_type: "function".to_string(),
+            signature: "fn func_b()".to_string(),
+            start_line: 1,
+            end_line: 5,
+            content_hash: "hash2".to_string(),
+            embedding: vec![0.3, 0.4],
+        };
+
+        cache.upsert_symbol(&symbol1).unwrap();
+        cache.upsert_symbol(&symbol2).unwrap();
+
+        let all_symbols = cache.get_all_symbols().unwrap();
+        assert_eq!(all_symbols.len(), 2);
+    }
+
+    #[test]
+    fn test_get_symbols_for_file() {
+        let cache = EmbeddingCache::in_memory().unwrap();
+
+        let symbol1 = CachedSymbol {
+            file_path: "src/main.rs".to_string(),
+            symbol_name: "func_a".to_string(),
+            symbol_type: "function".to_string(),
+            signature: "fn func_a()".to_string(),
+            start_line: 1,
+            end_line: 5,
+            content_hash: "hash1".to_string(),
+            embedding: vec![0.1, 0.2],
+        };
+
+        let symbol2 = CachedSymbol {
+            file_path: "src/main.rs".to_string(),
+            symbol_name: "func_b".to_string(),
+            symbol_type: "function".to_string(),
+            signature: "fn func_b()".to_string(),
+            start_line: 10,
+            end_line: 15,
+            content_hash: "hash2".to_string(),
+            embedding: vec![0.3, 0.4],
+        };
+
+        let symbol3 = CachedSymbol {
+            file_path: "src/other.rs".to_string(),
+            symbol_name: "func_c".to_string(),
+            symbol_type: "function".to_string(),
+            signature: "fn func_c()".to_string(),
+            start_line: 1,
+            end_line: 5,
+            content_hash: "hash3".to_string(),
+            embedding: vec![0.5, 0.6],
+        };
+
+        cache.upsert_symbol(&symbol1).unwrap();
+        cache.upsert_symbol(&symbol2).unwrap();
+        cache.upsert_symbol(&symbol3).unwrap();
+
+        let main_symbols = cache.get_symbols_for_file("src/main.rs").unwrap();
+        assert_eq!(main_symbols.len(), 2);
+    }
+
+    #[test]
+    fn test_delete_file_symbols() {
+        let cache = EmbeddingCache::in_memory().unwrap();
+        let symbol = create_test_symbol();
+
+        cache.upsert_symbol(&symbol).unwrap();
+        assert_eq!(cache.symbol_count().unwrap(), 1);
+
+        cache.delete_file_symbols(&symbol.file_path).unwrap();
+        assert_eq!(cache.symbol_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_file_hash_tracking() {
+        let cache = EmbeddingCache::in_memory().unwrap();
+
+        cache.record_file_indexed("src/main.rs", "hash123").unwrap();
+
+        let hash = cache.get_file_hash("src/main.rs").unwrap();
+        assert_eq!(hash, Some("hash123".to_string()));
+
+        let missing = cache.get_file_hash("nonexistent.rs").unwrap();
+        assert!(missing.is_none());
+    }
+
+    #[test]
+    fn test_remove_file() {
+        let cache = EmbeddingCache::in_memory().unwrap();
+        let symbol = create_test_symbol();
+
+        cache.upsert_symbol(&symbol).unwrap();
+        cache
+            .record_file_indexed(&symbol.file_path, "hash123")
+            .unwrap();
+
+        cache.remove_file(&symbol.file_path).unwrap();
+
+        assert_eq!(cache.symbol_count().unwrap(), 0);
+        assert!(cache.get_file_hash(&symbol.file_path).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_get_all_indexed_files() {
+        let cache = EmbeddingCache::in_memory().unwrap();
+
+        cache.record_file_indexed("src/a.rs", "hash1").unwrap();
+        cache.record_file_indexed("src/b.rs", "hash2").unwrap();
+
+        let files = cache.get_all_indexed_files().unwrap();
+        assert_eq!(files.len(), 2);
+        assert!(files.contains(&"src/a.rs".to_string()));
+        assert!(files.contains(&"src/b.rs".to_string()));
+    }
+
+    #[test]
+    fn test_embedding_bytes_roundtrip() {
+        let original = vec![0.1, 0.2, 0.3, -0.5, 1.0];
+        let bytes = embedding_to_bytes(&original);
+        let restored = bytes_to_embedding(&bytes);
+
+        for (a, b) in original.iter().zip(restored.iter()) {
+            assert!((a - b).abs() < 1e-6);
+        }
+    }
+}

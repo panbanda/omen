@@ -7,7 +7,9 @@ use std::process::ExitCode;
 use clap::Parser;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-use omen::cli::{Cli, Command, McpSubcommand, OutputFormat, ReportSubcommand, ScoreSubcommand};
+use omen::cli::{
+    Cli, Command, McpSubcommand, OutputFormat, ReportSubcommand, ScoreSubcommand, SearchSubcommand,
+};
 use omen::config::Config;
 use omen::core::{AnalysisContext, Analyzer, FileSet};
 use omen::git::{clone_remote, is_remote_repo, CloneOptions};
@@ -259,6 +261,9 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         }
         Command::Report(cmd) => {
             run_report(path, &config, &cmd.subcommand)?;
+        }
+        Command::Search(cmd) => {
+            run_search(&cli.path, &config, cmd.subcommand, format)?;
         }
     }
 
@@ -565,6 +570,94 @@ fn run_report(
                     };
 
                     let _ = stream.write_all(response.as_bytes());
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn run_search(
+    path: &PathBuf,
+    config: &Config,
+    subcommand: SearchSubcommand,
+    format: Format,
+) -> omen::core::Result<()> {
+    use omen::semantic::{SearchConfig, SemanticSearch};
+
+    let search_config = SearchConfig::default();
+    let search = SemanticSearch::new(&search_config, path)?;
+
+    match subcommand {
+        SearchSubcommand::Index(args) => {
+            if args.force {
+                // Remove existing cache
+                let cache_path = path.join(".omen").join("search.db");
+                if cache_path.exists() {
+                    std::fs::remove_file(&cache_path)?;
+                    eprintln!("Removed existing index: {}", cache_path.display());
+                }
+                // Recreate search instance with fresh cache
+                let search = SemanticSearch::new(&search_config, path)?;
+                let stats = search.index(config)?;
+                eprintln!(
+                    "Indexed {} files ({} symbols), {} errors",
+                    stats.indexed, stats.symbols, stats.errors
+                );
+            } else {
+                let stats = search.index(config)?;
+                eprintln!(
+                    "Indexed {} files ({} symbols), {} removed, {} errors",
+                    stats.indexed, stats.symbols, stats.removed, stats.errors
+                );
+            }
+        }
+        SearchSubcommand::Query(args) => {
+            let file_filter: Option<Vec<&str>> =
+                args.files.as_ref().map(|f| f.split(',').collect());
+
+            let output = if let Some(files) = file_filter {
+                search.search_in_files(&args.query, &files, Some(args.top_k))?
+            } else {
+                search.search(&args.query, Some(args.top_k))?
+            };
+
+            // Filter by min_score
+            let filtered_results: Vec<_> = output
+                .results
+                .into_iter()
+                .filter(|r| r.score >= args.min_score)
+                .collect();
+
+            let output = omen::semantic::SearchOutput::new(
+                output.query,
+                output.total_symbols,
+                filtered_results,
+            );
+
+            match format {
+                Format::Json => println!("{}", serde_json::to_string_pretty(&output)?),
+                Format::Markdown | Format::Text => {
+                    println!("Query: {}", output.query);
+                    println!("Total symbols indexed: {}", output.total_symbols);
+                    println!("Results: {}\n", output.results.len());
+
+                    for (i, result) in output.results.iter().enumerate() {
+                        println!(
+                            "{}. {} ({}) - score: {:.3}",
+                            i + 1,
+                            result.symbol_name,
+                            result.symbol_type,
+                            result.score
+                        );
+                        println!(
+                            "   {}:{}-{}",
+                            result.file_path, result.start_line, result.end_line
+                        );
+                        println!("   {}", result.signature);
+                        println!();
+                    }
                 }
             }
         }
