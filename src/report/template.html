@@ -914,6 +914,10 @@
 
         <div class="nav-section">
             <div class="nav-section-title">Overview</div>
+            <a href="#quick-insights" class="nav-item">
+                <span class="nav-dot {% if Score.score < 60 %}danger{% elif Score.score < 80 %}warning{% else %}good{% endif %}"></span>
+                Quick Insights
+            </a>
             <a href="#summary" class="nav-item">
                 <span class="nav-dot neutral"></span>
                 Executive Summary
@@ -1069,6 +1073,81 @@
                 <div class="metric-card">
                     <div class="metric-card-value {% if Duplicates.duplication_ratio > 15.0 %}danger{% elif Duplicates.duplication_ratio > 10.0 %}warning{% else %}good{% endif %}">{{ Duplicates.duplication_ratio | round(1) }}%</div>
                     <div class="metric-card-label">Duplication</div>
+                </div>
+                {% endif %}
+            </div>
+        </section>
+
+        <!-- Quick Insights (Data-driven, always shown) -->
+        <section id="quick-insights" class="section">
+            <div class="section-header">
+                <h2>Quick Insights</h2>
+            </div>
+            <p class="section-subtitle">Key findings from the analysis - prioritized by impact</p>
+
+            <div class="grid-2">
+                {% if SATD and SATD.items %}
+                {% set critical_count = count_severity(SATD.items, "critical") %}
+                {% set high_count = count_severity(SATD.items, "high") %}
+                {% if critical_count > 0 or high_count > 10 %}
+                <div class="card highlight-red">
+                    <h3>Technical Debt Hotspot</h3>
+                    <p style="color: var(--text-secondary);">
+                        Found <strong>{{ critical_count }} critical</strong> and <strong>{{ high_count }} high-priority</strong> debt items.
+                        These are areas where the team has explicitly noted problems. Consider scheduling time to address the most impactful items.
+                    </p>
+                </div>
+                {% endif %}
+                {% endif %}
+
+                {% if Cohesion and Cohesion.classes %}
+                {% set god_classes = Cohesion.classes | selectattr("lcom", "gt", 50) | list %}
+                {% if god_classes | length > 5 %}
+                <div class="card highlight-yellow">
+                    <h3>Low Cohesion Classes</h3>
+                    <p style="color: var(--text-secondary);">
+                        Detected <strong>{{ god_classes | length }} classes</strong> with low cohesion (LCOM > 50).
+                        These classes may be doing too many unrelated things. Consider splitting them into more focused components.
+                    </p>
+                </div>
+                {% endif %}
+                {% endif %}
+
+                {% if Duplicates and Duplicates.duplication_ratio > 5.0 %}
+                <div class="card highlight-yellow">
+                    <h3>Code Duplication</h3>
+                    <p style="color: var(--text-secondary);">
+                        <strong>{{ Duplicates.duplication_ratio | round(1) }}%</strong> of code is duplicated across {{ Duplicates.clone_groups }} clone groups.
+                        Bugs fixed in one location may need fixing in others. Consider extracting shared functionality.
+                    </p>
+                </div>
+                {% endif %}
+
+                {% if Churn and Churn.summary.total_commits > 100 %}
+                <div class="card highlight-blue">
+                    <h3>Active Development</h3>
+                    <p style="color: var(--text-secondary);">
+                        <strong>{{ Churn.summary.total_commits }}</strong> commits across <strong>{{ Churn.summary.unique_files }}</strong> files.
+                        {% if Churn.summary.hotspot_files %}The most active files are potential hotspots that warrant attention.{% endif %}
+                    </p>
+                </div>
+                {% endif %}
+
+                {% if Score.score >= 80 %}
+                <div class="card highlight-green">
+                    <h3>Healthy Codebase</h3>
+                    <p style="color: var(--text-secondary);">
+                        Overall health score of <strong>{{ Score.score }}</strong> indicates a well-maintained codebase.
+                        Continue current practices and address issues as they arise.
+                    </p>
+                </div>
+                {% elif Score.score < 60 %}
+                <div class="card highlight-red">
+                    <h3>Attention Needed</h3>
+                    <p style="color: var(--text-secondary);">
+                        Health score of <strong>{{ Score.score }}</strong> suggests significant technical debt.
+                        Consider allocating dedicated time for refactoring and debt reduction.
+                    </p>
                 </div>
                 {% endif %}
             </div>
@@ -1711,6 +1790,22 @@
                         <div class="card">
                             <h3>CBO (Coupling)</h3>
                             <p style="color: var(--text-secondary);">How many other classes a class depends on. High coupling means changes ripple through the codebase - everything is connected to everything.</p>
+                        </div>
+                        <div class="card">
+                            <h3>Churn Rate</h3>
+                            <p style="color: var(--text-secondary);">How frequently a file changes. High churn indicates instability - the code may be unclear, have bugs, or be undergoing active development.</p>
+                        </div>
+                        <div class="card">
+                            <h3>Self-Admitted Technical Debt (SATD)</h3>
+                            <p style="color: var(--text-secondary);">Code issues the team has documented (TODO, FIXME, HACK, XXX). These represent known shortcuts that need eventual attention.</p>
+                        </div>
+                        <div class="card">
+                            <h3>Code Clone / Duplicate</h3>
+                            <p style="color: var(--text-secondary);">Similar code appearing in multiple places. When a bug is fixed in one spot, it may need fixing elsewhere. Candidates for refactoring into shared functions.</p>
+                        </div>
+                        <div class="card">
+                            <h3>Technical Debt Gradient</h3>
+                            <p style="color: var(--text-secondary);">Rate of debt accumulation over time. A positive gradient means debt is increasing; negative means the team is paying it down.</p>
                         </div>
                     </div>
                 </div>

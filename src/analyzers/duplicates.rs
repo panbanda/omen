@@ -624,6 +624,19 @@ impl AnalyzerTrait for Analyzer {
             ..Default::default()
         };
 
+        // Calculate duplicated_lines from unique instances in groups
+        // Each instance represents duplicated code - count each once
+        use std::collections::HashSet;
+        let mut seen_ranges: HashSet<(String, u32, u32)> = HashSet::new();
+        for group in &groups {
+            for inst in &group.instances {
+                let key = (inst.file.clone(), inst.start_line, inst.end_line);
+                if seen_ranges.insert(key) {
+                    summary.duplicated_lines += inst.lines;
+                }
+            }
+        }
+
         // Convert groups to pairwise clones for backward compatibility
         let mut clones = Vec::new();
         for group in &groups {
@@ -646,7 +659,7 @@ impl AnalyzerTrait for Analyzer {
                         group_id: group.id,
                     };
 
-                    summary.add_clone(&clone);
+                    summary.add_clone_stats(&clone);
                     clones.push(clone);
                 }
             }
@@ -799,7 +812,9 @@ pub struct AnalysisSummary {
 }
 
 impl AnalysisSummary {
-    fn add_clone(&mut self, clone: &Clone) {
+    /// Add clone statistics (file occurrences and type counts).
+    /// Note: duplicated_lines is calculated separately from unique group instances.
+    fn add_clone_stats(&mut self, clone: &Clone) {
         self.total_clones += 1;
         *self
             .file_occurrences
@@ -811,7 +826,6 @@ impl AnalysisSummary {
                 .entry(clone.file_b.clone())
                 .or_default() += 1;
         }
-        self.duplicated_lines += clone.lines_a + clone.lines_b;
 
         match clone.clone_type {
             CloneType::Type1 => self.type1_count += 1,
@@ -1754,7 +1768,7 @@ func funcB() string {
     }
 
     #[test]
-    fn test_summary_add_clone() {
+    fn test_summary_add_clone_stats() {
         let mut summary = AnalysisSummary::default();
 
         let clone = Clone {
@@ -1771,11 +1785,12 @@ func funcB() string {
             group_id: 1,
         };
 
-        summary.add_clone(&clone);
+        summary.add_clone_stats(&clone);
 
         assert_eq!(summary.total_clones, 1);
         assert_eq!(summary.type1_count, 1);
-        assert_eq!(summary.duplicated_lines, 20);
+        // duplicated_lines is now calculated separately from unique group instances
+        assert_eq!(summary.duplicated_lines, 0);
     }
 
     #[test]
