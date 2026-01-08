@@ -1,5 +1,21 @@
 # Changelog
 
+## [4.3.1](https://github.com/panbanda/omen/compare/omen-v4.3.0...omen-v4.3.1) (2026-01-08)
+
+
+### Bug Fixes
+
+* **deps:** update rust crate indicatif to 0.18 ([#233](https://github.com/panbanda/omen/issues/233)) ([f9306a1](https://github.com/panbanda/omen/commit/f9306a1fe6bb7f35065a566f5951efb72c7ffb70))
+* **deps:** update rust crate jsonrpsee to 0.26 ([#234](https://github.com/panbanda/omen/issues/234)) ([27183a9](https://github.com/panbanda/omen/commit/27183a90bf1a64243d7b9980ff46404b141c6a91))
+* **deps:** update rust crate petgraph to 0.8 ([#235](https://github.com/panbanda/omen/issues/235)) ([150c86f](https://github.com/panbanda/omen/commit/150c86f47360b91052b07106aefabe269b44c88d))
+* **deps:** update rust crate pulldown-cmark to 0.13 ([#238](https://github.com/panbanda/omen/issues/238)) ([075baad](https://github.com/panbanda/omen/commit/075baad26135bf345aad2ec9288356f1c5109ec1))
+* **deps:** update rust crate toml to 0.9 ([#240](https://github.com/panbanda/omen/issues/240)) ([af099a9](https://github.com/panbanda/omen/commit/af099a9df7d9f7f464b15f944ba896e8a36749bf))
+
+
+### Performance Improvements
+
+* **git:** replace CLI git calls with native gix library ([#241](https://github.com/panbanda/omen/issues/241)) ([73378ae](https://github.com/panbanda/omen/commit/73378ae2b74564c8e44d9e5ae61e66ba0f0a30c6))
+
 ## [4.3.0](https://github.com/panbanda/omen/compare/omen-v4.2.0...omen-v4.3.0) (2026-01-08)
 
 
