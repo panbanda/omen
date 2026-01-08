@@ -1,202 +1,77 @@
 //! Embedding engine for generating vector embeddings from code.
 //!
-//! Uses ONNX Runtime with the all-MiniLM-L6-v2 model for local inference.
+//! Uses pluggable providers: candle (local) or third-party APIs (OpenAI, Cohere, Voyage).
 
-use std::path::Path;
-use std::sync::Mutex;
+use std::sync::Arc;
 
-use ndarray::Axis;
-use ort::session::builder::GraphOptimizationLevel;
-use ort::session::Session;
-use ort::value::Tensor;
-use tokenizers::Tokenizer;
-
-use crate::core::{Error, Result};
+use crate::core::Result;
 use crate::parser::FunctionNode;
 
-use super::model::ModelManager;
+use super::api_provider::{CohereProvider, OpenAIProvider, VoyageProvider};
+use super::candle_provider::CandleProvider;
+use super::provider::{EmbeddingProvider, EmbeddingProviderConfig, MINILM_EMBEDDING_DIM};
 
-/// Embedding dimension for all-MiniLM-L6-v2.
-pub const EMBEDDING_DIM: usize = 384;
+/// Embedding dimension for all-MiniLM-L6-v2 (default candle provider).
+pub const EMBEDDING_DIM: usize = MINILM_EMBEDDING_DIM;
 
-/// Maximum sequence length for the model.
-const MAX_SEQ_LENGTH: usize = 256;
-
-/// Embedding engine for generating code embeddings.
+/// Embedding engine using pluggable providers.
 pub struct EmbeddingEngine {
-    session: Mutex<Session>,
-    tokenizer: Tokenizer,
+    provider: Arc<dyn EmbeddingProvider>,
 }
 
 impl EmbeddingEngine {
-    /// Create a new embedding engine, downloading the model if necessary.
+    /// Create a new embedding engine with the default candle provider.
     pub fn new() -> Result<Self> {
-        let manager = ModelManager::new()?;
-        manager.ensure_model()?;
-        Self::from_paths(&manager.model_path(), &manager.tokenizer_path())
+        Self::with_config(&EmbeddingProviderConfig::default())
     }
 
-    /// Create an embedding engine from explicit model and tokenizer paths.
-    pub fn from_paths(model_path: &Path, tokenizer_path: &Path) -> Result<Self> {
-        let session = Session::builder()
-            .map_err(|e| Error::analysis(format!("Failed to create ONNX session builder: {}", e)))?
-            .with_optimization_level(GraphOptimizationLevel::Level3)
-            .map_err(|e| Error::analysis(format!("Failed to set optimization level: {}", e)))?
-            .with_intra_threads(4)
-            .map_err(|e| Error::analysis(format!("Failed to set intra threads: {}", e)))?
-            .commit_from_file(model_path)
-            .map_err(|e| {
-                Error::analysis(format!(
-                    "Failed to load ONNX model from {}: {}",
-                    model_path.display(),
-                    e
-                ))
-            })?;
+    /// Create an embedding engine with a specific provider configuration.
+    pub fn with_config(config: &EmbeddingProviderConfig) -> Result<Self> {
+        let provider: Arc<dyn EmbeddingProvider> = match config {
+            EmbeddingProviderConfig::Candle => Arc::new(CandleProvider::new()?),
+            EmbeddingProviderConfig::OpenAI { api_key, model } => {
+                Arc::new(OpenAIProvider::new(api_key.clone(), model.clone())?)
+            }
+            EmbeddingProviderConfig::Cohere { api_key, model } => {
+                Arc::new(CohereProvider::new(api_key.clone(), model.clone())?)
+            }
+            EmbeddingProviderConfig::Voyage { api_key, model } => {
+                Arc::new(VoyageProvider::new(api_key.clone(), model.clone())?)
+            }
+        };
 
-        let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(|e| {
-            Error::analysis(format!(
-                "Failed to load tokenizer from {}: {}",
-                tokenizer_path.display(),
-                e
-            ))
-        })?;
+        Ok(Self { provider })
+    }
 
-        Ok(Self {
-            session: Mutex::new(session),
-            tokenizer,
-        })
+    /// Create an embedding engine with a custom provider.
+    pub fn with_provider(provider: Arc<dyn EmbeddingProvider>) -> Self {
+        Self { provider }
     }
 
     /// Generate an embedding for a single text.
     pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        let embeddings = self.embed_batch(&[text.to_string()])?;
-        Ok(embeddings.into_iter().next().unwrap())
+        self.provider.embed(text)
     }
 
     /// Generate embeddings for a batch of texts.
     pub fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        if texts.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // Tokenize all texts
-        let encodings = self
-            .tokenizer
-            .encode_batch(texts.to_vec(), true)
-            .map_err(|e| Error::analysis(format!("Tokenization failed: {}", e)))?;
-
-        let batch_size = encodings.len();
-
-        // Prepare input tensors
-        let mut input_ids: Vec<i64> = Vec::with_capacity(batch_size * MAX_SEQ_LENGTH);
-        let mut attention_mask: Vec<i64> = Vec::with_capacity(batch_size * MAX_SEQ_LENGTH);
-        let mut token_type_ids: Vec<i64> = Vec::with_capacity(batch_size * MAX_SEQ_LENGTH);
-
-        for encoding in &encodings {
-            let ids = encoding.get_ids();
-            let mask = encoding.get_attention_mask();
-            let type_ids = encoding.get_type_ids();
-
-            // Truncate or pad to MAX_SEQ_LENGTH
-            for i in 0..MAX_SEQ_LENGTH {
-                if i < ids.len() {
-                    input_ids.push(ids[i] as i64);
-                    attention_mask.push(mask[i] as i64);
-                    token_type_ids.push(type_ids[i] as i64);
-                } else {
-                    input_ids.push(0);
-                    attention_mask.push(0);
-                    token_type_ids.push(0);
-                }
-            }
-        }
-
-        // Create input tensors using Tensor::from_array with (shape, data) tuple
-        let shape = [batch_size as i64, MAX_SEQ_LENGTH as i64];
-
-        let input_ids_tensor = Tensor::from_array((shape, input_ids.into_boxed_slice()))
-            .map_err(|e| Error::analysis(format!("Failed to create input_ids tensor: {}", e)))?;
-
-        let attention_mask_tensor = Tensor::from_array((shape, attention_mask.into_boxed_slice()))
-            .map_err(|e| {
-                Error::analysis(format!("Failed to create attention_mask tensor: {}", e))
-            })?;
-
-        let token_type_ids_tensor = Tensor::from_array((shape, token_type_ids.into_boxed_slice()))
-            .map_err(|e| {
-                Error::analysis(format!("Failed to create token_type_ids tensor: {}", e))
-            })?;
-
-        // Run inference with mutable session access through Mutex
-        let mut session = self
-            .session
-            .lock()
-            .map_err(|e| Error::analysis(format!("Failed to lock session: {}", e)))?;
-
-        let outputs = session
-            .run(ort::inputs![
-                "input_ids" => input_ids_tensor,
-                "attention_mask" => attention_mask_tensor,
-                "token_type_ids" => token_type_ids_tensor,
-            ])
-            .map_err(|e| Error::analysis(format!("ONNX inference failed: {}", e)))?;
-
-        // Extract embeddings from output using try_extract_array (ndarray feature)
-        let output_array = outputs[0]
-            .try_extract_array::<f32>()
-            .map_err(|e| Error::analysis(format!("Failed to extract output tensor: {}", e)))?;
-
-        // The output shape is [batch_size, seq_len, hidden_size]
-        let output_shape = output_array.shape();
-        let seq_len = output_shape[1];
-        let hidden_size = output_shape[2];
-
-        // Mean pooling with attention mask
-        let mut embeddings = Vec::with_capacity(batch_size);
-
-        for (batch_idx, encoding) in encodings.iter().enumerate() {
-            let mask = encoding.get_attention_mask();
-            let mask_sum: f32 = mask.iter().take(seq_len).map(|&x| x as f32).sum();
-
-            let mut embedding = vec![0.0f32; hidden_size];
-
-            // Get the slice for this batch item
-            let batch_output = output_array.index_axis(Axis(0), batch_idx);
-
-            for (seq_idx, &mask_val) in mask.iter().take(seq_len).enumerate() {
-                if mask_val == 1 {
-                    let seq_output = batch_output.index_axis(Axis(0), seq_idx);
-                    for (emb_idx, emb_val) in embedding.iter_mut().enumerate() {
-                        *emb_val += seq_output[emb_idx];
-                    }
-                }
-            }
-
-            // Normalize by mask sum
-            if mask_sum > 0.0 {
-                for val in &mut embedding {
-                    *val /= mask_sum;
-                }
-            }
-
-            // L2 normalize
-            let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
-            if norm > 0.0 {
-                for val in &mut embedding {
-                    *val /= norm;
-                }
-            }
-
-            embeddings.push(embedding);
-        }
-
-        Ok(embeddings)
+        self.provider.embed_batch(texts)
     }
 
     /// Generate an embedding for a function/symbol.
     pub fn embed_symbol(&self, func: &FunctionNode, source: &str) -> Result<Vec<f32>> {
         let text = format_symbol_text(func, source);
         self.embed(&text)
+    }
+
+    /// Get the embedding dimension for the current provider.
+    pub fn embedding_dim(&self) -> usize {
+        self.provider.embedding_dim()
+    }
+
+    /// Get the provider name.
+    pub fn provider_name(&self) -> &str {
+        self.provider.name()
     }
 }
 
@@ -313,5 +188,10 @@ mod tests {
         let source = "x".repeat(3000);
         let text = format_symbol_text(&func, &source);
         assert!(text.len() <= 1600); // signature + truncated body
+    }
+
+    #[test]
+    fn test_embedding_dim_constant() {
+        assert_eq!(EMBEDDING_DIM, 384);
     }
 }

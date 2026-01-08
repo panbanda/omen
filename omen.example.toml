@@ -121,3 +121,33 @@ stale_days = 90
 #     (simple_symbol) @flag_key))
 # '''
 custom_providers = []
+
+# Semantic search configuration
+[semantic_search]
+# Maximum number of search results to return
+max_results = 20
+# Minimum similarity score (0-1) for results
+min_score = 0.3
+
+# Embedding provider configuration
+# Default: candle (local inference with all-MiniLM-L6-v2)
+[semantic_search.provider]
+type = "candle"
+
+# Alternative: OpenAI embeddings
+# [semantic_search.provider]
+# type = "open_ai"
+# model = "text-embedding-3-small"  # or "text-embedding-3-large", "text-embedding-ada-002"
+# api_key = "sk-..."  # Optional: can also use OPENAI_API_KEY env var
+
+# Alternative: Cohere embeddings
+# [semantic_search.provider]
+# type = "cohere"
+# model = "embed-english-v3.0"  # or "embed-multilingual-v3.0", "embed-english-light-v3.0"
+# api_key = "..."  # Optional: can also use COHERE_API_KEY env var
+
+# Alternative: Voyage AI embeddings (optimized for code)
+# [semantic_search.provider]
+# type = "voyage"
+# model = "voyage-code-2"  # or "voyage-2", "voyage-large-2"
+# api_key = "..."  # Optional: can also use VOYAGE_API_KEY env var

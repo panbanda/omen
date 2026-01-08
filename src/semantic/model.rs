@@ -1,29 +1,26 @@
 //! Model management for semantic search embeddings.
 //!
-//! Downloads and caches the all-MiniLM-L6-v2 ONNX model for local inference.
+//! Downloads and caches the all-MiniLM-L6-v2 model for local candle inference.
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::core::{Error, Result};
 
-/// URL for the all-MiniLM-L6-v2 ONNX model.
-const MODEL_URL: &str =
-    "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx";
-
-/// URL for the tokenizer.json file.
-const TOKENIZER_URL: &str =
-    "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json";
+/// Hugging Face repository for all-MiniLM-L6-v2.
+pub const MODEL_REPO: &str = "sentence-transformers/all-MiniLM-L6-v2";
 
 /// Expected model version for cache invalidation.
-const MODEL_VERSION: &str = "all-MiniLM-L6-v2-v1";
+const MODEL_VERSION: &str = "all-MiniLM-L6-v2-candle-v1";
 
-/// Model file name.
-const MODEL_FILE: &str = "model.onnx";
+/// Model weights file name.
+const MODEL_FILE: &str = "model.safetensors";
 
 /// Tokenizer file name.
 const TOKENIZER_FILE: &str = "tokenizer.json";
+
+/// Config file name.
+const CONFIG_FILE: &str = "config.json";
 
 /// Version file name.
 const VERSION_FILE: &str = "version.txt";
@@ -54,7 +51,12 @@ impl ModelManager {
         Ok(cache_dir)
     }
 
-    /// Get the path to the ONNX model file.
+    /// Get the cache directory.
+    pub fn cache_dir(&self) -> &Path {
+        &self.cache_dir
+    }
+
+    /// Get the path to the model weights file.
     pub fn model_path(&self) -> PathBuf {
         self.cache_dir.join(MODEL_FILE)
     }
@@ -64,7 +66,12 @@ impl ModelManager {
         self.cache_dir.join(TOKENIZER_FILE)
     }
 
-    /// Ensure the model and tokenizer are downloaded and cached.
+    /// Get the path to the config file.
+    pub fn config_path(&self) -> PathBuf {
+        self.cache_dir.join(CONFIG_FILE)
+    }
+
+    /// Ensure the model, tokenizer, and config are downloaded and cached.
     pub fn ensure_model(&self) -> Result<()> {
         fs::create_dir_all(&self.cache_dir).map_err(|e| {
             Error::analysis(format!(
@@ -76,8 +83,7 @@ impl ModelManager {
 
         // Check if we need to download/update
         if !self.is_model_valid() {
-            self.download_model()?;
-            self.download_tokenizer()?;
+            self.download_model_files()?;
             self.write_version()?;
         }
 
@@ -88,9 +94,14 @@ impl ModelManager {
     fn is_model_valid(&self) -> bool {
         let model_path = self.model_path();
         let tokenizer_path = self.tokenizer_path();
+        let config_path = self.config_path();
         let version_path = self.cache_dir.join(VERSION_FILE);
 
-        if !model_path.exists() || !tokenizer_path.exists() || !version_path.exists() {
+        if !model_path.exists()
+            || !tokenizer_path.exists()
+            || !config_path.exists()
+            || !version_path.exists()
+        {
             return false;
         }
 
@@ -101,21 +112,43 @@ impl ModelManager {
         }
     }
 
-    /// Download the ONNX model.
-    fn download_model(&self) -> Result<()> {
-        eprintln!("Downloading embedding model...");
-        let model_path = self.model_path();
-        download_file(MODEL_URL, &model_path)?;
-        eprintln!("Model downloaded to: {}", model_path.display());
-        Ok(())
-    }
+    /// Download model files from Hugging Face Hub.
+    fn download_model_files(&self) -> Result<()> {
+        eprintln!("Downloading embedding model from Hugging Face Hub...");
+        eprintln!("Repository: {}", MODEL_REPO);
 
-    /// Download the tokenizer.
-    fn download_tokenizer(&self) -> Result<()> {
+        // Use hf-hub to download files
+        let api = hf_hub::api::sync::Api::new().map_err(|e| {
+            Error::analysis(format!("Failed to initialize Hugging Face Hub API: {}", e))
+        })?;
+
+        let repo = api.model(MODEL_REPO.to_string());
+
+        // Download model weights (safetensors format)
+        eprintln!("Downloading model weights...");
+        let model_src = repo
+            .get(MODEL_FILE)
+            .map_err(|e| Error::analysis(format!("Failed to download model weights: {}", e)))?;
+        fs::copy(&model_src, self.model_path())
+            .map_err(|e| Error::analysis(format!("Failed to copy model weights: {}", e)))?;
+
+        // Download tokenizer
         eprintln!("Downloading tokenizer...");
-        let tokenizer_path = self.tokenizer_path();
-        download_file(TOKENIZER_URL, &tokenizer_path)?;
-        eprintln!("Tokenizer downloaded to: {}", tokenizer_path.display());
+        let tokenizer_src = repo
+            .get(TOKENIZER_FILE)
+            .map_err(|e| Error::analysis(format!("Failed to download tokenizer: {}", e)))?;
+        fs::copy(&tokenizer_src, self.tokenizer_path())
+            .map_err(|e| Error::analysis(format!("Failed to copy tokenizer: {}", e)))?;
+
+        // Download config
+        eprintln!("Downloading config...");
+        let config_src = repo
+            .get(CONFIG_FILE)
+            .map_err(|e| Error::analysis(format!("Failed to download config: {}", e)))?;
+        fs::copy(&config_src, self.config_path())
+            .map_err(|e| Error::analysis(format!("Failed to copy config: {}", e)))?;
+
+        eprintln!("Model downloaded to: {}", self.cache_dir.display());
         Ok(())
     }
 
@@ -139,32 +172,6 @@ impl Default for ModelManager {
     }
 }
 
-/// Download a file from a URL to a local path.
-fn download_file(url: &str, path: &Path) -> Result<()> {
-    let response = reqwest::blocking::get(url)
-        .map_err(|e| Error::analysis(format!("Failed to download {}: {}", url, e)))?;
-
-    if !response.status().is_success() {
-        return Err(Error::analysis(format!(
-            "Failed to download {}: HTTP {}",
-            url,
-            response.status()
-        )));
-    }
-
-    let bytes = response
-        .bytes()
-        .map_err(|e| Error::analysis(format!("Failed to read response body: {}", e)))?;
-
-    let mut file = fs::File::create(path)
-        .map_err(|e| Error::analysis(format!("Failed to create file {}: {}", path.display(), e)))?;
-
-    file.write_all(&bytes)
-        .map_err(|e| Error::analysis(format!("Failed to write file {}: {}", path.display(), e)))?;
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,7 +188,10 @@ mod tests {
     fn test_model_path() {
         let temp_dir = TempDir::new().unwrap();
         let manager = ModelManager::with_cache_dir(temp_dir.path().to_path_buf());
-        assert_eq!(manager.model_path(), temp_dir.path().join("model.onnx"));
+        assert_eq!(
+            manager.model_path(),
+            temp_dir.path().join("model.safetensors")
+        );
     }
 
     #[test]
@@ -192,6 +202,13 @@ mod tests {
             manager.tokenizer_path(),
             temp_dir.path().join("tokenizer.json")
         );
+    }
+
+    #[test]
+    fn test_config_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = ModelManager::with_cache_dir(temp_dir.path().to_path_buf());
+        assert_eq!(manager.config_path(), temp_dir.path().join("config.json"));
     }
 
     #[test]
@@ -209,6 +226,7 @@ mod tests {
         // Create dummy files
         fs::write(manager.model_path(), "dummy").unwrap();
         fs::write(manager.tokenizer_path(), "dummy").unwrap();
+        fs::write(manager.config_path(), "dummy").unwrap();
         fs::write(temp_dir.path().join(VERSION_FILE), MODEL_VERSION).unwrap();
 
         assert!(manager.is_model_valid());
@@ -222,6 +240,7 @@ mod tests {
         // Create dummy files with wrong version
         fs::write(manager.model_path(), "dummy").unwrap();
         fs::write(manager.tokenizer_path(), "dummy").unwrap();
+        fs::write(manager.config_path(), "dummy").unwrap();
         fs::write(temp_dir.path().join(VERSION_FILE), "wrong-version").unwrap();
 
         assert!(!manager.is_model_valid());

@@ -262,8 +262,8 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         Command::Report(cmd) => {
             run_report(path, &config, &cmd.subcommand)?;
         }
-        Command::Search(cmd) => {
-            run_search(&cli.path, &config, cmd.subcommand, format)?;
+        Command::Search(ref cmd) => {
+            run_search(&cli.path, &config, cmd.subcommand.clone(), format)?;
         }
     }
 

@@ -68,7 +68,7 @@ blake3 = "1.5"
 indicatif = "0.18"
 
 # HTTP for remote repos (MCP server)
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking", "json"] }
 tokio = { version = "1.42", features = ["rt-multi-thread", "macros", "io-std", "sync"] }
 
 # MCP server (JSON-RPC)
@@ -99,11 +99,13 @@ unicode-width = "0.2"
 
 # Semantic search (all-MiniLM-L6-v2 sentence transformer, 384-dim embeddings)
 # Model: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
-# Runtime: ONNX (ort) with local inference, no API keys required
-ort = { version = "2.0.0-rc.11", default-features = false, features = ["std", "download-binaries", "tls-native", "ndarray"] }
+# Runtime: candle for local inference, with optional third-party API providers
+candle-core = "0.8"
+candle-nn = "0.8"
+candle-transformers = "0.8"
+hf-hub = { version = "0.3", features = ["tokio"] }
 rusqlite = { version = "0.33", features = ["bundled"] }
 tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
-ndarray = "0.17"
 dirs = "6.0"
 
 [dev-dependencies]

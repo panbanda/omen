@@ -520,7 +520,7 @@ pub struct SearchCommand {
     pub subcommand: SearchSubcommand,
 }
 
-#[derive(Subcommand)]
+#[derive(Clone, Subcommand)]
 pub enum SearchSubcommand {
     /// Build or update the search index
     Index(SearchIndexArgs),
@@ -529,14 +529,14 @@ pub enum SearchSubcommand {
     Query(SearchQueryArgs),
 }
 
-#[derive(Args)]
+#[derive(Clone, Args)]
 pub struct SearchIndexArgs {
     /// Force full re-index (ignore cache)
     #[arg(long)]
     pub force: bool,
 }
 
-#[derive(Args)]
+#[derive(Clone, Args)]
 pub struct SearchQueryArgs {
     /// Natural language query
     pub query: String,
