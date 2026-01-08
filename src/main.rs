@@ -138,8 +138,8 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         Command::Deadcode(_args) => {
             run_analyzer::<omen::analyzers::deadcode::Analyzer>(path, &config, format)?;
         }
-        Command::Churn(_args) => {
-            run_analyzer::<omen::analyzers::churn::Analyzer>(path, &config, format)?;
+        Command::Churn(args) => {
+            run_churn_analyzer(path, &config, format, args.days)?;
         }
         Command::Clones(_args) => {
             run_analyzer::<omen::analyzers::duplicates::Analyzer>(path, &config, format)?;
@@ -278,6 +278,24 @@ fn run_analyzer<A: Analyzer + Default>(
         ctx = ctx.with_git_path(Box::leak(Box::new(git_root)));
     }
     let analyzer = A::default();
+    let result = analyzer.analyze(&ctx)?;
+    format.format(&result, &mut stdout())?;
+    Ok(())
+}
+
+fn run_churn_analyzer(
+    path: &PathBuf,
+    config: &Config,
+    format: Format,
+    days: u32,
+) -> omen::core::Result<()> {
+    let file_set = FileSet::from_path(path, config)?;
+    let mut ctx = AnalysisContext::new(&file_set, config, Some(path));
+    if let Ok(repo) = omen::git::GitRepo::open(path) {
+        let git_root = repo.root().to_path_buf();
+        ctx = ctx.with_git_path(Box::leak(Box::new(git_root)));
+    }
+    let analyzer = omen::analyzers::churn::Analyzer::new().with_days(days);
     let result = analyzer.analyze(&ctx)?;
     format.format(&result, &mut stdout())?;
     Ok(())

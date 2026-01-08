@@ -161,8 +161,120 @@ fn parse_since_duration(since: &str) -> Option<std::time::Duration> {
 
 /// Get commit log with file change statistics (numstat equivalent).
 ///
-/// This is faster than CLI because we process diffs in-memory.
+/// Uses git CLI for performance - gix tree diff is ~160x slower.
 pub fn get_log_with_stats(repo: &Repository, since: Option<&str>) -> Result<Vec<Commit>> {
+    let repo_path = repo
+        .work_dir()
+        .ok_or_else(|| Error::git("Not a work tree"))?;
+
+    // Build git log command with numstat
+    let mut cmd = std::process::Command::new("git");
+    cmd.current_dir(repo_path);
+    cmd.args(["log", "--format=%H|%an|%ae|%at|%s", "--numstat"]);
+
+    if let Some(since_str) = since {
+        cmd.arg(format!("--since={}", since_str));
+    }
+
+    let output = cmd
+        .output()
+        .map_err(|e| Error::git(format!("Failed to run git log: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(Error::git(format!("git log failed: {}", stderr)));
+    }
+
+    parse_git_log_numstat(&output.stdout)
+}
+
+/// Parse git log --numstat output into Commit structs.
+fn parse_git_log_numstat(output: &[u8]) -> Result<Vec<Commit>> {
+    use std::io::{BufRead, BufReader};
+
+    let mut commits = Vec::new();
+    let reader = BufReader::new(output);
+
+    let mut current_commit: Option<Commit> = None;
+
+    for line in reader.lines() {
+        let line = line.map_err(|e| Error::git(format!("Failed to read git output: {}", e)))?;
+
+        if line.is_empty() {
+            continue;
+        }
+
+        // Check if this is a commit line (contains |)
+        if line.contains('|') {
+            let parts: Vec<&str> = line.splitn(5, '|').collect();
+            if parts.len() == 5 {
+                // Save previous commit
+                if let Some(commit) = current_commit.take() {
+                    commits.push(commit);
+                }
+
+                // Parse new commit
+                let sha = parts[0].to_string();
+                let author = parts[1].to_string();
+                let email = parts[2].to_string();
+                let timestamp: i64 = parts[3].parse().unwrap_or(0);
+                let message = parts[4].to_string();
+
+                current_commit = Some(Commit {
+                    sha,
+                    author,
+                    email,
+                    timestamp,
+                    message,
+                    files: Vec::new(),
+                });
+                continue;
+            }
+        }
+
+        // This is a numstat line: added\tdeleted\tfilepath
+        if let Some(ref mut commit) = current_commit {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() == 3 {
+                let (added_str, deleted_str, path) = (parts[0], parts[1], parts[2]);
+
+                // Skip binary files (shown as "-")
+                if added_str == "-" || deleted_str == "-" {
+                    continue;
+                }
+
+                let additions: u32 = added_str.parse().unwrap_or(0);
+                let deletions: u32 = deleted_str.parse().unwrap_or(0);
+
+                commit.files.push(FileChange {
+                    path: PathBuf::from(path),
+                    additions,
+                    deletions,
+                    change_type: if additions > 0 && deletions > 0 {
+                        ChangeType::Modified
+                    } else if additions > 0 {
+                        ChangeType::Added
+                    } else {
+                        ChangeType::Deleted
+                    },
+                });
+            }
+        }
+    }
+
+    // Don't forget the last commit
+    if let Some(commit) = current_commit {
+        commits.push(commit);
+    }
+
+    Ok(commits)
+}
+
+/// Get commit log with file change statistics using gix (slower but pure Rust).
+///
+/// Note: This is ~160x slower than CLI for large repos. Use get_log_with_stats() for performance.
+#[allow(dead_code)]
+pub fn get_log_with_stats_gix(repo: &Repository, since: Option<&str>) -> Result<Vec<Commit>> {
     let head = repo
         .head_id()
         .map_err(|e| Error::git(format!("Failed to get HEAD: {e}")))?;
@@ -251,26 +363,53 @@ fn get_commit_file_changes(repo: &Repository, commit: &gix::Commit<'_>) -> Resul
             })
             .for_each_to_obtain_tree_with_cache(&tree, &mut resource_cache, |change| {
                 use gix::object::tree::diff::Change;
-                let (path, change_type) = match change {
-                    Change::Addition { location, .. } => {
-                        (PathBuf::from(location.to_string()), ChangeType::Added)
-                    }
-                    Change::Deletion { location, .. } => {
-                        (PathBuf::from(location.to_string()), ChangeType::Deleted)
-                    }
-                    Change::Modification { location, .. } => {
-                        (PathBuf::from(location.to_string()), ChangeType::Modified)
-                    }
-                    Change::Rewrite { location, .. } => {
-                        (PathBuf::from(location.to_string()), ChangeType::Renamed)
-                    }
+                let (path, change_type, is_blob) = match change {
+                    Change::Addition {
+                        location,
+                        entry_mode,
+                        ..
+                    } => (
+                        PathBuf::from(location.to_string()),
+                        ChangeType::Added,
+                        entry_mode.is_blob(),
+                    ),
+                    Change::Deletion {
+                        location,
+                        entry_mode,
+                        ..
+                    } => (
+                        PathBuf::from(location.to_string()),
+                        ChangeType::Deleted,
+                        entry_mode.is_blob(),
+                    ),
+                    Change::Modification {
+                        location,
+                        entry_mode,
+                        ..
+                    } => (
+                        PathBuf::from(location.to_string()),
+                        ChangeType::Modified,
+                        entry_mode.is_blob(),
+                    ),
+                    Change::Rewrite {
+                        location,
+                        entry_mode,
+                        ..
+                    } => (
+                        PathBuf::from(location.to_string()),
+                        ChangeType::Renamed,
+                        entry_mode.is_blob(),
+                    ),
                 };
-                changes.push(FileChange {
-                    path,
-                    additions: 0,
-                    deletions: 0,
-                    change_type,
-                });
+                // Only include blob (file) entries, not tree (directory) entries
+                if is_blob {
+                    changes.push(FileChange {
+                        path,
+                        additions: 0,
+                        deletions: 0,
+                        change_type,
+                    });
+                }
                 Ok::<_, std::convert::Infallible>(gix::object::tree::diff::Action::Continue)
             })
             .map_err(|e| Error::git(format!("{e}")))?;
@@ -352,26 +491,53 @@ pub fn get_diff_stats(repo: &Repository, from: &str, to: &str) -> Result<Vec<Fil
         })
         .for_each_to_obtain_tree_with_cache(&to_tree, &mut resource_cache, |change| {
             use gix::object::tree::diff::Change;
-            let (path, change_type) = match change {
-                Change::Addition { location, .. } => {
-                    (PathBuf::from(location.to_string()), ChangeType::Added)
-                }
-                Change::Deletion { location, .. } => {
-                    (PathBuf::from(location.to_string()), ChangeType::Deleted)
-                }
-                Change::Modification { location, .. } => {
-                    (PathBuf::from(location.to_string()), ChangeType::Modified)
-                }
-                Change::Rewrite { location, .. } => {
-                    (PathBuf::from(location.to_string()), ChangeType::Renamed)
-                }
+            let (path, change_type, is_blob) = match change {
+                Change::Addition {
+                    location,
+                    entry_mode,
+                    ..
+                } => (
+                    PathBuf::from(location.to_string()),
+                    ChangeType::Added,
+                    entry_mode.is_blob(),
+                ),
+                Change::Deletion {
+                    location,
+                    entry_mode,
+                    ..
+                } => (
+                    PathBuf::from(location.to_string()),
+                    ChangeType::Deleted,
+                    entry_mode.is_blob(),
+                ),
+                Change::Modification {
+                    location,
+                    entry_mode,
+                    ..
+                } => (
+                    PathBuf::from(location.to_string()),
+                    ChangeType::Modified,
+                    entry_mode.is_blob(),
+                ),
+                Change::Rewrite {
+                    location,
+                    entry_mode,
+                    ..
+                } => (
+                    PathBuf::from(location.to_string()),
+                    ChangeType::Renamed,
+                    entry_mode.is_blob(),
+                ),
             };
-            changes.push(FileChange {
-                path,
-                additions: 0,
-                deletions: 0,
-                change_type,
-            });
+            // Only include blob (file) entries, not tree (directory) entries
+            if is_blob {
+                changes.push(FileChange {
+                    path,
+                    additions: 0,
+                    deletions: 0,
+                    change_type,
+                });
+            }
             Ok::<_, std::convert::Infallible>(gix::object::tree::diff::Action::Continue)
         })
         .map_err(|e| Error::git(format!("{e}")))?;
