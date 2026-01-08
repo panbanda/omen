@@ -1,6 +1,5 @@
 //! Git log operations.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use gix::Repository;
@@ -429,94 +428,6 @@ pub fn get_commit_count(repo: &Repository, from: &str, to: &str) -> Result<i32> 
     }
 
     Ok(count)
-}
-
-/// Aggregated churn data for files (replacement for git log --numstat parsing).
-#[derive(Debug, Clone, Default)]
-pub struct FileChurnData {
-    /// Number of commits touching this file.
-    pub commits: u32,
-    /// Authors who modified this file with their commit counts.
-    pub authors: HashMap<String, u32>,
-    /// Total lines added.
-    pub additions: u32,
-    /// Total lines deleted.
-    pub deletions: u32,
-    /// First commit timestamp.
-    pub first_commit: Option<i64>,
-    /// Last commit timestamp.
-    pub last_commit: Option<i64>,
-}
-
-/// Get file churn data for all files in the repository since a given time.
-///
-/// This is a faster replacement for parsing `git log --numstat` output.
-pub fn get_file_churn(
-    repo: &Repository,
-    since: Option<&str>,
-) -> Result<HashMap<PathBuf, FileChurnData>> {
-    let commits = get_log_with_stats(repo, since)?;
-    let mut file_data: HashMap<PathBuf, FileChurnData> = HashMap::new();
-
-    for commit in commits {
-        for file_change in &commit.files {
-            let data = file_data.entry(file_change.path.clone()).or_default();
-
-            data.commits += 1;
-            *data.authors.entry(commit.author.clone()).or_insert(0) += 1;
-            data.additions += file_change.additions;
-            data.deletions += file_change.deletions;
-
-            // Update time range
-            match data.first_commit {
-                Some(first) if commit.timestamp < first => {
-                    data.first_commit = Some(commit.timestamp)
-                }
-                None => data.first_commit = Some(commit.timestamp),
-                _ => {}
-            }
-            match data.last_commit {
-                Some(last) if commit.timestamp > last => data.last_commit = Some(commit.timestamp),
-                None => data.last_commit = Some(commit.timestamp),
-                _ => {}
-            }
-        }
-    }
-
-    Ok(file_data)
-}
-
-/// Get unique contributor count for a file (replacement for git shortlog -sn).
-pub fn get_file_contributors(repo: &Repository, file_path: &str) -> Result<Vec<(String, u32)>> {
-    let head = repo
-        .head_id()
-        .map_err(|e| Error::git(format!("Failed to get HEAD: {e}")))?;
-
-    let walk = repo
-        .rev_walk([head])
-        .all()
-        .map_err(|e| Error::git(format!("Failed to walk commits: {e}")))?;
-
-    let mut contributors: HashMap<String, u32> = HashMap::new();
-    let file_path = PathBuf::from(file_path);
-
-    for info in walk {
-        let info = info.map_err(|e| Error::git(format!("Failed to read commit: {e}")))?;
-        let commit = info
-            .object()
-            .map_err(|e| Error::git(format!("Failed to get commit object: {e}")))?;
-
-        // Check if this commit touches the file
-        let files = get_commit_file_changes(repo, &commit)?;
-        if files.iter().any(|f| f.path == file_path) {
-            let author = commit.author().map_err(|e| Error::git(format!("{e}")))?;
-            *contributors.entry(author.name.to_string()).or_insert(0) += 1;
-        }
-    }
-
-    let mut result: Vec<_> = contributors.into_iter().collect();
-    result.sort_by(|a, b| b.1.cmp(&a.1)); // Sort by commit count descending
-    Ok(result)
 }
 
 #[cfg(test)]

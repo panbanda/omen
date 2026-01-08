@@ -217,7 +217,6 @@ impl AnalyzerTrait for Analyzer {
 #[derive(Debug, Clone)]
 struct RawCommit {
     features: CommitFeatures,
-    lines_per_file: HashMap<String, i32>,
 }
 
 /// Commit features for change risk analysis.
@@ -417,7 +416,6 @@ fn commits_to_raw_commits(commits: &[crate::git::Commit]) -> Result<Vec<RawCommi
                 files_modified,
                 ..Default::default()
             },
-            lines_per_file,
         });
     }
 
@@ -429,6 +427,7 @@ fn commits_to_raw_commits(commits: &[crate::git::Commit]) -> Result<Vec<RawCommi
 fn parse_git_log(output: &str) -> Result<Vec<RawCommit>> {
     let mut commits = Vec::new();
     let mut current: Option<RawCommit> = None;
+    let mut current_lines_per_file: HashMap<String, i32> = HashMap::new();
 
     for line in output.lines() {
         if line.is_empty() {
@@ -440,8 +439,9 @@ fn parse_git_log(output: &str) -> Result<Vec<RawCommit>> {
             // Save previous commit
             if let Some(mut commit) = current.take() {
                 commit.features.num_files = commit.features.files_modified.len() as i32;
-                commit.features.entropy = calculate_entropy(&commit.lines_per_file);
+                commit.features.entropy = calculate_entropy(&current_lines_per_file);
                 commits.push(commit);
+                current_lines_per_file.clear();
             }
 
             // Parse new commit header
@@ -464,7 +464,6 @@ fn parse_git_log(output: &str) -> Result<Vec<RawCommit>> {
                         is_automated: is_automated_commit(&message),
                         ..Default::default()
                     },
-                    lines_per_file: HashMap::new(),
                 });
             }
         } else if let Some(ref mut commit) = current {
@@ -478,7 +477,7 @@ fn parse_git_log(output: &str) -> Result<Vec<RawCommit>> {
                 commit.features.lines_added += added;
                 commit.features.lines_deleted += deleted;
                 commit.features.files_modified.push(file.clone());
-                *commit.lines_per_file.entry(file).or_insert(0) += added + deleted;
+                *current_lines_per_file.entry(file).or_insert(0) += added + deleted;
             }
         }
     }
@@ -486,7 +485,7 @@ fn parse_git_log(output: &str) -> Result<Vec<RawCommit>> {
     // Don't forget the last commit
     if let Some(mut commit) = current.take() {
         commit.features.num_files = commit.features.files_modified.len() as i32;
-        commit.features.entropy = calculate_entropy(&commit.lines_per_file);
+        commit.features.entropy = calculate_entropy(&current_lines_per_file);
         commits.push(commit);
     }
 
