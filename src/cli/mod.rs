@@ -130,6 +130,10 @@ pub enum Command {
 
     /// Generate and manage HTML health reports
     Report(ReportCommand),
+
+    /// Semantic search over code symbols
+    #[command(alias = "s")]
+    Search(SearchCommand),
 }
 
 #[derive(Args)]
@@ -507,6 +511,47 @@ pub struct ReportServeArgs {
     /// Host to bind to
     #[arg(long, default_value = "127.0.0.1")]
     pub host: String,
+}
+
+/// Search command with subcommands.
+#[derive(Args)]
+pub struct SearchCommand {
+    #[command(subcommand)]
+    pub subcommand: SearchSubcommand,
+}
+
+#[derive(Clone, Subcommand)]
+pub enum SearchSubcommand {
+    /// Build or update the search index
+    Index(SearchIndexArgs),
+
+    /// Search for code symbols
+    Query(SearchQueryArgs),
+}
+
+#[derive(Clone, Args)]
+pub struct SearchIndexArgs {
+    /// Force full re-index (ignore cache)
+    #[arg(long)]
+    pub force: bool,
+}
+
+#[derive(Clone, Args)]
+pub struct SearchQueryArgs {
+    /// Natural language query
+    pub query: String,
+
+    /// Maximum number of results
+    #[arg(short = 'k', long, default_value = "10")]
+    pub top_k: usize,
+
+    /// Minimum similarity score (0.0-1.0)
+    #[arg(long, default_value = "0.3")]
+    pub min_score: f32,
+
+    /// Limit search to specific files (comma-separated)
+    #[arg(long)]
+    pub files: Option<String>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -1262,5 +1307,80 @@ mod tests {
     fn test_shallow_flag() {
         let cli = Cli::try_parse_from(["omen", "--shallow", "complexity"]).unwrap();
         assert!(cli.shallow);
+    }
+
+    // Search command tests
+    #[test]
+    fn test_command_search_index() {
+        let cli = Cli::try_parse_from(["omen", "search", "index"]).unwrap();
+        if let Command::Search(cmd) = cli.command {
+            assert!(matches!(cmd.subcommand, SearchSubcommand::Index(_)));
+        }
+    }
+
+    #[test]
+    fn test_alias_s_for_search() {
+        let cli = Cli::try_parse_from(["omen", "s", "index"]).unwrap();
+        assert!(matches!(cli.command, Command::Search(_)));
+    }
+
+    #[test]
+    fn test_search_index_force() {
+        let cli = Cli::try_parse_from(["omen", "search", "index", "--force"]).unwrap();
+        if let Command::Search(cmd) = cli.command {
+            if let SearchSubcommand::Index(args) = cmd.subcommand {
+                assert!(args.force);
+            }
+        }
+    }
+
+    #[test]
+    fn test_command_search_query() {
+        let cli = Cli::try_parse_from(["omen", "search", "query", "function that handles errors"])
+            .unwrap();
+        if let Command::Search(cmd) = cli.command {
+            if let SearchSubcommand::Query(args) = cmd.subcommand {
+                assert_eq!(args.query, "function that handles errors");
+            }
+        }
+    }
+
+    #[test]
+    fn test_search_query_top_k() {
+        let cli = Cli::try_parse_from(["omen", "search", "query", "test", "-k", "20"]).unwrap();
+        if let Command::Search(cmd) = cli.command {
+            if let SearchSubcommand::Query(args) = cmd.subcommand {
+                assert_eq!(args.top_k, 20);
+            }
+        }
+    }
+
+    #[test]
+    fn test_search_query_min_score() {
+        let cli =
+            Cli::try_parse_from(["omen", "search", "query", "test", "--min-score", "0.5"]).unwrap();
+        if let Command::Search(cmd) = cli.command {
+            if let SearchSubcommand::Query(args) = cmd.subcommand {
+                assert!((args.min_score - 0.5).abs() < 0.001);
+            }
+        }
+    }
+
+    #[test]
+    fn test_search_query_files() {
+        let cli = Cli::try_parse_from([
+            "omen",
+            "search",
+            "query",
+            "test",
+            "--files",
+            "src/main.rs,src/lib.rs",
+        ])
+        .unwrap();
+        if let Command::Search(cmd) = cli.command {
+            if let SearchSubcommand::Query(args) = cmd.subcommand {
+                assert_eq!(args.files, Some("src/main.rs,src/lib.rs".to_string()));
+            }
+        }
     }
 }

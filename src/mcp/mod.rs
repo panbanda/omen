@@ -301,6 +301,20 @@ impl McpServer {
                             "analyzers": {"type": "string", "description": "Analyzers to include (comma-separated)"}
                         }
                     }
+                },
+                {
+                    "name": "semantic_search",
+                    "description": "Search for code symbols using natural language queries",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "Natural language search query"},
+                            "top_k": {"type": "integer", "description": "Maximum number of results (default: 10)"},
+                            "min_score": {"type": "number", "description": "Minimum similarity score 0-1 (default: 0.3)"},
+                            "files": {"type": "string", "description": "Comma-separated file paths to search within"}
+                        },
+                        "required": ["query"]
+                    }
                 }
             ]
         }))
@@ -348,6 +362,9 @@ impl McpServer {
             "repomap" => self.run_analyzer::<crate::analyzers::repomap::Analyzer>(&ctx),
             "smells" => self.run_analyzer::<crate::analyzers::smells::Analyzer>(&ctx),
             "flags" => self.run_analyzer::<crate::analyzers::flags::Analyzer>(&ctx),
+            "semantic_search" => {
+                return self.handle_semantic_search(&arguments);
+            }
             _ => Err(format!("Unknown tool: {}", tool_name)),
         }?;
 
@@ -368,6 +385,65 @@ impl McpServer {
             .analyze(ctx)
             .map_err(|e| format!("Analysis failed: {}", e))?;
         serde_json::to_value(result).map_err(|e| format!("Serialization failed: {}", e))
+    }
+
+    fn handle_semantic_search(&self, arguments: &Value) -> std::result::Result<Value, String> {
+        use crate::semantic::{SearchConfig, SemanticSearch};
+
+        let query = arguments
+            .get("query")
+            .and_then(|v| v.as_str())
+            .ok_or("Missing required 'query' parameter")?;
+
+        let top_k = arguments
+            .get("top_k")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(10);
+
+        let min_score = arguments
+            .get("min_score")
+            .and_then(|v| v.as_f64())
+            .map(|v| v as f32)
+            .unwrap_or(0.3);
+
+        let files: Option<Vec<&str>> = arguments
+            .get("files")
+            .and_then(|v| v.as_str())
+            .map(|s| s.split(',').collect());
+
+        let search_config = SearchConfig {
+            min_score,
+            ..SearchConfig::default()
+        };
+
+        let search = SemanticSearch::new(&search_config, &self.root_path)
+            .map_err(|e| format!("Failed to initialize semantic search: {}", e))?;
+
+        // Ensure index exists (auto-index if needed)
+        search
+            .index(&self.config)
+            .map_err(|e| format!("Failed to index: {}", e))?;
+
+        let output = if let Some(file_paths) = files {
+            search
+                .search_in_files(query, &file_paths, Some(top_k))
+                .map_err(|e| format!("Search failed: {}", e))?
+        } else {
+            search
+                .search(query, Some(top_k))
+                .map_err(|e| format!("Search failed: {}", e))?
+        };
+
+        let result =
+            serde_json::to_value(&output).map_err(|e| format!("Serialization failed: {}", e))?;
+
+        Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": serde_json::to_string_pretty(&result).unwrap_or_default()
+            }]
+        }))
     }
 }
 
@@ -784,5 +860,28 @@ mod tests {
             "temporal tool should succeed with git history: {:?}",
             result.err()
         );
+    }
+
+    #[test]
+    fn test_handle_tools_list_has_semantic_search() {
+        let (server, _temp_dir) = create_test_server();
+        let result = server.handle_tools_list().unwrap();
+        let tools = result.get("tools").unwrap().as_array().unwrap();
+        let has_semantic_search = tools
+            .iter()
+            .any(|t| t.get("name").unwrap() == "semantic_search");
+        assert!(has_semantic_search);
+    }
+
+    #[test]
+    fn test_semantic_search_missing_query() {
+        let (server, _temp_dir) = create_test_server();
+        let params = json!({
+            "name": "semantic_search",
+            "arguments": {}
+        });
+        let result = server.handle_tool_call(Some(params));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("query"));
     }
 }
