@@ -72,7 +72,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 tokio = { version = "1.42", features = ["rt-multi-thread", "macros", "io-std", "sync"] }
 
 # MCP server (JSON-RPC)
-jsonrpsee = { version = "0.24", features = ["server"] }
+jsonrpsee = { version = "0.26", features = ["server"] }
 tower = "0.5"
 
 # Logging and colors
