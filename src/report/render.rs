@@ -435,7 +435,8 @@ fn count_severity(items: Vec<Value>, severity: &str) -> i32 {
         .iter()
         .filter(|item| {
             if let Ok(sev) = item.get_attr("severity") {
-                sev.to_string().eq_ignore_ascii_case(severity)
+                sev.as_str()
+                    .is_some_and(|s| s.eq_ignore_ascii_case(severity))
             } else {
                 false
             }
@@ -452,7 +453,8 @@ fn filter_severity(items: Vec<Value>, severities: Vec<String>) -> Vec<Value> {
         .into_iter()
         .filter(|item| {
             if let Ok(sev) = item.get_attr("severity") {
-                severity_set.contains(&sev.to_string().to_lowercase())
+                sev.as_str()
+                    .is_some_and(|s| severity_set.contains(&s.to_lowercase()))
             } else {
                 false
             }
