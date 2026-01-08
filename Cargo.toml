@@ -103,7 +103,7 @@ unicode-width = "0.2"
 candle-core = "0.8"
 candle-nn = "0.8"
 candle-transformers = "0.8"
-hf-hub = { version = "0.3", features = ["tokio"] }
+hf-hub = { version = "0.4", features = ["tokio"] }
 rusqlite = { version = "0.33", features = ["bundled"] }
 tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
 dirs = "6.0"
