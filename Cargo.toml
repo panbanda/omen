@@ -58,7 +58,7 @@ walkdir = "2.5"
 globset = "0.4"
 
 # Graph algorithms
-petgraph = "0.6"
+petgraph = "0.8"
 
 # Hashing
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
