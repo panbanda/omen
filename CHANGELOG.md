@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.3.0](https://github.com/panbanda/omen/compare/omen-v4.2.0...omen-v4.3.0) (2026-01-08)
+
+
+### Features
+
+* **remote:** implement remote repository scanning with report improvements ([#230](https://github.com/panbanda/omen/issues/230)) ([4f1a945](https://github.com/panbanda/omen/commit/4f1a945eb73748236776fca57a4954f7f8aadcac))
+
 ## [4.2.0](https://github.com/panbanda/omen/compare/omen-v4.1.0...omen-v4.2.0) (2026-01-07)
 
 
