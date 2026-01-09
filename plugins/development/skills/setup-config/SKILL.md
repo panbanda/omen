@@ -49,6 +49,40 @@ Also check package manifests:
 
 Only include providers that are actually detected. If no providers are found, leave `providers = []` with a comment explaining how to add them manually.
 
+### Step 2b: Detect Custom Feature Flag Systems
+
+If you find feature flag patterns that don't match the built-in providers, the user likely has an in-house system. Ask them about it and help them create a custom provider.
+
+Custom providers use tree-sitter queries to match code patterns. They are defined separately from the `providers` list and run automatically.
+
+Example: If you see patterns like `MyFlags.enabled?("feature_name")` in Ruby:
+
+```toml
+[[feature_flags.custom_providers]]
+name = "my_flags"
+languages = ["ruby"]
+query = '''
+(call
+  receiver: (constant) @receiver
+  method: (identifier) @method
+  arguments: (argument_list
+    (string (string_content) @flag_key)))
+(#eq? @receiver "MyFlags")
+(#eq? @method "enabled?")
+'''
+```
+
+Key points for custom providers:
+- `name`: The provider name shown in output (choose something descriptive)
+- `languages`: List of languages to apply this query to (e.g., `["ruby", "python"]`)
+- `query`: A tree-sitter query that captures the flag key as `@flag_key` or `@key`
+- Custom providers run automatically and don't need to be listed in `providers`
+
+To write tree-sitter queries:
+1. Use `omen context <file>` to see the AST structure
+2. Match the pattern that wraps your feature flag calls
+3. Capture the flag key string with `@flag_key` or `@key`
+
 ### Step 3: Detect Generated Code Patterns
 
 Use Glob to find generated files:
@@ -161,6 +195,19 @@ color = true
 # Populate with providers detected in Step 2, e.g.:
 # providers = ["launchdarkly", "split"]
 providers = []
+
+# Custom providers for in-house feature flag systems (uses tree-sitter queries)
+# [[feature_flags.custom_providers]]
+# name = "my_flags"
+# languages = ["ruby", "python"]
+# query = '''
+# (call
+#   receiver: (constant) @receiver
+#   method: (identifier) @method
+#   arguments: (argument_list (string (string_content) @flag_key)))
+# (#eq? @receiver "MyFlags")
+# (#eq? @method "enabled?")
+# '''
 
 [score]
 # Set to true for OO-heavy codebases (Ruby, Java, C#)
