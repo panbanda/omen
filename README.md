@@ -567,6 +567,42 @@ This prevents pushing code that fails your quality thresholds.
 </details>
 
 <details>
+<summary><strong>Semantic Search</strong> - Natural language code discovery</summary>
+
+Search your codebase by meaning, not just keywords. Omen uses vector embeddings to find semantically similar code based on natural language queries.
+
+```bash
+# Build the search index (first time)
+omen search index
+
+# Search for code
+omen search query "database connection pooling"
+omen search query "error handling middleware" --top-k 20
+omen search query "authentication" --files src/auth/,src/middleware/
+```
+
+**How it works:**
+
+1. **Symbol extraction** - Extracts functions from your codebase using tree-sitter
+2. **Embedding generation** - Generates 384-dimensional embeddings using all-MiniLM-L6-v2 via candle (local inference, no API keys)
+3. **Incremental indexing** - Only re-embeds files that changed since last index
+4. **Similarity search** - Ranks results by cosine similarity to your query
+
+**Performance:**
+
+- Index stored in `.omen/search.db` (SQLite)
+- Parallel file parsing with rayon
+- Batch embedding generation (64 symbols per batch)
+- Typical indexing: ~3.5 symbols/second on CPU
+
+**Why it matters:** Traditional grep/ripgrep finds exact matches. Semantic search finds code that *means* the same thing even with different naming. Ask "how do we validate user input" and find functions named `sanitize_params`, `check_request`, or `validate_form`.
+
+> [!TIP]
+> Run `omen search index` after major refactors or when onboarding to a new codebase. The index updates incrementally on subsequent runs.
+
+</details>
+
+<details>
 <summary><strong>MCP Server</strong> - LLM tool integration via Model Context Protocol</summary>
 
 Omen includes a Model Context Protocol (MCP) server that exposes all analyzers as tools for LLMs like Claude. This enables AI assistants to analyze codebases directly through standardized tool calls.
@@ -591,6 +627,7 @@ Omen includes a Model Context Protocol (MCP) server that exposes all analyzers a
 - `analyze_flags` - Feature flag detection and staleness
 - `score_repository` - Composite health score (0-100)
 - `get_context` - Deep context for a specific file or symbol
+- `semantic_search` - Natural language code search
 
 Each tool includes detailed descriptions with interpretation guidance, helping LLMs understand what metrics mean and when to use each analyzer.
 
