@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.5.1](https://github.com/panbanda/omen/compare/omen-v4.5.0...omen-v4.5.1) (2026-01-09)
+
+
+### Bug Fixes
+
+* **hotspot:** use log_with_stats to collect file changes from git history ([#256](https://github.com/panbanda/omen/issues/256)) ([3f658a4](https://github.com/panbanda/omen/commit/3f658a416c3d99942d6ebc01ed9ae65df17ceb4f))
+* **temporal:** use log_with_stats and correct date format for git history ([#258](https://github.com/panbanda/omen/issues/258)) ([52bb82b](https://github.com/panbanda/omen/commit/52bb82b17d9dca3e783a65e176b1920c77b0860b))
+
 ## [4.5.0](https://github.com/panbanda/omen/compare/omen-v4.4.0...omen-v4.5.0) (2026-01-09)
 
 
