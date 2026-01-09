@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.5.0](https://github.com/panbanda/omen/compare/omen-v4.4.0...omen-v4.5.0) (2026-01-09)
+
+
+### Features
+
+* add progress bars for long-running operations ([#253](https://github.com/panbanda/omen/issues/253)) ([1d1566d](https://github.com/panbanda/omen/commit/1d1566dfa38cd2b5cf1bac477c97f95bd850df46))
+
+
+### Bug Fixes
+
+* **deps:** update rust crate rusqlite to 0.38 ([#251](https://github.com/panbanda/omen/issues/251)) ([0b8fbc0](https://github.com/panbanda/omen/commit/0b8fbc06e4181b4ed7133258b43145a3da2d932f))
+
 ## [4.4.0](https://github.com/panbanda/omen/compare/omen-v4.3.1...omen-v4.4.0) (2026-01-09)
 
 
