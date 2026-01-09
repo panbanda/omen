@@ -86,9 +86,13 @@ impl Analyzer {
     }
 
     /// Analyze a repository for feature flags using only the analyzer's internal config.
-    /// This method uses built-in providers based on the `providers` field.
     pub fn analyze_repo(&self, repo_path: &Path) -> Result<Analysis> {
-        self.analyze_with_config(repo_path, self.config.expected_ttl_days, &[])
+        self.analyze_with_config(
+            repo_path,
+            self.config.expected_ttl_days,
+            &self.config.providers,
+            &[],
+        )
     }
 }
 
@@ -104,32 +108,42 @@ impl AnalyzerTrait for Analyzer {
     }
 
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
-        // Use stale_days from config if set, otherwise use analyzer's default
         let expected_ttl_days = if ctx.config.feature_flags.stale_days > 0 {
             ctx.config.feature_flags.stale_days
         } else {
             self.config.expected_ttl_days
         };
 
-        // Collect custom providers from config
-        let custom_providers = &ctx.config.feature_flags.custom_providers;
+        let providers = if !ctx.config.feature_flags.providers.is_empty() {
+            &ctx.config.feature_flags.providers
+        } else {
+            &self.config.providers
+        };
 
-        self.analyze_with_config(ctx.root, expected_ttl_days, custom_providers)
+        self.analyze_with_config(
+            ctx.root,
+            expected_ttl_days,
+            providers,
+            &ctx.config.feature_flags.custom_providers,
+        )
     }
 }
 
 impl Analyzer {
     /// Analyze a repository with explicit config parameters.
+    ///
+    /// Built-in providers only run if explicitly listed in `providers`.
+    /// If `providers` is empty, no built-in detection runs (only custom providers).
     fn analyze_with_config(
         &self,
         repo_path: &Path,
         expected_ttl_days: u32,
+        providers: &[String],
         custom_providers: &[CustomProvider],
     ) -> Result<Analysis> {
         let mut references: Vec<FlagReference> = Vec::new();
         let parser = Parser::new();
 
-        // Collect all flag references
         for entry in WalkBuilder::new(repo_path)
             .hidden(true)
             .git_ignore(true)
@@ -145,13 +159,11 @@ impl Analyzer {
                 continue;
             }
 
-            // Detect language for this file
             let language = match Language::detect(path) {
                 Some(lang) => lang,
                 None => continue,
             };
 
-            // Read file content
             let content = match std::fs::read_to_string(path) {
                 Ok(c) => c,
                 Err(_) => continue,
@@ -163,12 +175,9 @@ impl Analyzer {
                 .to_string_lossy()
                 .to_string();
 
-            // Apply regex patterns
+            // Apply built-in regex patterns only if providers are explicitly enabled
             for pattern in &self.patterns {
-                // Filter by provider if configured
-                if !self.config.providers.is_empty()
-                    && !self.config.providers.contains(&pattern.provider)
-                {
+                if !providers.contains(&pattern.provider) {
                     continue;
                 }
 
@@ -178,7 +187,6 @@ impl Analyzer {
                             .as_str()
                             .trim_matches(|c| c == '"' || c == '\'' || c == ':');
 
-                        // Calculate line number
                         let line = content[..key_match.start()]
                             .chars()
                             .filter(|&c| c == '\n')
@@ -750,10 +758,10 @@ mod tests {
         .unwrap();
 
         let analyzer = Analyzer::new();
+        let providers = vec!["launchdarkly".to_string()];
 
-        // Test with default stale_days (14)
         let result = analyzer
-            .analyze_with_config(temp_dir.path(), 14, &[])
+            .analyze_with_config(temp_dir.path(), 14, &providers, &[])
             .unwrap();
         assert_eq!(result.flags.len(), 1);
         assert_eq!(result.flags[0].key, "test-flag");
@@ -797,7 +805,7 @@ end
 
         let analyzer = Analyzer::new();
         let result = analyzer
-            .analyze_with_config(temp_dir.path(), 14, &[custom_provider])
+            .analyze_with_config(temp_dir.path(), 14, &[], &[custom_provider])
             .unwrap();
 
         // Should find the custom feature flag
@@ -835,7 +843,7 @@ end
 
         let analyzer = Analyzer::new();
         let result = analyzer
-            .analyze_with_config(temp_dir.path(), 14, &[custom_provider])
+            .analyze_with_config(temp_dir.path(), 14, &[], &[custom_provider])
             .unwrap();
 
         // Should only find flags from Ruby files for this provider
@@ -856,7 +864,7 @@ end
     }
 
     #[test]
-    fn test_empty_custom_providers() {
+    fn test_empty_providers_no_builtin_detection() {
         use tempfile::TempDir;
 
         let temp_dir = TempDir::new().unwrap();
@@ -869,9 +877,32 @@ end
 
         let analyzer = Analyzer::new();
 
-        // Empty custom providers should still work with built-in patterns
+        // Empty providers means no built-in patterns run
         let result = analyzer
-            .analyze_with_config(temp_dir.path(), 14, &[])
+            .analyze_with_config(temp_dir.path(), 14, &[], &[])
+            .unwrap();
+
+        assert_eq!(result.flags.len(), 0);
+    }
+
+    #[test]
+    fn test_explicit_provider_enabling() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.js");
+        std::fs::write(
+            &file_path,
+            r#"client.boolVariation("ld-flag", user, false)"#,
+        )
+        .unwrap();
+
+        let analyzer = Analyzer::new();
+        let providers = vec!["launchdarkly".to_string()];
+
+        // With launchdarkly explicitly enabled, it should find the flag
+        let result = analyzer
+            .analyze_with_config(temp_dir.path(), 14, &providers, &[])
             .unwrap();
 
         assert_eq!(result.flags.len(), 1);

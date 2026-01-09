@@ -49,6 +49,9 @@ top = 20
 
 [feature_flags]
 stale_days = 90
+# Built-in providers to enable. If empty, no built-in detection runs.
+# Available: launchdarkly, flipper, split, unleash, generic, env
+providers = []
 
 [output]
 format = "text"
