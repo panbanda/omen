@@ -100,7 +100,7 @@ unicode-width = "0.2"
 # Semantic search (all-MiniLM-L6-v2 sentence transformer, 384-dim embeddings)
 # Model: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
 # Runtime: candle for local inference, with optional third-party API providers
-candle-core = "0.8"
+candle-core = "0.9"
 candle-nn = "0.8"
 candle-transformers = "0.8"
 hf-hub = { version = "0.4", features = ["tokio"] }
