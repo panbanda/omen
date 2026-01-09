@@ -114,7 +114,7 @@ impl Analyzer {
         let since = days_ago.format("%Y-%m-%d").to_string();
 
         // Get all commits in the time range
-        let commits = git_repo.log(Some(&since), None)?;
+        let commits = git_repo.log_with_stats(Some(&since))?;
 
         // Build file -> churn map
         let mut file_churn: HashMap<String, FileChurn> = HashMap::new();
@@ -590,5 +590,53 @@ mod tests {
         assert_eq!(summary.total_hotspots, 10);
         assert_eq!(summary.critical_count, 2);
         assert_eq!(summary.high_count, 3);
+    }
+
+    #[test]
+    fn test_collect_churn_data_returns_file_changes() {
+        // This test verifies that collect_churn_data properly extracts
+        // file changes from git history. The bug was that it called
+        // git_repo.log() which returns commits with empty file lists,
+        // instead of git_repo.log_with_stats() which includes file changes.
+        use std::path::PathBuf;
+
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let analyzer = Analyzer::new().with_days(365);
+
+        // Open the omen repo itself
+        let git_repo = match GitRepo::open(&repo_root) {
+            Ok(repo) => repo,
+            Err(_) => return, // Skip if not in a git repo
+        };
+
+        // Get files in the repo
+        let files: Vec<PathBuf> = WalkBuilder::new(&repo_root)
+            .hidden(true)
+            .git_ignore(true)
+            .build()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
+            .map(|e| e.into_path())
+            .take(100) // Limit for test speed
+            .collect();
+
+        let churn_data = analyzer
+            .collect_churn_data(&git_repo, &files, &repo_root)
+            .unwrap();
+
+        // The omen repo has git history with file changes.
+        // If collect_churn_data works correctly, it should return non-empty data.
+        assert!(
+            !churn_data.is_empty(),
+            "collect_churn_data should return file changes from git history"
+        );
+
+        // Verify the churn data has actual commit counts
+        let total_commits: u32 = churn_data.iter().map(|f| f.commits).sum();
+        assert!(
+            total_commits > 0,
+            "churn data should have commits > 0, got {}",
+            total_commits
+        );
     }
 }
