@@ -5,10 +5,14 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use blake3::Hasher;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 
+use crate::core::progress::is_tty;
 use crate::core::{Error, FileSet, Result, SourceFile};
 use crate::parser::{extract_functions, Parser};
 
@@ -53,6 +57,7 @@ impl<'a> SyncManager<'a> {
     /// Returns the number of files that were re-indexed.
     pub fn sync(&self, file_set: &FileSet, root_path: &Path) -> Result<SyncStats> {
         let mut stats = SyncStats::default();
+        let show_progress = is_tty();
 
         // Get current files
         let current_files: HashSet<PathBuf> = file_set.files().iter().cloned().collect();
@@ -91,18 +96,54 @@ impl<'a> SyncManager<'a> {
             return Ok(stats);
         }
 
+        // Set up multi-progress for the three phases
+        let multi = if show_progress {
+            Some(MultiProgress::new())
+        } else {
+            None
+        };
+
+        let progress_style = ProgressStyle::default_bar()
+            .template("{prefix:.bold} [{bar:30.cyan/blue}] {pos}/{len} {msg}")
+            .expect("valid template")
+            .progress_chars("#>-");
+
         // Phase 1: Parse all files in parallel and extract symbols
+        let parse_bar = multi.as_ref().map(|m| {
+            let bar = m.add(ProgressBar::new(files_to_index.len() as u64));
+            bar.set_style(progress_style.clone());
+            bar.set_prefix("Parsing");
+            bar.set_message("files...");
+            bar
+        });
+
         let root = root_path.to_path_buf();
+        let parse_counter = Arc::new(AtomicUsize::new(0));
+
         let parsed_files: Vec<_> = files_to_index
             .par_iter()
-            .filter_map(|path| match parse_file(path, &root) {
-                Ok(parsed) => Some(parsed),
-                Err(e) => {
-                    eprintln!("Warning: Failed to parse {}: {}", path.display(), e);
-                    None
+            .filter_map(|path| {
+                let result = match parse_file(path, &root) {
+                    Ok(parsed) => Some(parsed),
+                    Err(e) => {
+                        eprintln!("Warning: Failed to parse {}: {}", path.display(), e);
+                        None
+                    }
+                };
+
+                // Update progress
+                let count = parse_counter.fetch_add(1, Ordering::Relaxed) + 1;
+                if let Some(ref bar) = parse_bar {
+                    bar.set_position(count as u64);
                 }
+
+                result
             })
             .collect();
+
+        if let Some(bar) = parse_bar {
+            bar.finish_with_message("done");
+        }
 
         // Collect all symbols and their texts for batch embedding
         let mut all_symbols: Vec<ParsedSymbol> = Vec::new();
@@ -121,17 +162,38 @@ impl<'a> SyncManager<'a> {
         }
 
         // Phase 2: Batch embed all symbols
+        let embed_bar = multi.as_ref().map(|m| {
+            let num_batches = all_symbols.len().div_ceil(EMBEDDING_BATCH_SIZE);
+            let bar = m.add(ProgressBar::new(num_batches as u64));
+            bar.set_style(progress_style.clone());
+            bar.set_prefix("Embedding");
+            bar.set_message(format!("{} symbols...", all_symbols.len()));
+            bar
+        });
+
         let texts: Vec<String> = all_symbols.iter().map(|s| s.text.clone()).collect();
-        let embeddings = self.embed_in_batches(&texts)?;
+        let embeddings = self.embed_in_batches_with_progress(&texts, embed_bar.as_ref())?;
+
+        if let Some(bar) = embed_bar {
+            bar.finish_with_message("done");
+        }
 
         // Phase 3: Write all symbols to cache
+        let write_bar = multi.as_ref().map(|m| {
+            let bar = m.add(ProgressBar::new(all_symbols.len() as u64));
+            bar.set_style(progress_style);
+            bar.set_prefix("Writing");
+            bar.set_message("to cache...");
+            bar
+        });
+
         // First, delete existing symbols for all files being re-indexed
         for parsed_file in &parsed_files {
             self.cache.delete_file_symbols(&parsed_file.rel_path)?;
         }
 
         // Insert all symbols with their embeddings
-        for (symbol, embedding) in all_symbols.iter().zip(embeddings.into_iter()) {
+        for (i, (symbol, embedding)) in all_symbols.iter().zip(embeddings.into_iter()).enumerate() {
             let cached_symbol = CachedSymbol {
                 file_path: symbol.file_path.clone(),
                 symbol_name: symbol.symbol_name.clone(),
@@ -143,6 +205,14 @@ impl<'a> SyncManager<'a> {
                 embedding,
             };
             self.cache.upsert_symbol(&cached_symbol)?;
+
+            if let Some(ref bar) = write_bar {
+                bar.set_position((i + 1) as u64);
+            }
+        }
+
+        if let Some(bar) = write_bar {
+            bar.finish_with_message("done");
         }
 
         // Record all files as indexed
@@ -168,17 +238,25 @@ impl<'a> SyncManager<'a> {
         }
     }
 
-    /// Embed texts in batches to optimize model inference.
-    fn embed_in_batches(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+    /// Embed texts in batches with optional progress bar.
+    fn embed_in_batches_with_progress(
+        &self,
+        texts: &[String],
+        progress: Option<&ProgressBar>,
+    ) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
 
         let mut all_embeddings = Vec::with_capacity(texts.len());
 
-        for chunk in texts.chunks(EMBEDDING_BATCH_SIZE) {
+        for (i, chunk) in texts.chunks(EMBEDDING_BATCH_SIZE).enumerate() {
             let batch_embeddings = self.engine.embed_batch(chunk)?;
             all_embeddings.extend(batch_embeddings);
+
+            if let Some(bar) = progress {
+                bar.set_position((i + 1) as u64);
+            }
         }
 
         Ok(all_embeddings)

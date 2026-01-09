@@ -3,14 +3,18 @@
 use std::io::stdout;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use clap::Parser;
+use indicatif::{ProgressBar, ProgressStyle};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use omen::cli::{
     Cli, Command, McpSubcommand, OutputFormat, ReportSubcommand, ScoreSubcommand, SearchSubcommand,
 };
 use omen::config::Config;
+use omen::core::progress::is_tty;
 use omen::core::{AnalysisContext, Analyzer, FileSet};
 use omen::git::{clone_remote, is_remote_repo, CloneOptions};
 use omen::mcp::McpServer;
@@ -276,14 +280,51 @@ fn run_analyzer<A: Analyzer + Default>(
     format: Format,
 ) -> omen::core::Result<()> {
     let file_set = FileSet::from_path(path, config)?;
+
+    // Show analysis progress
+    let spinner = if is_tty() {
+        let s = ProgressBar::new_spinner();
+        s.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} {msg}")
+                .expect("valid template"),
+        );
+        s.enable_steady_tick(std::time::Duration::from_millis(100));
+        Some(s)
+    } else {
+        None
+    };
+
+    let analyzer = A::default();
+    if let Some(ref s) = spinner {
+        s.set_message(format!("Analyzing {} files...", file_set.len()));
+    }
+
     let mut ctx = AnalysisContext::new(&file_set, config, Some(path));
     // Try to find git root for this path
     if let Ok(repo) = omen::git::GitRepo::open(path) {
         let git_root = repo.root().to_path_buf();
         ctx = ctx.with_git_path(Box::leak(Box::new(git_root)));
     }
-    let analyzer = A::default();
+
+    // Add progress callback for analyzers that support it
+    let progress_counter = Arc::new(AtomicUsize::new(0));
+    let total_files = file_set.len();
+    let spinner_clone = spinner.clone();
+    let counter_clone = progress_counter.clone();
+    ctx = ctx.with_progress(move |current, _total| {
+        counter_clone.store(current, Ordering::Relaxed);
+        if let Some(ref s) = spinner_clone {
+            s.set_message(format!("Analyzing... {}/{} files", current, total_files));
+        }
+    });
+
     let result = analyzer.analyze(&ctx)?;
+
+    if let Some(s) = spinner {
+        s.finish_and_clear();
+    }
+
     format.format(&result, &mut stdout())?;
     Ok(())
 }
@@ -410,7 +451,6 @@ fn run_report(
             });
             let metadata_path = args.output.join("metadata.json");
             std::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata)?)?;
-            eprintln!("Generated: {}", metadata_path.display());
 
             let skip_list: Vec<&str> = args
                 .skip
@@ -418,9 +458,54 @@ fn run_report(
                 .map(|s| s.split(',').collect())
                 .unwrap_or_default();
 
+            // Count total analyzers to run
+            let analyzer_names = [
+                "complexity",
+                "satd",
+                "deadcode",
+                "churn",
+                "duplicates",
+                "defect",
+                "changes",
+                "tdg",
+                "graph",
+                "hotspots",
+                "temporal",
+                "ownership",
+                "cohesion",
+                "repomap",
+                "smells",
+                "flags",
+                "score",
+            ];
+            let total_analyzers = analyzer_names
+                .iter()
+                .filter(|n| !skip_list.contains(*n))
+                .count();
+
+            // Set up progress bar
+            let progress = if is_tty() {
+                let bar = ProgressBar::new(total_analyzers as u64);
+                bar.set_style(
+                    ProgressStyle::default_bar()
+                        .template("{prefix:.bold} [{bar:30.green/white}] {pos}/{len} {msg}")
+                        .expect("valid template")
+                        .progress_chars("=>-"),
+                );
+                bar.set_prefix("Generating");
+                Some(bar)
+            } else {
+                None
+            };
+
+            let mut completed = 0;
+
             macro_rules! run_and_save {
                 ($analyzer:ty, $name:expr) => {{
                     if !skip_list.contains(&$name) {
+                        if let Some(ref bar) = progress {
+                            bar.set_message(format!("{}...", $name));
+                        }
                         let a = <$analyzer>::default();
                         let result: Value = match a.analyze(&ctx) {
                             Ok(r) => serde_json::to_value(&r).unwrap_or(json!({"error": "serialization failed"})),
@@ -428,7 +513,12 @@ fn run_report(
                         };
                         let output_path = args.output.join(format!("{}.json", $name));
                         std::fs::write(&output_path, serde_json::to_string_pretty(&result)?)?;
-                        eprintln!("Generated: {}", output_path.display());
+                        completed += 1;
+                        if let Some(ref bar) = progress {
+                            bar.set_position(completed);
+                        } else {
+                            eprintln!("Generated: {}", output_path.display());
+                        }
                     }
                 }};
             }
@@ -444,6 +534,9 @@ fn run_report(
             run_and_save!(omen::analyzers::graph::Analyzer, "graph");
             // Use "hotspots" to match Go naming
             if !skip_list.contains(&"hotspots") {
+                if let Some(ref bar) = progress {
+                    bar.set_message("hotspots...");
+                }
                 let a = omen::analyzers::hotspot::Analyzer::default();
                 let result: Value = match a.analyze(&ctx) {
                     Ok(r) => {
@@ -453,7 +546,12 @@ fn run_report(
                 };
                 let output_path = args.output.join("hotspots.json");
                 std::fs::write(&output_path, serde_json::to_string_pretty(&result)?)?;
-                eprintln!("Generated: {}", output_path.display());
+                completed += 1;
+                if let Some(ref bar) = progress {
+                    bar.set_position(completed);
+                } else {
+                    eprintln!("Generated: {}", output_path.display());
+                }
             }
             run_and_save!(omen::analyzers::temporal::Analyzer, "temporal");
             run_and_save!(omen::analyzers::ownership::Analyzer, "ownership");
@@ -463,6 +561,9 @@ fn run_report(
             run_and_save!(omen::analyzers::flags::Analyzer, "flags");
             run_and_save!(omen::score::Analyzer, "score");
 
+            if let Some(bar) = progress {
+                bar.finish_with_message("done");
+            }
             eprintln!("Report data generated in: {}", args.output.display());
         }
         ReportSubcommand::Validate(args) => {
