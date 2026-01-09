@@ -33,6 +33,7 @@ toml = "0.9"
 
 # Tree-sitter for parsing
 tree-sitter = "0.24"
+streaming-iterator = "0.1"
 tree-sitter-go = "0.23"
 tree-sitter-rust = "0.23"
 tree-sitter-python = "0.23"
