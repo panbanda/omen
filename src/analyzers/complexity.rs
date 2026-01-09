@@ -26,6 +26,8 @@
 //! println!("Analyzed {} functions", result.summary.total_functions);
 //! ```
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use rayon::prelude::*;
@@ -92,12 +94,22 @@ impl AnalyzerTrait for Analyzer {
 
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
         let start = Instant::now();
+        let total_files = ctx.files.len();
+        let counter = Arc::new(AtomicUsize::new(0));
 
         let results: Vec<FileResult> = ctx
             .files
             .files()
             .par_iter()
-            .filter_map(|path| self.analyze_file(path).ok())
+            .filter_map(|path| {
+                let result = self.analyze_file(path).ok();
+
+                // Report progress
+                let current = counter.fetch_add(1, Ordering::Relaxed) + 1;
+                ctx.report_progress(current, total_files);
+
+                result
+            })
             .collect();
 
         let summary = build_summary(&results);

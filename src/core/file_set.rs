@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use ignore::WalkBuilder;
 
+use super::progress::{create_spinner, is_tty};
 use super::{Language, Result};
 use crate::config::Config;
 
@@ -38,6 +39,13 @@ impl FileSet {
     ) -> Result<Self> {
         let root = path.as_ref().canonicalize()?;
         let mut files = Vec::new();
+
+        let spinner = if is_tty() {
+            let s = create_spinner("Scanning files...");
+            Some(s)
+        } else {
+            None
+        };
 
         let walker = WalkBuilder::new(&root)
             .hidden(true)
@@ -75,10 +83,21 @@ impl FileSet {
             }
 
             files.push(path.to_path_buf());
+
+            // Update spinner periodically
+            if let Some(ref s) = spinner {
+                if files.len() % 100 == 0 {
+                    s.set_message(format!("Scanning files... {} found", files.len()));
+                }
+            }
         }
 
         // Sort for deterministic ordering
         files.sort();
+
+        if let Some(s) = spinner {
+            s.finish_with_message(format!("Found {} source files", files.len()));
+        }
 
         Ok(Self {
             root,
