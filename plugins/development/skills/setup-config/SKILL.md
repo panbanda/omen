@@ -29,17 +29,25 @@ Identify the primary language(s) based on file counts. This determines:
 
 ### Step 2: Detect Feature Flag Providers
 
-Use Grep to search for SDK imports:
+Use Grep to search for SDK imports and usage patterns. Add detected providers to `feature_flags.providers` in the config.
 
-| Provider | Search Pattern |
-|----------|---------------|
-| LaunchDarkly | `launchdarkly\|ld-client\|LDClient` |
-| Split | `@splitsoftware\|splitio\|SplitClient` |
-| Flipper | `Flipper\.enabled\?\|flipper` (in Gemfile) |
-| PostHog | `posthog\|isFeatureEnabled\|getFeatureFlag` |
-| Unleash | `unleash-client\|isEnabled` |
+| Provider | Config Value | Search Patterns |
+|----------|-------------|-----------------|
+| LaunchDarkly | `launchdarkly` | `launchdarkly`, `ld-client`, `LDClient`, `boolVariation`, `stringVariation` |
+| Split | `split` | `@splitsoftware`, `splitio`, `SplitClient`, `getTreatment` |
+| Flipper | `flipper` | `Flipper.enabled?`, `Flipper[`, `flipper` (in Gemfile) |
+| Unleash | `unleash` | `unleash-client`, `unleashclient`, `isEnabled` with unleash import |
+| Generic | `generic` | `feature_flag`, `featureFlag`, `is_feature_enabled`, `isFeatureEnabled` |
+| ENV-based | `env` | `ENV["FEATURE_`, `process.env.FEATURE_`, `os.environ["FEATURE_` |
 
-Only include providers that are actually detected.
+Also check package manifests:
+- `package.json`: `launchdarkly-*`, `@splitsoftware/*`, `unleash-*`
+- `Gemfile`: `launchdarkly-*`, `flipper`, `split-*`, `unleash`
+- `Cargo.toml`: `launchdarkly`, `unleash`
+- `go.mod`: `launchdarkly`, `unleash`
+- `requirements.txt`/`pyproject.toml`: `launchdarkly-*`, `split-*`, `unleashclient`
+
+Only include providers that are actually detected. If no providers are found, leave `providers = []` with a comment explaining how to add them manually.
 
 ### Step 3: Detect Generated Code Patterns
 
@@ -148,7 +156,10 @@ format = "text"
 color = true
 
 [feature_flags]
-# Detected providers (if any)
+# Feature flag providers to detect. Empty = no built-in detection.
+# Available: launchdarkly, flipper, split, unleash, generic, env
+# Populate with providers detected in Step 2, e.g.:
+# providers = ["launchdarkly", "split"]
 providers = []
 
 [score]
@@ -233,9 +244,19 @@ After generating the config, display a summary:
 ```
 Generated omen.toml with:
 - Primary language: Ruby
-- Feature flags: flipper, posthog
+- Feature flag providers: ["flipper"] (or "none detected" if empty)
 - Cohesion scoring: enabled
 - Exclude patterns: 12 patterns
 
+Run `omen flags` to detect feature flags (requires providers to be configured).
 Run `omen all` to verify the configuration works for your project.
+```
+
+If no feature flag providers were detected, remind the user:
+
+```
+No feature flag providers detected. If you use feature flags, add providers manually:
+
+[feature_flags]
+providers = ["launchdarkly"]  # or: flipper, split, unleash, generic, env
 ```
