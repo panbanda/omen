@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.6.0](https://github.com/panbanda/omen/compare/omen-v4.5.1...omen-v4.6.0) (2026-01-09)
+
+
+### Features
+
+* **flags:** implement custom_providers support with tree-sitter queries ([#260](https://github.com/panbanda/omen/issues/260)) ([1076012](https://github.com/panbanda/omen/commit/107601243d8ed08e3f9cf0cba7cc284f04d0dcf7))
+
 ## [4.5.1](https://github.com/panbanda/omen/compare/omen-v4.5.0...omen-v4.5.1) (2026-01-09)
 
 
