@@ -84,11 +84,11 @@ impl Analyzer {
 
     /// Analyzes temporal coupling using an existing git repo.
     fn analyze_with_git(&self, git_repo: &GitRepo, _root: &Path) -> Result<Analysis> {
-        // Format since as ISO date string for git log
-        let since_str = format!("{}d", self.config.days);
+        // Format since for git log (git accepts "N days" format)
+        let since_str = format!("{} days", self.config.days);
 
         // Get commit log with file changes
-        let commits = git_repo.log(Some(&since_str), None)?;
+        let commits = git_repo.log_with_stats(Some(&since_str))?;
 
         // Track co-changes: normalized pair -> count
         let mut cochanges: HashMap<FilePair, u32> = HashMap::new();
@@ -562,5 +562,41 @@ mod tests {
         let hash2 = hasher2.finish();
 
         assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_analyze_with_git_collects_file_changes() {
+        // This test verifies that analyze_with_git properly extracts
+        // file changes from git history. The bug was that it called
+        // git_repo.log() which returns commits with empty file lists,
+        // instead of git_repo.log_with_stats() which includes file changes.
+        use crate::git::GitRepo;
+        use std::path::PathBuf;
+
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+        // Open the omen repo itself
+        let git_repo = match GitRepo::open(&repo_root) {
+            Ok(repo) => repo,
+            Err(_) => return, // Skip if not in a git repo
+        };
+
+        // Use a longer time window to ensure we have file changes
+        let analyzer = Analyzer::new().with_days(365).with_min_cochanges(1);
+        let result = analyzer.analyze_with_git(&git_repo, &repo_root).unwrap();
+
+        // The omen repo has git history with file changes.
+        // If analyze_with_git works correctly and there are files that changed together,
+        // we should have some data in file_commits tracking.
+        // With min_cochanges=1, any files that changed together at least once should appear.
+        // Even if no couplings meet the threshold, the function should process commits with files.
+
+        // The key assertion: if commits have files, we can verify by checking
+        // that the summary shows files were analyzed (even if no couplings found).
+        // If the bug exists (empty files), total_files_analyzed would be 0.
+        assert!(
+            result.summary.total_files_analyzed > 0 || !result.couplings.is_empty(),
+            "temporal analysis should process file changes from git history"
+        );
     }
 }
