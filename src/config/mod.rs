@@ -212,7 +212,10 @@ pub struct ScoreThresholds {
 pub struct FeatureFlagsConfig {
     /// Days before a flag is considered stale.
     pub stale_days: u32,
-    /// Custom providers.
+    /// Built-in providers to enable (e.g., "launchdarkly", "flipper", "split", "unleash", "generic", "env").
+    /// If empty, no built-in providers are used; you must explicitly list providers to enable them.
+    pub providers: Vec<String>,
+    /// Custom providers defined via tree-sitter queries.
     pub custom_providers: Vec<CustomProvider>,
 }
 
@@ -461,6 +464,7 @@ exclude = ["target/**", "node_modules/**"]
     fn test_feature_flags_config_default() {
         let config = FeatureFlagsConfig::default();
         assert_eq!(config.stale_days, 0);
+        assert!(config.providers.is_empty());
         assert!(config.custom_providers.is_empty());
     }
 }

@@ -105,6 +105,10 @@ cohesion = 80.0
 [feature_flags]
 # Days before a flag is considered stale
 stale_days = 90
+# Built-in providers to enable. If empty, no built-in detection runs.
+# Available: launchdarkly, flipper, split, unleash, generic, env
+# Example: providers = ["launchdarkly"]
+providers = []
 
 # Custom feature flag providers (for in-house systems)
 # [[feature_flags.custom_providers]]

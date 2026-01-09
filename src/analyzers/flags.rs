@@ -1,7 +1,8 @@
 //! Feature flag detection analyzer.
 //!
 //! Detects feature flags from common providers and assesses staleness based on
-//! git history. Supports LaunchDarkly, Flipper, Split, and generic patterns.
+//! git history. Supports LaunchDarkly, Flipper, Split, generic patterns, and
+//! custom providers defined via tree-sitter queries in the configuration.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -10,9 +11,13 @@ use chrono::Utc;
 use ignore::WalkBuilder;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use streaming_iterator::StreamingIterator;
+use tree_sitter::{Query, QueryCursor};
 
+use crate::config::CustomProvider;
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
 use crate::git::GitRepo;
+use crate::parser::{get_tree_sitter_language, Parser};
 
 /// Feature flags analyzer configuration.
 #[derive(Debug, Clone)]
@@ -80,11 +85,65 @@ impl Analyzer {
         self
     }
 
-    /// Analyze a repository for feature flags.
+    /// Analyze a repository for feature flags using only the analyzer's internal config.
     pub fn analyze_repo(&self, repo_path: &Path) -> Result<Analysis> {
-        let mut references: Vec<FlagReference> = Vec::new();
+        self.analyze_with_config(
+            repo_path,
+            self.config.expected_ttl_days,
+            &self.config.providers,
+            &[],
+        )
+    }
+}
 
-        // Collect all flag references
+impl AnalyzerTrait for Analyzer {
+    type Output = Analysis;
+
+    fn name(&self) -> &'static str {
+        "flags"
+    }
+
+    fn description(&self) -> &'static str {
+        "Find feature flags and assess staleness"
+    }
+
+    fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
+        let expected_ttl_days = if ctx.config.feature_flags.stale_days > 0 {
+            ctx.config.feature_flags.stale_days
+        } else {
+            self.config.expected_ttl_days
+        };
+
+        let providers = if !ctx.config.feature_flags.providers.is_empty() {
+            &ctx.config.feature_flags.providers
+        } else {
+            &self.config.providers
+        };
+
+        self.analyze_with_config(
+            ctx.root,
+            expected_ttl_days,
+            providers,
+            &ctx.config.feature_flags.custom_providers,
+        )
+    }
+}
+
+impl Analyzer {
+    /// Analyze a repository with explicit config parameters.
+    ///
+    /// Built-in providers only run if explicitly listed in `providers`.
+    /// If `providers` is empty, no built-in detection runs (only custom providers).
+    fn analyze_with_config(
+        &self,
+        repo_path: &Path,
+        expected_ttl_days: u32,
+        providers: &[String],
+        custom_providers: &[CustomProvider],
+    ) -> Result<Analysis> {
+        let mut references: Vec<FlagReference> = Vec::new();
+        let parser = Parser::new();
+
         for entry in WalkBuilder::new(repo_path)
             .hidden(true)
             .git_ignore(true)
@@ -100,12 +159,11 @@ impl Analyzer {
                 continue;
             }
 
-            // Skip non-source files
-            if Language::detect(path).is_none() {
-                continue;
-            }
+            let language = match Language::detect(path) {
+                Some(lang) => lang,
+                None => continue,
+            };
 
-            // Read file content
             let content = match std::fs::read_to_string(path) {
                 Ok(c) => c,
                 Err(_) => continue,
@@ -117,12 +175,9 @@ impl Analyzer {
                 .to_string_lossy()
                 .to_string();
 
-            // Apply patterns
+            // Apply built-in regex patterns only if providers are explicitly enabled
             for pattern in &self.patterns {
-                // Filter by provider if configured
-                if !self.config.providers.is_empty()
-                    && !self.config.providers.contains(&pattern.provider)
-                {
+                if !providers.contains(&pattern.provider) {
                     continue;
                 }
 
@@ -132,7 +187,6 @@ impl Analyzer {
                             .as_str()
                             .trim_matches(|c| c == '"' || c == '\'' || c == ':');
 
-                        // Calculate line number
                         let line = content[..key_match.start()]
                             .chars()
                             .filter(|&c| c == '\n')
@@ -145,6 +199,66 @@ impl Analyzer {
                             key: key.to_string(),
                             provider: pattern.provider.clone(),
                         });
+                    }
+                }
+            }
+
+            // Apply custom providers using tree-sitter queries
+            for custom in custom_providers {
+                // Check if this language is supported by this provider
+                let lang_name = format!("{:?}", language).to_lowercase();
+                if !custom.languages.is_empty()
+                    && !custom
+                        .languages
+                        .iter()
+                        .any(|l| l.to_lowercase() == lang_name)
+                {
+                    continue;
+                }
+
+                // Parse with tree-sitter and run query
+                if let Ok(ts_lang) = get_tree_sitter_language(language) {
+                    if let Ok(query) = Query::new(&ts_lang, &custom.query) {
+                        if let Ok(parse_result) = parser.parse(content.as_bytes(), language, path) {
+                            let mut cursor = QueryCursor::new();
+                            let mut matches = cursor.matches(
+                                &query,
+                                parse_result.tree.root_node(),
+                                content.as_bytes(),
+                            );
+
+                            // Find the capture index for "flag_key" or "key"
+                            let key_capture_idx = query
+                                .capture_names()
+                                .iter()
+                                .position(|n| *n == "flag_key" || *n == "key");
+
+                            while let Some(query_match) = matches.next() {
+                                for capture in query_match.captures {
+                                    // If we have a specific key capture, use it
+                                    if let Some(idx) = key_capture_idx {
+                                        if capture.index as usize != idx {
+                                            continue;
+                                        }
+                                    }
+
+                                    let node = capture.node;
+                                    let key = node
+                                        .utf8_text(content.as_bytes())
+                                        .unwrap_or("")
+                                        .trim_matches(|c| c == '"' || c == '\'' || c == ':');
+
+                                    if !key.is_empty() {
+                                        references.push(FlagReference {
+                                            file: rel_path.clone(),
+                                            line: node.start_position().row as u32 + 1,
+                                            key: key.to_string(),
+                                            provider: custom.name.clone(),
+                                        });
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -179,7 +293,7 @@ impl Analyzer {
 
             // Calculate staleness from git if available
             let (first_seen, last_seen, age_days, stale) = if let Some(ref repo) = git_repo {
-                calculate_staleness(repo, &refs, self.config.expected_ttl_days)
+                calculate_staleness(repo, &refs, expected_ttl_days)
             } else {
                 (None, None, 0, false)
             };
@@ -219,22 +333,6 @@ impl Analyzer {
             stale_count: summary.stale_flags,
             summary,
         })
-    }
-}
-
-impl AnalyzerTrait for Analyzer {
-    type Output = Analysis;
-
-    fn name(&self) -> &'static str {
-        "flags"
-    }
-
-    fn description(&self) -> &'static str {
-        "Find feature flags and assess staleness"
-    }
-
-    fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
-        self.analyze_repo(ctx.root)
     }
 }
 
@@ -645,5 +743,169 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_analyze_with_config_uses_stale_days() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.js");
+        std::fs::write(
+            &file_path,
+            r#"client.boolVariation("test-flag", user, false)"#,
+        )
+        .unwrap();
+
+        let analyzer = Analyzer::new();
+        let providers = vec!["launchdarkly".to_string()];
+
+        let result = analyzer
+            .analyze_with_config(temp_dir.path(), 14, &providers, &[])
+            .unwrap();
+        assert_eq!(result.flags.len(), 1);
+        assert_eq!(result.flags[0].key, "test-flag");
+    }
+
+    #[test]
+    fn test_analyze_with_custom_provider_treesitter_query() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rb");
+
+        // Ruby code with custom feature flag pattern
+        std::fs::write(
+            &file_path,
+            r#"
+class FlagService
+  def enabled?(flag_name)
+    MyFeature.enabled?("custom_feature_x")
+  end
+end
+"#,
+        )
+        .unwrap();
+
+        let custom_provider = CustomProvider {
+            name: "my_feature_system".to_string(),
+            languages: vec!["ruby".to_string()],
+            // Tree-sitter query to find MyFeature.enabled? calls
+            query: r#"
+                (call
+                    receiver: (constant) @receiver
+                    method: (identifier) @method
+                    arguments: (argument_list
+                        (string (string_content) @key)))
+                (#eq? @receiver "MyFeature")
+                (#eq? @method "enabled?")
+            "#
+            .to_string(),
+        };
+
+        let analyzer = Analyzer::new();
+        let result = analyzer
+            .analyze_with_config(temp_dir.path(), 14, &[], &[custom_provider])
+            .unwrap();
+
+        // Should find the custom feature flag
+        let custom_flags: Vec<_> = result
+            .flags
+            .iter()
+            .filter(|f| f.provider == "my_feature_system")
+            .collect();
+        assert_eq!(custom_flags.len(), 1);
+        assert_eq!(custom_flags[0].key, "custom_feature_x");
+    }
+
+    #[test]
+    fn test_custom_provider_language_filtering() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create a Python file
+        let py_file = temp_dir.path().join("test.py");
+        std::fs::write(&py_file, r#"flag = is_enabled("python_flag")"#).unwrap();
+
+        // Create a Ruby file
+        let rb_file = temp_dir.path().join("test.rb");
+        std::fs::write(&rb_file, r#"flag = is_enabled("ruby_flag")"#).unwrap();
+
+        // Custom provider that only applies to Ruby
+        let custom_provider = CustomProvider {
+            name: "ruby_only".to_string(),
+            languages: vec!["ruby".to_string()],
+            query:
+                r#"(call method: (identifier) @method arguments: (argument_list (string) @key))"#
+                    .to_string(),
+        };
+
+        let analyzer = Analyzer::new();
+        let result = analyzer
+            .analyze_with_config(temp_dir.path(), 14, &[], &[custom_provider])
+            .unwrap();
+
+        // Should only find flags from Ruby files for this provider
+        let ruby_only_flags: Vec<_> = result
+            .flags
+            .iter()
+            .filter(|f| f.provider == "ruby_only")
+            .collect();
+
+        // The custom provider should only match the Ruby file
+        for flag in &ruby_only_flags {
+            assert!(
+                flag.references.iter().all(|r| r.file.ends_with(".rb")),
+                "Expected only Ruby files, got: {:?}",
+                flag.references
+            );
+        }
+    }
+
+    #[test]
+    fn test_empty_providers_no_builtin_detection() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.js");
+        std::fs::write(
+            &file_path,
+            r#"client.boolVariation("ld-flag", user, false)"#,
+        )
+        .unwrap();
+
+        let analyzer = Analyzer::new();
+
+        // Empty providers means no built-in patterns run
+        let result = analyzer
+            .analyze_with_config(temp_dir.path(), 14, &[], &[])
+            .unwrap();
+
+        assert_eq!(result.flags.len(), 0);
+    }
+
+    #[test]
+    fn test_explicit_provider_enabling() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.js");
+        std::fs::write(
+            &file_path,
+            r#"client.boolVariation("ld-flag", user, false)"#,
+        )
+        .unwrap();
+
+        let analyzer = Analyzer::new();
+        let providers = vec!["launchdarkly".to_string()];
+
+        // With launchdarkly explicitly enabled, it should find the flag
+        let result = analyzer
+            .analyze_with_config(temp_dir.path(), 14, &providers, &[])
+            .unwrap();
+
+        assert_eq!(result.flags.len(), 1);
+        assert_eq!(result.flags[0].provider, "launchdarkly");
     }
 }

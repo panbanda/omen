@@ -29,17 +29,59 @@ Identify the primary language(s) based on file counts. This determines:
 
 ### Step 2: Detect Feature Flag Providers
 
-Use Grep to search for SDK imports:
+Use Grep to search for SDK imports and usage patterns. Add detected providers to `feature_flags.providers` in the config.
 
-| Provider | Search Pattern |
-|----------|---------------|
-| LaunchDarkly | `launchdarkly\|ld-client\|LDClient` |
-| Split | `@splitsoftware\|splitio\|SplitClient` |
-| Flipper | `Flipper\.enabled\?\|flipper` (in Gemfile) |
-| PostHog | `posthog\|isFeatureEnabled\|getFeatureFlag` |
-| Unleash | `unleash-client\|isEnabled` |
+| Provider | Config Value | Search Patterns |
+|----------|-------------|-----------------|
+| LaunchDarkly | `launchdarkly` | `launchdarkly`, `ld-client`, `LDClient`, `boolVariation`, `stringVariation` |
+| Split | `split` | `@splitsoftware`, `splitio`, `SplitClient`, `getTreatment` |
+| Flipper | `flipper` | `Flipper.enabled?`, `Flipper[`, `flipper` (in Gemfile) |
+| Unleash | `unleash` | `unleash-client`, `unleashclient`, `isEnabled` with unleash import |
+| Generic | `generic` | `feature_flag`, `featureFlag`, `is_feature_enabled`, `isFeatureEnabled` |
+| ENV-based | `env` | `ENV["FEATURE_`, `process.env.FEATURE_`, `os.environ["FEATURE_` |
 
-Only include providers that are actually detected.
+Also check package manifests:
+- `package.json`: `launchdarkly-*`, `@splitsoftware/*`, `unleash-*`
+- `Gemfile`: `launchdarkly-*`, `flipper`, `split-*`, `unleash`
+- `Cargo.toml`: `launchdarkly`, `unleash`
+- `go.mod`: `launchdarkly`, `unleash`
+- `requirements.txt`/`pyproject.toml`: `launchdarkly-*`, `split-*`, `unleashclient`
+
+Only include providers that are actually detected. If no providers are found, leave `providers = []` with a comment explaining how to add them manually.
+
+### Step 2b: Detect Custom Feature Flag Systems
+
+If you find feature flag patterns that don't match the built-in providers, the user likely has an in-house system. Ask them about it and help them create a custom provider.
+
+Custom providers use tree-sitter queries to match code patterns. They are defined separately from the `providers` list and run automatically.
+
+Example: If you see patterns like `MyFlags.enabled?("feature_name")` in Ruby:
+
+```toml
+[[feature_flags.custom_providers]]
+name = "my_flags"
+languages = ["ruby"]
+query = '''
+(call
+  receiver: (constant) @receiver
+  method: (identifier) @method
+  arguments: (argument_list
+    (string (string_content) @flag_key)))
+(#eq? @receiver "MyFlags")
+(#eq? @method "enabled?")
+'''
+```
+
+Key points for custom providers:
+- `name`: The provider name shown in output (choose something descriptive)
+- `languages`: List of languages to apply this query to (e.g., `["ruby", "python"]`)
+- `query`: A tree-sitter query that captures the flag key as `@flag_key` or `@key`
+- Custom providers run automatically and don't need to be listed in `providers`
+
+To write tree-sitter queries:
+1. Use `omen context <file>` to see the AST structure
+2. Match the pattern that wraps your feature flag calls
+3. Capture the flag key string with `@flag_key` or `@key`
 
 ### Step 3: Detect Generated Code Patterns
 
@@ -148,8 +190,24 @@ format = "text"
 color = true
 
 [feature_flags]
-# Detected providers (if any)
+# Feature flag providers to detect. Empty = no built-in detection.
+# Available: launchdarkly, flipper, split, unleash, generic, env
+# Populate with providers detected in Step 2, e.g.:
+# providers = ["launchdarkly", "split"]
 providers = []
+
+# Custom providers for in-house feature flag systems (uses tree-sitter queries)
+# [[feature_flags.custom_providers]]
+# name = "my_flags"
+# languages = ["ruby", "python"]
+# query = '''
+# (call
+#   receiver: (constant) @receiver
+#   method: (identifier) @method
+#   arguments: (argument_list (string (string_content) @flag_key)))
+# (#eq? @receiver "MyFlags")
+# (#eq? @method "enabled?")
+# '''
 
 [score]
 # Set to true for OO-heavy codebases (Ruby, Java, C#)
@@ -233,9 +291,19 @@ After generating the config, display a summary:
 ```
 Generated omen.toml with:
 - Primary language: Ruby
-- Feature flags: flipper, posthog
+- Feature flag providers: ["flipper"] (or "none detected" if empty)
 - Cohesion scoring: enabled
 - Exclude patterns: 12 patterns
 
+Run `omen flags` to detect feature flags (requires providers to be configured).
 Run `omen all` to verify the configuration works for your project.
+```
+
+If no feature flag providers were detected, remind the user:
+
+```
+No feature flag providers detected. If you use feature flags, add providers manually:
+
+[feature_flags]
+providers = ["launchdarkly"]  # or: flipper, split, unleash, generic, env
 ```
