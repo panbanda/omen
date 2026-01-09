@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.4.0](https://github.com/panbanda/omen/compare/omen-v4.3.1...omen-v4.4.0) (2026-01-09)
+
+
+### Features
+
+* **semantic:** replace ONNX with candle for embeddings ([#243](https://github.com/panbanda/omen/issues/243)) ([84d2b50](https://github.com/panbanda/omen/commit/84d2b504b78324051d0f63a587c4d496af395f80))
+
+
+### Performance Improvements
+
+* **semantic:** parallel file parsing and batch embeddings ([#245](https://github.com/panbanda/omen/issues/245)) ([02b051c](https://github.com/panbanda/omen/commit/02b051c96d9e4795f37d2f09b061363f7cee2970))
+
 ## [4.3.1](https://github.com/panbanda/omen/compare/omen-v4.3.0...omen-v4.3.1) (2026-01-08)
 
 
