@@ -1,10 +1,14 @@
 //! Composite health score analyzer.
 
+pub mod trend;
+
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result};
+
+pub use trend::analyze_trend;
 
 /// Score analyzer - calculates composite health score.
 #[derive(Default)]
@@ -112,6 +116,113 @@ impl AnalyzerTrait for Analyzer {
             }
         }
 
+        // Churn score (requires git)
+        if self.weights.churn > 0.0 {
+            let churn_analyzer = crate::analyzers::churn::Analyzer::new();
+            if let Ok(result) = churn_analyzer.analyze(ctx) {
+                let score = calculate_churn_score(&result);
+                components.insert(
+                    "churn".to_string(),
+                    ScoreComponent {
+                        score,
+                        weight: self.weights.churn,
+                        details: format!(
+                            "Analyzed {} files, mean churn: {:.2}",
+                            result.summary.total_files_changed, result.summary.mean_churn_score
+                        ),
+                    },
+                );
+                weighted_sum += score * self.weights.churn;
+                total_weight += self.weights.churn;
+            }
+        }
+
+        // Duplicates score
+        if self.weights.duplicates > 0.0 {
+            let dup_analyzer = crate::analyzers::duplicates::Analyzer::new();
+            if let Ok(result) = dup_analyzer.analyze(ctx) {
+                let score = calculate_duplicates_score(&result);
+                components.insert(
+                    "duplicates".to_string(),
+                    ScoreComponent {
+                        score,
+                        weight: self.weights.duplicates,
+                        details: format!(
+                            "Found {} clones, {:.1}% duplication",
+                            result.summary.total_clones,
+                            result.summary.duplication_ratio * 100.0
+                        ),
+                    },
+                );
+                weighted_sum += score * self.weights.duplicates;
+                total_weight += self.weights.duplicates;
+            }
+        }
+
+        // Cohesion score
+        if self.weights.cohesion > 0.0 {
+            let cohesion_analyzer = crate::analyzers::cohesion::Analyzer::new();
+            if let Ok(result) = cohesion_analyzer.analyze(ctx) {
+                let score = calculate_cohesion_score(&result);
+                components.insert(
+                    "cohesion".to_string(),
+                    ScoreComponent {
+                        score,
+                        weight: self.weights.cohesion,
+                        details: format!(
+                            "Analyzed {} classes, avg LCOM: {:.1}",
+                            result.summary.total_classes, result.summary.avg_lcom
+                        ),
+                    },
+                );
+                weighted_sum += score * self.weights.cohesion;
+                total_weight += self.weights.cohesion;
+            }
+        }
+
+        // Ownership score (requires git)
+        if self.weights.ownership > 0.0 {
+            let ownership_analyzer = crate::analyzers::ownership::Analyzer::new();
+            if let Ok(result) = ownership_analyzer.analyze(ctx) {
+                let score = calculate_ownership_score(&result);
+                components.insert(
+                    "ownership".to_string(),
+                    ScoreComponent {
+                        score,
+                        weight: self.weights.ownership,
+                        details: format!(
+                            "Bus factor: {}, {} knowledge silos",
+                            result.summary.bus_factor, result.summary.silo_count
+                        ),
+                    },
+                );
+                weighted_sum += score * self.weights.ownership;
+                total_weight += self.weights.ownership;
+            }
+        }
+
+        // Defect score (requires git)
+        if self.weights.defect > 0.0 {
+            let defect_analyzer = crate::analyzers::defect::Analyzer::new();
+            if let Ok(result) = defect_analyzer.analyze(ctx) {
+                let score = calculate_defect_score(&result);
+                components.insert(
+                    "defect".to_string(),
+                    ScoreComponent {
+                        score,
+                        weight: self.weights.defect,
+                        details: format!(
+                            "{} high-risk files, avg probability: {:.1}%",
+                            result.summary.high_risk_count,
+                            result.summary.avg_probability * 100.0
+                        ),
+                    },
+                );
+                weighted_sum += score * self.weights.defect;
+                total_weight += self.weights.defect;
+            }
+        }
+
         // Calculate final score
         let overall_score = if total_weight > 0.0 {
             weighted_sum / total_weight
@@ -184,6 +295,102 @@ fn calculate_deadcode_score(result: &crate::analyzers::deadcode::Analysis) -> f6
         80.0 - (count - 5) as f64 * 2.0
     } else {
         (50.0 - (count - 20) as f64).max(0.0)
+    }
+}
+
+fn calculate_churn_score(result: &crate::analyzers::churn::Analysis) -> f64 {
+    // Lower mean churn score = higher health score
+    // Churn scores typically range 0-1+
+    let mean = result.summary.mean_churn_score;
+    if mean <= 0.1 {
+        100.0
+    } else if mean <= 0.3 {
+        80.0 + (0.3 - mean) * 100.0
+    } else if mean <= 0.5 {
+        60.0 + (0.5 - mean) * 100.0
+    } else if mean <= 0.8 {
+        40.0 + (0.8 - mean) * 66.67
+    } else {
+        (40.0 - (mean - 0.8) * 50.0).max(0.0)
+    }
+}
+
+fn calculate_duplicates_score(result: &crate::analyzers::duplicates::Analysis) -> f64 {
+    // Lower duplication ratio = higher score
+    // duplication_ratio: 0 = no duplication, 0.2 = 20% duplicated
+    let ratio = result.summary.duplication_ratio;
+    if ratio <= 0.0 {
+        100.0
+    } else if ratio <= 0.05 {
+        90.0 + (0.05 - ratio) * 200.0
+    } else if ratio <= 0.10 {
+        70.0 + (0.10 - ratio) * 400.0
+    } else if ratio <= 0.20 {
+        50.0 + (0.20 - ratio) * 200.0
+    } else {
+        (50.0 - (ratio - 0.20) * 100.0).max(0.0)
+    }
+}
+
+fn calculate_cohesion_score(result: &crate::analyzers::cohesion::Analysis) -> f64 {
+    // Lower LCOM (Lack of Cohesion of Methods) = better cohesion = higher score
+    // LCOM typically 0-10+
+    let lcom = result.summary.avg_lcom;
+    if lcom <= 1.0 {
+        100.0
+    } else if lcom <= 2.0 {
+        80.0 + (2.0 - lcom) * 20.0
+    } else if lcom <= 5.0 {
+        50.0 + (5.0 - lcom) * 10.0
+    } else {
+        (50.0 - (lcom - 5.0) * 5.0).max(0.0)
+    }
+}
+
+fn calculate_ownership_score(result: &crate::analyzers::ownership::Analysis) -> f64 {
+    // Higher bus factor and lower silo count = better ownership = higher score
+    let bus_factor = result.summary.bus_factor;
+    let silo_ratio = if result.summary.total_files > 0 {
+        result.summary.silo_count as f64 / result.summary.total_files as f64
+    } else {
+        0.0
+    };
+
+    // Bus factor contribution (0-50 points)
+    let bus_score = match bus_factor {
+        0..=1 => 20.0,
+        2..=3 => 35.0,
+        4..=5 => 45.0,
+        _ => 50.0,
+    };
+
+    // Silo ratio contribution (0-50 points, fewer silos = higher score)
+    let silo_score = if silo_ratio <= 0.1 {
+        50.0
+    } else if silo_ratio <= 0.3 {
+        30.0 + (0.3 - silo_ratio) * 100.0
+    } else if silo_ratio <= 0.5 {
+        10.0 + (0.5 - silo_ratio) * 100.0
+    } else {
+        (10.0 - (silo_ratio - 0.5) * 20.0).max(0.0)
+    };
+
+    bus_score + silo_score
+}
+
+fn calculate_defect_score(result: &crate::analyzers::defect::Analysis) -> f64 {
+    // Lower average probability = fewer predicted defects = higher score
+    let avg_prob = result.summary.avg_probability as f64;
+    if avg_prob <= 0.1 {
+        100.0
+    } else if avg_prob <= 0.3 {
+        80.0 + (0.3 - avg_prob) * 100.0
+    } else if avg_prob <= 0.5 {
+        60.0 + (0.5 - avg_prob) * 100.0
+    } else if avg_prob <= 0.7 {
+        40.0 + (0.7 - avg_prob) * 100.0
+    } else {
+        (40.0 - (avg_prob - 0.7) * 100.0).max(0.0)
     }
 }
 
@@ -633,5 +840,300 @@ mod tests {
         let json = serde_json::to_string(&weights).unwrap();
         assert!(json.contains("\"complexity\":1.0"));
         assert!(json.contains("\"satd\":0.8"));
+    }
+
+    #[test]
+    fn test_calculate_churn_score_low() {
+        use chrono::Utc;
+        let result = crate::analyzers::churn::Analysis {
+            generated_at: Utc::now(),
+            period_days: 30,
+            repository_root: ".".to_string(),
+            files: vec![],
+            summary: crate::analyzers::churn::Summary {
+                total_file_changes: 0,
+                total_files_changed: 0,
+                total_additions: 0,
+                total_deletions: 0,
+                avg_commits_per_file: 0.0,
+                max_churn_score: 0.0,
+                mean_churn_score: 0.05,
+                variance_churn_score: 0.0,
+                stddev_churn_score: 0.0,
+                p50_churn_score: 0.0,
+                p95_churn_score: 0.0,
+                hotspot_files: vec![],
+                stable_files: vec![],
+                author_contributions: std::collections::HashMap::new(),
+            },
+        };
+        let score = calculate_churn_score(&result);
+        assert_eq!(score, 100.0);
+    }
+
+    #[test]
+    fn test_calculate_churn_score_medium() {
+        use chrono::Utc;
+        let result = crate::analyzers::churn::Analysis {
+            generated_at: Utc::now(),
+            period_days: 30,
+            repository_root: ".".to_string(),
+            files: vec![],
+            summary: crate::analyzers::churn::Summary {
+                total_file_changes: 100,
+                total_files_changed: 50,
+                total_additions: 500,
+                total_deletions: 200,
+                avg_commits_per_file: 2.0,
+                max_churn_score: 0.8,
+                mean_churn_score: 0.4,
+                variance_churn_score: 0.1,
+                stddev_churn_score: 0.32,
+                p50_churn_score: 0.3,
+                p95_churn_score: 0.7,
+                hotspot_files: vec![],
+                stable_files: vec![],
+                author_contributions: std::collections::HashMap::new(),
+            },
+        };
+        let score = calculate_churn_score(&result);
+        assert!((60.0..=80.0).contains(&score));
+    }
+
+    #[test]
+    fn test_calculate_churn_score_high() {
+        use chrono::Utc;
+        let result = crate::analyzers::churn::Analysis {
+            generated_at: Utc::now(),
+            period_days: 30,
+            repository_root: ".".to_string(),
+            files: vec![],
+            summary: crate::analyzers::churn::Summary {
+                total_file_changes: 1000,
+                total_files_changed: 500,
+                total_additions: 5000,
+                total_deletions: 3000,
+                avg_commits_per_file: 10.0,
+                max_churn_score: 1.5,
+                mean_churn_score: 0.9,
+                variance_churn_score: 0.2,
+                stddev_churn_score: 0.45,
+                p50_churn_score: 0.8,
+                p95_churn_score: 1.2,
+                hotspot_files: vec![],
+                stable_files: vec![],
+                author_contributions: std::collections::HashMap::new(),
+            },
+        };
+        let score = calculate_churn_score(&result);
+        assert!(score < 40.0);
+    }
+
+    #[test]
+    fn test_calculate_duplicates_score_none() {
+        let result = crate::analyzers::duplicates::Analysis {
+            clones: vec![],
+            groups: vec![],
+            summary: crate::analyzers::duplicates::AnalysisSummary {
+                total_clones: 0,
+                total_groups: 0,
+                type1_count: 0,
+                type2_count: 0,
+                type3_count: 0,
+                duplicated_lines: 0,
+                total_lines: 1000,
+                duplication_ratio: 0.0,
+                file_occurrences: std::collections::HashMap::new(),
+                avg_similarity: 0.0,
+                p50_similarity: 0.0,
+                p95_similarity: 0.0,
+                hotspots: vec![],
+            },
+            total_files_scanned: 10,
+            min_lines: 6,
+            threshold: 0.8,
+        };
+        assert_eq!(calculate_duplicates_score(&result), 100.0);
+    }
+
+    #[test]
+    fn test_calculate_duplicates_score_low() {
+        let result = crate::analyzers::duplicates::Analysis {
+            clones: vec![],
+            groups: vec![],
+            summary: crate::analyzers::duplicates::AnalysisSummary {
+                total_clones: 5,
+                total_groups: 2,
+                type1_count: 3,
+                type2_count: 2,
+                type3_count: 0,
+                duplicated_lines: 30,
+                total_lines: 1000,
+                duplication_ratio: 0.03,
+                file_occurrences: std::collections::HashMap::new(),
+                avg_similarity: 0.85,
+                p50_similarity: 0.84,
+                p95_similarity: 0.95,
+                hotspots: vec![],
+            },
+            total_files_scanned: 10,
+            min_lines: 6,
+            threshold: 0.8,
+        };
+        let score = calculate_duplicates_score(&result);
+        assert!((90.0..=100.0).contains(&score));
+    }
+
+    #[test]
+    fn test_calculate_duplicates_score_high() {
+        let result = crate::analyzers::duplicates::Analysis {
+            clones: vec![],
+            groups: vec![],
+            summary: crate::analyzers::duplicates::AnalysisSummary {
+                total_clones: 100,
+                total_groups: 20,
+                type1_count: 50,
+                type2_count: 30,
+                type3_count: 20,
+                duplicated_lines: 300,
+                total_lines: 1000,
+                duplication_ratio: 0.30,
+                file_occurrences: std::collections::HashMap::new(),
+                avg_similarity: 0.90,
+                p50_similarity: 0.88,
+                p95_similarity: 0.98,
+                hotspots: vec![],
+            },
+            total_files_scanned: 10,
+            min_lines: 6,
+            threshold: 0.8,
+        };
+        let score = calculate_duplicates_score(&result);
+        assert!(score < 50.0);
+    }
+
+    #[test]
+    fn test_calculate_cohesion_score_high() {
+        let result = crate::analyzers::cohesion::Analysis {
+            generated_at: "2024-01-01T00:00:00Z".to_string(),
+            classes: vec![],
+            summary: crate::analyzers::cohesion::Summary {
+                total_classes: 10,
+                total_files: 5,
+                avg_wmc: 5.0,
+                avg_cbo: 3.0,
+                avg_rfc: 8.0,
+                avg_lcom: 0.5,
+                max_wmc: 10,
+                max_cbo: 6,
+                max_rfc: 15,
+                max_lcom: 2,
+                max_dit: 3,
+                low_cohesion_count: 1,
+                violation_count: 0,
+            },
+        };
+        assert_eq!(calculate_cohesion_score(&result), 100.0);
+    }
+
+    #[test]
+    fn test_calculate_cohesion_score_low() {
+        let result = crate::analyzers::cohesion::Analysis {
+            generated_at: "2024-01-01T00:00:00Z".to_string(),
+            classes: vec![],
+            summary: crate::analyzers::cohesion::Summary {
+                total_classes: 10,
+                total_files: 5,
+                avg_wmc: 20.0,
+                avg_cbo: 10.0,
+                avg_rfc: 30.0,
+                avg_lcom: 8.0,
+                max_wmc: 50,
+                max_cbo: 20,
+                max_rfc: 60,
+                max_lcom: 20,
+                max_dit: 10,
+                low_cohesion_count: 8,
+                violation_count: 15,
+            },
+        };
+        let score = calculate_cohesion_score(&result);
+        assert!(score < 50.0);
+    }
+
+    #[test]
+    fn test_calculate_ownership_score_good() {
+        let result = crate::analyzers::ownership::Analysis {
+            generated_at: "2024-01-01T00:00:00Z".to_string(),
+            files: vec![],
+            summary: crate::analyzers::ownership::Summary {
+                total_files: 100,
+                bus_factor: 6,
+                silo_count: 5,
+                high_risk_count: 2,
+                avg_contributors: 4.0,
+                max_concentration: 0.5,
+                top_contributors: vec![],
+            },
+        };
+        let score = calculate_ownership_score(&result);
+        assert!(score >= 80.0);
+    }
+
+    #[test]
+    fn test_calculate_ownership_score_poor() {
+        let result = crate::analyzers::ownership::Analysis {
+            generated_at: "2024-01-01T00:00:00Z".to_string(),
+            files: vec![],
+            summary: crate::analyzers::ownership::Summary {
+                total_files: 100,
+                bus_factor: 1,
+                silo_count: 60,
+                high_risk_count: 40,
+                avg_contributors: 1.2,
+                max_concentration: 0.95,
+                top_contributors: vec![],
+            },
+        };
+        let score = calculate_ownership_score(&result);
+        assert!(score < 50.0);
+    }
+
+    #[test]
+    fn test_calculate_defect_score_low_risk() {
+        let result = crate::analyzers::defect::Analysis {
+            files: vec![],
+            summary: crate::analyzers::defect::Summary {
+                total_files: 100,
+                high_risk_count: 0,
+                medium_risk_count: 5,
+                low_risk_count: 95,
+                avg_probability: 0.05,
+                p50_probability: 0.03,
+                p95_probability: 0.15,
+            },
+            weights: crate::analyzers::defect::Weights::default(),
+        };
+        let score = calculate_defect_score(&result);
+        assert_eq!(score, 100.0);
+    }
+
+    #[test]
+    fn test_calculate_defect_score_high_risk() {
+        let result = crate::analyzers::defect::Analysis {
+            files: vec![],
+            summary: crate::analyzers::defect::Summary {
+                total_files: 100,
+                high_risk_count: 40,
+                medium_risk_count: 30,
+                low_risk_count: 30,
+                avg_probability: 0.75,
+                p50_probability: 0.70,
+                p95_probability: 0.95,
+            },
+            weights: crate::analyzers::defect::Weights::default(),
+        };
+        let score = calculate_defect_score(&result);
+        assert!(score < 40.0);
     }
 }
