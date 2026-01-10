@@ -189,7 +189,15 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         Command::Smells(_args) => {
             run_analyzer::<omen::analyzers::smells::Analyzer>(path, &config, format)?;
         }
-        Command::Flags(_args) => {
+        Command::Flags(args) => {
+            // Merge CLI --provider option into config
+            let mut config = config.clone();
+            if let Some(ref provider) = args.provider {
+                config.feature_flags.providers = vec![provider.clone()];
+            }
+            if args.stale_days > 0 {
+                config.feature_flags.stale_days = args.stale_days;
+            }
             run_analyzer::<omen::analyzers::flags::Analyzer>(path, &config, format)?;
         }
         Command::LintHotspot(_args) => {
@@ -547,10 +555,11 @@ fn run_report(
             }
 
             // Generate metadata.json (matches Go structure)
-            let repo_name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown");
+            // Canonicalize path to handle "." and get actual directory name
+            let repo_name = std::fs::canonicalize(path)
+                .ok()
+                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+                .unwrap_or_else(|| "unknown".to_string());
             // Use --days if provided, otherwise use --since
             let since_str = if let Some(days) = args.days {
                 format!("{} days", days)

@@ -418,10 +418,20 @@ fn build_patterns() -> Vec<FlagPattern> {
         });
     }
 
-    // Flipper (Ruby) patterns
-    if let Ok(re) =
-        Regex::new(r#"Flipper(?:\[|\.enabled\?\s*\(\s*):?(?P<key>[a-zA-Z_][a-zA-Z0-9_]*)"#)
-    {
+    // Flipper (Ruby) patterns - matches symbol keys like :my_flag
+    if let Ok(re) = Regex::new(
+        r#"Flipper(?:\[|\.(?:enabled\?|enable|disable|add|remove|exist\?)\s*\(\s*):(?P<key>[a-zA-Z_][a-zA-Z0-9_]*)"#,
+    ) {
+        patterns.push(FlagPattern {
+            provider: "flipper".to_string(),
+            regex: re,
+        });
+    }
+
+    // Flipper (Ruby) patterns - matches string keys like 'my_flag' or "my_flag"
+    if let Ok(re) = Regex::new(
+        r#"Flipper(?:\[|\.(?:enabled\?|enable|disable|add|remove|exist\?)\s*\(\s*)["'](?P<key>[a-zA-Z_][a-zA-Z0-9_]*)["']"#,
+    ) {
         patterns.push(FlagPattern {
             provider: "flipper".to_string(),
             regex: re,
