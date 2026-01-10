@@ -79,7 +79,7 @@ tower = "0.5"
 # Logging and colors
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-colored = "2.1"
+colored = "3.0"
 
 # Regex
 regex = "1.11"
