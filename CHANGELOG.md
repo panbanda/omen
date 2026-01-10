@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.8.0](https://github.com/panbanda/omen/compare/omen-v4.7.1...omen-v4.8.0) (2026-01-10)
+
+
+### Features
+
+* **score:** add missing components and implement trend analysis ([#273](https://github.com/panbanda/omen/issues/273)) ([08227a6](https://github.com/panbanda/omen/commit/08227a61ead1d5b795bd98e091f7879f0d2ce668))
+
 ## [4.7.1](https://github.com/panbanda/omen/compare/omen-v4.7.0...omen-v4.7.1) (2026-01-10)
 
 
