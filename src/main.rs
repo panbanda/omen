@@ -201,14 +201,67 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             match &cmd.subcommand {
                 Some(ScoreSubcommand::Trend(args)) => {
                     // Score trend analysis
-                    use serde_json::json;
-                    let result = json!({
-                        "since": args.since,
-                        "period": format!("{:?}", args.period).to_lowercase(),
-                        "snap": args.snap,
-                        "message": "Trend analysis not yet implemented"
-                    });
-                    println!("{}", serde_json::to_string_pretty(&result)?);
+                    let trend_data =
+                        omen::score::analyze_trend(path, &config, &args.since, args.period)?;
+                    match format {
+                        Format::Json => {
+                            println!("{}", serde_json::to_string_pretty(&trend_data)?);
+                        }
+                        Format::Markdown => {
+                            println!("# Score Trend Analysis\n");
+                            println!(
+                                "**Period**: {} ({})",
+                                args.since,
+                                format!("{:?}", args.period).to_lowercase()
+                            );
+                            println!("**Data Points**: {}\n", trend_data.points.len());
+
+                            if !trend_data.points.is_empty() {
+                                println!("## Overall Trend\n");
+                                println!("- **Start Score**: {}", trend_data.start_score);
+                                println!("- **End Score**: {}", trend_data.end_score);
+                                println!(
+                                    "- **Change**: {:+}",
+                                    trend_data.end_score - trend_data.start_score
+                                );
+                                println!("- **Slope**: {:.2} points/period", trend_data.slope);
+                                println!("- **R-squared**: {:.3}\n", trend_data.r_squared);
+
+                                if !trend_data.component_trends.is_empty() {
+                                    println!("## Component Trends\n");
+                                    println!("| Component | Slope | Correlation |");
+                                    println!("|-----------|-------|-------------|");
+                                    for (name, stats) in &trend_data.component_trends {
+                                        println!(
+                                            "| {} | {:.2} | {:.3} |",
+                                            name, stats.slope, stats.correlation
+                                        );
+                                    }
+                                    println!();
+                                }
+
+                                println!("## History\n");
+                                println!("| Date | Score |");
+                                println!("|------|-------|");
+                                for point in &trend_data.points {
+                                    println!("| {} | {} |", point.date, point.score);
+                                }
+                            } else {
+                                println!("No historical data available for the specified period.");
+                            }
+                        }
+                        Format::Text => {
+                            println!(
+                                "Score Trend: {} - {}",
+                                trend_data.start_score, trend_data.end_score
+                            );
+                            println!(
+                                "Change: {:+}",
+                                trend_data.end_score - trend_data.start_score
+                            );
+                            println!("Slope: {:.2}", trend_data.slope);
+                        }
+                    }
                 }
                 None => {
                     run_analyzer::<omen::score::Analyzer>(path, &config, format)?;
