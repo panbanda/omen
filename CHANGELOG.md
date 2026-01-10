@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.7.0](https://github.com/panbanda/omen/compare/omen-v4.6.0...omen-v4.7.0) (2026-01-10)
+
+
+### Features
+
+* **complexity:** add --check mode for threshold enforcement ([#262](https://github.com/panbanda/omen/issues/262)) ([3b76aad](https://github.com/panbanda/omen/commit/3b76aad53c513a9f8b8494f9956abcba4dd17ccf))
+
 ## [4.6.0](https://github.com/panbanda/omen/compare/omen-v4.5.1...omen-v4.6.0) (2026-01-09)
 
 
