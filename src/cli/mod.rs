@@ -49,7 +49,7 @@ pub struct Cli {
 pub enum Command {
     /// Analyze code complexity (cyclomatic and cognitive)
     #[command(alias = "cx")]
-    Complexity(AnalyzerArgs),
+    Complexity(ComplexityArgs),
 
     /// Detect Self-Admitted Technical Debt
     #[command(alias = "debt")]
@@ -157,6 +157,24 @@ pub struct AnalyzerArgs {
     /// Sort order
     #[arg(long, value_enum)]
     pub sort: Option<SortOrder>,
+}
+
+#[derive(Args)]
+pub struct ComplexityArgs {
+    #[command(flatten)]
+    pub common: AnalyzerArgs,
+
+    /// Check mode: fail if any function exceeds thresholds
+    #[arg(long)]
+    pub check: bool,
+
+    /// Maximum cyclomatic complexity (default: from config or 20)
+    #[arg(long)]
+    pub max_cyclomatic: Option<u32>,
+
+    /// Maximum cognitive complexity (default: from config or 30)
+    #[arg(long)]
+    pub max_cognitive: Option<u32>,
 }
 
 #[derive(Args)]
@@ -916,7 +934,7 @@ mod tests {
     fn test_analyzer_args_glob() {
         let cli = Cli::try_parse_from(["omen", "complexity", "-g", "*.rs"]).unwrap();
         if let Command::Complexity(args) = cli.command {
-            assert_eq!(args.glob, Some("*.rs".to_string()));
+            assert_eq!(args.common.glob, Some("*.rs".to_string()));
         }
     }
 
@@ -924,7 +942,7 @@ mod tests {
     fn test_analyzer_args_exclude() {
         let cli = Cli::try_parse_from(["omen", "complexity", "-e", "test"]).unwrap();
         if let Command::Complexity(args) = cli.command {
-            assert_eq!(args.exclude, Some("test".to_string()));
+            assert_eq!(args.common.exclude, Some("test".to_string()));
         }
     }
 
@@ -932,7 +950,7 @@ mod tests {
     fn test_analyzer_args_threshold() {
         let cli = Cli::try_parse_from(["omen", "complexity", "-t", "10.0"]).unwrap();
         if let Command::Complexity(args) = cli.command {
-            assert!((args.threshold.unwrap() - 10.0).abs() < 0.001);
+            assert!((args.common.threshold.unwrap() - 10.0).abs() < 0.001);
         }
     }
 
@@ -940,7 +958,7 @@ mod tests {
     fn test_analyzer_args_limit() {
         let cli = Cli::try_parse_from(["omen", "complexity", "-n", "20"]).unwrap();
         if let Command::Complexity(args) = cli.command {
-            assert_eq!(args.limit, Some(20));
+            assert_eq!(args.common.limit, Some(20));
         }
     }
 
@@ -948,7 +966,7 @@ mod tests {
     fn test_analyzer_args_sort_asc() {
         let cli = Cli::try_parse_from(["omen", "complexity", "--sort", "asc"]).unwrap();
         if let Command::Complexity(args) = cli.command {
-            assert!(matches!(args.sort, Some(SortOrder::Asc)));
+            assert!(matches!(args.common.sort, Some(SortOrder::Asc)));
         }
     }
 
@@ -956,7 +974,7 @@ mod tests {
     fn test_analyzer_args_sort_desc() {
         let cli = Cli::try_parse_from(["omen", "complexity", "--sort", "desc"]).unwrap();
         if let Command::Complexity(args) = cli.command {
-            assert!(matches!(args.sort, Some(SortOrder::Desc)));
+            assert!(matches!(args.common.sort, Some(SortOrder::Desc)));
         }
     }
 
@@ -1381,6 +1399,71 @@ mod tests {
             if let SearchSubcommand::Query(args) = cmd.subcommand {
                 assert_eq!(args.files, Some("src/main.rs,src/lib.rs".to_string()));
             }
+        }
+    }
+
+    #[test]
+    fn test_complexity_check_flag() {
+        let cli = Cli::try_parse_from(["omen", "complexity", "--check"]).unwrap();
+        if let Command::Complexity(args) = cli.command {
+            assert!(args.check);
+        } else {
+            panic!("Expected Complexity command");
+        }
+    }
+
+    #[test]
+    fn test_complexity_max_cyclomatic() {
+        let cli = Cli::try_parse_from(["omen", "complexity", "--check", "--max-cyclomatic", "15"])
+            .unwrap();
+        if let Command::Complexity(args) = cli.command {
+            assert!(args.check);
+            assert_eq!(args.max_cyclomatic, Some(15));
+        } else {
+            panic!("Expected Complexity command");
+        }
+    }
+
+    #[test]
+    fn test_complexity_max_cognitive() {
+        let cli = Cli::try_parse_from(["omen", "complexity", "--check", "--max-cognitive", "20"])
+            .unwrap();
+        if let Command::Complexity(args) = cli.command {
+            assert!(args.check);
+            assert_eq!(args.max_cognitive, Some(20));
+        } else {
+            panic!("Expected Complexity command");
+        }
+    }
+
+    #[test]
+    fn test_complexity_both_thresholds() {
+        let cli = Cli::try_parse_from([
+            "omen",
+            "complexity",
+            "--check",
+            "--max-cyclomatic",
+            "15",
+            "--max-cognitive",
+            "15",
+        ])
+        .unwrap();
+        if let Command::Complexity(args) = cli.command {
+            assert!(args.check);
+            assert_eq!(args.max_cyclomatic, Some(15));
+            assert_eq!(args.max_cognitive, Some(15));
+        } else {
+            panic!("Expected Complexity command");
+        }
+    }
+
+    #[test]
+    fn test_complexity_check_default_false() {
+        let cli = Cli::try_parse_from(["omen", "complexity"]).unwrap();
+        if let Command::Complexity(args) = cli.command {
+            assert!(!args.check);
+        } else {
+            panic!("Expected Complexity command");
         }
     }
 }
