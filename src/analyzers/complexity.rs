@@ -138,6 +138,55 @@ pub struct Analysis {
     pub summary: AnalysisSummary,
 }
 
+/// A function that violated complexity thresholds.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Violation {
+    /// Function name.
+    pub name: String,
+    /// File path.
+    pub file: String,
+    /// Line number.
+    pub line: u32,
+    /// Cyclomatic complexity.
+    pub cyclomatic: u32,
+    /// Cognitive complexity.
+    pub cognitive: u32,
+}
+
+impl Analysis {
+    /// Check if any functions exceed the given thresholds.
+    ///
+    /// Returns Ok(()) if all functions are within thresholds.
+    /// Returns Err with a list of violations if any function exceeds either threshold.
+    pub fn check_thresholds(
+        &self,
+        max_cyclomatic: u32,
+        max_cognitive: u32,
+    ) -> std::result::Result<(), Vec<Violation>> {
+        let violations: Vec<Violation> = self
+            .files
+            .iter()
+            .flat_map(|file| &file.functions)
+            .filter(|func| {
+                func.metrics.cyclomatic > max_cyclomatic || func.metrics.cognitive > max_cognitive
+            })
+            .map(|func| Violation {
+                name: func.name.clone(),
+                file: func.file.clone(),
+                line: func.start_line,
+                cyclomatic: func.metrics.cyclomatic,
+                cognitive: func.metrics.cognitive,
+            })
+            .collect();
+
+        if violations.is_empty() {
+            Ok(())
+        } else {
+            Err(violations)
+        }
+    }
+}
+
 /// Per-file complexity result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileResult {
@@ -510,6 +559,161 @@ mod tests {
         let metrics = Metrics::default();
         assert_eq!(metrics.cyclomatic, 0);
         assert_eq!(metrics.cognitive, 0);
+    }
+
+    #[test]
+    fn test_check_thresholds_passes_when_under() {
+        let analysis = Analysis {
+            files: vec![FileResult {
+                path: "test.rs".to_string(),
+                language: "rust".to_string(),
+                functions: vec![FunctionResult {
+                    name: "simple_fn".to_string(),
+                    file: "test.rs".to_string(),
+                    start_line: 1,
+                    end_line: 5,
+                    metrics: Metrics {
+                        cyclomatic: 5,
+                        cognitive: 3,
+                        max_nesting: 1,
+                        lines: 5,
+                    },
+                }],
+                total_cyclomatic: 5,
+                total_cognitive: 3,
+                avg_cyclomatic: 5.0,
+                avg_cognitive: 3.0,
+            }],
+            summary: AnalysisSummary::default(),
+        };
+
+        let result = analysis.check_thresholds(15, 15);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_check_thresholds_fails_when_cyclomatic_exceeded() {
+        let analysis = Analysis {
+            files: vec![FileResult {
+                path: "test.rs".to_string(),
+                language: "rust".to_string(),
+                functions: vec![FunctionResult {
+                    name: "complex_fn".to_string(),
+                    file: "test.rs".to_string(),
+                    start_line: 1,
+                    end_line: 50,
+                    metrics: Metrics {
+                        cyclomatic: 20,
+                        cognitive: 5,
+                        max_nesting: 3,
+                        lines: 50,
+                    },
+                }],
+                total_cyclomatic: 20,
+                total_cognitive: 5,
+                avg_cyclomatic: 20.0,
+                avg_cognitive: 5.0,
+            }],
+            summary: AnalysisSummary::default(),
+        };
+
+        let result = analysis.check_thresholds(15, 15);
+        assert!(result.is_err());
+        let violations = result.unwrap_err();
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].name, "complex_fn");
+        assert_eq!(violations[0].cyclomatic, 20);
+    }
+
+    #[test]
+    fn test_check_thresholds_fails_when_cognitive_exceeded() {
+        let analysis = Analysis {
+            files: vec![FileResult {
+                path: "test.rs".to_string(),
+                language: "rust".to_string(),
+                functions: vec![FunctionResult {
+                    name: "nested_fn".to_string(),
+                    file: "test.rs".to_string(),
+                    start_line: 1,
+                    end_line: 30,
+                    metrics: Metrics {
+                        cyclomatic: 5,
+                        cognitive: 25,
+                        max_nesting: 5,
+                        lines: 30,
+                    },
+                }],
+                total_cyclomatic: 5,
+                total_cognitive: 25,
+                avg_cyclomatic: 5.0,
+                avg_cognitive: 25.0,
+            }],
+            summary: AnalysisSummary::default(),
+        };
+
+        let result = analysis.check_thresholds(15, 15);
+        assert!(result.is_err());
+        let violations = result.unwrap_err();
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].cognitive, 25);
+    }
+
+    #[test]
+    fn test_check_thresholds_multiple_violations() {
+        let analysis = Analysis {
+            files: vec![FileResult {
+                path: "test.rs".to_string(),
+                language: "rust".to_string(),
+                functions: vec![
+                    FunctionResult {
+                        name: "ok_fn".to_string(),
+                        file: "test.rs".to_string(),
+                        start_line: 1,
+                        end_line: 5,
+                        metrics: Metrics {
+                            cyclomatic: 3,
+                            cognitive: 2,
+                            max_nesting: 1,
+                            lines: 5,
+                        },
+                    },
+                    FunctionResult {
+                        name: "bad_fn1".to_string(),
+                        file: "test.rs".to_string(),
+                        start_line: 10,
+                        end_line: 50,
+                        metrics: Metrics {
+                            cyclomatic: 20,
+                            cognitive: 18,
+                            max_nesting: 4,
+                            lines: 40,
+                        },
+                    },
+                    FunctionResult {
+                        name: "bad_fn2".to_string(),
+                        file: "test.rs".to_string(),
+                        start_line: 60,
+                        end_line: 100,
+                        metrics: Metrics {
+                            cyclomatic: 10,
+                            cognitive: 25,
+                            max_nesting: 6,
+                            lines: 40,
+                        },
+                    },
+                ],
+                total_cyclomatic: 33,
+                total_cognitive: 45,
+                avg_cyclomatic: 11.0,
+                avg_cognitive: 15.0,
+            }],
+            summary: AnalysisSummary::default(),
+        };
+
+        let result = analysis.check_thresholds(15, 15);
+        assert!(result.is_err());
+        let violations = result.unwrap_err();
+        assert_eq!(violations.len(), 2);
     }
 
     #[test]

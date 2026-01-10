@@ -11,7 +11,8 @@ use indicatif::{ProgressBar, ProgressStyle};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use omen::cli::{
-    Cli, Command, McpSubcommand, OutputFormat, ReportSubcommand, ScoreSubcommand, SearchSubcommand,
+    Cli, Command, ComplexityArgs, McpSubcommand, OutputFormat, ReportSubcommand, ScoreSubcommand,
+    SearchSubcommand,
 };
 use omen::config::Config;
 use omen::core::progress::is_tty;
@@ -135,8 +136,12 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 }
             }
         }
-        Command::Complexity(_args) => {
-            run_analyzer::<omen::analyzers::complexity::Analyzer>(path, &config, format)?;
+        Command::Complexity(args) => {
+            if args.check {
+                run_complexity_check(path, &config, args)?;
+            } else {
+                run_analyzer::<omen::analyzers::complexity::Analyzer>(path, &config, format)?;
+            }
         }
         Command::Satd(_args) => {
             run_analyzer::<omen::analyzers::satd::Analyzer>(path, &config, format)?;
@@ -327,6 +332,63 @@ fn run_analyzer<A: Analyzer + Default>(
 
     format.format(&result, &mut stdout())?;
     Ok(())
+}
+
+fn run_complexity_check(
+    path: &PathBuf,
+    config: &Config,
+    args: &ComplexityArgs,
+) -> omen::core::Result<()> {
+    let file_set = FileSet::from_path(path, config)?;
+    let mut ctx = AnalysisContext::new(&file_set, config, Some(path));
+
+    if let Ok(repo) = omen::git::GitRepo::open(path) {
+        let git_root = repo.root().to_path_buf();
+        ctx = ctx.with_git_path(Box::leak(Box::new(git_root)));
+    }
+
+    let analyzer = omen::analyzers::complexity::Analyzer::default();
+    let result = analyzer.analyze(&ctx)?;
+
+    let max_cyclomatic = args
+        .max_cyclomatic
+        .unwrap_or(config.complexity.cyclomatic_error);
+    let max_cognitive = args
+        .max_cognitive
+        .unwrap_or(config.complexity.cognitive_error);
+
+    match result.check_thresholds(max_cyclomatic, max_cognitive) {
+        Ok(()) => {
+            eprintln!(
+                "All {} functions within thresholds (cyclomatic <= {}, cognitive <= {})",
+                result.summary.total_functions, max_cyclomatic, max_cognitive
+            );
+            Ok(())
+        }
+        Err(violations) => {
+            eprintln!(
+                "Complexity threshold exceeded in {} function(s):\n",
+                violations.len()
+            );
+            for v in &violations {
+                eprintln!(
+                    "  {}:{} - {}: cyclomatic={}, cognitive={}",
+                    v.file, v.line, v.name, v.cyclomatic, v.cognitive
+                );
+            }
+            eprintln!(
+                "\nThresholds: cyclomatic <= {}, cognitive <= {}",
+                max_cyclomatic, max_cognitive
+            );
+            Err(omen::core::Error::threshold_violation(
+                format!(
+                    "{} function(s) exceed complexity thresholds",
+                    violations.len()
+                ),
+                violations.len() as f64,
+            ))
+        }
+    }
 }
 
 fn run_churn_analyzer(
