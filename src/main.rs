@@ -592,6 +592,7 @@ fn run_report(
                 "smells",
                 "flags",
                 "score",
+                "trend",
             ];
             let total_analyzers = analyzer_names
                 .iter()
@@ -676,6 +677,38 @@ fn run_report(
             run_and_save!(omen::analyzers::flags::Analyzer, "flags");
             run_and_save!(omen::score::Analyzer, "score");
 
+            // Generate trend data for charts
+            if !skip_list.contains(&"trend") {
+                if let Some(ref bar) = progress {
+                    bar.set_message("trend...");
+                }
+                match omen::score::analyze_trend(
+                    path,
+                    config,
+                    &args.since,
+                    omen::cli::TrendPeriod::Monthly,
+                ) {
+                    Ok(trend_data) => {
+                        let output_path = args.output.join("trend.json");
+                        if let Err(e) =
+                            std::fs::write(&output_path, serde_json::to_string_pretty(&trend_data)?)
+                        {
+                            eprintln!("Warning: failed to write trend.json: {}", e);
+                        } else {
+                            completed += 1;
+                            if let Some(ref bar) = progress {
+                                bar.set_position(completed);
+                            } else {
+                                eprintln!("Generated: {}", output_path.display());
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: trend analysis failed: {}", e);
+                    }
+                }
+            }
+
             if let Some(bar) = progress {
                 bar.finish_with_message("done");
             }
@@ -703,6 +736,7 @@ fn run_report(
                 "smells",
                 "flags",
                 "score",
+                "trend",
             ];
 
             let mut errors = Vec::new();
