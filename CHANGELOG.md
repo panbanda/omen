@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.7.1](https://github.com/panbanda/omen/compare/omen-v4.7.0...omen-v4.7.1) (2026-01-10)
+
+
+### Bug Fixes
+
+* **deps:** update rust crate colored to v3 ([#268](https://github.com/panbanda/omen/issues/268)) ([cb44701](https://github.com/panbanda/omen/commit/cb44701fca66c04bbbed7d09f884a0d116473bea))
+* **deps:** update rust crate tokenizers to 0.22 ([#266](https://github.com/panbanda/omen/issues/266)) ([6a3d54a](https://github.com/panbanda/omen/commit/6a3d54ab9f9374e54bb0cdc0bc747649382e89fb))
+
 ## [4.7.0](https://github.com/panbanda/omen/compare/omen-v4.6.0...omen-v4.7.0) (2026-01-10)
 
 
