@@ -1,8 +1,8 @@
 //! File set for collecting files to analyze.
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
 
 use super::progress::{create_spinner, is_tty};
@@ -54,7 +54,8 @@ impl FileSet {
             .git_exclude(true)
             .build();
 
-        let exclude_set: HashSet<_> = exclude_patterns.iter().collect();
+        // Pre-compile glob patterns once for efficient matching
+        let exclude_globs = build_glob_set(&exclude_patterns);
 
         for entry in walker.flatten() {
             let path = entry.path();
@@ -69,16 +70,9 @@ impl FileSet {
                 continue;
             }
 
-            // Check exclude patterns
+            // Check exclude patterns using pre-compiled glob set
             let path_str = path.to_string_lossy();
-            let should_exclude = exclude_set.iter().any(|pattern| {
-                globset::Glob::new(pattern)
-                    .ok()
-                    .and_then(|g| g.compile_matcher().is_match(&*path_str).then_some(()))
-                    .is_some()
-            });
-
-            if should_exclude {
+            if exclude_globs.is_match(&*path_str) {
                 continue;
             }
 
@@ -174,6 +168,18 @@ impl<'a> IntoIterator for &'a FileSet {
     fn into_iter(self) -> Self::IntoIter {
         self.files.iter()
     }
+}
+
+/// Build a compiled GlobSet from a list of patterns.
+/// Invalid patterns are silently skipped.
+fn build_glob_set(patterns: &[String]) -> GlobSet {
+    let mut builder = GlobSetBuilder::new();
+    for pattern in patterns {
+        if let Ok(glob) = Glob::new(pattern) {
+            builder.add(glob);
+        }
+    }
+    builder.build().unwrap_or_else(|_| GlobSet::empty())
 }
 
 #[cfg(test)]

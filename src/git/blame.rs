@@ -79,11 +79,10 @@ pub fn get_blame(repo: &Repository, root: &Path, path: &Path) -> Result<BlameInf
     for (entry, _line_content) in outcome.entries_with_lines() {
         let commit_id = entry.commit_id;
 
-        // Look up or cache commit author info
-        let (author_name, timestamp) = if let Some(cached) = commit_cache.get(&commit_id) {
-            cached.clone()
-        } else {
-            let info = match repo.find_commit(commit_id) {
+        // Look up or cache commit author info - use entry API to avoid double lookup
+        let (author_name, timestamp) = commit_cache
+            .entry(commit_id)
+            .or_insert_with(|| match repo.find_commit(commit_id) {
                 Ok(commit) => {
                     let author = commit.author().ok();
                     let name = author
@@ -94,26 +93,24 @@ pub fn get_blame(repo: &Repository, root: &Path, path: &Path) -> Result<BlameInf
                     (name, ts)
                 }
                 Err(_) => ("Unknown".to_string(), 0),
-            };
-            commit_cache.insert(commit_id, info.clone());
-            info
-        };
+            });
 
         // Each entry represents multiple lines (len is the span)
         let range = entry.range_in_blamed_file();
+        let sha_str = commit_id.to_string();
         for line_num in range {
             lines.push(BlameLine {
                 line: (line_num + 1) as u32, // Convert to 1-indexed
                 author: author_name.clone(),
-                sha: commit_id.to_string(),
-                timestamp,
+                sha: sha_str.clone(),
+                timestamp: *timestamp,
             });
 
             // Track lines per author for statistics
             author_lines
                 .entry(author_name.clone())
                 .or_default()
-                .push(timestamp);
+                .push(*timestamp);
         }
     }
 

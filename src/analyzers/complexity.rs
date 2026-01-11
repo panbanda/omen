@@ -477,14 +477,16 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, _source: &[u8], current_d
 }
 
 /// Get the operator from a binary expression.
-fn get_operator(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
-    for child in node.children(&mut node.walk()) {
+/// Returns a borrowed string slice to avoid allocation.
+fn get_operator<'a>(node: &tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'a str> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
         let kind = child.kind();
         if kind == "&&" || kind == "||" || kind == "and" || kind == "or" {
-            return Some(kind.to_string());
+            return Some(kind);
         }
         if kind == "operator" {
-            return child.utf8_text(source).ok().map(|s| s.to_string());
+            return child.utf8_text(source).ok();
         }
     }
     None
