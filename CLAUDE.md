@@ -156,6 +156,10 @@ Integration tests live in `tests/` directory.
 - Run `cargo llvm-cov` to check coverage locally
 - Coverage report excludes `main.rs`
 
+### Pull Request Requirements
+
+**Performance PRs**: When submitting a PR that claims performance improvements, include before/after benchmarks in the PR description. Run the old version and new version on a representative dataset and document the timing difference.
+
 ## Supported Languages
 
 Go, Rust, Python, TypeScript, JavaScript, TSX/JSX, Java, C, C++, C#, Ruby, PHP, Bash
