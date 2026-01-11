@@ -115,7 +115,7 @@ impl Analyzer {
         let mut files = Vec::new();
         for entry in WalkBuilder::new(root).hidden(false).build() {
             let entry = entry.map_err(|e| Error::analysis(e.to_string()))?;
-            if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+            if entry.file_type().is_some_and(|t| t.is_file()) {
                 files.push(entry.into_path());
             }
         }

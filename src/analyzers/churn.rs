@@ -103,7 +103,7 @@ fn commits_to_file_metrics(commits: &[crate::git::Commit]) -> HashMap<String, Fi
             let fm = file_metrics
                 .entry(path_str.clone())
                 .or_insert_with(|| FileMetrics {
-                    path: format!("./{}", path_str),
+                    path: format!("./{path_str}"),
                     relative_path: path_str.clone(),
                     commits: 0,
                     unique_authors: Vec::new(),
@@ -154,7 +154,7 @@ fn parse_git_log_numstat(output: &[u8]) -> Result<HashMap<String, FileMetrics>> 
     let mut current_time: Option<DateTime<Utc>> = None;
 
     for line in reader.lines() {
-        let line = line.map_err(|e| Error::git(format!("Failed to read git output: {}", e)))?;
+        let line = line.map_err(|e| Error::git(format!("Failed to read git output: {e}")))?;
 
         if line.is_empty() {
             continue;
@@ -192,7 +192,7 @@ fn parse_git_log_numstat(output: &[u8]) -> Result<HashMap<String, FileMetrics>> 
         let fm = file_metrics
             .entry(relative_path.to_string())
             .or_insert_with(|| FileMetrics {
-                path: format!("./{}", relative_path),
+                path: format!("./{relative_path}"),
                 relative_path: relative_path.to_string(),
                 commits: 0,
                 unique_authors: Vec::new(),

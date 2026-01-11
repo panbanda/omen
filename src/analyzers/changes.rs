@@ -369,7 +369,7 @@ fn is_automated_commit(message: &str) -> bool {
 /// Collect commit data from git log using gix.
 fn collect_commit_data(git_path: &Path, days: u32) -> Result<Vec<RawCommit>> {
     let repo = GitRepo::open(git_path)?;
-    let since = format!("{} days", days);
+    let since = format!("{days} days");
     let commits = repo.log_with_stats(Some(&since))?;
 
     commits_to_raw_commits(&commits)

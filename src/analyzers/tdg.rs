@@ -101,7 +101,7 @@ impl Analyzer {
     /// Analyze a single file and return its TDG score.
     pub fn analyze_file(&self, path: &Path) -> Result<Score> {
         let content = std::fs::read_to_string(path)
-            .map_err(|e| crate::core::Error::analysis(format!("Failed to read file: {}", e)))?;
+            .map_err(|e| crate::core::Error::analysis(format!("Failed to read file: {e}")))?;
 
         if let Some(max_size) = self.max_file_size {
             if content.len() as u64 > max_size {
@@ -167,7 +167,7 @@ impl Analyzer {
             penalties.push(PenaltyAttribution {
                 source_metric: "structural_complexity".to_string(),
                 amount: penalty,
-                issue: format!("High cyclomatic complexity: {}", cyclomatic),
+                issue: format!("High cyclomatic complexity: {cyclomatic}"),
             });
             points -= penalty;
         }
@@ -189,7 +189,7 @@ impl Analyzer {
             penalties.push(PenaltyAttribution {
                 source_metric: "semantic_complexity".to_string(),
                 amount: penalty,
-                issue: format!("Deep nesting: {} levels", nesting_depth),
+                issue: format!("Deep nesting: {nesting_depth} levels"),
             });
             points -= penalty;
         }
