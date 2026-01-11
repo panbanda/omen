@@ -1,5 +1,29 @@
 # Changelog
 
+## [4.9.0](https://github.com/panbanda/omen/compare/omen-v4.8.0...omen-v4.9.0) (2026-01-11)
+
+
+### Features
+
+* **git:** implement git blame using gix ([dfda93f](https://github.com/panbanda/omen/commit/dfda93fd6663e054190c2a8eea9b40711cc1c68a))
+* **git:** implement git blame using gix ([6e3d578](https://github.com/panbanda/omen/commit/6e3d57807096df857b0d466ca895ab8ba45e181c))
+* **score:** add TDG, coupling, smells analyzers and programmatic summary ([9d9725e](https://github.com/panbanda/omen/commit/9d9725e2b5dad2b3ede3daf57394092ba6ac44e1))
+
+
+### Bug Fixes
+
+* **flags:** fix CLI --provider option and expand Flipper patterns ([9c1c2b0](https://github.com/panbanda/omen/commit/9c1c2b0850e4db1475509e330084b01578ba3728))
+* **report:** achieve parity between 4.x and 3.x HTML reports ([bc2c392](https://github.com/panbanda/omen/commit/bc2c392424987b71daba73d390f7c6f3ffbf4cd7))
+* **report:** remove generic programmatic summary generation ([a736abf](https://github.com/panbanda/omen/commit/a736abfd860eeb1c6691815b0df27663b0cebda1))
+
+
+### Performance Improvements
+
+* **flags:** pre-compile queries and cache git log results ([45bfb9c](https://github.com/panbanda/omen/commit/45bfb9c527c4d226cdc4a7c436f42018d2cad59e))
+* **flags:** pre-compile queries and cache git log results ([70fd3e5](https://github.com/panbanda/omen/commit/70fd3e5d65a61490b4659786498a2df627f22545))
+* reduce allocations and optimize hot paths ([26f7cfe](https://github.com/panbanda/omen/commit/26f7cfe0d3e9ce28f3b75225855b2fbfb0b0c2e5))
+* reduce allocations and optimize hot paths ([788f4bc](https://github.com/panbanda/omen/commit/788f4bc83a6bf4cfee548414a49f9bc5c0e1f801))
+
 ## [4.8.0](https://github.com/panbanda/omen/compare/omen-v4.7.1...omen-v4.8.0) (2026-01-10)
 
 
