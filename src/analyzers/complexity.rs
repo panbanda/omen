@@ -738,4 +738,348 @@ mod tests {
         let analyzer = Analyzer::new();
         assert_eq!(analyzer.name(), "complexity");
     }
+
+    // Language-specific complexity calculation tests
+
+    fn parse_and_analyze(code: &[u8], lang: Language, filename: &str) -> FileResult {
+        let parser = crate::parser::Parser::new();
+        let result = parser
+            .parse(code, lang, std::path::Path::new(filename))
+            .expect("Parse failed");
+        analyze_parse_result(&result)
+    }
+
+    #[test]
+    fn test_complexity_rust_simple_function() {
+        let code = b"fn simple() { let x = 1; }";
+        let result = parse_and_analyze(code, Language::Rust, "test.rs");
+        assert_eq!(result.functions.len(), 1);
+        assert_eq!(result.functions[0].name, "simple");
+        // Cyclomatic: 1 (baseline for a simple function)
+        assert_eq!(result.functions[0].metrics.cyclomatic, 1);
+    }
+
+    #[test]
+    fn test_complexity_rust_if_statement() {
+        let code = b"fn with_if(x: i32) { if x > 0 { return; } }";
+        let result = parse_and_analyze(code, Language::Rust, "test.rs");
+        assert_eq!(result.functions.len(), 1);
+        // Cyclomatic: 1 (baseline) + 1 (if) = 2
+        assert!(result.functions[0].metrics.cyclomatic >= 2);
+    }
+
+    #[test]
+    fn test_complexity_rust_match_expression() {
+        let code = br#"
+fn with_match(x: i32) -> &'static str {
+    match x {
+        0 => "zero",
+        1 => "one",
+        _ => "other",
+    }
+}
+"#;
+        let result = parse_and_analyze(code, Language::Rust, "test.rs");
+        assert_eq!(result.functions.len(), 1);
+        // Match expression counts as one decision point (the match itself)
+        // Individual arms contribute to cognitive complexity via nesting
+        assert!(result.functions[0].metrics.cyclomatic >= 2);
+    }
+
+    #[test]
+    fn test_complexity_rust_nested_if() {
+        let code = br#"
+fn nested(x: i32, y: i32) {
+    if x > 0 {
+        if y > 0 {
+            println!("both positive");
+        }
+    }
+}
+"#;
+        let result = parse_and_analyze(code, Language::Rust, "test.rs");
+        assert_eq!(result.functions.len(), 1);
+        // Nested if should have higher cognitive complexity
+        assert!(result.functions[0].metrics.cognitive >= 2);
+        assert!(result.functions[0].metrics.max_nesting >= 2);
+    }
+
+    #[test]
+    fn test_complexity_go_simple_function() {
+        let code = b"package main\n\nfunc simple() { x := 1 }";
+        let result = parse_and_analyze(code, Language::Go, "test.go");
+        assert_eq!(result.functions.len(), 1);
+        assert_eq!(result.functions[0].name, "simple");
+        assert_eq!(result.functions[0].metrics.cyclomatic, 1);
+    }
+
+    #[test]
+    fn test_complexity_go_if_else() {
+        let code = br#"
+package main
+
+func withIfElse(x int) int {
+    if x > 0 {
+        return 1
+    } else {
+        return -1
+    }
+}
+"#;
+        let result = parse_and_analyze(code, Language::Go, "test.go");
+        assert_eq!(result.functions.len(), 1);
+        // if + else adds complexity
+        assert!(result.functions[0].metrics.cyclomatic >= 2);
+    }
+
+    #[test]
+    fn test_complexity_go_switch() {
+        let code = br#"
+package main
+
+func withSwitch(x int) string {
+    switch x {
+    case 0:
+        return "zero"
+    case 1:
+        return "one"
+    default:
+        return "other"
+    }
+}
+"#;
+        let result = parse_and_analyze(code, Language::Go, "test.go");
+        assert_eq!(result.functions.len(), 1);
+        // Switch statement counts as one decision point
+        assert!(result.functions[0].metrics.cyclomatic >= 2);
+    }
+
+    #[test]
+    fn test_complexity_go_for_loop() {
+        let code = br#"
+package main
+
+func withLoop() {
+    for i := 0; i < 10; i++ {
+        println(i)
+    }
+}
+"#;
+        let result = parse_and_analyze(code, Language::Go, "test.go");
+        assert_eq!(result.functions.len(), 1);
+        // for loop adds complexity
+        assert!(result.functions[0].metrics.cyclomatic >= 2);
+    }
+
+    #[test]
+    fn test_complexity_python_simple_function() {
+        let code = b"def simple():\n    x = 1";
+        let result = parse_and_analyze(code, Language::Python, "test.py");
+        assert_eq!(result.functions.len(), 1);
+        assert_eq!(result.functions[0].name, "simple");
+        assert_eq!(result.functions[0].metrics.cyclomatic, 1);
+    }
+
+    #[test]
+    fn test_complexity_python_if_elif_else() {
+        let code = br#"
+def classify(x):
+    if x > 0:
+        return "positive"
+    elif x < 0:
+        return "negative"
+    else:
+        return "zero"
+"#;
+        let result = parse_and_analyze(code, Language::Python, "test.py");
+        assert_eq!(result.functions.len(), 1);
+        // if + elif adds complexity
+        assert!(result.functions[0].metrics.cyclomatic >= 3);
+    }
+
+    #[test]
+    fn test_complexity_python_for_loop() {
+        let code = br#"
+def sum_list(items):
+    total = 0
+    for item in items:
+        total += item
+    return total
+"#;
+        let result = parse_and_analyze(code, Language::Python, "test.py");
+        assert_eq!(result.functions.len(), 1);
+        assert!(result.functions[0].metrics.cyclomatic >= 2);
+    }
+
+    #[test]
+    fn test_complexity_python_while_loop() {
+        let code = br#"
+def countdown(n):
+    while n > 0:
+        print(n)
+        n -= 1
+"#;
+        let result = parse_and_analyze(code, Language::Python, "test.py");
+        assert_eq!(result.functions.len(), 1);
+        assert!(result.functions[0].metrics.cyclomatic >= 2);
+    }
+
+    #[test]
+    fn test_complexity_javascript_simple_function() {
+        let code = b"function simple() { const x = 1; }";
+        let result = parse_and_analyze(code, Language::JavaScript, "test.js");
+        assert_eq!(result.functions.len(), 1);
+        assert_eq!(result.functions[0].name, "simple");
+        assert_eq!(result.functions[0].metrics.cyclomatic, 1);
+    }
+
+    #[test]
+    fn test_complexity_javascript_ternary() {
+        let code = b"function tern(x) { return x > 0 ? 'pos' : 'neg'; }";
+        let result = parse_and_analyze(code, Language::JavaScript, "test.js");
+        assert_eq!(result.functions.len(), 1);
+        // Ternary operator adds complexity
+        assert!(result.functions[0].metrics.cyclomatic >= 2);
+    }
+
+    #[test]
+    fn test_complexity_javascript_logical_and_or() {
+        let code = b"function check(a, b) { if (a && b || !a) { return true; } return false; }";
+        let result = parse_and_analyze(code, Language::JavaScript, "test.js");
+        assert_eq!(result.functions.len(), 1);
+        // Logical operators add to cognitive complexity
+        assert!(result.functions[0].metrics.cognitive >= 1);
+    }
+
+    #[test]
+    fn test_complexity_typescript_simple_function() {
+        let code = b"function simple(): void { const x: number = 1; }";
+        let result = parse_and_analyze(code, Language::TypeScript, "test.ts");
+        assert_eq!(result.functions.len(), 1);
+        assert_eq!(result.functions[0].name, "simple");
+        assert_eq!(result.functions[0].metrics.cyclomatic, 1);
+    }
+
+    #[test]
+    fn test_complexity_typescript_try_catch() {
+        let code = br#"
+function safeParse(json: string): any {
+    try {
+        return JSON.parse(json);
+    } catch (e) {
+        return null;
+    }
+}
+"#;
+        let result = parse_and_analyze(code, Language::TypeScript, "test.ts");
+        assert_eq!(result.functions.len(), 1);
+        // try-catch adds complexity
+        assert!(result.functions[0].metrics.cyclomatic >= 2);
+    }
+
+    #[test]
+    fn test_complexity_ruby_simple_method() {
+        let code = b"def simple\n  x = 1\nend";
+        let result = parse_and_analyze(code, Language::Ruby, "test.rb");
+        assert_eq!(result.functions.len(), 1);
+        assert_eq!(result.functions[0].name, "simple");
+        assert_eq!(result.functions[0].metrics.cyclomatic, 1);
+    }
+
+    #[test]
+    fn test_complexity_ruby_if_unless() {
+        let code = br#"
+def check(x)
+  if x > 0
+    "positive"
+  else
+    "non-positive"
+  end
+end
+"#;
+        let result = parse_and_analyze(code, Language::Ruby, "test.rb");
+        assert_eq!(result.functions.len(), 1);
+        assert!(result.functions[0].metrics.cyclomatic >= 2);
+    }
+
+    #[test]
+    fn test_complexity_ruby_case_when() {
+        let code = br#"
+def classify(x)
+  case x
+  when 0 then "zero"
+  when 1 then "one"
+  else "other"
+  end
+end
+"#;
+        let result = parse_and_analyze(code, Language::Ruby, "test.rb");
+        assert_eq!(result.functions.len(), 1);
+        // case with multiple when clauses
+        assert!(result.functions[0].metrics.cyclomatic >= 3);
+    }
+
+    #[test]
+    fn test_complexity_java_simple_method() {
+        let code = b"class Test { void simple() { int x = 1; } }";
+        let result = parse_and_analyze(code, Language::Java, "Test.java");
+        assert_eq!(result.functions.len(), 1);
+        assert_eq!(result.functions[0].name, "simple");
+        assert_eq!(result.functions[0].metrics.cyclomatic, 1);
+    }
+
+    #[test]
+    fn test_complexity_java_switch() {
+        let code = br#"
+class Test {
+    String classify(int x) {
+        switch (x) {
+            case 0: return "zero";
+            case 1: return "one";
+            default: return "other";
+        }
+    }
+}
+"#;
+        let result = parse_and_analyze(code, Language::Java, "Test.java");
+        assert_eq!(result.functions.len(), 1);
+        // Switch statement counts as one decision point
+        assert!(result.functions[0].metrics.cyclomatic >= 2);
+    }
+
+    #[test]
+    fn test_nesting_depth_multiple_levels() {
+        let code = br#"
+fn deeply_nested(x: i32, y: i32, z: i32) {
+    if x > 0 {
+        if y > 0 {
+            if z > 0 {
+                println!("all positive");
+            }
+        }
+    }
+}
+"#;
+        let result = parse_and_analyze(code, Language::Rust, "test.rs");
+        assert_eq!(result.functions.len(), 1);
+        // Should detect 3 levels of nesting
+        assert!(result.functions[0].metrics.max_nesting >= 3);
+    }
+
+    #[test]
+    fn test_multiple_functions_same_file() {
+        let code = br#"
+fn first() { let x = 1; }
+fn second(x: i32) { if x > 0 { return; } }
+fn third() { for i in 0..10 { println!("{}", i); } }
+"#;
+        let result = parse_and_analyze(code, Language::Rust, "test.rs");
+        assert_eq!(result.functions.len(), 3);
+
+        // Verify each function has correct name
+        let names: Vec<_> = result.functions.iter().map(|f| f.name.as_str()).collect();
+        assert!(names.contains(&"first"));
+        assert!(names.contains(&"second"));
+        assert!(names.contains(&"third"));
+    }
 }
