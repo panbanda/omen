@@ -83,13 +83,24 @@ impl AnalyzerTrait for Analyzer {
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
         let start = Instant::now();
 
-        let items: Vec<SatdItem> = ctx
+        // Single pass: collect SATD items and LOC simultaneously to avoid double file loading
+        let (items, total_loc): (Vec<SatdItem>, usize) = ctx
             .files
             .iter()
             .par_bridge()
             .filter_map(|path| SourceFile::load(path).ok())
-            .flat_map(|file| self.analyze_file(&file))
-            .collect();
+            .map(|file| {
+                let loc = file.lines_of_code();
+                let file_items = self.analyze_file(&file);
+                (file_items, loc)
+            })
+            .reduce(
+                || (Vec::new(), 0),
+                |(mut items1, loc1), (items2, loc2)| {
+                    items1.extend(items2);
+                    (items1, loc1 + loc2)
+                },
+            );
 
         // Group by category
         let mut by_category = std::collections::HashMap::new();
@@ -99,12 +110,6 @@ impl AnalyzerTrait for Analyzer {
 
         // Calculate weighted density
         let total_weight: f64 = items.iter().map(|i| i.weight).sum();
-        let total_loc: usize = ctx
-            .files
-            .iter()
-            .filter_map(|p| SourceFile::load(p).ok())
-            .map(|f| f.lines_of_code())
-            .sum();
 
         let density = if total_loc > 0 {
             total_weight / (total_loc as f64 / 1000.0)
