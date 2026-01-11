@@ -80,20 +80,20 @@ pub fn get_blame(repo: &Repository, root: &Path, path: &Path) -> Result<BlameInf
         let commit_id = entry.commit_id;
 
         // Look up or cache commit author info - use entry API to avoid double lookup
-        let (author_name, timestamp) = commit_cache
-            .entry(commit_id)
-            .or_insert_with(|| match repo.find_commit(commit_id) {
-                Ok(commit) => {
-                    let author = commit.author().ok();
-                    let name = author
-                        .as_ref()
-                        .map(|a| a.name.to_string())
-                        .unwrap_or_else(|| "Unknown".to_string());
-                    let ts = author.map(|a| a.seconds()).unwrap_or(0);
-                    (name, ts)
-                }
-                Err(_) => ("Unknown".to_string(), 0),
-            });
+        let (author_name, timestamp) = commit_cache.entry(commit_id).or_insert_with(|| match repo
+            .find_commit(commit_id)
+        {
+            Ok(commit) => {
+                let author = commit.author().ok();
+                let name = author
+                    .as_ref()
+                    .map(|a| a.name.to_string())
+                    .unwrap_or_else(|| "Unknown".to_string());
+                let ts = author.map(|a| a.seconds()).unwrap_or(0);
+                (name, ts)
+            }
+            Err(_) => ("Unknown".to_string(), 0),
+        });
 
         // Each entry represents multiple lines (len is the span)
         let range = entry.range_in_blamed_file();
