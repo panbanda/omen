@@ -122,19 +122,33 @@ impl Renderer {
             });
         }
 
-        // Load hotspots and compute summary
+        // Load hotspots and compute summary if needed
         if let Ok(mut hotspots) = load_json::<HotspotsData>(&data_dir.join("hotspots.json")) {
-            if hotspots.summary.is_none() && !hotspots.files.is_empty() {
+            // Compute max_score/avg_score if not present (summary is None or has default values)
+            let needs_compute = !hotspots.files.is_empty()
+                && (hotspots.summary.is_none()
+                    || hotspots
+                        .summary
+                        .as_ref()
+                        .is_some_and(|s| s.max_score == 0.0));
+            if needs_compute {
                 let max_score = hotspots
                     .files
                     .iter()
                     .map(|f| f.hotspot_score)
                     .fold(0.0f64, f64::max);
                 let total_score: f64 = hotspots.files.iter().map(|f| f.hotspot_score).sum();
-                hotspots.summary = Some(HotspotSummary {
-                    max_score,
-                    avg_score: total_score / hotspots.files.len() as f64,
-                });
+                let avg_score = total_score / hotspots.files.len() as f64;
+                if let Some(ref mut summary) = hotspots.summary {
+                    summary.max_score = max_score;
+                    summary.avg_score = avg_score;
+                } else {
+                    hotspots.summary = Some(HotspotSummary {
+                        max_score,
+                        avg_score,
+                        ..Default::default()
+                    });
+                }
             }
             data.hotspots = Some(hotspots);
         }

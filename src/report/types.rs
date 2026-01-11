@@ -78,24 +78,38 @@ pub struct ComplexitySummary {
 /// HotspotsData represents the hotspots.json structure.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HotspotsData {
-    #[serde(default)]
+    #[serde(default, alias = "hotspots")]
     pub files: Vec<HotspotItem>,
     pub summary: Option<HotspotSummary>,
 }
 
 /// HotspotSummary contains aggregate hotspot stats.
+/// The JSON may contain different fields depending on the analyzer version,
+/// so all fields use defaults and the renderer computes what it needs.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HotspotSummary {
+    #[serde(default)]
     pub max_score: f64,
+    #[serde(default)]
     pub avg_score: f64,
+    #[serde(default)]
+    pub critical_count: i32,
+    #[serde(default)]
+    pub high_count: i32,
+    #[serde(default)]
+    pub total_hotspots: i32,
 }
 
 /// HotspotItem represents a single hotspot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HotspotItem {
+    #[serde(alias = "file")]
     pub path: String,
+    #[serde(alias = "score")]
     pub hotspot_score: f64,
+    #[serde(default)]
     pub commits: i32,
+    #[serde(default, alias = "avg_complexity")]
     pub avg_cognitive: f64,
 }
 
@@ -315,20 +329,33 @@ pub struct FlagsData {
 /// FlagItem represents a single feature flag.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlagItem {
+    #[serde(alias = "key")]
     pub flag_key: String,
+    #[serde(default)]
     pub provider: String,
+    #[serde(default)]
     pub priority: FlagPriority,
+    #[serde(default)]
     pub complexity: FlagComplexity,
+    #[serde(default)]
     pub staleness: FlagStaleness,
     #[serde(default)]
     pub references: Vec<FlagReference>,
+    #[serde(default)]
+    pub file_spread: Option<i32>,
+    #[serde(default)]
+    pub first_seen: Option<String>,
+    #[serde(default)]
+    pub stale: Option<bool>,
 }
 
 /// FlagReference represents a single occurrence of a feature flag in code.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlagReference {
     pub file: String,
+    #[serde(default)]
     pub line: u32,
+    #[serde(default)]
     pub column: u32,
 }
 
@@ -689,5 +716,69 @@ mod tests {
         let file: ChurnFile = serde_json::from_str(json).unwrap();
         assert_eq!(file.file, "src/main.rs");
         assert_eq!(file.commits, 42);
+    }
+
+    #[test]
+    fn test_hotspots_deserialize() {
+        let json = r#"{
+            "hotspots": [
+                {
+                    "file": "test.js",
+                    "score": 0.99,
+                    "commits": 10,
+                    "avg_complexity": 93.0
+                }
+            ]
+        }"#;
+        let hotspots: HotspotsData = serde_json::from_str(json).unwrap();
+        assert_eq!(hotspots.files.len(), 1);
+        assert_eq!(hotspots.files[0].path, "test.js");
+        assert!((hotspots.files[0].hotspot_score - 0.99).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_hotspots_deserialize_with_extra_fields() {
+        // Test with actual JSON structure including extra fields like severity, percentiles
+        let json = r#"{
+            "hotspots": [
+                {
+                    "avg_complexity": 93.0,
+                    "churn_percentile": 99.84,
+                    "commits": 10,
+                    "complexity_percentile": 99.78,
+                    "file": "test.js",
+                    "score": 0.99,
+                    "severity": "Critical"
+                }
+            ]
+        }"#;
+        let hotspots: HotspotsData = serde_json::from_str(json).unwrap();
+        assert_eq!(hotspots.files.len(), 1);
+        assert_eq!(hotspots.files[0].path, "test.js");
+        assert!((hotspots.files[0].hotspot_score - 0.99).abs() < f64::EPSILON);
+        assert_eq!(hotspots.files[0].commits, 10);
+    }
+
+    #[test]
+    fn test_flags_deserialize() {
+        let json = r#"{
+            "flags": [
+                {
+                    "key": "test_flag",
+                    "provider": "feature",
+                    "file_spread": 3,
+                    "first_seen": "2020-01-01T00:00:00Z",
+                    "stale": true,
+                    "references": [
+                        {"file": "test.rb", "line": 10}
+                    ]
+                }
+            ]
+        }"#;
+        let flags: FlagsData = serde_json::from_str(json).unwrap();
+        assert_eq!(flags.flags.len(), 1);
+        assert_eq!(flags.flags[0].flag_key, "test_flag");
+        assert_eq!(flags.flags[0].file_spread, Some(3));
+        assert_eq!(flags.flags[0].stale, Some(true));
     }
 }

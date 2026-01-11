@@ -189,7 +189,15 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         Command::Smells(_args) => {
             run_analyzer::<omen::analyzers::smells::Analyzer>(path, &config, format)?;
         }
-        Command::Flags(_args) => {
+        Command::Flags(args) => {
+            // Merge CLI --provider option into config
+            let mut config = config.clone();
+            if let Some(ref provider) = args.provider {
+                config.feature_flags.providers = vec![provider.clone()];
+            }
+            if args.stale_days > 0 {
+                config.feature_flags.stale_days = args.stale_days;
+            }
             run_analyzer::<omen::analyzers::flags::Analyzer>(path, &config, format)?;
         }
         Command::LintHotspot(_args) => {
@@ -547,10 +555,11 @@ fn run_report(
             }
 
             // Generate metadata.json (matches Go structure)
-            let repo_name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown");
+            // Canonicalize path to handle "." and get actual directory name
+            let repo_name = std::fs::canonicalize(path)
+                .ok()
+                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+                .unwrap_or_else(|| "unknown".to_string());
             // Use --days if provided, otherwise use --since
             let since_str = if let Some(days) = args.days {
                 format!("{} days", days)
@@ -592,6 +601,7 @@ fn run_report(
                 "smells",
                 "flags",
                 "score",
+                "trend",
             ];
             let total_analyzers = analyzer_names
                 .iter()
@@ -676,6 +686,38 @@ fn run_report(
             run_and_save!(omen::analyzers::flags::Analyzer, "flags");
             run_and_save!(omen::score::Analyzer, "score");
 
+            // Generate trend data for charts
+            if !skip_list.contains(&"trend") {
+                if let Some(ref bar) = progress {
+                    bar.set_message("trend...");
+                }
+                match omen::score::analyze_trend(
+                    path,
+                    config,
+                    &args.since,
+                    omen::cli::TrendPeriod::Monthly,
+                ) {
+                    Ok(trend_data) => {
+                        let output_path = args.output.join("trend.json");
+                        if let Err(e) =
+                            std::fs::write(&output_path, serde_json::to_string_pretty(&trend_data)?)
+                        {
+                            eprintln!("Warning: failed to write trend.json: {}", e);
+                        } else {
+                            completed += 1;
+                            if let Some(ref bar) = progress {
+                                bar.set_position(completed);
+                            } else {
+                                eprintln!("Generated: {}", output_path.display());
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: trend analysis failed: {}", e);
+                    }
+                }
+            }
+
             if let Some(bar) = progress {
                 bar.finish_with_message("done");
             }
@@ -703,6 +745,7 @@ fn run_report(
                 "smells",
                 "flags",
                 "score",
+                "trend",
             ];
 
             let mut errors = Vec::new();

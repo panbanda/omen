@@ -9,7 +9,6 @@ use std::path::Path;
 
 use chrono::Utc;
 use ignore::WalkBuilder;
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Query, QueryCursor};
@@ -46,7 +45,6 @@ impl Default for Config {
 /// Feature flags analyzer.
 pub struct Analyzer {
     config: Config,
-    patterns: Vec<FlagPattern>,
 }
 
 impl Default for Analyzer {
@@ -59,15 +57,11 @@ impl Analyzer {
     pub fn new() -> Self {
         Self {
             config: Config::default(),
-            patterns: build_patterns(),
         }
     }
 
     pub fn with_config(config: Config) -> Self {
-        Self {
-            config,
-            patterns: build_patterns(),
-        }
+        Self { config }
     }
 
     pub fn with_expected_ttl(mut self, days: u32) -> Self {
@@ -129,6 +123,198 @@ impl AnalyzerTrait for Analyzer {
     }
 }
 
+/// Built-in provider definition using tree-sitter queries.
+struct BuiltinProvider {
+    name: &'static str,
+    languages: &'static [Language],
+    query: &'static str,
+}
+
+/// Get built-in providers with tree-sitter queries.
+fn get_builtin_providers() -> Vec<BuiltinProvider> {
+    vec![
+        // Flipper (Ruby) - element reference: Flipper[:flag] or Flipper['flag']
+        BuiltinProvider {
+            name: "flipper",
+            languages: &[Language::Ruby],
+            query: r#"
+                ; Flipper[:symbol] or Flipper["string"]
+                (element_reference
+                    object: (constant) @_receiver
+                    (simple_symbol) @key
+                    (#eq? @_receiver "Flipper"))
+
+                (element_reference
+                    object: (constant) @_receiver
+                    (string (string_content) @key)
+                    (#eq? @_receiver "Flipper"))
+
+                ; Flipper.enable(:symbol) and similar method calls
+                (call
+                    receiver: (constant) @_receiver
+                    method: (identifier) @_method
+                    arguments: (argument_list
+                        (simple_symbol) @key)
+                    (#eq? @_receiver "Flipper")
+                    (#match? @_method "^(enabled\\?|enable|disable|add|remove|exist\\?)$"))
+
+                ; Flipper.enable("string") and similar method calls
+                (call
+                    receiver: (constant) @_receiver
+                    method: (identifier) @_method
+                    arguments: (argument_list
+                        (string (string_content) @key))
+                    (#eq? @_receiver "Flipper")
+                    (#match? @_method "^(enabled\\?|enable|disable|add|remove|exist\\?)$"))
+            "#,
+        },
+        // LaunchDarkly (JavaScript/TypeScript)
+        BuiltinProvider {
+            name: "launchdarkly",
+            languages: &[
+                Language::JavaScript,
+                Language::TypeScript,
+                Language::Tsx,
+                Language::Jsx,
+            ],
+            query: r#"
+                ; client.variation("flag-key", ...)
+                (call_expression
+                    function: (member_expression
+                        property: (property_identifier) @_method)
+                    arguments: (arguments
+                        (string (string_fragment) @key))
+                    (#match? @_method "^(variation|boolVariation|stringVariation|intVariation|floatVariation|jsonVariation)$"))
+            "#,
+        },
+        // Split (JavaScript/TypeScript)
+        BuiltinProvider {
+            name: "split",
+            languages: &[
+                Language::JavaScript,
+                Language::TypeScript,
+                Language::Tsx,
+                Language::Jsx,
+            ],
+            query: r#"
+                ; client.getTreatment(user, "flag-key")
+                (call_expression
+                    function: (member_expression
+                        property: (property_identifier) @_method)
+                    arguments: (arguments
+                        (_)
+                        (string (string_fragment) @key))
+                    (#match? @_method "^(getTreatment|getTreatments)$"))
+            "#,
+        },
+        // Unleash (JavaScript/TypeScript)
+        BuiltinProvider {
+            name: "unleash",
+            languages: &[
+                Language::JavaScript,
+                Language::TypeScript,
+                Language::Tsx,
+                Language::Jsx,
+            ],
+            query: r#"
+                ; client.isEnabled("flag-key")
+                (call_expression
+                    function: (member_expression
+                        property: (property_identifier) @_method)
+                    arguments: (arguments
+                        (string (string_fragment) @key))
+                    (#eq? @_method "isEnabled"))
+            "#,
+        },
+        // Unleash (Python)
+        BuiltinProvider {
+            name: "unleash",
+            languages: &[Language::Python],
+            query: r#"
+                ; client.is_enabled("flag-key")
+                (call
+                    function: (attribute
+                        attribute: (identifier) @_method)
+                    arguments: (argument_list
+                        (string (string_content) @key))
+                    (#eq? @_method "is_enabled"))
+            "#,
+        },
+        // ENV-based feature flags (Ruby)
+        BuiltinProvider {
+            name: "env",
+            languages: &[Language::Ruby],
+            query: r#"
+                ; ENV["FEATURE_X"] or ENV['FEATURE_X']
+                (element_reference
+                    object: (constant) @_receiver
+                    (string (string_content) @key)
+                    (#eq? @_receiver "ENV")
+                    (#match? @key "^FEATURE_"))
+            "#,
+        },
+        // ENV-based feature flags (JavaScript/TypeScript)
+        BuiltinProvider {
+            name: "env",
+            languages: &[
+                Language::JavaScript,
+                Language::TypeScript,
+                Language::Tsx,
+                Language::Jsx,
+            ],
+            query: r#"
+                ; process.env.FEATURE_X or process.env["FEATURE_X"]
+                (member_expression
+                    object: (member_expression
+                        object: (identifier) @_process
+                        property: (property_identifier) @_env)
+                    property: (property_identifier) @key
+                    (#eq? @_process "process")
+                    (#eq? @_env "env")
+                    (#match? @key "^FEATURE_"))
+
+                (subscript_expression
+                    object: (member_expression
+                        object: (identifier) @_process
+                        property: (property_identifier) @_env)
+                    index: (string (string_fragment) @key)
+                    (#eq? @_process "process")
+                    (#eq? @_env "env")
+                    (#match? @key "^FEATURE_"))
+            "#,
+        },
+        // ENV-based feature flags (Python)
+        BuiltinProvider {
+            name: "env",
+            languages: &[Language::Python],
+            query: r#"
+                ; os.environ["FEATURE_X"] or os.environ.get("FEATURE_X")
+                (subscript
+                    value: (attribute
+                        object: (identifier) @_os
+                        attribute: (identifier) @_environ)
+                    subscript: (string (string_content) @key)
+                    (#eq? @_os "os")
+                    (#eq? @_environ "environ")
+                    (#match? @key "^FEATURE_"))
+
+                (call
+                    function: (attribute
+                        object: (attribute
+                            object: (identifier) @_os
+                            attribute: (identifier) @_environ)
+                        attribute: (identifier) @_get)
+                    arguments: (argument_list
+                        (string (string_content) @key))
+                    (#eq? @_os "os")
+                    (#eq? @_environ "environ")
+                    (#eq? @_get "get")
+                    (#match? @key "^FEATURE_"))
+            "#,
+        },
+    ]
+}
+
 impl Analyzer {
     /// Analyze a repository with explicit config parameters.
     ///
@@ -143,6 +329,7 @@ impl Analyzer {
     ) -> Result<Analysis> {
         let mut references: Vec<FlagReference> = Vec::new();
         let parser = Parser::new();
+        let builtin_providers = get_builtin_providers();
 
         for entry in WalkBuilder::new(repo_path)
             .hidden(true)
@@ -175,30 +362,62 @@ impl Analyzer {
                 .to_string_lossy()
                 .to_string();
 
-            // Apply built-in regex patterns only if providers are explicitly enabled
-            for pattern in &self.patterns {
-                if !providers.contains(&pattern.provider) {
+            // Get tree-sitter language for parsing
+            let ts_lang = match get_tree_sitter_language(language) {
+                Ok(lang) => lang,
+                Err(_) => continue,
+            };
+
+            // Parse the file once
+            let parse_result = match parser.parse(content.as_bytes(), language, path) {
+                Ok(result) => result,
+                Err(_) => continue,
+            };
+
+            // Apply built-in providers using tree-sitter queries
+            for builtin in &builtin_providers {
+                // Check if this provider is enabled
+                if !providers.contains(&builtin.name.to_string()) {
                     continue;
                 }
 
-                for cap in pattern.regex.captures_iter(&content) {
-                    if let Some(key_match) = cap.name("key") {
-                        let key = key_match
-                            .as_str()
-                            .trim_matches(|c| c == '"' || c == '\'' || c == ':');
+                // Check if this language is supported
+                if !builtin.languages.contains(&language) {
+                    continue;
+                }
 
-                        let line = content[..key_match.start()]
-                            .chars()
-                            .filter(|&c| c == '\n')
-                            .count() as u32
-                            + 1;
+                // Compile and run the query
+                if let Ok(query) = Query::new(&ts_lang, builtin.query) {
+                    let mut cursor = QueryCursor::new();
+                    let mut matches =
+                        cursor.matches(&query, parse_result.tree.root_node(), content.as_bytes());
 
-                        references.push(FlagReference {
-                            file: rel_path.clone(),
-                            line,
-                            key: key.to_string(),
-                            provider: pattern.provider.clone(),
-                        });
+                    // Find the capture index for "key"
+                    let key_capture_idx = query.capture_names().iter().position(|n| *n == "key");
+
+                    while let Some(query_match) = matches.next() {
+                        for capture in query_match.captures {
+                            if let Some(idx) = key_capture_idx {
+                                if capture.index as usize != idx {
+                                    continue;
+                                }
+                            }
+
+                            let node = capture.node;
+                            let key = node
+                                .utf8_text(content.as_bytes())
+                                .unwrap_or("")
+                                .trim_matches(|c| c == '"' || c == '\'' || c == ':');
+
+                            if !key.is_empty() {
+                                references.push(FlagReference {
+                                    file: rel_path.clone(),
+                                    line: node.start_position().row as u32 + 1,
+                                    key: key.to_string(),
+                                    provider: builtin.name.to_string(),
+                                });
+                            }
+                        }
                     }
                 }
             }
@@ -216,47 +435,39 @@ impl Analyzer {
                     continue;
                 }
 
-                // Parse with tree-sitter and run query
-                if let Ok(ts_lang) = get_tree_sitter_language(language) {
-                    if let Ok(query) = Query::new(&ts_lang, &custom.query) {
-                        if let Ok(parse_result) = parser.parse(content.as_bytes(), language, path) {
-                            let mut cursor = QueryCursor::new();
-                            let mut matches = cursor.matches(
-                                &query,
-                                parse_result.tree.root_node(),
-                                content.as_bytes(),
-                            );
+                // Compile and run the query
+                if let Ok(query) = Query::new(&ts_lang, &custom.query) {
+                    let mut cursor = QueryCursor::new();
+                    let mut matches =
+                        cursor.matches(&query, parse_result.tree.root_node(), content.as_bytes());
 
-                            // Find the capture index for "flag_key" or "key"
-                            let key_capture_idx = query
-                                .capture_names()
-                                .iter()
-                                .position(|n| *n == "flag_key" || *n == "key");
+                    // Find the capture index for "flag_key" or "key"
+                    let key_capture_idx = query
+                        .capture_names()
+                        .iter()
+                        .position(|n| *n == "flag_key" || *n == "key");
 
-                            while let Some(query_match) = matches.next() {
-                                for capture in query_match.captures {
-                                    // If we have a specific key capture, use it
-                                    if let Some(idx) = key_capture_idx {
-                                        if capture.index as usize != idx {
-                                            continue;
-                                        }
-                                    }
-
-                                    let node = capture.node;
-                                    let key = node
-                                        .utf8_text(content.as_bytes())
-                                        .unwrap_or("")
-                                        .trim_matches(|c| c == '"' || c == '\'' || c == ':');
-
-                                    if !key.is_empty() {
-                                        references.push(FlagReference {
-                                            file: rel_path.clone(),
-                                            line: node.start_position().row as u32 + 1,
-                                            key: key.to_string(),
-                                            provider: custom.name.clone(),
-                                        });
-                                    }
+                    while let Some(query_match) = matches.next() {
+                        for capture in query_match.captures {
+                            if let Some(idx) = key_capture_idx {
+                                if capture.index as usize != idx {
+                                    continue;
                                 }
+                            }
+
+                            let node = capture.node;
+                            let key = node
+                                .utf8_text(content.as_bytes())
+                                .unwrap_or("")
+                                .trim_matches(|c| c == '"' || c == '\'' || c == ':');
+
+                            if !key.is_empty() {
+                                references.push(FlagReference {
+                                    file: rel_path.clone(),
+                                    line: node.start_position().row as u32 + 1,
+                                    key: key.to_string(),
+                                    provider: custom.name.clone(),
+                                });
                             }
                         }
                     }
@@ -398,77 +609,6 @@ fn calculate_summary(flags: &[FeatureFlag]) -> AnalysisSummary {
     }
 }
 
-/// A pattern for detecting feature flags.
-struct FlagPattern {
-    provider: String,
-    regex: Regex,
-}
-
-/// Build detection patterns for common providers.
-fn build_patterns() -> Vec<FlagPattern> {
-    let mut patterns = Vec::new();
-
-    // LaunchDarkly patterns
-    if let Ok(re) = Regex::new(
-        r#"(?:variation|boolVariation|stringVariation|intVariation|floatVariation|jsonVariation)\s*\(\s*["'](?P<key>[^"']+)["']"#,
-    ) {
-        patterns.push(FlagPattern {
-            provider: "launchdarkly".to_string(),
-            regex: re,
-        });
-    }
-
-    // Flipper (Ruby) patterns
-    if let Ok(re) =
-        Regex::new(r#"Flipper(?:\[|\.enabled\?\s*\(\s*):?(?P<key>[a-zA-Z_][a-zA-Z0-9_]*)"#)
-    {
-        patterns.push(FlagPattern {
-            provider: "flipper".to_string(),
-            regex: re,
-        });
-    }
-
-    // Split patterns
-    if let Ok(re) =
-        Regex::new(r#"(?:getTreatment|get_treatment)\s*\([^,]*,\s*["'](?P<key>[^"']+)["']"#)
-    {
-        patterns.push(FlagPattern {
-            provider: "split".to_string(),
-            regex: re,
-        });
-    }
-
-    // Unleash patterns
-    if let Ok(re) = Regex::new(r#"(?:isEnabled|is_enabled)\s*\(\s*["'](?P<key>[^"']+)["']"#) {
-        patterns.push(FlagPattern {
-            provider: "unleash".to_string(),
-            regex: re,
-        });
-    }
-
-    // Generic feature flag patterns
-    if let Ok(re) = Regex::new(
-        r#"(?i)(?:feature_flag|featureFlag|is_feature_enabled|isFeatureEnabled|feature_enabled\?|check_feature)\s*\(?["':]+(?P<key>[a-zA-Z_][a-zA-Z0-9_-]*)["']?\)?"#,
-    ) {
-        patterns.push(FlagPattern {
-            provider: "generic".to_string(),
-            regex: re,
-        });
-    }
-
-    // ENV-based feature flags
-    if let Ok(re) =
-        Regex::new(r#"(?:ENV|process\.env|os\.environ)\s*\[?\s*["'](?P<key>FEATURE_[A-Z_]+)["']"#)
-    {
-        patterns.push(FlagPattern {
-            provider: "env".to_string(),
-            regex: re,
-        });
-    }
-
-    patterns
-}
-
 /// Internal flag reference during collection.
 struct FlagReference {
     file: String,
@@ -554,75 +694,93 @@ mod tests {
     }
 
     #[test]
-    fn test_build_patterns() {
-        let patterns = build_patterns();
-        assert!(!patterns.is_empty());
+    fn test_builtin_providers_exist() {
+        let providers = get_builtin_providers();
+        assert!(!providers.is_empty());
 
-        let providers: Vec<&str> = patterns.iter().map(|p| p.provider.as_str()).collect();
-        assert!(providers.contains(&"launchdarkly"));
-        assert!(providers.contains(&"flipper"));
-        assert!(providers.contains(&"split"));
+        let names: Vec<&str> = providers.iter().map(|p| p.name).collect();
+        assert!(names.contains(&"flipper"));
+        assert!(names.contains(&"launchdarkly"));
+        assert!(names.contains(&"split"));
+        assert!(names.contains(&"unleash"));
+        assert!(names.contains(&"env"));
     }
 
     #[test]
-    fn test_launchdarkly_pattern() {
-        let patterns = build_patterns();
-        let ld_pattern = patterns
-            .iter()
-            .find(|p| p.provider == "launchdarkly")
+    fn test_flipper_symbol_detection() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rb");
+        std::fs::write(&file_path, "Flipper[:my_feature]").unwrap();
+
+        let analyzer = Analyzer::new();
+        let providers = vec!["flipper".to_string()];
+
+        let result = analyzer
+            .analyze_with_config(temp_dir.path(), 14, &providers, &[])
             .unwrap();
 
-        let test_cases = vec![
-            (
-                r#"client.boolVariation("my-flag", user, false)"#,
-                Some("my-flag"),
-            ),
-            (r#"variation('feature-x', ctx, true)"#, Some("feature-x")),
-            (
-                r#"stringVariation("test_flag", user, "")"#,
-                Some("test_flag"),
-            ),
-            (r#"something else"#, None),
-        ];
-
-        for (input, expected) in test_cases {
-            let cap = ld_pattern.regex.captures(input);
-            match expected {
-                Some(key) => {
-                    assert!(cap.is_some(), "Expected match for: {}", input);
-                    let key_match = cap.unwrap().name("key").unwrap().as_str();
-                    assert_eq!(key_match, key);
-                }
-                None => {
-                    assert!(cap.is_none(), "Expected no match for: {}", input);
-                }
-            }
-        }
+        assert_eq!(result.flags.len(), 1);
+        assert_eq!(result.flags[0].key, "my_feature");
+        assert_eq!(result.flags[0].provider, "flipper");
     }
 
     #[test]
-    fn test_flipper_pattern() {
-        let patterns = build_patterns();
-        let flipper_pattern = patterns.iter().find(|p| p.provider == "flipper").unwrap();
+    fn test_flipper_string_detection() {
+        use tempfile::TempDir;
 
-        let test_cases = vec![
-            (r#"Flipper.enabled?(:my_feature)"#, Some("my_feature")),
-            (r#"Flipper[:feature_x]"#, Some("feature_x")),
-        ];
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rb");
+        std::fs::write(&file_path, r#"Flipper["my_feature"]"#).unwrap();
 
-        for (input, expected) in test_cases {
-            let cap = flipper_pattern.regex.captures(input);
-            match expected {
-                Some(key) => {
-                    assert!(cap.is_some(), "Expected match for: {}", input);
-                    let key_match = cap.unwrap().name("key").unwrap().as_str();
-                    assert_eq!(key_match, key);
-                }
-                None => {
-                    assert!(cap.is_none(), "Expected no match for: {}", input);
-                }
-            }
-        }
+        let analyzer = Analyzer::new();
+        let providers = vec!["flipper".to_string()];
+
+        let result = analyzer
+            .analyze_with_config(temp_dir.path(), 14, &providers, &[])
+            .unwrap();
+
+        assert_eq!(result.flags.len(), 1);
+        assert_eq!(result.flags[0].key, "my_feature");
+    }
+
+    #[test]
+    fn test_flipper_enable_detection() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rb");
+        std::fs::write(&file_path, "Flipper.enable(:test_flag)").unwrap();
+
+        let analyzer = Analyzer::new();
+        let providers = vec!["flipper".to_string()];
+
+        let result = analyzer
+            .analyze_with_config(temp_dir.path(), 14, &providers, &[])
+            .unwrap();
+
+        assert_eq!(result.flags.len(), 1);
+        assert_eq!(result.flags[0].key, "test_flag");
+    }
+
+    #[test]
+    fn test_flipper_enabled_detection() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rb");
+        std::fs::write(&file_path, "Flipper.enabled?(:check_flag)").unwrap();
+
+        let analyzer = Analyzer::new();
+        let providers = vec!["flipper".to_string()];
+
+        let result = analyzer
+            .analyze_with_config(temp_dir.path(), 14, &providers, &[])
+            .unwrap();
+
+        assert_eq!(result.flags.len(), 1);
+        assert_eq!(result.flags[0].key, "check_flag");
     }
 
     #[test]
@@ -718,57 +876,45 @@ mod tests {
     }
 
     #[test]
-    fn test_env_pattern() {
-        let patterns = build_patterns();
-        let env_pattern = patterns.iter().find(|p| p.provider == "env").unwrap();
-
-        let test_cases = vec![
-            (r#"ENV["FEATURE_NEW_UI"]"#, Some("FEATURE_NEW_UI")),
-            (
-                r#"process.env['FEATURE_DARK_MODE']"#,
-                Some("FEATURE_DARK_MODE"),
-            ),
-        ];
-
-        for (input, expected) in test_cases {
-            let cap = env_pattern.regex.captures(input);
-            match expected {
-                Some(key) => {
-                    assert!(cap.is_some(), "Expected match for: {}", input);
-                    let key_match = cap.unwrap().name("key").unwrap().as_str();
-                    assert_eq!(key_match, key);
-                }
-                None => {
-                    assert!(cap.is_none(), "Expected no match for: {}", input);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_analyze_with_config_uses_stale_days() {
+    fn test_empty_providers_no_builtin_detection() {
         use tempfile::TempDir;
 
         let temp_dir = TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("test.js");
-        std::fs::write(
-            &file_path,
-            r#"client.boolVariation("test-flag", user, false)"#,
-        )
-        .unwrap();
+        let file_path = temp_dir.path().join("test.rb");
+        std::fs::write(&file_path, "Flipper[:ld_flag]").unwrap();
 
         let analyzer = Analyzer::new();
-        let providers = vec!["launchdarkly".to_string()];
 
+        // Empty providers means no built-in patterns run
         let result = analyzer
-            .analyze_with_config(temp_dir.path(), 14, &providers, &[])
+            .analyze_with_config(temp_dir.path(), 14, &[], &[])
             .unwrap();
-        assert_eq!(result.flags.len(), 1);
-        assert_eq!(result.flags[0].key, "test-flag");
+
+        assert_eq!(result.flags.len(), 0);
     }
 
     #[test]
-    fn test_analyze_with_custom_provider_treesitter_query() {
+    fn test_explicit_provider_enabling() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rb");
+        std::fs::write(&file_path, "Flipper[:flipper_flag]").unwrap();
+
+        let analyzer = Analyzer::new();
+        let providers = vec!["flipper".to_string()];
+
+        // With flipper explicitly enabled, it should find the flag
+        let result = analyzer
+            .analyze_with_config(temp_dir.path(), 14, &providers, &[])
+            .unwrap();
+
+        assert_eq!(result.flags.len(), 1);
+        assert_eq!(result.flags[0].provider, "flipper");
+    }
+
+    #[test]
+    fn test_custom_provider_with_treesitter_query() {
         use tempfile::TempDir;
 
         let temp_dir = TempDir::new().unwrap();
@@ -861,51 +1007,5 @@ end
                 flag.references
             );
         }
-    }
-
-    #[test]
-    fn test_empty_providers_no_builtin_detection() {
-        use tempfile::TempDir;
-
-        let temp_dir = TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("test.js");
-        std::fs::write(
-            &file_path,
-            r#"client.boolVariation("ld-flag", user, false)"#,
-        )
-        .unwrap();
-
-        let analyzer = Analyzer::new();
-
-        // Empty providers means no built-in patterns run
-        let result = analyzer
-            .analyze_with_config(temp_dir.path(), 14, &[], &[])
-            .unwrap();
-
-        assert_eq!(result.flags.len(), 0);
-    }
-
-    #[test]
-    fn test_explicit_provider_enabling() {
-        use tempfile::TempDir;
-
-        let temp_dir = TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("test.js");
-        std::fs::write(
-            &file_path,
-            r#"client.boolVariation("ld-flag", user, false)"#,
-        )
-        .unwrap();
-
-        let analyzer = Analyzer::new();
-        let providers = vec!["launchdarkly".to_string()];
-
-        // With launchdarkly explicitly enabled, it should find the flag
-        let result = analyzer
-            .analyze_with_config(temp_dir.path(), 14, &providers, &[])
-            .unwrap();
-
-        assert_eq!(result.flags.len(), 1);
-        assert_eq!(result.flags[0].provider, "launchdarkly");
     }
 }

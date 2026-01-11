@@ -940,7 +940,7 @@
                 Hotspots
             </a>
             {% endif %}
-            {% if FlagsInsight %}
+            {% if Flags and Flags.flags %}
             <a href="#flags" class="nav-item">
                 <span class="nav-dot warning"></span>
                 Feature Flags
@@ -1297,18 +1297,18 @@
         {% endif %}
 
         <!-- Feature Flags -->
-        {% if FlagsInsight %}
+        {% if Flags and Flags.flags %}
         <section id="flags" class="section">
             <div class="section-header">
                 <h2>Feature Flags</h2>
             </div>
             <p class="section-subtitle">Stale feature flags that should be cleaned up</p>
 
+            {% if FlagsInsight %}
             <div class="card" style="margin-bottom: 1.5rem;">
                 <div class="narrative">{{ FlagsInsight.section_insight | markdown }}</div>
             </div>
-
-            {% if Flags and Flags.flags %}
+            {% endif %}
             <div class="table-container">
                 <table id="flags-table">
                     <thead>
@@ -1324,16 +1324,15 @@
                         {% for item in Flags.flags %}
                         <tr>
                             <td><code>{{ item.flag_key }}</code></td>
-                            <td><span class="badge {{ item.priority.level | priority_badge }}">{{ item.priority.level }}</span></td>
-                            <td><span class="time-ago" data-timestamp="{{ item.staleness.introduced_at }}"></span></td>
-                            <td><span class="files-badge tooltip" data-tooltip="{{ flag_files_tooltip(item.references, Metadata.paths) }}">{{ item.complexity.file_spread }} file{% if item.complexity.file_spread != 1 %}s{% endif %}</span></td>
+                            <td><span class="badge {{ (item.priority.level | default("") or (item.stale and "HIGH" or "LOW")) | priority_badge }}">{{ item.priority.level | default(item.stale and "High" or "Low") }}</span></td>
+                            <td><span class="time-ago" data-timestamp="{{ item.staleness.introduced_at | default(item.first_seen) }}"></span></td>
+                            <td><span class="files-badge tooltip" data-tooltip="{{ flag_files_tooltip(item.references, Metadata.paths) }}">{{ item.complexity.file_spread | default(item.file_spread) | default(item.references | length) }} file{% if (item.complexity.file_spread | default(item.file_spread) | default(item.references | length)) != 1 %}s{% endif %}</span></td>
                             <td>{{ item.provider }}</td>
                         </tr>
                         {% endfor %}
                     </tbody>
                 </table>
             </div>
-            {% endif %}
         </section>
         {% endif %}
 

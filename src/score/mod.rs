@@ -137,13 +137,13 @@ impl AnalyzerTrait for Analyzer {
             }
         }
 
-        // Duplicates score
+        // Duplicates score (named "duplication" for template compatibility)
         if self.weights.duplicates > 0.0 {
             let dup_analyzer = crate::analyzers::duplicates::Analyzer::new();
             if let Ok(result) = dup_analyzer.analyze(ctx) {
                 let score = calculate_duplicates_score(&result);
                 components.insert(
-                    "duplicates".to_string(),
+                    "duplication".to_string(),
                     ScoreComponent {
                         score,
                         weight: self.weights.duplicates,
@@ -220,6 +220,73 @@ impl AnalyzerTrait for Analyzer {
                 );
                 weighted_sum += score * self.weights.defect;
                 total_weight += self.weights.defect;
+            }
+        }
+
+        // TDG (Technical Debt Gradient) score
+        if self.weights.tdg > 0.0 {
+            let tdg_analyzer = crate::analyzers::tdg::Analyzer::new();
+            if let Ok(result) = tdg_analyzer.analyze(ctx) {
+                let score = calculate_tdg_score(&result);
+                components.insert(
+                    "tdg".to_string(),
+                    ScoreComponent {
+                        score,
+                        weight: self.weights.tdg,
+                        details: format!(
+                            "Analyzed {} files, avg grade: {:?}",
+                            result.total_files, result.average_grade
+                        ),
+                    },
+                );
+                weighted_sum += score * self.weights.tdg;
+                total_weight += self.weights.tdg;
+            }
+        }
+
+        // Coupling score (from graph analyzer)
+        if self.weights.coupling > 0.0 {
+            let graph_analyzer = crate::analyzers::graph::Analyzer::new();
+            if let Ok(result) = graph_analyzer.analyze(ctx) {
+                let score = calculate_coupling_score(&result);
+                components.insert(
+                    "coupling".to_string(),
+                    ScoreComponent {
+                        score,
+                        weight: self.weights.coupling,
+                        details: format!(
+                            "{} nodes, {} cycles, avg degree: {:.1}",
+                            result.summary.total_nodes,
+                            result.summary.cycle_count,
+                            result.summary.avg_degree
+                        ),
+                    },
+                );
+                weighted_sum += score * self.weights.coupling;
+                total_weight += self.weights.coupling;
+            }
+        }
+
+        // Smells score
+        if self.weights.smells > 0.0 {
+            let smells_analyzer = crate::analyzers::smells::Analyzer::new();
+            if let Ok(result) = smells_analyzer.analyze(ctx) {
+                let score = calculate_smells_score(&result);
+                components.insert(
+                    "smells".to_string(),
+                    ScoreComponent {
+                        score,
+                        weight: self.weights.smells,
+                        details: format!(
+                            "{} smells ({} critical, {} high)",
+                            result.summary.total_smells,
+                            result.summary.critical_count,
+                            result.summary.high_count
+                        ),
+                    },
+                );
+                weighted_sum += score * self.weights.smells;
+                total_weight += self.weights.smells;
             }
         }
 
@@ -394,6 +461,56 @@ fn calculate_defect_score(result: &crate::analyzers::defect::Analysis) -> f64 {
     }
 }
 
+fn calculate_tdg_score(result: &crate::analyzers::tdg::Analysis) -> f64 {
+    // TDG average_score is typically 0-100, higher is better
+    // Convert to health score: higher TDG score = higher health
+    let avg = result.average_score as f64;
+    avg.clamp(0.0, 100.0)
+}
+
+fn calculate_coupling_score(result: &crate::analyzers::graph::Analysis) -> f64 {
+    // Score based on cycles and average degree
+    // Fewer cycles and lower avg degree = better coupling = higher score
+    let cycle_count = result.summary.cycle_count;
+    let avg_degree = result.summary.avg_degree;
+
+    // Cycle penalty: 0 cycles = 50 points, each cycle reduces by 5 (min 0)
+    let cycle_score = (50.0 - cycle_count as f64 * 5.0).max(0.0);
+
+    // Degree penalty: avg degree 0-2 = 50 points, 2-5 = 30-50, 5+ = <30
+    let degree_score = if avg_degree <= 2.0 {
+        50.0
+    } else if avg_degree <= 5.0 {
+        30.0 + (5.0 - avg_degree) * 6.67
+    } else if avg_degree <= 10.0 {
+        10.0 + (10.0 - avg_degree) * 4.0
+    } else {
+        (10.0 - (avg_degree - 10.0)).max(0.0)
+    };
+
+    cycle_score + degree_score
+}
+
+fn calculate_smells_score(result: &crate::analyzers::smells::Analysis) -> f64 {
+    // Score based on smell count and severity
+    // Fewer smells and lower severity = higher score
+    let total = result.summary.total_smells;
+    let critical = result.summary.critical_count;
+    let high = result.summary.high_count;
+
+    if total == 0 {
+        return 100.0;
+    }
+
+    // Base score: 100 - (smells * penalty)
+    // Critical smells have 10x penalty, high smells have 5x penalty
+    let weighted_count =
+        critical as f64 * 10.0 + high as f64 * 5.0 + (total - critical - high) as f64;
+    let penalty = weighted_count * 2.0;
+
+    (100.0 - penalty).max(0.0)
+}
+
 fn score_to_grade(score: f64) -> String {
     if score >= 90.0 {
         "A".to_string()
@@ -444,19 +561,28 @@ pub struct ScoreWeights {
     pub defect: f64,
     pub ownership: f64,
     pub cohesion: f64,
+    pub tdg: f64,
+    pub coupling: f64,
+    pub smells: f64,
 }
 
 impl Default for ScoreWeights {
     fn default() -> Self {
+        // Weights based on 3.x report component importance:
+        // Complexity 25%, Duplication 20%, Cohesion 15%, TDG 15%,
+        // Known Debt 10%, Coupling 10%, Smells 5%
         Self {
-            complexity: 1.0,
-            satd: 0.8,
-            deadcode: 0.6,
-            churn: 0.7,
-            duplicates: 0.8,
-            defect: 0.9,
-            ownership: 0.5,
-            cohesion: 0.6,
+            complexity: 1.0, // 25% - highest priority
+            duplicates: 0.8, // 20%
+            cohesion: 0.6,   // 15%
+            tdg: 0.6,        // 15%
+            satd: 0.4,       // 10%
+            coupling: 0.4,   // 10%
+            smells: 0.2,     // 5%
+            deadcode: 0.0,   // Not in 3.x display
+            churn: 0.0,      // Not in 3.x display
+            defect: 0.0,     // Not in 3.x display
+            ownership: 0.0,  // Not in 3.x display
         }
     }
 }
@@ -488,6 +614,9 @@ mod tests {
             defect: 0.5,
             ownership: 0.5,
             cohesion: 0.5,
+            tdg: 0.5,
+            coupling: 0.5,
+            smells: 0.5,
         };
         let analyzer = Analyzer::with_weights(weights);
         assert_eq!(analyzer.weights.complexity, 0.5);
@@ -508,14 +637,20 @@ mod tests {
     #[test]
     fn test_score_weights_default() {
         let weights = ScoreWeights::default();
+        // Weights based on 3.x report: Complexity 25%, Duplication 20%, Cohesion 15%,
+        // TDG 15%, Known Debt 10%, Coupling 10%, Smells 5%
         assert_eq!(weights.complexity, 1.0);
-        assert_eq!(weights.satd, 0.8);
-        assert_eq!(weights.deadcode, 0.6);
-        assert_eq!(weights.churn, 0.7);
         assert_eq!(weights.duplicates, 0.8);
-        assert_eq!(weights.defect, 0.9);
-        assert_eq!(weights.ownership, 0.5);
         assert_eq!(weights.cohesion, 0.6);
+        assert_eq!(weights.tdg, 0.6);
+        assert_eq!(weights.satd, 0.4);
+        assert_eq!(weights.coupling, 0.4);
+        assert_eq!(weights.smells, 0.2);
+        // Disabled by default (not shown in 3.x report)
+        assert_eq!(weights.deadcode, 0.0);
+        assert_eq!(weights.churn, 0.0);
+        assert_eq!(weights.defect, 0.0);
+        assert_eq!(weights.ownership, 0.0);
     }
 
     #[test]
@@ -839,7 +974,10 @@ mod tests {
         let weights = ScoreWeights::default();
         let json = serde_json::to_string(&weights).unwrap();
         assert!(json.contains("\"complexity\":1.0"));
-        assert!(json.contains("\"satd\":0.8"));
+        assert!(json.contains("\"satd\":0.4"));
+        assert!(json.contains("\"tdg\":0.6"));
+        assert!(json.contains("\"coupling\":0.4"));
+        assert!(json.contains("\"smells\":0.2"));
     }
 
     #[test]
