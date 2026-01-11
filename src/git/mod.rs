@@ -29,7 +29,7 @@ impl GitRepo {
         let repo =
             gix::open(path).map_err(|e| Error::git(format!("Failed to open repository: {e}")))?;
         let root = repo
-            .work_dir()
+            .workdir()
             .ok_or_else(|| Error::git("Not a work tree"))?
             .to_path_buf();
 

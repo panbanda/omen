@@ -48,7 +48,7 @@ tree-sitter-php = "0.23"
 tree-sitter-bash = "0.23"
 
 # Git operations
-gix = { version = "0.68", default-features = false, features = ["blocking-network-client", "blocking-http-transport-reqwest-rust-tls", "revision", "blob-diff", "merge"] }
+gix = { version = "0.77", default-features = false, features = ["blocking-network-client", "blocking-http-transport-reqwest-rust-tls", "revision", "blob-diff", "merge", "blame"] }
 
 # Parallelism
 rayon = "1.10"
