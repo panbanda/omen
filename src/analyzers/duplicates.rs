@@ -1006,7 +1006,7 @@ fn normalize_tokens_fresh(tokens: &[String], config: &Config) -> Vec<String> {
                 if let Some(canonical) = identifier_map.get(token) {
                     return Some(canonical.clone());
                 }
-                let canonical = format!("VAR_{}", counter);
+                let canonical = format!("VAR_{counter}");
                 counter += 1;
                 identifier_map.insert(token.clone(), canonical.clone());
                 return Some(canonical);

@@ -245,7 +245,7 @@ impl Analyzer {
                     }
 
                     // Also try index files
-                    let index_path = resolved.join(format!("index{}", ext));
+                    let index_path = resolved.join(format!("index{ext}"));
                     for file in files {
                         let rel = file.strip_prefix(root).unwrap_or(file);
                         if rel == index_path {
@@ -422,7 +422,7 @@ impl Analyzer {
         // Create node definitions with sanitized IDs
         let mut node_ids: HashMap<&str, String> = HashMap::new();
         for (i, node) in analysis.nodes.iter().enumerate() {
-            let id = format!("n{}", i);
+            let id = format!("n{i}");
             node_ids.insert(&node.path, id.clone());
 
             // Format label with metrics
@@ -433,7 +433,7 @@ impl Analyzer {
                 node.in_degree,
                 node.out_degree
             );
-            output.push_str(&format!("    {}[\"{}\"]\n", id, label));
+            output.push_str(&format!("    {id}[\"{label}\"]\n"));
         }
 
         // Add edges
@@ -458,7 +458,7 @@ impl Analyzer {
 
             for node in &cycle_nodes {
                 if let Some(id) = node_ids.get(node) {
-                    output.push_str(&format!("    style {} fill:#f96\n", id));
+                    output.push_str(&format!("    style {id} fill:#f96\n"));
                 }
             }
         }
@@ -475,7 +475,7 @@ impl Analyzer {
         // Create node definitions
         let mut node_ids: HashMap<&str, String> = HashMap::new();
         for (i, node) in analysis.nodes.iter().enumerate() {
-            let id = format!("n{}", i);
+            let id = format!("n{i}");
             node_ids.insert(&node.path, id.clone());
 
             let label = format!(
@@ -485,7 +485,7 @@ impl Analyzer {
                 node.in_degree,
                 node.out_degree
             );
-            output.push_str(&format!("    {} [label=\"{}\"];\n", id, label));
+            output.push_str(&format!("    {id} [label=\"{label}\"];\n"));
         }
 
         output.push('\n');
