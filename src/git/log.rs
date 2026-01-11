@@ -98,7 +98,7 @@ pub fn get_log(
             .map_err(|e| Error::git(format!("Failed to get commit object: {e}")))?;
 
         let author = commit.author().map_err(|e| Error::git(format!("{e}")))?;
-        let timestamp = author.time.seconds;
+        let timestamp = author.seconds();
 
         // Skip commits older than cutoff
         if let Some(cutoff) = cutoff_time {
@@ -164,7 +164,7 @@ fn parse_since_duration(since: &str) -> Option<std::time::Duration> {
 /// Uses git CLI for performance - gix tree diff is ~160x slower.
 pub fn get_log_with_stats(repo: &Repository, since: Option<&str>) -> Result<Vec<Commit>> {
     let repo_path = repo
-        .work_dir()
+        .workdir()
         .ok_or_else(|| Error::git("Not a work tree"))?;
 
     // Build git log command with numstat
@@ -305,7 +305,7 @@ pub fn get_log_with_stats_gix(repo: &Repository, since: Option<&str>) -> Result<
             .map_err(|e| Error::git(format!("Failed to get commit object: {e}")))?;
 
         let author = commit.author().map_err(|e| Error::git(format!("{e}")))?;
-        let timestamp = author.time.seconds;
+        let timestamp = author.seconds();
 
         // Skip commits older than cutoff
         if let Some(cutoff) = cutoff_time {
