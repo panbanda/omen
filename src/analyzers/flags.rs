@@ -315,6 +315,27 @@ fn get_builtin_providers() -> Vec<BuiltinProvider> {
     ]
 }
 
+/// Parse a language name (e.g., "ruby", "python") to a Language enum.
+fn parse_language_name(name: &str) -> Option<Language> {
+    match name.to_lowercase().as_str() {
+        "go" | "golang" => Some(Language::Go),
+        "rust" | "rs" => Some(Language::Rust),
+        "python" | "py" => Some(Language::Python),
+        "typescript" | "ts" => Some(Language::TypeScript),
+        "javascript" | "js" => Some(Language::JavaScript),
+        "tsx" => Some(Language::Tsx),
+        "jsx" => Some(Language::Jsx),
+        "java" => Some(Language::Java),
+        "c" => Some(Language::C),
+        "cpp" | "c++" => Some(Language::Cpp),
+        "csharp" | "c#" | "cs" => Some(Language::CSharp),
+        "ruby" | "rb" => Some(Language::Ruby),
+        "php" => Some(Language::Php),
+        "bash" | "sh" | "shell" => Some(Language::Bash),
+        _ => None,
+    }
+}
+
 impl Analyzer {
     /// Analyze a repository with explicit config parameters.
     ///
@@ -330,6 +351,45 @@ impl Analyzer {
         let mut references: Vec<FlagReference> = Vec::new();
         let parser = Parser::new();
         let builtin_providers = get_builtin_providers();
+
+        // Pre-compile queries for each (language, provider) combination
+        let mut compiled_queries: HashMap<(Language, String), (Query, usize)> = HashMap::new();
+        for builtin in &builtin_providers {
+            if !providers.contains(&builtin.name.to_string()) {
+                continue;
+            }
+            for &lang in builtin.languages {
+                if let Ok(ts_lang) = get_tree_sitter_language(lang) {
+                    if let Ok(query) = Query::new(&ts_lang, builtin.query) {
+                        let key_idx = query
+                            .capture_names()
+                            .iter()
+                            .position(|n| *n == "key")
+                            .unwrap_or(0);
+                        compiled_queries.insert((lang, builtin.name.to_string()), (query, key_idx));
+                    }
+                }
+            }
+        }
+
+        // Pre-compile custom provider queries
+        for custom in custom_providers {
+            for lang_str in &custom.languages {
+                if let Some(lang) = parse_language_name(lang_str) {
+                    if let Ok(ts_lang) = get_tree_sitter_language(lang) {
+                        if let Ok(query) = Query::new(&ts_lang, &custom.query) {
+                            // Support both "key" and "flag_key" capture names
+                            let key_idx = query
+                                .capture_names()
+                                .iter()
+                                .position(|n| *n == "key" || *n == "flag_key")
+                                .unwrap_or(0);
+                            compiled_queries.insert((lang, custom.name.clone()), (query, key_idx));
+                        }
+                    }
+                }
+            }
+        }
 
         for entry in WalkBuilder::new(repo_path)
             .hidden(true)
@@ -362,58 +422,45 @@ impl Analyzer {
                 .to_string_lossy()
                 .to_string();
 
-            // Get tree-sitter language for parsing
-            let ts_lang = match get_tree_sitter_language(language) {
-                Ok(lang) => lang,
-                Err(_) => continue,
-            };
-
             // Parse the file once
             let parse_result = match parser.parse(content.as_bytes(), language, path) {
                 Ok(result) => result,
                 Err(_) => continue,
             };
 
-            // Apply built-in providers using tree-sitter queries
+            // Apply built-in providers using pre-compiled queries
             for builtin in &builtin_providers {
-                // Check if this provider is enabled
                 if !providers.contains(&builtin.name.to_string()) {
                     continue;
                 }
-
-                // Check if this language is supported
                 if !builtin.languages.contains(&language) {
                     continue;
                 }
 
-                // Compile and run the query
-                if let Ok(query) = Query::new(&ts_lang, builtin.query) {
+                // Look up pre-compiled query
+                let key = (language, builtin.name.to_string());
+                if let Some((query, key_capture_idx)) = compiled_queries.get(&key) {
                     let mut cursor = QueryCursor::new();
                     let mut matches =
-                        cursor.matches(&query, parse_result.tree.root_node(), content.as_bytes());
-
-                    // Find the capture index for "key"
-                    let key_capture_idx = query.capture_names().iter().position(|n| *n == "key");
+                        cursor.matches(query, parse_result.tree.root_node(), content.as_bytes());
 
                     while let Some(query_match) = matches.next() {
                         for capture in query_match.captures {
-                            if let Some(idx) = key_capture_idx {
-                                if capture.index as usize != idx {
-                                    continue;
-                                }
+                            if capture.index as usize != *key_capture_idx {
+                                continue;
                             }
 
                             let node = capture.node;
-                            let key = node
+                            let flag_key = node
                                 .utf8_text(content.as_bytes())
                                 .unwrap_or("")
                                 .trim_matches(|c| c == '"' || c == '\'' || c == ':');
 
-                            if !key.is_empty() {
+                            if !flag_key.is_empty() {
                                 references.push(FlagReference {
                                     file: rel_path.clone(),
                                     line: node.start_position().row as u32 + 1,
-                                    key: key.to_string(),
+                                    key: flag_key.to_string(),
                                     provider: builtin.name.to_string(),
                                 });
                             }
@@ -422,7 +469,7 @@ impl Analyzer {
                 }
             }
 
-            // Apply custom providers using tree-sitter queries
+            // Apply custom providers using pre-compiled queries
             for custom in custom_providers {
                 // Check if this language is supported by this provider
                 let lang_name = format!("{:?}", language).to_lowercase();
@@ -435,37 +482,30 @@ impl Analyzer {
                     continue;
                 }
 
-                // Compile and run the query
-                if let Ok(query) = Query::new(&ts_lang, &custom.query) {
+                // Look up pre-compiled query
+                let key = (language, custom.name.clone());
+                if let Some((query, key_capture_idx)) = compiled_queries.get(&key) {
                     let mut cursor = QueryCursor::new();
                     let mut matches =
-                        cursor.matches(&query, parse_result.tree.root_node(), content.as_bytes());
-
-                    // Find the capture index for "flag_key" or "key"
-                    let key_capture_idx = query
-                        .capture_names()
-                        .iter()
-                        .position(|n| *n == "flag_key" || *n == "key");
+                        cursor.matches(query, parse_result.tree.root_node(), content.as_bytes());
 
                     while let Some(query_match) = matches.next() {
                         for capture in query_match.captures {
-                            if let Some(idx) = key_capture_idx {
-                                if capture.index as usize != idx {
-                                    continue;
-                                }
+                            if capture.index as usize != *key_capture_idx {
+                                continue;
                             }
 
                             let node = capture.node;
-                            let key = node
+                            let flag_key = node
                                 .utf8_text(content.as_bytes())
                                 .unwrap_or("")
                                 .trim_matches(|c| c == '"' || c == '\'' || c == ':');
 
-                            if !key.is_empty() {
+                            if !flag_key.is_empty() {
                                 references.push(FlagReference {
                                     file: rel_path.clone(),
                                     line: node.start_position().row as u32 + 1,
-                                    key: key.to_string(),
+                                    key: flag_key.to_string(),
                                     provider: custom.name.clone(),
                                 });
                             }
@@ -494,6 +534,33 @@ impl Analyzer {
             None
         };
 
+        // Pre-cache git log results for all unique files
+        let mut git_cache: HashMap<String, (Option<i64>, Option<i64>)> = HashMap::new();
+        if let Some(ref repo) = git_repo {
+            let unique_files: std::collections::HashSet<_> = flags_map
+                .values()
+                .flatten()
+                .map(|r| r.file.clone())
+                .collect();
+            for file in unique_files {
+                let path = std::path::PathBuf::from(&file);
+                let paths = [path];
+                if let Ok(commits) = repo.log(None, Some(&paths)) {
+                    let mut first: Option<i64> = None;
+                    let mut last: Option<i64> = None;
+                    for commit in commits {
+                        if first.is_none() || commit.timestamp < first.unwrap() {
+                            first = Some(commit.timestamp);
+                        }
+                        if last.is_none() || commit.timestamp > last.unwrap() {
+                            last = Some(commit.timestamp);
+                        }
+                    }
+                    git_cache.insert(file, (first, last));
+                }
+            }
+        }
+
         for (key, refs) in flags_map {
             let provider = refs.first().map(|r| r.provider.clone()).unwrap_or_default();
             let file_spread = refs
@@ -502,9 +569,9 @@ impl Analyzer {
                 .collect::<std::collections::HashSet<_>>()
                 .len();
 
-            // Calculate staleness from git if available
-            let (first_seen, last_seen, age_days, stale) = if let Some(ref repo) = git_repo {
-                calculate_staleness(repo, &refs, expected_ttl_days)
+            // Calculate staleness from cached git data
+            let (first_seen, last_seen, age_days, stale) = if git_repo.is_some() {
+                calculate_staleness_from_cache(&git_cache, &refs, expected_ttl_days)
             } else {
                 (None, None, 0, false)
             };
@@ -547,28 +614,29 @@ impl Analyzer {
     }
 }
 
-/// Calculate staleness from git history.
-fn calculate_staleness(
-    repo: &GitRepo,
+/// Calculate staleness from cached git history.
+fn calculate_staleness_from_cache(
+    cache: &HashMap<String, (Option<i64>, Option<i64>)>,
     refs: &[FlagReference],
     expected_ttl_days: u32,
 ) -> (Option<String>, Option<String>, u32, bool) {
     let mut first_seen: Option<chrono::DateTime<chrono::Utc>> = None;
     let mut last_seen: Option<chrono::DateTime<chrono::Utc>> = None;
 
-    // Check git log for files containing this flag
     for reference in refs {
-        let path = std::path::PathBuf::from(&reference.file);
-        let paths = [path];
-        if let Ok(commits) = repo.log(None, Some(&paths)) {
-            for commit in commits {
-                let commit_time = chrono::TimeZone::timestamp_opt(&Utc, commit.timestamp, 0)
+        if let Some((first_ts, last_ts)) = cache.get(&reference.file) {
+            if let Some(ts) = first_ts {
+                let commit_time = chrono::TimeZone::timestamp_opt(&Utc, *ts, 0)
                     .single()
                     .unwrap_or_else(Utc::now);
-
                 if first_seen.is_none() || commit_time < first_seen.unwrap() {
                     first_seen = Some(commit_time);
                 }
+            }
+            if let Some(ts) = last_ts {
+                let commit_time = chrono::TimeZone::timestamp_opt(&Utc, *ts, 0)
+                    .single()
+                    .unwrap_or_else(Utc::now);
                 if last_seen.is_none() || commit_time > last_seen.unwrap() {
                     last_seen = Some(commit_time);
                 }
