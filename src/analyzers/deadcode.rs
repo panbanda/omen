@@ -59,10 +59,10 @@ impl AnalyzerTrait for Analyzer {
         let start = Instant::now();
 
         // Phase 1: Collect definitions and usages from all files
-        let file_results: Vec<FileDeadCode> = ctx
-            .files
-            .iter()
-            .par_bridge()
+        // Collect into Vec first for efficient parallel iteration
+        let files: Vec<_> = ctx.files.iter().collect();
+        let file_results: Vec<FileDeadCode> = files
+            .par_iter()
             .filter_map(|path| self.analyze_file(path).ok())
             .collect();
 
@@ -213,23 +213,25 @@ fn collect_file_data(result: &parser::ParseResult) -> FileDeadCode {
 }
 
 /// Walk AST to collect identifier usages and function calls.
+/// Uses iterative traversal with a single TreeCursor for performance.
 fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode) {
-    let root = result.root_node();
+    let source = &result.source;
+    let lang = result.language;
+    let mut cursor = result.tree.walk();
+    let mut current_function: Option<String> = None;
+    let mut function_depth = 0u32;
 
-    fn walk(
-        node: tree_sitter::Node<'_>,
-        source: &[u8],
-        lang: Language,
-        fdc: &mut FileDeadCode,
-        current_function: &mut Option<String>,
-    ) {
+    // Iterative pre-order traversal
+    loop {
+        let node = cursor.node();
         let kind = node.kind();
 
-        // Track current function context
+        // Track function context using depth
         if is_function_node(kind) {
             if let Some(name_node) = node.child_by_field_name("name") {
                 if let Ok(name) = name_node.utf8_text(source) {
-                    *current_function = Some(name.to_string());
+                    current_function = Some(name.to_string());
+                    function_depth = cursor.depth();
                 }
             }
         }
@@ -254,25 +256,28 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
             }
         }
 
-        // Recurse into children
-        for child in node.children(&mut node.walk()) {
-            walk(child, source, lang, fdc, current_function);
+        // Move to next node in pre-order traversal
+        if cursor.goto_first_child() {
+            continue;
         }
 
-        // Reset function context when leaving function
-        if is_function_node(kind) {
-            *current_function = None;
+        // No children, try siblings or go up
+        loop {
+            // Clear function context when leaving its scope
+            if current_function.is_some() && cursor.depth() <= function_depth {
+                if is_function_node(cursor.node().kind()) {
+                    current_function = None;
+                }
+            }
+
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() {
+                return; // Done traversing
+            }
         }
     }
-
-    let mut current_function = None;
-    walk(
-        root,
-        &result.source,
-        result.language,
-        fdc,
-        &mut current_function,
-    );
 }
 
 fn is_function_node(kind: &str) -> bool {
