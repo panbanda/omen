@@ -160,6 +160,15 @@ Integration tests live in `tests/` directory.
 
 **Performance PRs**: When submitting a PR that claims performance improvements, include before/after benchmarks in the PR description. Run the old version and new version on a representative dataset and document the timing difference.
 
+## Accuracy Requirements
+
+Omen is a code analysis tool where accuracy is paramount. When making changes:
+
+- **No sampling or approximation**: Analyze all requested data points. Do not skip, sample, or approximate to improve performance.
+- **No guessing**: Use actual data from git history and file analysis. Do not estimate or infer values.
+- **Deterministic results**: The same input must always produce the same output.
+- **Performance through parallelization**: Improve speed by doing work in parallel, not by doing less work.
+
 ## Supported Languages
 
 Go, Rust, Python, TypeScript, JavaScript, TSX/JSX, Java, C, C++, C#, Ruby, PHP, Bash

@@ -32,6 +32,45 @@ impl FileSet {
         Self::from_path_with_patterns(path, Vec::new())
     }
 
+    /// Create a file set from an existing list of files.
+    /// Files are sorted for deterministic ordering.
+    pub fn from_files(root: PathBuf, files: Vec<PathBuf>) -> Self {
+        let mut files = files;
+        files.sort();
+        Self {
+            root,
+            files,
+            exclude_patterns: Vec::new(),
+        }
+    }
+
+    /// Create a file set from a TreeSource (git tree at a specific commit).
+    /// Only includes files with recognized source code languages.
+    pub fn from_tree_source(tree_source: &super::TreeSource, config: &Config) -> Result<Self> {
+        let all_files = tree_source.list_files()?;
+
+        // Pre-compile glob patterns for exclusion
+        let exclude_globs = build_glob_set(&config.exclude_patterns);
+
+        // Filter to supported languages and apply exclusions
+        let files: Vec<PathBuf> = all_files
+            .into_iter()
+            .filter(|path| {
+                // Only include files with recognized languages
+                if Language::detect(path).is_none() {
+                    return false;
+                }
+                // Check exclude patterns
+                let path_str = path.to_string_lossy();
+                !exclude_globs.is_match(&*path_str)
+            })
+            .collect();
+
+        // Use a placeholder root since files are relative paths from tree
+        let root = PathBuf::from(".");
+        Ok(Self::from_files(root, files))
+    }
+
     /// Create a file set with custom exclude patterns.
     pub fn from_path_with_patterns(
         path: impl AsRef<Path>,
@@ -338,6 +377,102 @@ mod tests {
         let file_set = FileSet::from_path_default(temp.path()).unwrap();
         let debug_str = format!("{:?}", file_set);
         assert!(debug_str.contains("FileSet"));
+    }
+
+    #[test]
+    fn test_file_set_from_files() {
+        let root = PathBuf::from("/project");
+        let files = vec![
+            PathBuf::from("src/main.rs"),
+            PathBuf::from("src/lib.rs"),
+            PathBuf::from("tests/test.rs"),
+        ];
+
+        let file_set = FileSet::from_files(root.clone(), files.clone());
+
+        assert_eq!(file_set.root(), &root);
+        assert_eq!(file_set.len(), 3);
+        assert!(file_set.files().contains(&PathBuf::from("src/main.rs")));
+    }
+
+    #[test]
+    fn test_file_set_from_files_sorted() {
+        let root = PathBuf::from("/project");
+        let files = vec![
+            PathBuf::from("z.rs"),
+            PathBuf::from("a.rs"),
+            PathBuf::from("m.rs"),
+        ];
+
+        let file_set = FileSet::from_files(root, files);
+        let sorted_files: Vec<_> = file_set.files().to_vec();
+
+        assert_eq!(sorted_files[0], PathBuf::from("a.rs"));
+        assert_eq!(sorted_files[1], PathBuf::from("m.rs"));
+        assert_eq!(sorted_files[2], PathBuf::from("z.rs"));
+    }
+
+    #[test]
+    fn test_file_set_from_tree_source() {
+        use crate::core::TreeSource;
+        use std::process::Command;
+
+        let temp = tempfile::tempdir().unwrap();
+
+        // Initialize git repo
+        Command::new("git")
+            .args(["init"])
+            .current_dir(temp.path())
+            .output()
+            .expect("failed to init");
+        Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(temp.path())
+            .output()
+            .expect("failed to config email");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(temp.path())
+            .output()
+            .expect("failed to config name");
+
+        // Create source files and non-source files
+        std::fs::write(temp.path().join("main.rs"), "fn main() {}").unwrap();
+        std::fs::write(temp.path().join("lib.py"), "print('hello')").unwrap();
+        std::fs::write(temp.path().join("README.md"), "# readme").unwrap();
+        std::fs::write(temp.path().join("data.json"), "{}").unwrap();
+
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(temp.path())
+            .output()
+            .expect("failed to add");
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(temp.path())
+            .output()
+            .expect("failed to commit");
+        let output = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(temp.path())
+            .output()
+            .expect("failed to get HEAD");
+        let sha = String::from_utf8(output.stdout).unwrap().trim().to_string();
+
+        let tree_source = TreeSource::new(temp.path(), &sha).unwrap();
+        let config = Config::default();
+        let file_set = FileSet::from_tree_source(&tree_source, &config).unwrap();
+
+        // Should only include source files (rs, py), not md or json
+        assert_eq!(file_set.len(), 2);
+        assert!(file_set
+            .files()
+            .iter()
+            .any(|f| f.to_string_lossy().contains("main.rs")));
+        assert!(file_set
+            .files()
+            .iter()
+            .any(|f| f.to_string_lossy().contains("lib.py")));
     }
 
     #[test]

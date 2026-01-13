@@ -33,11 +33,13 @@ use std::time::Instant;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
+use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Language, Result, SourceFile};
 use crate::parser::queries::{
     get_decision_node_types, get_flat_node_types, get_nesting_node_types,
 };
 use crate::parser::{self, ParseResult, Parser};
+
+use std::path::Path;
 
 /// Complexity analyzer.
 pub struct Analyzer {
@@ -79,6 +81,30 @@ impl Analyzer {
         let result = self.parser.parse_file(path)?;
         Ok(analyze_parse_result(&result))
     }
+
+    /// Analyze complexity for file content (without reading from filesystem).
+    pub fn analyze_content(&self, path: &Path, content: Vec<u8>) -> Result<FileResult> {
+        // Skip files that are too large
+        if content.len() > Self::MAX_FILE_SIZE as usize {
+            return Err(crate::core::Error::Parse {
+                path: path.to_path_buf(),
+                message: format!(
+                    "File too large: {} bytes (max {})",
+                    content.len(),
+                    Self::MAX_FILE_SIZE
+                ),
+            });
+        }
+
+        let language =
+            Language::detect(path).ok_or_else(|| crate::core::Error::UnsupportedLanguage {
+                path: path.to_path_buf(),
+            })?;
+
+        let source_file = SourceFile::from_content(path, language, content);
+        let result = self.parser.parse_source(&source_file)?;
+        Ok(analyze_parse_result(&result))
+    }
 }
 
 impl AnalyzerTrait for Analyzer {
@@ -102,7 +128,15 @@ impl AnalyzerTrait for Analyzer {
             .files()
             .par_iter()
             .filter_map(|path| {
-                let result = self.analyze_file(path).ok();
+                let result = if ctx.content_source.is_some() {
+                    // Read via content source (e.g., git tree)
+                    ctx.read_file(path)
+                        .ok()
+                        .and_then(|content| self.analyze_content(path, content).ok())
+                } else {
+                    // Read from filesystem
+                    self.analyze_file(path).ok()
+                };
 
                 // Report progress
                 let current = counter.fetch_add(1, Ordering::Relaxed) + 1;
