@@ -1,5 +1,20 @@
 # Changelog
 
+## [4.9.1](https://github.com/panbanda/omen/compare/omen-v4.9.0...omen-v4.9.1) (2026-01-13)
+
+
+### Bug Fixes
+
+* **lint:** collapse nested if and remove default() on unit struct ([25bf265](https://github.com/panbanda/omen/commit/25bf26507acc0faa95b1a678be6f16d38eebc298))
+* **report:** show feature flag age/priority/files in HTML report ([e051491](https://github.com/panbanda/omen/commit/e0514918b987acae8092e90fd446ac18d98f092a))
+* **report:** show feature flags + perf(parser,deadcode): eliminate lock contention ([107605d](https://github.com/panbanda/omen/commit/107605dad49c36007486925fb164cf9a2ac19ae8))
+
+
+### Performance Improvements
+
+* **analyzers:** optimize complexity, satd, and graph analyzers ([b6b3f2c](https://github.com/panbanda/omen/commit/b6b3f2cf6bfd969b1421412474504018f7e63412))
+* **parser,deadcode:** eliminate lock contention and reduce allocations ([e2d2101](https://github.com/panbanda/omen/commit/e2d2101a0feb1f0345fc6836d6aa095708ba0d34))
+
 ## [4.9.0](https://github.com/panbanda/omen/compare/omen-v4.8.0...omen-v4.9.0) (2026-01-11)
 
 
