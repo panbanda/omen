@@ -1,11 +1,12 @@
 //! Analyzer trait and common types.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
 
-use super::{FileSet, Result};
+use super::{ContentSource, FileSet, Result};
 use crate::config::Config;
 use crate::git::GitRepo;
 
@@ -46,6 +47,8 @@ pub struct AnalysisContext<'a> {
     pub config: &'a Config,
     /// Progress callback.
     pub on_progress: Option<Box<dyn Fn(usize, usize) + Send + Sync + 'a>>,
+    /// Optional content source for reading files (e.g., from git tree).
+    pub content_source: Option<Arc<dyn ContentSource>>,
 }
 
 impl<'a> AnalysisContext<'a> {
@@ -57,6 +60,7 @@ impl<'a> AnalysisContext<'a> {
             git_path: None,
             config,
             on_progress: None,
+            content_source: None,
         }
     }
 
@@ -66,12 +70,28 @@ impl<'a> AnalysisContext<'a> {
         self
     }
 
+    /// Add a content source for reading files.
+    pub fn with_content_source(mut self, source: Arc<dyn ContentSource>) -> Self {
+        self.content_source = Some(source);
+        self
+    }
+
     /// Open a thread-local git repository (for parallel operations).
     pub fn open_git(&self) -> Result<Option<GitRepo>> {
         if let Some(path) = self.git_path {
             Ok(Some(GitRepo::open(path)?))
         } else {
             Ok(None)
+        }
+    }
+
+    /// Read file contents using the content source if available, otherwise from filesystem.
+    pub fn read_file(&self, path: &Path) -> Result<Vec<u8>> {
+        if let Some(ref source) = self.content_source {
+            source.read(path)
+        } else {
+            let full_path = self.root.join(path);
+            std::fs::read(&full_path).map_err(super::Error::Io)
         }
     }
 

@@ -2,18 +2,24 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
+use rayon::prelude::*;
 
 use crate::cli::TrendPeriod;
 use crate::config::Config;
-use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Error, FileSet, Result};
+use crate::core::{
+    AnalysisContext, Analyzer as AnalyzerTrait, ContentSource, Error, FileSet, Result, TreeSource,
+};
 use crate::git::GitRepo;
 use crate::report::{ComponentTrendStats, TrendData, TrendPoint};
 
 use super::Analyzer as ScoreAnalyzer;
 
 /// Analyze score trends over time by iterating through git history.
+/// Uses parallel worktree analysis for performance.
 pub fn analyze_trend(
     path: &Path,
     config: &Config,
@@ -39,17 +45,135 @@ pub fn analyze_trend(
         return Ok(TrendData::default());
     }
 
-    // Build sample points at regular intervals
-    let mut points = Vec::new();
+    // Build list of commits to analyze at each sample point
+    let mut sample_commits: Vec<(DateTime<Utc>, String)> = Vec::new();
     let mut current_time = start_time;
 
     while current_time <= now {
-        // Find the commit closest to this time
         if let Some(commit) = find_commit_at_time(&commits, current_time) {
-            // Checkout and analyze at this commit
-            if let Ok(score_data) = analyze_at_commit(path, config, &commit.sha) {
+            // Avoid duplicate commits (same commit for multiple time points)
+            if sample_commits
+                .last()
+                .map(|(_, sha)| sha != &commit.sha)
+                .unwrap_or(true)
+            {
+                sample_commits.push((current_time, commit.sha.clone()));
+            }
+        }
+        current_time += interval;
+    }
+
+    // Analyze commits in parallel using worktrees
+    let points = analyze_commits_parallel(path, config, &sample_commits)?;
+
+    // Always include the current HEAD if not already included
+    let mut final_points = points;
+    let head_date = now.format("%Y-%m-%d").to_string();
+    if final_points.last().map(|p| &p.date) != Some(&head_date) {
+        if let Ok(score_data) = analyze_current(path, config) {
+            final_points.push(TrendPoint {
+                date: head_date,
+                score: score_data.overall_score as i32,
+                components: score_data
+                    .components
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.score as i32))
+                    .collect(),
+            });
+        }
+    }
+
+    // Calculate linear regression for overall score
+    let (slope, intercept, r_squared) = if final_points.len() >= 2 {
+        calculate_linear_regression(&final_points)
+    } else {
+        (0.0, 0.0, 0.0)
+    };
+
+    // Calculate component trends
+    let component_trends = calculate_component_trends(&final_points);
+
+    let start_score = final_points.first().map(|p| p.score).unwrap_or(0);
+    let end_score = final_points.last().map(|p| p.score).unwrap_or(0);
+
+    Ok(TrendData {
+        points: final_points,
+        slope,
+        intercept,
+        r_squared,
+        start_score,
+        end_score,
+        component_trends,
+    })
+}
+
+/// Analyze multiple commits in parallel using TreeSource (no worktrees needed).
+/// Reads file contents directly from git's object store without filesystem checkout.
+fn analyze_commits_parallel(
+    path: &Path,
+    config: &Config,
+    sample_commits: &[(DateTime<Utc>, String)],
+) -> Result<Vec<TrendPoint>> {
+    if sample_commits.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let total = sample_commits.len();
+    eprintln!(
+        "Trend analysis: analyzing {} commits using tree-based analysis",
+        total
+    );
+
+    let completed = Arc::new(AtomicUsize::new(0));
+    let path_buf = path.to_path_buf();
+
+    // Analyze all commits in parallel using TreeSource
+    let all_points: Vec<TrendPoint> = sample_commits
+        .par_iter()
+        .filter_map(|(time, sha)| {
+            // Create TreeSource for this commit
+            let tree_source = TreeSource::new(&path_buf, sha).ok()?;
+            let result = analyze_at_tree(&tree_source, config).ok()?;
+
+            // Update progress
+            let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+            if done.is_multiple_of(10) || done == total {
+                eprintln!("Trend analysis: {}/{} commits analyzed", done, total);
+            }
+
+            Some(TrendPoint {
+                date: time.format("%Y-%m-%d").to_string(),
+                score: result.overall_score as i32,
+                components: result
+                    .components
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.score as i32))
+                    .collect(),
+            })
+        })
+        .collect();
+
+    // Sort by date
+    let mut sorted_points = all_points;
+    sorted_points.sort_by(|a, b| a.date.cmp(&b.date));
+
+    Ok(sorted_points)
+}
+
+/// Analyze commits sequentially using TreeSource (for debugging or when parallelism fails).
+#[allow(dead_code)]
+fn analyze_commits_sequential(
+    path: &Path,
+    config: &Config,
+    sample_commits: &[(DateTime<Utc>, String)],
+) -> Result<Vec<TrendPoint>> {
+    let mut points = Vec::new();
+
+    for (time, sha) in sample_commits {
+        if let Ok(tree_source) = TreeSource::new(path, sha) {
+            if let Ok(score_data) = analyze_at_tree(&tree_source, config) {
                 points.push(TrendPoint {
-                    date: current_time.format("%Y-%m-%d").to_string(),
+                    date: time.format("%Y-%m-%d").to_string(),
                     score: score_data.overall_score as i32,
                     components: score_data
                         .components
@@ -59,44 +183,9 @@ pub fn analyze_trend(
                 });
             }
         }
-        current_time += interval;
     }
 
-    // Always include the current HEAD
-    if let Ok(score_data) = analyze_current(path, config) {
-        points.push(TrendPoint {
-            date: now.format("%Y-%m-%d").to_string(),
-            score: score_data.overall_score as i32,
-            components: score_data
-                .components
-                .iter()
-                .map(|(k, v)| (k.clone(), v.score as i32))
-                .collect(),
-        });
-    }
-
-    // Calculate linear regression for overall score
-    let (slope, intercept, r_squared) = if points.len() >= 2 {
-        calculate_linear_regression(&points)
-    } else {
-        (0.0, 0.0, 0.0)
-    };
-
-    // Calculate component trends
-    let component_trends = calculate_component_trends(&points);
-
-    let start_score = points.first().map(|p| p.score).unwrap_or(0);
-    let end_score = points.last().map(|p| p.score).unwrap_or(0);
-
-    Ok(TrendData {
-        points,
-        slope,
-        intercept,
-        r_squared,
-        start_score,
-        end_score,
-        component_trends,
-    })
+    Ok(points)
 }
 
 /// Parse "since" string (like "3m", "6m", "1y") to a DateTime.
@@ -140,52 +229,65 @@ fn find_commit_at_time(
         .min_by_key(|c| (target_ts - c.timestamp).abs())
 }
 
-/// Analyze score at a specific commit (checkout, analyze, restore).
-fn analyze_at_commit(path: &Path, config: &Config, sha: &str) -> Result<super::Analysis> {
-    // Use git stash and checkout to temporarily switch to the commit
-    let output = std::process::Command::new("git")
-        .args(["stash", "push", "-m", "omen-trend-analysis"])
-        .current_dir(path)
-        .output()
-        .map_err(|e| Error::git(format!("Failed to stash: {}", e)))?;
-
-    let had_stash = output.status.success()
-        && !String::from_utf8_lossy(&output.stdout).contains("No local changes");
-
-    // Checkout the target commit
-    let checkout_result = std::process::Command::new("git")
-        .args(["checkout", sha])
-        .current_dir(path)
-        .output();
-
-    let result = if checkout_result.is_ok() {
-        analyze_current(path, config)
-    } else {
-        Err(Error::git(format!("Failed to checkout {}", sha)))
-    };
-
-    // Restore original state
-    let _ = std::process::Command::new("git")
-        .args(["checkout", "-"])
-        .current_dir(path)
-        .output();
-
-    if had_stash {
-        let _ = std::process::Command::new("git")
-            .args(["stash", "pop"])
-            .current_dir(path)
-            .output();
-    }
-
-    result
-}
-
 /// Analyze the current working directory.
 fn analyze_current(path: &Path, config: &Config) -> Result<super::Analysis> {
     let file_set = FileSet::from_path(path, config)?;
     let ctx = AnalysisContext::new(&file_set, config, Some(path));
     let analyzer = ScoreAnalyzer::new();
     analyzer.analyze(&ctx)
+}
+
+/// Analyze code at a specific git tree (commit) without filesystem checkout.
+/// Reads file contents directly from git's object store.
+pub fn analyze_at_tree(tree_source: &TreeSource, config: &Config) -> Result<super::Analysis> {
+    let file_set = FileSet::from_tree_source(tree_source, config)?;
+    let content_source: Arc<dyn ContentSource> = Arc::new(TreeSourceWrapper {
+        repo_path: tree_source.repo_path().to_path_buf(),
+        tree_id: tree_source.tree_id(),
+    });
+    let root = Path::new(".");
+    let ctx =
+        AnalysisContext::new(&file_set, config, Some(root)).with_content_source(content_source);
+    let analyzer = ScoreAnalyzer::new();
+    analyzer.analyze(&ctx)
+}
+
+/// Wrapper to create a new TreeSource for the content source.
+/// This is needed because TreeSource stores state that can't be easily cloned.
+struct TreeSourceWrapper {
+    repo_path: std::path::PathBuf,
+    tree_id: [u8; 20],
+}
+
+impl ContentSource for TreeSourceWrapper {
+    fn read(&self, path: &Path) -> Result<Vec<u8>> {
+        // Re-create TreeSource for each read (thread-safe approach)
+        let repo = gix::open(&self.repo_path)
+            .map_err(|e| Error::git(format!("Failed to open repository: {e}")))?;
+
+        let tree_oid = gix::ObjectId::from_bytes_or_panic(&self.tree_id);
+        let tree = repo
+            .find_object(tree_oid)
+            .map_err(|e| Error::git(format!("Failed to find tree: {e}")))?
+            .try_into_tree()
+            .map_err(|e| Error::git(format!("Not a tree: {e}")))?;
+
+        let path_str = path.to_string_lossy();
+        let entry = tree
+            .lookup_entry_by_path(path_str.as_ref())
+            .map_err(|e| Error::git(format!("Failed to lookup {path_str}: {e}")))?
+            .ok_or_else(|| Error::git(format!("File not found in tree: {path_str}")))?;
+
+        let object = entry
+            .object()
+            .map_err(|e| Error::git(format!("Failed to get object: {e}")))?;
+
+        let blob = object
+            .try_into_blob()
+            .map_err(|_| Error::git(format!("Not a blob: {path_str}")))?;
+
+        Ok(blob.data.to_vec())
+    }
 }
 
 /// Calculate linear regression for score trend.
@@ -484,5 +586,82 @@ mod tests {
         assert_eq!(data.r_squared, 0.0);
         assert_eq!(data.start_score, 0);
         assert_eq!(data.end_score, 0);
+    }
+
+    #[test]
+    fn test_analyze_at_tree() {
+        use crate::core::TreeSource;
+        use std::process::Command;
+
+        let temp = tempfile::tempdir().unwrap();
+
+        // Initialize git repo
+        Command::new("git")
+            .args(["init"])
+            .current_dir(temp.path())
+            .output()
+            .expect("failed to init");
+        Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(temp.path())
+            .output()
+            .expect("failed to config email");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(temp.path())
+            .output()
+            .expect("failed to config name");
+
+        // Create a simple Rust file
+        std::fs::write(
+            temp.path().join("main.rs"),
+            r#"
+fn simple() {
+    println!("hello");
+}
+
+fn complex(x: i32) -> i32 {
+    if x > 0 {
+        if x > 10 {
+            x * 2
+        } else {
+            x + 1
+        }
+    } else {
+        0
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(temp.path())
+            .output()
+            .expect("failed to add");
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(temp.path())
+            .output()
+            .expect("failed to commit");
+        let output = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(temp.path())
+            .output()
+            .expect("failed to get HEAD");
+        let sha = String::from_utf8(output.stdout).unwrap().trim().to_string();
+
+        let tree_source = TreeSource::new(temp.path(), &sha).unwrap();
+        let config = Config::default();
+
+        // analyze_at_tree should return a score
+        let result = analyze_at_tree(&tree_source, &config);
+        assert!(result.is_ok());
+
+        let analysis = result.unwrap();
+        // Score should be between 0 and 100
+        assert!(analysis.overall_score >= 0.0);
+        assert!(analysis.overall_score <= 100.0);
     }
 }
