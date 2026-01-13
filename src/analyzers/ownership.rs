@@ -6,9 +6,11 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use chrono::Utc;
 use ignore::WalkBuilder;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Error, Result};
@@ -221,10 +223,58 @@ impl AnalyzerTrait for Analyzer {
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
         let git_path = ctx
             .git_path
-            .as_ref()
             .ok_or_else(|| Error::git("Ownership analysis requires git history"))?;
 
-        self.analyze_repo(git_path)
+        // Use ctx.files (already filtered to source files) instead of walking all files
+        let files: Vec<_> = ctx.files.iter().collect();
+        let total_files = files.len();
+
+        // Progress tracking
+        let progress_counter = AtomicUsize::new(0);
+
+        // Phase 1: Parallel blame operations (the expensive part)
+        // Each thread opens its own GitRepo for thread safety
+        let file_ownerships: Vec<FileOwnership> = files
+            .par_iter()
+            .filter_map(|file| {
+                // Open thread-local git repo
+                let repo = GitRepo::open(git_path).ok()?;
+
+                // Update progress
+                let current = progress_counter.fetch_add(1, Ordering::Relaxed);
+                if current.is_multiple_of(100) {
+                    ctx.report_progress(current, total_files);
+                }
+
+                self.analyze_file(&repo, file, git_path).ok().flatten()
+            })
+            .collect();
+
+        // Phase 2: Sequential aggregation (fast, O(n))
+        let mut all_contributors: HashMap<String, u32> = HashMap::new();
+        for ownership in &file_ownerships {
+            for contributor in &ownership.contributors {
+                *all_contributors
+                    .entry(contributor.name.clone())
+                    .or_insert(0) += contributor.lines_owned;
+            }
+        }
+
+        // Sort by concentration (highest first - most risky)
+        let mut sorted_ownerships = file_ownerships;
+        sorted_ownerships.sort_by(|a, b| {
+            b.concentration
+                .partial_cmp(&a.concentration)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let summary = calculate_summary(&sorted_ownerships, &all_contributors);
+
+        Ok(Analysis {
+            generated_at: Utc::now().to_rfc3339(),
+            files: sorted_ownerships,
+            summary,
+        })
     }
 }
 
