@@ -2,20 +2,24 @@
 
 pub mod queries;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use parking_lot::Mutex;
 use tree_sitter::{Language as TsLanguage, Parser as TsParser, Tree};
 
 use crate::core::{Error, Language, Result, SourceFile};
 
-/// Thread-safe parser pool for multi-language parsing.
-pub struct Parser {
-    /// Cached parsers per language.
-    parsers: Mutex<HashMap<Language, TsParser>>,
+// Thread-local parser cache to avoid lock contention in parallel parsing.
+// Each rayon worker thread gets its own set of parsers.
+thread_local! {
+    static THREAD_PARSERS: RefCell<HashMap<Language, TsParser>> = RefCell::new(HashMap::new());
 }
+
+/// Thread-safe parser for multi-language parsing.
+/// Uses thread-local storage to enable lock-free parallel parsing.
+pub struct Parser;
 
 impl Default for Parser {
     fn default() -> Self {
@@ -26,9 +30,7 @@ impl Default for Parser {
 impl Parser {
     /// Create a new parser.
     pub fn new() -> Self {
-        Self {
-            parsers: Mutex::new(HashMap::new()),
-        }
+        Self
     }
 
     /// Parse a file and return the syntax tree.
@@ -46,8 +48,8 @@ impl Parser {
     pub fn parse(&self, content: &[u8], lang: Language, path: &Path) -> Result<ParseResult> {
         let ts_lang = get_tree_sitter_language(lang)?;
 
-        let tree = {
-            let mut parsers = self.parsers.lock();
+        let tree = THREAD_PARSERS.with(|parsers| {
+            let mut parsers = parsers.borrow_mut();
             let parser = parsers.entry(lang).or_insert_with(|| {
                 let mut p = TsParser::new();
                 p.set_language(&ts_lang).expect("Language should be valid");
@@ -57,8 +59,8 @@ impl Parser {
             parser.parse(content, None).ok_or_else(|| Error::Parse {
                 path: path.to_path_buf(),
                 message: "Failed to parse file".to_string(),
-            })?
-        };
+            })
+        })?;
 
         Ok(ParseResult {
             tree: Arc::new(tree),
@@ -445,7 +447,7 @@ mod tests {
 
     #[test]
     fn test_parser_default() {
-        let parser = Parser::default();
+        let parser = Parser;
         let content = b"fn main() {}";
         let result = parser.parse(content, Language::Rust, Path::new("main.rs"));
         assert!(result.is_ok());

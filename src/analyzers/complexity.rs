@@ -326,120 +326,157 @@ fn analyze_function_complexity(func: &parser::FunctionNode, result: &ParseResult
 }
 
 /// Find a function node at a specific line.
+/// Uses iterative cursor traversal for performance.
 fn find_function_at_line<'a>(
     root: &tree_sitter::Node<'a>,
     target_line: u32,
 ) -> Option<tree_sitter::Node<'a>> {
     let line = target_line.saturating_sub(1); // Convert to 0-indexed
+    let mut cursor = root.walk();
 
-    fn search(node: tree_sitter::Node<'_>, line: u32) -> Option<tree_sitter::Node<'_>> {
+    loop {
+        let node = cursor.node();
         let start = node.start_position().row as u32;
         let end = node.end_position().row as u32;
 
+        // Only descend if line is within this node's range
         if start <= line && line <= end {
-            // Check if this is a function node
             let kind = node.kind();
             if kind.contains("function") || kind.contains("method") || kind == "impl_item" {
                 return Some(node);
             }
 
-            // Search children
-            for child in node.children(&mut node.walk()) {
-                if let Some(found) = search(child, line) {
-                    return Some(found);
-                }
+            // Try to go deeper
+            if cursor.goto_first_child() {
+                continue;
             }
         }
 
-        None
+        // Move to next sibling or go up
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() {
+                return None;
+            }
+        }
     }
-
-    search(*root, line)
 }
 
 /// Count decision points for cyclomatic complexity.
+/// Uses iterative cursor traversal for performance.
 fn count_decision_points(node: &tree_sitter::Node<'_>, source: &[u8], lang: Language) -> u32 {
-    // Get the static slice of decision types - no allocation needed
     let decision_types = get_decision_node_types(lang);
     let mut count = 0;
+    let mut cursor = node.walk();
 
-    fn visit(
-        node: &tree_sitter::Node<'_>,
-        source: &[u8],
-        decision_types: &[&str],
-        count: &mut u32,
-    ) {
-        let kind = node.kind();
+    loop {
+        let current = cursor.node();
+        let kind = current.kind();
 
-        // Use slice contains - O(n) but n is small (typically < 15 items)
+        // Count decision points
         if decision_types.contains(&kind) {
-            *count += 1;
+            count += 1;
         }
 
         // Count logical operators as additional decision points
         if kind == "binary_expression" || kind == "logical_expression" {
-            if let Some(op) = get_operator(node, source) {
+            if let Some(op) = get_operator(&current, source) {
                 if op == "&&" || op == "||" || op == "and" || op == "or" {
-                    *count += 1;
+                    count += 1;
                 }
             }
         }
 
-        for child in node.children(&mut node.walk()) {
-            visit(&child, source, decision_types, count);
+        // Traverse tree
+        if cursor.goto_first_child() {
+            continue;
+        }
+
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() {
+                return count;
+            }
         }
     }
-
-    visit(node, source, decision_types, &mut count);
-    count
 }
 
 /// Calculate cognitive complexity with nesting penalties.
+/// Uses iterative cursor traversal with depth tracking for performance.
 fn calculate_cognitive_complexity(
     node: &tree_sitter::Node<'_>,
     _source: &[u8],
     lang: Language,
-    depth: u32,
+    initial_depth: u32,
 ) -> u32 {
-    // Get static slices once - no allocation needed
     let nesting_types = get_nesting_node_types(lang);
     let flat_types = get_flat_node_types(lang);
 
-    fn visit(
-        node: &tree_sitter::Node<'_>,
-        nesting_types: &[&str],
-        flat_types: &[&str],
-        depth: u32,
-    ) -> u32 {
-        let mut complexity = 0;
+    let mut complexity = 0;
+    let mut cursor = node.walk();
+    let start_depth = cursor.depth();
 
-        for child in node.children(&mut node.walk()) {
-            let kind = child.kind();
+    // Track nesting depth separately from cursor depth
+    // Use a small stack to track depth changes at each cursor level
+    let mut depth_at_level: Vec<u32> = vec![initial_depth; 64]; // Pre-allocate for typical depths
 
-            // Use slice contains - O(n) but n is small (typically < 10 items)
-            if nesting_types.contains(&kind) {
-                // Nesting construct: add base + depth penalty
-                complexity += 1 + depth;
-                complexity += visit(&child, nesting_types, flat_types, depth + 1);
-            } else if flat_types.contains(&kind) {
-                // Flat construct: add base + depth penalty without increasing depth
-                complexity += 1 + depth;
-                complexity += visit(&child, nesting_types, flat_types, depth);
-            } else {
-                // Continue at same depth
-                complexity += visit(&child, nesting_types, flat_types, depth);
+    loop {
+        let current = cursor.node();
+        let kind = current.kind();
+        let cursor_depth = cursor.depth();
+        let level = (cursor_depth - start_depth) as usize;
+
+        // Ensure we have space for this level
+        if level >= depth_at_level.len() {
+            depth_at_level.resize(level + 16, initial_depth);
+        }
+
+        let current_depth = depth_at_level[level];
+
+        // Check if this is a complexity-adding construct
+        if nesting_types.contains(&kind) {
+            complexity += 1 + current_depth;
+            // Children will have increased depth
+            if level + 1 < depth_at_level.len() {
+                depth_at_level[level + 1] = current_depth + 1;
+            }
+        } else if flat_types.contains(&kind) {
+            complexity += 1 + current_depth;
+            // Children stay at same depth
+            if level + 1 < depth_at_level.len() {
+                depth_at_level[level + 1] = current_depth;
+            }
+        } else {
+            // Non-complexity node, children inherit current depth
+            if level + 1 < depth_at_level.len() {
+                depth_at_level[level + 1] = current_depth;
             }
         }
 
-        complexity
-    }
+        // Traverse tree
+        if cursor.goto_first_child() {
+            continue;
+        }
 
-    visit(node, nesting_types, flat_types, depth)
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() || cursor.depth() < start_depth {
+                return complexity;
+            }
+        }
+    }
 }
 
 /// Calculate maximum nesting depth.
-fn calculate_max_nesting(node: &tree_sitter::Node<'_>, _source: &[u8], current_depth: u32) -> u32 {
-    let nesting_kinds = [
+/// Uses iterative cursor traversal with depth tracking for performance.
+fn calculate_max_nesting(node: &tree_sitter::Node<'_>, _source: &[u8], initial_depth: u32) -> u32 {
+    const NESTING_KINDS: &[&str] = &[
         "if_statement",
         "if_expression",
         "if",
@@ -458,22 +495,55 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, _source: &[u8], current_d
         "begin",
     ];
 
-    let mut max_depth = current_depth;
+    let mut max_depth = initial_depth;
+    let mut cursor = node.walk();
+    let start_depth = cursor.depth();
 
-    for child in node.children(&mut node.walk()) {
-        let kind = child.kind();
-        let child_depth = if nesting_kinds.contains(&kind) {
-            calculate_max_nesting(&child, _source, current_depth + 1)
+    // Track nesting depth at each cursor level
+    let mut depth_at_level: Vec<u32> = vec![initial_depth; 64];
+
+    loop {
+        let current = cursor.node();
+        let kind = current.kind();
+        let cursor_depth = cursor.depth();
+        let level = (cursor_depth - start_depth) as usize;
+
+        if level >= depth_at_level.len() {
+            depth_at_level.resize(level + 16, initial_depth);
+        }
+
+        let current_depth = depth_at_level[level];
+
+        // Track max depth seen
+        if current_depth > max_depth {
+            max_depth = current_depth;
+        }
+
+        // Set depth for children
+        let child_depth = if NESTING_KINDS.contains(&kind) {
+            current_depth + 1
         } else {
-            calculate_max_nesting(&child, _source, current_depth)
+            current_depth
         };
 
-        if child_depth > max_depth {
-            max_depth = child_depth;
+        if level + 1 < depth_at_level.len() {
+            depth_at_level[level + 1] = child_depth;
+        }
+
+        // Traverse tree
+        if cursor.goto_first_child() {
+            continue;
+        }
+
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() || cursor.depth() < start_depth {
+                return max_depth;
+            }
         }
     }
-
-    max_depth
 }
 
 /// Get the operator from a binary expression.

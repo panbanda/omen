@@ -92,9 +92,9 @@ impl Analyzer {
 
     /// Analyze a set of files and build dependency graph.
     pub fn analyze_files(&self, files: &[std::path::PathBuf], root: &Path) -> Result<Analysis> {
-        let mut graph: DiGraph<String, ()> = DiGraph::new();
-        let mut node_indices: HashMap<String, NodeIndex> = HashMap::new();
-        let mut file_imports: HashMap<String, Vec<String>> = HashMap::new();
+        let mut graph: DiGraph<String, ()> = DiGraph::with_capacity(files.len(), files.len() * 4);
+        let mut node_indices: HashMap<String, NodeIndex> = HashMap::with_capacity(files.len());
+        let mut file_imports: HashMap<String, Vec<String>> = HashMap::with_capacity(files.len());
 
         // First pass: create nodes and collect imports
         for file in files {
@@ -296,7 +296,7 @@ impl Analyzer {
             .collect();
 
         for _ in 0..self.config.max_iterations {
-            let mut new_rank: HashMap<NodeIndex, f64> = HashMap::new();
+            let mut new_rank: HashMap<NodeIndex, f64> = HashMap::with_capacity(n);
             let mut diff = 0.0;
 
             for node in graph.node_indices() {
@@ -340,11 +340,11 @@ impl Analyzer {
 
         // For each node as source, run BFS and count shortest paths
         for source in graph.node_indices() {
-            let mut dist: HashMap<NodeIndex, i32> = HashMap::new();
-            let mut paths: HashMap<NodeIndex, f64> = HashMap::new();
-            let mut predecessors: HashMap<NodeIndex, Vec<NodeIndex>> = HashMap::new();
-            let mut stack: Vec<NodeIndex> = Vec::new();
-            let mut queue: VecDeque<NodeIndex> = VecDeque::new();
+            let mut dist: HashMap<NodeIndex, i32> = HashMap::with_capacity(n);
+            let mut paths: HashMap<NodeIndex, f64> = HashMap::with_capacity(n);
+            let mut predecessors: HashMap<NodeIndex, Vec<NodeIndex>> = HashMap::with_capacity(n);
+            let mut stack: Vec<NodeIndex> = Vec::with_capacity(n);
+            let mut queue: VecDeque<NodeIndex> = VecDeque::with_capacity(n);
 
             dist.insert(source, 0);
             paths.insert(source, 1.0);
@@ -373,7 +373,7 @@ impl Analyzer {
             }
 
             // Accumulate dependencies
-            let mut delta: HashMap<NodeIndex, f64> = HashMap::new();
+            let mut delta: HashMap<NodeIndex, f64> = HashMap::with_capacity(n);
             while let Some(w) = stack.pop() {
                 if let Some(preds) = predecessors.get(&w) {
                     for &v in preds {
