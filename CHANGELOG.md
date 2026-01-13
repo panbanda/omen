@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.9.3](https://github.com/panbanda/omen/compare/omen-v4.9.2...omen-v4.9.3) (2026-01-13)
+
+
+### Performance Improvements
+
+* **ownership:** parallelize blame operations - 11.5x faster ([4bd0962](https://github.com/panbanda/omen/commit/4bd096268361f9c93dad2f2fe204a7593d176fd5))
+* **ownership:** parallelize blame operations and use filtered file set ([eb45d97](https://github.com/panbanda/omen/commit/eb45d9749913d0cf56a2bcbdd8df981c326d6bb0))
+
 ## [4.9.2](https://github.com/panbanda/omen/compare/omen-v4.9.1...omen-v4.9.2) (2026-01-13)
 
 
