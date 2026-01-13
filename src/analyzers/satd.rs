@@ -84,10 +84,10 @@ impl AnalyzerTrait for Analyzer {
         let start = Instant::now();
 
         // Single pass: collect SATD items and LOC simultaneously to avoid double file loading
-        let (items, total_loc): (Vec<SatdItem>, usize) = ctx
-            .files
-            .iter()
-            .par_bridge()
+        // Collect into Vec first for efficient parallel iteration
+        let files: Vec<_> = ctx.files.iter().collect();
+        let (items, total_loc): (Vec<SatdItem>, usize) = files
+            .par_iter()
             .filter_map(|path| SourceFile::load(path).ok())
             .map(|file| {
                 let loc = file.lines_of_code();
