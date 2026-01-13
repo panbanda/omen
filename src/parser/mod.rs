@@ -447,7 +447,7 @@ mod tests {
 
     #[test]
     fn test_parser_default() {
-        let parser = Parser::default();
+        let parser = Parser;
         let content = b"fn main() {}";
         let result = parser.parse(content, Language::Rust, Path::new("main.rs"));
         assert!(result.is_ok());

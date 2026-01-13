@@ -264,10 +264,11 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
         // No children, try siblings or go up
         loop {
             // Clear function context when leaving its scope
-            if current_function.is_some() && cursor.depth() <= function_depth {
-                if is_function_node(cursor.node().kind()) {
-                    current_function = None;
-                }
+            if current_function.is_some()
+                && cursor.depth() <= function_depth
+                && is_function_node(cursor.node().kind())
+            {
+                current_function = None;
             }
 
             if cursor.goto_next_sibling() {
