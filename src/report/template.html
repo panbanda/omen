@@ -122,9 +122,9 @@
 
         /* Main Content */
         .main-content {
-            margin-left: var(--sidebar-width);
-            padding: 2rem 3rem;
-            max-width: 1400px;
+            padding: 2rem 3rem 2rem calc(var(--sidebar-width) + 3rem);
+            max-width: calc(1400px + var(--sidebar-width));
+            margin: 0 auto;
         }
 
         /* Hero Section */
@@ -885,8 +885,8 @@
                 display: none;
             }
             .main-content {
-                margin-left: 0;
                 padding: 1.5rem;
+                max-width: 100%;
             }
             .hero {
                 grid-template-columns: 1fr;
@@ -1233,7 +1233,7 @@
             </div>
             <div class="card">
                 {% for item in Summary.key_findings %}
-                <div class="key-finding narrative">{{ item }}</div>
+                <div class="key-finding narrative">{{ item | markdown }}</div>
                 {% endfor %}
             </div>
         </section>

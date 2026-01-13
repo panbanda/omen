@@ -51,12 +51,19 @@ impl Analyzer {
 
             for (category, regex, weight) in &self.patterns {
                 if let Some(mat) = regex.find(line) {
+                    let marker = mat.as_str().to_uppercase();
+
+                    // Check if this is a valid SATD marker (not a false positive)
+                    if !is_valid_satd_marker(line, mat.start(), &marker) {
+                        continue;
+                    }
+
                     items.push(SatdItem {
                         file: file.path.to_string_lossy().to_string(),
                         line: line_num as u32 + 1,
                         category: category.clone(),
                         severity: severity_from_weight(*weight),
-                        marker: mat.as_str().to_uppercase(),
+                        marker,
                         text: line.trim().chars().take(200).collect(),
                         weight: *weight,
                     });
@@ -67,6 +74,47 @@ impl Analyzer {
 
         items
     }
+}
+
+/// Markers that are commonly false positives when not at the start of a comment.
+const AMBIGUOUS_MARKERS: &[&str] = &[
+    "ERROR",
+    "NEED",
+    "SKIP",
+    "FAILS",
+    "IMPLEMENT",
+    "IGNORE",
+    "PENDING",
+    "SLOW",
+    "UNSAFE",
+];
+
+/// Check if a SATD marker is valid (not a false positive).
+///
+/// For ambiguous markers like ERROR, NEED, SKIP, we require them to be
+/// followed by a colon (e.g., "ERROR:", "SKIP:") to distinguish SATD from
+/// normal explanatory comments like "// Skip this step if authenticated".
+///
+/// Clear markers like TODO, FIXME, HACK, BUG are accepted anywhere.
+fn is_valid_satd_marker(line: &str, match_start: usize, marker: &str) -> bool {
+    // Clear markers (TODO, FIXME, HACK, BUG, etc.) are always valid
+    if !AMBIGUOUS_MARKERS.contains(&marker) {
+        return true;
+    }
+
+    // For ambiguous markers, require a colon or similar punctuation after the marker
+    // This distinguishes "// SKIP: test disabled" from "// Skip this step"
+    let match_end = match_start + marker.len();
+    if match_end < line.len() {
+        let next_char = line[match_end..].chars().next();
+        // Accept markers followed by : or - (common SATD patterns)
+        if matches!(next_char, Some(':') | Some('-')) {
+            return true;
+        }
+    }
+
+    // Ambiguous markers without punctuation are likely false positives
+    false
 }
 
 impl AnalyzerTrait for Analyzer {
@@ -255,5 +303,59 @@ mod tests {
         assert_eq!(severity_from_weight(2.0), Severity::High);
         assert_eq!(severity_from_weight(1.0), Severity::Medium);
         assert_eq!(severity_from_weight(0.25), Severity::Low);
+    }
+
+    #[test]
+    fn test_satd_false_positives_are_filtered() {
+        let analyzer = Analyzer::new();
+
+        // These should NOT trigger SATD detection - they're explanatory comments
+        let false_positive_content = b"\
+// Handles all other unknown errors\n\
+# We need to validate input before processing\n\
+// Skip this step if already authenticated\n\
+fn main() {}\n\
+"
+        .to_vec();
+        let file = SourceFile::from_content("test.rs", Language::Rust, false_positive_content);
+
+        let items = analyzer.analyze_file(&file);
+        assert_eq!(
+            items.len(),
+            0,
+            "Should not detect SATD in explanatory comments, found: {:?}",
+            items
+                .iter()
+                .map(|i| (&i.text, &i.marker))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_satd_true_positives_with_markers_at_start() {
+        let analyzer = Analyzer::new();
+
+        // These SHOULD trigger SATD detection - markers at start of comment
+        let true_positive_content = b"\
+// TODO: implement this feature\n\
+// FIXME: broken authentication\n\
+// ERROR: this needs fixing\n\
+// NEED: add validation\n\
+// SKIP: until API is ready\n\
+fn main() {}\n\
+"
+        .to_vec();
+        let file = SourceFile::from_content("test.rs", Language::Rust, true_positive_content);
+
+        let items = analyzer.analyze_file(&file);
+        assert_eq!(
+            items.len(),
+            5,
+            "Should detect all 5 SATD markers at start of comment, found: {:?}",
+            items
+                .iter()
+                .map(|i| (&i.text, &i.marker))
+                .collect::<Vec<_>>()
+        );
     }
 }

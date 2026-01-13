@@ -11,7 +11,7 @@ use gix::Repository;
 use crate::core::{Error, Result};
 
 pub use blame::BlameInfo;
-pub use log::{ChangeType, Commit, CommitStats, FileChange};
+pub use log::{parse_since_to_days, ChangeType, Commit, CommitStats, FileChange};
 pub use remote::{clone_remote, is_remote_repo, CloneOptions};
 
 /// Git repository wrapper for analysis operations.

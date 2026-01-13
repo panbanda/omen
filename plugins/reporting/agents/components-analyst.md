@@ -25,9 +25,20 @@ For each component:
 - Major events that caused changes
 - Remaining issues
 
+## Investigating Component Changes
+
+When a component shows significant change (score shift of 5+ points):
+
+1. Identify the time period when the change occurred
+2. Use `git log --since="<start_date>" --until="<end_date>" --oneline` to see commits in that period
+3. Cross-reference with hotspot files to identify which changes impacted the score
+4. Look for patterns: refactoring efforts, new feature additions, dependency changes
+
+This helps explain causation, not just correlation.
+
 ## What to Report
 
-- Components that are improving (what's working)
-- Components that are declining (what needs attention)
+- Components that are improving (what's working, and why if identifiable from git history)
+- Components that are declining (what needs attention, and what caused the decline)
 - Specific files driving component scores
 - Recommended actions per component
