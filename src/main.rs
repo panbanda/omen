@@ -651,7 +651,32 @@ fn run_report(
             run_and_save!(omen::analyzers::complexity::Analyzer, "complexity");
             run_and_save!(omen::analyzers::satd::Analyzer, "satd");
             run_and_save!(omen::analyzers::deadcode::Analyzer, "deadcode");
-            run_and_save!(omen::analyzers::churn::Analyzer, "churn");
+
+            // Churn analyzer needs special handling to pass the --since parameter
+            if !skip_list.contains(&"churn") {
+                if let Some(ref bar) = progress {
+                    bar.set_message("churn...");
+                }
+                // Parse since string to days, default to 365 (1 year)
+                let churn_days = args
+                    .days
+                    .unwrap_or_else(|| omen::git::parse_since_to_days(&args.since).unwrap_or(365));
+                let a = omen::analyzers::churn::Analyzer::new().with_days(churn_days);
+                let result: serde_json::Value = match a.analyze(&ctx) {
+                    Ok(r) => serde_json::to_value(&r)
+                        .unwrap_or(serde_json::json!({"error": "serialization failed"})),
+                    Err(e) => serde_json::json!({"error": e.to_string()}),
+                };
+                let output_path = args.output.join("churn.json");
+                std::fs::write(&output_path, serde_json::to_string_pretty(&result)?)?;
+                completed += 1;
+                if let Some(ref bar) = progress {
+                    bar.set_position(completed);
+                } else {
+                    eprintln!("Generated: {}", output_path.display());
+                }
+            }
+
             run_and_save!(omen::analyzers::duplicates::Analyzer, "duplicates");
             run_and_save!(omen::analyzers::defect::Analyzer, "defect");
             run_and_save!(omen::analyzers::changes::Analyzer, "changes");

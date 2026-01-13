@@ -153,8 +153,10 @@ impl Renderer {
             data.hotspots = Some(hotspots);
         }
 
-        // Load SATD
-        if let Ok(satd) = load_json::<SATDData>(&data_dir.join("satd.json")) {
+        // Load SATD and sort by severity (Critical > High > Medium > Low)
+        if let Ok(mut satd) = load_json::<SATDData>(&data_dir.join("satd.json")) {
+            satd.items
+                .sort_by(|a, b| severity_order(&b.severity).cmp(&severity_order(&a.severity)));
             data.satd = Some(satd);
             data.compute_satd_stats();
         }
@@ -270,6 +272,18 @@ fn load_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let content = fs::read_to_string(path)?;
     let value = serde_json::from_str(&content)?;
     Ok(value)
+}
+
+/// Convert severity string to numeric order for sorting.
+/// Higher values = higher severity (for descending sort).
+fn severity_order(severity: &str) -> u8 {
+    match severity.to_lowercase().as_str() {
+        "critical" => 4,
+        "high" => 3,
+        "medium" => 2,
+        "low" => 1,
+        _ => 0,
+    }
 }
 
 // ============================================================================

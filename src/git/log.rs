@@ -63,10 +63,11 @@ pub struct CommitStats {
 /// Get commit log from repository.
 ///
 /// This is a fast gix-based implementation that avoids spawning git CLI.
+/// If `paths` is provided, only commits that touch those paths are returned.
 pub fn get_log(
     repo: &Repository,
     since: Option<&str>,
-    _paths: Option<&[PathBuf]>,
+    paths: Option<&[PathBuf]>,
 ) -> Result<Vec<Commit>> {
     let head = repo
         .head_id()
@@ -107,6 +108,19 @@ pub fn get_log(
             }
         }
 
+        // If path filter is specified, check if commit touches any of the paths
+        if let Some(filter_paths) = paths {
+            let file_changes = get_commit_file_changes(repo, &commit)?;
+            let matches_filter = file_changes.iter().any(|change| {
+                filter_paths
+                    .iter()
+                    .any(|filter| change.path == *filter || change.path.starts_with(filter))
+            });
+            if !matches_filter {
+                continue;
+            }
+        }
+
         let message = commit
             .message()
             .map_err(|e| Error::git(format!("{e}")))?
@@ -124,6 +138,13 @@ pub fn get_log(
     }
 
     Ok(commits)
+}
+
+/// Parse "since" duration strings like "30 days ago", "1 week", "6m", "1y" to days.
+///
+/// Returns the number of days, or None if the format is invalid.
+pub fn parse_since_to_days(since: &str) -> Option<u32> {
+    parse_since_duration(since).map(|d| (d.as_secs() / 86400) as u32)
 }
 
 /// Parse "since" duration strings like "30 days ago", "1 week", "6m", "1y".
@@ -763,5 +784,135 @@ mod tests {
             serde_json::from_str::<ChangeType>("\"renamed\"").unwrap(),
             ChangeType::Renamed
         );
+    }
+
+    #[test]
+    fn test_get_log_filters_by_path() {
+        use std::process::Command;
+
+        // Create a temp directory for the test repo
+        let temp = tempfile::tempdir().unwrap();
+        let repo_path = temp.path();
+
+        // Initialize git repo
+        Command::new("git")
+            .args(["init"])
+            .current_dir(repo_path)
+            .output()
+            .expect("failed to init git repo");
+        Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(repo_path)
+            .output()
+            .expect("failed to set git email");
+        Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(repo_path)
+            .output()
+            .expect("failed to set git name");
+
+        // Create file1.rs and commit it
+        std::fs::write(repo_path.join("file1.rs"), "fn file1() {}").unwrap();
+        Command::new("git")
+            .args(["add", "file1.rs"])
+            .current_dir(repo_path)
+            .output()
+            .expect("failed to add file1");
+        Command::new("git")
+            .args(["commit", "-m", "Add file1"])
+            .current_dir(repo_path)
+            .output()
+            .expect("failed to commit file1");
+
+        // Create file2.rs and commit it
+        std::fs::write(repo_path.join("file2.rs"), "fn file2() {}").unwrap();
+        Command::new("git")
+            .args(["add", "file2.rs"])
+            .current_dir(repo_path)
+            .output()
+            .expect("failed to add file2");
+        Command::new("git")
+            .args(["commit", "-m", "Add file2"])
+            .current_dir(repo_path)
+            .output()
+            .expect("failed to commit file2");
+
+        // Modify file1.rs and commit it
+        std::fs::write(
+            repo_path.join("file1.rs"),
+            "fn file1() { println!(\"modified\"); }",
+        )
+        .unwrap();
+        Command::new("git")
+            .args(["add", "file1.rs"])
+            .current_dir(repo_path)
+            .output()
+            .expect("failed to add modified file1");
+        Command::new("git")
+            .args(["commit", "-m", "Modify file1"])
+            .current_dir(repo_path)
+            .output()
+            .expect("failed to commit modified file1");
+
+        // Open the repo with gix
+        let repo = gix::open(repo_path).expect("failed to open repo");
+
+        // Get log for file1.rs only - should return 2 commits (Add file1, Modify file1)
+        let file1_path = PathBuf::from("file1.rs");
+        let paths = [file1_path];
+        let commits = get_log(&repo, None, Some(&paths)).expect("failed to get log");
+
+        // After fix: Should return only 2 commits that touch file1.rs
+        assert_eq!(
+            commits.len(),
+            2,
+            "Expected 2 commits touching file1.rs, got {} commits: {:?}",
+            commits.len(),
+            commits.iter().map(|c| &c.message).collect::<Vec<_>>()
+        );
+
+        // Verify the commits are the right ones (trim whitespace from messages)
+        let messages: Vec<_> = commits.iter().map(|c| c.message.trim()).collect();
+        assert!(
+            messages.iter().any(|m| m.contains("Modify file1")),
+            "Should contain 'Modify file1' commit, got: {:?}",
+            messages
+        );
+        assert!(
+            messages.iter().any(|m| m.contains("Add file1")),
+            "Should contain 'Add file1' commit, got: {:?}",
+            messages
+        );
+        assert!(
+            !messages.iter().any(|m| m.contains("Add file2")),
+            "Should NOT contain 'Add file2' commit, got: {:?}",
+            messages
+        );
+    }
+
+    #[test]
+    fn test_parse_since_to_days() {
+        // Test years
+        assert_eq!(parse_since_to_days("1y"), Some(365));
+        assert_eq!(parse_since_to_days("10y"), Some(3650));
+        assert_eq!(parse_since_to_days("1 year"), Some(365));
+        assert_eq!(parse_since_to_days("2 years"), Some(730));
+
+        // Test months (note: "m" alone means minutes, use "mo" or "month" for months)
+        assert_eq!(parse_since_to_days("6mo"), Some(180));
+        assert_eq!(parse_since_to_days("1 month"), Some(30));
+        assert_eq!(parse_since_to_days("3 months"), Some(90));
+
+        // Test weeks
+        assert_eq!(parse_since_to_days("1w"), Some(7));
+        assert_eq!(parse_since_to_days("2 weeks"), Some(14));
+
+        // Test days
+        assert_eq!(parse_since_to_days("30 days"), Some(30));
+        assert_eq!(parse_since_to_days("90d"), Some(90));
+
+        // Test invalid
+        assert_eq!(parse_since_to_days("invalid"), None);
+        assert_eq!(parse_since_to_days(""), None);
     }
 }
