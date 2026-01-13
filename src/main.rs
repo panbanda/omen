@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
+use rayon::ThreadPoolBuilder;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use omen::cli::{
@@ -76,6 +77,14 @@ fn cleanup_repo(path: &PathBuf) {
 }
 
 fn run(cli: Cli) -> omen::core::Result<()> {
+    // Configure rayon thread pool if -j/--jobs flag is specified
+    if let Some(jobs) = cli.jobs {
+        ThreadPoolBuilder::new()
+            .num_threads(jobs)
+            .build_global()
+            .ok(); // Ignore if already initialized
+    }
+
     // Resolve repository path (clone if remote)
     let (path, cleanup_path) = resolve_repo_path(&cli)?;
 
