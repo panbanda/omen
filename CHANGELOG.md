@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.9.2](https://github.com/panbanda/omen/compare/omen-v4.9.1...omen-v4.9.2) (2026-01-13)
+
+
+### Bug Fixes
+
+* **satd:** filter false positives for ambiguous markers ([fb9eacc](https://github.com/panbanda/omen/commit/fb9eacce3dca4361f18111582a590235dcd7f79a))
+* **satd:** filter false positives for ambiguous markers ([77eaede](https://github.com/panbanda/omen/commit/77eaedebd5f55b5be7cdd243383c9cc0c493e62e))
+
 ## [4.9.1](https://github.com/panbanda/omen/compare/omen-v4.9.0...omen-v4.9.1) (2026-01-13)
 
 
