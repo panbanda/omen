@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.9.4](https://github.com/panbanda/omen/compare/omen-v4.9.3...omen-v4.9.4) (2026-01-13)
+
+
+### Performance Improvements
+
+* **trend:** use git tree objects for historical analysis ([b7ade2e](https://github.com/panbanda/omen/commit/b7ade2e08c0ceaaee26bf35ed0ec6bedc1c4dfb5))
+* **trend:** use git tree objects for historical analysis ([263a6a6](https://github.com/panbanda/omen/commit/263a6a64bc214329c46468b397693d8695fe6121))
+
 ## [4.9.3](https://github.com/panbanda/omen/compare/omen-v4.9.2...omen-v4.9.3) (2026-01-13)
 
 
