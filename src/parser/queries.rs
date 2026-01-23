@@ -172,6 +172,9 @@ pub mod satd {
     /// Security debt markers.
     pub const SECURITY: &[&str] = &["SECURITY", "VULN", "UNSAFE", "XXX", "INSECURE"];
 
+    /// Documentation debt markers.
+    pub const DOCUMENTATION: &[&str] = &["DOC", "UNDOCUMENTED", "DOCUMENT", "NODOC", "UNDOC"];
+
     /// All marker categories with their severity weights.
     pub fn all_categories() -> &'static [(&'static str, &'static [&'static str], f64)] {
         &[
@@ -179,6 +182,7 @@ pub mod satd {
             ("defect", DEFECT, 2.0),
             ("design", DESIGN, 1.0),
             ("performance", PERFORMANCE, 1.0),
+            ("documentation", DOCUMENTATION, 0.5),
             ("requirement", REQUIREMENT, 0.25),
             ("test", TEST, 0.25),
         ]
