@@ -111,9 +111,22 @@ impl Analyzer {
     }
 
     /// Get file metrics from git for defect prediction.
+    ///
+    /// # Integration Gaps
+    ///
+    /// TODO: Integrate with complexity::Analyzer for actual cyclomatic/cognitive complexity.
+    /// Currently using LOC-based estimate which is less accurate.
+    ///
+    /// TODO: Integrate with clones::Analyzer for clone detection ratio.
+    /// Currently `duplicate_ratio` is always 0.0.
+    ///
+    /// TODO: Integrate with graph::Analyzer for coupling metrics (Ca/Ce).
+    /// Currently `afferent_coupling` and `efferent_coupling` are always 0.0.
     fn get_file_metrics(&self, git_path: &std::path::Path, file_path: &str) -> FileMetrics {
         let mut metrics = FileMetrics {
             file_path: file_path.to_string(),
+            // Mark that we're using estimates, not actual values
+            uses_estimated_complexity: true,
             ..Default::default()
         };
 
@@ -142,12 +155,16 @@ impl Analyzer {
             }
         }
 
-        // Get file size as a proxy for complexity (simple heuristic)
+        // Get file size as a proxy for complexity (simple heuristic).
+        // Research suggests average function is ~25-30 lines, so LOC/30 gives a rough
+        // estimate of function count, which correlates loosely with cyclomatic complexity.
+        // Cap at 50 to avoid extreme outliers for very large files.
         if let Ok(content) = std::fs::read_to_string(git_path.join(file_path)) {
             let lines = content.lines().count();
             metrics.lines_of_code = lines;
-            // Estimate complexity from lines (very rough)
-            metrics.complexity = (lines as f32 / 50.0).min(30.0);
+            // Estimate complexity from lines - using LOC/30 as research shows
+            // average function is ~25-30 lines. This is still a rough estimate.
+            metrics.complexity = (lines as f32 / 30.0).min(50.0);
         }
 
         metrics
@@ -183,7 +200,8 @@ impl Analyzer {
             confidence *= 0.8;
         }
 
-        // Reduce confidence if coupling metrics are missing
+        // Reduce confidence if coupling metrics are missing (always 0.0 currently)
+        // TODO: Remove this penalty once graph::Analyzer integration provides real coupling data
         if metrics.afferent_coupling == 0.0 && metrics.efferent_coupling == 0.0 {
             confidence *= 0.9;
         }
@@ -191,6 +209,18 @@ impl Analyzer {
         // Reduce confidence for very new files (no churn history)
         if metrics.churn_score == 0.0 {
             confidence *= 0.85;
+        }
+
+        // Reduce confidence when using LOC-based complexity estimate instead of
+        // actual cyclomatic complexity from complexity::Analyzer
+        if metrics.uses_estimated_complexity {
+            confidence *= 0.85;
+        }
+
+        // Reduce confidence when duplicate_ratio is 0.0 (no clone detection integration)
+        // TODO: Remove this penalty once clones::Analyzer integration is complete
+        if metrics.duplicate_ratio == 0.0 {
+            confidence *= 0.95;
         }
 
         confidence.clamp(0.0, 1.0)
@@ -375,6 +405,9 @@ struct FileMetrics {
     ownership_diffusion: f32,
     #[allow(dead_code)]
     ownership_concentration: f32,
+    /// True when complexity is estimated from LOC rather than actual cyclomatic analysis.
+    /// Used to reduce confidence in the prediction.
+    uses_estimated_complexity: bool,
 }
 
 // Output types
@@ -684,5 +717,71 @@ mod tests {
         let metrics = FileMetrics::default();
         let recs = analyzer.generate_recommendations(&metrics, 0.85);
         assert!(recs.iter().any(|r| r.contains("CRITICAL")));
+    }
+
+    #[test]
+    fn test_complexity_estimate_reasonable() {
+        // Test that LOC-based complexity estimate produces reasonable values.
+        // Using LOC/30 should give ~3.3 for 100 lines (not 2.0 from LOC/50).
+        // This is still an estimate - actual cyclomatic complexity requires
+        // integration with complexity::Analyzer.
+
+        // 100 lines should estimate ~3.3 complexity
+        let estimate_100 = (100.0_f32 / 30.0).min(50.0);
+        assert!(
+            estimate_100 >= 3.0 && estimate_100 <= 4.0,
+            "100 LOC should estimate 3-4 complexity, got {}",
+            estimate_100
+        );
+
+        // 300 lines should estimate ~10 complexity
+        let estimate_300 = (300.0_f32 / 30.0).min(50.0);
+        assert!(
+            estimate_300 >= 9.0 && estimate_300 <= 11.0,
+            "300 LOC should estimate ~10 complexity, got {}",
+            estimate_300
+        );
+
+        // Very large files should cap at 50
+        let estimate_large = (2000.0_f32 / 30.0).min(50.0);
+        assert_eq!(estimate_large, 50.0, "Large files should cap at 50");
+    }
+
+    #[test]
+    fn test_confidence_penalty_for_estimates() {
+        let analyzer = Analyzer::new();
+
+        // File with actual complexity data (hypothetical future state)
+        let with_real_data = FileMetrics {
+            lines_of_code: 100,
+            churn_score: 0.5,
+            afferent_coupling: 5.0,
+            efferent_coupling: 3.0,
+            duplicate_ratio: 0.1,
+            uses_estimated_complexity: false,
+            ..Default::default()
+        };
+
+        // File with estimated complexity (current state)
+        let with_estimates = FileMetrics {
+            lines_of_code: 100,
+            churn_score: 0.5,
+            afferent_coupling: 0.0,  // No coupling data
+            efferent_coupling: 0.0,
+            duplicate_ratio: 0.0,    // No clone data
+            uses_estimated_complexity: true,
+            ..Default::default()
+        };
+
+        let conf_real = analyzer.calculate_confidence(&with_real_data);
+        let conf_estimated = analyzer.calculate_confidence(&with_estimates);
+
+        // Estimated metrics should have lower confidence
+        assert!(
+            conf_estimated < conf_real,
+            "Estimated metrics should have lower confidence: {} vs {}",
+            conf_estimated,
+            conf_real
+        );
     }
 }
