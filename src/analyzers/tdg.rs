@@ -37,8 +37,10 @@ impl Default for Weights {
             coupling: 15.0,
             documentation: 5.0,
             consistency: 10.0,
-            hotspot: 10.0,
-            temporal_coupling: 10.0,
+            // Stub factors: set to 0.0 until integrated with actual hotspot/temporal analyzers
+            // TODO: Integrate with crate::analyzers::hotspot and crate::analyzers::temporal
+            hotspot: 0.0,
+            temporal_coupling: 0.0,
         }
     }
 }
@@ -140,8 +142,9 @@ impl Analyzer {
         score.consistency_score = self.analyze_consistency(source);
 
         // Check for critical defects
-        let (defect_count, _has_critical) = self.detect_critical_defects(source, language);
+        let (defect_count, has_critical) = self.detect_critical_defects(source, language);
         score.critical_defects_count = defect_count;
+        score.has_critical_defects = has_critical;
 
         // Store penalty attributions
         score.penalties_applied = penalties;
@@ -413,8 +416,8 @@ impl Analyzer {
             }
         }
 
-        // Return count but never auto-fail
-        (count, false)
+        // Return count and whether any critical defects were found
+        (count, count > 0)
     }
 }
 
@@ -616,8 +619,9 @@ impl Score {
             coupling_score: 15.0,
             doc_coverage: 5.0,
             consistency_score: 10.0,
-            hotspot_score: 10.0,
-            temporal_coupling_score: 10.0,
+            // Stub scores: 0.0 until integrated with actual analyzers
+            hotspot_score: 0.0,
+            temporal_coupling_score: 0.0,
             entropy_score: 0.0,
             total: 100.0,
             grade: Grade::APlus,
@@ -727,7 +731,8 @@ mod tests {
             + weights.consistency
             + weights.hotspot
             + weights.temporal_coupling;
-        assert_eq!(total, 100.0);
+        // Hotspot and temporal_coupling are stub factors (0.0) until integrated
+        assert_eq!(total, 80.0);
     }
 
     #[test]
@@ -790,8 +795,9 @@ mod tests {
     fn test_score_calculation() {
         let mut score = Score::new();
         score.calculate_total();
-        assert_eq!(score.total, 100.0);
-        assert_eq!(score.grade, Grade::APlus);
+        // Score is 80.0 because hotspot_score and temporal_coupling_score are stub factors (0.0)
+        assert_eq!(score.total, 80.0);
+        assert_eq!(score.grade, Grade::BMinus);
     }
 
     #[test]
@@ -929,5 +935,45 @@ import React from 'react';
         let analysis = aggregate_project_score(scores);
         assert_eq!(analysis.total_files, 2);
         assert_eq!(analysis.average_score, 85.0);
+    }
+
+    #[test]
+    fn test_critical_defects_detection() {
+        let analyzer = Analyzer::new();
+        // Rust code with .unwrap() should be flagged
+        let (count, has_critical) =
+            analyzer.detect_critical_defects("let x = foo.unwrap();", Language::Rust);
+        assert_eq!(count, 1);
+        assert!(
+            has_critical,
+            "has_critical should be true when defects found"
+        );
+
+        // Clean code should not be flagged
+        let (count, has_critical) =
+            analyzer.detect_critical_defects("let x = foo.unwrap_or_default();", Language::Rust);
+        assert_eq!(count, 0);
+        assert!(
+            !has_critical,
+            "has_critical should be false when no defects"
+        );
+    }
+
+    #[test]
+    fn test_critical_defects_auto_fail() {
+        let analyzer = Analyzer::new();
+        // Source with .unwrap() should trigger critical defect
+        let source = r#"
+fn risky() {
+    let x = some_option.unwrap();
+}
+"#;
+        let result = analyzer
+            .analyze_source(source, Language::Rust, "test.rs")
+            .unwrap();
+        assert!(result.critical_defects_count > 0);
+        assert!(result.has_critical_defects);
+        assert_eq!(result.total, 0.0);
+        assert_eq!(result.grade, Grade::F);
     }
 }
