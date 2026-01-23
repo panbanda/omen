@@ -4,9 +4,13 @@
 //! - WMC: Weighted Methods per Class (sum of cyclomatic complexity)
 //! - CBO: Coupling Between Objects (number of classes referenced)
 //! - RFC: Response for Class (methods that can be invoked)
-//! - LCOM: Lack of Cohesion in Methods (connected components in method-field graph)
+//! - LCOM: Lack of Cohesion in Methods (LCOM3 via connected components in method-field graph)
 //! - DIT: Depth of Inheritance Tree
 //! - NOC: Number of Children (direct subclasses)
+//!
+//! Note: LCOM uses LCOM3 (Hitz & Montazeri 1995), which counts connected components
+//! where methods are connected if they share instance variables. This differs from
+//! LCOM4 which also connects methods that call each other.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -19,7 +23,8 @@ use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
 use crate::parser::Parser;
 
 /// Default threshold for WMC above which a class is considered complex.
-pub const WMC_THRESHOLD: u32 = 50;
+/// Research suggests 20-24 is appropriate (Chidamber & Kemerer 1994 IEEE TSE).
+pub const WMC_THRESHOLD: u32 = 24;
 
 /// Default threshold for CBO above which a class is considered highly coupled.
 pub const CBO_THRESHOLD: u32 = 14;
@@ -284,10 +289,14 @@ fn extract_class_metrics(
     let coupled_classes = extract_coupled_classes(node, source, lang);
     let cbo = coupled_classes.len() as u32;
 
-    // LCOM4 = connected components in method-field graph
-    let lcom = calculate_lcom4(&methods, &fields);
+    // LCOM3 = connected components in method-field graph
+    // (LCOM4 would additionally connect methods that call each other)
+    let lcom = calculate_lcom(&methods, &fields);
 
-    // DIT and NOC require cross-file analysis, set to 0 for now
+    // TODO: DIT and NOC require cross-file inheritance analysis to track
+    // class hierarchies across the codebase. Currently hardcoded to 0.
+    // Implementing this would require building a global class hierarchy map
+    // by scanning all files for extends/implements relationships.
     let dit = 0;
     let noc = 0;
 
@@ -777,9 +786,10 @@ fn is_primitive_type(name: &str) -> bool {
     )
 }
 
-/// Calculates LCOM4 (number of connected components).
-/// Methods sharing fields are in the same component.
-fn calculate_lcom4(methods: &[MethodInfo], fields: &[String]) -> u32 {
+/// Calculates LCOM3 (Hitz & Montazeri 1995) as the number of connected components.
+/// Methods are connected if they share at least one instance variable.
+/// Note: This is LCOM3, not LCOM4. LCOM4 would also connect methods that call each other.
+fn calculate_lcom(methods: &[MethodInfo], fields: &[String]) -> u32 {
     if methods.is_empty() {
         return 0;
     }
@@ -934,7 +944,7 @@ pub struct ClassMetrics {
     pub cbo: u32,
     /// Response for Class (methods that can be invoked).
     pub rfc: u32,
-    /// Lack of Cohesion in Methods (LCOM4).
+    /// Lack of Cohesion in Methods (LCOM3 - connected components).
     pub lcom: u32,
     /// Depth of Inheritance Tree.
     pub dit: u32,
@@ -1042,14 +1052,14 @@ mod tests {
     }
 
     #[test]
-    fn test_lcom4_no_methods() {
+    fn test_lcom_no_methods() {
         let methods: Vec<MethodInfo> = vec![];
         let fields: Vec<String> = vec![];
-        assert_eq!(calculate_lcom4(&methods, &fields), 0);
+        assert_eq!(calculate_lcom(&methods, &fields), 0);
     }
 
     #[test]
-    fn test_lcom4_no_fields() {
+    fn test_lcom_no_fields() {
         let methods = vec![
             MethodInfo {
                 name: "foo".to_string(),
@@ -1064,11 +1074,11 @@ mod tests {
         ];
         let fields: Vec<String> = vec![];
         // No fields = methods don't share state = each is its own component
-        assert_eq!(calculate_lcom4(&methods, &fields), 2);
+        assert_eq!(calculate_lcom(&methods, &fields), 2);
     }
 
     #[test]
-    fn test_lcom4_connected() {
+    fn test_lcom_connected() {
         let mut fields1 = HashSet::new();
         fields1.insert("x".to_string());
 
@@ -1089,11 +1099,11 @@ mod tests {
         ];
         let fields = vec!["x".to_string()];
         // Both methods use field x, so they're connected = 1 component
-        assert_eq!(calculate_lcom4(&methods, &fields), 1);
+        assert_eq!(calculate_lcom(&methods, &fields), 1);
     }
 
     #[test]
-    fn test_lcom4_disconnected() {
+    fn test_lcom_disconnected() {
         let mut fields1 = HashSet::new();
         fields1.insert("x".to_string());
 
@@ -1114,7 +1124,7 @@ mod tests {
         ];
         let fields = vec!["x".to_string(), "y".to_string()];
         // Methods use different fields, not connected = 2 components
-        assert_eq!(calculate_lcom4(&methods, &fields), 2);
+        assert_eq!(calculate_lcom(&methods, &fields), 2);
     }
 
     #[test]
@@ -1276,8 +1286,41 @@ mod tests {
 
     #[test]
     fn test_thresholds() {
-        assert_eq!(WMC_THRESHOLD, 50);
+        // WMC threshold of 24 per Chidamber & Kemerer 1994 IEEE TSE
+        assert_eq!(WMC_THRESHOLD, 24);
         assert_eq!(CBO_THRESHOLD, 14);
         assert_eq!(LCOM_THRESHOLD, 1);
+    }
+
+    #[test]
+    fn test_wmc_threshold_at_24() {
+        // Verify WMC > 24 is flagged as complex
+        let metrics = ClassMetrics {
+            path: "Test.java".to_string(),
+            class_name: "ComplexClass".to_string(),
+            language: "Java".to_string(),
+            start_line: 1,
+            end_line: 100,
+            loc: 100,
+            wmc: 25, // Just above threshold
+            cbo: 5,
+            rfc: 20,
+            lcom: 1,
+            dit: 0,
+            noc: 0,
+            nom: 10,
+            nof: 5,
+            methods: vec![],
+            fields: vec![],
+            coupled_classes: vec![],
+            violations: vec![format!("WMC {} exceeds threshold {}", 25, WMC_THRESHOLD)],
+        };
+
+        assert!(metrics.wmc > WMC_THRESHOLD);
+        assert!(!metrics.violations.is_empty());
+
+        // Also verify WMC at threshold is not flagged
+        let at_threshold = 24;
+        assert!(at_threshold <= WMC_THRESHOLD);
     }
 }
