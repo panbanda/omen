@@ -2,6 +2,16 @@
 //!
 //! Finds unreachable/unused functions, variables, and classes using
 //! reference graph analysis.
+//!
+//! ## Current Limitations
+//!
+//! TODO: Variable and class tracking is not yet implemented.
+//! Currently only function definitions and usages are tracked.
+//! Future work should include:
+//! - Variable declarations (let, const, var, etc.)
+//! - Class/struct definitions
+//! - Module-level constants
+//! - Type aliases
 
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -66,41 +76,70 @@ impl AnalyzerTrait for Analyzer {
             .filter_map(|path| self.analyze_file(path).ok())
             .collect();
 
-        // Phase 2: Build global symbol tables
+        // Phase 2: Build global symbol tables with qualified names
+        // Use file::function_name format to prevent collisions when multiple files
+        // have functions with the same name.
         let mut all_definitions: HashMap<String, Definition> = HashMap::new();
         let mut all_usages: HashSet<String> = HashSet::new();
         let mut all_calls: Vec<CallReference> = Vec::new();
+        // Map from simple name to qualified names for cross-file call resolution
+        let mut name_to_qualified: HashMap<String, Vec<String>> = HashMap::new();
 
         for fdc in &file_results {
             for (name, def) in &fdc.definitions {
-                all_definitions.insert(name.clone(), def.clone());
+                let qualified_name = format!("{}::{}", def.file, name);
+                all_definitions.insert(qualified_name.clone(), def.clone());
+                name_to_qualified
+                    .entry(name.clone())
+                    .or_default()
+                    .push(qualified_name);
             }
             all_usages.extend(fdc.usages.iter().cloned());
             all_calls.extend(fdc.calls.iter().cloned());
         }
 
-        // Phase 3: Build call graph edges (for reachability)
+        // Phase 3: Build call graph edges (for reachability) using qualified names
         let mut call_graph: HashMap<String, Vec<String>> = HashMap::new();
         for call in &all_calls {
-            call_graph
-                .entry(call.caller.clone())
-                .or_default()
-                .push(call.callee.clone());
-        }
+            // Qualify the caller with its file path
+            let qualified_caller = format!("{}::{}", call.file, call.caller);
 
-        // Phase 4: Mark reachable from entry points
-        let mut reachable: HashSet<String> = HashSet::new();
-        let mut queue: Vec<String> = Vec::new();
+            // For the callee, first try same-file lookup, then cross-file
+            let qualified_callees: Vec<String> = {
+                let same_file_qualified = format!("{}::{}", call.file, call.callee);
+                if all_definitions.contains_key(&same_file_qualified) {
+                    vec![same_file_qualified]
+                } else if let Some(qualified_names) = name_to_qualified.get(&call.callee) {
+                    // Cross-file call: could be any of the matching functions
+                    qualified_names.clone()
+                } else {
+                    vec![]
+                }
+            };
 
-        // Identify entry points
-        for (name, def) in &all_definitions {
-            if is_entry_point(name, def) {
-                reachable.insert(name.clone());
-                queue.push(name.clone());
+            for qualified_callee in qualified_callees {
+                call_graph
+                    .entry(qualified_caller.clone())
+                    .or_default()
+                    .push(qualified_callee);
             }
         }
 
-        // BFS to mark reachable
+        // Phase 4: Mark reachable from entry points (using qualified names)
+        let mut reachable: HashSet<String> = HashSet::new();
+        let mut queue: Vec<String> = Vec::new();
+
+        // Identify entry points using qualified names
+        for (qualified_name, def) in &all_definitions {
+            // Extract simple name from qualified name for entry point check
+            let simple_name = qualified_name.rsplit("::").next().unwrap_or(qualified_name);
+            if is_entry_point(simple_name, def) {
+                reachable.insert(qualified_name.clone());
+                queue.push(qualified_name.clone());
+            }
+        }
+
+        // BFS to mark reachable (all names are qualified now)
         while let Some(current) = queue.pop() {
             if let Some(callees) = call_graph.get(&current) {
                 for callee in callees {
@@ -112,26 +151,29 @@ impl AnalyzerTrait for Analyzer {
             }
         }
 
-        // Phase 5: Classify dead code
+        // Phase 5: Classify dead code (using qualified names)
         let mut items = Vec::new();
         let mut by_kind: HashMap<String, usize> = HashMap::new();
 
-        for (name, def) in &all_definitions {
+        for (qualified_name, def) in &all_definitions {
+            // Extract simple name for entry point check and usage lookup
+            let simple_name = qualified_name.rsplit("::").next().unwrap_or(qualified_name);
+
             // Skip entry points
-            if is_entry_point(name, def) {
+            if is_entry_point(simple_name, def) {
                 continue;
             }
 
-            // Check if unreachable AND not used
-            let is_unreachable = !reachable.contains(name);
-            let is_unused = !all_usages.contains(name);
+            // Check if unreachable (using qualified name) AND not used (simple name in usages)
+            let is_unreachable = !reachable.contains(qualified_name);
+            let is_unused = !all_usages.contains(simple_name);
 
             if is_unreachable || is_unused {
                 let confidence = calculate_confidence(def, is_unreachable, is_unused);
 
                 if confidence >= self.confidence_threshold {
                     let item = DeadCodeItem {
-                        name: name.clone(),
+                        name: simple_name.to_string(),
                         kind: def.kind.clone(),
                         file: def.file.clone(),
                         line: def.line,
@@ -250,6 +292,7 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
                     fdc.calls.push(CallReference {
                         caller: caller.clone(),
                         callee,
+                        file: fdc.path.clone(),
                         line: node.start_position().row as u32 + 1,
                     });
                 }
@@ -482,6 +525,7 @@ struct Definition {
 struct CallReference {
     caller: String,
     callee: String,
+    file: String,
     #[allow(dead_code)]
     line: u32,
 }
@@ -595,5 +639,81 @@ mod tests {
         };
         let conf2 = calculate_confidence(&exported_def, false, true);
         assert!(conf2 < 0.7); // Lower confidence for exported
+    }
+
+    #[test]
+    fn test_same_name_different_files() {
+        // Test that qualified names prevent collisions when multiple files
+        // have functions with the same name.
+        let mut all_definitions: HashMap<String, Definition> = HashMap::new();
+        let mut name_to_qualified: HashMap<String, Vec<String>> = HashMap::new();
+
+        // Two files both have a helper() function
+        let def1 = Definition {
+            name: "helper".to_string(),
+            kind: "function".to_string(),
+            file: "src/util.go".to_string(),
+            line: 1,
+            end_line: 10,
+            visibility: "private".to_string(),
+            exported: false,
+            is_test_file: false,
+        };
+
+        let def2 = Definition {
+            name: "helper".to_string(),
+            kind: "function".to_string(),
+            file: "src/parser.go".to_string(),
+            line: 5,
+            end_line: 15,
+            visibility: "private".to_string(),
+            exported: false,
+            is_test_file: false,
+        };
+
+        // Using qualified names, both should be tracked
+        let qualified1 = format!("{}::{}", def1.file, "helper");
+        let qualified2 = format!("{}::{}", def2.file, "helper");
+
+        all_definitions.insert(qualified1.clone(), def1.clone());
+        all_definitions.insert(qualified2.clone(), def2.clone());
+
+        name_to_qualified
+            .entry("helper".to_string())
+            .or_default()
+            .push(qualified1.clone());
+        name_to_qualified
+            .entry("helper".to_string())
+            .or_default()
+            .push(qualified2.clone());
+
+        // Both definitions should exist (no collision)
+        assert_eq!(all_definitions.len(), 2);
+        assert!(all_definitions.contains_key("src/util.go::helper"));
+        assert!(all_definitions.contains_key("src/parser.go::helper"));
+
+        // The name_to_qualified map should track both
+        assert_eq!(name_to_qualified.get("helper").unwrap().len(), 2);
+
+        // Verify they are different definitions by checking file paths
+        let stored_def1 = all_definitions.get("src/util.go::helper").unwrap();
+        let stored_def2 = all_definitions.get("src/parser.go::helper").unwrap();
+        assert_eq!(stored_def1.file, "src/util.go");
+        assert_eq!(stored_def2.file, "src/parser.go");
+        assert_eq!(stored_def1.line, 1);
+        assert_eq!(stored_def2.line, 5);
+    }
+
+    #[test]
+    fn test_qualified_name_extraction() {
+        // Test extracting simple name from qualified name
+        let qualified = "src/util.go::helper";
+        let simple = qualified.rsplit("::").next().unwrap_or(qualified);
+        assert_eq!(simple, "helper");
+
+        // Edge case: no :: in name
+        let simple_only = "helper";
+        let extracted = simple_only.rsplit("::").next().unwrap_or(simple_only);
+        assert_eq!(extracted, "helper");
     }
 }
