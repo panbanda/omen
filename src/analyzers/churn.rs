@@ -2,6 +2,19 @@
 //!
 //! Analyzes git history to identify files with high change frequency (churn),
 //! which often correlates with bug-prone or complex code.
+//!
+//! # References
+//!
+//! - Nagappan, N., Ball, T. (2005) "Use of Relative Code Churn Measures to
+//!   Predict System Defect Density" ICSE 2005 (foundational churn research)
+//!
+//! # Scoring
+//!
+//! Churn score = commit_factor * 0.6 + change_factor * 0.4 (normalized to 0-1)
+//! These weights are heuristics that prioritize commit frequency over raw
+//! line changes, as frequent small changes often indicate instability.
+//! The original Nagappan & Ball research uses relative churn (churn / LOC)
+//! rather than absolute weights.
 
 use std::collections::HashMap;
 use std::path::Path;

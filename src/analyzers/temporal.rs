@@ -3,6 +3,17 @@
 //! Identifies files that frequently change together in version control.
 //! Files with high temporal coupling that don't have explicit import
 //! relationships may indicate hidden dependencies or poor module boundaries.
+//!
+//! # References
+//!
+//! - Ball, T., Kim, J., Porter, A., Siy, H. (1997) "If Your Version Control
+//!   System Could Talk", Proceedings of the ICSE'97 Workshop
+//!
+//! # Coupling Strength
+//!
+//! Uses a symmetric formula: `cochanges / max(commits_a, commits_b)`
+//! - 0.5 threshold for "strong" coupling is a heuristic
+//! - Min cochanges (default 3) filters statistical noise
 
 use std::collections::HashMap;
 use std::path::Path;

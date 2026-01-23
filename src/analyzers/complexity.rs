@@ -5,10 +5,11 @@
 //! This analyzer computes two types of complexity metrics:
 //!
 //! - **Cyclomatic Complexity**: Counts the number of linearly independent paths through code.
-//!   Based on McCabe's 1976 paper.
+//!   Based on McCabe (1976) "A Complexity Measure", IEEE TSE SE-2(4).
 //!
 //! - **Cognitive Complexity**: Measures how hard code is to understand, with penalties
 //!   for nesting. Based on SonarSource's methodology.
+//!   Reference: https://www.sonarsource.com/docs/CognitiveComplexity.pdf
 //!
 //! # Example
 //!
@@ -1324,6 +1325,56 @@ fn complex(a: bool, b: bool, c: bool) {
         assert_eq!(
             result.functions[0].metrics.cognitive, 6,
             "3 nested ifs should equal 6 (1+2+3)"
+        );
+    }
+
+    #[test]
+    fn test_cognitive_catch_no_nesting_penalty() {
+        // Per SonarSource spec: catch adds +1 only, no nesting penalty
+        // (similar to else - it's already inside a nesting structure)
+        let code = br#"
+function safeParse(json) {
+    try {
+        if (json) {
+            return JSON.parse(json);
+        }
+    } catch (e) {
+        return null;
+    }
+}
+"#;
+        let result = parse_and_analyze(code, Language::JavaScript, "test.js");
+        assert_eq!(result.functions.len(), 1);
+        // try = +1 (nesting construct)
+        // if (inside try, depth 1) = +1 + 1 = 2
+        // catch = +1 (flat, no depth penalty per SonarSource spec)
+        // Total = 4
+        assert_eq!(
+            result.functions[0].metrics.cognitive, 4,
+            "try + nested if + catch should equal 4 (catch should not get nesting penalty)"
+        );
+    }
+
+    #[test]
+    fn test_cognitive_python_except_no_nesting_penalty() {
+        // Python's except is equivalent to catch - should be flat
+        let code = br#"
+def safe_parse(data):
+    try:
+        if data:
+            return json.loads(data)
+    except ValueError:
+        return None
+"#;
+        let result = parse_and_analyze(code, Language::Python, "test.py");
+        assert_eq!(result.functions.len(), 1);
+        // try = +1
+        // if (depth 1) = +1 + 1 = 2
+        // except = +1 (flat)
+        // Total = 4
+        assert_eq!(
+            result.functions[0].metrics.cognitive, 4,
+            "try + nested if + except should equal 4 (except should not get nesting penalty)"
         );
     }
 }

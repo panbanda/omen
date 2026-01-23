@@ -3,11 +3,26 @@
 //! Builds a directed graph of file dependencies, calculates graph metrics,
 //! detects cycles, and outputs Mermaid diagrams.
 //!
-//! Key metrics:
-//! - PageRank: Importance based on incoming edges
-//! - Betweenness centrality: How often a node appears on shortest paths
-//! - In/Out degree: Direct dependency counts
-//! - Instability: out_degree / (in_degree + out_degree) - tendency to change
+//! # Key Metrics
+//!
+//! - **PageRank**: Importance based on incoming edges
+//!   Reference: Page, Brin, Motwani, Winograd (1999) "The PageRank Citation Ranking"
+//!   Damping factor 0.85 is the canonical value.
+//!
+//! - **Betweenness Centrality**: How often a node appears on shortest paths
+//!   Reference: Brandes, U. (2001) "A Faster Algorithm for Betweenness Centrality"
+//!
+//! - **Instability**: out_degree / (in_degree + out_degree)
+//!   Reference: Martin, R.C. (2003) "Agile Software Development"
+//!   Measures tendency to change (1.0 = maximally unstable, 0.0 = maximally stable)
+//!
+//! - **Cycle Detection**: Uses Tarjan's SCC algorithm
+//!   Reference: Tarjan, R. (1972) "Depth-first search and linear graph algorithms"
+//!
+//! # Known Limitation
+//!
+//! PageRank implementation does not redistribute dangling node mass uniformly.
+//! This is documented as a TODO and may slightly affect scores in sparse graphs.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;

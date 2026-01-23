@@ -111,13 +111,29 @@ pub fn get_nesting_node_types(lang: Language) -> &'static [&'static str] {
 }
 
 /// Get flat (non-nesting) node types for cognitive complexity.
+///
+/// Per SonarSource cognitive complexity spec, these constructs add +1 to complexity
+/// but do NOT increment the nesting level. This includes:
+/// - else/elif/elseif clauses (already inside a nesting if)
+/// - catch/except/rescue clauses (already inside a nesting try)
+/// - break/continue/goto (flow-breaking statements)
+///
+/// Reference: https://www.sonarsource.com/docs/CognitiveComplexity.pdf
 pub fn get_flat_node_types(lang: Language) -> &'static [&'static str] {
     match lang {
         Language::Ruby => &["elsif", "else", "when", "rescue", "break", "next", "redo"],
+        Language::Python => &[
+            "else_clause",
+            "elif_clause",
+            "except_clause", // Python's catch equivalent
+            "break_statement",
+            "continue_statement",
+        ],
         _ => &[
             "else_clause",
             "elif_clause",
             "elseif_clause",
+            "catch_clause", // try-catch: +1 but no nesting increment
             "break_statement",
             "continue_statement",
             "goto_statement",

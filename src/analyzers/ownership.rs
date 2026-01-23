@@ -3,6 +3,19 @@
 //! Analyzes git blame data to determine code ownership concentration
 //! and calculate bus factor (minimum contributors needed to cover 50%
 //! of the codebase).
+//!
+//! # References
+//!
+//! - Bird, C., Nagappan, N., Murphy, B., Gall, H., Devanbu, P. (2011)
+//!   "Don't Touch My Code! Examining the Effects of Ownership on Software Quality"
+//!   FSE 2011
+//! - Avelino, G., Passos, L., Hora, A., Valente, M.T. (2016)
+//!   "A Novel Approach for Estimating Truck Factors", ICPC 2016
+//!
+//! # Thresholds
+//!
+//! Concentration thresholds (0.8 high, 0.6 medium) are heuristics commonly
+//! used in practice. The 50% threshold for bus factor is standard.
 
 use std::collections::HashMap;
 use std::path::Path;
