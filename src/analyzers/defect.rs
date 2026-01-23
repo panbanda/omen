@@ -1,17 +1,18 @@
 //! Defect prediction analyzer using PMAT-weighted metrics.
 //!
 //! Predicts defect probability based on:
-//! - Churn: How frequently the file changes
-//! - Complexity: Cyclomatic/cognitive complexity
-//! - Duplication: Code clone ratio
-//! - Coupling: Afferent coupling (dependencies)
-//! - Ownership: Contributor diffusion (Bird et al. 2011)
+//! - Churn: How frequently the file changes (from git history)
+//! - Complexity: Cyclomatic/cognitive complexity (from complexity::Analyzer)
+//! - Duplication: Code clone ratio (from duplicates::Analyzer)
+//! - Coupling: Afferent coupling (from graph::Analyzer edge analysis)
+//! - Ownership: Contributor diffusion (Bird et al. 2011, from git history)
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::analyzers::{complexity, duplicates, graph};
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result};
 use crate::git::GitRepo;
 
@@ -110,23 +111,113 @@ impl Analyzer {
         self
     }
 
-    /// Get file metrics from git for defect prediction.
-    ///
-    /// # Integration Gaps
-    ///
-    /// TODO: Integrate with complexity::Analyzer for actual cyclomatic/cognitive complexity.
-    /// Currently using LOC-based estimate which is less accurate.
-    ///
-    /// TODO: Integrate with clones::Analyzer for clone detection ratio.
-    /// Currently `duplicate_ratio` is always 0.0.
-    ///
-    /// TODO: Integrate with graph::Analyzer for coupling metrics (Ca/Ce).
-    /// Currently `afferent_coupling` and `efferent_coupling` are always 0.0.
-    fn get_file_metrics(&self, git_path: &std::path::Path, file_path: &str) -> FileMetrics {
+    /// Compute complexity data from complexity::Analyzer.
+    /// Returns a map of file path -> (cyclomatic, cognitive) complexity.
+    fn compute_complexity_data(&self, ctx: &AnalysisContext<'_>) -> HashMap<String, (u32, u32)> {
+        let mut data = HashMap::new();
+
+        let analyzer = complexity::Analyzer::new();
+        if let Ok(analysis) = analyzer.analyze(ctx) {
+            for file_result in analysis.files {
+                data.insert(
+                    file_result.path.clone(),
+                    (file_result.total_cyclomatic, file_result.total_cognitive),
+                );
+            }
+        }
+
+        data
+    }
+
+    /// Compute duplication data from duplicates::Analyzer.
+    /// Returns a map of file path -> duplication ratio (0.0-1.0).
+    fn compute_duplication_data(&self, ctx: &AnalysisContext<'_>) -> HashMap<String, f32> {
+        let mut data = HashMap::new();
+
+        let analyzer = duplicates::Analyzer::new();
+        if let Ok(analysis) = analyzer.analyze(ctx) {
+            // Count lines involved in clones per file
+            let mut clone_lines: HashMap<String, usize> = HashMap::new();
+            let mut total_lines: HashMap<String, usize> = HashMap::new();
+
+            for clone in &analysis.clones {
+                // File A
+                *clone_lines.entry(clone.file_a.clone()).or_insert(0) += clone.lines_a;
+                // File B
+                *clone_lines.entry(clone.file_b.clone()).or_insert(0) += clone.lines_b;
+            }
+
+            // Get total lines per file (approximate from clone data)
+            for clone in &analysis.clones {
+                total_lines.entry(clone.file_a.clone()).or_insert_with(|| {
+                    // Estimate total lines from file (read if needed)
+                    std::fs::read_to_string(ctx.root.join(&clone.file_a))
+                        .map(|c| c.lines().count())
+                        .unwrap_or(1000)
+                });
+                total_lines.entry(clone.file_b.clone()).or_insert_with(|| {
+                    std::fs::read_to_string(ctx.root.join(&clone.file_b))
+                        .map(|c| c.lines().count())
+                        .unwrap_or(1000)
+                });
+            }
+
+            // Calculate ratio for each file that has clones
+            for (file, lines) in clone_lines {
+                let total = *total_lines.get(&file).unwrap_or(&1);
+                let ratio = (lines as f32 / total as f32).min(1.0);
+                data.insert(file, ratio);
+            }
+        }
+
+        data
+    }
+
+    /// Compute coupling data from graph::Analyzer.
+    /// Returns a map of file path -> (afferent_coupling, efferent_coupling).
+    fn compute_coupling_data(&self, ctx: &AnalysisContext<'_>) -> HashMap<String, (f32, f32)> {
+        let mut data = HashMap::new();
+
+        let analyzer = graph::Analyzer::new();
+        if let Ok(analysis) = analyzer.analyze(ctx) {
+            // Count incoming and outgoing edges per node
+            let mut incoming: HashMap<String, usize> = HashMap::new();
+            let mut outgoing: HashMap<String, usize> = HashMap::new();
+
+            for edge in &analysis.edges {
+                *outgoing.entry(edge.from.clone()).or_insert(0) += 1;
+                *incoming.entry(edge.to.clone()).or_insert(0) += 1;
+            }
+
+            // Collect all nodes
+            let mut nodes: HashSet<String> = HashSet::new();
+            for node in &analysis.nodes {
+                nodes.insert(node.path.clone());
+            }
+
+            // Calculate coupling for each node
+            for node in nodes {
+                let ca = *incoming.get(&node).unwrap_or(&0) as f32;
+                let ce = *outgoing.get(&node).unwrap_or(&0) as f32;
+                data.insert(node, (ca, ce));
+            }
+        }
+
+        data
+    }
+
+    /// Get file metrics for defect prediction.
+    /// Uses pre-computed data from other analyzers when available.
+    fn get_file_metrics(
+        &self,
+        git_path: &std::path::Path,
+        file_path: &str,
+        complexity_data: &HashMap<String, (u32, u32)>,
+        duplication_data: &HashMap<String, f32>,
+        coupling_data: &HashMap<String, (f32, f32)>,
+    ) -> FileMetrics {
         let mut metrics = FileMetrics {
             file_path: file_path.to_string(),
-            // Mark that we're using estimates, not actual values
-            uses_estimated_complexity: true,
             ..Default::default()
         };
 
@@ -155,16 +246,33 @@ impl Analyzer {
             }
         }
 
-        // Get file size as a proxy for complexity (simple heuristic).
-        // Research suggests average function is ~25-30 lines, so LOC/30 gives a rough
-        // estimate of function count, which correlates loosely with cyclomatic complexity.
-        // Cap at 50 to avoid extreme outliers for very large files.
+        // Get file LOC for confidence calculation
         if let Ok(content) = std::fs::read_to_string(git_path.join(file_path)) {
-            let lines = content.lines().count();
-            metrics.lines_of_code = lines;
-            // Estimate complexity from lines - using LOC/30 as research shows
-            // average function is ~25-30 lines. This is still a rough estimate.
-            metrics.complexity = (lines as f32 / 30.0).min(50.0);
+            metrics.lines_of_code = content.lines().count();
+        }
+
+        // Use pre-computed complexity data if available, otherwise estimate from LOC
+        if let Some(&(cyclomatic, cognitive)) = complexity_data.get(file_path) {
+            metrics.cyclomatic_complexity = cyclomatic;
+            metrics.cognitive_complexity = cognitive;
+            // Use cyclomatic complexity directly for the complexity metric
+            metrics.complexity = cyclomatic as f32;
+            metrics.uses_estimated_complexity = false;
+        } else {
+            // Fall back to LOC-based estimate
+            metrics.complexity = (metrics.lines_of_code as f32 / 30.0).min(50.0);
+            metrics.uses_estimated_complexity = true;
+        }
+
+        // Use pre-computed duplication data if available
+        if let Some(&ratio) = duplication_data.get(file_path) {
+            metrics.duplicate_ratio = ratio;
+        }
+
+        // Use pre-computed coupling data if available
+        if let Some(&(afferent, efferent)) = coupling_data.get(file_path) {
+            metrics.afferent_coupling = afferent;
+            metrics.efferent_coupling = efferent;
         }
 
         metrics
@@ -200,12 +308,6 @@ impl Analyzer {
             confidence *= 0.8;
         }
 
-        // Reduce confidence if coupling metrics are missing (always 0.0 currently)
-        // TODO: Remove this penalty once graph::Analyzer integration provides real coupling data
-        if metrics.afferent_coupling == 0.0 && metrics.efferent_coupling == 0.0 {
-            confidence *= 0.9;
-        }
-
         // Reduce confidence for very new files (no churn history)
         if metrics.churn_score == 0.0 {
             confidence *= 0.85;
@@ -215,12 +317,6 @@ impl Analyzer {
         // actual cyclomatic complexity from complexity::Analyzer
         if metrics.uses_estimated_complexity {
             confidence *= 0.85;
-        }
-
-        // Reduce confidence when duplicate_ratio is 0.0 (no clone detection integration)
-        // TODO: Remove this penalty once clones::Analyzer integration is complete
-        if metrics.duplicate_ratio == 0.0 {
-            confidence *= 0.95;
         }
 
         confidence.clamp(0.0, 1.0)
@@ -295,6 +391,11 @@ impl AnalyzerTrait for Analyzer {
             .git_path
             .ok_or_else(|| crate::core::Error::git("Defect analyzer requires a git repository"))?;
 
+        // Pre-compute data from other analyzers
+        let complexity_data = self.compute_complexity_data(ctx);
+        let duplication_data = self.compute_duplication_data(ctx);
+        let coupling_data = self.compute_coupling_data(ctx);
+
         let mut files = Vec::new();
         let mut total_prob = 0.0f32;
         let mut high_count = 0;
@@ -314,7 +415,13 @@ impl AnalyzerTrait for Analyzer {
                 }
             }
 
-            let metrics = self.get_file_metrics(git_path, &file_str);
+            let metrics = self.get_file_metrics(
+                git_path,
+                &file_str,
+                &complexity_data,
+                &duplication_data,
+                &coupling_data,
+            );
             let prob = self.calculate_probability(&metrics);
             let confidence = self.calculate_confidence(&metrics);
             let risk = RiskLevel::from_probability(prob);
@@ -729,7 +836,7 @@ mod tests {
         // 100 lines should estimate ~3.3 complexity
         let estimate_100 = (100.0_f32 / 30.0).min(50.0);
         assert!(
-            estimate_100 >= 3.0 && estimate_100 <= 4.0,
+            (3.0..=4.0).contains(&estimate_100),
             "100 LOC should estimate 3-4 complexity, got {}",
             estimate_100
         );
@@ -737,7 +844,7 @@ mod tests {
         // 300 lines should estimate ~10 complexity
         let estimate_300 = (300.0_f32 / 30.0).min(50.0);
         assert!(
-            estimate_300 >= 9.0 && estimate_300 <= 11.0,
+            (9.0..=11.0).contains(&estimate_300),
             "300 LOC should estimate ~10 complexity, got {}",
             estimate_300
         );
@@ -766,9 +873,9 @@ mod tests {
         let with_estimates = FileMetrics {
             lines_of_code: 100,
             churn_score: 0.5,
-            afferent_coupling: 0.0,  // No coupling data
+            afferent_coupling: 0.0, // No coupling data
             efferent_coupling: 0.0,
-            duplicate_ratio: 0.0,    // No clone data
+            duplicate_ratio: 0.0, // No clone data
             uses_estimated_complexity: true,
             ..Default::default()
         };
