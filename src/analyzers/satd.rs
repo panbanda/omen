@@ -87,6 +87,8 @@ const AMBIGUOUS_MARKERS: &[&str] = &[
     "PENDING",
     "SLOW",
     "UNSAFE",
+    "DOC",
+    "DOCUMENT",
 ];
 
 /// Check if a SATD marker is valid (not a false positive).
@@ -357,5 +359,81 @@ fn main() {}\n\
                 .map(|i| (&i.text, &i.marker))
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn test_documentation_debt_detection() {
+        let analyzer = Analyzer::new();
+        let content = b"// DOC: needs API documentation\nfn main() {}\n".to_vec();
+        let file = SourceFile::from_content("test.rs", Language::Rust, content);
+
+        let items = analyzer.analyze_file(&file);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].category, "documentation");
+        assert_eq!(items[0].marker, "DOC");
+    }
+
+    #[test]
+    fn test_undocumented_marker() {
+        let analyzer = Analyzer::new();
+        let content = b"// UNDOCUMENTED: public interface\nfn main() {}\n".to_vec();
+        let file = SourceFile::from_content("test.rs", Language::Rust, content);
+
+        let items = analyzer.analyze_file(&file);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].category, "documentation");
+        assert_eq!(items[0].marker, "UNDOCUMENTED");
+    }
+
+    #[test]
+    fn test_documentation_markers_require_punctuation() {
+        let analyzer = Analyzer::new();
+
+        // "DOC" and "DOCUMENT" without colon should not trigger (ambiguous)
+        let false_positive_content =
+            b"// See the documentation for details\n// Document this later\n".to_vec();
+        let file = SourceFile::from_content("test.rs", Language::Rust, false_positive_content);
+
+        let items = analyzer.analyze_file(&file);
+        assert_eq!(
+            items.len(),
+            0,
+            "Should not detect documentation markers in prose, found: {:?}",
+            items
+                .iter()
+                .map(|i| (&i.text, &i.marker))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_all_documentation_markers() {
+        let analyzer = Analyzer::new();
+        let content = b"\
+// DOC: add API docs\n\
+// UNDOCUMENTED public function\n\
+// DOCUMENT: this module\n\
+// NODOC for internal use\n\
+// UNDOC: missing docs\n\
+fn main() {}\n\
+"
+        .to_vec();
+        let file = SourceFile::from_content("test.rs", Language::Rust, content);
+
+        let items = analyzer.analyze_file(&file);
+        // DOC and DOCUMENT require colon (ambiguous markers)
+        // UNDOCUMENTED, NODOC, UNDOC are unambiguous
+        assert_eq!(
+            items.len(),
+            5,
+            "Should detect all documentation markers, found: {:?}",
+            items
+                .iter()
+                .map(|i| (&i.text, &i.marker))
+                .collect::<Vec<_>>()
+        );
+        for item in &items {
+            assert_eq!(item.category, "documentation");
+        }
     }
 }
