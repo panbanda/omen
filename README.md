@@ -445,11 +445,13 @@ Omen detects feature flag usage across popular providers:
 
 | Provider     | Languages                | What it finds                                  |
 | ------------ | ------------------------ | ---------------------------------------------- |
-| LaunchDarkly | JS/TS, Python, Go, Java  | `variation()`, `boolVariation()` calls         |
-| Split        | JS/TS, Python, Go        | `getTreatment()` calls                         |
-| Unleash      | JS/TS, Go                | `isEnabled()`, `getVariant()` calls            |
-| PostHog      | JS/TS, Python, Go, Java, Ruby | `isFeatureEnabled()`, `getFeatureFlag()` calls |
-| Flipper      | Ruby                     | `enabled?()`, `Flipper.enabled?()` calls       |
+| LaunchDarkly | JS/TS                    | `variation()`, `boolVariation()` calls         |
+| Split        | JS/TS                    | `getTreatment()` calls                         |
+| Unleash      | JS/TS, Python            | `isEnabled()`, `is_enabled()` calls            |
+| Flipper      | Ruby                     | `Flipper[:flag]`, `enabled?()` calls           |
+| ENV-based    | Ruby, JS/TS, Python      | `ENV["FEATURE_*"]`, `process.env.FEATURE_*`    |
+
+Additional providers can be added via custom tree-sitter queries in your `omen.toml` configuration.
 
 For each flag, Omen reports:
 
