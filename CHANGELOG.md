@@ -1,5 +1,23 @@
 # Changelog
 
+## [4.10.0](https://github.com/panbanda/omen/compare/omen-v4.9.4...omen-v4.10.0) (2026-01-23)
+
+
+### Features
+
+* **satd:** add documentation debt category per SATD taxonomy ([f02100e](https://github.com/panbanda/omen/commit/f02100e690fe890bdbea3cc64405d7a3323be685))
+* **tdg:** integrate hotspot and temporal coupling analyzers ([688ec39](https://github.com/panbanda/omen/commit/688ec3993c0c6319621c7d14486e0d07551b99c7))
+
+
+### Bug Fixes
+
+* **cohesion:** correct LCOM labeling and adjust WMC threshold ([#294](https://github.com/panbanda/omen/issues/294)) ([351ea2b](https://github.com/panbanda/omen/commit/351ea2b06b5e45eeba2bc29320084013e71df19f))
+* **complexity:** correct cognitive complexity algorithm per SonarSource spec ([2df8eec](https://github.com/panbanda/omen/commit/2df8eecf8e10c34ec7addfe237b294f3b22ccf9d))
+* **deadcode:** use qualified names to prevent function name collisions ([#295](https://github.com/panbanda/omen/issues/295)) ([882672f](https://github.com/panbanda/omen/commit/882672f6669000ce5c18fe13381602916c374161))
+* **defect:** document integration gaps and improve complexity estimation ([2ca702d](https://github.com/panbanda/omen/commit/2ca702de0b94f33bc547249fc059fa95a9f555a3))
+* **repomap:** use deterministic ordering for call resolution ([#298](https://github.com/panbanda/omen/issues/298)) ([aae782a](https://github.com/panbanda/omen/commit/aae782a9f7e9e03e7157a9d9402f569f7f142a90))
+* **tdg:** correct stub factors and critical defect detection ([e309e43](https://github.com/panbanda/omen/commit/e309e43c234335721de795b647acd4979f81ad37))
+
 ## [4.9.4](https://github.com/panbanda/omen/compare/omen-v4.9.3...omen-v4.9.4) (2026-01-13)
 
 
