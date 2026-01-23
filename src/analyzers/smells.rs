@@ -1,12 +1,18 @@
 //! Architectural smells analyzer.
 //!
 //! Detects architectural anti-patterns in dependency graphs:
-//! - Cyclic dependencies (using Tarjan's SCC algorithm)
+//! - Cyclic dependencies (using Tarjan's SCC algorithm, including self-loops)
 //! - Hub-like dependencies (excessive fan-in + fan-out)
-//! - God components (high fan-in AND high fan-out)
+//! - Central connectors (high fan-in AND high fan-out coupling)
 //! - Unstable dependencies (stable components depending on unstable ones)
 //!
 //! Based on detection algorithms from Fontana et al. (2017) "Arcan".
+//!
+//! **Note on terminology**: This implementation uses "Central Connector" instead of
+//! Arcan's "God Component". Arcan's God Component detection is based on Lines of Code
+//! (LOC) metrics, whereas our Central Connector detection uses bidirectional coupling
+//! metrics (fan-in + fan-out). Both indicate components that may need decomposition,
+//! but they measure different aspects of over-centralization.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -26,10 +32,10 @@ use crate::parser::{extract_imports, Parser};
 pub struct Thresholds {
     /// Fan-in + Fan-out threshold for hub detection.
     pub hub_threshold: usize,
-    /// Minimum fan-in for god component.
-    pub god_fan_in_threshold: usize,
-    /// Minimum fan-out for god component.
-    pub god_fan_out_threshold: usize,
+    /// Minimum fan-in for central connector detection.
+    pub central_connector_fan_in_threshold: usize,
+    /// Minimum fan-out for central connector detection.
+    pub central_connector_fan_out_threshold: usize,
     /// Max instability difference for unstable dependency.
     pub instability_difference: f64,
     /// I < this is considered stable.
@@ -42,8 +48,8 @@ impl Default for Thresholds {
     fn default() -> Self {
         Self {
             hub_threshold: 20,
-            god_fan_in_threshold: 10,
-            god_fan_out_threshold: 10,
+            central_connector_fan_in_threshold: 10,
+            central_connector_fan_out_threshold: 10,
             instability_difference: 0.4,
             stable_threshold: 0.3,
             unstable_threshold: 0.7,
@@ -84,9 +90,9 @@ impl Analyzer {
         self
     }
 
-    pub fn with_god_thresholds(mut self, fan_in: usize, fan_out: usize) -> Self {
-        self.config.thresholds.god_fan_in_threshold = fan_in;
-        self.config.thresholds.god_fan_out_threshold = fan_out;
+    pub fn with_central_connector_thresholds(mut self, fan_in: usize, fan_out: usize) -> Self {
+        self.config.thresholds.central_connector_fan_in_threshold = fan_in;
+        self.config.thresholds.central_connector_fan_out_threshold = fan_out;
         self
     }
 
@@ -187,8 +193,9 @@ impl Analyzer {
             };
 
             let is_hub = total > self.config.thresholds.hub_threshold && fan_in >= 3;
-            let is_god = fan_in > self.config.thresholds.god_fan_in_threshold
-                && fan_out > self.config.thresholds.god_fan_out_threshold;
+            let is_central_connector = fan_in
+                > self.config.thresholds.central_connector_fan_in_threshold
+                && fan_out > self.config.thresholds.central_connector_fan_out_threshold;
 
             components.push(ComponentMetrics {
                 id: file_path.clone(),
@@ -197,7 +204,7 @@ impl Analyzer {
                 fan_out,
                 instability,
                 is_hub,
-                is_god,
+                is_central_connector,
             });
         }
 
@@ -205,9 +212,11 @@ impl Analyzer {
         let mut smells: Vec<Smell> = Vec::new();
 
         // 1. Detect cyclic dependencies using Tarjan's SCC
+        // Also detect self-loops (files importing themselves)
         let sccs = tarjan_scc(&graph);
         for scc in sccs {
-            if scc.len() > 1 {
+            let is_cycle = scc.len() > 1 || (scc.len() == 1 && graph.contains_edge(scc[0], scc[0]));
+            if is_cycle {
                 let component_names: Vec<String> =
                     scc.iter().map(|&idx| graph[idx].clone()).collect();
 
@@ -233,7 +242,7 @@ impl Analyzer {
 
         // 2. Detect hub-like dependencies
         for cm in &components {
-            if cm.is_hub && !cm.is_god {
+            if cm.is_hub && !cm.is_central_connector {
                 smells.push(Smell {
                     smell_type: SmellType::HubLikeDependency,
                     severity: Severity::High,
@@ -257,15 +266,18 @@ impl Analyzer {
             }
         }
 
-        // 3. Detect god components
+        // 3. Detect central connectors (high bidirectional coupling)
+        // Note: This differs from Arcan's "God Component" which uses LOC metrics.
+        // Central Connector detects components with high fan-in AND fan-out,
+        // indicating they serve as communication hubs that may need decomposition.
         for cm in &components {
-            if cm.is_god {
+            if cm.is_central_connector {
                 smells.push(Smell {
-                    smell_type: SmellType::GodComponent,
+                    smell_type: SmellType::CentralConnector,
                     severity: Severity::Critical,
                     components: vec![cm.id.clone()],
                     description: format!(
-                        "God component \"{}\" has excessive coupling (fan-in={}, fan-out={})",
+                        "Central connector \"{}\" has excessive bidirectional coupling (fan-in={}, fan-out={})",
                         cm.name, cm.fan_in, cm.fan_out
                     ),
                     suggestion: "Decompose into smaller components with single responsibility; extract interfaces for consumers".to_string(),
@@ -395,7 +407,9 @@ fn calculate_summary(smells: &[Smell], components: &[ComponentMetrics]) -> Summa
             SmellType::CyclicDependency => summary.cyclic_count += 1,
             SmellType::HubLikeDependency | SmellType::Hub => summary.hub_count += 1,
             SmellType::UnstableDependency => summary.unstable_count += 1,
-            SmellType::GodComponent | SmellType::GodClass => summary.god_count += 1,
+            SmellType::CentralConnector => summary.central_connector_count += 1,
+            // Backward compatibility with old smell types
+            SmellType::GodComponent | SmellType::GodClass => summary.central_connector_count += 1,
             SmellType::FeatureEnvy => {}
         }
 
@@ -453,12 +467,18 @@ pub struct SmellMetrics {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SmellType {
     CyclicDependency,
-    GodClass,
     UnstableDependency,
     FeatureEnvy,
     Hub,
     HubLikeDependency,
+    /// High bidirectional coupling (high fan-in AND fan-out).
+    /// Note: This differs from Arcan's "God Component" which uses LOC metrics.
+    CentralConnector,
+    // Backward compatibility aliases
+    #[serde(alias = "GodComponent")]
     GodComponent,
+    #[serde(alias = "GodClass")]
+    GodClass,
 }
 
 /// Severity level.
@@ -490,7 +510,8 @@ pub struct ComponentMetrics {
     pub fan_out: usize,
     pub instability: f64,
     pub is_hub: bool,
-    pub is_god: bool,
+    /// High bidirectional coupling (high fan-in AND fan-out).
+    pub is_central_connector: bool,
 }
 
 /// Summary statistics.
@@ -500,7 +521,7 @@ pub struct Summary {
     pub cyclic_count: usize,
     pub hub_count: usize,
     pub unstable_count: usize,
-    pub god_count: usize,
+    pub central_connector_count: usize,
     pub critical_count: usize,
     pub high_count: usize,
     pub medium_count: usize,
@@ -519,15 +540,21 @@ mod tests {
     fn test_analyzer_creation() {
         let analyzer = Analyzer::new();
         assert_eq!(analyzer.config.thresholds.hub_threshold, 20);
-        assert_eq!(analyzer.config.thresholds.god_fan_in_threshold, 10);
+        assert_eq!(
+            analyzer
+                .config
+                .thresholds
+                .central_connector_fan_in_threshold,
+            10
+        );
     }
 
     #[test]
     fn test_thresholds_default() {
         let thresholds = Thresholds::default();
         assert_eq!(thresholds.hub_threshold, 20);
-        assert_eq!(thresholds.god_fan_in_threshold, 10);
-        assert_eq!(thresholds.god_fan_out_threshold, 10);
+        assert_eq!(thresholds.central_connector_fan_in_threshold, 10);
+        assert_eq!(thresholds.central_connector_fan_out_threshold, 10);
         assert!((thresholds.instability_difference - 0.4).abs() < 0.001);
         assert!((thresholds.stable_threshold - 0.3).abs() < 0.001);
         assert!((thresholds.unstable_threshold - 0.7).abs() < 0.001);
@@ -540,10 +567,22 @@ mod tests {
     }
 
     #[test]
-    fn test_analyzer_with_god_thresholds() {
-        let analyzer = Analyzer::new().with_god_thresholds(15, 15);
-        assert_eq!(analyzer.config.thresholds.god_fan_in_threshold, 15);
-        assert_eq!(analyzer.config.thresholds.god_fan_out_threshold, 15);
+    fn test_analyzer_with_central_connector_thresholds() {
+        let analyzer = Analyzer::new().with_central_connector_thresholds(15, 15);
+        assert_eq!(
+            analyzer
+                .config
+                .thresholds
+                .central_connector_fan_in_threshold,
+            15
+        );
+        assert_eq!(
+            analyzer
+                .config
+                .thresholds
+                .central_connector_fan_out_threshold,
+            15
+        );
     }
 
     #[test]
@@ -562,7 +601,7 @@ mod tests {
 
     #[test]
     fn test_smell_types() {
-        assert_ne!(SmellType::CyclicDependency, SmellType::GodComponent);
+        assert_ne!(SmellType::CyclicDependency, SmellType::CentralConnector);
         assert_eq!(SmellType::CyclicDependency, SmellType::CyclicDependency);
     }
 
@@ -625,7 +664,7 @@ mod tests {
                 fan_out: 5,
                 instability: 0.5,
                 is_hub: false,
-                is_god: false,
+                is_central_connector: false,
             },
             ComponentMetrics {
                 id: "b".to_string(),
@@ -634,7 +673,7 @@ mod tests {
                 fan_out: 8,
                 instability: 0.8,
                 is_hub: false,
-                is_god: false,
+                is_central_connector: false,
             },
         ];
 
@@ -657,7 +696,7 @@ mod tests {
             fan_out: 10,
             instability: 10.0 / 15.0,
             is_hub: false,
-            is_god: false,
+            is_central_connector: false,
         };
 
         assert_eq!(cm.fan_in, 5);
@@ -715,7 +754,7 @@ mod tests {
             fan_out: 0,
             instability: 0.0,
             is_hub: false,
-            is_god: false,
+            is_central_connector: false,
         };
         assert_eq!(stable.instability, 0.0);
 
@@ -727,8 +766,56 @@ mod tests {
             fan_out: 10,
             instability: 1.0,
             is_hub: false,
-            is_god: false,
+            is_central_connector: false,
         };
         assert_eq!(unstable.instability, 1.0);
+    }
+
+    #[test]
+    fn test_self_loop_cycle_detection() {
+        // A file importing itself should be flagged as cyclic
+        use petgraph::graph::DiGraph;
+
+        let mut graph: DiGraph<String, ()> = DiGraph::new();
+        let node = graph.add_node("self_loop.rs".to_string());
+        graph.add_edge(node, node, ()); // Self-loop
+
+        let sccs = tarjan_scc(&graph);
+
+        // Verify self-loop detection logic
+        let mut found_cycle = false;
+        for scc in sccs {
+            let is_cycle = scc.len() > 1 || (scc.len() == 1 && graph.contains_edge(scc[0], scc[0]));
+            if is_cycle {
+                found_cycle = true;
+                assert_eq!(scc.len(), 1);
+                assert_eq!(graph[scc[0]], "self_loop.rs");
+            }
+        }
+        assert!(found_cycle, "Self-loop should be detected as a cycle");
+    }
+
+    #[test]
+    fn test_multi_node_cycle_detection() {
+        // Traditional cycle: A -> B -> A
+        use petgraph::graph::DiGraph;
+
+        let mut graph: DiGraph<String, ()> = DiGraph::new();
+        let a = graph.add_node("a.rs".to_string());
+        let b = graph.add_node("b.rs".to_string());
+        graph.add_edge(a, b, ());
+        graph.add_edge(b, a, ());
+
+        let sccs = tarjan_scc(&graph);
+
+        let mut found_cycle = false;
+        for scc in sccs {
+            let is_cycle = scc.len() > 1 || (scc.len() == 1 && graph.contains_edge(scc[0], scc[0]));
+            if is_cycle {
+                found_cycle = true;
+                assert_eq!(scc.len(), 2);
+            }
+        }
+        assert!(found_cycle, "Multi-node cycle should be detected");
     }
 }
