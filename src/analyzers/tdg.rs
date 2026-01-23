@@ -7,12 +7,15 @@
 //! - Coupling (imports)
 //! - Documentation coverage
 //! - Consistency (indentation style)
+//! - Hotspot (churn x complexity from git history)
+//! - Temporal coupling (files that change together)
 
 use std::collections::HashMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::analyzers::{hotspot, temporal};
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result};
 
 /// TDG weight configuration.
@@ -37,7 +40,9 @@ impl Default for Weights {
             coupling: 15.0,
             documentation: 5.0,
             consistency: 10.0,
+            // Hotspot: penalize files that are both highly complex and frequently changed
             hotspot: 10.0,
+            // Temporal coupling: penalize files that change together with many others
             temporal_coupling: 10.0,
         }
     }
@@ -140,8 +145,9 @@ impl Analyzer {
         score.consistency_score = self.analyze_consistency(source);
 
         // Check for critical defects
-        let (defect_count, _has_critical) = self.detect_critical_defects(source, language);
+        let (defect_count, has_critical) = self.detect_critical_defects(source, language);
         score.critical_defects_count = defect_count;
+        score.has_critical_defects = has_critical;
 
         // Store penalty attributions
         score.penalties_applied = penalties;
@@ -413,8 +419,54 @@ impl Analyzer {
             }
         }
 
-        // Return count but never auto-fail
-        (count, false)
+        // Return count and whether any critical defects were found
+        (count, count > 0)
+    }
+
+    /// Compute per-file hotspot scores using git history analysis.
+    /// Returns a map of file path -> hotspot score (0.0-1.0, where 1.0 is worst).
+    fn compute_hotspot_scores(&self, ctx: &AnalysisContext<'_>) -> HashMap<String, f32> {
+        let mut scores = HashMap::new();
+
+        // Run hotspot analysis (silently fails if no git repo)
+        let hotspot_analyzer = hotspot::Analyzer::new();
+        if let Ok(analysis) = hotspot_analyzer.analyze(ctx) {
+            for hs in analysis.hotspots {
+                // Hotspot score is 0-1 (normalized churn * complexity percentiles)
+                scores.insert(hs.file, hs.score as f32);
+            }
+        }
+
+        scores
+    }
+
+    /// Compute per-file temporal coupling scores using git history.
+    /// Returns a map of file path -> coupling score (0.0-1.0, where 1.0 = many couplings).
+    fn compute_temporal_scores(&self, ctx: &AnalysisContext<'_>) -> HashMap<String, f32> {
+        let mut scores = HashMap::new();
+
+        // Run temporal coupling analysis
+        let temporal_analyzer = temporal::Analyzer::new();
+        if let Ok(analysis) = temporal_analyzer.analyze(ctx) {
+            // Count how many times each file appears in couplings
+            let mut coupling_counts: HashMap<String, usize> = HashMap::new();
+            for coupling in &analysis.couplings {
+                *coupling_counts.entry(coupling.file_a.clone()).or_insert(0) += 1;
+                *coupling_counts.entry(coupling.file_b.clone()).or_insert(0) += 1;
+            }
+
+            // Normalize to 0-1 scale
+            if let Some(&max_count) = coupling_counts.values().max() {
+                if max_count > 0 {
+                    for (file, count) in coupling_counts {
+                        // Higher count = more couplings = higher risk
+                        scores.insert(file, count as f32 / max_count as f32);
+                    }
+                }
+            }
+        }
+
+        scores
     }
 }
 
@@ -430,6 +482,12 @@ impl AnalyzerTrait for Analyzer {
     }
 
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
+        // Run hotspot analysis to get per-file hotspot scores (requires git history)
+        let hotspot_scores = self.compute_hotspot_scores(ctx);
+
+        // Run temporal coupling analysis to get per-file coupling counts
+        let temporal_scores = self.compute_temporal_scores(ctx);
+
         let mut scores = Vec::new();
 
         for path in ctx.files.iter() {
@@ -451,7 +509,28 @@ impl AnalyzerTrait for Analyzer {
                 .to_string();
 
             let language = Language::from_extension(path);
-            if let Ok(score) = self.analyze_source(&content, language, &file_path) {
+            if let Ok(mut score) = self.analyze_source(&content, language, &file_path) {
+                // Apply hotspot score (higher hotspot = more risk = lower score)
+                // Hotspot score ranges 0-1, where 1 is worst (critical hotspot)
+                if let Some(&hs) = hotspot_scores.get(&file_path) {
+                    // Invert: hotspot 0 = full points, hotspot 1 = 0 points
+                    score.hotspot_score = self.weights.hotspot * (1.0 - hs);
+                } else {
+                    // No hotspot data means no penalty (file may be new or not in git)
+                    score.hotspot_score = self.weights.hotspot;
+                }
+
+                // Apply temporal coupling score (more couplings = more risk = lower score)
+                if let Some(&tc) = temporal_scores.get(&file_path) {
+                    // tc is a 0-1 normalized score where 1 = many couplings
+                    score.temporal_coupling_score = self.weights.temporal_coupling * (1.0 - tc);
+                } else {
+                    // No coupling data means full points
+                    score.temporal_coupling_score = self.weights.temporal_coupling;
+                }
+
+                // Recalculate total with updated scores
+                score.calculate_total();
                 scores.push(score);
             }
         }
@@ -616,6 +695,8 @@ impl Score {
             coupling_score: 15.0,
             doc_coverage: 5.0,
             consistency_score: 10.0,
+            // Hotspot and temporal scores are set during analyze() from git history
+            // Default to max (no penalty) for files without git data
             hotspot_score: 10.0,
             temporal_coupling_score: 10.0,
             entropy_score: 0.0,
@@ -727,6 +808,7 @@ mod tests {
             + weights.consistency
             + weights.hotspot
             + weights.temporal_coupling;
+        // All weights sum to 100: 20 + 15 + 15 + 15 + 5 + 10 + 10 + 10
         assert_eq!(total, 100.0);
     }
 
@@ -790,6 +872,8 @@ mod tests {
     fn test_score_calculation() {
         let mut score = Score::new();
         score.calculate_total();
+        // Score is 100.0 with all components at their default max values
+        // (20 + 15 + 15 + 15 + 5 + 10 + 10 + 10 + 0 = 100)
         assert_eq!(score.total, 100.0);
         assert_eq!(score.grade, Grade::APlus);
     }
@@ -929,5 +1013,45 @@ import React from 'react';
         let analysis = aggregate_project_score(scores);
         assert_eq!(analysis.total_files, 2);
         assert_eq!(analysis.average_score, 85.0);
+    }
+
+    #[test]
+    fn test_critical_defects_detection() {
+        let analyzer = Analyzer::new();
+        // Rust code with .unwrap() should be flagged
+        let (count, has_critical) =
+            analyzer.detect_critical_defects("let x = foo.unwrap();", Language::Rust);
+        assert_eq!(count, 1);
+        assert!(
+            has_critical,
+            "has_critical should be true when defects found"
+        );
+
+        // Clean code should not be flagged
+        let (count, has_critical) =
+            analyzer.detect_critical_defects("let x = foo.unwrap_or_default();", Language::Rust);
+        assert_eq!(count, 0);
+        assert!(
+            !has_critical,
+            "has_critical should be false when no defects"
+        );
+    }
+
+    #[test]
+    fn test_critical_defects_auto_fail() {
+        let analyzer = Analyzer::new();
+        // Source with .unwrap() should trigger critical defect
+        let source = r#"
+fn risky() {
+    let x = some_option.unwrap();
+}
+"#;
+        let result = analyzer
+            .analyze_source(source, Language::Rust, "test.rs")
+            .unwrap();
+        assert!(result.critical_defects_count > 0);
+        assert!(result.has_critical_defects);
+        assert_eq!(result.total, 0.0);
+        assert_eq!(result.grade, Grade::F);
     }
 }
