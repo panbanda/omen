@@ -12,7 +12,7 @@
 //! where methods are connected if they share instance variables. This differs from
 //! LCOM4 which also connects methods that call each other.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use chrono::Utc;
@@ -131,6 +131,18 @@ impl Analyzer {
             }
         }
 
+        // Build class hierarchy for DIT/NOC calculation
+        let mut hierarchy = ClassHierarchy::new();
+        for cls in &all_classes {
+            hierarchy.add_class(&cls.class_name, cls.parent_class.as_deref());
+        }
+
+        // Update DIT and NOC for each class
+        for cls in &mut all_classes {
+            cls.dit = hierarchy.get_dit(&cls.class_name);
+            cls.noc = hierarchy.get_noc(&cls.class_name);
+        }
+
         // Sort by LCOM (least cohesive first)
         all_classes.sort_by(|a, b| b.lcom.cmp(&a.lcom));
 
@@ -173,6 +185,74 @@ fn is_oo_language(lang: Language) -> bool {
             | Language::Ruby
             | Language::Php
     )
+}
+
+/// Class hierarchy for DIT/NOC calculation.
+/// Tracks parent-child relationships across the codebase.
+#[derive(Debug, Default)]
+pub struct ClassHierarchy {
+    /// Maps class name -> parent class name (None if no parent)
+    parents: HashMap<String, Option<String>>,
+    /// Maps class name -> list of direct children
+    children: HashMap<String, Vec<String>>,
+}
+
+impl ClassHierarchy {
+    /// Creates a new empty class hierarchy.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds a class to the hierarchy.
+    pub fn add_class(&mut self, class_name: &str, parent: Option<&str>) {
+        let parent_str = parent.map(|s| s.to_string());
+        self.parents
+            .insert(class_name.to_string(), parent_str.clone());
+
+        // Register this class as a child of its parent
+        if let Some(parent_name) = parent_str {
+            self.children
+                .entry(parent_name)
+                .or_default()
+                .push(class_name.to_string());
+        }
+
+        // Ensure the class has an entry in children map (even if empty)
+        self.children.entry(class_name.to_string()).or_default();
+    }
+
+    /// Calculates DIT (Depth of Inheritance Tree) for a class.
+    /// DIT = max path length from class to root of inheritance tree.
+    /// Per Chidamber & Kemerer 1994, DIT counts the number of ancestor classes.
+    pub fn get_dit(&self, class_name: &str) -> u32 {
+        let mut depth = 0;
+        let mut current = class_name.to_string();
+
+        // Walk up the inheritance chain
+        while let Some(Some(parent)) = self.parents.get(&current) {
+            depth += 1;
+            current = parent.clone();
+        }
+
+        // If parent not in our map, still count it as depth 1
+        if depth == 0 {
+            if let Some(Some(_)) = self.parents.get(class_name) {
+                // Has a parent but parent not tracked - depth is at least 1
+                return 1;
+            }
+        }
+
+        depth
+    }
+
+    /// Calculates NOC (Number of Children) for a class.
+    /// NOC = count of immediate subclasses.
+    pub fn get_noc(&self, class_name: &str) -> u32 {
+        self.children
+            .get(class_name)
+            .map(|c| c.len() as u32)
+            .unwrap_or(0)
+    }
 }
 
 /// Checks if a file is a test file.
@@ -266,6 +346,9 @@ fn extract_class_metrics(
     // Get class name
     let name = get_class_name(node, source, lang)?;
 
+    // Extract parent class for inheritance tracking
+    let parent_class = extract_parent_class(node, source, lang);
+
     let start_line = node.start_position().row + 1;
     let end_line = node.end_position().row + 1;
     let loc = (end_line - start_line + 1) as u32;
@@ -293,10 +376,7 @@ fn extract_class_metrics(
     // (LCOM4 would additionally connect methods that call each other)
     let lcom = calculate_lcom(&methods, &fields);
 
-    // TODO: DIT and NOC require cross-file inheritance analysis to track
-    // class hierarchies across the codebase. Currently hardcoded to 0.
-    // Implementing this would require building a global class hierarchy map
-    // by scanning all files for extends/implements relationships.
+    // DIT and NOC are calculated later after building the full class hierarchy
     let dit = 0;
     let noc = 0;
 
@@ -318,6 +398,7 @@ fn extract_class_metrics(
     Some(ClassMetrics {
         path: path.to_string_lossy().to_string(),
         class_name: name,
+        parent_class,
         language: lang.to_string(),
         start_line,
         end_line,
@@ -335,6 +416,136 @@ fn extract_class_metrics(
         coupled_classes,
         violations,
     })
+}
+
+/// Extracts the parent class name from a class node (for extends/inherits).
+fn extract_parent_class(node: &tree_sitter::Node, source: &[u8], lang: Language) -> Option<String> {
+    match lang {
+        Language::Java => {
+            // Java: class Child extends Parent { }
+            // superclass node contains: "extends" keyword + type_identifier
+            node.child_by_field_name("superclass").and_then(|sc| {
+                // Find the type_identifier child (not the "extends" keyword)
+                for i in 0..sc.child_count() {
+                    if let Some(child) = sc.child(i) {
+                        if child.kind() == "type_identifier" {
+                            return std::str::from_utf8(&source[child.byte_range()])
+                                .ok()
+                                .map(|s| s.to_string());
+                        }
+                    }
+                }
+                None
+            })
+        }
+        Language::TypeScript | Language::JavaScript => {
+            // TS/JS: class Child extends Parent { }
+            // Look for class_heritage -> extends_clause -> identifier
+            for i in 0..node.child_count() {
+                if let Some(child) = node.child(i) {
+                    if child.kind() == "class_heritage" {
+                        // Find the extends clause
+                        for j in 0..child.child_count() {
+                            if let Some(clause) = child.child(j) {
+                                if clause.kind() == "extends_clause" {
+                                    // Get the identifier/type after 'extends'
+                                    for k in 0..clause.child_count() {
+                                        if let Some(type_node) = clause.child(k) {
+                                            if type_node.kind() == "identifier"
+                                                || type_node.kind() == "type_identifier"
+                                            {
+                                                return std::str::from_utf8(
+                                                    &source[type_node.byte_range()],
+                                                )
+                                                .ok()
+                                                .map(|s| s.to_string());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            None
+        }
+        Language::Python => {
+            // Python: class Child(Parent):
+            // superclasses is an argument_list containing: "(", identifier, ")"
+            node.child_by_field_name("superclasses").and_then(|args| {
+                // Find the first identifier child (the base class name)
+                for i in 0..args.child_count() {
+                    if let Some(child) = args.child(i) {
+                        if child.kind() == "identifier" {
+                            return std::str::from_utf8(&source[child.byte_range()])
+                                .ok()
+                                .map(|s| s.to_string());
+                        }
+                    }
+                }
+                None
+            })
+        }
+        Language::CSharp => {
+            // C#: class Child : Parent { }
+            node.child_by_field_name("bases")
+                .and_then(|bases| {
+                    for i in 0..bases.child_count() {
+                        if let Some(base) = bases.child(i) {
+                            if base.kind() == "identifier" || base.kind() == "type_identifier" {
+                                return std::str::from_utf8(&source[base.byte_range()]).ok();
+                            }
+                        }
+                    }
+                    None
+                })
+                .map(|s| s.to_string())
+        }
+        Language::Cpp => {
+            // C++: class Child : public Parent { }
+            // Look for base_class_clause
+            for i in 0..node.child_count() {
+                if let Some(child) = node.child(i) {
+                    if child.kind() == "base_class_clause" {
+                        // Find type_identifier inside
+                        for j in 0..child.child_count() {
+                            if let Some(base) = child.child(j) {
+                                if base.kind() == "type_identifier" {
+                                    return std::str::from_utf8(&source[base.byte_range()])
+                                        .ok()
+                                        .map(|s| s.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            None
+        }
+        Language::Ruby => {
+            // Ruby: class Child < Parent
+            node.child_by_field_name("superclass")
+                .and_then(|sc| std::str::from_utf8(&source[sc.byte_range()]).ok())
+                .map(|s| s.to_string())
+        }
+        Language::Php => {
+            // PHP: class Child extends Parent { }
+            node.child_by_field_name("base_clause")
+                .and_then(|base| {
+                    for i in 0..base.child_count() {
+                        if let Some(child) = base.child(i) {
+                            if child.kind() == "name" || child.kind() == "qualified_name" {
+                                return std::str::from_utf8(&source[child.byte_range()]).ok();
+                            }
+                        }
+                    }
+                    None
+                })
+                .map(|s| s.to_string())
+        }
+        _ => None,
+    }
 }
 
 /// Gets the class name from a node.
@@ -930,6 +1141,9 @@ pub struct ClassMetrics {
     pub path: String,
     /// Class name.
     pub class_name: String,
+    /// Parent class name (for inheritance tracking).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_class: Option<String>,
     /// Programming language.
     pub language: String,
     /// Start line.
@@ -1140,6 +1354,7 @@ mod tests {
             ClassMetrics {
                 path: "a.java".to_string(),
                 class_name: "Foo".to_string(),
+                parent_class: None,
                 language: "Java".to_string(),
                 start_line: 1,
                 end_line: 50,
@@ -1160,6 +1375,7 @@ mod tests {
             ClassMetrics {
                 path: "b.java".to_string(),
                 class_name: "Bar".to_string(),
+                parent_class: None,
                 language: "Java".to_string(),
                 start_line: 1,
                 end_line: 30,
@@ -1195,6 +1411,7 @@ mod tests {
         let metrics = ClassMetrics {
             path: "Test.java".to_string(),
             class_name: "Test".to_string(),
+            parent_class: Some("BaseTest".to_string()),
             language: "Java".to_string(),
             start_line: 1,
             end_line: 100,
@@ -1225,6 +1442,7 @@ mod tests {
             classes: vec![
                 ClassMetrics {
                     class_name: "Low".to_string(),
+                    parent_class: None,
                     lcom: 1,
                     wmc: 5,
                     cbo: 2,
@@ -1245,6 +1463,7 @@ mod tests {
                 },
                 ClassMetrics {
                     class_name: "High".to_string(),
+                    parent_class: None,
                     lcom: 5,
                     wmc: 50,
                     cbo: 10,
@@ -1298,6 +1517,7 @@ mod tests {
         let metrics = ClassMetrics {
             path: "Test.java".to_string(),
             class_name: "ComplexClass".to_string(),
+            parent_class: None,
             language: "Java".to_string(),
             start_line: 1,
             end_line: 100,
@@ -1322,5 +1542,168 @@ mod tests {
         // Also verify WMC at threshold is not flagged
         let at_threshold = 24;
         assert!(at_threshold <= WMC_THRESHOLD);
+    }
+
+    // DIT/NOC Tests - Chidamber & Kemerer 1994 IEEE TSE
+    // DIT = Depth of Inheritance Tree (max path length to root)
+    // NOC = Number of Children (direct subclasses)
+
+    #[test]
+    fn test_class_hierarchy_empty() {
+        let hierarchy = ClassHierarchy::new();
+        assert_eq!(hierarchy.get_dit("Foo"), 0);
+        assert_eq!(hierarchy.get_noc("Foo"), 0);
+    }
+
+    #[test]
+    fn test_class_hierarchy_no_inheritance() {
+        let mut hierarchy = ClassHierarchy::new();
+        hierarchy.add_class("Foo", None);
+        assert_eq!(hierarchy.get_dit("Foo"), 0);
+        assert_eq!(hierarchy.get_noc("Foo"), 0);
+    }
+
+    #[test]
+    fn test_class_hierarchy_single_inheritance() {
+        // Child extends Parent
+        let mut hierarchy = ClassHierarchy::new();
+        hierarchy.add_class("Parent", None);
+        hierarchy.add_class("Child", Some("Parent"));
+
+        assert_eq!(hierarchy.get_dit("Parent"), 0);
+        assert_eq!(hierarchy.get_dit("Child"), 1);
+        assert_eq!(hierarchy.get_noc("Parent"), 1);
+        assert_eq!(hierarchy.get_noc("Child"), 0);
+    }
+
+    #[test]
+    fn test_class_hierarchy_multi_level() {
+        // GrandChild extends Child extends Parent
+        let mut hierarchy = ClassHierarchy::new();
+        hierarchy.add_class("Parent", None);
+        hierarchy.add_class("Child", Some("Parent"));
+        hierarchy.add_class("GrandChild", Some("Child"));
+
+        assert_eq!(hierarchy.get_dit("Parent"), 0);
+        assert_eq!(hierarchy.get_dit("Child"), 1);
+        assert_eq!(hierarchy.get_dit("GrandChild"), 2);
+        assert_eq!(hierarchy.get_noc("Parent"), 1);
+        assert_eq!(hierarchy.get_noc("Child"), 1);
+        assert_eq!(hierarchy.get_noc("GrandChild"), 0);
+    }
+
+    #[test]
+    fn test_class_hierarchy_multiple_children() {
+        // Child1, Child2, Child3 all extend Parent
+        let mut hierarchy = ClassHierarchy::new();
+        hierarchy.add_class("Parent", None);
+        hierarchy.add_class("Child1", Some("Parent"));
+        hierarchy.add_class("Child2", Some("Parent"));
+        hierarchy.add_class("Child3", Some("Parent"));
+
+        assert_eq!(hierarchy.get_dit("Parent"), 0);
+        assert_eq!(hierarchy.get_noc("Parent"), 3);
+        for child in &["Child1", "Child2", "Child3"] {
+            assert_eq!(hierarchy.get_dit(child), 1);
+            assert_eq!(hierarchy.get_noc(child), 0);
+        }
+    }
+
+    #[test]
+    fn test_class_hierarchy_unknown_parent() {
+        // Child extends UnknownParent (not in codebase, e.g., stdlib)
+        let mut hierarchy = ClassHierarchy::new();
+        hierarchy.add_class("Child", Some("UnknownParent"));
+
+        // DIT should be 1 (assuming unknown parent has DIT 0)
+        assert_eq!(hierarchy.get_dit("Child"), 1);
+        assert_eq!(hierarchy.get_noc("Child"), 0);
+    }
+
+    #[test]
+    fn test_extract_parent_class_java() {
+        let parser = Parser::new();
+        let source = b"public class Child extends Parent { }";
+        let result = parser
+            .parse(source, Language::Java, Path::new("Child.java"))
+            .unwrap();
+
+        let class_node = find_first_class_node(&result.tree, Language::Java).unwrap();
+        let parent = extract_parent_class(&class_node, source, Language::Java);
+
+        assert_eq!(parent, Some("Parent".to_string()));
+    }
+
+    #[test]
+    fn test_extract_parent_class_java_no_extends() {
+        let parser = Parser::new();
+        let source = b"public class Standalone { }";
+        let result = parser
+            .parse(source, Language::Java, Path::new("Standalone.java"))
+            .unwrap();
+
+        let class_node = find_first_class_node(&result.tree, Language::Java).unwrap();
+        let parent = extract_parent_class(&class_node, source, Language::Java);
+
+        assert_eq!(parent, None);
+    }
+
+    #[test]
+    fn test_extract_parent_class_python() {
+        let parser = Parser::new();
+        let source = b"class Child(Parent):\n    pass";
+        let result = parser
+            .parse(source, Language::Python, Path::new("child.py"))
+            .unwrap();
+
+        let class_node = find_first_class_node(&result.tree, Language::Python).unwrap();
+        let parent = extract_parent_class(&class_node, source, Language::Python);
+
+        assert_eq!(parent, Some("Parent".to_string()));
+    }
+
+    #[test]
+    fn test_extract_parent_class_typescript() {
+        let parser = Parser::new();
+        let source = b"class Child extends Parent { }";
+        let result = parser
+            .parse(source, Language::TypeScript, Path::new("child.ts"))
+            .unwrap();
+
+        let class_node = find_first_class_node(&result.tree, Language::TypeScript).unwrap();
+        let parent = extract_parent_class(&class_node, source, Language::TypeScript);
+
+        assert_eq!(parent, Some("Parent".to_string()));
+    }
+
+    /// Helper to find the first class node in a tree using a cursor.
+    fn find_first_class_node<'a>(
+        tree: &'a tree_sitter::Tree,
+        lang: Language,
+    ) -> Option<tree_sitter::Node<'a>> {
+        let mut cursor = tree.walk();
+        find_class_node_recursive(&mut cursor, lang)
+    }
+
+    fn find_class_node_recursive<'a>(
+        cursor: &mut tree_sitter::TreeCursor<'a>,
+        lang: Language,
+    ) -> Option<tree_sitter::Node<'a>> {
+        loop {
+            let node = cursor.node();
+            if is_class_node(node.kind(), lang) {
+                return Some(node);
+            }
+            if cursor.goto_first_child() {
+                if let Some(found) = find_class_node_recursive(cursor, lang) {
+                    return Some(found);
+                }
+                cursor.goto_parent();
+            }
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+        None
     }
 }
