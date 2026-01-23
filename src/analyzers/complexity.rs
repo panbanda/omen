@@ -441,9 +441,14 @@ fn count_decision_points(node: &tree_sitter::Node<'_>, source: &[u8], lang: Lang
 
 /// Calculate cognitive complexity with nesting penalties.
 /// Uses iterative cursor traversal with depth tracking for performance.
+///
+/// Per SonarSource Cognitive Complexity specification:
+/// - Nesting constructs (if, for, while, etc.) add +1 plus nesting depth
+/// - Flat constructs (else, elif, break, continue) add +1 only (no nesting penalty)
+/// - Logical operators (&&, ||, and, or) add +1 each (no nesting penalty)
 fn calculate_cognitive_complexity(
     node: &tree_sitter::Node<'_>,
-    _source: &[u8],
+    source: &[u8],
     lang: Language,
     initial_depth: u32,
 ) -> u32 {
@@ -473,14 +478,30 @@ fn calculate_cognitive_complexity(
 
         // Check if this is a complexity-adding construct
         if nesting_types.contains(&kind) {
+            // Nesting constructs: +1 base plus nesting penalty
             complexity += 1 + current_depth;
             // Children will have increased depth
             if level + 1 < depth_at_level.len() {
                 depth_at_level[level + 1] = current_depth + 1;
             }
         } else if flat_types.contains(&kind) {
-            complexity += 1 + current_depth;
+            // Flat constructs: +1 only, NO nesting penalty per SonarSource spec
+            complexity += 1;
             // Children stay at same depth
+            if level + 1 < depth_at_level.len() {
+                depth_at_level[level + 1] = current_depth;
+            }
+        } else if kind == "binary_expression"
+            || kind == "logical_expression"
+            || kind == "boolean_operator"
+        {
+            // Logical operators: +1 each for &&, ||, and, or (no nesting penalty)
+            if let Some(op) = get_operator(&current, source) {
+                if op == "&&" || op == "||" || op == "and" || op == "or" {
+                    complexity += 1;
+                }
+            }
+            // Children inherit current depth
             if level + 1 < depth_at_level.len() {
                 depth_at_level[level + 1] = current_depth;
             }
@@ -1185,5 +1206,124 @@ fn third() { for i in 0..10 { println!("{}", i); } }
         assert!(names.contains(&"first"));
         assert!(names.contains(&"second"));
         assert!(names.contains(&"third"));
+    }
+
+    // SonarSource Cognitive Complexity specification tests
+    // These tests verify the fix for:
+    // 1. else/elif adding +1 only (no nesting penalty)
+    // 2. logical operators (&&/||) counting in cognitive complexity
+
+    #[test]
+    fn test_cognitive_else_no_nesting_penalty() {
+        // Per SonarSource spec: else adds +1 only, no nesting penalty
+        let code = br#"
+fn with_else(x: i32) -> i32 {
+    if x > 0 {
+        1
+    } else {
+        -1
+    }
+}
+"#;
+        let result = parse_and_analyze(code, Language::Rust, "test.rs");
+        assert_eq!(result.functions.len(), 1);
+        // if = +1 (base) + 0 (depth) = 1
+        // else = +1 (flat, no depth penalty)
+        // Total = 2
+        assert_eq!(
+            result.functions[0].metrics.cognitive, 2,
+            "if + else should equal 2 (else should not get nesting penalty)"
+        );
+    }
+
+    #[test]
+    fn test_cognitive_nested_if_else() {
+        // Nested structure: outer if, inner if + else
+        let code = br#"
+fn nested_if_else(x: i32, y: i32) -> i32 {
+    if x > 0 {
+        if y > 0 {
+            1
+        } else {
+            2
+        }
+    } else {
+        0
+    }
+}
+"#;
+        let result = parse_and_analyze(code, Language::Rust, "test.rs");
+        assert_eq!(result.functions.len(), 1);
+        // outer if = +1 + 0 = 1
+        // inner if = +1 + 1 = 2
+        // inner else = +1 (no depth)
+        // outer else = +1 (no depth)
+        // Total = 5
+        assert_eq!(
+            result.functions[0].metrics.cognitive, 5,
+            "nested if/else expected 5"
+        );
+    }
+
+    #[test]
+    fn test_cognitive_logical_operators_js() {
+        // Per SonarSource spec: each && and || adds +1 (no nesting penalty)
+        let code = b"function check(a, b, c) { if (a && b || c) { return true; } return false; }";
+        let result = parse_and_analyze(code, Language::JavaScript, "test.js");
+        assert_eq!(result.functions.len(), 1);
+        // if = +1, && = +1, || = +1
+        // Total = 3
+        assert_eq!(
+            result.functions[0].metrics.cognitive, 3,
+            "if + && + || should equal 3"
+        );
+    }
+
+    #[test]
+    fn test_cognitive_elif_no_nesting_penalty_py() {
+        // Per SonarSource spec: elif adds +1 only, no nesting penalty
+        let code = br#"
+def classify(x):
+    if x > 0:
+        return "positive"
+    elif x < 0:
+        return "negative"
+    else:
+        return "zero"
+"#;
+        let result = parse_and_analyze(code, Language::Python, "test.py");
+        assert_eq!(result.functions.len(), 1);
+        // if = +1, elif = +1 (flat), else = +1 (flat)
+        // Total = 3
+        assert_eq!(
+            result.functions[0].metrics.cognitive, 3,
+            "if + elif + else should equal 3"
+        );
+    }
+
+    #[test]
+    fn test_cognitive_complex_nesting() {
+        // Test deeply nested structure with proper depth penalties
+        let code = br#"
+fn complex(a: bool, b: bool, c: bool) {
+    if a {
+        if b {
+            if c {
+                println!("all true");
+            }
+        }
+    }
+}
+"#;
+        let result = parse_and_analyze(code, Language::Rust, "test.rs");
+        assert_eq!(result.functions.len(), 1);
+        // if a (depth 0) = +1 + 0 = 1
+        // if b (depth 1) = +1 + 1 = 2
+        // if c (depth 2) = +1 + 2 = 3
+        // Total = 6
+        assert_eq!(
+            result.functions[0].metrics.cognitive, 6,
+            "3 nested ifs should equal 6 (1+2+3)"
+        );
     }
 }
