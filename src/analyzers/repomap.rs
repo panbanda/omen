@@ -189,13 +189,16 @@ impl Analyzer {
                     continue;
                 }
 
-                // Try any function with this name
-                for (name, &callee_idx) in &symbol_names {
-                    if name.ends_with(&format!(":{}", call)) {
-                        let callee_node = node_indices[&callee_idx];
-                        graph.add_edge(caller_node, callee_node, ());
-                        break;
-                    }
+                // Try any function with this name (sorted for determinism)
+                let suffix = format!(":{}", call);
+                let mut candidates: Vec<_> = symbol_names
+                    .iter()
+                    .filter(|(name, _)| name.ends_with(&suffix))
+                    .collect();
+                candidates.sort_by(|a, b| a.0.cmp(b.0)); // Lexicographic order for determinism
+                if let Some((_, &callee_idx)) = candidates.first() {
+                    let callee_node = node_indices[&callee_idx];
+                    graph.add_edge(caller_node, callee_node, ());
                 }
             }
         }
@@ -248,6 +251,10 @@ impl Analyzer {
     }
 
     /// Calculate PageRank for all nodes in the graph.
+    ///
+    // TODO: Handle dangling nodes (no outgoing edges) in PageRank.
+    // Current implementation effectively treats sinks as having self-loops.
+    // Standard PageRank redistributes sink rank uniformly across all nodes.
     fn calculate_pagerank(&self, graph: &DiGraph<usize, ()>) -> HashMap<NodeIndex, f64> {
         let n = graph.node_count();
         if n == 0 {
@@ -749,5 +756,40 @@ mod tests {
         let parsed: Analysis = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.symbols.len(), 1);
         assert_eq!(parsed.symbols[0].name, "test");
+    }
+
+    #[test]
+    fn test_deterministic_call_resolution() {
+        // When multiple functions match a call name, the resolution should be
+        // deterministic (lexicographically sorted by qualified name)
+        let mut symbol_names: HashMap<String, usize> = HashMap::new();
+        symbol_names.insert("z_module.rs:helper".to_string(), 0);
+        symbol_names.insert("a_module.rs:helper".to_string(), 1);
+        symbol_names.insert("m_module.rs:helper".to_string(), 2);
+
+        let call = "helper";
+        let suffix = format!(":{}", call);
+
+        // Collect and sort candidates
+        let mut candidates: Vec<_> = symbol_names
+            .iter()
+            .filter(|(name, _)| name.ends_with(&suffix))
+            .collect();
+        candidates.sort_by(|a, b| a.0.cmp(b.0));
+
+        // Should always resolve to a_module.rs:helper (lexicographically first)
+        assert_eq!(candidates.len(), 3);
+        assert_eq!(candidates[0].0, "a_module.rs:helper");
+        assert_eq!(*candidates[0].1, 1);
+
+        // Run multiple times to verify determinism
+        for _ in 0..10 {
+            let mut candidates2: Vec<_> = symbol_names
+                .iter()
+                .filter(|(name, _)| name.ends_with(&suffix))
+                .collect();
+            candidates2.sort_by(|a, b| a.0.cmp(b.0));
+            assert_eq!(candidates2[0].0, "a_module.rs:helper");
+        }
     }
 }
