@@ -245,21 +245,36 @@ impl AnalyzerTrait for Analyzer {
         // Progress tracking
         let progress_counter = AtomicUsize::new(0);
 
+        // Thread-local GitRepo to avoid opening/closing for each file
+        use std::cell::RefCell;
+        thread_local! {
+            static THREAD_REPO: RefCell<Option<GitRepo>> = const { RefCell::new(None) };
+        }
+
         // Phase 1: Parallel blame operations (the expensive part)
-        // Each thread opens its own GitRepo for thread safety
+        // Each thread reuses its own GitRepo for all files it processes
+        let git_path_owned = git_path.to_path_buf();
         let file_ownerships: Vec<FileOwnership> = files
             .par_iter()
             .filter_map(|file| {
-                // Open thread-local git repo
-                let repo = GitRepo::open(git_path).ok()?;
+                // Get or create thread-local git repo
+                THREAD_REPO.with(|cell| {
+                    let mut repo_opt = cell.borrow_mut();
+                    if repo_opt.is_none() {
+                        *repo_opt = GitRepo::open(&git_path_owned).ok();
+                    }
+                    let repo = repo_opt.as_ref()?;
 
-                // Update progress
-                let current = progress_counter.fetch_add(1, Ordering::Relaxed);
-                if current.is_multiple_of(100) {
-                    ctx.report_progress(current, total_files);
-                }
+                    // Update progress
+                    let current = progress_counter.fetch_add(1, Ordering::Relaxed);
+                    if current.is_multiple_of(100) {
+                        ctx.report_progress(current, total_files);
+                    }
 
-                self.analyze_file(&repo, file, git_path).ok().flatten()
+                    self.analyze_file(repo, file, &git_path_owned)
+                        .ok()
+                        .flatten()
+                })
             })
             .collect();
 

@@ -12,6 +12,7 @@ use ignore::WalkBuilder;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
@@ -83,105 +84,100 @@ impl Analyzer {
 
     /// Analyze a repository and generate a PageRank-ranked symbol map.
     pub fn analyze_repo(&self, repo_path: &Path) -> Result<Analysis> {
-        let parser = Parser::new();
+        // Phase 1: Collect all file paths (fast)
+        let files: Vec<_> = WalkBuilder::new(repo_path)
+            .hidden(false)
+            .build()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
+            .filter(|e| !self.config.skip_test_files || !is_test_file(e.path()))
+            .filter(|e| Language::detect(e.path()).is_some())
+            .map(|e| e.into_path())
+            .collect();
 
-        // Collect all symbols with their calls
-        let mut symbols: Vec<SymbolInfo> = Vec::new();
-        let mut symbol_names: HashMap<String, usize> = HashMap::new();
+        // Phase 2: Parallel parsing - extract symbols from all files
+        let file_symbols: Vec<Vec<SymbolInfo>> = files
+            .par_iter()
+            .filter_map(|path| {
+                let lang = Language::detect(path)?;
+                let parser = Parser::new();
+                let parse_result = parser.parse_file(path).ok()?;
+                let functions = extract_functions(&parse_result);
+                let source = &parse_result.source;
 
-        for entry in WalkBuilder::new(repo_path).hidden(false).build() {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
+                let rel_path = path
+                    .strip_prefix(repo_path)
+                    .unwrap_or(path)
+                    .to_string_lossy()
+                    .to_string();
 
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
+                let symbols: Vec<SymbolInfo> = functions
+                    .into_iter()
+                    .map(|func| {
+                        let qualified_name = format!("{}:{}", rel_path, func.name);
+                        let calls = if let Some(body_node) = func.body {
+                            extract_calls_from_body(&body_node, source, lang)
+                        } else {
+                            Vec::new()
+                        };
 
-            // Skip test files if configured
-            if self.config.skip_test_files && is_test_file(path) {
-                continue;
-            }
+                        SymbolInfo {
+                            name: func.name.clone(),
+                            qualified_name,
+                            kind: SymbolKind::Function,
+                            file: rel_path.clone(),
+                            line: func.start_line,
+                            signature: func.signature.clone(),
+                            calls,
+                            is_exported: func.is_exported,
+                        }
+                    })
+                    .collect();
 
-            // Detect language
-            let lang = match Language::detect(path) {
-                Some(l) => l,
-                None => continue,
-            };
+                Some(symbols)
+            })
+            .collect();
 
-            // Parse file
-            let parse_result = match parser.parse_file(path) {
-                Ok(r) => r,
-                Err(_) => continue,
-            };
+        // Phase 3: Flatten and build indices
+        let symbols: Vec<SymbolInfo> = file_symbols.into_iter().flatten().collect();
 
-            // Extract functions/symbols
-            let functions = extract_functions(&parse_result);
-            let source = &parse_result.source;
+        // Build lookup indices for O(1) call resolution
+        let mut symbol_names: HashMap<String, usize> = HashMap::with_capacity(symbols.len());
+        let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
 
-            for func in functions {
-                let qualified_name = format!(
-                    "{}:{}",
-                    path.strip_prefix(repo_path)
-                        .unwrap_or(path)
-                        .to_string_lossy(),
-                    func.name
-                );
-
-                // Get index for this symbol
-                let idx = symbols.len();
-                symbol_names.insert(qualified_name.clone(), idx);
-
-                // Extract function calls from body
-                let calls = if let Some(body_node) = func.body {
-                    extract_calls_from_body(&body_node, source, lang)
-                } else {
-                    Vec::new()
-                };
-
-                symbols.push(SymbolInfo {
-                    name: func.name.clone(),
-                    qualified_name,
-                    kind: SymbolKind::Function,
-                    file: path
-                        .strip_prefix(repo_path)
-                        .unwrap_or(path)
-                        .to_string_lossy()
-                        .to_string(),
-                    line: func.start_line,
-                    signature: func.signature.clone(),
-                    calls,
-                    is_exported: func.is_exported,
-                });
-            }
+        for (idx, sym) in symbols.iter().enumerate() {
+            symbol_names.insert(sym.qualified_name.clone(), idx);
+            by_name.entry(sym.name.clone()).or_default().push(idx);
         }
 
-        // Build call graph
+        // Pre-sort name lookups for deterministic resolution
+        for indices in by_name.values_mut() {
+            indices.sort_by(|a, b| symbols[*a].qualified_name.cmp(&symbols[*b].qualified_name));
+        }
+
+        // Phase 4: Build call graph
         let mut graph: DiGraph<usize, ()> = DiGraph::new();
-        let mut node_indices: HashMap<usize, NodeIndex> = HashMap::new();
+        let mut node_indices: HashMap<usize, NodeIndex> = HashMap::with_capacity(symbols.len());
 
         // Create nodes
-        for (idx, _) in symbols.iter().enumerate() {
+        for idx in 0..symbols.len() {
             let node_idx = graph.add_node(idx);
             node_indices.insert(idx, node_idx);
         }
 
-        // Create edges based on calls
+        // Create edges based on calls using indexed lookups
         for (caller_idx, symbol) in symbols.iter().enumerate() {
             let caller_node = node_indices[&caller_idx];
 
             for call in &symbol.calls {
-                // Try to resolve the call to a symbol
-                // First, try exact qualified name match
+                // 1. Try exact qualified name match
                 if let Some(&callee_idx) = symbol_names.get(call) {
                     let callee_node = node_indices[&callee_idx];
                     graph.add_edge(caller_node, callee_node, ());
                     continue;
                 }
 
-                // Try matching by function name only (within same file first)
+                // 2. Try same-file match
                 let same_file_key = format!("{}:{}", symbol.file, call);
                 if let Some(&callee_idx) = symbol_names.get(&same_file_key) {
                     let callee_node = node_indices[&callee_idx];
@@ -189,24 +185,20 @@ impl Analyzer {
                     continue;
                 }
 
-                // Try any function with this name (sorted for determinism)
-                let suffix = format!(":{}", call);
-                let mut candidates: Vec<_> = symbol_names
-                    .iter()
-                    .filter(|(name, _)| name.ends_with(&suffix))
-                    .collect();
-                candidates.sort_by(|a, b| a.0.cmp(b.0)); // Lexicographic order for determinism
-                if let Some((_, &callee_idx)) = candidates.first() {
-                    let callee_node = node_indices[&callee_idx];
-                    graph.add_edge(caller_node, callee_node, ());
+                // 3. Use name index for O(1) lookup (already sorted for determinism)
+                if let Some(indices) = by_name.get(call) {
+                    if let Some(&callee_idx) = indices.first() {
+                        let callee_node = node_indices[&callee_idx];
+                        graph.add_edge(caller_node, callee_node, ());
+                    }
                 }
             }
         }
 
-        // Calculate PageRank
+        // Phase 5: Calculate PageRank
         let pagerank = self.calculate_pagerank(&graph);
 
-        // Build output symbols with metrics
+        // Phase 6: Build output symbols with metrics
         let mut output_symbols: Vec<SymbolEntry> = symbols
             .iter()
             .enumerate()

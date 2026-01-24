@@ -32,6 +32,7 @@ use petgraph::algo::tarjan_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result};
@@ -52,6 +53,153 @@ pub struct Config {
     pub include_external: bool,
 }
 
+/// Pre-built index for O(1) file path lookups during import resolution.
+#[allow(dead_code)]
+struct FilePathIndex {
+    /// Full relative path -> relative path (identity mapping for exact matches).
+    by_full_path: HashMap<String, String>,
+    /// File stem (without extension) -> list of relative paths.
+    by_stem: HashMap<String, Vec<String>>,
+    /// File name (with extension) -> list of relative paths.
+    by_name: HashMap<String, Vec<String>>,
+    /// Normalized path segments for partial matching.
+    by_segments: HashMap<String, Vec<String>>,
+}
+
+impl FilePathIndex {
+    fn new(files: &[std::path::PathBuf], root: &Path) -> Self {
+        let mut by_full_path = HashMap::with_capacity(files.len());
+        let mut by_stem: HashMap<String, Vec<String>> = HashMap::new();
+        let mut by_name: HashMap<String, Vec<String>> = HashMap::new();
+        let mut by_segments: HashMap<String, Vec<String>> = HashMap::new();
+
+        for file in files {
+            let rel = file.strip_prefix(root).unwrap_or(file);
+            let rel_str = rel.to_string_lossy().to_string();
+
+            // Full path lookup
+            by_full_path.insert(rel_str.clone(), rel_str.clone());
+
+            // File stem lookup (e.g., "mod" from "mod.rs")
+            if let Some(stem) = rel.file_stem() {
+                let stem_str = stem.to_string_lossy().to_string();
+                by_stem.entry(stem_str).or_default().push(rel_str.clone());
+            }
+
+            // File name lookup (e.g., "mod.rs")
+            if let Some(name) = rel.file_name() {
+                let name_str = name.to_string_lossy().to_string();
+                by_name.entry(name_str).or_default().push(rel_str.clone());
+            }
+
+            // Segment-based lookup for partial path matching
+            // e.g., "src/utils/helpers" can match "utils/helpers.rs"
+            for component in rel.iter() {
+                let comp_str = component.to_string_lossy().to_string();
+                if !comp_str.is_empty() && comp_str != "." {
+                    by_segments
+                        .entry(comp_str)
+                        .or_default()
+                        .push(rel_str.clone());
+                }
+            }
+        }
+
+        Self {
+            by_full_path,
+            by_stem,
+            by_name,
+            by_segments,
+        }
+    }
+
+    /// Try to find a file matching the import path.
+    fn find_match(&self, import_path: &str, from_file: &Path) -> Option<String> {
+        // 1. Handle relative imports (./foo, ../foo)
+        if import_path.starts_with("./") || import_path.starts_with("../") {
+            if let Some(parent) = from_file.parent() {
+                let resolved = parent.join(import_path);
+                let normalized = normalize_path(&resolved);
+
+                // Try exact match with common extensions
+                for ext in &[
+                    "", ".rs", ".go", ".py", ".ts", ".tsx", ".js", ".jsx", ".java",
+                ] {
+                    let with_ext = if ext.is_empty() {
+                        normalized.clone()
+                    } else {
+                        format!(
+                            "{}.{}",
+                            normalized.trim_end_matches(&format!(".{}", &ext[1..])),
+                            &ext[1..]
+                        )
+                    };
+
+                    if self.by_full_path.contains_key(&with_ext) {
+                        return Some(with_ext);
+                    }
+
+                    // Try index files (e.g., ./utils -> ./utils/index.ts)
+                    let index_path = format!("{}/index{}", normalized, ext);
+                    if self.by_full_path.contains_key(&index_path) {
+                        return Some(index_path);
+                    }
+                }
+            }
+        }
+
+        // 2. Try exact stem match
+        if let Some(matches) = self.by_stem.get(import_path) {
+            if matches.len() == 1 {
+                return Some(matches[0].clone());
+            }
+            // Multiple matches - prefer shortest path (most specific)
+            if !matches.is_empty() {
+                let mut sorted = matches.clone();
+                sorted.sort_by_key(|s| s.len());
+                return Some(sorted[0].clone());
+            }
+        }
+
+        // 3. Try segment-based matching for module paths like "utils/helpers"
+        let segments: Vec<&str> = import_path.split('/').filter(|s| !s.is_empty()).collect();
+        if let Some(last_segment) = segments.last() {
+            if let Some(candidates) = self.by_stem.get(*last_segment) {
+                // Find candidates that match the full path pattern
+                for candidate in candidates {
+                    if candidate.contains(import_path) {
+                        return Some(candidate.clone());
+                    }
+                }
+                // Fall back to first match with the stem
+                if !candidates.is_empty() {
+                    return Some(candidates[0].clone());
+                }
+            }
+        }
+
+        None
+    }
+}
+
+/// Normalize a path by removing . and resolving ..
+fn normalize_path(path: &Path) -> String {
+    let mut components = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(c) => {
+                components.push(c.to_string_lossy().to_string());
+            }
+            std::path::Component::ParentDir => {
+                components.pop();
+            }
+            std::path::Component::CurDir => {}
+            _ => {}
+        }
+    }
+    components.join("/")
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -66,6 +214,7 @@ impl Default for Config {
 
 /// Graph analyzer.
 pub struct Analyzer {
+    #[allow(dead_code)]
     parser: Parser,
     config: Config,
 }
@@ -107,29 +256,52 @@ impl Analyzer {
 
     /// Analyze a set of files and build dependency graph.
     pub fn analyze_files(&self, files: &[std::path::PathBuf], root: &Path) -> Result<Analysis> {
+        // Build file path index for O(1) lookups during import resolution
+        let file_index = FilePathIndex::new(files, root);
+
+        // Parallel parsing: extract imports from all files concurrently
+        let file_imports: Vec<(String, Vec<String>)> = files
+            .par_iter()
+            .filter_map(|file| {
+                let rel_path = file.strip_prefix(root).unwrap_or(file);
+                let path_str = rel_path.to_string_lossy().to_string();
+
+                // Parse and extract imports using thread-local parser
+                let parser = Parser::new();
+                let result = parser.parse_file(file).ok()?;
+                let imports = extract_imports(&result);
+
+                // Resolve imports using the pre-built index
+                let resolved: Vec<String> = if self.config.resolve_imports {
+                    imports
+                        .iter()
+                        .filter_map(|imp| {
+                            file_index.find_match(&imp.path, rel_path).or_else(|| {
+                                if self.config.include_external {
+                                    Some(imp.path.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                        })
+                        .collect()
+                } else {
+                    imports.iter().map(|imp| imp.path.clone()).collect()
+                };
+
+                Some((path_str, resolved))
+            })
+            .collect();
+
+        // Build graph (sequential, but fast since parsing is done)
         let mut graph: DiGraph<String, ()> = DiGraph::with_capacity(files.len(), files.len() * 4);
         let mut node_indices: HashMap<String, NodeIndex> = HashMap::with_capacity(files.len());
-        let mut file_imports: HashMap<String, Vec<String>> = HashMap::with_capacity(files.len());
 
-        // First pass: create nodes and collect imports
-        for file in files {
-            let rel_path = file.strip_prefix(root).unwrap_or(file);
-            let path_str = rel_path.to_string_lossy().to_string();
-
-            // Add node if not exists
-            if !node_indices.contains_key(&path_str) {
+        // First pass: create all nodes
+        for (path_str, _) in &file_imports {
+            if !node_indices.contains_key(path_str) {
                 let idx = graph.add_node(path_str.clone());
                 node_indices.insert(path_str.clone(), idx);
-            }
-
-            // Parse and extract imports
-            if let Ok(result) = self.parser.parse_file(file) {
-                let imports = extract_imports(&result);
-                let resolved: Vec<String> = imports
-                    .iter()
-                    .filter_map(|imp| self.resolve_import(&imp.path, rel_path, root, files))
-                    .collect();
-                file_imports.insert(path_str, resolved);
             }
         }
 
@@ -225,78 +397,6 @@ impl Analyzer {
         })
     }
 
-    /// Resolve import path to a file in the project.
-    fn resolve_import(
-        &self,
-        import_path: &str,
-        from_file: &Path,
-        root: &Path,
-        files: &[std::path::PathBuf],
-    ) -> Option<String> {
-        if !self.config.resolve_imports {
-            return Some(import_path.to_string());
-        }
-
-        // Handle relative imports (./foo, ../foo)
-        if import_path.starts_with("./") || import_path.starts_with("../") {
-            if let Some(parent) = from_file.parent() {
-                let resolved = parent.join(import_path);
-                // Try with common extensions
-                for ext in &[
-                    "", ".rs", ".go", ".py", ".ts", ".tsx", ".js", ".jsx", ".java",
-                ] {
-                    let with_ext = if ext.is_empty() {
-                        resolved.clone()
-                    } else {
-                        resolved.with_extension(&ext[1..])
-                    };
-
-                    // Check if this file exists in our set
-                    for file in files {
-                        let rel = file.strip_prefix(root).unwrap_or(file);
-                        if rel == with_ext {
-                            return Some(rel.to_string_lossy().to_string());
-                        }
-                    }
-
-                    // Also try index files
-                    let index_path = resolved.join(format!("index{ext}"));
-                    for file in files {
-                        let rel = file.strip_prefix(root).unwrap_or(file);
-                        if rel == index_path {
-                            return Some(rel.to_string_lossy().to_string());
-                        }
-                    }
-                }
-            }
-        }
-
-        // Handle absolute project imports
-        for file in files {
-            let rel = file.strip_prefix(root).unwrap_or(file);
-            let rel_str = rel.to_string_lossy();
-
-            // Match by stem (without extension)
-            if rel_str.contains(import_path) {
-                return Some(rel.to_string_lossy().to_string());
-            }
-
-            // Match by module name
-            if let Some(stem) = rel.file_stem() {
-                if stem.to_string_lossy() == import_path {
-                    return Some(rel.to_string_lossy().to_string());
-                }
-            }
-        }
-
-        // External dependency - return as-is if configured
-        if self.config.include_external {
-            Some(import_path.to_string())
-        } else {
-            None
-        }
-    }
-
     /// Calculate PageRank scores using power iteration.
     fn calculate_pagerank(&self, graph: &DiGraph<String, ()>) -> HashMap<NodeIndex, f64> {
         let n = graph.node_count();
@@ -343,67 +443,85 @@ impl Analyzer {
         rank
     }
 
-    /// Calculate betweenness centrality using BFS.
+    /// Calculate betweenness centrality using Brandes' algorithm with parallel BFS.
     fn calculate_betweenness(&self, graph: &DiGraph<String, ()>) -> HashMap<NodeIndex, f64> {
         let n = graph.node_count();
         if n <= 2 {
             return graph.node_indices().map(|idx| (idx, 0.0)).collect();
         }
 
+        // Use all nodes as sources (no sampling - per project requirements)
+        let sources: Vec<NodeIndex> = graph.node_indices().collect();
+
+        // Parallel betweenness calculation
+        let partial_betweenness: Vec<HashMap<NodeIndex, f64>> = sources
+            .par_iter()
+            .map(|&source| {
+                let mut local_betweenness: HashMap<NodeIndex, f64> = HashMap::new();
+                let mut dist: HashMap<NodeIndex, i32> = HashMap::with_capacity(n);
+                let mut paths: HashMap<NodeIndex, f64> = HashMap::with_capacity(n);
+                let mut predecessors: HashMap<NodeIndex, Vec<NodeIndex>> =
+                    HashMap::with_capacity(n);
+                let mut stack: Vec<NodeIndex> = Vec::with_capacity(n);
+                let mut queue: VecDeque<NodeIndex> = VecDeque::with_capacity(n);
+
+                dist.insert(source, 0);
+                paths.insert(source, 1.0);
+                queue.push_back(source);
+
+                // BFS
+                while let Some(v) = queue.pop_front() {
+                    stack.push(v);
+                    let v_dist = dist[&v];
+
+                    for edge in graph.edges_directed(v, Direction::Outgoing) {
+                        let w = edge.target();
+
+                        // First visit
+                        if let std::collections::hash_map::Entry::Vacant(e) = dist.entry(w) {
+                            e.insert(v_dist + 1);
+                            queue.push_back(w);
+                        }
+
+                        // Shortest path via v
+                        if dist[&w] == v_dist + 1 {
+                            *paths.entry(w).or_insert(0.0) += *paths.get(&v).unwrap_or(&0.0);
+                            predecessors.entry(w).or_default().push(v);
+                        }
+                    }
+                }
+
+                // Accumulate dependencies
+                let mut delta: HashMap<NodeIndex, f64> = HashMap::with_capacity(n);
+                while let Some(w) = stack.pop() {
+                    if let Some(preds) = predecessors.get(&w) {
+                        for &v in preds {
+                            let coeff = (paths.get(&v).unwrap_or(&0.0)
+                                / paths.get(&w).unwrap_or(&1.0))
+                                * (1.0 + delta.get(&w).unwrap_or(&0.0));
+                            *delta.entry(v).or_insert(0.0) += coeff;
+                        }
+                    }
+                    if w != source {
+                        *local_betweenness.entry(w).or_insert(0.0) += delta.get(&w).unwrap_or(&0.0);
+                    }
+                }
+
+                local_betweenness
+            })
+            .collect();
+
+        // Merge partial results
         let mut betweenness: HashMap<NodeIndex, f64> =
             graph.node_indices().map(|idx| (idx, 0.0)).collect();
 
-        // For each node as source, run BFS and count shortest paths
-        for source in graph.node_indices() {
-            let mut dist: HashMap<NodeIndex, i32> = HashMap::with_capacity(n);
-            let mut paths: HashMap<NodeIndex, f64> = HashMap::with_capacity(n);
-            let mut predecessors: HashMap<NodeIndex, Vec<NodeIndex>> = HashMap::with_capacity(n);
-            let mut stack: Vec<NodeIndex> = Vec::with_capacity(n);
-            let mut queue: VecDeque<NodeIndex> = VecDeque::with_capacity(n);
-
-            dist.insert(source, 0);
-            paths.insert(source, 1.0);
-            queue.push_back(source);
-
-            // BFS
-            while let Some(v) = queue.pop_front() {
-                stack.push(v);
-                let v_dist = dist[&v];
-
-                for edge in graph.edges_directed(v, Direction::Outgoing) {
-                    let w = edge.target();
-
-                    // First visit
-                    if let std::collections::hash_map::Entry::Vacant(e) = dist.entry(w) {
-                        e.insert(v_dist + 1);
-                        queue.push_back(w);
-                    }
-
-                    // Shortest path via v
-                    if dist[&w] == v_dist + 1 {
-                        *paths.entry(w).or_insert(0.0) += *paths.get(&v).unwrap_or(&0.0);
-                        predecessors.entry(w).or_default().push(v);
-                    }
-                }
-            }
-
-            // Accumulate dependencies
-            let mut delta: HashMap<NodeIndex, f64> = HashMap::with_capacity(n);
-            while let Some(w) = stack.pop() {
-                if let Some(preds) = predecessors.get(&w) {
-                    for &v in preds {
-                        let coeff = (paths.get(&v).unwrap_or(&0.0) / paths.get(&w).unwrap_or(&1.0))
-                            * (1.0 + delta.get(&w).unwrap_or(&0.0));
-                        *delta.entry(v).or_insert(0.0) += coeff;
-                    }
-                }
-                if w != source {
-                    *betweenness.entry(w).or_insert(0.0) += delta.get(&w).unwrap_or(&0.0);
-                }
+        for partial in partial_betweenness {
+            for (idx, value) in partial {
+                *betweenness.entry(idx).or_insert(0.0) += value;
             }
         }
 
-        // Normalize
+        // Normalize betweenness scores
         let norm = if n > 2 {
             1.0 / ((n - 1) * (n - 2)) as f64
         } else {

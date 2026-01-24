@@ -6,9 +6,11 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use chrono::Utc;
 use ignore::WalkBuilder;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Query, QueryCursor};
@@ -348,8 +350,6 @@ impl Analyzer {
         providers: &[String],
         custom_providers: &[CustomProvider],
     ) -> Result<Analysis> {
-        let mut references: Vec<FlagReference> = Vec::new();
-        let parser = Parser::new();
         let builtin_providers = get_builtin_providers();
 
         // Pre-compile queries for each (language, provider) combination
@@ -391,129 +391,147 @@ impl Analyzer {
             }
         }
 
-        for entry in WalkBuilder::new(repo_path)
+        // Wrap compiled queries in Arc for sharing across threads
+        let compiled_queries = Arc::new(compiled_queries);
+        let builtin_providers = Arc::new(builtin_providers);
+        let custom_providers: Arc<[CustomProvider]> = custom_providers.to_vec().into();
+        let providers: Arc<[String]> = providers.to_vec().into();
+
+        // Collect all files first (fast)
+        let files: Vec<_> = WalkBuilder::new(repo_path)
             .hidden(true)
             .git_ignore(true)
             .build()
-        {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_file())
+            .map(|e| e.into_path())
+            .filter(|path| Language::detect(path).is_some())
+            .collect();
 
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
+        // Process files in parallel
+        let references: Vec<FlagReference> = files
+            .par_iter()
+            .flat_map(|path| {
+                let mut file_refs = Vec::new();
 
-            let language = match Language::detect(path) {
-                Some(lang) => lang,
-                None => continue,
-            };
+                let language = match Language::detect(path) {
+                    Some(lang) => lang,
+                    None => return file_refs,
+                };
 
-            let content = match std::fs::read_to_string(path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
+                let content = match std::fs::read_to_string(path) {
+                    Ok(c) => c,
+                    Err(_) => return file_refs,
+                };
 
-            let rel_path = path
-                .strip_prefix(repo_path)
-                .unwrap_or(path)
-                .to_string_lossy()
-                .to_string();
+                let rel_path = path
+                    .strip_prefix(repo_path)
+                    .unwrap_or(path)
+                    .to_string_lossy()
+                    .to_string();
 
-            // Parse the file once
-            let parse_result = match parser.parse(content.as_bytes(), language, path) {
-                Ok(result) => result,
-                Err(_) => continue,
-            };
+                // Parse the file once with thread-local parser
+                let parser = Parser::new();
+                let parse_result = match parser.parse(content.as_bytes(), language, path) {
+                    Ok(result) => result,
+                    Err(_) => return file_refs,
+                };
 
-            // Apply built-in providers using pre-compiled queries
-            for builtin in &builtin_providers {
-                if !providers.contains(&builtin.name.to_string()) {
-                    continue;
-                }
-                if !builtin.languages.contains(&language) {
-                    continue;
-                }
+                // Apply built-in providers using pre-compiled queries
+                for builtin in builtin_providers.iter() {
+                    if !providers.contains(&builtin.name.to_string()) {
+                        continue;
+                    }
+                    if !builtin.languages.contains(&language) {
+                        continue;
+                    }
 
-                // Look up pre-compiled query
-                let key = (language, builtin.name.to_string());
-                if let Some((query, key_capture_idx)) = compiled_queries.get(&key) {
-                    let mut cursor = QueryCursor::new();
-                    let mut matches =
-                        cursor.matches(query, parse_result.tree.root_node(), content.as_bytes());
+                    // Look up pre-compiled query
+                    let key = (language, builtin.name.to_string());
+                    if let Some((query, key_capture_idx)) = compiled_queries.get(&key) {
+                        let mut cursor = QueryCursor::new();
+                        let mut matches = cursor.matches(
+                            query,
+                            parse_result.tree.root_node(),
+                            content.as_bytes(),
+                        );
 
-                    while let Some(query_match) = matches.next() {
-                        for capture in query_match.captures {
-                            if capture.index as usize != *key_capture_idx {
-                                continue;
-                            }
+                        while let Some(query_match) = matches.next() {
+                            for capture in query_match.captures {
+                                if capture.index as usize != *key_capture_idx {
+                                    continue;
+                                }
 
-                            let node = capture.node;
-                            let flag_key = node
-                                .utf8_text(content.as_bytes())
-                                .unwrap_or("")
-                                .trim_matches(|c| c == '"' || c == '\'' || c == ':');
+                                let node = capture.node;
+                                let flag_key = node
+                                    .utf8_text(content.as_bytes())
+                                    .unwrap_or("")
+                                    .trim_matches(|c| c == '"' || c == '\'' || c == ':');
 
-                            if !flag_key.is_empty() {
-                                references.push(FlagReference {
-                                    file: rel_path.clone(),
-                                    line: node.start_position().row as u32 + 1,
-                                    key: flag_key.to_string(),
-                                    provider: builtin.name.to_string(),
-                                });
+                                if !flag_key.is_empty() {
+                                    file_refs.push(FlagReference {
+                                        file: rel_path.clone(),
+                                        line: node.start_position().row as u32 + 1,
+                                        key: flag_key.to_string(),
+                                        provider: builtin.name.to_string(),
+                                    });
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            // Apply custom providers using pre-compiled queries
-            for custom in custom_providers {
-                // Check if this language is supported by this provider
-                let lang_name = format!("{:?}", language).to_lowercase();
-                if !custom.languages.is_empty()
-                    && !custom
-                        .languages
-                        .iter()
-                        .any(|l| l.to_lowercase() == lang_name)
-                {
-                    continue;
-                }
+                // Apply custom providers using pre-compiled queries
+                for custom in custom_providers.iter() {
+                    // Check if this language is supported by this provider
+                    let lang_name = format!("{:?}", language).to_lowercase();
+                    if !custom.languages.is_empty()
+                        && !custom
+                            .languages
+                            .iter()
+                            .any(|l| l.to_lowercase() == lang_name)
+                    {
+                        continue;
+                    }
 
-                // Look up pre-compiled query
-                let key = (language, custom.name.clone());
-                if let Some((query, key_capture_idx)) = compiled_queries.get(&key) {
-                    let mut cursor = QueryCursor::new();
-                    let mut matches =
-                        cursor.matches(query, parse_result.tree.root_node(), content.as_bytes());
+                    // Look up pre-compiled query
+                    let key = (language, custom.name.clone());
+                    if let Some((query, key_capture_idx)) = compiled_queries.get(&key) {
+                        let mut cursor = QueryCursor::new();
+                        let mut matches = cursor.matches(
+                            query,
+                            parse_result.tree.root_node(),
+                            content.as_bytes(),
+                        );
 
-                    while let Some(query_match) = matches.next() {
-                        for capture in query_match.captures {
-                            if capture.index as usize != *key_capture_idx {
-                                continue;
-                            }
+                        while let Some(query_match) = matches.next() {
+                            for capture in query_match.captures {
+                                if capture.index as usize != *key_capture_idx {
+                                    continue;
+                                }
 
-                            let node = capture.node;
-                            let flag_key = node
-                                .utf8_text(content.as_bytes())
-                                .unwrap_or("")
-                                .trim_matches(|c| c == '"' || c == '\'' || c == ':');
+                                let node = capture.node;
+                                let flag_key = node
+                                    .utf8_text(content.as_bytes())
+                                    .unwrap_or("")
+                                    .trim_matches(|c| c == '"' || c == '\'' || c == ':');
 
-                            if !flag_key.is_empty() {
-                                references.push(FlagReference {
-                                    file: rel_path.clone(),
-                                    line: node.start_position().row as u32 + 1,
-                                    key: flag_key.to_string(),
-                                    provider: custom.name.clone(),
-                                });
+                                if !flag_key.is_empty() {
+                                    file_refs.push(FlagReference {
+                                        file: rel_path.clone(),
+                                        line: node.start_position().row as u32 + 1,
+                                        key: flag_key.to_string(),
+                                        provider: custom.name.clone(),
+                                    });
+                                }
                             }
                         }
                     }
                 }
-            }
-        }
+
+                file_refs
+            })
+            .collect();
 
         // Group by flag key
         let mut flags_map: HashMap<String, Vec<FlagReference>> = HashMap::new();
