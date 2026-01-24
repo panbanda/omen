@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.10.2](https://github.com/panbanda/omen/compare/omen-v4.10.1...omen-v4.10.2) (2026-01-24)
+
+
+### Bug Fixes
+
+* **security:** resolve code scanning alerts [#58](https://github.com/panbanda/omen/issues/58) and [#37](https://github.com/panbanda/omen/issues/37) ([066c7e5](https://github.com/panbanda/omen/commit/066c7e52ba2879c49ec3cfed24a6f52d88edc1e9))
+* **security:** resolve code scanning alerts [#58](https://github.com/panbanda/omen/issues/58) and [#37](https://github.com/panbanda/omen/issues/37) ([45cc725](https://github.com/panbanda/omen/commit/45cc72529874366329c1dd4133cbbfb1f244ca98))
+
 ## [4.10.1](https://github.com/panbanda/omen/compare/omen-v4.10.0...omen-v4.10.1) (2026-01-24)
 
 
