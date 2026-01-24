@@ -51,10 +51,6 @@ pub struct Config {
     pub resolve_imports: bool,
     /// Include external dependencies.
     pub include_external: bool,
-    /// Use approximate betweenness for graphs larger than this (0 = always exact).
-    pub betweenness_sample_threshold: usize,
-    /// Number of sample nodes for approximate betweenness (default: 100).
-    pub betweenness_sample_size: usize,
 }
 
 /// Pre-built index for O(1) file path lookups during import resolution.
@@ -212,8 +208,6 @@ impl Default for Config {
             tolerance: 1e-6,
             resolve_imports: true,
             include_external: false,
-            betweenness_sample_threshold: 5000,
-            betweenness_sample_size: 100,
         }
     }
 }
@@ -449,35 +443,15 @@ impl Analyzer {
         rank
     }
 
-    /// Calculate betweenness centrality using BFS.
-    /// Uses sampling for large graphs (> betweenness_sample_threshold nodes).
+    /// Calculate betweenness centrality using Brandes' algorithm with parallel BFS.
     fn calculate_betweenness(&self, graph: &DiGraph<String, ()>) -> HashMap<NodeIndex, f64> {
         let n = graph.node_count();
         if n <= 2 {
             return graph.node_indices().map(|idx| (idx, 0.0)).collect();
         }
 
-        // Use sampling for large graphs to avoid O(n^2) complexity
-        let use_sampling = self.config.betweenness_sample_threshold > 0
-            && n > self.config.betweenness_sample_threshold;
-
-        let sources: Vec<NodeIndex> = if use_sampling {
-            // Sample random nodes for approximate betweenness
-            // Use deterministic sampling based on node indices for reproducibility
-            let sample_size = self.config.betweenness_sample_size.min(n);
-            let step = n / sample_size;
-            graph
-                .node_indices()
-                .enumerate()
-                .filter(|(i, _)| *i % step == 0)
-                .take(sample_size)
-                .map(|(_, idx)| idx)
-                .collect()
-        } else {
-            graph.node_indices().collect()
-        };
-
-        let num_sources = sources.len();
+        // Use all nodes as sources (no sampling - per project requirements)
+        let sources: Vec<NodeIndex> = graph.node_indices().collect();
 
         // Parallel betweenness calculation
         let partial_betweenness: Vec<HashMap<NodeIndex, f64>> = sources
@@ -547,15 +521,9 @@ impl Analyzer {
             }
         }
 
-        // Normalize - scale up if using sampling
+        // Normalize betweenness scores
         let norm = if n > 2 {
-            let base_norm = 1.0 / ((n - 1) * (n - 2)) as f64;
-            if use_sampling {
-                // Scale by sampling ratio to approximate full betweenness
-                base_norm * (n as f64 / num_sources as f64)
-            } else {
-                base_norm
-            }
+            1.0 / ((n - 1) * (n - 2)) as f64
         } else {
             1.0
         };
