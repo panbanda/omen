@@ -911,21 +911,30 @@ fn extract_calls_recursive(
 }
 
 /// Extracts coupled class names from a class.
-fn extract_coupled_classes(
-    node: &tree_sitter::Node,
-    source: &[u8],
-    _lang: Language,
-) -> Vec<String> {
+fn extract_coupled_classes(node: &tree_sitter::Node, source: &[u8], lang: Language) -> Vec<String> {
     let mut coupled = HashSet::new();
-    let type_node_types = [
-        "type_identifier",
-        "class_type",
-        "simple_type",
-        "named_type",
-        "type_name",
-    ];
+
+    // Language-specific type reference node types
+    let type_node_types: Vec<&str> = match lang {
+        Language::Ruby => vec![
+            "constant",         // Class references like User, Post, ActiveRecord
+            "scope_resolution", // Namespaced constants like ActiveRecord::Base
+        ],
+        Language::Python => vec![
+            "identifier", // Python uses identifiers for class refs in type hints
+            "attribute",  // For qualified names like module.ClassName
+        ],
+        _ => vec![
+            "type_identifier",
+            "class_type",
+            "simple_type",
+            "named_type",
+            "type_name",
+        ],
+    };
+
     let mut cursor = node.walk();
-    extract_types_recursive(&mut cursor, source, &type_node_types, &mut coupled);
+    extract_types_recursive(&mut cursor, source, &type_node_types, lang, &mut coupled);
     coupled.into_iter().collect()
 }
 
@@ -934,6 +943,7 @@ fn extract_types_recursive(
     cursor: &mut tree_sitter::TreeCursor,
     source: &[u8],
     type_node_types: &[&str],
+    lang: Language,
     coupled: &mut HashSet<String>,
 ) {
     loop {
@@ -941,20 +951,56 @@ fn extract_types_recursive(
 
         if type_node_types.contains(&node.kind()) {
             if let Ok(name) = std::str::from_utf8(&source[node.byte_range()]) {
-                if !is_primitive_type(name) && name.len() > 1 {
+                if is_valid_class_reference(name, lang) {
                     coupled.insert(name.to_string());
                 }
             }
         }
 
         if cursor.goto_first_child() {
-            extract_types_recursive(cursor, source, type_node_types, coupled);
+            extract_types_recursive(cursor, source, type_node_types, lang, coupled);
             cursor.goto_parent();
         }
 
         if !cursor.goto_next_sibling() {
             break;
         }
+    }
+}
+
+/// Checks if a name is a valid class reference for the given language.
+fn is_valid_class_reference(name: &str, lang: Language) -> bool {
+    if is_primitive_type(name) || name.len() <= 1 {
+        return false;
+    }
+
+    match lang {
+        Language::Ruby => {
+            // Ruby constants start with uppercase
+            // Exclude common non-class constants
+            let first_char = name.chars().next().unwrap_or('a');
+            if !first_char.is_ascii_uppercase() {
+                return false;
+            }
+            // Exclude common Ruby constants that aren't classes
+            !matches!(
+                name,
+                "DEFAULT_FEATURED_BADGE_COUNT"
+                    | "MAX_SIMILAR_USERS"
+                    | "TRUE"
+                    | "FALSE"
+                    | "STDIN"
+                    | "STDOUT"
+                    | "STDERR"
+                    | "ENV"
+                    | "ARGV"
+                    | "DATA"
+                    | "RUBY_VERSION"
+                    | "RUBY_PLATFORM"
+            ) && !name.chars().all(|c| c.is_ascii_uppercase() || c == '_')
+            // Exclude SCREAMING_SNAKE_CASE constants (non-class constants)
+        }
+        _ => true,
     }
 }
 
