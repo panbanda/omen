@@ -26,6 +26,7 @@ use std::path::Path;
 
 use chrono::Utc;
 use ignore::WalkBuilder;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
@@ -91,54 +92,50 @@ impl Analyzer {
 
     /// Analyzes cohesion metrics in a repository.
     pub fn analyze_repo(&self, repo_path: &Path) -> Result<Analysis> {
-        let parser = Parser::new();
-        let mut all_classes = Vec::new();
+        // Phase 1: Collect all candidate files (fast, sequential)
+        let files: Vec<_> = WalkBuilder::new(repo_path)
+            .hidden(false)
+            .build()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+            .map(|e| e.into_path())
+            .filter(|path| {
+                // Skip test files if configured
+                if self.config.skip_test_files && is_test_file(path) {
+                    return false;
+                }
+                // Only include OO languages
+                Language::detect(path).map(is_oo_language).unwrap_or(false)
+            })
+            .collect();
 
-        // Collect all source files
-        for entry in WalkBuilder::new(repo_path).hidden(false).build() {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
+        // Phase 2: Parse files in parallel and extract classes
+        let max_file_size = self.config.max_file_size;
+        let all_classes: Vec<ClassMetrics> = files
+            .par_iter()
+            .filter_map(|path| {
+                // Read file
+                let source = std::fs::read(path).ok()?;
 
-            if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
-                continue;
-            }
+                // Skip if too large
+                if max_file_size > 0 && source.len() > max_file_size {
+                    return None;
+                }
 
-            let path = entry.path();
+                let lang = Language::detect(path)?;
 
-            // Skip test files if configured
-            if self.config.skip_test_files && is_test_file(path) {
-                continue;
-            }
-
-            // Detect language and skip non-OO languages
-            let lang = match Language::detect(path) {
-                Some(l) => l,
-                None => continue,
-            };
-
-            if !is_oo_language(lang) {
-                continue;
-            }
-
-            // Read and parse file
-            let source = match std::fs::read(path) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-
-            if self.config.max_file_size > 0 && source.len() > self.config.max_file_size {
-                continue;
-            }
-
-            // Extract classes from file
-            if let Ok(parse_result) = parser.parse(&source, lang, path) {
+                // Parse with thread-local parser
+                let parser = Parser::new();
+                let parse_result = parser.parse(&source, lang, path).ok()?;
                 let classes =
                     extract_classes_from_file(path, &source, parse_result.tree.as_ref(), lang);
-                all_classes.extend(classes);
-            }
-        }
+
+                Some(classes)
+            })
+            .flatten()
+            .collect();
+
+        let mut all_classes = all_classes;
 
         // Build class hierarchy for DIT/NOC calculation
         let mut hierarchy = ClassHierarchy::new();
