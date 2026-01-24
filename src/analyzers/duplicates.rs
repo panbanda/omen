@@ -2,6 +2,18 @@
 //!
 //! Uses Locality-Sensitive Hashing for O(n) average-case candidate filtering,
 //! then verifies with actual Jaccard similarity calculation.
+//!
+//! # References
+//!
+//! - Broder, A.Z. (1997) "On the Resemblance and Containment of Documents"
+//!   SEQUENCES '97 (MinHash algorithm)
+//! - Indyk, P., Motwani, R. (1998) "Approximate Nearest Neighbors: Towards
+//!   Removing the Curse of Dimensionality" (LSH theory)
+//!
+//! # Configuration
+//!
+//! Default: 200 hashes, 20 bands x 10 rows, 0.70 similarity threshold.
+//! These parameters provide good precision/recall balance for code clones.
 
 use std::collections::{HashMap, HashSet};
 

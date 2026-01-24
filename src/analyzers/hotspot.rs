@@ -4,7 +4,17 @@
 //! high complexity (cyclomatic/cognitive). These are prime candidates
 //! for refactoring as they represent high-risk, hard-to-maintain code.
 //!
-//! Based on Adam Tornhill's "Your Code as a Crime Scene" methodology.
+//! # References
+//!
+//! - Tornhill, A. (2015) "Your Code as a Crime Scene: Use Forensic Techniques
+//!   to Arrest Defects, Bottlenecks, and Bad Design in Your Programs"
+//!
+//! # Threshold Derivation
+//!
+//! Severity thresholds are derived from percentile products:
+//! - Critical = 0.81 (90th percentile in both dimensions: 0.9 * 0.9)
+//! - High = 0.64 (80th percentile: 0.8 * 0.8)
+//! - Moderate = 0.36 (60th percentile: 0.6 * 0.6)
 
 use std::collections::HashMap;
 use std::path::Path;

@@ -2,6 +2,31 @@
 //!
 //! Predicts which commits are likely to introduce bugs using
 //! Just-in-Time quality assurance features.
+//!
+//! # References
+//!
+//! - Kamei, Y., Shihab, E., et al. (2013) "A Large-Scale Empirical Study of
+//!   Just-in-Time Quality Assurance", IEEE TSE 39(6)
+//! - Zeng, Z., et al. (2021) for modern weight calibration
+//!
+//! # Implemented Features (8/14 from Kamei)
+//!
+//! - FIX: Bug fix commit flag
+//! - LA/LD: Lines added/deleted
+//! - NF: Number of files modified
+//! - ENTROPY: Change distribution entropy
+//! - NDEV: Number of developers
+//! - NUC: Unique commits to files
+//! - EXP: Author experience
+//!
+//! # Not Implemented (documented limitation)
+//!
+//! - AGE: Average age of modified files
+//! - REXP: Recent author experience
+//! - SEXP: Subsystem experience
+//! - LT: Lines in total (file size)
+//! - NS: Number of subsystems
+//! - ND: Number of directories
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;

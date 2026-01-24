@@ -8,6 +8,15 @@
 //! - DIT: Depth of Inheritance Tree
 //! - NOC: Number of Children (direct subclasses)
 //!
+//! # References
+//!
+//! - Chidamber, S.R., Kemerer, C.F. (1994) "A Metrics Suite for Object Oriented Design"
+//!   IEEE TSE 20(6), pp. 476-493
+//! - Hitz, M., Montazeri, B. (1995) "Measuring Coupling and Cohesion in OO Systems"
+//!   (LCOM3 definition using connected components)
+//! - Basili, V.R., Briand, L.C., Melo, W.L. (1996) "A Validation of Object-Oriented
+//!   Design Metrics as Quality Indicators" IEEE TSE 22(10) (threshold validation)
+//!
 //! Note: LCOM uses LCOM3 (Hitz & Montazeri 1995), which counts connected components
 //! where methods are connected if they share instance variables. This differs from
 //! LCOM4 which also connects methods that call each other.
