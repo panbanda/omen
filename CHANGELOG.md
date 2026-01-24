@@ -1,5 +1,19 @@
 # Changelog
 
+## [4.10.1](https://github.com/panbanda/omen/compare/omen-v4.10.0...omen-v4.10.1) (2026-01-24)
+
+
+### Bug Fixes
+
+* **cohesion:** detect Ruby class references for CBO metric ([aa82728](https://github.com/panbanda/omen/commit/aa82728b5ff1b2846e8d9eadbbc2df866c787061))
+* **cohesion:** detect Ruby class references for CBO metric ([36643e3](https://github.com/panbanda/omen/commit/36643e32989e7f46c8b469e16522952c04988819))
+* **complexity:** add catch_clause to flat types for cognitive complexity ([#303](https://github.com/panbanda/omen/issues/303)) ([4907e9a](https://github.com/panbanda/omen/commit/4907e9af0f1a0829878e9bb98a1031e269fa0a36))
+
+
+### Performance Improvements
+
+* optimize graph, repomap, defect, and smells analyzers ([#305](https://github.com/panbanda/omen/issues/305)) ([81cc571](https://github.com/panbanda/omen/commit/81cc571a6be421f54a2452fe08dbc9f73bb8b0e3))
+
 ## [4.10.0](https://github.com/panbanda/omen/compare/omen-v4.9.4...omen-v4.10.0) (2026-01-23)
 
 
