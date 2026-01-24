@@ -10,6 +10,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::analyzers::{complexity, duplicates, graph};
@@ -206,48 +207,66 @@ impl Analyzer {
         data
     }
 
+    /// Pre-compute git metrics (churn and ownership) for all files at once.
+    /// Returns a map of file path -> (commit_count, contributor_count).
+    fn compute_git_metrics(&self, git_path: &std::path::Path) -> HashMap<PathBuf, (usize, usize)> {
+        let mut result = HashMap::new();
+
+        if let Ok(repo) = GitRepo::open(git_path) {
+            let since = format!("{} days", self.config.churn_days);
+            if let Ok(commits) = repo.log_with_stats(Some(&since)) {
+                // Build per-file metrics from the single git log call
+                let mut file_commits: HashMap<PathBuf, usize> = HashMap::new();
+                let mut file_contributors: HashMap<PathBuf, HashSet<String>> = HashMap::new();
+
+                for commit in &commits {
+                    for file_stat in &commit.files {
+                        *file_commits.entry(file_stat.path.clone()).or_insert(0) += 1;
+                        file_contributors
+                            .entry(file_stat.path.clone())
+                            .or_default()
+                            .insert(commit.author.clone());
+                    }
+                }
+
+                // Convert to final format
+                for (path, commit_count) in file_commits {
+                    let contributor_count =
+                        file_contributors.get(&path).map(|s| s.len()).unwrap_or(0);
+                    result.insert(path, (commit_count, contributor_count));
+                }
+            }
+        }
+
+        result
+    }
+
     /// Get file metrics for defect prediction.
     /// Uses pre-computed data from other analyzers when available.
     fn get_file_metrics(
         &self,
-        git_path: &std::path::Path,
+        root_path: &std::path::Path,
         file_path: &str,
         complexity_data: &HashMap<String, (u32, u32)>,
         duplication_data: &HashMap<String, f32>,
         coupling_data: &HashMap<String, (f32, f32)>,
+        git_metrics: &HashMap<PathBuf, (usize, usize)>,
     ) -> FileMetrics {
         let mut metrics = FileMetrics {
             file_path: file_path.to_string(),
             ..Default::default()
         };
 
-        // Get churn and ownership metrics from gix
-        if let Ok(repo) = GitRepo::open(git_path) {
-            let since = format!("{} days", self.config.churn_days);
-            if let Ok(commits) = repo.log_with_stats(Some(&since)) {
-                // Count commits touching this file
-                let file_pathbuf = PathBuf::from(file_path);
-                let commit_count = commits
-                    .iter()
-                    .filter(|c| c.files.iter().any(|f| f.path == file_pathbuf))
-                    .count();
-                // Normalize churn score (max ~20 commits/month = high churn)
-                metrics.churn_score = (commit_count as f32 / 20.0).min(1.0);
-
-                // Count unique contributors to this file (from all history we have)
-                let mut contributors: std::collections::HashSet<&str> =
-                    std::collections::HashSet::new();
-                for commit in &commits {
-                    if commit.files.iter().any(|f| f.path == file_pathbuf) {
-                        contributors.insert(&commit.author);
-                    }
-                }
-                metrics.ownership_diffusion = contributors.len() as f32;
-            }
+        // Get churn and ownership from pre-computed git metrics
+        let file_pathbuf = PathBuf::from(file_path);
+        if let Some(&(commit_count, contributor_count)) = git_metrics.get(&file_pathbuf) {
+            // Normalize churn score (max ~20 commits/month = high churn)
+            metrics.churn_score = (commit_count as f32 / 20.0).min(1.0);
+            metrics.ownership_diffusion = contributor_count as f32;
         }
 
         // Get file LOC for confidence calculation
-        if let Ok(content) = std::fs::read_to_string(git_path.join(file_path)) {
+        if let Ok(content) = std::fs::read_to_string(root_path.join(file_path)) {
             metrics.lines_of_code = content.lines().count();
         }
 
@@ -391,104 +410,118 @@ impl AnalyzerTrait for Analyzer {
             .git_path
             .ok_or_else(|| crate::core::Error::git("Defect analyzer requires a git repository"))?;
 
-        // Pre-compute data from other analyzers
+        // Pre-compute data from other analyzers (runs in parallel internally)
         let complexity_data = self.compute_complexity_data(ctx);
         let duplication_data = self.compute_duplication_data(ctx);
         let coupling_data = self.compute_coupling_data(ctx);
 
-        let mut files = Vec::new();
-        let mut total_prob = 0.0f32;
+        // Pre-compute git metrics once for all files (single git log call)
+        let git_metrics = self.compute_git_metrics(git_path);
+
+        // Pre-filter files
+        let valid_files: Vec<_> = ctx
+            .files
+            .iter()
+            .filter(|path| {
+                if self.config.max_file_size > 0 {
+                    if let Ok(meta) = std::fs::metadata(path) {
+                        return meta.len() as usize <= self.config.max_file_size;
+                    }
+                }
+                true
+            })
+            .collect();
+
+        // Process files in parallel
+        let weights = &self.config.weights;
+        let file_scores: Vec<FileScore> = valid_files
+            .par_iter()
+            .map(|path| {
+                let file_path = path.strip_prefix(ctx.root).unwrap_or(path);
+                let file_str = file_path.to_string_lossy();
+
+                let metrics = self.get_file_metrics(
+                    ctx.root,
+                    &file_str,
+                    &complexity_data,
+                    &duplication_data,
+                    &coupling_data,
+                    &git_metrics,
+                );
+                let prob = self.calculate_probability(&metrics);
+                let confidence = self.calculate_confidence(&metrics);
+                let risk = RiskLevel::from_probability(prob);
+
+                let contributing_factors = HashMap::from([
+                    (
+                        "churn".to_string(),
+                        normalize_churn(metrics.churn_score) * weights.churn,
+                    ),
+                    (
+                        "complexity".to_string(),
+                        normalize_complexity(metrics.complexity) * weights.complexity,
+                    ),
+                    (
+                        "duplication".to_string(),
+                        normalize_duplication(metrics.duplicate_ratio) * weights.duplication,
+                    ),
+                    (
+                        "coupling".to_string(),
+                        normalize_coupling(metrics.afferent_coupling) * weights.coupling,
+                    ),
+                    (
+                        "ownership".to_string(),
+                        normalize_ownership(metrics.ownership_diffusion) * weights.ownership,
+                    ),
+                ]);
+
+                let recommendations = self.generate_recommendations(&metrics, prob);
+
+                FileScore {
+                    file_path: file_str.to_string(),
+                    probability: prob,
+                    confidence,
+                    risk_level: risk,
+                    contributing_factors,
+                    recommendations,
+                }
+            })
+            .collect();
+
+        // Calculate summary statistics (sequential, fast)
         let mut high_count = 0;
         let mut medium_count = 0;
         let mut low_count = 0;
+        let mut total_prob = 0.0f32;
 
-        for path in ctx.files.iter() {
-            let file_path = path.strip_prefix(ctx.root).unwrap_or(path);
-            let file_str = file_path.to_string_lossy();
-
-            // Skip if file is too large
-            if self.config.max_file_size > 0 {
-                if let Ok(meta) = std::fs::metadata(path) {
-                    if meta.len() as usize > self.config.max_file_size {
-                        continue;
-                    }
-                }
-            }
-
-            let metrics = self.get_file_metrics(
-                git_path,
-                &file_str,
-                &complexity_data,
-                &duplication_data,
-                &coupling_data,
-            );
-            let prob = self.calculate_probability(&metrics);
-            let confidence = self.calculate_confidence(&metrics);
-            let risk = RiskLevel::from_probability(prob);
-
-            let w = &self.config.weights;
-            let contributing_factors = HashMap::from([
-                (
-                    "churn".to_string(),
-                    normalize_churn(metrics.churn_score) * w.churn,
-                ),
-                (
-                    "complexity".to_string(),
-                    normalize_complexity(metrics.complexity) * w.complexity,
-                ),
-                (
-                    "duplication".to_string(),
-                    normalize_duplication(metrics.duplicate_ratio) * w.duplication,
-                ),
-                (
-                    "coupling".to_string(),
-                    normalize_coupling(metrics.afferent_coupling) * w.coupling,
-                ),
-                (
-                    "ownership".to_string(),
-                    normalize_ownership(metrics.ownership_diffusion) * w.ownership,
-                ),
-            ]);
-
-            let recommendations = self.generate_recommendations(&metrics, prob);
-
-            files.push(FileScore {
-                file_path: file_str.to_string(),
-                probability: prob,
-                confidence,
-                risk_level: risk,
-                contributing_factors,
-                recommendations,
-            });
-
-            total_prob += prob;
-            match risk {
+        for score in &file_scores {
+            total_prob += score.probability;
+            match score.risk_level {
                 RiskLevel::High => high_count += 1,
                 RiskLevel::Medium => medium_count += 1,
                 RiskLevel::Low => low_count += 1,
             }
         }
 
-        // Calculate summary statistics
         let mut summary = Summary {
-            total_files: files.len(),
+            total_files: file_scores.len(),
             high_risk_count: high_count,
             medium_risk_count: medium_count,
             low_risk_count: low_count,
             ..Default::default()
         };
 
-        if !files.is_empty() {
-            summary.avg_probability = total_prob / files.len() as f32;
+        if !file_scores.is_empty() {
+            summary.avg_probability = total_prob / file_scores.len() as f32;
 
-            let mut probs: Vec<f32> = files.iter().map(|f| f.probability).collect();
+            let mut probs: Vec<f32> = file_scores.iter().map(|f| f.probability).collect();
             probs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             summary.p50_probability = percentile(&probs, 50.0);
             summary.p95_probability = percentile(&probs, 95.0);
         }
 
         Ok(Analysis {
-            files,
+            files: file_scores,
             summary,
             weights: self.config.weights.clone(),
         })
