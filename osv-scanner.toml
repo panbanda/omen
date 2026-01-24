@@ -1,0 +1,19 @@
+# OSV Scanner Configuration
+# See: https://google.github.io/osv-scanner/configuration/
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0436"
+reason = """
+The 'paste' crate is unmaintained (informational advisory, not a security vulnerability).
+It is a transitive dependency via candle-core -> gemm, and cannot be removed without
+upstream updates to the candle ML framework. The crate is still functional and widely
+used. Monitoring upstream for migration to 'pastey' alternative.
+"""
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0119"
+reason = """
+The 'number_prefix' crate is unmaintained (informational advisory, not a security vulnerability).
+It is a transitive dependency via hf-hub -> indicatif. The crate is still functional.
+Monitoring upstream hf-hub for migration to 'unit-prefix' alternative.
+"""

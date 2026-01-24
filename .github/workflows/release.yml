@@ -8,15 +8,17 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-permissions:
-  contents: write
-  issues: write
-  pull-requests: write
+permissions: {}
 
 jobs:
   release-please:
     name: Release Please
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
 
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
@@ -99,6 +101,9 @@ jobs:
     needs: [release-please, build]
     if: ${{ needs.release-please.outputs.release_created }}
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
