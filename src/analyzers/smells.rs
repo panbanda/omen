@@ -22,6 +22,7 @@ use ignore::WalkBuilder;
 use petgraph::algo::tarjan_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::Direction;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
@@ -103,77 +104,98 @@ impl Analyzer {
 
     /// Analyze a repository for architectural smells.
     pub fn analyze_repo(&self, repo_path: &Path) -> Result<Analysis> {
-        let parser = Parser::new();
-
-        // Build dependency graph
-        let mut graph: DiGraph<String, ()> = DiGraph::new();
-        let mut node_indices: HashMap<String, NodeIndex> = HashMap::new();
-        let mut file_imports: HashMap<String, Vec<String>> = HashMap::new();
-
-        // Collect files and their imports
-        for entry in WalkBuilder::new(repo_path)
+        // Phase 1: Collect all file paths (fast)
+        let files: Vec<_> = WalkBuilder::new(repo_path)
             .hidden(true)
             .git_ignore(true)
             .build()
-        {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
+            .filter(|e| Language::detect(e.path()).is_some())
+            .map(|e| e.into_path())
+            .collect();
 
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
+        // Phase 2: Parallel parsing - extract imports from all files
+        let file_imports: Vec<(String, Vec<String>)> = files
+            .par_iter()
+            .filter_map(|path| {
+                let parser = Parser::new();
+                let parse_result = parser.parse_file(path).ok()?;
+                let rel_path = path
+                    .strip_prefix(repo_path)
+                    .unwrap_or(path)
+                    .to_string_lossy()
+                    .to_string();
+
+                let imports = extract_imports(&parse_result);
+                let import_paths: Vec<String> = imports.into_iter().map(|imp| imp.path).collect();
+
+                Some((rel_path, import_paths))
+            })
+            .collect();
+
+        // Phase 3: Build graph and lookup index
+        let mut graph: DiGraph<String, ()> = DiGraph::new();
+        let mut node_indices: HashMap<String, NodeIndex> = HashMap::new();
+
+        // Build index for O(1) lookups: stem -> list of full paths
+        let mut by_stem: HashMap<String, Vec<String>> = HashMap::new();
+        let mut by_name: HashMap<String, Vec<String>> = HashMap::new();
+
+        // Create all nodes first
+        for (rel_path, _) in &file_imports {
+            if !node_indices.contains_key(rel_path) {
+                let idx = graph.add_node(rel_path.clone());
+                node_indices.insert(rel_path.clone(), idx);
+
+                // Index by file stem
+                if let Some(stem) = std::path::Path::new(rel_path).file_stem() {
+                    let stem_str = stem.to_string_lossy().to_string();
+                    by_stem.entry(stem_str).or_default().push(rel_path.clone());
+                }
+
+                // Index by file name
+                if let Some(name) = std::path::Path::new(rel_path).file_name() {
+                    let name_str = name.to_string_lossy().to_string();
+                    by_name.entry(name_str).or_default().push(rel_path.clone());
+                }
             }
-
-            // Detect language
-            let _lang = match Language::detect(path) {
-                Some(l) => l,
-                None => continue,
-            };
-
-            // Parse file
-            let parse_result = match parser.parse_file(path) {
-                Ok(r) => r,
-                Err(_) => continue,
-            };
-
-            // Get relative path as node ID
-            let rel_path = path
-                .strip_prefix(repo_path)
-                .unwrap_or(path)
-                .to_string_lossy()
-                .to_string();
-
-            // Create node if not exists
-            let node_idx = *node_indices
-                .entry(rel_path.clone())
-                .or_insert_with(|| graph.add_node(rel_path.clone()));
-            let _ = node_idx; // Silence unused warning
-
-            // Extract imports
-            let imports = extract_imports(&parse_result);
-            let import_paths: Vec<String> = imports.into_iter().map(|imp| imp.path).collect();
-
-            file_imports.insert(rel_path, import_paths);
         }
 
-        // Add edges based on imports
+        // Phase 4: Add edges based on imports using indexed lookups
         for (from_file, imports) in &file_imports {
             let from_idx = node_indices[from_file];
 
             for import in imports {
-                // Try to resolve import to a file in the repo
+                // 1. Try exact path match
                 if let Some(&to_idx) = node_indices.get(import) {
                     graph.add_edge(from_idx, to_idx, ());
                     continue;
                 }
 
-                // Try matching by filename
-                for (file_path, &to_idx) in &node_indices {
-                    if file_path.ends_with(import) || file_path.contains(import) {
-                        graph.add_edge(from_idx, to_idx, ());
-                        break;
+                // 2. Try matching by import as stem or name (O(1) lookup)
+                let import_stem = std::path::Path::new(import)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| import.clone());
+
+                if let Some(matches) = by_stem.get(&import_stem) {
+                    if let Some(first_match) = matches.first() {
+                        if let Some(&to_idx) = node_indices.get(first_match) {
+                            graph.add_edge(from_idx, to_idx, ());
+                            continue;
+                        }
+                    }
+                }
+
+                // 3. Try matching by import containing a path segment
+                if let Some(last_segment) = import.split('/').next_back() {
+                    if let Some(matches) = by_stem.get(last_segment) {
+                        if let Some(first_match) = matches.first() {
+                            if let Some(&to_idx) = node_indices.get(first_match) {
+                                graph.add_edge(from_idx, to_idx, ());
+                            }
+                        }
                     }
                 }
             }
