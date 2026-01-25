@@ -12,8 +12,8 @@ use rayon::ThreadPoolBuilder;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use omen::cli::{
-    Cli, Command, ComplexityArgs, McpSubcommand, MutationArgs, MutationTrainArgs, OutputFormat,
-    ReportSubcommand, ScoreSubcommand, SearchSubcommand,
+    Cli, Command, ComplexityArgs, McpSubcommand, MutationArgs, MutationSubcommand,
+    MutationTrainArgs, OutputFormat, ReportSubcommand, ScoreSubcommand, SearchSubcommand,
 };
 use omen::config::Config;
 use omen::core::progress::is_tty;
@@ -344,12 +344,14 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         Command::Search(ref cmd) => {
             run_search(&cli.path, &config, cmd.subcommand.clone(), format)?;
         }
-        Command::Mutation(ref args) => {
-            run_mutation(path, &config, args, format)?;
-        }
-        Command::MutationTrain(ref args) => {
-            run_mutation_train(&args.path, args)?;
-        }
+        Command::Mutation(ref cmd) => match &cmd.subcommand {
+            Some(MutationSubcommand::Train(args)) => {
+                run_mutation_train(&args.path, args)?;
+            }
+            None => {
+                run_mutation(path, &config, &cmd.args, format)?;
+            }
+        },
     }
 
     Ok(())

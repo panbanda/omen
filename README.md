@@ -660,7 +660,7 @@ omen mutation --glob "src/analyzers/*.rs"
 omen mutation --learn
 
 # Train model from accumulated history
-omen mutation-train
+omen mutation train
 
 # Use custom model path
 omen mutation --model custom-model.json
@@ -674,7 +674,7 @@ omen mutation --skip-predicted 0.9
 The mutation predictor can learn from your codebase's actual results:
 
 1. Run `omen mutation --learn` to collect training data (saves to `.omen/mutation-history.jsonl`)
-2. Run `omen mutation-train` to train the model from historical results
+2. Run `omen mutation train` to train the model from historical results
 3. Future runs automatically load the trained model for improved predictions
 
 The model learns operator-specific kill rates and feature weights, improving equivalent mutant detection over time.

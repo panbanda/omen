@@ -137,10 +137,7 @@ pub enum Command {
 
     /// Mutation testing for test suite effectiveness
     #[command(alias = "mut")]
-    Mutation(MutationArgs),
-
-    /// Train mutation predictor from historical results
-    MutationTrain(MutationTrainArgs),
+    Mutation(MutationCommand),
 }
 
 #[derive(Args)]
@@ -656,7 +653,23 @@ pub enum MutationMode {
     Thorough,
 }
 
-/// Arguments for mutation-train command.
+/// Mutation testing command with subcommands.
+#[derive(Args)]
+pub struct MutationCommand {
+    #[command(subcommand)]
+    pub subcommand: Option<MutationSubcommand>,
+
+    #[command(flatten)]
+    pub args: MutationArgs,
+}
+
+#[derive(Subcommand)]
+pub enum MutationSubcommand {
+    /// Train ML predictor from historical mutation results
+    Train(MutationTrainArgs),
+}
+
+/// Arguments for mutation train command.
 #[derive(Args)]
 pub struct MutationTrainArgs {
     /// Path to analyze (default: current directory)
@@ -1583,7 +1596,8 @@ mod tests {
     #[test]
     fn test_mutation_defaults() {
         let cli = Cli::try_parse_from(["omen", "mutation"]).unwrap();
-        if let Command::Mutation(args) = cli.command {
+        if let Command::Mutation(cmd) = cli.command {
+            let args = &cmd.args;
             assert_eq!(args.timeout, 30);
             assert_eq!(args.operators, "CRR,ROR,AOR");
             assert!(!args.check);
@@ -1604,8 +1618,8 @@ mod tests {
     fn test_mutation_test_command() {
         let cli =
             Cli::try_parse_from(["omen", "mutation", "--test-command", "cargo test"]).unwrap();
-        if let Command::Mutation(args) = cli.command {
-            assert_eq!(args.test_command, Some("cargo test".to_string()));
+        if let Command::Mutation(cmd) = cli.command {
+            assert_eq!(cmd.args.test_command, Some("cargo test".to_string()));
         } else {
             panic!("Expected Mutation command");
         }
@@ -1614,8 +1628,8 @@ mod tests {
     #[test]
     fn test_mutation_timeout() {
         let cli = Cli::try_parse_from(["omen", "mutation", "--timeout", "60"]).unwrap();
-        if let Command::Mutation(args) = cli.command {
-            assert_eq!(args.timeout, 60);
+        if let Command::Mutation(cmd) = cli.command {
+            assert_eq!(cmd.args.timeout, 60);
         } else {
             panic!("Expected Mutation command");
         }
@@ -1624,8 +1638,8 @@ mod tests {
     #[test]
     fn test_mutation_operators() {
         let cli = Cli::try_parse_from(["omen", "mutation", "--operators", "CRR,ROR"]).unwrap();
-        if let Command::Mutation(args) = cli.command {
-            assert_eq!(args.operators, "CRR,ROR");
+        if let Command::Mutation(cmd) = cli.command {
+            assert_eq!(cmd.args.operators, "CRR,ROR");
         } else {
             panic!("Expected Mutation command");
         }
@@ -1634,8 +1648,8 @@ mod tests {
     #[test]
     fn test_mutation_check_mode() {
         let cli = Cli::try_parse_from(["omen", "mutation", "--check"]).unwrap();
-        if let Command::Mutation(args) = cli.command {
-            assert!(args.check);
+        if let Command::Mutation(cmd) = cli.command {
+            assert!(cmd.args.check);
         } else {
             panic!("Expected Mutation command");
         }
@@ -1644,8 +1658,8 @@ mod tests {
     #[test]
     fn test_mutation_min_score() {
         let cli = Cli::try_parse_from(["omen", "mutation", "--min-score", "0.9"]).unwrap();
-        if let Command::Mutation(args) = cli.command {
-            assert!((args.min_score - 0.9).abs() < 0.001);
+        if let Command::Mutation(cmd) = cli.command {
+            assert!((cmd.args.min_score - 0.9).abs() < 0.001);
         } else {
             panic!("Expected Mutation command");
         }
@@ -1654,8 +1668,8 @@ mod tests {
     #[test]
     fn test_mutation_dry_run() {
         let cli = Cli::try_parse_from(["omen", "mutation", "--dry-run"]).unwrap();
-        if let Command::Mutation(args) = cli.command {
-            assert!(args.dry_run);
+        if let Command::Mutation(cmd) = cli.command {
+            assert!(cmd.args.dry_run);
         } else {
             panic!("Expected Mutation command");
         }
@@ -1664,8 +1678,8 @@ mod tests {
     #[test]
     fn test_mutation_jobs() {
         let cli = Cli::try_parse_from(["omen", "mutation", "--jobs", "4"]).unwrap();
-        if let Command::Mutation(args) = cli.command {
-            assert_eq!(args.jobs, 4);
+        if let Command::Mutation(cmd) = cli.command {
+            assert_eq!(cmd.args.jobs, 4);
         } else {
             panic!("Expected Mutation command");
         }
@@ -1674,8 +1688,8 @@ mod tests {
     #[test]
     fn test_mutation_coverage() {
         let cli = Cli::try_parse_from(["omen", "mutation", "--coverage", "coverage.json"]).unwrap();
-        if let Command::Mutation(args) = cli.command {
-            assert_eq!(args.coverage, Some(PathBuf::from("coverage.json")));
+        if let Command::Mutation(cmd) = cli.command {
+            assert_eq!(cmd.args.coverage, Some(PathBuf::from("coverage.json")));
         } else {
             panic!("Expected Mutation command");
         }
@@ -1684,8 +1698,8 @@ mod tests {
     #[test]
     fn test_mutation_incremental() {
         let cli = Cli::try_parse_from(["omen", "mutation", "--incremental"]).unwrap();
-        if let Command::Mutation(args) = cli.command {
-            assert!(args.incremental);
+        if let Command::Mutation(cmd) = cli.command {
+            assert!(cmd.args.incremental);
         } else {
             panic!("Expected Mutation command");
         }
@@ -1694,8 +1708,8 @@ mod tests {
     #[test]
     fn test_mutation_skip_equivalent() {
         let cli = Cli::try_parse_from(["omen", "mutation", "--skip-equivalent"]).unwrap();
-        if let Command::Mutation(args) = cli.command {
-            assert!(args.skip_equivalent);
+        if let Command::Mutation(cmd) = cli.command {
+            assert!(cmd.args.skip_equivalent);
         } else {
             panic!("Expected Mutation command");
         }
@@ -1704,8 +1718,8 @@ mod tests {
     #[test]
     fn test_mutation_mode_all() {
         let cli = Cli::try_parse_from(["omen", "mutation", "--mode", "all"]).unwrap();
-        if let Command::Mutation(args) = cli.command {
-            assert!(matches!(args.mode, MutationMode::All));
+        if let Command::Mutation(cmd) = cli.command {
+            assert!(matches!(cmd.args.mode, MutationMode::All));
         } else {
             panic!("Expected Mutation command");
         }
@@ -1714,8 +1728,8 @@ mod tests {
     #[test]
     fn test_mutation_mode_fast() {
         let cli = Cli::try_parse_from(["omen", "mutation", "--mode", "fast"]).unwrap();
-        if let Command::Mutation(args) = cli.command {
-            assert!(matches!(args.mode, MutationMode::Fast));
+        if let Command::Mutation(cmd) = cli.command {
+            assert!(matches!(cmd.args.mode, MutationMode::Fast));
         } else {
             panic!("Expected Mutation command");
         }
@@ -1724,8 +1738,8 @@ mod tests {
     #[test]
     fn test_mutation_mode_thorough() {
         let cli = Cli::try_parse_from(["omen", "mutation", "--mode", "thorough"]).unwrap();
-        if let Command::Mutation(args) = cli.command {
-            assert!(matches!(args.mode, MutationMode::Thorough));
+        if let Command::Mutation(cmd) = cli.command {
+            assert!(matches!(cmd.args.mode, MutationMode::Thorough));
         } else {
             panic!("Expected Mutation command");
         }
@@ -1735,8 +1749,11 @@ mod tests {
     fn test_mutation_output_survivors() {
         let cli = Cli::try_parse_from(["omen", "mutation", "--output-survivors", "survivors.json"])
             .unwrap();
-        if let Command::Mutation(args) = cli.command {
-            assert_eq!(args.output_survivors, Some(PathBuf::from("survivors.json")));
+        if let Command::Mutation(cmd) = cli.command {
+            assert_eq!(
+                cmd.args.output_survivors,
+                Some(PathBuf::from("survivors.json"))
+            );
         } else {
             panic!("Expected Mutation command");
         }
@@ -1757,7 +1774,8 @@ mod tests {
             "0.7",
         ])
         .unwrap();
-        if let Command::Mutation(args) = cli.command {
+        if let Command::Mutation(cmd) = cli.command {
+            let args = &cmd.args;
             assert!(args.check);
             assert!(matches!(args.mode, MutationMode::Fast));
             assert_eq!(args.jobs, 8);
@@ -1768,40 +1786,53 @@ mod tests {
         }
     }
 
-    // MutationTrain command tests
+    // Mutation train subcommand tests
     #[test]
     fn test_command_mutation_train() {
-        let cli = Cli::try_parse_from(["omen", "mutation-train"]).unwrap();
-        assert!(matches!(cli.command, Command::MutationTrain(_)));
+        let cli = Cli::try_parse_from(["omen", "mutation", "train"]).unwrap();
+        if let Command::Mutation(cmd) = cli.command {
+            assert!(matches!(cmd.subcommand, Some(MutationSubcommand::Train(_))));
+        } else {
+            panic!("Expected Mutation command");
+        }
     }
 
     #[test]
     fn test_mutation_train_with_model_path() {
-        let cli = Cli::try_parse_from(["omen", "mutation-train", "--model", "custom-model.json"])
-            .unwrap();
-        if let Command::MutationTrain(args) = cli.command {
-            assert_eq!(args.model, Some(PathBuf::from("custom-model.json")));
+        let cli =
+            Cli::try_parse_from(["omen", "mutation", "train", "--model", "custom-model.json"])
+                .unwrap();
+        if let Command::Mutation(cmd) = cli.command {
+            if let Some(MutationSubcommand::Train(args)) = cmd.subcommand {
+                assert_eq!(args.model, Some(PathBuf::from("custom-model.json")));
+            } else {
+                panic!("Expected Train subcommand");
+            }
         } else {
-            panic!("Expected MutationTrain command");
+            panic!("Expected Mutation command");
         }
     }
 
     #[test]
     fn test_mutation_train_with_history_path() {
-        let cli =
-            Cli::try_parse_from(["omen", "mutation-train", "--history", "history.jsonl"]).unwrap();
-        if let Command::MutationTrain(args) = cli.command {
-            assert_eq!(args.history, Some(PathBuf::from("history.jsonl")));
+        let cli = Cli::try_parse_from(["omen", "mutation", "train", "--history", "history.jsonl"])
+            .unwrap();
+        if let Command::Mutation(cmd) = cli.command {
+            if let Some(MutationSubcommand::Train(args)) = cmd.subcommand {
+                assert_eq!(args.history, Some(PathBuf::from("history.jsonl")));
+            } else {
+                panic!("Expected Train subcommand");
+            }
         } else {
-            panic!("Expected MutationTrain command");
+            panic!("Expected Mutation command");
         }
     }
 
     #[test]
     fn test_mutation_learn_flag() {
         let cli = Cli::try_parse_from(["omen", "mutation", "--learn"]).unwrap();
-        if let Command::Mutation(args) = cli.command {
-            assert!(args.learn);
+        if let Command::Mutation(cmd) = cli.command {
+            assert!(cmd.args.learn);
         } else {
             panic!("Expected Mutation command");
         }
