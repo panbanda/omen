@@ -113,7 +113,7 @@ Top-level commands (flat structure):
 - `smells` - Architectural smell detection
 - `flags` - Feature flag detection
 - `lint-hotspot` - Lint violation density
-- `mutate` - Mutation testing (21 operators across 5 languages)
+- `mutation` - Mutation testing (21 operators across 5 languages)
 - `score` - Repository health score
 - `all` - Run all analyzers
 - `context` - Deep context for LLMs

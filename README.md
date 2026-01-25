@@ -625,33 +625,36 @@ Mutation testing measures how well your test suite catches bugs by introducing s
 
 - **Parallel execution** - Async worker pool with work-stealing for efficient mutation testing
 - **Equivalent mutant detection** - ML-based scoring to identify semantically equivalent mutations
-- **Coverage integration** - Parse LLVM-cov, Istanbul, and coverage.py to skip untested code
+- **Coverage integration** - Parse LLVM-cov, Istanbul, coverage.py, and Go coverage to skip untested code
 - **Incremental mode** - Only test mutations in changed files since last baseline
 - **CI/CD integration** - Quality gates with baseline tracking and GitHub integration
 
 **Usage:**
 
 ```bash
-# Run mutation testing with default operators (CRR, ROR, AOR)
-omen mutate src/
+# Generate mutants (dry run) with default operators (CRR, ROR, AOR)
+omen mutation --dry-run
 
-# Use all operators for thorough testing
-omen mutate src/ --mode thorough
+# Run mutation testing with all operators
+omen mutation --mode thorough
 
 # Fast mode (excludes operators that produce more equivalent mutants)
-omen mutate src/ --mode fast
+omen mutation --mode fast
 
 # Run with coverage data to skip untested code
-omen mutate src/ --coverage coverage.json
+omen mutation --coverage coverage.json
 
 # Incremental mode for CI - only test changed files
-omen mutate src/ --incremental --baseline .omen/baseline.json
+omen mutation --incremental --baseline .omen/baseline.json
 
 # Control parallelism
-omen mutate src/ --jobs 8
+omen mutation --jobs 8
 
 # Output surviving mutants for investigation
-omen mutate src/ --output-survivors survivors.json
+omen mutation --output-survivors survivors.json
+
+# Filter to specific files
+omen mutation --glob "src/analyzers/*.rs"
 ```
 
 **Mutation Score:**

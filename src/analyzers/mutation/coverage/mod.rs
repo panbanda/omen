@@ -327,6 +327,80 @@ fn parse_coverage_py_str(content: &str) -> Result<CoverageData> {
     Ok(coverage)
 }
 
+// ============================================================================
+// Go Coverage Support
+// ============================================================================
+
+/// Go coverage JSON structure (from `go tool cover -json`).
+#[derive(Debug, Deserialize)]
+struct GoCoverReport {
+    #[serde(rename = "Packages")]
+    packages: Vec<GoCoverPackage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GoCoverPackage {
+    #[serde(rename = "Files")]
+    files: Option<Vec<GoCoverFile>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GoCoverFile {
+    #[serde(rename = "Name")]
+    name: String,
+    #[serde(rename = "Lines")]
+    lines: Option<Vec<GoCoverLine>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GoCoverLine {
+    #[serde(rename = "StartLine")]
+    start_line: u32,
+    #[serde(rename = "EndLine")]
+    end_line: u32,
+    #[serde(rename = "Count")]
+    count: u32,
+}
+
+/// Parse Go coverage JSON output.
+pub fn parse_go_cover(path: &Path) -> Result<CoverageData> {
+    let content = fs::read_to_string(path)?;
+    parse_go_cover_str(&content)
+}
+
+fn parse_go_cover_str(content: &str) -> Result<CoverageData> {
+    let report: GoCoverReport = serde_json::from_str(content)
+        .map_err(|e| Error::analysis(format!("Failed to parse Go coverage JSON: {e}")))?;
+
+    let mut coverage = CoverageData::new();
+
+    for package in report.packages {
+        if let Some(files) = package.files {
+            for file in files {
+                let path = PathBuf::from(&file.name);
+                let mut covered_lines = HashSet::new();
+
+                if let Some(lines) = file.lines {
+                    for line in lines {
+                        // Only include lines that were executed (count > 0)
+                        if line.count > 0 {
+                            for line_num in line.start_line..=line.end_line {
+                                covered_lines.insert(line_num);
+                            }
+                        }
+                    }
+                }
+
+                if !covered_lines.is_empty() {
+                    coverage.files.insert(path, covered_lines);
+                }
+            }
+        }
+    }
+
+    Ok(coverage)
+}
+
 /// Automatically detect coverage format and parse.
 pub fn parse_auto(path: &Path) -> Result<CoverageData> {
     let content = fs::read_to_string(path)?;
@@ -346,8 +420,13 @@ pub fn parse_auto(path: &Path) -> Result<CoverageData> {
         return parse_istanbul_str(&content);
     }
 
+    // Try Go coverage format (has "Packages" with "Files")
+    if content.contains("\"Packages\"") && content.contains("\"StartLine\"") {
+        return parse_go_cover_str(&content);
+    }
+
     Err(Error::analysis(
-        "Could not detect coverage format. Supported: llvm-cov, istanbul, coverage.py",
+        "Could not detect coverage format. Supported: llvm-cov, istanbul, coverage.py, go-cover",
     ))
 }
 
@@ -825,8 +904,58 @@ mod tests {
     }
 
     // ========================================================================
+    // Go coverage parser tests
+    // ========================================================================
+
+    #[test]
+    fn test_parse_go_cover_valid() {
+        let path = fixture_path("go-cover.json");
+        let coverage = parse_go_cover(&path).expect("Failed to parse");
+
+        assert_eq!(coverage.file_count(), 2);
+        // main.go lines 10, 11, 20-22 have count > 0
+        assert!(coverage.is_covered(&PathBuf::from("main.go"), 10));
+        assert!(coverage.is_covered(&PathBuf::from("main.go"), 11));
+        assert!(coverage.is_covered(&PathBuf::from("main.go"), 20));
+        assert!(coverage.is_covered(&PathBuf::from("main.go"), 21));
+        assert!(coverage.is_covered(&PathBuf::from("main.go"), 22));
+        // Line 15 has count=0
+        assert!(!coverage.is_covered(&PathBuf::from("main.go"), 15));
+        // utils.go
+        assert!(coverage.is_covered(&PathBuf::from("utils.go"), 5));
+        assert!(coverage.is_covered(&PathBuf::from("utils.go"), 8));
+        assert!(coverage.is_covered(&PathBuf::from("utils.go"), 9));
+        assert!(coverage.is_covered(&PathBuf::from("utils.go"), 10));
+    }
+
+    #[test]
+    fn test_parse_go_cover_uncovered_lines() {
+        let path = fixture_path("go-cover.json");
+        let coverage = parse_go_cover(&path).expect("Failed to parse");
+
+        // Line 15 has count=0, should not be covered
+        assert!(!coverage.is_covered(&PathBuf::from("main.go"), 15));
+    }
+
+    #[test]
+    fn test_parse_go_cover_nonexistent_file() {
+        let path = PathBuf::from("/nonexistent/coverage.json");
+        let result = parse_go_cover(&path);
+        assert!(result.is_err());
+    }
+
+    // ========================================================================
     // Auto-detection tests
     // ========================================================================
+
+    #[test]
+    fn test_parse_auto_go_cover() {
+        let path = fixture_path("go-cover.json");
+        let coverage = parse_auto(&path).expect("Failed to parse");
+
+        assert!(coverage.file_count() > 0);
+        assert!(coverage.is_covered(&PathBuf::from("main.go"), 10));
+    }
 
     #[test]
     fn test_parse_auto_llvm() {
