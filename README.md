@@ -655,29 +655,53 @@ omen mutation --output-survivors survivors.json
 
 # Filter to specific files
 omen mutation --glob "src/analyzers/*.rs"
-
-# Learn from results to improve future predictions
-omen mutation --learn
-
-# Train model from accumulated history
-omen mutation train
-
-# Use custom model path
-omen mutation --model custom-model.json
-
-# Skip mutants predicted to be killed above threshold
-omen mutation --skip-predicted 0.9
 ```
 
-**ML Training Workflow:**
+**ML-Based Prediction:**
 
-The mutation predictor can learn from your codebase's actual results:
+Omen includes an ML model that learns from your mutation testing history to predict which mutants will survive. This enables two optimizations:
 
-1. Run `omen mutation --learn` to collect training data (saves to `.omen/mutation-history.jsonl`)
-2. Run `omen mutation train` to train the model from historical results
-3. Future runs automatically load the trained model for improved predictions
+1. **Skip obvious kills** - Don't waste time testing mutants the model is confident will be caught
+2. **Better equivalent detection** - Learn which patterns in your codebase produce equivalent mutants
 
-The model learns operator-specific kill rates and feature weights, improving equivalent mutant detection over time.
+```bash
+# Record results to history file for later training
+omen mutation --record
+
+# Train the model from accumulated history
+omen mutation train
+
+# Use trained model to skip high-confidence kills (saves time)
+omen mutation --skip-predicted 0.95
+
+# Use a custom model path
+omen mutation --model path/to/model.json
+```
+
+**Training Workflow:**
+
+1. **Collect data**: Run `omen mutation --record` on your codebase. Each mutant's outcome (killed/survived) is appended to `.omen/mutation-history.jsonl` along with:
+   - Mutant details (operator, location, original/mutated code)
+   - Source context (5 lines before/after the mutation)
+   - Execution time
+
+2. **Train model**: Run `omen mutation train` to train the predictor. The model learns:
+   - Operator-specific kill rates for your codebase
+   - Feature weights correlating code patterns with survival
+
+3. **Use predictions**: Future runs automatically load `.omen/mutation-model.json`. Use `--skip-predicted 0.9` to skip mutants with >90% predicted kill probability.
+
+**Example CI workflow:**
+```bash
+# Weekly: full run with recording
+omen mutation --record --mode thorough
+
+# After accumulating history: train model
+omen mutation train
+
+# Daily CI: fast run using predictions
+omen mutation --incremental --skip-predicted 0.95
+```
 
 **Mutation Score:**
 

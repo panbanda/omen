@@ -1122,8 +1122,8 @@ fn run_mutation(
         )));
     }
 
-    // Save results to history if --learn flag is set
-    if args.learn && !args.dry_run {
+    // Save results to history if --record flag is set
+    if args.record && !args.dry_run {
         use std::io::Write;
 
         let history_path = path.join(".omen/mutation-history.jsonl");
@@ -1199,7 +1199,7 @@ fn run_mutation_train(path: &std::path::Path, args: &MutationTrainArgs) -> omen:
     // Check if history file exists
     if !history_path.exists() {
         return Err(omen::core::Error::analysis(format!(
-            "History file not found: {}\nRun 'omen mutation --learn' first to collect training data.",
+            "History file not found: {}\nRun 'omen mutation --record' first to collect training data.",
             history_path.display()
         )));
     }

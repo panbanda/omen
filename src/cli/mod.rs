@@ -629,9 +629,9 @@ pub struct MutationArgs {
     #[arg(long)]
     pub output_survivors: Option<PathBuf>,
 
-    /// Learn from results to improve future predictions
+    /// Record results to history file for model training
     #[arg(long)]
-    pub learn: bool,
+    pub record: bool,
 
     /// Path to ML model file (default: .omen/mutation-model.json)
     #[arg(long)]
@@ -1829,10 +1829,10 @@ mod tests {
     }
 
     #[test]
-    fn test_mutation_learn_flag() {
-        let cli = Cli::try_parse_from(["omen", "mutation", "--learn"]).unwrap();
+    fn test_mutation_record_flag() {
+        let cli = Cli::try_parse_from(["omen", "mutation", "--record"]).unwrap();
         if let Command::Mutation(cmd) = cli.command {
-            assert!(cmd.args.learn);
+            assert!(cmd.args.record);
         } else {
             panic!("Expected Mutation command");
         }
