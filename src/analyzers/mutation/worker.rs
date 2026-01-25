@@ -56,7 +56,7 @@ impl ProgressUpdate {
             MutantStatus::Survived => self.survived += 1,
             MutantStatus::Timeout => self.timeout += 1,
             MutantStatus::BuildError | MutantStatus::Equivalent => self.error += 1,
-            MutantStatus::Pending => {}
+            MutantStatus::Pending | MutantStatus::Skipped => {}
         }
         let scored = self.killed + self.survived;
         if scored > 0 {

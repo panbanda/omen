@@ -378,6 +378,7 @@ mod tests {
                     survived: 1,
                     timeout: 0,
                     error: 0,
+                    skipped: 0,
                     score: 0.5,
                 },
                 FileResult {
@@ -401,6 +402,7 @@ mod tests {
                     survived: 0,
                     timeout: 0,
                     error: 0,
+                    skipped: 0,
                     score: 1.0,
                 },
             ],
@@ -411,6 +413,7 @@ mod tests {
                 survived: 3,
                 timeout: 0,
                 error: 0,
+                skipped: 0,
                 mutation_score: 0.8,
                 duration_ms: 5000,
                 by_operator,

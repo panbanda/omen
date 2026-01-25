@@ -974,10 +974,28 @@ fn run_mutation(
     format: Format,
 ) -> omen::core::Result<()> {
     use omen::analyzers::mutation;
-    use omen::analyzers::mutation::ml_predictor::TrainingData;
+    use omen::analyzers::mutation::ml_predictor::{SurvivabilityPredictor, TrainingData};
     use omen::analyzers::mutation::MutantStatus;
 
     let mut file_set = FileSet::from_path(path, config)?;
+
+    // Load predictor model if --skip-predicted is specified
+    let predictor = if args.skip_predicted.is_some() {
+        let model_path = args
+            .model
+            .clone()
+            .unwrap_or_else(|| path.join(SurvivabilityPredictor::default_model_path()));
+        let p = SurvivabilityPredictor::load_or_default(&model_path);
+        if !p.is_trained() {
+            eprintln!(
+                "Warning: No trained model found at {}. Run 'omen mutation train' first.",
+                model_path.display()
+            );
+        }
+        Some(p)
+    } else {
+        None
+    };
 
     // Apply glob filter if specified
     if let Some(ref pattern) = args.common.glob {
@@ -1025,6 +1043,13 @@ fn run_mutation(
         analyzer = analyzer.min_score(Some(args.min_score));
     }
 
+    // Configure ML-based filtering if --skip-predicted is set
+    if let Some(threshold) = args.skip_predicted {
+        if let Some(p) = predictor {
+            analyzer = analyzer.skip_predicted(Some(threshold)).predictor(p);
+        }
+    }
+
     let mut ctx = AnalysisContext::new(&file_set, config, Some(path));
     if let Ok(repo) = omen::git::GitRepo::open(path) {
         let git_root = repo.root().to_path_buf();
@@ -1063,6 +1088,9 @@ fn run_mutation(
             println!("- **Survived**: {}", result.summary.survived);
             println!("- **Timeout**: {}", result.summary.timeout);
             println!("- **Error**: {}", result.summary.error);
+            if result.summary.skipped > 0 {
+                println!("- **Skipped**: {} (ML predicted)", result.summary.skipped);
+            }
             println!(
                 "- **Mutation Score**: {:.1}%",
                 result.summary.mutation_score * 100.0
@@ -1086,10 +1114,17 @@ fn run_mutation(
                 println!("## Files\n");
                 for file in &result.files {
                     println!("### {} (score: {:.1}%)\n", file.path, file.score * 100.0);
-                    println!(
-                        "- Killed: {}, Survived: {}, Timeout: {}, Error: {}\n",
-                        file.killed, file.survived, file.timeout, file.error
-                    );
+                    if file.skipped > 0 {
+                        println!(
+                            "- Killed: {}, Survived: {}, Skipped: {}, Timeout: {}, Error: {}\n",
+                            file.killed, file.survived, file.skipped, file.timeout, file.error
+                        );
+                    } else {
+                        println!(
+                            "- Killed: {}, Survived: {}, Timeout: {}, Error: {}\n",
+                            file.killed, file.survived, file.timeout, file.error
+                        );
+                    }
                 }
             }
         }
@@ -1098,13 +1133,24 @@ fn run_mutation(
             println!("=======================");
             println!("Files: {}", result.summary.total_files);
             println!("Mutants: {}", result.summary.total_mutants);
-            println!(
-                "Killed: {} | Survived: {} | Timeout: {} | Error: {}",
-                result.summary.killed,
-                result.summary.survived,
-                result.summary.timeout,
-                result.summary.error
-            );
+            if result.summary.skipped > 0 {
+                println!(
+                    "Killed: {} | Survived: {} | Skipped: {} | Timeout: {} | Error: {}",
+                    result.summary.killed,
+                    result.summary.survived,
+                    result.summary.skipped,
+                    result.summary.timeout,
+                    result.summary.error
+                );
+            } else {
+                println!(
+                    "Killed: {} | Survived: {} | Timeout: {} | Error: {}",
+                    result.summary.killed,
+                    result.summary.survived,
+                    result.summary.timeout,
+                    result.summary.error
+                );
+            }
             println!(
                 "Mutation Score: {:.1}%",
                 result.summary.mutation_score * 100.0

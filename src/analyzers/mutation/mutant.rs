@@ -83,6 +83,8 @@ pub enum MutantStatus {
     Equivalent,
     /// Mutant was not executed (e.g., dry run).
     Pending,
+    /// Mutant was skipped by ML prediction (predicted to be killed).
+    Skipped,
 }
 
 impl MutantStatus {

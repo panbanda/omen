@@ -97,6 +97,10 @@ pub struct Analyzer {
     mode: MutationMode,
     /// Output path for surviving mutants.
     output_survivors: Option<PathBuf>,
+    /// Skip mutants predicted to be killed above this threshold.
+    skip_predicted_threshold: Option<f64>,
+    /// Trained ML predictor for filtering mutants.
+    predictor: Option<ml_predictor::SurvivabilityPredictor>,
 }
 
 impl Default for Analyzer {
@@ -120,6 +124,8 @@ impl Analyzer {
             skip_equivalent: false,
             mode: MutationMode::All,
             output_survivors: None,
+            skip_predicted_threshold: None,
+            predictor: None,
         }
     }
 
@@ -186,6 +192,19 @@ impl Analyzer {
     /// Set output path for surviving mutants.
     pub fn output_survivors(mut self, path: Option<PathBuf>) -> Self {
         self.output_survivors = path;
+        self
+    }
+
+    /// Set threshold for skipping mutants predicted to be killed.
+    /// Mutants with kill probability >= threshold will be skipped.
+    pub fn skip_predicted(mut self, threshold: Option<f64>) -> Self {
+        self.skip_predicted_threshold = threshold;
+        self
+    }
+
+    /// Set the ML predictor for filtering mutants.
+    pub fn predictor(mut self, predictor: ml_predictor::SurvivabilityPredictor) -> Self {
+        self.predictor = Some(predictor);
         self
     }
 
@@ -265,6 +284,7 @@ impl Analyzer {
                     survived: 0,
                     timeout: 0,
                     error: 0,
+                    skipped: 0,
                     score: 0.0,
                 });
 
@@ -364,11 +384,39 @@ impl AnalyzerTrait for Analyzer {
                 survived: 0,
                 timeout: 0,
                 error: 0,
+                skipped: 0,
                 score: 0.0,
             };
 
+            // Get source as string for predictor context
+            let source_str = String::from_utf8_lossy(&source);
+
             // Execute each mutant
             for mutant in mutants {
+                // Check if we should skip this mutant based on ML prediction
+                if let (Some(threshold), Some(predictor)) =
+                    (self.skip_predicted_threshold, &self.predictor)
+                {
+                    // Extract context around the mutation (5 lines before and after)
+                    let lines: Vec<&str> = source_str.lines().collect();
+                    let line_idx = mutant.line.saturating_sub(1) as usize;
+                    let start = line_idx.saturating_sub(5);
+                    let end = (line_idx + 6).min(lines.len());
+                    let context = lines[start..end].join("\n");
+
+                    let prediction = predictor.predict(&mutant, &context);
+                    if prediction.kill_probability >= threshold {
+                        // Skip this mutant - predicted to be killed with high confidence
+                        file_result.skipped += 1;
+                        file_result.mutants.push(MutationResult::new(
+                            mutant,
+                            MutantStatus::Skipped,
+                            0,
+                        ));
+                        continue;
+                    }
+                }
+
                 let result = match executor.execute_mutant(&mutant, &source) {
                     Ok(r) => r,
                     Err(_) => MutationResult::new(mutant, MutantStatus::BuildError, 0),
@@ -379,7 +427,7 @@ impl AnalyzerTrait for Analyzer {
                     MutantStatus::Survived => file_result.survived += 1,
                     MutantStatus::Timeout => file_result.timeout += 1,
                     MutantStatus::BuildError | MutantStatus::Equivalent => file_result.error += 1,
-                    MutantStatus::Pending => {}
+                    MutantStatus::Pending | MutantStatus::Skipped => {}
                 }
 
                 file_result.mutants.push(result);
@@ -450,6 +498,9 @@ pub struct FileResult {
     pub timeout: usize,
     /// Number of error mutants.
     pub error: usize,
+    /// Number of skipped mutants (ML predicted to be killed).
+    #[serde(default)]
+    pub skipped: usize,
     /// Mutation score for this file.
     pub score: f64,
 }
@@ -469,6 +520,9 @@ pub struct Summary {
     pub timeout: usize,
     /// Total error mutants.
     pub error: usize,
+    /// Total skipped mutants (ML predicted to be killed).
+    #[serde(default)]
+    pub skipped: usize,
     /// Overall mutation score (killed / (killed + survived)).
     pub mutation_score: f64,
     /// Duration in milliseconds.
@@ -497,6 +551,7 @@ fn build_summary(files: &[FileResult], duration_ms: u64) -> Summary {
         survived: 0,
         timeout: 0,
         error: 0,
+        skipped: 0,
         mutation_score: 0.0,
         duration_ms,
         by_operator: HashMap::new(),
@@ -505,6 +560,7 @@ fn build_summary(files: &[FileResult], duration_ms: u64) -> Summary {
     for file in files {
         summary.total_mutants += file.mutants.len();
         summary.killed += file.killed;
+        summary.skipped += file.skipped;
         summary.survived += file.survived;
         summary.timeout += file.timeout;
         summary.error += file.error;
@@ -584,6 +640,7 @@ mod tests {
             survived: 1,
             timeout: 0,
             error: 0,
+            skipped: 0,
             score: 0.5,
         }];
 
@@ -618,6 +675,7 @@ mod tests {
             survived: 0,
             timeout: 0,
             error: 0,
+            skipped: 0,
             score: 1.0,
         }];
 
@@ -645,6 +703,7 @@ mod tests {
             survived: 1,
             timeout: 0,
             error: 0,
+            skipped: 0,
             score: 0.5,
         }];
 
