@@ -703,6 +703,9 @@ omen mutation train
 omen mutation --incremental --skip-predicted 0.95
 ```
 
+> [!NOTE]
+> The `.omen/` directory is gitignored by default. If you want to share the trained model across your team, remove `.omen/mutation-model.json` from your `.gitignore`.
+
 **Mutation Score:**
 
 The mutation score measures test suite effectiveness:

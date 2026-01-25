@@ -53,3 +53,10 @@ Cargo.lock
 
 # Claude Flow
 .claude-flow/
+
+# Omen generated files
+.omen/
+
+# Profiling data
+perf.data
+perf.data.old
