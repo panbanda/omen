@@ -12,8 +12,8 @@ use rayon::ThreadPoolBuilder;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use omen::cli::{
-    Cli, Command, ComplexityArgs, McpSubcommand, OutputFormat, ReportSubcommand, ScoreSubcommand,
-    SearchSubcommand,
+    Cli, Command, ComplexityArgs, McpSubcommand, MutationArgs, OutputFormat, ReportSubcommand,
+    ScoreSubcommand, SearchSubcommand,
 };
 use omen::config::Config;
 use omen::core::progress::is_tty;
@@ -343,6 +343,9 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         }
         Command::Search(ref cmd) => {
             run_search(&cli.path, &config, cmd.subcommand.clone(), format)?;
+        }
+        Command::Mutation(ref args) => {
+            run_mutation(path, &config, args, format)?;
         }
     }
 
@@ -954,6 +957,152 @@ fn run_search(
                 }
             }
         }
+    }
+
+    Ok(())
+}
+
+fn run_mutation(
+    path: &PathBuf,
+    config: &Config,
+    args: &MutationArgs,
+    format: Format,
+) -> omen::core::Result<()> {
+    use omen::analyzers::mutation;
+
+    let file_set = FileSet::from_path(path, config)?;
+
+    // Show analysis progress
+    let spinner = if is_tty() {
+        let s = ProgressBar::new_spinner();
+        s.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} {msg}")
+                .expect("valid template"),
+        );
+        s.enable_steady_tick(std::time::Duration::from_millis(100));
+        Some(s)
+    } else {
+        None
+    };
+
+    if let Some(ref s) = spinner {
+        s.set_message(format!("Analyzing {} files...", file_set.len()));
+    }
+
+    // Parse operators
+    let operators: Vec<String> = args
+        .operators
+        .split(',')
+        .map(|s| s.trim().to_uppercase())
+        .collect();
+
+    // Build analyzer
+    let mut analyzer = mutation::Analyzer::new()
+        .operators(operators)
+        .test_command(args.test_command.clone())
+        .timeout(args.timeout)
+        .dry_run(args.dry_run);
+
+    if args.check {
+        analyzer = analyzer.min_score(Some(args.min_score));
+    }
+
+    let mut ctx = AnalysisContext::new(&file_set, config, Some(path));
+    if let Ok(repo) = omen::git::GitRepo::open(path) {
+        let git_root = repo.root().to_path_buf();
+        ctx = ctx.with_git_path(Box::leak(Box::new(git_root)));
+    }
+
+    // Add progress callback
+    let progress_counter = Arc::new(AtomicUsize::new(0));
+    let total_files = file_set.len();
+    let spinner_clone = spinner.clone();
+    let counter_clone = progress_counter.clone();
+    ctx = ctx.with_progress(move |current, _total| {
+        counter_clone.store(current, Ordering::Relaxed);
+        if let Some(ref s) = spinner_clone {
+            s.set_message(format!("Analyzing... {}/{} files", current, total_files));
+        }
+    });
+
+    let result = analyzer.analyze(&ctx)?;
+
+    if let Some(s) = spinner {
+        s.finish_and_clear();
+    }
+
+    // Output results
+    match format {
+        Format::Json => {
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        Format::Markdown => {
+            println!("# Mutation Testing Report\n");
+            println!("## Summary\n");
+            println!("- **Total Files**: {}", result.summary.total_files);
+            println!("- **Total Mutants**: {}", result.summary.total_mutants);
+            println!("- **Killed**: {}", result.summary.killed);
+            println!("- **Survived**: {}", result.summary.survived);
+            println!("- **Timeout**: {}", result.summary.timeout);
+            println!("- **Error**: {}", result.summary.error);
+            println!(
+                "- **Mutation Score**: {:.1}%",
+                result.summary.mutation_score * 100.0
+            );
+            println!("- **Duration**: {}ms\n", result.summary.duration_ms);
+
+            if !result.summary.by_operator.is_empty() {
+                println!("## By Operator\n");
+                println!("| Operator | Total | Killed | Survived |");
+                println!("|----------|-------|--------|----------|");
+                for (op, stats) in &result.summary.by_operator {
+                    println!(
+                        "| {} | {} | {} | {} |",
+                        op, stats.total, stats.killed, stats.survived
+                    );
+                }
+                println!();
+            }
+
+            if !result.files.is_empty() {
+                println!("## Files\n");
+                for file in &result.files {
+                    println!("### {} (score: {:.1}%)\n", file.path, file.score * 100.0);
+                    println!(
+                        "- Killed: {}, Survived: {}, Timeout: {}, Error: {}\n",
+                        file.killed, file.survived, file.timeout, file.error
+                    );
+                }
+            }
+        }
+        Format::Text => {
+            println!("Mutation Testing Report");
+            println!("=======================");
+            println!("Files: {}", result.summary.total_files);
+            println!("Mutants: {}", result.summary.total_mutants);
+            println!(
+                "Killed: {} | Survived: {} | Timeout: {} | Error: {}",
+                result.summary.killed,
+                result.summary.survived,
+                result.summary.timeout,
+                result.summary.error
+            );
+            println!(
+                "Mutation Score: {:.1}%",
+                result.summary.mutation_score * 100.0
+            );
+            println!("Duration: {}ms", result.summary.duration_ms);
+        }
+    }
+
+    // Check mode: fail if score below threshold
+    if args.check && result.summary.mutation_score < args.min_score {
+        return Err(omen::core::Error::analysis(format!(
+            "Mutation score {:.1}% is below minimum threshold {:.1}%",
+            result.summary.mutation_score * 100.0,
+            args.min_score * 100.0
+        )));
     }
 
     Ok(())

@@ -605,6 +605,78 @@ omen search query "authentication" --files src/auth/,src/middleware/
 </details>
 
 <details>
+<summary><strong>Mutation Testing</strong> - Test suite effectiveness through code mutation</summary>
+
+Mutation testing measures how well your test suite catches bugs by introducing small changes (mutations) to your code and checking if tests fail. A "killed" mutant means tests caught the bug; a "surviving" mutant means a bug could slip through.
+
+**21 Mutation Operators:**
+
+| Category | Operators | What they mutate |
+|----------|-----------|------------------|
+| Core | CRR, ROR, AOR, COR, UOR | Literals, relational ops, arithmetic, conditionals, unary |
+| Advanced | SDL, RVR, BVO, BOR, ASR | Statement deletion, return values, boundaries, bitwise, assignment |
+| Rust | BorrowOperator, OptionOperator, ResultOperator | Borrow semantics, Option/Result handling |
+| Go | GoErrorOperator, GoNilOperator | Error handling, nil checks |
+| TypeScript | TSEqualityOperator, TSOptionalOperator | `===`/`==`, optional chaining |
+| Python | PythonIdentityOperator, PythonComprehensionOperator | `is`/`==`, list comprehensions |
+| Ruby | RubyNilOperator, RubySymbolOperator | nil handling, symbol/string conversion |
+
+**Features:**
+
+- **Parallel execution** - Async worker pool with work-stealing for efficient mutation testing
+- **Equivalent mutant detection** - ML-based scoring to identify semantically equivalent mutations
+- **Coverage integration** - Parse LLVM-cov, Istanbul, and coverage.py to skip untested code
+- **Incremental mode** - Only test mutations in changed files since last baseline
+- **CI/CD integration** - Quality gates with baseline tracking and GitHub integration
+
+**Usage:**
+
+```bash
+# Run mutation testing with default operators (CRR, ROR, AOR)
+omen mutate src/
+
+# Use all operators for thorough testing
+omen mutate src/ --mode thorough
+
+# Fast mode (excludes operators that produce more equivalent mutants)
+omen mutate src/ --mode fast
+
+# Run with coverage data to skip untested code
+omen mutate src/ --coverage coverage.json
+
+# Incremental mode for CI - only test changed files
+omen mutate src/ --incremental --baseline .omen/baseline.json
+
+# Control parallelism
+omen mutate src/ --jobs 8
+
+# Output surviving mutants for investigation
+omen mutate src/ --output-survivors survivors.json
+```
+
+**Mutation Score:**
+
+The mutation score measures test suite effectiveness:
+
+```
+mutation_score = killed_mutants / (total_mutants - equivalent_mutants)
+```
+
+| Score | Quality | Meaning |
+|-------|---------|---------|
+| > 80% | Excellent | Strong test suite that catches most bugs |
+| 60-80% | Good | Reasonable coverage, some gaps to address |
+| 40-60% | Moderate | Significant testing gaps |
+| < 40% | Poor | Tests miss many potential bugs |
+
+**Why it matters:** Code coverage tells you what code runs during tests, but not whether tests actually verify behavior. A function can have 100% coverage yet 0% mutation score if assertions are missing. [Jia and Harman (2011)](https://ieeexplore.ieee.org/document/5487526) showed that mutation testing correlates strongly with fault detection. [Papadakis et al. (2019)](https://ieeexplore.ieee.org/document/8532419) demonstrated it outperforms other test adequacy criteria.
+
+> [!TIP]
+> Start with `--mode fast` on CI for quick feedback, and run `--mode thorough` periodically for comprehensive analysis. Use `--coverage` to avoid wasting time on untested code.
+
+</details>
+
+<details>
 <summary><strong>MCP Server</strong> - LLM tool integration via Model Context Protocol</summary>
 
 Omen includes a Model Context Protocol (MCP) server that exposes all analyzers as tools for LLMs like Claude. This enables AI assistants to analyze codebases directly through standardized tool calls.

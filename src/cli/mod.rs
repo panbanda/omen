@@ -134,6 +134,10 @@ pub enum Command {
     /// Semantic search over code symbols
     #[command(alias = "s")]
     Search(SearchCommand),
+
+    /// Mutation testing for test suite effectiveness
+    #[command(alias = "mut")]
+    Mutation(MutationArgs),
 }
 
 #[derive(Args)]
@@ -570,6 +574,75 @@ pub struct SearchQueryArgs {
     /// Limit search to specific files (comma-separated)
     #[arg(long)]
     pub files: Option<String>,
+}
+
+#[derive(Args)]
+pub struct MutationArgs {
+    #[command(flatten)]
+    pub common: AnalyzerArgs,
+
+    /// Test command to run (auto-detected if omitted)
+    #[arg(long)]
+    pub test_command: Option<String>,
+
+    /// Timeout per mutant in seconds
+    #[arg(long, default_value = "30")]
+    pub timeout: u64,
+
+    /// Mutation operators to use (comma-separated: CRR,ROR,AOR)
+    #[arg(long, default_value = "CRR,ROR,AOR")]
+    pub operators: String,
+
+    /// Check mode: fail if mutation score below threshold
+    #[arg(long)]
+    pub check: bool,
+
+    /// Minimum mutation score (0.0-1.0)
+    #[arg(long, default_value = "0.8")]
+    pub min_score: f64,
+
+    /// Generate mutants only, don't execute tests
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Number of parallel workers (0 = num_cpus)
+    #[arg(long, default_value = "0")]
+    pub jobs: usize,
+
+    /// Path to coverage JSON file
+    #[arg(long)]
+    pub coverage: Option<PathBuf>,
+
+    /// Only test mutants in changed files (incremental mode)
+    #[arg(long)]
+    pub incremental: bool,
+
+    /// Baseline file for regression detection
+    #[arg(long)]
+    pub baseline: Option<PathBuf>,
+
+    /// Skip likely-equivalent mutants
+    #[arg(long)]
+    pub skip_equivalent: bool,
+
+    /// Mutation mode: all, fast, thorough
+    #[arg(long, value_enum, default_value = "all")]
+    pub mode: MutationMode,
+
+    /// Write surviving mutants to file
+    #[arg(long)]
+    pub output_survivors: Option<PathBuf>,
+}
+
+/// Mutation testing mode.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum MutationMode {
+    /// All operators, all mutants
+    All,
+    /// Skip equivalent, limit per-location
+    Fast,
+    /// All + language-specific operators
+    Thorough,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -1464,6 +1537,218 @@ mod tests {
             assert!(!args.check);
         } else {
             panic!("Expected Complexity command");
+        }
+    }
+
+    // Mutation command tests
+    #[test]
+    fn test_command_mutation() {
+        let cli = Cli::try_parse_from(["omen", "mutation"]).unwrap();
+        assert!(matches!(cli.command, Command::Mutation(_)));
+    }
+
+    #[test]
+    fn test_alias_mut_for_mutation() {
+        let cli = Cli::try_parse_from(["omen", "mut"]).unwrap();
+        assert!(matches!(cli.command, Command::Mutation(_)));
+    }
+
+    #[test]
+    fn test_mutation_defaults() {
+        let cli = Cli::try_parse_from(["omen", "mutation"]).unwrap();
+        if let Command::Mutation(args) = cli.command {
+            assert_eq!(args.timeout, 30);
+            assert_eq!(args.operators, "CRR,ROR,AOR");
+            assert!(!args.check);
+            assert!((args.min_score - 0.8).abs() < 0.001);
+            assert!(!args.dry_run);
+            assert_eq!(args.jobs, 0);
+            assert!(args.coverage.is_none());
+            assert!(!args.incremental);
+            assert!(args.baseline.is_none());
+            assert!(!args.skip_equivalent);
+            assert!(matches!(args.mode, MutationMode::All));
+            assert!(args.output_survivors.is_none());
+        } else {
+            panic!("Expected Mutation command");
+        }
+    }
+
+    #[test]
+    fn test_mutation_test_command() {
+        let cli =
+            Cli::try_parse_from(["omen", "mutation", "--test-command", "cargo test"]).unwrap();
+        if let Command::Mutation(args) = cli.command {
+            assert_eq!(args.test_command, Some("cargo test".to_string()));
+        } else {
+            panic!("Expected Mutation command");
+        }
+    }
+
+    #[test]
+    fn test_mutation_timeout() {
+        let cli = Cli::try_parse_from(["omen", "mutation", "--timeout", "60"]).unwrap();
+        if let Command::Mutation(args) = cli.command {
+            assert_eq!(args.timeout, 60);
+        } else {
+            panic!("Expected Mutation command");
+        }
+    }
+
+    #[test]
+    fn test_mutation_operators() {
+        let cli = Cli::try_parse_from(["omen", "mutation", "--operators", "CRR,ROR"]).unwrap();
+        if let Command::Mutation(args) = cli.command {
+            assert_eq!(args.operators, "CRR,ROR");
+        } else {
+            panic!("Expected Mutation command");
+        }
+    }
+
+    #[test]
+    fn test_mutation_check_mode() {
+        let cli = Cli::try_parse_from(["omen", "mutation", "--check"]).unwrap();
+        if let Command::Mutation(args) = cli.command {
+            assert!(args.check);
+        } else {
+            panic!("Expected Mutation command");
+        }
+    }
+
+    #[test]
+    fn test_mutation_min_score() {
+        let cli = Cli::try_parse_from(["omen", "mutation", "--min-score", "0.9"]).unwrap();
+        if let Command::Mutation(args) = cli.command {
+            assert!((args.min_score - 0.9).abs() < 0.001);
+        } else {
+            panic!("Expected Mutation command");
+        }
+    }
+
+    #[test]
+    fn test_mutation_dry_run() {
+        let cli = Cli::try_parse_from(["omen", "mutation", "--dry-run"]).unwrap();
+        if let Command::Mutation(args) = cli.command {
+            assert!(args.dry_run);
+        } else {
+            panic!("Expected Mutation command");
+        }
+    }
+
+    #[test]
+    fn test_mutation_jobs() {
+        let cli = Cli::try_parse_from(["omen", "mutation", "--jobs", "4"]).unwrap();
+        if let Command::Mutation(args) = cli.command {
+            assert_eq!(args.jobs, 4);
+        } else {
+            panic!("Expected Mutation command");
+        }
+    }
+
+    #[test]
+    fn test_mutation_coverage() {
+        let cli = Cli::try_parse_from(["omen", "mutation", "--coverage", "coverage.json"]).unwrap();
+        if let Command::Mutation(args) = cli.command {
+            assert_eq!(args.coverage, Some(PathBuf::from("coverage.json")));
+        } else {
+            panic!("Expected Mutation command");
+        }
+    }
+
+    #[test]
+    fn test_mutation_incremental() {
+        let cli = Cli::try_parse_from(["omen", "mutation", "--incremental"]).unwrap();
+        if let Command::Mutation(args) = cli.command {
+            assert!(args.incremental);
+        } else {
+            panic!("Expected Mutation command");
+        }
+    }
+
+    #[test]
+    fn test_mutation_baseline() {
+        let cli = Cli::try_parse_from(["omen", "mutation", "--baseline", "baseline.json"]).unwrap();
+        if let Command::Mutation(args) = cli.command {
+            assert_eq!(args.baseline, Some(PathBuf::from("baseline.json")));
+        } else {
+            panic!("Expected Mutation command");
+        }
+    }
+
+    #[test]
+    fn test_mutation_skip_equivalent() {
+        let cli = Cli::try_parse_from(["omen", "mutation", "--skip-equivalent"]).unwrap();
+        if let Command::Mutation(args) = cli.command {
+            assert!(args.skip_equivalent);
+        } else {
+            panic!("Expected Mutation command");
+        }
+    }
+
+    #[test]
+    fn test_mutation_mode_all() {
+        let cli = Cli::try_parse_from(["omen", "mutation", "--mode", "all"]).unwrap();
+        if let Command::Mutation(args) = cli.command {
+            assert!(matches!(args.mode, MutationMode::All));
+        } else {
+            panic!("Expected Mutation command");
+        }
+    }
+
+    #[test]
+    fn test_mutation_mode_fast() {
+        let cli = Cli::try_parse_from(["omen", "mutation", "--mode", "fast"]).unwrap();
+        if let Command::Mutation(args) = cli.command {
+            assert!(matches!(args.mode, MutationMode::Fast));
+        } else {
+            panic!("Expected Mutation command");
+        }
+    }
+
+    #[test]
+    fn test_mutation_mode_thorough() {
+        let cli = Cli::try_parse_from(["omen", "mutation", "--mode", "thorough"]).unwrap();
+        if let Command::Mutation(args) = cli.command {
+            assert!(matches!(args.mode, MutationMode::Thorough));
+        } else {
+            panic!("Expected Mutation command");
+        }
+    }
+
+    #[test]
+    fn test_mutation_output_survivors() {
+        let cli = Cli::try_parse_from(["omen", "mutation", "--output-survivors", "survivors.json"])
+            .unwrap();
+        if let Command::Mutation(args) = cli.command {
+            assert_eq!(args.output_survivors, Some(PathBuf::from("survivors.json")));
+        } else {
+            panic!("Expected Mutation command");
+        }
+    }
+
+    #[test]
+    fn test_mutation_combined_options() {
+        let cli = Cli::try_parse_from([
+            "omen",
+            "mutation",
+            "--check",
+            "--mode",
+            "fast",
+            "--jobs",
+            "8",
+            "--skip-equivalent",
+            "--min-score",
+            "0.7",
+        ])
+        .unwrap();
+        if let Command::Mutation(args) = cli.command {
+            assert!(args.check);
+            assert!(matches!(args.mode, MutationMode::Fast));
+            assert_eq!(args.jobs, 8);
+            assert!(args.skip_equivalent);
+            assert!((args.min_score - 0.7).abs() < 0.001);
+        } else {
+            panic!("Expected Mutation command");
         }
     }
 }
