@@ -24,6 +24,7 @@ pub mod coverage;
 pub mod equivalent;
 mod executor;
 mod generator;
+pub mod ml_predictor;
 mod mutant;
 mod operator;
 pub mod operators;

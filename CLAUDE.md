@@ -154,7 +154,7 @@ Integration tests live in `tests/` directory.
 
 ### Coverage Requirements
 
-- Minimum 69% line coverage enforced by CI
+- Minimum 80% line coverage enforced by CI
 - Run `cargo llvm-cov` to check coverage locally
 - Coverage report excludes `main.rs`
 
