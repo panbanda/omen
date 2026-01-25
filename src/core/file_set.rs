@@ -172,6 +172,61 @@ impl FileSet {
             .collect()
     }
 
+    /// Filter files by glob pattern, returning a new FileSet.
+    pub fn filter_by_glob(&self, pattern: &str) -> Self {
+        let glob = match Glob::new(pattern) {
+            Ok(g) => g.compile_matcher(),
+            Err(_) => return self.clone(),
+        };
+
+        let files: Vec<PathBuf> = self
+            .files
+            .iter()
+            .filter(|f| {
+                let path_str = f.to_string_lossy();
+                glob.is_match(&*path_str)
+                    || f.file_name()
+                        .map(|n| glob.is_match(n.to_string_lossy().as_ref()))
+                        .unwrap_or(false)
+            })
+            .cloned()
+            .collect();
+
+        Self {
+            root: self.root.clone(),
+            files,
+            exclude_patterns: self.exclude_patterns.clone(),
+        }
+    }
+
+    /// Exclude files matching glob pattern, returning a new FileSet.
+    pub fn exclude_by_glob(&self, pattern: &str) -> Self {
+        let glob = match Glob::new(pattern) {
+            Ok(g) => g.compile_matcher(),
+            Err(_) => return self.clone(),
+        };
+
+        let files: Vec<PathBuf> = self
+            .files
+            .iter()
+            .filter(|f| {
+                let path_str = f.to_string_lossy();
+                !glob.is_match(&*path_str)
+                    && !f
+                        .file_name()
+                        .map(|n| glob.is_match(n.to_string_lossy().as_ref()))
+                        .unwrap_or(false)
+            })
+            .cloned()
+            .collect();
+
+        Self {
+            root: self.root.clone(),
+            files,
+            exclude_patterns: self.exclude_patterns.clone(),
+        }
+    }
+
     /// Get files grouped by language.
     pub fn group_by_language(&self) -> std::collections::HashMap<Language, Vec<&PathBuf>> {
         let mut groups = std::collections::HashMap::new();
@@ -489,5 +544,94 @@ mod tests {
         for i in 0..files.len() - 1 {
             assert!(files[i] < files[i + 1]);
         }
+    }
+
+    #[test]
+    fn test_filter_by_glob_exact_filename() {
+        let root = PathBuf::from("/project");
+        let files = vec![
+            PathBuf::from("src/main.rs"),
+            PathBuf::from("src/lib.rs"),
+            PathBuf::from("src/error.rs"),
+        ];
+
+        let file_set = FileSet::from_files(root, files);
+        let filtered = file_set.filter_by_glob("error.rs");
+
+        assert_eq!(filtered.len(), 1);
+        assert!(filtered.files()[0].to_string_lossy().contains("error.rs"));
+    }
+
+    #[test]
+    fn test_filter_by_glob_pattern() {
+        let root = PathBuf::from("/project");
+        let files = vec![
+            PathBuf::from("src/main.rs"),
+            PathBuf::from("src/lib.rs"),
+            PathBuf::from("tests/test.rs"),
+        ];
+
+        let file_set = FileSet::from_files(root, files);
+        let filtered = file_set.filter_by_glob("**/src/*.rs");
+
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_by_glob_wildcard() {
+        let root = PathBuf::from("/project");
+        let files = vec![
+            PathBuf::from("src/main.rs"),
+            PathBuf::from("src/main.go"),
+            PathBuf::from("src/main.py"),
+        ];
+
+        let file_set = FileSet::from_files(root, files);
+        let filtered = file_set.filter_by_glob("*.rs");
+
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn test_filter_by_glob_invalid_pattern() {
+        let root = PathBuf::from("/project");
+        let files = vec![PathBuf::from("src/main.rs")];
+
+        let file_set = FileSet::from_files(root, files);
+        // Invalid glob should return original set
+        let filtered = file_set.filter_by_glob("[invalid");
+
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn test_exclude_by_glob_pattern() {
+        let root = PathBuf::from("/project");
+        let files = vec![
+            PathBuf::from("src/main.rs"),
+            PathBuf::from("src/lib.rs"),
+            PathBuf::from("tests/test.rs"),
+        ];
+
+        let file_set = FileSet::from_files(root, files);
+        let filtered = file_set.exclude_by_glob("**/tests/*.rs");
+
+        assert_eq!(filtered.len(), 2);
+        assert!(!filtered
+            .files()
+            .iter()
+            .any(|f| f.to_string_lossy().contains("test.rs")));
+    }
+
+    #[test]
+    fn test_exclude_by_glob_filename() {
+        let root = PathBuf::from("/project");
+        let files = vec![PathBuf::from("src/main.rs"), PathBuf::from("src/lib.rs")];
+
+        let file_set = FileSet::from_files(root, files);
+        let filtered = file_set.exclude_by_glob("main.rs");
+
+        assert_eq!(filtered.len(), 1);
+        assert!(filtered.files()[0].to_string_lossy().contains("lib.rs"));
     }
 }

@@ -970,7 +970,17 @@ fn run_mutation(
 ) -> omen::core::Result<()> {
     use omen::analyzers::mutation;
 
-    let file_set = FileSet::from_path(path, config)?;
+    let mut file_set = FileSet::from_path(path, config)?;
+
+    // Apply glob filter if specified
+    if let Some(ref pattern) = args.common.glob {
+        file_set = file_set.filter_by_glob(pattern);
+    }
+
+    // Apply exclude filter if specified
+    if let Some(ref pattern) = args.common.exclude {
+        file_set = file_set.exclude_by_glob(pattern);
+    }
 
     // Show analysis progress
     let spinner = if is_tty() {
