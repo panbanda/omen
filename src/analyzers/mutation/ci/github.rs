@@ -7,7 +7,6 @@ use std::env;
 use crate::core::{Error, Result};
 
 use super::super::Analysis;
-use super::baseline::MutationBaseline;
 
 /// GitHub reporter for mutation testing results.
 pub struct GitHubReporter {
@@ -51,11 +50,7 @@ impl GitHubReporter {
     }
 
     /// Format mutation results as a PR comment in markdown.
-    pub fn format_pr_comment(
-        &self,
-        analysis: &Analysis,
-        baseline: Option<&MutationBaseline>,
-    ) -> String {
+    pub fn format_pr_comment(&self, analysis: &Analysis) -> String {
         let mut output = String::new();
 
         // Header with score
@@ -88,41 +83,6 @@ impl GitHubReporter {
             "| Duration | {:.1}s |\n",
             analysis.summary.duration_ms as f64 / 1000.0
         ));
-
-        // Baseline comparison if available
-        if let Some(baseline) = baseline {
-            output.push_str("\n### Comparison with Baseline\n\n");
-
-            let current = MutationBaseline::new("current", analysis);
-            let comparison = baseline.compare(&current);
-
-            let delta_sign = if comparison.score_delta >= 0.0 {
-                "+"
-            } else {
-                ""
-            };
-            output.push_str(&format!(
-                "**Score Delta:** {}{:.1}%\n\n",
-                delta_sign,
-                comparison.score_delta * 100.0
-            ));
-
-            if !comparison.regressed_files.is_empty() {
-                output.push_str("**Regressed Files:**\n");
-                for file in &comparison.regressed_files {
-                    output.push_str(&format!("- `{}`\n", file));
-                }
-                output.push('\n');
-            }
-
-            if !comparison.improved_files.is_empty() {
-                output.push_str("**Improved Files:**\n");
-                for file in &comparison.improved_files {
-                    output.push_str(&format!("- `{}`\n", file));
-                }
-                output.push('\n');
-            }
-        }
 
         // Operator breakdown
         if !analysis.summary.by_operator.is_empty() {
@@ -476,7 +436,7 @@ mod tests {
         let reporter = GitHubReporter::new("owner/repo", None);
         let analysis = create_test_analysis();
 
-        let comment = reporter.format_pr_comment(&analysis, None);
+        let comment = reporter.format_pr_comment(&analysis);
 
         assert!(comment.contains("80.0%"));
         assert!(comment.contains("Mutation Testing Results"));
@@ -488,7 +448,7 @@ mod tests {
         let reporter = GitHubReporter::new("owner/repo", None);
         let analysis = create_test_analysis();
 
-        let comment = reporter.format_pr_comment(&analysis, None);
+        let comment = reporter.format_pr_comment(&analysis);
 
         assert!(comment.contains("| Total Mutants | 15 |"));
         assert!(comment.contains("| Killed | 12 |"));
@@ -500,7 +460,7 @@ mod tests {
         let reporter = GitHubReporter::new("owner/repo", None);
         let analysis = create_test_analysis();
 
-        let comment = reporter.format_pr_comment(&analysis, None);
+        let comment = reporter.format_pr_comment(&analysis);
 
         assert!(comment.contains("By Operator"));
         assert!(comment.contains("| CRR |"));
@@ -512,7 +472,7 @@ mod tests {
         let reporter = GitHubReporter::new("owner/repo", None);
         let analysis = create_test_analysis();
 
-        let comment = reporter.format_pr_comment(&analysis, None);
+        let comment = reporter.format_pr_comment(&analysis);
 
         assert!(comment.contains("Survived Mutants"));
         assert!(comment.contains("true"));
@@ -520,27 +480,11 @@ mod tests {
     }
 
     #[test]
-    fn test_format_pr_comment_with_baseline() {
-        let reporter = GitHubReporter::new("owner/repo", None);
-        let analysis = create_test_analysis();
-
-        // Create a baseline with lower score
-        let mut baseline_analysis = create_test_analysis();
-        baseline_analysis.summary.mutation_score = 0.7;
-        let baseline = MutationBaseline::new("abc123", &baseline_analysis);
-
-        let comment = reporter.format_pr_comment(&analysis, Some(&baseline));
-
-        assert!(comment.contains("Comparison with Baseline"));
-        assert!(comment.contains("Score Delta"));
-    }
-
-    #[test]
     fn test_format_pr_comment_emoji_high_score() {
         let reporter = GitHubReporter::new("owner/repo", None);
         let analysis = create_test_analysis(); // 80% score
 
-        let comment = reporter.format_pr_comment(&analysis, None);
+        let comment = reporter.format_pr_comment(&analysis);
 
         assert!(comment.contains("white_check_mark"));
     }
@@ -551,7 +495,7 @@ mod tests {
         let mut analysis = create_test_analysis();
         analysis.summary.mutation_score = 0.5;
 
-        let comment = reporter.format_pr_comment(&analysis, None);
+        let comment = reporter.format_pr_comment(&analysis);
 
         assert!(comment.contains(":x:"));
     }

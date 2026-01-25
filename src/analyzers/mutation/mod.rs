@@ -91,8 +91,6 @@ pub struct Analyzer {
     coverage_path: Option<PathBuf>,
     /// Incremental mode (only changed files).
     incremental: bool,
-    /// Baseline file for regression detection.
-    baseline_path: Option<PathBuf>,
     /// Skip likely-equivalent mutants.
     skip_equivalent: bool,
     /// Mutation mode.
@@ -119,7 +117,6 @@ impl Analyzer {
             jobs: 0,
             coverage_path: None,
             incremental: false,
-            baseline_path: None,
             skip_equivalent: false,
             mode: MutationMode::All,
             output_survivors: None,
@@ -171,12 +168,6 @@ impl Analyzer {
     /// Enable incremental mode (only test changed files).
     pub fn incremental(mut self, incremental: bool) -> Self {
         self.incremental = incremental;
-        self
-    }
-
-    /// Set baseline file path for regression detection.
-    pub fn baseline_path(mut self, path: Option<PathBuf>) -> Self {
-        self.baseline_path = path;
         self
     }
 
@@ -670,7 +661,6 @@ mod tests {
             .jobs(4)
             .coverage_path(Some(PathBuf::from("coverage.json")))
             .incremental(true)
-            .baseline_path(Some(PathBuf::from("baseline.json")))
             .skip_equivalent(true)
             .mode(MutationMode::Fast)
             .output_survivors(Some(PathBuf::from("survivors.json")));
@@ -678,7 +668,6 @@ mod tests {
         assert_eq!(analyzer.jobs, 4);
         assert_eq!(analyzer.coverage_path, Some(PathBuf::from("coverage.json")));
         assert!(analyzer.incremental);
-        assert_eq!(analyzer.baseline_path, Some(PathBuf::from("baseline.json")));
         assert!(analyzer.skip_equivalent);
         assert_eq!(analyzer.mode, MutationMode::Fast);
         assert_eq!(

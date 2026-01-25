@@ -626,8 +626,8 @@ Mutation testing measures how well your test suite catches bugs by introducing s
 - **Parallel execution** - Async worker pool with work-stealing for efficient mutation testing
 - **Equivalent mutant detection** - ML-based scoring to identify semantically equivalent mutations
 - **Coverage integration** - Parse LLVM-cov, Istanbul, coverage.py, and Go coverage to skip untested code
-- **Incremental mode** - Only test mutations in changed files since last baseline
-- **CI/CD integration** - Quality gates with baseline tracking and GitHub integration
+- **Incremental mode** - Only test mutations in changed files
+- **CI/CD integration** - Quality gates and GitHub integration
 
 **Usage:**
 
@@ -645,7 +645,7 @@ omen mutation --mode fast
 omen mutation --coverage coverage.json
 
 # Incremental mode for CI - only test changed files
-omen mutation --incremental --baseline .omen/baseline.json
+omen mutation --incremental
 
 # Control parallelism
 omen mutation --jobs 8

@@ -620,10 +620,6 @@ pub struct MutationArgs {
     #[arg(long)]
     pub incremental: bool,
 
-    /// Baseline file for regression detection
-    #[arg(long)]
-    pub baseline: Option<PathBuf>,
-
     /// Skip likely-equivalent mutants
     #[arg(long)]
     pub skip_equivalent: bool,
@@ -1596,7 +1592,6 @@ mod tests {
             assert_eq!(args.jobs, 0);
             assert!(args.coverage.is_none());
             assert!(!args.incremental);
-            assert!(args.baseline.is_none());
             assert!(!args.skip_equivalent);
             assert!(matches!(args.mode, MutationMode::All));
             assert!(args.output_survivors.is_none());
@@ -1691,16 +1686,6 @@ mod tests {
         let cli = Cli::try_parse_from(["omen", "mutation", "--incremental"]).unwrap();
         if let Command::Mutation(args) = cli.command {
             assert!(args.incremental);
-        } else {
-            panic!("Expected Mutation command");
-        }
-    }
-
-    #[test]
-    fn test_mutation_baseline() {
-        let cli = Cli::try_parse_from(["omen", "mutation", "--baseline", "baseline.json"]).unwrap();
-        if let Command::Mutation(args) = cli.command {
-            assert_eq!(args.baseline, Some(PathBuf::from("baseline.json")));
         } else {
             panic!("Expected Mutation command");
         }
