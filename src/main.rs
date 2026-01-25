@@ -12,8 +12,8 @@ use rayon::ThreadPoolBuilder;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use omen::cli::{
-    Cli, Command, ComplexityArgs, McpSubcommand, MutationArgs, OutputFormat, ReportSubcommand,
-    ScoreSubcommand, SearchSubcommand,
+    Cli, Command, ComplexityArgs, McpSubcommand, MutationArgs, MutationTrainArgs, OutputFormat,
+    ReportSubcommand, ScoreSubcommand, SearchSubcommand,
 };
 use omen::config::Config;
 use omen::core::progress::is_tty;
@@ -346,6 +346,9 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         }
         Command::Mutation(ref args) => {
             run_mutation(path, &config, args, format)?;
+        }
+        Command::MutationTrain(ref args) => {
+            run_mutation_train(&args.path, args)?;
         }
     }
 
@@ -969,6 +972,8 @@ fn run_mutation(
     format: Format,
 ) -> omen::core::Result<()> {
     use omen::analyzers::mutation;
+    use omen::analyzers::mutation::ml_predictor::TrainingData;
+    use omen::analyzers::mutation::MutantStatus;
 
     let mut file_set = FileSet::from_path(path, config)?;
 
@@ -1113,6 +1118,144 @@ fn run_mutation(
             result.summary.mutation_score * 100.0,
             args.min_score * 100.0
         )));
+    }
+
+    // Save results to history if --learn flag is set
+    if args.learn && !args.dry_run {
+        use std::io::Write;
+
+        let history_path = path.join(".omen/mutation-history.jsonl");
+
+        // Ensure .omen directory exists
+        if let Some(parent) = history_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        // Append results to history file (JSONL format - one JSON object per line)
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&history_path);
+
+        match file {
+            Ok(mut f) => {
+                let mut count = 0;
+                for file_result in &result.files {
+                    let source = std::fs::read_to_string(&file_result.path).unwrap_or_default();
+
+                    for mutation_result in &file_result.mutants {
+                        let was_killed = match mutation_result.status {
+                            MutantStatus::Killed => true,
+                            MutantStatus::Survived => false,
+                            _ => continue,
+                        };
+
+                        let lines: Vec<&str> = source.lines().collect();
+                        let line_idx = mutation_result.mutant.line.saturating_sub(1) as usize;
+                        let start = line_idx.saturating_sub(5);
+                        let end = (line_idx + 6).min(lines.len());
+                        let source_context = lines[start..end].join("\n");
+
+                        let record = TrainingData {
+                            mutant: mutation_result.mutant.clone(),
+                            source_context,
+                            was_killed,
+                            execution_time_ms: mutation_result.duration_ms,
+                        };
+
+                        if let Ok(json) = serde_json::to_string(&record) {
+                            let _ = writeln!(f, "{}", json);
+                            count += 1;
+                        }
+                    }
+                }
+                eprintln!("Saved {} results to {}", count, history_path.display());
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to open history file: {}", e);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn run_mutation_train(path: &std::path::Path, args: &MutationTrainArgs) -> omen::core::Result<()> {
+    use omen::analyzers::mutation::ml_predictor::{SurvivabilityPredictor, TrainingData};
+    use std::io::BufRead;
+
+    let history_path = args
+        .history
+        .clone()
+        .unwrap_or_else(|| path.join(".omen/mutation-history.jsonl"));
+
+    let model_path = args
+        .model
+        .clone()
+        .unwrap_or_else(|| path.join(SurvivabilityPredictor::default_model_path()));
+
+    // Check if history file exists
+    if !history_path.exists() {
+        return Err(omen::core::Error::analysis(format!(
+            "History file not found: {}\nRun 'omen mutation --learn' first to collect training data.",
+            history_path.display()
+        )));
+    }
+
+    // Read training data from history file (JSONL format)
+    let file = std::fs::File::open(&history_path)
+        .map_err(|e| omen::core::Error::analysis(format!("Failed to open history file: {}", e)))?;
+
+    let reader = std::io::BufReader::new(file);
+    let mut training_data: Vec<TrainingData> = Vec::new();
+
+    for line in reader.lines() {
+        let line =
+            line.map_err(|e| omen::core::Error::analysis(format!("Failed to read line: {}", e)))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<TrainingData>(&line) {
+            Ok(data) => training_data.push(data),
+            Err(e) => {
+                eprintln!("Warning: Skipping malformed line: {}", e);
+            }
+        }
+    }
+
+    if training_data.is_empty() {
+        return Err(omen::core::Error::analysis(
+            "No valid training data found in history file".to_string(),
+        ));
+    }
+
+    println!(
+        "Training model from {} historical results...",
+        training_data.len()
+    );
+
+    // Train the predictor
+    let mut predictor = SurvivabilityPredictor::new();
+    predictor
+        .train(&training_data)
+        .map_err(|e| omen::core::Error::analysis(format!("Training failed: {}", e)))?;
+
+    // Ensure output directory exists
+    if let Some(parent) = model_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            omen::core::Error::analysis(format!("Failed to create directory: {}", e))
+        })?;
+    }
+
+    // Save the model
+    predictor
+        .save(&model_path)
+        .map_err(|e| omen::core::Error::analysis(format!("Failed to save model: {}", e)))?;
+
+    println!("Model saved to {}", model_path.display());
+    println!("\nOperator kill rates learned:");
+    for (op, rate) in predictor.operator_kill_rates() {
+        println!("  {}: {:.1}%", op, rate * 100.0);
     }
 
     Ok(())

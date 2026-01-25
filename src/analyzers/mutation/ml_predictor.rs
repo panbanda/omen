@@ -8,6 +8,8 @@
 use super::Mutant;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 
 /// Features extracted from a mutant for ML prediction.
 /// 18-dimensional feature vector based on PMAT's approach.
@@ -286,6 +288,7 @@ impl LinearRegressionModel {
 
         // Add regularization (ridge regression) to prevent singular matrix
         let lambda = 0.01;
+        #[allow(clippy::needless_range_loop)]
         for i in 0..n_cols {
             xtx[i][i] += lambda;
         }
@@ -344,13 +347,14 @@ impl Default for LinearRegressionModel {
 }
 
 /// ML-based survivability predictor.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SurvivabilityPredictor {
     /// Trained linear regression model.
     model: LinearRegressionModel,
     /// Historical kill rates by operator type (fallback).
     operator_kill_rates: HashMap<String, f64>,
     /// Feature names for interpretation.
+    #[serde(skip)]
     feature_names: Vec<&'static str>,
     /// Whether the model is trained.
     trained: bool,
@@ -362,26 +366,7 @@ impl SurvivabilityPredictor {
         Self {
             model: LinearRegressionModel::new(),
             operator_kill_rates: default_operator_kill_rates(),
-            feature_names: vec![
-                "operator_type",
-                "cyclomatic_complexity",
-                "cognitive_complexity",
-                "source_line",
-                "nesting_depth",
-                "control_flow_count",
-                "has_loops",
-                "has_conditionals",
-                "function_size",
-                "parameter_count",
-                "has_error_handling",
-                "has_assertions",
-                "token_count",
-                "unique_variables",
-                "has_arithmetic",
-                "has_comparisons",
-                "has_logical_ops",
-                "mutation_depth",
-            ],
+            feature_names: Self::default_feature_names(),
             trained: false,
         }
     }
@@ -522,6 +507,76 @@ impl SurvivabilityPredictor {
     /// Get operator kill rates.
     pub fn operator_kill_rates(&self) -> &HashMap<String, f64> {
         &self.operator_kill_rates
+    }
+
+    /// Save the trained model to a file.
+    pub fn save(&self, path: &Path) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("Failed to serialize model: {}", e))?;
+        fs::write(path, json).map_err(|e| format!("Failed to write model file: {}", e))?;
+        Ok(())
+    }
+
+    /// Load a trained model from a file.
+    pub fn load(path: &Path) -> Result<Self, String> {
+        let json =
+            fs::read_to_string(path).map_err(|e| format!("Failed to read model file: {}", e))?;
+        let mut predictor: Self = serde_json::from_str(&json)
+            .map_err(|e| format!("Failed to deserialize model: {}", e))?;
+        // Reconstruct feature_names since it's skipped in serialization
+        predictor.feature_names = Self::default_feature_names();
+        Ok(predictor)
+    }
+
+    /// Load a model from the given path if it exists, otherwise return a default predictor.
+    /// This is the recommended way to create a predictor for most use cases.
+    pub fn load_or_default(path: &Path) -> Self {
+        if path.exists() {
+            match Self::load(path) {
+                Ok(predictor) => {
+                    eprintln!("Loaded mutation predictor model from {}", path.display());
+                    predictor
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Warning: Failed to load model from {}: {}. Using defaults.",
+                        path.display(),
+                        e
+                    );
+                    Self::new()
+                }
+            }
+        } else {
+            Self::new()
+        }
+    }
+
+    /// Default model path relative to project root.
+    pub fn default_model_path() -> &'static str {
+        ".omen/mutation-model.json"
+    }
+
+    fn default_feature_names() -> Vec<&'static str> {
+        vec![
+            "operator_type",
+            "cyclomatic_complexity",
+            "cognitive_complexity",
+            "source_line",
+            "nesting_depth",
+            "control_flow_count",
+            "has_loops",
+            "has_conditionals",
+            "function_size",
+            "parameter_count",
+            "has_error_handling",
+            "has_assertions",
+            "token_count",
+            "unique_variables",
+            "has_arithmetic",
+            "has_comparisons",
+            "has_logical_ops",
+            "mutation_depth",
+        ]
     }
 }
 
@@ -716,6 +771,7 @@ fn default_operator_kill_rates() -> HashMap<String, f64> {
 }
 
 /// Solve a linear system Ax = b using Gaussian elimination with partial pivoting.
+#[allow(clippy::needless_range_loop)]
 fn solve_linear_system(a: &[Vec<f64>], b: &[f64]) -> Result<Vec<f64>, String> {
     let n = b.len();
     if n == 0 || a.len() != n || a[0].len() != n {
@@ -949,5 +1005,85 @@ fn calculate(x: i32, y: i32) -> i32 {
 
         // Should include BVO mutant (kill rate 0.55 < 0.6)
         assert!(!survivors.is_empty());
+    }
+
+    #[test]
+    fn test_save_and_load() {
+        let mut predictor = SurvivabilityPredictor::new();
+
+        // Train the predictor
+        let training_data: Vec<TrainingData> = (0..30)
+            .map(|i| TrainingData {
+                mutant: create_test_mutant(if i % 2 == 0 { "ROR" } else { "AOR" }, i as u32),
+                source_context: format!("fn test{}() {{ if x > {} {{ }} }}", i, i),
+                was_killed: i % 3 != 0,
+                execution_time_ms: 100,
+            })
+            .collect();
+        predictor.train(&training_data).unwrap();
+        assert!(predictor.is_trained());
+
+        // Save to temp file
+        let temp_dir = std::env::temp_dir();
+        let model_path = temp_dir.join("test-mutation-model.json");
+        predictor.save(&model_path).unwrap();
+
+        // Load it back
+        let loaded = SurvivabilityPredictor::load(&model_path).unwrap();
+        assert!(loaded.is_trained());
+        assert_eq!(loaded.trained, predictor.trained);
+
+        // Predictions should be similar
+        let mutant = create_test_mutant("ROR", 50);
+        let orig_pred = predictor.predict(&mutant, "if x > 0 {}");
+        let loaded_pred = loaded.predict(&mutant, "if x > 0 {}");
+        assert!((orig_pred.kill_probability - loaded_pred.kill_probability).abs() < 0.01);
+
+        // Clean up
+        let _ = fs::remove_file(&model_path);
+    }
+
+    #[test]
+    fn test_load_or_default_missing_file() {
+        let path = Path::new("/nonexistent/path/model.json");
+        let predictor = SurvivabilityPredictor::load_or_default(path);
+
+        // Should return default predictor without error
+        assert!(!predictor.is_trained());
+        assert!(!predictor.operator_kill_rates().is_empty());
+    }
+
+    #[test]
+    fn test_load_or_default_existing_file() {
+        let mut predictor = SurvivabilityPredictor::new();
+
+        // Train minimally
+        let training_data: Vec<TrainingData> = (0..20)
+            .map(|i| TrainingData {
+                mutant: create_test_mutant("ROR", i as u32),
+                source_context: "if x > 0 {}".to_string(),
+                was_killed: i % 2 == 0,
+                execution_time_ms: 50,
+            })
+            .collect();
+        predictor.train(&training_data).unwrap();
+
+        // Save
+        let temp_dir = std::env::temp_dir();
+        let model_path = temp_dir.join("test-load-or-default.json");
+        predictor.save(&model_path).unwrap();
+
+        // Load or default should load the existing file
+        let loaded = SurvivabilityPredictor::load_or_default(&model_path);
+        assert!(loaded.is_trained());
+
+        // Clean up
+        let _ = fs::remove_file(&model_path);
+    }
+
+    #[test]
+    fn test_default_model_path() {
+        let path = SurvivabilityPredictor::default_model_path();
+        assert_eq!(path, ".omen/mutation-model.json");
     }
 }

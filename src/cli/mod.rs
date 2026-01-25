@@ -138,6 +138,9 @@ pub enum Command {
     /// Mutation testing for test suite effectiveness
     #[command(alias = "mut")]
     Mutation(MutationArgs),
+
+    /// Train mutation predictor from historical results
+    MutationTrain(MutationTrainArgs),
 }
 
 #[derive(Args)]
@@ -632,6 +635,18 @@ pub struct MutationArgs {
     /// Write surviving mutants to file
     #[arg(long)]
     pub output_survivors: Option<PathBuf>,
+
+    /// Learn from results to improve future predictions
+    #[arg(long)]
+    pub learn: bool,
+
+    /// Path to ML model file (default: .omen/mutation-model.json)
+    #[arg(long)]
+    pub model: Option<PathBuf>,
+
+    /// Skip mutants predicted to be killed above this threshold (0.0-1.0)
+    #[arg(long, value_name = "THRESHOLD")]
+    pub skip_predicted: Option<f64>,
 }
 
 /// Mutation testing mode.
@@ -643,6 +658,22 @@ pub enum MutationMode {
     Fast,
     /// All + language-specific operators
     Thorough,
+}
+
+/// Arguments for mutation-train command.
+#[derive(Args)]
+pub struct MutationTrainArgs {
+    /// Path to analyze (default: current directory)
+    #[arg(short, long, default_value = ".")]
+    pub path: PathBuf,
+
+    /// Path to history file (default: .omen/mutation-history.jsonl)
+    #[arg(long)]
+    pub history: Option<PathBuf>,
+
+    /// Path to output model file (default: .omen/mutation-model.json)
+    #[arg(long)]
+    pub model: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -1747,6 +1778,45 @@ mod tests {
             assert_eq!(args.jobs, 8);
             assert!(args.skip_equivalent);
             assert!((args.min_score - 0.7).abs() < 0.001);
+        } else {
+            panic!("Expected Mutation command");
+        }
+    }
+
+    // MutationTrain command tests
+    #[test]
+    fn test_command_mutation_train() {
+        let cli = Cli::try_parse_from(["omen", "mutation-train"]).unwrap();
+        assert!(matches!(cli.command, Command::MutationTrain(_)));
+    }
+
+    #[test]
+    fn test_mutation_train_with_model_path() {
+        let cli = Cli::try_parse_from(["omen", "mutation-train", "--model", "custom-model.json"])
+            .unwrap();
+        if let Command::MutationTrain(args) = cli.command {
+            assert_eq!(args.model, Some(PathBuf::from("custom-model.json")));
+        } else {
+            panic!("Expected MutationTrain command");
+        }
+    }
+
+    #[test]
+    fn test_mutation_train_with_history_path() {
+        let cli =
+            Cli::try_parse_from(["omen", "mutation-train", "--history", "history.jsonl"]).unwrap();
+        if let Command::MutationTrain(args) = cli.command {
+            assert_eq!(args.history, Some(PathBuf::from("history.jsonl")));
+        } else {
+            panic!("Expected MutationTrain command");
+        }
+    }
+
+    #[test]
+    fn test_mutation_learn_flag() {
+        let cli = Cli::try_parse_from(["omen", "mutation", "--learn"]).unwrap();
+        if let Command::Mutation(args) = cli.command {
+            assert!(args.learn);
         } else {
             panic!("Expected Mutation command");
         }
