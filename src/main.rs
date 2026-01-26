@@ -12,8 +12,8 @@ use rayon::ThreadPoolBuilder;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use omen::cli::{
-    Cli, Command, ComplexityArgs, McpSubcommand, OutputFormat, ReportSubcommand, ScoreSubcommand,
-    SearchSubcommand,
+    Cli, Command, ComplexityArgs, McpSubcommand, MutationArgs, MutationSubcommand,
+    MutationTrainArgs, OutputFormat, ReportSubcommand, ScoreSubcommand, SearchSubcommand,
 };
 use omen::config::Config;
 use omen::core::progress::is_tty;
@@ -344,6 +344,14 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         Command::Search(ref cmd) => {
             run_search(&cli.path, &config, cmd.subcommand.clone(), format)?;
         }
+        Command::Mutation(ref cmd) => match &cmd.subcommand {
+            Some(MutationSubcommand::Train(args)) => {
+                run_mutation_train(&args.path, args)?;
+            }
+            None => {
+                run_mutation(path, &config, &cmd.args, format)?;
+            }
+        },
     }
 
     Ok(())
@@ -954,6 +962,348 @@ fn run_search(
                 }
             }
         }
+    }
+
+    Ok(())
+}
+
+fn run_mutation(
+    path: &PathBuf,
+    config: &Config,
+    args: &MutationArgs,
+    format: Format,
+) -> omen::core::Result<()> {
+    use omen::analyzers::mutation;
+    use omen::analyzers::mutation::ml_predictor::{SurvivabilityPredictor, TrainingData};
+    use omen::analyzers::mutation::MutantStatus;
+
+    let mut file_set = FileSet::from_path(path, config)?;
+
+    // Load predictor model if --skip-predicted is specified
+    let predictor = if args.skip_predicted.is_some() {
+        let model_path = args
+            .model
+            .clone()
+            .unwrap_or_else(|| path.join(SurvivabilityPredictor::default_model_path()));
+        let p = SurvivabilityPredictor::load_or_default(&model_path);
+        if !p.is_trained() {
+            eprintln!(
+                "Warning: No trained model found at {}. Run 'omen mutation train' first.",
+                model_path.display()
+            );
+        }
+        Some(p)
+    } else {
+        None
+    };
+
+    // Apply glob filter if specified
+    if let Some(ref pattern) = args.common.glob {
+        file_set = file_set.filter_by_glob(pattern);
+    }
+
+    // Apply exclude filter if specified
+    if let Some(ref pattern) = args.common.exclude {
+        file_set = file_set.exclude_by_glob(pattern);
+    }
+
+    // Show analysis progress
+    let spinner = if is_tty() {
+        let s = ProgressBar::new_spinner();
+        s.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} {msg}")
+                .expect("valid template"),
+        );
+        s.enable_steady_tick(std::time::Duration::from_millis(100));
+        Some(s)
+    } else {
+        None
+    };
+
+    if let Some(ref s) = spinner {
+        s.set_message(format!("Analyzing {} files...", file_set.len()));
+    }
+
+    // Parse operators
+    let operators: Vec<String> = args
+        .operators
+        .split(',')
+        .map(|s| s.trim().to_uppercase())
+        .collect();
+
+    // Build analyzer
+    let mut analyzer = mutation::Analyzer::new()
+        .operators(operators)
+        .test_command(args.test_command.clone())
+        .timeout(args.timeout)
+        .dry_run(args.dry_run);
+
+    if args.check {
+        analyzer = analyzer.min_score(Some(args.min_score));
+    }
+
+    // Configure ML-based filtering if --skip-predicted is set
+    if let Some(threshold) = args.skip_predicted {
+        if let Some(p) = predictor {
+            analyzer = analyzer.skip_predicted(Some(threshold)).predictor(p);
+        }
+    }
+
+    let mut ctx = AnalysisContext::new(&file_set, config, Some(path));
+    if let Ok(repo) = omen::git::GitRepo::open(path) {
+        let git_root = repo.root().to_path_buf();
+        ctx = ctx.with_git_path(Box::leak(Box::new(git_root)));
+    }
+
+    // Add progress callback
+    let progress_counter = Arc::new(AtomicUsize::new(0));
+    let total_files = file_set.len();
+    let spinner_clone = spinner.clone();
+    let counter_clone = progress_counter.clone();
+    ctx = ctx.with_progress(move |current, _total| {
+        counter_clone.store(current, Ordering::Relaxed);
+        if let Some(ref s) = spinner_clone {
+            s.set_message(format!("Analyzing... {}/{} files", current, total_files));
+        }
+    });
+
+    let result = analyzer.analyze(&ctx)?;
+
+    if let Some(s) = spinner {
+        s.finish_and_clear();
+    }
+
+    // Output results
+    match format {
+        Format::Json => {
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        Format::Markdown => {
+            println!("# Mutation Testing Report\n");
+            println!("## Summary\n");
+            println!("- **Total Files**: {}", result.summary.total_files);
+            println!("- **Total Mutants**: {}", result.summary.total_mutants);
+            println!("- **Killed**: {}", result.summary.killed);
+            println!("- **Survived**: {}", result.summary.survived);
+            println!("- **Timeout**: {}", result.summary.timeout);
+            println!("- **Error**: {}", result.summary.error);
+            if result.summary.skipped > 0 {
+                println!("- **Skipped**: {} (ML predicted)", result.summary.skipped);
+            }
+            println!(
+                "- **Mutation Score**: {:.1}%",
+                result.summary.mutation_score * 100.0
+            );
+            println!("- **Duration**: {}ms\n", result.summary.duration_ms);
+
+            if !result.summary.by_operator.is_empty() {
+                println!("## By Operator\n");
+                println!("| Operator | Total | Killed | Survived |");
+                println!("|----------|-------|--------|----------|");
+                for (op, stats) in &result.summary.by_operator {
+                    println!(
+                        "| {} | {} | {} | {} |",
+                        op, stats.total, stats.killed, stats.survived
+                    );
+                }
+                println!();
+            }
+
+            if !result.files.is_empty() {
+                println!("## Files\n");
+                for file in &result.files {
+                    println!("### {} (score: {:.1}%)\n", file.path, file.score * 100.0);
+                    if file.skipped > 0 {
+                        println!(
+                            "- Killed: {}, Survived: {}, Skipped: {}, Timeout: {}, Error: {}\n",
+                            file.killed, file.survived, file.skipped, file.timeout, file.error
+                        );
+                    } else {
+                        println!(
+                            "- Killed: {}, Survived: {}, Timeout: {}, Error: {}\n",
+                            file.killed, file.survived, file.timeout, file.error
+                        );
+                    }
+                }
+            }
+        }
+        Format::Text => {
+            println!("Mutation Testing Report");
+            println!("=======================");
+            println!("Files: {}", result.summary.total_files);
+            println!("Mutants: {}", result.summary.total_mutants);
+            if result.summary.skipped > 0 {
+                println!(
+                    "Killed: {} | Survived: {} | Skipped: {} | Timeout: {} | Error: {}",
+                    result.summary.killed,
+                    result.summary.survived,
+                    result.summary.skipped,
+                    result.summary.timeout,
+                    result.summary.error
+                );
+            } else {
+                println!(
+                    "Killed: {} | Survived: {} | Timeout: {} | Error: {}",
+                    result.summary.killed,
+                    result.summary.survived,
+                    result.summary.timeout,
+                    result.summary.error
+                );
+            }
+            println!(
+                "Mutation Score: {:.1}%",
+                result.summary.mutation_score * 100.0
+            );
+            println!("Duration: {}ms", result.summary.duration_ms);
+        }
+    }
+
+    // Check mode: fail if score below threshold
+    if args.check && result.summary.mutation_score < args.min_score {
+        return Err(omen::core::Error::analysis(format!(
+            "Mutation score {:.1}% is below minimum threshold {:.1}%",
+            result.summary.mutation_score * 100.0,
+            args.min_score * 100.0
+        )));
+    }
+
+    // Save results to history if --record flag is set
+    if args.record && !args.dry_run {
+        use std::io::Write;
+
+        let history_path = path.join(".omen/mutation-history.jsonl");
+
+        // Ensure .omen directory exists
+        if let Some(parent) = history_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        // Append results to history file (JSONL format - one JSON object per line)
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&history_path);
+
+        match file {
+            Ok(mut f) => {
+                let mut count = 0;
+                for file_result in &result.files {
+                    let source = std::fs::read_to_string(&file_result.path).unwrap_or_default();
+
+                    for mutation_result in &file_result.mutants {
+                        let was_killed = match mutation_result.status {
+                            MutantStatus::Killed => true,
+                            MutantStatus::Survived => false,
+                            _ => continue,
+                        };
+
+                        let lines: Vec<&str> = source.lines().collect();
+                        let line_idx = mutation_result.mutant.line.saturating_sub(1) as usize;
+                        let start = line_idx.saturating_sub(5);
+                        let end = (line_idx + 6).min(lines.len());
+                        let source_context = lines[start..end].join("\n");
+
+                        let record = TrainingData {
+                            mutant: mutation_result.mutant.clone(),
+                            source_context,
+                            was_killed,
+                            execution_time_ms: mutation_result.duration_ms,
+                        };
+
+                        if let Ok(json) = serde_json::to_string(&record) {
+                            let _ = writeln!(f, "{}", json);
+                            count += 1;
+                        }
+                    }
+                }
+                eprintln!("Saved {} results to {}", count, history_path.display());
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to open history file: {}", e);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn run_mutation_train(path: &std::path::Path, args: &MutationTrainArgs) -> omen::core::Result<()> {
+    use omen::analyzers::mutation::ml_predictor::{SurvivabilityPredictor, TrainingData};
+    use std::io::BufRead;
+
+    let history_path = args
+        .history
+        .clone()
+        .unwrap_or_else(|| path.join(".omen/mutation-history.jsonl"));
+
+    let model_path = args
+        .model
+        .clone()
+        .unwrap_or_else(|| path.join(SurvivabilityPredictor::default_model_path()));
+
+    // Check if history file exists
+    if !history_path.exists() {
+        return Err(omen::core::Error::analysis(format!(
+            "History file not found: {}\nRun 'omen mutation --record' first to collect training data.",
+            history_path.display()
+        )));
+    }
+
+    // Read training data from history file (JSONL format)
+    let file = std::fs::File::open(&history_path)
+        .map_err(|e| omen::core::Error::analysis(format!("Failed to open history file: {}", e)))?;
+
+    let reader = std::io::BufReader::new(file);
+    let mut training_data: Vec<TrainingData> = Vec::new();
+
+    for line in reader.lines() {
+        let line =
+            line.map_err(|e| omen::core::Error::analysis(format!("Failed to read line: {}", e)))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<TrainingData>(&line) {
+            Ok(data) => training_data.push(data),
+            Err(e) => {
+                eprintln!("Warning: Skipping malformed line: {}", e);
+            }
+        }
+    }
+
+    if training_data.is_empty() {
+        return Err(omen::core::Error::analysis(
+            "No valid training data found in history file".to_string(),
+        ));
+    }
+
+    println!(
+        "Training model from {} historical results...",
+        training_data.len()
+    );
+
+    // Train the predictor
+    let mut predictor = SurvivabilityPredictor::new();
+    predictor
+        .train(&training_data)
+        .map_err(|e| omen::core::Error::analysis(format!("Training failed: {}", e)))?;
+
+    // Ensure output directory exists
+    if let Some(parent) = model_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            omen::core::Error::analysis(format!("Failed to create directory: {}", e))
+        })?;
+    }
+
+    // Save the model
+    predictor
+        .save(&model_path)
+        .map_err(|e| omen::core::Error::analysis(format!("Failed to save model: {}", e)))?;
+
+    println!("Model saved to {}", model_path.display());
+    println!("\nOperator kill rates learned:");
+    for (op, rate) in predictor.operator_kill_rates() {
+        println!("  {}: {:.1}%", op, rate * 100.0);
     }
 
     Ok(())

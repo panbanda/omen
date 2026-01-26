@@ -1,0 +1,26 @@
+{
+  "Packages": [
+    {
+      "Name": "example/pkg",
+      "Coverage": 75.5,
+      "Files": [
+        {
+          "Name": "main.go",
+          "Lines": [
+            {"StartLine": 10, "StartCol": 1, "EndLine": 10, "EndCol": 20, "Count": 1},
+            {"StartLine": 11, "StartCol": 1, "EndLine": 11, "EndCol": 15, "Count": 1},
+            {"StartLine": 15, "StartCol": 1, "EndLine": 15, "EndCol": 25, "Count": 0},
+            {"StartLine": 20, "StartCol": 1, "EndLine": 22, "EndCol": 10, "Count": 3}
+          ]
+        },
+        {
+          "Name": "utils.go",
+          "Lines": [
+            {"StartLine": 5, "StartCol": 1, "EndLine": 5, "EndCol": 30, "Count": 2},
+            {"StartLine": 8, "StartCol": 1, "EndLine": 10, "EndCol": 5, "Count": 1}
+          ]
+        }
+      ]
+    }
+  ]
+}

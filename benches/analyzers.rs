@@ -307,7 +307,7 @@ fn bench_smells(c: &mut Criterion) {
 fn bench_repomap(c: &mut Criterion) {
     let mut group = c.benchmark_group("repomap");
 
-    for size in [10, 50].iter() {
+    for size in [10, 49].iter() {
         let temp = create_benchmark_repo(*size);
         let config = Config::default();
         let files = FileSet::from_path(temp.path(), &config).unwrap();
