@@ -1,5 +1,20 @@
 # Changelog
 
+## [4.11.0](https://github.com/panbanda/omen/compare/omen-v4.10.2...omen-v4.11.0) (2026-01-26)
+
+
+### Features
+
+* **mutation:** add comprehensive mutation testing with 21 operators ([4ed000d](https://github.com/panbanda/omen/commit/4ed000d3323bfd09092d53e4e5c9d48aace8c7a2))
+* **mutation:** add ML-based survivability predictor ([f5b7f42](https://github.com/panbanda/omen/commit/f5b7f42cd1977b2ed4cd58732a2f308eb479ea2c))
+* **mutation:** add model persistence and training command ([490f6ce](https://github.com/panbanda/omen/commit/490f6ce494f49891b939667d513ce825db08f0ea))
+* **mutation:** implement --skip-predicted for ML-based mutant filtering ([369c147](https://github.com/panbanda/omen/commit/369c1471ba28502a46325d0fe72a530078195c29))
+
+
+### Bug Fixes
+
+* **mutation:** apply glob and exclude filters from CLI args ([631af4d](https://github.com/panbanda/omen/commit/631af4d82c97630e5e5b45b89621130b1238f761))
+
 ## [4.10.2](https://github.com/panbanda/omen/compare/omen-v4.10.1...omen-v4.10.2) (2026-01-24)
 
 
