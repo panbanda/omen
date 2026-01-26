@@ -362,4 +362,63 @@ mod tests {
         assert!(!is_remote_repo("C:\\Users\\project"));
         assert!(!is_remote_repo("D:\\repos\\myrepo"));
     }
+
+    #[test]
+    fn test_is_remote_repo_windows_drive_edge_cases() {
+        // Minimal Windows drive paths (C:)
+        assert!(!is_remote_repo("C:"));
+        assert!(!is_remote_repo("D:"));
+    }
+
+    #[test]
+    fn test_is_remote_repo_colon_position() {
+        // Colon at index 0 (not Windows path style)
+        // If mutation changes nth(1) to nth(0), this would wrongly be detected as Windows path
+        // ":owner/repo" has owner/repo pattern after the colon
+        assert!(is_remote_repo(":a/b")); // Colon at index 0, but has valid owner/repo pattern
+
+        // Colon at index 2 (not Windows path style)
+        // If mutation changes nth(1) to nth(2), "ab:c/d" would wrongly be detected as Windows
+        // "ab:x/y" - colon at index 2, not index 1
+        assert!(is_remote_repo("ab:x/y")); // Not a Windows path, has owner/repo-like pattern
+    }
+
+    #[test]
+    fn test_is_remote_repo_length_edge_cases() {
+        // Empty string already tested in test_is_remote_repo_empty
+
+        // Single char - can't be Windows path (needs at least "X:")
+        // Tests that len >= 2 check is correct
+        assert!(!is_remote_repo("a")); // No slash, not owner/repo
+        assert!(!is_remote_repo(":")); // Just colon, not owner/repo
+    }
+
+    #[test]
+    fn test_is_remote_repo_owner_repo_empty_parts() {
+        // Tests for line 78: !parts[0].is_empty() && !parts[1].is_empty()
+        // Swapping parts[0] and parts[1] indices would change behavior
+
+        // "a/" has parts ["a", ""], parts[1] is empty - should be false
+        assert!(!is_remote_repo("a/")); // Empty repo name
+
+        // "/b" starts with /, rejected earlier by line 48
+
+        // Valid owner/repo pattern
+        assert!(is_remote_repo("a/b"));
+        assert!(is_remote_repo("owner/repo"));
+    }
+
+    #[test]
+    fn test_is_remote_repo_slash_patterns() {
+        // Multiple slashes - not owner/repo pattern
+        assert!(!is_remote_repo("a/b/c")); // Two slashes
+        assert!(!is_remote_repo("a/b/c/d")); // Three slashes
+
+        // Trailing slash means empty last part
+        assert!(!is_remote_repo("owner/")); // Trailing slash
+
+        // @ ref handling with slashes
+        assert!(is_remote_repo("owner/repo@v1")); // Valid with ref
+        assert!(!is_remote_repo("owner/@v1")); // Empty repo before ref
+    }
 }
