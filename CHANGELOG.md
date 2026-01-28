@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.12.0](https://github.com/panbanda/omen/compare/omen-v4.11.0...omen-v4.12.0) (2026-01-28)
+
+
+### Features
+
+* **deadcode:** use cargo check for Rust dead code detection ([#311](https://github.com/panbanda/omen/issues/311)) ([fad30d0](https://github.com/panbanda/omen/commit/fad30d0649abe50d60b237299f968a0611105f79))
+
+
+### Bug Fixes
+
+* **analyzers:** use content_source for historical commit analysis ([#313](https://github.com/panbanda/omen/issues/313)) ([a915573](https://github.com/panbanda/omen/commit/a915573f335bc04bc913fdac02b26903ac8dcc8a))
+
 ## [4.11.0](https://github.com/panbanda/omen/compare/omen-v4.10.2...omen-v4.11.0) (2026-01-26)
 
 
