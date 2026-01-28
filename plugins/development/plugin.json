@@ -1,7 +1,7 @@
 {
   "name": "omen-development",
   "description": "Code analysis skills for active development: find bugs, assess impact, plan refactoring, audit architecture, and more",
-  "version": "1.0.0",
+  "version": "4.0.0",
   "author": {
     "name": "Jonathan Reyes",
     "email": "me@jonathanreyes.com"
