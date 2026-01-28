@@ -8,6 +8,7 @@ use crate::core::Language;
 use crate::parser::ParseResult;
 
 use crate::analyzers::mutation::operator::MutationOperator;
+use crate::analyzers::mutation::operators::walk_and_collect_mutants;
 use crate::analyzers::mutation::Mutant;
 
 /// PCR (Python Comprehension Replacement) operator.
@@ -25,69 +26,22 @@ impl MutationOperator for PythonComprehensionOperator {
     }
 
     fn generate_mutants(&self, result: &ParseResult, mutant_id_prefix: &str) -> Vec<Mutant> {
-        let mut mutants = Vec::new();
-        let root = result.root_node();
-
         let mut counter = 0;
-        let mut cursor = root.walk();
-
-        loop {
-            let node = cursor.node();
-
-            // Look for list comprehensions
-            if node.kind() == "list_comprehension" {
-                mutants.extend(self.mutate_list_comprehension(
-                    &node,
-                    result,
-                    mutant_id_prefix,
-                    &mut counter,
-                ));
+        walk_and_collect_mutants(result, |node| match node.kind() {
+            "list_comprehension" => {
+                self.mutate_list_comprehension(&node, result, mutant_id_prefix, &mut counter)
             }
-
-            // Also handle generator expressions similarly
-            if node.kind() == "generator_expression" {
-                mutants.extend(self.mutate_generator_expression(
-                    &node,
-                    result,
-                    mutant_id_prefix,
-                    &mut counter,
-                ));
+            "generator_expression" => {
+                self.mutate_generator_expression(&node, result, mutant_id_prefix, &mut counter)
             }
-
-            // Dictionary comprehensions
-            if node.kind() == "dictionary_comprehension" {
-                mutants.extend(self.mutate_dict_comprehension(
-                    &node,
-                    result,
-                    mutant_id_prefix,
-                    &mut counter,
-                ));
+            "dictionary_comprehension" => {
+                self.mutate_dict_comprehension(&node, result, mutant_id_prefix, &mut counter)
             }
-
-            // Set comprehensions
-            if node.kind() == "set_comprehension" {
-                mutants.extend(self.mutate_set_comprehension(
-                    &node,
-                    result,
-                    mutant_id_prefix,
-                    &mut counter,
-                ));
+            "set_comprehension" => {
+                self.mutate_set_comprehension(&node, result, mutant_id_prefix, &mut counter)
             }
-
-            // Tree traversal
-            if cursor.goto_first_child() {
-                continue;
-            }
-
-            loop {
-                if cursor.goto_next_sibling() {
-                    break;
-                }
-                if !cursor.goto_parent() {
-                    return mutants;
-                }
-            }
-        }
+            _ => Vec::new(),
+        })
     }
 
     fn supports_language(&self, lang: Language) -> bool {
