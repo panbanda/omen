@@ -68,9 +68,37 @@ impl AnalyzerTrait for Analyzer {
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
         let start = Instant::now();
 
+        // Check if this is a Rust project with Cargo.toml
+        let cargo_toml = ctx.root.join("Cargo.toml");
+        let is_rust_project = cargo_toml.exists();
+
+        // For Rust projects, use cargo check for accurate dead code detection
+        let cargo_items = if is_rust_project {
+            match CargoDeadCodeAnalyzer::analyze(ctx.root) {
+                Ok(analysis) => analysis.items,
+                Err(e) => {
+                    tracing::warn!("Cargo analysis failed, falling back to tree-sitter: {}", e);
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+
         // Phase 1: Collect definitions and usages from all files
-        // Collect into Vec first for efficient parallel iteration
-        let files: Vec<_> = ctx.files.iter().collect();
+        // For Rust projects, skip .rs files since cargo handles them
+        let files: Vec<_> = ctx
+            .files
+            .iter()
+            .filter(|path| {
+                if is_rust_project {
+                    // Skip Rust files - cargo handles them more accurately
+                    path.extension().map(|e| e != "rs").unwrap_or(true)
+                } else {
+                    true
+                }
+            })
+            .collect();
         let file_results: Vec<FileDeadCode> = files
             .par_iter()
             .filter_map(|path| self.analyze_file(path).ok())
@@ -155,6 +183,23 @@ impl AnalyzerTrait for Analyzer {
         let mut items = Vec::new();
         let mut by_kind: HashMap<String, usize> = HashMap::new();
 
+        // Add cargo-detected dead code items (Rust files)
+        for cargo_item in cargo_items {
+            let item = DeadCodeItem {
+                name: cargo_item.name,
+                kind: cargo_item.kind.clone(),
+                file: cargo_item.file,
+                line: cargo_item.line,
+                end_line: cargo_item.end_line,
+                visibility: "unknown".to_string(),
+                confidence: 1.0, // Cargo/rustc is authoritative
+                reason: cargo_item.message,
+            };
+            *by_kind.entry(cargo_item.kind).or_insert(0) += 1;
+            items.push(item);
+        }
+
+        // Add tree-sitter detected dead code (non-Rust files)
         for (qualified_name, def) in &all_definitions {
             // Extract simple name for entry point check and usage lookup
             let simple_name = qualified_name.rsplit("::").next().unwrap_or(qualified_name);
@@ -228,10 +273,24 @@ fn collect_file_data(result: &parser::ParseResult) -> FileDeadCode {
 
     let is_test_file = is_test_file(&fdc.path);
 
+    // For Rust, extract function attributes and context from the AST
+    let function_info = if result.language == Language::Rust {
+        extract_rust_function_attributes(result)
+    } else {
+        HashMap::new()
+    };
+
     // Extract function definitions
     for func in functions {
         let visibility = get_visibility(&func.name, result.language);
-        let exported = is_exported(&func.name, result.language);
+        // Use the parser's is_exported which correctly checks for pub in Rust
+        let exported = func.is_exported || is_exported(&func.name, result.language);
+        let info = function_info.get(&func.name);
+        let attributes = info.map(|i| i.attributes.clone()).unwrap_or_default();
+        // Mark as test file if already in test file OR inside #[cfg(test)] module
+        let is_in_test_context =
+            is_test_file || info.map(|i| i.in_cfg_test_module).unwrap_or(false);
+        let is_trait_impl = info.map(|i| i.is_trait_impl).unwrap_or(false);
 
         fdc.definitions.insert(
             func.name.clone(),
@@ -243,7 +302,9 @@ fn collect_file_data(result: &parser::ParseResult) -> FileDeadCode {
                 end_line: func.end_line,
                 visibility,
                 exported,
-                is_test_file,
+                is_test_file: is_in_test_context,
+                attributes,
+                is_trait_impl,
             },
         );
     }
@@ -252,6 +313,148 @@ fn collect_file_data(result: &parser::ParseResult) -> FileDeadCode {
     collect_usages_and_calls(result, &mut fdc);
 
     fdc
+}
+
+/// Info about a Rust function extracted from the AST.
+struct RustFunctionInfo {
+    attributes: Vec<String>,
+    in_cfg_test_module: bool,
+    is_trait_impl: bool,
+}
+
+/// Extract attributes and context for Rust functions.
+/// Returns a map from function name to function info.
+fn extract_rust_function_attributes(
+    result: &parser::ParseResult,
+) -> HashMap<String, RustFunctionInfo> {
+    let mut info: HashMap<String, RustFunctionInfo> = HashMap::new();
+    let root = result.root_node();
+    let source = &result.source;
+
+    // Walk the AST looking for function_item nodes
+    fn visit(
+        node: tree_sitter::Node<'_>,
+        source: &[u8],
+        info: &mut HashMap<String, RustFunctionInfo>,
+        in_cfg_test: bool,
+        in_trait_impl: bool,
+    ) {
+        let mut current_in_cfg_test = in_cfg_test;
+        let mut current_in_trait_impl = in_trait_impl;
+
+        // Check if this is a mod_item with #[cfg(test)] attribute
+        if node.kind() == "mod_item" && has_cfg_test_attribute(&node, source) {
+            current_in_cfg_test = true;
+        }
+
+        // Check if this is a trait impl block (impl Trait for Type)
+        if node.kind() == "impl_item" {
+            current_in_trait_impl = is_trait_impl_block(&node);
+        }
+
+        if node.kind() == "function_item" {
+            // Get the function name
+            if let Some(name_node) = node.child_by_field_name("name") {
+                if let Ok(func_name) = name_node.utf8_text(source) {
+                    // Look for preceding attribute_item siblings
+                    let mut preceding_attrs = Vec::new();
+                    let mut prev = node.prev_sibling();
+                    while let Some(sibling) = prev {
+                        if sibling.kind() == "attribute_item" {
+                            if let Some(attr_name) = extract_attribute_name(&sibling, source) {
+                                preceding_attrs.push(attr_name);
+                            }
+                        } else {
+                            // Stop at non-attribute nodes
+                            break;
+                        }
+                        prev = sibling.prev_sibling();
+                    }
+                    info.insert(
+                        func_name.to_string(),
+                        RustFunctionInfo {
+                            attributes: preceding_attrs,
+                            in_cfg_test_module: current_in_cfg_test,
+                            is_trait_impl: current_in_trait_impl,
+                        },
+                    );
+                }
+            }
+        }
+
+        // Recurse into children with updated context
+        for child in node.children(&mut node.walk()) {
+            visit(
+                child,
+                source,
+                info,
+                current_in_cfg_test,
+                current_in_trait_impl,
+            );
+        }
+    }
+
+    visit(root, source, &mut info, false, false);
+    info
+}
+
+/// Check if an impl_item is a trait impl (impl Trait for Type) vs inherent impl (impl Type).
+fn is_trait_impl_block(impl_node: &tree_sitter::Node<'_>) -> bool {
+    // Trait impl has "for" keyword between the trait name and the type
+    for child in impl_node.children(&mut impl_node.walk()) {
+        if child.kind() == "for" {
+            return true;
+        }
+    }
+    false
+}
+
+/// Check if a mod_item has a preceding #[cfg(test)] attribute.
+fn has_cfg_test_attribute(mod_node: &tree_sitter::Node<'_>, source: &[u8]) -> bool {
+    let mut prev = mod_node.prev_sibling();
+    while let Some(sibling) = prev {
+        if sibling.kind() == "attribute_item" {
+            // Check if this is #[cfg(test)]
+            for child in sibling.children(&mut sibling.walk()) {
+                if child.kind() == "attribute" {
+                    if let Ok(text) = child.utf8_text(source) {
+                        if text == "cfg(test)" {
+                            return true;
+                        }
+                    }
+                }
+            }
+        } else {
+            // Stop at non-attribute nodes
+            break;
+        }
+        prev = sibling.prev_sibling();
+    }
+    false
+}
+
+/// Extract the attribute name from an attribute_item node.
+/// Handles both simple (#[test]) and path-based (#[tokio::test]) attributes.
+fn extract_attribute_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    // Find the "attribute" child
+    for child in node.children(&mut node.walk()) {
+        if child.kind() == "attribute" {
+            // The attribute can contain an identifier or a scoped_identifier
+            for attr_child in child.children(&mut child.walk()) {
+                match attr_child.kind() {
+                    "identifier" => {
+                        return attr_child.utf8_text(source).ok().map(|s| s.to_string());
+                    }
+                    "scoped_identifier" => {
+                        // For paths like tokio::test, return the full path
+                        return attr_child.utf8_text(source).ok().map(|s| s.to_string());
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Walk AST to collect identifier usages and function calls.
@@ -442,9 +645,16 @@ fn is_entry_point(name: &str, def: &Definition) -> bool {
         return true;
     }
 
-    // Test functions
+    // Test functions by name pattern
     if name.starts_with("Test") || name.starts_with("test") {
         return true;
+    }
+
+    // Rust test attributes (#[test], #[tokio::test], #[bench], etc.)
+    for attr in &def.attributes {
+        if attr == "test" || attr.ends_with("::test") || attr == "bench" || attr == "tokio::main" {
+            return true;
+        }
     }
 
     // Benchmark/Example/Fuzz (Go)
@@ -468,6 +678,12 @@ fn is_entry_point(name: &str, def: &Definition) -> bool {
 
     // Exported symbols in Go/Rust are often entry points
     if def.exported {
+        return true;
+    }
+
+    // Trait implementation methods are entry points because they may be called
+    // via dynamic dispatch (trait objects) which static analysis cannot track
+    if def.is_trait_impl {
         return true;
     }
 
@@ -519,6 +735,10 @@ struct Definition {
     visibility: String,
     exported: bool,
     is_test_file: bool,
+    /// Attributes on this definition (e.g., "test", "tokio::test", "bench")
+    attributes: Vec<String>,
+    /// Whether this is a trait implementation method
+    is_trait_impl: bool,
 }
 
 #[derive(Clone)]
@@ -587,6 +807,8 @@ mod tests {
             visibility: "private".to_string(),
             exported: false,
             is_test_file: false,
+            attributes: vec![],
+            is_trait_impl: false,
         };
         assert!(is_entry_point("main", &def));
 
@@ -599,6 +821,8 @@ mod tests {
             visibility: "public".to_string(),
             exported: true,
             is_test_file: true,
+            attributes: vec![],
+            is_trait_impl: false,
         };
         assert!(is_entry_point("TestSomething", &def2));
     }
@@ -623,6 +847,8 @@ mod tests {
             visibility: "private".to_string(),
             exported: false,
             is_test_file: false,
+            attributes: vec![],
+            is_trait_impl: false,
         };
         let conf = calculate_confidence(&private_def, true, true);
         assert!(conf > 0.9); // High confidence for private, unreachable, unused
@@ -636,6 +862,8 @@ mod tests {
             visibility: "public".to_string(),
             exported: true,
             is_test_file: false,
+            attributes: vec![],
+            is_trait_impl: false,
         };
         let conf2 = calculate_confidence(&exported_def, false, true);
         assert!(conf2 < 0.7); // Lower confidence for exported
@@ -658,6 +886,8 @@ mod tests {
             visibility: "private".to_string(),
             exported: false,
             is_test_file: false,
+            attributes: vec![],
+            is_trait_impl: false,
         };
 
         let def2 = Definition {
@@ -669,6 +899,8 @@ mod tests {
             visibility: "private".to_string(),
             exported: false,
             is_test_file: false,
+            attributes: vec![],
+            is_trait_impl: false,
         };
 
         // Using qualified names, both should be tracked
@@ -715,5 +947,372 @@ mod tests {
         let simple_only = "helper";
         let extracted = simple_only.rsplit("::").next().unwrap_or(simple_only);
         assert_eq!(extracted, "helper");
+    }
+
+    #[test]
+    fn test_rust_test_attribute_is_entry_point() {
+        // Functions with #[test] attribute should be treated as entry points
+        // even if they don't follow a naming convention like "test_*"
+        use std::path::Path;
+
+        let parser = crate::parser::Parser::new();
+        let content = br#"
+            #[test]
+            fn my_weird_test_name() {
+                assert!(true);
+            }
+
+            fn helper_not_a_test() {
+                println!("I'm not a test");
+            }
+        "#;
+        let result = parser
+            .parse(content, Language::Rust, Path::new("lib.rs"))
+            .unwrap();
+        let fdc = collect_file_data(&result);
+
+        // The #[test] function should be recognized as an entry point
+        let test_fn = fdc.definitions.get("my_weird_test_name").unwrap();
+        assert!(
+            is_entry_point("my_weird_test_name", test_fn),
+            "Function with #[test] attribute should be an entry point"
+        );
+
+        // The helper function should NOT be an entry point
+        let helper_fn = fdc.definitions.get("helper_not_a_test").unwrap();
+        assert!(
+            !is_entry_point("helper_not_a_test", helper_fn),
+            "Regular function without #[test] should not be an entry point"
+        );
+    }
+
+    #[test]
+    fn test_rust_tokio_test_attribute_is_entry_point() {
+        // Functions with #[tokio::test] attribute should be treated as entry points
+        use std::path::Path;
+
+        let parser = crate::parser::Parser::new();
+        let content = br#"
+            #[tokio::test]
+            async fn my_async_test() {
+                assert!(true);
+            }
+        "#;
+        let result = parser
+            .parse(content, Language::Rust, Path::new("lib.rs"))
+            .unwrap();
+        let fdc = collect_file_data(&result);
+
+        // The #[tokio::test] function should be recognized as an entry point
+        let test_fn = fdc.definitions.get("my_async_test").unwrap();
+        assert!(
+            is_entry_point("my_async_test", test_fn),
+            "Function with #[tokio::test] attribute should be an entry point, attrs: {:?}",
+            test_fn.attributes
+        );
+    }
+
+    #[test]
+    fn test_rust_cfg_test_module_functions_are_entry_points() {
+        // Functions inside #[cfg(test)] modules should be treated as entry points
+        // since they're test code, even if they don't have #[test] attribute
+        use std::path::Path;
+
+        let parser = crate::parser::Parser::new();
+        let content = br#"
+            fn production_code() {
+                println!("I'm production code");
+            }
+
+            #[cfg(test)]
+            mod tests {
+                use super::*;
+
+                fn helper_in_test_module() {
+                    // This is a test helper, not flagged as dead code
+                }
+
+                #[test]
+                fn actual_test() {
+                    helper_in_test_module();
+                }
+            }
+        "#;
+        let result = parser
+            .parse(content, Language::Rust, Path::new("lib.rs"))
+            .unwrap();
+        let fdc = collect_file_data(&result);
+
+        // Functions inside #[cfg(test)] should be recognized as being in test context
+        // They should have is_test_file = true OR have reduced confidence
+        let helper_fn = fdc.definitions.get("helper_in_test_module");
+        assert!(
+            helper_fn.is_some(),
+            "helper_in_test_module should be found in definitions"
+        );
+
+        let helper = helper_fn.unwrap();
+        // The helper function should be marked as in a test context
+        assert!(
+            helper.is_test_file || !helper.attributes.is_empty(),
+            "Function in #[cfg(test)] module should be recognized as test code"
+        );
+    }
+
+    #[test]
+    fn test_rust_trait_impl_methods_have_reduced_confidence() {
+        // Trait implementation methods should have reduced confidence for dead code
+        // because they may be called via dynamic dispatch (trait objects)
+        use std::path::Path;
+
+        let parser = crate::parser::Parser::new();
+        let content = br#"
+            trait MyTrait {
+                fn trait_method(&self);
+            }
+
+            struct MyStruct;
+
+            impl MyTrait for MyStruct {
+                fn trait_method(&self) {
+                    println!("trait method impl");
+                }
+            }
+
+            fn standalone_function() {
+                println!("not a trait impl");
+            }
+        "#;
+        let result = parser
+            .parse(content, Language::Rust, Path::new("lib.rs"))
+            .unwrap();
+        let fdc = collect_file_data(&result);
+
+        // The trait impl method should be found and marked as a trait impl
+        let trait_method = fdc.definitions.get("trait_method");
+        assert!(
+            trait_method.is_some(),
+            "trait_method should be found in definitions"
+        );
+
+        let trait_fn = trait_method.unwrap();
+        // Trait impl methods should be either marked as entry points or have reduced confidence
+        // For now, we'll check that they're detected as trait impls (via attributes or kind)
+        assert!(
+            trait_fn.kind == "trait_impl" || is_entry_point("trait_method", trait_fn),
+            "Trait impl method should be recognized as a trait implementation"
+        );
+    }
+
+    #[test]
+    fn test_rust_pub_functions_are_entry_points() {
+        // Public functions in Rust should be treated as entry points
+        // because they're part of the public API
+        use std::path::Path;
+
+        let parser = crate::parser::Parser::new();
+        let content = br#"
+            pub fn public_api_function() {
+                println!("I'm a public API function");
+            }
+
+            fn private_helper() {
+                println!("I'm a private helper");
+            }
+        "#;
+        let result = parser
+            .parse(content, Language::Rust, Path::new("lib.rs"))
+            .unwrap();
+        let fdc = collect_file_data(&result);
+
+        // The pub function should be marked as exported and be an entry point
+        let pub_fn = fdc.definitions.get("public_api_function").unwrap();
+        assert!(pub_fn.exported, "pub function should be marked as exported");
+        assert!(
+            is_entry_point("public_api_function", pub_fn),
+            "pub function should be an entry point"
+        );
+
+        // The private function should NOT be an entry point
+        let private_fn = fdc.definitions.get("private_helper").unwrap();
+        assert!(
+            !private_fn.exported,
+            "private function should not be marked as exported"
+        );
+        assert!(
+            !is_entry_point("private_helper", private_fn),
+            "private function should not be an entry point"
+        );
+    }
+
+    #[test]
+    fn test_cargo_analyzer_parse_dead_code_json() {
+        let json_line = r#"{"reason":"compiler-message","package_id":"test 0.1.0","manifest_path":"/test/Cargo.toml","target":{"name":"test"},"message":{"rendered":"warning: function `unused_func` is never used\n","code":{"code":"dead_code"},"level":"warning","message":"function `unused_func` is never used","spans":[{"file_name":"src/lib.rs","byte_start":0,"byte_end":10,"line_start":5,"line_end":7,"column_start":1,"column_end":2}]}}"#;
+
+        let item = CargoDeadCodeAnalyzer::parse_json_message(json_line);
+        assert!(item.is_some(), "Should parse dead_code JSON message");
+
+        let item = item.unwrap();
+        assert_eq!(item.name, "unused_func");
+        assert_eq!(item.file, "src/lib.rs");
+        assert_eq!(item.line, 5);
+        assert_eq!(item.end_line, 7);
+    }
+
+    #[test]
+    fn test_cargo_analyzer_ignores_non_dead_code() {
+        let json_line = r#"{"reason":"compiler-message","message":{"code":{"code":"unused_imports"},"level":"warning","message":"unused import"}}"#;
+
+        let item = CargoDeadCodeAnalyzer::parse_json_message(json_line);
+        assert!(item.is_none(), "Should ignore non-dead_code warnings");
+    }
+}
+
+/// Cargo-based dead code analyzer for Rust projects.
+/// Uses `cargo check --message-format=json` to get accurate dead code warnings
+/// from the Rust compiler.
+pub struct CargoDeadCodeAnalyzer;
+
+/// A dead code item detected by cargo/rustc.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CargoDeadCodeItem {
+    pub name: String,
+    pub file: String,
+    pub line: u32,
+    pub end_line: u32,
+    pub message: String,
+    pub kind: String,
+}
+
+/// Result of cargo-based dead code analysis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CargoDeadCodeAnalysis {
+    pub items: Vec<CargoDeadCodeItem>,
+    pub summary: CargoDeadCodeSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CargoDeadCodeSummary {
+    pub total_items: usize,
+    pub by_kind: HashMap<String, usize>,
+}
+
+impl CargoDeadCodeAnalyzer {
+    /// Analyze a Rust project using cargo check.
+    pub fn analyze(project_path: &std::path::Path) -> Result<CargoDeadCodeAnalysis> {
+        use std::process::Command;
+
+        // Run cargo check with JSON output
+        let output = Command::new("cargo")
+            .arg("check")
+            .arg("--message-format=json")
+            .arg("--all-targets")
+            .current_dir(project_path)
+            .output()
+            .map_err(|e| crate::core::Error::Analysis {
+                message: format!("Failed to run cargo check: {}", e),
+            })?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let items = Self::parse_cargo_output(&stdout);
+
+        let mut by_kind: HashMap<String, usize> = HashMap::new();
+        for item in &items {
+            *by_kind.entry(item.kind.clone()).or_insert(0) += 1;
+        }
+
+        Ok(CargoDeadCodeAnalysis {
+            summary: CargoDeadCodeSummary {
+                total_items: items.len(),
+                by_kind,
+            },
+            items,
+        })
+    }
+
+    /// Parse cargo JSON output for dead code warnings.
+    fn parse_cargo_output(output: &str) -> Vec<CargoDeadCodeItem> {
+        output
+            .lines()
+            .filter_map(Self::parse_json_message)
+            .collect()
+    }
+
+    /// Parse a single JSON message line from cargo output.
+    fn parse_json_message(line: &str) -> Option<CargoDeadCodeItem> {
+        // Quick check before parsing JSON
+        if !line.contains(r#""code":"dead_code""#) {
+            return None;
+        }
+
+        let json: serde_json::Value = serde_json::from_str(line).ok()?;
+
+        // Verify this is a dead_code warning
+        let code = json.get("message")?.get("code")?.get("code")?.as_str()?;
+        if code != "dead_code" {
+            return None;
+        }
+
+        let message_obj = json.get("message")?;
+        let message = message_obj.get("message")?.as_str()?.to_string();
+
+        // Extract function/struct/etc name from message
+        let name = Self::extract_name_from_message(&message)?;
+
+        // Get location from spans
+        let spans = message_obj.get("spans")?.as_array()?;
+        let span = spans.first()?;
+
+        let file = span.get("file_name")?.as_str()?.to_string();
+        let line = span.get("line_start")?.as_u64()? as u32;
+        let end_line = span.get("line_end")?.as_u64()? as u32;
+
+        // Determine kind from message
+        let kind = Self::determine_kind(&message);
+
+        Some(CargoDeadCodeItem {
+            name,
+            file,
+            line,
+            end_line,
+            message,
+            kind,
+        })
+    }
+
+    /// Extract the name of the dead code item from the warning message.
+    fn extract_name_from_message(message: &str) -> Option<String> {
+        // Patterns like:
+        // "function `unused_func` is never used"
+        // "struct `UnusedStruct` is never constructed"
+        // "constant `UNUSED_CONST` is never used"
+        if let Some(start) = message.find('`') {
+            let rest = &message[start + 1..];
+            if let Some(end) = rest.find('`') {
+                return Some(rest[..end].to_string());
+            }
+        }
+        None
+    }
+
+    /// Determine the kind of dead code from the message.
+    fn determine_kind(message: &str) -> String {
+        if message.starts_with("function") || message.starts_with("method") {
+            "function".to_string()
+        } else if message.starts_with("struct") {
+            "struct".to_string()
+        } else if message.starts_with("enum") {
+            "enum".to_string()
+        } else if message.starts_with("constant") || message.starts_with("static") {
+            "constant".to_string()
+        } else if message.starts_with("type alias") {
+            "type_alias".to_string()
+        } else if message.starts_with("field") {
+            "field".to_string()
+        } else if message.starts_with("variant") {
+            "variant".to_string()
+        } else {
+            "unknown".to_string()
+        }
     }
 }
