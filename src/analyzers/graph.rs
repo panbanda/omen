@@ -27,7 +27,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 
-use ignore::WalkBuilder;
 use petgraph::algo::tarjan_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
@@ -35,7 +34,7 @@ use petgraph::Direction;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result};
+use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
 use crate::parser::{extract_imports, Parser};
 
 /// Graph analyzer configuration.
@@ -242,33 +241,40 @@ impl Analyzer {
 
     /// Analyze a directory and build dependency graph.
     pub fn analyze_project(&self, root: &Path) -> Result<Analysis> {
-        let files: Vec<_> = WalkBuilder::new(root)
-            .hidden(true)
-            .git_ignore(true)
-            .build()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
-            .map(|e| e.into_path())
-            .collect();
+        use crate::config::Config as AppConfig;
+        use crate::core::FileSet;
 
-        self.analyze_files(&files, root)
+        let config = AppConfig::default();
+        let file_set = FileSet::from_path(root, &config)?;
+        let ctx = AnalysisContext::new(&file_set, &config, Some(root));
+        self.analyze_files(&ctx)
     }
 
     /// Analyze a set of files and build dependency graph.
-    pub fn analyze_files(&self, files: &[std::path::PathBuf], root: &Path) -> Result<Analysis> {
+    /// Uses ctx.read_file() to support both filesystem and git tree sources.
+    pub fn analyze_files(&self, ctx: &AnalysisContext<'_>) -> Result<Analysis> {
+        let files: Vec<_> = ctx.files.iter().collect();
+
         // Build file path index for O(1) lookups during import resolution
-        let file_index = FilePathIndex::new(files, root);
+        let file_index = FilePathIndex::new(
+            &files.iter().map(|p| (*p).clone()).collect::<Vec<_>>(),
+            ctx.root,
+        );
 
         // Parallel parsing: extract imports from all files concurrently
         let file_imports: Vec<(String, Vec<String>)> = files
             .par_iter()
             .filter_map(|file| {
-                let rel_path = file.strip_prefix(root).unwrap_or(file);
+                let rel_path = file.strip_prefix(ctx.root).unwrap_or(file);
                 let path_str = rel_path.to_string_lossy().to_string();
+
+                // Read file via context (supports both filesystem and git tree)
+                let content = ctx.read_file(file).ok()?;
+                let lang = Language::detect(file)?;
 
                 // Parse and extract imports using thread-local parser
                 let parser = Parser::new();
-                let result = parser.parse_file(file).ok()?;
+                let result = parser.parse(&content, lang, file).ok()?;
                 let imports = extract_imports(&result);
 
                 // Resolve imports using the pre-built index
@@ -654,8 +660,7 @@ impl AnalyzerTrait for Analyzer {
     }
 
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
-        let files: Vec<_> = ctx.files.iter().cloned().collect();
-        let mut analysis = self.analyze_files(&files, ctx.root)?;
+        let mut analysis = self.analyze_files(ctx)?;
         analysis.summary.cycle_count = analysis.cycles.len();
         Ok(analysis)
     }

@@ -491,8 +491,11 @@ impl AnalyzerTrait for Analyzer {
         let mut scores = Vec::new();
 
         for path in ctx.files.iter() {
-            let content = match std::fs::read_to_string(path) {
-                Ok(c) => c,
+            let content = match ctx.read_file(path) {
+                Ok(bytes) => match String::from_utf8(bytes) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                },
                 Err(_) => continue,
             };
 

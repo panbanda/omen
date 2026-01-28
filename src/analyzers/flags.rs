@@ -9,7 +9,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use chrono::Utc;
-use ignore::WalkBuilder;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use streaming_iterator::StreamingIterator;
@@ -83,8 +82,15 @@ impl Analyzer {
 
     /// Analyze a repository for feature flags using only the analyzer's internal config.
     pub fn analyze_repo(&self, repo_path: &Path) -> Result<Analysis> {
+        use crate::config::Config as AppConfig;
+        use crate::core::FileSet;
+
+        let config = AppConfig::default();
+        let file_set = FileSet::from_path(repo_path, &config)?;
+        let ctx = AnalysisContext::new(&file_set, &config, Some(repo_path));
+
         self.analyze_with_config(
-            repo_path,
+            &ctx,
             self.config.expected_ttl_days,
             &self.config.providers,
             &[],
@@ -117,7 +123,7 @@ impl AnalyzerTrait for Analyzer {
         };
 
         self.analyze_with_config(
-            ctx.root,
+            ctx,
             expected_ttl_days,
             providers,
             &ctx.config.feature_flags.custom_providers,
@@ -345,7 +351,7 @@ impl Analyzer {
     /// If `providers` is empty, no built-in detection runs (only custom providers).
     fn analyze_with_config(
         &self,
-        repo_path: &Path,
+        ctx: &AnalysisContext<'_>,
         expected_ttl_days: u32,
         providers: &[String],
         custom_providers: &[CustomProvider],
@@ -397,16 +403,8 @@ impl Analyzer {
         let custom_providers: Arc<[CustomProvider]> = custom_providers.to_vec().into();
         let providers: Arc<[String]> = providers.to_vec().into();
 
-        // Collect all files first (fast)
-        let files: Vec<_> = WalkBuilder::new(repo_path)
-            .hidden(true)
-            .git_ignore(true)
-            .build()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().is_file())
-            .map(|e| e.into_path())
-            .filter(|path| Language::detect(path).is_some())
-            .collect();
+        // Get files from context
+        let files: Vec<_> = ctx.files.iter().collect();
 
         // Process files in parallel
         let references: Vec<FlagReference> = files
@@ -419,13 +417,17 @@ impl Analyzer {
                     None => return file_refs,
                 };
 
-                let content = match std::fs::read_to_string(path) {
-                    Ok(c) => c,
+                // Read file via context (supports both filesystem and git tree)
+                let content = match ctx.read_file(path) {
+                    Ok(bytes) => match String::from_utf8(bytes) {
+                        Ok(s) => s,
+                        Err(_) => return file_refs,
+                    },
                     Err(_) => return file_refs,
                 };
 
                 let rel_path = path
-                    .strip_prefix(repo_path)
+                    .strip_prefix(ctx.root)
                     .unwrap_or(path)
                     .to_string_lossy()
                     .to_string();
@@ -547,7 +549,7 @@ impl Analyzer {
 
         // Try to open git repo for staleness detection
         let git_repo = if self.config.include_git {
-            GitRepo::open(repo_path).ok()
+            GitRepo::open(ctx.root).ok()
         } else {
             None
         };
@@ -743,6 +745,15 @@ pub struct AnalysisSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config as AppConfig;
+    use crate::core::FileSet;
+
+    /// Helper to create an AnalysisContext from a path for testing.
+    fn create_test_context(path: &Path) -> (FileSet, AppConfig) {
+        let config = AppConfig::default();
+        let file_set = FileSet::from_path(path, &config).unwrap();
+        (file_set, config)
+    }
 
     #[test]
     fn test_analyzer_creation() {
@@ -802,9 +813,11 @@ mod tests {
 
         let analyzer = Analyzer::new();
         let providers = vec!["flipper".to_string()];
+        let (file_set, config) = create_test_context(temp_dir.path());
+        let ctx = AnalysisContext::new(&file_set, &config, Some(temp_dir.path()));
 
         let result = analyzer
-            .analyze_with_config(temp_dir.path(), 14, &providers, &[])
+            .analyze_with_config(&ctx, 14, &providers, &[])
             .unwrap();
 
         assert_eq!(result.flags.len(), 1);
@@ -822,9 +835,11 @@ mod tests {
 
         let analyzer = Analyzer::new();
         let providers = vec!["flipper".to_string()];
+        let (file_set, config) = create_test_context(temp_dir.path());
+        let ctx = AnalysisContext::new(&file_set, &config, Some(temp_dir.path()));
 
         let result = analyzer
-            .analyze_with_config(temp_dir.path(), 14, &providers, &[])
+            .analyze_with_config(&ctx, 14, &providers, &[])
             .unwrap();
 
         assert_eq!(result.flags.len(), 1);
@@ -841,9 +856,11 @@ mod tests {
 
         let analyzer = Analyzer::new();
         let providers = vec!["flipper".to_string()];
+        let (file_set, config) = create_test_context(temp_dir.path());
+        let ctx = AnalysisContext::new(&file_set, &config, Some(temp_dir.path()));
 
         let result = analyzer
-            .analyze_with_config(temp_dir.path(), 14, &providers, &[])
+            .analyze_with_config(&ctx, 14, &providers, &[])
             .unwrap();
 
         assert_eq!(result.flags.len(), 1);
@@ -860,9 +877,11 @@ mod tests {
 
         let analyzer = Analyzer::new();
         let providers = vec!["flipper".to_string()];
+        let (file_set, config) = create_test_context(temp_dir.path());
+        let ctx = AnalysisContext::new(&file_set, &config, Some(temp_dir.path()));
 
         let result = analyzer
-            .analyze_with_config(temp_dir.path(), 14, &providers, &[])
+            .analyze_with_config(&ctx, 14, &providers, &[])
             .unwrap();
 
         assert_eq!(result.flags.len(), 1);
@@ -970,11 +989,11 @@ mod tests {
         std::fs::write(&file_path, "Flipper[:ld_flag]").unwrap();
 
         let analyzer = Analyzer::new();
+        let (file_set, config) = create_test_context(temp_dir.path());
+        let ctx = AnalysisContext::new(&file_set, &config, Some(temp_dir.path()));
 
         // Empty providers means no built-in patterns run
-        let result = analyzer
-            .analyze_with_config(temp_dir.path(), 14, &[], &[])
-            .unwrap();
+        let result = analyzer.analyze_with_config(&ctx, 14, &[], &[]).unwrap();
 
         assert_eq!(result.flags.len(), 0);
     }
@@ -989,10 +1008,12 @@ mod tests {
 
         let analyzer = Analyzer::new();
         let providers = vec!["flipper".to_string()];
+        let (file_set, config) = create_test_context(temp_dir.path());
+        let ctx = AnalysisContext::new(&file_set, &config, Some(temp_dir.path()));
 
         // With flipper explicitly enabled, it should find the flag
         let result = analyzer
-            .analyze_with_config(temp_dir.path(), 14, &providers, &[])
+            .analyze_with_config(&ctx, 14, &providers, &[])
             .unwrap();
 
         assert_eq!(result.flags.len(), 1);
@@ -1036,8 +1057,10 @@ end
         };
 
         let analyzer = Analyzer::new();
+        let (file_set, config) = create_test_context(temp_dir.path());
+        let ctx = AnalysisContext::new(&file_set, &config, Some(temp_dir.path()));
         let result = analyzer
-            .analyze_with_config(temp_dir.path(), 14, &[], &[custom_provider])
+            .analyze_with_config(&ctx, 14, &[], &[custom_provider])
             .unwrap();
 
         // Should find the custom feature flag
@@ -1074,8 +1097,10 @@ end
         };
 
         let analyzer = Analyzer::new();
+        let (file_set, config) = create_test_context(temp_dir.path());
+        let ctx = AnalysisContext::new(&file_set, &config, Some(temp_dir.path()));
         let result = analyzer
-            .analyze_with_config(temp_dir.path(), 14, &[], &[custom_provider])
+            .analyze_with_config(&ctx, 14, &[], &[custom_provider])
             .unwrap();
 
         // Should only find flags from Ruby files for this provider
