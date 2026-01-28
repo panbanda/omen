@@ -13,7 +13,8 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use omen::cli::{
     Cli, Command, ComplexityArgs, McpSubcommand, MutationArgs, MutationSubcommand,
-    MutationTrainArgs, OutputFormat, ReportSubcommand, ScoreSubcommand, SearchSubcommand,
+    MutationTrainArgs, OutputFormat, ReportSubcommand, ScoreArgs, ScoreSubcommand,
+    SearchSubcommand,
 };
 use omen::config::Config;
 use omen::core::progress::is_tty;
@@ -215,73 +216,79 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             run_analyzer::<omen::analyzers::hotspot::Analyzer>(path, &config, format)?;
         }
         Command::Score(cmd) => {
-            match &cmd.subcommand {
-                Some(ScoreSubcommand::Trend(args)) => {
-                    // Score trend analysis
-                    let trend_data =
-                        omen::score::analyze_trend(path, &config, &args.since, args.period)?;
-                    match format {
-                        Format::Json => {
-                            println!("{}", serde_json::to_string_pretty(&trend_data)?);
-                        }
-                        Format::Markdown => {
-                            println!("# Score Trend Analysis\n");
-                            println!(
-                                "**Period**: {} ({})",
-                                args.since,
-                                format!("{:?}", args.period).to_lowercase()
-                            );
-                            println!("**Data Points**: {}\n", trend_data.points.len());
-
-                            if !trend_data.points.is_empty() {
-                                println!("## Overall Trend\n");
-                                println!("- **Start Score**: {}", trend_data.start_score);
-                                println!("- **End Score**: {}", trend_data.end_score);
+            if cmd.args.check {
+                run_score_check(path, &config, &cmd.args)?;
+            } else {
+                match &cmd.subcommand {
+                    Some(ScoreSubcommand::Trend(args)) => {
+                        // Score trend analysis
+                        let trend_data =
+                            omen::score::analyze_trend(path, &config, &args.since, args.period)?;
+                        match format {
+                            Format::Json => {
+                                println!("{}", serde_json::to_string_pretty(&trend_data)?);
+                            }
+                            Format::Markdown => {
+                                println!("# Score Trend Analysis\n");
                                 println!(
-                                    "- **Change**: {:+}",
+                                    "**Period**: {} ({})",
+                                    args.since,
+                                    format!("{:?}", args.period).to_lowercase()
+                                );
+                                println!("**Data Points**: {}\n", trend_data.points.len());
+
+                                if !trend_data.points.is_empty() {
+                                    println!("## Overall Trend\n");
+                                    println!("- **Start Score**: {}", trend_data.start_score);
+                                    println!("- **End Score**: {}", trend_data.end_score);
+                                    println!(
+                                        "- **Change**: {:+}",
+                                        trend_data.end_score - trend_data.start_score
+                                    );
+                                    println!("- **Slope**: {:.2} points/period", trend_data.slope);
+                                    println!("- **R-squared**: {:.3}\n", trend_data.r_squared);
+
+                                    if !trend_data.component_trends.is_empty() {
+                                        println!("## Component Trends\n");
+                                        println!("| Component | Slope | Correlation |");
+                                        println!("|-----------|-------|-------------|");
+                                        for (name, stats) in &trend_data.component_trends {
+                                            println!(
+                                                "| {} | {:.2} | {:.3} |",
+                                                name, stats.slope, stats.correlation
+                                            );
+                                        }
+                                        println!();
+                                    }
+
+                                    println!("## History\n");
+                                    println!("| Date | Score |");
+                                    println!("|------|-------|");
+                                    for point in &trend_data.points {
+                                        println!("| {} | {} |", point.date, point.score);
+                                    }
+                                } else {
+                                    println!(
+                                        "No historical data available for the specified period."
+                                    );
+                                }
+                            }
+                            Format::Text => {
+                                println!(
+                                    "Score Trend: {} - {}",
+                                    trend_data.start_score, trend_data.end_score
+                                );
+                                println!(
+                                    "Change: {:+}",
                                     trend_data.end_score - trend_data.start_score
                                 );
-                                println!("- **Slope**: {:.2} points/period", trend_data.slope);
-                                println!("- **R-squared**: {:.3}\n", trend_data.r_squared);
-
-                                if !trend_data.component_trends.is_empty() {
-                                    println!("## Component Trends\n");
-                                    println!("| Component | Slope | Correlation |");
-                                    println!("|-----------|-------|-------------|");
-                                    for (name, stats) in &trend_data.component_trends {
-                                        println!(
-                                            "| {} | {:.2} | {:.3} |",
-                                            name, stats.slope, stats.correlation
-                                        );
-                                    }
-                                    println!();
-                                }
-
-                                println!("## History\n");
-                                println!("| Date | Score |");
-                                println!("|------|-------|");
-                                for point in &trend_data.points {
-                                    println!("| {} | {} |", point.date, point.score);
-                                }
-                            } else {
-                                println!("No historical data available for the specified period.");
+                                println!("Slope: {:.2}", trend_data.slope);
                             }
                         }
-                        Format::Text => {
-                            println!(
-                                "Score Trend: {} - {}",
-                                trend_data.start_score, trend_data.end_score
-                            );
-                            println!(
-                                "Change: {:+}",
-                                trend_data.end_score - trend_data.start_score
-                            );
-                            println!("Slope: {:.2}", trend_data.slope);
-                        }
                     }
-                }
-                None => {
-                    run_analyzer::<omen::score::Analyzer>(path, &config, format)?;
+                    None => {
+                        run_analyzer::<omen::score::Analyzer>(path, &config, format)?;
+                    }
                 }
             }
         }
@@ -466,6 +473,34 @@ fn run_complexity_check(
                 violations.len() as f64,
             ))
         }
+    }
+}
+
+fn run_score_check(path: &PathBuf, config: &Config, args: &ScoreArgs) -> omen::core::Result<()> {
+    let file_set = FileSet::from_path(path, config)?;
+    let mut ctx = AnalysisContext::new(&file_set, config, Some(path));
+
+    if let Ok(repo) = omen::git::GitRepo::open(path) {
+        let git_root = repo.root().to_path_buf();
+        ctx = ctx.with_git_path(Box::leak(Box::new(git_root)));
+    }
+
+    let analyzer = omen::score::Analyzer::default();
+    let result = analyzer.analyze(&ctx)?;
+
+    let min_score = args
+        .fail_under
+        .unwrap_or_else(|| config.score.fail_under.unwrap_or(80.0));
+
+    match result.check_threshold(min_score) {
+        Ok(()) => {
+            eprintln!(
+                "Score {:.1} ({}) meets minimum {:.1}",
+                result.overall_score, result.grade, min_score
+            );
+            Ok(())
+        }
+        Err(e) => Err(e),
     }
 }
 

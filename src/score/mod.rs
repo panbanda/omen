@@ -537,6 +537,23 @@ pub struct Analysis {
     pub summary: AnalysisSummary,
 }
 
+impl Analysis {
+    /// Check that overall score meets a minimum threshold.
+    pub fn check_threshold(&self, min_score: f64) -> crate::core::Result<()> {
+        if self.overall_score >= min_score {
+            Ok(())
+        } else {
+            Err(crate::core::Error::threshold_violation(
+                format!(
+                    "Score {:.1} ({}) is below minimum {:.1}",
+                    self.overall_score, self.grade, min_score
+                ),
+                self.overall_score,
+            ))
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScoreComponent {
     pub score: f64,
@@ -967,6 +984,39 @@ mod tests {
         assert!(json.contains("\"score\":90.0"));
         assert!(json.contains("\"weight\":1.0"));
         assert!(json.contains("test details"));
+    }
+
+    #[test]
+    fn test_check_threshold_passes() {
+        let analysis = Analysis {
+            overall_score: 85.0,
+            grade: "B".to_string(),
+            components: HashMap::new(),
+            summary: AnalysisSummary::default(),
+        };
+        assert!(analysis.check_threshold(80.0).is_ok());
+    }
+
+    #[test]
+    fn test_check_threshold_fails() {
+        let analysis = Analysis {
+            overall_score: 72.0,
+            grade: "C".to_string(),
+            components: HashMap::new(),
+            summary: AnalysisSummary::default(),
+        };
+        assert!(analysis.check_threshold(80.0).is_err());
+    }
+
+    #[test]
+    fn test_check_threshold_exact_boundary() {
+        let analysis = Analysis {
+            overall_score: 80.0,
+            grade: "B".to_string(),
+            components: HashMap::new(),
+            summary: AnalysisSummary::default(),
+        };
+        assert!(analysis.check_threshold(80.0).is_ok());
     }
 
     #[test]
