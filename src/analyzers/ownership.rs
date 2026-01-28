@@ -41,18 +41,13 @@ pub const MEDIUM_CONCENTRATION_THRESHOLD: f64 = 0.6;
 /// Ownership analyzer configuration.
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Whether to exclude trivial lines from analysis.
-    pub exclude_trivial: bool,
     /// Minimum lines for a file to be analyzed.
     pub min_lines: usize,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self {
-            exclude_trivial: true,
-            min_lines: 1,
-        }
+        Self { min_lines: 1 }
     }
 }
 
@@ -78,12 +73,6 @@ impl Analyzer {
     /// Creates a new analyzer with the specified config.
     pub fn with_config(config: Config) -> Self {
         Self { config }
-    }
-
-    /// Sets whether to include trivial lines.
-    pub fn with_include_trivial(mut self) -> Self {
-        self.config.exclude_trivial = false;
-        self
     }
 
     /// Analyzes ownership in a repository.
@@ -150,19 +139,7 @@ impl Analyzer {
         };
 
         // Filter trivial lines if configured
-        let lines: Vec<_> = if self.config.exclude_trivial {
-            blame_info
-                .lines
-                .iter()
-                .filter(|_line| {
-                    // TODO: Filter trivial lines based on content
-                    // For now, include all lines
-                    true
-                })
-                .collect()
-        } else {
-            blame_info.lines.iter().collect()
-        };
+        let lines: Vec<_> = blame_info.lines.iter().collect();
 
         let total_lines = lines.len();
         if total_lines < self.config.min_lines {
@@ -501,20 +478,12 @@ mod tests {
     #[test]
     fn test_config_default() {
         let config = Config::default();
-        assert!(config.exclude_trivial);
         assert_eq!(config.min_lines, 1);
     }
 
     #[test]
     fn test_analyzer_creation() {
-        let analyzer = Analyzer::new();
-        assert!(analyzer.config.exclude_trivial);
-    }
-
-    #[test]
-    fn test_analyzer_with_include_trivial() {
-        let analyzer = Analyzer::new().with_include_trivial();
-        assert!(!analyzer.config.exclude_trivial);
+        let _analyzer = Analyzer::new();
     }
 
     #[test]

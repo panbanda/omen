@@ -172,7 +172,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             run_analyzer::<omen::analyzers::changes::Analyzer>(path, &config, format)?;
         }
         Command::Diff(_args) => {
-            // Diff uses the changes analyzer - base/head filtering TBD
+            // Diff currently delegates to the changes analyzer
             run_analyzer::<omen::analyzers::changes::Analyzer>(path, &config, format)?;
         }
         Command::Tdg(_args) => {
@@ -211,8 +211,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             run_analyzer::<omen::analyzers::flags::Analyzer>(path, &config, format)?;
         }
         Command::LintHotspot(_args) => {
-            // Lint hotspot combines lint output with hotspot analysis
-            // For now, run hotspot analyzer (lint integration TBD)
+            // Lint hotspot currently delegates to the hotspot analyzer
             run_analyzer::<omen::analyzers::hotspot::Analyzer>(path, &config, format)?;
         }
         Command::Score(cmd) => {
