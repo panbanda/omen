@@ -25,7 +25,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use chrono::Utc;
-use ignore::WalkBuilder;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -91,14 +90,12 @@ impl Analyzer {
     }
 
     /// Analyzes cohesion metrics in a repository.
-    pub fn analyze_repo(&self, repo_path: &Path) -> Result<Analysis> {
-        // Phase 1: Collect all candidate files (fast, sequential)
-        let files: Vec<_> = WalkBuilder::new(repo_path)
-            .hidden(false)
-            .build()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
-            .map(|e| e.into_path())
+    /// Uses ctx.read_file() to support both filesystem and git tree sources.
+    pub fn analyze_repo(&self, ctx: &AnalysisContext<'_>) -> Result<Analysis> {
+        // Phase 1: Get files from context, filtered by OO languages
+        let files: Vec<_> = ctx
+            .files
+            .iter()
             .filter(|path| {
                 // Skip test files if configured
                 if self.config.skip_test_files && is_test_file(path) {
@@ -114,8 +111,8 @@ impl Analyzer {
         let all_classes: Vec<ClassMetrics> = files
             .par_iter()
             .filter_map(|path| {
-                // Read file
-                let source = std::fs::read(path).ok()?;
+                // Read file via context (supports both filesystem and git tree)
+                let source = ctx.read_file(path).ok()?;
 
                 // Skip if too large
                 if max_file_size > 0 && source.len() > max_file_size {
@@ -174,7 +171,7 @@ impl AnalyzerTrait for Analyzer {
     }
 
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
-        self.analyze_repo(ctx.root)
+        self.analyze_repo(ctx)
     }
 }
 

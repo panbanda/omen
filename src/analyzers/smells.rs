@@ -15,10 +15,8 @@
 //! but they measure different aspects of over-centralization.
 
 use std::collections::HashMap;
-use std::path::Path;
 
 use chrono::Utc;
-use ignore::WalkBuilder;
 use petgraph::algo::tarjan_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::Direction;
@@ -103,30 +101,28 @@ impl Analyzer {
     }
 
     /// Analyze a repository for architectural smells.
-    pub fn analyze_repo(&self, repo_path: &Path) -> Result<Analysis> {
-        // Phase 1: Collect all file paths (fast)
-        let files: Vec<_> = WalkBuilder::new(repo_path)
-            .hidden(true)
-            .git_ignore(true)
-            .build()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
-            .filter(|e| Language::detect(e.path()).is_some())
-            .map(|e| e.into_path())
-            .collect();
+    /// Uses ctx.read_file() to support both filesystem and git tree sources.
+    pub fn analyze_repo(&self, ctx: &AnalysisContext<'_>) -> Result<Analysis> {
+        // Phase 1: Get files from context (already filtered by language)
+        let files: Vec<_> = ctx.files.iter().collect();
 
-        // Phase 2: Parallel parsing - extract imports from all files
+        // Phase 2: Parallel parsing - extract imports using content_source
         let file_imports: Vec<(String, Vec<String>)> = files
             .par_iter()
             .filter_map(|path| {
-                let parser = Parser::new();
-                let parse_result = parser.parse_file(path).ok()?;
                 let rel_path = path
-                    .strip_prefix(repo_path)
+                    .strip_prefix(ctx.root)
                     .unwrap_or(path)
                     .to_string_lossy()
                     .to_string();
 
+                // Read file via context (supports both filesystem and git tree)
+                let content = ctx.read_file(path).ok()?;
+                let lang = Language::detect(path)?;
+
+                // Parse with the content
+                let parser = Parser::new();
+                let parse_result = parser.parse(&content, lang, path).ok()?;
                 let imports = extract_imports(&parse_result);
                 let import_paths: Vec<String> = imports.into_iter().map(|imp| imp.path).collect();
 
@@ -397,7 +393,7 @@ impl AnalyzerTrait for Analyzer {
     }
 
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
-        self.analyze_repo(ctx.root)
+        self.analyze_repo(ctx)
     }
 }
 
@@ -839,5 +835,106 @@ mod tests {
             }
         }
         assert!(found_cycle, "Multi-node cycle should be detected");
+    }
+
+    #[test]
+    fn test_analyzer_uses_content_source_for_historical_commits() {
+        use crate::config::Config;
+        use crate::core::{AnalysisContext, FileSet, TreeSource};
+        use std::process::Command;
+        use std::sync::Arc;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Initialize git repo
+        Command::new("git")
+            .args(["init"])
+            .current_dir(temp_dir.path())
+            .output()
+            .expect("failed to init");
+        Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(temp_dir.path())
+            .output()
+            .expect("failed to config email");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(temp_dir.path())
+            .output()
+            .expect("failed to config name");
+
+        // First commit: 2 TypeScript files with NO cyclic dependency
+        std::fs::write(
+            temp_dir.path().join("a.ts"),
+            b"// No imports\nexport const a = 1;",
+        )
+        .unwrap();
+        std::fs::write(
+            temp_dir.path().join("b.ts"),
+            b"// No imports\nexport const b = 2;",
+        )
+        .unwrap();
+
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(temp_dir.path())
+            .output()
+            .expect("failed to add");
+        Command::new("git")
+            .args(["commit", "-m", "First commit - no cycles"])
+            .current_dir(temp_dir.path())
+            .output()
+            .expect("failed to commit");
+        let output = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(temp_dir.path())
+            .output()
+            .expect("failed to get HEAD");
+        let sha1 = String::from_utf8(output.stdout).unwrap().trim().to_string();
+
+        // Second commit: modify files to CREATE a cyclic dependency
+        std::fs::write(
+            temp_dir.path().join("a.ts"),
+            b"import { b } from './b';\nexport const a = b + 1;",
+        )
+        .unwrap();
+        std::fs::write(
+            temp_dir.path().join("b.ts"),
+            b"import { a } from './a';\nexport const b = a + 1;",
+        )
+        .unwrap();
+
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(temp_dir.path())
+            .output()
+            .expect("failed to add");
+        Command::new("git")
+            .args(["commit", "-m", "Second commit - introduces cycle"])
+            .current_dir(temp_dir.path())
+            .output()
+            .expect("failed to commit");
+
+        // Analyze at the FIRST commit (should have NO cycles)
+        let tree_source = TreeSource::new(temp_dir.path(), &sha1).unwrap();
+        let config = Config::default();
+        let file_set = FileSet::from_tree_source(&tree_source, &config).unwrap();
+        let content_source: Arc<dyn crate::core::ContentSource> = Arc::new(tree_source);
+
+        let ctx = AnalysisContext::new(&file_set, &config, Some(temp_dir.path()))
+            .with_content_source(content_source);
+
+        let analyzer = Analyzer::new();
+        let result = analyzer.analyze(&ctx).unwrap();
+
+        // The analysis should find NO cycles because we're analyzing the first commit
+        // which had no cyclic imports. If the analyzer reads from filesystem instead
+        // of content_source, it will incorrectly find the cycle from the second commit.
+        assert_eq!(
+            result.summary.cyclic_count, 0,
+            "Historical commit analysis should find no cycles, but found {}. \
+             This indicates the analyzer is reading from filesystem instead of content_source.",
+            result.summary.cyclic_count
+        );
     }
 }

@@ -599,7 +599,7 @@ impl AnalyzerTrait for Analyzer {
         let mut files_scanned = 0usize;
 
         for path in ctx.files.iter() {
-            let content = match std::fs::read(path) {
+            let content = match ctx.read_file(path) {
                 Ok(c) => c,
                 Err(_) => continue,
             };
