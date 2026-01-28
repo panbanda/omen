@@ -221,16 +221,8 @@ impl BorrowOperator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Parser;
-    use std::path::Path;
 
-    fn parse_rust(code: &[u8]) -> ParseResult {
-        let parser = Parser::new();
-        parser
-            .parse(code, Language::Rust, Path::new("test.rs"))
-            .unwrap()
-    }
-
+    use super::super::super::test_utils::parse_rust;
     #[test]
     fn test_borrow_operator_name() {
         let op = BorrowOperator;

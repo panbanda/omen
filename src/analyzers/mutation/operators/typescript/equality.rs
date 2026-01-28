@@ -107,23 +107,8 @@ fn get_equality_replacements(op: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Parser;
-    use std::path::Path;
 
-    fn parse_ts(code: &[u8]) -> ParseResult {
-        let parser = Parser::new();
-        parser
-            .parse(code, Language::TypeScript, Path::new("test.ts"))
-            .unwrap()
-    }
-
-    fn parse_js(code: &[u8]) -> ParseResult {
-        let parser = Parser::new();
-        parser
-            .parse(code, Language::JavaScript, Path::new("test.js"))
-            .unwrap()
-    }
-
+    use super::super::super::test_utils::{parse_js, parse_ts};
     #[test]
     fn test_ts_equality_operator_name() {
         let op = TypeScriptEqualityOperator;

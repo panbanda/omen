@@ -173,16 +173,8 @@ impl TypeScriptOptionalOperator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Parser;
-    use std::path::Path;
 
-    fn parse_ts(code: &[u8]) -> ParseResult {
-        let parser = Parser::new();
-        parser
-            .parse(code, Language::TypeScript, Path::new("test.ts"))
-            .unwrap()
-    }
-
+    use super::super::super::test_utils::parse_ts;
     #[test]
     fn test_ts_optional_operator_name() {
         let op = TypeScriptOptionalOperator;

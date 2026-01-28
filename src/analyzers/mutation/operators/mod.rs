@@ -226,16 +226,48 @@ pub fn fast_registry() -> OperatorRegistry {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) mod test_utils {
     use crate::core::Language;
-    use crate::parser::Parser;
+    use crate::parser::{ParseResult, Parser};
     use std::path::Path;
 
-    fn parse_code(code: &[u8], lang: Language) -> ParseResult {
+    /// Parse source code for testing. Accepts any language.
+    pub fn parse_code(code: &[u8], lang: Language) -> ParseResult {
         let parser = Parser::new();
         parser.parse(code, lang, Path::new("test.rs")).unwrap()
     }
+
+    pub fn parse_rust(code: &[u8]) -> ParseResult {
+        parse_code(code, Language::Rust)
+    }
+
+    pub fn parse_go(code: &[u8]) -> ParseResult {
+        parse_code(code, Language::Go)
+    }
+
+    pub fn parse_py(code: &[u8]) -> ParseResult {
+        parse_code(code, Language::Python)
+    }
+
+    pub fn parse_ts(code: &[u8]) -> ParseResult {
+        parse_code(code, Language::TypeScript)
+    }
+
+    pub fn parse_js(code: &[u8]) -> ParseResult {
+        parse_code(code, Language::JavaScript)
+    }
+
+    pub fn parse_rb(code: &[u8]) -> ParseResult {
+        parse_code(code, Language::Ruby)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::Language;
+
+    use super::test_utils::parse_code;
 
     #[test]
     fn test_generate_binary_operator_mutants_basic() {

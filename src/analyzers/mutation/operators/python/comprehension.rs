@@ -246,16 +246,8 @@ impl PythonComprehensionOperator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Parser;
-    use std::path::Path;
 
-    fn parse_py(code: &[u8]) -> ParseResult {
-        let parser = Parser::new();
-        parser
-            .parse(code, Language::Python, Path::new("test.py"))
-            .unwrap()
-    }
-
+    use super::super::super::test_utils::parse_py;
     #[test]
     fn test_python_comprehension_operator_name() {
         let op = PythonComprehensionOperator;

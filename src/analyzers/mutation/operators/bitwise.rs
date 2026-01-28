@@ -85,14 +85,8 @@ fn get_bitwise_replacements(op: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Parser;
-    use std::path::Path;
 
-    fn parse_code(code: &[u8], lang: Language) -> ParseResult {
-        let parser = Parser::new();
-        parser.parse(code, lang, Path::new("test.rs")).unwrap()
-    }
-
+    use super::super::test_utils::parse_code;
     #[test]
     fn test_bitwise_operator_name() {
         let op = BitwiseOperator;
