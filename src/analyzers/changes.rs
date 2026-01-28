@@ -11,7 +11,7 @@
 //!
 //! # Implemented Features (8/14 from Kamei)
 //!
-//! - FIX: Bug fix commit flag
+//! - FIX: Bug fix commit flag omen:ignore
 //! - LA/LD: Lines added/deleted
 //! - NF: Number of files modified
 //! - ENTROPY: Change distribution entropy
@@ -42,7 +42,7 @@ use crate::git::GitRepo;
 /// Based on Kamei et al. (2013) and Zeng et al. (2021).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Weights {
-    /// Is bug fix commit?
+    /// Is bug fix commit? omen:ignore
     pub fix: f64,
     /// Change entropy across files
     pub entropy: f64,
@@ -350,7 +350,7 @@ impl Default for RiskThresholds {
     }
 }
 
-// Bug fix patterns (Mockus & Votta 2000)
+// Bug fix patterns (Mockus & Votta 2000) omen:ignore
 fn is_bug_fix_commit(message: &str) -> bool {
     static PATTERNS: std::sync::OnceLock<Vec<Regex>> = std::sync::OnceLock::new();
     let patterns = PATTERNS.get_or_init(|| {

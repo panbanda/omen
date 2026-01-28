@@ -426,7 +426,7 @@ fn calculate_summary(smells: &[Smell], components: &[ComponentMetrics]) -> Summa
             SmellType::HubLikeDependency | SmellType::Hub => summary.hub_count += 1,
             SmellType::UnstableDependency => summary.unstable_count += 1,
             SmellType::CentralConnector => summary.central_connector_count += 1,
-            // Backward compatibility with old smell types
+            // Backward compatibility with old smell types omen:ignore
             SmellType::GodComponent | SmellType::GodClass => summary.central_connector_count += 1,
             SmellType::FeatureEnvy => {}
         }
@@ -447,7 +447,7 @@ fn calculate_summary(smells: &[Smell], components: &[ComponentMetrics]) -> Summa
     summary
 }
 
-/// Architectural smell analysis result.
+/// Architectural smell analysis result. omen:ignore
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Analysis {
     pub generated_at: String,
@@ -457,7 +457,7 @@ pub struct Analysis {
     pub thresholds: Thresholds,
 }
 
-/// A detected architectural smell.
+/// A detected architectural smell. omen:ignore
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Smell {
     pub smell_type: SmellType,
@@ -468,7 +468,7 @@ pub struct Smell {
     pub metrics: SmellMetrics,
 }
 
-/// Quantitative metrics about a smell.
+/// Quantitative metrics about a smell. omen:ignore
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SmellMetrics {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -481,7 +481,7 @@ pub struct SmellMetrics {
     pub cycle_length: Option<usize>,
 }
 
-/// Type of architectural smell.
+/// Type of architectural smell. omen:ignore
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SmellType {
     CyclicDependency,

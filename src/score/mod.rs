@@ -492,7 +492,7 @@ fn calculate_coupling_score(result: &crate::analyzers::graph::Analysis) -> f64 {
 }
 
 fn calculate_smells_score(result: &crate::analyzers::smells::Analysis) -> f64 {
-    // Score based on smell count and severity
+    // Score based on smell count and severity omen:ignore
     // Fewer smells and lower severity = higher score
     let total = result.summary.total_smells;
     let critical = result.summary.critical_count;
@@ -663,7 +663,7 @@ mod tests {
         assert_eq!(weights.satd, 0.4);
         assert_eq!(weights.coupling, 0.4);
         assert_eq!(weights.smells, 0.2);
-        // Disabled by default (not shown in 3.x report)
+        // Disabled by default (not shown in 3.x report) omen:ignore
         assert_eq!(weights.deadcode, 0.0);
         assert_eq!(weights.churn, 0.0);
         assert_eq!(weights.defect, 0.0);
