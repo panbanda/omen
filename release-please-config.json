@@ -15,6 +15,17 @@
         }
       ]
     },
+    "plugins/reporting": {
+      "release-type": "simple",
+      "component": "omen-reporting",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
     ".claude-plugin": {
       "release-type": "simple",
       "component": "omen-marketplace",
