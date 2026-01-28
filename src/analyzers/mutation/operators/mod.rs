@@ -122,6 +122,38 @@ where
     }
 }
 
+/// Walk the AST and collect mutants by calling a visitor on each node.
+///
+/// This is the general-purpose tree traversal used by language-specific operators
+/// (Go error/nil, Rust Option/Result, Python identity, etc.) that match on
+/// specific node kinds and delegate to handler methods.
+pub fn walk_and_collect_mutants<F>(result: &ParseResult, mut visitor: F) -> Vec<Mutant>
+where
+    F: FnMut(tree_sitter::Node<'_>) -> Vec<Mutant>,
+{
+    let mut mutants = Vec::new();
+    let root = result.root_node();
+    let mut cursor = root.walk();
+
+    loop {
+        let node = cursor.node();
+        mutants.extend(visitor(node));
+
+        if cursor.goto_first_child() {
+            continue;
+        }
+
+        loop {
+            if cursor.goto_next_sibling() {
+                break;
+            }
+            if !cursor.goto_parent() {
+                return mutants;
+            }
+        }
+    }
+}
+
 /// Create a registry with default operators (CRR, ROR, AOR).
 ///
 /// These are the most commonly used operators that work across all languages
@@ -320,5 +352,49 @@ mod tests {
         let names: Vec<&str> = registry.operators().iter().map(|op| op.name()).collect();
         assert!(names.contains(&"ROR"));
         assert!(names.contains(&"AOR"));
+    }
+
+    #[test]
+    fn test_walk_and_collect_mutants_basic() {
+        let code = b"fn add(a: i32, b: i32) -> i32 { a + b }";
+        let result = parse_code(code, Language::Rust);
+
+        let mutants = walk_and_collect_mutants(&result, |node| {
+            let mut found = Vec::new();
+            if node.kind() == "binary_expression" {
+                for child in node.children(&mut node.walk()) {
+                    if child.kind() == "+" {
+                        if let Ok(op_text) = child.utf8_text(&result.source) {
+                            let start = child.start_position();
+                            found.push(Mutant::new(
+                                "test-1",
+                                result.path.clone(),
+                                "TEST",
+                                (start.row + 1) as u32,
+                                (start.column + 1) as u32,
+                                op_text,
+                                "-",
+                                "Replace + with -",
+                                (child.start_byte(), child.end_byte()),
+                            ));
+                        }
+                    }
+                }
+            }
+            found
+        });
+
+        assert_eq!(mutants.len(), 1);
+        assert_eq!(mutants[0].original, "+");
+        assert_eq!(mutants[0].replacement, "-");
+    }
+
+    #[test]
+    fn test_walk_and_collect_mutants_empty() {
+        let code = b"fn empty() {}";
+        let result = parse_code(code, Language::Rust);
+
+        let mutants = walk_and_collect_mutants(&result, |_node| Vec::new());
+        assert!(mutants.is_empty());
     }
 }

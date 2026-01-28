@@ -15,6 +15,7 @@ use crate::parser::ParseResult;
 
 use super::super::operator::MutationOperator;
 use super::super::Mutant;
+use super::walk_and_collect_mutants;
 
 /// UOR (Unary Operator Replacement) operator.
 ///
@@ -31,53 +32,32 @@ impl MutationOperator for UnaryOperator {
     }
 
     fn generate_mutants(&self, result: &ParseResult, mutant_id_prefix: &str) -> Vec<Mutant> {
-        let mut mutants = Vec::new();
-        let root = result.root_node();
         let unary_types = get_unary_expression_types(result.language);
-
         let mut counter = 0;
-        let mut cursor = root.walk();
-
-        loop {
-            let node = cursor.node();
-            let kind = node.kind();
-
-            if unary_types.contains(&kind) {
-                // For unary expressions, we need to find the operator and operand
-                if let Some(mutant_info) =
-                    extract_unary_mutation(node, &result.source, result.language)
-                {
-                    counter += 1;
-                    let id = format!("{}-{}", mutant_id_prefix, counter);
-                    let start = node.start_position();
-                    mutants.push(Mutant::new(
-                        id,
-                        result.path.clone(),
-                        self.name(),
-                        (start.row + 1) as u32,
-                        (start.column + 1) as u32,
-                        mutant_info.original,
-                        mutant_info.replacement,
-                        mutant_info.description,
-                        (node.start_byte(), node.end_byte()),
-                    ));
-                }
+        walk_and_collect_mutants(result, |node| {
+            if !unary_types.contains(&node.kind()) {
+                return Vec::new();
             }
-
-            // Tree traversal
-            if cursor.goto_first_child() {
-                continue;
+            if let Some(mutant_info) = extract_unary_mutation(node, &result.source, result.language)
+            {
+                counter += 1;
+                let id = format!("{}-{}", mutant_id_prefix, counter);
+                let start = node.start_position();
+                vec![Mutant::new(
+                    id,
+                    result.path.clone(),
+                    self.name(),
+                    (start.row + 1) as u32,
+                    (start.column + 1) as u32,
+                    mutant_info.original,
+                    mutant_info.replacement,
+                    mutant_info.description,
+                    (node.start_byte(), node.end_byte()),
+                )]
+            } else {
+                Vec::new()
             }
-
-            loop {
-                if cursor.goto_next_sibling() {
-                    break;
-                }
-                if !cursor.goto_parent() {
-                    return mutants;
-                }
-            }
-        }
+        })
     }
 
     fn supports_language(&self, _lang: Language) -> bool {

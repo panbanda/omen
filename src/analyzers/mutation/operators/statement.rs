@@ -15,6 +15,7 @@ use crate::parser::ParseResult;
 
 use super::super::operator::MutationOperator;
 use super::super::Mutant;
+use super::walk_and_collect_mutants;
 
 /// SDL (Statement Deletion) operator.
 ///
@@ -31,22 +32,15 @@ impl MutationOperator for StatementOperator {
     }
 
     fn generate_mutants(&self, result: &ParseResult, mutant_id_prefix: &str) -> Vec<Mutant> {
-        let mut mutants = Vec::new();
-        let root = result.root_node();
         let statement_types = get_statement_node_types(result.language);
         let control_flow_types = get_control_flow_node_types(result.language);
-
         let mut counter = 0;
-        let mut cursor = root.walk();
-
-        loop {
-            let node = cursor.node();
+        walk_and_collect_mutants(result, |node| {
             let kind = node.kind();
+            let mut mutants = Vec::new();
 
-            // Check for deletable statements
             if statement_types.contains(&kind) {
                 if let Ok(text) = node.utf8_text(&result.source) {
-                    // Skip if already empty or just whitespace
                     if !text.trim().is_empty() && is_deletable_statement(text, result.language) {
                         counter += 1;
                         let id = format!("{}-{}", mutant_id_prefix, counter);
@@ -68,7 +62,6 @@ impl MutationOperator for StatementOperator {
                 }
             }
 
-            // Check for control flow statements (skip body)
             if control_flow_types.contains(&kind) {
                 if let Some(body_node) = find_control_flow_body(&node, result.language) {
                     if let Ok(body_text) = body_node.utf8_text(&result.source) {
@@ -94,20 +87,8 @@ impl MutationOperator for StatementOperator {
                 }
             }
 
-            // Tree traversal
-            if cursor.goto_first_child() {
-                continue;
-            }
-
-            loop {
-                if cursor.goto_next_sibling() {
-                    break;
-                }
-                if !cursor.goto_parent() {
-                    return mutants;
-                }
-            }
-        }
+            mutants
+        })
     }
 
     fn supports_language(&self, _lang: Language) -> bool {

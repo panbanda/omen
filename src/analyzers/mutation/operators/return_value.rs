@@ -18,6 +18,7 @@ use crate::parser::ParseResult;
 
 use super::super::operator::MutationOperator;
 use super::super::Mutant;
+use super::walk_and_collect_mutants;
 
 /// RVR (Return Value Replacement) operator.
 ///
@@ -34,54 +35,37 @@ impl MutationOperator for ReturnValueOperator {
     }
 
     fn generate_mutants(&self, result: &ParseResult, mutant_id_prefix: &str) -> Vec<Mutant> {
-        let mut mutants = Vec::new();
-        let root = result.root_node();
         let return_types = get_return_node_types(result.language);
-
         let mut counter = 0;
-        let mut cursor = root.walk();
-
-        loop {
-            let node = cursor.node();
-            let kind = node.kind();
-
-            if return_types.contains(&kind) {
-                if let Ok(text) = node.utf8_text(&result.source) {
-                    let replacements = generate_return_replacements(text, result.language);
-                    for replacement in replacements {
-                        counter += 1;
-                        let id = format!("{}-{}", mutant_id_prefix, counter);
-                        let start = node.start_position();
-
-                        mutants.push(Mutant::new(
-                            id,
-                            result.path.clone(),
-                            self.name(),
-                            (start.row + 1) as u32,
-                            (start.column + 1) as u32,
-                            text,
-                            replacement.clone(),
-                            format!("Replace return with {}", truncate_replacement(&replacement)),
-                            (node.start_byte(), node.end_byte()),
-                        ));
-                    }
-                }
+        walk_and_collect_mutants(result, |node| {
+            if !return_types.contains(&node.kind()) {
+                return Vec::new();
             }
-
-            // Tree traversal
-            if cursor.goto_first_child() {
-                continue;
-            }
-
-            loop {
-                if cursor.goto_next_sibling() {
-                    break;
-                }
-                if !cursor.goto_parent() {
-                    return mutants;
-                }
-            }
-        }
+            let text = match node.utf8_text(&result.source) {
+                Ok(t) => t,
+                Err(_) => return Vec::new(),
+            };
+            let replacements = generate_return_replacements(text, result.language);
+            replacements
+                .into_iter()
+                .map(|replacement| {
+                    counter += 1;
+                    let id = format!("{}-{}", mutant_id_prefix, counter);
+                    let start = node.start_position();
+                    Mutant::new(
+                        id,
+                        result.path.clone(),
+                        self.name(),
+                        (start.row + 1) as u32,
+                        (start.column + 1) as u32,
+                        text,
+                        replacement.clone(),
+                        format!("Replace return with {}", truncate_replacement(&replacement)),
+                        (node.start_byte(), node.end_byte()),
+                    )
+                })
+                .collect()
+        })
     }
 
     fn supports_language(&self, _lang: Language) -> bool {

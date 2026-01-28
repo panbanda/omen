@@ -10,6 +10,7 @@ use crate::core::Language;
 use crate::parser::ParseResult;
 
 use crate::analyzers::mutation::operator::MutationOperator;
+use crate::analyzers::mutation::operators::walk_and_collect_mutants;
 use crate::analyzers::mutation::Mutant;
 
 /// TER (TypeScript Equality Replacement) operator.
@@ -27,39 +28,13 @@ impl MutationOperator for TypeScriptEqualityOperator {
     }
 
     fn generate_mutants(&self, result: &ParseResult, mutant_id_prefix: &str) -> Vec<Mutant> {
-        let mut mutants = Vec::new();
-        let root = result.root_node();
-
         let mut counter = 0;
-        let mut cursor = root.walk();
-
-        loop {
-            let node = cursor.node();
-
-            // Look for binary expressions with equality operators
-            if node.kind() == "binary_expression" {
-                mutants.extend(self.try_mutate_equality(
-                    &node,
-                    result,
-                    mutant_id_prefix,
-                    &mut counter,
-                ));
+        walk_and_collect_mutants(result, |node| match node.kind() {
+            "binary_expression" => {
+                self.try_mutate_equality(&node, result, mutant_id_prefix, &mut counter)
             }
-
-            // Tree traversal
-            if cursor.goto_first_child() {
-                continue;
-            }
-
-            loop {
-                if cursor.goto_next_sibling() {
-                    break;
-                }
-                if !cursor.goto_parent() {
-                    return mutants;
-                }
-            }
-        }
+            _ => Vec::new(),
+        })
     }
 
     fn supports_language(&self, lang: Language) -> bool {

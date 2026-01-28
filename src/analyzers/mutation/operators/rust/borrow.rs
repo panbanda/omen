@@ -11,6 +11,7 @@ use crate::parser::ParseResult;
 
 use super::super::super::operator::MutationOperator;
 use super::super::super::Mutant;
+use super::super::walk_and_collect_mutants;
 
 /// Rust borrow mutation operator.
 ///
@@ -27,53 +28,16 @@ impl MutationOperator for BorrowOperator {
     }
 
     fn generate_mutants(&self, result: &ParseResult, mutant_id_prefix: &str) -> Vec<Mutant> {
-        let mut mutants = Vec::new();
-        let root = result.root_node();
-
         let mut counter = 0;
-        let mut cursor = root.walk();
-
-        loop {
-            let node = cursor.node();
-            let kind = node.kind();
-
-            match kind {
-                // Match reference expressions: &x, &mut x
-                "reference_expression" => {
-                    if let Some(mutant_list) = self.handle_reference_expression(
-                        &node,
-                        result,
-                        mutant_id_prefix,
-                        &mut counter,
-                    ) {
-                        mutants.extend(mutant_list);
-                    }
-                }
-                // Match call expressions for .clone(), .to_owned()
-                "call_expression" => {
-                    if let Some(mutant_list) =
-                        self.handle_call_expression(&node, result, mutant_id_prefix, &mut counter)
-                    {
-                        mutants.extend(mutant_list);
-                    }
-                }
-                _ => {}
-            }
-
-            // Tree traversal
-            if cursor.goto_first_child() {
-                continue;
-            }
-
-            loop {
-                if cursor.goto_next_sibling() {
-                    break;
-                }
-                if !cursor.goto_parent() {
-                    return mutants;
-                }
-            }
-        }
+        walk_and_collect_mutants(result, |node| match node.kind() {
+            "reference_expression" => self
+                .handle_reference_expression(&node, result, mutant_id_prefix, &mut counter)
+                .unwrap_or_default(),
+            "call_expression" => self
+                .handle_call_expression(&node, result, mutant_id_prefix, &mut counter)
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        })
     }
 
     fn supports_language(&self, lang: Language) -> bool {

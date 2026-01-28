@@ -14,6 +14,7 @@ use crate::parser::ParseResult;
 
 use super::super::operator::MutationOperator;
 use super::super::Mutant;
+use super::walk_and_collect_mutants;
 
 /// BVO (Boundary Value Operator) operator.
 pub struct BoundaryOperator;
@@ -28,17 +29,10 @@ impl MutationOperator for BoundaryOperator {
     }
 
     fn generate_mutants(&self, result: &ParseResult, mutant_id_prefix: &str) -> Vec<Mutant> {
-        let mut mutants = Vec::new();
-        let root = result.root_node();
-
         let mut counter = 0;
-        let mut cursor = root.walk();
-
-        loop {
-            let node = cursor.node();
+        walk_and_collect_mutants(result, |node| {
             let kind = node.kind();
-
-            // Check for comparison expressions with numeric literals
+            let mut mutants = Vec::new();
             if is_comparison_expression(kind, result.language) {
                 mutants.extend(generate_comparison_boundary_mutants(
                     &node,
@@ -47,8 +41,6 @@ impl MutationOperator for BoundaryOperator {
                     &mut counter,
                 ));
             }
-
-            // Check for array/subscript indexing
             if is_subscript_expression(kind, result.language) {
                 mutants.extend(generate_index_boundary_mutants(
                     &node,
@@ -57,21 +49,8 @@ impl MutationOperator for BoundaryOperator {
                     &mut counter,
                 ));
             }
-
-            // Tree traversal
-            if cursor.goto_first_child() {
-                continue;
-            }
-
-            loop {
-                if cursor.goto_next_sibling() {
-                    break;
-                }
-                if !cursor.goto_parent() {
-                    return mutants;
-                }
-            }
-        }
+            mutants
+        })
     }
 
     fn supports_language(&self, _lang: Language) -> bool {
