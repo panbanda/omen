@@ -4,7 +4,7 @@
       "release-type": "rust",
       "component": "omen"
     },
-    "plugin": {
+    "plugins/development": {
       "release-type": "simple",
       "component": "omen-skills",
       "extra-files": [
