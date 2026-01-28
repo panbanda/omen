@@ -186,16 +186,8 @@ impl GoErrorOperator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Parser;
-    use std::path::Path;
 
-    fn parse_go(code: &[u8]) -> ParseResult {
-        let parser = Parser::new();
-        parser
-            .parse(code, Language::Go, Path::new("test.go"))
-            .unwrap()
-    }
-
+    use super::super::super::test_utils::parse_go;
     #[test]
     fn test_go_error_operator_name() {
         let op = GoErrorOperator;

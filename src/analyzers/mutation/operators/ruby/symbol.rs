@@ -126,16 +126,8 @@ impl RubySymbolOperator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Parser;
-    use std::path::Path;
 
-    fn parse_rb(code: &[u8]) -> ParseResult {
-        let parser = Parser::new();
-        parser
-            .parse(code, Language::Ruby, Path::new("test.rb"))
-            .unwrap()
-    }
-
+    use super::super::super::test_utils::parse_rb;
     #[test]
     fn test_operator_name() {
         let op = RubySymbolOperator;

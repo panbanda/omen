@@ -221,14 +221,8 @@ fn extract_operand(node: tree_sitter::Node, source: &[u8], lang: Language) -> Op
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Parser;
-    use std::path::Path;
 
-    fn parse_code(code: &[u8], lang: Language) -> ParseResult {
-        let parser = Parser::new();
-        parser.parse(code, lang, Path::new("test.rs")).unwrap()
-    }
-
+    use super::super::test_utils::parse_code;
     #[test]
     fn test_unary_operator_name() {
         let op = UnaryOperator;

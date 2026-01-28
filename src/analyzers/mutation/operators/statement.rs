@@ -265,14 +265,8 @@ fn truncate_description(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Parser;
-    use std::path::Path;
 
-    fn parse_code(code: &[u8], lang: Language) -> ParseResult {
-        let parser = Parser::new();
-        parser.parse(code, lang, Path::new("test.rs")).unwrap()
-    }
-
+    use super::super::test_utils::parse_code;
     #[test]
     fn test_statement_operator_name() {
         let op = StatementOperator;
