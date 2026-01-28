@@ -11,6 +11,7 @@
 //! - Temporal coupling (files that change together)
 
 use std::collections::HashMap;
+use std::ops::Range;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -385,36 +386,30 @@ impl Analyzer {
     }
 
     fn detect_critical_defects(&self, source: &str, language: Language) -> (i32, bool) {
+        let test_ranges = if language == Language::Rust {
+            cfg_test_module_ranges(source)
+        } else {
+            Vec::new()
+        };
+
         let mut count = 0;
-        let mut in_test_region = false;
-        let mut test_brace_depth: i32 = 0;
+        let mut byte_offset = 0;
 
         for line in source.lines() {
+            let line_len = line.len();
             let trimmed = line.trim();
 
-            // Track Rust #[cfg(test)] modules to skip test code
-            if language == Language::Rust {
-                if trimmed.starts_with("#[cfg(test)]") {
-                    in_test_region = true;
-                    test_brace_depth = 0;
-                    continue;
-                }
-                if in_test_region {
-                    for ch in trimmed.chars() {
-                        match ch {
-                            '{' => test_brace_depth += 1,
-                            '}' => {
-                                test_brace_depth -= 1;
-                                if test_brace_depth <= 0 {
-                                    in_test_region = false;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    continue;
-                }
+            // Skip lines inside #[cfg(test)] modules (Rust)
+            if test_ranges
+                .iter()
+                .any(|r| byte_offset >= r.start && byte_offset < r.end)
+            {
+                // +1 for the newline character
+                byte_offset += line_len + 1;
+                continue;
             }
+
+            byte_offset += line_len + 1;
 
             // Skip comments and string literals
             if trimmed.starts_with("//") || trimmed.starts_with("/*") {
@@ -565,6 +560,57 @@ impl AnalyzerTrait for Analyzer {
 
         Ok(aggregate_project_score(scores))
     }
+}
+
+/// Find byte ranges of `#[cfg(test)]` modules using tree-sitter.
+///
+/// Returns ranges covering each module's body so that line-based analysis
+/// can skip test code without fragile brace-counting heuristics.
+///
+/// Uses a thread-local parser cache to avoid allocating a new parser per file.
+fn cfg_test_module_ranges(source: &str) -> Vec<Range<usize>> {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static RUST_PARSER: RefCell<tree_sitter::Parser> = RefCell::new({
+            let ts_lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
+            let mut p = tree_sitter::Parser::new();
+            p.set_language(&ts_lang).expect("built-in Rust grammar");
+            p
+        });
+    }
+
+    let tree = RUST_PARSER.with(|parser| parser.borrow_mut().parse(source.as_bytes(), None));
+    let tree = match tree {
+        Some(t) => t,
+        None => return Vec::new(),
+    };
+
+    let mut ranges = Vec::new();
+    let mut cursor = tree.root_node().walk();
+
+    // Walk top-level children looking for mod_item nodes preceded by #[cfg(test)]
+    if cursor.goto_first_child() {
+        loop {
+            let node = cursor.node();
+            if node.kind() == "mod_item" {
+                if let Some(prev) = node.prev_sibling() {
+                    if prev.kind() == "attribute_item" {
+                        if let Ok(text) = prev.utf8_text(source.as_bytes()) {
+                            if text.contains("cfg") && text.contains("test") {
+                                ranges.push(node.start_byte()..node.end_byte());
+                            }
+                        }
+                    }
+                }
+            }
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+
+    ranges
 }
 
 // Types
@@ -1110,6 +1156,37 @@ mod tests {
         let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Rust);
         assert_eq!(count, 1, "only production unwrap() should count");
         assert!(has_critical);
+    }
+
+    #[test]
+    fn test_critical_defects_skips_test_with_unbalanced_braces_in_strings() {
+        let analyzer = Analyzer::new();
+        // Extra closing braces in string literals fool brace-counting into
+        // thinking the test module ended early, causing a false positive
+        // on the unwrap() that is still inside test code.
+        let source = r#"
+fn production() {
+    let x = safe_call();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CLOSE: &str = "}}}}";
+
+    #[test]
+    fn test_brace_edge() {
+        let result = parse("}}").unwrap();
+    }
+}
+"#;
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Rust);
+        assert_eq!(
+            count, 0,
+            "unwrap() inside #[cfg(test)] should not count even with unbalanced braces in strings"
+        );
+        assert!(!has_critical);
     }
 
     #[test]
