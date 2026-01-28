@@ -74,6 +74,7 @@ impl AnalyzerTrait for Analyzer {
 
         // For Rust projects, use cargo check for accurate dead code detection
         let cargo_items = if is_rust_project {
+            tracing::info!("Detected Cargo.toml, using cargo check for Rust dead code analysis");
             match CargoDeadCodeAnalyzer::analyze(ctx.root) {
                 Ok(analysis) => analysis.items,
                 Err(e) => {
@@ -1212,6 +1213,14 @@ impl CargoDeadCodeAnalyzer {
             .map_err(|e| crate::core::Error::Analysis {
                 message: format!("Failed to run cargo check: {}", e),
             })?;
+
+        // Log stderr if cargo check had issues (but still parse stdout for warnings)
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stderr.is_empty() {
+                tracing::debug!("cargo check stderr: {}", stderr);
+            }
+        }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let items = Self::parse_cargo_output(&stdout);
