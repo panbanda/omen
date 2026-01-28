@@ -244,9 +244,8 @@ impl Analyzer {
 
     /// Calculate PageRank for all nodes in the graph.
     ///
-    // TODO: Handle dangling nodes (no outgoing edges) in PageRank.
-    // Current implementation effectively treats sinks as having self-loops.
-    // Standard PageRank redistributes sink rank uniformly across all nodes.
+    /// Note: Dangling nodes (no outgoing edges) are effectively treated as
+    /// having self-loops rather than redistributing rank uniformly.
     fn calculate_pagerank(&self, graph: &DiGraph<usize, ()>) -> HashMap<NodeIndex, f64> {
         let n = graph.node_count();
         if n == 0 {

@@ -3,15 +3,11 @@
 //! Finds unreachable/unused functions, variables, and classes using
 //! reference graph analysis.
 //!
-//! ## Current Limitations
+//! ## Limitations
 //!
-//! TODO: Variable and class tracking is not yet implemented.
 //! Currently only function definitions and usages are tracked.
-//! Future work should include:
-//! - Variable declarations (let, const, var, etc.)
-//! - Class/struct definitions
-//! - Module-level constants
-//! - Type aliases
+//! Variable declarations, class/struct definitions, module-level
+//! constants, and type aliases are not yet analyzed.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;

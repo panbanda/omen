@@ -604,10 +604,8 @@ mod tests {
 
     #[test]
     fn test_collect_churn_data_returns_file_changes() {
-        // This test verifies that collect_churn_data properly extracts
-        // file changes from git history. The bug was that it called
-        // git_repo.log() which returns commits with empty file lists,
-        // instead of git_repo.log_with_stats() which includes file changes.
+        // Verifies that collect_churn_data uses log_with_stats() to get
+        // file-level changes, not log() which returns empty file lists.
         use std::path::PathBuf;
 
         let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
