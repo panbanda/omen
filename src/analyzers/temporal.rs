@@ -577,10 +577,8 @@ mod tests {
 
     #[test]
     fn test_analyze_with_git_collects_file_changes() {
-        // This test verifies that analyze_with_git properly extracts
-        // file changes from git history. The bug was that it called
-        // git_repo.log() which returns commits with empty file lists,
-        // instead of git_repo.log_with_stats() which includes file changes.
+        // Verifies that analyze_with_git uses log_with_stats() to get
+        // file-level changes, not log() which returns empty file lists.
         use crate::git::GitRepo;
         use std::path::PathBuf;
 
@@ -604,7 +602,7 @@ mod tests {
 
         // The key assertion: if commits have files, we can verify by checking
         // that the summary shows files were analyzed (even if no couplings found).
-        // If the bug exists (empty files), total_files_analyzed would be 0.
+        // With empty file lists, total_files_analyzed would be 0.
         assert!(
             result.summary.total_files_analyzed > 0 || !result.couplings.is_empty(),
             "temporal analysis should process file changes from git history"

@@ -9,6 +9,7 @@ use crate::core::Language;
 use crate::parser::ParseResult;
 
 use crate::analyzers::mutation::operator::MutationOperator;
+use crate::analyzers::mutation::operators::walk_and_collect_mutants;
 use crate::analyzers::mutation::Mutant;
 
 /// TOR (TypeScript Optional Replacement) operator.
@@ -26,63 +27,22 @@ impl MutationOperator for TypeScriptOptionalOperator {
     }
 
     fn generate_mutants(&self, result: &ParseResult, mutant_id_prefix: &str) -> Vec<Mutant> {
-        let mut mutants = Vec::new();
-        let root = result.root_node();
-
         let mut counter = 0;
-        let mut cursor = root.walk();
-
-        loop {
-            let node = cursor.node();
-            let kind = node.kind();
-
-            // Optional chain expression: obj?.prop
-            if kind == "optional_chain_expression" || kind == "member_expression" {
-                if let Some(mutant) =
-                    self.try_mutate_optional_chain(&node, result, mutant_id_prefix, &mut counter)
-                {
-                    mutants.push(mutant);
-                }
-            }
-
-            // Binary expression for nullish coalescing: a ?? b
-            if kind == "binary_expression" {
-                if let Some(mutant) = self.try_mutate_nullish_coalescing(
-                    &node,
-                    result,
-                    mutant_id_prefix,
-                    &mut counter,
-                ) {
-                    mutants.push(mutant);
-                }
-            }
-
-            // Non-null assertion: x!
-            if kind == "non_null_expression" {
-                if let Some(mutant) = self.try_mutate_non_null_assertion(
-                    &node,
-                    result,
-                    mutant_id_prefix,
-                    &mut counter,
-                ) {
-                    mutants.push(mutant);
-                }
-            }
-
-            // Tree traversal
-            if cursor.goto_first_child() {
-                continue;
-            }
-
-            loop {
-                if cursor.goto_next_sibling() {
-                    break;
-                }
-                if !cursor.goto_parent() {
-                    return mutants;
-                }
-            }
-        }
+        walk_and_collect_mutants(result, |node| match node.kind() {
+            "optional_chain_expression" | "member_expression" => self
+                .try_mutate_optional_chain(&node, result, mutant_id_prefix, &mut counter)
+                .map(|m| vec![m])
+                .unwrap_or_default(),
+            "binary_expression" => self
+                .try_mutate_nullish_coalescing(&node, result, mutant_id_prefix, &mut counter)
+                .map(|m| vec![m])
+                .unwrap_or_default(),
+            "non_null_expression" => self
+                .try_mutate_non_null_assertion(&node, result, mutant_id_prefix, &mut counter)
+                .map(|m| vec![m])
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        })
     }
 
     fn supports_language(&self, lang: Language) -> bool {
@@ -213,16 +173,8 @@ impl TypeScriptOptionalOperator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Parser;
-    use std::path::Path;
 
-    fn parse_ts(code: &[u8]) -> ParseResult {
-        let parser = Parser::new();
-        parser
-            .parse(code, Language::TypeScript, Path::new("test.ts"))
-            .unwrap()
-    }
-
+    use super::super::super::test_utils::parse_ts;
     #[test]
     fn test_ts_optional_operator_name() {
         let op = TypeScriptOptionalOperator;

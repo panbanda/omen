@@ -21,8 +21,8 @@
 //!
 //! # Known Limitation
 //!
-//! PageRank implementation does not redistribute dangling node mass uniformly.
-//! This is documented as a TODO and may slightly affect scores in sparse graphs.
+//! PageRank implementation does not redistribute dangling node mass uniformly,
+//! which may slightly affect scores in sparse graphs.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;

@@ -185,7 +185,7 @@ pub mod satd {
     /// Performance debt markers.
     pub const PERFORMANCE: &[&str] = &["SLOW", "OPTIMIZE", "PERF", "BOTTLENECK", "INEFFICIENT"];
 
-    /// Security debt markers.
+    /// Security debt markers. omen:ignore
     pub const SECURITY: &[&str] = &["SECURITY", "VULN", "UNSAFE", "XXX", "INSECURE"];
 
     /// Documentation debt markers.

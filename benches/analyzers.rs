@@ -99,13 +99,12 @@ fn generate_function(seed: usize, func_num: usize, complexity: usize) -> String 
     func.push_str(&"    ".repeat(complexity + 1));
     func.push_str("let result = x + y;\n");
 
-    // TODO comment for SATD detection
+    // Inject SATD markers into generated code for detection benchmarks
     if seed.is_multiple_of(3) {
         func.push_str(&"    ".repeat(complexity + 1));
         func.push_str("// TODO: Optimize this calculation\n");
     }
 
-    // FIXME comment for defect detection
     if seed.is_multiple_of(4) {
         func.push_str(&"    ".repeat(complexity + 1));
         func.push_str("// FIXME: Handle edge case\n");

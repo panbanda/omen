@@ -8,6 +8,7 @@ use crate::core::Language;
 use crate::parser::ParseResult;
 
 use crate::analyzers::mutation::operator::MutationOperator;
+use crate::analyzers::mutation::operators::walk_and_collect_mutants;
 use crate::analyzers::mutation::Mutant;
 
 /// GER (Go Error Replacement) operator.
@@ -25,47 +26,18 @@ impl MutationOperator for GoErrorOperator {
     }
 
     fn generate_mutants(&self, result: &ParseResult, mutant_id_prefix: &str) -> Vec<Mutant> {
-        let mut mutants = Vec::new();
-        let root = result.root_node();
-
         let mut counter = 0;
-        let mut cursor = root.walk();
-
-        loop {
-            let node = cursor.node();
-
-            // Look for binary expressions that might be error checks
-            if node.kind() == "binary_expression" {
-                if let Some(mutant) =
-                    self.try_mutate_error_check(&node, result, mutant_id_prefix, &mut counter)
-                {
-                    mutants.push(mutant);
-                }
-            }
-
-            // Look for if statements with error returns
-            if node.kind() == "if_statement" {
-                if let Some(mutant) =
-                    self.try_mutate_error_return(&node, result, mutant_id_prefix, &mut counter)
-                {
-                    mutants.push(mutant);
-                }
-            }
-
-            // Tree traversal
-            if cursor.goto_first_child() {
-                continue;
-            }
-
-            loop {
-                if cursor.goto_next_sibling() {
-                    break;
-                }
-                if !cursor.goto_parent() {
-                    return mutants;
-                }
-            }
-        }
+        walk_and_collect_mutants(result, |node| match node.kind() {
+            "binary_expression" => self
+                .try_mutate_error_check(&node, result, mutant_id_prefix, &mut counter)
+                .map(|m| vec![m])
+                .unwrap_or_default(),
+            "if_statement" => self
+                .try_mutate_error_return(&node, result, mutant_id_prefix, &mut counter)
+                .map(|m| vec![m])
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        })
     }
 
     fn supports_language(&self, lang: Language) -> bool {
@@ -214,16 +186,8 @@ impl GoErrorOperator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Parser;
-    use std::path::Path;
 
-    fn parse_go(code: &[u8]) -> ParseResult {
-        let parser = Parser::new();
-        parser
-            .parse(code, Language::Go, Path::new("test.go"))
-            .unwrap()
-    }
-
+    use super::super::super::test_utils::parse_go;
     #[test]
     fn test_go_error_operator_name() {
         let op = GoErrorOperator;

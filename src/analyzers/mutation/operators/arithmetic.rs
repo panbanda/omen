@@ -12,6 +12,7 @@ use crate::parser::ParseResult;
 
 use super::super::operator::MutationOperator;
 use super::super::Mutant;
+use super::generate_binary_operator_mutants;
 
 /// AOR (Arithmetic Operator Replacement) operator.
 pub struct ArithmeticOperator;
@@ -26,58 +27,15 @@ impl MutationOperator for ArithmeticOperator {
     }
 
     fn generate_mutants(&self, result: &ParseResult, mutant_id_prefix: &str) -> Vec<Mutant> {
-        let mut mutants = Vec::new();
-        let root = result.root_node();
-        let binary_types = get_binary_expression_types(result.language);
-
-        let mut counter = 0;
-        let mut cursor = root.walk();
-
-        loop {
-            let node = cursor.node();
-            let kind = node.kind();
-
-            if binary_types.contains(&kind) {
-                // Find the operator child
-                for child in node.children(&mut node.walk()) {
-                    if is_arithmetic_operator(child.kind()) {
-                        if let Ok(op_text) = child.utf8_text(&result.source) {
-                            let replacements = get_arithmetic_replacements(op_text);
-                            for replacement in replacements {
-                                counter += 1;
-                                let id = format!("{}-{}", mutant_id_prefix, counter);
-                                let start = child.start_position();
-                                mutants.push(Mutant::new(
-                                    id,
-                                    result.path.clone(),
-                                    self.name(),
-                                    (start.row + 1) as u32,
-                                    (start.column + 1) as u32,
-                                    op_text,
-                                    replacement.clone(),
-                                    format!("Replace {} with {}", op_text, replacement),
-                                    (child.start_byte(), child.end_byte()),
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Tree traversal
-            if cursor.goto_first_child() {
-                continue;
-            }
-
-            loop {
-                if cursor.goto_next_sibling() {
-                    break;
-                }
-                if !cursor.goto_parent() {
-                    return mutants;
-                }
-            }
-        }
+        let node_types = get_binary_expression_types(result.language);
+        generate_binary_operator_mutants(
+            result,
+            mutant_id_prefix,
+            self.name(),
+            node_types,
+            is_arithmetic_operator,
+            get_arithmetic_replacements,
+        )
     }
 
     fn supports_language(&self, _lang: Language) -> bool {
@@ -121,14 +79,8 @@ fn get_arithmetic_replacements(op: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Parser;
-    use std::path::Path;
 
-    fn parse_code(code: &[u8], lang: Language) -> ParseResult {
-        let parser = Parser::new();
-        parser.parse(code, lang, Path::new("test.rs")).unwrap()
-    }
-
+    use super::super::test_utils::parse_code;
     #[test]
     fn test_arithmetic_operator_name() {
         let op = ArithmeticOperator;

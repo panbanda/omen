@@ -13,6 +13,7 @@ use crate::parser::ParseResult;
 
 use super::super::operator::MutationOperator;
 use super::super::Mutant;
+use super::walk_and_collect_mutants;
 
 /// CRR (Constant Replacement) operator.
 ///
@@ -29,19 +30,13 @@ impl MutationOperator for LiteralOperator {
     }
 
     fn generate_mutants(&self, result: &ParseResult, mutant_id_prefix: &str) -> Vec<Mutant> {
-        let mut mutants = Vec::new();
-        let root = result.root_node();
         let literal_types = get_literal_node_types(result.language);
         let boolean_types = get_boolean_node_types(result.language);
-
         let mut counter = 0;
-        let mut cursor = root.walk();
-
-        loop {
-            let node = cursor.node();
+        walk_and_collect_mutants(result, |node| {
             let kind = node.kind();
+            let mut mutants = Vec::new();
 
-            // Check if it's a literal node
             if literal_types.contains(&kind) {
                 if let Ok(text) = node.utf8_text(&result.source) {
                     if let Some(replacements) = generate_literal_replacements(text, result.language)
@@ -66,7 +61,6 @@ impl MutationOperator for LiteralOperator {
                 }
             }
 
-            // Check for boolean literals
             if boolean_types.contains(&kind) {
                 if let Ok(text) = node.utf8_text(&result.source) {
                     if let Some(replacement) = generate_boolean_replacement(text, result.language) {
@@ -88,20 +82,8 @@ impl MutationOperator for LiteralOperator {
                 }
             }
 
-            // Tree traversal
-            if cursor.goto_first_child() {
-                continue;
-            }
-
-            loop {
-                if cursor.goto_next_sibling() {
-                    break;
-                }
-                if !cursor.goto_parent() {
-                    return mutants;
-                }
-            }
-        }
+            mutants
+        })
     }
 
     fn supports_language(&self, _lang: Language) -> bool {
@@ -223,14 +205,8 @@ fn generate_boolean_replacement(text: &str, lang: Language) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Parser;
-    use std::path::Path;
 
-    fn parse_code(code: &[u8], lang: Language) -> ParseResult {
-        let parser = Parser::new();
-        parser.parse(code, lang, Path::new("test.rs")).unwrap()
-    }
-
+    use super::super::test_utils::parse_code;
     #[test]
     fn test_literal_operator_name() {
         let op = LiteralOperator;

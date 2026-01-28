@@ -11,6 +11,7 @@ use crate::parser::ParseResult;
 
 use super::super::super::operator::MutationOperator;
 use super::super::super::Mutant;
+use super::super::walk_and_collect_mutants;
 
 /// Rust Result mutation operator.
 ///
@@ -27,50 +28,16 @@ impl MutationOperator for ResultOperator {
     }
 
     fn generate_mutants(&self, result: &ParseResult, mutant_id_prefix: &str) -> Vec<Mutant> {
-        let mut mutants = Vec::new();
-        let root = result.root_node();
-
         let mut counter = 0;
-        let mut cursor = root.walk();
-
-        loop {
-            let node = cursor.node();
-            let kind = node.kind();
-
-            match kind {
-                // Match call expressions like Ok(x), Err(e), Result::Ok(x), .unwrap(), etc.
-                "call_expression" => {
-                    if let Some(mutant_list) =
-                        self.handle_call_expression(&node, result, mutant_id_prefix, &mut counter)
-                    {
-                        mutants.extend(mutant_list);
-                    }
-                }
-                // Match macro invocations
-                "macro_invocation" => {
-                    if let Some(mutant_list) =
-                        self.handle_macro_invocation(&node, result, mutant_id_prefix, &mut counter)
-                    {
-                        mutants.extend(mutant_list);
-                    }
-                }
-                _ => {}
-            }
-
-            // Tree traversal
-            if cursor.goto_first_child() {
-                continue;
-            }
-
-            loop {
-                if cursor.goto_next_sibling() {
-                    break;
-                }
-                if !cursor.goto_parent() {
-                    return mutants;
-                }
-            }
-        }
+        walk_and_collect_mutants(result, |node| match node.kind() {
+            "call_expression" => self
+                .handle_call_expression(&node, result, mutant_id_prefix, &mut counter)
+                .unwrap_or_default(),
+            "macro_invocation" => self
+                .handle_macro_invocation(&node, result, mutant_id_prefix, &mut counter)
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        })
     }
 
     fn supports_language(&self, lang: Language) -> bool {
@@ -321,16 +288,8 @@ impl ResultOperator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Parser;
-    use std::path::Path;
 
-    fn parse_rust(code: &[u8]) -> ParseResult {
-        let parser = Parser::new();
-        parser
-            .parse(code, Language::Rust, Path::new("test.rs"))
-            .unwrap()
-    }
-
+    use super::super::super::test_utils::parse_rust;
     #[test]
     fn test_result_operator_name() {
         let op = ResultOperator;

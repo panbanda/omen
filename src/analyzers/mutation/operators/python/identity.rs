@@ -10,6 +10,7 @@ use crate::core::Language;
 use crate::parser::ParseResult;
 
 use crate::analyzers::mutation::operator::MutationOperator;
+use crate::analyzers::mutation::operators::walk_and_collect_mutants;
 use crate::analyzers::mutation::Mutant;
 
 /// PIR (Python Identity Replacement) operator.
@@ -27,48 +28,17 @@ impl MutationOperator for PythonIdentityOperator {
     }
 
     fn generate_mutants(&self, result: &ParseResult, mutant_id_prefix: &str) -> Vec<Mutant> {
-        let mut mutants = Vec::new();
-        let root = result.root_node();
-
         let mut counter = 0;
-        let mut cursor = root.walk();
-
-        loop {
-            let node = cursor.node();
-
-            // Look for comparison operators in Python
-            if node.kind() == "comparison_operator" {
-                mutants.extend(self.try_mutate_comparison(
-                    &node,
-                    result,
-                    mutant_id_prefix,
-                    &mut counter,
-                ));
+        walk_and_collect_mutants(result, |node| match node.kind() {
+            "comparison_operator" => {
+                self.try_mutate_comparison(&node, result, mutant_id_prefix, &mut counter)
             }
-
-            // Also check for not_operator which may contain "not in"
-            if node.kind() == "not_operator" {
-                if let Some(mutant) =
-                    self.try_mutate_not_in(&node, result, mutant_id_prefix, &mut counter)
-                {
-                    mutants.push(mutant);
-                }
-            }
-
-            // Tree traversal
-            if cursor.goto_first_child() {
-                continue;
-            }
-
-            loop {
-                if cursor.goto_next_sibling() {
-                    break;
-                }
-                if !cursor.goto_parent() {
-                    return mutants;
-                }
-            }
-        }
+            "not_operator" => self
+                .try_mutate_not_in(&node, result, mutant_id_prefix, &mut counter)
+                .map(|m| vec![m])
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        })
     }
 
     fn supports_language(&self, lang: Language) -> bool {
@@ -236,16 +206,8 @@ impl PythonIdentityOperator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Parser;
-    use std::path::Path;
 
-    fn parse_py(code: &[u8]) -> ParseResult {
-        let parser = Parser::new();
-        parser
-            .parse(code, Language::Python, Path::new("test.py"))
-            .unwrap()
-    }
-
+    use super::super::super::test_utils::parse_py;
     #[test]
     fn test_python_identity_operator_name() {
         let op = PythonIdentityOperator;

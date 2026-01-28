@@ -12,6 +12,7 @@ use crate::core::Language;
 use crate::parser::ParseResult;
 
 use crate::analyzers::mutation::operator::MutationOperator;
+use crate::analyzers::mutation::operators::walk_and_collect_mutants;
 use crate::analyzers::mutation::Mutant;
 
 /// RSM (Ruby Symbol Mutation) operator.
@@ -29,47 +30,18 @@ impl MutationOperator for RubySymbolOperator {
     }
 
     fn generate_mutants(&self, result: &ParseResult, mutant_id_prefix: &str) -> Vec<Mutant> {
-        let mut mutants = Vec::new();
-        let root = result.root_node();
-
         let mut counter = 0;
-        let mut cursor = root.walk();
-
-        loop {
-            let node = cursor.node();
-
-            // Look for symbol literals
-            if node.kind() == "symbol" || node.kind() == "simple_symbol" {
-                if let Some(mutant) =
-                    self.mutate_symbol(&node, result, mutant_id_prefix, &mut counter)
-                {
-                    mutants.push(mutant);
-                }
-            }
-
-            // Look for blocks
-            if node.kind() == "block" || node.kind() == "do_block" {
-                if let Some(mutant) =
-                    self.mutate_block(&node, result, mutant_id_prefix, &mut counter)
-                {
-                    mutants.push(mutant);
-                }
-            }
-
-            // Tree traversal
-            if cursor.goto_first_child() {
-                continue;
-            }
-
-            loop {
-                if cursor.goto_next_sibling() {
-                    break;
-                }
-                if !cursor.goto_parent() {
-                    return mutants;
-                }
-            }
-        }
+        walk_and_collect_mutants(result, |node| match node.kind() {
+            "symbol" | "simple_symbol" => self
+                .mutate_symbol(&node, result, mutant_id_prefix, &mut counter)
+                .map(|m| vec![m])
+                .unwrap_or_default(),
+            "block" | "do_block" => self
+                .mutate_block(&node, result, mutant_id_prefix, &mut counter)
+                .map(|m| vec![m])
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        })
     }
 
     fn supports_language(&self, lang: Language) -> bool {
@@ -154,16 +126,8 @@ impl RubySymbolOperator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Parser;
-    use std::path::Path;
 
-    fn parse_rb(code: &[u8]) -> ParseResult {
-        let parser = Parser::new();
-        parser
-            .parse(code, Language::Ruby, Path::new("test.rb"))
-            .unwrap()
-    }
-
+    use super::super::super::test_utils::parse_rb;
     #[test]
     fn test_operator_name() {
         let op = RubySymbolOperator;
