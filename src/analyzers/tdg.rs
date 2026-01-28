@@ -386,9 +386,35 @@ impl Analyzer {
 
     fn detect_critical_defects(&self, source: &str, language: Language) -> (i32, bool) {
         let mut count = 0;
+        let mut in_test_region = false;
+        let mut test_brace_depth: i32 = 0;
 
         for line in source.lines() {
             let trimmed = line.trim();
+
+            // Track Rust #[cfg(test)] modules to skip test code
+            if language == Language::Rust {
+                if trimmed.starts_with("#[cfg(test)]") {
+                    in_test_region = true;
+                    test_brace_depth = 0;
+                    continue;
+                }
+                if in_test_region {
+                    for ch in trimmed.chars() {
+                        match ch {
+                            '{' => test_brace_depth += 1,
+                            '}' => {
+                                test_brace_depth -= 1;
+                                if test_brace_depth <= 0 {
+                                    in_test_region = false;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    continue;
+                }
+            }
 
             // Skip comments and string literals
             if trimmed.starts_with("//") || trimmed.starts_with("/*") {
@@ -419,7 +445,6 @@ impl Analyzer {
             }
         }
 
-        // Return count and whether any critical defects were found
         (count, count > 0)
     }
 
@@ -1038,6 +1063,53 @@ import React from 'react';
             !has_critical,
             "has_critical should be false when no defects"
         );
+    }
+
+    #[test]
+    fn test_critical_defects_skips_test_modules() {
+        let analyzer = Analyzer::new();
+        let source = r#"
+fn production() {
+    let x = safe_call();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_something() {
+        let x = some_option.unwrap();
+        assert!(x > 0);
+    }
+}
+"#;
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Rust);
+        assert_eq!(count, 0, "unwrap() in #[cfg(test)] should not count");
+        assert!(!has_critical);
+    }
+
+    #[test]
+    fn test_critical_defects_counts_production_unwrap_with_test_module() {
+        let analyzer = Analyzer::new();
+        let source = r#"
+fn production() {
+    let x = some_option.unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_something() {
+        let x = other.unwrap();
+    }
+}
+"#;
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Rust);
+        assert_eq!(count, 1, "only production unwrap() should count");
+        assert!(has_critical);
     }
 
     #[test]

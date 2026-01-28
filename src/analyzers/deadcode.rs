@@ -591,7 +591,7 @@ fn extract_callee(node: &tree_sitter::Node<'_>, source: &[u8], _lang: Language) 
 fn get_visibility(name: &str, lang: Language) -> String {
     match lang {
         Language::Go => {
-            if !name.is_empty() && name.chars().next().unwrap().is_uppercase() {
+            if !name.is_empty() && name.starts_with(char::is_uppercase) {
                 "public".to_string()
             } else {
                 "private".to_string()
@@ -619,7 +619,7 @@ fn get_visibility(name: &str, lang: Language) -> String {
 
 fn is_exported(name: &str, lang: Language) -> bool {
     match lang {
-        Language::Go => !name.is_empty() && name.chars().next().unwrap().is_uppercase(),
+        Language::Go => !name.is_empty() && name.starts_with(char::is_uppercase),
         Language::Python => !name.starts_with('_'),
         Language::Rust => false, // Would need AST context for `pub`
         _ => false,

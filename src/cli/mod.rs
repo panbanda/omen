@@ -360,6 +360,14 @@ pub struct ScoreArgs {
     /// Number of days for history
     #[arg(long, default_value = "30")]
     pub days: u32,
+
+    /// Check mode: fail if score is below threshold
+    #[arg(long)]
+    pub check: bool,
+
+    /// Minimum score to pass (default: from config)
+    #[arg(long)]
+    pub fail_under: Option<f64>,
 }
 
 #[derive(Args)]
@@ -1418,6 +1426,43 @@ mod tests {
             if let Some(ScoreSubcommand::Trend(args)) = cmd.subcommand {
                 assert!(args.snap);
             }
+        }
+    }
+
+    #[test]
+    fn test_score_check_flag() {
+        let cli = Cli::try_parse_from(["omen", "score", "--check"]).unwrap();
+        if let Command::Score(cmd) = cli.command {
+            assert!(cmd.args.check);
+        } else {
+            panic!("expected Score command");
+        }
+    }
+
+    #[test]
+    fn test_score_check_default_false() {
+        let cli = Cli::try_parse_from(["omen", "score"]).unwrap();
+        if let Command::Score(cmd) = cli.command {
+            assert!(!cmd.args.check);
+        }
+    }
+
+    #[test]
+    fn test_score_fail_under() {
+        let cli = Cli::try_parse_from(["omen", "score", "--check", "--fail-under", "80"]).unwrap();
+        if let Command::Score(cmd) = cli.command {
+            assert!(cmd.args.check);
+            assert_eq!(cmd.args.fail_under, Some(80.0));
+        } else {
+            panic!("expected Score command");
+        }
+    }
+
+    #[test]
+    fn test_score_fail_under_default_none() {
+        let cli = Cli::try_parse_from(["omen", "score", "--check"]).unwrap();
+        if let Command::Score(cmd) = cli.command {
+            assert!(cmd.args.fail_under.is_none());
         }
     }
 
