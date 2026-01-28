@@ -1,6 +1,6 @@
 //! SATD (Self-Admitted Technical Debt) analyzer.
 //!
-//! Finds TODO, FIXME, HACK, and other debt markers in comments.
+//! Finds TODO, FIXME, HACK, and other debt markers in comments. omen:ignore
 
 use std::time::Instant;
 
@@ -49,6 +49,11 @@ impl Analyzer {
                 continue;
             }
 
+            // Skip lines with omen:ignore directive
+            if has_ignore_directive(line) {
+                continue;
+            }
+
             for (category, regex, weight) in &self.patterns {
                 if let Some(mat) = regex.find(line) {
                     let marker = mat.as_str().to_uppercase();
@@ -91,21 +96,30 @@ const AMBIGUOUS_MARKERS: &[&str] = &[
     "DOCUMENT",
 ];
 
+/// Check if a line contains an omen:ignore directive.
+///
+/// Supports: `omen:ignore`, `omen:ignore-line`, `omen:ignore-satd`.
+/// Case-insensitive matching, matching the Go v3 behavior.
+fn has_ignore_directive(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.contains("omen:ignore")
+}
+
 /// Check if a SATD marker is valid (not a false positive).
 ///
 /// For ambiguous markers like ERROR, NEED, SKIP, we require them to be
-/// followed by a colon (e.g., "ERROR:", "SKIP:") to distinguish SATD from
+/// followed by a colon (e.g., "ERROR:", "SKIP:") to distinguish SATD from omen:ignore
 /// normal explanatory comments like "// Skip this step if authenticated".
 ///
-/// Clear markers like TODO, FIXME, HACK, BUG are accepted anywhere.
+/// Clear markers like TODO, FIXME, HACK, BUG are accepted anywhere. omen:ignore
 fn is_valid_satd_marker(line: &str, match_start: usize, marker: &str) -> bool {
-    // Clear markers (TODO, FIXME, HACK, BUG, etc.) are always valid
+    // Clear markers (TODO, FIXME, HACK, BUG, etc.) are always valid omen:ignore
     if !AMBIGUOUS_MARKERS.contains(&marker) {
         return true;
     }
 
     // For ambiguous markers, require a colon or similar punctuation after the marker
-    // This distinguishes "// SKIP: test disabled" from "// Skip this step"
+    // This distinguishes "// SKIP: test disabled" from "// Skip this step" omen:ignore
     let match_end = match_start + marker.len();
     if match_end < line.len() {
         let next_char = line[match_end..].chars().next();
@@ -214,7 +228,7 @@ pub struct SatdItem {
     pub category: String,
     /// Severity level.
     pub severity: Severity,
-    /// Matched marker (TODO, FIXME, etc.).
+    /// Matched marker (TODO, FIXME, etc.). omen:ignore
     pub marker: String,
     /// Comment text (truncated).
     pub text: String,
@@ -338,15 +352,15 @@ fn main() {}\n\
         let analyzer = Analyzer::new();
 
         // These SHOULD trigger SATD detection - markers at start of comment
-        let true_positive_content = b"\
-// TODO: implement this feature\n\
-// FIXME: broken authentication\n\
-// ERROR: this needs fixing\n\
-// NEED: add validation\n\
-// SKIP: until API is ready\n\
-fn main() {}\n\
-"
-        .to_vec();
+        let true_positive_content = [
+            b"// TODO: implement this feature\n" as &[u8],
+            b"// FIXME: broken authentication\n",
+            b"// ERROR: this needs fixing\n",
+            b"// NEED: add validation\n",
+            b"// SKIP: until API is ready\n",
+            b"fn main() {}\n",
+        ]
+        .concat();
         let file = SourceFile::from_content("test.rs", Language::Rust, true_positive_content);
 
         let items = analyzer.analyze_file(&file);
@@ -409,20 +423,20 @@ fn main() {}\n\
     #[test]
     fn test_all_documentation_markers() {
         let analyzer = Analyzer::new();
-        let content = b"\
-// DOC: add API docs\n\
-// UNDOCUMENTED public function\n\
-// DOCUMENT: this module\n\
-// NODOC for internal use\n\
-// UNDOC: missing docs\n\
-fn main() {}\n\
-"
-        .to_vec();
+        let content = [
+            b"// DOC: add API docs\n" as &[u8],
+            b"// UNDOCUMENTED public function\n",
+            b"// DOCUMENT: this module\n",
+            b"// NODOC for internal use\n",
+            b"// UNDOC: missing docs\n",
+            b"fn main() {}\n",
+        ]
+        .concat();
         let file = SourceFile::from_content("test.rs", Language::Rust, content);
 
         let items = analyzer.analyze_file(&file);
         // DOC and DOCUMENT require colon (ambiguous markers)
-        // UNDOCUMENTED, NODOC, UNDOC are unambiguous
+        // UNDOCUMENTED, NODOC, UNDOC are unambiguous omen:ignore
         assert_eq!(
             items.len(),
             5,
@@ -435,5 +449,38 @@ fn main() {}\n\
         for item in &items {
             assert_eq!(item.category, "documentation");
         }
+    }
+
+    #[test]
+    fn test_ignore_directive_suppresses_detection() {
+        let analyzer = Analyzer::new();
+        let content = [
+            b"// TODO: real debt\n" as &[u8],
+            b"// TODO: false positive omen:ignore\n",
+            b"// FIXME: also ignored omen:ignore-satd\n",
+            b"// HACK: case insensitive OMEN:IGNORE\n",
+            b"fn main() {}\n",
+        ]
+        .concat();
+        let file = SourceFile::from_content("test.rs", Language::Rust, content);
+
+        let items = analyzer.analyze_file(&file);
+        assert_eq!(
+            items.len(),
+            1,
+            "Only the line without omen:ignore should be detected"
+        );
+        assert_eq!(items[0].marker, "TODO");
+        assert!(items[0].text.contains("real debt"));
+    }
+
+    #[test]
+    fn test_has_ignore_directive() {
+        assert!(has_ignore_directive("// TODO: false positive omen:ignore"));
+        assert!(has_ignore_directive("// FIXME: not debt omen:ignore-satd"));
+        assert!(has_ignore_directive("// BUG fix detection OMEN:IGNORE"));
+        assert!(has_ignore_directive("// omen:ignore-line"));
+        assert!(!has_ignore_directive("// TODO: real debt"));
+        assert!(!has_ignore_directive("// normal comment"));
     }
 }

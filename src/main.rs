@@ -116,7 +116,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         Command::Mcp(cmd) => {
             match cmd.subcommand {
                 Some(McpSubcommand::Manifest) => {
-                    // Output MCP server manifest (standalone use only, registry publishing disabled)
+                    // Output MCP server manifest (standalone use only, registry publishing disabled) omen:ignore
                     let manifest = serde_json::json!({
                         "$schema": "https://registry.modelcontextprotocol.io/schemas/server.json",
                         "name": "panbanda/omen",
@@ -1013,7 +1013,7 @@ fn run_mutation(
 
     let mut file_set = FileSet::from_path(path, config)?;
 
-    // Load predictor model if --skip-predicted is specified
+    // Load predictor model if --skip-predicted is specified omen:ignore
     let predictor = if args.skip_predicted.is_some() {
         let model_path = args
             .model
@@ -1077,7 +1077,7 @@ fn run_mutation(
         analyzer = analyzer.min_score(Some(args.min_score));
     }
 
-    // Configure ML-based filtering if --skip-predicted is set
+    // Configure ML-based filtering if --skip-predicted is set omen:ignore
     if let Some(threshold) = args.skip_predicted {
         if let Some(p) = predictor {
             analyzer = analyzer.skip_predicted(Some(threshold)).predictor(p);

@@ -1,7 +1,7 @@
 //! Git churn analyzer - file change frequency and hotspot detection.
 //!
 //! Analyzes git history to identify files with high change frequency (churn),
-//! which often correlates with bug-prone or complex code.
+//! which often correlates with bug-prone or complex code. omen:ignore
 //!
 //! # References
 //!
