@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.13.0](https://github.com/panbanda/omen/compare/omen-v4.12.0...omen-v4.13.0) (2026-01-28)
+
+
+### Features
+
+* **score:** add CI quality gate with clippy::unwrap_used enforcement ([#316](https://github.com/panbanda/omen/issues/316)) ([dfb635f](https://github.com/panbanda/omen/commit/dfb635f7efd650e72395bf4cd9deffd95e586f17))
+
+
+### Bug Fixes
+
+* **release:** update release-please config for plugins directory ([#314](https://github.com/panbanda/omen/issues/314)) ([274e793](https://github.com/panbanda/omen/commit/274e793fba606a95ad4360ef5539da5b5c3dc5bc))
+
 ## [4.12.0](https://github.com/panbanda/omen/compare/omen-v4.11.0...omen-v4.12.0) (2026-01-28)
 
 

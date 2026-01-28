@@ -1,7 +1,7 @@
 {
   "name": "omen-reporting",
   "description": "Generate comprehensive HTML health reports with research-backed insights from specialized domain analysts",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "author": {
     "name": "Jonathan Reyes",
     "email": "me@jonathanreyes.com"
