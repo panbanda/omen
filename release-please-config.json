@@ -4,9 +4,20 @@
       "release-type": "rust",
       "component": "omen"
     },
-    "plugin": {
+    "plugins/development": {
       "release-type": "simple",
       "component": "omen-skills",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "plugins/reporting": {
+      "release-type": "simple",
+      "component": "omen-reporting",
       "extra-files": [
         {
           "type": "json",
