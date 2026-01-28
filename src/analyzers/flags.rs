@@ -569,10 +569,10 @@ impl Analyzer {
                     let mut first: Option<i64> = None;
                     let mut last: Option<i64> = None;
                     for commit in commits {
-                        if first.is_none() || commit.timestamp < first.unwrap() {
+                        if first.is_none_or(|f| commit.timestamp < f) {
                             first = Some(commit.timestamp);
                         }
-                        if last.is_none() || commit.timestamp > last.unwrap() {
+                        if last.is_none_or(|l| commit.timestamp > l) {
                             last = Some(commit.timestamp);
                         }
                     }
@@ -649,7 +649,7 @@ fn calculate_staleness_from_cache(
                 let commit_time = chrono::TimeZone::timestamp_opt(&Utc, *ts, 0)
                     .single()
                     .unwrap_or_else(Utc::now);
-                if first_seen.is_none() || commit_time < first_seen.unwrap() {
+                if first_seen.is_none_or(|f| commit_time < f) {
                     first_seen = Some(commit_time);
                 }
             }
@@ -657,7 +657,7 @@ fn calculate_staleness_from_cache(
                 let commit_time = chrono::TimeZone::timestamp_opt(&Utc, *ts, 0)
                     .single()
                     .unwrap_or_else(Utc::now);
-                if last_seen.is_none() || commit_time > last_seen.unwrap() {
+                if last_seen.is_none_or(|l| commit_time > l) {
                     last_seen = Some(commit_time);
                 }
             }

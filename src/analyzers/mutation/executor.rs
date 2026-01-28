@@ -320,7 +320,9 @@ impl AsyncMutantExecutor {
             let _ = handle.await;
         }
 
-        Ok(Arc::try_unwrap(results).unwrap().into_inner())
+        Ok(Arc::try_unwrap(results)
+            .expect("all worker handles joined")
+            .into_inner())
     }
 
     /// Execute a single mutant asynchronously.

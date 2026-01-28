@@ -143,7 +143,10 @@ impl CandleProvider {
 impl EmbeddingProvider for CandleProvider {
     fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let embeddings = self.embed_batch(&[text.to_string()])?;
-        Ok(embeddings.into_iter().next().unwrap())
+        Ok(embeddings
+            .into_iter()
+            .next()
+            .expect("batch returned empty for single input"))
     }
 
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {

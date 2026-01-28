@@ -207,7 +207,7 @@ impl MultiPhaseProgress {
             .build();
         let bar = self.multi.add(bar);
         self.bars.push(bar);
-        self.bars.last().unwrap()
+        self.bars.last().expect("just pushed")
     }
 
     /// Get a phase by index.

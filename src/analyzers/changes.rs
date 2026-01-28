@@ -355,17 +355,17 @@ fn is_bug_fix_commit(message: &str) -> bool {
     static PATTERNS: std::sync::OnceLock<Vec<Regex>> = std::sync::OnceLock::new();
     let patterns = PATTERNS.get_or_init(|| {
         vec![
-            Regex::new(r"(?i)\bfix(es|ed|ing)?\b").unwrap(),
-            Regex::new(r"(?i)\bbug\b").unwrap(),
-            Regex::new(r"(?i)\bbugfix\b").unwrap(),
-            Regex::new(r"(?i)\bpatch(es|ed|ing)?\b").unwrap(),
-            Regex::new(r"(?i)\bresolve[sd]?\b").unwrap(),
-            Regex::new(r"(?i)\bclose[sd]?\s+#\d+").unwrap(),
-            Regex::new(r"(?i)\bfixes?\s+#\d+").unwrap(),
-            Regex::new(r"(?i)\bdefect\b").unwrap(),
-            Regex::new(r"(?i)\bissue\b").unwrap(),
-            Regex::new(r"(?i)\berror\b").unwrap(),
-            Regex::new(r"(?i)\bcrash(es|ed|ing)?\b").unwrap(),
+            Regex::new(r"(?i)\bfix(es|ed|ing)?\b").expect("valid regex"),
+            Regex::new(r"(?i)\bbug\b").expect("valid regex"),
+            Regex::new(r"(?i)\bbugfix\b").expect("valid regex"),
+            Regex::new(r"(?i)\bpatch(es|ed|ing)?\b").expect("valid regex"),
+            Regex::new(r"(?i)\bresolve[sd]?\b").expect("valid regex"),
+            Regex::new(r"(?i)\bclose[sd]?\s+#\d+").expect("valid regex"),
+            Regex::new(r"(?i)\bfixes?\s+#\d+").expect("valid regex"),
+            Regex::new(r"(?i)\bdefect\b").expect("valid regex"),
+            Regex::new(r"(?i)\bissue\b").expect("valid regex"),
+            Regex::new(r"(?i)\berror\b").expect("valid regex"),
+            Regex::new(r"(?i)\bcrash(es|ed|ing)?\b").expect("valid regex"),
         ]
     });
 
@@ -377,14 +377,14 @@ fn is_automated_commit(message: &str) -> bool {
     static PATTERNS: std::sync::OnceLock<Vec<Regex>> = std::sync::OnceLock::new();
     let patterns = PATTERNS.get_or_init(|| {
         vec![
-            Regex::new(r"(?i)^\s*chore:\s*updated?\s+(image\s+)?tag").unwrap(),
-            Regex::new(r"(?i)\[skip ci\]").unwrap(),
-            Regex::new(r"(?i)^\s*Merge\s+(pull\s+request|branch)").unwrap(),
-            Regex::new(r"(?i)^\s*chore\(deps\):").unwrap(),
-            Regex::new(r"(?i)^\s*chore:\s*bump\s+version").unwrap(),
-            Regex::new(r"(?i)^\s*ci:").unwrap(),
-            Regex::new(r"(?i)^\s*docs?:").unwrap(),
-            Regex::new(r"(?i)^\s*style:").unwrap(),
+            Regex::new(r"(?i)^\s*chore:\s*updated?\s+(image\s+)?tag").expect("valid regex"),
+            Regex::new(r"(?i)\[skip ci\]").expect("valid regex"),
+            Regex::new(r"(?i)^\s*Merge\s+(pull\s+request|branch)").expect("valid regex"),
+            Regex::new(r"(?i)^\s*chore\(deps\):").expect("valid regex"),
+            Regex::new(r"(?i)^\s*chore:\s*bump\s+version").expect("valid regex"),
+            Regex::new(r"(?i)^\s*ci:").expect("valid regex"),
+            Regex::new(r"(?i)^\s*docs?:").expect("valid regex"),
+            Regex::new(r"(?i)^\s*style:").expect("valid regex"),
         ]
     });
 
@@ -611,13 +611,13 @@ fn calculate_normalization_stats(commits: &[CommitFeatures]) -> NormalizationSta
         commits.iter().map(|c| c.author_experience as f64).collect();
     let mut entropy: Vec<f64> = commits.iter().map(|c| c.entropy).collect();
 
-    lines_added.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    lines_deleted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    num_files.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    unique_changes.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    num_developers.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    author_experience.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    entropy.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    lines_added.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    lines_deleted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    num_files.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    unique_changes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    num_developers.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    author_experience.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    entropy.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
     NormalizationStats {
         max_lines_added: percentile(&lines_added, 95).max(1.0) as i32,

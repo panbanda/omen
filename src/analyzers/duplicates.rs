@@ -957,7 +957,7 @@ fn is_literal(token: &str) -> bool {
         return false;
     }
 
-    let first = token.chars().next().unwrap();
+    let first = token.chars().next().expect("non-empty token checked above");
 
     // String literal
     if first == '"' || first == '\'' || first == '`' {
@@ -1264,7 +1264,11 @@ fn generate_k_shingles(tokens: &[String], k: usize) -> Vec<u64> {
                 hasher.update(t.as_bytes());
             }
             let hash = hasher.finalize();
-            return vec![u64::from_le_bytes(hash.as_bytes()[..8].try_into().unwrap())];
+            return vec![u64::from_le_bytes(
+                hash.as_bytes()[..8]
+                    .try_into()
+                    .expect("blake3 hash is always 32 bytes"),
+            )];
         }
         return Vec::new();
     }
@@ -1277,7 +1281,11 @@ fn generate_k_shingles(tokens: &[String], k: usize) -> Vec<u64> {
             hasher.update(token.as_bytes());
         }
         let hash = hasher.finalize();
-        let h = u64::from_le_bytes(hash.as_bytes()[..8].try_into().unwrap());
+        let h = u64::from_le_bytes(
+            hash.as_bytes()[..8]
+                .try_into()
+                .expect("blake3 hash is always 32 bytes"),
+        );
         shingle_set.insert(h);
     }
 
