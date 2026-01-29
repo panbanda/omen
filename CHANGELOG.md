@@ -1,5 +1,21 @@
 # Changelog
 
+## [4.14.0](https://github.com/panbanda/omen/compare/omen-v4.13.1...omen-v4.14.0) (2026-01-29)
+
+
+### Features
+
+* multi-language critical defect detection via AST ([db735ad](https://github.com/panbanda/omen/commit/db735adbf7d7ebdadc5060eee2880a55b1057b27))
+* **trend:** include notable commit messages in trend data points ([0b425ef](https://github.com/panbanda/omen/commit/0b425ef71aa349cfc99b663fc5b9d97e45ee5f75))
+
+
+### Bug Fixes
+
+* AST-based TDG defect detection, fix glob exclude matching ([74077a9](https://github.com/panbanda/omen/commit/74077a93546ffe1fc664ee6f67a1ff945c2c50c3))
+* relative paths in FileSet and add trend commit context ([11d234a](https://github.com/panbanda/omen/commit/11d234a2838753fdb4e91ed67b17e0c3b63b585f))
+* store relative paths in FileSet for consistent path handling ([926f103](https://github.com/panbanda/omen/commit/926f103c5160f5d6a356e4080379f7d28f410984))
+* use AST for TDG critical defect detection, fix glob exclude matching ([feb1190](https://github.com/panbanda/omen/commit/feb1190923b274fad778e3625a034550fbff5b49))
+
 ## [4.13.1](https://github.com/panbanda/omen/compare/omen-v4.13.0...omen-v4.13.1) (2026-01-29)
 
 
