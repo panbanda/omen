@@ -783,4 +783,40 @@ mod tests {
         assert_eq!(flags.flags[0].file_spread, Some(3));
         assert_eq!(flags.flags[0].stale, Some(true));
     }
+
+    #[test]
+    fn test_flags_deserialize_with_priority() {
+        let json = r#"{
+            "flags": [
+                {
+                    "key": "test_flag",
+                    "provider": "feature",
+                    "file_spread": 3,
+                    "first_seen": "2020-01-01T00:00:00Z",
+                    "stale": true,
+                    "references": [{"file": "test.rb", "line": 10}],
+                    "priority": {"level": "High", "score": 35.0}
+                }
+            ]
+        }"#;
+        let flags: FlagsData = serde_json::from_str(json).unwrap();
+        assert_eq!(flags.flags[0].priority.level, "High");
+        assert_eq!(flags.flags[0].priority.score, 35.0);
+    }
+
+    #[test]
+    fn test_flags_deserialize_priority_defaults_when_missing() {
+        let json = r#"{
+            "flags": [
+                {
+                    "key": "test_flag",
+                    "provider": "feature",
+                    "references": []
+                }
+            ]
+        }"#;
+        let flags: FlagsData = serde_json::from_str(json).unwrap();
+        assert_eq!(flags.flags[0].priority.level, "");
+        assert_eq!(flags.flags[0].priority.score, 0.0);
+    }
 }

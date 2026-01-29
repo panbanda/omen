@@ -261,7 +261,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 }
             }
         }
-        Command::All(_args) => {
+        Command::All(_) => {
             use serde_json::{json, Value};
             let file_set = FileSet::from_path(path, &config)?;
             let git_root = omen::git::GitRepo::open(path)

@@ -210,7 +210,7 @@ impl Renderer {
             data.cohesion = Some(cohesion);
         }
 
-        // Load flags
+        // Load flags (priorities computed by the flags analyzer)
         if let Ok(flags) = load_json::<FlagsData>(&data_dir.join("flags.json")) {
             data.flags = Some(flags);
         }

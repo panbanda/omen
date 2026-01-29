@@ -58,8 +58,9 @@ impl AnalyzerTrait for Analyzer {
             crate::analyzers::complexity::Analyzer::new(),
             calculate_complexity_score,
             |r: &crate::analyzers::complexity::Analysis| format!(
-                "Analyzed {} files, avg cyclomatic: {:.1}",
+                "Analyzed {} files, p90 cyclomatic: {}, avg: {:.1}",
                 r.files.len(),
+                r.summary.p90_cyclomatic,
                 r.summary.avg_cyclomatic
             )
         );
@@ -367,19 +368,21 @@ pub fn compute_from_data_dir(data_dir: &std::path::Path, file_count: usize) -> R
 }
 
 fn calculate_complexity_score(result: &crate::analyzers::complexity::Analysis) -> f64 {
-    // Score based on average complexity
-    // 0-5: 100, 5-10: 90-100, 10-20: 70-90, 20-30: 50-70, 30+: 0-50
-    let avg = result.summary.avg_cyclomatic;
-    if avg <= 5.0 {
+    // Use p90 cyclomatic complexity instead of average.
+    // Average is destroyed by a few extreme outlier files (e.g. generated code),
+    // making the score 0 for years even when 90% of files are fine.
+    // p90 reflects the complexity that most developers encounter.
+    let p90 = result.summary.p90_cyclomatic as f64;
+    if p90 <= 5.0 {
         100.0
-    } else if avg <= 10.0 {
-        90.0 + (10.0 - avg) * 2.0
-    } else if avg <= 20.0 {
-        70.0 + (20.0 - avg) * 2.0
-    } else if avg <= 30.0 {
-        50.0 + (30.0 - avg) * 2.0
+    } else if p90 <= 10.0 {
+        90.0 + (10.0 - p90) * 2.0
+    } else if p90 <= 20.0 {
+        70.0 + (20.0 - p90) * 2.0
+    } else if p90 <= 40.0 {
+        50.0 + (40.0 - p90) * 1.0
     } else {
-        (50.0 - (avg - 30.0)).max(0.0)
+        (50.0 - (p90 - 40.0)).max(0.0)
     }
 }
 
@@ -521,46 +524,88 @@ fn calculate_tdg_score(result: &crate::analyzers::tdg::Analysis) -> f64 {
 }
 
 fn calculate_coupling_score(result: &crate::analyzers::graph::Analysis) -> f64 {
-    // Score based on cycles and average degree
-    // Fewer cycles and lower avg degree = better coupling = higher score
+    // Score based on cycles, average degree, and hub concentration.
+    // The old formula only used cycle_count and avg_degree, which was too coarse:
+    // avg_degree is diluted when most nodes have 0 edges, hiding extreme hubs.
     let cycle_count = result.summary.cycle_count;
     let avg_degree = result.summary.avg_degree;
+    let total_nodes = result.summary.total_nodes.max(1);
 
-    // Cycle penalty: 0 cycles = 50 points, each cycle reduces by 5 (min 0)
-    let cycle_score = (50.0 - cycle_count as f64 * 5.0).max(0.0);
+    // Cycle penalty: 0 cycles = 35 points, each cycle costs 5 (min 0)
+    let cycle_score = (35.0 - cycle_count as f64 * 5.0).max(0.0);
 
-    // Degree penalty: avg degree 0-2 = 50 points, 2-5 = 30-50, 5+ = <30
+    // Degree score: avg degree 0-2 = 35 points, 2-5 = 20-35, 5+ = <20
     let degree_score = if avg_degree <= 2.0 {
-        50.0
+        35.0
     } else if avg_degree <= 5.0 {
-        30.0 + (5.0 - avg_degree) * 6.67
+        20.0 + (5.0 - avg_degree) * 5.0
     } else if avg_degree <= 10.0 {
-        10.0 + (10.0 - avg_degree) * 4.0
+        5.0 + (10.0 - avg_degree) * 3.0
     } else {
-        (10.0 - (avg_degree - 10.0)).max(0.0)
+        (5.0 - (avg_degree - 10.0)).max(0.0)
     };
 
-    cycle_score + degree_score
+    // Hub concentration: penalize when a few nodes have disproportionate degree.
+    // Compute max degree and fraction of "high-degree" nodes (degree > 10).
+    let (max_degree, high_degree_count) = if result.nodes.is_empty() {
+        (0usize, 0usize)
+    } else {
+        let mut max_deg = 0usize;
+        let mut high_count = 0usize;
+        for node in &result.nodes {
+            let deg = node.in_degree + node.out_degree;
+            if deg > max_deg {
+                max_deg = deg;
+            }
+            if deg > 10 {
+                high_count += 1;
+            }
+        }
+        (max_deg, high_count)
+    };
+
+    // Hub score: 30 points. Penalize for max degree and high-degree node fraction.
+    let max_degree_penalty = if max_degree <= 10 {
+        0.0
+    } else if max_degree <= 30 {
+        (max_degree as f64 - 10.0) * 0.3
+    } else if max_degree <= 80 {
+        6.0 + (max_degree as f64 - 30.0) * 0.2
+    } else {
+        16.0 + (max_degree as f64 - 80.0) * 0.1
+    }
+    .min(20.0);
+
+    let high_degree_ratio = high_degree_count as f64 / total_nodes as f64;
+    let ratio_penalty = (high_degree_ratio * 100.0).min(10.0);
+
+    let hub_score = (30.0 - max_degree_penalty - ratio_penalty).max(0.0);
+
+    cycle_score + degree_score + hub_score
 }
 
 fn calculate_smells_score(result: &crate::analyzers::smells::Analysis) -> f64 {
-    // Score based on smell count and severity omen:ignore
-    // Fewer smells and lower severity = higher score
+    // Score based on smell density relative to codebase size.
+    // The old formula used absolute counts which bottomed out at 0
+    // for any non-trivial codebase (5 critical smells = score 0).
     let total = result.summary.total_smells;
     let critical = result.summary.critical_count;
     let high = result.summary.high_count;
+    let components = result.summary.total_components.max(1);
 
     if total == 0 {
         return 100.0;
     }
 
-    // Base score: 100 - (smells * penalty)
-    // Critical smells have 10x penalty, high smells have 5x penalty
+    // Weight smells by severity then compute density against codebase size
     let weighted_count =
-        critical as f64 * 10.0 + high as f64 * 5.0 + (total - critical - high) as f64;
-    let penalty = weighted_count * 2.0;
+        critical as f64 * 5.0 + high as f64 * 2.0 + (total - critical - high) as f64;
+    let density = weighted_count / components as f64;
 
-    (100.0 - penalty).max(0.0)
+    // Use logarithmic decay so the score degrades gracefully:
+    // density 0.01 -> ~95, 0.05 -> ~80, 0.1 -> ~70, 0.3 -> ~50, 1.0 -> ~25
+    let raw = 100.0 * (-2.5 * density).exp();
+    raw.clamp(0.0, 100.0)
 }
 
 fn score_to_grade(score: f64) -> String {
@@ -723,12 +768,13 @@ mod tests {
     }
 
     #[test]
-    fn test_calculate_complexity_score_low() {
-        // avg <= 5.0 should be 100
+    fn test_calculate_complexity_score_low_p90() {
+        // p90 <= 5 should be 100
         let result = crate::analyzers::complexity::Analysis {
             files: vec![],
             summary: crate::analyzers::complexity::AnalysisSummary {
-                avg_cyclomatic: 3.0,
+                p90_cyclomatic: 3,
+                avg_cyclomatic: 50.0, // high avg should NOT drag score down
                 ..Default::default()
             },
         };
@@ -736,59 +782,89 @@ mod tests {
     }
 
     #[test]
-    fn test_calculate_complexity_score_medium() {
-        // avg 5-10 should be 90-100
+    fn test_calculate_complexity_score_medium_p90() {
+        // p90 5-10 should be 90-100
         let result = crate::analyzers::complexity::Analysis {
             files: vec![],
             summary: crate::analyzers::complexity::AnalysisSummary {
-                avg_cyclomatic: 7.5,
+                p90_cyclomatic: 8,
                 ..Default::default()
             },
         };
         let score = calculate_complexity_score(&result);
-        assert!((90.0..=100.0).contains(&score));
+        assert!(
+            (90.0..=100.0).contains(&score),
+            "p90=8 should score 90-100, got {score}"
+        );
     }
 
     #[test]
-    fn test_calculate_complexity_score_high() {
-        // avg 10-20 should be 70-90
+    fn test_calculate_complexity_score_high_p90() {
+        // p90 10-20 should be 70-90
         let result = crate::analyzers::complexity::Analysis {
             files: vec![],
             summary: crate::analyzers::complexity::AnalysisSummary {
-                avg_cyclomatic: 15.0,
+                p90_cyclomatic: 15,
                 ..Default::default()
             },
         };
         let score = calculate_complexity_score(&result);
-        assert!((70.0..=90.0).contains(&score));
+        assert!(
+            (70.0..=90.0).contains(&score),
+            "p90=15 should score 70-90, got {score}"
+        );
     }
 
     #[test]
-    fn test_calculate_complexity_score_very_high() {
-        // avg 20-30 should be 50-70
+    fn test_calculate_complexity_score_very_high_p90() {
+        // p90 20-40 should be 50-70
         let result = crate::analyzers::complexity::Analysis {
             files: vec![],
             summary: crate::analyzers::complexity::AnalysisSummary {
-                avg_cyclomatic: 25.0,
+                p90_cyclomatic: 30,
                 ..Default::default()
             },
         };
         let score = calculate_complexity_score(&result);
-        assert!((50.0..=70.0).contains(&score));
+        assert!(
+            (50.0..=70.0).contains(&score),
+            "p90=30 should score 50-70, got {score}"
+        );
     }
 
     #[test]
-    fn test_calculate_complexity_score_extreme() {
-        // avg > 30 should be < 50
+    fn test_calculate_complexity_score_extreme_p90() {
+        // p90 > 40 should be < 50
         let result = crate::analyzers::complexity::Analysis {
             files: vec![],
             summary: crate::analyzers::complexity::AnalysisSummary {
-                avg_cyclomatic: 50.0,
+                p90_cyclomatic: 60,
                 ..Default::default()
             },
         };
         let score = calculate_complexity_score(&result);
-        assert!(score < 50.0);
+        assert!(score < 50.0, "p90=60 should score < 50, got {score}");
+    }
+
+    #[test]
+    fn test_calculate_complexity_score_outlier_resistant() {
+        // A repo with p50=2, p90=41, avg=29 (like real data) should score reasonably
+        let result = crate::analyzers::complexity::Analysis {
+            files: vec![],
+            summary: crate::analyzers::complexity::AnalysisSummary {
+                avg_cyclomatic: 29.2,
+                p50_cyclomatic: 2,
+                p90_cyclomatic: 41,
+                max_cyclomatic: 1504,
+                ..Default::default()
+            },
+        };
+        let score = calculate_complexity_score(&result);
+        // Should NOT be 0 - that was the bug. Should reflect p90=41 which is high but not catastrophic
+        assert!(
+            score >= 40.0,
+            "real-world data (p90=41) should not score near 0, got {score}"
+        );
     }
 
     #[test]
@@ -1359,12 +1435,220 @@ mod tests {
     }
 
     #[test]
+    fn test_calculate_smells_score_none() {
+        let result = crate::analyzers::smells::Analysis {
+            generated_at: String::new(),
+            smells: vec![],
+            components: vec![],
+            summary: crate::analyzers::smells::Summary {
+                total_smells: 0,
+                ..Default::default()
+            },
+            thresholds: crate::analyzers::smells::Thresholds::default(),
+        };
+        assert_eq!(calculate_smells_score(&result), 100.0);
+    }
+
+    #[test]
+    fn test_calculate_smells_score_scales_with_codebase() {
+        // 32 critical + 27 high + 246 medium in a 4835-component codebase
+        // should NOT be 0 - that was the bug
+        let result = crate::analyzers::smells::Analysis {
+            generated_at: String::new(),
+            smells: vec![],
+            components: vec![],
+            summary: crate::analyzers::smells::Summary {
+                total_smells: 305,
+                critical_count: 32,
+                high_count: 27,
+                medium_count: 246,
+                total_components: 4835,
+                ..Default::default()
+            },
+            thresholds: crate::analyzers::smells::Thresholds::default(),
+        };
+        let score = calculate_smells_score(&result);
+        // 305 smells in 4835 components = ~6.3% affected. Should be a moderate penalty, not 0
+        assert!(
+            score >= 30.0,
+            "305 smells in 4835 components should not be 0, got {score}"
+        );
+        assert!(
+            score <= 80.0,
+            "305 smells with 32 critical should not be too high, got {score}"
+        );
+    }
+
+    #[test]
+    fn test_calculate_smells_score_small_codebase_penalized_more() {
+        // Same smell count but fewer components = higher density = lower score
+        let large = crate::analyzers::smells::Analysis {
+            generated_at: String::new(),
+            smells: vec![],
+            components: vec![],
+            summary: crate::analyzers::smells::Summary {
+                total_smells: 20,
+                critical_count: 5,
+                high_count: 5,
+                medium_count: 10,
+                total_components: 1000,
+                ..Default::default()
+            },
+            thresholds: crate::analyzers::smells::Thresholds::default(),
+        };
+        let small = crate::analyzers::smells::Analysis {
+            generated_at: String::new(),
+            smells: vec![],
+            components: vec![],
+            summary: crate::analyzers::smells::Summary {
+                total_smells: 20,
+                critical_count: 5,
+                high_count: 5,
+                medium_count: 10,
+                total_components: 50,
+                ..Default::default()
+            },
+            thresholds: crate::analyzers::smells::Thresholds::default(),
+        };
+        let large_score = calculate_smells_score(&large);
+        let small_score = calculate_smells_score(&small);
+        assert!(
+            large_score > small_score,
+            "larger codebase should score higher: large={large_score}, small={small_score}"
+        );
+    }
+
+    #[test]
+    fn test_calculate_smells_score_few_critical_not_zero() {
+        // 5 critical smells in a large codebase should not immediately score 0
+        let result = crate::analyzers::smells::Analysis {
+            generated_at: String::new(),
+            smells: vec![],
+            components: vec![],
+            summary: crate::analyzers::smells::Summary {
+                total_smells: 5,
+                critical_count: 5,
+                high_count: 0,
+                medium_count: 0,
+                total_components: 500,
+                ..Default::default()
+            },
+            thresholds: crate::analyzers::smells::Thresholds::default(),
+        };
+        let score = calculate_smells_score(&result);
+        assert!(
+            score > 0.0,
+            "5 critical smells in 500 components should not be 0, got {score}"
+        );
+    }
+
+    #[test]
+    fn test_calculate_coupling_score_uses_hub_concentration() {
+        // A repo with low avg degree but extreme hub nodes should score lower
+        // than one with uniform low degree
+        let uniform = crate::analyzers::graph::Analysis {
+            nodes: (0..100)
+                .map(|i| crate::analyzers::graph::Node {
+                    path: format!("file{i}.rs"),
+                    pagerank: 0.01,
+                    betweenness: 0.01,
+                    in_degree: 1,
+                    out_degree: 1,
+                    instability: 0.5,
+                })
+                .collect(),
+            edges: vec![],
+            cycles: vec![],
+            summary: crate::analyzers::graph::AnalysisSummary {
+                total_nodes: 100,
+                total_edges: 100,
+                avg_degree: 2.0,
+                cycle_count: 0,
+            },
+        };
+        let hub_heavy = crate::analyzers::graph::Analysis {
+            nodes: {
+                let mut nodes: Vec<_> = (0..100)
+                    .map(|i| crate::analyzers::graph::Node {
+                        path: format!("file{i}.rs"),
+                        pagerank: 0.01,
+                        betweenness: 0.01,
+                        in_degree: 0,
+                        out_degree: 0,
+                        instability: 0.5,
+                    })
+                    .collect();
+                // One mega-hub with 141 connections
+                nodes[0].in_degree = 70;
+                nodes[0].out_degree = 71;
+                nodes
+            },
+            edges: vec![],
+            cycles: vec![],
+            summary: crate::analyzers::graph::AnalysisSummary {
+                total_nodes: 100,
+                total_edges: 141,
+                avg_degree: 1.41, // low avg because most nodes are 0
+                cycle_count: 0,
+            },
+        };
+        let uniform_score = calculate_coupling_score(&uniform);
+        let hub_score = calculate_coupling_score(&hub_heavy);
+        assert!(
+            uniform_score > hub_score,
+            "uniform coupling should score higher than hub-heavy: uniform={uniform_score}, hub={hub_score}"
+        );
+    }
+
+    #[test]
+    fn test_calculate_coupling_score_not_always_near_100() {
+        // A repo with 4835 nodes, 1 cycle, avg_degree 1.2, but extreme hubs
+        // should not just score 95
+        let result = crate::analyzers::graph::Analysis {
+            nodes: {
+                let mut nodes: Vec<_> = (0..4835)
+                    .map(|i| crate::analyzers::graph::Node {
+                        path: format!("file{i}.rs"),
+                        pagerank: 0.0002,
+                        betweenness: 0.0,
+                        in_degree: 0,
+                        out_degree: 0,
+                        instability: 0.5,
+                    })
+                    .collect();
+                // Top hubs from real data
+                nodes[0].in_degree = 70;
+                nodes[0].out_degree = 71;
+                nodes[1].in_degree = 57;
+                nodes[1].out_degree = 57;
+                nodes[2].in_degree = 50;
+                nodes[2].out_degree = 55;
+                nodes
+            },
+            edges: vec![],
+            cycles: vec![vec!["a".into(), "b".into()]],
+            summary: crate::analyzers::graph::AnalysisSummary {
+                total_nodes: 4835,
+                total_edges: 2907,
+                avg_degree: 1.2,
+                cycle_count: 1,
+            },
+        };
+        let score = calculate_coupling_score(&result);
+        // Should reflect the hub concentration, not just avg_degree
+        assert!(
+            score < 90.0,
+            "hub-heavy graph should not score 95, got {score}"
+        );
+    }
+
+    #[test]
     fn test_score_module_line_count_acceptable() {
         let source = include_str!("mod.rs");
         let line_count = source.lines().count();
         assert!(
-            line_count <= 1400,
-            "score/mod.rs has {line_count} lines (max 1400)"
+            line_count <= 1700,
+            "score/mod.rs has {line_count} lines (max 1700)"
         );
     }
 

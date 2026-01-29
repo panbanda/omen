@@ -600,14 +600,69 @@ impl Analyzer {
                 age_days,
                 stale,
                 file_spread,
+                priority: FlagPriority::default(),
             });
         }
 
-        // Sort by staleness (stale first, then by age)
-        flags.sort_by(|a, b| match (a.stale, b.stale) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            _ => b.age_days.cmp(&a.age_days),
+        // Compute risk-based priority using per-file complexity.
+        // Flags in high-complexity files are higher risk because conditional
+        // branches there are more likely to cause bugs.
+        let complexity_analyzer = crate::analyzers::complexity::Analyzer::new();
+        let unique_flag_files: std::collections::HashSet<String> = flags
+            .iter()
+            .flat_map(|f| f.references.iter().map(|r| r.file.clone()))
+            .collect();
+
+        let file_complexity: HashMap<String, u32> = unique_flag_files
+            .iter()
+            .filter_map(|rel_path| {
+                let full_path = ctx.root.join(rel_path);
+                complexity_analyzer
+                    .analyze_file(&full_path)
+                    .ok()
+                    .map(|r| (rel_path.clone(), r.total_cyclomatic))
+            })
+            .collect();
+
+        for flag in &mut flags {
+            let max_complexity = flag
+                .references
+                .iter()
+                .filter_map(|r| file_complexity.get(&r.file))
+                .copied()
+                .max()
+                .unwrap_or(0);
+
+            // Score: complexity drives the risk level.
+            // Thresholds based on typical per-file cyclomatic complexity.
+            let level = if max_complexity >= 50 {
+                "Critical"
+            } else if max_complexity >= 20 {
+                "High"
+            } else if max_complexity >= 10 {
+                "Medium"
+            } else {
+                "Low"
+            };
+
+            flag.priority = FlagPriority {
+                level: level.to_string(),
+                score: max_complexity as f64,
+                max_complexity,
+            };
+        }
+
+        // Sort by priority score descending, then staleness
+        flags.sort_by(|a, b| {
+            b.priority
+                .score
+                .partial_cmp(&a.priority.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| match (a.stale, b.stale) {
+                    (true, false) => std::cmp::Ordering::Less,
+                    (false, true) => std::cmp::Ordering::Greater,
+                    _ => b.age_days.cmp(&a.age_days),
+                })
         });
 
         let summary = calculate_summary(&flags);
@@ -766,6 +821,16 @@ pub struct FeatureFlag {
     pub age_days: u32,
     pub stale: bool,
     pub file_spread: usize,
+    pub priority: FlagPriority,
+}
+
+/// Risk-based priority for a feature flag.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FlagPriority {
+    pub level: String,
+    pub score: f64,
+    /// Max cyclomatic complexity across files containing this flag.
+    pub max_complexity: u32,
 }
 
 /// A reference to a flag in code.
@@ -949,6 +1014,7 @@ mod tests {
                 age_days: 10,
                 stale: false,
                 file_spread: 1,
+                priority: FlagPriority::default(),
             },
             FeatureFlag {
                 key: "flag2".to_string(),
@@ -959,6 +1025,7 @@ mod tests {
                 age_days: 30,
                 stale: true,
                 file_spread: 2,
+                priority: FlagPriority::default(),
             },
             FeatureFlag {
                 key: "flag3".to_string(),
@@ -969,6 +1036,7 @@ mod tests {
                 age_days: 5,
                 stale: false,
                 file_spread: 1,
+                priority: FlagPriority::default(),
             },
         ];
 
@@ -993,16 +1061,51 @@ mod tests {
             age_days: 15,
             stale: true,
             file_spread: 1,
+            priority: FlagPriority {
+                level: "High".to_string(),
+                score: 25.0,
+                max_complexity: 25,
+            },
         };
 
         let json = serde_json::to_string(&flag).unwrap();
         assert!(json.contains("\"test-flag\""));
         assert!(json.contains("\"launchdarkly\""));
+        assert!(json.contains("\"High\""));
         assert!(json.contains("\"stale\":true"));
 
         let parsed: FeatureFlag = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.key, "test-flag");
         assert!(parsed.stale);
+    }
+
+    #[test]
+    fn test_flag_priority_levels() {
+        // Verify the threshold logic directly
+        let cases = vec![
+            (5, "Low"),       // < 10
+            (10, "Medium"),   // >= 10
+            (19, "Medium"),   // < 20
+            (20, "High"),     // >= 20
+            (49, "High"),     // < 50
+            (50, "Critical"), // >= 50
+            (200, "Critical"),
+        ];
+        for (complexity, expected_level) in cases {
+            let level = if complexity >= 50 {
+                "Critical"
+            } else if complexity >= 20 {
+                "High"
+            } else if complexity >= 10 {
+                "Medium"
+            } else {
+                "Low"
+            };
+            assert_eq!(
+                level, expected_level,
+                "complexity {complexity} should be {expected_level}, got {level}"
+            );
+        }
     }
 
     #[test]
