@@ -40,7 +40,7 @@ pub fn analyze_trend(
     };
 
     // Get commits in the time range
-    let commits = repo.log(Some(since), None)?;
+    let commits = repo.log(Some(since), None, None)?;
     if commits.is_empty() {
         return Ok(TrendData::default());
     }

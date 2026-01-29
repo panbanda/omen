@@ -124,7 +124,7 @@ impl Analyzer {
         let since = days_ago.format("%Y-%m-%d").to_string();
 
         // Get all commits in the time range
-        let commits = git_repo.log_with_stats(Some(&since))?;
+        let commits = git_repo.log_with_stats(Some(&since), None)?;
 
         // Build file -> churn map
         let mut file_churn: HashMap<String, FileChurn> = HashMap::new();

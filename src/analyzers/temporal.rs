@@ -99,7 +99,7 @@ impl Analyzer {
         let since_str = format!("{} days", self.config.days);
 
         // Get commit log with file changes
-        let commits = git_repo.log_with_stats(Some(&since_str))?;
+        let commits = git_repo.log_with_stats(Some(&since_str), None)?;
 
         // Track co-changes: normalized pair -> count
         let mut cochanges: HashMap<FilePair, u32> = HashMap::new();

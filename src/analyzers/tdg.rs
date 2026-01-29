@@ -72,6 +72,8 @@ pub struct Analyzer {
     weights: Weights,
     thresholds: Thresholds,
     max_file_size: Option<u64>,
+    precomputed_hotspot: Option<hotspot::Analysis>,
+    precomputed_temporal: Option<temporal::Analysis>,
 }
 
 impl Default for Analyzer {
@@ -86,6 +88,8 @@ impl Analyzer {
             weights: Weights::default(),
             thresholds: Thresholds::default(),
             max_file_size: None,
+            precomputed_hotspot: None,
+            precomputed_temporal: None,
         }
     }
 
@@ -101,6 +105,20 @@ impl Analyzer {
 
     pub fn with_max_file_size(mut self, size: u64) -> Self {
         self.max_file_size = Some(size);
+        self
+    }
+
+    /// Supply pre-computed hotspot analysis results so TDG skips re-running
+    /// the hotspot analyzer internally.
+    pub fn with_precomputed_hotspot(mut self, analysis: hotspot::Analysis) -> Self {
+        self.precomputed_hotspot = Some(analysis);
+        self
+    }
+
+    /// Supply pre-computed temporal coupling analysis results so TDG skips
+    /// re-running the temporal analyzer internally.
+    pub fn with_precomputed_temporal(mut self, analysis: temporal::Analysis) -> Self {
+        self.precomputed_temporal = Some(analysis);
         self
     }
 
@@ -444,14 +462,19 @@ impl Analyzer {
 
     /// Compute per-file hotspot scores using git history analysis.
     /// Returns a map of file path -> hotspot score (0.0-1.0, where 1.0 is worst).
+    /// Uses precomputed results when available, otherwise runs the hotspot analyzer.
     fn compute_hotspot_scores(&self, ctx: &AnalysisContext<'_>) -> HashMap<String, f32> {
         let mut scores = HashMap::new();
 
-        // Run hotspot analysis (silently fails if no git repo)
-        let hotspot_analyzer = hotspot::Analyzer::new();
-        if let Ok(analysis) = hotspot_analyzer.analyze(ctx) {
+        let analysis = if let Some(ref precomputed) = self.precomputed_hotspot {
+            Some(precomputed.clone())
+        } else {
+            let hotspot_analyzer = hotspot::Analyzer::new();
+            hotspot_analyzer.analyze(ctx).ok()
+        };
+
+        if let Some(analysis) = analysis {
             for hs in analysis.hotspots {
-                // Hotspot score is 0-1 (normalized churn * complexity percentiles)
                 scores.insert(hs.file, hs.score as f32);
             }
         }
@@ -461,24 +484,27 @@ impl Analyzer {
 
     /// Compute per-file temporal coupling scores using git history.
     /// Returns a map of file path -> coupling score (0.0-1.0, where 1.0 = many couplings).
+    /// Uses precomputed results when available, otherwise runs the temporal analyzer.
     fn compute_temporal_scores(&self, ctx: &AnalysisContext<'_>) -> HashMap<String, f32> {
         let mut scores = HashMap::new();
 
-        // Run temporal coupling analysis
-        let temporal_analyzer = temporal::Analyzer::new();
-        if let Ok(analysis) = temporal_analyzer.analyze(ctx) {
-            // Count how many times each file appears in couplings
+        let analysis = if let Some(ref precomputed) = self.precomputed_temporal {
+            Some(precomputed.clone())
+        } else {
+            let temporal_analyzer = temporal::Analyzer::new();
+            temporal_analyzer.analyze(ctx).ok()
+        };
+
+        if let Some(analysis) = analysis {
             let mut coupling_counts: HashMap<String, usize> = HashMap::new();
             for coupling in &analysis.couplings {
                 *coupling_counts.entry(coupling.file_a.clone()).or_insert(0) += 1;
                 *coupling_counts.entry(coupling.file_b.clone()).or_insert(0) += 1;
             }
 
-            // Normalize to 0-1 scale
             if let Some(&max_count) = coupling_counts.values().max() {
                 if max_count > 0 {
                     for (file, count) in coupling_counts {
-                        // Higher count = more couplings = higher risk
                         scores.insert(file, count as f32 / max_count as f32);
                     }
                 }
@@ -1308,5 +1334,113 @@ fn risky() {
         assert!(result.has_critical_defects);
         assert_eq!(result.total, 0.0);
         assert_eq!(result.grade, Grade::F);
+    }
+
+    #[test]
+    fn test_precomputed_hotspot_and_temporal_used() {
+        use crate::analyzers::hotspot as hs;
+        use crate::analyzers::temporal as tp;
+        use crate::core::{AnalysisContext, FileSet};
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file_path = tmp.path().join("lib.rs");
+        std::fs::write(&file_path, "fn hello() {}\n").unwrap();
+
+        let hotspot_analysis = hs::Analysis {
+            hotspots: vec![hs::Hotspot {
+                file: "lib.rs".to_string(),
+                score: 0.8,
+                severity: hs::Severity::High,
+                churn_percentile: 90.0,
+                complexity_percentile: 85.0,
+                commits: 42,
+                avg_complexity: 12.0,
+            }],
+            summary: hs::AnalysisSummary {
+                total_hotspots: 1,
+                critical_count: 0,
+                high_count: 1,
+            },
+        };
+
+        let temporal_analysis = tp::Analysis {
+            generated_at: "2025-01-01T00:00:00Z".to_string(),
+            period_days: 30,
+            min_cochanges: 3,
+            couplings: vec![tp::FileCoupling {
+                file_a: "lib.rs".to_string(),
+                file_b: "other.rs".to_string(),
+                cochange_count: 5,
+                coupling_strength: 0.7,
+                commits_a: 10,
+                commits_b: 7,
+            }],
+            summary: tp::Summary {
+                total_couplings: 1,
+                strong_couplings: 1,
+                avg_coupling_strength: 0.7,
+                max_coupling_strength: 0.7,
+                total_files_analyzed: 2,
+            },
+        };
+
+        let analyzer = Analyzer::new()
+            .with_precomputed_hotspot(hotspot_analysis)
+            .with_precomputed_temporal(temporal_analysis);
+
+        let file_set = FileSet::from_files(tmp.path().to_path_buf(), vec![file_path]);
+        let config = crate::config::Config::default();
+        let ctx = AnalysisContext::new(&file_set, &config, None);
+
+        let result = AnalyzerTrait::analyze(&analyzer, &ctx).unwrap();
+        assert_eq!(result.total_files, 1);
+
+        let score = &result.files[0];
+        assert_eq!(score.file_path, "lib.rs");
+
+        // Hotspot was 0.8 risk => hotspot_score = weight * (1 - 0.8) = 10 * 0.2 = 2.0
+        assert!(
+            (score.hotspot_score - 2.0).abs() < 0.01,
+            "expected hotspot_score ~2.0 from precomputed data, got {}",
+            score.hotspot_score
+        );
+
+        // Temporal: lib.rs appears in 1 coupling, max coupling count is 1,
+        // so normalized = 1.0 => temporal_coupling_score = 10 * (1 - 1.0) = 0.0
+        assert!(
+            score.temporal_coupling_score.abs() < 0.01,
+            "expected temporal_coupling_score ~0.0 from precomputed data, got {}",
+            score.temporal_coupling_score
+        );
+    }
+
+    #[test]
+    fn test_precomputed_none_is_backward_compatible() {
+        use crate::core::{AnalysisContext, FileSet};
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file_path = tmp.path().join("lib.rs");
+        std::fs::write(&file_path, "fn hello() {}\n").unwrap();
+
+        let analyzer = Analyzer::new();
+        let file_set = FileSet::from_files(tmp.path().to_path_buf(), vec![file_path]);
+        let config = crate::config::Config::default();
+        let ctx = AnalysisContext::new(&file_set, &config, None);
+
+        let result = AnalyzerTrait::analyze(&analyzer, &ctx).unwrap();
+        assert_eq!(result.total_files, 1);
+
+        let score = &result.files[0];
+        // No precomputed data and no git repo => full points (default)
+        assert!(
+            (score.hotspot_score - 10.0).abs() < 0.01,
+            "expected full hotspot points without precomputed data, got {}",
+            score.hotspot_score
+        );
+        assert!(
+            (score.temporal_coupling_score - 10.0).abs() < 0.01,
+            "expected full temporal points without precomputed data, got {}",
+            score.temporal_coupling_score
+        );
     }
 }

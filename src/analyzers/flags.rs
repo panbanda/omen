@@ -565,7 +565,7 @@ impl Analyzer {
             for file in unique_files {
                 let path = std::path::PathBuf::from(&file);
                 let paths = [path];
-                if let Ok(commits) = repo.log(None, Some(&paths)) {
+                if let Ok(commits) = repo.log(None, Some(&paths), None) {
                     let mut first: Option<i64> = None;
                     let mut last: Option<i64> = None;
                     for commit in commits {

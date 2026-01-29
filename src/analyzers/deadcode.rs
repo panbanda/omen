@@ -82,20 +82,11 @@ impl AnalyzerTrait for Analyzer {
             Vec::new()
         };
 
-        // Phase 1: Collect definitions and usages from all files
-        // For Rust projects, skip .rs files since cargo handles them
-        let files: Vec<_> = ctx
-            .files
-            .iter()
-            .filter(|path| {
-                if is_rust_project {
-                    // Skip Rust files - cargo handles them more accurately
-                    path.extension().map(|e| e != "rs").unwrap_or(true)
-                } else {
-                    true
-                }
-            })
-            .collect();
+        // Phase 1: Collect definitions and usages from all files.
+        // Tree-sitter extraction runs on all files (including .rs) to build
+        // the definition/reference graph. Cargo results supplement this with
+        // compiler-level dead code warnings when available.
+        let files: Vec<_> = ctx.files.iter().collect();
         let file_results: Vec<FileDeadCode> = files
             .par_iter()
             .filter_map(|path| self.analyze_file(path).ok())
@@ -180,8 +171,11 @@ impl AnalyzerTrait for Analyzer {
         let mut items = Vec::new();
         let mut by_kind: HashMap<String, usize> = HashMap::new();
 
-        // Add cargo-detected dead code items (Rust files)
+        // Add cargo-detected dead code items (Rust files).
+        // Track (file, line) pairs so tree-sitter results don't duplicate them.
+        let mut cargo_reported: HashSet<(String, u32)> = HashSet::new();
         for cargo_item in cargo_items {
+            cargo_reported.insert((cargo_item.file.clone(), cargo_item.line));
             let item = DeadCodeItem {
                 name: cargo_item.name,
                 kind: cargo_item.kind.clone(),
@@ -196,13 +190,18 @@ impl AnalyzerTrait for Analyzer {
             items.push(item);
         }
 
-        // Add tree-sitter detected dead code (non-Rust files)
+        // Add tree-sitter detected dead code, skipping items already reported by cargo
         for (qualified_name, def) in &all_definitions {
             // Extract simple name for entry point check and usage lookup
             let simple_name = qualified_name.rsplit("::").next().unwrap_or(qualified_name);
 
             // Skip entry points
             if is_entry_point(simple_name, def) {
+                continue;
+            }
+
+            // Skip items already reported by cargo (higher confidence)
+            if cargo_reported.contains(&(def.file.clone(), def.line)) {
                 continue;
             }
 
@@ -277,17 +276,57 @@ fn collect_file_data(result: &parser::ParseResult) -> FileDeadCode {
         HashMap::new()
     };
 
+    // For Python, extract __all__, if __name__ calls, and decorators
+    let python_ctx = if result.language == Language::Python {
+        Some(extract_python_context(result))
+    } else {
+        None
+    };
+
+    // For Ruby, extract visibility modifiers
+    let ruby_vis = if result.language == Language::Ruby {
+        Some(extract_ruby_visibility(result))
+    } else {
+        None
+    };
+
     // Extract function definitions
     for func in functions {
-        let visibility = get_visibility(&func.name, result.language);
+        let mut visibility = get_visibility(&func.name, result.language);
         // Use the parser's is_exported which correctly checks for pub in Rust
-        let exported = func.is_exported || is_exported(&func.name, result.language);
+        let mut exported = func.is_exported || is_exported(&func.name, result.language);
         let info = function_info.get(&func.name);
-        let attributes = info.map(|i| i.attributes.clone()).unwrap_or_default();
+        let mut attributes = info.map(|i| i.attributes.clone()).unwrap_or_default();
         // Mark as test file if already in test file OR inside #[cfg(test)] module
         let is_in_test_context =
             is_test_file || info.map(|i| i.in_cfg_test_module).unwrap_or(false);
         let is_trait_impl = info.map(|i| i.is_trait_impl).unwrap_or(false);
+
+        // Apply Python-specific context
+        if let Some(ref py_ctx) = python_ctx {
+            // Functions listed in __all__ are explicitly exported
+            if py_ctx.all_exports.contains(&func.name) {
+                exported = true;
+            }
+            // Functions called in if __name__ == "__main__" are entry points
+            if py_ctx.name_main_calls.contains(&func.name) {
+                attributes.push("__name__main_call".to_string());
+            }
+            // Attach decorator info
+            if let Some(decorators) = py_ctx.decorators.get(&func.name) {
+                attributes.extend(decorators.iter().cloned());
+            }
+        }
+
+        // Apply Ruby visibility modifiers
+        if let Some(ref rb_vis) = ruby_vis {
+            if let Some(vis) = rb_vis.method_visibility.get(&func.name) {
+                visibility = vis.clone();
+                if vis == "private" || vis == "protected" {
+                    exported = false;
+                }
+            }
+        }
 
         fdc.definitions.insert(
             func.name.clone(),
@@ -317,6 +356,21 @@ struct RustFunctionInfo {
     attributes: Vec<String>,
     in_cfg_test_module: bool,
     is_trait_impl: bool,
+}
+
+/// Python-specific context extracted from the AST.
+struct PythonContext {
+    /// Names listed in `__all__` (these are explicitly exported).
+    all_exports: HashSet<String>,
+    /// Functions called inside `if __name__ == "__main__"` blocks.
+    name_main_calls: HashSet<String>,
+    /// Map from function name to its decorator strings.
+    decorators: HashMap<String, Vec<String>>,
+}
+
+/// Ruby visibility context: maps method name to visibility modifier.
+struct RubyVisibility {
+    method_visibility: HashMap<String, String>,
 }
 
 /// Extract attributes and context for Rust functions.
@@ -393,6 +447,285 @@ fn extract_rust_function_attributes(
 
     visit(root, source, &mut info, false, false);
     info
+}
+
+/// Extract Python-specific context: `__all__` exports, `if __name__` calls, and decorators.
+fn extract_python_context(result: &parser::ParseResult) -> PythonContext {
+    let root = result.root_node();
+    let source = &result.source;
+    let mut ctx = PythonContext {
+        all_exports: HashSet::new(),
+        name_main_calls: HashSet::new(),
+        decorators: HashMap::new(),
+    };
+
+    fn visit(node: tree_sitter::Node<'_>, source: &[u8], ctx: &mut PythonContext) {
+        match node.kind() {
+            // Parse `__all__ = ["func1", "func2"]`
+            "expression_statement" => {
+                if let Some(child) = node.child(0) {
+                    if child.kind() == "assignment" {
+                        if let Some(left) = child.child_by_field_name("left") {
+                            if left.utf8_text(source).ok() == Some("__all__") {
+                                if let Some(right) = child.child_by_field_name("right") {
+                                    extract_all_list_entries(&right, source, ctx);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Parse `if __name__ == "__main__":` blocks
+            "if_statement" => {
+                if is_name_main_guard(&node, source) {
+                    collect_calls_in_subtree(&node, source, &mut ctx.name_main_calls);
+                }
+            }
+            // Parse decorated function definitions
+            "decorated_definition" => {
+                extract_python_decorators(&node, source, ctx);
+            }
+            _ => {}
+        }
+
+        for child in node.children(&mut node.walk()) {
+            visit(child, source, ctx);
+        }
+    }
+
+    visit(root, source, &mut ctx);
+    ctx
+}
+
+/// Extract string entries from a list literal (for `__all__`).
+fn extract_all_list_entries(node: &tree_sitter::Node<'_>, source: &[u8], ctx: &mut PythonContext) {
+    // The right-hand side should be a list node containing string children.
+    if node.kind() != "list" {
+        return;
+    }
+    for child in node.children(&mut node.walk()) {
+        if child.kind() == "string" {
+            if let Ok(text) = child.utf8_text(source) {
+                // Strip quotes: "func1" or 'func1'
+                let stripped = text
+                    .trim_start_matches(['"', '\''])
+                    .trim_end_matches(['"', '\'']);
+                if !stripped.is_empty() {
+                    ctx.all_exports.insert(stripped.to_string());
+                }
+            }
+        }
+    }
+}
+
+/// Check if an `if_statement` node is `if __name__ == "__main__":`.
+fn is_name_main_guard(node: &tree_sitter::Node<'_>, source: &[u8]) -> bool {
+    // The condition is the first child after "if" keyword.
+    if let Some(condition) = node.child_by_field_name("condition") {
+        if condition.kind() == "comparison_operator" {
+            if let Ok(text) = condition.utf8_text(source) {
+                let normalized = text.replace(' ', "");
+                return normalized.contains("__name__==\"__main__\"")
+                    || normalized.contains("__name__=='__main__'")
+                    || normalized.contains("\"__main__\"==__name__")
+                    || normalized.contains("'__main__'==__name__");
+            }
+        }
+    }
+    false
+}
+
+/// Collect all function/method call names within a subtree.
+fn collect_calls_in_subtree(
+    node: &tree_sitter::Node<'_>,
+    source: &[u8],
+    calls: &mut HashSet<String>,
+) {
+    if node.kind() == "call" {
+        // Get the function name from the call
+        if let Some(fn_node) = node.child_by_field_name("function") {
+            if fn_node.kind() == "identifier" {
+                if let Ok(name) = fn_node.utf8_text(source) {
+                    calls.insert(name.to_string());
+                }
+            } else if fn_node.kind() == "attribute" {
+                // obj.method() -- grab the attribute (method) name
+                if let Some(attr) = fn_node.child_by_field_name("attribute") {
+                    if let Ok(name) = attr.utf8_text(source) {
+                        calls.insert(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    for child in node.children(&mut node.walk()) {
+        collect_calls_in_subtree(&child, source, calls);
+    }
+}
+
+/// Extract decorators from a `decorated_definition` node and associate them with the function.
+fn extract_python_decorators(node: &tree_sitter::Node<'_>, source: &[u8], ctx: &mut PythonContext) {
+    let mut decorator_texts: Vec<String> = Vec::new();
+    let mut func_name: Option<String> = None;
+
+    for child in node.children(&mut node.walk()) {
+        if child.kind() == "decorator" {
+            if let Ok(text) = child.utf8_text(source) {
+                // Strip the leading '@' and any trailing whitespace
+                let stripped = text.trim_start_matches('@').trim();
+                decorator_texts.push(stripped.to_string());
+            }
+        } else if child.kind() == "function_definition" {
+            if let Some(name_node) = child.child_by_field_name("name") {
+                func_name = name_node.utf8_text(source).ok().map(|s| s.to_string());
+            }
+        }
+    }
+
+    if let Some(name) = func_name {
+        if !decorator_texts.is_empty() {
+            ctx.decorators.insert(name, decorator_texts);
+        }
+    }
+}
+
+/// Decorator patterns that indicate a function is an entry point.
+const ENTRY_POINT_DECORATOR_KEYWORDS: &[&str] = &[
+    "route",
+    "task",
+    "fixture",
+    "handler",
+    "endpoint",
+    "command",
+    "hook",
+    "signal",
+    "receiver",
+    "property",
+    "pytest.fixture",
+    "pytest.mark",
+    "shared_task",
+    "celery.task",
+];
+
+/// Check if a decorator string indicates an entry point.
+fn is_entry_point_decorator(decorator: &str) -> bool {
+    // Exact known patterns
+    let lower = decorator.to_lowercase();
+    for keyword in ENTRY_POINT_DECORATOR_KEYWORDS {
+        if lower.contains(keyword) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Extract Ruby method visibility based on `private`, `protected`, `public` calls.
+///
+/// In Ruby, `private` / `protected` / `public` can be used as:
+/// 1. Section markers: all methods defined after `private` are private.
+/// 2. Method-level: `private :method_name`
+fn extract_ruby_visibility(result: &parser::ParseResult) -> RubyVisibility {
+    let root = result.root_node();
+    let source = &result.source;
+    let mut vis = RubyVisibility {
+        method_visibility: HashMap::new(),
+    };
+
+    fn visit_class_body(node: tree_sitter::Node<'_>, source: &[u8], vis: &mut RubyVisibility) {
+        // Only process class/module bodies
+        if node.kind() != "class" && node.kind() != "module" && node.kind() != "singleton_class" {
+            // Recurse to find classes/modules
+            for child in node.children(&mut node.walk()) {
+                visit_class_body(child, source, vis);
+            }
+            return;
+        }
+
+        // Find the body node inside the class/module
+        if let Some(body) = node.child_by_field_name("body") {
+            process_body_for_visibility(&body, source, vis);
+        } else {
+            // Some grammars put children directly under class node
+            process_body_for_visibility(&node, source, vis);
+        }
+
+        // Recurse into nested classes
+        for child in node.children(&mut node.walk()) {
+            if child.kind() == "class" || child.kind() == "module" {
+                visit_class_body(child, source, vis);
+            }
+        }
+    }
+
+    fn process_body_for_visibility(
+        body: &tree_sitter::Node<'_>,
+        source: &[u8],
+        vis: &mut RubyVisibility,
+    ) {
+        let mut current_visibility = "public".to_string();
+
+        for child in body.children(&mut body.walk()) {
+            match child.kind() {
+                "method" | "singleton_method" => {
+                    if let Some(name_node) = child.child_by_field_name("name") {
+                        if let Ok(name) = name_node.utf8_text(source) {
+                            vis.method_visibility
+                                .insert(name.to_string(), current_visibility.clone());
+                        }
+                    }
+                }
+                // Bare `private` / `protected` / `public` calls act as section markers
+                "identifier" => {
+                    if let Ok(text) = child.utf8_text(source) {
+                        match text {
+                            "private" | "protected" | "public" => {
+                                current_visibility = text.to_string();
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                // `private :method_name` or `private def ...` as a call expression
+                "call" => {
+                    if let Some(method_node) = child.child_by_field_name("method") {
+                        if let Ok(method_text) = method_node.utf8_text(source) {
+                            match method_text {
+                                "private" | "protected" | "public" => {
+                                    // Check for symbol arguments: `private :foo, :bar`
+                                    if let Some(args) = child.child_by_field_name("arguments") {
+                                        let mut found_symbols = false;
+                                        for arg in args.children(&mut args.walk()) {
+                                            if arg.kind() == "simple_symbol" {
+                                                if let Ok(sym) = arg.utf8_text(source) {
+                                                    let name =
+                                                        sym.trim_start_matches(':').to_string();
+                                                    vis.method_visibility
+                                                        .insert(name, method_text.to_string());
+                                                    found_symbols = true;
+                                                }
+                                            }
+                                        }
+                                        if !found_symbols {
+                                            // No symbol args: this is a section marker
+                                            current_visibility = method_text.to_string();
+                                        }
+                                    } else {
+                                        // No arguments: section marker
+                                        current_visibility = method_text.to_string();
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    visit_class_body(root, source, &mut vis);
+    vis
 }
 
 /// Check if an impl_item is a trait impl (impl Trait for Type) vs inherent impl (impl Type).
@@ -648,8 +981,17 @@ fn is_entry_point(name: &str, def: &Definition) -> bool {
     }
 
     // Rust test attributes (#[test], #[tokio::test], #[bench], etc.)
+    // Python decorators and __name__ == "__main__" calls
     for attr in &def.attributes {
         if attr == "test" || attr.ends_with("::test") || attr == "bench" || attr == "tokio::main" {
+            return true;
+        }
+        // Functions called in `if __name__ == "__main__"` blocks
+        if attr == "__name__main_call" {
+            return true;
+        }
+        // Python decorator-based entry points
+        if is_entry_point_decorator(attr) {
             return true;
         }
     }
@@ -1162,6 +1504,337 @@ mod tests {
 
         let item = CargoDeadCodeAnalyzer::parse_json_message(json_line);
         assert!(item.is_none(), "Should ignore non-dead_code warnings");
+    }
+
+    #[test]
+    fn test_rust_extracts_all_function_definitions() {
+        // Verifies that tree-sitter extraction finds free functions,
+        // inherent impl methods, and trait impl methods in Rust.
+        use std::path::Path;
+
+        let parser = crate::parser::Parser::new();
+        let content = br#"
+fn free_function() {}
+
+fn another_free() -> bool { true }
+
+struct MyStruct;
+
+impl MyStruct {
+    fn new() -> Self { MyStruct }
+
+    fn method_one(&self) {}
+
+    pub fn method_two(&mut self) {}
+}
+
+trait MyTrait {
+    fn required(&self);
+}
+
+impl MyTrait for MyStruct {
+    fn required(&self) {}
+}
+        "#;
+        let result = parser
+            .parse(content, Language::Rust, Path::new("lib.rs"))
+            .unwrap();
+        let fdc = collect_file_data(&result);
+
+        let names: HashSet<&str> = fdc.definitions.keys().map(|s| s.as_str()).collect();
+        assert!(
+            names.contains("free_function"),
+            "should find free_function, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains("another_free"),
+            "should find another_free, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains("new"),
+            "should find impl method 'new', got: {:?}",
+            names
+        );
+        assert!(
+            names.contains("method_one"),
+            "should find impl method 'method_one', got: {:?}",
+            names
+        );
+        assert!(
+            names.contains("method_two"),
+            "should find impl method 'method_two', got: {:?}",
+            names
+        );
+        assert!(
+            names.contains("required"),
+            "should find trait impl method 'required', got: {:?}",
+            names
+        );
+
+        assert_eq!(
+            fdc.definitions.len(),
+            6,
+            "should find exactly 6 function definitions, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_rust_non_cargo_project_uses_treesitter() {
+        // When there is no Cargo.toml, the deadcode analyzer should use
+        // tree-sitter to extract Rust function definitions instead of
+        // skipping .rs files.
+        use std::path::Path;
+
+        let parser = crate::parser::Parser::new();
+        let content = br#"
+fn alpha() {}
+fn beta() {}
+fn gamma() {}
+fn delta() {}
+fn epsilon() {}
+        "#;
+        let result = parser
+            .parse(content, Language::Rust, Path::new("standalone.rs"))
+            .unwrap();
+        let functions = crate::parser::extract_functions(&result);
+
+        assert_eq!(
+            functions.len(),
+            5,
+            "tree-sitter should find all 5 Rust functions, got: {:?}",
+            functions.iter().map(|f| &f.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_python_all_list_marks_exported() {
+        use std::path::Path;
+
+        let parser = crate::parser::Parser::new();
+        let content = br#"
+__all__ = ["_internal_api", "public_func"]
+
+def _internal_api():
+    pass
+
+def public_func():
+    pass
+
+def _unlisted_helper():
+    pass
+"#;
+        let result = parser
+            .parse(content, Language::Python, Path::new("mymodule.py"))
+            .unwrap();
+
+        // Verify __all__ parsing extracts the correct names
+        let py_ctx = extract_python_context(&result);
+        assert!(
+            py_ctx.all_exports.contains("_internal_api"),
+            "__all__ should contain _internal_api"
+        );
+        assert!(
+            py_ctx.all_exports.contains("public_func"),
+            "__all__ should contain public_func"
+        );
+        assert!(
+            !py_ctx.all_exports.contains("_unlisted_helper"),
+            "__all__ should not contain _unlisted_helper"
+        );
+
+        // Verify collect_file_data integrates __all__ into the exported flag.
+        // _internal_api starts with _ so is_exported() alone returns false,
+        // but __all__ listing should force it to exported.
+        let fdc = collect_file_data(&result);
+        let internal_fn = fdc.definitions.get("_internal_api").unwrap();
+        assert!(
+            internal_fn.exported,
+            "Function in __all__ should be exported even with _ prefix"
+        );
+        assert!(
+            is_entry_point("_internal_api", internal_fn),
+            "__all__-listed function should be an entry point"
+        );
+    }
+
+    #[test]
+    fn test_python_name_main_block_functions_are_entry_points() {
+        use std::path::Path;
+
+        let parser = crate::parser::Parser::new();
+        let content = br#"
+def main():
+    print("running")
+
+def setup():
+    print("setup")
+
+def unused():
+    pass
+
+if __name__ == "__main__":
+    setup()
+    main()
+"#;
+        let result = parser
+            .parse(content, Language::Python, Path::new("script.py"))
+            .unwrap();
+        let fdc = collect_file_data(&result);
+
+        let main_fn = fdc.definitions.get("main").unwrap();
+        assert!(
+            is_entry_point("main", main_fn),
+            "main() called in __name__ block should be an entry point"
+        );
+
+        let setup_fn = fdc.definitions.get("setup").unwrap();
+        assert!(
+            is_entry_point("setup", setup_fn),
+            "setup() called in __name__ block should be an entry point"
+        );
+
+        // unused() is not called in the __name__ block and is not exported
+        // (it is still "public" by Python naming, so it will be exported via is_exported)
+    }
+
+    #[test]
+    fn test_python_decorated_functions_are_entry_points() {
+        use std::path::Path;
+
+        let parser = crate::parser::Parser::new();
+        let content = br#"
+@app.route("/hello")
+def hello():
+    return "hello"
+
+@pytest.fixture
+def my_fixture():
+    return 42
+
+@celery.task
+def process_data():
+    pass
+
+@property
+def name(self):
+    return self._name
+
+def plain_function():
+    pass
+"#;
+        let result = parser
+            .parse(content, Language::Python, Path::new("app.py"))
+            .unwrap();
+        let fdc = collect_file_data(&result);
+
+        let hello_fn = fdc.definitions.get("hello").unwrap();
+        assert!(
+            is_entry_point("hello", hello_fn),
+            "Flask @app.route decorated function should be an entry point, attrs: {:?}",
+            hello_fn.attributes
+        );
+
+        let fixture_fn = fdc.definitions.get("my_fixture").unwrap();
+        assert!(
+            is_entry_point("my_fixture", fixture_fn),
+            "@pytest.fixture decorated function should be an entry point, attrs: {:?}",
+            fixture_fn.attributes
+        );
+
+        let task_fn = fdc.definitions.get("process_data").unwrap();
+        assert!(
+            is_entry_point("process_data", task_fn),
+            "@celery.task decorated function should be an entry point, attrs: {:?}",
+            task_fn.attributes
+        );
+
+        let prop_fn = fdc.definitions.get("name").unwrap();
+        assert!(
+            is_entry_point("name", prop_fn),
+            "@property decorated function should be an entry point, attrs: {:?}",
+            prop_fn.attributes
+        );
+
+        // plain_function has no decorator -- it is still "public" by Python naming,
+        // so it will be exported via is_exported. Check that it has no decorator attrs.
+        let plain_fn = fdc.definitions.get("plain_function").unwrap();
+        assert!(
+            plain_fn
+                .attributes
+                .iter()
+                .all(|a| !is_entry_point_decorator(a)),
+            "plain_function should have no entry-point decorators"
+        );
+    }
+
+    #[test]
+    fn test_ruby_visibility_modifiers() {
+        use std::path::Path;
+
+        let parser = crate::parser::Parser::new();
+        let content = br#"
+class MyClass
+  def public_method
+    puts "public"
+  end
+
+  private
+
+  def secret_method
+    puts "secret"
+  end
+
+  def another_secret
+    puts "also secret"
+  end
+
+  protected
+
+  def protected_method
+    puts "protected"
+  end
+end
+"#;
+        let result = parser
+            .parse(content, Language::Ruby, Path::new("my_class.rb"))
+            .unwrap();
+        let fdc = collect_file_data(&result);
+
+        let public_fn = fdc.definitions.get("public_method").unwrap();
+        assert_eq!(
+            public_fn.visibility, "public",
+            "Method before 'private' should be public"
+        );
+        assert!(public_fn.exported, "Public Ruby method should be exported");
+
+        let secret_fn = fdc.definitions.get("secret_method").unwrap();
+        assert_eq!(
+            secret_fn.visibility, "private",
+            "Method after 'private' should be private"
+        );
+        assert!(
+            !secret_fn.exported,
+            "Private Ruby method should not be exported"
+        );
+
+        let another_fn = fdc.definitions.get("another_secret").unwrap();
+        assert_eq!(
+            another_fn.visibility, "private",
+            "Second method after 'private' should also be private"
+        );
+
+        let protected_fn = fdc.definitions.get("protected_method").unwrap();
+        assert_eq!(
+            protected_fn.visibility, "protected",
+            "Method after 'protected' should be protected"
+        );
+        assert!(
+            !protected_fn.exported,
+            "Protected Ruby method should not be exported"
+        );
     }
 }
 

@@ -297,46 +297,91 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             let git_root = omen::git::GitRepo::open(path)
                 .ok()
                 .map(|r| r.root().to_path_buf());
-            let mut ctx = AnalysisContext::new(&file_set, &config, Some(path));
-            if let Some(ref git_path) = git_root {
-                ctx = ctx.with_git_path(git_path);
-            }
-
-            let mut results: Vec<Value> = Vec::new();
+            let ctx = AnalysisContext::new(&file_set, &config, Some(path));
+            let ctx = if let Some(ref git_path) = git_root {
+                ctx.with_git_path(git_path)
+            } else {
+                ctx
+            };
 
             macro_rules! run_and_collect {
-                ($analyzer:ty, $name:expr) => {{
+                ($ctx:expr, $analyzer:ty, $name:expr) => {{
                     let a = <$analyzer>::default();
-                    match a.analyze(&ctx) {
-                        Ok(result) => {
-                            if let Ok(v) = serde_json::to_value(&result) {
-                                results.push(json!({ "analyzer": $name, "result": v }));
-                            }
-                        }
+                    match a.analyze($ctx) {
+                        Ok(result) => match serde_json::to_value(&result) {
+                            Ok(v) => json!({ "analyzer": $name, "result": v }),
+                            Err(e) => json!({ "analyzer": $name, "error": format!("serialization failed: {e}") }),
+                        },
                         Err(e) => {
-                            results.push(json!({ "analyzer": $name, "error": e.to_string() }));
+                            json!({ "analyzer": $name, "error": e.to_string() })
                         }
                     }
                 }};
             }
 
-            run_and_collect!(omen::analyzers::complexity::Analyzer, "complexity");
-            run_and_collect!(omen::analyzers::satd::Analyzer, "satd");
-            run_and_collect!(omen::analyzers::deadcode::Analyzer, "deadcode");
-            run_and_collect!(omen::analyzers::churn::Analyzer, "churn");
-            run_and_collect!(omen::analyzers::duplicates::Analyzer, "duplicates");
-            run_and_collect!(omen::analyzers::defect::Analyzer, "defect");
-            run_and_collect!(omen::analyzers::changes::Analyzer, "changes");
-            run_and_collect!(omen::analyzers::tdg::Analyzer, "tdg");
-            run_and_collect!(omen::analyzers::graph::Analyzer, "graph");
-            run_and_collect!(omen::analyzers::hotspot::Analyzer, "hotspot");
-            run_and_collect!(omen::analyzers::temporal::Analyzer, "temporal");
-            run_and_collect!(omen::analyzers::ownership::Analyzer, "ownership");
-            run_and_collect!(omen::analyzers::cohesion::Analyzer, "cohesion");
-            run_and_collect!(omen::analyzers::repomap::Analyzer, "repomap");
-            run_and_collect!(omen::analyzers::smells::Analyzer, "smells");
-            run_and_collect!(omen::analyzers::flags::Analyzer, "flags");
-            run_and_collect!(omen::score::Analyzer, "score");
+            // Run analyzers in parallel using std::thread::scope.
+            //
+            // Group A: file-based analyzers (no git dependency)
+            // Group B: git-based analyzers
+            // These two groups run concurrently. After both complete,
+            // Group C (analyzers that internally depend on git + file data)
+            // and score run sequentially.
+            let (group_a, group_b) = std::thread::scope(|s| {
+                let handle_a = s.spawn(|| -> Vec<Value> {
+                    vec![
+                        run_and_collect!(&ctx, omen::analyzers::complexity::Analyzer, "complexity"),
+                        run_and_collect!(&ctx, omen::analyzers::satd::Analyzer, "satd"),
+                        run_and_collect!(&ctx, omen::analyzers::deadcode::Analyzer, "deadcode"),
+                        run_and_collect!(&ctx, omen::analyzers::cohesion::Analyzer, "cohesion"),
+                        run_and_collect!(&ctx, omen::analyzers::graph::Analyzer, "graph"),
+                        run_and_collect!(&ctx, omen::analyzers::repomap::Analyzer, "repomap"),
+                        run_and_collect!(&ctx, omen::analyzers::smells::Analyzer, "smells"),
+                        run_and_collect!(&ctx, omen::analyzers::flags::Analyzer, "flags"),
+                        run_and_collect!(&ctx, omen::analyzers::duplicates::Analyzer, "duplicates"),
+                    ]
+                });
+
+                let handle_b = s.spawn(|| -> Vec<Value> {
+                    vec![
+                        run_and_collect!(&ctx, omen::analyzers::churn::Analyzer, "churn"),
+                        run_and_collect!(&ctx, omen::analyzers::temporal::Analyzer, "temporal"),
+                        run_and_collect!(&ctx, omen::analyzers::ownership::Analyzer, "ownership"),
+                    ]
+                });
+
+                (
+                    handle_a.join().unwrap_or_default(),
+                    handle_b.join().unwrap_or_default(),
+                )
+            });
+
+            let mut results: Vec<Value> = Vec::with_capacity(17);
+            results.extend(group_a);
+            results.extend(group_b);
+
+            // Group C: analyzers that internally depend on both file and git data.
+            // Run after groups A and B to benefit from warm OS page cache.
+            results.push(run_and_collect!(
+                &ctx,
+                omen::analyzers::hotspot::Analyzer,
+                "hotspot"
+            ));
+            results.push(run_and_collect!(
+                &ctx,
+                omen::analyzers::tdg::Analyzer,
+                "tdg"
+            ));
+            results.push(run_and_collect!(
+                &ctx,
+                omen::analyzers::defect::Analyzer,
+                "defect"
+            ));
+            results.push(run_and_collect!(
+                &ctx,
+                omen::analyzers::changes::Analyzer,
+                "changes"
+            ));
+            results.push(run_and_collect!(&ctx, omen::score::Analyzer, "score"));
 
             let combined = json!({ "analyzers": results });
             println!("{}", serde_json::to_string_pretty(&combined)?);

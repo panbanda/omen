@@ -214,7 +214,7 @@ impl Analyzer {
 
         if let Ok(repo) = GitRepo::open(git_path) {
             let since = format!("{} days", self.config.churn_days);
-            if let Ok(commits) = repo.log_with_stats(Some(&since)) {
+            if let Ok(commits) = repo.log_with_stats(Some(&since), None) {
                 // Build per-file metrics from the single git log call
                 let mut file_commits: HashMap<PathBuf, usize> = HashMap::new();
                 let mut file_contributors: HashMap<PathBuf, HashSet<String>> = HashMap::new();

@@ -68,6 +68,7 @@ pub fn get_log(
     repo: &Repository,
     since: Option<&str>,
     paths: Option<&[PathBuf]>,
+    limit: Option<usize>,
 ) -> Result<Vec<Commit>> {
     let head = repo
         .head_id()
@@ -135,6 +136,16 @@ pub fn get_log(
             message,
             files: Vec::new(), // File changes calculated separately if needed
         });
+
+        if let Some(max) = limit {
+            if commits.len() >= max {
+                break;
+            }
+        }
+    }
+
+    if let Some(max) = limit {
+        commits.truncate(max);
     }
 
     Ok(commits)
@@ -183,7 +194,11 @@ fn parse_since_duration(since: &str) -> Option<std::time::Duration> {
 /// Get commit log with file change statistics (numstat equivalent).
 ///
 /// Uses git CLI for performance - gix tree diff is ~160x slower.
-pub fn get_log_with_stats(repo: &Repository, since: Option<&str>) -> Result<Vec<Commit>> {
+pub fn get_log_with_stats(
+    repo: &Repository,
+    since: Option<&str>,
+    limit: Option<usize>,
+) -> Result<Vec<Commit>> {
     let repo_path = repo
         .workdir()
         .ok_or_else(|| Error::git("Not a work tree"))?;
@@ -197,6 +212,10 @@ pub fn get_log_with_stats(repo: &Repository, since: Option<&str>) -> Result<Vec<
         cmd.arg(format!("--since={}", since_str));
     }
 
+    if let Some(max) = limit {
+        cmd.arg(format!("-n{}", max));
+    }
+
     let output = cmd
         .output()
         .map_err(|e| Error::git(format!("Failed to run git log: {e}")))?;
@@ -206,7 +225,13 @@ pub fn get_log_with_stats(repo: &Repository, since: Option<&str>) -> Result<Vec<
         return Err(Error::git(format!("git log failed: {}", stderr)));
     }
 
-    parse_git_log_numstat(&output.stdout)
+    let mut commits = parse_git_log_numstat(&output.stdout)?;
+
+    if let Some(max) = limit {
+        commits.truncate(max);
+    }
+
+    Ok(commits)
 }
 
 /// Parse git log --numstat output into Commit structs.
@@ -295,7 +320,11 @@ fn parse_git_log_numstat(output: &[u8]) -> Result<Vec<Commit>> {
 ///
 /// Note: This is ~160x slower than CLI for large repos. Use get_log_with_stats() for performance.
 #[allow(dead_code)]
-pub fn get_log_with_stats_gix(repo: &Repository, since: Option<&str>) -> Result<Vec<Commit>> {
+pub fn get_log_with_stats_gix(
+    repo: &Repository,
+    since: Option<&str>,
+    limit: Option<usize>,
+) -> Result<Vec<Commit>> {
     let head = repo
         .head_id()
         .map_err(|e| Error::git(format!("Failed to get HEAD: {e}")))?;
@@ -352,6 +381,16 @@ pub fn get_log_with_stats_gix(repo: &Repository, since: Option<&str>) -> Result<
             message,
             files,
         });
+
+        if let Some(max) = limit {
+            if commits.len() >= max {
+                break;
+            }
+        }
+    }
+
+    if let Some(max) = limit {
+        commits.truncate(max);
     }
 
     Ok(commits)
@@ -860,7 +899,7 @@ mod tests {
         // Get log for file1.rs only - should return 2 commits (Add file1, Modify file1)
         let file1_path = PathBuf::from("file1.rs");
         let paths = [file1_path];
-        let commits = get_log(&repo, None, Some(&paths)).expect("failed to get log");
+        let commits = get_log(&repo, None, Some(&paths), None).expect("failed to get log");
 
         // After fix: Should return only 2 commits that touch file1.rs
         assert_eq!(
@@ -914,5 +953,114 @@ mod tests {
         // Test invalid
         assert_eq!(parse_since_to_days("invalid"), None);
         assert_eq!(parse_since_to_days(""), None);
+    }
+
+    #[test]
+    fn test_get_log_with_stats_passes_limit_flag() {
+        use std::process::Command;
+
+        let temp = tempfile::tempdir().unwrap();
+        let repo_path = temp.path();
+
+        // Initialize git repo with multiple commits
+        Command::new("git")
+            .args(["init"])
+            .current_dir(repo_path)
+            .output()
+            .expect("failed to init git repo");
+        Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(repo_path)
+            .output()
+            .expect("failed to set git email");
+        Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(repo_path)
+            .output()
+            .expect("failed to set git name");
+
+        for i in 0..5 {
+            let filename = format!("file{}.rs", i);
+            std::fs::write(repo_path.join(&filename), format!("fn f{}() {{}}", i)).unwrap();
+            Command::new("git")
+                .args(["add", &filename])
+                .current_dir(repo_path)
+                .output()
+                .expect("failed to add file");
+            Command::new("git")
+                .args(["commit", "-m", &format!("Add file{}", i)])
+                .current_dir(repo_path)
+                .output()
+                .expect("failed to commit");
+        }
+
+        let repo = gix::open(repo_path).expect("failed to open repo");
+
+        // Without limit: all 5 commits
+        let all = get_log_with_stats(&repo, None, None).expect("failed to get log");
+        assert_eq!(all.len(), 5);
+
+        // With limit of 2: only 2 commits
+        let limited = get_log_with_stats(&repo, None, Some(2)).expect("failed to get limited log");
+        assert_eq!(
+            limited.len(),
+            2,
+            "Expected 2 commits with limit=2, got {}",
+            limited.len()
+        );
+    }
+
+    #[test]
+    fn test_get_log_respects_limit() {
+        use std::process::Command;
+
+        let temp = tempfile::tempdir().unwrap();
+        let repo_path = temp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(repo_path)
+            .output()
+            .expect("failed to init git repo");
+        Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(repo_path)
+            .output()
+            .expect("failed to set git email");
+        Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(repo_path)
+            .output()
+            .expect("failed to set git name");
+
+        for i in 0..5 {
+            let filename = format!("file{}.rs", i);
+            std::fs::write(repo_path.join(&filename), format!("fn f{}() {{}}", i)).unwrap();
+            Command::new("git")
+                .args(["add", &filename])
+                .current_dir(repo_path)
+                .output()
+                .expect("failed to add file");
+            Command::new("git")
+                .args(["commit", "-m", &format!("Add file{}", i)])
+                .current_dir(repo_path)
+                .output()
+                .expect("failed to commit");
+        }
+
+        let repo = gix::open(repo_path).expect("failed to open repo");
+
+        // Without limit: all 5 commits
+        let all = get_log(&repo, None, None, None).expect("failed to get log");
+        assert_eq!(all.len(), 5);
+
+        // With limit of 3: only 3 commits
+        let limited = get_log(&repo, None, None, Some(3)).expect("failed to get limited log");
+        assert_eq!(
+            limited.len(),
+            3,
+            "Expected 3 commits with limit=3, got {}",
+            limited.len()
+        );
     }
 }

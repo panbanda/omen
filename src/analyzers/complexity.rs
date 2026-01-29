@@ -1377,4 +1377,86 @@ def safe_parse(data):
             "try + nested if + except should equal 4 (except should not get nesting penalty)"
         );
     }
+
+    #[test]
+    fn test_complexity_python_conditional_expression() {
+        let code = br#"
+def pick(x):
+    return 1 if x > 0 else 0
+"#;
+        let result = parse_and_analyze(code, Language::Python, "test.py");
+        assert_eq!(result.functions.len(), 1);
+        // baseline 1 + conditional_expression 1 = 2
+        assert_eq!(
+            result.functions[0].metrics.cyclomatic, 2,
+            "Python ternary (conditional_expression) must count as a decision point"
+        );
+    }
+
+    #[test]
+    fn test_complexity_rust_while_let() {
+        // while let parses as while_expression with a let_condition child
+        // in tree-sitter-rust 0.23+, so it is already counted.
+        let code = br#"
+fn drain(v: &mut Vec<i32>) {
+    while let Some(x) = v.pop() {
+        println!("{}", x);
+    }
+}
+"#;
+        let result = parse_and_analyze(code, Language::Rust, "test.rs");
+        assert_eq!(result.functions.len(), 1);
+        // baseline 1 + while_expression 1 = 2
+        assert_eq!(
+            result.functions[0].metrics.cyclomatic, 2,
+            "Rust while-let must count as a decision point (via while_expression)"
+        );
+    }
+
+    #[test]
+    fn test_complexity_go_case_clauses() {
+        let code = br#"
+package main
+
+func classify(x int) string {
+    switch x {
+    case 0:
+        return "zero"
+    case 1:
+        return "one"
+    default:
+        return "other"
+    }
+}
+"#;
+        let result = parse_and_analyze(code, Language::Go, "test.go");
+        assert_eq!(result.functions.len(), 1);
+        // baseline 1 + expression_switch_statement 1 + expression_case * 2 = 4
+        // (default_case is not counted)
+        assert_eq!(
+            result.functions[0].metrics.cyclomatic, 4,
+            "Go switch with 2 case clauses: 1 base + 1 switch + 2 cases = 4"
+        );
+    }
+
+    #[test]
+    fn test_complexity_typescript_switch_case() {
+        let code = br#"
+function classify(x: number): string {
+    switch (x) {
+        case 0: return "zero";
+        case 1: return "one";
+        default: return "other";
+    }
+}
+"#;
+        let result = parse_and_analyze(code, Language::TypeScript, "test.ts");
+        assert_eq!(result.functions.len(), 1);
+        // baseline 1 + switch_statement 1 + switch_case * 2 = 4
+        // (default_clause is not a switch_case, so not counted)
+        assert!(
+            result.functions[0].metrics.cyclomatic >= 4,
+            "TypeScript switch with 2 case clauses should count each case as a decision point"
+        );
+    }
 }
