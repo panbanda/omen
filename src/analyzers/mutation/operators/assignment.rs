@@ -17,6 +17,7 @@ use crate::parser::ParseResult;
 
 use super::super::operator::MutationOperator;
 use super::super::Mutant;
+use super::{mutant_from_node, walk_and_collect_mutants};
 
 /// ASR (Assignment Operator Replacement) operator.
 pub struct AssignmentOperator;
@@ -31,19 +32,14 @@ impl MutationOperator for AssignmentOperator {
     }
 
     fn generate_mutants(&self, result: &ParseResult, mutant_id_prefix: &str) -> Vec<Mutant> {
-        let mut mutants = Vec::new();
-        let root = result.root_node();
         let assignment_types = get_assignment_expression_types(result.language);
-
+        let lang = result.language;
         let mut counter = 0;
-        let mut cursor = root.walk();
-
-        loop {
-            let node = cursor.node();
+        walk_and_collect_mutants(result, |node| {
             let kind = node.kind();
+            let mut mutants = Vec::new();
 
             if assignment_types.contains(&kind) {
-                // Find the operator child
                 for child in node.children(&mut node.walk()) {
                     if is_compound_assignment_operator(child.kind()) {
                         if let Ok(op_text) = child.utf8_text(&result.source) {
@@ -51,17 +47,14 @@ impl MutationOperator for AssignmentOperator {
                             for replacement in replacements {
                                 counter += 1;
                                 let id = format!("{}-{}", mutant_id_prefix, counter);
-                                let start = child.start_position();
-                                mutants.push(Mutant::new(
+                                mutants.push(mutant_from_node(
                                     id,
                                     result.path.clone(),
                                     self.name(),
-                                    (start.row + 1) as u32,
-                                    (start.column + 1) as u32,
+                                    &child,
                                     op_text,
                                     replacement.clone(),
                                     format!("Replace {} with {}", op_text, replacement),
-                                    (child.start_byte(), child.end_byte()),
                                 ));
                             }
                         }
@@ -69,12 +62,9 @@ impl MutationOperator for AssignmentOperator {
                 }
             }
 
-            // Also check for compound assignment statements (language-specific)
-            if is_compound_assignment_statement(kind, result.language) {
-                // The operator might be embedded in the node kind itself
+            if is_compound_assignment_statement(kind, lang) {
                 if let Some(replacements) = get_replacement_for_node_kind(kind) {
                     if let Ok(node_text) = node.utf8_text(&result.source) {
-                        // Find the operator position within the statement
                         for (op, replacement) in replacements {
                             if node_text.contains(op) {
                                 counter += 1;
@@ -97,20 +87,8 @@ impl MutationOperator for AssignmentOperator {
                 }
             }
 
-            // Tree traversal
-            if cursor.goto_first_child() {
-                continue;
-            }
-
-            loop {
-                if cursor.goto_next_sibling() {
-                    break;
-                }
-                if !cursor.goto_parent() {
-                    return mutants;
-                }
-            }
-        }
+            mutants
+        })
     }
 
     fn supports_language(&self, _lang: Language) -> bool {

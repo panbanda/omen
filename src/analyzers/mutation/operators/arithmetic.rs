@@ -51,13 +51,7 @@ fn is_arithmetic_operator(kind: &str) -> bool {
 
 /// Get replacement operators for an arithmetic operator.
 fn get_arithmetic_replacements(op: &str) -> Vec<String> {
-    let all_ops = ["+", "-", "*", "/", "%"];
-
-    all_ops
-        .iter()
-        .filter(|&&o| o != op)
-        .map(|&o| o.to_string())
-        .collect()
+    super::replacements_excluding_self(&["+", "-", "*", "/", "%"], op)
 }
 
 #[cfg(test)]

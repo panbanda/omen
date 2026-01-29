@@ -50,6 +50,42 @@ pub use unary::UnaryOperator;
 
 use super::operator::OperatorRegistry;
 
+/// Build a list of replacement operators by returning all `ops` except `current`.
+pub fn replacements_excluding_self(ops: &[&str], current: &str) -> Vec<String> {
+    ops.iter()
+        .filter(|&&o| o != current)
+        .map(|&o| o.to_string())
+        .collect()
+}
+
+/// Create a single `Mutant` from a tree-sitter node.
+///
+/// Centralizes the common pattern of extracting position and byte range from a node
+/// and constructing a `Mutant`. Used by operators that build mutants from individual
+/// AST nodes (literal, return value, statement, boundary, etc.).
+pub fn mutant_from_node(
+    id: String,
+    path: std::path::PathBuf,
+    operator_name: &'static str,
+    node: &tree_sitter::Node,
+    original: impl Into<String>,
+    replacement: impl Into<String>,
+    description: impl Into<String>,
+) -> Mutant {
+    let start = node.start_position();
+    Mutant::new(
+        id,
+        path,
+        operator_name,
+        (start.row + 1) as u32,
+        (start.column + 1) as u32,
+        original,
+        replacement,
+        description,
+        (node.start_byte(), node.end_byte()),
+    )
+}
+
 /// Helper function for generating mutants from binary operators.
 ///
 /// All binary operator mutators (AOR, ROR, COR, BOR, ASR) share the same tree traversal

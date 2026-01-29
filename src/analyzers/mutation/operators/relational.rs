@@ -55,13 +55,7 @@ fn is_relational_operator(kind: &str) -> bool {
 
 /// Get replacement operators for a relational operator.
 fn get_relational_replacements(op: &str) -> Vec<String> {
-    let all_ops = ["<", "<=", ">", ">=", "==", "!="];
-
-    all_ops
-        .iter()
-        .filter(|&&o| o != op)
-        .map(|&o| o.to_string())
-        .collect()
+    super::replacements_excluding_self(&["<", "<=", ">", ">=", "==", "!="], op)
 }
 
 #[cfg(test)]

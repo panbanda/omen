@@ -11,7 +11,7 @@ use crate::parser::ParseResult;
 
 use super::super::super::operator::MutationOperator;
 use super::super::super::Mutant;
-use super::super::walk_and_collect_mutants;
+use super::super::{mutant_from_node, walk_and_collect_mutants};
 
 /// Rust Result mutation operator.
 ///
@@ -60,23 +60,20 @@ impl ResultOperator {
         let function_node = node.child_by_field_name("function")?;
         let function_text = function_node.utf8_text(&result.source).ok()?;
 
+        let original = node.utf8_text(&result.source).ok()?;
+
         // Check for Ok(x) or Result::Ok(x)
         if function_text == "Ok" || function_text.ends_with("::Ok") {
             *counter += 1;
             let id = format!("{}-{}", prefix, counter);
-            let start = node.start_position();
-            let original = node.utf8_text(&result.source).ok()?;
-
-            mutants.push(Mutant::new(
+            mutants.push(mutant_from_node(
                 id,
                 result.path.clone(),
                 self.name(),
-                (start.row + 1) as u32,
-                (start.column + 1) as u32,
+                node,
                 original,
                 "Err(Default::default())",
                 format!("Replace {} with Err(Default::default())", original),
-                (node.start_byte(), node.end_byte()),
             ));
         }
 
@@ -84,137 +81,60 @@ impl ResultOperator {
         if function_text == "Err" || function_text.ends_with("::Err") {
             *counter += 1;
             let id = format!("{}-{}", prefix, counter);
-            let start = node.start_position();
-            let original = node.utf8_text(&result.source).ok()?;
-
-            mutants.push(Mutant::new(
+            mutants.push(mutant_from_node(
                 id,
                 result.path.clone(),
                 self.name(),
-                (start.row + 1) as u32,
-                (start.column + 1) as u32,
+                node,
                 original,
                 "Ok(Default::default())",
                 format!("Replace {} with Ok(Default::default())", original),
-                (node.start_byte(), node.end_byte()),
             ));
         }
 
-        // Check for method calls like .unwrap()
-        if function_text.ends_with(".unwrap") {
-            // .unwrap() -> .expect("mutated")
-            *counter += 1;
-            let id = format!("{}-{}", prefix, counter);
-            let start = function_node.start_position();
-            let original = node.utf8_text(&result.source).ok()?;
+        // Method suffix replacements: (suffix, replacement_fmt, description)
+        let method_mutations: &[(&str, &str, &str)] = &[
+            (
+                ".unwrap",
+                ".expect(\"mutated\")",
+                "Replace .unwrap() with .expect(\"mutated\")",
+            ),
+            (
+                ".unwrap_err",
+                ".expect_err(\"mutated\")",
+                "Replace .unwrap_err() with .expect_err(\"mutated\")",
+            ),
+            (
+                ".unwrap_or",
+                ".unwrap()",
+                "Replace .unwrap_or(...) with .unwrap()",
+            ),
+            (
+                ".unwrap_or_else",
+                ".unwrap()",
+                "Replace .unwrap_or_else(...) with .unwrap()",
+            ),
+            (
+                ".unwrap_or_default",
+                ".unwrap()",
+                "Replace .unwrap_or_default() with .unwrap()",
+            ),
+        ];
 
-            // Find the receiver (everything before .unwrap)
-            let receiver_end = function_text.len() - ".unwrap".len();
-            let receiver = &function_text[..receiver_end];
-
-            mutants.push(Mutant::new(
-                id,
-                result.path.clone(),
-                self.name(),
-                (start.row + 1) as u32,
-                (start.column + 1) as u32,
-                original,
-                format!("{}.expect(\"mutated\")", receiver),
-                "Replace .unwrap() with .expect(\"mutated\")".to_string(),
-                (node.start_byte(), node.end_byte()),
-            ));
-        }
-
-        if function_text.ends_with(".unwrap_err") {
-            // .unwrap_err() -> .expect_err("mutated")
-            *counter += 1;
-            let id = format!("{}-{}", prefix, counter);
-            let start = function_node.start_position();
-            let original = node.utf8_text(&result.source).ok()?;
-
-            let receiver_end = function_text.len() - ".unwrap_err".len();
-            let receiver = &function_text[..receiver_end];
-
-            mutants.push(Mutant::new(
-                id,
-                result.path.clone(),
-                self.name(),
-                (start.row + 1) as u32,
-                (start.column + 1) as u32,
-                original,
-                format!("{}.expect_err(\"mutated\")", receiver),
-                "Replace .unwrap_err() with .expect_err(\"mutated\")".to_string(),
-                (node.start_byte(), node.end_byte()),
-            ));
-        }
-
-        if function_text.ends_with(".unwrap_or") {
-            // .unwrap_or(default) -> .unwrap()
-            *counter += 1;
-            let id = format!("{}-{}", prefix, counter);
-            let start = function_node.start_position();
-            let original = node.utf8_text(&result.source).ok()?;
-
-            let receiver_end = function_text.len() - ".unwrap_or".len();
-            let receiver = &function_text[..receiver_end];
-
-            mutants.push(Mutant::new(
-                id,
-                result.path.clone(),
-                self.name(),
-                (start.row + 1) as u32,
-                (start.column + 1) as u32,
-                original,
-                format!("{}.unwrap()", receiver),
-                "Replace .unwrap_or(...) with .unwrap()".to_string(),
-                (node.start_byte(), node.end_byte()),
-            ));
-        }
-
-        if function_text.ends_with(".unwrap_or_else") {
-            // .unwrap_or_else(f) -> .unwrap()
-            *counter += 1;
-            let id = format!("{}-{}", prefix, counter);
-            let start = function_node.start_position();
-            let original = node.utf8_text(&result.source).ok()?;
-
-            let receiver_end = function_text.len() - ".unwrap_or_else".len();
-            let receiver = &function_text[..receiver_end];
-
-            mutants.push(Mutant::new(
-                id,
-                result.path.clone(),
-                self.name(),
-                (start.row + 1) as u32,
-                (start.column + 1) as u32,
-                original,
-                format!("{}.unwrap()", receiver),
-                "Replace .unwrap_or_else(...) with .unwrap()".to_string(),
-                (node.start_byte(), node.end_byte()),
-            ));
-        }
-
-        if function_text.ends_with(".unwrap_or_default") {
-            // .unwrap_or_default() -> .unwrap()
-            *counter += 1;
-            let id = format!("{}-{}", prefix, counter);
-            let start = function_node.start_position();
-            let original = node.utf8_text(&result.source).ok()?;
-
-            let receiver_end = function_text.len() - ".unwrap_or_default".len();
-            let receiver = &function_text[..receiver_end];
-
-            mutants.push(Mutant::new(
-                id,
-                result.path.clone(),
-                self.name(),
-                (start.row + 1) as u32,
-                (start.column + 1) as u32,
-                original,
-                format!("{}.unwrap()", receiver),
-                "Replace .unwrap_or_default() with .unwrap()".to_string(),
-                (node.start_byte(), node.end_byte()),
-            ));
+        for &(suffix, replacement_method, description) in method_mutations {
+            if let Some(receiver) = function_text.strip_suffix(suffix) {
+                *counter += 1;
+                let id = format!("{}-{}", prefix, counter);
+                mutants.push(mutant_from_node(
+                    id,
+                    result.path.clone(),
+                    self.name(),
+                    node,
+                    original,
+                    format!("{}{}", receiver, replacement_method),
+                    description,
+                ));
+            }
         }
 
         if mutants.is_empty() {
@@ -238,42 +158,33 @@ impl ResultOperator {
         let macro_node = node.child_by_field_name("macro")?;
         let macro_text = macro_node.utf8_text(&result.source).ok()?;
 
-        // Check for Ok! or Err! macros (custom macros wrapping Ok/Err)
+        let original = node.utf8_text(&result.source).ok()?;
+
         if macro_text == "Ok" {
             *counter += 1;
             let id = format!("{}-{}", prefix, counter);
-            let start = node.start_position();
-            let original = node.utf8_text(&result.source).ok()?;
-
-            mutants.push(Mutant::new(
+            mutants.push(mutant_from_node(
                 id,
                 result.path.clone(),
                 self.name(),
-                (start.row + 1) as u32,
-                (start.column + 1) as u32,
+                node,
                 original,
                 "Err(Default::default())",
                 format!("Replace {} with Err(Default::default())", original),
-                (node.start_byte(), node.end_byte()),
             ));
         }
 
         if macro_text == "Err" {
             *counter += 1;
             let id = format!("{}-{}", prefix, counter);
-            let start = node.start_position();
-            let original = node.utf8_text(&result.source).ok()?;
-
-            mutants.push(Mutant::new(
+            mutants.push(mutant_from_node(
                 id,
                 result.path.clone(),
                 self.name(),
-                (start.row + 1) as u32,
-                (start.column + 1) as u32,
+                node,
                 original,
                 "Ok(Default::default())",
                 format!("Replace {} with Ok(Default::default())", original),
-                (node.start_byte(), node.end_byte()),
             ));
         }
 

@@ -15,7 +15,7 @@ use crate::parser::ParseResult;
 
 use super::super::operator::MutationOperator;
 use super::super::Mutant;
-use super::walk_and_collect_mutants;
+use super::{mutant_from_node, walk_and_collect_mutants};
 
 /// BVO (Boundary Value Operator) operator.
 pub struct BoundaryOperator;
@@ -121,17 +121,14 @@ fn generate_comparison_boundary_mutants(
                         for replacement in replacements {
                             *counter += 1;
                             let id = format!("{}-{}", prefix, counter);
-                            let start = right.start_position();
-                            mutants.push(Mutant::new(
+                            mutants.push(mutant_from_node(
                                 id,
                                 result.path.clone(),
                                 "BVO",
-                                (start.row + 1) as u32,
-                                (start.column + 1) as u32,
+                                &right,
                                 num_text,
                                 replacement.clone(),
                                 format!("Boundary: change {} to {}", num_text, replacement),
-                                (right.start_byte(), right.end_byte()),
                             ));
                         }
                     }
@@ -140,32 +137,26 @@ fn generate_comparison_boundary_mutants(
                     if op_text == "<=" {
                         *counter += 1;
                         let id = format!("{}-{}", prefix, counter);
-                        let start = op_node.start_position();
-                        mutants.push(Mutant::new(
+                        mutants.push(mutant_from_node(
                             id,
                             result.path.clone(),
                             "BVO",
-                            (start.row + 1) as u32,
-                            (start.column + 1) as u32,
+                            &op_node,
                             op_text,
                             "<",
                             format!("Boundary: change {} to <", op_text),
-                            (op_node.start_byte(), op_node.end_byte()),
                         ));
                     } else if op_text == ">=" {
                         *counter += 1;
                         let id = format!("{}-{}", prefix, counter);
-                        let start = op_node.start_position();
-                        mutants.push(Mutant::new(
+                        mutants.push(mutant_from_node(
                             id,
                             result.path.clone(),
                             "BVO",
-                            (start.row + 1) as u32,
-                            (start.column + 1) as u32,
+                            &op_node,
                             op_text,
                             ">",
                             format!("Boundary: change {} to >", op_text),
-                            (op_node.start_byte(), op_node.end_byte()),
                         ));
                     }
                 }
@@ -195,17 +186,14 @@ fn generate_index_boundary_mutants(
                     for replacement in replacements {
                         *counter += 1;
                         let id = format!("{}-{}", prefix, counter);
-                        let start = child.start_position();
-                        mutants.push(Mutant::new(
+                        mutants.push(mutant_from_node(
                             id,
                             result.path.clone(),
                             "BVO",
-                            (start.row + 1) as u32,
-                            (start.column + 1) as u32,
+                            &child,
                             num_text,
                             replacement.clone(),
                             format!("Boundary: change index {} to {}", num_text, replacement),
-                            (child.start_byte(), child.end_byte()),
                         ));
                     }
                 }
@@ -213,22 +201,18 @@ fn generate_index_boundary_mutants(
         } else if child.kind() == "identifier" || is_identifier_like(child.kind(), result.language)
         {
             if let Ok(id_text) = child.utf8_text(&result.source) {
-                // Generate i-1 and i+1 mutations for identifier indices
                 let replacements = get_boundary_identifier_replacements(id_text);
                 for replacement in replacements {
                     *counter += 1;
                     let id = format!("{}-{}", prefix, counter);
-                    let start = child.start_position();
-                    mutants.push(Mutant::new(
+                    mutants.push(mutant_from_node(
                         id,
                         result.path.clone(),
                         "BVO",
-                        (start.row + 1) as u32,
-                        (start.column + 1) as u32,
+                        &child,
                         id_text,
                         replacement.clone(),
                         format!("Boundary: change index {} to {}", id_text, replacement),
-                        (child.start_byte(), child.end_byte()),
                     ));
                 }
             }

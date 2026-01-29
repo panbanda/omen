@@ -11,7 +11,7 @@ use crate::parser::ParseResult;
 
 use super::super::super::operator::MutationOperator;
 use super::super::super::Mutant;
-use super::super::walk_and_collect_mutants;
+use super::super::{mutant_from_node, walk_and_collect_mutants};
 
 /// Rust borrow mutation operator.
 ///
@@ -56,7 +56,6 @@ impl BorrowOperator {
     ) -> Option<Vec<Mutant>> {
         let mut mutants = Vec::new();
         let original = node.utf8_text(&result.source).ok()?;
-        let start = node.start_position();
 
         // Check if this is a mutable reference
         let has_mutable = node
@@ -67,39 +66,29 @@ impl BorrowOperator {
         let value_node = node.child_by_field_name("value")?;
         let value_text = value_node.utf8_text(&result.source).ok()?;
 
-        if has_mutable {
-            // &mut x -> &x
-            *counter += 1;
-            let id = format!("{}-{}", prefix, counter);
-
-            mutants.push(Mutant::new(
-                id,
-                result.path.clone(),
-                self.name(),
-                (start.row + 1) as u32,
-                (start.column + 1) as u32,
-                original,
+        let (replacement, description) = if has_mutable {
+            (
                 format!("&{}", value_text),
                 format!("Replace &mut {} with &{}", value_text, value_text),
-                (node.start_byte(), node.end_byte()),
-            ));
+            )
         } else {
-            // &x -> &mut x
-            *counter += 1;
-            let id = format!("{}-{}", prefix, counter);
-
-            mutants.push(Mutant::new(
-                id,
-                result.path.clone(),
-                self.name(),
-                (start.row + 1) as u32,
-                (start.column + 1) as u32,
-                original,
+            (
                 format!("&mut {}", value_text),
                 format!("Replace &{} with &mut {}", value_text, value_text),
-                (node.start_byte(), node.end_byte()),
-            ));
-        }
+            )
+        };
+
+        *counter += 1;
+        let id = format!("{}-{}", prefix, counter);
+        mutants.push(mutant_from_node(
+            id,
+            result.path.clone(),
+            self.name(),
+            node,
+            original,
+            replacement,
+            description,
+        ));
 
         Some(mutants)
     }
@@ -118,96 +107,30 @@ impl BorrowOperator {
         let function_node = node.child_by_field_name("function")?;
         let function_text = function_node.utf8_text(&result.source).ok()?;
 
-        // Check for .clone() method
-        if function_text.ends_with(".clone") {
-            let receiver_end = function_text.len() - ".clone".len();
-            let receiver = &function_text[..receiver_end];
+        let original = node.utf8_text(&result.source).ok()?;
 
-            *counter += 1;
-            let id = format!("{}-{}", prefix, counter);
-            let start = node.start_position();
-            let original = node.utf8_text(&result.source).ok()?;
+        // Method suffix removals: (suffix, display_suffix)
+        let method_removals: &[(&str, &str)] = &[
+            (".clone", ".clone()"),
+            (".to_owned", ".to_owned()"),
+            (".to_string", ".to_string()"),
+            (".into", ".into()"),
+        ];
 
-            mutants.push(Mutant::new(
-                id,
-                result.path.clone(),
-                self.name(),
-                (start.row + 1) as u32,
-                (start.column + 1) as u32,
-                original,
-                receiver.to_string(),
-                format!("Remove .clone() from {}", receiver),
-                (node.start_byte(), node.end_byte()),
-            ));
-        }
-
-        // Check for .to_owned() method
-        if function_text.ends_with(".to_owned") {
-            let receiver_end = function_text.len() - ".to_owned".len();
-            let receiver = &function_text[..receiver_end];
-
-            *counter += 1;
-            let id = format!("{}-{}", prefix, counter);
-            let start = node.start_position();
-            let original = node.utf8_text(&result.source).ok()?;
-
-            mutants.push(Mutant::new(
-                id,
-                result.path.clone(),
-                self.name(),
-                (start.row + 1) as u32,
-                (start.column + 1) as u32,
-                original,
-                receiver.to_string(),
-                format!("Remove .to_owned() from {}", receiver),
-                (node.start_byte(), node.end_byte()),
-            ));
-        }
-
-        // Check for .to_string() method (similar to clone for strings)
-        if function_text.ends_with(".to_string") {
-            let receiver_end = function_text.len() - ".to_string".len();
-            let receiver = &function_text[..receiver_end];
-
-            *counter += 1;
-            let id = format!("{}-{}", prefix, counter);
-            let start = node.start_position();
-            let original = node.utf8_text(&result.source).ok()?;
-
-            mutants.push(Mutant::new(
-                id,
-                result.path.clone(),
-                self.name(),
-                (start.row + 1) as u32,
-                (start.column + 1) as u32,
-                original,
-                receiver.to_string(),
-                format!("Remove .to_string() from {}", receiver),
-                (node.start_byte(), node.end_byte()),
-            ));
-        }
-
-        // Check for .into() method (ownership transfer)
-        if function_text.ends_with(".into") {
-            let receiver_end = function_text.len() - ".into".len();
-            let receiver = &function_text[..receiver_end];
-
-            *counter += 1;
-            let id = format!("{}-{}", prefix, counter);
-            let start = node.start_position();
-            let original = node.utf8_text(&result.source).ok()?;
-
-            mutants.push(Mutant::new(
-                id,
-                result.path.clone(),
-                self.name(),
-                (start.row + 1) as u32,
-                (start.column + 1) as u32,
-                original,
-                receiver.to_string(),
-                format!("Remove .into() from {}", receiver),
-                (node.start_byte(), node.end_byte()),
-            ));
+        for &(suffix, display) in method_removals {
+            if let Some(receiver) = function_text.strip_suffix(suffix) {
+                *counter += 1;
+                let id = format!("{}-{}", prefix, counter);
+                mutants.push(mutant_from_node(
+                    id,
+                    result.path.clone(),
+                    self.name(),
+                    node,
+                    original,
+                    receiver.to_string(),
+                    format!("Remove {} from {}", display, receiver),
+                ));
+            }
         }
 
         if mutants.is_empty() {

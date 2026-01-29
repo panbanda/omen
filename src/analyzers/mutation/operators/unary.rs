@@ -15,7 +15,7 @@ use crate::parser::ParseResult;
 
 use super::super::operator::MutationOperator;
 use super::super::Mutant;
-use super::walk_and_collect_mutants;
+use super::{mutant_from_node, walk_and_collect_mutants};
 
 /// UOR (Unary Operator Replacement) operator.
 ///
@@ -42,17 +42,14 @@ impl MutationOperator for UnaryOperator {
             {
                 counter += 1;
                 let id = format!("{}-{}", mutant_id_prefix, counter);
-                let start = node.start_position();
-                vec![Mutant::new(
+                vec![mutant_from_node(
                     id,
                     result.path.clone(),
                     self.name(),
-                    (start.row + 1) as u32,
-                    (start.column + 1) as u32,
+                    &node,
                     mutant_info.original,
                     mutant_info.replacement,
                     mutant_info.description,
-                    (node.start_byte(), node.end_byte()),
                 )]
             } else {
                 Vec::new()

@@ -18,7 +18,7 @@ use crate::parser::ParseResult;
 
 use super::super::operator::MutationOperator;
 use super::super::Mutant;
-use super::walk_and_collect_mutants;
+use super::{mutant_from_node, walk_and_collect_mutants};
 
 /// RVR (Return Value Replacement) operator.
 ///
@@ -51,17 +51,14 @@ impl MutationOperator for ReturnValueOperator {
                 .map(|replacement| {
                     counter += 1;
                     let id = format!("{}-{}", mutant_id_prefix, counter);
-                    let start = node.start_position();
-                    Mutant::new(
+                    mutant_from_node(
                         id,
                         result.path.clone(),
                         self.name(),
-                        (start.row + 1) as u32,
-                        (start.column + 1) as u32,
+                        &node,
                         text,
                         replacement.clone(),
                         format!("Replace return with {}", truncate_replacement(&replacement)),
-                        (node.start_byte(), node.end_byte()),
                     )
                 })
                 .collect()
