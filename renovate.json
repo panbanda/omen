@@ -6,47 +6,73 @@
     ":separateMajorReleases",
     "schedule:weekly"
   ],
-  "labels": ["dependencies"],
+  "labels": [
+    "dependencies"
+  ],
   "prConcurrentLimit": 3,
   "prHourlyLimit": 2,
   "minimumReleaseAge": "3 days",
   "packageRules": [
     {
       "description": "Group all tree-sitter packages",
-      "matchPackagePatterns": ["^tree-sitter"],
-      "groupName": "tree-sitter packages"
+      "groupName": "tree-sitter packages",
+      "matchPackageNames": [
+        "/^tree-sitter/"
+      ]
     },
     {
       "description": "Group all GitHub Actions",
-      "matchManagers": ["github-actions"],
+      "matchManagers": [
+        "github-actions"
+      ],
       "groupName": "github-actions"
     },
     {
       "description": "Automerge patch updates for dev dependencies",
-      "matchDepTypes": ["dev-dependencies"],
-      "matchUpdateTypes": ["patch"],
+      "matchDepTypes": [
+        "dev-dependencies"
+      ],
+      "matchUpdateTypes": [
+        "patch"
+      ],
       "automerge": true
     },
     {
       "description": "Automerge patch updates for GitHub Actions",
-      "matchManagers": ["github-actions"],
-      "matchUpdateTypes": ["patch", "minor"],
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "patch",
+        "minor"
+      ],
       "automerge": true
     },
     {
       "description": "Disable golang updates (project is Rust, not Go)",
-      "matchPackageNames": ["golang"],
+      "matchPackageNames": [
+        "golang"
+      ],
       "enabled": false
     },
     {
       "description": "Require manual review for major updates",
-      "matchUpdateTypes": ["major"],
-      "labels": ["dependencies", "breaking"]
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "labels": [
+        "dependencies",
+        "breaking"
+      ]
     }
   ],
   "vulnerabilityAlerts": {
-    "labels": ["security"],
-    "schedule": ["at any time"]
+    "labels": [
+      "security"
+    ],
+    "schedule": [
+      "at any time"
+    ]
   },
   "ignoreDeps": [
     "rust"
