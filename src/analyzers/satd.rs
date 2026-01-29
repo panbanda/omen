@@ -152,7 +152,10 @@ impl AnalyzerTrait for Analyzer {
         let files: Vec<_> = ctx.files.iter().collect();
         let (items, total_loc): (Vec<SatdItem>, usize) = files
             .par_iter()
-            .filter_map(|path| SourceFile::load(path).ok())
+            .filter_map(|path| {
+                let full_path = ctx.root.join(path);
+                SourceFile::load(&full_path).ok()
+            })
             .map(|file| {
                 let loc = file.lines_of_code();
                 let file_items = self.analyze_file(&file);

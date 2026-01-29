@@ -282,6 +282,8 @@ pub struct TrendPoint {
     pub score: i32,
     #[serde(default)]
     pub components: HashMap<String, i32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notable_commits: Vec<String>,
 }
 
 /// ComponentTrendStats contains trend statistics for a component.
