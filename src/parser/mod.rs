@@ -242,6 +242,11 @@ pub fn extract_imports(result: &ParseResult) -> Vec<ImportNode> {
                     imports.push(import);
                 }
             }
+            Language::Ruby if node.kind() == "class" => {
+                if let Some(import) = extract_ruby_superclass(&node, source) {
+                    imports.push(import);
+                }
+            }
             _ => {}
         }
 
@@ -427,13 +432,47 @@ fn extract_java_import(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<Im
 }
 
 fn extract_ruby_import(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<ImportNode> {
-    // Ruby uses require/require_relative
     let method = find_named_child(node, "identifier", source)?;
-    if method != "require" && method != "require_relative" {
-        return None;
-    }
+    let line = node.start_position().row as u32 + 1;
 
-    let path = node.utf8_text(source).ok()?.to_string();
+    let args = find_node_child(node, "argument_list")?;
+
+    match method.as_str() {
+        "require" | "require_relative" => {
+            let string_node = find_node_child(&args, "string")?;
+            let content = find_named_child(&string_node, "string_content", source)?;
+            Some(ImportNode {
+                path: content,
+                line,
+                names: Vec::new(),
+            })
+        }
+        "include" | "extend" | "prepend" => {
+            let path = find_named_child(&args, "constant", source)
+                .or_else(|| find_named_child(&args, "scope_resolution", source))?;
+            Some(ImportNode {
+                path,
+                line,
+                names: Vec::new(),
+            })
+        }
+        "autoload" => {
+            let string_node = find_node_child(&args, "string")?;
+            let content = find_named_child(&string_node, "string_content", source)?;
+            Some(ImportNode {
+                path: content,
+                line,
+                names: Vec::new(),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn extract_ruby_superclass(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<ImportNode> {
+    let superclass = find_node_child(node, "superclass")?;
+    let path = find_named_child(&superclass, "constant", source)
+        .or_else(|| find_named_child(&superclass, "scope_resolution", source))?;
     Some(ImportNode {
         path,
         line: node.start_position().row as u32 + 1,
@@ -749,7 +788,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_ruby_imports() {
+    fn test_extract_ruby_require_path() {
         let parser = Parser::new();
         let content = b"require 'json'\n\ndef main; end";
         let result = parser
@@ -757,7 +796,206 @@ mod tests {
             .unwrap();
 
         let imports = extract_imports(&result);
-        assert!(!imports.is_empty());
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].path, "json");
+        assert_eq!(imports[0].line, 1);
+    }
+
+    #[test]
+    fn test_extract_ruby_require_relative() {
+        let parser = Parser::new();
+        let content = b"require_relative './helper'";
+        let result = parser
+            .parse(content, Language::Ruby, Path::new("main.rb"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].path, "./helper");
+    }
+
+    #[test]
+    fn test_extract_ruby_require_double_quotes() {
+        let parser = Parser::new();
+        let content = b"require \"json\"";
+        let result = parser
+            .parse(content, Language::Ruby, Path::new("main.rb"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].path, "json");
+    }
+
+    #[test]
+    fn test_extract_ruby_include() {
+        let parser = Parser::new();
+        let content = b"class Foo\n  include Comparable\nend";
+        let result = parser
+            .parse(content, Language::Ruby, Path::new("foo.rb"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].path, "Comparable");
+    }
+
+    #[test]
+    fn test_extract_ruby_extend() {
+        let parser = Parser::new();
+        let content = b"class Foo\n  extend ClassMethods\nend";
+        let result = parser
+            .parse(content, Language::Ruby, Path::new("foo.rb"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].path, "ClassMethods");
+    }
+
+    #[test]
+    fn test_extract_ruby_prepend() {
+        let parser = Parser::new();
+        let content = b"class Foo\n  prepend Validation\nend";
+        let result = parser
+            .parse(content, Language::Ruby, Path::new("foo.rb"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].path, "Validation");
+    }
+
+    #[test]
+    fn test_extract_ruby_include_scoped() {
+        let parser = Parser::new();
+        let content = b"class Foo\n  include ActiveModel::Validations\nend";
+        let result = parser
+            .parse(content, Language::Ruby, Path::new("foo.rb"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].path, "ActiveModel::Validations");
+    }
+
+    #[test]
+    fn test_extract_ruby_autoload() {
+        let parser = Parser::new();
+        let content = b"autoload :Foo, 'foo'";
+        let result = parser
+            .parse(content, Language::Ruby, Path::new("main.rb"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].path, "foo");
+    }
+
+    #[test]
+    fn test_extract_ruby_multiple_imports() {
+        let parser = Parser::new();
+        let content = b"require 'json'\nrequire 'yaml'\n\nclass Foo\n  include Comparable\n  extend ClassMethods\nend";
+        let result = parser
+            .parse(content, Language::Ruby, Path::new("foo.rb"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert_eq!(imports.len(), 4);
+    }
+
+    #[test]
+    fn test_extract_ruby_ignores_other_calls() {
+        let parser = Parser::new();
+        let content = b"puts 'hello'\nfoo('bar')";
+        let result = parser
+            .parse(content, Language::Ruby, Path::new("main.rb"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert!(imports.is_empty());
+    }
+
+    #[test]
+    fn test_extract_ruby_require_not_in_string() {
+        let parser = Parser::new();
+        let content = b"x = \"require 'json'\"";
+        let result = parser
+            .parse(content, Language::Ruby, Path::new("main.rb"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert!(imports.is_empty());
+    }
+
+    #[test]
+    fn test_extract_ruby_multiple_includes() {
+        let parser = Parser::new();
+        let content =
+            b"class Foo\n  include Comparable\n  include Enumerable\n  prepend Caching\nend";
+        let result = parser
+            .parse(content, Language::Ruby, Path::new("foo.rb"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert_eq!(imports.len(), 3);
+        assert_eq!(imports[0].path, "Comparable");
+        assert_eq!(imports[1].path, "Enumerable");
+        assert_eq!(imports[2].path, "Caching");
+    }
+
+    #[test]
+    fn test_extract_ruby_inheritance() {
+        let parser = Parser::new();
+        let content = b"class Order < ApplicationRecord\nend";
+        let result = parser
+            .parse(content, Language::Ruby, Path::new("order.rb"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].path, "ApplicationRecord");
+    }
+
+    #[test]
+    fn test_extract_ruby_inheritance_scoped() {
+        let parser = Parser::new();
+        let content = b"class User < ActiveRecord::Base\nend";
+        let result = parser
+            .parse(content, Language::Ruby, Path::new("user.rb"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].path, "ActiveRecord::Base");
+    }
+
+    #[test]
+    fn test_extract_ruby_inheritance_with_includes() {
+        let parser = Parser::new();
+        let content =
+            b"class Order < ApplicationRecord\n  include Searchable\n  extend ClassMethods\nend";
+        let result = parser
+            .parse(content, Language::Ruby, Path::new("order.rb"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert_eq!(imports.len(), 3);
+        assert_eq!(imports[0].path, "ApplicationRecord");
+        assert_eq!(imports[1].path, "Searchable");
+        assert_eq!(imports[2].path, "ClassMethods");
+    }
+
+    #[test]
+    fn test_extract_ruby_class_without_superclass() {
+        let parser = Parser::new();
+        let content = b"class Foo\n  def bar; end\nend";
+        let result = parser
+            .parse(content, Language::Ruby, Path::new("foo.rb"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert!(imports.is_empty());
     }
 
     #[test]
