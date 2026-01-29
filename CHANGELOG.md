@@ -1,5 +1,14 @@
 # Changelog
 
+## [4.13.1](https://github.com/panbanda/omen/compare/omen-v4.13.0...omen-v4.13.1) (2026-01-29)
+
+
+### Bug Fixes
+
+* audit-driven analyzer fixes, parallelization, and test coverage ([79cdc5c](https://github.com/panbanda/omen/commit/79cdc5c2b3d856392730ea2fe2d8222d8ca3c61d))
+* audit-driven analyzer fixes, parallelization, and test coverage ([50a2b7c](https://github.com/panbanda/omen/commit/50a2b7c084f29f8c49f325d9880b75f8d87ea94a))
+* resolve clippy warnings from pre-commit lint ([462dd0b](https://github.com/panbanda/omen/commit/462dd0b003b50fd9ea14e0562b66375fa4ff654a))
+
 ## [4.13.0](https://github.com/panbanda/omen/compare/omen-v4.12.0...omen-v4.13.0) (2026-01-28)
 
 
