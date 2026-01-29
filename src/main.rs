@@ -727,24 +727,26 @@ fn run_report(
                 None
             };
 
-            let mut completed = 0;
+            let completed = std::sync::atomic::AtomicU64::new(0);
+            let output_dir = &args.output;
 
-            macro_rules! run_and_save {
-                ($analyzer:ty, $name:expr) => {{
+            // Helper: run an analyzer and save its JSON output
+            macro_rules! run_analyzer {
+                ($analyzer:expr, $name:expr, $filename:expr) => {{
                     if !skip_list.contains(&$name) {
-                        if let Some(ref bar) = progress {
-                            bar.set_message(format!("{}...", $name));
-                        }
-                        let a = <$analyzer>::default();
-                        let result: Value = match a.analyze(&ctx) {
-                            Ok(r) => serde_json::to_value(&r).unwrap_or(json!({"error": "serialization failed"})),
+                        let result: Value = match $analyzer.analyze(&ctx) {
+                            Ok(r) => serde_json::to_value(&r)
+                                .unwrap_or(json!({"error": "serialization failed"})),
                             Err(e) => json!({"error": e.to_string()}),
                         };
-                        let output_path = args.output.join(format!("{}.json", $name));
-                        std::fs::write(&output_path, serde_json::to_string_pretty(&result)?)?;
-                        completed += 1;
+                        let output_path = output_dir.join(format!("{}.json", $filename));
+                        let _ = std::fs::write(
+                            &output_path,
+                            serde_json::to_string_pretty(&result).unwrap_or_default(),
+                        );
+                        let done = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                         if let Some(ref bar) = progress {
-                            bar.set_position(completed);
+                            bar.set_position(done);
                         } else {
                             eprintln!("Generated: {}", output_path.display());
                         }
@@ -752,70 +754,122 @@ fn run_report(
                 }};
             }
 
-            run_and_save!(omen::analyzers::complexity::Analyzer, "complexity");
-            run_and_save!(omen::analyzers::satd::Analyzer, "satd");
-            run_and_save!(omen::analyzers::deadcode::Analyzer, "deadcode");
+            // Phase 1: Run all analyzers in parallel groups.
+            // Group A: File-parsing analyzers (CPU-bound, share tree-sitter work)
+            // Group B: Git-heavy analyzers (I/O-bound, overlap with CPU work)
+            // Group C: Mixed analyzers (benefit from warm OS caches)
+            let churn_days = args
+                .days
+                .unwrap_or_else(|| omen::git::parse_since_to_days(&args.since).unwrap_or(365));
 
-            // Churn analyzer needs special handling to pass the --since parameter
-            if !skip_list.contains(&"churn") {
+            std::thread::scope(|s| {
+                // Group A: file-based analyzers
+                s.spawn(|| {
+                    run_analyzer!(
+                        omen::analyzers::complexity::Analyzer::default(),
+                        "complexity",
+                        "complexity"
+                    );
+                    run_analyzer!(omen::analyzers::satd::Analyzer::default(), "satd", "satd");
+                    run_analyzer!(
+                        omen::analyzers::deadcode::Analyzer::default(),
+                        "deadcode",
+                        "deadcode"
+                    );
+                    run_analyzer!(
+                        omen::analyzers::duplicates::Analyzer::default(),
+                        "duplicates",
+                        "duplicates"
+                    );
+                    run_analyzer!(
+                        omen::analyzers::cohesion::Analyzer::default(),
+                        "cohesion",
+                        "cohesion"
+                    );
+                    run_analyzer!(
+                        omen::analyzers::repomap::Analyzer::default(),
+                        "repomap",
+                        "repomap"
+                    );
+                });
+
+                // Group B: git-heavy analyzers (ownership is the longest at ~57s)
+                s.spawn(|| {
+                    run_analyzer!(
+                        omen::analyzers::ownership::Analyzer::default(),
+                        "ownership",
+                        "ownership"
+                    );
+                    run_analyzer!(
+                        omen::analyzers::churn::Analyzer::new().with_days(churn_days),
+                        "churn",
+                        "churn"
+                    );
+                    run_analyzer!(
+                        omen::analyzers::temporal::Analyzer::default(),
+                        "temporal",
+                        "temporal"
+                    );
+                    run_analyzer!(
+                        omen::analyzers::changes::Analyzer::default(),
+                        "changes",
+                        "changes"
+                    );
+                });
+
+                // Group C: mixed file+git analyzers
+                s.spawn(|| {
+                    run_analyzer!(
+                        omen::analyzers::graph::Analyzer::default(),
+                        "graph",
+                        "graph"
+                    );
+                    run_analyzer!(
+                        omen::analyzers::smells::Analyzer::default(),
+                        "smells",
+                        "smells"
+                    );
+                    run_analyzer!(
+                        omen::analyzers::flags::Analyzer::default(),
+                        "flags",
+                        "flags"
+                    );
+                    run_analyzer!(
+                        omen::analyzers::defect::Analyzer::default(),
+                        "defect",
+                        "defect"
+                    );
+                    run_analyzer!(
+                        omen::analyzers::hotspot::Analyzer::default(),
+                        "hotspots",
+                        "hotspots"
+                    );
+                    run_analyzer!(omen::analyzers::tdg::Analyzer::default(), "tdg", "tdg");
+                });
+            });
+
+            // Phase 2: Score (reads pre-generated JSON files, nearly instant)
+            if !skip_list.contains(&"score") {
                 if let Some(ref bar) = progress {
-                    bar.set_message("churn...");
+                    bar.set_message("score...");
                 }
-                // Parse since string to days, default to 365 (1 year)
-                let churn_days = args
-                    .days
-                    .unwrap_or_else(|| omen::git::parse_since_to_days(&args.since).unwrap_or(365));
-                let a = omen::analyzers::churn::Analyzer::new().with_days(churn_days);
-                let result: serde_json::Value = match a.analyze(&ctx) {
-                    Ok(r) => serde_json::to_value(&r)
-                        .unwrap_or(serde_json::json!({"error": "serialization failed"})),
-                    Err(e) => serde_json::json!({"error": e.to_string()}),
-                };
-                let output_path = args.output.join("churn.json");
+                let result: Value =
+                    match omen::score::compute_from_data_dir(output_dir, ctx.files.files().len()) {
+                        Ok(r) => serde_json::to_value(&r)
+                            .unwrap_or(json!({"error": "serialization failed"})),
+                        Err(e) => json!({"error": e.to_string()}),
+                    };
+                let output_path = output_dir.join("score.json");
                 std::fs::write(&output_path, serde_json::to_string_pretty(&result)?)?;
-                completed += 1;
+                let done = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                 if let Some(ref bar) = progress {
-                    bar.set_position(completed);
+                    bar.set_position(done);
                 } else {
                     eprintln!("Generated: {}", output_path.display());
                 }
             }
 
-            run_and_save!(omen::analyzers::duplicates::Analyzer, "duplicates");
-            run_and_save!(omen::analyzers::defect::Analyzer, "defect");
-            run_and_save!(omen::analyzers::changes::Analyzer, "changes");
-            run_and_save!(omen::analyzers::tdg::Analyzer, "tdg");
-            run_and_save!(omen::analyzers::graph::Analyzer, "graph");
-            // Use "hotspots" to match Go naming
-            if !skip_list.contains(&"hotspots") {
-                if let Some(ref bar) = progress {
-                    bar.set_message("hotspots...");
-                }
-                let a = omen::analyzers::hotspot::Analyzer::default();
-                let result: Value = match a.analyze(&ctx) {
-                    Ok(r) => {
-                        serde_json::to_value(&r).unwrap_or(json!({"error": "serialization failed"}))
-                    }
-                    Err(e) => json!({"error": e.to_string()}),
-                };
-                let output_path = args.output.join("hotspots.json");
-                std::fs::write(&output_path, serde_json::to_string_pretty(&result)?)?;
-                completed += 1;
-                if let Some(ref bar) = progress {
-                    bar.set_position(completed);
-                } else {
-                    eprintln!("Generated: {}", output_path.display());
-                }
-            }
-            run_and_save!(omen::analyzers::temporal::Analyzer, "temporal");
-            run_and_save!(omen::analyzers::ownership::Analyzer, "ownership");
-            run_and_save!(omen::analyzers::cohesion::Analyzer, "cohesion");
-            run_and_save!(omen::analyzers::repomap::Analyzer, "repomap");
-            run_and_save!(omen::analyzers::smells::Analyzer, "smells");
-            run_and_save!(omen::analyzers::flags::Analyzer, "flags");
-            run_and_save!(omen::score::Analyzer, "score");
-
-            // Generate trend data for charts
+            // Phase 3: Trend data (analyzes historical commits)
             if !skip_list.contains(&"trend") {
                 if let Some(ref bar) = progress {
                     bar.set_message("trend...");
@@ -827,15 +881,16 @@ fn run_report(
                     omen::cli::TrendPeriod::Monthly,
                 ) {
                     Ok(trend_data) => {
-                        let output_path = args.output.join("trend.json");
+                        let output_path = output_dir.join("trend.json");
                         if let Err(e) =
                             std::fs::write(&output_path, serde_json::to_string_pretty(&trend_data)?)
                         {
                             eprintln!("Warning: failed to write trend.json: {}", e);
                         } else {
-                            completed += 1;
+                            let done =
+                                completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                             if let Some(ref bar) = progress {
-                                bar.set_position(completed);
+                                bar.set_position(done);
                             } else {
                                 eprintln!("Generated: {}", output_path.display());
                             }
@@ -850,7 +905,7 @@ fn run_report(
             if let Some(bar) = progress {
                 bar.finish_with_message("done");
             }
-            eprintln!("Report data generated in: {}", args.output.display());
+            eprintln!("Report data generated in: {}", output_dir.display());
         }
         ReportSubcommand::Validate(args) => {
             // Basic validation: check that expected JSON files exist and are valid JSON
