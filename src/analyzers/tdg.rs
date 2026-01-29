@@ -404,58 +404,38 @@ impl Analyzer {
     }
 
     fn detect_critical_defects(&self, source: &str, language: Language) -> (i32, bool) {
+        let ts_lang = match language {
+            Language::Rust => tree_sitter_rust::LANGUAGE.into(),
+            Language::Go => tree_sitter_go::LANGUAGE.into(),
+            _ => return (0, false),
+        };
+
+        let mut parser = tree_sitter::Parser::new();
+        if parser.set_language(&ts_lang).is_err() {
+            return (0, false);
+        }
+        let tree = match parser.parse(source.as_bytes(), None) {
+            Some(t) => t,
+            None => return (0, false),
+        };
+
         let test_ranges = if language == Language::Rust {
             cfg_test_module_ranges(source)
         } else {
             Vec::new()
         };
 
+        let is_go_test_file = language == Language::Go && source.contains("func Test");
+
         let mut count = 0;
-        let bytes = source.as_bytes();
-        let mut line_start = 0;
-
-        for line in source.lines() {
-            let trimmed = line.trim();
-
-            // Skip lines inside #[cfg(test)] modules (Rust)
-            if test_ranges
-                .iter()
-                .any(|r| line_start >= r.start && line_start < r.end)
-            {
-                line_start = next_line_start(bytes, line_start + line.len());
-                continue;
-            }
-
-            line_start = next_line_start(bytes, line_start + line.len());
-
-            // Skip comments and string literals
-            if trimmed.starts_with("//") || trimmed.starts_with("/*") {
-                continue;
-            }
-            if trimmed.contains("\"panic(") || trimmed.contains("'panic(") {
-                continue;
-            }
-            if trimmed.contains("\".unwrap()") || trimmed.contains("'.unwrap()") {
-                continue;
-            }
-
-            match language {
-                Language::Rust => {
-                    if trimmed.contains(".unwrap()") {
-                        count += 1;
-                    }
-                    if trimmed.contains("panic!") {
-                        count += 1;
-                    }
-                }
-                Language::Go => {
-                    if !source.contains("func Test") && trimmed.contains("panic(") {
-                        count += 1;
-                    }
-                }
-                _ => {}
-            }
-        }
+        count_defect_nodes(
+            &tree.root_node(),
+            source.as_bytes(),
+            language,
+            &test_ranges,
+            is_go_test_file,
+            &mut count,
+        );
 
         (count, count > 0)
     }
@@ -587,6 +567,98 @@ impl AnalyzerTrait for Analyzer {
     }
 }
 
+/// Walk the AST to count critical defect nodes (.unwrap() calls, panic! macros).
+///
+/// Only counts nodes that represent actual method calls or macro invocations --
+/// string literals, comments, and attributes are structurally distinct node types
+/// in the AST and are never matched.
+fn count_defect_nodes(
+    node: &tree_sitter::Node,
+    source: &[u8],
+    language: Language,
+    test_ranges: &[Range<usize>],
+    is_go_test_file: bool,
+    count: &mut i32,
+) {
+    // Skip nodes inside #[cfg(test)] modules
+    let start = node.start_byte();
+    if test_ranges
+        .iter()
+        .any(|r| start >= r.start && start < r.end)
+    {
+        return;
+    }
+
+    match language {
+        Language::Rust => {
+            // Detect .unwrap() calls: call_expression whose function is a
+            // field_expression with field name "unwrap" and no arguments.
+            if node.kind() == "call_expression" {
+                if let Some(func) = node.child_by_field_name("function") {
+                    if func.kind() == "field_expression" {
+                        if let Some(field) = func.child_by_field_name("field") {
+                            if field.utf8_text(source).ok() == Some("unwrap") {
+                                // Verify it's a no-arg call (not unwrap_or etc.)
+                                if let Some(args) = node.child_by_field_name("arguments") {
+                                    // argument_list with only ( and ) means zero args
+                                    let arg_count = (0..args.named_child_count()).count();
+                                    if arg_count == 0 {
+                                        *count += 1;
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Detect panic!(...) macro invocations
+            if node.kind() == "macro_invocation" {
+                if let Some(mac) = node.child_by_field_name("macro") {
+                    if mac.utf8_text(source).ok() == Some("panic") {
+                        *count += 1;
+                        return;
+                    }
+                }
+            }
+        }
+        Language::Go => {
+            // Skip Go test files entirely
+            if is_go_test_file {
+                return;
+            }
+            // Detect panic(...) calls
+            if node.kind() == "call_expression" {
+                if let Some(func) = node.child_by_field_name("function") {
+                    if func.kind() == "identifier" && func.utf8_text(source).ok() == Some("panic") {
+                        *count += 1;
+                        return;
+                    }
+                }
+            }
+        }
+        _ => return,
+    }
+
+    // Recurse into children
+    let mut cursor = node.walk();
+    if cursor.goto_first_child() {
+        loop {
+            count_defect_nodes(
+                &cursor.node(),
+                source,
+                language,
+                test_ranges,
+                is_go_test_file,
+                count,
+            );
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
 /// Find byte ranges of `#[cfg(test)]` modules using tree-sitter.
 ///
 /// Returns ranges covering each module's body so that line-based analysis
@@ -660,18 +732,6 @@ fn has_cfg_test_attribute(node: &tree_sitter::Node, source: &[u8]) -> bool {
     };
     // Match #[cfg(test)] but not #[cfg(not(test))] or #[cfg(feature = "contest")]
     text.contains("cfg(test)") && !text.contains("not(test)") && !text.contains("not(all(test")
-}
-
-/// Advance past the line terminator (`\n` or `\r\n`) to the start of the next line.
-fn next_line_start(bytes: &[u8], pos: usize) -> usize {
-    let mut i = pos;
-    if i < bytes.len() && bytes[i] == b'\r' {
-        i += 1;
-    }
-    if i < bytes.len() && bytes[i] == b'\n' {
-        i += 1;
-    }
-    i
 }
 
 // Types
@@ -1442,5 +1502,120 @@ fn risky() {
             "expected full temporal points without precomputed data, got {}",
             score.temporal_coupling_score
         );
+    }
+
+    #[test]
+    fn test_unwrap_in_string_literal_not_flagged() {
+        let analyzer = Analyzer::new();
+        let source = r#"
+fn mutate() -> Vec<&'static str> {
+    vec![
+        "Replace .unwrap_or(...) with .unwrap()",
+        "Replace .unwrap_or_else(...) with .unwrap()",
+        ".unwrap()",
+    ]
+}
+"#;
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Rust);
+        assert_eq!(
+            count, 0,
+            ".unwrap() inside string literals should not count as critical defects"
+        );
+        assert!(!has_critical);
+    }
+
+    #[test]
+    fn test_unwrap_in_raw_string_not_flagged() {
+        let analyzer = Analyzer::new();
+        let source = "fn doc() -> &'static str {\n    r#\"call .unwrap() to get the value\"#\n}\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Rust);
+        assert_eq!(
+            count, 0,
+            ".unwrap() inside raw string literals should not count"
+        );
+        assert!(!has_critical);
+    }
+
+    #[test]
+    fn test_panic_in_string_literal_not_flagged() {
+        let analyzer = Analyzer::new();
+        let source = r#"
+fn describe() -> &'static str {
+    "this will panic! if misused"
+}
+"#;
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Rust);
+        assert_eq!(count, 0, "panic! inside string literals should not count");
+        assert!(!has_critical);
+    }
+
+    #[test]
+    fn test_real_unwrap_still_detected() {
+        let analyzer = Analyzer::new();
+        let source = r#"
+fn risky() {
+    let x = some_option.unwrap();
+    let y = other.unwrap();
+}
+"#;
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Rust);
+        assert_eq!(count, 2, "both real .unwrap() calls should be detected");
+        assert!(has_critical);
+    }
+
+    #[test]
+    fn test_real_panic_still_detected() {
+        let analyzer = Analyzer::new();
+        let source = r#"
+fn risky() {
+    panic!("something went wrong");
+}
+"#;
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Rust);
+        assert_eq!(count, 1);
+        assert!(has_critical);
+    }
+
+    #[test]
+    fn test_unwrap_in_comment_not_flagged() {
+        let analyzer = Analyzer::new();
+        let source = r#"
+// Don't use .unwrap() in production
+/// Example: foo.unwrap()
+fn safe() -> i32 { 42 }
+"#;
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Rust);
+        assert_eq!(count, 0, ".unwrap() in comments should not count");
+        assert!(!has_critical);
+    }
+
+    #[test]
+    fn test_go_panic_in_string_not_flagged() {
+        let analyzer = Analyzer::new();
+        let source = r#"
+package main
+
+func describe() string {
+    return "will panic( if bad input"
+}
+"#;
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Go);
+        assert_eq!(count, 0, "panic( inside Go string should not count");
+        assert!(!has_critical);
+    }
+
+    #[test]
+    fn test_go_real_panic_detected() {
+        let analyzer = Analyzer::new();
+        let source = r#"
+package main
+
+func risky() {
+    panic("fatal error")
+}
+"#;
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Go);
+        assert_eq!(count, 1);
+        assert!(has_critical);
     }
 }

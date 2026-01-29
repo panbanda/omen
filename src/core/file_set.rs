@@ -101,6 +101,7 @@ impl FileSet {
             let files_mutex = &files_mutex;
             let exclude_globs = &exclude_globs;
             let spinner = &spinner;
+            let root = &root;
             Box::new(move |entry| {
                 let entry = match entry {
                     Ok(e) => e,
@@ -117,8 +118,11 @@ impl FileSet {
                     return WalkState::Continue;
                 }
 
-                let path_str = path.to_string_lossy();
-                if exclude_globs.is_match(&*path_str) {
+                // Match exclude patterns against relative path so that
+                // patterns like "tests/**" work regardless of absolute root.
+                let rel_path = path.strip_prefix(root).unwrap_or(path);
+                let rel_str = rel_path.to_string_lossy();
+                if exclude_globs.is_match(&*rel_str) {
                     return WalkState::Continue;
                 }
 
@@ -634,6 +638,31 @@ mod tests {
             .files()
             .iter()
             .any(|f| f.to_string_lossy().contains("test.rs")));
+    }
+
+    #[test]
+    fn test_exclude_patterns_relative_paths() {
+        // Exclude patterns like "tests/**" should work even though the walker
+        // produces absolute paths.
+        let temp = tempfile::tempdir().unwrap();
+        let src_dir = temp.path().join("src");
+        let tests_dir = temp.path().join("tests");
+        let benches_dir = temp.path().join("benches");
+        std::fs::create_dir(&src_dir).unwrap();
+        std::fs::create_dir(&tests_dir).unwrap();
+        std::fs::create_dir(&benches_dir).unwrap();
+        std::fs::write(src_dir.join("lib.rs"), "").unwrap();
+        std::fs::write(tests_dir.join("integration.rs"), "").unwrap();
+        std::fs::write(benches_dir.join("bench.rs"), "").unwrap();
+
+        let file_set = FileSet::from_path_with_patterns(
+            temp.path(),
+            vec!["tests/**".to_string(), "benches/**".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(file_set.len(), 1, "only src/lib.rs should be included");
+        assert!(file_set.files()[0].to_string_lossy().contains("lib.rs"));
     }
 
     #[test]
