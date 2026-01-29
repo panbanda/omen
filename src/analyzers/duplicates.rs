@@ -156,104 +156,78 @@ impl Analyzer {
         let mut func_start_line = 0;
         let mut func_lines: Vec<&str> = Vec::new();
         let mut brace_depth = 0;
-        let mut end_depth = 0; // For Ruby's end keyword
+        let mut end_depth: i32 = 0;
 
         for (i, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
 
             if !in_function {
+                if !is_function_start(trimmed, lang) {
+                    continue;
+                }
+                in_function = true;
+                func_start_line = i;
+                func_lines = vec![line];
+                brace_depth = line.matches('{').count() as i32 - line.matches('}').count() as i32;
+                if lang == "python" {
+                    brace_depth = 1;
+                } else if lang == "ruby" {
+                    end_depth = 1;
+                }
+                continue;
+            }
+
+            func_lines.push(line);
+
+            if lang == "python" {
+                let is_dedent =
+                    !trimmed.is_empty() && !line.starts_with(' ') && !line.starts_with('\t');
+                let is_new_block = trimmed.starts_with("def ")
+                    || trimmed.starts_with("class ")
+                    || i == lines.len() - 1;
+
+                if !(is_dedent && is_new_block) {
+                    continue;
+                }
+                let end = if func_lines.len() > 1 { i - 1 } else { i };
+                if let Some(frag) = self.create_fragment(
+                    path,
+                    func_start_line,
+                    end,
+                    &func_lines[..func_lines.len().saturating_sub(1)],
+                    lang,
+                ) {
+                    fragments.push(frag);
+                }
                 if is_function_start(trimmed, lang) {
-                    in_function = true;
                     func_start_line = i;
                     func_lines = vec![line];
-                    brace_depth =
-                        line.matches('{').count() as i32 - line.matches('}').count() as i32;
-                    if lang == "python" {
-                        brace_depth = 1; // Python uses indentation
-                    } else if lang == "ruby" {
-                        end_depth = 1; // Ruby uses end keyword
-                    }
-                }
-            } else {
-                func_lines.push(line);
-
-                if lang == "python" {
-                    // Python function ends at dedent or new def/class
-                    let is_dedent =
-                        !trimmed.is_empty() && !line.starts_with(' ') && !line.starts_with('\t');
-                    let is_new_block = trimmed.starts_with("def ")
-                        || trimmed.starts_with("class ")
-                        || i == lines.len() - 1;
-
-                    if is_dedent && is_new_block {
-                        // End of function
-                        let end = if func_lines.len() > 1 { i - 1 } else { i };
-                        if let Some(frag) = self.create_fragment(
-                            path,
-                            func_start_line,
-                            end,
-                            &func_lines[..func_lines.len().saturating_sub(1)],
-                            lang,
-                        ) {
-                            fragments.push(frag);
-                        }
-                        // Check if this line starts a new function
-                        if is_function_start(trimmed, lang) {
-                            func_start_line = i;
-                            func_lines = vec![line];
-                        } else {
-                            in_function = false;
-                        }
-                    }
-                } else if lang == "ruby" {
-                    // Ruby uses 'end' keyword to close blocks
-                    // Track nested blocks (def, class, module, if, unless, case, while, until, for, begin, do)
-                    let block_starters = [
-                        "def ", "class ", "module ", "if ", "unless ", "case ", "while ", "until ",
-                        "for ", "begin", "do",
-                    ];
-                    for starter in &block_starters {
-                        if trimmed.starts_with(starter)
-                            || trimmed.contains(&format!(" {} ", starter.trim()))
-                        {
-                            end_depth += 1;
-                            break;
-                        }
-                    }
-                    // Also check for inline block starters like "x.each do"
-                    if trimmed.ends_with(" do") || trimmed.ends_with(" do |") {
-                        end_depth += 1;
-                    }
-                    // Check for 'end' keyword
-                    if trimmed == "end" || trimmed.starts_with("end ") || trimmed.ends_with(" end")
-                    {
-                        end_depth -= 1;
-                        if end_depth <= 0 {
-                            // End of function
-                            if let Some(frag) =
-                                self.create_fragment(path, func_start_line, i, &func_lines, lang)
-                            {
-                                fragments.push(frag);
-                            }
-                            in_function = false;
-                            func_lines.clear();
-                            end_depth = 0;
-                        }
-                    }
                 } else {
+                    in_function = false;
+                }
+                continue;
+            }
+
+            let ended = match lang {
+                "ruby" => process_ruby_line(trimmed, &mut end_depth),
+                _ => {
                     brace_depth +=
                         line.matches('{').count() as i32 - line.matches('}').count() as i32;
-                    if brace_depth <= 0 {
-                        // End of function
-                        if let Some(frag) =
-                            self.create_fragment(path, func_start_line, i, &func_lines, lang)
-                        {
-                            fragments.push(frag);
-                        }
-                        in_function = false;
-                        func_lines.clear();
-                    }
+                    brace_depth <= 0
                 }
+            };
+
+            if !ended {
+                continue;
+            }
+
+            if let Some(frag) = self.create_fragment(path, func_start_line, i, &func_lines, lang) {
+                fragments.push(frag);
+            }
+            in_function = false;
+            func_lines.clear();
+            if lang == "ruby" {
+                end_depth = 0;
             }
         }
 
@@ -930,6 +904,36 @@ fn is_function_start(line: &str, lang: &str) -> bool {
         "php" => line.contains("function ") && line.contains('('),
         _ => false,
     }
+}
+
+/// Process a line inside a Ruby function body. Returns true if the function ended.
+///
+/// Tracks Ruby's block nesting via `end_depth`: block-starting keywords increment
+/// the depth, and `end` decrements it. The function ends when depth reaches zero.
+fn process_ruby_line(trimmed: &str, end_depth: &mut i32) -> bool {
+    const BLOCK_STARTERS: &[&str] = &[
+        "def ", "class ", "module ", "if ", "unless ", "case ", "while ", "until ", "for ",
+        "begin", "do",
+    ];
+
+    let starts_block = BLOCK_STARTERS.iter().any(|starter| {
+        trimmed.starts_with(starter) || trimmed.contains(&format!(" {} ", starter.trim()))
+    });
+    if starts_block {
+        *end_depth += 1;
+    }
+
+    if trimmed.ends_with(" do") || trimmed.ends_with(" do |") {
+        *end_depth += 1;
+    }
+
+    let is_end = trimmed == "end" || trimmed.starts_with("end ") || trimmed.ends_with(" end");
+    if !is_end {
+        return false;
+    }
+
+    *end_depth -= 1;
+    *end_depth <= 0
 }
 
 /// Check if a line is a comment, using language-specific comment prefixes.
@@ -1915,5 +1919,20 @@ func funcB() string {
         assert!(is_comment("// comment", "rust"));
         assert!(is_comment("// comment", "c"));
         assert!(is_comment("// comment", "python"));
+    }
+
+    #[test]
+    fn test_max_nesting_depth_acceptable() {
+        let source = include_str!("duplicates.rs");
+        let max_nesting = source
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| (l.len() - l.trim_start().len()) / 4)
+            .max()
+            .unwrap_or(0);
+        assert!(
+            max_nesting <= 7,
+            "duplicates.rs nesting depth {max_nesting} exceeds 7"
+        );
     }
 }

@@ -8,6 +8,7 @@
 //! - % -> +, -, *, /
 
 use crate::core::Language;
+use crate::parser::queries::get_binary_expression_types;
 use crate::parser::ParseResult;
 
 use super::super::operator::MutationOperator;
@@ -43,23 +44,6 @@ impl MutationOperator for ArithmeticOperator {
     }
 }
 
-/// Get node types for binary expressions.
-fn get_binary_expression_types(lang: Language) -> &'static [&'static str] {
-    match lang {
-        Language::Rust => &["binary_expression"],
-        Language::Go => &["binary_expression"],
-        Language::Python => &["binary_operator"],
-        Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => {
-            &["binary_expression"]
-        }
-        Language::Java | Language::CSharp => &["binary_expression"],
-        Language::C | Language::Cpp => &["binary_expression"],
-        Language::Ruby => &["binary"],
-        Language::Php => &["binary_expression"],
-        Language::Bash => &["binary_expression"],
-    }
-}
-
 /// Check if a node kind is an arithmetic operator.
 fn is_arithmetic_operator(kind: &str) -> bool {
     matches!(kind, "+" | "-" | "*" | "/" | "%")
@@ -67,13 +51,7 @@ fn is_arithmetic_operator(kind: &str) -> bool {
 
 /// Get replacement operators for an arithmetic operator.
 fn get_arithmetic_replacements(op: &str) -> Vec<String> {
-    let all_ops = ["+", "-", "*", "/", "%"];
-
-    all_ops
-        .iter()
-        .filter(|&&o| o != op)
-        .map(|&o| o.to_string())
-        .collect()
+    super::replacements_excluding_self(&["+", "-", "*", "/", "%"], op)
 }
 
 #[cfg(test)]

@@ -327,13 +327,13 @@ fn extract_rust_classes(path: &Path, source: &[u8], tree: &tree_sitter::Tree) ->
 
         // Find all impl blocks for this struct and extract methods
         let mut methods = Vec::new();
+        let method_types = get_method_node_types(lang);
         for (impl_name, impl_node) in &impl_nodes {
             if impl_name == struct_name {
                 let impl_end = impl_node.end_position().row + 1;
                 if impl_end > end_line {
                     end_line = impl_end;
                 }
-                let method_types = get_method_node_types(lang);
                 let mut cursor = impl_node.walk();
                 extract_methods_recursive(&mut cursor, source, lang, &method_types, &mut methods);
             }
@@ -343,51 +343,15 @@ fn extract_rust_classes(path: &Path, source: &[u8], tree: &tree_sitter::Tree) ->
         let wmc: u32 = methods.iter().map(|m| m.complexity).sum();
         let loc = (end_line - start_line + 1) as u32;
 
-        // RFC = local methods + externally called methods
-        let mut all_called = HashSet::new();
-        for (impl_name, impl_node) in &impl_nodes {
-            if impl_name == struct_name {
-                let called = extract_called_methods(impl_node, source, lang);
-                for c in called {
-                    all_called.insert(c);
-                }
-            }
-        }
+        let all_called = collect_called_methods(&impl_nodes, struct_name, source, lang);
         let rfc = nom + all_called.len() as u32;
 
-        // CBO from struct + impl blocks
-        let mut all_coupled = HashSet::new();
-        let coupled_from_struct = extract_coupled_classes(struct_node, source, lang);
-        for c in coupled_from_struct {
-            all_coupled.insert(c);
-        }
-        for (impl_name, impl_node) in &impl_nodes {
-            if impl_name == struct_name {
-                let coupled = extract_coupled_classes(impl_node, source, lang);
-                for c in coupled {
-                    all_coupled.insert(c);
-                }
-            }
-        }
-        // Remove self-reference
-        all_coupled.remove(struct_name);
+        let all_coupled =
+            collect_coupled_classes(struct_node, &impl_nodes, struct_name, source, lang);
         let cbo = all_coupled.len() as u32;
 
         let lcom = calculate_lcom(&methods, &fields);
-
-        let mut violations = Vec::new();
-        if wmc > WMC_THRESHOLD {
-            violations.push(format!("WMC {} exceeds threshold {}", wmc, WMC_THRESHOLD));
-        }
-        if cbo > CBO_THRESHOLD {
-            violations.push(format!("CBO {} exceeds threshold {}", cbo, CBO_THRESHOLD));
-        }
-        if lcom > LCOM_THRESHOLD {
-            violations.push(format!(
-                "LCOM {} exceeds threshold {}",
-                lcom, LCOM_THRESHOLD
-            ));
-        }
+        let violations = build_violations(wmc, cbo, lcom);
 
         classes.push(ClassMetrics {
             path: path.to_string_lossy().to_string(),
@@ -427,25 +391,15 @@ fn extract_go_classes(path: &Path, source: &[u8], tree: &tree_sitter::Tree) -> V
     // Phase 1: Collect type declarations that contain struct_type
     let mut struct_defs: Vec<(String, tree_sitter::Node)> = Vec::new();
     for i in 0..root.child_count() {
-        if let Some(child) = root.child(i) {
-            if child.kind() == "type_declaration" {
-                // type_declaration contains type_spec children
-                for j in 0..child.child_count() {
-                    if let Some(spec) = child.child(j) {
-                        if spec.kind() == "type_spec" {
-                            let has_struct = has_child_of_kind(&spec, "struct_type");
-                            if has_struct {
-                                if let Some(name_node) = spec.child_by_field_name("name") {
-                                    if let Ok(name) =
-                                        std::str::from_utf8(&source[name_node.byte_range()])
-                                    {
-                                        if !name.is_empty() {
-                                            struct_defs.push((name.to_string(), child));
-                                        }
-                                    }
-                                }
-                            }
-                        }
+        let child = match root.child(i) {
+            Some(c) if c.kind() == "type_declaration" => c,
+            _ => continue,
+        };
+        for j in 0..child.child_count() {
+            if let Some(spec) = child.child(j) {
+                if spec.kind() == "type_spec" && has_child_of_kind(&spec, "struct_type") {
+                    if let Some(name) = node_name_text(&spec, source) {
+                        struct_defs.push((name, child));
                     }
                 }
             }
@@ -455,12 +409,12 @@ fn extract_go_classes(path: &Path, source: &[u8], tree: &tree_sitter::Tree) -> V
     // Phase 2: Collect method declarations and group by receiver type
     let mut method_map: HashMap<String, Vec<tree_sitter::Node>> = HashMap::new();
     for i in 0..root.child_count() {
-        if let Some(child) = root.child(i) {
-            if child.kind() == "method_declaration" {
-                if let Some(receiver_type) = extract_go_receiver_type(&child, source) {
-                    method_map.entry(receiver_type).or_default().push(child);
-                }
-            }
+        let child = match root.child(i) {
+            Some(c) if c.kind() == "method_declaration" => c,
+            _ => continue,
+        };
+        if let Some(receiver_type) = extract_go_receiver_type(&child, source) {
+            method_map.entry(receiver_type).or_default().push(child);
         }
     }
 
@@ -503,50 +457,28 @@ fn extract_go_classes(path: &Path, source: &[u8], tree: &tree_sitter::Tree) -> V
         let wmc: u32 = methods.iter().map(|m| m.complexity).sum();
         let loc = (end_line - start_line + 1) as u32;
 
-        // RFC
+        // RFC: collect called methods from all method_declaration nodes
         let mut all_called = HashSet::new();
         if let Some(method_nodes) = method_map.get(struct_name) {
             for method_node in method_nodes {
-                let called = extract_called_methods(method_node, source, lang);
-                for c in called {
+                for c in extract_called_methods(method_node, source, lang) {
                     all_called.insert(c);
                 }
             }
         }
         let rfc = nom + all_called.len() as u32;
 
-        // CBO
-        let mut all_coupled = HashSet::new();
-        let coupled_from_struct = extract_coupled_classes(struct_node, source, lang);
-        for c in coupled_from_struct {
-            all_coupled.insert(c);
-        }
-        if let Some(method_nodes) = method_map.get(struct_name) {
-            for method_node in method_nodes {
-                let coupled = extract_coupled_classes(method_node, source, lang);
-                for c in coupled {
-                    all_coupled.insert(c);
-                }
-            }
-        }
-        all_coupled.remove(struct_name);
+        // CBO: coupled classes from struct def + method nodes
+        let method_pairs: Vec<(String, tree_sitter::Node)> = method_map
+            .get(struct_name)
+            .map(|nodes| nodes.iter().map(|n| (struct_name.clone(), *n)).collect())
+            .unwrap_or_default();
+        let all_coupled =
+            collect_coupled_classes(struct_node, &method_pairs, struct_name, source, lang);
         let cbo = all_coupled.len() as u32;
 
         let lcom = calculate_lcom(&methods, &fields);
-
-        let mut violations = Vec::new();
-        if wmc > WMC_THRESHOLD {
-            violations.push(format!("WMC {} exceeds threshold {}", wmc, WMC_THRESHOLD));
-        }
-        if cbo > CBO_THRESHOLD {
-            violations.push(format!("CBO {} exceeds threshold {}", cbo, CBO_THRESHOLD));
-        }
-        if lcom > LCOM_THRESHOLD {
-            violations.push(format!(
-                "LCOM {} exceeds threshold {}",
-                lcom, LCOM_THRESHOLD
-            ));
-        }
+        let violations = build_violations(wmc, cbo, lcom);
 
         classes.push(ClassMetrics {
             path: path.to_string_lossy().to_string(),
@@ -582,16 +514,12 @@ fn collect_nodes_by_kind<'a>(
     out: &mut Vec<(String, tree_sitter::Node<'a>)>,
 ) {
     for i in 0..root.child_count() {
-        if let Some(child) = root.child(i) {
-            if child.kind() == kind {
-                if let Some(name_node) = child.child_by_field_name("name") {
-                    if let Ok(name) = std::str::from_utf8(&source[name_node.byte_range()]) {
-                        if !name.is_empty() {
-                            out.push((name.to_string(), child));
-                        }
-                    }
-                }
-            }
+        let child = match root.child(i) {
+            Some(c) if c.kind() == kind => c,
+            _ => continue,
+        };
+        if let Some(name) = node_name_text(&child, source) {
+            out.push((name, child));
         }
     }
 }
@@ -603,12 +531,12 @@ fn collect_impl_blocks<'a>(
     out: &mut Vec<(String, tree_sitter::Node<'a>)>,
 ) {
     for i in 0..root.child_count() {
-        if let Some(child) = root.child(i) {
-            if child.kind() == "impl_item" {
-                if let Some(name) = extract_rust_impl_type(&child, source) {
-                    out.push((name, child));
-                }
-            }
+        let child = match root.child(i) {
+            Some(c) if c.kind() == "impl_item" => c,
+            _ => continue,
+        };
+        if let Some(name) = extract_rust_impl_type(&child, source) {
+            out.push((name, child));
         }
     }
 }
@@ -671,6 +599,16 @@ fn extract_go_base_type(node: &tree_sitter::Node, source: &[u8]) -> Option<Strin
             .map(|s| s.to_string()),
         _ => None,
     }
+}
+
+/// Extracts the text of a node's `name` field, returning `None` if absent or empty.
+fn node_name_text(node: &tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let name_node = node.child_by_field_name("name")?;
+    let name = std::str::from_utf8(&source[name_node.byte_range()]).ok()?;
+    if name.is_empty() {
+        return None;
+    }
+    Some(name.to_string())
 }
 
 /// Checks if a node has a child of the given kind.
@@ -818,20 +756,7 @@ fn extract_class_metrics(
     let dit = 0;
     let noc = 0;
 
-    // Collect violations
-    let mut violations = Vec::new();
-    if wmc > WMC_THRESHOLD {
-        violations.push(format!("WMC {} exceeds threshold {}", wmc, WMC_THRESHOLD));
-    }
-    if cbo > CBO_THRESHOLD {
-        violations.push(format!("CBO {} exceeds threshold {}", cbo, CBO_THRESHOLD));
-    }
-    if lcom > LCOM_THRESHOLD {
-        violations.push(format!(
-            "LCOM {} exceeds threshold {}",
-            lcom, LCOM_THRESHOLD
-        ));
-    }
+    let violations = build_violations(wmc, cbo, lcom);
 
     Some(ClassMetrics {
         path: path.to_string_lossy().to_string(),
@@ -856,131 +781,65 @@ fn extract_class_metrics(
     })
 }
 
+/// Finds the first child of `parent` whose `kind()` matches one of `kinds`,
+/// and returns its source text as a `String`.
+fn first_child_text_by_kind(
+    parent: &tree_sitter::Node,
+    source: &[u8],
+    kinds: &[&str],
+) -> Option<String> {
+    for i in 0..parent.child_count() {
+        let child = parent.child(i)?;
+        if kinds.contains(&child.kind()) {
+            return std::str::from_utf8(&source[child.byte_range()])
+                .ok()
+                .map(|s| s.to_string());
+        }
+    }
+    None
+}
+
 /// Extracts the parent class name from a class node (for extends/inherits).
 fn extract_parent_class(node: &tree_sitter::Node, source: &[u8], lang: Language) -> Option<String> {
     match lang {
         Language::Java => {
             // Java: class Child extends Parent { }
-            // superclass node contains: "extends" keyword + type_identifier
-            node.child_by_field_name("superclass").and_then(|sc| {
-                // Find the type_identifier child (not the "extends" keyword)
-                for i in 0..sc.child_count() {
-                    if let Some(child) = sc.child(i) {
-                        if child.kind() == "type_identifier" {
-                            return std::str::from_utf8(&source[child.byte_range()])
-                                .ok()
-                                .map(|s| s.to_string());
-                        }
-                    }
-                }
-                None
-            })
+            let sc = node.child_by_field_name("superclass")?;
+            first_child_text_by_kind(&sc, source, &["type_identifier"])
         }
         Language::TypeScript | Language::JavaScript => {
             // TS/JS: class Child extends Parent { }
-            // Look for class_heritage -> extends_clause -> identifier
-            for i in 0..node.child_count() {
-                if let Some(child) = node.child(i) {
-                    if child.kind() == "class_heritage" {
-                        // Find the extends clause
-                        for j in 0..child.child_count() {
-                            if let Some(clause) = child.child(j) {
-                                if clause.kind() == "extends_clause" {
-                                    // Get the identifier/type after 'extends'
-                                    for k in 0..clause.child_count() {
-                                        if let Some(type_node) = clause.child(k) {
-                                            if type_node.kind() == "identifier"
-                                                || type_node.kind() == "type_identifier"
-                                            {
-                                                return std::str::from_utf8(
-                                                    &source[type_node.byte_range()],
-                                                )
-                                                .ok()
-                                                .map(|s| s.to_string());
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            None
+            // class_heritage -> extends_clause -> identifier|type_identifier
+            let heritage = find_child_by_kind(node, "class_heritage")?;
+            let clause = find_child_by_kind(&heritage, "extends_clause")?;
+            first_child_text_by_kind(&clause, source, &["identifier", "type_identifier"])
         }
         Language::Python => {
             // Python: class Child(Parent):
-            // superclasses is an argument_list containing: "(", identifier, ")"
-            node.child_by_field_name("superclasses").and_then(|args| {
-                // Find the first identifier child (the base class name)
-                for i in 0..args.child_count() {
-                    if let Some(child) = args.child(i) {
-                        if child.kind() == "identifier" {
-                            return std::str::from_utf8(&source[child.byte_range()])
-                                .ok()
-                                .map(|s| s.to_string());
-                        }
-                    }
-                }
-                None
-            })
+            let args = node.child_by_field_name("superclasses")?;
+            first_child_text_by_kind(&args, source, &["identifier"])
         }
         Language::CSharp => {
             // C#: class Child : Parent { }
-            node.child_by_field_name("bases")
-                .and_then(|bases| {
-                    for i in 0..bases.child_count() {
-                        if let Some(base) = bases.child(i) {
-                            if base.kind() == "identifier" || base.kind() == "type_identifier" {
-                                return std::str::from_utf8(&source[base.byte_range()]).ok();
-                            }
-                        }
-                    }
-                    None
-                })
-                .map(|s| s.to_string())
+            let bases = node.child_by_field_name("bases")?;
+            first_child_text_by_kind(&bases, source, &["identifier", "type_identifier"])
         }
         Language::Cpp => {
             // C++: class Child : public Parent { }
-            // Look for base_class_clause
-            for i in 0..node.child_count() {
-                if let Some(child) = node.child(i) {
-                    if child.kind() == "base_class_clause" {
-                        // Find type_identifier inside
-                        for j in 0..child.child_count() {
-                            if let Some(base) = child.child(j) {
-                                if base.kind() == "type_identifier" {
-                                    return std::str::from_utf8(&source[base.byte_range()])
-                                        .ok()
-                                        .map(|s| s.to_string());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            None
+            let clause = find_child_by_kind(node, "base_class_clause")?;
+            first_child_text_by_kind(&clause, source, &["type_identifier"])
         }
         Language::Ruby => {
             // Ruby: class Child < Parent
-            node.child_by_field_name("superclass")
-                .and_then(|sc| std::str::from_utf8(&source[sc.byte_range()]).ok())
+            let sc = node.child_by_field_name("superclass")?;
+            std::str::from_utf8(&source[sc.byte_range()])
+                .ok()
                 .map(|s| s.to_string())
         }
         Language::Php => {
             // PHP: class Child extends Parent { }
-            node.child_by_field_name("base_clause")
-                .and_then(|base| {
-                    for i in 0..base.child_count() {
-                        if let Some(child) = base.child(i) {
-                            if child.kind() == "name" || child.kind() == "qualified_name" {
-                                return std::str::from_utf8(&source[child.byte_range()]).ok();
-                            }
-                        }
-                    }
-                    None
-                })
-                .map(|s| s.to_string())
+            let base = node.child_by_field_name("base_clause")?;
+            first_child_text_by_kind(&base, source, &["name", "qualified_name"])
         }
         // Rust and Go have no class inheritance
         Language::Rust | Language::Go => None,
@@ -988,35 +847,88 @@ fn extract_parent_class(node: &tree_sitter::Node, source: &[u8], lang: Language)
     }
 }
 
+/// Finds the first direct child of `node` with the given `kind`.
+fn find_child_by_kind<'a>(
+    node: &tree_sitter::Node<'a>,
+    kind: &str,
+) -> Option<tree_sitter::Node<'a>> {
+    for i in 0..node.child_count() {
+        let child = node.child(i)?;
+        if child.kind() == kind {
+            return Some(child);
+        }
+    }
+    None
+}
+
 /// Gets the class name from a node.
 fn get_class_name(node: &tree_sitter::Node, source: &[u8], lang: Language) -> Option<String> {
     match lang {
         Language::Go => {
             // type_declaration -> type_spec -> name
-            for i in 0..node.child_count() {
-                if let Some(spec) = node.child(i) {
-                    if spec.kind() == "type_spec" {
-                        if let Some(name_node) = spec.child_by_field_name("name") {
-                            let name = std::str::from_utf8(&source[name_node.byte_range()]).ok()?;
-                            if !name.is_empty() {
-                                return Some(name.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-            None
+            let spec = find_child_by_kind(node, "type_spec")?;
+            node_name_text(&spec, source)
         }
-        _ => {
-            let name_node = node.child_by_field_name("name")?;
-            let name = std::str::from_utf8(&source[name_node.byte_range()]).ok()?;
-            if name.is_empty() {
-                None
-            } else {
-                Some(name.to_string())
+        _ => node_name_text(node, source),
+    }
+}
+
+/// Builds the list of threshold violations for a class.
+fn build_violations(wmc: u32, cbo: u32, lcom: u32) -> Vec<String> {
+    let mut violations = Vec::new();
+    if wmc > WMC_THRESHOLD {
+        violations.push(format!("WMC {} exceeds threshold {}", wmc, WMC_THRESHOLD));
+    }
+    if cbo > CBO_THRESHOLD {
+        violations.push(format!("CBO {} exceeds threshold {}", cbo, CBO_THRESHOLD));
+    }
+    if lcom > LCOM_THRESHOLD {
+        violations.push(format!(
+            "LCOM {} exceeds threshold {}",
+            lcom, LCOM_THRESHOLD
+        ));
+    }
+    violations
+}
+
+/// Collects RFC (called methods) from a set of nodes belonging to a single class.
+fn collect_called_methods(
+    nodes: &[(String, tree_sitter::Node)],
+    class_name: &str,
+    source: &[u8],
+    lang: Language,
+) -> HashSet<String> {
+    let mut all_called = HashSet::new();
+    for (name, node) in nodes {
+        if name == class_name {
+            for c in extract_called_methods(node, source, lang) {
+                all_called.insert(c);
             }
         }
     }
+    all_called
+}
+
+/// Collects CBO (coupled classes) from a base node plus additional nodes for a single class.
+fn collect_coupled_classes(
+    base_node: &tree_sitter::Node,
+    extra_nodes: &[(String, tree_sitter::Node)],
+    class_name: &str,
+    source: &[u8],
+    lang: Language,
+) -> HashSet<String> {
+    let mut all_coupled: HashSet<String> = extract_coupled_classes(base_node, source, lang)
+        .into_iter()
+        .collect();
+    for (name, node) in extra_nodes {
+        if name == class_name {
+            for c in extract_coupled_classes(node, source, lang) {
+                all_coupled.insert(c);
+            }
+        }
+    }
+    all_coupled.remove(class_name);
+    all_coupled
 }
 
 /// Method info for LCOM calculation.
@@ -1159,6 +1071,49 @@ fn find_fields_used_by_method(
     fields
 }
 
+/// If `node` is a two-part field access where the receiver matches `self_keyword`
+/// (e.g. `self.x`, `this.y`), returns the field name. `obj_field` and `attr_field`
+/// are the tree-sitter field names for the two child nodes.
+fn extract_self_field_access(
+    node: &tree_sitter::Node,
+    source: &[u8],
+    self_keyword: &str,
+    obj_field: &str,
+    attr_field: &str,
+) -> Option<String> {
+    let obj = node.child_by_field_name(obj_field)?;
+    let attr = node.child_by_field_name(attr_field)?;
+    let obj_text = std::str::from_utf8(&source[obj.byte_range()]).ok()?;
+    if obj_text != self_keyword {
+        return None;
+    }
+    std::str::from_utf8(&source[attr.byte_range()])
+        .ok()
+        .map(|s| s.to_string())
+}
+
+/// Checks if a Go selector_expression is a receiver field access and returns the field name.
+fn extract_go_field_access(node: &tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let field_node = node.child_by_field_name("field")?;
+    let operand = node.child_by_field_name("operand")?;
+    if operand.kind() != "identifier" {
+        return None;
+    }
+    let op_text = std::str::from_utf8(&source[operand.byte_range()]).ok()?;
+    // Go receivers are typically short lowercase names
+    let is_receiver = op_text.len() <= 4
+        && op_text
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase());
+    if !is_receiver {
+        return None;
+    }
+    std::str::from_utf8(&source[field_node.byte_range()])
+        .ok()
+        .map(|s| s.to_string())
+}
+
 /// Recursively finds field accesses.
 fn find_field_accesses(
     cursor: &mut tree_sitter::TreeCursor,
@@ -1168,98 +1123,30 @@ fn find_field_accesses(
 ) {
     loop {
         let node = cursor.node();
+        let kind = node.kind();
 
-        match lang {
-            Language::Python => {
-                if node.kind() == "attribute" {
-                    if let (Some(obj), Some(attr)) = (
-                        node.child_by_field_name("object"),
-                        node.child_by_field_name("attribute"),
-                    ) {
-                        if let (Ok(obj_text), Ok(attr_text)) = (
-                            std::str::from_utf8(&source[obj.byte_range()]),
-                            std::str::from_utf8(&source[attr.byte_range()]),
-                        ) {
-                            if obj_text == "self" {
-                                fields.insert(attr_text.to_string());
-                            }
-                        }
-                    }
-                }
+        let field_name = match lang {
+            Language::Python if kind == "attribute" => {
+                extract_self_field_access(&node, source, "self", "object", "attribute")
             }
-            Language::Ruby => {
-                if node.kind() == "instance_variable" {
-                    if let Ok(text) = std::str::from_utf8(&source[node.byte_range()]) {
-                        fields.insert(text.to_string());
-                    }
-                }
+            Language::Ruby if kind == "instance_variable" => {
+                std::str::from_utf8(&source[node.byte_range()])
+                    .ok()
+                    .map(|s| s.to_string())
             }
-            Language::Java | Language::CSharp | Language::TypeScript | Language::JavaScript => {
-                if node.kind() == "member_expression" || node.kind() == "member_access_expression" {
-                    if let (Some(obj), Some(prop)) = (
-                        node.child_by_field_name("object"),
-                        node.child_by_field_name("property"),
-                    ) {
-                        if let (Ok(obj_text), Ok(prop_text)) = (
-                            std::str::from_utf8(&source[obj.byte_range()]),
-                            std::str::from_utf8(&source[prop.byte_range()]),
-                        ) {
-                            if obj_text == "this" {
-                                fields.insert(prop_text.to_string());
-                            }
-                        }
-                    }
-                }
+            Language::Java | Language::CSharp | Language::TypeScript | Language::JavaScript
+                if kind == "member_expression" || kind == "member_access_expression" =>
+            {
+                extract_self_field_access(&node, source, "this", "object", "property")
             }
-            Language::Rust => {
-                // Rust: self.field is a field_expression with value=self, field=name
-                if node.kind() == "field_expression" {
-                    if let (Some(value), Some(field)) = (
-                        node.child_by_field_name("value"),
-                        node.child_by_field_name("field"),
-                    ) {
-                        if let (Ok(val_text), Ok(field_text)) = (
-                            std::str::from_utf8(&source[value.byte_range()]),
-                            std::str::from_utf8(&source[field.byte_range()]),
-                        ) {
-                            if val_text == "self" {
-                                fields.insert(field_text.to_string());
-                            }
-                        }
-                    }
-                }
+            Language::Rust if kind == "field_expression" => {
+                extract_self_field_access(&node, source, "self", "value", "field")
             }
-            Language::Go => {
-                // Go: receiver.field is a selector_expression
-                // We treat any selector_expression field access as a potential field usage
-                if node.kind() == "selector_expression" {
-                    if let Some(field_node) = node.child_by_field_name("field") {
-                        if let Ok(field_text) =
-                            std::str::from_utf8(&source[field_node.byte_range()])
-                        {
-                            // Check if operand is likely the receiver (single lowercase identifier)
-                            if let Some(operand) = node.child_by_field_name("operand") {
-                                if operand.kind() == "identifier" {
-                                    if let Ok(op_text) =
-                                        std::str::from_utf8(&source[operand.byte_range()])
-                                    {
-                                        // Go receivers are typically short lowercase names
-                                        if op_text.len() <= 4
-                                            && op_text
-                                                .chars()
-                                                .next()
-                                                .is_some_and(|c| c.is_ascii_lowercase())
-                                        {
-                                            fields.insert(field_text.to_string());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {}
+            Language::Go if kind == "selector_expression" => extract_go_field_access(&node, source),
+            _ => None,
+        };
+        if let Some(name) = field_name {
+            fields.insert(name);
         }
 
         if cursor.goto_first_child() {

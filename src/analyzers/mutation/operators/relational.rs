@@ -9,6 +9,7 @@
 //! - != -> <, <=, >, >=, ==
 
 use crate::core::Language;
+use crate::parser::queries::get_comparison_expression_types;
 use crate::parser::ParseResult;
 
 use super::super::operator::MutationOperator;
@@ -28,7 +29,7 @@ impl MutationOperator for RelationalOperator {
     }
 
     fn generate_mutants(&self, result: &ParseResult, mutant_id_prefix: &str) -> Vec<Mutant> {
-        let node_types = get_comparison_node_types(result.language);
+        let node_types = get_comparison_expression_types(result.language);
         generate_binary_operator_mutants(
             result,
             mutant_id_prefix,
@@ -44,23 +45,6 @@ impl MutationOperator for RelationalOperator {
     }
 }
 
-/// Get node types for comparison expressions.
-fn get_comparison_node_types(lang: Language) -> &'static [&'static str] {
-    match lang {
-        Language::Rust => &["binary_expression"],
-        Language::Go => &["binary_expression"],
-        Language::Python => &["comparison_operator"],
-        Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => {
-            &["binary_expression"]
-        }
-        Language::Java | Language::CSharp => &["binary_expression"],
-        Language::C | Language::Cpp => &["binary_expression"],
-        Language::Ruby => &["binary"],
-        Language::Php => &["binary_expression"],
-        Language::Bash => &["binary_expression"],
-    }
-}
-
 /// Check if a node kind is a relational operator.
 fn is_relational_operator(kind: &str) -> bool {
     matches!(
@@ -71,13 +55,7 @@ fn is_relational_operator(kind: &str) -> bool {
 
 /// Get replacement operators for a relational operator.
 fn get_relational_replacements(op: &str) -> Vec<String> {
-    let all_ops = ["<", "<=", ">", ">=", "==", "!="];
-
-    all_ops
-        .iter()
-        .filter(|&&o| o != op)
-        .map(|&o| o.to_string())
-        .collect()
+    super::replacements_excluding_self(&["<", "<=", ">", ">=", "==", "!="], op)
 }
 
 #[cfg(test)]

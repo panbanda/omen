@@ -15,7 +15,7 @@ use crate::parser::ParseResult;
 
 use super::super::operator::MutationOperator;
 use super::super::Mutant;
-use super::walk_and_collect_mutants;
+use super::{mutant_from_node, walk_and_collect_mutants};
 
 /// SDL (Statement Deletion) operator.
 ///
@@ -44,19 +44,16 @@ impl MutationOperator for StatementOperator {
                     if !text.trim().is_empty() && is_deletable_statement(text, result.language) {
                         counter += 1;
                         let id = format!("{}-{}", mutant_id_prefix, counter);
-                        let start = node.start_position();
                         let replacement = get_empty_replacement(result.language);
 
-                        mutants.push(Mutant::new(
+                        mutants.push(mutant_from_node(
                             id,
                             result.path.clone(),
                             self.name(),
-                            (start.row + 1) as u32,
-                            (start.column + 1) as u32,
+                            &node,
                             text,
                             replacement.clone(),
                             format!("Delete statement: {}", truncate_description(text)),
-                            (node.start_byte(), node.end_byte()),
                         ));
                     }
                 }
@@ -68,19 +65,16 @@ impl MutationOperator for StatementOperator {
                         if !body_text.trim().is_empty() {
                             counter += 1;
                             let id = format!("{}-{}", mutant_id_prefix, counter);
-                            let start = body_node.start_position();
                             let replacement = get_empty_block_replacement(result.language);
 
-                            mutants.push(Mutant::new(
+                            mutants.push(mutant_from_node(
                                 id,
                                 result.path.clone(),
                                 self.name(),
-                                (start.row + 1) as u32,
-                                (start.column + 1) as u32,
+                                &body_node,
                                 body_text,
                                 replacement.clone(),
                                 format!("Skip {} body", kind),
-                                (body_node.start_byte(), body_node.end_byte()),
                             ));
                         }
                     }

@@ -153,51 +153,25 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 run_analyzer::<omen::analyzers::complexity::Analyzer>(path, &config, format)?;
             }
         }
-        Command::Satd(_args) => {
-            run_analyzer::<omen::analyzers::satd::Analyzer>(path, &config, format)?;
-        }
-        Command::Deadcode(_args) => {
-            run_analyzer::<omen::analyzers::deadcode::Analyzer>(path, &config, format)?;
+        Command::Satd(_)
+        | Command::Deadcode(_)
+        | Command::Clones(_)
+        | Command::Defect(_)
+        | Command::Changes(_)
+        | Command::Diff(_)
+        | Command::Tdg(_)
+        | Command::Graph(_)
+        | Command::Hotspot(_)
+        | Command::Temporal(_)
+        | Command::Ownership(_)
+        | Command::Cohesion(_)
+        | Command::Repomap(_)
+        | Command::Smells(_)
+        | Command::LintHotspot(_) => {
+            dispatch_analyzer(&cli.command, path, &config, format)?;
         }
         Command::Churn(args) => {
             run_churn_analyzer(path, &config, format, args.days)?;
-        }
-        Command::Clones(_args) => {
-            run_analyzer::<omen::analyzers::duplicates::Analyzer>(path, &config, format)?;
-        }
-        Command::Defect(_args) => {
-            run_analyzer::<omen::analyzers::defect::Analyzer>(path, &config, format)?;
-        }
-        Command::Changes(_args) => {
-            run_analyzer::<omen::analyzers::changes::Analyzer>(path, &config, format)?;
-        }
-        Command::Diff(_args) => {
-            // Diff currently delegates to the changes analyzer
-            run_analyzer::<omen::analyzers::changes::Analyzer>(path, &config, format)?;
-        }
-        Command::Tdg(_args) => {
-            run_analyzer::<omen::analyzers::tdg::Analyzer>(path, &config, format)?;
-        }
-        Command::Graph(_args) => {
-            run_analyzer::<omen::analyzers::graph::Analyzer>(path, &config, format)?;
-        }
-        Command::Hotspot(_args) => {
-            run_analyzer::<omen::analyzers::hotspot::Analyzer>(path, &config, format)?;
-        }
-        Command::Temporal(_args) => {
-            run_analyzer::<omen::analyzers::temporal::Analyzer>(path, &config, format)?;
-        }
-        Command::Ownership(_args) => {
-            run_analyzer::<omen::analyzers::ownership::Analyzer>(path, &config, format)?;
-        }
-        Command::Cohesion(_args) => {
-            run_analyzer::<omen::analyzers::cohesion::Analyzer>(path, &config, format)?;
-        }
-        Command::Repomap(_args) => {
-            run_analyzer::<omen::analyzers::repomap::Analyzer>(path, &config, format)?;
-        }
-        Command::Smells(_args) => {
-            run_analyzer::<omen::analyzers::smells::Analyzer>(path, &config, format)?;
         }
         Command::Flags(args) => {
             // Merge CLI --provider option into config
@@ -209,10 +183,6 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 config.feature_flags.stale_days = args.stale_days;
             }
             run_analyzer::<omen::analyzers::flags::Analyzer>(path, &config, format)?;
-        }
-        Command::LintHotspot(_args) => {
-            // Lint hotspot currently delegates to the hotspot analyzer
-            run_analyzer::<omen::analyzers::hotspot::Analyzer>(path, &config, format)?;
         }
         Command::Score(cmd) => {
             if cmd.args.check {
@@ -408,6 +378,68 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
     Ok(())
 }
 
+/// Build a `FileSet` and `AnalysisContext` for the given path, including git
+/// root discovery. This eliminates the repeated file-set + context + git-root
+/// boilerplate that appears in every command handler.
+fn build_context<'a>(
+    path: &'a PathBuf,
+    file_set: &'a FileSet,
+    config: &'a Config,
+) -> AnalysisContext<'a> {
+    let mut ctx = AnalysisContext::new(file_set, config, Some(path));
+    if let Ok(repo) = omen::git::GitRepo::open(path) {
+        let git_root = repo.root().to_path_buf();
+        ctx = ctx.with_git_path(Box::leak(Box::new(git_root)));
+    }
+    ctx
+}
+
+/// Dispatch a command variant to its corresponding analyzer. This consolidates
+/// the 15 command arms that all follow the same `run_analyzer::<T>` pattern.
+fn dispatch_analyzer(
+    command: &Command,
+    path: &PathBuf,
+    config: &Config,
+    format: Format,
+) -> omen::core::Result<()> {
+    match command {
+        Command::Satd(_) => run_analyzer::<omen::analyzers::satd::Analyzer>(path, config, format),
+        Command::Deadcode(_) => {
+            run_analyzer::<omen::analyzers::deadcode::Analyzer>(path, config, format)
+        }
+        Command::Clones(_) => {
+            run_analyzer::<omen::analyzers::duplicates::Analyzer>(path, config, format)
+        }
+        Command::Defect(_) => {
+            run_analyzer::<omen::analyzers::defect::Analyzer>(path, config, format)
+        }
+        Command::Changes(_) | Command::Diff(_) => {
+            run_analyzer::<omen::analyzers::changes::Analyzer>(path, config, format)
+        }
+        Command::Tdg(_) => run_analyzer::<omen::analyzers::tdg::Analyzer>(path, config, format),
+        Command::Graph(_) => run_analyzer::<omen::analyzers::graph::Analyzer>(path, config, format),
+        Command::Hotspot(_) | Command::LintHotspot(_) => {
+            run_analyzer::<omen::analyzers::hotspot::Analyzer>(path, config, format)
+        }
+        Command::Temporal(_) => {
+            run_analyzer::<omen::analyzers::temporal::Analyzer>(path, config, format)
+        }
+        Command::Ownership(_) => {
+            run_analyzer::<omen::analyzers::ownership::Analyzer>(path, config, format)
+        }
+        Command::Cohesion(_) => {
+            run_analyzer::<omen::analyzers::cohesion::Analyzer>(path, config, format)
+        }
+        Command::Repomap(_) => {
+            run_analyzer::<omen::analyzers::repomap::Analyzer>(path, config, format)
+        }
+        Command::Smells(_) => {
+            run_analyzer::<omen::analyzers::smells::Analyzer>(path, config, format)
+        }
+        _ => unreachable!("dispatch_analyzer called with non-dispatched command"),
+    }
+}
+
 fn run_analyzer<A: Analyzer + Default>(
     path: &PathBuf,
     config: &Config,
@@ -434,12 +466,7 @@ fn run_analyzer<A: Analyzer + Default>(
         s.set_message(format!("Analyzing {} files...", file_set.len()));
     }
 
-    let mut ctx = AnalysisContext::new(&file_set, config, Some(path));
-    // Try to find git root for this path
-    if let Ok(repo) = omen::git::GitRepo::open(path) {
-        let git_root = repo.root().to_path_buf();
-        ctx = ctx.with_git_path(Box::leak(Box::new(git_root)));
-    }
+    let mut ctx = build_context(path, &file_set, config);
 
     // Add progress callback for analyzers that support it
     let progress_counter = Arc::new(AtomicUsize::new(0));
@@ -469,12 +496,7 @@ fn run_complexity_check(
     args: &ComplexityArgs,
 ) -> omen::core::Result<()> {
     let file_set = FileSet::from_path(path, config)?;
-    let mut ctx = AnalysisContext::new(&file_set, config, Some(path));
-
-    if let Ok(repo) = omen::git::GitRepo::open(path) {
-        let git_root = repo.root().to_path_buf();
-        ctx = ctx.with_git_path(Box::leak(Box::new(git_root)));
-    }
+    let ctx = build_context(path, &file_set, config);
 
     let analyzer = omen::analyzers::complexity::Analyzer::default();
     let result = analyzer.analyze(&ctx)?;
@@ -522,12 +544,7 @@ fn run_complexity_check(
 
 fn run_score_check(path: &PathBuf, config: &Config, args: &ScoreArgs) -> omen::core::Result<()> {
     let file_set = FileSet::from_path(path, config)?;
-    let mut ctx = AnalysisContext::new(&file_set, config, Some(path));
-
-    if let Ok(repo) = omen::git::GitRepo::open(path) {
-        let git_root = repo.root().to_path_buf();
-        ctx = ctx.with_git_path(Box::leak(Box::new(git_root)));
-    }
+    let ctx = build_context(path, &file_set, config);
 
     let analyzer = omen::score::Analyzer::default();
     let result = analyzer.analyze(&ctx)?;
@@ -555,11 +572,7 @@ fn run_churn_analyzer(
     days: u32,
 ) -> omen::core::Result<()> {
     let file_set = FileSet::from_path(path, config)?;
-    let mut ctx = AnalysisContext::new(&file_set, config, Some(path));
-    if let Ok(repo) = omen::git::GitRepo::open(path) {
-        let git_root = repo.root().to_path_buf();
-        ctx = ctx.with_git_path(Box::leak(Box::new(git_root)));
-    }
+    let ctx = build_context(path, &file_set, config);
     let analyzer = omen::analyzers::churn::Analyzer::new().with_days(days);
     let result = analyzer.analyze(&ctx)?;
     format.format(&result, &mut stdout())?;
@@ -575,12 +588,7 @@ fn run_context(
     use serde_json::json;
 
     let file_set = FileSet::from_path(path, config)?;
-    let mut ctx = AnalysisContext::new(&file_set, config, Some(path));
-
-    if let Ok(repo) = omen::git::GitRepo::open(path) {
-        let git_root = repo.root().to_path_buf();
-        ctx = ctx.with_git_path(Box::leak(Box::new(git_root)));
-    }
+    let ctx = build_context(path, &file_set, config);
 
     // Generate context using repomap analyzer as base
     let analyzer = omen::analyzers::repomap::Analyzer::default();
@@ -1129,11 +1137,7 @@ fn run_mutation(
         }
     }
 
-    let mut ctx = AnalysisContext::new(&file_set, config, Some(path));
-    if let Ok(repo) = omen::git::GitRepo::open(path) {
-        let git_root = repo.root().to_path_buf();
-        ctx = ctx.with_git_path(Box::leak(Box::new(git_root)));
-    }
+    let mut ctx = build_context(path, &file_set, config);
 
     // Add progress callback
     let progress_counter = Arc::new(AtomicUsize::new(0));

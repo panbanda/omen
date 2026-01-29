@@ -13,7 +13,7 @@ use crate::parser::ParseResult;
 
 use super::super::operator::MutationOperator;
 use super::super::Mutant;
-use super::walk_and_collect_mutants;
+use super::{mutant_from_node, walk_and_collect_mutants};
 
 /// CRR (Constant Replacement) operator.
 ///
@@ -44,17 +44,14 @@ impl MutationOperator for LiteralOperator {
                         for replacement in replacements {
                             counter += 1;
                             let id = format!("{}-{}", mutant_id_prefix, counter);
-                            let start = node.start_position();
-                            mutants.push(Mutant::new(
+                            mutants.push(mutant_from_node(
                                 id,
                                 result.path.clone(),
                                 self.name(),
-                                (start.row + 1) as u32,
-                                (start.column + 1) as u32,
+                                &node,
                                 text,
                                 replacement.clone(),
                                 format!("Replace {} with {}", text, replacement),
-                                (node.start_byte(), node.end_byte()),
                             ));
                         }
                     }
@@ -66,17 +63,14 @@ impl MutationOperator for LiteralOperator {
                     if let Some(replacement) = generate_boolean_replacement(text, result.language) {
                         counter += 1;
                         let id = format!("{}-{}", mutant_id_prefix, counter);
-                        let start = node.start_position();
-                        mutants.push(Mutant::new(
+                        mutants.push(mutant_from_node(
                             id,
                             result.path.clone(),
                             self.name(),
-                            (start.row + 1) as u32,
-                            (start.column + 1) as u32,
+                            &node,
                             text,
                             replacement.clone(),
                             format!("Replace {} with {}", text, replacement),
-                            (node.start_byte(), node.end_byte()),
                         ));
                     }
                 }

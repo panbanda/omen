@@ -38,39 +38,37 @@ impl AnalyzerTrait for Analyzer {
     }
 
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
-        let mut components = HashMap::new();
-        let mut weighted_sum = 0.0;
-        let mut total_weight = 0.0;
+        let mut acc = ScoreAccumulator::default();
 
-        // Complexity score
-        if self.weights.complexity > 0.0 {
-            let complexity_analyzer = crate::analyzers::complexity::Analyzer::new();
-            if let Ok(result) = complexity_analyzer.analyze(ctx) {
-                let score = calculate_complexity_score(&result);
-                let file_count = result.files.len();
-                components.insert(
-                    "complexity".to_string(),
-                    ScoreComponent {
-                        score,
-                        weight: self.weights.complexity,
-                        details: format!(
-                            "Analyzed {} files, avg cyclomatic: {:.1}",
-                            file_count, result.summary.avg_cyclomatic
-                        ),
-                    },
-                );
-                weighted_sum += score * self.weights.complexity;
-                total_weight += self.weights.complexity;
-            }
+        macro_rules! run_analyzer {
+            ($name:expr, $weight:expr, $analyzer:expr, $score_fn:expr, $details:expr) => {
+                if $weight > 0.0 {
+                    if let Ok(result) = $analyzer.analyze(ctx) {
+                        let score = $score_fn(&result);
+                        let details = $details(&result);
+                        acc.add($name, $weight, score, details);
+                    }
+                }
+            };
         }
 
-        // SATD score
+        run_analyzer!(
+            "complexity",
+            self.weights.complexity,
+            crate::analyzers::complexity::Analyzer::new(),
+            calculate_complexity_score,
+            |r: &crate::analyzers::complexity::Analysis| format!(
+                "Analyzed {} files, avg cyclomatic: {:.1}",
+                r.files.len(),
+                r.summary.avg_cyclomatic
+            )
+        );
+
+        // SATD needs file_count from ctx, so handle inline
         if self.weights.satd > 0.0 {
-            let satd_analyzer = crate::analyzers::satd::Analyzer::new();
-            if let Ok(result) = satd_analyzer.analyze(ctx) {
-                let file_count = ctx.files.files().len();
-                let score = calculate_satd_score(&result, file_count);
-                let high_weight_count = result
+            if let Ok(result) = crate::analyzers::satd::Analyzer::new().analyze(ctx) {
+                let score = calculate_satd_score(&result, ctx.files.files().len());
+                let high_priority = result
                     .items
                     .iter()
                     .filter(|i| {
@@ -81,232 +79,160 @@ impl AnalyzerTrait for Analyzer {
                         )
                     })
                     .count();
-                components.insert(
-                    "satd".to_string(),
-                    ScoreComponent {
-                        score,
-                        weight: self.weights.satd,
-                        details: format!(
-                            "Found {} debt items ({} high priority)",
-                            result.items.len(),
-                            high_weight_count
-                        ),
-                    },
+                acc.add(
+                    "satd",
+                    self.weights.satd,
+                    score,
+                    format!(
+                        "Found {} debt items ({} high priority)",
+                        result.items.len(),
+                        high_priority
+                    ),
                 );
-                weighted_sum += score * self.weights.satd;
-                total_weight += self.weights.satd;
             }
         }
 
-        // Deadcode score
-        if self.weights.deadcode > 0.0 {
-            let deadcode_analyzer = crate::analyzers::deadcode::Analyzer::new();
-            if let Ok(result) = deadcode_analyzer.analyze(ctx) {
-                let score = calculate_deadcode_score(&result);
-                components.insert(
-                    "deadcode".to_string(),
-                    ScoreComponent {
-                        score,
-                        weight: self.weights.deadcode,
-                        details: format!("Found {} dead code items", result.items.len()),
-                    },
-                );
-                weighted_sum += score * self.weights.deadcode;
-                total_weight += self.weights.deadcode;
-            }
-        }
+        run_analyzer!(
+            "deadcode",
+            self.weights.deadcode,
+            crate::analyzers::deadcode::Analyzer::new(),
+            calculate_deadcode_score,
+            |r: &crate::analyzers::deadcode::Analysis| format!(
+                "Found {} dead code items",
+                r.items.len()
+            )
+        );
 
-        // Churn score (requires git)
-        if self.weights.churn > 0.0 {
-            let churn_analyzer = crate::analyzers::churn::Analyzer::new();
-            if let Ok(result) = churn_analyzer.analyze(ctx) {
-                let score = calculate_churn_score(&result);
-                components.insert(
-                    "churn".to_string(),
-                    ScoreComponent {
-                        score,
-                        weight: self.weights.churn,
-                        details: format!(
-                            "Analyzed {} files, mean churn: {:.2}",
-                            result.summary.total_files_changed, result.summary.mean_churn_score
-                        ),
-                    },
-                );
-                weighted_sum += score * self.weights.churn;
-                total_weight += self.weights.churn;
-            }
-        }
+        run_analyzer!(
+            "churn",
+            self.weights.churn,
+            crate::analyzers::churn::Analyzer::new(),
+            calculate_churn_score,
+            |r: &crate::analyzers::churn::Analysis| format!(
+                "Analyzed {} files, mean churn: {:.2}",
+                r.summary.total_files_changed, r.summary.mean_churn_score
+            )
+        );
 
-        // Duplicates score (named "duplication" for template compatibility)
-        if self.weights.duplicates > 0.0 {
-            let dup_analyzer = crate::analyzers::duplicates::Analyzer::new();
-            if let Ok(result) = dup_analyzer.analyze(ctx) {
-                let score = calculate_duplicates_score(&result);
-                components.insert(
-                    "duplication".to_string(),
-                    ScoreComponent {
-                        score,
-                        weight: self.weights.duplicates,
-                        details: format!(
-                            "Found {} clones, {:.1}% duplication",
-                            result.summary.total_clones,
-                            result.summary.duplication_ratio * 100.0
-                        ),
-                    },
-                );
-                weighted_sum += score * self.weights.duplicates;
-                total_weight += self.weights.duplicates;
-            }
-        }
+        run_analyzer!(
+            "duplication",
+            self.weights.duplicates,
+            crate::analyzers::duplicates::Analyzer::new(),
+            calculate_duplicates_score,
+            |r: &crate::analyzers::duplicates::Analysis| format!(
+                "Found {} clones, {:.1}% duplication",
+                r.summary.total_clones,
+                r.summary.duplication_ratio * 100.0
+            )
+        );
 
-        // Cohesion score
-        if self.weights.cohesion > 0.0 {
-            let cohesion_analyzer = crate::analyzers::cohesion::Analyzer::new();
-            if let Ok(result) = cohesion_analyzer.analyze(ctx) {
-                let score = calculate_cohesion_score(&result);
-                components.insert(
-                    "cohesion".to_string(),
-                    ScoreComponent {
-                        score,
-                        weight: self.weights.cohesion,
-                        details: format!(
-                            "Analyzed {} classes, avg LCOM: {:.1}",
-                            result.summary.total_classes, result.summary.avg_lcom
-                        ),
-                    },
-                );
-                weighted_sum += score * self.weights.cohesion;
-                total_weight += self.weights.cohesion;
-            }
-        }
+        run_analyzer!(
+            "cohesion",
+            self.weights.cohesion,
+            crate::analyzers::cohesion::Analyzer::new(),
+            calculate_cohesion_score,
+            |r: &crate::analyzers::cohesion::Analysis| format!(
+                "Analyzed {} classes, avg LCOM: {:.1}",
+                r.summary.total_classes, r.summary.avg_lcom
+            )
+        );
 
-        // Ownership score (requires git)
-        if self.weights.ownership > 0.0 {
-            let ownership_analyzer = crate::analyzers::ownership::Analyzer::new();
-            if let Ok(result) = ownership_analyzer.analyze(ctx) {
-                let score = calculate_ownership_score(&result);
-                components.insert(
-                    "ownership".to_string(),
-                    ScoreComponent {
-                        score,
-                        weight: self.weights.ownership,
-                        details: format!(
-                            "Bus factor: {}, {} knowledge silos",
-                            result.summary.bus_factor, result.summary.silo_count
-                        ),
-                    },
-                );
-                weighted_sum += score * self.weights.ownership;
-                total_weight += self.weights.ownership;
-            }
-        }
+        run_analyzer!(
+            "ownership",
+            self.weights.ownership,
+            crate::analyzers::ownership::Analyzer::new(),
+            calculate_ownership_score,
+            |r: &crate::analyzers::ownership::Analysis| format!(
+                "Bus factor: {}, {} knowledge silos",
+                r.summary.bus_factor, r.summary.silo_count
+            )
+        );
 
-        // Defect score (requires git)
-        if self.weights.defect > 0.0 {
-            let defect_analyzer = crate::analyzers::defect::Analyzer::new();
-            if let Ok(result) = defect_analyzer.analyze(ctx) {
-                let score = calculate_defect_score(&result);
-                components.insert(
-                    "defect".to_string(),
-                    ScoreComponent {
-                        score,
-                        weight: self.weights.defect,
-                        details: format!(
-                            "{} high-risk files, avg probability: {:.1}%",
-                            result.summary.high_risk_count,
-                            result.summary.avg_probability * 100.0
-                        ),
-                    },
-                );
-                weighted_sum += score * self.weights.defect;
-                total_weight += self.weights.defect;
-            }
-        }
+        run_analyzer!(
+            "defect",
+            self.weights.defect,
+            crate::analyzers::defect::Analyzer::new(),
+            calculate_defect_score,
+            |r: &crate::analyzers::defect::Analysis| format!(
+                "{} high-risk files, avg probability: {:.1}%",
+                r.summary.high_risk_count,
+                r.summary.avg_probability * 100.0
+            )
+        );
 
-        // TDG (Technical Debt Gradient) score
-        if self.weights.tdg > 0.0 {
-            let tdg_analyzer = crate::analyzers::tdg::Analyzer::new();
-            if let Ok(result) = tdg_analyzer.analyze(ctx) {
-                let score = calculate_tdg_score(&result);
-                components.insert(
-                    "tdg".to_string(),
-                    ScoreComponent {
-                        score,
-                        weight: self.weights.tdg,
-                        details: format!(
-                            "Analyzed {} files, avg grade: {:?}",
-                            result.total_files, result.average_grade
-                        ),
-                    },
-                );
-                weighted_sum += score * self.weights.tdg;
-                total_weight += self.weights.tdg;
-            }
-        }
+        run_analyzer!(
+            "tdg",
+            self.weights.tdg,
+            crate::analyzers::tdg::Analyzer::new(),
+            calculate_tdg_score,
+            |r: &crate::analyzers::tdg::Analysis| format!(
+                "Analyzed {} files, avg grade: {:?}",
+                r.total_files, r.average_grade
+            )
+        );
 
-        // Coupling score (from graph analyzer)
-        if self.weights.coupling > 0.0 {
-            let graph_analyzer = crate::analyzers::graph::Analyzer::new();
-            if let Ok(result) = graph_analyzer.analyze(ctx) {
-                let score = calculate_coupling_score(&result);
-                components.insert(
-                    "coupling".to_string(),
-                    ScoreComponent {
-                        score,
-                        weight: self.weights.coupling,
-                        details: format!(
-                            "{} nodes, {} cycles, avg degree: {:.1}",
-                            result.summary.total_nodes,
-                            result.summary.cycle_count,
-                            result.summary.avg_degree
-                        ),
-                    },
-                );
-                weighted_sum += score * self.weights.coupling;
-                total_weight += self.weights.coupling;
-            }
-        }
+        run_analyzer!(
+            "coupling",
+            self.weights.coupling,
+            crate::analyzers::graph::Analyzer::new(),
+            calculate_coupling_score,
+            |r: &crate::analyzers::graph::Analysis| format!(
+                "{} nodes, {} cycles, avg degree: {:.1}",
+                r.summary.total_nodes, r.summary.cycle_count, r.summary.avg_degree
+            )
+        );
 
-        // Smells score
-        if self.weights.smells > 0.0 {
-            let smells_analyzer = crate::analyzers::smells::Analyzer::new();
-            if let Ok(result) = smells_analyzer.analyze(ctx) {
-                let score = calculate_smells_score(&result);
-                components.insert(
-                    "smells".to_string(),
-                    ScoreComponent {
-                        score,
-                        weight: self.weights.smells,
-                        details: format!(
-                            "{} smells ({} critical, {} high)",
-                            result.summary.total_smells,
-                            result.summary.critical_count,
-                            result.summary.high_count
-                        ),
-                    },
-                );
-                weighted_sum += score * self.weights.smells;
-                total_weight += self.weights.smells;
-            }
-        }
+        run_analyzer!(
+            "smells",
+            self.weights.smells,
+            crate::analyzers::smells::Analyzer::new(),
+            calculate_smells_score,
+            |r: &crate::analyzers::smells::Analysis| format!(
+                "{} smells ({} critical, {} high)",
+                r.summary.total_smells, r.summary.critical_count, r.summary.high_count
+            )
+        );
 
-        // Calculate final score
-        let overall_score = if total_weight > 0.0 {
-            weighted_sum / total_weight
+        acc.into_analysis(ctx.files.files().len())
+    }
+}
+
+#[derive(Default)]
+struct ScoreAccumulator {
+    components: HashMap<String, ScoreComponent>,
+    weighted_sum: f64,
+    total_weight: f64,
+}
+
+impl ScoreAccumulator {
+    fn add(&mut self, name: &str, weight: f64, score: f64, details: String) {
+        self.components.insert(
+            name.to_string(),
+            ScoreComponent {
+                score,
+                weight,
+                details,
+            },
+        );
+        self.weighted_sum += score * weight;
+        self.total_weight += weight;
+    }
+
+    fn into_analysis(self, files_analyzed: usize) -> Result<Analysis> {
+        let overall_score = if self.total_weight > 0.0 {
+            self.weighted_sum / self.total_weight
         } else {
             100.0
         };
-
         let grade = score_to_grade(overall_score);
-
-        let analyzers_run = components.len();
-        let critical_issues = count_critical_issues(&components);
+        let analyzers_run = self.components.len();
+        let critical_issues = count_critical_issues(&self.components);
         Ok(Analysis {
             overall_score,
             grade,
-            components,
+            components: self.components,
             summary: AnalysisSummary {
-                files_analyzed: ctx.files.files().len(),
+                files_analyzed,
                 analyzers_run,
                 critical_issues,
             },
@@ -1304,6 +1230,16 @@ mod tests {
         };
         let score = calculate_defect_score(&result);
         assert_eq!(score, 100.0);
+    }
+
+    #[test]
+    fn test_score_module_line_count_acceptable() {
+        let source = include_str!("mod.rs");
+        let line_count = source.lines().count();
+        assert!(
+            line_count <= 1270,
+            "score/mod.rs has {line_count} lines (max 1270)"
+        );
     }
 
     #[test]

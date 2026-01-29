@@ -172,6 +172,47 @@ pub fn get_class_node_types(lang: Language) -> &'static [&'static str] {
     }
 }
 
+/// Get node types for binary arithmetic/bitwise expressions.
+///
+/// Used by AOR and BOR mutation operators to find binary expression nodes.
+pub fn get_binary_expression_types(lang: Language) -> &'static [&'static str] {
+    match lang {
+        Language::Rust => &["binary_expression"],
+        Language::Go => &["binary_expression"],
+        Language::Python => &["binary_operator"],
+        Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => {
+            &["binary_expression"]
+        }
+        Language::Java | Language::CSharp => &["binary_expression"],
+        Language::C | Language::Cpp => &["binary_expression"],
+        Language::Ruby => &["binary"],
+        Language::Php => &["binary_expression"],
+        Language::Bash => &["binary_expression"],
+    }
+}
+
+/// Get node types for boolean/logical expressions.
+///
+/// Used by COR mutation operator. Differs from `get_binary_expression_types`
+/// because Python uses `boolean_operator` for `and`/`or` rather than `binary_operator`.
+pub fn get_boolean_expression_types(lang: Language) -> &'static [&'static str] {
+    match lang {
+        Language::Python => &["boolean_operator"],
+        _ => get_binary_expression_types(lang),
+    }
+}
+
+/// Get node types for comparison/relational expressions.
+///
+/// Used by ROR and BVO mutation operators. Differs from `get_binary_expression_types`
+/// because Python uses `comparison_operator` for `<`, `>`, `==`, etc.
+pub fn get_comparison_expression_types(lang: Language) -> &'static [&'static str] {
+    match lang {
+        Language::Python => &["comparison_operator"],
+        _ => get_binary_expression_types(lang),
+    }
+}
+
 /// Check if a node type represents a logical operator.
 pub fn is_logical_operator(node_type: &str) -> bool {
     matches!(node_type, "&&" | "||" | "and" | "or")

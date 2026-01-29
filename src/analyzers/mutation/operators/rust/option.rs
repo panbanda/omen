@@ -11,7 +11,7 @@ use crate::parser::ParseResult;
 
 use super::super::super::operator::MutationOperator;
 use super::super::super::Mutant;
-use super::super::walk_and_collect_mutants;
+use super::super::{mutant_from_node, walk_and_collect_mutants};
 
 /// Rust Option mutation operator.
 ///
@@ -60,119 +60,61 @@ impl OptionOperator {
         let function_node = node.child_by_field_name("function")?;
         let function_text = function_node.utf8_text(&result.source).ok()?;
 
+        let original = node.utf8_text(&result.source).ok()?;
+
         // Check for Some(x) or Option::Some(x)
         if function_text == "Some" || function_text.ends_with("::Some") {
             *counter += 1;
             let id = format!("{}-{}", prefix, counter);
-            let start = node.start_position();
-            let original = node.utf8_text(&result.source).ok()?;
-
-            mutants.push(Mutant::new(
+            mutants.push(mutant_from_node(
                 id,
                 result.path.clone(),
                 self.name(),
-                (start.row + 1) as u32,
-                (start.column + 1) as u32,
+                node,
                 original,
                 "None",
                 format!("Replace {} with None", original),
-                (node.start_byte(), node.end_byte()),
             ));
         }
 
-        // Check for method calls like .unwrap(), .unwrap_or(...)
-        if function_text.ends_with(".unwrap") {
-            // .unwrap() -> .expect("mutated")
-            *counter += 1;
-            let id = format!("{}-{}", prefix, counter);
-            let start = function_node.start_position();
-            let original = node.utf8_text(&result.source).ok()?;
+        // Method suffix replacements: (suffix, replacement_fmt, description)
+        let method_mutations: &[(&str, &str, &str)] = &[
+            (
+                ".unwrap",
+                ".expect(\"mutated\")",
+                "Replace .unwrap() with .expect(\"mutated\")",
+            ),
+            (
+                ".unwrap_or",
+                ".unwrap()",
+                "Replace .unwrap_or(...) with .unwrap()",
+            ),
+            (
+                ".unwrap_or_else",
+                ".unwrap()",
+                "Replace .unwrap_or_else(...) with .unwrap()",
+            ),
+            (
+                ".unwrap_or_default",
+                ".unwrap()",
+                "Replace .unwrap_or_default() with .unwrap()",
+            ),
+        ];
 
-            // Find the receiver (everything before .unwrap)
-            let receiver_end = function_text.len() - ".unwrap".len();
-            let receiver = &function_text[..receiver_end];
-
-            mutants.push(Mutant::new(
-                id,
-                result.path.clone(),
-                self.name(),
-                (start.row + 1) as u32,
-                (start.column + 1) as u32,
-                original,
-                format!("{}.expect(\"mutated\")", receiver),
-                "Replace .unwrap() with .expect(\"mutated\")".to_string(),
-                (node.start_byte(), node.end_byte()),
-            ));
-        }
-
-        if function_text.ends_with(".unwrap_or") {
-            // .unwrap_or(default) -> .unwrap()
-            *counter += 1;
-            let id = format!("{}-{}", prefix, counter);
-            let start = function_node.start_position();
-            let original = node.utf8_text(&result.source).ok()?;
-
-            // Find the receiver (everything before .unwrap_or)
-            let receiver_end = function_text.len() - ".unwrap_or".len();
-            let receiver = &function_text[..receiver_end];
-
-            mutants.push(Mutant::new(
-                id,
-                result.path.clone(),
-                self.name(),
-                (start.row + 1) as u32,
-                (start.column + 1) as u32,
-                original,
-                format!("{}.unwrap()", receiver),
-                "Replace .unwrap_or(...) with .unwrap()".to_string(),
-                (node.start_byte(), node.end_byte()),
-            ));
-        }
-
-        if function_text.ends_with(".unwrap_or_else") {
-            // .unwrap_or_else(f) -> .unwrap()
-            *counter += 1;
-            let id = format!("{}-{}", prefix, counter);
-            let start = function_node.start_position();
-            let original = node.utf8_text(&result.source).ok()?;
-
-            let receiver_end = function_text.len() - ".unwrap_or_else".len();
-            let receiver = &function_text[..receiver_end];
-
-            mutants.push(Mutant::new(
-                id,
-                result.path.clone(),
-                self.name(),
-                (start.row + 1) as u32,
-                (start.column + 1) as u32,
-                original,
-                format!("{}.unwrap()", receiver),
-                "Replace .unwrap_or_else(...) with .unwrap()".to_string(),
-                (node.start_byte(), node.end_byte()),
-            ));
-        }
-
-        if function_text.ends_with(".unwrap_or_default") {
-            // .unwrap_or_default() -> .unwrap()
-            *counter += 1;
-            let id = format!("{}-{}", prefix, counter);
-            let start = function_node.start_position();
-            let original = node.utf8_text(&result.source).ok()?;
-
-            let receiver_end = function_text.len() - ".unwrap_or_default".len();
-            let receiver = &function_text[..receiver_end];
-
-            mutants.push(Mutant::new(
-                id,
-                result.path.clone(),
-                self.name(),
-                (start.row + 1) as u32,
-                (start.column + 1) as u32,
-                original,
-                format!("{}.unwrap()", receiver),
-                "Replace .unwrap_or_default() with .unwrap()".to_string(),
-                (node.start_byte(), node.end_byte()),
-            ));
+        for &(suffix, replacement_method, description) in method_mutations {
+            if let Some(receiver) = function_text.strip_suffix(suffix) {
+                *counter += 1;
+                let id = format!("{}-{}", prefix, counter);
+                mutants.push(mutant_from_node(
+                    id,
+                    result.path.clone(),
+                    self.name(),
+                    node,
+                    original,
+                    format!("{}{}", receiver, replacement_method),
+                    description,
+                ));
+            }
         }
 
         if mutants.is_empty() {
@@ -196,23 +138,18 @@ impl OptionOperator {
         let macro_node = node.child_by_field_name("macro")?;
         let macro_text = macro_node.utf8_text(&result.source).ok()?;
 
-        // Check for Some! macro (custom macros wrapping Some)
         if macro_text == "Some" {
             *counter += 1;
             let id = format!("{}-{}", prefix, counter);
-            let start = node.start_position();
             let original = node.utf8_text(&result.source).ok()?;
-
-            mutants.push(Mutant::new(
+            mutants.push(mutant_from_node(
                 id,
                 result.path.clone(),
                 self.name(),
-                (start.row + 1) as u32,
-                (start.column + 1) as u32,
+                node,
                 original,
                 "None",
                 format!("Replace {} with None", original),
-                (node.start_byte(), node.end_byte()),
             ));
         }
 
