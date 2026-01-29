@@ -902,6 +902,16 @@
                 grid-template-columns: 1fr;
             }
         }
+        .language-filter { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; }
+        .lang-pill {
+            background: var(--bg-tertiary); border: 1px solid var(--border-color);
+            color: var(--text-secondary); padding: 0.25rem 0.75rem; border-radius: 1rem;
+            font-size: 0.8rem; cursor: pointer; transition: all 0.15s;
+        }
+        .lang-pill:hover { border-color: var(--text-secondary); color: var(--text-primary); }
+        .lang-pill.active { border-color: var(--accent-blue); color: var(--accent-blue); background: #58a6ff15; }
+        .lang-pill .lang-count { color: var(--text-secondary); font-size: 0.75rem; margin-left: 0.25rem; }
+        .lang-pill.active .lang-count { color: var(--accent-blue); opacity: 0.7; }
     </style>
 </head>
 <body>
@@ -1271,6 +1281,7 @@
                 {% endif %}
             </div>
 
+            <div class="language-filter" data-target="hotspots-table"></div>
             <div class="table-container">
                 <table id="hotspots-table">
                     <thead>
@@ -1283,7 +1294,7 @@
                     </thead>
                     <tbody>
                         {% for item in Hotspots.files %}
-                        <tr>
+                        <tr data-language="{{ item.path | lang_from_path }}">
                             <td><code>{{ item.path | rel_path(Metadata.paths) | truncate_path(60) }}</code></td>
                             <td><span class="badge {{ item.hotspot_score | hotspot_badge }}">{{ item.hotspot_score | round(3) }}</span></td>
                             <td>{{ item.commits }}</td>
@@ -1351,11 +1362,13 @@
             </div>
             {% endif %}
 
+            <div class="language-filter" data-target="cohesion-table"></div>
             <div class="table-container">
                 <table id="cohesion-table">
                     <thead>
                         <tr>
                             <th>Class</th>
+                            <th>Language</th>
                             <th><span class="tooltip" data-tooltip="Lack of Cohesion of Methods. Higher values indicate a class is doing too many unrelated things and should be split.">LCOM</span></th>
                             <th><span class="tooltip" data-tooltip="Weighted Methods per Class. Sum of complexity of all methods. High values indicate overly complex classes.">WMC</span></th>
                             <th><span class="tooltip" data-tooltip="Coupling Between Objects. Number of classes this class depends on. High coupling makes changes risky.">CBO</span></th>
@@ -1363,8 +1376,9 @@
                     </thead>
                     <tbody>
                         {% for item in Cohesion.classes %}
-                        <tr>
+                        <tr data-language="{{ item.language }}">
                             <td><code>{{ item.class_name }}</code></td>
+                            <td>{{ item.language }}</td>
                             <td><span class="badge {% if item.lcom > 50 %}critical{% elif item.lcom > 20 %}high{% else %}medium{% endif %}">{{ item.lcom }}</span></td>
                             <td>{{ item.wmc }}</td>
                             <td>{{ item.cbo }}</td>
@@ -1424,6 +1438,7 @@
                 </div>
             </div>
 
+            <div class="language-filter" data-target="satd-table"></div>
             <div class="table-container">
                 <table id="satd-table">
                     <thead>
@@ -1436,7 +1451,7 @@
                     </thead>
                     <tbody>
                         {% for item in SATD.items %}
-                        <tr>
+                        <tr data-language="{{ item.file | lang_from_path }}">
                             <td><span class="badge {{ item.severity | lower }}">{{ item.severity }}</span></td>
                             <td>{{ item.category }}</td>
                             <td><code>{{ item.file | rel_path(Metadata.paths) | truncate_path(50) }}</code></td>
@@ -1591,6 +1606,7 @@
             </div>
 
             {% if Churn.files %}
+            <div class="language-filter" data-target="churn-table"></div>
             <div class="table-container">
                 <table id="churn-table">
                     <thead>
@@ -1603,7 +1619,7 @@
                     </thead>
                     <tbody>
                         {% for item in Churn.files %}
-                        <tr>
+                        <tr data-language="{{ item.file | lang_from_path }}">
                             <td><code>{{ item.file }}</code></td>
                             <td>{{ item.commits }}</td>
                             <td>{{ item.authors | length }}</td>
@@ -1883,12 +1899,84 @@
             }
         };
 
+        const dataTableInstances = {};
         const tableIds = ['hotspots-table', 'flags-table', 'cohesion-table', 'satd-table', 'churn-table'];
         tableIds.forEach(id => {
             const table = document.getElementById(id);
             if (table && table.querySelector('tbody tr')) {
-                new simpleDatatables.DataTable(table, dataTableConfig);
+                dataTableInstances[id] = new simpleDatatables.DataTable(table, dataTableConfig);
             }
+        });
+
+        // Language filter pills for filterable tables
+        const filterableTableIds = ['cohesion-table', 'hotspots-table', 'satd-table', 'churn-table'];
+        filterableTableIds.forEach(tableId => {
+            const filterContainer = document.querySelector('.language-filter[data-target="' + tableId + '"]');
+            const table = document.getElementById(tableId);
+            if (!filterContainer || !table) return;
+
+            const rows = table.querySelectorAll('tbody tr[data-language]');
+            if (rows.length === 0) return;
+
+            const langCounts = {};
+            rows.forEach(row => {
+                const lang = row.getAttribute('data-language');
+                if (lang) langCounts[lang] = (langCounts[lang] || 0) + 1;
+            });
+
+            if (Object.keys(langCounts).length < 2) return;
+
+            const allBtn = document.createElement('button');
+            allBtn.className = 'lang-pill active';
+            allBtn.setAttribute('data-lang', 'all');
+            allBtn.textContent = 'All';
+            filterContainer.appendChild(allBtn);
+
+            Object.keys(langCounts).sort().forEach(lang => {
+                const btn = document.createElement('button');
+                btn.className = 'lang-pill';
+                btn.setAttribute('data-lang', lang);
+                btn.innerHTML = lang + '<span class="lang-count">(' + langCounts[lang] + ')</span>';
+                filterContainer.appendChild(btn);
+            });
+
+            filterContainer.addEventListener('click', function(e) {
+                const pill = e.target.closest('.lang-pill');
+                if (!pill) return;
+
+                const lang = pill.getAttribute('data-lang');
+                const dt = dataTableInstances[tableId];
+                if (!dt) return;
+
+                if (lang === 'all') {
+                    filterContainer.querySelectorAll('.lang-pill').forEach(p => p.classList.remove('active'));
+                    pill.classList.add('active');
+                } else {
+                    filterContainer.querySelector('[data-lang="all"]').classList.remove('active');
+                    pill.classList.toggle('active');
+                    if (!filterContainer.querySelector('.lang-pill.active')) {
+                        filterContainer.querySelector('[data-lang="all"]').classList.add('active');
+                    }
+                }
+
+                const activeLangs = [];
+                filterContainer.querySelectorAll('.lang-pill.active').forEach(p => {
+                    const l = p.getAttribute('data-lang');
+                    if (l !== 'all') activeLangs.push(l);
+                });
+                const showAll = filterContainer.querySelector('[data-lang="all"]').classList.contains('active');
+
+                dt.destroy();
+                rows.forEach(row => {
+                    if (showAll) {
+                        row.style.display = '';
+                    } else {
+                        const rowLang = row.getAttribute('data-language');
+                        row.style.display = activeLangs.includes(rowLang) ? '' : 'none';
+                    }
+                });
+                dataTableInstances[tableId] = new simpleDatatables.DataTable(table, dataTableConfig);
+            });
         });
 
         // Initialize tooltips with Tippy.js (after DataTables to catch cloned elements)

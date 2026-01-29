@@ -8,6 +8,7 @@ use std::path::Path;
 use minijinja::{context, Environment, Value};
 use pulldown_cmark::{html, Options, Parser};
 
+use crate::core::Language;
 use crate::core::Result;
 use crate::report::types::*;
 
@@ -38,6 +39,7 @@ impl Renderer {
         env.add_filter("truncate_path", truncate_path);
         env.add_filter("num", num_format);
         env.add_filter("tojson", tojson_filter);
+        env.add_filter("lang_from_path", lang_from_path);
 
         // Add template functions
         env.add_function("percent", percent);
@@ -490,6 +492,13 @@ fn filter_severity(items: Vec<Value>, severities: Vec<String>) -> Vec<Value> {
         .collect()
 }
 
+/// Map a file path to its language display name.
+fn lang_from_path(path: &str) -> String {
+    Language::detect(Path::new(path))
+        .map(|l: Language| l.display_name().to_string())
+        .unwrap_or_default()
+}
+
 /// Generate tooltip for flag file references.
 fn flag_files_tooltip(refs: Vec<Value>, roots: Option<Vec<String>>) -> String {
     if refs.is_empty() {
@@ -586,6 +595,15 @@ mod tests {
     fn test_percent() {
         assert!((percent(1, 4) - 25.0).abs() < f64::EPSILON);
         assert!((percent(0, 0) - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_lang_from_path() {
+        assert_eq!(lang_from_path("src/main.rs"), "Rust");
+        assert_eq!(lang_from_path("app/server.go"), "Go");
+        assert_eq!(lang_from_path("lib/utils.py"), "Python");
+        assert_eq!(lang_from_path("index.tsx"), "TSX");
+        assert_eq!(lang_from_path("README.md"), "");
     }
 
     #[test]
