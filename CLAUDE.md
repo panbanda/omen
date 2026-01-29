@@ -174,3 +174,14 @@ Omen is a code analysis tool where accuracy is paramount. When making changes:
 ## Supported Languages
 
 Go, Rust, Python, TypeScript, JavaScript, TSX/JSX, Java, C, C++, C#, Ruby, PHP, Bash
+
+### Multi-language requirements
+
+Any analyzer feature that operates on source code must be implemented and tested for all supported languages where the feature applies. This includes:
+
+- **TDG critical defect detection**: Each language defines its own dangerous patterns detected via tree-sitter AST (not string matching). Tests must cover both detection of real calls and rejection of false positives in string literals/comments.
+- **Complexity analysis**: Decision-point node types must be defined per language in `parser/queries.rs`.
+- **Dead code detection**: Language-specific entry points, visibility rules, and export conventions must be handled.
+- **Cohesion (CK metrics)**: Class-equivalent constructs must be defined per language (e.g. Rust struct+impl, Go struct+methods).
+
+When adding a new language feature, write tests for every supported language before implementing.
