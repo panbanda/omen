@@ -135,8 +135,9 @@ impl AnalyzerTrait for Analyzer {
                         .ok()
                         .and_then(|content| self.analyze_content(path, content).ok())
                 } else {
-                    // Read from filesystem
-                    self.analyze_file(path).ok()
+                    // Read from filesystem using absolute path
+                    let full_path = ctx.root.join(path);
+                    self.analyze_file(&full_path).ok()
                 };
 
                 // Report progress

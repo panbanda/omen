@@ -127,6 +127,10 @@ impl FileSet {
                 }
 
                 let owned = entry.into_path();
+                let owned = owned
+                    .strip_prefix(root)
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or(owned);
                 let mut locked = files_mutex.lock().expect("file_set mutex poisoned");
                 locked.push(owned);
 
@@ -675,5 +679,27 @@ mod tests {
 
         assert_eq!(filtered.len(), 1);
         assert!(filtered.files()[0].to_string_lossy().contains("lib.rs"));
+    }
+
+    #[test]
+    fn test_file_set_stores_relative_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let src = temp.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("main.rs"), "fn main() {}").unwrap();
+
+        let file_set = FileSet::from_path(temp.path(), &Config::default()).unwrap();
+
+        for path in file_set.files() {
+            assert!(
+                path.is_relative(),
+                "Expected relative path, got: {}",
+                path.display()
+            );
+        }
+        assert!(file_set
+            .files()
+            .iter()
+            .any(|p| p == Path::new("src/main.rs")));
     }
 }
