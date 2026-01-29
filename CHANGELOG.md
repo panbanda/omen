@@ -1,5 +1,20 @@
 # Changelog
 
+## [4.14.1](https://github.com/panbanda/omen/compare/omen-v4.14.0...omen-v4.14.1) (2026-01-29)
+
+
+### Bug Fixes
+
+* **tdg:** add serde default for penalties_applied field ([9eb1151](https://github.com/panbanda/omen/commit/9eb11515505634a28255514291dd5beb029ded33))
+
+
+### Performance Improvements
+
+* **blame:** use git CLI blame instead of gix pure-Rust blame ([3485694](https://github.com/panbanda/omen/commit/3485694831a81852872aa8f412f39f9f688e0756))
+* **flags:** replace per-file gix log with bulk git CLI call ([f4671fb](https://github.com/panbanda/omen/commit/f4671fb35a36b9a0ddf364fa7ee93abb1b120b46))
+* optimize report generation for large repos ([fc0d0da](https://github.com/panbanda/omen/commit/fc0d0da6e6e26f037c8809ef9c0d547f89a32e01))
+* **report:** parallelize analyzers and compute score from disk ([4bfe688](https://github.com/panbanda/omen/commit/4bfe6881a90b81fe0626397c0622dee7fa45e82f))
+
 ## [4.14.0](https://github.com/panbanda/omen/compare/omen-v4.13.1...omen-v4.14.0) (2026-01-29)
 
 
