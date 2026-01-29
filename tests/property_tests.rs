@@ -189,7 +189,7 @@ proptest! {
         };
         // Strength can exceed 1.0 if edges > max_edges (multigraph), but
         // for a simple graph it should be bounded. We clamp like the real code does.
-        let clamped = strength.min(1.0).max(0.0);
+        let clamped = strength.clamp(0.0, 1.0);
         prop_assert!((0.0..=1.0).contains(&clamped));
     }
 

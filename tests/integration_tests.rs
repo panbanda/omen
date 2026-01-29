@@ -3,6 +3,7 @@ use predicates::prelude::*;
 use tempfile::TempDir;
 
 fn omen() -> Command {
+    #[allow(deprecated)]
     Command::cargo_bin("omen").expect("binary exists")
 }
 

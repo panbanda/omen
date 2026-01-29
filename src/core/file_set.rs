@@ -123,7 +123,7 @@ impl FileSet {
                 }
 
                 let owned = entry.into_path();
-                let mut locked = files_mutex.lock().unwrap();
+                let mut locked = files_mutex.lock().expect("file_set mutex poisoned");
                 locked.push(owned);
 
                 if let Some(ref s) = spinner {
@@ -136,7 +136,7 @@ impl FileSet {
                 WalkState::Continue
             })
         });
-        let mut files = files_mutex.into_inner().unwrap();
+        let mut files = files_mutex.into_inner().expect("file_set mutex poisoned");
 
         // Sort for deterministic ordering
         files.sort();
