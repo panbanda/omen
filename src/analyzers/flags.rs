@@ -16,7 +16,6 @@ use tree_sitter::{Query, QueryCursor};
 
 use crate::config::CustomProvider;
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
-use crate::git::GitRepo;
 use crate::parser::{get_tree_sitter_language, Parser};
 
 /// Feature flags analyzer configuration.
@@ -547,37 +546,25 @@ impl Analyzer {
         // Build flag analysis
         let mut flags: Vec<FeatureFlag> = Vec::new();
 
-        // Try to open git repo for staleness detection
-        let git_repo = if self.config.include_git {
-            GitRepo::open(ctx.root).ok()
-        } else {
-            None
-        };
+        // Check if git is available for staleness detection
+        let has_git = self.config.include_git
+            && std::process::Command::new("git")
+                .current_dir(ctx.root)
+                .args(["rev-parse", "--git-dir"])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
 
-        // Pre-cache git log results for all unique files
+        // Pre-cache git log results for all unique files using bulk CLI call
         let mut git_cache: HashMap<String, (Option<i64>, Option<i64>)> = HashMap::new();
-        if let Some(ref repo) = git_repo {
+        if has_git {
             let unique_files: std::collections::HashSet<_> = flags_map
                 .values()
                 .flatten()
                 .map(|r| r.file.clone())
                 .collect();
-            for file in unique_files {
-                let path = std::path::PathBuf::from(&file);
-                let paths = [path];
-                if let Ok(commits) = repo.log(None, Some(&paths), None) {
-                    let mut first: Option<i64> = None;
-                    let mut last: Option<i64> = None;
-                    for commit in commits {
-                        if first.is_none_or(|f| commit.timestamp < f) {
-                            first = Some(commit.timestamp);
-                        }
-                        if last.is_none_or(|l| commit.timestamp > l) {
-                            last = Some(commit.timestamp);
-                        }
-                    }
-                    git_cache.insert(file, (first, last));
-                }
+            if !unique_files.is_empty() {
+                git_cache = bulk_git_file_timestamps(ctx.root, &unique_files);
             }
         }
 
@@ -590,7 +577,7 @@ impl Analyzer {
                 .len();
 
             // Calculate staleness from cached git data
-            let (first_seen, last_seen, age_days, stale) = if git_repo.is_some() {
+            let (first_seen, last_seen, age_days, stale) = if has_git {
                 calculate_staleness_from_cache(&git_cache, &refs, expected_ttl_days)
             } else {
                 (None, None, 0, false)
@@ -695,6 +682,60 @@ fn calculate_summary(flags: &[FeatureFlag]) -> AnalysisSummary {
         stale_flags,
         by_provider,
     }
+}
+
+/// Get first/last commit timestamps for a set of files using a single git CLI call.
+///
+/// Runs `git log --format=COMMIT:%at --name-only` once and builds a map of
+/// file -> (first_timestamp, last_timestamp) from the output. This is orders of
+/// magnitude faster than calling gix repo.log() per file, which does a tree diff
+/// for every commit in the repository per file.
+fn bulk_git_file_timestamps(
+    root: &std::path::Path,
+    files: &std::collections::HashSet<String>,
+) -> HashMap<String, (Option<i64>, Option<i64>)> {
+    let mut cache: HashMap<String, (Option<i64>, Option<i64>)> = HashMap::new();
+
+    let output = std::process::Command::new("git")
+        .current_dir(root)
+        .args(["log", "--format=COMMIT:%at", "--name-only"])
+        .output();
+
+    let output = match output {
+        Ok(o) if o.status.success() => o,
+        _ => return cache,
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut current_timestamp: Option<i64> = None;
+
+    for line in stdout.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(ts_str) = line.strip_prefix("COMMIT:") {
+            current_timestamp = ts_str.parse().ok();
+        } else if let Some(ts) = current_timestamp {
+            // This is a file path line; only track files we care about
+            if files.contains(line) {
+                let entry = cache.entry(line.to_string()).or_insert((None, None));
+                // Commits are newest-first, so first seen is updated to older timestamps
+                match entry.0 {
+                    Some(existing) if ts < existing => entry.0 = Some(ts),
+                    None => entry.0 = Some(ts),
+                    _ => {}
+                }
+                // Last seen is updated to newer timestamps
+                match entry.1 {
+                    Some(existing) if ts > existing => entry.1 = Some(ts),
+                    None => entry.1 = Some(ts),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    cache
 }
 
 /// Internal flag reference during collection.
