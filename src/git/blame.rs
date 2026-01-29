@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use bstr::ByteSlice;
 use gix::Repository;
 use serde::{Deserialize, Serialize};
 
@@ -46,75 +45,70 @@ pub struct AuthorStats {
     pub last_commit: i64,
 }
 
-/// Get blame information for a file.
-pub fn get_blame(repo: &Repository, root: &Path, path: &Path) -> Result<BlameInfo> {
-    // Get relative path from repo root
+/// Get blame information for a file using git CLI (fast path).
+///
+/// Uses `git blame --line-porcelain` which is much faster than gix's pure-Rust
+/// blame implementation, especially on large repositories with deep history.
+pub fn get_blame(_repo: &Repository, root: &Path, path: &Path) -> Result<BlameInfo> {
     let relative_path = path
         .strip_prefix(root)
         .unwrap_or(path)
         .to_string_lossy()
         .to_string();
 
-    // Get HEAD commit as the suspect
-    let head = repo
-        .head_id()
-        .map_err(|e| Error::git(format!("Failed to get HEAD: {e}")))?;
+    let output = std::process::Command::new("git")
+        .current_dir(root)
+        .args(["blame", "--line-porcelain", &relative_path])
+        .output()
+        .map_err(|e| Error::git(format!("Failed to run git blame: {e}")))?;
 
-    // Run blame using gix
-    let outcome = repo
-        .blame_file(
-            relative_path.as_bytes().as_bstr(),
-            head,
-            gix::repository::blame_file::Options::default(),
-        )
-        .map_err(|e| Error::git(format!("Failed to blame file: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(Error::git(format!("git blame failed: {}", stderr)));
+    }
 
-    // Cache for commit -> author lookups to avoid repeated lookups
-    let mut commit_cache: HashMap<gix::ObjectId, (String, i64)> = HashMap::new();
+    parse_line_porcelain(&output.stdout, path)
+}
+
+/// Parse `git blame --line-porcelain` output into BlameInfo.
+fn parse_line_porcelain(output: &[u8], path: &Path) -> Result<BlameInfo> {
+    let text = String::from_utf8_lossy(output);
 
     let mut lines = Vec::new();
     let mut author_lines: HashMap<String, Vec<i64>> = HashMap::new();
 
-    // Process blame entries with their corresponding lines
-    for (entry, _line_content) in outcome.entries_with_lines() {
-        let commit_id = entry.commit_id;
+    let mut current_sha = String::new();
+    let mut current_author = String::new();
+    let mut current_timestamp: i64 = 0;
+    let mut current_line_num: u32 = 0;
 
-        // Look up or cache commit author info - use entry API to avoid double lookup
-        let (author_name, timestamp) = commit_cache.entry(commit_id).or_insert_with(|| match repo
-            .find_commit(commit_id)
-        {
-            Ok(commit) => {
-                let author = commit.author().ok();
-                let name = author
-                    .as_ref()
-                    .map(|a| a.name.to_string())
-                    .unwrap_or_else(|| "Unknown".to_string());
-                let ts = author.map(|a| a.seconds()).unwrap_or(0);
-                (name, ts)
-            }
-            Err(_) => ("Unknown".to_string(), 0),
-        });
-
-        // Each entry represents multiple lines (len is the span)
-        let range = entry.range_in_blamed_file();
-        let sha_str = commit_id.to_string();
-        for line_num in range {
+    for line in text.lines() {
+        if line.starts_with('\t') {
+            // Content line - marks end of a blame entry
             lines.push(BlameLine {
-                line: (line_num + 1) as u32, // Convert to 1-indexed
-                author: author_name.clone(),
-                sha: sha_str.clone(),
-                timestamp: *timestamp,
+                line: current_line_num,
+                author: current_author.clone(),
+                sha: current_sha.clone(),
+                timestamp: current_timestamp,
             });
-
-            // Track lines per author for statistics
             author_lines
-                .entry(author_name.clone())
+                .entry(current_author.clone())
                 .or_default()
-                .push(*timestamp);
+                .push(current_timestamp);
+        } else if let Some(rest) = line.strip_prefix("author ") {
+            current_author = rest.to_string();
+        } else if let Some(rest) = line.strip_prefix("author-time ") {
+            current_timestamp = rest.parse().unwrap_or(0);
+        } else if line.len() >= 40 && line.as_bytes()[0].is_ascii_hexdigit() {
+            // Header line: <sha> <orig-line> <final-line> [<num-lines>]
+            let parts: Vec<&str> = line.splitn(4, ' ').collect();
+            if parts.len() >= 3 {
+                current_sha = parts[0].to_string();
+                current_line_num = parts[2].parse().unwrap_or(0);
+            }
         }
     }
 
-    // Calculate author statistics
     let total_lines = lines.len() as f64;
     let mut authors = HashMap::new();
 
