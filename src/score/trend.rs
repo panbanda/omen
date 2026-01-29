@@ -13,7 +13,7 @@ use crate::config::Config;
 use crate::core::{
     AnalysisContext, Analyzer as AnalyzerTrait, ContentSource, Error, FileSet, Result, TreeSource,
 };
-use crate::git::GitRepo;
+use crate::git::{Commit, GitRepo};
 use crate::report::{ComponentTrendStats, TrendData, TrendPoint};
 
 use super::Analyzer as ScoreAnalyzer;
@@ -64,13 +64,20 @@ pub fn analyze_trend(
     }
 
     // Analyze commits in parallel using worktrees
-    let points = analyze_commits_parallel(path, config, &sample_commits)?;
+    let points = analyze_commits_parallel(path, config, &sample_commits, &commits)?;
 
     // Always include the current HEAD if not already included
     let mut final_points = points;
     let head_date = now.format("%Y-%m-%d").to_string();
     if final_points.last().map(|p| &p.date) != Some(&head_date) {
         if let Ok(score_data) = analyze_current(path, config) {
+            let last_ts = final_points
+                .last()
+                .and_then(|p| chrono::NaiveDate::parse_from_str(&p.date, "%Y-%m-%d").ok())
+                .and_then(|d| d.and_hms_opt(0, 0, 0))
+                .map(|dt| dt.and_utc().timestamp())
+                .unwrap_or(0);
+            let head_commits = collect_commits_in_range(&commits, last_ts, now.timestamp());
             final_points.push(TrendPoint {
                 date: head_date,
                 score: score_data.overall_score as i32,
@@ -79,6 +86,7 @@ pub fn analyze_trend(
                     .iter()
                     .map(|(k, v)| (k.clone(), v.score as i32))
                     .collect(),
+                notable_commits: head_commits,
             });
         }
     }
@@ -113,6 +121,7 @@ fn analyze_commits_parallel(
     path: &Path,
     config: &Config,
     sample_commits: &[(DateTime<Utc>, String)],
+    all_commits: &[Commit],
 ) -> Result<Vec<TrendPoint>> {
     if sample_commits.is_empty() {
         return Ok(Vec::new());
@@ -124,13 +133,29 @@ fn analyze_commits_parallel(
         total
     );
 
+    // Build time windows for commit message collection.
+    // Each sample point gets messages from (previous_sample_time, current_sample_time].
+    let windows: Vec<(i64, i64)> = sample_commits
+        .iter()
+        .enumerate()
+        .map(|(i, (time, _))| {
+            let start = if i == 0 {
+                0
+            } else {
+                sample_commits[i - 1].0.timestamp()
+            };
+            (start, time.timestamp())
+        })
+        .collect();
+
     let completed = Arc::new(AtomicUsize::new(0));
     let path_buf = path.to_path_buf();
 
     // Analyze all commits in parallel using TreeSource
     let all_points: Vec<TrendPoint> = sample_commits
         .par_iter()
-        .filter_map(|(time, sha)| {
+        .zip(windows.par_iter())
+        .filter_map(|((time, sha), &(window_start, window_end))| {
             // Create TreeSource for this commit
             let tree_source = TreeSource::new(&path_buf, sha).ok()?;
             let result = analyze_at_tree(&tree_source, config).ok()?;
@@ -141,6 +166,8 @@ fn analyze_commits_parallel(
                 eprintln!("Trend analysis: {}/{} commits analyzed", done, total);
             }
 
+            let notable = collect_commits_in_range(all_commits, window_start, window_end);
+
             Some(TrendPoint {
                 date: time.format("%Y-%m-%d").to_string(),
                 score: result.overall_score as i32,
@@ -149,6 +176,7 @@ fn analyze_commits_parallel(
                     .iter()
                     .map(|(k, v)| (k.clone(), v.score as i32))
                     .collect(),
+                notable_commits: notable,
             })
         })
         .collect();
@@ -166,12 +194,15 @@ fn analyze_commits_sequential(
     path: &Path,
     config: &Config,
     sample_commits: &[(DateTime<Utc>, String)],
+    all_commits: &[Commit],
 ) -> Result<Vec<TrendPoint>> {
     let mut points = Vec::new();
+    let mut prev_ts: i64 = 0;
 
     for (time, sha) in sample_commits {
         if let Ok(tree_source) = TreeSource::new(path, sha) {
             if let Ok(score_data) = analyze_at_tree(&tree_source, config) {
+                let notable = collect_commits_in_range(all_commits, prev_ts, time.timestamp());
                 points.push(TrendPoint {
                     date: time.format("%Y-%m-%d").to_string(),
                     score: score_data.overall_score as i32,
@@ -180,7 +211,9 @@ fn analyze_commits_sequential(
                         .iter()
                         .map(|(k, v)| (k.clone(), v.score as i32))
                         .collect(),
+                    notable_commits: notable,
                 });
+                prev_ts = time.timestamp();
             }
         }
     }
@@ -290,6 +323,22 @@ impl ContentSource for TreeSourceWrapper {
     }
 }
 
+/// Collect commit messages that fall within a time range (exclusive start, inclusive end).
+/// Returns up to 5 most recent commit messages for the window.
+fn collect_commits_in_range(commits: &[Commit], after_ts: i64, up_to_ts: i64) -> Vec<String> {
+    let mut messages: Vec<&Commit> = commits
+        .iter()
+        .filter(|c| c.timestamp > after_ts && c.timestamp <= up_to_ts)
+        .collect();
+    // Most recent first
+    messages.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    messages
+        .into_iter()
+        .take(5)
+        .map(|c| c.message.clone())
+        .collect()
+}
+
 /// Calculate linear regression for score trend.
 /// Returns (slope, intercept, r_squared).
 fn calculate_linear_regression(points: &[TrendPoint]) -> (f64, f64, f64) {
@@ -369,6 +418,7 @@ fn calculate_component_trends(points: &[TrendPoint]) -> HashMap<String, Componen
                     date: p.date.clone(),
                     score,
                     components: HashMap::new(),
+                    notable_commits: Vec::new(),
                 })
             })
             .collect();
@@ -438,16 +488,19 @@ mod tests {
                 date: "2024-01-01".to_string(),
                 score: 50,
                 components: HashMap::new(),
+                notable_commits: vec![],
             },
             TrendPoint {
                 date: "2024-01-08".to_string(),
                 score: 60,
                 components: HashMap::new(),
+                notable_commits: vec![],
             },
             TrendPoint {
                 date: "2024-01-15".to_string(),
                 score: 70,
                 components: HashMap::new(),
+                notable_commits: vec![],
             },
         ];
 
@@ -463,16 +516,19 @@ mod tests {
                 date: "2024-01-01".to_string(),
                 score: 80,
                 components: HashMap::new(),
+                notable_commits: vec![],
             },
             TrendPoint {
                 date: "2024-01-08".to_string(),
                 score: 70,
                 components: HashMap::new(),
+                notable_commits: vec![],
             },
             TrendPoint {
                 date: "2024-01-15".to_string(),
                 score: 60,
                 components: HashMap::new(),
+                notable_commits: vec![],
             },
         ];
 
@@ -488,16 +544,19 @@ mod tests {
                 date: "2024-01-01".to_string(),
                 score: 75,
                 components: HashMap::new(),
+                notable_commits: vec![],
             },
             TrendPoint {
                 date: "2024-01-08".to_string(),
                 score: 75,
                 components: HashMap::new(),
+                notable_commits: vec![],
             },
             TrendPoint {
                 date: "2024-01-15".to_string(),
                 score: 75,
                 components: HashMap::new(),
+                notable_commits: vec![],
             },
         ];
 
@@ -514,6 +573,7 @@ mod tests {
             date: "2024-01-01".to_string(),
             score: 75,
             components: HashMap::new(),
+            notable_commits: vec![],
         }];
 
         let (slope, intercept, r_squared) = calculate_linear_regression(&points);
@@ -550,16 +610,19 @@ mod tests {
                 date: "2024-01-01".to_string(),
                 score: 65,
                 components: components1,
+                notable_commits: vec![],
             },
             TrendPoint {
                 date: "2024-01-08".to_string(),
                 score: 70,
                 components: components2,
+                notable_commits: vec![],
             },
             TrendPoint {
                 date: "2024-01-15".to_string(),
                 score: 75,
                 components: components3,
+                notable_commits: vec![],
             },
         ];
 
@@ -663,5 +726,78 @@ fn complex(x: i32) -> i32 {
         // Score should be between 0 and 100
         assert!(analysis.overall_score >= 0.0);
         assert!(analysis.overall_score <= 100.0);
+    }
+
+    #[test]
+    fn test_collect_commits_in_range() {
+        let commits = vec![
+            Commit {
+                sha: "aaa".to_string(),
+                author: "A".to_string(),
+                email: "a@test.com".to_string(),
+                timestamp: 100,
+                message: "first commit".to_string(),
+                files: vec![],
+            },
+            Commit {
+                sha: "bbb".to_string(),
+                author: "B".to_string(),
+                email: "b@test.com".to_string(),
+                timestamp: 200,
+                message: "second commit".to_string(),
+                files: vec![],
+            },
+            Commit {
+                sha: "ccc".to_string(),
+                author: "C".to_string(),
+                email: "c@test.com".to_string(),
+                timestamp: 300,
+                message: "third commit".to_string(),
+                files: vec![],
+            },
+            Commit {
+                sha: "ddd".to_string(),
+                author: "D".to_string(),
+                email: "d@test.com".to_string(),
+                timestamp: 400,
+                message: "fourth commit".to_string(),
+                files: vec![],
+            },
+        ];
+
+        // Range (100, 300] should include commits at 200 and 300
+        let result = collect_commits_in_range(&commits, 100, 300);
+        assert_eq!(result.len(), 2);
+        // Most recent first
+        assert_eq!(result[0], "third commit");
+        assert_eq!(result[1], "second commit");
+
+        // Range (0, 100] should include only the first commit
+        let result = collect_commits_in_range(&commits, 0, 100);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], "first commit");
+
+        // Empty range
+        let result = collect_commits_in_range(&commits, 500, 600);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_collect_commits_in_range_limits_to_five() {
+        let commits: Vec<Commit> = (0..10)
+            .map(|i| Commit {
+                sha: format!("sha{}", i),
+                author: "A".to_string(),
+                email: "a@test.com".to_string(),
+                timestamp: (i + 1) * 100,
+                message: format!("commit {}", i),
+                files: vec![],
+            })
+            .collect();
+
+        let result = collect_commits_in_range(&commits, 0, 1500);
+        assert_eq!(result.len(), 5);
+        // Most recent first
+        assert_eq!(result[0], "commit 9");
     }
 }
