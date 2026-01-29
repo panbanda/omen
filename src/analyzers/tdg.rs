@@ -976,7 +976,7 @@ pub struct Score {
     pub has_critical_defects: bool,
 
     // Penalty tracking
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub penalties_applied: Vec<PenaltyAttribution>,
 }
 
