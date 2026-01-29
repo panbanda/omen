@@ -1,5 +1,22 @@
 # Changelog
 
+## [4.15.0](https://github.com/panbanda/omen/compare/omen-v4.14.1...omen-v4.15.0) (2026-01-29)
+
+
+### Features
+
+* **graph:** add Ruby dependency extraction and resolution ([2625020](https://github.com/panbanda/omen/commit/262502037d91aaab7efba632e9447421701acaf9))
+* **graph:** resolve Ruby CamelCase constants to snake_case filenames ([018bde8](https://github.com/panbanda/omen/commit/018bde88fe4abc7d91634711e756c0efa584be2e))
+* **parser:** add comprehensive Ruby dependency extraction ([8490d0c](https://github.com/panbanda/omen/commit/8490d0cfc12216bf44b779ed53ef68103526e6d4))
+* **report:** add language filter pills to HTML report tables ([317f407](https://github.com/panbanda/omen/commit/317f40785daae89a1b552125af8bc24b3294cdd8))
+* **report:** add language filter pills to report tables ([0e2e5e7](https://github.com/panbanda/omen/commit/0e2e5e7322eac36eb191cb44175b47c469754fb3))
+
+
+### Bug Fixes
+
+* **score:** improve accuracy of complexity, smells, and coupling scores ([6bdd61a](https://github.com/panbanda/omen/commit/6bdd61ab8367d86260316e5a577cefdefd951916))
+* **score:** improve accuracy of complexity, smells, coupling, and flag priority ([78a1fe7](https://github.com/panbanda/omen/commit/78a1fe7c0c5b27adf70407ef5ed64e4311efbeec))
+
 ## [4.14.1](https://github.com/panbanda/omen/compare/omen-v4.14.0...omen-v4.14.1) (2026-01-29)
 
 
