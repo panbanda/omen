@@ -8,6 +8,7 @@
 //! - % -> +, -, *, /
 
 use crate::core::Language;
+use crate::parser::queries::get_binary_expression_types;
 use crate::parser::ParseResult;
 
 use super::super::operator::MutationOperator;
@@ -40,23 +41,6 @@ impl MutationOperator for ArithmeticOperator {
 
     fn supports_language(&self, _lang: Language) -> bool {
         true
-    }
-}
-
-/// Get node types for binary expressions.
-fn get_binary_expression_types(lang: Language) -> &'static [&'static str] {
-    match lang {
-        Language::Rust => &["binary_expression"],
-        Language::Go => &["binary_expression"],
-        Language::Python => &["binary_operator"],
-        Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => {
-            &["binary_expression"]
-        }
-        Language::Java | Language::CSharp => &["binary_expression"],
-        Language::C | Language::Cpp => &["binary_expression"],
-        Language::Ruby => &["binary"],
-        Language::Php => &["binary_expression"],
-        Language::Bash => &["binary_expression"],
     }
 }
 

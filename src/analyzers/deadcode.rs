@@ -404,32 +404,13 @@ fn extract_rust_function_attributes(
         }
 
         if node.kind() == "function_item" {
-            // Get the function name
-            if let Some(name_node) = node.child_by_field_name("name") {
-                if let Ok(func_name) = name_node.utf8_text(source) {
-                    // Look for preceding attribute_item siblings
-                    let mut preceding_attrs = Vec::new();
-                    let mut prev = node.prev_sibling();
-                    while let Some(sibling) = prev {
-                        if sibling.kind() == "attribute_item" {
-                            if let Some(attr_name) = extract_attribute_name(&sibling, source) {
-                                preceding_attrs.push(attr_name);
-                            }
-                        } else {
-                            // Stop at non-attribute nodes
-                            break;
-                        }
-                        prev = sibling.prev_sibling();
-                    }
-                    info.insert(
-                        func_name.to_string(),
-                        RustFunctionInfo {
-                            attributes: preceding_attrs,
-                            in_cfg_test_module: current_in_cfg_test,
-                            is_trait_impl: current_in_trait_impl,
-                        },
-                    );
-                }
+            if let Some(func_info) = collect_rust_function_info(
+                &node,
+                source,
+                current_in_cfg_test,
+                current_in_trait_impl,
+            ) {
+                info.insert(func_info.0, func_info.1);
             }
         }
 
@@ -449,6 +430,43 @@ fn extract_rust_function_attributes(
     info
 }
 
+/// Collect info for a single Rust function_item node: name, attributes, and context flags.
+fn collect_rust_function_info(
+    node: &tree_sitter::Node<'_>,
+    source: &[u8],
+    in_cfg_test_module: bool,
+    is_trait_impl: bool,
+) -> Option<(String, RustFunctionInfo)> {
+    let name_node = node.child_by_field_name("name")?;
+    let func_name = name_node.utf8_text(source).ok()?;
+
+    let preceding_attrs = collect_preceding_attributes(node, source);
+    Some((
+        func_name.to_string(),
+        RustFunctionInfo {
+            attributes: preceding_attrs,
+            in_cfg_test_module,
+            is_trait_impl,
+        },
+    ))
+}
+
+/// Collect attribute names from consecutive attribute_item siblings preceding a node.
+fn collect_preceding_attributes(node: &tree_sitter::Node<'_>, source: &[u8]) -> Vec<String> {
+    let mut attrs = Vec::new();
+    let mut prev = node.prev_sibling();
+    while let Some(sibling) = prev {
+        if sibling.kind() != "attribute_item" {
+            break;
+        }
+        if let Some(attr_name) = extract_attribute_name(&sibling, source) {
+            attrs.push(attr_name);
+        }
+        prev = sibling.prev_sibling();
+    }
+    attrs
+}
+
 /// Extract Python-specific context: `__all__` exports, `if __name__` calls, and decorators.
 fn extract_python_context(result: &parser::ParseResult) -> PythonContext {
     let root = result.root_node();
@@ -463,17 +481,7 @@ fn extract_python_context(result: &parser::ParseResult) -> PythonContext {
         match node.kind() {
             // Parse `__all__ = ["func1", "func2"]`
             "expression_statement" => {
-                if let Some(child) = node.child(0) {
-                    if child.kind() == "assignment" {
-                        if let Some(left) = child.child_by_field_name("left") {
-                            if left.utf8_text(source).ok() == Some("__all__") {
-                                if let Some(right) = child.child_by_field_name("right") {
-                                    extract_all_list_entries(&right, source, ctx);
-                                }
-                            }
-                        }
-                    }
-                }
+                try_extract_all_assignment(&node, source, ctx);
             }
             // Parse `if __name__ == "__main__":` blocks
             "if_statement" => {
@@ -495,6 +503,28 @@ fn extract_python_context(result: &parser::ParseResult) -> PythonContext {
 
     visit(root, source, &mut ctx);
     ctx
+}
+
+/// Try to extract `__all__ = [...]` from an expression_statement node.
+fn try_extract_all_assignment(
+    node: &tree_sitter::Node<'_>,
+    source: &[u8],
+    ctx: &mut PythonContext,
+) {
+    let child = match node.child(0) {
+        Some(c) if c.kind() == "assignment" => c,
+        _ => return,
+    };
+    let left = match child.child_by_field_name("left") {
+        Some(l) => l,
+        None => return,
+    };
+    if left.utf8_text(source).ok() != Some("__all__") {
+        return;
+    }
+    if let Some(right) = child.child_by_field_name("right") {
+        extract_all_list_entries(&right, source, ctx);
+    }
 }
 
 /// Extract string entries from a list literal (for `__all__`).
@@ -667,56 +697,16 @@ fn extract_ruby_visibility(result: &parser::ParseResult) -> RubyVisibility {
         for child in body.children(&mut body.walk()) {
             match child.kind() {
                 "method" | "singleton_method" => {
-                    if let Some(name_node) = child.child_by_field_name("name") {
-                        if let Ok(name) = name_node.utf8_text(source) {
-                            vis.method_visibility
-                                .insert(name.to_string(), current_visibility.clone());
-                        }
-                    }
+                    record_method_visibility(&child, source, &current_visibility, vis);
                 }
-                // Bare `private` / `protected` / `public` calls act as section markers
                 "identifier" => {
-                    if let Ok(text) = child.utf8_text(source) {
-                        match text {
-                            "private" | "protected" | "public" => {
-                                current_visibility = text.to_string();
-                            }
-                            _ => {}
-                        }
+                    if let Some(new_vis) = parse_visibility_keyword(&child, source) {
+                        current_visibility = new_vis;
                     }
                 }
-                // `private :method_name` or `private def ...` as a call expression
                 "call" => {
-                    if let Some(method_node) = child.child_by_field_name("method") {
-                        if let Ok(method_text) = method_node.utf8_text(source) {
-                            match method_text {
-                                "private" | "protected" | "public" => {
-                                    // Check for symbol arguments: `private :foo, :bar`
-                                    if let Some(args) = child.child_by_field_name("arguments") {
-                                        let mut found_symbols = false;
-                                        for arg in args.children(&mut args.walk()) {
-                                            if arg.kind() == "simple_symbol" {
-                                                if let Ok(sym) = arg.utf8_text(source) {
-                                                    let name =
-                                                        sym.trim_start_matches(':').to_string();
-                                                    vis.method_visibility
-                                                        .insert(name, method_text.to_string());
-                                                    found_symbols = true;
-                                                }
-                                            }
-                                        }
-                                        if !found_symbols {
-                                            // No symbol args: this is a section marker
-                                            current_visibility = method_text.to_string();
-                                        }
-                                    } else {
-                                        // No arguments: section marker
-                                        current_visibility = method_text.to_string();
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
+                    if let Some(new_vis) = process_ruby_visibility_call(&child, source, vis) {
+                        current_visibility = new_vis;
                     }
                 }
                 _ => {}
@@ -726,6 +716,75 @@ fn extract_ruby_visibility(result: &parser::ParseResult) -> RubyVisibility {
 
     visit_class_body(root, source, &mut vis);
     vis
+}
+
+/// Record a Ruby method's visibility based on the current section marker.
+fn record_method_visibility(
+    node: &tree_sitter::Node<'_>,
+    source: &[u8],
+    current_visibility: &str,
+    vis: &mut RubyVisibility,
+) {
+    let name_node = match node.child_by_field_name("name") {
+        Some(n) => n,
+        None => return,
+    };
+    let name = match name_node.utf8_text(source) {
+        Ok(n) => n,
+        Err(_) => return,
+    };
+    vis.method_visibility
+        .insert(name.to_string(), current_visibility.to_string());
+}
+
+/// Parse a bare `private` / `protected` / `public` identifier as a visibility keyword.
+/// Returns the new visibility if the node is a visibility keyword, None otherwise.
+fn parse_visibility_keyword(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    let text = node.utf8_text(source).ok()?;
+    match text {
+        "private" | "protected" | "public" => Some(text.to_string()),
+        _ => None,
+    }
+}
+
+/// Process a Ruby `call` node that may be a visibility modifier (e.g. `private :foo`).
+/// Returns Some(visibility) if this acts as a section marker, None otherwise.
+fn process_ruby_visibility_call(
+    node: &tree_sitter::Node<'_>,
+    source: &[u8],
+    vis: &mut RubyVisibility,
+) -> Option<String> {
+    let method_node = node.child_by_field_name("method")?;
+    let method_text = method_node.utf8_text(source).ok()?;
+
+    if !matches!(method_text, "private" | "protected" | "public") {
+        return None;
+    }
+
+    let args = match node.child_by_field_name("arguments") {
+        Some(args) => args,
+        None => return Some(method_text.to_string()),
+    };
+
+    let mut found_symbols = false;
+    for arg in args.children(&mut args.walk()) {
+        if arg.kind() != "simple_symbol" {
+            continue;
+        }
+        let sym = match arg.utf8_text(source) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let name = sym.trim_start_matches(':').to_string();
+        vis.method_visibility.insert(name, method_text.to_string());
+        found_symbols = true;
+    }
+
+    if found_symbols {
+        None
+    } else {
+        Some(method_text.to_string())
+    }
 }
 
 /// Check if an impl_item is a trait impl (impl Trait for Type) vs inherent impl (impl Type).
@@ -1768,6 +1827,31 @@ def plain_function():
                 .all(|a| !is_entry_point_decorator(a)),
             "plain_function should have no entry-point decorators"
         );
+    }
+
+    #[test]
+    fn test_max_nesting_depth_acceptable() {
+        // Verify refactored code keeps nesting under 10 levels
+        // This test documents the refactoring goal
+        let source = include_str!("deadcode.rs");
+        let max_nesting = measure_max_indent_depth(source);
+        assert!(
+            max_nesting <= 10,
+            "deadcode.rs nesting depth {max_nesting} exceeds 10"
+        );
+    }
+
+    fn measure_max_indent_depth(source: &str) -> usize {
+        source
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| {
+                let trimmed = l.trim_start();
+                let indent = l.len() - trimmed.len();
+                indent / 4 // 4 spaces per indent level
+            })
+            .max()
+            .unwrap_or(0)
     }
 
     #[test]

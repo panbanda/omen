@@ -10,6 +10,7 @@
 //! off-by-one errors that frequently escape code review.
 
 use crate::core::Language;
+use crate::parser::queries::get_comparison_expression_types;
 use crate::parser::ParseResult;
 
 use super::super::operator::MutationOperator;
@@ -60,19 +61,7 @@ impl MutationOperator for BoundaryOperator {
 
 /// Check if node is a comparison expression.
 fn is_comparison_expression(kind: &str, lang: Language) -> bool {
-    match lang {
-        Language::Rust => kind == "binary_expression",
-        Language::Go => kind == "binary_expression",
-        Language::Python => kind == "comparison_operator",
-        Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => {
-            kind == "binary_expression"
-        }
-        Language::Java | Language::CSharp => kind == "binary_expression",
-        Language::C | Language::Cpp => kind == "binary_expression",
-        Language::Ruby => kind == "binary",
-        Language::Php => kind == "binary_expression",
-        Language::Bash => kind == "binary_expression",
-    }
+    get_comparison_expression_types(lang).contains(&kind)
 }
 
 /// Check if node is a subscript/index expression.

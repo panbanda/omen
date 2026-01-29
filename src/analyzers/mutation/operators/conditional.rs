@@ -10,6 +10,7 @@
 //! indicate missing branch coverage or redundant conditions.
 
 use crate::core::Language;
+use crate::parser::queries::get_boolean_expression_types;
 use crate::parser::ParseResult;
 
 use super::super::operator::MutationOperator;
@@ -32,7 +33,7 @@ impl MutationOperator for ConditionalOperator {
 
     fn generate_mutants(&self, result: &ParseResult, mutant_id_prefix: &str) -> Vec<Mutant> {
         let lang = result.language;
-        let node_types = get_binary_expression_types(lang);
+        let node_types = get_boolean_expression_types(lang);
         generate_binary_operator_mutants(
             result,
             mutant_id_prefix,
@@ -45,23 +46,6 @@ impl MutationOperator for ConditionalOperator {
 
     fn supports_language(&self, _lang: Language) -> bool {
         true
-    }
-}
-
-/// Get node types for binary expressions that may contain logical operators.
-fn get_binary_expression_types(lang: Language) -> &'static [&'static str] {
-    match lang {
-        Language::Rust => &["binary_expression"],
-        Language::Go => &["binary_expression"],
-        Language::Python => &["boolean_operator"],
-        Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => {
-            &["binary_expression"]
-        }
-        Language::Java | Language::CSharp => &["binary_expression"],
-        Language::C | Language::Cpp => &["binary_expression"],
-        Language::Ruby => &["binary"],
-        Language::Php => &["binary_expression"],
-        Language::Bash => &["binary_expression"],
     }
 }
 
