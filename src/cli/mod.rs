@@ -64,19 +64,19 @@ pub enum Command {
 
     /// Detect code duplicates/clones
     #[command(alias = "dup", alias = "duplicates")]
-    Clones(ClonesArgs),
+    Clones(AnalyzerArgs),
 
     /// Predict defect-prone files using PMAT
     #[command(alias = "predict")]
-    Defect(DefectArgs),
+    Defect(AnalyzerArgs),
 
     /// Analyze recent changes (JIT risk)
     #[command(alias = "jit")]
-    Changes(ChangesArgs),
+    Changes(AnalyzerArgs),
 
     /// Analyze a specific diff (PR review)
     #[command(alias = "pr")]
-    Diff(DiffArgs),
+    Diff(AnalyzerArgs),
 
     /// Generate Technical Debt Graph
     Tdg(AnalyzerArgs),
@@ -87,22 +87,22 @@ pub enum Command {
 
     /// Find complexity/churn hotspots
     #[command(alias = "hs")]
-    Hotspot(HotspotArgs),
+    Hotspot(AnalyzerArgs),
 
     /// Detect temporally coupled files
     #[command(alias = "tc", visible_alias = "temporal-coupling")]
-    Temporal(TemporalArgs),
+    Temporal(AnalyzerArgs),
 
     /// Analyze code ownership and bus factor
     #[command(alias = "own", alias = "bus-factor")]
-    Ownership(OwnershipArgs),
+    Ownership(AnalyzerArgs),
 
     /// Calculate CK cohesion metrics
     #[command(alias = "ck")]
     Cohesion(AnalyzerArgs),
 
     /// Generate PageRank-ranked symbol map
-    Repomap(RepomapArgs),
+    Repomap(AnalyzerArgs),
 
     /// Detect architectural smells
     Smells(AnalyzerArgs),
@@ -113,7 +113,7 @@ pub enum Command {
 
     /// Analyze lint violation density
     #[command(alias = "lh")]
-    LintHotspot(LintHotspotArgs),
+    LintHotspot(AnalyzerArgs),
 
     /// Calculate composite health score
     Score(ScoreCommand),
@@ -122,7 +122,7 @@ pub enum Command {
     Mcp(McpCommand),
 
     /// Run all analyzers
-    All(AllArgs),
+    All(AnalyzerArgs),
 
     /// Generate deep context for LLM consumption
     #[command(alias = "ctx")]
@@ -137,7 +137,7 @@ pub enum Command {
 
     /// Mutation testing for test suite effectiveness
     #[command(alias = "mut")]
-    Mutation(MutationCommand),
+    Mutation(Box<MutationCommand>),
 }
 
 #[derive(Args)]
@@ -149,18 +149,6 @@ pub struct AnalyzerArgs {
     /// Exclude files matching pattern
     #[arg(short, long)]
     pub exclude: Option<String>,
-
-    /// Minimum threshold for reporting
-    #[arg(short, long)]
-    pub threshold: Option<f64>,
-
-    /// Maximum number of results
-    #[arg(short = 'n', long)]
-    pub limit: Option<usize>,
-
-    /// Sort order
-    #[arg(long, value_enum)]
-    pub sort: Option<SortOrder>,
 }
 
 #[derive(Args)]
@@ -189,118 +177,6 @@ pub struct ChurnArgs {
     /// Number of days to analyze
     #[arg(long, default_value = "30")]
     pub days: u32,
-
-    /// Git revision range (e.g., main..HEAD)
-    #[arg(long)]
-    pub range: Option<String>,
-}
-
-#[derive(Args)]
-pub struct ClonesArgs {
-    #[command(flatten)]
-    pub common: AnalyzerArgs,
-
-    /// Minimum tokens for clone detection
-    #[arg(long, default_value = "50")]
-    pub min_tokens: usize,
-
-    /// Similarity threshold (0.0-1.0)
-    #[arg(long, default_value = "0.8")]
-    pub similarity: f64,
-}
-
-#[derive(Args)]
-pub struct DefectArgs {
-    #[command(flatten)]
-    pub common: AnalyzerArgs,
-
-    /// Number of days to analyze
-    #[arg(long, default_value = "30")]
-    pub days: u32,
-
-    /// PMAT risk threshold
-    #[arg(long, default_value = "0.5")]
-    pub risk_threshold: f64,
-}
-
-#[derive(Args)]
-pub struct ChangesArgs {
-    #[command(flatten)]
-    pub common: AnalyzerArgs,
-
-    /// Commit or range to analyze
-    #[arg(long, default_value = "HEAD")]
-    pub commit: String,
-
-    /// Number of recent commits
-    #[arg(long, default_value = "1")]
-    pub count: usize,
-}
-
-#[derive(Args)]
-pub struct DiffArgs {
-    #[command(flatten)]
-    pub common: AnalyzerArgs,
-
-    /// Base commit/branch
-    #[arg(long)]
-    pub base: String,
-
-    /// Head commit/branch (default: HEAD)
-    #[arg(long, default_value = "HEAD")]
-    pub head: String,
-}
-
-#[derive(Args)]
-pub struct HotspotArgs {
-    #[command(flatten)]
-    pub common: AnalyzerArgs,
-
-    /// Number of days for churn analysis
-    #[arg(long, default_value = "30")]
-    pub days: u32,
-
-    /// Weight for complexity (0.0-1.0)
-    #[arg(long, default_value = "0.5")]
-    pub complexity_weight: f64,
-}
-
-#[derive(Args)]
-pub struct TemporalArgs {
-    #[command(flatten)]
-    pub common: AnalyzerArgs,
-
-    /// Number of days to analyze
-    #[arg(long, default_value = "30")]
-    pub days: u32,
-
-    /// Minimum coupling strength (0.0-1.0)
-    #[arg(long, default_value = "0.5")]
-    pub min_coupling: f64,
-}
-
-#[derive(Args)]
-pub struct OwnershipArgs {
-    #[command(flatten)]
-    pub common: AnalyzerArgs,
-
-    /// Bus factor threshold for high risk
-    #[arg(long, default_value = "2")]
-    pub bus_factor_threshold: usize,
-}
-
-#[derive(Args)]
-pub struct RepomapArgs {
-    #[command(flatten)]
-    pub common: AnalyzerArgs,
-
-    /// Maximum symbols to include
-    #[arg(long, default_value = "100")]
-    pub max_symbols: usize,
-
-    /// PageRank damping factor
-    #[arg(long, default_value = "0.85")]
-    pub damping: f64,
 }
 
 #[derive(Args)]
@@ -315,16 +191,6 @@ pub struct FlagsArgs {
     /// Days threshold for staleness
     #[arg(long, default_value = "90")]
     pub stale_days: u32,
-}
-
-#[derive(Args)]
-pub struct LintHotspotArgs {
-    #[command(flatten)]
-    pub common: AnalyzerArgs,
-
-    /// Maximum number of results
-    #[arg(long, default_value = "10")]
-    pub top: usize,
 }
 
 /// Score command with subcommands.
@@ -346,21 +212,6 @@ pub enum ScoreSubcommand {
 
 #[derive(Args)]
 pub struct ScoreArgs {
-    #[command(flatten)]
-    pub common: AnalyzerArgs,
-
-    /// Analyzers to include (comma-separated)
-    #[arg(long)]
-    pub analyzers: Option<String>,
-
-    /// Custom weights file
-    #[arg(long)]
-    pub weights: Option<PathBuf>,
-
-    /// Number of days for history
-    #[arg(long, default_value = "30")]
-    pub days: u32,
-
     /// Check mode: fail if score is below threshold
     #[arg(long)]
     pub check: bool,
@@ -379,10 +230,6 @@ pub struct ScoreTrendArgs {
     /// Aggregation period
     #[arg(short, long, value_enum, default_value = "weekly")]
     pub period: TrendPeriod,
-
-    /// Take snapshot of current score
-    #[arg(long)]
-    pub snap: bool,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -423,20 +270,6 @@ pub struct McpArgs {
     pub host: String,
 }
 
-#[derive(Args)]
-pub struct AllArgs {
-    #[command(flatten)]
-    pub common: AnalyzerArgs,
-
-    /// Skip specific analyzers (comma-separated)
-    #[arg(long)]
-    pub skip: Option<String>,
-
-    /// Number of days for git-based analyzers
-    #[arg(long, default_value = "30")]
-    pub days: u32,
-}
-
 /// Context generation for LLM consumption.
 #[derive(Args)]
 pub struct ContextArgs {
@@ -447,10 +280,6 @@ pub struct ContextArgs {
     /// Maximum context tokens to generate
     #[arg(long, default_value = "8000")]
     pub max_tokens: usize,
-
-    /// Include file contents (not just structure)
-    #[arg(long, default_value = "true")]
-    pub include_content: bool,
 
     /// Focus on specific symbol/function
     #[arg(long)]
@@ -701,12 +530,6 @@ pub enum OutputFormat {
 }
 
 #[derive(Clone, Copy, ValueEnum)]
-pub enum SortOrder {
-    Asc,
-    Desc,
-}
-
-#[derive(Clone, Copy, ValueEnum)]
 pub enum McpTransport {
     Stdio,
     Sse,
@@ -746,7 +569,7 @@ mod tests {
     }
 
     /// Extract MutationCommand from a parsed CLI, panicking if the command is wrong.
-    fn parse_mutation_command(args: &[&str]) -> MutationCommand {
+    fn parse_mutation_command(args: &[&str]) -> Box<MutationCommand> {
         let cli = parse(args);
         match cli.command {
             Command::Mutation(cmd) => cmd,
@@ -876,7 +699,7 @@ mod tests {
 
     #[test]
     fn test_command_diff() {
-        assert_parses_to!(&["omen", "diff", "--base", "main"], Command::Diff(_));
+        assert_parses_to!(&["omen", "diff"], Command::Diff(_));
     }
 
     #[test]
@@ -992,7 +815,7 @@ mod tests {
 
     #[test]
     fn test_alias_pr_for_diff() {
-        assert_parses_to!(&["omen", "pr", "--base", "main"], Command::Diff(_));
+        assert_parses_to!(&["omen", "pr"], Command::Diff(_));
     }
 
     #[test]
@@ -1074,79 +897,6 @@ mod tests {
     }
 
     #[test]
-    fn test_clones_min_tokens() {
-        let cli = parse(&["omen", "clones", "--min-tokens", "100"]);
-        if let Command::Clones(args) = cli.command {
-            assert_eq!(args.min_tokens, 100);
-        }
-    }
-
-    #[test]
-    fn test_clones_similarity() {
-        let cli = parse(&["omen", "clones", "--similarity", "0.9"]);
-        if let Command::Clones(args) = cli.command {
-            assert!((args.similarity - 0.9).abs() < 0.001);
-        }
-    }
-
-    #[test]
-    fn test_defect_risk_threshold() {
-        let cli = parse(&["omen", "defect", "--risk-threshold", "0.7"]);
-        if let Command::Defect(args) = cli.command {
-            assert!((args.risk_threshold - 0.7).abs() < 0.001);
-        }
-    }
-
-    #[test]
-    fn test_diff_base_and_head() {
-        let cli = parse(&["omen", "diff", "--base", "main", "--head", "feature"]);
-        if let Command::Diff(args) = cli.command {
-            assert_eq!(args.base, "main");
-            assert_eq!(args.head, "feature");
-        }
-    }
-
-    #[test]
-    fn test_hotspot_complexity_weight() {
-        let cli = parse(&["omen", "hotspot", "--complexity-weight", "0.7"]);
-        if let Command::Hotspot(args) = cli.command {
-            assert!((args.complexity_weight - 0.7).abs() < 0.001);
-        }
-    }
-
-    #[test]
-    fn test_temporal_min_coupling() {
-        let cli = parse(&["omen", "temporal", "--min-coupling", "0.6"]);
-        if let Command::Temporal(args) = cli.command {
-            assert!((args.min_coupling - 0.6).abs() < 0.001);
-        }
-    }
-
-    #[test]
-    fn test_ownership_bus_factor_threshold() {
-        let cli = parse(&["omen", "ownership", "--bus-factor-threshold", "3"]);
-        if let Command::Ownership(args) = cli.command {
-            assert_eq!(args.bus_factor_threshold, 3);
-        }
-    }
-
-    #[test]
-    fn test_repomap_max_symbols() {
-        let cli = parse(&["omen", "repomap", "--max-symbols", "200"]);
-        if let Command::Repomap(args) = cli.command {
-            assert_eq!(args.max_symbols, 200);
-        }
-    }
-
-    #[test]
-    fn test_repomap_damping() {
-        let cli = parse(&["omen", "repomap", "--damping", "0.9"]);
-        if let Command::Repomap(args) = cli.command {
-            assert!((args.damping - 0.9).abs() < 0.001);
-        }
-    }
-
-    #[test]
     fn test_flags_provider() {
         let cli = parse(&["omen", "flags", "--provider", "launchdarkly"]);
         if let Command::Flags(args) = cli.command {
@@ -1202,14 +952,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_all_skip() {
-        let cli = parse(&["omen", "all", "--skip", "complexity,satd"]);
-        if let Command::All(args) = cli.command {
-            assert_eq!(args.skip, Some("complexity,satd".to_string()));
-        }
-    }
-
     // Common AnalyzerArgs tests (via complexity)
 
     #[test]
@@ -1222,30 +964,6 @@ mod tests {
     fn test_analyzer_args_exclude() {
         let args = parse_complexity_args(&["omen", "complexity", "-e", "test"]);
         assert_eq!(args.common.exclude, Some("test".to_string()));
-    }
-
-    #[test]
-    fn test_analyzer_args_threshold() {
-        let args = parse_complexity_args(&["omen", "complexity", "-t", "10.0"]);
-        assert!((args.common.threshold.unwrap() - 10.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_analyzer_args_limit() {
-        let args = parse_complexity_args(&["omen", "complexity", "-n", "20"]);
-        assert_eq!(args.common.limit, Some(20));
-    }
-
-    #[test]
-    fn test_analyzer_args_sort_asc() {
-        let args = parse_complexity_args(&["omen", "complexity", "--sort", "asc"]);
-        assert!(matches!(args.common.sort, Some(SortOrder::Asc)));
-    }
-
-    #[test]
-    fn test_analyzer_args_sort_desc() {
-        let args = parse_complexity_args(&["omen", "complexity", "--sort", "desc"]);
-        assert!(matches!(args.common.sort, Some(SortOrder::Desc)));
     }
 
     #[test]
@@ -1396,14 +1114,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_lint_hotspot_top() {
-        let cli = parse(&["omen", "lint-hotspot", "--top", "20"]);
-        if let Command::LintHotspot(args) = cli.command {
-            assert_eq!(args.top, 20);
-        }
-    }
-
     // Score command tests
 
     #[test]
@@ -1438,16 +1148,6 @@ mod tests {
         if let Command::Score(cmd) = cli.command {
             if let Some(ScoreSubcommand::Trend(args)) = cmd.subcommand {
                 assert!(matches!(args.period, TrendPeriod::Monthly));
-            }
-        }
-    }
-
-    #[test]
-    fn test_score_trend_snap() {
-        let cli = parse(&["omen", "score", "trend", "--snap"]);
-        if let Command::Score(cmd) = cli.command {
-            if let Some(ScoreSubcommand::Trend(args)) = cmd.subcommand {
-                assert!(args.snap);
             }
         }
     }
