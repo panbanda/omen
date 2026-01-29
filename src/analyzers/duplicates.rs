@@ -126,6 +126,7 @@ impl Analyzer {
         };
 
         let lines: Vec<&str> = content_str.lines().collect();
+        let lang = detect_language(path);
         let mut fragments = Vec::new();
 
         // Try function-level extraction first
@@ -136,7 +137,8 @@ impl Analyzer {
 
         // Fall back to whole file as single fragment if no functions found
         if fragments.is_empty() {
-            if let Some(frag) = self.create_fragment(path, 0, lines.len().saturating_sub(1), &lines)
+            if let Some(frag) =
+                self.create_fragment(path, 0, lines.len().saturating_sub(1), &lines, lang)
             {
                 fragments.push(frag);
             }
@@ -191,6 +193,7 @@ impl Analyzer {
                             func_start_line,
                             end,
                             &func_lines[..func_lines.len().saturating_sub(1)],
+                            lang,
                         ) {
                             fragments.push(frag);
                         }
@@ -228,7 +231,7 @@ impl Analyzer {
                         if end_depth <= 0 {
                             // End of function
                             if let Some(frag) =
-                                self.create_fragment(path, func_start_line, i, &func_lines)
+                                self.create_fragment(path, func_start_line, i, &func_lines, lang)
                             {
                                 fragments.push(frag);
                             }
@@ -243,7 +246,7 @@ impl Analyzer {
                     if brace_depth <= 0 {
                         // End of function
                         if let Some(frag) =
-                            self.create_fragment(path, func_start_line, i, &func_lines)
+                            self.create_fragment(path, func_start_line, i, &func_lines, lang)
                         {
                             fragments.push(frag);
                         }
@@ -261,6 +264,7 @@ impl Analyzer {
                 func_start_line,
                 lines.len().saturating_sub(1),
                 &func_lines,
+                lang,
             ) {
                 fragments.push(frag);
             }
@@ -276,11 +280,12 @@ impl Analyzer {
         start_line: usize,
         end_line: usize,
         lines: &[&str],
+        lang: &str,
     ) -> Option<CodeFragment> {
         let content = lines.join("\n");
 
         // Normalize and tokenize
-        let normalized = self.normalize_code(&content);
+        let normalized = self.normalize_code(&content, lang);
         let tokens = tokenize(&normalized);
 
         // Normalize tokens with a FRESH identifier map for each fragment.
@@ -306,7 +311,7 @@ impl Analyzer {
     }
 
     /// Normalize code for comparison.
-    fn normalize_code(&self, code: &str) -> String {
+    fn normalize_code(&self, code: &str, lang: &str) -> String {
         let mut result = String::new();
 
         for line in code.lines() {
@@ -314,7 +319,7 @@ impl Analyzer {
             if trimmed.is_empty() {
                 continue;
             }
-            if self.config.ignore_comments && is_comment(trimmed) {
+            if self.config.ignore_comments && is_comment(trimmed, lang) {
                 continue;
             }
             if !result.is_empty() {
@@ -593,29 +598,39 @@ impl AnalyzerTrait for Analyzer {
     }
 
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
-        // Extract fragments from all files
-        let mut all_fragments: Vec<CodeFragment> = Vec::new();
+        // Extract fragments from all files in parallel
+        let max_file_size = self.max_file_size;
+        let files_scanned = std::sync::atomic::AtomicUsize::new(0);
+        let mut all_fragments: Vec<CodeFragment> = ctx
+            .files
+            .files()
+            .par_iter()
+            .filter_map(|path| {
+                let content = ctx.read_file(path).ok()?;
+                if max_file_size > 0 && content.len() > max_file_size {
+                    return None;
+                }
+                files_scanned.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let path_str = path.to_string_lossy();
+                let fragments = self.extract_fragments(&path_str, &content);
+                if fragments.is_empty() {
+                    None
+                } else {
+                    Some(fragments)
+                }
+            })
+            .flatten()
+            .collect();
+        let files_scanned = files_scanned.into_inner();
+
+        // Sort by file path then line number for deterministic output
+        all_fragments.sort_by(|a, b| a.file.cmp(&b.file).then(a.start_line.cmp(&b.start_line)));
+
+        // Assign sequential IDs and compute totals
         let mut total_lines = 0usize;
-        let mut files_scanned = 0usize;
-
-        for path in ctx.files.iter() {
-            let content = match ctx.read_file(path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-
-            if self.max_file_size > 0 && content.len() > self.max_file_size {
-                continue;
-            }
-
-            files_scanned += 1;
-            let path_str = path.to_string_lossy();
-            let fragments = self.extract_fragments(&path_str, &content);
-            for mut frag in fragments {
-                total_lines += (frag.end_line - frag.start_line + 1) as usize;
-                frag.id = all_fragments.len() as u64;
-                all_fragments.push(frag);
-            }
+        for (i, fragment) in all_fragments.iter_mut().enumerate() {
+            fragment.id = i as u64;
+            total_lines += (fragment.end_line - fragment.start_line + 1) as usize;
         }
 
         // Compute MinHash signatures in parallel
@@ -917,13 +932,25 @@ fn is_function_start(line: &str, lang: &str) -> bool {
     }
 }
 
-/// Check if a line is a comment.
-fn is_comment(line: &str) -> bool {
-    line.starts_with("//")
-        || line.starts_with('#')
+/// Check if a line is a comment, using language-specific comment prefixes.
+///
+/// The `#` character is only a comment prefix in languages that use it
+/// (Python, Ruby, Bash, PHP). In Rust, `#` starts attributes like
+/// `#[derive(Debug)]` and must not be stripped.
+fn is_comment(line: &str, lang: &str) -> bool {
+    if line.starts_with("//")
         || line.starts_with("/*")
         || line.starts_with('*')
         || line.starts_with("*/")
+    {
+        return true;
+    }
+
+    if line.starts_with('#') {
+        return matches!(lang, "python" | "ruby" | "bash" | "php");
+    }
+
+    false
 }
 
 /// Keywords that should not be normalized.
@@ -1477,7 +1504,7 @@ mod tests {
     fn test_normalize_code() {
         let analyzer = Analyzer::new();
         let code = "  func main() {\n    // comment\n    x := 1\n  }";
-        let normalized = analyzer.normalize_code(code);
+        let normalized = analyzer.normalize_code(code, "go");
         assert!(!normalized.contains("// comment"));
         assert!(normalized.contains("func main()"));
     }
@@ -1827,5 +1854,66 @@ func funcB() string {
             "NumHashFunctions should be positive"
         );
         assert!(cfg.num_bands > 0, "NumBands should be positive");
+    }
+
+    #[test]
+    fn test_rust_attribute_not_treated_as_comment() {
+        assert!(
+            !is_comment("#[derive(Debug)]", "rust"),
+            "Rust #[derive(Debug)] should not be treated as a comment"
+        );
+        assert!(
+            !is_comment("#![allow(unused)]", "rust"),
+            "Rust #![allow(unused)] should not be treated as a comment"
+        );
+        assert!(
+            !is_comment("#[cfg(test)]", "rust"),
+            "Rust #[cfg(test)] should not be treated as a comment"
+        );
+    }
+
+    #[test]
+    fn test_python_hash_treated_as_comment() {
+        assert!(
+            is_comment("# TODO: fix this", "python"),
+            "Python # TODO should be treated as a comment"
+        );
+        assert!(
+            is_comment("# a regular comment", "python"),
+            "Python # comment should be treated as a comment"
+        );
+    }
+
+    #[test]
+    fn test_go_slash_comment_treated_as_comment() {
+        assert!(
+            is_comment("// this is a comment", "go"),
+            "Go // comment should be treated as a comment"
+        );
+        assert!(
+            !is_comment("#include <stdio.h>", "go"),
+            "# should not be a comment in Go"
+        );
+    }
+
+    #[test]
+    fn test_is_comment_language_specific() {
+        // Hash is a comment in Ruby and Bash
+        assert!(is_comment("# comment", "ruby"));
+        assert!(is_comment("# comment", "bash"));
+        assert!(is_comment("# comment", "php"));
+
+        // Hash is NOT a comment in C-family or Rust
+        assert!(!is_comment("#include <stdio.h>", "c"));
+        assert!(!is_comment("#include <vector>", "cpp"));
+        assert!(!is_comment("#[derive(Clone)]", "rust"));
+        assert!(!is_comment("# not a comment", "java"));
+        assert!(!is_comment("# not a comment", "typescript"));
+        assert!(!is_comment("# not a comment", "javascript"));
+
+        // Double-slash is a comment everywhere
+        assert!(is_comment("// comment", "rust"));
+        assert!(is_comment("// comment", "c"));
+        assert!(is_comment("// comment", "python"));
     }
 }

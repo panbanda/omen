@@ -11,14 +11,19 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
             "select_statement",
             "type_switch_statement",
             "expression_switch_statement",
+            // Each case is an independent path per McCabe's methodology,
+            // consistent with C/C++ (case_statement) and Ruby (when).
+            "expression_case",
         ],
         Language::Rust => &[
             "if_expression",
             "match_expression",
             "for_expression",
+            // while_expression covers both `while cond` and `while let pat = expr`
+            // in tree-sitter-rust 0.23+, which uses let_condition as a child node
+            // rather than a separate while_let_expression node type.
             "while_expression",
             "loop_expression",
-            "if_let_expression",
         ],
         Language::Python => &[
             "if_statement",
@@ -29,6 +34,7 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
             "elif_clause",
             "except_clause",
             "comprehension",
+            "conditional_expression",
         ],
         Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => &[
             "if_statement",
@@ -39,6 +45,9 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
             "switch_statement",
             "ternary_expression",
             "catch_clause",
+            // Each case is an independent path per McCabe's methodology,
+            // consistent with C/C++ (case_statement) and Ruby (when).
+            "switch_case",
         ],
         Language::Java | Language::CSharp => &[
             "if_statement",

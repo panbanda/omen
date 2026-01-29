@@ -84,7 +84,7 @@ impl AnalyzerTrait for Analyzer {
         let since = format!("{} days", self.days);
 
         // Get commits with file changes using gix
-        let commits = repo.log_with_stats(Some(&since))?;
+        let commits = repo.log_with_stats(Some(&since), None)?;
 
         // Convert to file metrics
         let file_metrics = commits_to_file_metrics(&commits);
@@ -576,5 +576,336 @@ mod tests {
         assert_eq!(main.commits, 1);
         assert_eq!(main.lines_added, 10);
         assert_eq!(main.lines_deleted, 5);
+    }
+
+    /// Helper to construct a FileMetrics with sensible defaults.
+    fn make_file_metrics(
+        path: &str,
+        commits: u32,
+        added: u32,
+        deleted: u32,
+        churn_score: f64,
+    ) -> FileMetrics {
+        FileMetrics {
+            path: format!("./{path}"),
+            relative_path: path.to_string(),
+            commits,
+            unique_authors: vec![],
+            author_counts: HashMap::new(),
+            lines_added: added,
+            lines_deleted: deleted,
+            churn_score,
+            first_commit: None,
+            last_commit: None,
+            total_loc: 0,
+            relative_churn: 0.0,
+            churn_rate: 0.0,
+            change_frequency: 0.0,
+            days_active: 0,
+        }
+    }
+
+    // --- build_analysis tests ---
+
+    #[test]
+    fn test_build_analysis_empty() {
+        let file_metrics: HashMap<String, FileMetrics> = HashMap::new();
+        let analysis = build_analysis(file_metrics, "/tmp/fake", 30);
+
+        assert!(analysis.files.is_empty());
+        assert_eq!(analysis.summary.total_files_changed, 0);
+        assert_eq!(analysis.summary.total_file_changes, 0);
+        assert_eq!(analysis.summary.total_additions, 0);
+        assert_eq!(analysis.summary.total_deletions, 0);
+        assert_eq!(analysis.summary.avg_commits_per_file, 0.0);
+        assert_eq!(analysis.summary.max_churn_score, 0.0);
+        assert_eq!(analysis.summary.mean_churn_score, 0.0);
+        assert!(analysis.summary.hotspot_files.is_empty());
+        assert!(analysis.summary.stable_files.is_empty());
+    }
+
+    #[test]
+    fn test_build_analysis_single_file() {
+        let mut metrics = HashMap::new();
+        let mut fm = make_file_metrics("src/main.rs", 5, 100, 20, 0.0);
+        fm.author_counts.insert("Alice".to_string(), 3);
+        fm.author_counts.insert("Bob".to_string(), 2);
+        metrics.insert("src/main.rs".to_string(), fm);
+
+        let analysis = build_analysis(metrics, "/tmp/fake", 30);
+
+        assert_eq!(analysis.files.len(), 1);
+        assert_eq!(analysis.summary.total_files_changed, 1);
+        assert_eq!(analysis.summary.total_file_changes, 5);
+        assert_eq!(analysis.summary.total_additions, 100);
+        assert_eq!(analysis.summary.total_deletions, 20);
+        assert_eq!(analysis.summary.avg_commits_per_file, 5.0);
+
+        // Single file with max commits and max changes: score = 1.0
+        let file = &analysis.files[0];
+        assert!((file.churn_score - 1.0).abs() < 0.001);
+
+        // unique_authors should be populated
+        assert_eq!(file.unique_authors.len(), 2);
+
+        // author_contributions should aggregate both authors
+        assert_eq!(analysis.summary.author_contributions.len(), 2);
+    }
+
+    #[test]
+    fn test_build_analysis_multiple_files() {
+        let mut metrics = HashMap::new();
+
+        // High-churn file
+        let mut high = make_file_metrics("hot.rs", 20, 500, 200, 0.0);
+        high.author_counts.insert("Alice".to_string(), 20);
+        metrics.insert("hot.rs".to_string(), high);
+
+        // Medium-churn file
+        let mut mid = make_file_metrics("mid.rs", 10, 100, 50, 0.0);
+        mid.author_counts.insert("Bob".to_string(), 10);
+        metrics.insert("mid.rs".to_string(), mid);
+
+        // Low-churn file
+        let mut low = make_file_metrics("cold.rs", 1, 5, 2, 0.0);
+        low.author_counts.insert("Carol".to_string(), 1);
+        metrics.insert("cold.rs".to_string(), low);
+
+        let analysis = build_analysis(metrics, "/tmp/fake", 30);
+
+        assert_eq!(analysis.files.len(), 3);
+
+        // Files should be sorted by churn_score descending
+        assert!(analysis.files[0].churn_score >= analysis.files[1].churn_score);
+        assert!(analysis.files[1].churn_score >= analysis.files[2].churn_score);
+
+        // The highest-churn file should be first
+        assert_eq!(analysis.files[0].relative_path, "hot.rs");
+
+        // Percentiles should be computed (p50 and p95 set)
+        // With 3 files sorted ascending, p50 index = (50*3)/100 = 1
+        assert!(analysis.summary.p50_churn_score > 0.0);
+    }
+
+    // --- calculate_statistics tests ---
+
+    #[test]
+    fn test_calculate_statistics_basic() {
+        let mut summary = Summary::default();
+        let files = vec![
+            make_file_metrics("a.rs", 0, 0, 0, 0.2),
+            make_file_metrics("b.rs", 0, 0, 0, 0.4),
+            make_file_metrics("c.rs", 0, 0, 0, 0.6),
+            make_file_metrics("d.rs", 0, 0, 0, 0.8),
+        ];
+
+        calculate_statistics(&mut summary, &files);
+
+        // Mean = (0.2 + 0.4 + 0.6 + 0.8) / 4 = 0.5
+        assert!((summary.mean_churn_score - 0.5).abs() < 1e-9);
+
+        // Variance = ((0.3^2 + 0.1^2 + 0.1^2 + 0.3^2) / 4) = 0.05
+        assert!((summary.variance_churn_score - 0.05).abs() < 1e-9);
+
+        // Stddev = sqrt(0.05)
+        assert!((summary.stddev_churn_score - 0.05_f64.sqrt()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_calculate_statistics_single_value() {
+        let mut summary = Summary::default();
+        let files = vec![make_file_metrics("a.rs", 0, 0, 0, 0.7)];
+
+        calculate_statistics(&mut summary, &files);
+
+        assert!((summary.mean_churn_score - 0.7).abs() < 1e-9);
+        assert!((summary.variance_churn_score).abs() < 1e-9);
+        assert!((summary.stddev_churn_score).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_calculate_statistics_empty() {
+        let mut summary = Summary::default();
+        let files: Vec<FileMetrics> = vec![];
+
+        calculate_statistics(&mut summary, &files);
+
+        assert_eq!(summary.mean_churn_score, 0.0);
+        assert_eq!(summary.variance_churn_score, 0.0);
+        assert_eq!(summary.stddev_churn_score, 0.0);
+        assert_eq!(summary.p50_churn_score, 0.0);
+        assert_eq!(summary.p95_churn_score, 0.0);
+    }
+
+    // --- identify_hotspot_and_stable tests ---
+
+    #[test]
+    fn test_identify_hotspots() {
+        let mut summary = Summary::default();
+
+        // Files sorted descending by churn_score (as build_analysis would produce)
+        let files = vec![
+            make_file_metrics("a.rs", 1, 0, 0, 0.9),
+            make_file_metrics("b.rs", 1, 0, 0, 0.7),
+            make_file_metrics("c.rs", 1, 0, 0, 0.3),
+            make_file_metrics("d.rs", 1, 0, 0, 0.05),
+        ];
+
+        identify_hotspot_and_stable(&mut summary, &files);
+
+        // Hotspot threshold is > 0.5, so a.rs and b.rs qualify
+        assert_eq!(summary.hotspot_files.len(), 2);
+        assert!(summary.hotspot_files.contains(&"./a.rs".to_string()));
+        assert!(summary.hotspot_files.contains(&"./b.rs".to_string()));
+    }
+
+    #[test]
+    fn test_identify_stable_files() {
+        let mut summary = Summary::default();
+
+        // Sorted descending. Stable = bottom 10 with score < 0.1 and commits > 0.
+        let files = vec![
+            make_file_metrics("a.rs", 1, 0, 0, 0.9),
+            make_file_metrics("b.rs", 1, 0, 0, 0.5),
+            make_file_metrics("c.rs", 1, 0, 0, 0.05),
+            make_file_metrics("d.rs", 1, 0, 0, 0.02),
+        ];
+
+        identify_hotspot_and_stable(&mut summary, &files);
+
+        // c.rs and d.rs are below 0.1 and have commits > 0
+        assert_eq!(summary.stable_files.len(), 2);
+        assert!(summary.stable_files.contains(&"./c.rs".to_string()));
+        assert!(summary.stable_files.contains(&"./d.rs".to_string()));
+    }
+
+    #[test]
+    fn test_identify_stable_excludes_zero_commits() {
+        let mut summary = Summary::default();
+
+        let files = vec![
+            make_file_metrics("a.rs", 0, 0, 0, 0.01), // commits=0, excluded
+            make_file_metrics("b.rs", 1, 0, 0, 0.01), // commits=1, included
+        ];
+
+        identify_hotspot_and_stable(&mut summary, &files);
+
+        assert_eq!(summary.stable_files.len(), 1);
+        assert!(summary.stable_files.contains(&"./b.rs".to_string()));
+    }
+
+    // --- calculate_relative_churn edge cases ---
+
+    #[test]
+    fn test_relative_churn_zero_loc() {
+        // total_loc stays 0 because the file path doesn't exist on disk.
+        // relative_churn should remain 0.0 (no division by zero).
+        let mut fm = make_file_metrics("nonexistent_file.rs", 5, 100, 50, 0.5);
+        fm.total_loc = 0;
+
+        calculate_relative_churn(&mut fm, "/tmp/fake_repo_does_not_exist", Utc::now());
+
+        assert_eq!(fm.total_loc, 0);
+        assert_eq!(fm.relative_churn, 0.0);
+    }
+
+    #[test]
+    fn test_churn_rate_zero_days() {
+        // When first_commit == last_commit, days_active is clamped to 1 (not 0).
+        let t = Utc::now();
+        let mut fm = make_file_metrics("test.rs", 3, 30, 10, 0.5);
+        fm.first_commit = Some(t);
+        fm.last_commit = Some(t);
+        fm.total_loc = 100;
+
+        // Manually set total_loc since the file won't exist on disk
+        calculate_relative_churn(&mut fm, "/tmp/fake_repo_does_not_exist", Utc::now());
+
+        // days_active should be max(0, 1) = 1 due to .max(1)
+        assert_eq!(fm.days_active, 1);
+        // No division by zero: churn_rate and change_frequency should be finite
+        assert!(fm.churn_rate.is_finite());
+        assert!(fm.change_frequency.is_finite());
+    }
+
+    #[test]
+    fn test_relative_churn_no_timestamps() {
+        // If first_commit and last_commit are both None, days_active stays 0.
+        // churn_rate and change_frequency should remain 0 (guarded by if days_active > 0).
+        let mut fm = make_file_metrics("test.rs", 2, 20, 10, 0.3);
+        fm.first_commit = None;
+        fm.last_commit = None;
+
+        calculate_relative_churn(&mut fm, "/tmp/fake_repo_does_not_exist", Utc::now());
+
+        assert_eq!(fm.days_active, 0);
+        assert_eq!(fm.churn_rate, 0.0);
+        assert_eq!(fm.change_frequency, 0.0);
+    }
+
+    // --- percentile tests ---
+
+    #[test]
+    fn test_percentile_calculation() {
+        // 20 values: 0.05, 0.10, ..., 1.00
+        let sorted: Vec<f64> = (1..=20).map(|i| i as f64 * 0.05).collect();
+
+        // p50: index = (50 * 20) / 100 = 10 -> sorted[10] = 0.55
+        assert!((percentile(&sorted, 50) - 0.55).abs() < 1e-9);
+
+        // p95: index = (95 * 20) / 100 = 19 -> sorted[19] = 1.0
+        assert!((percentile(&sorted, 95) - 1.0).abs() < 1e-9);
+
+        // p0: index = 0 -> sorted[0] = 0.05
+        assert!((percentile(&sorted, 0) - 0.05).abs() < 1e-9);
+
+        // p100: index = 20, clamped to 19 -> sorted[19] = 1.0
+        assert!((percentile(&sorted, 100) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_percentile_single_element() {
+        let sorted = vec![0.42];
+        assert!((percentile(&sorted, 0) - 0.42).abs() < 1e-9);
+        assert!((percentile(&sorted, 50) - 0.42).abs() < 1e-9);
+        assert!((percentile(&sorted, 100) - 0.42).abs() < 1e-9);
+    }
+
+    // --- churn score normalization ---
+
+    #[test]
+    fn test_churn_score_normalization() {
+        // All computed churn scores should be in [0.0, 1.0].
+        let test_cases: Vec<(u32, u32, u32, u32, u32)> = vec![
+            // (commits, added, deleted, max_commits, max_changes)
+            (0, 0, 0, 10, 100),        // zero everything
+            (10, 100, 50, 10, 150),    // equal to max
+            (5, 50, 25, 10, 150),      // half of max
+            (1, 1, 0, 1, 1),           // minimum non-zero
+            (100, 1000, 500, 50, 200), // exceeds max (should clamp)
+        ];
+
+        for (commits, added, deleted, max_c, max_ch) in test_cases {
+            let mut fm = make_file_metrics("test.rs", commits, added, deleted, 0.0);
+            calculate_churn_score(&mut fm, max_c, max_ch);
+            assert!(
+                fm.churn_score >= 0.0 && fm.churn_score <= 1.0,
+                "Score {} out of [0,1] for commits={}, added={}, deleted={}, max_c={}, max_ch={}",
+                fm.churn_score,
+                commits,
+                added,
+                deleted,
+                max_c,
+                max_ch,
+            );
+        }
+    }
+
+    #[test]
+    fn test_churn_score_zero_maxes() {
+        // When max_commits and max_changes are both 0 (empty repo), score should be 0.
+        let mut fm = make_file_metrics("test.rs", 0, 0, 0, 0.0);
+        calculate_churn_score(&mut fm, 0, 0);
+        assert_eq!(fm.churn_score, 0.0);
     }
 }

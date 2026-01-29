@@ -1,9 +1,10 @@
 //! File set for collecting files to analyze.
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use ignore::WalkBuilder;
+use ignore::{WalkBuilder, WalkState};
 
 use super::progress::{create_spinner, is_tty};
 use super::{Language, Result};
@@ -77,7 +78,6 @@ impl FileSet {
         exclude_patterns: Vec<String>,
     ) -> Result<Self> {
         let root = path.as_ref().canonicalize()?;
-        let mut files = Vec::new();
 
         let spinner = if is_tty() {
             let s = create_spinner("Scanning files...");
@@ -91,39 +91,52 @@ impl FileSet {
             .git_ignore(true)
             .git_global(true)
             .git_exclude(true)
-            .build();
+            .build_parallel();
 
         // Pre-compile glob patterns once for efficient matching
         let exclude_globs = build_glob_set(&exclude_patterns);
 
-        for entry in walker.flatten() {
-            let path = entry.path();
+        let files_mutex = Mutex::new(Vec::new());
+        walker.run(|| {
+            let files_mutex = &files_mutex;
+            let exclude_globs = &exclude_globs;
+            let spinner = &spinner;
+            Box::new(move |entry| {
+                let entry = match entry {
+                    Ok(e) => e,
+                    Err(_) => return WalkState::Continue,
+                };
 
-            // Skip directories
-            if path.is_dir() {
-                continue;
-            }
-
-            // Skip non-source files
-            if Language::detect(path).is_none() {
-                continue;
-            }
-
-            // Check exclude patterns using pre-compiled glob set
-            let path_str = path.to_string_lossy();
-            if exclude_globs.is_match(&*path_str) {
-                continue;
-            }
-
-            files.push(path.to_path_buf());
-
-            // Update spinner periodically
-            if let Some(ref s) = spinner {
-                if files.len() % 100 == 0 {
-                    s.set_message(format!("Scanning files... {} found", files.len()));
+                if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+                    return WalkState::Continue;
                 }
-            }
-        }
+
+                let path = entry.path();
+
+                if Language::detect(path).is_none() {
+                    return WalkState::Continue;
+                }
+
+                let path_str = path.to_string_lossy();
+                if exclude_globs.is_match(&*path_str) {
+                    return WalkState::Continue;
+                }
+
+                let owned = entry.into_path();
+                let mut locked = files_mutex.lock().unwrap();
+                locked.push(owned);
+
+                if let Some(ref s) = spinner {
+                    let count = locked.len();
+                    if count % 100 == 0 {
+                        s.set_message(format!("Scanning files... {count} found"));
+                    }
+                }
+
+                WalkState::Continue
+            })
+        });
+        let mut files = files_mutex.into_inner().unwrap();
 
         // Sort for deterministic ordering
         files.sort();

@@ -74,13 +74,18 @@ impl GitRepo {
     }
 
     /// Get commit log with optional path filter.
-    pub fn log(&self, since: Option<&str>, paths: Option<&[PathBuf]>) -> Result<Vec<Commit>> {
-        log::get_log(&self.repo, since, paths)
+    pub fn log(
+        &self,
+        since: Option<&str>,
+        paths: Option<&[PathBuf]>,
+        limit: Option<usize>,
+    ) -> Result<Vec<Commit>> {
+        log::get_log(&self.repo, since, paths, limit)
     }
 
     /// Get commit log with file change statistics (equivalent to git log --numstat).
-    pub fn log_with_stats(&self, since: Option<&str>) -> Result<Vec<Commit>> {
-        log::get_log_with_stats(&self.repo, since)
+    pub fn log_with_stats(&self, since: Option<&str>, limit: Option<usize>) -> Result<Vec<Commit>> {
+        log::get_log_with_stats(&self.repo, since, limit)
     }
 
     /// Get blame information for a file.
@@ -226,7 +231,7 @@ mod tests {
         make_commit(temp.path(), "Initial commit");
         let repo = GitRepo::open(temp.path()).unwrap();
         // log() currently returns empty Vec (placeholder)
-        let result = repo.log(None, None);
+        let result = repo.log(None, None, None);
         assert!(result.is_ok());
     }
 
@@ -236,7 +241,7 @@ mod tests {
         init_git_repo(temp.path());
         make_commit(temp.path(), "Initial commit");
         let repo = GitRepo::open(temp.path()).unwrap();
-        let result = repo.log(Some("7 days"), None);
+        let result = repo.log(Some("7 days"), None, None);
         assert!(result.is_ok());
     }
 
