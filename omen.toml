@@ -3,9 +3,10 @@
 
 # Exclude patterns (glob)
 exclude_patterns = [
-    # Test files
+    # Test and benchmark files
     "*_test.rs",
     "tests/**",
+    "benches/**",
 
     # Build/output directories
     "target/**",

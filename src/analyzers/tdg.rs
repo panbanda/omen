@@ -404,58 +404,47 @@ impl Analyzer {
     }
 
     fn detect_critical_defects(&self, source: &str, language: Language) -> (i32, bool) {
+        let ts_lang: tree_sitter::Language = match language {
+            Language::Rust => tree_sitter_rust::LANGUAGE.into(),
+            Language::Go => tree_sitter_go::LANGUAGE.into(),
+            Language::Python => tree_sitter_python::LANGUAGE.into(),
+            Language::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
+            Language::TypeScript => tree_sitter_typescript::LANGUAGE_TSX.into(),
+            Language::Java => tree_sitter_java::LANGUAGE.into(),
+            Language::C => tree_sitter_c::LANGUAGE.into(),
+            Language::Cpp => tree_sitter_cpp::LANGUAGE.into(),
+            Language::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
+            Language::Ruby => tree_sitter_ruby::LANGUAGE.into(),
+            Language::PHP => tree_sitter_php::LANGUAGE_PHP.into(),
+            Language::Unknown | Language::Swift | Language::Kotlin => return (0, false),
+        };
+
+        let mut parser = tree_sitter::Parser::new();
+        if parser.set_language(&ts_lang).is_err() {
+            return (0, false);
+        }
+        let tree = match parser.parse(source.as_bytes(), None) {
+            Some(t) => t,
+            None => return (0, false),
+        };
+
         let test_ranges = if language == Language::Rust {
             cfg_test_module_ranges(source)
         } else {
             Vec::new()
         };
 
+        let is_go_test_file = language == Language::Go && source.contains("func Test");
+
         let mut count = 0;
-        let bytes = source.as_bytes();
-        let mut line_start = 0;
-
-        for line in source.lines() {
-            let trimmed = line.trim();
-
-            // Skip lines inside #[cfg(test)] modules (Rust)
-            if test_ranges
-                .iter()
-                .any(|r| line_start >= r.start && line_start < r.end)
-            {
-                line_start = next_line_start(bytes, line_start + line.len());
-                continue;
-            }
-
-            line_start = next_line_start(bytes, line_start + line.len());
-
-            // Skip comments and string literals
-            if trimmed.starts_with("//") || trimmed.starts_with("/*") {
-                continue;
-            }
-            if trimmed.contains("\"panic(") || trimmed.contains("'panic(") {
-                continue;
-            }
-            if trimmed.contains("\".unwrap()") || trimmed.contains("'.unwrap()") {
-                continue;
-            }
-
-            match language {
-                Language::Rust => {
-                    if trimmed.contains(".unwrap()") {
-                        count += 1;
-                    }
-                    if trimmed.contains("panic!") {
-                        count += 1;
-                    }
-                }
-                Language::Go => {
-                    if !source.contains("func Test") && trimmed.contains("panic(") {
-                        count += 1;
-                    }
-                }
-                _ => {}
-            }
-        }
+        count_defect_nodes(
+            &tree.root_node(),
+            source.as_bytes(),
+            language,
+            &test_ranges,
+            is_go_test_file,
+            &mut count,
+        );
 
         (count, count > 0)
     }
@@ -587,6 +576,194 @@ impl AnalyzerTrait for Analyzer {
     }
 }
 
+/// Walk the AST to count critical defect nodes.
+///
+/// Each language defines dangerous patterns (e.g. `.unwrap()` in Rust,
+/// `eval()` in Python). Only actual calls/invocations are matched --
+/// string literals, comments, and attributes are structurally distinct
+/// node types in the AST and are never matched.
+fn count_defect_nodes(
+    node: &tree_sitter::Node,
+    source: &[u8],
+    language: Language,
+    test_ranges: &[Range<usize>],
+    is_go_test_file: bool,
+    count: &mut i32,
+) {
+    // Skip nodes inside #[cfg(test)] modules
+    let start = node.start_byte();
+    if test_ranges
+        .iter()
+        .any(|r| start >= r.start && start < r.end)
+    {
+        return;
+    }
+
+    if match_defect_node(node, source, language, is_go_test_file) {
+        *count += 1;
+        // Don't recurse into children of a matched node to avoid double-counting
+        return;
+    }
+
+    // Recurse into children
+    let mut cursor = node.walk();
+    if cursor.goto_first_child() {
+        loop {
+            count_defect_nodes(
+                &cursor.node(),
+                source,
+                language,
+                test_ranges,
+                is_go_test_file,
+                count,
+            );
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+/// Check if a single AST node matches a critical defect pattern for the given language.
+fn match_defect_node(
+    node: &tree_sitter::Node,
+    source: &[u8],
+    language: Language,
+    is_go_test_file: bool,
+) -> bool {
+    match language {
+        Language::Rust => match_rust_defect(node, source),
+        Language::Go => !is_go_test_file && match_call_to(node, source, "identifier", &["panic"]),
+        Language::Python => match_call_to(node, source, "identifier", &["eval", "exec"]),
+        Language::JavaScript | Language::TypeScript => {
+            match_call_to(node, source, "identifier", &["eval"])
+        }
+        Language::Ruby => match_ruby_defect(node, source),
+        Language::Java => match_java_defect(node, source),
+        Language::C | Language::Cpp => {
+            match_call_to(node, source, "identifier", &["gets", "system"])
+        }
+        Language::CSharp => match_csharp_defect(node, source),
+        Language::PHP => match_php_defect(node, source),
+        _ => false,
+    }
+}
+
+/// Rust: `.unwrap()` (zero-arg method call) and `panic!` macro.
+fn match_rust_defect(node: &tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() == "call_expression" {
+        if let Some(func) = node.child_by_field_name("function") {
+            if func.kind() == "field_expression" {
+                if let Some(field) = func.child_by_field_name("field") {
+                    if field.utf8_text(source).ok() == Some("unwrap") {
+                        if let Some(args) = node.child_by_field_name("arguments") {
+                            if args.named_child_count() == 0 {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if node.kind() == "macro_invocation" {
+        if let Some(mac) = node.child_by_field_name("macro") {
+            if mac.utf8_text(source).ok() == Some("panic") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Match a `call_expression` whose function is a specific identifier.
+/// Works for Go (`panic`), Python (`eval`, `exec`), JS/TS (`eval`), C/C++ (`gets`, `system`).
+fn match_call_to(node: &tree_sitter::Node, source: &[u8], func_kind: &str, names: &[&str]) -> bool {
+    if node.kind() != "call_expression" && node.kind() != "call" {
+        return false;
+    }
+    if let Some(func) = node
+        .child_by_field_name("function")
+        .or_else(|| node.child_by_field_name("method"))
+    {
+        if func.kind() == func_kind {
+            if let Ok(text) = func.utf8_text(source) {
+                return names.contains(&text);
+            }
+        }
+    }
+    false
+}
+
+/// Ruby: `eval()` and `system()` calls.
+/// Ruby's tree-sitter uses `call` or `method_call` with `method` field,
+/// or bare function-style calls as `call` with `method` being an `identifier`.
+fn match_ruby_defect(node: &tree_sitter::Node, source: &[u8]) -> bool {
+    let kind = node.kind();
+    if kind != "call" && kind != "method_call" {
+        return false;
+    }
+    // Ruby: `eval(...)` is a `call` with method = identifier "eval"
+    if let Some(method) = node.child_by_field_name("method") {
+        if let Ok(text) = method.utf8_text(source) {
+            return text == "eval" || text == "system";
+        }
+    }
+    false
+}
+
+/// Java: `System.exit()` -- method_invocation with object `System` and name `exit`.
+fn match_java_defect(node: &tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() != "method_invocation" {
+        return false;
+    }
+    if let Some(name) = node.child_by_field_name("name") {
+        if name.utf8_text(source).ok() != Some("exit") {
+            return false;
+        }
+    } else {
+        return false;
+    }
+    if let Some(object) = node.child_by_field_name("object") {
+        if object.utf8_text(source).ok() == Some("System") {
+            return true;
+        }
+    }
+    false
+}
+
+/// C#: `Process.Start()` -- invocation_expression with member_access_expression.
+fn match_csharp_defect(node: &tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() != "invocation_expression" {
+        return false;
+    }
+    // The function part is a member_access_expression like `Process.Start`
+    if let Some(func) = node.child_by_field_name("function") {
+        if func.kind() == "member_access_expression" {
+            if let Ok(text) = func.utf8_text(source) {
+                return text == "Process.Start";
+            }
+        }
+    }
+    false
+}
+
+/// PHP: `eval()`, `exec()`, `system()`, `shell_exec()`, `passthru()`.
+fn match_php_defect(node: &tree_sitter::Node, source: &[u8]) -> bool {
+    // PHP has a dedicated `function_call_expression` node
+    if node.kind() != "function_call_expression" {
+        return false;
+    }
+    if let Some(func) = node.child_by_field_name("function") {
+        if func.kind() == "name" || func.kind() == "qualified_name" {
+            if let Ok(text) = func.utf8_text(source) {
+                return matches!(text, "eval" | "exec" | "system" | "shell_exec" | "passthru");
+            }
+        }
+    }
+    false
+}
+
 /// Find byte ranges of `#[cfg(test)]` modules using tree-sitter.
 ///
 /// Returns ranges covering each module's body so that line-based analysis
@@ -660,18 +837,6 @@ fn has_cfg_test_attribute(node: &tree_sitter::Node, source: &[u8]) -> bool {
     };
     // Match #[cfg(test)] but not #[cfg(not(test))] or #[cfg(feature = "contest")]
     text.contains("cfg(test)") && !text.contains("not(test)") && !text.contains("not(all(test")
-}
-
-/// Advance past the line terminator (`\n` or `\r\n`) to the start of the next line.
-fn next_line_start(bytes: &[u8], pos: usize) -> usize {
-    let mut i = pos;
-    if i < bytes.len() && bytes[i] == b'\r' {
-        i += 1;
-    }
-    if i < bytes.len() && bytes[i] == b'\n' {
-        i += 1;
-    }
-    i
 }
 
 // Types
@@ -1442,5 +1607,356 @@ fn risky() {
             "expected full temporal points without precomputed data, got {}",
             score.temporal_coupling_score
         );
+    }
+
+    #[test]
+    fn test_unwrap_in_string_literal_not_flagged() {
+        let analyzer = Analyzer::new();
+        let source = r#"
+fn mutate() -> Vec<&'static str> {
+    vec![
+        "Replace .unwrap_or(...) with .unwrap()",
+        "Replace .unwrap_or_else(...) with .unwrap()",
+        ".unwrap()",
+    ]
+}
+"#;
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Rust);
+        assert_eq!(
+            count, 0,
+            ".unwrap() inside string literals should not count as critical defects"
+        );
+        assert!(!has_critical);
+    }
+
+    #[test]
+    fn test_unwrap_in_raw_string_not_flagged() {
+        let analyzer = Analyzer::new();
+        let source = "fn doc() -> &'static str {\n    r#\"call .unwrap() to get the value\"#\n}\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Rust);
+        assert_eq!(
+            count, 0,
+            ".unwrap() inside raw string literals should not count"
+        );
+        assert!(!has_critical);
+    }
+
+    #[test]
+    fn test_panic_in_string_literal_not_flagged() {
+        let analyzer = Analyzer::new();
+        let source = r#"
+fn describe() -> &'static str {
+    "this will panic! if misused"
+}
+"#;
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Rust);
+        assert_eq!(count, 0, "panic! inside string literals should not count");
+        assert!(!has_critical);
+    }
+
+    #[test]
+    fn test_real_unwrap_still_detected() {
+        let analyzer = Analyzer::new();
+        let source = r#"
+fn risky() {
+    let x = some_option.unwrap();
+    let y = other.unwrap();
+}
+"#;
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Rust);
+        assert_eq!(count, 2, "both real .unwrap() calls should be detected");
+        assert!(has_critical);
+    }
+
+    #[test]
+    fn test_real_panic_still_detected() {
+        let analyzer = Analyzer::new();
+        let source = r#"
+fn risky() {
+    panic!("something went wrong");
+}
+"#;
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Rust);
+        assert_eq!(count, 1);
+        assert!(has_critical);
+    }
+
+    #[test]
+    fn test_unwrap_in_comment_not_flagged() {
+        let analyzer = Analyzer::new();
+        let source = r#"
+// Don't use .unwrap() in production
+/// Example: foo.unwrap()
+fn safe() -> i32 { 42 }
+"#;
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Rust);
+        assert_eq!(count, 0, ".unwrap() in comments should not count");
+        assert!(!has_critical);
+    }
+
+    #[test]
+    fn test_go_panic_in_string_not_flagged() {
+        let analyzer = Analyzer::new();
+        let source = r#"
+package main
+
+func describe() string {
+    return "will panic( if bad input"
+}
+"#;
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Go);
+        assert_eq!(count, 0, "panic( inside Go string should not count");
+        assert!(!has_critical);
+    }
+
+    #[test]
+    fn test_go_real_panic_detected() {
+        let analyzer = Analyzer::new();
+        let source = r#"
+package main
+
+func risky() {
+    panic("fatal error")
+}
+"#;
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Go);
+        assert_eq!(count, 1);
+        assert!(has_critical);
+    }
+
+    // -----------------------------------------------------------------------
+    // Python critical defect detection
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_python_eval_detected() {
+        let analyzer = Analyzer::new();
+        let source = "result = eval(user_input)\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Python);
+        assert_eq!(count, 1, "eval() should be detected as critical defect");
+        assert!(has_critical);
+    }
+
+    #[test]
+    fn test_python_exec_detected() {
+        let analyzer = Analyzer::new();
+        let source = "exec(code_string)\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Python);
+        assert_eq!(count, 1, "exec() should be detected as critical defect");
+        assert!(has_critical);
+    }
+
+    #[test]
+    fn test_python_eval_in_string_not_flagged() {
+        let analyzer = Analyzer::new();
+        let source = "msg = \"do not use eval() in production\"\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Python);
+        assert_eq!(count, 0, "eval() in string should not be flagged");
+        assert!(!has_critical);
+    }
+
+    #[test]
+    fn test_python_eval_in_comment_not_flagged() {
+        let analyzer = Analyzer::new();
+        let source = "# eval() is dangerous\nx = 42\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Python);
+        assert_eq!(count, 0, "eval() in comment should not be flagged");
+        assert!(!has_critical);
+    }
+
+    #[test]
+    fn test_python_multiple_defects() {
+        let analyzer = Analyzer::new();
+        let source = "a = eval(x)\nb = exec(y)\nc = eval(z)\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Python);
+        assert_eq!(count, 3);
+        assert!(has_critical);
+    }
+
+    // -----------------------------------------------------------------------
+    // JavaScript/TypeScript critical defect detection
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_js_eval_detected() {
+        let analyzer = Analyzer::new();
+        let source = "const result = eval(userInput);\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::JavaScript);
+        assert_eq!(count, 1, "eval() should be detected in JavaScript");
+        assert!(has_critical);
+    }
+
+    #[test]
+    fn test_ts_eval_detected() {
+        let analyzer = Analyzer::new();
+        let source = "const result: any = eval(userInput);\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::TypeScript);
+        assert_eq!(count, 1, "eval() should be detected in TypeScript");
+        assert!(has_critical);
+    }
+
+    #[test]
+    fn test_js_eval_in_string_not_flagged() {
+        let analyzer = Analyzer::new();
+        let source = "const msg = \"never use eval() here\";\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::JavaScript);
+        assert_eq!(count, 0, "eval() in string should not be flagged");
+        assert!(!has_critical);
+    }
+
+    // -----------------------------------------------------------------------
+    // Ruby critical defect detection
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_ruby_eval_detected() {
+        let analyzer = Analyzer::new();
+        let source = "result = eval(user_input)\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Ruby);
+        assert_eq!(count, 1, "eval() should be detected in Ruby");
+        assert!(has_critical);
+    }
+
+    #[test]
+    fn test_ruby_system_detected() {
+        let analyzer = Analyzer::new();
+        let source = "system(user_command)\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Ruby);
+        assert_eq!(count, 1, "system() should be detected in Ruby");
+        assert!(has_critical);
+    }
+
+    #[test]
+    fn test_ruby_eval_in_string_not_flagged() {
+        let analyzer = Analyzer::new();
+        let source = "msg = \"eval() is dangerous\"\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Ruby);
+        assert_eq!(count, 0, "eval() in string should not be flagged");
+        assert!(!has_critical);
+    }
+
+    // -----------------------------------------------------------------------
+    // Java critical defect detection
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_java_system_exit_detected() {
+        let analyzer = Analyzer::new();
+        let source =
+            "public class Main {\n    void shutdown() {\n        System.exit(1);\n    }\n}\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Java);
+        assert_eq!(count, 1, "System.exit() should be detected in Java");
+        assert!(has_critical);
+    }
+
+    #[test]
+    fn test_java_system_exit_in_string_not_flagged() {
+        let analyzer = Analyzer::new();
+        let source = "public class Main {\n    String msg = \"System.exit(1) is bad\";\n}\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Java);
+        assert_eq!(count, 0, "System.exit() in string should not be flagged");
+        assert!(!has_critical);
+    }
+
+    // -----------------------------------------------------------------------
+    // C/C++ critical defect detection
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_c_gets_detected() {
+        let analyzer = Analyzer::new();
+        let source = "#include <stdio.h>\nint main() {\n    char buf[64];\n    gets(buf);\n    return 0;\n}\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::C);
+        assert_eq!(count, 1, "gets() should be detected in C");
+        assert!(has_critical);
+    }
+
+    #[test]
+    fn test_c_system_detected() {
+        let analyzer = Analyzer::new();
+        let source = "#include <stdlib.h>\nint main() {\n    system(\"ls\");\n    return 0;\n}\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::C);
+        assert_eq!(count, 1, "system() should be detected in C");
+        assert!(has_critical);
+    }
+
+    #[test]
+    fn test_cpp_gets_detected() {
+        let analyzer = Analyzer::new();
+        let source = "#include <cstdio>\nint main() {\n    char buf[64];\n    gets(buf);\n    return 0;\n}\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Cpp);
+        assert_eq!(count, 1, "gets() should be detected in C++");
+        assert!(has_critical);
+    }
+
+    #[test]
+    fn test_c_gets_in_string_not_flagged() {
+        let analyzer = Analyzer::new();
+        let source = "#include <stdio.h>\nint main() {\n    printf(\"gets(buf) is unsafe\");\n    return 0;\n}\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::C);
+        assert_eq!(count, 0, "gets() in string should not be flagged");
+        assert!(!has_critical);
+    }
+
+    // -----------------------------------------------------------------------
+    // C# critical defect detection
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_csharp_process_start_detected() {
+        let analyzer = Analyzer::new();
+        let source = "using System.Diagnostics;\nclass Main {\n    void Run() {\n        Process.Start(cmd);\n    }\n}\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::CSharp);
+        assert_eq!(count, 1, "Process.Start() should be detected in C#");
+        assert!(has_critical);
+    }
+
+    #[test]
+    fn test_csharp_process_start_in_string_not_flagged() {
+        let analyzer = Analyzer::new();
+        let source = "class Main {\n    string msg = \"Process.Start() is risky\";\n}\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::CSharp);
+        assert_eq!(count, 0, "Process.Start() in string should not be flagged");
+        assert!(!has_critical);
+    }
+
+    // -----------------------------------------------------------------------
+    // PHP critical defect detection
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_php_eval_detected() {
+        let analyzer = Analyzer::new();
+        let source = "<?php\neval($user_input);\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::PHP);
+        assert_eq!(count, 1, "eval() should be detected in PHP");
+        assert!(has_critical);
+    }
+
+    #[test]
+    fn test_php_shell_exec_detected() {
+        let analyzer = Analyzer::new();
+        let source = "<?php\nshell_exec($cmd);\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::PHP);
+        assert_eq!(count, 1, "shell_exec() should be detected in PHP");
+        assert!(has_critical);
+    }
+
+    #[test]
+    fn test_php_system_detected() {
+        let analyzer = Analyzer::new();
+        let source = "<?php\nsystem($cmd);\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::PHP);
+        assert_eq!(count, 1, "system() should be detected in PHP");
+        assert!(has_critical);
+    }
+
+    #[test]
+    fn test_php_eval_in_string_not_flagged() {
+        let analyzer = Analyzer::new();
+        let source = "<?php\n$msg = \"eval() is dangerous\";\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::PHP);
+        assert_eq!(count, 0, "eval() in string should not be flagged");
+        assert!(!has_critical);
     }
 }
