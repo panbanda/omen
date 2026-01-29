@@ -160,7 +160,52 @@ impl FilePathIndex {
             }
         }
 
-        // 3. Try segment-based matching for module paths like "utils/helpers"
+        // 3. Try snake_case conversion for Ruby CamelCase constants
+        //    e.g., "OrderSearcher" -> "order_searcher", "ActiveModel::Validations" -> "active_model/validations"
+        if import_path.contains("::") {
+            // Scoped constant: split on ::, convert each segment, join with /
+            // e.g., ActiveModel::Validations -> active_model/validations
+            let snake_path: String = import_path
+                .split("::")
+                .map(camel_to_snake)
+                .collect::<Vec<_>>()
+                .join("/");
+            // Match on path segment boundaries (must be preceded by / or start of string)
+            let with_slash = format!("/{}", snake_path);
+            if let Some(matched) = self
+                .by_full_path
+                .keys()
+                .find(|k| k.starts_with(&snake_path) || k.contains(&with_slash))
+            {
+                return Some(matched.clone());
+            }
+            // Also try the last segment as a stem match
+            if let Some(last) = snake_path.rsplit('/').next() {
+                if let Some(matches) = self.by_stem.get(last) {
+                    for candidate in matches {
+                        if candidate.contains(&snake_path) {
+                            return Some(candidate.clone());
+                        }
+                    }
+                }
+            }
+        } else {
+            let snake = camel_to_snake(import_path);
+            if snake != import_path {
+                if let Some(matches) = self.by_stem.get(&snake) {
+                    if matches.len() == 1 {
+                        return Some(matches[0].clone());
+                    }
+                    if !matches.is_empty() {
+                        let mut sorted = matches.clone();
+                        sorted.sort_by_key(|s| s.len());
+                        return Some(sorted[0].clone());
+                    }
+                }
+            }
+        }
+
+        // 4. Try segment-based matching for module paths like "utils/helpers"
         let segments: Vec<&str> = import_path.split('/').filter(|s| !s.is_empty()).collect();
         if let Some(last_segment) = segments.last() {
             if let Some(candidates) = self.by_stem.get(*last_segment) {
@@ -179,6 +224,32 @@ impl FilePathIndex {
 
         None
     }
+}
+
+/// Convert CamelCase to snake_case for Ruby constant-to-filename resolution.
+/// Handles consecutive uppercase (e.g., HTTPClient -> http_client).
+fn camel_to_snake(name: &str) -> String {
+    let mut result = String::with_capacity(name.len() + 4);
+    let chars: Vec<char> = name.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
+        if c.is_uppercase() {
+            if i > 0 {
+                let prev = chars[i - 1];
+                let next_is_lower = chars.get(i + 1).is_some_and(|n| n.is_lowercase());
+                // Insert underscore before: uppercase after lowercase, or
+                // start of new word in consecutive uppercase (e.g., the P in HTTPParser)
+                if prev.is_lowercase() || (prev.is_uppercase() && next_is_lower) {
+                    result.push('_');
+                }
+            }
+            for lc in c.to_lowercase() {
+                result.push(lc);
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }
 
 /// Normalize a path by removing . and resolving ..
@@ -996,5 +1067,78 @@ mod tests {
         };
         assert_eq!(edge.from, "a.rs");
         assert_eq!(edge.to, "b.rs");
+    }
+
+    #[test]
+    fn test_camel_to_snake() {
+        assert_eq!(camel_to_snake("OrderSearcher"), "order_searcher");
+        assert_eq!(camel_to_snake("ApplicationRecord"), "application_record");
+        assert_eq!(camel_to_snake("HTTPClient"), "http_client");
+        assert_eq!(camel_to_snake("Foo"), "foo");
+        assert_eq!(camel_to_snake("FooBar"), "foo_bar");
+        assert_eq!(camel_to_snake("already_snake"), "already_snake");
+        assert_eq!(camel_to_snake("JSON"), "json");
+        assert_eq!(camel_to_snake("HTMLParser"), "html_parser");
+    }
+
+    #[test]
+    fn test_find_match_ruby_constant_to_snake_case() {
+        let root = Path::new("/project");
+        let files = vec![
+            std::path::PathBuf::from("/project/app/models/concerns/order_searcher.rb"),
+            std::path::PathBuf::from("/project/app/models/concerns/feature_gate.rb"),
+            std::path::PathBuf::from("/project/app/models/application_record.rb"),
+        ];
+        let index = FilePathIndex::new(&files, root);
+
+        // CamelCase constant should resolve to snake_case file
+        assert_eq!(
+            index.find_match("OrderSearcher", Path::new("app/models/order.rb")),
+            Some("app/models/concerns/order_searcher.rb".to_string())
+        );
+        assert_eq!(
+            index.find_match("FeatureGate", Path::new("app/models/order.rb")),
+            Some("app/models/concerns/feature_gate.rb".to_string())
+        );
+        assert_eq!(
+            index.find_match("ApplicationRecord", Path::new("app/models/order.rb")),
+            Some("app/models/application_record.rb".to_string())
+        );
+    }
+
+    #[test]
+    fn test_find_match_ruby_scoped_constant() {
+        let root = Path::new("/project");
+        let files = vec![
+            std::path::PathBuf::from("/project/app/models/concerns/active_model/validations.rb"),
+            std::path::PathBuf::from("/project/lib/active_record/base.rb"),
+        ];
+        let index = FilePathIndex::new(&files, root);
+
+        // Scoped constant ActiveModel::Validations -> active_model/validations
+        assert_eq!(
+            index.find_match("ActiveModel::Validations", Path::new("app/models/user.rb")),
+            Some("app/models/concerns/active_model/validations.rb".to_string())
+        );
+        assert_eq!(
+            index.find_match("ActiveRecord::Base", Path::new("app/models/user.rb")),
+            Some("lib/active_record/base.rb".to_string())
+        );
+    }
+
+    #[test]
+    fn test_find_match_scoped_constant_no_substring_collision() {
+        let root = Path::new("/project");
+        let files = vec![std::path::PathBuf::from(
+            "/project/packages/connect/app/controllers/connect/sign_up_controller.rb",
+        )];
+        let index = FilePathIndex::new(&files, root);
+
+        // T::Sig -> t/sig should NOT match connect/sign_up_controller.rb
+        // (substring "t/sig" appears in "connect/sign_up" but not on segment boundaries)
+        assert_eq!(
+            index.find_match("T::Sig", Path::new("app/models/user.rb")),
+            None
+        );
     }
 }
