@@ -526,64 +526,40 @@ mod tests {
         assert!(output.contains("src/main.rs"));
     }
 
+    // All env-var-dependent tests run in a single test to avoid races.
+    // Rust runs #[test] functions in parallel, and env vars are process-global.
     #[test]
-    fn test_from_env_returns_none_without_repo() {
-        // Clear any existing env vars
+    fn test_from_env_and_pr_number() {
+        // None without GITHUB_REPOSITORY
         env::remove_var("GITHUB_REPOSITORY");
         env::remove_var("GITHUB_TOKEN");
+        assert!(GitHubReporter::from_env().is_none());
 
-        let reporter = GitHubReporter::from_env();
-        assert!(reporter.is_none());
-    }
-
-    #[test]
-    fn test_from_env_works_with_repo() {
+        // Some with repo + token
         env::set_var("GITHUB_REPOSITORY", "test/repo");
         env::set_var("GITHUB_TOKEN", "test-token");
-
-        let reporter = GitHubReporter::from_env();
-        assert!(reporter.is_some());
-
-        let reporter = reporter.unwrap();
+        let reporter = GitHubReporter::from_env().expect("should be Some with repo set");
         assert_eq!(reporter.repo(), "test/repo");
         assert!(reporter.has_token());
 
-        // Clean up
-        env::remove_var("GITHUB_REPOSITORY");
+        // Some with repo, no token
         env::remove_var("GITHUB_TOKEN");
-    }
+        let reporter = GitHubReporter::from_env().expect("should be Some without token");
+        assert!(!reporter.has_token());
 
-    #[test]
-    fn test_from_env_works_without_token() {
-        env::set_var("GITHUB_REPOSITORY", "test/repo");
-        env::remove_var("GITHUB_TOKEN");
-
-        let reporter = GitHubReporter::from_env();
-        assert!(reporter.is_some());
-        assert!(!reporter.unwrap().has_token());
-
-        // Clean up
+        // Clean up repo
         env::remove_var("GITHUB_REPOSITORY");
-    }
 
-    #[test]
-    fn test_get_pr_number_returns_none_without_event() {
+        // PR number: None without event path
         env::remove_var("GITHUB_EVENT_PATH");
-        let pr_number = get_pr_number_from_event();
-        assert!(pr_number.is_none());
-    }
+        assert!(get_pr_number_from_event().is_none());
 
-    #[test]
-    fn test_get_pr_number_from_event_file() {
+        // PR number: parses event file
         let temp = tempfile::tempdir().unwrap();
         let event_path = temp.path().join("event.json");
         std::fs::write(&event_path, r#"{"pull_request": {"number": 42}}"#).unwrap();
-
         env::set_var("GITHUB_EVENT_PATH", event_path.to_str().unwrap());
-
-        let pr_number = get_pr_number_from_event();
-        assert_eq!(pr_number, Some(42));
-
+        assert_eq!(get_pr_number_from_event(), Some(42));
         env::remove_var("GITHUB_EVENT_PATH");
     }
 }
