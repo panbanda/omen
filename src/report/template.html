@@ -2495,15 +2495,26 @@
             notableCommitsByPeriod[key] = notableCommitsByPeriod[key].concat(pt.commits);
         });
 
+        // Convert "Oct 2016" → "2016-10" to match annotation date format
+        var monthNames = {Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12'};
+        function periodToDate(period) {
+            var parts = period.split(' ');
+            if (parts.length === 2 && monthNames[parts[0]]) {
+                return parts[1] + '-' + monthNames[parts[0]];
+            }
+            return period;
+        }
+
         // Populate Notable Events descriptions from component annotations, falling back to commit messages
         document.querySelectorAll('#notable-events-table tbody tr[data-period]').forEach(function(row) {
             var period = row.getAttribute('data-period');
+            var periodDate = periodToDate(period);
             var driver = row.getAttribute('data-driver').toLowerCase();
             var descCell = row.querySelector('.event-description');
             if (!descCell) return;
             var annotations = componentAnnotations[driver];
             if (annotations) {
-                var match = annotations.find(function(a) { return a.date === period; });
+                var match = annotations.find(function(a) { return a.date === periodDate; });
                 if (match) {
                     descCell.innerHTML = marked.parse(match.description);
                     return;
@@ -2522,27 +2533,21 @@
             return rawLabels.findIndex(function(label) { return label.startsWith(datePrefix); });
         }
 
-        // Build annotation markLines for health score chart
+        // Build annotation markLines for health score chart (icon-only, details on hover)
         var healthMarkLines = [];
         scoreAnnotations.forEach(function(ann) {
             var idx = findLabelIndex(trendsData.rawLabels, ann.date);
             if (idx !== -1) {
+                var color = ann.change < 0 ? '#f85149' : '#3fb950';
                 healthMarkLines.push({
                     xAxis: trendsData.labels[idx],
-                    lineStyle: {
-                        color: ann.change < 0 ? '#f8514988' : '#3fb95088',
-                        type: 'dashed',
-                        width: 2
-                    },
+                    lineStyle: { color: color + '88', type: 'dashed', width: 2 },
                     label: {
-                        formatter: ann.label,
-                        fontSize: 10,
-                        color: palette.textPrimary,
-                        backgroundColor: ann.change < 0 ? '#f8514933' : '#3fb95033',
-                        borderColor: ann.change < 0 ? '#f85149' : '#3fb950',
-                        borderWidth: 1,
-                        borderRadius: 4,
-                        padding: [2, 4]
+                        formatter: ann.change < 0 ? '\u25BC' : '\u25B2',
+                        fontSize: 12,
+                        color: color,
+                        position: 'insideStartTop',
+                        distance: 4
                     }
                 });
             }
@@ -2657,7 +2662,7 @@
                 smells: '#f85149'
             };
 
-            // Build component annotation markLines
+            // Build component annotation markLines (icon-only, details on hover)
             var componentMarkLines = [];
             Object.keys(componentAnnotations).forEach(function(compName) {
                 var events = componentAnnotations[compName];
@@ -2669,14 +2674,11 @@
                             xAxis: componentLabels[idx],
                             lineStyle: { color: color + '88', type: 'dashed', width: 2 },
                             label: {
-                                formatter: ann.label,
+                                formatter: '\u25C6',
                                 fontSize: 10,
-                                color: palette.textPrimary,
-                                backgroundColor: color + '33',
-                                borderColor: color,
-                                borderWidth: 1,
-                                borderRadius: 4,
-                                padding: [2, 4]
+                                color: color,
+                                position: 'insideStartTop',
+                                distance: 4
                             }
                         });
                     }
