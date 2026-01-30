@@ -12,6 +12,7 @@
     <script src="https://cdn.jsdelivr.net/npm/date-fns@4/cdn.min.js"></script>
     <script src="https://unpkg.com/@popperjs/core@2"></script>
     <script src="https://unpkg.com/tippy.js@6"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         :root {
             --bg-primary: #0d1117;
@@ -176,13 +177,22 @@
         .score-value { position: relative; font-size: 2.5rem; font-weight: bold; z-index: 1; }
         .score-label { position: relative; color: var(--text-secondary); font-size: 0.8rem; z-index: 1; }
 
-        .hero-trend {
-            font-size: 0.85rem;
-            color: var(--text-secondary);
-            margin-top: 0.5rem;
+        .hero-trend-stat {
+            margin-top: 0.75rem;
+            text-align: center;
         }
-        .hero-trend.down { color: var(--accent-red); }
-        .hero-trend.up { color: var(--accent-green); }
+        .hero-trend-value {
+            font-size: 1.1rem;
+            font-weight: bold;
+            color: var(--text-secondary);
+        }
+        .hero-trend-value.down { color: var(--accent-red); }
+        .hero-trend-value.up { color: var(--accent-green); }
+        .hero-trend-rate {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-top: 0.15rem;
+        }
 
         .hero-radar {
             height: 200px;
@@ -1052,8 +1062,11 @@
                     <span class="score-label">Health Score</span>
                 </div>
                 {% if Trend %}
-                <div class="hero-trend {% if Trend.slope < 0.0 %}down{% elif Trend.slope > 0.0 %}up{% endif %}">
-                    {% if Trend.slope < 0.0 %}Declining{% elif Trend.slope > 0.0 %}Improving{% else %}Stable{% endif %} ({{ Trend.slope | round(2) }}/mo)
+                <div class="hero-trend-stat">
+                    <div class="hero-trend-value {% if Trend.slope < 0.0 %}down{% elif Trend.slope > 0.0 %}up{% endif %}">
+                        {% if Trend.slope < 0.0 %}Declining{% elif Trend.slope > 0.0 %}Improving{% else %}Stable{% endif %}
+                    </div>
+                    <div class="hero-trend-rate">{{ Trend.slope | round(2) }} pts/mo</div>
                 </div>
                 {% endif %}
             </div>
@@ -1549,20 +1562,22 @@
             {% if TrendsInsight and TrendsInsight.historical_events %}
             <div class="card">
                 <h3>Notable Events</h3>
-                <table>
+                <table id="notable-events-table">
                     <thead>
                         <tr>
                             <th>Period</th>
                             <th>Change</th>
                             <th>Driver</th>
+                            <th>Description</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for item in TrendsInsight.historical_events %}
-                        <tr style="background: {% if item.change < 0 %}#f8514915{% else %}#3fb95015{% endif %};">
+                        <tr style="background: {% if item.change < 0 %}#f8514915{% else %}#3fb95015{% endif %};" data-period="{{ item.period }}" data-driver="{{ item.primary_driver }}">
                             <td><strong>{{ item.period }}</strong></td>
                             <td><span class="badge {% if item.change < -5 %}critical{% elif item.change < 0 %}high{% else %}low{% endif %}">{% if item.change > 0 %}+{% endif %}{{ item.change }} pts</span></td>
                             <td>{{ item.primary_driver }}</td>
+                            <td class="event-description" style="color: var(--text-secondary); font-size: 0.85rem;"></td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -1915,11 +1930,11 @@
             const table = document.getElementById(tableId);
             if (!filterContainer || !table) return;
 
-            const rows = table.querySelectorAll('tbody tr[data-language]');
-            if (rows.length === 0) return;
+            const allRows = Array.from(table.querySelectorAll('tbody tr[data-language]'));
+            if (allRows.length === 0) return;
 
             const langCounts = {};
-            rows.forEach(row => {
+            allRows.forEach(row => {
                 const lang = row.getAttribute('data-language');
                 if (lang) langCounts[lang] = (langCounts[lang] || 0) + 1;
             });
@@ -1966,16 +1981,21 @@
                 });
                 const showAll = filterContainer.querySelector('[data-lang="all"]').classList.contains('active');
 
+                const currentPerPage = dt.options.perPage;
                 dt.destroy();
-                rows.forEach(row => {
-                    if (showAll) {
-                        row.style.display = '';
-                    } else {
-                        const rowLang = row.getAttribute('data-language');
-                        row.style.display = activeLangs.includes(rowLang) ? '' : 'none';
+
+                const tbody = table.querySelector('tbody');
+                tbody.innerHTML = '';
+                allRows.forEach(row => {
+                    row.style.display = '';
+                    if (showAll || activeLangs.includes(row.getAttribute('data-language'))) {
+                        tbody.appendChild(row);
                     }
                 });
-                dataTableInstances[tableId] = new simpleDatatables.DataTable(table, dataTableConfig);
+
+                dataTableInstances[tableId] = new simpleDatatables.DataTable(table, Object.assign({}, dataTableConfig, {
+                    perPage: currentPerPage
+                }));
             });
         });
 
@@ -2067,6 +2087,20 @@
         {% else %}
         const componentAnnotations = {};
         {% endif %}
+
+        // Populate Notable Events descriptions from component annotations
+        document.querySelectorAll('#notable-events-table tbody tr[data-period]').forEach(row => {
+            const period = row.getAttribute('data-period');
+            const driver = row.getAttribute('data-driver').toLowerCase();
+            const descCell = row.querySelector('.event-description');
+            if (!descCell) return;
+            const annotations = componentAnnotations[driver];
+            if (!annotations) return;
+            const match = annotations.find(a => a.date === period);
+            if (match) {
+                descCell.innerHTML = marked.parse(match.description);
+            }
+        });
 
         function findLabelIndex(rawLabels, datePrefix) {
             return rawLabels.findIndex(label => label.startsWith(datePrefix));
