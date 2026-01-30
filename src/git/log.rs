@@ -187,13 +187,10 @@ fn parse_since_duration(since: &str) -> Option<std::time::Duration> {
     let num: u64 = num_str.trim().parse().ok()?;
 
     let secs = match unit {
-        "s" | "sec" | "secs" | "second" | "seconds" => num,
-        "m" | "min" | "mins" | "minute" | "minutes" if !unit.starts_with("mo") => num * 60,
-        "h" | "hr" | "hrs" | "hour" | "hours" => num * 3600,
         "d" | "day" | "days" => num * 86400,
         "w" | "wk" | "wks" | "week" | "weeks" => num * 604800,
-        "mo" | "mon" | "month" | "months" => num * 2592000, // 30 days
-        "y" | "yr" | "yrs" | "year" | "years" => num * 31536000, // 365 days
+        "m" | "mo" | "mon" | "month" | "months" => num * 2592000, // 30 days
+        "y" | "yr" | "yrs" | "year" | "years" => num * 31536000,  // 365 days
         _ => return None,
     };
 
@@ -946,7 +943,8 @@ mod tests {
         assert_eq!(parse_since_to_days("1 year"), Some(365));
         assert_eq!(parse_since_to_days("2 years"), Some(730));
 
-        // Test months (note: "m" alone means minutes, use "mo" or "month" for months)
+        // Test months
+        assert_eq!(parse_since_to_days("6m"), Some(180));
         assert_eq!(parse_since_to_days("6mo"), Some(180));
         assert_eq!(parse_since_to_days("1 month"), Some(30));
         assert_eq!(parse_since_to_days("3 months"), Some(90));
