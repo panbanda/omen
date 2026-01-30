@@ -1,5 +1,20 @@
 # Changelog
 
+## [4.18.0](https://github.com/panbanda/omen/compare/omen-v4.17.1...omen-v4.18.0) (2026-01-30)
+
+
+### Features
+
+* add exclude_built_assets config to filter minified/bundled files ([98407d4](https://github.com/panbanda/omen/commit/98407d4c6ec7c475e4eba843bd454bedfb7851d6))
+* add exclude_built_assets config to filter minified/bundled files ([b08d3f7](https://github.com/panbanda/omen/commit/b08d3f78f3c339fb58c06c2cd9206fa4b87ea230))
+
+
+### Bug Fixes
+
+* consolidate env-var tests to eliminate race condition ([39c8b9d](https://github.com/panbanda/omen/commit/39c8b9df2c476375e936719a4df96f46cff8a768))
+* make "m" parse as months in --since flag ([30e0693](https://github.com/panbanda/omen/commit/30e0693fce90085ddac08529ecd54474169d5439))
+* make "m" parse as months, not minutes, in --since flag ([89c5201](https://github.com/panbanda/omen/commit/89c52011044f9ba160fae5e538a348398a3dce9a))
+
 ## [4.17.1](https://github.com/panbanda/omen/compare/omen-v4.17.0...omen-v4.17.1) (2026-01-30)
 
 
