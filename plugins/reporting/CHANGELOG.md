@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.1](https://github.com/panbanda/omen/compare/omen-reporting-v2.0.0...omen-reporting-v2.0.1) (2026-01-30)
+
+
+### Bug Fixes
+
+* default --since to full history, fix plugin cohesion ([7fb09cb](https://github.com/panbanda/omen/commit/7fb09cbe54333c9c13c6ee47b6f6314258e35beb))
+* default --since to full history, fix plugin cohesion issues ([406790b](https://github.com/panbanda/omen/commit/406790b15eb4536bec95109ba0cf29ef7a7a5291))
+
 ## [2.0.0](https://github.com/panbanda/omen/compare/omen-reporting-v1.0.0...omen-reporting-v2.0.0) (2026-01-28)
 
 
