@@ -56,11 +56,6 @@ const config: Config = {
           label: 'Docs',
         },
         {
-          href: 'https://crates.io/crates/omen-cli',
-          label: 'Crates.io',
-          position: 'right',
-        },
-        {
           href: 'https://github.com/panbanda/omen',
           label: 'GitHub',
           position: 'right',
@@ -90,7 +85,6 @@ const config: Config = {
           title: 'More',
           items: [
             {label: 'GitHub', href: 'https://github.com/panbanda/omen'},
-            {label: 'Crates.io', href: 'https://crates.io/crates/omen-cli'},
           ],
         },
       ],

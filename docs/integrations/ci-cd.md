@@ -25,7 +25,7 @@ jobs:
           fetch-depth: 0  # Full history needed for churn, ownership, hotspot analyzers
 
       - name: Install Omen
-        run: cargo install omen-cli
+        run: brew install panbanda/omen/omen
 
       - name: Check repository score
         run: omen score
@@ -65,7 +65,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install Omen
-        run: cargo install omen-cli
+        run: brew install panbanda/omen/omen
 
       - name: Analyze PR changes
         run: |
@@ -104,7 +104,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install Omen
-        run: cargo install omen-cli
+        run: brew install panbanda/omen/omen
 
       - name: Run analysis
         id: analysis

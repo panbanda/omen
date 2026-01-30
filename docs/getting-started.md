@@ -12,12 +12,15 @@ sidebar_position: 2
 brew install panbanda/omen/omen
 ```
 
-### Cargo
+### Build from Source
 
-Requires a Rust toolchain (1.70+).
+Requires a Rust toolchain (1.92+).
 
 ```bash
-cargo install omen-cli
+git clone https://github.com/panbanda/omen.git
+cd omen
+cargo build --release
+# Binary at target/release/omen
 ```
 
 ### Docker

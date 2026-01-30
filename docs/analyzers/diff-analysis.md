@@ -126,7 +126,7 @@ jobs:
           fetch-depth: 0  # Full history required for accurate diff
 
       - name: Install Omen
-        run: cargo install omen-cli
+        run: brew install panbanda/omen/omen
 
       - name: Run diff analysis
         run: |
@@ -152,7 +152,7 @@ jobs:
 diff-analysis:
   stage: review
   script:
-    - cargo install omen-cli
+    - brew install panbanda/omen/omen
     - omen -f json diff --target origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
