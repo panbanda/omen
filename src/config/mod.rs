@@ -27,6 +27,8 @@ pub struct Config {
     pub score: ScoreConfig,
     /// Feature flag configuration.
     pub feature_flags: FeatureFlagsConfig,
+    /// Temporal coupling configuration.
+    pub temporal: TemporalConfig,
     /// Output configuration.
     pub output: OutputConfig,
 }
@@ -231,6 +233,22 @@ pub struct CustomProvider {
 }
 
 /// Output configuration.
+/// Temporal coupling configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TemporalConfig {
+    /// Exclude test files from coupling analysis.
+    pub exclude_tests: bool,
+}
+
+impl Default for TemporalConfig {
+    fn default() -> Self {
+        Self {
+            exclude_tests: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OutputConfig {

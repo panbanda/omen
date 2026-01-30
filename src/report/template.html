@@ -911,16 +911,8 @@
                 grid-template-columns: 1fr;
             }
         }
-        .language-filter { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; }
-        .lang-pill {
-            background: var(--bg-tertiary); border: 1px solid var(--border-color);
-            color: var(--text-secondary); padding: 0.25rem 0.75rem; border-radius: 1rem;
-            font-size: 0.8rem; cursor: pointer; transition: all 0.15s;
-        }
-        .lang-pill:hover { border-color: var(--text-secondary); color: var(--text-primary); }
-        .lang-pill.active { border-color: var(--accent-blue); color: var(--accent-blue); background: #58a6ff15; }
-        .lang-pill .lang-count { color: var(--text-secondary); font-size: 0.75rem; margin-left: 0.25rem; }
-        .lang-pill.active .lang-count { color: var(--accent-blue); opacity: 0.7; }
+        .cell-overflow { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .event-commits { max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-size: 0.85rem; }
     </style>
 </head>
 <body>
@@ -1057,7 +1049,7 @@
                 <div class="report-meta">
                     <span class="report-meta-item">
                         <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 0 1-.557 1.392l-2.5-1A.751.751 0 0 1 7 8.25v-3.5a.75.75 0 0 1 1.5 0Z"></path></svg>
-                        {{ Metadata.generated_at }}
+                        <span class="human-date" data-iso="{{ Metadata.generated_at }}">{{ Metadata.generated_at }}</span>
                     </span>
                     {% if Metadata.since %}
                     <span class="report-meta-item">
@@ -1319,15 +1311,16 @@
 
             <div class="chart-container">
                 <h3>Risk Landscape</h3>
+                <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 0.75rem;">Files in the upper-right are both complex and frequently changed -- the most likely sources of bugs. Bubble size reflects overall risk score. Green is low risk, yellow moderate, red high.</p>
                 <div id="hotspotsScatter" style="width:100%;height:400px"></div>
             </div>
 
-            <div class="language-filter" data-target="hotspots-table"></div>
             <div class="table-container">
                 <table id="hotspots-table">
                     <thead>
                         <tr>
                             <th>File</th>
+                            <th>Lang</th>
                             <th><span class="tooltip" data-tooltip="Combined score of churn frequency and code complexity. Higher risk = more likely to have bugs.">Risk</span></th>
                             <th><span class="tooltip" data-tooltip="Number of times this file was modified in the analysis period.">Changes</span></th>
                             <th><span class="tooltip" data-tooltip="Cyclomatic complexity - number of independent paths through the code.">Complexity</span></th>
@@ -1335,8 +1328,9 @@
                     </thead>
                     <tbody>
                         {% for item in Hotspots.files %}
-                        <tr data-language="{{ item.path | lang_from_path }}">
+                        <tr>
                             <td><code>{{ item.path | rel_path(Metadata.paths) | truncate_path(60) }}</code></td>
+                            <td>{{ item.path | lang_from_path }}</td>
                             <td><span class="badge {{ item.hotspot_score | hotspot_badge }}">{{ item.hotspot_score | round(3) }}</span></td>
                             <td>{{ item.commits }}</td>
                             <td>{{ item.avg_cognitive | round(1) }}</td>
@@ -1403,7 +1397,6 @@
             </div>
             {% endif %}
 
-            <div class="language-filter" data-target="cohesion-table"></div>
             <div class="table-container">
                 <table id="cohesion-table">
                     <thead>
@@ -1417,7 +1410,7 @@
                     </thead>
                     <tbody>
                         {% for item in Cohesion.classes %}
-                        <tr data-language="{{ item.language }}">
+                        <tr>
                             <td><code>{{ item.class_name }}</code></td>
                             <td>{{ item.language }}</td>
                             <td><span class="badge {% if item.lcom > 50 %}critical{% elif item.lcom > 20 %}high{% else %}medium{% endif %}">{{ item.lcom }}</span></td>
@@ -1477,7 +1470,7 @@
                     <tbody>
                         {% for item in Smells.smells %}
                         <tr>
-                            <td><span class="tooltip" data-tooltip="{{ item.description }}">{{ item.smell_type | smell_type_label }}</span></td>
+                            <td style="white-space: nowrap;"><span class="tooltip" data-tooltip="{{ item.description }}">{{ item.smell_type | smell_type_label }}</span></td>
                             <td><span class="badge {{ item.severity | lower }}">{{ item.severity }}</span></td>
                             <td>
                                 {% for comp in item.components %}
@@ -1545,12 +1538,12 @@
             {% endif %}
 
             {% if Graph.nodes %}
-            <div class="language-filter" data-target="graph-table"></div>
             <div class="table-container">
                 <table id="graph-table">
                     <thead>
                         <tr>
                             <th>File</th>
+                            <th>Lang</th>
                             <th><span class="tooltip" data-tooltip="Relative importance in the dependency graph. Higher PageRank = more other files depend on this (directly or transitively).">PageRank</span></th>
                             <th><span class="tooltip" data-tooltip="How often this file sits on the shortest path between other files. High betweenness = bottleneck.">Betweenness</span></th>
                             <th><span class="tooltip" data-tooltip="Number of files that import this file.">In</span></th>
@@ -1560,8 +1553,9 @@
                     </thead>
                     <tbody>
                         {% for node in Graph.nodes %}
-                        <tr data-language="{{ node.path | lang_from_path }}">
+                        <tr>
                             <td><code>{{ node.path | rel_path(Metadata.paths) | truncate_path(50) }}</code></td>
+                            <td>{{ node.path | lang_from_path }}</td>
                             <td>{{ node.pagerank | round(4) }}</td>
                             <td>{{ node.betweenness | round(4) }}</td>
                             <td>{{ node.in_degree }}</td>
@@ -1624,7 +1618,6 @@
                 </div>
             </div>
 
-            <div class="language-filter" data-target="satd-table"></div>
             <div class="table-container">
                 <table id="satd-table">
                     <thead>
@@ -1632,16 +1625,20 @@
                             <th><span class="tooltip" data-tooltip="Impact level based on marker type. FIXME/XXX are critical, TODO is high, HACK/TEMP are medium.">Severity</span></th>
                             <th><span class="tooltip" data-tooltip="Type of technical debt: defect (bugs), design (architecture), requirement (missing features), etc.">Category</span></th>
                             <th>File</th>
+                            <th>Lang</th>
                             <th>Line</th>
+                            <th>Comment</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for item in SATD.items %}
-                        <tr data-language="{{ item.file | lang_from_path }}">
+                        <tr>
                             <td><span class="badge {{ item.severity | lower }}">{{ item.severity }}</span></td>
                             <td>{{ item.category }}</td>
                             <td><code>{{ item.file | rel_path(Metadata.paths) | truncate_path(50) }}</code></td>
+                            <td>{{ item.file | lang_from_path }}</td>
                             <td>{{ item.line }}</td>
+                            <td class="cell-overflow" title="{{ item.content }}">{{ item.content }}</td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -1735,12 +1732,12 @@
             {% endif %}
 
             {% if Tdg.files %}
-            <div class="language-filter" data-target="tdg-table"></div>
             <div class="table-container">
                 <table id="tdg-table">
                     <thead>
                         <tr>
                             <th>File</th>
+                            <th>Lang</th>
                             <th><span class="tooltip" data-tooltip="Overall debt score (0-100). Higher is better. Below 60 is failing.">Score</span></th>
                             <th>Grade</th>
                             <th><span class="tooltip" data-tooltip="Cyclomatic complexity contribution (0-20).">Structural</span></th>
@@ -1751,8 +1748,9 @@
                     </thead>
                     <tbody>
                         {% for item in Tdg.files %}
-                        <tr data-language="{{ item.file_path | lang_from_path }}">
+                        <tr>
                             <td><code>{{ item.file_path | rel_path(Metadata.paths) | truncate_path(50) }}</code></td>
+                            <td>{{ item.file_path | lang_from_path }}</td>
                             <td><span class="{{ item.total | round(0) | int | score_class }}">{{ item.total | round(1) }}</span></td>
                             <td><span class="badge {{ item.grade | grade_class }}">{{ item.grade }}</span></td>
                             <td>{{ item.structural_complexity | round(1) }}</td>
@@ -1877,12 +1875,12 @@
             </div>
 
             {% if Churn.files %}
-            <div class="language-filter" data-target="churn-table"></div>
             <div class="table-container">
                 <table id="churn-table">
                     <thead>
                         <tr>
                             <th>File</th>
+                            <th>Lang</th>
                             <th><span class="tooltip" data-tooltip="Number of commits that modified this file in the analysis period.">Changes</span></th>
                             <th><span class="tooltip" data-tooltip="Number of unique authors who modified this file.">Contributors</span></th>
                             <th><span class="tooltip" data-tooltip="Normalized score combining commit frequency and lines changed. Higher = more volatile.">Churn Score</span></th>
@@ -1890,8 +1888,9 @@
                     </thead>
                     <tbody>
                         {% for item in Churn.files %}
-                        <tr data-language="{{ item.file | lang_from_path }}">
+                        <tr>
                             <td><code>{{ item.file }}</code></td>
+                            <td>{{ item.file | lang_from_path }}</td>
                             <td>{{ item.commits }}</td>
                             <td>{{ item.authors | length }}</td>
                             <td><span class="badge {{ item.churn_score | churn_badge }}">{{ item.churn_score | round(3) }}</span></td>
@@ -2014,11 +2013,6 @@
                 <h2>Score Breakdown</h2>
             </div>
             <p class="section-subtitle">How the health score is calculated from individual components</p>
-
-            <div class="chart-container" style="margin-bottom: 1.5rem;">
-                <h3>Component Comparison</h3>
-                <div id="scoreBreakdownChart" style="width:100%;height:250px"></div>
-            </div>
 
             <div class="grid-3">
                 {% if Score.components.complexity is defined %}
@@ -2179,7 +2173,7 @@
         </section>
 
         <footer>
-            <p>Generated {{ Metadata.generated_at }} using <a href="https://github.com/panbanda/omen">Omen</a></p>
+            <p>Generated <span class="human-date" data-iso="{{ Metadata.generated_at }}">{{ Metadata.generated_at }}</span> using <a href="https://github.com/panbanda/omen">Omen</a></p>
         </footer>
     </main>
 
@@ -2258,80 +2252,15 @@
             }
         });
 
-        // Language filter pills for filterable tables
-        const filterableTableIds = ['cohesion-table', 'hotspots-table', 'satd-table', 'churn-table', 'graph-table', 'tdg-table'];
-        filterableTableIds.forEach(tableId => {
-            const filterContainer = document.querySelector('.language-filter[data-target="' + tableId + '"]');
-            const table = document.getElementById(tableId);
-            if (!filterContainer || !table) return;
-
-            const allRows = Array.from(table.querySelectorAll('tbody tr[data-language]'));
-            if (allRows.length === 0) return;
-
-            const langCounts = {};
-            allRows.forEach(row => {
-                const lang = row.getAttribute('data-language');
-                if (lang) langCounts[lang] = (langCounts[lang] || 0) + 1;
-            });
-
-            if (Object.keys(langCounts).length < 2) return;
-
-            const allBtn = document.createElement('button');
-            allBtn.className = 'lang-pill active';
-            allBtn.setAttribute('data-lang', 'all');
-            allBtn.textContent = 'All';
-            filterContainer.appendChild(allBtn);
-
-            Object.keys(langCounts).sort().forEach(lang => {
-                const btn = document.createElement('button');
-                btn.className = 'lang-pill';
-                btn.setAttribute('data-lang', lang);
-                btn.innerHTML = lang + '<span class="lang-count">(' + langCounts[lang] + ')</span>';
-                filterContainer.appendChild(btn);
-            });
-
-            filterContainer.addEventListener('click', function(e) {
-                const pill = e.target.closest('.lang-pill');
-                if (!pill) return;
-
-                const lang = pill.getAttribute('data-lang');
-                const dt = dataTableInstances[tableId];
-                if (!dt) return;
-
-                if (lang === 'all') {
-                    filterContainer.querySelectorAll('.lang-pill').forEach(p => p.classList.remove('active'));
-                    pill.classList.add('active');
-                } else {
-                    filterContainer.querySelector('[data-lang="all"]').classList.remove('active');
-                    pill.classList.toggle('active');
-                    if (!filterContainer.querySelector('.lang-pill.active')) {
-                        filterContainer.querySelector('[data-lang="all"]').classList.add('active');
-                    }
-                }
-
-                const activeLangs = [];
-                filterContainer.querySelectorAll('.lang-pill.active').forEach(p => {
-                    const l = p.getAttribute('data-lang');
-                    if (l !== 'all') activeLangs.push(l);
-                });
-                const showAll = filterContainer.querySelector('[data-lang="all"]').classList.contains('active');
-
-                const currentPerPage = dt.options.perPage;
-                dt.destroy();
-
-                const tbody = table.querySelector('tbody');
-                tbody.innerHTML = '';
-                allRows.forEach(row => {
-                    row.style.display = '';
-                    if (showAll || activeLangs.includes(row.getAttribute('data-language'))) {
-                        tbody.appendChild(row);
-                    }
-                });
-
-                dataTableInstances[tableId] = new simpleDatatables.DataTable(table, Object.assign({}, dataTableConfig, {
-                    perPage: currentPerPage
-                }));
-            });
+        // Format ISO timestamps to human-friendly dates
+        document.querySelectorAll('.human-date').forEach(function(el) {
+            var iso = el.getAttribute('data-iso');
+            if (!iso) return;
+            try {
+                var d = new Date(iso);
+                el.textContent = d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                el.title = iso;
+            } catch (e) {}
         });
 
         // Initialize tooltips with Tippy.js (after DataTables to catch cloned elements)
@@ -2516,87 +2445,7 @@
         })();
         {% endif %}
 
-        // --- 10. Score Breakdown Bar ---
-        (function() {
-            var el = document.getElementById('scoreBreakdownChart');
-            if (!el) return;
-            var chart = initChart(el);
-
-            var components = [];
-            {% if Score.components.complexity is defined %}
-            components.push({ name: 'Complexity (25%)', score: {{ Score.components.complexity }} });
-            {% endif %}
-            {% if Score.components.duplication is defined %}
-            components.push({ name: 'Duplication (20%)', score: {{ Score.components.duplication }} });
-            {% endif %}
-            {% if Score.components.cohesion is defined %}
-            components.push({ name: 'Cohesion (15%)', score: {{ Score.components.cohesion }} });
-            {% endif %}
-            {% if Score.components.tdg is defined %}
-            components.push({ name: 'Debt Gradient (15%)', score: {{ Score.components.tdg }} });
-            {% endif %}
-            {% if Score.components.satd is defined %}
-            components.push({ name: 'Known Debt (10%)', score: {{ Score.components.satd }} });
-            {% endif %}
-            {% if Score.components.coupling is defined %}
-            components.push({ name: 'Coupling (10%)', score: {{ Score.components.coupling }} });
-            {% endif %}
-            {% if Score.components.smells is defined %}
-            components.push({ name: 'Code Smells (5%)', score: {{ Score.components.smells }} });
-            {% endif %}
-
-            components.sort(function(a, b) { return a.score - b.score; });
-
-            function scoreColor(s) {
-                if (s >= 80) return palette.green;
-                if (s >= 60) return palette.yellow;
-                return palette.red;
-            }
-
-            chart.setOption({
-                tooltip: {
-                    trigger: 'axis',
-                    axisPointer: { type: 'shadow' },
-                    formatter: function(params) {
-                        var p = params[0];
-                        return p.name + ': <strong>' + p.value + '</strong>';
-                    }
-                },
-                grid: { left: 140, right: 50, top: 10, bottom: 10 },
-                xAxis: {
-                    type: 'value',
-                    min: 0,
-                    max: 100,
-                    axisLabel: { color: palette.text },
-                    axisLine: { lineStyle: { color: palette.border } },
-                    splitLine: { lineStyle: { color: palette.border, type: 'dashed' } }
-                },
-                yAxis: {
-                    type: 'category',
-                    data: components.map(function(c) { return c.name; }),
-                    axisLabel: { color: palette.text, fontSize: 11 },
-                    axisLine: { lineStyle: { color: palette.border } },
-                    axisTick: { show: false }
-                },
-                series: [{
-                    type: 'bar',
-                    data: components.map(function(c) {
-                        return {
-                            value: c.score,
-                            itemStyle: { color: scoreColor(c.score), borderRadius: [0, 4, 4, 0] }
-                        };
-                    }),
-                    label: {
-                        show: true,
-                        position: 'right',
-                        color: palette.textPrimary,
-                        fontSize: 12,
-                        fontWeight: 'bold'
-                    },
-                    barMaxWidth: 24
-                }]
-            });
-        })();
+        // Score Breakdown Bar chart removed (redundant with component cards below)
     </script>
 
     {% if Trend %}
@@ -2630,17 +2479,40 @@
         var componentAnnotations = {};
         {% endif %}
 
-        // Populate Notable Events descriptions from component annotations
+        // Build a period-to-commits lookup from trend data
+        var notableCommitsByPeriod = {};
+        var trendPointCommits = [
+            {% for p in Trend.points %}
+            {% if p.notable_commits %}{ date: '{{ p.date }}', commits: {{ p.notable_commits | tojson }} }{% if not loop.last %},{% endif %}
+            {% endif %}
+            {% endfor %}
+        ];
+        trendPointCommits.forEach(function(pt) {
+            var key = pt.date.substring(0, 7);
+            if (!notableCommitsByPeriod[key]) notableCommitsByPeriod[key] = [];
+            notableCommitsByPeriod[key] = notableCommitsByPeriod[key].concat(pt.commits);
+        });
+
+        // Populate Notable Events descriptions from component annotations, falling back to commit messages
         document.querySelectorAll('#notable-events-table tbody tr[data-period]').forEach(function(row) {
             var period = row.getAttribute('data-period');
             var driver = row.getAttribute('data-driver').toLowerCase();
             var descCell = row.querySelector('.event-description');
             if (!descCell) return;
             var annotations = componentAnnotations[driver];
-            if (!annotations) return;
-            var match = annotations.find(function(a) { return a.date === period; });
-            if (match) {
-                descCell.innerHTML = marked.parse(match.description);
+            if (annotations) {
+                var match = annotations.find(function(a) { return a.date === period; });
+                if (match) {
+                    descCell.innerHTML = marked.parse(match.description);
+                    return;
+                }
+            }
+            // Fallback: show notable commits for this period
+            var commits = notableCommitsByPeriod[period];
+            if (commits && commits.length > 0) {
+                descCell.classList.add('event-commits');
+                descCell.title = commits.join('\n');
+                descCell.textContent = commits.slice(0, 3).join('; ');
             }
         });
 
@@ -2690,6 +2562,7 @@
             chart.setOption({
                 tooltip: {
                     trigger: 'axis',
+                    extraCssText: 'max-width: 420px; white-space: normal; word-wrap: break-word;',
                     formatter: function(params) {
                         var idx = params[0].dataIndex;
                         var rawDate = trendsData.rawLabels[idx];
@@ -2811,6 +2684,7 @@
             chart.setOption({
                 tooltip: {
                     trigger: 'axis',
+                    extraCssText: 'max-width: 420px; white-space: normal; word-wrap: break-word;',
                     formatter: function(params) {
                         var idx = params[0].dataIndex;
                         var rawDate = componentLabelsRaw[idx];
@@ -2847,8 +2721,6 @@
                 },
                 yAxis: {
                     type: 'value',
-                    min: 50,
-                    max: 100,
                     name: 'Score',
                     nameTextStyle: { color: palette.text },
                     axisLabel: { color: palette.text },

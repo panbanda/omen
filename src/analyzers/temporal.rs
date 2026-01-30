@@ -95,6 +95,29 @@ impl Analyzer {
 
     /// Analyzes temporal coupling using an existing git repo.
     fn analyze_with_git(&self, git_repo: &GitRepo, _root: &Path) -> Result<Analysis> {
+        self.analyze_with_git_filtered(git_repo, _root, false, &[])
+    }
+
+    /// Analyzes temporal coupling with optional test file exclusion.
+    fn analyze_with_git_filtered(
+        &self,
+        git_repo: &GitRepo,
+        _root: &Path,
+        exclude_tests: bool,
+        exclude_patterns: &[String],
+    ) -> Result<Analysis> {
+        let exclude_globs = if !exclude_patterns.is_empty() {
+            let mut builder = globset::GlobSetBuilder::new();
+            for pat in exclude_patterns {
+                if let Ok(g) = globset::Glob::new(pat) {
+                    builder.add(g);
+                }
+            }
+            builder.build().ok()
+        } else {
+            None
+        };
+
         // Format since for git log (git accepts "N days" format)
         let since_str = format!("{} days", self.config.days);
 
@@ -111,6 +134,17 @@ impl Analyzer {
                 .files
                 .iter()
                 .map(|f| f.path.to_string_lossy().to_string())
+                .filter(|f| {
+                    if exclude_tests && is_test_file(f) {
+                        return false;
+                    }
+                    if let Some(ref gs) = exclude_globs {
+                        if gs.is_match(f) {
+                            return false;
+                        }
+                    }
+                    true
+                })
                 .collect();
 
             // Update individual file commit counts
@@ -191,7 +225,9 @@ impl AnalyzerTrait for Analyzer {
             .ok_or_else(|| Error::git("Temporal coupling analysis requires git history"))?;
 
         let git_repo = GitRepo::open(git_path)?;
-        self.analyze_with_git(&git_repo, ctx.root)
+        let exclude_tests = ctx.config.temporal.exclude_tests;
+        let exclude_patterns = &ctx.config.exclude_patterns;
+        self.analyze_with_git_filtered(&git_repo, ctx.root, exclude_tests, exclude_patterns)
     }
 }
 
@@ -310,6 +346,51 @@ pub struct Summary {
     pub max_coupling_strength: f64,
     /// Total number of files analyzed.
     pub total_files_analyzed: usize,
+}
+
+/// Returns true if the path looks like a test file.
+fn is_test_file(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    let parts: Vec<&str> = lower.split('/').collect();
+
+    // Directory-based patterns
+    for part in &parts {
+        match *part {
+            "test" | "tests" | "spec" | "specs" | "__tests__" | "__mocks__" | "test_helpers"
+            | "testdata" | "fixtures" => return true,
+            _ => {}
+        }
+        // Java/Maven convention: src/test/...
+        if *part == "src" {
+            if let Some(next_idx) = parts.iter().position(|p| *p == *part) {
+                if parts.get(next_idx + 1) == Some(&"test") {
+                    return true;
+                }
+            }
+        }
+    }
+
+    // Filename-based patterns
+    if let Some(filename) = parts.last() {
+        // _test.go, _test.rb, etc.
+        if filename.contains("_test.") || filename.contains("_spec.") {
+            return true;
+        }
+        // test_*.py
+        if filename.starts_with("test_") {
+            return true;
+        }
+        // *.test.ts, *.spec.js, etc.
+        let dot_parts: Vec<&str> = filename.split('.').collect();
+        if dot_parts.len() >= 3 {
+            let second_last = dot_parts[dot_parts.len() - 2];
+            if second_last == "test" || second_last == "spec" {
+                return true;
+            }
+        }
+    }
+
+    false
 }
 
 #[cfg(test)]
@@ -607,5 +688,105 @@ mod tests {
             result.summary.total_files_analyzed > 0 || !result.couplings.is_empty(),
             "temporal analysis should process file changes from git history"
         );
+    }
+
+    #[test]
+    fn test_is_test_file_go() {
+        assert!(is_test_file("pkg/auth/handler_test.go"));
+        assert!(is_test_file("internal/service_test.go"));
+        assert!(!is_test_file("pkg/auth/handler.go"));
+        assert!(!is_test_file("cmd/server/main.go"));
+    }
+
+    #[test]
+    fn test_is_test_file_rust() {
+        // Rust inline tests (#[cfg(test)]) are in the same file, so not detected
+        // here. But integration tests in tests/ directory are.
+        assert!(is_test_file("tests/integration.rs"));
+        assert!(is_test_file("tests/common/mod.rs"));
+        assert!(!is_test_file("src/lib.rs"));
+        assert!(!is_test_file("src/analyzers/temporal.rs"));
+    }
+
+    #[test]
+    fn test_is_test_file_python() {
+        assert!(is_test_file("tests/test_auth.py"));
+        assert!(is_test_file("test_utils.py"));
+        assert!(is_test_file("tests/unit/test_models.py"));
+        assert!(!is_test_file("src/auth.py"));
+        assert!(!is_test_file("app/models.py"));
+    }
+
+    #[test]
+    fn test_is_test_file_typescript_javascript() {
+        assert!(is_test_file("src/components/Button.test.tsx"));
+        assert!(is_test_file("src/utils/helpers.spec.ts"));
+        assert!(is_test_file("lib/api.test.js"));
+        assert!(is_test_file("__tests__/App.test.jsx"));
+        assert!(!is_test_file("src/components/Button.tsx"));
+        assert!(!is_test_file("src/index.ts"));
+        assert!(!is_test_file("lib/api.js"));
+    }
+
+    #[test]
+    fn test_is_test_file_java() {
+        assert!(is_test_file("src/test/java/com/example/FooTest.java"));
+        assert!(is_test_file("test/com/example/BarTest.java"));
+        assert!(!is_test_file("src/main/java/com/example/Foo.java"));
+        assert!(!is_test_file("src/App.java"));
+    }
+
+    #[test]
+    fn test_is_test_file_ruby() {
+        assert!(is_test_file("spec/models/user_spec.rb"));
+        assert!(is_test_file("spec/controllers/auth_spec.rb"));
+        assert!(is_test_file("test/models/user_test.rb"));
+        assert!(!is_test_file("app/models/user.rb"));
+        assert!(!is_test_file("lib/auth.rb"));
+    }
+
+    #[test]
+    fn test_is_test_file_c_cpp_csharp() {
+        assert!(is_test_file("tests/test_parser.c"));
+        assert!(is_test_file("test/memory_test.cpp"));
+        assert!(is_test_file("tests/unit/allocator_test.c"));
+        assert!(!is_test_file("src/parser.c"));
+        assert!(!is_test_file("src/memory.cpp"));
+        assert!(!is_test_file("src/Services/Auth.cs"));
+    }
+
+    #[test]
+    fn test_is_test_file_php() {
+        assert!(is_test_file("tests/Unit/AuthTest.php"));
+        assert!(is_test_file("tests/Feature/LoginTest.php"));
+        assert!(!is_test_file("app/Http/Controllers/AuthController.php"));
+        assert!(!is_test_file("src/Service.php"));
+    }
+
+    #[test]
+    fn test_is_test_file_bash() {
+        assert!(is_test_file("test/setup.sh"));
+        assert!(is_test_file("tests/run_tests.sh"));
+        assert!(!is_test_file("scripts/deploy.sh"));
+        assert!(!is_test_file("bin/start.sh"));
+    }
+
+    #[test]
+    fn test_is_test_file_fixtures_and_mocks() {
+        assert!(is_test_file("__mocks__/api.ts"));
+        assert!(is_test_file("fixtures/data.json"));
+        assert!(is_test_file("testdata/sample.txt"));
+    }
+
+    #[test]
+    fn test_is_test_file_non_test_across_languages() {
+        assert!(!is_test_file("src/main.rs"));
+        assert!(!is_test_file("lib/auth.py"));
+        assert!(!is_test_file("app/models/user.rb"));
+        assert!(!is_test_file("src/components/Button.tsx"));
+        assert!(!is_test_file("cmd/server/main.go"));
+        assert!(!is_test_file("internal/handler.go"));
+        assert!(!is_test_file("pkg/service.go"));
+        assert!(!is_test_file("src/main/java/App.java"));
     }
 }

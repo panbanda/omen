@@ -555,18 +555,13 @@ impl Analyzer {
                 .map(|o| o.status.success())
                 .unwrap_or(false);
 
-        // Pre-cache git log results for all unique files using bulk CLI call
-        let mut git_cache: HashMap<String, (Option<i64>, Option<i64>)> = HashMap::new();
-        if has_git {
-            let unique_files: std::collections::HashSet<_> = flags_map
-                .values()
-                .flatten()
-                .map(|r| r.file.clone())
-                .collect();
-            if !unique_files.is_empty() {
-                git_cache = bulk_git_file_timestamps(ctx.root, &unique_files);
-            }
-        }
+        // Pre-cache git log -S results for each flag key to find actual introduction dates
+        let flag_timestamps: HashMap<String, (Option<i64>, Option<i64>)> = if has_git {
+            let keys: Vec<String> = flags_map.keys().cloned().collect();
+            bulk_git_flag_timestamps(ctx.root, &keys)
+        } else {
+            HashMap::new()
+        };
 
         for (key, refs) in flags_map {
             let provider = refs.first().map(|r| r.provider.clone()).unwrap_or_default();
@@ -576,9 +571,9 @@ impl Analyzer {
                 .collect::<std::collections::HashSet<_>>()
                 .len();
 
-            // Calculate staleness from cached git data
+            // Calculate staleness from flag-level git pickaxe data
             let (first_seen, last_seen, age_days, stale) = if has_git {
-                calculate_staleness_from_cache(&git_cache, &refs, expected_ttl_days)
+                calculate_staleness_from_flag_timestamps(&flag_timestamps, &key, expected_ttl_days)
             } else {
                 (None, None, 0, false)
             };
@@ -676,50 +671,6 @@ impl Analyzer {
     }
 }
 
-/// Calculate staleness from cached git history.
-fn calculate_staleness_from_cache(
-    cache: &HashMap<String, (Option<i64>, Option<i64>)>,
-    refs: &[FlagReference],
-    expected_ttl_days: u32,
-) -> (Option<String>, Option<String>, u32, bool) {
-    let mut first_seen: Option<chrono::DateTime<chrono::Utc>> = None;
-    let mut last_seen: Option<chrono::DateTime<chrono::Utc>> = None;
-
-    for reference in refs {
-        if let Some((first_ts, last_ts)) = cache.get(&reference.file) {
-            if let Some(ts) = first_ts {
-                let commit_time = chrono::TimeZone::timestamp_opt(&Utc, *ts, 0)
-                    .single()
-                    .unwrap_or_else(Utc::now);
-                if first_seen.is_none_or(|f| commit_time < f) {
-                    first_seen = Some(commit_time);
-                }
-            }
-            if let Some(ts) = last_ts {
-                let commit_time = chrono::TimeZone::timestamp_opt(&Utc, *ts, 0)
-                    .single()
-                    .unwrap_or_else(Utc::now);
-                if last_seen.is_none_or(|l| commit_time > l) {
-                    last_seen = Some(commit_time);
-                }
-            }
-        }
-    }
-
-    let age_days = first_seen
-        .map(|fs| (Utc::now() - fs).num_days().max(0) as u32)
-        .unwrap_or(0);
-
-    let stale = age_days > expected_ttl_days;
-
-    (
-        first_seen.map(|t| t.to_rfc3339()),
-        last_seen.map(|t| t.to_rfc3339()),
-        age_days,
-        stale,
-    )
-}
-
 /// Calculate summary statistics.
 fn calculate_summary(flags: &[FeatureFlag]) -> AnalysisSummary {
     let mut by_provider: HashMap<String, usize> = HashMap::new();
@@ -739,58 +690,59 @@ fn calculate_summary(flags: &[FeatureFlag]) -> AnalysisSummary {
     }
 }
 
-/// Get first/last commit timestamps for a set of files using a single git CLI call.
-///
-/// Runs `git log --format=COMMIT:%at --name-only` once and builds a map of
-/// file -> (first_timestamp, last_timestamp) from the output. This is orders of
-/// magnitude faster than calling gix repo.log() per file, which does a tree diff
-/// for every commit in the repository per file.
-fn bulk_git_file_timestamps(
+/// Find the actual introduction and last-modified timestamps for each flag key
+/// using `git log -S` (pickaxe search) to find commits that added/removed the flag text.
+fn bulk_git_flag_timestamps(
     root: &std::path::Path,
-    files: &std::collections::HashSet<String>,
+    keys: &[String],
 ) -> HashMap<String, (Option<i64>, Option<i64>)> {
-    let mut cache: HashMap<String, (Option<i64>, Option<i64>)> = HashMap::new();
+    use rayon::prelude::*;
 
-    let output = std::process::Command::new("git")
-        .current_dir(root)
-        .args(["log", "--format=COMMIT:%at", "--name-only"])
-        .output();
+    keys.par_iter()
+        .map(|key| {
+            let output = std::process::Command::new("git")
+                .current_dir(root)
+                .args(["log", "--all", "--format=%at", "-S", key])
+                .output();
 
-    let output = match output {
-        Ok(o) if o.status.success() => o,
-        _ => return cache,
-    };
+            let timestamps: Vec<i64> = match output {
+                Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .filter_map(|l| l.trim().parse::<i64>().ok())
+                    .collect(),
+                _ => Vec::new(),
+            };
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut current_timestamp: Option<i64> = None;
+            let first = timestamps.iter().copied().min();
+            let last = timestamps.iter().copied().max();
+            (key.clone(), (first, last))
+        })
+        .collect()
+}
 
-    for line in stdout.lines() {
-        if line.is_empty() {
-            continue;
-        }
-        if let Some(ts_str) = line.strip_prefix("COMMIT:") {
-            current_timestamp = ts_str.parse().ok();
-        } else if let Some(ts) = current_timestamp {
-            // This is a file path line; only track files we care about
-            if files.contains(line) {
-                let entry = cache.entry(line.to_string()).or_insert((None, None));
-                // Commits are newest-first, so first seen is updated to older timestamps
-                match entry.0 {
-                    Some(existing) if ts < existing => entry.0 = Some(ts),
-                    None => entry.0 = Some(ts),
-                    _ => {}
-                }
-                // Last seen is updated to newer timestamps
-                match entry.1 {
-                    Some(existing) if ts > existing => entry.1 = Some(ts),
-                    None => entry.1 = Some(ts),
-                    _ => {}
-                }
-            }
-        }
-    }
+/// Calculate staleness from flag-level pickaxe timestamps.
+fn calculate_staleness_from_flag_timestamps(
+    timestamps: &HashMap<String, (Option<i64>, Option<i64>)>,
+    key: &str,
+    expected_ttl_days: u32,
+) -> (Option<String>, Option<String>, u32, bool) {
+    let (first_ts, last_ts) = timestamps.get(key).copied().unwrap_or((None, None));
 
-    cache
+    let first_seen = first_ts.and_then(|ts| chrono::TimeZone::timestamp_opt(&Utc, ts, 0).single());
+    let last_seen = last_ts.and_then(|ts| chrono::TimeZone::timestamp_opt(&Utc, ts, 0).single());
+
+    let age_days = first_seen
+        .map(|fs| (Utc::now() - fs).num_days().max(0) as u32)
+        .unwrap_or(0);
+
+    let stale = age_days > expected_ttl_days;
+
+    (
+        first_seen.map(|t| t.to_rfc3339()),
+        last_seen.map(|t| t.to_rfc3339()),
+        age_days,
+        stale,
+    )
 }
 
 /// Internal flag reference during collection.
