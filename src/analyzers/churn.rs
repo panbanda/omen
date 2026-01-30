@@ -80,11 +80,15 @@ impl AnalyzerTrait for Analyzer {
         // Open repository with gix
         let repo = GitRepo::open(git_path)?;
 
-        // Calculate since date
-        let since = format!("{} days", self.days);
+        // Calculate since date (u32::MAX means "all history" -- no time limit)
+        let since = if self.days == u32::MAX {
+            None
+        } else {
+            Some(format!("{} days", self.days))
+        };
 
         // Get commits with file changes using gix
-        let commits = repo.log_with_stats(Some(&since), None)?;
+        let commits = repo.log_with_stats(since.as_deref(), None)?;
 
         // Convert to file metrics
         let file_metrics = commits_to_file_metrics(&commits);

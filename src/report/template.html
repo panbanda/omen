@@ -1402,6 +1402,7 @@
                     <thead>
                         <tr>
                             <th>Class</th>
+                            <th>File</th>
                             <th>Language</th>
                             <th><span class="tooltip" data-tooltip="Lack of Cohesion of Methods. Higher values indicate a class is doing too many unrelated things and should be split.">LCOM</span></th>
                             <th><span class="tooltip" data-tooltip="Weighted Methods per Class. Sum of complexity of all methods. High values indicate overly complex classes.">WMC</span></th>
@@ -1412,6 +1413,7 @@
                         {% for item in Cohesion.classes %}
                         <tr>
                             <td><code>{{ item.class_name }}</code></td>
+                            <td title="{{ item.path }}">{{ item.path | truncate_path(40) }}</td>
                             <td>{{ item.language }}</td>
                             <td><span class="badge {% if item.lcom > 50 %}critical{% elif item.lcom > 20 %}high{% else %}medium{% endif %}">{{ item.lcom }}</span></td>
                             <td>{{ item.wmc }}</td>
