@@ -1,5 +1,19 @@
 # Changelog
 
+## [4.17.0](https://github.com/panbanda/omen/compare/omen-v4.16.0...omen-v4.17.0) (2026-01-30)
+
+
+### Features
+
+* **report:** improve HTML report UX and fix analyzer accuracy ([2ae8052](https://github.com/panbanda/omen/commit/2ae80522c3dca18ffb9e4b33da47930ee7c254e3))
+* **report:** improve HTML report UX and fix analyzer accuracy ([009e99c](https://github.com/panbanda/omen/commit/009e99c336b405e80717e6c00efd875733ef7faf))
+
+
+### Bug Fixes
+
+* default --since to full history, fix plugin cohesion ([7fb09cb](https://github.com/panbanda/omen/commit/7fb09cbe54333c9c13c6ee47b6f6314258e35beb))
+* default --since to full history, fix plugin cohesion issues ([406790b](https://github.com/panbanda/omen/commit/406790b15eb4536bec95109ba0cf29ef7a7a5291))
+
 ## [4.16.0](https://github.com/panbanda/omen/compare/omen-v4.15.0...omen-v4.16.0) (2026-01-30)
 
 
