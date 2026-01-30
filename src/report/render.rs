@@ -203,7 +203,7 @@ impl Renderer {
                 .iter()
                 .map(|c| OwnerInfo {
                     name: c.name.clone(),
-                    files_owned: c.files,
+                    files_owned: c.files_owned,
                 })
                 .collect();
             data.ownership = Some(ownership);
