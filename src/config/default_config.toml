@@ -1,6 +1,9 @@
 # Omen Configuration
 # See https://github.com/panbanda/omen for documentation
 
+# Exclude built/minified assets (*.min.js, *.bundle.js, *.chunk.js, etc.)
+exclude_built_assets = true
+
 # File exclusion patterns (glob)
 exclude = [
     "**/vendor/**",
@@ -9,7 +12,6 @@ exclude = [
     "**/target/**",
     "**/dist/**",
     "**/build/**",
-    "**/*.min.js",
     "**/*.generated.*",
 ]
 

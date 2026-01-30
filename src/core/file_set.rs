@@ -25,12 +25,16 @@ pub struct FileSet {
 impl FileSet {
     /// Create a file set from a directory path.
     pub fn from_path(path: impl AsRef<Path>, config: &Config) -> Result<Self> {
-        Self::from_path_with_patterns(path, config.exclude_patterns.clone())
+        Self::from_path_with_patterns(
+            path,
+            config.exclude_patterns.clone(),
+            config.exclude_built_assets,
+        )
     }
 
     /// Create a file set from a directory path without config.
     pub fn from_path_default(path: impl AsRef<Path>) -> Result<Self> {
-        Self::from_path_with_patterns(path, Vec::new())
+        Self::from_path_with_patterns(path, Vec::new(), true)
     }
 
     /// Create a file set from an existing list of files.
@@ -61,6 +65,10 @@ impl FileSet {
                 if Language::detect(path).is_none() {
                     return false;
                 }
+                // Exclude built/minified assets
+                if config.exclude_built_assets && is_built_asset(path) {
+                    return false;
+                }
                 // Check exclude patterns
                 let path_str = path.to_string_lossy();
                 !exclude_globs.is_match(&*path_str)
@@ -76,6 +84,7 @@ impl FileSet {
     pub fn from_path_with_patterns(
         path: impl AsRef<Path>,
         exclude_patterns: Vec<String>,
+        exclude_built_assets: bool,
     ) -> Result<Self> {
         let root = path.as_ref().canonicalize()?;
 
@@ -115,6 +124,10 @@ impl FileSet {
                 let path = entry.path();
 
                 if Language::detect(path).is_none() {
+                    return WalkState::Continue;
+                }
+
+                if exclude_built_assets && is_built_asset(path) {
                     return WalkState::Continue;
                 }
 
@@ -285,6 +298,33 @@ impl<'a> IntoIterator for &'a FileSet {
     }
 }
 
+/// Check if a file path is a built/minified asset.
+///
+/// Detects JS/TS family files with `.min.`, `.bundle.`, or `.chunk.` segments
+/// before the final extension (e.g. `lodash.min.js`, `vendor.bundle.mjs`).
+fn is_built_asset(path: &Path) -> bool {
+    const BUILT_SUFFIXES: &[&str] = &[".min", ".bundle", ".chunk"];
+    const JS_TS_EXTENSIONS: &[&str] = &["js", "mjs", "cjs", "jsx", "ts", "tsx", "mts", "cts"];
+
+    let file_name = match path.file_name().and_then(|n| n.to_str()) {
+        Some(name) => name,
+        None => return false,
+    };
+
+    // Check the real extension is JS/TS family
+    let ext = match path.extension().and_then(|e| e.to_str()) {
+        Some(e) => e,
+        None => return false,
+    };
+    if !JS_TS_EXTENSIONS.contains(&ext) {
+        return false;
+    }
+
+    // Strip the real extension, then check if the remaining stem ends with a built suffix
+    let stem = &file_name[..file_name.len() - ext.len() - 1];
+    BUILT_SUFFIXES.iter().any(|suffix| stem.ends_with(suffix))
+}
+
 /// Build a compiled GlobSet from a list of patterns.
 /// Invalid patterns are silently skipped.
 fn build_glob_set(patterns: &[String]) -> GlobSet {
@@ -428,7 +468,7 @@ mod tests {
         std::fs::write(target_dir.join("generated.rs"), "").unwrap();
 
         let file_set =
-            FileSet::from_path_with_patterns(temp.path(), vec!["**/target/**".to_string()])
+            FileSet::from_path_with_patterns(temp.path(), vec!["**/target/**".to_string()], true)
                 .unwrap();
 
         // Only src/main.rs should be included
@@ -662,6 +702,7 @@ mod tests {
         let file_set = FileSet::from_path_with_patterns(
             temp.path(),
             vec!["tests/**".to_string(), "benches/**".to_string()],
+            true,
         )
         .unwrap();
 
@@ -701,5 +742,130 @@ mod tests {
             .files()
             .iter()
             .any(|p| p == Path::new("src/main.rs")));
+    }
+
+    #[test]
+    fn test_is_built_asset() {
+        // Minified JS
+        assert!(is_built_asset(Path::new("lodash.min.js")));
+        assert!(is_built_asset(Path::new("vendor.min.mjs")));
+        assert!(is_built_asset(Path::new("app.min.cjs")));
+        assert!(is_built_asset(Path::new("react.min.jsx")));
+        assert!(is_built_asset(Path::new("utils.min.ts")));
+        assert!(is_built_asset(Path::new("utils.min.tsx")));
+        assert!(is_built_asset(Path::new("utils.min.mts")));
+        assert!(is_built_asset(Path::new("utils.min.cts")));
+
+        // Bundled JS
+        assert!(is_built_asset(Path::new("vendor.bundle.js")));
+        assert!(is_built_asset(Path::new("app.bundle.mjs")));
+        assert!(is_built_asset(Path::new("main.bundle.cjs")));
+
+        // Webpack chunks
+        assert!(is_built_asset(Path::new("0.chunk.js")));
+        assert!(is_built_asset(Path::new("main.chunk.mjs")));
+
+        // Paths with directories
+        assert!(is_built_asset(Path::new("dist/vendor.min.js")));
+        assert!(is_built_asset(Path::new("public/js/app.bundle.js")));
+
+        // Not built assets
+        assert!(!is_built_asset(Path::new("main.js")));
+        assert!(!is_built_asset(Path::new("utils.ts")));
+        assert!(!is_built_asset(Path::new("app.tsx")));
+        assert!(!is_built_asset(Path::new("index.mjs")));
+        assert!(!is_built_asset(Path::new("lib.rs")));
+        assert!(!is_built_asset(Path::new("main.go")));
+        assert!(!is_built_asset(Path::new("script.py")));
+        assert!(!is_built_asset(Path::new("README.md")));
+
+        // .min in non-JS/TS files should not match
+        assert!(!is_built_asset(Path::new("something.min.css")));
+        assert!(!is_built_asset(Path::new("data.min.json")));
+    }
+
+    #[test]
+    fn test_file_set_excludes_built_assets() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("app.js"), "").unwrap();
+        std::fs::write(temp.path().join("lodash.min.js"), "").unwrap();
+        std::fs::write(temp.path().join("vendor.bundle.js"), "").unwrap();
+        std::fs::write(temp.path().join("0.chunk.js"), "").unwrap();
+
+        let file_set = FileSet::from_path_with_patterns(temp.path(), Vec::new(), true).unwrap();
+        assert_eq!(file_set.len(), 1);
+        assert!(file_set.files()[0].to_string_lossy().contains("app.js"));
+    }
+
+    #[test]
+    fn test_file_set_includes_built_assets_when_disabled() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("app.js"), "").unwrap();
+        std::fs::write(temp.path().join("lodash.min.js"), "").unwrap();
+        std::fs::write(temp.path().join("vendor.bundle.js"), "").unwrap();
+
+        let file_set = FileSet::from_path_with_patterns(temp.path(), Vec::new(), false).unwrap();
+        assert_eq!(file_set.len(), 3);
+    }
+
+    #[test]
+    fn test_file_set_tree_source_excludes_built_assets() {
+        use crate::core::TreeSource;
+        use std::process::Command;
+
+        let temp = tempfile::tempdir().unwrap();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(temp.path())
+            .output()
+            .expect("failed to init");
+        Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(temp.path())
+            .output()
+            .expect("failed to config email");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(temp.path())
+            .output()
+            .expect("failed to config name");
+
+        std::fs::write(temp.path().join("app.js"), "function app() {}").unwrap();
+        std::fs::write(temp.path().join("lodash.min.js"), "minified code").unwrap();
+        std::fs::write(temp.path().join("vendor.bundle.js"), "bundled code").unwrap();
+
+        Command::new("git")
+            .args(["add", "-f", "."])
+            .current_dir(temp.path())
+            .output()
+            .expect("failed to add");
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(temp.path())
+            .output()
+            .expect("failed to commit");
+        let output = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(temp.path())
+            .output()
+            .expect("failed to get HEAD");
+        let sha = String::from_utf8(output.stdout).unwrap().trim().to_string();
+
+        let tree_source = TreeSource::new(temp.path(), &sha).unwrap();
+
+        // With exclude_built_assets enabled (default)
+        let config = Config::default();
+        let file_set = FileSet::from_tree_source(&tree_source, &config).unwrap();
+        assert_eq!(file_set.len(), 1);
+        assert!(file_set.files()[0].to_string_lossy().contains("app.js"));
+
+        // With exclude_built_assets disabled
+        let config_disabled = Config {
+            exclude_built_assets: false,
+            ..Config::default()
+        };
+        let file_set = FileSet::from_tree_source(&tree_source, &config_disabled).unwrap();
+        assert_eq!(file_set.len(), 3);
     }
 }
