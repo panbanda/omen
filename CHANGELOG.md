@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.18.1](https://github.com/panbanda/omen/compare/omen-v4.18.0...omen-v4.18.1) (2026-01-30)
+
+
+### Bug Fixes
+
+* complexity score granularity and report annotation display ([28aa81c](https://github.com/panbanda/omen/commit/28aa81cfedec7e09b26cb120e170877652c0e647))
+* complexity score granularity, report annotation display ([9b427d4](https://github.com/panbanda/omen/commit/9b427d468572c1a9eca5ecbfe88963dac015e603))
+
 ## [4.18.0](https://github.com/panbanda/omen/compare/omen-v4.17.1...omen-v4.18.0) (2026-01-30)
 
 
