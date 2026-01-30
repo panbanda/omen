@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::core::Result;
 
 /// Main configuration structure.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     /// Exclude patterns (glob).
@@ -31,6 +31,26 @@ pub struct Config {
     pub temporal: TemporalConfig,
     /// Output configuration.
     pub output: OutputConfig,
+    /// Exclude built/minified assets (e.g. *.min.js) from analysis.
+    pub exclude_built_assets: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            exclude_patterns: Vec::new(),
+            complexity: ComplexityConfig::default(),
+            satd: SatdConfig::default(),
+            churn: ChurnConfig::default(),
+            duplicates: DuplicatesConfig::default(),
+            hotspot: HotspotConfig::default(),
+            score: ScoreConfig::default(),
+            feature_flags: FeatureFlagsConfig::default(),
+            temporal: TemporalConfig::default(),
+            output: OutputConfig::default(),
+            exclude_built_assets: true,
+        }
+    }
 }
 
 impl Config {
@@ -303,6 +323,27 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.complexity.cyclomatic_warn, 10);
         assert_eq!(config.churn.top, 20);
+        assert!(config.exclude_built_assets);
+    }
+
+    #[test]
+    fn test_exclude_built_assets_default_true() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("omen.toml");
+        std::fs::write(&config_path, "").unwrap();
+
+        let config = Config::from_file(&config_path).unwrap();
+        assert!(config.exclude_built_assets);
+    }
+
+    #[test]
+    fn test_exclude_built_assets_opt_out() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("omen.toml");
+        std::fs::write(&config_path, "exclude_built_assets = false").unwrap();
+
+        let config = Config::from_file(&config_path).unwrap();
+        assert!(!config.exclude_built_assets);
     }
 
     #[test]
