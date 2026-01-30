@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.19.0](https://github.com/panbanda/omen/compare/omen-v4.18.1...omen-v4.19.0) (2026-01-30)
+
+
+### Features
+
+* default report to 1y, add --samples for trend resolution ([70eab85](https://github.com/panbanda/omen/commit/70eab85ea4491964031dc78f8ca205e3524e3ea5))
+* default report to 1y, add --samples for trend resolution ([0f58bf4](https://github.com/panbanda/omen/commit/0f58bf40529c577899da620b2d9e8348e693346b))
+
 ## [4.18.1](https://github.com/panbanda/omen/compare/omen-v4.18.0...omen-v4.18.1) (2026-01-30)
 
 
