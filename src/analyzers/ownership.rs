@@ -343,14 +343,21 @@ fn calculate_bus_factor(contributor_lines: &HashMap<String, u32>) -> usize {
     sorted.len()
 }
 
-/// Gets top N contributors by total lines.
-fn get_top_contributors(contributor_lines: &HashMap<String, u32>, n: usize) -> Vec<String> {
-    let mut sorted: Vec<_> = contributor_lines.iter().collect();
-    sorted.sort_by(|a, b| b.1.cmp(a.1));
+/// Gets top N contributors by files owned (primary owner count).
+fn get_top_contributors(files: &[FileOwnership], n: usize) -> Vec<TopContributor> {
+    let mut owner_counts: HashMap<String, usize> = HashMap::new();
+    for file in files {
+        *owner_counts.entry(file.primary_owner.clone()).or_insert(0) += 1;
+    }
+    let mut sorted: Vec<_> = owner_counts.into_iter().collect();
+    sorted.sort_by(|a, b| b.1.cmp(&a.1));
     sorted
         .into_iter()
         .take(n)
-        .map(|(name, _)| name.clone())
+        .map(|(name, count)| TopContributor {
+            name,
+            files_owned: count,
+        })
         .collect()
 }
 
@@ -373,7 +380,7 @@ fn calculate_summary(files: &[FileOwnership], all_contributors: &HashMap<String,
     let max_concentration = files.iter().map(|f| f.concentration).fold(0.0, f64::max);
 
     let bus_factor = calculate_bus_factor(all_contributors);
-    let top_contributors = get_top_contributors(all_contributors, 5);
+    let top_contributors = get_top_contributors(files, 5);
 
     Summary {
         total_files,
@@ -452,6 +459,13 @@ impl std::fmt::Display for RiskLevel {
     }
 }
 
+/// A top contributor with file ownership count.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TopContributor {
+    pub name: String,
+    pub files_owned: usize,
+}
+
 /// Aggregate statistics for ownership analysis.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Summary {
@@ -467,8 +481,8 @@ pub struct Summary {
     pub avg_contributors: f64,
     /// Maximum concentration across all files.
     pub max_concentration: f64,
-    /// Top contributors by total lines.
-    pub top_contributors: Vec<String>,
+    /// Top contributors by files owned.
+    pub top_contributors: Vec<TopContributor>,
 }
 
 #[cfg(test)]
@@ -612,28 +626,52 @@ mod tests {
         assert_eq!(calculate_bus_factor(&contributors), 1);
     }
 
+    fn make_file(path: &str, owner: &str) -> FileOwnership {
+        FileOwnership {
+            path: path.to_string(),
+            primary_owner: owner.to_string(),
+            ownership_percent: 100.0,
+            concentration: 1.0,
+            total_lines: 100,
+            contributors: vec![Contributor {
+                name: owner.to_string(),
+                email: format!("{}@test.com", owner.to_lowercase()),
+                lines_owned: 100,
+                percentage: 100.0,
+            }],
+            is_silo: true,
+            risk_level: RiskLevel::Low,
+        }
+    }
+
     #[test]
     fn test_get_top_contributors() {
-        let mut contributors = HashMap::new();
-        contributors.insert("Alice".to_string(), 100);
-        contributors.insert("Bob".to_string(), 50);
-        contributors.insert("Carol".to_string(), 25);
-        contributors.insert("Dave".to_string(), 10);
+        let files = vec![
+            make_file("a.rs", "Alice"),
+            make_file("b.rs", "Alice"),
+            make_file("c.rs", "Alice"),
+            make_file("d.rs", "Bob"),
+            make_file("e.rs", "Bob"),
+            make_file("f.rs", "Carol"),
+            make_file("g.rs", "Dave"),
+        ];
 
-        let top = get_top_contributors(&contributors, 2);
+        let top = get_top_contributors(&files, 2);
         assert_eq!(top.len(), 2);
-        assert_eq!(top[0], "Alice");
-        assert_eq!(top[1], "Bob");
+        assert_eq!(top[0].name, "Alice");
+        assert_eq!(top[0].files_owned, 3);
+        assert_eq!(top[1].name, "Bob");
+        assert_eq!(top[1].files_owned, 2);
     }
 
     #[test]
     fn test_get_top_contributors_less_than_n() {
-        let mut contributors = HashMap::new();
-        contributors.insert("Alice".to_string(), 100);
+        let files = vec![make_file("a.rs", "Alice")];
 
-        let top = get_top_contributors(&contributors, 5);
+        let top = get_top_contributors(&files, 5);
         assert_eq!(top.len(), 1);
-        assert_eq!(top[0], "Alice");
+        assert_eq!(top[0].name, "Alice");
+        assert_eq!(top[0].files_owned, 1);
     }
 
     #[test]

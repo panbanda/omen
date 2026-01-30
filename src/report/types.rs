@@ -211,20 +211,20 @@ pub struct OwnershipSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TopContributor {
     pub name: String,
-    pub files: i32,
+    pub files_owned: usize,
 }
 
 /// OwnershipFile represents a single file's ownership.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OwnershipFile {
-    pub file: String,
+    pub path: String,
 }
 
 /// OwnerInfo represents a code owner's stats for display.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OwnerInfo {
     pub name: String,
-    pub files_owned: i32,
+    pub files_owned: usize,
 }
 
 /// DuplicatesData represents the duplicates.json structure.

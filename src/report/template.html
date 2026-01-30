@@ -5,8 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Repository Health Report - {{ Metadata.repository }}</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Cpath fill='%237A4A22' d='M160 90C160 60 352 60 352 90L352 130L160 130Z'/%3E%3Crect fill='%235E3618' x='140' y='130' width='232' height='28' rx='14'/%3E%3Cellipse fill='%233B8C8E' cx='138' cy='220' rx='28' ry='42'/%3E%3Cellipse fill='%233B8C8E' cx='374' cy='220' rx='28' ry='42'/%3E%3Cpath fill='%234FA3A5' d='M128 180C128 130 384 130 384 180V360C384 410 128 410 128 360Z'/%3E%3Cellipse fill='%23FFFFFF' cx='220' cy='240' rx='34' ry='38'/%3E%3Cellipse fill='%23FFFFFF' cx='292' cy='240' rx='34' ry='38'/%3E%3Ccircle fill='%231B1B1B' cx='228' cy='252' r='10'/%3E%3Ccircle fill='%231B1B1B' cx='300' cy='252' r='10'/%3E%3Cellipse fill='%232A2A2A' cx='256' cy='286' rx='14' ry='10'/%3E%3Crect fill='%23F2F2F2' x='242' y='304' width='12' height='24' rx='3'/%3E%3Crect fill='%23F2F2F2' x='258' y='304' width='12' height='24' rx='3'/%3E%3Cg transform='translate(330 260)'%3E%3Ccircle fill='%23C9B36D' cx='0' cy='0' r='56'/%3E%3Ccircle fill='%23FFF6D5' cx='0' cy='0' r='42'/%3E%3Crect fill='%236A4020' x='40' y='40' width='90' height='14' rx='7' transform='rotate(35)'/%3E%3C/g%3E%3Cpath fill='%233B8C8E' d='M128 330C180 360 332 360 384 330V360C384 410 128 410 128 360Z' opacity='0.6'/%3E%3C/svg%3E">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/simple-datatables@9/dist/style.min.css">
     <script src="https://cdn.jsdelivr.net/npm/simple-datatables@9"></script>
     <script src="https://cdn.jsdelivr.net/npm/date-fns@4/cdn.min.js"></script>
@@ -1096,7 +1095,7 @@
             </div>
 
             <div class="hero-radar">
-                <canvas id="radarChart"></canvas>
+                <div id="radarChart" style="width:100%;height:200px"></div>
             </div>
 
             <div class="hero-metrics">
@@ -1316,6 +1315,11 @@
                     <div class="label">Average Risk</div>
                 </div>
                 {% endif %}
+            </div>
+
+            <div class="chart-container">
+                <h3>Risk Landscape</h3>
+                <div id="hotspotsScatter" style="width:100%;height:400px"></div>
             </div>
 
             <div class="language-filter" data-target="hotspots-table"></div>
@@ -1609,13 +1613,13 @@
                 <div class="chart-container">
                     <h3>By Severity</h3>
                     <div class="chart-wrapper" style="height: 220px;">
-                        <canvas id="satdSeverityChart"></canvas>
+                        <div id="satdSeverityChart" style="width:100%;height:220px"></div>
                     </div>
                 </div>
                 <div class="chart-container">
                     <h3>By Category</h3>
                     <div class="chart-wrapper" style="height: 220px;">
-                        <canvas id="satdCategoryChart"></canvas>
+                        <div id="satdCategoryChart" style="width:100%;height:220px"></div>
                     </div>
                 </div>
             </div>
@@ -1678,6 +1682,11 @@
                     <div class="label">Total Lines</div>
                 </div>
             </div>
+
+            <div class="chart-container">
+                <h3>Duplication Level</h3>
+                <div id="duplicationGauge" style="width:100%;height:250px"></div>
+            </div>
         </section>
         {% endif %}
 
@@ -1720,7 +1729,7 @@
             <div class="chart-container" style="margin-bottom: 1.5rem;">
                 <h3>Grade Distribution</h3>
                 <div class="chart-wrapper" style="height: 220px;">
-                    <canvas id="tdgGradeChart"></canvas>
+                    <div id="tdgGradeChart" style="width:100%;height:220px"></div>
                 </div>
             </div>
             {% endif %}
@@ -1795,14 +1804,14 @@
             <div class="chart-container">
                 <h3>Health Score Over Time</h3>
                 <div class="chart-wrapper">
-                    <canvas id="trendsChart"></canvas>
+                    <div id="trendsChart" style="width:100%;height:350px"></div>
                 </div>
             </div>
 
             <div class="chart-container">
                 <h3>Component Trends</h3>
                 <div class="chart-wrapper">
-                    <canvas id="componentTrendsChart"></canvas>
+                    <div id="componentTrendsChart" style="width:100%;height:350px"></div>
                 </div>
             </div>
 
@@ -1934,7 +1943,7 @@
             <div class="chart-container">
                 <h3>Top Contributors</h3>
                 <div class="chart-wrapper" style="height: 280px;">
-                    <canvas id="ownershipChart"></canvas>
+                    <div id="ownershipChart" style="width:100%;height:280px"></div>
                 </div>
             </div>
             {% endif %}
@@ -2005,6 +2014,11 @@
                 <h2>Score Breakdown</h2>
             </div>
             <p class="section-subtitle">How the health score is calculated from individual components</p>
+
+            <div class="chart-container" style="margin-bottom: 1.5rem;">
+                <h3>Component Comparison</h3>
+                <div id="scoreBreakdownChart" style="width:100%;height:250px"></div>
+            </div>
 
             <div class="grid-3">
                 {% if Score.components.complexity is defined %}
@@ -2330,20 +2344,49 @@
         });
     </script>
 
-    <!-- Radar Chart -->
+    <!-- ECharts -->
     <script>
-        Chart.defaults.color = '#8b949e';
-        Chart.defaults.borderColor = '#30363d';
+        // All chart instances for resize handling
+        const echartsInstances = [];
+        function initChart(el) {
+            if (!el) return null;
+            const chart = echarts.init(el, null, { renderer: 'canvas' });
+            echartsInstances.push(chart);
+            return chart;
+        }
 
-        const radarCtx = document.getElementById('radarChart');
-        if (radarCtx) {
-            new Chart(radarCtx, {
-                type: 'radar',
-                data: {
-                    labels: ['Complexity', 'Duplication', 'Cohesion', 'Coupling', 'Debt', 'Smells'],
-                    datasets: [{
-                        label: 'Score',
-                        data: [
+        // Shared palette matching CSS vars
+        const palette = {
+            blue: '#58a6ff', green: '#3fb950', yellow: '#d29922',
+            red: '#f85149', purple: '#a371f7', gray: '#8b949e',
+            bg: '#161b22', border: '#30363d', text: '#8b949e', textPrimary: '#e6edf3'
+        };
+
+        // --- 1. Radar Chart ---
+        (function() {
+            const el = document.getElementById('radarChart');
+            if (!el) return;
+            const chart = initChart(el);
+            chart.setOption({
+                radar: {
+                    indicator: [
+                        { name: 'Complexity', max: 100 },
+                        { name: 'Duplication', max: 100 },
+                        { name: 'Cohesion', max: 100 },
+                        { name: 'Coupling', max: 100 },
+                        { name: 'Debt', max: 100 },
+                        { name: 'Smells', max: 100 }
+                    ],
+                    axisName: { color: palette.text, fontSize: 10 },
+                    splitLine: { lineStyle: { color: palette.border } },
+                    splitArea: { show: false },
+                    axisLine: { lineStyle: { color: palette.border } }
+                },
+                tooltip: {},
+                series: [{
+                    type: 'radar',
+                    data: [{
+                        value: [
                             {{ Score.components.complexity | default(0) }},
                             {{ Score.components.duplication | default(0) }},
                             {{ Score.components.cohesion | default(0) }},
@@ -2351,386 +2394,756 @@
                             {{ Score.components.satd | default(0) }},
                             {{ Score.components.smells | default(0) }}
                         ],
-                        backgroundColor: '#58a6ff33',
-                        borderColor: '#58a6ff',
-                        borderWidth: 2,
-                        pointBackgroundColor: '#58a6ff'
+                        areaStyle: { color: 'rgba(88,166,255,0.2)' },
+                        lineStyle: { color: palette.blue, width: 2 },
+                        itemStyle: { color: palette.blue },
+                        emphasis: {
+                            areaStyle: { color: 'rgba(88,166,255,0.35)' }
+                        }
                     }]
+                }]
+            });
+        })();
+
+        // --- 8. Hotspot Scatter ---
+        {% if Hotspots and Hotspots.files %}
+        (function() {
+            const el = document.getElementById('hotspotsScatter');
+            if (!el) return;
+            const chart = initChart(el);
+
+            const data = [
+                {% for item in Hotspots.files %}{
+                    name: '{{ item.path | rel_path(Metadata.paths) | truncate_path(60) }}',
+                    value: [{{ item.commits }}, {{ item.avg_cognitive | round(1) }}, {{ item.hotspot_score | round(3) }}]
+                }{% if not loop.last %},{% endif %}
+                {% endfor %}
+            ];
+
+            function severityColor(score) {
+                if (score >= 0.7) return palette.red;
+                if (score >= 0.4) return palette.yellow;
+                if (score >= 0.2) return palette.blue;
+                return palette.green;
+            }
+
+            chart.setOption({
+                tooltip: {
+                    formatter: function(p) {
+                        var d = p.data;
+                        return '<strong>' + d.name + '</strong><br/>'
+                            + 'Risk: ' + d.value[2] + '<br/>'
+                            + 'Commits: ' + d.value[0] + '<br/>'
+                            + 'Complexity: ' + d.value[1];
+                    }
                 },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: {
-                        r: {
-                            beginAtZero: true,
-                            max: 100,
-                            ticks: { stepSize: 20, display: false },
-                            grid: { color: '#30363d' },
-                            angleLines: { color: '#30363d' },
-                            pointLabels: { font: { size: 10 } }
+                grid: { left: 60, right: 30, top: 20, bottom: 50 },
+                xAxis: {
+                    name: 'Commits',
+                    nameLocation: 'middle',
+                    nameGap: 30,
+                    nameTextStyle: { color: palette.text },
+                    axisLine: { lineStyle: { color: palette.border } },
+                    axisLabel: { color: palette.text },
+                    splitLine: { lineStyle: { color: palette.border, type: 'dashed' } }
+                },
+                yAxis: {
+                    name: 'Complexity',
+                    nameLocation: 'middle',
+                    nameGap: 40,
+                    nameTextStyle: { color: palette.text },
+                    axisLine: { lineStyle: { color: palette.border } },
+                    axisLabel: { color: palette.text },
+                    splitLine: { lineStyle: { color: palette.border, type: 'dashed' } }
+                },
+                series: [{
+                    type: 'scatter',
+                    data: data,
+                    symbolSize: function(val) {
+                        return Math.max(8, val[2] * 40);
+                    },
+                    itemStyle: {
+                        color: function(p) { return severityColor(p.data.value[2]); },
+                        opacity: 0.8
+                    },
+                    emphasis: {
+                        itemStyle: { opacity: 1, borderColor: palette.textPrimary, borderWidth: 2 }
+                    }
+                }]
+            });
+        })();
+        {% endif %}
+
+        // --- 9. Duplication Gauge ---
+        {% if Duplicates %}
+        (function() {
+            var el = document.getElementById('duplicationGauge');
+            if (!el) return;
+            var chart = initChart(el);
+            chart.setOption({
+                series: [{
+                    type: 'gauge',
+                    startAngle: 200,
+                    endAngle: -20,
+                    min: 0,
+                    max: 100,
+                    axisLine: {
+                        lineStyle: {
+                            width: 20,
+                            color: [
+                                [0.10, palette.green],
+                                [0.20, palette.yellow],
+                                [1,    palette.red]
+                            ]
                         }
                     },
-                    plugins: {
-                        legend: { display: false }
-                    }
-                }
+                    axisTick: { show: false },
+                    splitLine: { show: false },
+                    axisLabel: { color: palette.text, fontSize: 11, distance: -30 },
+                    pointer: { width: 5, length: '60%', itemStyle: { color: palette.textPrimary } },
+                    detail: {
+                        valueAnimation: true,
+                        formatter: '{value}%',
+                        fontSize: 24,
+                        fontWeight: 'bold',
+                        color: palette.textPrimary,
+                        offsetCenter: [0, '60%']
+                    },
+                    title: { show: false },
+                    data: [{ value: {{ Duplicates.duplication_ratio | round(1) }} }]
+                }]
             });
-        }
+        })();
+        {% endif %}
+
+        // --- 10. Score Breakdown Bar ---
+        (function() {
+            var el = document.getElementById('scoreBreakdownChart');
+            if (!el) return;
+            var chart = initChart(el);
+
+            var components = [];
+            {% if Score.components.complexity is defined %}
+            components.push({ name: 'Complexity (25%)', score: {{ Score.components.complexity }} });
+            {% endif %}
+            {% if Score.components.duplication is defined %}
+            components.push({ name: 'Duplication (20%)', score: {{ Score.components.duplication }} });
+            {% endif %}
+            {% if Score.components.cohesion is defined %}
+            components.push({ name: 'Cohesion (15%)', score: {{ Score.components.cohesion }} });
+            {% endif %}
+            {% if Score.components.tdg is defined %}
+            components.push({ name: 'Debt Gradient (15%)', score: {{ Score.components.tdg }} });
+            {% endif %}
+            {% if Score.components.satd is defined %}
+            components.push({ name: 'Known Debt (10%)', score: {{ Score.components.satd }} });
+            {% endif %}
+            {% if Score.components.coupling is defined %}
+            components.push({ name: 'Coupling (10%)', score: {{ Score.components.coupling }} });
+            {% endif %}
+            {% if Score.components.smells is defined %}
+            components.push({ name: 'Code Smells (5%)', score: {{ Score.components.smells }} });
+            {% endif %}
+
+            components.sort(function(a, b) { return a.score - b.score; });
+
+            function scoreColor(s) {
+                if (s >= 80) return palette.green;
+                if (s >= 60) return palette.yellow;
+                return palette.red;
+            }
+
+            chart.setOption({
+                tooltip: {
+                    trigger: 'axis',
+                    axisPointer: { type: 'shadow' },
+                    formatter: function(params) {
+                        var p = params[0];
+                        return p.name + ': <strong>' + p.value + '</strong>';
+                    }
+                },
+                grid: { left: 140, right: 50, top: 10, bottom: 10 },
+                xAxis: {
+                    type: 'value',
+                    min: 0,
+                    max: 100,
+                    axisLabel: { color: palette.text },
+                    axisLine: { lineStyle: { color: palette.border } },
+                    splitLine: { lineStyle: { color: palette.border, type: 'dashed' } }
+                },
+                yAxis: {
+                    type: 'category',
+                    data: components.map(function(c) { return c.name; }),
+                    axisLabel: { color: palette.text, fontSize: 11 },
+                    axisLine: { lineStyle: { color: palette.border } },
+                    axisTick: { show: false }
+                },
+                series: [{
+                    type: 'bar',
+                    data: components.map(function(c) {
+                        return {
+                            value: c.score,
+                            itemStyle: { color: scoreColor(c.score), borderRadius: [0, 4, 4, 0] }
+                        };
+                    }),
+                    label: {
+                        show: true,
+                        position: 'right',
+                        color: palette.textPrimary,
+                        fontSize: 12,
+                        fontWeight: 'bold'
+                    },
+                    barMaxWidth: 24
+                }]
+            });
+        })();
     </script>
 
     {% if Trend %}
     <script>
-        const trendsDataRaw = {
+        var trendsDataRaw = {
             labels: [{% for p in Trend.points %}'{{ p.date }}'{% if not loop.last %}, {% endif %}{% endfor %}],
             scores: [{% for p in Trend.points %}{{ p.score }}{% if not loop.last %}, {% endif %}{% endfor %}]
         };
 
         function formatDateLabel(isoDate) {
-            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-            const parts = isoDate.substring(0, 10).split('-');
+            var months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            var parts = isoDate.substring(0, 10).split('-');
             return months[parseInt(parts[1], 10) - 1] + ' ' + parts[0];
         }
 
-        const trendsData = {
+        var trendsData = {
             labels: trendsDataRaw.labels.map(formatDateLabel),
             rawLabels: trendsDataRaw.labels,
             scores: trendsDataRaw.scores
         };
 
         {% if TrendsInsight and TrendsInsight.score_annotations %}
-        const scoreAnnotations = {{ TrendsInsight.score_annotations | tojson }};
+        var scoreAnnotations = {{ TrendsInsight.score_annotations | tojson }};
         {% else %}
-        const scoreAnnotations = [];
+        var scoreAnnotations = [];
         {% endif %}
 
         {% if ComponentsInsight and ComponentsInsight.component_annotations %}
-        const componentAnnotations = {{ ComponentsInsight.component_annotations | tojson }};
+        var componentAnnotations = {{ ComponentsInsight.component_annotations | tojson }};
         {% else %}
-        const componentAnnotations = {};
+        var componentAnnotations = {};
         {% endif %}
 
         // Populate Notable Events descriptions from component annotations
-        document.querySelectorAll('#notable-events-table tbody tr[data-period]').forEach(row => {
-            const period = row.getAttribute('data-period');
-            const driver = row.getAttribute('data-driver').toLowerCase();
-            const descCell = row.querySelector('.event-description');
+        document.querySelectorAll('#notable-events-table tbody tr[data-period]').forEach(function(row) {
+            var period = row.getAttribute('data-period');
+            var driver = row.getAttribute('data-driver').toLowerCase();
+            var descCell = row.querySelector('.event-description');
             if (!descCell) return;
-            const annotations = componentAnnotations[driver];
+            var annotations = componentAnnotations[driver];
             if (!annotations) return;
-            const match = annotations.find(a => a.date === period);
+            var match = annotations.find(function(a) { return a.date === period; });
             if (match) {
                 descCell.innerHTML = marked.parse(match.description);
             }
         });
 
         function findLabelIndex(rawLabels, datePrefix) {
-            return rawLabels.findIndex(label => label.startsWith(datePrefix));
+            return rawLabels.findIndex(function(label) { return label.startsWith(datePrefix); });
         }
 
-        const healthAnnotations = {};
-        scoreAnnotations.forEach((ann, i) => {
-            const labelIndex = findLabelIndex(trendsData.rawLabels, ann.date);
-            if (labelIndex !== -1) {
-                const xLabel = trendsData.labels[labelIndex];
-                healthAnnotations['line' + i] = {
-                    type: 'line',
-                    xMin: xLabel,
-                    xMax: xLabel,
-                    borderColor: ann.change < 0 ? '#f8514988' : '#3fb95088',
-                    borderWidth: 2,
-                    borderDash: [6, 6]
-                };
-                healthAnnotations['label' + i] = {
-                    type: 'label',
-                    xValue: xLabel,
-                    yValue: trendsData.scores[labelIndex] + (i % 2 === 0 ? 3 : -3),
-                    backgroundColor: ann.change < 0 ? '#f8514933' : '#3fb95033',
-                    borderColor: ann.change < 0 ? '#f85149' : '#3fb950',
-                    borderWidth: 1,
-                    borderRadius: 4,
-                    color: '#e6edf3',
-                    font: { size: 10 },
-                    padding: 4,
-                    content: ann.label
-                };
-            }
-        });
-
-        new Chart(document.getElementById('trendsChart'), {
-            type: 'line',
-            data: {
-                labels: trendsData.labels,
-                datasets: [{
-                    label: 'Health Score',
-                    data: trendsData.scores,
-                    borderColor: '#58a6ff',
-                    backgroundColor: '#58a6ff33',
-                    fill: true,
-                    tension: 0.3,
-                    pointRadius: 4,
-                    pointHoverRadius: 6
-                }, {
-                    label: 'Trend Line',
-                    data: trendsData.labels.map((_, i) => {{ Trend.intercept }} + ({{ Trend.slope }} * i)),
-                    borderColor: '#d2992288',
-                    borderDash: [5, 5],
-                    pointRadius: 0,
-                    fill: false
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { position: 'top' },
-                    tooltip: {
-                        mode: 'index',
-                        intersect: false,
-                        callbacks: {
-                            afterBody: function(context) {
-                                const rawDate = trendsData.rawLabels[context[0].dataIndex];
-                                const datePrefix = rawDate.substring(0, 7);
-                                const ann = scoreAnnotations.find(a => a.date === datePrefix);
-                                if (ann) {
-                                    const maxWidth = 60;
-                                    const words = ann.description.split(' ');
-                                    const lines = [ann.label + ':'];
-                                    let currentLine = '';
-
-                                    words.forEach(word => {
-                                        const testLine = currentLine ? currentLine + ' ' + word : word;
-                                        if (testLine.length > maxWidth) {
-                                            if (currentLine) lines.push(currentLine);
-                                            currentLine = word;
-                                        } else {
-                                            currentLine = testLine;
-                                        }
-                                    });
-                                    if (currentLine) lines.push(currentLine);
-
-                                    return '\n' + lines.join('\n');
-                                }
-                                return '';
-                            }
-                        }
+        // Build annotation markLines for health score chart
+        var healthMarkLines = [];
+        scoreAnnotations.forEach(function(ann) {
+            var idx = findLabelIndex(trendsData.rawLabels, ann.date);
+            if (idx !== -1) {
+                healthMarkLines.push({
+                    xAxis: trendsData.labels[idx],
+                    lineStyle: {
+                        color: ann.change < 0 ? '#f8514988' : '#3fb95088',
+                        type: 'dashed',
+                        width: 2
                     },
-                    annotation: {
-                        annotations: healthAnnotations
-                    }
-                },
-                scales: {
-                    x: {
-                        ticks: {
-                            maxRotation: 45,
-                            minRotation: 45,
-                            autoSkip: true,
-                            maxTicksLimit: 15
-                        }
-                    },
-                    y: {
-                        min: Math.min(...trendsData.scores) - 5,
-                        max: Math.max(...trendsData.scores) + 5,
-                        title: { display: true, text: 'Score' }
-                    }
-                }
-            }
-        });
-
-        {% if Trend.component_trends %}
-        const componentLabelsRaw = [{% for p in Trend.points %}'{{ p.date }}'{% if not loop.last %}, {% endif %}{% endfor %}];
-        const componentLabels = componentLabelsRaw.map(formatDateLabel);
-
-        const componentColors = {
-            'complexity': '#3fb950',
-            'duplication': '#58a6ff',
-            'coupling': '#d29922',
-            'cohesion': '#a371f7',
-            'smells': '#f85149'
-        };
-
-        const componentChartAnnotations = {};
-        Object.keys(componentAnnotations).forEach(componentName => {
-            const events = componentAnnotations[componentName];
-            const color = componentColors[componentName] || '#8b949e';
-            events.forEach((ann, i) => {
-                const key = componentName + '_' + i;
-                const labelIndex = findLabelIndex(componentLabelsRaw, ann.date);
-                if (labelIndex !== -1) {
-                    const xLabel = componentLabels[labelIndex];
-                    componentChartAnnotations['line_' + key] = {
-                        type: 'line',
-                        xMin: xLabel,
-                        xMax: xLabel,
-                        borderColor: color + '88',
-                        borderWidth: 2,
-                        borderDash: [6, 6]
-                    };
-                    componentChartAnnotations['label_' + key] = {
-                        type: 'label',
-                        xValue: xLabel,
-                        yValue: 95 - (Object.keys(componentAnnotations).indexOf(componentName) * 2),
-                        backgroundColor: color + '33',
-                        borderColor: color,
+                    label: {
+                        formatter: ann.label,
+                        fontSize: 10,
+                        color: palette.textPrimary,
+                        backgroundColor: ann.change < 0 ? '#f8514933' : '#3fb95033',
+                        borderColor: ann.change < 0 ? '#f85149' : '#3fb950',
                         borderWidth: 1,
                         borderRadius: 4,
-                        color: '#e6edf3',
-                        font: { size: 10 },
-                        padding: 4,
-                        content: ann.label
-                    };
-                }
-            });
-        });
-
-        new Chart(document.getElementById('componentTrendsChart'), {
-            type: 'line',
-            data: {
-                labels: componentLabels,
-                datasets: [
-                    { label: 'Complexity', data: [{% for p in Trend.points %}{{ p.components.complexity | default(0) }}{% if not loop.last %}, {% endif %}{% endfor %}], borderColor: '#3fb950', tension: 0.3, pointRadius: 2 },
-                    { label: 'Duplication', data: [{% for p in Trend.points %}{{ p.components.duplication | default(0) }}{% if not loop.last %}, {% endif %}{% endfor %}], borderColor: '#58a6ff', tension: 0.3, pointRadius: 2 },
-                    { label: 'Coupling', data: [{% for p in Trend.points %}{{ p.components.coupling | default(0) }}{% if not loop.last %}, {% endif %}{% endfor %}], borderColor: '#d29922', tension: 0.3, pointRadius: 2 },
-                    { label: 'Cohesion', data: [{% for p in Trend.points %}{{ p.components.cohesion | default(0) }}{% if not loop.last %}, {% endif %}{% endfor %}], borderColor: '#a371f7', tension: 0.3, pointRadius: 2 },
-                    { label: 'Smells', data: [{% for p in Trend.points %}{{ p.components.smells | default(0) }}{% if not loop.last %}, {% endif %}{% endfor %}], borderColor: '#f85149', tension: 0.3, pointRadius: 2 }
-                ]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { position: 'top' },
-                    tooltip: {
-                        mode: 'index',
-                        intersect: false,
-                        callbacks: {
-                            afterBody: function(context) {
-                                const rawDate = componentLabelsRaw[context[0].dataIndex];
-                                const datePrefix = rawDate.substring(0, 7);
-                                const results = [];
-                                Object.keys(componentAnnotations).forEach(componentName => {
-                                    const events = componentAnnotations[componentName];
-                                    const event = events.find(e => e.date === datePrefix);
-                                    if (event) {
-                                        results.push('\n' + componentName.toUpperCase() + ': ' + event.label);
-                                        results.push(event.description);
-                                    }
-                                });
-                                return results.length > 0 ? '\n' + results.join('\n') : '';
-                            }
-                        }
-                    },
-                    annotation: {
-                        annotations: componentChartAnnotations
+                        padding: [2, 4]
                     }
-                },
-                scales: {
-                    x: {
-                        ticks: {
-                            maxRotation: 45,
-                            minRotation: 45,
-                            autoSkip: true,
-                            maxTicksLimit: 15
-                        }
-                    },
-                    y: { min: 50, max: 100, title: { display: true, text: 'Score' } }
-                }
+                });
             }
         });
+
+        // --- 2. Trends Chart ---
+        (function() {
+            var el = document.getElementById('trendsChart');
+            if (!el) return;
+            var chart = initChart(el);
+
+            var trendLineData = trendsData.labels.map(function(_, i) {
+                return ({{ Trend.intercept }} + {{ Trend.slope }} * i).toFixed(1);
+            });
+
+            var yMin = Math.min.apply(null, trendsData.scores) - 5;
+            var yMax = Math.max.apply(null, trendsData.scores) + 5;
+
+            chart.setOption({
+                tooltip: {
+                    trigger: 'axis',
+                    formatter: function(params) {
+                        var idx = params[0].dataIndex;
+                        var rawDate = trendsData.rawLabels[idx];
+                        var datePrefix = rawDate.substring(0, 7);
+                        var lines = [params[0].axisValueLabel];
+                        params.forEach(function(p) {
+                            lines.push(p.marker + ' ' + p.seriesName + ': <strong>' + p.value + '</strong>');
+                        });
+                        var ann = scoreAnnotations.find(function(a) { return a.date === datePrefix; });
+                        if (ann) {
+                            lines.push('<br/><em>' + ann.label + '</em>: ' + ann.description);
+                        }
+                        return lines.join('<br/>');
+                    }
+                },
+                legend: {
+                    data: ['Health Score', 'Trend Line'],
+                    textStyle: { color: palette.text },
+                    top: 0
+                },
+                grid: { left: 50, right: 30, top: 40, bottom: 80 },
+                dataZoom: [
+                    { type: 'slider', start: 0, end: 100, bottom: 10, textStyle: { color: palette.text }, borderColor: palette.border, fillerColor: 'rgba(88,166,255,0.1)' },
+                    { type: 'inside' }
+                ],
+                xAxis: {
+                    type: 'category',
+                    data: trendsData.labels,
+                    axisLabel: { color: palette.text, rotate: 45 },
+                    axisLine: { lineStyle: { color: palette.border } }
+                },
+                yAxis: {
+                    type: 'value',
+                    min: yMin,
+                    max: yMax,
+                    name: 'Score',
+                    nameTextStyle: { color: palette.text },
+                    axisLabel: { color: palette.text },
+                    axisLine: { lineStyle: { color: palette.border } },
+                    splitLine: { lineStyle: { color: palette.border, type: 'dashed' } }
+                },
+                series: [
+                    {
+                        name: 'Health Score',
+                        type: 'line',
+                        data: trendsData.scores,
+                        smooth: 0.3,
+                        symbol: 'circle',
+                        symbolSize: 6,
+                        lineStyle: { color: palette.blue, width: 2 },
+                        itemStyle: { color: palette.blue },
+                        areaStyle: { color: 'rgba(88,166,255,0.15)' },
+                        markLine: {
+                            silent: true,
+                            symbol: 'none',
+                            data: healthMarkLines
+                        }
+                    },
+                    {
+                        name: 'Trend Line',
+                        type: 'line',
+                        data: trendLineData,
+                        smooth: false,
+                        symbol: 'none',
+                        lineStyle: { color: '#d2992288', type: 'dashed', width: 2 },
+                        itemStyle: { color: '#d29922' }
+                    }
+                ]
+            });
+
+            // Store for connect
+            window._trendsChart = chart;
+        })();
+
+        // --- 3. Component Trends Chart ---
+        {% if Trend.component_trends %}
+        (function() {
+            var el = document.getElementById('componentTrendsChart');
+            if (!el) return;
+            var chart = initChart(el);
+
+            var componentLabelsRaw = [{% for p in Trend.points %}'{{ p.date }}'{% if not loop.last %}, {% endif %}{% endfor %}];
+            var componentLabels = componentLabelsRaw.map(formatDateLabel);
+
+            var componentColors = {
+                complexity: '#3fb950',
+                duplication: '#58a6ff',
+                coupling: '#d29922',
+                cohesion: '#a371f7',
+                smells: '#f85149'
+            };
+
+            // Build component annotation markLines
+            var componentMarkLines = [];
+            Object.keys(componentAnnotations).forEach(function(compName) {
+                var events = componentAnnotations[compName];
+                var color = componentColors[compName] || palette.gray;
+                events.forEach(function(ann) {
+                    var idx = findLabelIndex(componentLabelsRaw, ann.date);
+                    if (idx !== -1) {
+                        componentMarkLines.push({
+                            xAxis: componentLabels[idx],
+                            lineStyle: { color: color + '88', type: 'dashed', width: 2 },
+                            label: {
+                                formatter: ann.label,
+                                fontSize: 10,
+                                color: palette.textPrimary,
+                                backgroundColor: color + '33',
+                                borderColor: color,
+                                borderWidth: 1,
+                                borderRadius: 4,
+                                padding: [2, 4]
+                            }
+                        });
+                    }
+                });
+            });
+
+            chart.setOption({
+                tooltip: {
+                    trigger: 'axis',
+                    formatter: function(params) {
+                        var idx = params[0].dataIndex;
+                        var rawDate = componentLabelsRaw[idx];
+                        var datePrefix = rawDate.substring(0, 7);
+                        var lines = [params[0].axisValueLabel];
+                        params.forEach(function(p) {
+                            lines.push(p.marker + ' ' + p.seriesName + ': <strong>' + p.value + '</strong>');
+                        });
+                        Object.keys(componentAnnotations).forEach(function(compName) {
+                            var events = componentAnnotations[compName];
+                            var ev = events.find(function(e) { return e.date === datePrefix; });
+                            if (ev) {
+                                lines.push('<br/><em>' + compName.toUpperCase() + '</em>: ' + ev.label + ' - ' + ev.description);
+                            }
+                        });
+                        return lines.join('<br/>');
+                    }
+                },
+                legend: {
+                    data: ['Complexity', 'Duplication', 'Coupling', 'Cohesion', 'Smells'],
+                    textStyle: { color: palette.text },
+                    top: 0
+                },
+                grid: { left: 50, right: 30, top: 40, bottom: 80 },
+                dataZoom: [
+                    { type: 'slider', start: 0, end: 100, bottom: 10, textStyle: { color: palette.text }, borderColor: palette.border, fillerColor: 'rgba(88,166,255,0.1)' },
+                    { type: 'inside' }
+                ],
+                xAxis: {
+                    type: 'category',
+                    data: componentLabels,
+                    axisLabel: { color: palette.text, rotate: 45 },
+                    axisLine: { lineStyle: { color: palette.border } }
+                },
+                yAxis: {
+                    type: 'value',
+                    min: 50,
+                    max: 100,
+                    name: 'Score',
+                    nameTextStyle: { color: palette.text },
+                    axisLabel: { color: palette.text },
+                    axisLine: { lineStyle: { color: palette.border } },
+                    splitLine: { lineStyle: { color: palette.border, type: 'dashed' } }
+                },
+                series: [
+                    {
+                        name: 'Complexity', type: 'line', smooth: 0.3, symbol: 'circle', symbolSize: 4,
+                        data: [{% for p in Trend.points %}{{ p.components.complexity | default(0) }}{% if not loop.last %}, {% endif %}{% endfor %}],
+                        lineStyle: { color: '#3fb950' }, itemStyle: { color: '#3fb950' },
+                        markLine: { silent: true, symbol: 'none', data: componentMarkLines }
+                    },
+                    {
+                        name: 'Duplication', type: 'line', smooth: 0.3, symbol: 'circle', symbolSize: 4,
+                        data: [{% for p in Trend.points %}{{ p.components.duplication | default(0) }}{% if not loop.last %}, {% endif %}{% endfor %}],
+                        lineStyle: { color: '#58a6ff' }, itemStyle: { color: '#58a6ff' }
+                    },
+                    {
+                        name: 'Coupling', type: 'line', smooth: 0.3, symbol: 'circle', symbolSize: 4,
+                        data: [{% for p in Trend.points %}{{ p.components.coupling | default(0) }}{% if not loop.last %}, {% endif %}{% endfor %}],
+                        lineStyle: { color: '#d29922' }, itemStyle: { color: '#d29922' }
+                    },
+                    {
+                        name: 'Cohesion', type: 'line', smooth: 0.3, symbol: 'circle', symbolSize: 4,
+                        data: [{% for p in Trend.points %}{{ p.components.cohesion | default(0) }}{% if not loop.last %}, {% endif %}{% endfor %}],
+                        lineStyle: { color: '#a371f7' }, itemStyle: { color: '#a371f7' }
+                    },
+                    {
+                        name: 'Smells', type: 'line', smooth: 0.3, symbol: 'circle', symbolSize: 4,
+                        data: [{% for p in Trend.points %}{{ p.components.smells | default(0) }}{% if not loop.last %}, {% endif %}{% endfor %}],
+                        lineStyle: { color: '#f85149' }, itemStyle: { color: '#f85149' }
+                    }
+                ]
+            });
+
+            // Connect trend charts so tooltip and dataZoom sync
+            if (window._trendsChart) {
+                echarts.connect([window._trendsChart, chart]);
+            }
+        })();
         {% endif %}
     </script>
     {% endif %}
 
     {% if Ownership and Ownership.top_owners %}
     <script>
-        new Chart(document.getElementById('ownershipChart'), {
-            type: 'bar',
-            data: {
-                labels: [{% for o in Ownership.top_owners %}'{{ o.name }}'{% if not loop.last %}, {% endif %}{% endfor %}],
-                datasets: [{
-                    label: 'Files Owned',
-                    data: [{% for o in Ownership.top_owners %}{{ o.files_owned }}{% if not loop.last %}, {% endif %}{% endfor %}],
-                    backgroundColor: ['#58a6ff', '#3fb950', '#d29922', '#a371f7', '#f85149', '#8b949e', '#58a6ff', '#3fb950', '#d29922', '#a371f7']
+        // --- 4. Ownership Chart ---
+        (function() {
+            var el = document.getElementById('ownershipChart');
+            if (!el) return;
+            var chart = initChart(el);
+
+            var names = [{% for o in Ownership.top_owners %}'{{ o.name }}'{% if not loop.last %}, {% endif %}{% endfor %}];
+            var values = [{% for o in Ownership.top_owners %}{{ o.files_owned }}{% if not loop.last %}, {% endif %}{% endfor %}];
+            var barColors = [palette.blue, palette.green, palette.yellow, palette.purple, palette.red, palette.gray, palette.blue, palette.green, palette.yellow, palette.purple];
+
+            chart.setOption({
+                tooltip: {
+                    trigger: 'axis',
+                    axisPointer: { type: 'shadow' }
+                },
+                grid: { left: 120, right: 40, top: 10, bottom: 10 },
+                xAxis: {
+                    type: 'value',
+                    axisLabel: { color: palette.text },
+                    axisLine: { lineStyle: { color: palette.border } },
+                    splitLine: { lineStyle: { color: palette.border, type: 'dashed' } }
+                },
+                yAxis: {
+                    type: 'category',
+                    data: names,
+                    inverse: true,
+                    axisLabel: { color: palette.text, fontSize: 11 },
+                    axisLine: { lineStyle: { color: palette.border } },
+                    axisTick: { show: false }
+                },
+                series: [{
+                    type: 'bar',
+                    data: values.map(function(v, i) {
+                        return {
+                            value: v,
+                            itemStyle: {
+                                color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
+                                    { offset: 0, color: barColors[i % barColors.length] + '88' },
+                                    { offset: 1, color: barColors[i % barColors.length] }
+                                ]),
+                                borderRadius: [0, 4, 4, 0]
+                            }
+                        };
+                    }),
+                    label: {
+                        show: true,
+                        position: 'insideRight',
+                        color: palette.textPrimary,
+                        fontSize: 11,
+                        fontWeight: 'bold'
+                    },
+                    barMaxWidth: 24
                 }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                indexAxis: 'y',
-                plugins: { legend: { display: false } }
-            }
-        });
+            });
+        })();
     </script>
     {% endif %}
 
     {% if Tdg and Tdg.grade_distribution %}
     <script>
-        const gradeOrder = ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-', 'D', 'F'];
-        const gradeColors = {
-            'A+': '#3fb950', 'A': '#3fb950', 'A-': '#56d364',
-            'B+': '#58a6ff', 'B': '#58a6ff', 'B-': '#79c0ff',
-            'C+': '#d29922', 'C': '#d29922', 'C-': '#e3b341',
-            'D': '#f85149', 'F': '#da3633'
-        };
-        const tdgDist = {{ Tdg.grade_distribution | tojson }};
-        const presentGrades = gradeOrder.filter(g => (tdgDist[g] || 0) > 0);
-        new Chart(document.getElementById('tdgGradeChart'), {
-            type: 'bar',
-            data: {
-                labels: presentGrades,
-                datasets: [{
-                    label: 'Files',
-                    data: presentGrades.map(g => tdgDist[g] || 0),
-                    backgroundColor: presentGrades.map(g => gradeColors[g] || '#8b949e')
+        // --- 5. TDG Grade Chart ---
+        (function() {
+            var el = document.getElementById('tdgGradeChart');
+            if (!el) return;
+            var chart = initChart(el);
+
+            var gradeOrder = ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-', 'D', 'F'];
+            var gradeColors = {
+                'A+': '#3fb950', 'A': '#3fb950', 'A-': '#56d364',
+                'B+': '#58a6ff', 'B': '#58a6ff', 'B-': '#79c0ff',
+                'C+': '#d29922', 'C': '#d29922', 'C-': '#e3b341',
+                'D': '#f85149', 'F': '#da3633'
+            };
+            var tdgDist = {{ Tdg.grade_distribution | tojson }};
+            var presentGrades = gradeOrder.filter(function(g) { return (tdgDist[g] || 0) > 0; });
+
+            chart.setOption({
+                tooltip: {
+                    trigger: 'axis',
+                    axisPointer: { type: 'shadow' }
+                },
+                grid: { left: 50, right: 20, top: 10, bottom: 30 },
+                xAxis: {
+                    type: 'category',
+                    data: presentGrades,
+                    axisLabel: { color: palette.text, fontWeight: 'bold' },
+                    axisLine: { lineStyle: { color: palette.border } },
+                    axisTick: { show: false }
+                },
+                yAxis: {
+                    type: 'value',
+                    name: 'Files',
+                    nameTextStyle: { color: palette.text },
+                    axisLabel: { color: palette.text },
+                    axisLine: { lineStyle: { color: palette.border } },
+                    splitLine: { lineStyle: { color: palette.border, type: 'dashed' } }
+                },
+                series: [{
+                    type: 'bar',
+                    data: presentGrades.map(function(g) {
+                        return {
+                            value: tdgDist[g] || 0,
+                            itemStyle: {
+                                color: gradeColors[g] || palette.gray,
+                                borderRadius: [4, 4, 0, 0]
+                            }
+                        };
+                    }),
+                    label: {
+                        show: true,
+                        position: 'top',
+                        color: palette.textPrimary,
+                        fontSize: 11,
+                        fontWeight: 'bold'
+                    },
+                    barMaxWidth: 40
                 }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
-                scales: {
-                    y: { beginAtZero: true, title: { display: true, text: 'Files' } }
-                }
-            }
-        });
+            });
+        })();
     </script>
     {% endif %}
 
     {% if SATD and SATD.items %}
     <script>
-        const satdItems = {{ SATDStats | tojson }};
+        // --- 6 & 7. SATD Charts ---
+        (function() {
+            var satdItems = {{ SATDStats | tojson }};
+            var donutRadius = ['40%', '70%'];
 
-        new Chart(document.getElementById('satdSeverityChart'), {
-            type: 'doughnut',
-            data: {
-                labels: ['Critical', 'High', 'Medium', 'Low'],
-                datasets: [{
-                    data: [satdItems.critical, satdItems.high, satdItems.medium, satdItems.low],
-                    backgroundColor: ['#f85149', '#d29922', '#58a6ff', '#3fb950']
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { position: 'right' } }
+            // 6. Severity doughnut
+            var sevEl = document.getElementById('satdSeverityChart');
+            if (sevEl) {
+                var chart = initChart(sevEl);
+                var sevTotal = satdItems.critical + satdItems.high + satdItems.medium + satdItems.low;
+                chart.setOption({
+                    tooltip: {
+                        trigger: 'item',
+                        formatter: '{b}: {c} ({d}%)'
+                    },
+                    legend: {
+                        orient: 'vertical',
+                        right: 10,
+                        top: 'center',
+                        textStyle: { color: palette.text }
+                    },
+                    series: [{
+                        type: 'pie',
+                        radius: donutRadius,
+                        center: ['40%', '50%'],
+                        label: { show: false },
+                        emphasis: {
+                            label: { show: true, fontSize: 14, fontWeight: 'bold', color: palette.textPrimary }
+                        },
+                        data: [
+                            { value: satdItems.critical, name: 'Critical', itemStyle: { color: palette.red } },
+                            { value: satdItems.high, name: 'High', itemStyle: { color: palette.yellow } },
+                            { value: satdItems.medium, name: 'Medium', itemStyle: { color: palette.blue } },
+                            { value: satdItems.low, name: 'Low', itemStyle: { color: palette.green } }
+                        ].filter(function(d) { return d.value > 0; })
+                    }],
+                    graphic: [{
+                        type: 'text',
+                        left: '37%',
+                        top: '45%',
+                        style: {
+                            text: sevTotal.toString(),
+                            fontSize: 22,
+                            fontWeight: 'bold',
+                            fill: palette.textPrimary,
+                            textAlign: 'center'
+                        }
+                    }, {
+                        type: 'text',
+                        left: '37%',
+                        top: '55%',
+                        style: {
+                            text: 'total',
+                            fontSize: 11,
+                            fill: palette.text,
+                            textAlign: 'center'
+                        }
+                    }]
+                });
             }
-        });
 
-        new Chart(document.getElementById('satdCategoryChart'), {
-            type: 'doughnut',
-            data: {
-                labels: Object.keys(satdItems.categories),
-                datasets: [{
-                    data: Object.values(satdItems.categories),
-                    backgroundColor: ['#58a6ff', '#3fb950', '#a371f7', '#d29922', '#f85149', '#8b949e']
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { position: 'right' } }
+            // 7. Category doughnut
+            var catEl = document.getElementById('satdCategoryChart');
+            if (catEl) {
+                var chart2 = initChart(catEl);
+                var catKeys = Object.keys(satdItems.categories);
+                var catColors = [palette.blue, palette.green, palette.purple, palette.yellow, palette.red, palette.gray];
+                var catTotal = catKeys.reduce(function(s, k) { return s + satdItems.categories[k]; }, 0);
+                chart2.setOption({
+                    tooltip: {
+                        trigger: 'item',
+                        formatter: '{b}: {c} ({d}%)'
+                    },
+                    legend: {
+                        orient: 'vertical',
+                        right: 10,
+                        top: 'center',
+                        textStyle: { color: palette.text }
+                    },
+                    series: [{
+                        type: 'pie',
+                        radius: donutRadius,
+                        center: ['40%', '50%'],
+                        label: { show: false },
+                        emphasis: {
+                            label: { show: true, fontSize: 14, fontWeight: 'bold', color: palette.textPrimary }
+                        },
+                        data: catKeys.map(function(k, i) {
+                            return { value: satdItems.categories[k], name: k, itemStyle: { color: catColors[i % catColors.length] } };
+                        }).filter(function(d) { return d.value > 0; })
+                    }],
+                    graphic: [{
+                        type: 'text',
+                        left: '37%',
+                        top: '45%',
+                        style: {
+                            text: catTotal.toString(),
+                            fontSize: 22,
+                            fontWeight: 'bold',
+                            fill: palette.textPrimary,
+                            textAlign: 'center'
+                        }
+                    }, {
+                        type: 'text',
+                        left: '37%',
+                        top: '55%',
+                        style: {
+                            text: 'total',
+                            fontSize: 11,
+                            fill: palette.text,
+                            textAlign: 'center'
+                        }
+                    }]
+                });
             }
-        });
+        })();
     </script>
     {% endif %}
+
+    <!-- Resize handler for all ECharts instances -->
+    <script>
+        window.addEventListener('resize', function() {
+            echartsInstances.forEach(function(c) { c.resize(); });
+        });
+    </script>
 </body>
 </html>
