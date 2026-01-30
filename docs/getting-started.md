@@ -149,6 +149,5 @@ fi
 
 ## What to Explore Next
 
-- [How It Works](./how-it-works.md) -- architecture and design of the analysis pipeline
 - [Repository Score](./repository-score.md) -- how the composite score is calculated
 - [Semantic Search](./semantic-search.md) -- natural language code discovery
