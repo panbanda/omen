@@ -4,6 +4,7 @@ const sidebars: SidebarsConfig = {
   docsSidebar: [
     'intro',
     'getting-started',
+    'examples',
     {
       type: 'category',
       label: 'Analyzers',
