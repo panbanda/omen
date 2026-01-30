@@ -9,27 +9,16 @@ Understand the potential blast radius of changes before making them by analyzing
 
 ## Prerequisites
 
-Omen must be available as an MCP server. Add to Claude Code settings:
-
-```json
-{
-  "mcpServers": {
-    "omen": {
-      "command": "omen",
-      "args": ["mcp"]
-    }
-  }
-}
-```
+Omen CLI must be installed and available in PATH.
 
 ## Workflow
 
 ### Step 1: Map Dependencies
 
-Use the `analyze_graph` tool to find what depends on the target:
+Run the dependency graph analysis:
 
-```
-analyze_graph(paths: ["."], scope: "function", include_metrics: true)
+```bash
+omen -f json graph
 ```
 
 Identify:
@@ -38,20 +27,20 @@ Identify:
 
 ### Step 2: Check Temporal Coupling
 
-Use the `analyze_temporal_coupling` tool to find implicit dependencies:
+Run the temporal coupling analysis:
 
-```
-analyze_temporal_coupling(paths: ["."])
+```bash
+omen -f json temporal
 ```
 
 Files with high temporal coupling to the target often need to change together even without explicit imports.
 
 ### Step 3: Identify Stakeholders
 
-Use the `analyze_ownership` tool to find who works on related code:
+Run the ownership analysis:
 
-```
-analyze_ownership(paths: ["."])
+```bash
+omen -f json ownership
 ```
 
 Identify:

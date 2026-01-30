@@ -90,7 +90,9 @@ files.par_iter()
 
 **Configuration**: Config loaded from `omen.toml` or `.omen/omen.toml`. See `omen.example.toml` for all options.
 
-**MCP server**: JSON-RPC server in `mcp/` module exposing all analyzers as tools for LLM integration.
+**MCP server**: JSON-RPC server in `mcp/` module exposing all analyzers as tools for LLM integration. Tool names are bare analyzer names (e.g., `complexity`, `satd`, `temporal`) -- no prefix.
+
+**`--since` flag**: Commands that accept `--since` (e.g., `report generate`, `score trend`) default to `"all"` (full repo history). The value `"all"` is handled by `is_since_all()` in `src/git/log.rs`, which causes `parse_since_to_days()` to return `None` (no time limit). Duration values like `3m`, `6m`, `1y` still work.
 
 ### CLI Commands
 
@@ -121,6 +123,32 @@ Top-level commands (flat structure):
 - `mcp` - Start MCP server
 
 **Global flags**: `-p/--path`, `-f/--format`, `-c/--config`, `-v/--verbose`, `-j/--jobs`, `--no-cache`, `--ref`, `--shallow`
+
+### Report System
+
+`omen report generate` runs all analyzers in parallel, then invokes LLM analyst agents to produce insight narratives, and renders an HTML report via `src/report/render.rs`.
+
+Key files:
+- `src/report/render.rs` -- loads JSON data files + optional insight JSON files, renders HTML
+- `src/report/types.rs` -- all Rust types for report data and insights (must match agent output schemas)
+- `src/report/template.html` -- Handlebars HTML template
+- `plugins/reporting/commands/generate-report.md` -- orchestration command (runs analyzers, spawns agents)
+- `plugins/reporting/agents/` -- 12 analyst agents that produce `{section_insight: string}` JSON
+
+When adding a new report section: add the insight type to `types.rs`, add a field to `RenderData`, add loading logic in `render.rs`, add the template section in `template.html`, and create an analyst agent.
+
+### Plugin Structure
+
+```
+plugins/
+  development/
+    skills/       - Claude Code skills (workflows using CLI commands)
+  reporting/
+    agents/       - LLM analyst agents for report insights
+    commands/     - Orchestration commands (e.g., generate-report)
+```
+
+Skills use CLI commands (`omen -f json <analyzer>`) not MCP tools. Each skill has a `SKILL.md` with a YAML frontmatter block (`name`, `description`) and a workflow section.
 
 ## Development Workflow
 

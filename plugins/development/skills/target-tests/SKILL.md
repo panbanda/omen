@@ -9,57 +9,46 @@ Identify the highest-value targets for additional test coverage by combining ris
 
 ## Prerequisites
 
-Omen must be available as an MCP server. Add to Claude Code settings:
-
-```json
-{
-  "mcpServers": {
-    "omen": {
-      "command": "omen",
-      "args": ["mcp"]
-    }
-  }
-}
-```
+Omen CLI must be installed and available in PATH.
 
 ## Workflow
 
 ### Step 1: Identify High-Risk Files
 
-Use the `analyze_defect` tool:
+Run the defect prediction analysis:
 
-```
-analyze_defect(paths: ["."])
+```bash
+omen -f json defect
 ```
 
 Files with high defect probability are statistically likely to contain bugs.
 
 ### Step 2: Find Hotspots
 
-Use the `analyze_hotspot` tool:
+Run the hotspot analysis:
 
-```
-analyze_hotspot(paths: ["."])
+```bash
+omen -f json hotspot
 ```
 
 High-churn + high-complexity code needs regression protection.
 
 ### Step 3: Analyze Complexity
 
-Use the `analyze_complexity` tool:
+Run the complexity analysis:
 
-```
-analyze_complexity(paths: ["."])
+```bash
+omen -f json complexity
 ```
 
 Complex functions have many code paths that need coverage.
 
 ### Step 4: Check Ownership
 
-Use the `analyze_ownership` tool:
+Run the ownership analysis:
 
-```
-analyze_ownership(paths: ["."])
+```bash
+omen -f json ownership
 ```
 
 Single-owner code needs tests as documentation for when others maintain it.

@@ -9,57 +9,46 @@ Generate a comprehensive onboarding guide for a new developer joining the projec
 
 ## Prerequisites
 
-Omen must be available as an MCP server. Add to Claude Code settings:
-
-```json
-{
-  "mcpServers": {
-    "omen": {
-      "command": "omen",
-      "args": ["mcp"]
-    }
-  }
-}
-```
+Omen CLI must be installed and available in PATH.
 
 ## Workflow
 
 ### Step 1: Identify Key Symbols
 
-Use the `analyze_repo_map` tool to find the most important code:
+Run the repomap analysis to find the most important code:
 
-```
-analyze_repo_map(paths: ["."], top: 30)
+```bash
+omen -f json repomap
 ```
 
 PageRank-ranked symbols show what's central to the codebase.
 
 ### Step 2: Map the Architecture
 
-Use the `analyze_graph` tool to understand structure:
+Run the dependency graph analysis to understand structure:
 
-```
-analyze_graph(paths: ["."], scope: "module")
+```bash
+omen -f json graph
 ```
 
 This reveals how the codebase is organized and how modules relate.
 
 ### Step 3: Identify Subject Matter Experts
 
-Use the `analyze_ownership` tool to find who knows what:
+Run the ownership analysis to find who knows what:
 
-```
-analyze_ownership(paths: ["."])
+```bash
+omen -f json ownership
 ```
 
 This shows who has expertise in each area of the code.
 
 ### Step 4: Find Complexity Hotspots
 
-Use the `analyze_complexity` tool to identify tricky areas:
+Run the complexity analysis to identify tricky areas:
 
-```
-analyze_complexity(paths: ["."])
+```bash
+omen -f json complexity
 ```
 
 New developers should be warned about complex areas.

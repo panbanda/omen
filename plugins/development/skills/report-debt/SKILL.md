@@ -9,67 +9,56 @@ Generate a comprehensive technical debt assessment with quantified metrics, prio
 
 ## Prerequisites
 
-Omen must be available as an MCP server. Add to Claude Code settings:
-
-```json
-{
-  "mcpServers": {
-    "omen": {
-      "command": "omen",
-      "args": ["mcp"]
-    }
-  }
-}
-```
+Omen CLI must be installed and available in PATH.
 
 ## Workflow
 
 ### Step 1: Scan for Self-Admitted Debt
 
-Use the `analyze_satd` tool to find explicit debt markers:
+Run the SATD analysis to find explicit debt markers:
 
-```
-analyze_satd(paths: ["."])
+```bash
+omen -f json satd
 ```
 
 Captures TODO, FIXME, HACK, XXX, and other debt markers with severity.
 
 ### Step 2: Calculate TDG Scores
 
-Use the `analyze_tdg` tool for quality grades:
+Run the TDG analysis for quality grades:
 
-```
-analyze_tdg(paths: ["."], hotspots: 20)
+```bash
+omen -f json tdg
 ```
 
 TDG provides A-F grades based on complexity, churn, and health metrics.
 
 ### Step 3: Measure Duplication
 
-Use the `analyze_duplicates` tool:
+Run the clone detection analysis:
 
-```
-analyze_duplicates(paths: ["."])
+```bash
+omen -f json clones
 ```
 
 Calculate duplication ratio and identify clone clusters.
 
 ### Step 4: Assess Defect Risk
 
-Use the `analyze_defect` tool:
+Run the defect prediction analysis:
 
-```
-analyze_defect(paths: ["."])
+```bash
+omen -f json defect
 ```
 
 Identify files with high predicted defect probability.
 
 ### Step 5: Check Complexity
 
-Use the `analyze_complexity` tool:
+Run the complexity analysis:
 
-```
-analyze_complexity(paths: ["."])
+```bash
+omen -f json complexity
 ```
 
 Find functions exceeding complexity thresholds.

@@ -9,47 +9,36 @@ Identify stale feature flags and provide actionable cleanup recommendations.
 
 ## Prerequisites
 
-Omen must be available as an MCP server. Add to Claude Code settings:
-
-```json
-{
-  "mcpServers": {
-    "omen": {
-      "command": "omen",
-      "args": ["mcp"]
-    }
-  }
-}
-```
+Omen CLI must be installed and available in PATH.
 
 ## Workflow
 
 ### Step 1: Detect All Flags
 
-Use the `analyze_flags` tool:
+Run the flags analysis:
 
-```
-analyze_flags(paths: ["."])
+```bash
+omen -f json flags
 ```
 
 Returns all feature flag references with staleness information, grouped by provider.
 
 ### Step 2: Identify Ownership
 
-Use the `analyze_ownership` tool:
+Run the ownership analysis:
 
-```
-analyze_ownership(paths: ["."])
+```bash
+omen -f json ownership
 ```
 
 Determine who owns the code containing flags - they should own cleanup.
 
 ### Step 3: Check Coupling
 
-Use the `analyze_temporal_coupling` tool:
+Run the temporal coupling analysis:
 
-```
-analyze_temporal_coupling(paths: ["."], days: 90)
+```bash
+omen -f json temporal
 ```
 
 Find files that change together with flag-containing files.

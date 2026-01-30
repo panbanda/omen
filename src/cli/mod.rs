@@ -223,8 +223,8 @@ pub struct ScoreArgs {
 
 #[derive(Args)]
 pub struct ScoreTrendArgs {
-    /// Time period (e.g., 3m, 6m, 1y)
-    #[arg(short, long, default_value = "3m")]
+    /// Time period (e.g., 3m, 6m, 1y, all)
+    #[arg(short, long, default_value = "all")]
     pub since: String,
 
     /// Aggregation period
@@ -323,7 +323,7 @@ pub struct ReportGenerateArgs {
     pub skip: Option<String>,
 
     /// Time period for analysis (e.g., 1m, 3m, 6m, 1y, 2y, all)
-    #[arg(long, default_value = "1y")]
+    #[arg(long, default_value = "all")]
     pub since: String,
 
     /// Number of days for git-based analyzers (alternative to --since)

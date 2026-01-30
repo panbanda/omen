@@ -151,10 +151,19 @@ pub fn get_log(
     Ok(commits)
 }
 
+/// Returns true if the since string means "all history" (no time limit).
+pub fn is_since_all(since: &str) -> bool {
+    matches!(since.trim().to_lowercase().as_str(), "all" | "forever")
+}
+
 /// Parse "since" duration strings like "30 days ago", "1 week", "6m", "1y" to days.
 ///
 /// Returns the number of days, or None if the format is invalid.
+/// Returns None for "all" (meaning no time limit).
 pub fn parse_since_to_days(since: &str) -> Option<u32> {
+    if is_since_all(since) {
+        return None;
+    }
     parse_since_duration(since).map(|d| (d.as_secs() / 86400) as u32)
 }
 
@@ -950,9 +959,26 @@ mod tests {
         assert_eq!(parse_since_to_days("30 days"), Some(30));
         assert_eq!(parse_since_to_days("90d"), Some(90));
 
+        // Test "all" returns None (no time limit)
+        assert_eq!(parse_since_to_days("all"), None);
+        assert_eq!(parse_since_to_days("ALL"), None);
+        assert_eq!(parse_since_to_days("forever"), None);
+
         // Test invalid
         assert_eq!(parse_since_to_days("invalid"), None);
         assert_eq!(parse_since_to_days(""), None);
+    }
+
+    #[test]
+    fn test_is_since_all() {
+        assert!(is_since_all("all"));
+        assert!(is_since_all("ALL"));
+        assert!(is_since_all("All"));
+        assert!(is_since_all("forever"));
+        assert!(is_since_all("  all  "));
+        assert!(!is_since_all("1y"));
+        assert!(!is_since_all(""));
+        assert!(!is_since_all("6m"));
     }
 
     #[test]
