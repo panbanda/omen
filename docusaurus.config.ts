@@ -29,6 +29,7 @@ const config: Config = {
       'classic',
       {
         docs: {
+          routeBasePath: '/',
           sidebarPath: './sidebars.ts',
           editUrl: 'https://github.com/panbanda/omen/tree/gh-pages/',
         },
@@ -72,17 +73,17 @@ const config: Config = {
         {
           title: 'Documentation',
           items: [
-            {label: 'Getting Started', to: '/docs/getting-started'},
-            {label: 'Analyzers', to: '/docs/analyzers/overview'},
-            {label: 'Configuration', to: '/docs/configuration'},
+            {label: 'Getting Started', to: '/getting-started'},
+            {label: 'Analyzers', to: '/analyzers/overview'},
+            {label: 'Configuration', to: '/configuration'},
           ],
         },
         {
           title: 'Integrations',
           items: [
-            {label: 'MCP Server', to: '/docs/integrations/mcp-server'},
-            {label: 'CI/CD', to: '/docs/integrations/ci-cd'},
-            {label: 'Claude Code Plugin', to: '/docs/integrations/claude-code-plugin'},
+            {label: 'MCP Server', to: '/integrations/mcp-server'},
+            {label: 'CI/CD', to: '/integrations/ci-cd'},
+            {label: 'Claude Code Plugin', to: '/integrations/claude-code-plugin'},
           ],
         },
         {
