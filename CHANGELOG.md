@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.17.1](https://github.com/panbanda/omen/compare/omen-v4.17.0...omen-v4.17.1) (2026-01-30)
+
+
+### Bug Fixes
+
+* churn empty when --since all, add file path to cohesion table ([5e62ec1](https://github.com/panbanda/omen/commit/5e62ec111b199a6303f0f67db4f097ec52feba3f))
+* churn empty when --since all, add file path to cohesion table ([fc3ef5b](https://github.com/panbanda/omen/commit/fc3ef5bbc98f4fcdfb7c7b641e17785cb365f0fc))
+
 ## [4.17.0](https://github.com/panbanda/omen/compare/omen-v4.16.0...omen-v4.17.0) (2026-01-30)
 
 
