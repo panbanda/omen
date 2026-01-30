@@ -230,6 +230,10 @@ pub struct ScoreTrendArgs {
     /// Aggregation period
     #[arg(short, long, value_enum, default_value = "weekly")]
     pub period: TrendPeriod,
+
+    /// Number of samples (evenly spaced over the time range; overrides --period)
+    #[arg(long)]
+    pub samples: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -323,12 +327,16 @@ pub struct ReportGenerateArgs {
     pub skip: Option<String>,
 
     /// Time period for analysis (e.g., 1m, 3m, 6m, 1y, 2y, all)
-    #[arg(long, default_value = "all")]
+    #[arg(long, default_value = "1y")]
     pub since: String,
 
     /// Number of days for git-based analyzers (alternative to --since)
     #[arg(long)]
     pub days: Option<u32>,
+
+    /// Number of samples for trend analysis (evenly spaced over the time range)
+    #[arg(long)]
+    pub samples: Option<usize>,
 }
 
 #[derive(Args)]
@@ -1111,6 +1119,43 @@ mod tests {
             parse_report_subcommand(&["omen", "report", "generate", "--days", "90"])
         {
             assert_eq!(args.days, Some(90));
+        }
+    }
+
+    #[test]
+    fn test_report_generate_default_since_is_one_year() {
+        if let ReportSubcommand::Generate(args) =
+            parse_report_subcommand(&["omen", "report", "generate"])
+        {
+            assert_eq!(args.since, "1y");
+        }
+    }
+
+    #[test]
+    fn test_report_generate_samples() {
+        if let ReportSubcommand::Generate(args) =
+            parse_report_subcommand(&["omen", "report", "generate", "--samples", "24"])
+        {
+            assert_eq!(args.samples, Some(24));
+        }
+    }
+
+    #[test]
+    fn test_report_generate_samples_default_is_none() {
+        if let ReportSubcommand::Generate(args) =
+            parse_report_subcommand(&["omen", "report", "generate"])
+        {
+            assert_eq!(args.samples, None);
+        }
+    }
+
+    #[test]
+    fn test_score_trend_samples() {
+        let cli = parse(&["omen", "score", "trend", "--samples", "12"]);
+        if let Command::Score(cmd) = cli.command {
+            if let Some(ScoreSubcommand::Trend(args)) = cmd.subcommand {
+                assert_eq!(args.samples, Some(12));
+            }
         }
     }
 

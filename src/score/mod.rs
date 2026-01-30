@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result};
 
-pub use trend::analyze_trend;
+pub use trend::{analyze_trend, default_sample_count};
 
 /// Score analyzer - calculates composite health score.
 #[derive(Default)]
