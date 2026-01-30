@@ -1,5 +1,16 @@
 # Changelog
 
+## [4.16.0](https://github.com/panbanda/omen/compare/omen-v4.15.0...omen-v4.16.0) (2026-01-30)
+
+
+### Features
+
+* **report:** add temporal coupling, arch smells, dependency graph, and TDG sections ([8fd3e9c](https://github.com/panbanda/omen/commit/8fd3e9c773f773e89da8bb6af065fca996ecf86b))
+* **report:** add temporal coupling, arch smells, dependency graph, and TDG sections ([ac8b670](https://github.com/panbanda/omen/commit/ac8b6701317ce0b5dd1a34498cda74a9614ea95c))
+* **report:** improve language filter, notable events, and trend display ([a4b4775](https://github.com/panbanda/omen/commit/a4b4775401d2ae5ca0ea68defb69b4a4ccac770c))
+* **report:** improve language filter, notable events, and trend display ([11db034](https://github.com/panbanda/omen/commit/11db034ca336033353f1a3a1dab2af631044fb7e))
+* **report:** migrate Chart.js to Apache ECharts + fix ownership deserialization ([#335](https://github.com/panbanda/omen/issues/335)) ([0fb84c9](https://github.com/panbanda/omen/commit/0fb84c923b154a0bcf2ab0b35c58dd4e2bbabca3))
+
 ## [4.15.0](https://github.com/panbanda/omen/compare/omen-v4.14.1...omen-v4.15.0) (2026-01-29)
 
 
