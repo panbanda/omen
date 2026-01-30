@@ -393,6 +393,231 @@ pub struct FlagsSummary {
 }
 
 // ============================================================================
+// Temporal Coupling Types
+// ============================================================================
+
+/// TemporalData represents the temporal.json structure.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TemporalData {
+    #[serde(default)]
+    pub couplings: Vec<TemporalCoupling>,
+    #[serde(default)]
+    pub summary: TemporalSummary,
+}
+
+/// A pair of files that change together.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemporalCoupling {
+    pub file_a: String,
+    pub file_b: String,
+    #[serde(default)]
+    pub cochange_count: u32,
+    #[serde(default)]
+    pub coupling_strength: f64,
+    #[serde(default)]
+    pub commits_a: u32,
+    #[serde(default)]
+    pub commits_b: u32,
+}
+
+/// Summary statistics for temporal coupling.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TemporalSummary {
+    #[serde(default)]
+    pub total_couplings: usize,
+    #[serde(default)]
+    pub strong_couplings: usize,
+    #[serde(default)]
+    pub avg_coupling_strength: f64,
+    #[serde(default)]
+    pub max_coupling_strength: f64,
+    #[serde(default)]
+    pub total_files_analyzed: usize,
+}
+
+// ============================================================================
+// Architectural Smells Types
+// ============================================================================
+
+/// SmellsData represents the smells.json structure.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SmellsData {
+    #[serde(default)]
+    pub smells: Vec<SmellItem>,
+    #[serde(default)]
+    pub components: Vec<SmellComponent>,
+    #[serde(default)]
+    pub summary: SmellsSummary,
+}
+
+/// A detected architectural smell.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SmellItem {
+    pub smell_type: String,
+    pub severity: String,
+    #[serde(default)]
+    pub components: Vec<String>,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub suggestion: String,
+    #[serde(default)]
+    pub metrics: SmellItemMetrics,
+}
+
+/// Quantitative metrics for a smell.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SmellItemMetrics {
+    #[serde(default)]
+    pub fan_in: Option<usize>,
+    #[serde(default)]
+    pub fan_out: Option<usize>,
+    #[serde(default)]
+    pub instability: Option<f64>,
+    #[serde(default)]
+    pub cycle_length: Option<usize>,
+}
+
+/// Component-level metrics from smell analysis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SmellComponent {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub fan_in: usize,
+    #[serde(default)]
+    pub fan_out: usize,
+    #[serde(default)]
+    pub instability: f64,
+    #[serde(default)]
+    pub is_hub: bool,
+    #[serde(default)]
+    pub is_central_connector: bool,
+}
+
+/// Summary statistics for architectural smells.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SmellsSummary {
+    #[serde(default)]
+    pub total_smells: usize,
+    #[serde(default)]
+    pub cyclic_count: usize,
+    #[serde(default)]
+    pub hub_count: usize,
+    #[serde(default)]
+    pub unstable_count: usize,
+    #[serde(default)]
+    pub central_connector_count: usize,
+    #[serde(default)]
+    pub critical_count: usize,
+    #[serde(default)]
+    pub high_count: usize,
+    #[serde(default)]
+    pub medium_count: usize,
+    #[serde(default)]
+    pub total_components: usize,
+    #[serde(default)]
+    pub average_instability: f64,
+}
+
+// ============================================================================
+// Dependency Graph Types
+// ============================================================================
+
+/// GraphData represents the graph.json structure.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GraphData {
+    #[serde(default)]
+    pub nodes: Vec<GraphNode>,
+    #[serde(default)]
+    pub edges: Vec<GraphEdge>,
+    #[serde(default)]
+    pub cycles: Vec<Vec<String>>,
+    #[serde(default)]
+    pub summary: GraphSummary,
+}
+
+/// A node in the dependency graph.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphNode {
+    pub path: String,
+    #[serde(default)]
+    pub pagerank: f64,
+    #[serde(default)]
+    pub betweenness: f64,
+    #[serde(default)]
+    pub in_degree: usize,
+    #[serde(default)]
+    pub out_degree: usize,
+    #[serde(default)]
+    pub instability: f64,
+}
+
+/// An edge in the dependency graph.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphEdge {
+    pub from: String,
+    pub to: String,
+}
+
+/// Summary statistics for the dependency graph.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GraphSummary {
+    #[serde(default)]
+    pub total_nodes: usize,
+    #[serde(default)]
+    pub total_edges: usize,
+    #[serde(default)]
+    pub avg_degree: f64,
+    #[serde(default)]
+    pub cycle_count: usize,
+}
+
+// ============================================================================
+// Technical Debt Gradient Types
+// ============================================================================
+
+/// TdgData represents the tdg.json structure.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TdgData {
+    #[serde(default)]
+    pub files: Vec<TdgFile>,
+    #[serde(default)]
+    pub average_score: f32,
+    #[serde(default)]
+    pub average_grade: String,
+    #[serde(default)]
+    pub total_files: usize,
+    #[serde(default)]
+    pub grade_distribution: HashMap<String, usize>,
+}
+
+/// Per-file TDG score.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TdgFile {
+    #[serde(default)]
+    pub file_path: String,
+    #[serde(default)]
+    pub total: f32,
+    #[serde(default)]
+    pub grade: String,
+    #[serde(default)]
+    pub structural_complexity: f32,
+    #[serde(default)]
+    pub semantic_complexity: f32,
+    #[serde(default)]
+    pub duplication_ratio: f32,
+    #[serde(default)]
+    pub coupling_score: f32,
+    #[serde(default)]
+    pub hotspot_score: f32,
+    #[serde(default)]
+    pub temporal_coupling_score: f32,
+    #[serde(default)]
+    pub has_critical_defects: bool,
+}
+
+// ============================================================================
 // Insight Types (LLM-generated content)
 // ============================================================================
 
@@ -561,6 +786,34 @@ pub struct FlagsInsight {
     pub item_annotations: Vec<FlagAnnotation>,
 }
 
+/// TemporalInsight contains temporal coupling analysis.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TemporalInsight {
+    #[serde(default)]
+    pub section_insight: String,
+}
+
+/// SmellsInsight contains architectural smells analysis.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SmellsInsight {
+    #[serde(default)]
+    pub section_insight: String,
+}
+
+/// GraphInsight contains dependency graph analysis.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GraphInsight {
+    #[serde(default)]
+    pub section_insight: String,
+}
+
+/// TdgInsight contains technical debt gradient analysis.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TdgInsight {
+    #[serde(default)]
+    pub section_insight: String,
+}
+
 // ============================================================================
 // Render Data (combined structure for template)
 // ============================================================================
@@ -589,8 +842,16 @@ pub struct RenderData {
     pub components_insight: Option<ComponentsInsight>,
     pub flags_insight: Option<FlagsInsight>,
     pub ownership_insight: Option<OwnershipInsight>,
+    pub temporal_insight: Option<TemporalInsight>,
+    pub smells_insight: Option<SmellsInsight>,
+    pub graph_insight: Option<GraphInsight>,
+    pub tdg_insight: Option<TdgInsight>,
     pub component_trends: HashMap<String, ComponentTrendStats>,
     pub satd_stats: Option<SATDStats>,
+    pub temporal: Option<TemporalData>,
+    pub smells: Option<SmellsData>,
+    pub graph: Option<GraphData>,
+    pub tdg: Option<TdgData>,
 }
 
 impl RenderData {
@@ -759,6 +1020,127 @@ mod tests {
         assert_eq!(hotspots.files[0].path, "test.js");
         assert!((hotspots.files[0].hotspot_score - 0.99).abs() < f64::EPSILON);
         assert_eq!(hotspots.files[0].commits, 10);
+    }
+
+    #[test]
+    fn test_temporal_deserialize() {
+        let json = r#"{
+            "generated_at": "2024-01-15T10:30:00Z",
+            "period_days": 30,
+            "min_cochanges": 3,
+            "couplings": [
+                {
+                    "file_a": "src/main.rs",
+                    "file_b": "src/lib.rs",
+                    "cochange_count": 10,
+                    "coupling_strength": 0.75,
+                    "commits_a": 12,
+                    "commits_b": 10
+                }
+            ],
+            "summary": {
+                "total_couplings": 1,
+                "strong_couplings": 1,
+                "avg_coupling_strength": 0.75,
+                "max_coupling_strength": 0.75,
+                "total_files_analyzed": 2
+            }
+        }"#;
+        let data: TemporalData = serde_json::from_str(json).unwrap();
+        assert_eq!(data.couplings.len(), 1);
+        assert!((data.couplings[0].coupling_strength - 0.75).abs() < f64::EPSILON);
+        assert_eq!(data.summary.strong_couplings, 1);
+    }
+
+    #[test]
+    fn test_smells_deserialize() {
+        let json = r#"{
+            "generated_at": "2024-01-15T10:30:00Z",
+            "smells": [
+                {
+                    "smell_type": "CyclicDependency",
+                    "severity": "Critical",
+                    "components": ["src/a.rs", "src/b.rs"],
+                    "description": "Cyclic dependency detected",
+                    "suggestion": "Break the cycle",
+                    "metrics": { "cycle_length": 2 }
+                }
+            ],
+            "components": [],
+            "summary": {
+                "total_smells": 1,
+                "cyclic_count": 1,
+                "hub_count": 0,
+                "unstable_count": 0,
+                "central_connector_count": 0,
+                "critical_count": 1,
+                "high_count": 0,
+                "medium_count": 0,
+                "total_components": 0,
+                "average_instability": 0.0
+            },
+            "thresholds": {}
+        }"#;
+        let data: SmellsData = serde_json::from_str(json).unwrap();
+        assert_eq!(data.smells.len(), 1);
+        assert_eq!(data.smells[0].smell_type, "CyclicDependency");
+        assert_eq!(data.summary.critical_count, 1);
+    }
+
+    #[test]
+    fn test_graph_deserialize() {
+        let json = r#"{
+            "nodes": [
+                {
+                    "path": "src/main.rs",
+                    "pagerank": 0.15,
+                    "betweenness": 0.5,
+                    "in_degree": 3,
+                    "out_degree": 2,
+                    "instability": 0.4
+                }
+            ],
+            "edges": [{ "from": "src/main.rs", "to": "src/lib.rs" }],
+            "cycles": [["src/a.rs", "src/b.rs"]],
+            "summary": {
+                "total_nodes": 1,
+                "total_edges": 1,
+                "avg_degree": 5.0,
+                "cycle_count": 1
+            }
+        }"#;
+        let data: GraphData = serde_json::from_str(json).unwrap();
+        assert_eq!(data.nodes.len(), 1);
+        assert_eq!(data.cycles.len(), 1);
+        assert_eq!(data.summary.cycle_count, 1);
+    }
+
+    #[test]
+    fn test_tdg_deserialize() {
+        let json = r#"{
+            "files": [
+                {
+                    "file_path": "src/main.rs",
+                    "total": 72.5,
+                    "grade": "B",
+                    "structural_complexity": 15.0,
+                    "semantic_complexity": 10.0,
+                    "duplication_ratio": 5.0,
+                    "coupling_score": 8.0,
+                    "hotspot_score": 6.0,
+                    "temporal_coupling_score": 3.0,
+                    "has_critical_defects": false
+                }
+            ],
+            "average_score": 72.5,
+            "average_grade": "B",
+            "total_files": 1,
+            "grade_distribution": { "B": 1 }
+        }"#;
+        let data: TdgData = serde_json::from_str(json).unwrap();
+        assert_eq!(data.files.len(), 1);
+        assert!((data.average_score - 72.5).abs() < f32::EPSILON);
+        assert_eq!(data.grade_distribution.get("B"), Some(&1));
     }
 
     #[test]

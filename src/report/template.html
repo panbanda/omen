@@ -972,6 +972,18 @@
                 Low Cohesion
             </a>
             {% endif %}
+            {% if Smells and Smells.smells %}
+            <a href="#smells" class="nav-item">
+                <span class="nav-dot {% if Smells.summary.critical_count > 0 %}danger{% elif Smells.summary.total_smells > 5 %}warning{% else %}good{% endif %}"></span>
+                Arch Smells
+            </a>
+            {% endif %}
+            {% if Graph and Graph.summary.total_edges > 0 %}
+            <a href="#dependencies" class="nav-item">
+                <span class="nav-dot {% if Graph.summary.cycle_count > 3 %}danger{% elif Graph.summary.cycle_count > 0 %}warning{% else %}good{% endif %}"></span>
+                Dependencies
+            </a>
+            {% endif %}
         </div>
 
         <div class="nav-section">
@@ -986,6 +998,12 @@
             <a href="#duplicates" class="nav-item">
                 <span class="nav-dot {% if Duplicates.duplication_ratio > 15.0 %}danger{% elif Duplicates.duplication_ratio > 10.0 %}warning{% else %}good{% endif %}"></span>
                 Duplication
+            </a>
+            {% endif %}
+            {% if Tdg %}
+            <a href="#tdg" class="nav-item">
+                <span class="nav-dot {% if Tdg.average_score < 50.0 %}danger{% elif Tdg.average_score < 70.0 %}warning{% else %}good{% endif %}"></span>
+                Debt Gradient
             </a>
             {% endif %}
         </div>
@@ -1008,6 +1026,12 @@
             <a href="#ownership" class="nav-item">
                 <span class="nav-dot {% if Ownership.bus_factor < 3 %}danger{% elif Ownership.bus_factor < 5 %}warning{% else %}good{% endif %}"></span>
                 Ownership
+            </a>
+            {% endif %}
+            {% if Temporal and Temporal.couplings %}
+            <a href="#temporal" class="nav-item">
+                <span class="nav-dot {% if Temporal.summary.strong_couplings > 10 %}danger{% elif Temporal.summary.strong_couplings > 3 %}warning{% else %}good{% endif %}"></span>
+                Temporal Coupling
             </a>
             {% endif %}
         </div>
@@ -1403,6 +1427,151 @@
         </section>
         {% endif %}
 
+        <!-- Architectural Smells -->
+        {% if Smells and Smells.smells %}
+        <section id="smells" class="section">
+            <div class="section-header">
+                <h2>Architectural Smells</h2>
+            </div>
+            <p class="section-subtitle">Structural problems that make the codebase harder to change safely</p>
+
+            {% if SmellsInsight %}
+            <div class="card" style="margin-bottom: 1.5rem;">
+                <div class="narrative">{{ SmellsInsight.section_insight | markdown }}</div>
+            </div>
+            {% endif %}
+
+            <div class="stat-grid">
+                <div class="stat-box">
+                    <div class="value" style="color: {% if Smells.summary.total_smells > 10 %}var(--accent-red){% elif Smells.summary.total_smells > 3 %}var(--accent-yellow){% else %}var(--accent-green){% endif %}">{{ Smells.summary.total_smells }}</div>
+                    <div class="label">Total Smells</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value" style="color: var(--accent-red)">{{ Smells.summary.cyclic_count }}</div>
+                    <div class="label"><span class="tooltip" data-tooltip="Files or modules that depend on each other in a cycle. Cycles make it impossible to change one without affecting all.">Cyclic Dependencies</span></div>
+                </div>
+                <div class="stat-box">
+                    <div class="value" style="color: var(--accent-yellow)">{{ Smells.summary.hub_count }}</div>
+                    <div class="label"><span class="tooltip" data-tooltip="Files with excessive incoming and outgoing dependencies. Changes here ripple everywhere.">Hub Dependencies</span></div>
+                </div>
+                <div class="stat-box">
+                    <div class="value" style="color: var(--accent-yellow)">{{ Smells.summary.unstable_count }}</div>
+                    <div class="label"><span class="tooltip" data-tooltip="Stable modules depending on unstable ones. The stable module is forced to change when the unstable one does.">Unstable Dependencies</span></div>
+                </div>
+            </div>
+
+            <div class="table-container">
+                <table id="smells-table">
+                    <thead>
+                        <tr>
+                            <th>Type</th>
+                            <th><span class="tooltip" data-tooltip="Impact severity. Critical smells cause cascading problems; medium smells are localized.">Severity</span></th>
+                            <th>Files Involved</th>
+                            <th>Suggestion</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in Smells.smells %}
+                        <tr>
+                            <td><span class="tooltip" data-tooltip="{{ item.description }}">{{ item.smell_type | smell_type_label }}</span></td>
+                            <td><span class="badge {{ item.severity | lower }}">{{ item.severity }}</span></td>
+                            <td>
+                                {% for comp in item.components %}
+                                <code style="font-size: 0.75rem;">{{ comp | rel_path(Metadata.paths) | truncate_path(40) }}</code>{% if not loop.last %}, {% endif %}
+                                {% endfor %}
+                            </td>
+                            <td style="color: var(--text-secondary); font-size: 0.85rem;">{{ item.suggestion | truncate(120) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+        {% endif %}
+
+        <!-- Dependency Graph -->
+        {% if Graph and Graph.summary.total_edges > 0 %}
+        <section id="dependencies" class="section">
+            <div class="section-header">
+                <h2>Dependency Structure</h2>
+            </div>
+            <p class="section-subtitle">Import graph analysis - cycles, bottlenecks, and instability</p>
+
+            {% if GraphInsight %}
+            <div class="card" style="margin-bottom: 1.5rem;">
+                <div class="narrative">{{ GraphInsight.section_insight | markdown }}</div>
+            </div>
+            {% endif %}
+
+            <div class="stat-grid">
+                <div class="stat-box">
+                    <div class="value">{{ Graph.summary.total_nodes }}</div>
+                    <div class="label">Modules</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value">{{ Graph.summary.total_edges }}</div>
+                    <div class="label">Dependencies</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value">{{ Graph.summary.avg_degree | round(1) }}</div>
+                    <div class="label"><span class="tooltip" data-tooltip="Average number of imports + importers per file. Higher means more interconnected.">Avg Degree</span></div>
+                </div>
+                <div class="stat-box">
+                    <div class="value" style="color: {% if Graph.summary.cycle_count > 3 %}var(--accent-red){% elif Graph.summary.cycle_count > 0 %}var(--accent-yellow){% else %}var(--accent-green){% endif %}">{{ Graph.summary.cycle_count }}</div>
+                    <div class="label"><span class="tooltip" data-tooltip="Strongly connected components with more than one node. Each cycle is a group of files that all depend on each other.">Dependency Cycles</span></div>
+                </div>
+            </div>
+
+            {% if Graph.cycles %}
+            <div class="card" style="margin-bottom: 1.5rem;">
+                <h3 style="margin-bottom: 0.75rem;">Detected Cycles</h3>
+                {% for cycle in Graph.cycles %}
+                <div style="margin-bottom: 0.75rem; padding: 0.5rem 0.75rem; background: var(--bg-tertiary); border-radius: 6px; border-left: 3px solid var(--accent-red);">
+                    <div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Cycle ({{ cycle | length }} files)</div>
+                    <div style="display: flex; flex-wrap: wrap; gap: 0.25rem;">
+                        {% for file in cycle %}
+                        <code style="font-size: 0.75rem;">{{ file | rel_path(Metadata.paths) | truncate_path(50) }}</code>{% if not loop.last %}<span style="color: var(--accent-red); margin: 0 0.125rem;">&#8594;</span>{% endif %}
+                        {% endfor %}
+                        <span style="color: var(--accent-red); margin: 0 0.125rem;">&#8594;</span>
+                        <code style="font-size: 0.75rem; opacity: 0.6;">{{ cycle[0] | rel_path(Metadata.paths) | truncate_path(50) }}</code>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            {% if Graph.nodes %}
+            <div class="language-filter" data-target="graph-table"></div>
+            <div class="table-container">
+                <table id="graph-table">
+                    <thead>
+                        <tr>
+                            <th>File</th>
+                            <th><span class="tooltip" data-tooltip="Relative importance in the dependency graph. Higher PageRank = more other files depend on this (directly or transitively).">PageRank</span></th>
+                            <th><span class="tooltip" data-tooltip="How often this file sits on the shortest path between other files. High betweenness = bottleneck.">Betweenness</span></th>
+                            <th><span class="tooltip" data-tooltip="Number of files that import this file.">In</span></th>
+                            <th><span class="tooltip" data-tooltip="Number of files this file imports.">Out</span></th>
+                            <th><span class="tooltip" data-tooltip="Ratio of outgoing to total dependencies. 0 = maximally stable (many dependents), 1 = maximally unstable. Stable modules depending on unstable ones is a smell.">Instability</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for node in Graph.nodes %}
+                        <tr data-language="{{ node.path | lang_from_path }}">
+                            <td><code>{{ node.path | rel_path(Metadata.paths) | truncate_path(50) }}</code></td>
+                            <td>{{ node.pagerank | round(4) }}</td>
+                            <td>{{ node.betweenness | round(4) }}</td>
+                            <td>{{ node.in_degree }}</td>
+                            <td>{{ node.out_degree }}</td>
+                            <td><span class="{{ node.instability | instability_class }}">{{ node.instability | round(2) }}</span></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+        </section>
+        {% endif %}
+
         <!-- SATD / Known Issues -->
         {% if SATD and SATD.items %}
         <section id="satd" class="section">
@@ -1509,6 +1678,84 @@
                     <div class="label">Total Lines</div>
                 </div>
             </div>
+        </section>
+        {% endif %}
+
+        <!-- Technical Debt Gradient -->
+        {% if Tdg %}
+        <section id="tdg" class="section">
+            <div class="section-header">
+                <h2>Technical Debt Gradient</h2>
+            </div>
+            <p class="section-subtitle">Per-file debt scores - prioritize cleanup where it matters most</p>
+
+            {% if TdgInsight %}
+            <div class="card" style="margin-bottom: 1.5rem;">
+                <div class="narrative">{{ TdgInsight.section_insight | markdown }}</div>
+            </div>
+            {% endif %}
+
+            <div class="stat-grid">
+                <div class="stat-box">
+                    <div class="value">{{ Tdg.total_files }}</div>
+                    <div class="label">Files Scored</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value {{ Tdg.average_score | round(0) | int | score_class }}">{{ Tdg.average_score | round(1) }}</div>
+                    <div class="label">Average Score</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value {{ Tdg.average_grade | grade_class }}">{{ Tdg.average_grade }}</div>
+                    <div class="label">Average Grade</div>
+                </div>
+                {% if Tdg.grade_distribution %}
+                <div class="stat-box">
+                    <div class="value" style="color: var(--accent-red)">{{ Tdg.grade_distribution.F | default(0) }}</div>
+                    <div class="label">Failing Files</div>
+                </div>
+                {% endif %}
+            </div>
+
+            {% if Tdg.grade_distribution %}
+            <div class="chart-container" style="margin-bottom: 1.5rem;">
+                <h3>Grade Distribution</h3>
+                <div class="chart-wrapper" style="height: 220px;">
+                    <canvas id="tdgGradeChart"></canvas>
+                </div>
+            </div>
+            {% endif %}
+
+            {% if Tdg.files %}
+            <div class="language-filter" data-target="tdg-table"></div>
+            <div class="table-container">
+                <table id="tdg-table">
+                    <thead>
+                        <tr>
+                            <th>File</th>
+                            <th><span class="tooltip" data-tooltip="Overall debt score (0-100). Higher is better. Below 60 is failing.">Score</span></th>
+                            <th>Grade</th>
+                            <th><span class="tooltip" data-tooltip="Cyclomatic complexity contribution (0-20).">Structural</span></th>
+                            <th><span class="tooltip" data-tooltip="Nesting depth contribution (0-15).">Semantic</span></th>
+                            <th><span class="tooltip" data-tooltip="Code duplication ratio contribution (0-15).">Duplication</span></th>
+                            <th><span class="tooltip" data-tooltip="Import count contribution (0-15).">Coupling</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in Tdg.files %}
+                        <tr data-language="{{ item.file_path | lang_from_path }}">
+                            <td><code>{{ item.file_path | rel_path(Metadata.paths) | truncate_path(50) }}</code></td>
+                            <td><span class="{{ item.total | round(0) | int | score_class }}">{{ item.total | round(1) }}</span></td>
+                            <td><span class="badge {{ item.grade | grade_class }}">{{ item.grade }}</span></td>
+                            <td>{{ item.structural_complexity | round(1) }}</td>
+                            <td>{{ item.semantic_complexity | round(1) }}</td>
+                            <td>{{ item.duplication_ratio | round(1) }}</td>
+                            <td>{{ item.coupling_score | round(1) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
         </section>
         {% endif %}
 
@@ -1694,6 +1941,64 @@
         </section>
         {% endif %}
 
+        <!-- Temporal Coupling -->
+        {% if Temporal and Temporal.couplings %}
+        <section id="temporal" class="section">
+            <div class="section-header">
+                <h2>Temporal Coupling</h2>
+            </div>
+            <p class="section-subtitle">Files that frequently change together - reveals hidden dependencies not in the import graph</p>
+
+            {% if TemporalInsight %}
+            <div class="card" style="margin-bottom: 1.5rem;">
+                <div class="narrative">{{ TemporalInsight.section_insight | markdown }}</div>
+            </div>
+            {% endif %}
+
+            <div class="stat-grid">
+                <div class="stat-box">
+                    <div class="value">{{ Temporal.summary.total_couplings }}</div>
+                    <div class="label">Coupled Pairs</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value" style="color: {% if Temporal.summary.strong_couplings > 10 %}var(--accent-red){% elif Temporal.summary.strong_couplings > 3 %}var(--accent-yellow){% else %}var(--accent-green){% endif %}">{{ Temporal.summary.strong_couplings }}</div>
+                    <div class="label"><span class="tooltip" data-tooltip="Pairs with coupling strength >= 0.5. These files almost always change together.">Strong Couplings</span></div>
+                </div>
+                <div class="stat-box">
+                    <div class="value">{{ Temporal.summary.avg_coupling_strength | round(2) }}</div>
+                    <div class="label">Avg Strength</div>
+                </div>
+                <div class="stat-box">
+                    <div class="value">{{ Temporal.summary.max_coupling_strength | round(2) }}</div>
+                    <div class="label">Max Strength</div>
+                </div>
+            </div>
+
+            <div class="table-container">
+                <table id="temporal-table">
+                    <thead>
+                        <tr>
+                            <th>File A</th>
+                            <th>File B</th>
+                            <th><span class="tooltip" data-tooltip="Number of commits where both files changed together.">Co-changes</span></th>
+                            <th><span class="tooltip" data-tooltip="Ratio of co-changes to the maximum commits of either file. 1.0 = always change together.">Strength</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in Temporal.couplings %}
+                        <tr>
+                            <td><code>{{ item.file_a | rel_path(Metadata.paths) | truncate_path(40) }}</code></td>
+                            <td><code>{{ item.file_b | rel_path(Metadata.paths) | truncate_path(40) }}</code></td>
+                            <td>{{ item.cochange_count }}</td>
+                            <td><span class="badge {{ item.coupling_strength | coupling_badge }}">{{ item.coupling_strength | round(2) }}</span></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+        {% endif %}
+
         <!-- Score Breakdown -->
         <section id="breakdown" class="section">
             <div class="section-header">
@@ -1836,7 +2141,23 @@
                         </div>
                         <div class="card">
                             <h3>Technical Debt Gradient</h3>
-                            <p style="color: var(--text-secondary);">Rate of debt accumulation over time. A positive gradient means debt is increasing; negative means the team is paying it down.</p>
+                            <p style="color: var(--text-secondary);">Per-file quality score (0-100) combining complexity, duplication, coupling, and other factors. Lower scores mean more accumulated debt.</p>
+                        </div>
+                        <div class="card">
+                            <h3>Temporal Coupling</h3>
+                            <p style="color: var(--text-secondary);">Files that frequently change together in the same commits. High temporal coupling suggests hidden dependencies not visible in the import graph.</p>
+                        </div>
+                        <div class="card">
+                            <h3>Architectural Smell</h3>
+                            <p style="color: var(--text-secondary);">A structural pattern that violates design principles: cyclic dependencies, hub-like modules, or stable code depending on unstable code.</p>
+                        </div>
+                        <div class="card">
+                            <h3>Instability</h3>
+                            <p style="color: var(--text-secondary);">Ratio of outgoing to total dependencies. 0 = maximally stable (many things depend on it), 1 = maximally unstable (depends on many things).</p>
+                        </div>
+                        <div class="card">
+                            <h3>PageRank</h3>
+                            <p style="color: var(--text-secondary);">Importance of a file in the dependency graph. Files with high PageRank are depended on by many other important files.</p>
                         </div>
                     </div>
                 </div>
@@ -1915,7 +2236,7 @@
         };
 
         const dataTableInstances = {};
-        const tableIds = ['hotspots-table', 'flags-table', 'cohesion-table', 'satd-table', 'churn-table'];
+        const tableIds = ['hotspots-table', 'flags-table', 'cohesion-table', 'satd-table', 'churn-table', 'smells-table', 'graph-table', 'tdg-table', 'temporal-table'];
         tableIds.forEach(id => {
             const table = document.getElementById(id);
             if (table && table.querySelector('tbody tr')) {
@@ -1924,7 +2245,7 @@
         });
 
         // Language filter pills for filterable tables
-        const filterableTableIds = ['cohesion-table', 'hotspots-table', 'satd-table', 'churn-table'];
+        const filterableTableIds = ['cohesion-table', 'hotspots-table', 'satd-table', 'churn-table', 'graph-table', 'tdg-table'];
         filterableTableIds.forEach(tableId => {
             const filterContainer = document.querySelector('.language-filter[data-target="' + tableId + '"]');
             const table = document.getElementById(tableId);
@@ -2336,6 +2657,39 @@
                 maintainAspectRatio: false,
                 indexAxis: 'y',
                 plugins: { legend: { display: false } }
+            }
+        });
+    </script>
+    {% endif %}
+
+    {% if Tdg and Tdg.grade_distribution %}
+    <script>
+        const gradeOrder = ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-', 'D', 'F'];
+        const gradeColors = {
+            'A+': '#3fb950', 'A': '#3fb950', 'A-': '#56d364',
+            'B+': '#58a6ff', 'B': '#58a6ff', 'B-': '#79c0ff',
+            'C+': '#d29922', 'C': '#d29922', 'C-': '#e3b341',
+            'D': '#f85149', 'F': '#da3633'
+        };
+        const tdgDist = {{ Tdg.grade_distribution | tojson }};
+        const presentGrades = gradeOrder.filter(g => (tdgDist[g] || 0) > 0);
+        new Chart(document.getElementById('tdgGradeChart'), {
+            type: 'bar',
+            data: {
+                labels: presentGrades,
+                datasets: [{
+                    label: 'Files',
+                    data: presentGrades.map(g => tdgDist[g] || 0),
+                    backgroundColor: presentGrades.map(g => gradeColors[g] || '#8b949e')
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: { beginAtZero: true, title: { display: true, text: 'Files' } }
+                }
             }
         });
     </script>
