@@ -23,8 +23,14 @@ There are two ways to generate reports:
 ### CLI
 
 ```bash
+# Generate JSON data files from all analyzers
 omen report generate
-omen report view
+
+# Render data + insights into a self-contained HTML file
+omen report render
+
+# Or serve with live re-render
+omen report serve
 ```
 
 The CLI runs all analyzers in parallel and renders an HTML report from the raw data.
@@ -37,7 +43,7 @@ The CLI runs all analyzers in parallel and renders an HTML report from the raw d
 
 The Claude Code skill goes beyond the CLI by having LLM analyst agents interpret the data. Each section of the report gets a dedicated agent that provides narrative analysis -- explaining what the numbers mean, identifying patterns across metrics, and producing prioritized recommendations. The result is a report with both raw data and expert-level commentary.
 
-Reports are saved to `.omen/report.html` by default.
+Reports are saved to `.omen/report/` by default.
 
 ## What the Reports Cover
 
