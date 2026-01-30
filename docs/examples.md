@@ -18,19 +18,26 @@ Omen can generate comprehensive HTML health reports for any repository. These re
 
 ## Generating Your Own Report
 
-Reports are generated using the Claude Code skill:
+There are two ways to generate reports:
+
+### CLI
+
+```bash
+omen report generate
+omen report view
+```
+
+The CLI runs all analyzers in parallel and renders an HTML report from the raw data.
+
+### Claude Code Skill (recommended)
 
 ```
 /omen-reporting:generate-report
 ```
 
-This skill:
+The Claude Code skill goes beyond the CLI by having LLM analyst agents interpret the data. Each section of the report gets a dedicated agent that provides narrative analysis -- explaining what the numbers mean, identifying patterns across metrics, and producing prioritized recommendations. The result is a report with both raw data and expert-level commentary.
 
-1. Runs all applicable analyzers in parallel via the Omen MCP server
-2. Spawns 14 LLM analyst agents to produce narrative insights for each section
-3. Renders an interactive standalone HTML report with charts, tables, and prioritized recommendations
-
-Reports are saved to `.omen/report.html` by default. Run `omen report view` to open the generated report in your browser.
+Reports are saved to `.omen/report.html` by default.
 
 ## What the Reports Cover
 
