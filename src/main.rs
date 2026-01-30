@@ -192,7 +192,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                     Some(ScoreSubcommand::Trend(args)) => {
                         // Score trend analysis
                         let trend_data =
-                            omen::score::analyze_trend(path, &config, &args.since, args.period)?;
+                            omen::score::analyze_trend(path, &config, &args.since, args.period, args.samples)?;
                         match format {
                             Format::Json => {
                                 println!("{}", serde_json::to_string_pretty(&trend_data)?);
@@ -874,11 +874,17 @@ fn run_report(
                 if let Some(ref bar) = progress {
                     bar.set_message("trend...");
                 }
+                let samples = args.samples.or_else(|| {
+                    let days = omen::git::parse_since_to_days(&args.since)
+                        .unwrap_or(365 * 50) as f64;
+                    Some(omen::score::default_sample_count(days))
+                });
                 match omen::score::analyze_trend(
                     path,
                     config,
                     &args.since,
                     omen::cli::TrendPeriod::Monthly,
+                    samples,
                 ) {
                     Ok(trend_data) => {
                         let output_path = output_dir.join("trend.json");

@@ -25,6 +25,7 @@ pub fn analyze_trend(
     config: &Config,
     since: &str,
     period: TrendPeriod,
+    samples: Option<usize>,
 ) -> Result<TrendData> {
     let repo = GitRepo::open(path)?;
     let now = Utc::now();
@@ -32,11 +33,18 @@ pub fn analyze_trend(
     // Parse the "since" parameter to determine how far back to go
     let start_time = parse_since_to_datetime(since, now)?;
 
-    // Determine interval based on period
-    let interval = match period {
-        TrendPeriod::Daily => Duration::days(1),
-        TrendPeriod::Weekly => Duration::days(7),
-        TrendPeriod::Monthly => Duration::days(30),
+    // If an explicit sample count is given, divide the range into evenly-spaced
+    // intervals. Otherwise fall back to the period-based fixed interval.
+    let interval = if let Some(n) = samples {
+        let n = n.max(2);
+        let total_seconds = (now - start_time).num_seconds();
+        Duration::seconds(total_seconds / (n as i64 - 1))
+    } else {
+        match period {
+            TrendPeriod::Daily => Duration::days(1),
+            TrendPeriod::Weekly => Duration::days(7),
+            TrendPeriod::Monthly => Duration::days(30),
+        }
     };
 
     // Get commits in the time range
@@ -224,6 +232,18 @@ fn analyze_commits_sequential(
     }
 
     Ok(points)
+}
+
+/// Compute a default sample count from the number of days in the time range.
+///
+/// Uses `100 * tanh(sqrt(days) / 50)`. For small ranges this approximates
+/// `2 * sqrt(days)` (e.g. 1 month -> 11 samples), because tanh(x) ~ x for
+/// small x. For large ranges tanh asymptotes to 1, naturally compressing
+/// toward a cap of 100 (e.g. 10 years -> 84 samples). This avoids both
+/// under-sampling short histories and over-sampling long ones.
+pub fn default_sample_count(days: f64) -> usize {
+    let count = 100.0 * (days.sqrt() / 50.0).tanh();
+    (count.round() as usize).max(2)
 }
 
 /// Parse "since" string (like "3m", "6m", "1y", "all") to a DateTime.
@@ -453,6 +473,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_default_sample_count() {
+        // Short ranges should match ~2*sqrt(days) (tanh(x) ~ x for small x)
+        assert_eq!(default_sample_count(30.0), 11);
+        assert_eq!(default_sample_count(90.0), 19);
+
+        // Long ranges compress toward 100
+        assert!(default_sample_count(3650.0) <= 100);
+        assert!(default_sample_count(3650.0) >= 80);
+
+        // Minimum is 2
+        assert_eq!(default_sample_count(0.0), 2);
+        assert_eq!(default_sample_count(1.0), 2);
+    }
+
+    #[test]
     fn test_parse_since_days() {
         let now = Utc::now();
         let result = parse_since_to_datetime("30d", now).unwrap();
@@ -482,6 +517,14 @@ mod tests {
         let result = parse_since_to_datetime("1y", now).unwrap();
         let expected = now - Duration::days(365);
         assert!((result.timestamp() - expected.timestamp()).abs() < 1);
+    }
+
+    #[test]
+    fn test_parse_since_all() {
+        let now = Utc::now();
+        let result = parse_since_to_datetime("all", now).unwrap();
+        // Should return epoch (Unix timestamp 0)
+        assert_eq!(result.timestamp(), 0);
     }
 
     #[test]
