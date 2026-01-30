@@ -37,9 +37,8 @@ omen score trend --since 1y --period monthly
 ```
 
 **Parameters:**
-- `--since`: How far back to analyze (3m, 6m, 1y, 2y, 30d, 4w)
+- `--since`: How far back to analyze (3m, 6m, 1y, 2y, 30d, 4w, all). Defaults to `all` (full history).
 - `--period`: Sampling frequency (daily, weekly, monthly)
-- `--snap`: Snap to period boundaries (1st of month, Monday)
 
 ### Step 2: Interpret Results
 

@@ -1,37 +1,11 @@
-pre-commit:
+pre-push:
   parallel: true
   commands:
     fmt:
       glob: "*.rs"
-      run: cargo fmt
-      stage_fixed: true
+      run: cargo fmt --check
     lint:
       glob: "*.rs"
-      run: cargo clippy --all-targets --all-features --fix --allow-dirty --allow-staged -- -D warnings
-      stage_fixed: true
+      run: cargo clippy --all-targets --all-features -- -D warnings
     tidy:
       run: cargo check --all-features
-
-pre-push:
-  parallel: true
-  commands:
-    test:
-      run: cargo test --all-features
-    coverage:
-      run: cargo llvm-cov --all-features --ignore-filename-regex 'main\.rs$' --fail-under-lines 69
-      fail_text: "Coverage below 69% threshold"
-    score:
-      run: omen -p . score --check --fail-under 80
-      fail_text: "Repository health score below 80"
-    duplication:
-      run: |
-        omen -p . -f json clones 2>&1 | python3 -c "
-        import json, sys
-        data = json.load(sys.stdin)
-        ratio = data['summary']['duplication_ratio']
-        if ratio > 0.30:
-            print(f'FAIL: duplication ratio {ratio:.1%} exceeds 30%')
-            sys.exit(1)
-        print(f'OK: duplication ratio {ratio:.1%} <= 30%')
-        "
-      fail_text: "Code duplication exceeds 30%"

@@ -9,27 +9,16 @@ Analyze the structural health of a codebase by examining coupling, cohesion, hid
 
 ## Prerequisites
 
-Omen must be available as an MCP server. Add to Claude Code settings:
-
-```json
-{
-  "mcpServers": {
-    "omen": {
-      "command": "omen",
-      "args": ["mcp"]
-    }
-  }
-}
-```
+Omen CLI must be installed and available in PATH.
 
 ## Workflow
 
 ### Step 1: Map Module Dependencies
 
-Use the `analyze_graph` tool for dependency visualization:
+Run the dependency graph analysis:
 
-```
-analyze_graph(paths: ["."], scope: "module", include_metrics: true)
+```bash
+omen -f json graph
 ```
 
 Look for:
@@ -37,12 +26,22 @@ Look for:
 - God modules (too many dependents)
 - Orphan modules (no connections)
 
-### Step 2: Measure Cohesion
+### Step 2: Detect Architectural Smells
 
-Use the `analyze_cohesion` tool for CK metrics:
+Run the smells analysis:
 
+```bash
+omen -f json smells
 ```
-analyze_cohesion(paths: ["."])
+
+Detects cyclic dependencies, hub modules, unstable dependencies, and central connectors using Tarjan's SCC algorithm.
+
+### Step 3: Measure Cohesion
+
+Run the cohesion analysis for CK metrics:
+
+```bash
+omen -f json cohesion
 ```
 
 Metrics to watch:
@@ -50,12 +49,12 @@ Metrics to watch:
 - **WMC** (Weighted Methods per Class): > 30 indicates too complex
 - **CBO** (Coupling Between Objects): > 10 indicates too many dependencies
 
-### Step 3: Find Hidden Dependencies
+### Step 4: Find Hidden Dependencies
 
-Use the `analyze_temporal_coupling` tool:
+Run the temporal coupling analysis:
 
-```
-analyze_temporal_coupling(paths: ["."])
+```bash
+omen -f json temporal
 ```
 
 Files that always change together but don't have explicit imports indicate:
@@ -63,12 +62,12 @@ Files that always change together but don't have explicit imports indicate:
 - Implicit contracts
 - Missing abstractions
 
-### Step 4: Check Ownership Distribution
+### Step 5: Check Ownership Distribution
 
-Use the `analyze_ownership` tool:
+Run the ownership analysis:
 
-```
-analyze_ownership(paths: ["."])
+```bash
+omen -f json ownership
 ```
 
 Look for:
@@ -98,7 +97,7 @@ Present architecture review as:
 ## Module Dependency Analysis
 
 ### Dependency Graph
-[Mermaid diagram from analyze_graph]
+[Mermaid diagram from graph analysis]
 
 ### Issues Detected
 

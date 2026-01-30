@@ -40,7 +40,12 @@ pub fn analyze_trend(
     };
 
     // Get commits in the time range
-    let commits = repo.log(Some(since), None, None)?;
+    let since_arg = if crate::git::is_since_all(since) {
+        None
+    } else {
+        Some(since)
+    };
+    let commits = repo.log(since_arg, None, None)?;
     if commits.is_empty() {
         return Ok(TrendData::default());
     }
@@ -221,8 +226,13 @@ fn analyze_commits_sequential(
     Ok(points)
 }
 
-/// Parse "since" string (like "3m", "6m", "1y") to a DateTime.
+/// Parse "since" string (like "3m", "6m", "1y", "all") to a DateTime.
 fn parse_since_to_datetime(since: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>> {
+    if crate::git::is_since_all(since) {
+        // Return a date far enough in the past to cover any repository
+        return Ok(DateTime::from_timestamp(0, 0).unwrap_or(now - Duration::days(365 * 50)));
+    }
+
     let since = since.trim().to_lowercase();
 
     // Find where the number ends and the unit begins

@@ -760,7 +760,7 @@ fn run_report(
             // Group C: Mixed analyzers (benefit from warm OS caches)
             let churn_days = args
                 .days
-                .unwrap_or_else(|| omen::git::parse_since_to_days(&args.since).unwrap_or(365));
+                .unwrap_or_else(|| omen::git::parse_since_to_days(&args.since).unwrap_or(u32::MAX));
 
             std::thread::scope(|s| {
                 // Group A: file-based analyzers

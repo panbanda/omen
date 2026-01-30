@@ -5,7 +5,7 @@ Generate a complete HTML health report with LLM-generated insights.
 ## Workflow
 
 1. Check for `omen.toml` or `.omen/omen.toml`. If missing, run `omen-development:setup-config` first.
-2. Generate data: `omen report generate --since 1y -o ./omen-report-$(date +%Y-%m-%d)/`
+2. Generate data: `omen report generate -o ./omen-report-$(date +%Y-%m-%d)/`
 3. Create insights dir: `mkdir -p <output-dir>/insights`
 4. Spawn analyst agents in parallel (Step 3)
 5. Wait for all to complete, then spawn summary agent (Step 4)
@@ -14,7 +14,7 @@ Generate a complete HTML health report with LLM-generated insights.
 
 ## Step 3: Spawn Analysts (In Parallel)
 
-Use the Task tool to spawn all 9 agents simultaneously. Each agent reads its data file and writes an insight file with the schema below.
+Use the Task tool to spawn all 12 agents simultaneously. Each agent reads its data file and writes an insight file with the schema below.
 
 ---
 
@@ -74,16 +74,37 @@ Use the Task tool to spawn all 9 agents simultaneously. Each agent reads its dat
 
 ---
 
-**Use the patterns-analyst agent** to analyze all data files and write `<dir>/insights/patterns.json`:
+**Use the temporal-analyst agent** to analyze `<dir>/temporal.json` and write `<dir>/insights/temporal.json`:
 ```json
-{"patterns": [{"category": "string", "insight": "string"}]}
+{"section_insight": "string"}
+```
+
+---
+
+**Use the smells-analyst agent** to analyze `<dir>/smells.json` and write `<dir>/insights/smells.json`:
+```json
+{"section_insight": "string"}
+```
+
+---
+
+**Use the graph-analyst agent** to analyze `<dir>/graph.json` and write `<dir>/insights/graph.json`:
+```json
+{"section_insight": "string"}
+```
+
+---
+
+**Use the tdg-analyst agent** to analyze `<dir>/tdg.json` and write `<dir>/insights/tdg.json`:
+```json
+{"section_insight": "string"}
 ```
 
 ---
 
 ## Step 4: Summary (After All Complete)
 
-Wait for all 9 analysts to finish, then:
+Wait for all 12 analysts to finish, then:
 
 **Use the summary-analyst agent** to read all `<dir>/insights/*.json` plus `<dir>/score.json` and write `<dir>/insights/summary.json`:
 ```json

@@ -735,24 +735,24 @@ Omen includes a Model Context Protocol (MCP) server that exposes all analyzers a
 
 **Available tools:**
 
-- `analyze_complexity` - Cyclomatic and cognitive complexity
-- `analyze_satd` - Self-admitted technical debt detection
-- `analyze_deadcode` - Unused functions and variables
-- `analyze_churn` - Git file change frequency
-- `analyze_duplicates` - Code clones detection
-- `analyze_defect` - File-level defect probability (PMAT)
-- `analyze_changes` - Commit-level change risk (JIT)
-- `analyze_tdg` - Technical Debt Gradient scores
-- `analyze_graph` - Dependency graph generation
-- `analyze_hotspot` - High churn + complexity files
-- `analyze_temporal_coupling` - Files that change together
-- `analyze_ownership` - Code ownership and bus factor
-- `analyze_cohesion` - CK OO metrics
-- `analyze_repo_map` - PageRank-ranked symbol map
-- `analyze_smells` - Architectural smell detection
-- `analyze_flags` - Feature flag detection and staleness
-- `score_repository` - Composite health score (0-100)
-- `get_context` - Deep context for a specific file or symbol
+- `complexity` - Cyclomatic and cognitive complexity
+- `satd` - Self-admitted technical debt detection
+- `deadcode` - Unused functions and variables
+- `churn` - Git file change frequency
+- `clones` - Code clones detection
+- `defect` - File-level defect probability (PMAT)
+- `changes` - Commit-level change risk (JIT)
+- `diff` - Branch diff risk analysis
+- `tdg` - Technical Debt Gradient scores
+- `graph` - Dependency graph generation
+- `hotspot` - High churn + complexity files
+- `temporal` - Files that change together
+- `ownership` - Code ownership and bus factor
+- `cohesion` - CK OO metrics
+- `repomap` - PageRank-ranked symbol map
+- `smells` - Architectural smell detection
+- `flags` - Feature flag detection and staleness
+- `score` - Composite health score (0-100)
 - `semantic_search` - Natural language code search
 
 Each tool includes detailed descriptions with interpretation guidance, helping LLMs understand what metrics mean and when to use each analyzer.
