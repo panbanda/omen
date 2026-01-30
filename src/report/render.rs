@@ -40,6 +40,10 @@ impl Renderer {
         env.add_filter("num", num_format);
         env.add_filter("tojson", tojson_filter);
         env.add_filter("lang_from_path", lang_from_path);
+        env.add_filter("coupling_badge", coupling_badge);
+        env.add_filter("grade_class", grade_class);
+        env.add_filter("smell_type_label", smell_type_label);
+        env.add_filter("instability_class", instability_class);
 
         // Add template functions
         env.add_function("percent", percent);
@@ -79,6 +83,14 @@ impl Renderer {
             ComponentsInsight => data.components_insight,
             FlagsInsight => data.flags_insight,
             OwnershipInsight => data.ownership_insight,
+            Temporal => data.temporal,
+            TemporalInsight => data.temporal_insight,
+            Smells => data.smells,
+            SmellsInsight => data.smells_insight,
+            Graph => data.graph,
+            GraphInsight => data.graph_insight,
+            Tdg => data.tdg,
+            TdgInsight => data.tdg_insight,
             ComponentTrends => data.component_trends,
             SATDStats => data.satd_stats,
         })?;
@@ -217,6 +229,39 @@ impl Renderer {
             data.flags = Some(flags);
         }
 
+        // Load temporal coupling
+        if let Ok(temporal) = load_json::<TemporalData>(&data_dir.join("temporal.json")) {
+            data.temporal = Some(temporal);
+        }
+
+        // Load architectural smells
+        if let Ok(smells) = load_json::<SmellsData>(&data_dir.join("smells.json")) {
+            data.smells = Some(smells);
+        }
+
+        // Load dependency graph
+        if let Ok(graph) = load_json::<GraphData>(&data_dir.join("graph.json")) {
+            data.graph = Some(graph);
+        }
+
+        // Load TDG (technical debt gradient) and sort by score ascending (worst first)
+        if let Ok(mut tdg) = load_json::<TdgData>(&data_dir.join("tdg.json")) {
+            tdg.files.sort_by(|a, b| {
+                a.total
+                    .partial_cmp(&b.total)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            // Normalize grade_distribution keys from Debug format ("APlus") to display ("A+").
+            // The grade_distribution HashMap uses format!("{:?}", grade) which gives variant
+            // names, while average_grade and file grades use serde rename ("A+").
+            tdg.grade_distribution = tdg
+                .grade_distribution
+                .into_iter()
+                .map(|(k, v)| (normalize_grade_key(&k), v))
+                .collect();
+            data.tdg = Some(tdg);
+        }
+
         // Load trend
         if let Ok(trend) = load_json::<TrendData>(&data_dir.join("trend.json")) {
             data.component_trends = trend.component_trends.clone();
@@ -257,6 +302,18 @@ impl Renderer {
             if let Ok(insight) = load_json::<OwnershipInsight>(&insights_dir.join("ownership.json"))
             {
                 data.ownership_insight = Some(insight);
+            }
+            if let Ok(insight) = load_json::<TemporalInsight>(&insights_dir.join("temporal.json")) {
+                data.temporal_insight = Some(insight);
+            }
+            if let Ok(insight) = load_json::<SmellsInsight>(&insights_dir.join("smells.json")) {
+                data.smells_insight = Some(insight);
+            }
+            if let Ok(insight) = load_json::<GraphInsight>(&insights_dir.join("graph.json")) {
+                data.graph_insight = Some(insight);
+            }
+            if let Ok(insight) = load_json::<TdgInsight>(&insights_dir.join("tdg.json")) {
+                data.tdg_insight = Some(insight);
             }
         }
 
@@ -545,6 +602,67 @@ fn flag_files_tooltip(refs: Vec<Value>, roots: Option<Vec<String>>) -> String {
         .join("\n")
 }
 
+/// Normalize TDG grade keys from Debug format to display format.
+/// "APlus" -> "A+", "AMinus" -> "A-", "B" -> "B", etc.
+fn normalize_grade_key(key: &str) -> String {
+    match key {
+        "APlus" => "A+".to_string(),
+        "AMinus" => "A-".to_string(),
+        "BPlus" => "B+".to_string(),
+        "BMinus" => "B-".to_string(),
+        "CPlus" => "C+".to_string(),
+        "CMinus" => "C-".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Get badge class based on temporal coupling strength.
+fn coupling_badge(strength: f64) -> &'static str {
+    if strength >= 0.5 {
+        "critical"
+    } else if strength >= 0.3 {
+        "high"
+    } else if strength >= 0.1 {
+        "medium"
+    } else {
+        "low"
+    }
+}
+
+/// Get CSS class based on TDG grade letter.
+fn grade_class(grade: &str) -> &'static str {
+    match grade.chars().next() {
+        Some('A') => "good",
+        Some('B') => "good",
+        Some('C') => "warning",
+        Some('D') => "warning",
+        _ => "danger",
+    }
+}
+
+/// Convert SmellType enum name to human-readable label.
+fn smell_type_label(s: &str) -> String {
+    match s {
+        "CyclicDependency" => "Cyclic Dependency".to_string(),
+        "UnstableDependency" => "Unstable Dependency".to_string(),
+        "Hub" | "HubLikeDependency" => "Hub Dependency".to_string(),
+        "CentralConnector" | "GodComponent" | "GodClass" => "Central Connector".to_string(),
+        "FeatureEnvy" => "Feature Envy".to_string(),
+        _ => s.to_string(),
+    }
+}
+
+/// Get CSS class based on instability value.
+fn instability_class(instability: f64) -> &'static str {
+    if instability >= 0.7 {
+        "danger"
+    } else if instability >= 0.3 {
+        "warning"
+    } else {
+        "good"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -604,6 +722,42 @@ mod tests {
         assert_eq!(lang_from_path("lib/utils.py"), "Python");
         assert_eq!(lang_from_path("index.tsx"), "TSX");
         assert_eq!(lang_from_path("README.md"), "");
+    }
+
+    #[test]
+    fn test_coupling_badge() {
+        assert_eq!(coupling_badge(0.6), "critical");
+        assert_eq!(coupling_badge(0.5), "critical");
+        assert_eq!(coupling_badge(0.4), "high");
+        assert_eq!(coupling_badge(0.3), "high");
+        assert_eq!(coupling_badge(0.2), "medium");
+        assert_eq!(coupling_badge(0.1), "medium");
+        assert_eq!(coupling_badge(0.05), "low");
+    }
+
+    #[test]
+    fn test_grade_class() {
+        assert_eq!(grade_class("A+"), "good");
+        assert_eq!(grade_class("A"), "good");
+        assert_eq!(grade_class("B"), "good");
+        assert_eq!(grade_class("C"), "warning");
+        assert_eq!(grade_class("D"), "warning");
+        assert_eq!(grade_class("F"), "danger");
+    }
+
+    #[test]
+    fn test_smell_type_label() {
+        assert_eq!(smell_type_label("CyclicDependency"), "Cyclic Dependency");
+        assert_eq!(smell_type_label("Hub"), "Hub Dependency");
+        assert_eq!(smell_type_label("CentralConnector"), "Central Connector");
+        assert_eq!(smell_type_label("Unknown"), "Unknown");
+    }
+
+    #[test]
+    fn test_instability_class() {
+        assert_eq!(instability_class(0.8), "danger");
+        assert_eq!(instability_class(0.5), "warning");
+        assert_eq!(instability_class(0.2), "good");
     }
 
     #[test]
