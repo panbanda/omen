@@ -996,12 +996,15 @@ fn run_report(
             }
         }
         ReportSubcommand::Render(args) => {
-            // Use the HTML report renderer (matches Go 3.x version)
             use omen::report::Renderer;
 
             let renderer = Renderer::new()?;
             renderer.render_to_file(&args.data, &args.output)?;
             eprintln!("Report rendered to: {}", args.output.display());
+            eprintln!(
+                "Compressed:         {}",
+                Renderer::gz_path(&args.output).display()
+            );
         }
         ReportSubcommand::Serve(args) => {
             eprintln!("Starting server at http://{}:{}/", args.host, args.port);
