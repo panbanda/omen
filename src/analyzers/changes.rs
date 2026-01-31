@@ -1344,9 +1344,16 @@ impl Analyzer {
 
         // Compute file-level risk signals for the diff's files
         let diff_files: Vec<String> = lines_per_file.keys().cloned().collect();
-        let empty_churn = HashMap::new();
+
+        // Build churn data from full repo history for touched files
+        let file_churn = build_churn_for_files(repo_path, &diff_files)?;
+        let max_churn_count = file_churn
+            .values()
+            .map(|c| c.commit_count)
+            .max()
+            .unwrap_or(1);
         let file_profiles =
-            compute_file_risk_profiles(repo_path, &diff_files, &empty_churn, 1);
+            compute_file_risk_profiles(repo_path, &diff_files, &file_churn, max_churn_count);
 
         // For diff, aggregate without author familiarity (no single commit author)
         let file_risk = if diff_files.is_empty() {
@@ -1527,6 +1534,32 @@ fn get_lines_per_file(repo_path: &Path, merge_base: &str) -> Result<HashMap<Stri
     }
 
     Ok(result)
+}
+
+/// Build churn data (commit count + author set) for a specific set of files
+/// by scanning the full git log.
+fn build_churn_for_files(
+    repo_path: &Path,
+    files: &[String],
+) -> Result<HashMap<String, FileChurnData>> {
+    let target_files: HashSet<&str> = files.iter().map(|s| s.as_str()).collect();
+    let repo = GitRepo::open(repo_path)?;
+    let commits = repo.log_with_stats(None, None)?;
+
+    let mut churn: HashMap<String, FileChurnData> = HashMap::new();
+
+    for commit in &commits {
+        for file_change in &commit.files {
+            let path_str = file_change.path.to_string_lossy();
+            if target_files.contains(path_str.as_ref()) {
+                let entry = churn.entry(path_str.to_string()).or_default();
+                entry.commit_count += 1;
+                entry.authors.insert(commit.author.clone());
+            }
+        }
+    }
+
+    Ok(churn)
 }
 
 fn generate_diff_recommendations(

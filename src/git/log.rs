@@ -555,9 +555,9 @@ pub fn get_diff_stats(repo: &Repository, from: &str, to: &str) -> Result<Vec<Fil
         .options(|opts| {
             opts.track_path();
         })
-        .for_each_to_obtain_tree_with_cache(&to_tree, &mut resource_cache, |change| {
+        .for_each_to_obtain_tree(&to_tree, |change| {
             use gix::object::tree::diff::Change;
-            let (path, change_type, is_blob) = match change {
+            let (path, change_type, is_blob) = match &change {
                 Change::Addition {
                     location,
                     entry_mode,
@@ -595,12 +595,19 @@ pub fn get_diff_stats(repo: &Repository, from: &str, to: &str) -> Result<Vec<Fil
                     entry_mode.is_blob(),
                 ),
             };
-            // Only include blob (file) entries, not tree (directory) entries
             if is_blob {
+                let (additions, deletions) = change
+                    .diff(&mut resource_cache)
+                    .ok()
+                    .and_then(|mut platform| platform.line_counts().ok())
+                    .flatten()
+                    .map(|counts| (counts.insertions, counts.removals))
+                    .unwrap_or((0, 0));
+                resource_cache.clear_resource_cache_keep_allocation();
                 changes.push(FileChange {
                     path,
-                    additions: 0,
-                    deletions: 0,
+                    additions,
+                    deletions,
                     change_type,
                 });
             }
