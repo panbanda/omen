@@ -218,6 +218,11 @@ pub fn extract_imports(result: &ParseResult) -> Vec<ImportNode> {
                     imports.push(import);
                 }
             }
+            Language::Rust if node.kind() == "mod_item" => {
+                if let Some(import) = extract_rust_mod(&node, source) {
+                    imports.push(import);
+                }
+            }
             Language::Python
                 if node.kind() == "import_statement" || node.kind() == "import_from_statement" =>
             {
@@ -396,9 +401,71 @@ fn extract_go_import(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<Impo
 }
 
 fn extract_rust_import(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<ImportNode> {
-    let path = node.utf8_text(source).ok()?.to_string();
+    // use_declaration children: optional visibility_modifier, then the use argument
+    // The argument can be: scoped_identifier, use_as_clause, scoped_use_list, use_wildcard, identifier
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "use" | "visibility_modifier" | ";" => continue,
+            "scoped_use_list" => {
+                // e.g., use std::collections::{HashMap, HashSet}
+                // Extract just the base path (the part before the {})
+                if let Some(path_node) = child.child_by_field_name("path") {
+                    let path = path_node.utf8_text(source).ok()?.to_string();
+                    return Some(ImportNode {
+                        path,
+                        line: node.start_position().row as u32 + 1,
+                        names: Vec::new(),
+                    });
+                }
+            }
+            _ => {
+                // scoped_identifier, identifier, use_as_clause, use_wildcard
+                let text = child.utf8_text(source).ok()?.to_string();
+                // For use_as_clause like "crate::foo as bar", take the path part
+                let path = if child.kind() == "use_as_clause" {
+                    if let Some(path_node) = child.child_by_field_name("path") {
+                        path_node.utf8_text(source).ok()?.to_string()
+                    } else {
+                        text
+                    }
+                } else {
+                    text
+                };
+                return Some(ImportNode {
+                    path,
+                    line: node.start_position().row as u32 + 1,
+                    names: Vec::new(),
+                });
+            }
+        }
+    }
+    None
+}
+
+fn extract_rust_mod(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<ImportNode> {
+    // mod_item children: optional visibility_modifier, "mod", identifier, optional block body
+    // We only want `mod foo;` declarations (no body), not `mod foo { ... }` inline modules
+    let mut has_body = false;
+    let mut name = None;
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "declaration_list" => {
+                has_body = true;
+            }
+            "identifier" => {
+                name = child.utf8_text(source).ok().map(|s| s.to_string());
+            }
+            _ => {}
+        }
+    }
+    if has_body {
+        return None;
+    }
+    let name = name?;
     Some(ImportNode {
-        path,
+        path: name,
         line: node.start_position().row as u32 + 1,
         names: Vec::new(),
     })
@@ -749,6 +816,52 @@ mod tests {
 
         let imports = extract_imports(&result);
         assert!(!imports.is_empty());
+    }
+
+    #[test]
+    fn test_extract_rust_import_path_only() {
+        let parser = Parser::new();
+        let content =
+            b"use std::path::Path;\nuse crate::config::Config;\nuse super::utils;\n\nfn main() {}";
+        let result = parser
+            .parse(content, Language::Rust, Path::new("main.rs"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert_eq!(imports.len(), 3);
+        // Must extract just the module path, not "use ... ;"
+        assert_eq!(imports[0].path, "std::path::Path");
+        assert_eq!(imports[1].path, "crate::config::Config");
+        assert_eq!(imports[2].path, "super::utils");
+    }
+
+    #[test]
+    fn test_extract_rust_use_group() {
+        let parser = Parser::new();
+        let content = b"use std::collections::{HashMap, HashSet};\n\nfn main() {}";
+        let result = parser
+            .parse(content, Language::Rust, Path::new("main.rs"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert_eq!(imports.len(), 1);
+        // Group imports should extract the base path
+        assert_eq!(imports[0].path, "std::collections");
+    }
+
+    #[test]
+    fn test_extract_rust_mod_declarations() {
+        let parser = Parser::new();
+        let content = b"mod config;\nmod utils;\npub mod helpers;\n\nfn main() {}";
+        let result = parser
+            .parse(content, Language::Rust, Path::new("lib.rs"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert_eq!(imports.len(), 3);
+        assert_eq!(imports[0].path, "config");
+        assert_eq!(imports[1].path, "utils");
+        assert_eq!(imports[2].path, "helpers");
     }
 
     #[test]
