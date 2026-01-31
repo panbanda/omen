@@ -115,8 +115,15 @@ impl Analyzer {
                     .into_iter()
                     .map(|func| {
                         let qualified_name = format!("{}:{}", rel_path, func.name);
-                        let calls = if let Some(body_node) = func.body {
-                            extract_calls_from_body(&body_node, source, lang)
+                        let calls = if let Some((start, end)) = func.body_byte_range {
+                            let root = parse_result.tree.root_node();
+                            if let Some(body_node) =
+                                root.descendant_for_byte_range(start, end)
+                            {
+                                extract_calls_from_body(&body_node, source, lang)
+                            } else {
+                                Vec::new()
+                            }
                         } else {
                             Vec::new()
                         };

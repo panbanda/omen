@@ -164,7 +164,7 @@ mod tests {
             name: "test_func".to_string(),
             start_line: 1,
             end_line: 3,
-            body: None,
+            body_byte_range: None,
             is_exported: true,
             signature: "fn test_func()".to_string(),
         };
@@ -180,7 +180,7 @@ mod tests {
             name: "test_func".to_string(),
             start_line: 1,
             end_line: 1,
-            body: None,
+            body_byte_range: None,
             is_exported: true,
             signature: "fn test_func()".to_string(),
         };

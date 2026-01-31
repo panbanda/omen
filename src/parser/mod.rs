@@ -124,8 +124,8 @@ pub struct FunctionNode {
     pub start_line: u32,
     /// End line (1-indexed).
     pub end_line: u32,
-    /// Function body node (for complexity analysis).
-    pub body: Option<tree_sitter::Node<'static>>,
+    /// Byte range of the function body (start, end).
+    pub body_byte_range: Option<(usize, usize)>,
     /// Whether function is exported/public.
     pub is_exported: bool,
     /// Function signature.
@@ -306,7 +306,7 @@ fn extract_function_info(
         name,
         start_line: node.start_position().row as u32 + 1,
         end_line: node.end_position().row as u32 + 1,
-        body: body.map(|_| unsafe { std::mem::transmute(*node) }),
+        body_byte_range: body.map(|b| (b.start_byte(), b.end_byte())),
         is_exported,
         signature,
     })
@@ -1224,5 +1224,169 @@ mod tests {
         let cloned = result.clone();
         assert_eq!(cloned.language, result.language);
         assert_eq!(cloned.path, result.path);
+    }
+
+    #[test]
+    fn test_body_byte_range_rust() {
+        let parser = Parser::new();
+        let content = b"fn hello() {\n    println!(\"hi\");\n}\n";
+        let result = parser
+            .parse(content, Language::Rust, Path::new("main.rs"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 1);
+        let (start, end) = functions[0].body_byte_range.expect("should have body");
+        let body_text = std::str::from_utf8(&content[start..end]).unwrap();
+        assert!(body_text.contains("println!"));
+    }
+
+    #[test]
+    fn test_body_byte_range_go() {
+        let parser = Parser::new();
+        let content = b"package main\n\nfunc hello() {\n\tfmt.Println(\"hi\")\n}\n";
+        let result = parser
+            .parse(content, Language::Go, Path::new("main.go"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 1);
+        let (start, end) = functions[0].body_byte_range.expect("should have body");
+        let body_text = std::str::from_utf8(&content[start..end]).unwrap();
+        assert!(body_text.contains("Println"));
+    }
+
+    #[test]
+    fn test_body_byte_range_python() {
+        let parser = Parser::new();
+        let content = b"def hello():\n    print(\"hi\")\n";
+        let result = parser
+            .parse(content, Language::Python, Path::new("main.py"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 1);
+        let (start, end) = functions[0].body_byte_range.expect("should have body");
+        let body_text = std::str::from_utf8(&content[start..end]).unwrap();
+        assert!(body_text.contains("print"));
+    }
+
+    #[test]
+    fn test_body_byte_range_typescript() {
+        let parser = Parser::new();
+        let content = b"function greet() { console.log('hi'); }";
+        let result = parser
+            .parse(content, Language::TypeScript, Path::new("main.ts"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 1);
+        let (start, end) = functions[0].body_byte_range.expect("should have body");
+        let body_text = std::str::from_utf8(&content[start..end]).unwrap();
+        assert!(body_text.contains("console.log"));
+    }
+
+    #[test]
+    fn test_body_byte_range_javascript() {
+        let parser = Parser::new();
+        let content = b"function test() { return 42; }";
+        let result = parser
+            .parse(content, Language::JavaScript, Path::new("main.js"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 1);
+        let (start, end) = functions[0].body_byte_range.expect("should have body");
+        let body_text = std::str::from_utf8(&content[start..end]).unwrap();
+        assert!(body_text.contains("return 42"));
+    }
+
+    #[test]
+    fn test_body_byte_range_java() {
+        let parser = Parser::new();
+        let content = b"public class Main { public void hello() { System.out.println(\"hi\"); } }";
+        let result = parser
+            .parse(content, Language::Java, Path::new("Main.java"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 1);
+        let (start, end) = functions[0].body_byte_range.expect("should have body");
+        let body_text = std::str::from_utf8(&content[start..end]).unwrap();
+        assert!(body_text.contains("System.out"));
+    }
+
+    #[test]
+    fn test_body_byte_range_c() {
+        let parser = Parser::new();
+        let content = b"int add(int a, int b) { return a + b; }";
+        let result = parser
+            .parse(content, Language::C, Path::new("main.c"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        if !functions.is_empty() {
+            if let Some((start, end)) = functions[0].body_byte_range {
+                let body_text = std::str::from_utf8(&content[start..end]).unwrap();
+                assert!(body_text.contains("return"));
+            }
+        }
+    }
+
+    #[test]
+    fn test_body_byte_range_cpp() {
+        let parser = Parser::new();
+        let content = b"int add(int a, int b) { return a + b; }";
+        let result = parser
+            .parse(content, Language::Cpp, Path::new("main.cpp"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        if !functions.is_empty() {
+            if let Some((start, end)) = functions[0].body_byte_range {
+                let body_text = std::str::from_utf8(&content[start..end]).unwrap();
+                assert!(body_text.contains("return"));
+            }
+        }
+    }
+
+    #[test]
+    fn test_body_none_for_declaration_without_body() {
+        let parser = Parser::new();
+        // Java abstract method has no body
+        let content = b"public abstract class Foo { abstract void bar(); }";
+        let result = parser
+            .parse(content, Language::Java, Path::new("Foo.java"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        for func in &functions {
+            if func.name == "bar" {
+                assert!(
+                    func.body_byte_range.is_none(),
+                    "abstract method should have no body"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_body_byte_range_multiple_functions() {
+        let parser = Parser::new();
+        let content = b"fn first() { let a = 1; }\nfn second() { let b = 2; }";
+        let result = parser
+            .parse(content, Language::Rust, Path::new("main.rs"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 2);
+
+        let (s1, e1) = functions[0].body_byte_range.expect("first should have body");
+        let body1 = std::str::from_utf8(&content[s1..e1]).unwrap();
+        assert!(body1.contains("let a"));
+
+        let (s2, e2) = functions[1].body_byte_range.expect("second should have body");
+        let body2 = std::str::from_utf8(&content[s2..e2]).unwrap();
+        assert!(body2.contains("let b"));
     }
 }
