@@ -114,6 +114,87 @@ impl FilePathIndex {
 
     /// Try to find a file matching the import path.
     fn find_match(&self, import_path: &str, from_file: &Path) -> Option<String> {
+        // 0. Handle Rust crate-relative imports (crate::, super::, self::)
+        if import_path.starts_with("crate::")
+            || import_path.starts_with("super::")
+            || import_path.starts_with("self::")
+        {
+            let stripped = import_path
+                .strip_prefix("crate::")
+                .or_else(|| import_path.strip_prefix("super::"))
+                .or_else(|| import_path.strip_prefix("self::"))
+                .unwrap_or(import_path);
+
+            // Take the module path part (strip trailing type names which are CamelCase)
+            // e.g., crate::config::Config -> config, crate::analyzers::graph -> analyzers/graph
+            let segments: Vec<&str> = stripped.split("::").collect();
+
+            // Find the last segment that looks like a module (lowercase/snake_case)
+            let module_segments: Vec<&str> = segments
+                .iter()
+                .take_while(|s| {
+                    s.chars()
+                        .next()
+                        .map(|c| c.is_lowercase() || c == '_')
+                        .unwrap_or(false)
+                })
+                .copied()
+                .collect();
+
+            let module_path = if module_segments.is_empty() {
+                // All segments start with uppercase - use all as path
+                segments.join("/")
+            } else {
+                module_segments.join("/")
+            };
+
+            // Handle super:: relative to current file
+            if import_path.starts_with("super::") {
+                if let Some(parent) = from_file.parent().and_then(|p| p.parent()) {
+                    let resolved = parent.join(&module_path);
+                    let normalized = normalize_path(&resolved);
+                    for ext in &["", ".rs"] {
+                        let candidate = if ext.is_empty() {
+                            normalized.clone()
+                        } else {
+                            format!("{}{}", normalized, ext)
+                        };
+                        if self.by_full_path.contains_key(&candidate) {
+                            return Some(candidate);
+                        }
+                    }
+                    let mod_rs = format!("{}/mod.rs", normalized);
+                    if self.by_full_path.contains_key(&mod_rs) {
+                        return Some(mod_rs);
+                    }
+                }
+            }
+
+            // Try common Rust source roots with the module path
+            let source_roots = ["src", "lib", ""];
+            for root in &source_roots {
+                let base = if root.is_empty() {
+                    module_path.clone()
+                } else {
+                    format!("{}/{}", root, module_path)
+                };
+
+                // Try direct file match (e.g., src/config.rs)
+                let rs_path = format!("{}.rs", base);
+                if self.by_full_path.contains_key(&rs_path) {
+                    return Some(rs_path);
+                }
+
+                // Try mod.rs (e.g., src/config/mod.rs)
+                let mod_path = format!("{}/mod.rs", base);
+                if self.by_full_path.contains_key(&mod_path) {
+                    return Some(mod_path);
+                }
+            }
+
+            // Fall through to other matching strategies
+        }
+
         // 1. Handle relative imports (./foo, ../foo)
         if import_path.starts_with("./") || import_path.starts_with("../") {
             if let Some(parent) = from_file.parent() {
@@ -1139,6 +1220,61 @@ mod tests {
         assert_eq!(
             index.find_match("T::Sig", Path::new("app/models/user.rb")),
             None
+        );
+    }
+
+    #[test]
+    fn test_find_match_rust_crate_import() {
+        let root = Path::new("/project");
+        let files = vec![
+            std::path::PathBuf::from("/project/src/config/mod.rs"),
+            std::path::PathBuf::from("/project/src/utils.rs"),
+            std::path::PathBuf::from("/project/src/analyzers/graph.rs"),
+        ];
+        let index = FilePathIndex::new(&files, root);
+
+        // crate::config::Config -> should match src/config/mod.rs
+        assert_eq!(
+            index.find_match("crate::config", Path::new("src/main.rs")),
+            Some("src/config/mod.rs".to_string())
+        );
+
+        // crate::utils -> should match src/utils.rs
+        assert_eq!(
+            index.find_match("crate::utils", Path::new("src/main.rs")),
+            Some("src/utils.rs".to_string())
+        );
+
+        // crate::analyzers::graph -> should match src/analyzers/graph.rs
+        assert_eq!(
+            index.find_match("crate::analyzers::graph", Path::new("src/main.rs")),
+            Some("src/analyzers/graph.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn test_find_match_rust_mod_declaration() {
+        let root = Path::new("/project");
+        let files = vec![
+            std::path::PathBuf::from("/project/src/config.rs"),
+            std::path::PathBuf::from("/project/src/config/mod.rs"),
+            std::path::PathBuf::from("/project/src/utils.rs"),
+        ];
+        let index = FilePathIndex::new(&files, root);
+
+        // mod config -> should match src/config.rs or src/config/mod.rs
+        let result = index.find_match("config", Path::new("src/lib.rs"));
+        assert!(
+            result == Some("src/config.rs".to_string())
+                || result == Some("src/config/mod.rs".to_string()),
+            "Expected config.rs or config/mod.rs, got {:?}",
+            result
+        );
+
+        // mod utils -> should match src/utils.rs
+        assert_eq!(
+            index.find_match("utils", Path::new("src/lib.rs")),
+            Some("src/utils.rs".to_string())
         );
     }
 }

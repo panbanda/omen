@@ -115,6 +115,38 @@ Glob: **/__tests__/**
 
 Add detected patterns to exclude list.
 
+### Step 4b: Detect Fixture, Test Data, and Eval Directories
+
+Use Glob to find directories containing test fixtures, evaluation data, sample files, and other non-production code that would skew analysis results (especially complexity and SATD):
+
+```
+Glob: **/fixtures/**/*.{rs,go,py,ts,js,java,rb}
+Glob: **/test_data/**/*.{rs,go,py,ts,js,java,rb}
+Glob: **/testdata/**/*.{rs,go,py,ts,js,java,rb}
+Glob: **/evals/fixtures/**
+Glob: **/test_fixtures/**
+Glob: **/sample_data/**
+Glob: **/samples/**/*.{rs,go,py,ts,js,java,rb}
+Glob: **/snapshots/**
+Glob: **/golden/**
+Glob: **/__fixtures__/**
+Glob: **/cassettes/**
+Glob: **/vcr_cassettes/**
+```
+
+If any of these directories contain source files, add the parent pattern to the exclude list. These directories often contain:
+- Copied production code used as eval fixtures (inflates complexity and SATD counts)
+- Generated test snapshots
+- VCR/HTTP cassettes
+- Golden files for snapshot testing
+
+Common patterns to add when detected:
+- `**/fixtures/` - test fixtures
+- `**/test_data/` or `**/testdata/` - test data directories
+- `**/evals/fixtures/` - ML/AI evaluation fixtures
+- `**/snapshots/` - snapshot test output
+- `**/cassettes/` - HTTP replay cassettes
+
 ### Step 5: Check for OO-Heavy Codebase
 
 For Ruby, Java, C#, or TypeScript projects, recommend enabling cohesion:
@@ -281,6 +313,10 @@ patterns = [
 patterns = [
     "target/",
     "Cargo.lock",
+    # Add if detected:
+    # "**/fixtures/",
+    # "**/test_data/",
+    # "**/evals/fixtures/",
 ]
 ```
 
