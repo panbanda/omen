@@ -33,6 +33,8 @@ pub struct Config {
     pub output: OutputConfig,
     /// Exclude built/minified assets (e.g. *.min.js) from analysis.
     pub exclude_built_assets: bool,
+    /// Changes/JIT analyzer configuration.
+    pub changes: ChangesConfig,
 }
 
 impl Default for Config {
@@ -49,6 +51,7 @@ impl Default for Config {
             temporal: TemporalConfig::default(),
             output: OutputConfig::default(),
             exclude_built_assets: true,
+            changes: ChangesConfig::default(),
         }
     }
 }
@@ -284,6 +287,20 @@ impl Default for OutputConfig {
             format: OutputFormat::Text,
             color: true,
         }
+    }
+}
+
+/// Changes/JIT analyzer configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChangesConfig {
+    /// Number of days of history to analyze.
+    pub days: u32,
+}
+
+impl Default for ChangesConfig {
+    fn default() -> Self {
+        Self { days: 30 }
     }
 }
 
