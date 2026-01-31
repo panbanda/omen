@@ -653,7 +653,8 @@ fn parse_git_log(output: &str) -> Result<Vec<RawCommit>> {
 fn truncate_message(message: &str) -> String {
     let first_line = message.lines().next().unwrap_or(message);
     if first_line.len() > 80 {
-        format!("{}...", &first_line[..77])
+        let end = first_line.floor_char_boundary(77);
+        format!("{}...", &first_line[..end])
     } else {
         first_line.trim().to_string()
     }
@@ -1230,6 +1231,17 @@ mod tests {
         let truncated = truncate_message(&long);
         assert!(truncated.ends_with("..."));
         assert!(truncated.len() <= 80);
+    }
+
+    #[test]
+    fn test_truncate_message_multibyte_utf8() {
+        // 81 bytes with multi-byte chars: 77 ASCII + 2-byte e-acute at byte 78
+        let mut msg = "a".repeat(77);
+        msg.push('\u{00e9}'); // 2 bytes, total 79
+        msg.push_str("zzz"); // total 82 bytes, > 80
+        let result = truncate_message(&msg);
+        assert!(result.ends_with("..."));
+        // Must not panic from slicing mid-character
     }
 
     #[test]

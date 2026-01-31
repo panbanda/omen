@@ -507,7 +507,8 @@ fn title_case(s: &str) -> String {
 /// Truncate string to n characters.
 fn truncate(s: &str, n: usize) -> String {
     if s.len() > n {
-        format!("{}...", &s[..n])
+        let end = s.floor_char_boundary(n);
+        format!("{}...", &s[..end])
     } else {
         s.to_string()
     }
@@ -521,18 +522,21 @@ fn truncate_path(s: &str, n: usize) -> String {
 
     let parts: Vec<&str> = s.split('/').collect();
     if parts.len() <= 2 {
-        return format!("{}...", &s[..n.saturating_sub(3)]);
+        let end = s.floor_char_boundary(n.saturating_sub(3));
+        return format!("{}...", &s[..end]);
     }
 
     let filename = parts.last().unwrap_or(&"");
     if filename.len() >= n.saturating_sub(3) {
-        return format!("...{}", &filename[filename.len().saturating_sub(n - 3)..]);
+        let start = filename.floor_char_boundary(filename.len().saturating_sub(n - 3));
+        return format!("...{}", &filename[start..]);
     }
 
     let remaining = n.saturating_sub(filename.len()).saturating_sub(4);
     let prefix = parts[..parts.len() - 1].join("/");
     let truncated_prefix = if prefix.len() > remaining {
-        &prefix[prefix.len() - remaining..]
+        let start = prefix.floor_char_boundary(prefix.len() - remaining);
+        &prefix[start..]
     } else {
         &prefix
     };
@@ -548,7 +552,8 @@ fn tojson_filter(value: Value) -> String {
 /// Format number with thousands separator.
 fn num_format(n: Value) -> String {
     let num = n.as_i64().unwrap_or(0);
-    let s = num.to_string();
+    let negative = num < 0;
+    let s = num.unsigned_abs().to_string();
     let mut result = String::new();
     let chars: Vec<char> = s.chars().collect();
     for (i, c) in chars.iter().enumerate() {
@@ -556,6 +561,9 @@ fn num_format(n: Value) -> String {
             result.push(',');
         }
         result.push(*c);
+    }
+    if negative {
+        result.insert(0, '-');
     }
     result
 }
@@ -1003,6 +1011,82 @@ mod tests {
         assert_eq!(instability_class(0.8), "danger");
         assert_eq!(instability_class(0.5), "warning");
         assert_eq!(instability_class(0.2), "good");
+    }
+
+    #[test]
+    fn test_truncate_ascii() {
+        assert_eq!(truncate("Hello, world!", 5), "Hello...");
+        assert_eq!(truncate("Hi", 10), "Hi");
+    }
+
+    #[test]
+    fn test_truncate_multibyte_utf8() {
+        // Each CJK char is 3 bytes. "Hello, " is 7 bytes + 2*3=6 bytes = 13 bytes total.
+        let s = "Hello, \u{4e16}\u{754c}"; // "Hello, world" in Chinese
+        let result = truncate(s, 8);
+        // n=8 falls after the space but inside the first CJK char.
+        // floor_char_boundary(8) should back up to 7 (after the space).
+        assert!(result.ends_with("..."));
+        assert!(!result.contains('\u{4e16}'));
+    }
+
+    #[test]
+    fn test_truncate_emoji() {
+        let s = "Hello \u{1F600}\u{1F601}\u{1F602}"; // emoji are 4 bytes each
+        let result = truncate(s, 7);
+        // n=7 falls inside the first emoji (bytes 6..10).
+        // floor_char_boundary(7) should back up to 6.
+        assert_eq!(result, "Hello ...");
+    }
+
+    #[test]
+    fn test_truncate_mid_multibyte() {
+        // 2-byte chars: each e-acute is 2 bytes
+        let s = "\u{00e9}\u{00e9}\u{00e9}\u{00e9}\u{00e9}"; // 5 chars, 10 bytes
+        let result = truncate(s, 3);
+        // n=3 falls in the middle of the second char. floor_char_boundary(3) -> 2.
+        assert!(result.ends_with("..."));
+        // Should contain exactly 1 e-acute
+        assert_eq!(result.chars().filter(|&c| c == '\u{00e9}').count(), 1);
+    }
+
+    #[test]
+    fn test_truncate_edge_cases() {
+        assert_eq!(truncate("", 0), "");
+        assert_eq!(truncate("", 5), "");
+        assert_eq!(truncate("abc", 3), "abc");
+        assert_eq!(truncate("abc", 0), "...");
+        assert_eq!(truncate("abcd", 3), "abc...");
+        assert_eq!(truncate("abc", 100), "abc");
+    }
+
+    #[test]
+    fn test_num_format_negative() {
+        assert_eq!(num_format(Value::from(-42)), "-42");
+        assert_eq!(num_format(Value::from(-1234)), "-1,234");
+        assert_eq!(num_format(Value::from(-1234567)), "-1,234,567");
+    }
+
+    #[test]
+    fn test_num_format_zero() {
+        assert_eq!(num_format(Value::from(0)), "0");
+    }
+
+    #[test]
+    fn test_num_format_large() {
+        assert_eq!(num_format(Value::from(1_000_000)), "1,000,000");
+        assert_eq!(num_format(Value::from(1_000_000_000)), "1,000,000,000");
+        assert_eq!(num_format(Value::from(999)), "999");
+        assert_eq!(num_format(Value::from(1000)), "1,000");
+    }
+
+    #[test]
+    fn test_truncate_path_multibyte() {
+        // Path with CJK filename
+        let s = "src/components/\u{30c6}\u{30b9}\u{30c8}.rs"; // katakana "test"
+        let result = truncate_path(s, 20);
+        // Should not panic
+        assert!(result.len() <= 30);
     }
 
     #[test]

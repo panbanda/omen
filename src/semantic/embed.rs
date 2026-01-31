@@ -91,7 +91,8 @@ pub fn format_symbol_text(func: &FunctionNode, source: &str) -> String {
     // Limit body length to avoid exceeding token limit
     let max_chars = 1500;
     if body.len() > max_chars {
-        format!("{}\n{}", func.signature, &body[..max_chars])
+        let end = body.floor_char_boundary(max_chars);
+        format!("{}\n{}", func.signature, &body[..end])
     } else {
         body
     }
@@ -188,6 +189,23 @@ mod tests {
         let source = "x".repeat(3000);
         let text = format_symbol_text(&func, &source);
         assert!(text.len() <= 1600); // signature + truncated body
+    }
+
+    #[test]
+    fn test_format_symbol_text_truncation_multibyte() {
+        let func = FunctionNode {
+            name: "test_func".to_string(),
+            start_line: 1,
+            end_line: 1,
+            body_byte_range: None,
+            is_exported: true,
+            signature: "fn test_func()".to_string(),
+        };
+        // CJK characters are 3 bytes each; 600 chars = 1800 bytes > 1500
+        let source = "\u{4e16}".repeat(600);
+        let text = format_symbol_text(&func, &source);
+        // Must not panic from slicing mid-character
+        assert!(text.is_char_boundary(text.len()));
     }
 
     #[test]
