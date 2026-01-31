@@ -90,11 +90,23 @@ pub fn is_remote_repo(path: &str) -> bool {
 pub fn clone_remote(url: &str, options: CloneOptions) -> Result<PathBuf> {
     let (repo_url, reference) = parse_remote_url(url)?;
 
-    let target = options.target.unwrap_or_else(|| {
+    let target = if let Some(t) = options.target {
+        t
+    } else {
         let temp_dir = std::env::temp_dir().join("omen-repos");
         std::fs::create_dir_all(&temp_dir).ok();
-        temp_dir.join(sanitize_repo_name(&repo_url))
-    });
+        let sanitized = sanitize_repo_name(&repo_url);
+        if sanitized.is_empty()
+            || sanitized.contains("..")
+            || sanitized.contains('/')
+            || sanitized.contains('\\')
+        {
+            return Err(Error::Remote(format!(
+                "Invalid sanitized repo name: {sanitized}"
+            )));
+        }
+        temp_dir.join(sanitized)
+    };
 
     // Clean up existing directory if it exists (from a previous run)
     if target.exists() {
@@ -108,7 +120,10 @@ pub fn clone_remote(url: &str, options: CloneOptions) -> Result<PathBuf> {
         args.push("1");
     }
     args.push(&repo_url);
-    args.push(target.to_str().unwrap_or_default());
+    let target_str = target
+        .to_str()
+        .ok_or_else(|| Error::Remote("Target path is not valid UTF-8".to_string()))?;
+    args.push(target_str);
 
     // Clone using git command (more reliable for working tree checkout)
     let output = std::process::Command::new("git")
@@ -158,6 +173,10 @@ fn parse_remote_url(url: &str) -> Result<(String, Option<String>)> {
 
 /// Checkout a specific ref in a repository.
 fn checkout_ref(repo_path: &Path, reference: &str) -> Result<()> {
+    if reference.starts_with('-') {
+        return Err(Error::Remote(format!("Invalid reference: {reference}")));
+    }
+
     // Use git command for checkout since gix checkout is complex
     let output = std::process::Command::new("git")
         .args(["checkout", reference])
@@ -420,5 +439,140 @@ mod tests {
         // @ ref handling with slashes
         assert!(is_remote_repo("owner/repo@v1")); // Valid with ref
         assert!(!is_remote_repo("owner/@v1")); // Empty repo before ref
+    }
+
+    // --- Git argument injection tests ---
+
+    fn init_test_repo(path: &Path) {
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(path)
+            .output()
+            .expect("failed to init git repo");
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(path)
+            .output()
+            .expect("failed to set git email");
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test Author"])
+            .current_dir(path)
+            .output()
+            .expect("failed to set git name");
+    }
+
+    fn create_initial_commit(path: &Path) {
+        let file_path = path.join("README.md");
+        std::fs::write(&file_path, "# test\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(path)
+            .output()
+            .expect("failed to add file");
+        std::process::Command::new("git")
+            .args(["commit", "-m", "Initial commit"])
+            .current_dir(path)
+            .output()
+            .expect("failed to commit");
+    }
+
+    #[test]
+    fn test_checkout_ref_rejects_option_injection() {
+        let temp = tempfile::tempdir().unwrap();
+        init_test_repo(temp.path());
+        create_initial_commit(temp.path());
+
+        let dangerous_refs = [
+            "--upload-pack=evil",
+            "-c",
+            "--exec=cmd",
+            "-",
+            "--help",
+            "-b",
+        ];
+        for bad_ref in &dangerous_refs {
+            let result = checkout_ref(temp.path(), bad_ref);
+            assert!(
+                result.is_err(),
+                "checkout_ref should reject ref starting with dash: {bad_ref}"
+            );
+            let err_msg = result.unwrap_err().to_string();
+            assert!(
+                err_msg.contains("Invalid reference"),
+                "Error should mention 'Invalid reference', got: {err_msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_checkout_ref_allows_valid_refs() {
+        let temp = tempfile::tempdir().unwrap();
+        init_test_repo(temp.path());
+        create_initial_commit(temp.path());
+
+        // Tag the initial commit
+        std::process::Command::new("git")
+            .args(["tag", "v1.0.0"])
+            .current_dir(temp.path())
+            .output()
+            .expect("failed to create tag");
+
+        // Create a branch
+        std::process::Command::new("git")
+            .args(["branch", "feature/test-branch"])
+            .current_dir(temp.path())
+            .output()
+            .expect("failed to create branch");
+
+        // These should all succeed
+        assert!(checkout_ref(temp.path(), "v1.0.0").is_ok());
+        assert!(
+            checkout_ref(temp.path(), "main").is_ok()
+                || checkout_ref(temp.path(), "master").is_ok()
+        );
+        assert!(checkout_ref(temp.path(), "feature/test-branch").is_ok());
+    }
+
+    #[test]
+    fn test_sanitize_repo_name_edge_cases() {
+        // Normal cases
+        assert_eq!(
+            sanitize_repo_name("https://github.com/owner/repo"),
+            "owner-repo"
+        );
+        assert_eq!(
+            sanitize_repo_name("https://github.com/owner/repo.git"),
+            "owner-repo"
+        );
+
+        // Empty-ish URLs
+        assert_eq!(sanitize_repo_name(""), "");
+        assert_eq!(sanitize_repo_name("/"), "");
+    }
+
+    #[test]
+    fn test_clone_remote_rejects_dangerous_sanitized_name() {
+        // A URL that would produce a sanitized name with path traversal
+        // sanitize_repo_name won't normally produce ".." but we test the validation
+        // by checking that the clone_remote function validates properly.
+        // The sanitizer strips .git but can't produce ".." from normal URLs.
+        // Test with a URL whose sanitized form is empty.
+        let result = clone_remote("/", CloneOptions::default());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_remote_url_extracts_dash_refs() {
+        // A ref starting with '-' can come from parse_remote_url
+        let (url, reference) = parse_remote_url("owner/repo@--upload-pack=evil").unwrap();
+        assert_eq!(url, "https://github.com/owner/repo");
+        assert_eq!(reference, Some("--upload-pack=evil".to_string()));
+
+        // This dangerous ref should then be caught by checkout_ref validation
+        let temp = tempfile::tempdir().unwrap();
+        init_test_repo(temp.path());
+        create_initial_commit(temp.path());
+        let result = checkout_ref(temp.path(), reference.as_deref().unwrap());
+        assert!(result.is_err());
     }
 }
