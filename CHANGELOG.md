@@ -1,5 +1,20 @@
 # Changelog
 
+## [4.20.2](https://github.com/panbanda/omen/compare/omen-v4.20.1...omen-v4.20.2) (2026-01-31)
+
+
+### Bug Fixes
+
+* address review feedback on report optimization ([2055b5b](https://github.com/panbanda/omen/commit/2055b5b8cda295f6218258e1ad56b913bbff9a47))
+* **graph:** detect Rust imports and module dependencies ([6706dc5](https://github.com/panbanda/omen/commit/6706dc558094aebf45e963bbffe7224e5b6539be))
+* **graph:** detect Rust imports and module dependencies ([6edd8b4](https://github.com/panbanda/omen/commit/6edd8b42a939d10244ffe64576e138b459c7d6fd))
+
+
+### Performance Improvements
+
+* reduce HTML report size and improve load performance ([40d13cf](https://github.com/panbanda/omen/commit/40d13cf053e928090ab727941a8c1cf7bcae5cc9))
+* reduce HTML report size by replacing table rows with JSON data ([7325f17](https://github.com/panbanda/omen/commit/7325f17a3d9d7e04bea49542c5b35c21173bbb12))
+
 ## [4.20.1](https://github.com/panbanda/omen/compare/omen-v4.20.0...omen-v4.20.1) (2026-01-31)
 
 

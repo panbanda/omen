@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.0.2](https://github.com/panbanda/omen/compare/omen-skills-v4.0.1...omen-skills-v4.0.2) (2026-01-31)
+
+
+### Bug Fixes
+
+* **graph:** detect Rust imports and module dependencies ([6706dc5](https://github.com/panbanda/omen/commit/6706dc558094aebf45e963bbffe7224e5b6539be))
+* **graph:** detect Rust imports and module dependencies ([6edd8b4](https://github.com/panbanda/omen/commit/6edd8b42a939d10244ffe64576e138b459c7d6fd))
+
 ## [4.0.1](https://github.com/panbanda/omen/compare/omen-skills-v4.0.0...omen-skills-v4.0.1) (2026-01-30)
 
 
