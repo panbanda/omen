@@ -6,8 +6,12 @@
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::core::{Error, Result};
+
+/// Global counter for generating unique temp file names across threads.
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// RAII guard that ensures a file is restored to its original content.
 ///
@@ -76,8 +80,30 @@ impl MutationGuard {
 impl Drop for MutationGuard {
     fn drop(&mut self) {
         if self.modified {
-            // Best-effort restoration - we can't propagate errors from drop
-            let _ = fs::write(&self.path, &self.original);
+            // Best-effort atomic restoration: write to temp, then rename.
+            // Falls back to direct write if rename fails (e.g. cross-device).
+            let parent = self.path.parent().unwrap_or(Path::new("."));
+            let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let temp_path = parent.join(format!(
+                ".omen-restore-{}-{}.tmp",
+                std::process::id(),
+                counter
+            ));
+            if File::create(&temp_path)
+                .and_then(|mut f| {
+                    f.write_all(&self.original)?;
+                    f.sync_all()
+                })
+                .is_ok()
+            {
+                if fs::rename(&temp_path, &self.path).is_err() {
+                    let _ = fs::remove_file(&temp_path);
+                    let _ = fs::write(&self.path, &self.original);
+                }
+            } else {
+                let _ = fs::remove_file(&temp_path);
+                let _ = fs::write(&self.path, &self.original);
+            }
         }
     }
 }
@@ -92,8 +118,13 @@ pub fn atomic_write(path: impl AsRef<Path>, content: &[u8]) -> Result<()> {
     // Get the parent directory for the temp file
     let parent = path.parent().unwrap_or(Path::new("."));
 
-    // Create a temporary file in the same directory
-    let temp_path = parent.join(format!(".omen-mutation-{}.tmp", std::process::id()));
+    // Create a temporary file in the same directory (unique per thread via atomic counter)
+    let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temp_path = parent.join(format!(
+        ".omen-mutation-{}-{}.tmp",
+        std::process::id(),
+        counter
+    ));
 
     // Write to temp file
     let mut file = File::create(&temp_path).map_err(Error::Io)?;
@@ -294,5 +325,64 @@ mod tests {
 
         // Should return false when not in a git repo
         assert!(!has_uncommitted_changes(&file_path));
+    }
+
+    #[test]
+    fn test_temp_file_names_unique_across_threads() {
+        use std::collections::HashSet;
+        use std::sync::{Arc, Mutex};
+
+        let temp_dir = TempDir::new().unwrap();
+        let collected = Arc::new(Mutex::new(HashSet::new()));
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let dir = temp_dir.path().to_path_buf();
+                let collected = Arc::clone(&collected);
+                std::thread::spawn(move || {
+                    let file = dir.join("src.rs");
+                    fs::write(&file, b"original").unwrap();
+                    for _ in 0..50 {
+                        let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+                        let name = format!(".omen-mutation-{}-{}.tmp", std::process::id(), counter);
+                        collected.lock().unwrap().insert(name);
+                    }
+                })
+            })
+            .collect();
+
+        for t in threads {
+            t.join().unwrap();
+        }
+
+        // 8 threads x 50 iterations = 400 unique names expected
+        assert_eq!(collected.lock().unwrap().len(), 400);
+    }
+
+    #[test]
+    fn test_drop_restores_atomically() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original content").unwrap();
+
+        {
+            let mut guard = MutationGuard::new(&file_path).unwrap();
+            guard.apply(b"mutated content").unwrap();
+            // Guard dropped here -- should restore atomically
+        }
+
+        let content = fs::read(&file_path).unwrap();
+        assert_eq!(content, b"original content");
+
+        // Verify no temp files left behind
+        let temp_files: Vec<_> = fs::read_dir(temp_dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with(".omen-restore-")
+            })
+            .collect();
+        assert!(temp_files.is_empty());
     }
 }

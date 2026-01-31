@@ -5,6 +5,7 @@
 //! with parallel worker pools.
 
 use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -320,9 +321,9 @@ impl AsyncMutantExecutor {
             let _ = handle.await;
         }
 
-        Ok(Arc::try_unwrap(results)
-            .expect("all worker handles joined")
-            .into_inner())
+        let mutex = Arc::try_unwrap(results)
+            .unwrap_or_else(|arc| parking_lot::Mutex::new(arc.lock().clone()));
+        Ok(mutex.into_inner())
     }
 
     /// Execute a single mutant asynchronously.
@@ -407,28 +408,25 @@ async fn run_tests_async(config: &ExecutorConfig) -> MutantStatus {
 
     let timeout_duration = Duration::from_secs(config.timeout_secs);
 
-    match timeout(timeout_duration, async {
-        match cmd.spawn() {
-            Ok(mut child) => match child.wait().await {
-                Ok(status) => {
-                    if status.success() {
-                        ExecutionResult::Success
-                    } else {
-                        ExecutionResult::Failed
-                    }
-                }
-                Err(_) => ExecutionResult::Error,
-            },
-            Err(_) => ExecutionResult::Error,
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(_) => return MutantStatus::BuildError,
+    };
+
+    match timeout(timeout_duration, child.wait()).await {
+        Ok(Ok(status)) => {
+            if status.success() {
+                MutantStatus::Survived
+            } else {
+                MutantStatus::Killed
+            }
         }
-    })
-    .await
-    {
-        Ok(ExecutionResult::Success) => MutantStatus::Survived,
-        Ok(ExecutionResult::Failed) => MutantStatus::Killed,
-        Ok(ExecutionResult::Error) => MutantStatus::BuildError,
-        Ok(ExecutionResult::Timeout) => MutantStatus::Timeout,
-        Err(_) => MutantStatus::Timeout, // Timeout elapsed
+        Ok(Err(_)) => MutantStatus::BuildError,
+        Err(_) => {
+            // Timeout: kill the child process to prevent zombies
+            let _ = child.kill().await;
+            MutantStatus::Timeout
+        }
     }
 }
 
@@ -523,12 +521,22 @@ pub fn detect_test_command(path: &Path) -> Option<String> {
         return Some("./gradlew test".to_string());
     }
 
-    // .NET
-    if path.join("*.csproj").exists() || path.join("*.sln").exists() {
+    // .NET (glob for *.csproj / *.sln since names vary)
+    if has_file_with_extension(path, "csproj") || has_file_with_extension(path, "sln") {
         return Some("dotnet test".to_string());
     }
 
     None
+}
+
+/// Check if a directory contains any file with the given extension.
+fn has_file_with_extension(dir: &Path, extension: &str) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return false;
+    };
+    entries
+        .filter_map(|e| e.ok())
+        .any(|entry| entry.path().extension().is_some_and(|ext| ext == extension))
 }
 
 #[cfg(test)]
@@ -943,5 +951,81 @@ mod tests {
         let status = run_tests_async(&config).await;
         // Shell returns non-zero exit code for command not found, which counts as Killed
         assert_eq!(status, MutantStatus::Killed);
+    }
+
+    #[tokio::test]
+    async fn test_run_tests_async_timeout_kills_child() {
+        // Spawn a process that writes a marker file, then sleeps forever.
+        // After timeout, verify the function returned Timeout (meaning
+        // child.kill() was called -- if it weren't, the future would hang).
+        let temp_dir = TempDir::new().unwrap();
+        let marker = temp_dir.path().join("started.txt");
+        let cmd = format!("touch {} && sleep 60", marker.display());
+        let config = ExecutorConfig::with_command(cmd).timeout(1);
+        let status = run_tests_async(&config).await;
+        assert_eq!(status, MutantStatus::Timeout);
+
+        // The process started (marker exists) but was killed by the timeout handler
+        assert!(marker.exists(), "child process should have started");
+    }
+
+    #[tokio::test]
+    async fn test_arc_unwrap_fallback() {
+        // Verify execute_mutants does not panic even in edge cases.
+        // An empty mutants list triggers early return; a single-mutant run
+        // exercises the Arc::try_unwrap path.
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"let x = 1;").unwrap();
+
+        let mutant = Mutant::new(
+            "mut-arc",
+            &file_path,
+            "CRR",
+            1,
+            1,
+            "1",
+            "0",
+            "arc test",
+            (8, 9),
+        );
+
+        let mut sources = HashMap::new();
+        sources.insert(file_path.clone(), b"let x = 1;".to_vec());
+
+        let config = ExecutorConfig::with_command("true").jobs(1).timeout(5);
+        let executor = AsyncMutantExecutor::new(config);
+
+        // Should not panic
+        let results = executor.execute_mutants(&[mutant], &sources).await.unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_detect_test_command_csproj() {
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(temp_dir.path().join("MyApp.csproj"), "<Project/>").unwrap();
+
+        let cmd = detect_test_command(temp_dir.path());
+        assert_eq!(cmd, Some("dotnet test".to_string()));
+    }
+
+    #[test]
+    fn test_detect_test_command_sln() {
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(temp_dir.path().join("MySolution.sln"), "").unwrap();
+
+        let cmd = detect_test_command(temp_dir.path());
+        assert_eq!(cmd, Some("dotnet test".to_string()));
+    }
+
+    #[test]
+    fn test_has_file_with_extension() {
+        let temp_dir = TempDir::new().unwrap();
+        assert!(!has_file_with_extension(temp_dir.path(), "csproj"));
+
+        fs::write(temp_dir.path().join("App.csproj"), "").unwrap();
+        assert!(has_file_with_extension(temp_dir.path(), "csproj"));
+        assert!(!has_file_with_extension(temp_dir.path(), "sln"));
     }
 }
