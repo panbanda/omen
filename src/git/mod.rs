@@ -11,7 +11,9 @@ use gix::Repository;
 use crate::core::{Error, Result};
 
 pub use blame::BlameInfo;
-pub use log::{is_since_all, parse_since_to_days, ChangeType, Commit, CommitStats, FileChange};
+pub use log::{
+    is_since_all, parse_since_to_days, ChangeType, Commit, CommitStats, FileChange, FileChurnEntry,
+};
 pub use remote::{clone_remote, is_remote_repo, CloneOptions};
 
 /// Git repository wrapper for analysis operations.
@@ -86,6 +88,17 @@ impl GitRepo {
     /// Get commit log with file change statistics (equivalent to git log --numstat).
     pub fn log_with_stats(&self, since: Option<&str>, limit: Option<usize>) -> Result<Vec<Commit>> {
         log::get_log_with_stats(&self.repo, since, limit)
+    }
+
+    /// Get per-file churn (commit count + authors) for specific paths.
+    ///
+    /// Uses path-filtered git log, so cost scales with the history of the
+    /// requested files rather than the entire repository.
+    pub fn file_churn(
+        &self,
+        paths: &[String],
+    ) -> Result<std::collections::HashMap<String, FileChurnEntry>> {
+        log::get_file_churn(&self.repo, paths)
     }
 
     /// Get blame information for a file.

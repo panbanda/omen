@@ -1,5 +1,6 @@
 //! Git log operations.
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use gix::Repository;
@@ -238,6 +239,87 @@ pub fn get_log_with_stats(
     }
 
     Ok(commits)
+}
+
+/// Per-file churn entry: commit count and set of authors.
+#[derive(Debug, Clone, Default)]
+pub struct FileChurnEntry {
+    pub commit_count: i32,
+    pub authors: HashSet<String>,
+}
+
+/// Get per-file churn (commit count + authors) for a specific set of paths.
+///
+/// Uses `git log --name-only -- <paths>` so git itself filters commits,
+/// avoiding the cost of scanning the entire history.
+pub fn get_file_churn(
+    repo: &Repository,
+    paths: &[String],
+) -> Result<HashMap<String, FileChurnEntry>> {
+    if paths.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let repo_path = repo
+        .workdir()
+        .ok_or_else(|| Error::git("Not a work tree"))?;
+
+    let mut cmd = std::process::Command::new("git");
+    cmd.current_dir(repo_path);
+    cmd.args(["log", "--format=%H|%an", "--name-only", "--"]);
+    for p in paths {
+        cmd.arg(p);
+    }
+
+    let output = cmd
+        .output()
+        .map_err(|e| Error::git(format!("Failed to run git log: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(Error::git(format!("git log failed: {}", stderr)));
+    }
+
+    parse_file_churn(&output.stdout, paths)
+}
+
+/// Parse `git log --format=%H|%an --name-only` output into per-file churn.
+fn parse_file_churn(output: &[u8], paths: &[String]) -> Result<HashMap<String, FileChurnEntry>> {
+    use std::io::{BufRead, BufReader};
+
+    let target_files: HashSet<&str> = paths.iter().map(|s| s.as_str()).collect();
+    let mut churn: HashMap<String, FileChurnEntry> = HashMap::new();
+    let reader = BufReader::new(output);
+
+    let mut current_author: Option<String> = None;
+
+    for line in reader.lines() {
+        let line = line.map_err(|e| Error::git(format!("Failed to read git output: {}", e)))?;
+
+        if line.is_empty() {
+            continue;
+        }
+
+        // Commit header: SHA|author
+        if line.contains('|') {
+            let parts: Vec<&str> = line.splitn(2, '|').collect();
+            if parts.len() == 2 && parts[0].len() >= 7 {
+                current_author = Some(parts[1].to_string());
+                continue;
+            }
+        }
+
+        // File path line -- only record if it's one of our target files
+        if let Some(ref author) = current_author {
+            if target_files.contains(line.as_str()) {
+                let entry = churn.entry(line.to_string()).or_default();
+                entry.commit_count += 1;
+                entry.authors.insert(author.clone());
+            }
+        }
+    }
+
+    Ok(churn)
 }
 
 /// Parse git log --numstat output into Commit structs.
