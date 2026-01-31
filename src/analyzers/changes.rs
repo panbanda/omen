@@ -7,17 +7,48 @@
 //!
 //! - Kamei, Y., Shihab, E., et al. (2013) "A Large-Scale Empirical Study of
 //!   Just-in-Time Quality Assurance", IEEE TSE 39(6)
-//! - Zeng, Z., et al. (2021) for modern weight calibration
+//! - Zeng, Z., et al. (2021) "Deep Just-in-Time Defect Prediction" for modern
+//!   weight calibration showing simple models match DL accuracy (~65%)
+//! - Nagappan, N. & Ball, T. (2005) "Use of Relative Code Churn Measures to
+//!   Predict System Defect Density", ICSE -- churn is a strong defect predictor
+//! - Zimmermann, T. & Nagappan, N. (2008) "Predicting Defects using Network
+//!   Analysis on Dependency Graphs", ICSE -- complexity is predictive but weaker
+//!   than change metrics
+//! - Bird, C., et al. (2011) "Don't Touch My Code! Examining the Effects of
+//!   Ownership on Software Quality", FSE -- files with many minor contributors
+//!   (diffuse ownership) have more defects than files with concentrated ownership
 //!
-//! # Implemented Features (8/14 from Kamei)
+//! # Weight rationale
 //!
-//! - FIX: Bug fix commit flag omen:ignore
-//! - LA/LD: Lines added/deleted
-//! - NF: Number of files modified
+//! 75% change-scope factors, 25% file-level risk signals.
+//!
+//! Change-scope weights follow Kamei's logistic regression coefficients (median
+//! across projects): la > entropy > fix > ld > nf > nuc > ndev > exp.
+//!
+//! File-level weights use churn > complexity > ownership_diffusion, reflecting
+//! that churn is a stronger predictor than static complexity (Nagappan 2005),
+//! and both are weaker than change-scope features.
+//!
+//! Ownership direction follows Bird et al.: diffuse ownership (low concentration)
+//! increases risk. The `ownership_diffusion` signal is `1 - max_author_percentage`,
+//! so files where no single author dominates score higher risk.
+//!
+//! # Implemented Features (8/14 from Kamei + 3 file-level signals)
+//!
+//! - LA: Lines added (strongest change-scope predictor)
 //! - ENTROPY: Change distribution entropy
-//! - NDEV: Number of developers
+//! - FIX: Bug fix commit flag omen:ignore
+//! - LD: Lines deleted
+//! - NF: Number of files modified
 //! - NUC: Unique commits to files
-//! - EXP: Author experience
+//! - NDEV: Number of developers
+//! - EXP: Author experience (subsumes author familiarity)
+//!
+//! ## File-level risk signals
+//!
+//! - FILE_CHURN: Max historical churn of touched files (Nagappan 2005)
+//! - FILE_COMPLEXITY: Max avg cyclomatic complexity (Zimmermann 2008)
+//! - OWNERSHIP_DIFFUSION: 1 - max single-author ownership % (Bird 2011)
 //!
 //! # Not Implemented (documented limitation)
 //!
@@ -39,38 +70,65 @@ use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result};
 use crate::git::GitRepo;
 
 /// Weights for change-level defect prediction features.
-/// Based on Kamei et al. (2013) and Zeng et al. (2021).
+///
+/// 75% change-scope factors (Kamei et al. 2013), 25% file-level signals.
+///
+/// Change-scope ordering follows Kamei's median logistic regression coefficients:
+/// la > entropy > fix > ld > nf > nuc > ndev > exp.
+///
+/// File-level ordering: churn > complexity > ownership_diffusion, per Nagappan
+/// (2005), Zimmermann (2008), and Bird (2011) respectively. These are weaker
+/// predictors than change-scope features, hence the 75/25 split.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Weights {
-    /// Is bug fix commit? omen:ignore
-    pub fix: f64,
+    // -- Change-scope factors (75% total) --
+    // Ordered by Kamei's median effect size across projects.
+    /// Lines added -- strongest change-scope predictor (Kamei 2013)
+    pub la: f64,
     /// Change entropy across files
     pub entropy: f64,
-    /// Lines added
-    pub la: f64,
-    /// Number of unique prior commits
-    pub nuc: f64,
-    /// Number of files modified
-    pub nf: f64,
+    /// Is bug fix commit? omen:ignore
+    pub fix: f64,
     /// Lines deleted
     pub ld: f64,
+    /// Number of files modified
+    pub nf: f64,
+    /// Number of unique prior commits
+    pub nuc: f64,
     /// Number of developers
     pub ndev: f64,
-    /// Author experience (inverted)
+    /// Author experience (inverted: less experience = more risk).
+    /// Subsumes "author familiarity" -- Kamei's EXP already captures whether the
+    /// author has worked on the affected files.
     pub exp: f64,
+
+    // -- File-level risk signals (25% total) --
+    /// Max historical churn of touched files (Nagappan & Ball 2005)
+    pub file_churn: f64,
+    /// Max avg cyclomatic complexity of touched files (Zimmermann 2008)
+    pub file_complexity: f64,
+    /// Ownership diffusion: 1 - max_author_percentage. Diffuse ownership (many
+    /// minor contributors, no clear owner) correlates with more defects (Bird 2011).
+    pub ownership_diffusion: f64,
 }
 
 impl Default for Weights {
+    /// Default weights: 75% change-scope, 25% file-level.
     fn default() -> Self {
         Self {
-            fix: 0.25,
-            entropy: 0.20,
-            la: 0.20,
-            nuc: 0.10,
-            nf: 0.10,
-            ld: 0.05,
+            // Change-scope: 75% total, following Kamei's relative ordering
+            la: 0.16,
+            entropy: 0.14,
+            fix: 0.12,
+            ld: 0.08,
+            nf: 0.08,
+            nuc: 0.07,
             ndev: 0.05,
             exp: 0.05,
+            // File-level: 25% total
+            file_churn: 0.10,
+            file_complexity: 0.08,
+            ownership_diffusion: 0.07,
         }
     }
 }
@@ -78,6 +136,11 @@ impl Default for Weights {
 /// Percentile thresholds for risk level classification.
 const HIGH_RISK_PERCENTILE: usize = 95;
 const MEDIUM_RISK_PERCENTILE: usize = 80;
+
+/// Thresholds for file-level risk recommendations.
+const HIGH_COMPLEXITY_THRESHOLD: f64 = 10.0;
+const HIGH_CHURN_THRESHOLD: f64 = 0.7;
+const HIGH_DIFFUSION_THRESHOLD: f64 = 0.7;
 
 /// Changes/JIT analyzer.
 pub struct Analyzer {
@@ -150,15 +213,53 @@ impl AnalyzerTrait for Analyzer {
         // Compute state-dependent features in chronological order (oldest first)
         let mut commits_chronological = raw_commits;
         commits_chronological.reverse();
-        let commits = compute_state_dependent_features(commits_chronological);
+        let (commits, file_churn_data) = compute_state_dependent_features(commits_chronological);
 
-        // Calculate normalization stats
-        let normalization = calculate_normalization_stats(&commits);
+        // Collect all unique file paths across all commits
+        let all_files: Vec<String> = {
+            let mut seen = HashSet::new();
+            commits
+                .iter()
+                .flat_map(|c| c.files_modified.iter().cloned())
+                .filter(|f| seen.insert(f.clone()))
+                .collect()
+        };
+
+        // Compute max churn for normalization
+        let max_churn_count = file_churn_data
+            .values()
+            .map(|c| c.commit_count)
+            .max()
+            .unwrap_or(1);
+
+        // Pre-compute file risk profiles once for all files
+        let file_profiles =
+            compute_file_risk_profiles(git_path, &all_files, &file_churn_data, max_churn_count);
+
+        // Build per-commit file risk signals
+        let commit_file_risks: Vec<FileRiskSignals> = commits
+            .iter()
+            .map(|c| aggregate_file_risk(&file_profiles, &c.files_modified))
+            .collect();
+
+        // Calculate normalization stats (including file-level stats)
+        let mut normalization = calculate_normalization_stats(&commits);
+        // Update file complexity normalization from actual data
+        let complexity_values: Vec<f64> = commit_file_risks
+            .iter()
+            .map(|fr| fr.max_complexity)
+            .collect();
+        if !complexity_values.is_empty() {
+            let mut sorted = complexity_values.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            normalization.max_file_complexity = percentile(&sorted, 95).max(1.0);
+        }
 
         // First pass: compute all risk scores
         let scores: Vec<f64> = commits
             .iter()
-            .map(|c| calculate_risk(c, &self.weights, &normalization))
+            .zip(commit_file_risks.iter())
+            .map(|(c, fr)| calculate_risk(c, &self.weights, &normalization, fr))
             .collect();
 
         // Calculate percentile-based thresholds
@@ -180,7 +281,8 @@ impl AnalyzerTrait for Analyzer {
         let mut commit_risks: Vec<CommitRisk> = commits
             .iter()
             .zip(scores.iter())
-            .map(|(features, &score)| {
+            .zip(commit_file_risks)
+            .map(|((features, &score), file_risk)| {
                 total_score += score;
                 if features.is_fix {
                     bug_fix_count += 1;
@@ -199,6 +301,7 @@ impl AnalyzerTrait for Analyzer {
                     &self.weights,
                     &normalization,
                     &risk_thresholds,
+                    file_risk,
                 )
             })
             .collect();
@@ -263,6 +366,31 @@ struct CommitFeatures {
     files_modified: Vec<String>,
 }
 
+/// Per-file risk profile computed from complexity, churn, and blame.
+#[derive(Debug, Clone, Default)]
+struct FileRiskProfile {
+    avg_cyclomatic: f64,
+    churn_score: f64,
+    ownership_concentration: f64,
+}
+
+/// Accumulated churn data per file from git history.
+#[derive(Debug, Clone, Default)]
+struct FileChurnData {
+    commit_count: i32,
+    authors: HashSet<String>,
+}
+
+/// Aggregated file-level risk signals across all files in a commit or PR.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FileRiskSignals {
+    pub max_complexity: f64,
+    pub max_churn: f64,
+    /// 1 - max_author_percentage. Higher = more diffuse ownership = more risk.
+    /// Per Bird et al. (2011), files with many minor contributors have more defects.
+    pub ownership_diffusion: f64,
+}
+
 // Output types
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -288,6 +416,7 @@ pub struct CommitRisk {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub recommendations: Vec<String>,
     pub files_modified: Vec<String>,
+    pub file_risk: FileRiskSignals,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -319,6 +448,8 @@ pub struct NormalizationStats {
     pub max_num_developers: i32,
     pub max_author_experience: i32,
     pub max_entropy: f64,
+    pub max_file_complexity: f64,
+    pub max_file_churn: f64,
 }
 
 impl Default for NormalizationStats {
@@ -331,6 +462,8 @@ impl Default for NormalizationStats {
             max_num_developers: 1,
             max_author_experience: 1,
             max_entropy: 1.0,
+            max_file_complexity: 15.0,
+            max_file_churn: 1.0,
         }
     }
 }
@@ -550,7 +683,10 @@ fn calculate_entropy(lines_per_file: &HashMap<String, i32>) -> f64 {
 }
 
 /// Compute state-dependent features in chronological order.
-fn compute_state_dependent_features(raw_commits: Vec<RawCommit>) -> Vec<CommitFeatures> {
+/// Returns (commit features, file churn data accumulated across all commits).
+fn compute_state_dependent_features(
+    raw_commits: Vec<RawCommit>,
+) -> (Vec<CommitFeatures>, HashMap<String, FileChurnData>) {
     let mut author_commits: HashMap<String, i32> = HashMap::new();
     let mut file_changes: HashMap<String, i32> = HashMap::new();
     let mut file_authors: HashMap<String, HashSet<String>> = HashMap::new();
@@ -593,7 +729,116 @@ fn compute_state_dependent_features(raw_commits: Vec<RawCommit>) -> Vec<CommitFe
         }
     }
 
-    commits
+    // Build file churn data from accumulated state
+    let churn_data: HashMap<String, FileChurnData> = file_changes
+        .into_iter()
+        .map(|(path, count)| {
+            let authors = file_authors.remove(&path).unwrap_or_default();
+            (
+                path,
+                FileChurnData {
+                    commit_count: count,
+                    authors,
+                },
+            )
+        })
+        .collect();
+
+    (commits, churn_data)
+}
+
+/// Compute file risk profiles for all unique files.
+///
+/// Uses complexity analysis and git blame in parallel via rayon.
+/// Falls back gracefully if any individual file fails.
+fn compute_file_risk_profiles(
+    git_path: &Path,
+    files: &[String],
+    file_churn: &HashMap<String, FileChurnData>,
+    max_churn: i32,
+) -> HashMap<String, FileRiskProfile> {
+    use rayon::prelude::*;
+    use std::cell::RefCell;
+
+    let complexity_analyzer = crate::analyzers::complexity::Analyzer::default();
+    let git_path_owned = git_path.to_path_buf();
+
+    thread_local! {
+        static THREAD_REPO: RefCell<Option<GitRepo>> = const { RefCell::new(None) };
+    }
+
+    files
+        .par_iter()
+        .map(|file| {
+            let abs_path = git_path.join(file);
+            let mut profile = FileRiskProfile::default();
+
+            // Complexity
+            if let Ok(result) = complexity_analyzer.analyze_file(&abs_path) {
+                profile.avg_cyclomatic = result.avg_cyclomatic;
+            }
+
+            // Churn
+            if let Some(churn) = file_churn.get(file.as_str()) {
+                profile.churn_score = if max_churn > 0 {
+                    safe_normalize_int(churn.commit_count, max_churn)
+                } else {
+                    0.0
+                };
+            }
+
+            // Ownership concentration via blame (reuse thread-local repo handle)
+            THREAD_REPO.with(|cell| {
+                let mut repo_opt = cell.borrow_mut();
+                if repo_opt.is_none() {
+                    *repo_opt = GitRepo::open(&git_path_owned).ok();
+                }
+                if let Some(repo) = repo_opt.as_ref() {
+                    if let Ok(blame) = repo.blame(&abs_path) {
+                        let max_pct = blame
+                            .authors
+                            .values()
+                            .map(|a| a.percentage)
+                            .fold(0.0f64, f64::max);
+                        profile.ownership_concentration = max_pct / 100.0;
+                    }
+                }
+            });
+
+            (file.clone(), profile)
+        })
+        .collect()
+}
+
+/// Aggregate per-file profiles into a single `FileRiskSignals` for the given files.
+fn aggregate_file_risk(
+    profiles: &HashMap<String, FileRiskProfile>,
+    touched_files: &[String],
+) -> FileRiskSignals {
+    if touched_files.is_empty() {
+        return FileRiskSignals::default();
+    }
+
+    let mut max_complexity = 0.0f64;
+    let mut max_churn = 0.0f64;
+    let mut max_diffusion = 0.0f64;
+
+    for file in touched_files {
+        if let Some(profile) = profiles.get(file) {
+            max_complexity = max_complexity.max(profile.avg_cyclomatic);
+            max_churn = max_churn.max(profile.churn_score);
+            // ownership_concentration is max author %. Diffusion = 1 - concentration.
+            // Higher diffusion = more minor contributors = more defect-prone (Bird 2011).
+            let diffusion = 1.0 - profile.ownership_concentration;
+            max_diffusion = max_diffusion.max(diffusion);
+        }
+    }
+
+    FileRiskSignals {
+        max_complexity,
+        max_churn,
+        ownership_diffusion: max_diffusion,
+    }
 }
 
 /// Calculate 95th percentile normalization stats.
@@ -627,11 +872,19 @@ fn calculate_normalization_stats(commits: &[CommitFeatures]) -> NormalizationSta
         max_num_developers: percentile(&num_developers, 95).max(1.0) as i32,
         max_author_experience: percentile(&author_experience, 95).max(1.0) as i32,
         max_entropy: percentile(&entropy, 95).max(1.0),
+        // File-level stats are set to defaults here; caller updates from actual data.
+        max_file_complexity: 15.0,
+        max_file_churn: 1.0,
     }
 }
 
 /// Calculate risk score for a commit.
-fn calculate_risk(features: &CommitFeatures, weights: &Weights, norm: &NormalizationStats) -> f64 {
+fn calculate_risk(
+    features: &CommitFeatures,
+    weights: &Weights,
+    norm: &NormalizationStats,
+    file_risk: &FileRiskSignals,
+) -> f64 {
     // Automated commits are inherently low risk
     if features.is_automated {
         return 0.05;
@@ -647,14 +900,23 @@ fn calculate_risk(features: &CommitFeatures, weights: &Weights, norm: &Normaliza
     // Experience is inverted: less experience = more risk
     let exp_norm = 1.0 - safe_normalize_int(features.author_experience, norm.max_author_experience);
 
-    let score = weights.fix * fix_norm
+    // File-level risk signals
+    let churn_norm = safe_normalize(file_risk.max_churn, norm.max_file_churn);
+    let complexity_norm = safe_normalize(file_risk.max_complexity, norm.max_file_complexity);
+    // ownership_diffusion is already 0-1 (1 - max_author_percentage)
+    let diffusion_norm = file_risk.ownership_diffusion;
+
+    let score = weights.la * la_norm
         + weights.entropy * entropy_norm
-        + weights.la * la_norm
+        + weights.fix * fix_norm
         + weights.ld * ld_norm
         + weights.nf * nf_norm
         + weights.nuc * nuc_norm
         + weights.ndev * ndev_norm
-        + weights.exp * exp_norm;
+        + weights.exp * exp_norm
+        + weights.file_churn * churn_norm
+        + weights.file_complexity * complexity_norm
+        + weights.ownership_diffusion * diffusion_norm;
 
     score.clamp(0.0, 1.0)
 }
@@ -695,6 +957,7 @@ fn build_commit_risk(
     weights: &Weights,
     norm: &NormalizationStats,
     thresholds: &RiskThresholds,
+    file_risk: FileRiskSignals,
 ) -> CommitRisk {
     let risk_level = get_risk_level(score, thresholds);
 
@@ -730,8 +993,21 @@ fn build_commit_risk(
         (1.0 - safe_normalize_int(features.author_experience, norm.max_author_experience))
             * weights.exp,
     );
+    factors.insert(
+        "file_churn".to_string(),
+        safe_normalize(file_risk.max_churn, norm.max_file_churn) * weights.file_churn,
+    );
+    factors.insert(
+        "file_complexity".to_string(),
+        safe_normalize(file_risk.max_complexity, norm.max_file_complexity)
+            * weights.file_complexity,
+    );
+    factors.insert(
+        "ownership_diffusion".to_string(),
+        file_risk.ownership_diffusion * weights.ownership_diffusion,
+    );
 
-    let recommendations = generate_recommendations(features, score, &factors);
+    let recommendations = generate_recommendations(features, score, &factors, &file_risk);
 
     CommitRisk {
         commit_hash: features.commit_hash.clone(),
@@ -743,6 +1019,7 @@ fn build_commit_risk(
         contributing_factors: factors,
         recommendations,
         files_modified: features.files_modified.clone(),
+        file_risk,
     }
 }
 
@@ -750,6 +1027,7 @@ fn generate_recommendations(
     features: &CommitFeatures,
     score: f64,
     factors: &HashMap<String, f64>,
+    file_risk: &FileRiskSignals,
 ) -> Vec<String> {
     let mut recs = Vec::new();
 
@@ -772,6 +1050,22 @@ fn generate_recommendations(
     if factors.get("experience").copied().unwrap_or(0.0) > 0.04 {
         recs.push(
             "Author has limited experience with these files - request senior review".to_string(),
+        );
+    }
+
+    if file_risk.max_complexity > HIGH_COMPLEXITY_THRESHOLD {
+        recs.push("Touches high-complexity files - ensure thorough test coverage".to_string());
+    }
+
+    if file_risk.max_churn > HIGH_CHURN_THRESHOLD {
+        recs.push(
+            "Touches historically volatile files - changes here often introduce bugs".to_string(),
+        );
+    }
+
+    if file_risk.ownership_diffusion > HIGH_DIFFUSION_THRESHOLD {
+        recs.push(
+            "Touches files with diffuse ownership (no clear owner) - ensure someone takes responsibility for review".to_string(),
         );
     }
 
@@ -804,14 +1098,17 @@ mod tests {
     #[test]
     fn test_default_weights() {
         let weights = Weights::default();
-        let total = weights.fix
+        let total = weights.la
             + weights.entropy
-            + weights.la
-            + weights.nuc
-            + weights.nf
+            + weights.fix
             + weights.ld
+            + weights.nf
+            + weights.nuc
             + weights.ndev
-            + weights.exp;
+            + weights.exp
+            + weights.file_churn
+            + weights.file_complexity
+            + weights.ownership_diffusion;
         assert!((total - 1.0).abs() < 0.001, "Weights should sum to 1.0");
     }
 
@@ -906,7 +1203,8 @@ mod tests {
         };
         let weights = Weights::default();
         let norm = NormalizationStats::default();
-        let score = calculate_risk(&features, &weights, &norm);
+        let file_risk = FileRiskSignals::default();
+        let score = calculate_risk(&features, &weights, &norm, &file_risk);
         assert_eq!(score, 0.05);
     }
 
@@ -918,9 +1216,13 @@ mod tests {
         };
         let weights = Weights::default();
         let norm = NormalizationStats::default();
-        let score = calculate_risk(&features, &weights, &norm);
-        // fix contributes 0.25, exp contributes 0.05 (1.0 - 0 = 1.0 * 0.05)
-        assert!(score > 0.25);
+        let file_risk = FileRiskSignals::default();
+        let score = calculate_risk(&features, &weights, &norm, &file_risk);
+        // fix contributes 0.12, exp (inverted) contributes 0.05 => 0.17 total
+        assert!(
+            (0.15..=0.19).contains(&score),
+            "expected ~0.17, got {score}"
+        );
     }
 
     #[test]
@@ -940,7 +1242,8 @@ mod tests {
             ..Default::default()
         };
         let factors = HashMap::new();
-        let recs = generate_recommendations(&features, 0.3, &factors);
+        let file_risk = FileRiskSignals::default();
+        let recs = generate_recommendations(&features, 0.3, &factors, &file_risk);
         assert!(recs.iter().any(|r| r.contains("Bug fix")));
     }
 
@@ -948,7 +1251,8 @@ mod tests {
     fn test_recommendations_high_risk() {
         let features = CommitFeatures::default();
         let factors = HashMap::new();
-        let recs = generate_recommendations(&features, 0.75, &factors);
+        let file_risk = FileRiskSignals::default();
+        let recs = generate_recommendations(&features, 0.75, &factors, &file_risk);
         assert!(recs.iter().any(|r| r.contains("HIGH RISK")));
     }
 
@@ -956,7 +1260,8 @@ mod tests {
     fn test_recommendations_low_risk() {
         let features = CommitFeatures::default();
         let factors = HashMap::new();
-        let recs = generate_recommendations(&features, 0.1, &factors);
+        let file_risk = FileRiskSignals::default();
+        let recs = generate_recommendations(&features, 0.1, &factors, &file_risk);
         assert!(recs.iter().any(|r| r.contains("Low risk")));
     }
 
@@ -1025,6 +1330,7 @@ pub struct DiffResult {
     pub factors: HashMap<String, f64>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub recommendations: Vec<String>,
+    pub file_risk: FileRiskSignals,
 }
 
 impl Analyzer {
@@ -1053,6 +1359,25 @@ impl Analyzer {
         let lines_per_file = get_lines_per_file(repo_path, &merge_base)?;
         let entropy = calculate_entropy(&lines_per_file);
 
+        // Compute file-level risk signals for the diff's files
+        let diff_files: Vec<String> = lines_per_file.keys().cloned().collect();
+
+        // Build churn data from full repo history for touched files
+        let file_churn = build_churn_for_files(repo_path, &diff_files)?;
+        let max_churn_count = file_churn
+            .values()
+            .map(|c| c.commit_count)
+            .max()
+            .unwrap_or(1);
+        let file_profiles =
+            compute_file_risk_profiles(repo_path, &diff_files, &file_churn, max_churn_count);
+
+        let file_risk = if diff_files.is_empty() {
+            FileRiskSignals::default()
+        } else {
+            aggregate_file_risk(&file_profiles, &diff_files)
+        };
+
         // Use fixed thresholds for diff analysis (sensible PR size limits)
         let norm = diff_normalization();
 
@@ -1069,7 +1394,7 @@ impl Analyzer {
         };
 
         // Calculate risk score
-        let score = calculate_risk(&features, &self.weights, &norm);
+        let score = calculate_risk(&features, &self.weights, &norm, &file_risk);
         let thresholds = RiskThresholds::default();
         let level = get_risk_level(score, &thresholds);
 
@@ -1095,6 +1420,19 @@ impl Analyzer {
             "commits".to_string(),
             safe_normalize_int(commit_count, norm.max_unique_changes) * self.weights.nuc,
         );
+        factors.insert(
+            "file_churn".to_string(),
+            safe_normalize(file_risk.max_churn, norm.max_file_churn) * self.weights.file_churn,
+        );
+        factors.insert(
+            "file_complexity".to_string(),
+            safe_normalize(file_risk.max_complexity, norm.max_file_complexity)
+                * self.weights.file_complexity,
+        );
+        factors.insert(
+            "ownership_diffusion".to_string(),
+            file_risk.ownership_diffusion * self.weights.ownership_diffusion,
+        );
 
         // Generate recommendations
         let recommendations = generate_diff_recommendations(
@@ -1104,6 +1442,7 @@ impl Analyzer {
             commit_count,
             score,
             &factors,
+            &file_risk,
         );
 
         Ok(DiffResult {
@@ -1119,6 +1458,7 @@ impl Analyzer {
             commits: commit_count,
             factors,
             recommendations,
+            file_risk,
         })
     }
 }
@@ -1134,6 +1474,8 @@ fn diff_normalization() -> NormalizationStats {
         max_num_developers: 3,  // Multiple authors can indicate coordination issues
         max_author_experience: 100,
         max_entropy: 3.0, // Lower threshold - scattered changes are risky
+        max_file_complexity: 15.0,
+        max_file_churn: 1.0,
     }
 }
 
@@ -1195,6 +1537,32 @@ fn get_lines_per_file(repo_path: &Path, merge_base: &str) -> Result<HashMap<Stri
     Ok(result)
 }
 
+/// Build churn data (commit count + author set) for a specific set of files
+/// by scanning the full git log.
+fn build_churn_for_files(
+    repo_path: &Path,
+    files: &[String],
+) -> Result<HashMap<String, FileChurnData>> {
+    let target_files: HashSet<&str> = files.iter().map(|s| s.as_str()).collect();
+    let repo = GitRepo::open(repo_path)?;
+    let commits = repo.log_with_stats(None, None)?;
+
+    let mut churn: HashMap<String, FileChurnData> = HashMap::new();
+
+    for commit in &commits {
+        for file_change in &commit.files {
+            let path_str = file_change.path.to_string_lossy();
+            if target_files.contains(path_str.as_ref()) {
+                let entry = churn.entry(path_str.to_string()).or_default();
+                entry.commit_count += 1;
+                entry.authors.insert(commit.author.clone());
+            }
+        }
+    }
+
+    Ok(churn)
+}
+
 fn generate_diff_recommendations(
     lines_added: i32,
     lines_deleted: i32,
@@ -1202,6 +1570,7 @@ fn generate_diff_recommendations(
     commits: i32,
     score: f64,
     factors: &HashMap<String, f64>,
+    file_risk: &FileRiskSignals,
 ) -> Vec<String> {
     let mut recs = Vec::new();
 
@@ -1239,6 +1608,22 @@ fn generate_diff_recommendations(
         );
     }
 
+    if file_risk.max_complexity > HIGH_COMPLEXITY_THRESHOLD {
+        recs.push("Touches high-complexity files - ensure thorough test coverage".to_string());
+    }
+
+    if file_risk.max_churn > HIGH_CHURN_THRESHOLD {
+        recs.push(
+            "Touches historically volatile files - changes here often introduce bugs".to_string(),
+        );
+    }
+
+    if file_risk.ownership_diffusion > HIGH_DIFFUSION_THRESHOLD {
+        recs.push(
+            "Touches files with diffuse ownership (no clear owner) - ensure someone takes responsibility for review".to_string(),
+        );
+    }
+
     if score >= 0.7 {
         recs.push(
             "HIGH RISK: Consider extra review scrutiny and comprehensive testing".to_string(),
@@ -1270,35 +1655,113 @@ mod diff_tests {
     #[test]
     fn test_diff_recommendations_large_pr() {
         let factors = HashMap::new();
-        let recs = generate_diff_recommendations(500, 50, 5, 3, 0.4, &factors);
+        let file_risk = FileRiskSignals::default();
+        let recs = generate_diff_recommendations(500, 50, 5, 3, 0.4, &factors, &file_risk);
         assert!(recs.iter().any(|r| r.contains("Large PR")));
     }
 
     #[test]
     fn test_diff_recommendations_many_files() {
         let factors = HashMap::new();
-        let recs = generate_diff_recommendations(100, 50, 20, 3, 0.4, &factors);
+        let file_risk = FileRiskSignals::default();
+        let recs = generate_diff_recommendations(100, 50, 20, 3, 0.4, &factors, &file_risk);
         assert!(recs.iter().any(|r| r.contains("touches")));
     }
 
     #[test]
     fn test_diff_recommendations_many_commits() {
         let factors = HashMap::new();
-        let recs = generate_diff_recommendations(100, 50, 5, 15, 0.4, &factors);
+        let file_risk = FileRiskSignals::default();
+        let recs = generate_diff_recommendations(100, 50, 5, 15, 0.4, &factors, &file_risk);
         assert!(recs.iter().any(|r| r.contains("commits")));
     }
 
     #[test]
     fn test_diff_recommendations_high_risk() {
         let factors = HashMap::new();
-        let recs = generate_diff_recommendations(100, 50, 5, 3, 0.75, &factors);
+        let file_risk = FileRiskSignals::default();
+        let recs = generate_diff_recommendations(100, 50, 5, 3, 0.75, &factors, &file_risk);
         assert!(recs.iter().any(|r| r.contains("HIGH RISK")));
     }
 
     #[test]
     fn test_diff_recommendations_low_risk() {
         let factors = HashMap::new();
-        let recs = generate_diff_recommendations(50, 20, 3, 2, 0.2, &factors);
+        let file_risk = FileRiskSignals::default();
+        let recs = generate_diff_recommendations(50, 20, 3, 2, 0.2, &factors, &file_risk);
         assert!(recs.iter().any(|r| r.contains("well-scoped")));
+    }
+
+    #[test]
+    fn test_file_risk_signals_serialization() {
+        let signals = FileRiskSignals {
+            max_complexity: 12.5,
+            max_churn: 0.8,
+            ownership_diffusion: 0.75,
+        };
+        let json = serde_json::to_string(&signals).unwrap();
+        let deserialized: FileRiskSignals = serde_json::from_str(&json).unwrap();
+        assert!((deserialized.max_complexity - 12.5).abs() < f64::EPSILON);
+        assert!((deserialized.max_churn - 0.8).abs() < f64::EPSILON);
+        assert!((deserialized.ownership_diffusion - 0.75).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_file_risk_signals_default() {
+        let signals = FileRiskSignals::default();
+        assert_eq!(signals.max_complexity, 0.0);
+        assert_eq!(signals.max_churn, 0.0);
+        assert_eq!(signals.ownership_diffusion, 0.0);
+    }
+
+    #[test]
+    fn test_aggregate_file_risk() {
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "a.rs".to_string(),
+            FileRiskProfile {
+                avg_cyclomatic: 15.0,
+                churn_score: 0.9,
+                ownership_concentration: 0.85, // diffusion = 0.15
+            },
+        );
+        profiles.insert(
+            "b.rs".to_string(),
+            FileRiskProfile {
+                avg_cyclomatic: 5.0,
+                churn_score: 0.3,
+                ownership_concentration: 0.5, // diffusion = 0.5
+            },
+        );
+
+        let touched = vec!["a.rs".to_string(), "b.rs".to_string()];
+        let signals = aggregate_file_risk(&profiles, &touched);
+
+        assert!((signals.max_complexity - 15.0).abs() < f64::EPSILON);
+        assert!((signals.max_churn - 0.9).abs() < f64::EPSILON);
+        // max diffusion = 1 - 0.5 = 0.5 (from b.rs, the more diffusely-owned file)
+        assert!((signals.ownership_diffusion - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_diff_recommendations_high_complexity() {
+        let factors = HashMap::new();
+        let file_risk = FileRiskSignals {
+            max_complexity: 15.0,
+            ..Default::default()
+        };
+        let recs = generate_diff_recommendations(50, 20, 3, 2, 0.2, &factors, &file_risk);
+        assert!(recs.iter().any(|r| r.contains("high-complexity")));
+    }
+
+    #[test]
+    fn test_diff_recommendations_diffuse_ownership() {
+        let factors = HashMap::new();
+        let file_risk = FileRiskSignals {
+            ownership_diffusion: 0.8,
+            ..Default::default()
+        };
+        let recs = generate_diff_recommendations(50, 20, 3, 2, 0.2, &factors, &file_risk);
+        assert!(recs.iter().any(|r| r.contains("diffuse ownership")));
     }
 }

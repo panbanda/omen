@@ -138,18 +138,32 @@ Each file gets a risk score from 0% to 100%.
 <details>
 <summary><strong>Change Risk Analysis (JIT)</strong> - Predict which commits are likely to introduce bugs</summary>
 
-Just-in-Time (JIT) defect prediction analyzes recent commits to identify risky changes before they cause problems. Unlike file-level prediction, JIT operates at the commit level using factors from [Kamei et al. (2013)](https://ieeexplore.ieee.org/document/6341763):
+Just-in-Time (JIT) defect prediction analyzes recent commits to identify risky changes before they cause problems. Unlike file-level prediction, JIT operates at the commit level using change-scope factors from [Kamei et al. (2013)](https://ieeexplore.ieee.org/document/6341763), augmented with file-level risk signals from the software engineering research literature.
 
-| Factor | Name                   | What it measures                           |
-| ------ | ---------------------- | ------------------------------------------ |
-| LA     | Lines Added            | More additions = more risk                 |
-| LD     | Lines Deleted          | Deletions are generally safer              |
-| LT     | Lines in Touched Files | Larger files = more risk                   |
-| FIX    | Bug Fix                | Bug fix commits indicate problematic areas |
-| NDEV   | Number of Developers   | More developers on files = more risk       |
-| AGE    | Average File Age       | File stability indicator                   |
-| NUC    | Unique Changes         | Change entropy = higher risk               |
-| EXP    | Developer Experience   | Less experience = more risk                |
+**Change-scope factors (75% of score):**
+
+Weighted using Kamei's median logistic regression coefficients (relative ordering across projects):
+
+| Factor  | Name                   | Weight | What it measures                           |
+| ------- | ---------------------- | ------ | ------------------------------------------ |
+| LA      | Lines Added            | 0.16   | More additions = more risk (strongest predictor) |
+| ENTROPY | Change Entropy         | 0.14   | Scattered changes = harder to review       |
+| FIX     | Bug Fix                | 0.12   | Bug fix commits indicate problematic areas |
+| LD      | Lines Deleted          | 0.08   | Deletions are generally safer              |
+| NF      | Number of Files        | 0.08   | More files = more coordination risk        |
+| NUC     | Unique Changes         | 0.07   | More unique prior commits on files         |
+| NDEV    | Number of Developers   | 0.05   | More developers on files = more risk       |
+| EXP     | Developer Experience   | 0.05   | Less experience = more risk                |
+
+**File-level risk signals (25% of score):**
+
+| Signal              | Weight | Source                                             |
+| ------------------- | ------ | -------------------------------------------------- |
+| File Churn          | 0.10   | [Nagappan & Ball (2005)](https://dl.acm.org/doi/10.1145/1062455.1062514) - historical change frequency predicts defects |
+| File Complexity     | 0.08   | [Zimmermann & Nagappan (2008)](https://dl.acm.org/doi/10.1145/1368088.1368161) - cyclomatic complexity is predictive but weaker than change metrics |
+| Ownership Diffusion | 0.07   | [Bird et al. (2011)](https://dl.acm.org/doi/10.1145/2025113.2025119) - files with many minor contributors (no clear owner) have more defects |
+
+Ownership diffusion is `1 - max_author_percentage`: files where no single author dominates score higher risk. This follows Bird et al.'s finding that concentrated ownership (a clear primary author) correlates with *fewer* defects, while diffuse ownership correlates with more.
 
 **Percentile-based risk classification:**
 
@@ -190,13 +204,18 @@ omen diff --target main -f markdown
 
 **Risk Factors:**
 
-| Factor | What it measures | Risk contribution |
-| ------ | ---------------- | ----------------- |
-| Lines Added | Total new code introduced | More code = more potential bugs |
-| Lines Deleted | Code removed | Generally reduces risk (less code) |
-| Files Modified | Spread of changes | More files = more potential for cascading issues |
-| Commits | Number of commits in branch | Many commits may indicate scope creep |
-| Entropy | How scattered changes are | High entropy = changes everywhere |
+The diff analyzer uses the same research-backed weight model as `omen changes` (see above), combining change-scope factors with file-level signals:
+
+| Factor | What it measures | Category |
+| ------ | ---------------- | -------- |
+| Lines Added | Total new code introduced | Change-scope |
+| Lines Deleted | Code removed | Change-scope |
+| Files Modified | Spread of changes | Change-scope |
+| Commits | Number of commits in branch | Change-scope |
+| Entropy | How scattered changes are | Change-scope |
+| File Churn | Historical change frequency of touched files | File-level |
+| File Complexity | Max cyclomatic complexity of touched files | File-level |
+| Ownership Diffusion | How diffusely owned the touched files are | File-level |
 
 **Risk Score Interpretation:**
 
@@ -219,17 +238,25 @@ Base:     abc123def
 Risk Score: 0.31 (MEDIUM)
 
 Changes:
-  Lines Added:    63
-  Lines Deleted:  2
-  Files Modified: 2
+  Lines Added:    530
+  Lines Deleted:  39
+  Files Modified: 3
   Commits:        1
 
 Risk Factors:
-  entropy:        0.084
-  lines_added:    0.118
-  lines_deleted:  0.003
-  num_files:      0.050
-  commits:        0.005
+  entropy:              0.023
+  lines_added:          0.140
+  lines_deleted:        0.008
+  num_files:            0.014
+  commits:              0.007
+  file_churn:           0.080
+  file_complexity:      0.045
+  ownership_diffusion:  0.000
+
+File Risk:
+  max_complexity:       6.78
+  max_churn:            1.00
+  ownership_diffusion:  0.00
 ```
 
 **What to Look For:**
@@ -239,6 +266,8 @@ Risk Factors:
 - **Net code reduction** - Cleanup/simplification, generally positive
 - **High entropy** - Scattered changes, check for unrelated modifications
 - **Many files** - Wide impact, ensure integration testing
+- **High file_churn** - Touching historically volatile files that change often
+- **High ownership_diffusion** - No clear owner for the touched files; ensure someone takes responsibility for review
 
 **CI/CD Integration:**
 

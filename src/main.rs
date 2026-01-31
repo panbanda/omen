@@ -1,7 +1,7 @@
 //! Omen CLI - Multi-language code analysis for AI assistants.
 
 use std::io::stdout;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -153,12 +153,16 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 run_analyzer::<omen::analyzers::complexity::Analyzer>(path, &config, format)?;
             }
         }
+        Command::Diff(_) => {
+            run_diff_analyzer(path, format)?;
+        }
+        Command::Changes(_) => {
+            run_changes_analyzer(path, &config, format)?;
+        }
         Command::Satd(_)
         | Command::Deadcode(_)
         | Command::Clones(_)
         | Command::Defect(_)
-        | Command::Changes(_)
-        | Command::Diff(_)
         | Command::Tdg(_)
         | Command::Graph(_)
         | Command::Hotspot(_)
@@ -418,9 +422,6 @@ fn dispatch_analyzer(
         Command::Defect(_) => {
             run_analyzer::<omen::analyzers::defect::Analyzer>(path, config, format)
         }
-        Command::Changes(_) | Command::Diff(_) => {
-            run_analyzer::<omen::analyzers::changes::Analyzer>(path, config, format)
-        }
         Command::Tdg(_) => run_analyzer::<omen::analyzers::tdg::Analyzer>(path, config, format),
         Command::Graph(_) => run_analyzer::<omen::analyzers::graph::Analyzer>(path, config, format),
         Command::Hotspot(_) | Command::LintHotspot(_) => {
@@ -491,6 +492,23 @@ fn run_analyzer<A: Analyzer + Default>(
         s.finish_and_clear();
     }
 
+    format.format(&result, &mut stdout())?;
+    Ok(())
+}
+
+fn run_diff_analyzer(path: &Path, format: Format) -> omen::core::Result<()> {
+    let analyzer = omen::analyzers::changes::Analyzer::default();
+    let result = analyzer.analyze_diff(path, None)?;
+    format.format(&result, &mut stdout())?;
+    Ok(())
+}
+
+fn run_changes_analyzer(path: &Path, config: &Config, format: Format) -> omen::core::Result<()> {
+    let file_set = FileSet::from_path(path, config)?;
+    let path_buf = path.to_path_buf();
+    let ctx = build_context(&path_buf, &file_set, config);
+    let analyzer = omen::analyzers::changes::Analyzer::new().with_days(config.changes.days);
+    let result = analyzer.analyze(&ctx)?;
     format.format(&result, &mut stdout())?;
     Ok(())
 }
