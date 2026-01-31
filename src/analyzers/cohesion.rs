@@ -1480,16 +1480,22 @@ fn calculate_lcom(methods: &[MethodInfo], fields: &[String]) -> u32 {
     let n = methods.len();
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
 
-    // Build adjacency list: methods are connected if they share a field
-    for i in 0..n {
-        for j in (i + 1)..n {
-            // Check if methods i and j share any field
-            for field in &methods[i].used_fields {
-                if methods[j].used_fields.contains(field) {
-                    adj[i].push(j);
-                    adj[j].push(i);
-                    break;
-                }
+    // Build inverted index: field -> list of method indices that use it.
+    // Then connect all methods sharing a field via the index, avoiding
+    // the O(methods^2 * fields) nested scan.
+    let mut field_to_methods: HashMap<&String, Vec<usize>> = HashMap::new();
+    for (i, method) in methods.iter().enumerate() {
+        for field in &method.used_fields {
+            field_to_methods.entry(field).or_default().push(i);
+        }
+    }
+    for method_indices in field_to_methods.values() {
+        for w in 0..method_indices.len() {
+            for v in (w + 1)..method_indices.len() {
+                let a = method_indices[w];
+                let b = method_indices[v];
+                adj[a].push(b);
+                adj[b].push(a);
             }
         }
     }
@@ -2092,6 +2098,83 @@ mod tests {
         ];
         let fields = vec!["x".to_string(), "y".to_string()];
         assert_eq!(calculate_lcom(&methods, &fields), 1);
+    }
+
+    #[test]
+    fn test_lcom_many_methods_sharing_one_field() {
+        // All methods share a single field: should be 1 connected component.
+        // This exercises the inverted-index path (many methods per field).
+        let n = 50;
+        let mut methods = Vec::with_capacity(n);
+        for i in 0..n {
+            let mut used = HashSet::new();
+            used.insert("shared".to_string());
+            methods.push(MethodInfo {
+                name: format!("m{i}"),
+                complexity: 1,
+                used_fields: used,
+            });
+        }
+        let fields = vec!["shared".to_string()];
+        assert_eq!(calculate_lcom(&methods, &fields), 1);
+    }
+
+    #[test]
+    fn test_lcom_star_topology() {
+        // One method shares a field with every other method via different fields.
+        // Hub method uses fields f0..f4, each satellite uses exactly one.
+        let mut hub_fields = HashSet::new();
+        for i in 0..5 {
+            hub_fields.insert(format!("f{i}"));
+        }
+        let mut methods = vec![MethodInfo {
+            name: "hub".to_string(),
+            complexity: 1,
+            used_fields: hub_fields,
+        }];
+        for i in 0..5 {
+            let mut used = HashSet::new();
+            used.insert(format!("f{i}"));
+            methods.push(MethodInfo {
+                name: format!("sat{i}"),
+                complexity: 1,
+                used_fields: used,
+            });
+        }
+        let fields: Vec<String> = (0..5).map(|i| format!("f{i}")).collect();
+        // Hub connects to all satellites; satellites connect to hub => 1 component
+        assert_eq!(calculate_lcom(&methods, &fields), 1);
+    }
+
+    #[test]
+    fn test_lcom_two_disjoint_groups() {
+        // Group A: methods 0,1 share field "a"
+        // Group B: methods 2,3 share field "b"
+        // No cross-group links => 2 components
+        let methods = vec![
+            MethodInfo {
+                name: "a0".to_string(),
+                complexity: 1,
+                used_fields: ["a".to_string()].into_iter().collect(),
+            },
+            MethodInfo {
+                name: "a1".to_string(),
+                complexity: 1,
+                used_fields: ["a".to_string()].into_iter().collect(),
+            },
+            MethodInfo {
+                name: "b0".to_string(),
+                complexity: 1,
+                used_fields: ["b".to_string()].into_iter().collect(),
+            },
+            MethodInfo {
+                name: "b1".to_string(),
+                complexity: 1,
+                used_fields: ["b".to_string()].into_iter().collect(),
+            },
+        ];
+        let fields = vec!["a".to_string(), "b".to_string()];
+        assert_eq!(calculate_lcom(&methods, &fields), 2);
     }
 
     #[test]
