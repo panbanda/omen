@@ -127,14 +127,20 @@ where
                             // When the replacement is a constant (e.g. `true` or
                             // `false`), the byte range must cover the entire parent
                             // binary expression, not just the operator token.
-                            let is_whole_expr_replacement =
-                                !is_target_operator(&replacement);
+                            let is_whole_expr_replacement = !is_target_operator(&replacement);
                             let (range_node, original, desc) = if is_whole_expr_replacement {
-                                let expr_text = node.utf8_text(&result.source)
-                                    .unwrap_or(op_text);
-                                (node, expr_text, format!("Replace `{}` with {}", expr_text, replacement))
+                                let expr_text = node.utf8_text(&result.source).unwrap_or(op_text);
+                                (
+                                    node,
+                                    expr_text,
+                                    format!("Replace `{}` with {}", expr_text, replacement),
+                                )
                             } else {
-                                (child, op_text, format!("Replace {} with {}", op_text, replacement))
+                                (
+                                    child,
+                                    op_text,
+                                    format!("Replace {} with {}", op_text, replacement),
+                                )
                             };
                             let start = range_node.start_position();
                             mutants.push(Mutant::new(

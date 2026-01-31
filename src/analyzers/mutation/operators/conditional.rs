@@ -214,7 +214,10 @@ mod tests {
         assert!(!op_mutants.is_empty());
         assert!(op_mutants.iter().any(|m| m.replacement == "&&"));
 
-        let expr_mutants: Vec<_> = mutants.iter().filter(|m| m.replacement == "false").collect();
+        let expr_mutants: Vec<_> = mutants
+            .iter()
+            .filter(|m| m.replacement == "false")
+            .collect();
         assert!(!expr_mutants.is_empty());
         assert!(expr_mutants[0].original.contains("||"));
     }
@@ -272,7 +275,10 @@ mod tests {
         assert!(!op_mutants.is_empty());
         assert!(op_mutants.iter().any(|m| m.replacement == "and"));
 
-        let expr_mutants: Vec<_> = mutants.iter().filter(|m| m.replacement == "False").collect();
+        let expr_mutants: Vec<_> = mutants
+            .iter()
+            .filter(|m| m.replacement == "False")
+            .collect();
         assert!(!expr_mutants.is_empty());
         assert!(expr_mutants[0].original.contains("or"));
     }
