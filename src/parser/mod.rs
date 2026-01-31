@@ -1381,11 +1381,15 @@ mod tests {
         let functions = extract_functions(&result);
         assert_eq!(functions.len(), 2);
 
-        let (s1, e1) = functions[0].body_byte_range.expect("first should have body");
+        let (s1, e1) = functions[0]
+            .body_byte_range
+            .expect("first should have body");
         let body1 = std::str::from_utf8(&content[s1..e1]).unwrap();
         assert!(body1.contains("let a"));
 
-        let (s2, e2) = functions[1].body_byte_range.expect("second should have body");
+        let (s2, e2) = functions[1]
+            .body_byte_range
+            .expect("second should have body");
         let body2 = std::str::from_utf8(&content[s2..e2]).unwrap();
         assert!(body2.contains("let b"));
     }
