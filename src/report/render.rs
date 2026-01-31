@@ -145,7 +145,7 @@ impl Renderer {
 
         let gz_path = output_path.with_extension("html.gz");
         let gz_file = fs::File::create(&gz_path)?;
-        let mut encoder = GzEncoder::new(gz_file, Compression::best());
+        let mut encoder = GzEncoder::new(gz_file, Compression::default());
         encoder.write_all(&output)?;
         encoder.finish()?;
 
@@ -404,7 +404,11 @@ fn severity_order(severity: &str) -> u8 {
 
 /// Strip root prefix from path for relative display.
 fn rel_path(path: &str, roots: Option<Vec<String>>) -> String {
-    let roots = roots.unwrap_or_default();
+    rel_path_ref(path, roots.as_deref().unwrap_or(&[]))
+}
+
+/// Same as `rel_path` but takes a slice, avoiding per-call allocation.
+fn rel_path_ref(path: &str, roots: &[String]) -> String {
     if roots.is_empty() {
         return path.to_string();
     }
@@ -742,7 +746,7 @@ fn build_hotspots_json(files: &[HotspotItem], roots: &[String]) -> String {
     let rows: Vec<Vec<String>> = files
         .iter()
         .map(|item| {
-            let path = rel_path(&item.path, Some(roots.to_vec()));
+            let path = rel_path_ref(&item.path, roots);
             let lang = lang_from_path(&item.path);
             let score = item.hotspot_score;
             let badge = hotspot_badge(score);
@@ -763,7 +767,7 @@ fn build_satd_json(items: &[SATDItem], roots: &[String]) -> String {
         .iter()
         .map(|item| {
             let sev_lower = item.severity.to_lowercase();
-            let path = rel_path(&item.file, Some(roots.to_vec()));
+            let path = rel_path_ref(&item.file, roots);
             let lang = lang_from_path(&item.file);
             vec![
                 format!(
@@ -830,7 +834,7 @@ fn build_graph_json(nodes: &[GraphNode], roots: &[String]) -> String {
     let rows: Vec<Vec<String>> = nodes
         .iter()
         .map(|node| {
-            let path = rel_path(&node.path, Some(roots.to_vec()));
+            let path = rel_path_ref(&node.path, roots);
             let lang = lang_from_path(&node.path);
             let inst_class = instability_class(node.instability);
             vec![
@@ -854,7 +858,7 @@ fn build_tdg_json(files: &[TdgFile], roots: &[String]) -> String {
     let rows: Vec<Vec<String>> = files
         .iter()
         .map(|item| {
-            let path = rel_path(&item.file_path, Some(roots.to_vec()));
+            let path = rel_path_ref(&item.file_path, roots);
             let lang = lang_from_path(&item.file_path);
             let score_class_val = score_class(item.total.round() as i32);
             let grade_class_val = grade_class(&item.grade);
@@ -880,8 +884,8 @@ fn build_temporal_json(couplings: &[TemporalCoupling], roots: &[String]) -> Stri
     let rows: Vec<Vec<String>> = couplings
         .iter()
         .map(|item| {
-            let path_a = rel_path(&item.file_a, Some(roots.to_vec()));
-            let path_b = rel_path(&item.file_b, Some(roots.to_vec()));
+            let path_a = rel_path_ref(&item.file_a, roots);
+            let path_b = rel_path_ref(&item.file_b, roots);
             let badge = coupling_badge(item.coupling_strength);
             vec![
                 format!("<code>{}</code>", html_escape(&truncate_path(&path_a, 40))),
@@ -1011,5 +1015,58 @@ mod tests {
             "src/main.rs"
         );
         assert_eq!(rel_path("src/main.rs", None), "src/main.rs");
+    }
+
+    #[test]
+    fn test_html_escape() {
+        assert_eq!(html_escape("hello"), "hello");
+        assert_eq!(html_escape("<b>bold</b>"), "&lt;b&gt;bold&lt;/b&gt;");
+        assert_eq!(html_escape("a & b"), "a &amp; b");
+        assert_eq!(html_escape(r#"say "hi""#), "say &quot;hi&quot;");
+        assert_eq!(html_escape("</script>"), "&lt;/script&gt;");
+    }
+
+    #[test]
+    fn test_build_hotspots_json() {
+        let files = vec![
+            HotspotItem {
+                path: "/root/src/main.rs".to_string(),
+                hotspot_score: 0.85,
+                commits: 42,
+                avg_cognitive: 12.3,
+            },
+            HotspotItem {
+                path: "/root/src/lib.rs".to_string(),
+                hotspot_score: 0.15,
+                commits: 5,
+                avg_cognitive: 2.0,
+            },
+        ];
+        let roots = vec!["/root".to_string()];
+        let json = build_hotspots_json(&files, &roots);
+        let parsed: Vec<Vec<String>> = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].len(), 5);
+        assert!(parsed[0][0].contains("<code>"));
+        assert!(parsed[0][0].contains("src/main.rs"));
+        assert!(parsed[0][2].contains("critical"));
+        assert!(parsed[1][2].contains("low"));
+        assert_eq!(parsed[0][3], "42");
+    }
+
+    #[test]
+    fn test_build_temporal_json_empty() {
+        let json = build_temporal_json(&[], &[]);
+        assert_eq!(json, "[]");
+    }
+
+    #[test]
+    fn test_rel_path_ref() {
+        let roots = vec!["/home/user/repo".to_string()];
+        assert_eq!(
+            rel_path_ref("/home/user/repo/src/main.rs", &roots),
+            "src/main.rs"
+        );
+        assert_eq!(rel_path_ref("src/main.rs", &[]), "src/main.rs");
     }
 }
