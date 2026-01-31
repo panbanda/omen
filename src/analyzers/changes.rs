@@ -378,7 +378,6 @@ struct FileRiskProfile {
 #[derive(Debug, Clone, Default)]
 struct FileChurnData {
     commit_count: i32,
-    authors: HashSet<String>,
 }
 
 /// Aggregated file-level risk signals across all files in a commit or PR.
@@ -733,12 +732,10 @@ fn compute_state_dependent_features(
     let churn_data: HashMap<String, FileChurnData> = file_changes
         .into_iter()
         .map(|(path, count)| {
-            let authors = file_authors.remove(&path).unwrap_or_default();
             (
                 path,
                 FileChurnData {
                     commit_count: count,
-                    authors,
                 },
             )
         })
@@ -1537,28 +1534,28 @@ fn get_lines_per_file(repo_path: &Path, merge_base: &str) -> Result<HashMap<Stri
     Ok(result)
 }
 
-/// Build churn data (commit count + author set) for a specific set of files
-/// by scanning the full git log.
+/// Build churn data (commit count + author set) for a specific set of files.
+///
+/// Uses path-filtered git log so only commits touching the requested files
+/// are scanned, rather than the entire repository history.
 fn build_churn_for_files(
     repo_path: &Path,
     files: &[String],
 ) -> Result<HashMap<String, FileChurnData>> {
-    let target_files: HashSet<&str> = files.iter().map(|s| s.as_str()).collect();
     let repo = GitRepo::open(repo_path)?;
-    let commits = repo.log_with_stats(None, None)?;
+    let git_churn = repo.file_churn(files)?;
 
-    let mut churn: HashMap<String, FileChurnData> = HashMap::new();
-
-    for commit in &commits {
-        for file_change in &commit.files {
-            let path_str = file_change.path.to_string_lossy();
-            if target_files.contains(path_str.as_ref()) {
-                let entry = churn.entry(path_str.to_string()).or_default();
-                entry.commit_count += 1;
-                entry.authors.insert(commit.author.clone());
-            }
-        }
-    }
+    let churn = git_churn
+        .into_iter()
+        .map(|(path, entry)| {
+            (
+                path,
+                FileChurnData {
+                    commit_count: entry.commit_count,
+                },
+            )
+        })
+        .collect();
 
     Ok(churn)
 }
