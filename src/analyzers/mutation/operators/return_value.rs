@@ -398,7 +398,8 @@ fn generate_empty_return_replacements(lang: Language) -> Vec<String> {
 fn truncate_replacement(text: &str) -> String {
     let text = text.trim();
     if text.len() > 30 {
-        format!("{}...", &text[..27])
+        let end = text.floor_char_boundary(27);
+        format!("{}...", &text[..end])
     } else {
         text.to_string()
     }
@@ -668,6 +669,16 @@ mod tests {
         let long_text = "return Some(very_long_complex_expression_here)";
         let result = truncate_replacement(long_text);
         assert!(result.len() <= 33);
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn test_truncate_replacement_multibyte_utf8() {
+        // 27 ASCII + a 4-byte emoji at the truncation boundary
+        let mut text = "a".repeat(27);
+        text.push('\u{1F600}'); // 4 bytes
+        text.push_str("tail");
+        let result = truncate_replacement(&text);
         assert!(result.ends_with("..."));
     }
 

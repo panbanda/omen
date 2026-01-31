@@ -250,7 +250,8 @@ fn get_empty_block_replacement(lang: Language) -> String {
 fn truncate_description(text: &str) -> String {
     let text = text.trim().replace('\n', " ");
     if text.len() > 40 {
-        format!("{}...", &text[..37])
+        let end = text.floor_char_boundary(37);
+        format!("{}...", &text[..end])
     } else {
         text
     }
@@ -432,6 +433,16 @@ mod tests {
             "this is a very long statement that should be truncated for display purposes";
         let result = truncate_description(long_text);
         assert!(result.len() <= 43);
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn test_truncate_description_multibyte_utf8() {
+        // 37 ASCII + a 3-byte CJK char at the truncation boundary
+        let mut text = "a".repeat(37);
+        text.push('\u{4e16}'); // 3 bytes
+        text.push_str("extra");
+        let result = truncate_description(&text);
         assert!(result.ends_with("..."));
     }
 
