@@ -5,13 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Repository Health Report - {{ Metadata.repository }}</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Cpath fill='%237A4A22' d='M160 90C160 60 352 60 352 90L352 130L160 130Z'/%3E%3Crect fill='%235E3618' x='140' y='130' width='232' height='28' rx='14'/%3E%3Cellipse fill='%233B8C8E' cx='138' cy='220' rx='28' ry='42'/%3E%3Cellipse fill='%233B8C8E' cx='374' cy='220' rx='28' ry='42'/%3E%3Cpath fill='%234FA3A5' d='M128 180C128 130 384 130 384 180V360C384 410 128 410 128 360Z'/%3E%3Cellipse fill='%23FFFFFF' cx='220' cy='240' rx='34' ry='38'/%3E%3Cellipse fill='%23FFFFFF' cx='292' cy='240' rx='34' ry='38'/%3E%3Ccircle fill='%231B1B1B' cx='228' cy='252' r='10'/%3E%3Ccircle fill='%231B1B1B' cx='300' cy='252' r='10'/%3E%3Cellipse fill='%232A2A2A' cx='256' cy='286' rx='14' ry='10'/%3E%3Crect fill='%23F2F2F2' x='242' y='304' width='12' height='24' rx='3'/%3E%3Crect fill='%23F2F2F2' x='258' y='304' width='12' height='24' rx='3'/%3E%3Cg transform='translate(330 260)'%3E%3Ccircle fill='%23C9B36D' cx='0' cy='0' r='56'/%3E%3Ccircle fill='%23FFF6D5' cx='0' cy='0' r='42'/%3E%3Crect fill='%236A4020' x='40' y='40' width='90' height='14' rx='7' transform='rotate(35)'/%3E%3C/g%3E%3Cpath fill='%233B8C8E' d='M128 330C180 360 332 360 384 330V360C384 410 128 410 128 360Z' opacity='0.6'/%3E%3C/svg%3E">
-    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/simple-datatables@9/dist/style.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/simple-datatables@9"></script>
-    <script src="https://cdn.jsdelivr.net/npm/date-fns@4/cdn.min.js"></script>
-    <script src="https://unpkg.com/@popperjs/core@2"></script>
-    <script src="https://unpkg.com/tippy.js@6"></script>
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         :root {
             --bg-primary: #0d1117;
@@ -1326,18 +1320,8 @@
                             <th><span class="tooltip" data-tooltip="Cyclomatic complexity - number of independent paths through the code.">Complexity</span></th>
                         </tr>
                     </thead>
-                    <tbody>
-                        {% for item in Hotspots.files %}
-                        <tr>
-                            <td><code>{{ item.path | rel_path(Metadata.paths) | truncate_path(60) }}</code></td>
-                            <td>{{ item.path | lang_from_path }}</td>
-                            <td><span class="badge {{ item.hotspot_score | hotspot_badge }}">{{ item.hotspot_score | round(3) }}</span></td>
-                            <td>{{ item.commits }}</td>
-                            <td>{{ item.avg_cognitive | round(1) }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
                 </table>
+                {% if HotspotsTableJson %}<script>window.__td_hotspots={{ HotspotsTableJson }};</script>{% endif %}
             </div>
         </section>
         {% endif %}
@@ -1409,19 +1393,8 @@
                             <th><span class="tooltip" data-tooltip="Coupling Between Objects. Number of classes this class depends on. High coupling makes changes risky.">CBO</span></th>
                         </tr>
                     </thead>
-                    <tbody>
-                        {% for item in Cohesion.classes %}
-                        <tr>
-                            <td><code>{{ item.class_name }}</code></td>
-                            <td title="{{ item.path }}">{{ item.path | truncate_path(40) }}</td>
-                            <td>{{ item.language }}</td>
-                            <td><span class="badge {% if item.lcom > 50 %}critical{% elif item.lcom > 20 %}high{% else %}medium{% endif %}">{{ item.lcom }}</span></td>
-                            <td>{{ item.wmc }}</td>
-                            <td>{{ item.cbo }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
                 </table>
+                {% if CohesionTableJson %}<script>window.__td_cohesion={{ CohesionTableJson }};</script>{% endif %}
             </div>
         </section>
         {% endif %}
@@ -1553,20 +1526,8 @@
                             <th><span class="tooltip" data-tooltip="Ratio of outgoing to total dependencies. 0 = maximally stable (many dependents), 1 = maximally unstable. Stable modules depending on unstable ones is a smell.">Instability</span></th>
                         </tr>
                     </thead>
-                    <tbody>
-                        {% for node in Graph.nodes %}
-                        <tr>
-                            <td><code>{{ node.path | rel_path(Metadata.paths) | truncate_path(50) }}</code></td>
-                            <td>{{ node.path | lang_from_path }}</td>
-                            <td>{{ node.pagerank | round(4) }}</td>
-                            <td>{{ node.betweenness | round(4) }}</td>
-                            <td>{{ node.in_degree }}</td>
-                            <td>{{ node.out_degree }}</td>
-                            <td><span class="{{ node.instability | instability_class }}">{{ node.instability | round(2) }}</span></td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
                 </table>
+                {% if GraphTableJson %}<script>window.__td_graph={{ GraphTableJson }};</script>{% endif %}
             </div>
             {% endif %}
         </section>
@@ -1632,19 +1593,8 @@
                             <th>Comment</th>
                         </tr>
                     </thead>
-                    <tbody>
-                        {% for item in SATD.items %}
-                        <tr>
-                            <td><span class="badge {{ item.severity | lower }}">{{ item.severity }}</span></td>
-                            <td>{{ item.category }}</td>
-                            <td><code>{{ item.file | rel_path(Metadata.paths) | truncate_path(50) }}</code></td>
-                            <td>{{ item.file | lang_from_path }}</td>
-                            <td>{{ item.line }}</td>
-                            <td class="cell-overflow" title="{{ item.content }}">{{ item.content }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
                 </table>
+                {% if SATDTableJson %}<script>window.__td_satd={{ SATDTableJson }};</script>{% endif %}
             </div>
         </section>
         {% endif %}
@@ -1748,21 +1698,8 @@
                             <th><span class="tooltip" data-tooltip="Import count contribution (0-15).">Coupling</span></th>
                         </tr>
                     </thead>
-                    <tbody>
-                        {% for item in Tdg.files %}
-                        <tr>
-                            <td><code>{{ item.file_path | rel_path(Metadata.paths) | truncate_path(50) }}</code></td>
-                            <td>{{ item.file_path | lang_from_path }}</td>
-                            <td><span class="{{ item.total | round(0) | int | score_class }}">{{ item.total | round(1) }}</span></td>
-                            <td><span class="badge {{ item.grade | grade_class }}">{{ item.grade }}</span></td>
-                            <td>{{ item.structural_complexity | round(1) }}</td>
-                            <td>{{ item.semantic_complexity | round(1) }}</td>
-                            <td>{{ item.duplication_ratio | round(1) }}</td>
-                            <td>{{ item.coupling_score | round(1) }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
                 </table>
+                {% if TdgTableJson %}<script>window.__td_tdg={{ TdgTableJson }};</script>{% endif %}
             </div>
             {% endif %}
         </section>
@@ -1888,18 +1825,8 @@
                             <th><span class="tooltip" data-tooltip="Normalized score combining commit frequency and lines changed. Higher = more volatile.">Churn Score</span></th>
                         </tr>
                     </thead>
-                    <tbody>
-                        {% for item in Churn.files %}
-                        <tr>
-                            <td><code>{{ item.file }}</code></td>
-                            <td>{{ item.file | lang_from_path }}</td>
-                            <td>{{ item.commits }}</td>
-                            <td>{{ item.authors | length }}</td>
-                            <td><span class="badge {{ item.churn_score | churn_badge }}">{{ item.churn_score | round(3) }}</span></td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
                 </table>
+                {% if ChurnTableJson %}<script>window.__td_churn={{ ChurnTableJson }};</script>{% endif %}
             </div>
             {% endif %}
         </section>
@@ -1994,17 +1921,8 @@
                             <th><span class="tooltip" data-tooltip="Ratio of co-changes to the maximum commits of either file. 1.0 = always change together.">Strength</span></th>
                         </tr>
                     </thead>
-                    <tbody>
-                        {% for item in Temporal.couplings %}
-                        <tr>
-                            <td><code>{{ item.file_a | rel_path(Metadata.paths) | truncate_path(40) }}</code></td>
-                            <td><code>{{ item.file_b | rel_path(Metadata.paths) | truncate_path(40) }}</code></td>
-                            <td>{{ item.cochange_count }}</td>
-                            <td><span class="badge {{ item.coupling_strength | coupling_badge }}">{{ item.coupling_strength | round(2) }}</span></td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
                 </table>
+                {% if TemporalTableJson %}<script>window.__td_temporal={{ TemporalTableJson }};</script>{% endif %}
             </div>
         </section>
         {% endif %}
@@ -2179,6 +2097,12 @@
         </footer>
     </main>
 
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/simple-datatables@9"></script>
+    <script src="https://cdn.jsdelivr.net/npm/date-fns@4/cdn.min.js"></script>
+    <script src="https://unpkg.com/@popperjs/core@2"></script>
+    <script src="https://unpkg.com/tippy.js@6"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script>
         // Toggle collapsible sections
         function toggleCollapsible(id) {
@@ -2246,10 +2170,27 @@
         };
 
         const dataTableInstances = {};
+        const jsonTableMap = {
+            'hotspots-table': window.__td_hotspots,
+            'cohesion-table': window.__td_cohesion,
+            'graph-table': window.__td_graph,
+            'satd-table': window.__td_satd,
+            'tdg-table': window.__td_tdg,
+            'churn-table': window.__td_churn,
+            'temporal-table': window.__td_temporal
+        };
         const tableIds = ['hotspots-table', 'flags-table', 'cohesion-table', 'satd-table', 'churn-table', 'smells-table', 'graph-table', 'tdg-table', 'temporal-table'];
         tableIds.forEach(id => {
             const table = document.getElementById(id);
-            if (table && table.querySelector('tbody tr')) {
+            if (!table) return;
+            const jsonData = jsonTableMap[id];
+            if (jsonData && jsonData.length) {
+                const headings = Array.from(table.querySelectorAll('thead th')).map(th => th.innerHTML);
+                dataTableInstances[id] = new simpleDatatables.DataTable(table, {
+                    ...dataTableConfig,
+                    data: { headings: headings, data: jsonData }
+                });
+            } else if (table.querySelector('tbody tr')) {
                 dataTableInstances[id] = new simpleDatatables.DataTable(table, dataTableConfig);
             }
         });

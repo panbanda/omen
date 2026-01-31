@@ -5,6 +5,8 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use minijinja::{context, Environment, Value};
 use pulldown_cmark::{html, Options, Parser};
 
@@ -57,9 +59,40 @@ impl Renderer {
         Ok(Self { env })
     }
 
-    /// Render generates HTML from the data directory and writes to the output.
-    pub fn render<W: Write>(&self, data_dir: &Path, writer: &mut W) -> Result<()> {
+    /// Render generates HTML from the data directory into a byte buffer.
+    fn render_to_bytes(&self, data_dir: &Path) -> Result<Vec<u8>> {
         let data = self.load_data(data_dir)?;
+        let roots = &data.metadata.paths;
+
+        let hotspots_json = data
+            .hotspots
+            .as_ref()
+            .map(|h| build_hotspots_json(&h.files, roots));
+        let satd_json = data
+            .satd
+            .as_ref()
+            .map(|s| build_satd_json(&s.items, roots));
+        let churn_json = data
+            .churn
+            .as_ref()
+            .map(|c| build_churn_json(&c.files));
+        let cohesion_json = data
+            .cohesion
+            .as_ref()
+            .map(|c| build_cohesion_json(&c.classes));
+        let graph_json = data
+            .graph
+            .as_ref()
+            .map(|g| build_graph_json(&g.nodes, roots));
+        let tdg_json = data
+            .tdg
+            .as_ref()
+            .map(|t| build_tdg_json(&t.files, roots));
+        let temporal_json = data
+            .temporal
+            .as_ref()
+            .map(|t| build_temporal_json(&t.couplings, roots));
+
         let tmpl = self.env.get_template("report")?;
         let rendered = tmpl.render(context! {
             Metadata => data.metadata,
@@ -93,15 +126,44 @@ impl Renderer {
             TdgInsight => data.tdg_insight,
             ComponentTrends => data.component_trends,
             SATDStats => data.satd_stats,
+            HotspotsTableJson => hotspots_json,
+            SATDTableJson => satd_json,
+            ChurnTableJson => churn_json,
+            CohesionTableJson => cohesion_json,
+            GraphTableJson => graph_json,
+            TdgTableJson => tdg_json,
+            TemporalTableJson => temporal_json,
         })?;
-        writer.write_all(rendered.as_bytes())?;
+
+        let minified = minify_html_output(rendered.as_bytes());
+        Ok(minified)
+    }
+
+    /// Render generates HTML from the data directory and writes to the output.
+    pub fn render<W: Write>(&self, data_dir: &Path, writer: &mut W) -> Result<()> {
+        let output = self.render_to_bytes(data_dir)?;
+        writer.write_all(&output)?;
         Ok(())
     }
 
-    /// Render to a file.
+    /// Render to a file, also producing a `.html.gz` companion.
     pub fn render_to_file(&self, data_dir: &Path, output_path: &Path) -> Result<()> {
-        let mut file = fs::File::create(output_path)?;
-        self.render(data_dir, &mut file)
+        let output = self.render_to_bytes(data_dir)?;
+
+        fs::write(output_path, &output)?;
+
+        let gz_path = output_path.with_extension("html.gz");
+        let gz_file = fs::File::create(&gz_path)?;
+        let mut encoder = GzEncoder::new(gz_file, Compression::best());
+        encoder.write_all(&output)?;
+        encoder.finish()?;
+
+        Ok(())
+    }
+
+    /// Return the gzip companion path for a given output path.
+    pub fn gz_path(output_path: &Path) -> std::path::PathBuf {
+        output_path.with_extension("html.gz")
     }
 
     /// Load all JSON data files and transform for rendering.
@@ -661,6 +723,200 @@ fn instability_class(instability: f64) -> &'static str {
     } else {
         "good"
     }
+}
+
+// ============================================================================
+// HTML Minification
+// ============================================================================
+
+fn minify_html_output(input: &[u8]) -> Vec<u8> {
+    let cfg = minify_html::Cfg {
+        minify_js: true,
+        minify_css: true,
+        ..Default::default()
+    };
+    minify_html::minify(input, &cfg)
+}
+
+// ============================================================================
+// JSON Table Data Builders
+// ============================================================================
+
+/// Serialize rows as a JSON array-of-arrays string for simple-datatables `data` option.
+fn rows_to_json(rows: &[Vec<String>]) -> String {
+    serde_json::to_string(rows).unwrap_or_else(|_| "[]".to_string())
+}
+
+fn build_hotspots_json(files: &[HotspotItem], roots: &[String]) -> String {
+    let rows: Vec<Vec<String>> = files
+        .iter()
+        .map(|item| {
+            let path = rel_path(&item.path, Some(roots.to_vec()));
+            let lang = lang_from_path(&item.path);
+            let score = item.hotspot_score;
+            let badge = hotspot_badge(score);
+            vec![
+                format!("<code>{}</code>", html_escape(&truncate_path(&path, 60))),
+                lang,
+                format!(
+                    "<span class=\"badge {badge}\">{:.3}</span>",
+                    score
+                ),
+                item.commits.to_string(),
+                format!("{:.1}", item.avg_cognitive),
+            ]
+        })
+        .collect();
+    rows_to_json(&rows)
+}
+
+fn build_satd_json(items: &[SATDItem], roots: &[String]) -> String {
+    let rows: Vec<Vec<String>> = items
+        .iter()
+        .map(|item| {
+            let sev_lower = item.severity.to_lowercase();
+            let path = rel_path(&item.file, Some(roots.to_vec()));
+            let lang = lang_from_path(&item.file);
+            vec![
+                format!(
+                    "<span class=\"badge {sev_lower}\">{}</span>",
+                    html_escape(&item.severity)
+                ),
+                html_escape(&item.category),
+                format!("<code>{}</code>", html_escape(&truncate_path(&path, 50))),
+                lang,
+                item.line.to_string(),
+                html_escape(&item.content),
+            ]
+        })
+        .collect();
+    rows_to_json(&rows)
+}
+
+fn build_churn_json(files: &[ChurnFile]) -> String {
+    let rows: Vec<Vec<String>> = files
+        .iter()
+        .map(|item| {
+            let lang = lang_from_path(&item.file);
+            let badge = churn_badge(item.churn_score);
+            vec![
+                format!("<code>{}</code>", html_escape(&item.file)),
+                lang,
+                item.commits.to_string(),
+                item.authors.len().to_string(),
+                format!(
+                    "<span class=\"badge {badge}\">{:.3}</span>",
+                    item.churn_score
+                ),
+            ]
+        })
+        .collect();
+    rows_to_json(&rows)
+}
+
+fn build_cohesion_json(classes: &[CohesionClass]) -> String {
+    let rows: Vec<Vec<String>> = classes
+        .iter()
+        .map(|item| {
+            let lcom_class = if item.lcom > 50 {
+                "critical"
+            } else if item.lcom > 20 {
+                "high"
+            } else {
+                "medium"
+            };
+            vec![
+                format!("<code>{}</code>", html_escape(&item.class_name)),
+                html_escape(&truncate_path(&item.path, 40)),
+                html_escape(&item.language),
+                format!("<span class=\"badge {lcom_class}\">{}</span>", item.lcom),
+                item.wmc.to_string(),
+                item.cbo.to_string(),
+            ]
+        })
+        .collect();
+    rows_to_json(&rows)
+}
+
+fn build_graph_json(nodes: &[GraphNode], roots: &[String]) -> String {
+    let rows: Vec<Vec<String>> = nodes
+        .iter()
+        .map(|node| {
+            let path = rel_path(&node.path, Some(roots.to_vec()));
+            let lang = lang_from_path(&node.path);
+            let inst_class = instability_class(node.instability);
+            vec![
+                format!("<code>{}</code>", html_escape(&truncate_path(&path, 50))),
+                lang,
+                format!("{:.4}", node.pagerank),
+                format!("{:.4}", node.betweenness),
+                node.in_degree.to_string(),
+                node.out_degree.to_string(),
+                format!(
+                    "<span class=\"{inst_class}\">{:.2}</span>",
+                    node.instability
+                ),
+            ]
+        })
+        .collect();
+    rows_to_json(&rows)
+}
+
+fn build_tdg_json(files: &[TdgFile], roots: &[String]) -> String {
+    let rows: Vec<Vec<String>> = files
+        .iter()
+        .map(|item| {
+            let path = rel_path(&item.file_path, Some(roots.to_vec()));
+            let lang = lang_from_path(&item.file_path);
+            let score_class_val = score_class(item.total.round() as i32);
+            let grade_class_val = grade_class(&item.grade);
+            vec![
+                format!("<code>{}</code>", html_escape(&truncate_path(&path, 50))),
+                lang,
+                format!(
+                    "<span class=\"{score_class_val}\">{:.1}</span>",
+                    item.total
+                ),
+                format!(
+                    "<span class=\"badge {grade_class_val}\">{}</span>",
+                    html_escape(&item.grade)
+                ),
+                format!("{:.1}", item.structural_complexity),
+                format!("{:.1}", item.semantic_complexity),
+                format!("{:.1}", item.duplication_ratio),
+                format!("{:.1}", item.coupling_score),
+            ]
+        })
+        .collect();
+    rows_to_json(&rows)
+}
+
+fn build_temporal_json(couplings: &[TemporalCoupling], roots: &[String]) -> String {
+    let rows: Vec<Vec<String>> = couplings
+        .iter()
+        .map(|item| {
+            let path_a = rel_path(&item.file_a, Some(roots.to_vec()));
+            let path_b = rel_path(&item.file_b, Some(roots.to_vec()));
+            let badge = coupling_badge(item.coupling_strength);
+            vec![
+                format!("<code>{}</code>", html_escape(&truncate_path(&path_a, 40))),
+                format!("<code>{}</code>", html_escape(&truncate_path(&path_b, 40))),
+                item.cochange_count.to_string(),
+                format!(
+                    "<span class=\"badge {badge}\">{:.2}</span>",
+                    item.coupling_strength
+                ),
+            ]
+        })
+        .collect();
+    rows_to_json(&rows)
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 #[cfg(test)]
