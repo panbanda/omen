@@ -68,14 +68,8 @@ impl Renderer {
             .hotspots
             .as_ref()
             .map(|h| build_hotspots_json(&h.files, roots));
-        let satd_json = data
-            .satd
-            .as_ref()
-            .map(|s| build_satd_json(&s.items, roots));
-        let churn_json = data
-            .churn
-            .as_ref()
-            .map(|c| build_churn_json(&c.files));
+        let satd_json = data.satd.as_ref().map(|s| build_satd_json(&s.items, roots));
+        let churn_json = data.churn.as_ref().map(|c| build_churn_json(&c.files));
         let cohesion_json = data
             .cohesion
             .as_ref()
@@ -84,10 +78,7 @@ impl Renderer {
             .graph
             .as_ref()
             .map(|g| build_graph_json(&g.nodes, roots));
-        let tdg_json = data
-            .tdg
-            .as_ref()
-            .map(|t| build_tdg_json(&t.files, roots));
+        let tdg_json = data.tdg.as_ref().map(|t| build_tdg_json(&t.files, roots));
         let temporal_json = data
             .temporal
             .as_ref()
@@ -758,10 +749,7 @@ fn build_hotspots_json(files: &[HotspotItem], roots: &[String]) -> String {
             vec![
                 format!("<code>{}</code>", html_escape(&truncate_path(&path, 60))),
                 lang,
-                format!(
-                    "<span class=\"badge {badge}\">{:.3}</span>",
-                    score
-                ),
+                format!("<span class=\"badge {badge}\">{:.3}</span>", score),
                 item.commits.to_string(),
                 format!("{:.1}", item.avg_cognitive),
             ]
@@ -873,10 +861,7 @@ fn build_tdg_json(files: &[TdgFile], roots: &[String]) -> String {
             vec![
                 format!("<code>{}</code>", html_escape(&truncate_path(&path, 50))),
                 lang,
-                format!(
-                    "<span class=\"{score_class_val}\">{:.1}</span>",
-                    item.total
-                ),
+                format!("<span class=\"{score_class_val}\">{:.1}</span>", item.total),
                 format!(
                     "<span class=\"badge {grade_class_val}\">{}</span>",
                     html_escape(&item.grade)
