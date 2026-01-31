@@ -105,16 +105,66 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
 pub fn get_nesting_node_types(lang: Language) -> &'static [&'static str] {
     match lang {
         Language::Ruby => &["if", "unless", "while", "until", "for", "case", "begin"],
-        _ => &[
+        Language::Go => &[
             "if_statement",
-            "if_expression",
-            "while_statement",
-            "while_expression",
             "for_statement",
-            "for_expression",
-            "switch_statement",
-            "match_expression",
+            "select_statement",
+            "type_switch_statement",
+            "expression_switch_statement",
+        ],
+        Language::Python => &[
+            "if_statement",
+            "for_statement",
+            "while_statement",
+            "with_statement",
             "try_statement",
+        ],
+        Language::Rust => &[
+            "if_expression",
+            "match_expression",
+            "for_expression",
+            "while_expression",
+            "loop_expression",
+        ],
+        Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => &[
+            "if_statement",
+            "for_statement",
+            "for_in_statement",
+            "while_statement",
+            "do_statement",
+            "switch_statement",
+            "try_statement",
+        ],
+        Language::Java | Language::CSharp => &[
+            "if_statement",
+            "for_statement",
+            "enhanced_for_statement",
+            "while_statement",
+            "do_statement",
+            "switch_expression",
+            "try_statement",
+        ],
+        Language::C | Language::Cpp => &[
+            "if_statement",
+            "for_statement",
+            "while_statement",
+            "do_statement",
+            "switch_statement",
+        ],
+        Language::Php => &[
+            "if_statement",
+            "for_statement",
+            "foreach_statement",
+            "while_statement",
+            "do_statement",
+            "switch_statement",
+            "try_statement",
+        ],
+        Language::Bash => &[
+            "if_statement",
+            "for_statement",
+            "while_statement",
+            "case_statement",
         ],
     }
 }
@@ -138,15 +188,42 @@ pub fn get_flat_node_types(lang: Language) -> &'static [&'static str] {
             "break_statement",
             "continue_statement",
         ],
-        _ => &[
+        Language::Go => &["else_clause"],
+        Language::Rust => &[
             "else_clause",
-            "elif_clause",
-            "elseif_clause",
-            "catch_clause", // try-catch: +1 but no nesting increment
+            // match_arm contributes to flat complexity (each arm is +1 like case)
+            "break_expression",
+            "continue_expression",
+        ],
+        Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => &[
+            "else_clause",
+            "catch_clause",
+            "switch_case",
+            "break_statement",
+            "continue_statement",
+        ],
+        Language::Java | Language::CSharp => &[
+            "else_clause",
+            "catch_clause",
+            "break_statement",
+            "continue_statement",
+        ],
+        Language::C | Language::Cpp => &[
+            "else_clause",
+            "case_statement",
+            "catch_clause",
             "break_statement",
             "continue_statement",
             "goto_statement",
         ],
+        Language::Php => &[
+            "else_clause",
+            "elseif_clause",
+            "catch_clause",
+            "break_statement",
+            "continue_statement",
+        ],
+        Language::Bash => &["elif_clause", "else_clause"],
     }
 }
 
@@ -216,6 +293,118 @@ pub fn get_comparison_expression_types(lang: Language) -> &'static [&'static str
 /// Check if a node type represents a logical operator.
 pub fn is_logical_operator(node_type: &str) -> bool {
     matches!(node_type, "&&" | "||" | "and" | "or")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every language must have an explicit arm in get_nesting_node_types (no catch-all).
+    #[test]
+    fn test_nesting_node_types_per_language() {
+        let all_languages = [
+            Language::Go,
+            Language::Rust,
+            Language::Python,
+            Language::TypeScript,
+            Language::JavaScript,
+            Language::Tsx,
+            Language::Jsx,
+            Language::Java,
+            Language::CSharp,
+            Language::C,
+            Language::Cpp,
+            Language::Ruby,
+            Language::Php,
+            Language::Bash,
+        ];
+        for lang in all_languages {
+            let types = get_nesting_node_types(lang);
+            assert!(!types.is_empty(), "{lang} should have nesting node types");
+        }
+    }
+
+    /// Every language must have an explicit arm in get_flat_node_types (no catch-all).
+    #[test]
+    fn test_flat_node_types_per_language() {
+        let all_languages = [
+            Language::Go,
+            Language::Rust,
+            Language::Python,
+            Language::TypeScript,
+            Language::JavaScript,
+            Language::Tsx,
+            Language::Jsx,
+            Language::Java,
+            Language::CSharp,
+            Language::C,
+            Language::Cpp,
+            Language::Ruby,
+            Language::Php,
+            Language::Bash,
+        ];
+        for lang in all_languages {
+            let types = get_flat_node_types(lang);
+            assert!(!types.is_empty(), "{lang} should have flat node types");
+        }
+    }
+
+    #[test]
+    fn test_nesting_types_language_specific() {
+        // Rust uses _expression suffix, not _statement
+        let rust_types = get_nesting_node_types(Language::Rust);
+        assert!(rust_types.contains(&"if_expression"));
+        assert!(!rust_types.contains(&"if_statement"));
+
+        // Go uses _statement suffix
+        let go_types = get_nesting_node_types(Language::Go);
+        assert!(go_types.contains(&"if_statement"));
+        assert!(go_types.contains(&"select_statement"));
+
+        // Ruby uses bare keywords
+        let ruby_types = get_nesting_node_types(Language::Ruby);
+        assert!(ruby_types.contains(&"if"));
+        assert!(ruby_types.contains(&"unless"));
+
+        // C/C++ should include do_statement
+        let c_types = get_nesting_node_types(Language::C);
+        assert!(c_types.contains(&"do_statement"));
+
+        // PHP should include foreach_statement
+        let php_types = get_nesting_node_types(Language::Php);
+        assert!(php_types.contains(&"foreach_statement"));
+    }
+
+    #[test]
+    fn test_flat_types_language_specific() {
+        // Rust uses break_expression / continue_expression, not _statement
+        let rust_types = get_flat_node_types(Language::Rust);
+        assert!(rust_types.contains(&"break_expression"));
+        assert!(rust_types.contains(&"continue_expression"));
+        assert!(!rust_types.contains(&"break_statement"));
+
+        // Go only has else_clause (no break/continue as flat complexity)
+        let go_types = get_flat_node_types(Language::Go);
+        assert!(go_types.contains(&"else_clause"));
+        assert_eq!(go_types.len(), 1);
+
+        // Ruby has elsif and rescue
+        let ruby_types = get_flat_node_types(Language::Ruby);
+        assert!(ruby_types.contains(&"elsif"));
+        assert!(ruby_types.contains(&"rescue"));
+
+        // C/C++ should include goto_statement
+        let c_types = get_flat_node_types(Language::C);
+        assert!(c_types.contains(&"goto_statement"));
+
+        // PHP should include elseif_clause
+        let php_types = get_flat_node_types(Language::Php);
+        assert!(php_types.contains(&"elseif_clause"));
+
+        // Bash should have elif_clause
+        let bash_types = get_flat_node_types(Language::Bash);
+        assert!(bash_types.contains(&"elif_clause"));
+    }
 }
 
 /// SATD (Self-Admitted Technical Debt) comment markers.

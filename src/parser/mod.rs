@@ -351,7 +351,7 @@ fn check_is_exported(node: &tree_sitter::Node<'_>, source: &[u8], lang: Language
             }
             false
         }
-        Language::TypeScript | Language::JavaScript => {
+        Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => {
             // Check for 'export' keyword
             if let Some(parent) = node.parent() {
                 parent.kind() == "export_statement"
@@ -1211,6 +1211,54 @@ mod tests {
         assert!(result.is_ok());
         let functions = extract_functions(&result.unwrap());
         assert!(functions.is_empty());
+    }
+
+    #[test]
+    fn test_tsx_export_detection() {
+        let parser = Parser::new();
+        let content = b"export function Component() { return <div />; }";
+        let result = parser
+            .parse(content, Language::Tsx, Path::new("component.tsx"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 1);
+        assert!(
+            functions[0].is_exported,
+            "TSX exported function should be detected as exported"
+        );
+    }
+
+    #[test]
+    fn test_jsx_export_detection() {
+        let parser = Parser::new();
+        let content = b"export function App() { return <div />; }";
+        let result = parser
+            .parse(content, Language::Jsx, Path::new("app.jsx"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 1);
+        assert!(
+            functions[0].is_exported,
+            "JSX exported function should be detected as exported"
+        );
+    }
+
+    #[test]
+    fn test_tsx_non_exported_function() {
+        let parser = Parser::new();
+        let content = b"function Helper() { return <span />; }";
+        let result = parser
+            .parse(content, Language::Tsx, Path::new("helper.tsx"))
+            .unwrap();
+
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 1);
+        assert!(
+            !functions[0].is_exported,
+            "Non-exported TSX function should not be detected as exported"
+        );
     }
 
     #[test]
