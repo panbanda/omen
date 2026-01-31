@@ -60,9 +60,7 @@ impl MutationOperator for AssignmentOperator {
                         }
                     }
                 }
-            }
-
-            if is_compound_assignment_statement(kind, lang) {
+            } else if is_compound_assignment_statement(kind, lang) {
                 if let Some(replacements) = get_replacement_for_node_kind(kind) {
                     if let Ok(node_text) = node.utf8_text(&result.source) {
                         for (op, replacement) in replacements {

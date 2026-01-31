@@ -191,12 +191,15 @@ mod tests {
 
         let mutants = op.generate_mutants(&result, "test");
 
-        let and_mutants: Vec<_> = mutants.iter().filter(|m| m.original == "&&").collect();
-        assert!(!and_mutants.is_empty());
+        // The `||` replacement targets just the operator token.
+        let op_mutants: Vec<_> = mutants.iter().filter(|m| m.original == "&&").collect();
+        assert!(!op_mutants.is_empty());
+        assert!(op_mutants.iter().any(|m| m.replacement == "||"));
 
-        let replacements: Vec<_> = and_mutants.iter().map(|m| m.replacement.as_str()).collect();
-        assert!(replacements.contains(&"||"));
-        assert!(replacements.contains(&"true"));
+        // The `true` replacement targets the entire binary expression.
+        let expr_mutants: Vec<_> = mutants.iter().filter(|m| m.replacement == "true").collect();
+        assert!(!expr_mutants.is_empty());
+        assert!(expr_mutants[0].original.contains("&&"));
     }
 
     #[test]
@@ -207,12 +210,16 @@ mod tests {
 
         let mutants = op.generate_mutants(&result, "test");
 
-        let or_mutants: Vec<_> = mutants.iter().filter(|m| m.original == "||").collect();
-        assert!(!or_mutants.is_empty());
+        let op_mutants: Vec<_> = mutants.iter().filter(|m| m.original == "||").collect();
+        assert!(!op_mutants.is_empty());
+        assert!(op_mutants.iter().any(|m| m.replacement == "&&"));
 
-        let replacements: Vec<_> = or_mutants.iter().map(|m| m.replacement.as_str()).collect();
-        assert!(replacements.contains(&"&&"));
-        assert!(replacements.contains(&"false"));
+        let expr_mutants: Vec<_> = mutants
+            .iter()
+            .filter(|m| m.replacement == "false")
+            .collect();
+        assert!(!expr_mutants.is_empty());
+        assert!(expr_mutants[0].original.contains("||"));
     }
 
     #[test]
@@ -247,12 +254,13 @@ mod tests {
 
         let mutants = op.generate_mutants(&result, "test");
 
-        let and_mutants: Vec<_> = mutants.iter().filter(|m| m.original == "and").collect();
-        assert!(!and_mutants.is_empty());
+        let op_mutants: Vec<_> = mutants.iter().filter(|m| m.original == "and").collect();
+        assert!(!op_mutants.is_empty());
+        assert!(op_mutants.iter().any(|m| m.replacement == "or"));
 
-        let replacements: Vec<_> = and_mutants.iter().map(|m| m.replacement.as_str()).collect();
-        assert!(replacements.contains(&"or"));
-        assert!(replacements.contains(&"True"));
+        let expr_mutants: Vec<_> = mutants.iter().filter(|m| m.replacement == "True").collect();
+        assert!(!expr_mutants.is_empty());
+        assert!(expr_mutants[0].original.contains("and"));
     }
 
     #[test]
@@ -263,12 +271,16 @@ mod tests {
 
         let mutants = op.generate_mutants(&result, "test");
 
-        let or_mutants: Vec<_> = mutants.iter().filter(|m| m.original == "or").collect();
-        assert!(!or_mutants.is_empty());
+        let op_mutants: Vec<_> = mutants.iter().filter(|m| m.original == "or").collect();
+        assert!(!op_mutants.is_empty());
+        assert!(op_mutants.iter().any(|m| m.replacement == "and"));
 
-        let replacements: Vec<_> = or_mutants.iter().map(|m| m.replacement.as_str()).collect();
-        assert!(replacements.contains(&"and"));
-        assert!(replacements.contains(&"False"));
+        let expr_mutants: Vec<_> = mutants
+            .iter()
+            .filter(|m| m.replacement == "False")
+            .collect();
+        assert!(!expr_mutants.is_empty());
+        assert!(expr_mutants[0].original.contains("or"));
     }
 
     #[test]

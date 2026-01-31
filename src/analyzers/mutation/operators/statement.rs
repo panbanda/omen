@@ -229,6 +229,7 @@ fn get_empty_replacement(lang: Language) -> String {
     match lang {
         Language::Python => "pass".to_string(),
         Language::Rust => "{}".to_string(),
+        Language::Go => "{}".to_string(),
         Language::Ruby => "nil".to_string(),
         Language::Bash => ":".to_string(),
         _ => ";".to_string(),
@@ -409,6 +410,7 @@ mod tests {
     fn test_get_empty_replacement_by_language() {
         assert_eq!(get_empty_replacement(Language::Python), "pass");
         assert_eq!(get_empty_replacement(Language::Rust), "{}");
+        assert_eq!(get_empty_replacement(Language::Go), "{}");
         assert_eq!(get_empty_replacement(Language::JavaScript), ";");
         assert_eq!(get_empty_replacement(Language::Ruby), "nil");
         assert_eq!(get_empty_replacement(Language::Bash), ":");

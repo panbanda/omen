@@ -124,17 +124,35 @@ where
                         for replacement in replacements {
                             counter += 1;
                             let id = format!("{}-{}", mutant_id_prefix, counter);
-                            let start = child.start_position();
+                            // When the replacement is a constant (e.g. `true` or
+                            // `false`), the byte range must cover the entire parent
+                            // binary expression, not just the operator token.
+                            let is_whole_expr_replacement = !is_target_operator(&replacement);
+                            let (range_node, original, desc) = if is_whole_expr_replacement {
+                                let expr_text = node.utf8_text(&result.source).unwrap_or(op_text);
+                                (
+                                    node,
+                                    expr_text,
+                                    format!("Replace `{}` with {}", expr_text, replacement),
+                                )
+                            } else {
+                                (
+                                    child,
+                                    op_text,
+                                    format!("Replace {} with {}", op_text, replacement),
+                                )
+                            };
+                            let start = range_node.start_position();
                             mutants.push(Mutant::new(
                                 id,
                                 result.path.clone(),
                                 operator_name,
                                 (start.row + 1) as u32,
                                 (start.column + 1) as u32,
-                                op_text,
+                                original,
                                 replacement.clone(),
-                                format!("Replace {} with {}", op_text, replacement),
-                                (child.start_byte(), child.end_byte()),
+                                desc,
+                                (range_node.start_byte(), range_node.end_byte()),
                             ));
                         }
                     }
@@ -315,12 +333,13 @@ mod tests {
             "test",
             "TEST",
             &["binary_expression"],
-            |kind| kind == "+",
+            |kind| matches!(kind, "+" | "-" | "*"),
             |_op| vec!["-".to_string(), "*".to_string()],
         );
 
         assert_eq!(mutants.len(), 2);
         assert!(mutants.iter().all(|m| m.operator == "TEST"));
+        // Both replacements target only the operator token
         assert!(mutants.iter().all(|m| m.original == "+"));
         let replacements: Vec<_> = mutants.iter().map(|m| m.replacement.as_str()).collect();
         assert!(replacements.contains(&"-"));
@@ -354,7 +373,7 @@ mod tests {
             "test",
             "TEST",
             &["binary_expression"],
-            |kind| kind == "+",
+            |kind| matches!(kind, "+" | "-"),
             |_op| vec!["-".to_string()],
         );
 
@@ -375,7 +394,7 @@ mod tests {
             "test",
             "TEST",
             &["binary_expression"],
-            |kind| kind == "+",
+            |kind| matches!(kind, "+" | "-"),
             |_op| vec!["-".to_string()],
         );
 
