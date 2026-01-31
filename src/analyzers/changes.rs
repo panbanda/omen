@@ -7,24 +7,48 @@
 //!
 //! - Kamei, Y., Shihab, E., et al. (2013) "A Large-Scale Empirical Study of
 //!   Just-in-Time Quality Assurance", IEEE TSE 39(6)
-//! - Zeng, Z., et al. (2021) for modern weight calibration
+//! - Zeng, Z., et al. (2021) "Deep Just-in-Time Defect Prediction" for modern
+//!   weight calibration showing simple models match DL accuracy (~65%)
+//! - Nagappan, N. & Ball, T. (2005) "Use of Relative Code Churn Measures to
+//!   Predict System Defect Density", ICSE -- churn is a strong defect predictor
+//! - Zimmermann, T. & Nagappan, N. (2008) "Predicting Defects using Network
+//!   Analysis on Dependency Graphs", ICSE -- complexity is predictive but weaker
+//!   than change metrics
+//! - Bird, C., et al. (2011) "Don't Touch My Code! Examining the Effects of
+//!   Ownership on Software Quality", FSE -- files with many minor contributors
+//!   (diffuse ownership) have more defects than files with concentrated ownership
 //!
-//! # Implemented Features (8/14 from Kamei + 4 file-level signals)
+//! # Weight rationale
 //!
-//! - FIX: Bug fix commit flag omen:ignore
-//! - LA/LD: Lines added/deleted
-//! - NF: Number of files modified
+//! 75% change-scope factors, 25% file-level risk signals.
+//!
+//! Change-scope weights follow Kamei's logistic regression coefficients (median
+//! across projects): la > entropy > fix > ld > nf > nuc > ndev > exp.
+//!
+//! File-level weights use churn > complexity > ownership_diffusion, reflecting
+//! that churn is a stronger predictor than static complexity (Nagappan 2005),
+//! and both are weaker than change-scope features.
+//!
+//! Ownership direction follows Bird et al.: diffuse ownership (low concentration)
+//! increases risk. The `ownership_diffusion` signal is `1 - max_author_percentage`,
+//! so files where no single author dominates score higher risk.
+//!
+//! # Implemented Features (8/14 from Kamei + 3 file-level signals)
+//!
+//! - LA: Lines added (strongest change-scope predictor)
 //! - ENTROPY: Change distribution entropy
-//! - NDEV: Number of developers
+//! - FIX: Bug fix commit flag omen:ignore
+//! - LD: Lines deleted
+//! - NF: Number of files modified
 //! - NUC: Unique commits to files
-//! - EXP: Author experience
+//! - NDEV: Number of developers
+//! - EXP: Author experience (subsumes author familiarity)
 //!
 //! ## File-level risk signals
 //!
-//! - FILE_COMPLEXITY: Max avg cyclomatic complexity of touched files
-//! - FILE_CHURN: Max historical churn of touched files
-//! - AUTHOR_FAMILIARITY: Ratio of files where commit author has prior history
-//! - OWNERSHIP_CONCENTRATION: Max single-author ownership percentage
+//! - FILE_CHURN: Max historical churn of touched files (Nagappan 2005)
+//! - FILE_COMPLEXITY: Max avg cyclomatic complexity (Zimmermann 2008)
+//! - OWNERSHIP_DIFFUSION: 1 - max single-author ownership % (Bird 2011)
 //!
 //! # Not Implemented (documented limitation)
 //!
@@ -46,52 +70,65 @@ use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result};
 use crate::git::GitRepo;
 
 /// Weights for change-level defect prediction features.
-/// Based on Kamei et al. (2013) and Zeng et al. (2021).
 ///
-/// 70% change-scope factors, 30% file-level risk signals.
+/// 75% change-scope factors (Kamei et al. 2013), 25% file-level signals.
+///
+/// Change-scope ordering follows Kamei's median logistic regression coefficients:
+/// la > entropy > fix > ld > nf > nuc > ndev > exp.
+///
+/// File-level ordering: churn > complexity > ownership_diffusion, per Nagappan
+/// (2005), Zimmermann (2008), and Bird (2011) respectively. These are weaker
+/// predictors than change-scope features, hence the 75/25 split.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Weights {
-    /// Is bug fix commit? omen:ignore
-    pub fix: f64,
+    // -- Change-scope factors (75% total) --
+    // Ordered by Kamei's median effect size across projects.
+    /// Lines added -- strongest change-scope predictor (Kamei 2013)
+    pub la: f64,
     /// Change entropy across files
     pub entropy: f64,
-    /// Lines added
-    pub la: f64,
-    /// Number of unique prior commits
-    pub nuc: f64,
-    /// Number of files modified
-    pub nf: f64,
+    /// Is bug fix commit? omen:ignore
+    pub fix: f64,
     /// Lines deleted
     pub ld: f64,
+    /// Number of files modified
+    pub nf: f64,
+    /// Number of unique prior commits
+    pub nuc: f64,
     /// Number of developers
     pub ndev: f64,
-    /// Author experience (inverted)
+    /// Author experience (inverted: less experience = more risk).
+    /// Subsumes "author familiarity" -- Kamei's EXP already captures whether the
+    /// author has worked on the affected files.
     pub exp: f64,
-    /// Max avg cyclomatic complexity of touched files
-    pub file_complexity: f64,
-    /// Max historical churn of touched files
+
+    // -- File-level risk signals (25% total) --
+    /// Max historical churn of touched files (Nagappan & Ball 2005)
     pub file_churn: f64,
-    /// Fraction of files where author has no prior commits
-    pub author_familiarity: f64,
-    /// Max single-author ownership percentage
-    pub ownership_concentration: f64,
+    /// Max avg cyclomatic complexity of touched files (Zimmermann 2008)
+    pub file_complexity: f64,
+    /// Ownership diffusion: 1 - max_author_percentage. Diffuse ownership (many
+    /// minor contributors, no clear owner) correlates with more defects (Bird 2011).
+    pub ownership_diffusion: f64,
 }
 
 impl Default for Weights {
+    /// Default weights: 75% change-scope, 25% file-level.
     fn default() -> Self {
         Self {
-            fix: 0.18,
+            // Change-scope: 75% total, following Kamei's relative ordering
+            la: 0.16,
             entropy: 0.14,
-            la: 0.14,
+            fix: 0.12,
+            ld: 0.08,
+            nf: 0.08,
             nuc: 0.07,
-            nf: 0.07,
-            ld: 0.04,
-            ndev: 0.03,
-            exp: 0.03,
-            file_complexity: 0.10,
-            file_churn: 0.08,
-            author_familiarity: 0.07,
-            ownership_concentration: 0.05,
+            ndev: 0.05,
+            exp: 0.05,
+            // File-level: 25% total
+            file_churn: 0.10,
+            file_complexity: 0.08,
+            ownership_diffusion: 0.07,
         }
     }
 }
@@ -203,12 +240,7 @@ impl AnalyzerTrait for Analyzer {
         let commit_file_risks: Vec<FileRiskSignals> = commits
             .iter()
             .map(|c| {
-                aggregate_file_risk(
-                    &file_profiles,
-                    &c.files_modified,
-                    &c.author,
-                    &file_churn_data,
-                )
+                aggregate_file_risk(&file_profiles, &c.files_modified)
             })
             .collect();
 
@@ -356,8 +388,9 @@ struct FileChurnData {
 pub struct FileRiskSignals {
     pub max_complexity: f64,
     pub max_churn: f64,
-    pub author_familiar_ratio: f64,
-    pub max_ownership_concentration: f64,
+    /// 1 - max_author_percentage. Higher = more diffuse ownership = more risk.
+    /// Per Bird et al. (2011), files with many minor contributors have more defects.
+    pub ownership_diffusion: f64,
 }
 
 // Output types
@@ -771,8 +804,6 @@ fn compute_file_risk_profiles(
 fn aggregate_file_risk(
     profiles: &HashMap<String, FileRiskProfile>,
     touched_files: &[String],
-    commit_author: &str,
-    file_churn: &HashMap<String, FileChurnData>,
 ) -> FileRiskSignals {
     if touched_files.is_empty() {
         return FileRiskSignals::default();
@@ -780,29 +811,23 @@ fn aggregate_file_risk(
 
     let mut max_complexity = 0.0f64;
     let mut max_churn = 0.0f64;
-    let mut max_ownership = 0.0f64;
-    let mut familiar_count = 0usize;
+    let mut max_diffusion = 0.0f64;
 
     for file in touched_files {
         if let Some(profile) = profiles.get(file) {
             max_complexity = max_complexity.max(profile.avg_cyclomatic);
             max_churn = max_churn.max(profile.churn_score);
-            max_ownership = max_ownership.max(profile.ownership_concentration);
-        }
-
-        // Author familiarity: does the commit author appear in the file's author history?
-        if let Some(churn) = file_churn.get(file.as_str()) {
-            if churn.authors.contains(commit_author) {
-                familiar_count += 1;
-            }
+            // ownership_concentration is max author %. Diffusion = 1 - concentration.
+            // Higher diffusion = more minor contributors = more defect-prone (Bird 2011).
+            let diffusion = 1.0 - profile.ownership_concentration;
+            max_diffusion = max_diffusion.max(diffusion);
         }
     }
 
     FileRiskSignals {
         max_complexity,
         max_churn,
-        author_familiar_ratio: familiar_count as f64 / touched_files.len() as f64,
-        max_ownership_concentration: max_ownership,
+        ownership_diffusion: max_diffusion,
     }
 }
 
@@ -866,25 +891,22 @@ fn calculate_risk(
     let exp_norm = 1.0 - safe_normalize_int(features.author_experience, norm.max_author_experience);
 
     // File-level risk signals
-    let complexity_norm = safe_normalize(file_risk.max_complexity, norm.max_file_complexity);
     let churn_norm = safe_normalize(file_risk.max_churn, norm.max_file_churn);
-    // Familiarity is inverted: lower familiarity = more risk
-    let familiarity_norm = 1.0 - file_risk.author_familiar_ratio;
-    // Ownership concentration is already 0-1
-    let ownership_norm = file_risk.max_ownership_concentration;
+    let complexity_norm = safe_normalize(file_risk.max_complexity, norm.max_file_complexity);
+    // ownership_diffusion is already 0-1 (1 - max_author_percentage)
+    let diffusion_norm = file_risk.ownership_diffusion;
 
-    let score = weights.fix * fix_norm
+    let score = weights.la * la_norm
         + weights.entropy * entropy_norm
-        + weights.la * la_norm
+        + weights.fix * fix_norm
         + weights.ld * ld_norm
         + weights.nf * nf_norm
         + weights.nuc * nuc_norm
         + weights.ndev * ndev_norm
         + weights.exp * exp_norm
-        + weights.file_complexity * complexity_norm
         + weights.file_churn * churn_norm
-        + weights.author_familiarity * familiarity_norm
-        + weights.ownership_concentration * ownership_norm;
+        + weights.file_complexity * complexity_norm
+        + weights.ownership_diffusion * diffusion_norm;
 
     score.clamp(0.0, 1.0)
 }
@@ -962,21 +984,17 @@ fn build_commit_risk(
             * weights.exp,
     );
     factors.insert(
+        "file_churn".to_string(),
+        safe_normalize(file_risk.max_churn, norm.max_file_churn) * weights.file_churn,
+    );
+    factors.insert(
         "file_complexity".to_string(),
         safe_normalize(file_risk.max_complexity, norm.max_file_complexity)
             * weights.file_complexity,
     );
     factors.insert(
-        "file_churn".to_string(),
-        safe_normalize(file_risk.max_churn, norm.max_file_churn) * weights.file_churn,
-    );
-    factors.insert(
-        "author_familiarity".to_string(),
-        (1.0 - file_risk.author_familiar_ratio) * weights.author_familiarity,
-    );
-    factors.insert(
-        "ownership_concentration".to_string(),
-        file_risk.max_ownership_concentration * weights.ownership_concentration,
+        "ownership_diffusion".to_string(),
+        file_risk.ownership_diffusion * weights.ownership_diffusion,
     );
 
     let recommendations = generate_recommendations(features, score, &factors, &file_risk);
@@ -1037,20 +1055,9 @@ fn generate_recommendations(
         );
     }
 
-    if file_risk.author_familiar_ratio < 0.5 && !features.files_modified.is_empty() {
-        let unfamiliar = ((1.0 - file_risk.author_familiar_ratio)
-            * features.files_modified.len() as f64)
-            .round() as usize;
-        recs.push(format!(
-            "Author has no prior commits on {} of {} touched files - consider domain-expert review",
-            unfamiliar,
-            features.files_modified.len()
-        ));
-    }
-
-    if file_risk.max_ownership_concentration > 0.8 {
+    if file_risk.ownership_diffusion > 0.7 {
         recs.push(
-            "Touched files have concentrated ownership - coordinate with primary owner".to_string(),
+            "Touches files with diffuse ownership (no clear owner) - ensure someone takes responsibility for review".to_string(),
         );
     }
 
@@ -1083,18 +1090,17 @@ mod tests {
     #[test]
     fn test_default_weights() {
         let weights = Weights::default();
-        let total = weights.fix
+        let total = weights.la
             + weights.entropy
-            + weights.la
-            + weights.nuc
-            + weights.nf
+            + weights.fix
             + weights.ld
+            + weights.nf
+            + weights.nuc
             + weights.ndev
             + weights.exp
-            + weights.file_complexity
             + weights.file_churn
-            + weights.author_familiarity
-            + weights.ownership_concentration;
+            + weights.file_complexity
+            + weights.ownership_diffusion;
         assert!((total - 1.0).abs() < 0.001, "Weights should sum to 1.0");
     }
 
@@ -1204,8 +1210,8 @@ mod tests {
         let norm = NormalizationStats::default();
         let file_risk = FileRiskSignals::default();
         let score = calculate_risk(&features, &weights, &norm, &file_risk);
-        // fix contributes 0.18, exp contributes 0.03, plus file-risk terms
-        assert!(score > 0.18);
+        // fix contributes 0.12, exp (inverted) contributes 0.05 => 0.17 total
+        assert!(score > 0.12);
     }
 
     #[test]
@@ -1355,26 +1361,10 @@ impl Analyzer {
         let file_profiles =
             compute_file_risk_profiles(repo_path, &diff_files, &file_churn, max_churn_count);
 
-        // For diff, aggregate without author familiarity (no single commit author)
         let file_risk = if diff_files.is_empty() {
             FileRiskSignals::default()
         } else {
-            let mut max_complexity = 0.0f64;
-            let mut max_churn = 0.0f64;
-            let mut max_ownership = 0.0f64;
-            for file in &diff_files {
-                if let Some(profile) = file_profiles.get(file) {
-                    max_complexity = max_complexity.max(profile.avg_cyclomatic);
-                    max_churn = max_churn.max(profile.churn_score);
-                    max_ownership = max_ownership.max(profile.ownership_concentration);
-                }
-            }
-            FileRiskSignals {
-                max_complexity,
-                max_churn,
-                author_familiar_ratio: 1.0, // N/A for diff (no single author)
-                max_ownership_concentration: max_ownership,
-            }
+            aggregate_file_risk(&file_profiles, &diff_files)
         };
 
         // Use fixed thresholds for diff analysis (sensible PR size limits)
@@ -1420,17 +1410,17 @@ impl Analyzer {
             safe_normalize_int(commit_count, norm.max_unique_changes) * self.weights.nuc,
         );
         factors.insert(
+            "file_churn".to_string(),
+            safe_normalize(file_risk.max_churn, norm.max_file_churn) * self.weights.file_churn,
+        );
+        factors.insert(
             "file_complexity".to_string(),
             safe_normalize(file_risk.max_complexity, norm.max_file_complexity)
                 * self.weights.file_complexity,
         );
         factors.insert(
-            "file_churn".to_string(),
-            safe_normalize(file_risk.max_churn, norm.max_file_churn) * self.weights.file_churn,
-        );
-        factors.insert(
-            "ownership_concentration".to_string(),
-            file_risk.max_ownership_concentration * self.weights.ownership_concentration,
+            "ownership_diffusion".to_string(),
+            file_risk.ownership_diffusion * self.weights.ownership_diffusion,
         );
 
         // Generate recommendations
@@ -1619,9 +1609,9 @@ fn generate_diff_recommendations(
         );
     }
 
-    if file_risk.max_ownership_concentration > 0.8 {
+    if file_risk.ownership_diffusion > 0.7 {
         recs.push(
-            "Touched files have concentrated ownership - coordinate with primary owner".to_string(),
+            "Touches files with diffuse ownership (no clear owner) - ensure someone takes responsibility for review".to_string(),
         );
     }
 
@@ -1698,15 +1688,13 @@ mod diff_tests {
         let signals = FileRiskSignals {
             max_complexity: 12.5,
             max_churn: 0.8,
-            author_familiar_ratio: 0.5,
-            max_ownership_concentration: 0.75,
+            ownership_diffusion: 0.75,
         };
         let json = serde_json::to_string(&signals).unwrap();
         let deserialized: FileRiskSignals = serde_json::from_str(&json).unwrap();
         assert!((deserialized.max_complexity - 12.5).abs() < f64::EPSILON);
         assert!((deserialized.max_churn - 0.8).abs() < f64::EPSILON);
-        assert!((deserialized.author_familiar_ratio - 0.5).abs() < f64::EPSILON);
-        assert!((deserialized.max_ownership_concentration - 0.75).abs() < f64::EPSILON);
+        assert!((deserialized.ownership_diffusion - 0.75).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -1714,8 +1702,7 @@ mod diff_tests {
         let signals = FileRiskSignals::default();
         assert_eq!(signals.max_complexity, 0.0);
         assert_eq!(signals.max_churn, 0.0);
-        assert_eq!(signals.author_familiar_ratio, 0.0);
-        assert_eq!(signals.max_ownership_concentration, 0.0);
+        assert_eq!(signals.ownership_diffusion, 0.0);
     }
 
     #[test]
@@ -1726,7 +1713,7 @@ mod diff_tests {
             FileRiskProfile {
                 avg_cyclomatic: 15.0,
                 churn_score: 0.9,
-                ownership_concentration: 0.85,
+                ownership_concentration: 0.85, // diffusion = 0.15
             },
         );
         profiles.insert(
@@ -1734,39 +1721,17 @@ mod diff_tests {
             FileRiskProfile {
                 avg_cyclomatic: 5.0,
                 churn_score: 0.3,
-                ownership_concentration: 0.5,
-            },
-        );
-
-        let mut churn = HashMap::new();
-        churn.insert(
-            "a.rs".to_string(),
-            FileChurnData {
-                commit_count: 10,
-                authors: HashSet::new(),
-            },
-        );
-        let mut b_authors = HashSet::new();
-        b_authors.insert("alice".to_string());
-        churn.insert(
-            "b.rs".to_string(),
-            FileChurnData {
-                commit_count: 5,
-                authors: b_authors,
+                ownership_concentration: 0.5, // diffusion = 0.5
             },
         );
 
         let touched = vec!["a.rs".to_string(), "b.rs".to_string()];
-        let signals = aggregate_file_risk(&profiles, &touched, "alice", &churn);
+        let signals = aggregate_file_risk(&profiles, &touched);
 
-        // max complexity = 15.0 (from a.rs)
         assert!((signals.max_complexity - 15.0).abs() < f64::EPSILON);
-        // max churn = 0.9 (from a.rs)
         assert!((signals.max_churn - 0.9).abs() < f64::EPSILON);
-        // author "alice" has history in b.rs but not a.rs => 1/2 = 0.5
-        assert!((signals.author_familiar_ratio - 0.5).abs() < f64::EPSILON);
-        // max ownership = 0.85 (from a.rs)
-        assert!((signals.max_ownership_concentration - 0.85).abs() < f64::EPSILON);
+        // max diffusion = 1 - 0.5 = 0.5 (from b.rs, the more diffusely-owned file)
+        assert!((signals.ownership_diffusion - 0.5).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -1781,13 +1746,13 @@ mod diff_tests {
     }
 
     #[test]
-    fn test_diff_recommendations_high_ownership() {
+    fn test_diff_recommendations_diffuse_ownership() {
         let factors = HashMap::new();
         let file_risk = FileRiskSignals {
-            max_ownership_concentration: 0.9,
+            ownership_diffusion: 0.8,
             ..Default::default()
         };
         let recs = generate_diff_recommendations(50, 20, 3, 2, 0.2, &factors, &file_risk);
-        assert!(recs.iter().any(|r| r.contains("concentrated ownership")));
+        assert!(recs.iter().any(|r| r.contains("diffuse ownership")));
     }
 }
