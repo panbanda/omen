@@ -43,7 +43,8 @@ impl ContentSource for FilesystemSource {
 /// This is thread-safe since each read is independent.
 pub struct TreeSource {
     repo_path: PathBuf,
-    tree_id: [u8; 20], // Store raw SHA bytes to avoid gix types in struct
+    // Raw OID bytes. Vec to support both SHA-1 (20 bytes) and SHA-256 (32 bytes).
+    tree_id: Vec<u8>,
 }
 
 impl TreeSource {
@@ -68,8 +69,7 @@ impl TreeSource {
             .tree_id()
             .map_err(|e| super::Error::git(format!("Failed to get tree id: {e}")))?;
 
-        let mut tree_id = [0u8; 20];
-        tree_id.copy_from_slice(tree_oid.as_bytes());
+        let tree_id = tree_oid.as_bytes().to_vec();
 
         Ok(Self { repo_path, tree_id })
     }
@@ -80,8 +80,8 @@ impl TreeSource {
     }
 
     /// Get the tree ID bytes.
-    pub fn tree_id(&self) -> [u8; 20] {
-        self.tree_id
+    pub fn tree_id(&self) -> &[u8] {
+        &self.tree_id
     }
 
     /// List all files in the tree (recursively).

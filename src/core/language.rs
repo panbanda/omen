@@ -106,7 +106,9 @@ impl Language {
             Self::Jsx => &["**/*.jsx"],
             Self::Java => &["**/*.java"],
             Self::C => &["**/*.c", "**/*.h"],
-            Self::Cpp => &["**/*.cpp", "**/*.cc", "**/*.cxx", "**/*.hpp", "**/*.hxx"],
+            Self::Cpp => &[
+                "**/*.cpp", "**/*.cc", "**/*.cxx", "**/*.hpp", "**/*.hxx", "**/*.hh",
+            ],
             Self::CSharp => &["**/*.cs"],
             Self::Ruby => &["**/*.rb", "**/*.rake", "**/*.gemspec"],
             Self::Php => &["**/*.php"],
@@ -175,6 +177,15 @@ mod tests {
         assert_eq!(Language::Go.display_name(), "Go");
         assert_eq!(Language::Cpp.display_name(), "C++");
         assert_eq!(Language::CSharp.display_name(), "C#");
+    }
+
+    #[test]
+    fn test_cpp_glob_patterns_include_hh() {
+        let patterns = Language::Cpp.glob_patterns();
+        assert!(
+            patterns.contains(&"**/*.hh"),
+            "C++ glob patterns must include .hh header extension"
+        );
     }
 
     #[test]

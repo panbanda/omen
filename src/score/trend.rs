@@ -306,7 +306,7 @@ pub fn analyze_at_tree(tree_source: &TreeSource, config: &Config) -> Result<supe
     let file_set = FileSet::from_tree_source(tree_source, config)?;
     let content_source: Arc<dyn ContentSource> = Arc::new(TreeSourceWrapper {
         repo_path: tree_source.repo_path().to_path_buf(),
-        tree_id: tree_source.tree_id(),
+        tree_id: tree_source.tree_id().to_vec(),
     });
     let root = Path::new(".");
     let ctx =
@@ -319,7 +319,7 @@ pub fn analyze_at_tree(tree_source: &TreeSource, config: &Config) -> Result<supe
 /// This is needed because TreeSource stores state that can't be easily cloned.
 struct TreeSourceWrapper {
     repo_path: std::path::PathBuf,
-    tree_id: [u8; 20],
+    tree_id: Vec<u8>,
 }
 
 impl ContentSource for TreeSourceWrapper {
