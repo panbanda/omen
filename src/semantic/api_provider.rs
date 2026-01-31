@@ -66,10 +66,9 @@ struct OpenAIEmbedding {
 impl EmbeddingProvider for OpenAIProvider {
     fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let embeddings = self.embed_batch(&[text.to_string()])?;
-        embeddings
-            .into_iter()
-            .next()
-            .ok_or_else(|| crate::core::Error::analysis("embed_batch returned empty for single input"))
+        embeddings.into_iter().next().ok_or_else(|| {
+            crate::core::Error::analysis("embed_batch returned empty for single input")
+        })
     }
 
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
@@ -160,10 +159,9 @@ struct CohereResponse {
 impl EmbeddingProvider for CohereProvider {
     fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let embeddings = self.embed_batch(&[text.to_string()])?;
-        embeddings
-            .into_iter()
-            .next()
-            .ok_or_else(|| crate::core::Error::analysis("embed_batch returned empty for single input"))
+        embeddings.into_iter().next().ok_or_else(|| {
+            crate::core::Error::analysis("embed_batch returned empty for single input")
+        })
     }
 
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
@@ -266,10 +264,9 @@ struct VoyageEmbedding {
 impl EmbeddingProvider for VoyageProvider {
     fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let embeddings = self.embed_batch(&[text.to_string()])?;
-        embeddings
-            .into_iter()
-            .next()
-            .ok_or_else(|| crate::core::Error::analysis("embed_batch returned empty for single input"))
+        embeddings.into_iter().next().ok_or_else(|| {
+            crate::core::Error::analysis("embed_batch returned empty for single input")
+        })
     }
 
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
