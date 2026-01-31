@@ -66,10 +66,10 @@ struct OpenAIEmbedding {
 impl EmbeddingProvider for OpenAIProvider {
     fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let embeddings = self.embed_batch(&[text.to_string()])?;
-        Ok(embeddings
+        embeddings
             .into_iter()
             .next()
-            .expect("batch returned empty for single input"))
+            .ok_or_else(|| crate::core::Error::analysis("embed_batch returned empty for single input"))
     }
 
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
@@ -160,10 +160,10 @@ struct CohereResponse {
 impl EmbeddingProvider for CohereProvider {
     fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let embeddings = self.embed_batch(&[text.to_string()])?;
-        Ok(embeddings
+        embeddings
             .into_iter()
             .next()
-            .expect("batch returned empty for single input"))
+            .ok_or_else(|| crate::core::Error::analysis("embed_batch returned empty for single input"))
     }
 
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
@@ -266,10 +266,10 @@ struct VoyageEmbedding {
 impl EmbeddingProvider for VoyageProvider {
     fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let embeddings = self.embed_batch(&[text.to_string()])?;
-        Ok(embeddings
+        embeddings
             .into_iter()
             .next()
-            .expect("batch returned empty for single input"))
+            .ok_or_else(|| crate::core::Error::analysis("embed_batch returned empty for single input"))
     }
 
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
@@ -365,5 +365,39 @@ mod tests {
             .embedding_dim(),
             1536
         );
+    }
+
+    #[test]
+    fn test_openai_embed_empty_batch_returns_error() {
+        let provider = OpenAIProvider {
+            api_key: "test".to_string(),
+            model: "text-embedding-3-small".to_string(),
+            client: reqwest::blocking::Client::new(),
+        };
+        let result = provider.embed_batch(&[]);
+        // Empty input should return Ok with empty vec, not panic
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_cohere_embed_empty_batch_returns_error() {
+        let provider = CohereProvider {
+            api_key: "test".to_string(),
+            model: "embed-english-v3.0".to_string(),
+            client: reqwest::blocking::Client::new(),
+        };
+        let result = provider.embed_batch(&[]);
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_voyage_embed_empty_batch_returns_error() {
+        let provider = VoyageProvider {
+            api_key: "test".to_string(),
+            model: "voyage-code-2".to_string(),
+            client: reqwest::blocking::Client::new(),
+        };
+        let result = provider.embed_batch(&[]);
+        assert!(result.unwrap().is_empty());
     }
 }

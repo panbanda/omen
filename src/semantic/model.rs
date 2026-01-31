@@ -166,12 +166,6 @@ impl ModelManager {
     }
 }
 
-impl Default for ModelManager {
-    fn default() -> Self {
-        Self::new().expect("Failed to create model manager")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,5 +238,14 @@ mod tests {
         fs::write(temp_dir.path().join(VERSION_FILE), "wrong-version").unwrap();
 
         assert!(!manager.is_model_valid());
+    }
+
+    #[test]
+    fn test_new_returns_result_not_panic() {
+        // ModelManager::new() returns Result, not a panicking Default.
+        // On most systems this succeeds; on systems without a cache dir it returns Err.
+        let result = ModelManager::new();
+        // Just verify it doesn't panic -- either Ok or Err is fine.
+        let _ = result;
     }
 }
