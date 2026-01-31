@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.20.1](https://github.com/panbanda/omen/compare/omen-v4.20.0...omen-v4.20.1) (2026-01-31)
+
+
+### Performance Improvements
+
+* 8x faster diff analyzer via path-filtered git log ([08e6514](https://github.com/panbanda/omen/commit/08e6514ff8bf2efd3ebb40f784b5aa6ed0cd5493))
+* use path-filtered git log in build_churn_for_files ([597b453](https://github.com/panbanda/omen/commit/597b45387ef685e556d720fde25fe0e059f0d399))
+
 ## [4.20.0](https://github.com/panbanda/omen/compare/omen-v4.19.0...omen-v4.20.0) (2026-01-31)
 
 
