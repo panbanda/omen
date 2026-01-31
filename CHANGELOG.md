@@ -1,5 +1,19 @@
 # Changelog
 
+## [4.20.0](https://github.com/panbanda/omen/compare/omen-v4.19.0...omen-v4.20.0) (2026-01-31)
+
+
+### Features
+
+* enrich changes/diff risk scoring with file-level signals ([37d5a3d](https://github.com/panbanda/omen/commit/37d5a3df3ecbc1e3a7f7ca8d12d8cbb64f503933))
+* file-level risk signals for changes/diff analyzers ([9c3a721](https://github.com/panbanda/omen/commit/9c3a721cabf6492eb8ef0a77d7e9008a69d0b364))
+
+
+### Bug Fixes
+
+* address review feedback for file-level risk signals ([a58239a](https://github.com/panbanda/omen/commit/a58239af581b9c9d2d26fe94d267f0346615a22e))
+* populate diff churn context and real line counts ([82ad978](https://github.com/panbanda/omen/commit/82ad978b907a5ef24df7d8c0f2b6d70a9e3759a5))
+
 ## [4.19.0](https://github.com/panbanda/omen/compare/omen-v4.18.1...omen-v4.19.0) (2026-01-30)
 
 
