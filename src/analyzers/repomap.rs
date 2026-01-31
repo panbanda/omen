@@ -95,6 +95,31 @@ impl Analyzer {
             .map(|e| e.into_path())
             .collect();
 
+        self.analyze_files(repo_path, &files)
+    }
+
+    /// Analyze using a pre-filtered file set from an AnalysisContext.
+    pub fn analyze_with_files(
+        &self,
+        repo_path: &Path,
+        file_set: &crate::core::FileSet,
+    ) -> Result<Analysis> {
+        let files: Vec<_> = file_set
+            .iter()
+            .filter(|path| {
+                if self.config.skip_test_files && is_test_file(path) {
+                    return false;
+                }
+                Language::detect(path).is_some()
+            })
+            .map(|p| repo_path.join(p))
+            .collect();
+
+        self.analyze_files(repo_path, &files)
+    }
+
+    /// Core analysis logic operating on a list of absolute file paths.
+    fn analyze_files(&self, repo_path: &Path, files: &[std::path::PathBuf]) -> Result<Analysis> {
         // Phase 2: Parallel parsing - extract symbols from all files
         let file_symbols: Vec<Vec<SymbolInfo>> = files
             .par_iter()
@@ -309,7 +334,7 @@ impl AnalyzerTrait for Analyzer {
     }
 
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
-        self.analyze_repo(ctx.root)
+        self.analyze_with_files(ctx.root, ctx.files)
     }
 }
 
@@ -752,6 +777,112 @@ mod tests {
         let parsed: Analysis = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.symbols.len(), 1);
         assert_eq!(parsed.symbols[0].name, "test");
+    }
+
+    #[test]
+    fn test_pagerank_cycle() {
+        let analyzer = Analyzer::new();
+        let mut graph: DiGraph<usize, ()> = DiGraph::new();
+
+        // A -> B -> C -> A (circular dependency)
+        let a = graph.add_node(0);
+        let b = graph.add_node(1);
+        let c = graph.add_node(2);
+
+        graph.add_edge(a, b, ());
+        graph.add_edge(b, c, ());
+        graph.add_edge(c, a, ());
+
+        let pagerank = analyzer.calculate_pagerank(&graph);
+        assert_eq!(pagerank.len(), 3);
+
+        // All nodes should have equal rank in a symmetric cycle
+        let ranks: Vec<f64> = vec![pagerank[&a], pagerank[&b], pagerank[&c]];
+        let max_diff = ranks.iter().map(|r| (r - ranks[0]).abs()).fold(0.0f64, f64::max);
+        assert!(
+            max_diff < 0.01,
+            "Nodes in a symmetric cycle should have roughly equal rank, diff={}",
+            max_diff
+        );
+    }
+
+    #[test]
+    fn test_pagerank_self_loop() {
+        let analyzer = Analyzer::new();
+        let mut graph: DiGraph<usize, ()> = DiGraph::new();
+
+        // A -> A (self-reference), B -> A
+        let a = graph.add_node(0);
+        let b = graph.add_node(1);
+
+        graph.add_edge(a, a, ());
+        graph.add_edge(b, a, ());
+
+        let pagerank = analyzer.calculate_pagerank(&graph);
+        assert_eq!(pagerank.len(), 2);
+        // A should have higher rank than B (A receives from both self and B)
+        assert!(pagerank[&a] > pagerank[&b]);
+    }
+
+    #[test]
+    fn test_pagerank_disconnected_components() {
+        let analyzer = Analyzer::new();
+        let mut graph: DiGraph<usize, ()> = DiGraph::new();
+
+        // Component 1: A -> B
+        let a = graph.add_node(0);
+        let b = graph.add_node(1);
+        graph.add_edge(a, b, ());
+
+        // Component 2: C -> D (disconnected from component 1)
+        let c = graph.add_node(2);
+        let d = graph.add_node(3);
+        graph.add_edge(c, d, ());
+
+        let pagerank = analyzer.calculate_pagerank(&graph);
+        assert_eq!(pagerank.len(), 4);
+
+        // Symmetric structure: A and C should have similar ranks, B and D similar
+        assert!((pagerank[&a] - pagerank[&c]).abs() < 0.01);
+        assert!((pagerank[&b] - pagerank[&d]).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_calculate_summary_single_file_symbols() {
+        let symbols = vec![
+            SymbolEntry {
+                name: "a".to_string(),
+                kind: SymbolKind::Function,
+                file: "file1.rs".to_string(),
+                line: 1,
+                signature: String::new(),
+                pagerank: 0.5,
+                in_degree: 0,
+                out_degree: 0,
+            },
+            SymbolEntry {
+                name: "b".to_string(),
+                kind: SymbolKind::Function,
+                file: "file1.rs".to_string(),
+                line: 10,
+                signature: String::new(),
+                pagerank: 0.3,
+                in_degree: 1,
+                out_degree: 2,
+            },
+        ];
+
+        let summary = calculate_summary(&symbols);
+        assert_eq!(summary.total_symbols, 2);
+        // Both in same file
+        assert_eq!(summary.total_files, 1);
+    }
+
+    #[test]
+    fn test_max_symbols_truncation() {
+        let analyzer = Analyzer::new().with_max_symbols(2);
+        // Verify config is set
+        assert_eq!(analyzer.config.max_symbols, 2);
     }
 
     #[test]

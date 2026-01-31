@@ -233,9 +233,13 @@ impl ClassHierarchy {
     pub fn get_dit(&self, class_name: &str) -> u32 {
         let mut depth = 0;
         let mut current = class_name.to_string();
+        let mut visited = HashSet::new();
 
-        // Walk up the inheritance chain
+        // Walk up the inheritance chain, tracking visited to break cycles
         while let Some(Some(parent)) = self.parents.get(&current) {
+            if !visited.insert(parent.clone()) {
+                break;
+            }
             depth += 1;
             current = parent.clone();
         }
@@ -2011,6 +2015,119 @@ mod tests {
     // DIT/NOC Tests - Chidamber & Kemerer 1994 IEEE TSE
     // DIT = Depth of Inheritance Tree (max path length to root)
     // NOC = Number of Children (direct subclasses)
+
+    #[test]
+    fn test_lcom_single_method_no_fields() {
+        let methods = vec![MethodInfo {
+            name: "only".to_string(),
+            complexity: 1,
+            used_fields: HashSet::new(),
+        }];
+        let fields: Vec<String> = vec![];
+        // No fields: each method is its own component
+        assert_eq!(calculate_lcom(&methods, &fields), 1);
+    }
+
+    #[test]
+    fn test_lcom_single_method_with_fields() {
+        let mut used = HashSet::new();
+        used.insert("x".to_string());
+        let methods = vec![MethodInfo {
+            name: "only".to_string(),
+            complexity: 1,
+            used_fields: used,
+        }];
+        let fields = vec!["x".to_string()];
+        // Single method using a field: 1 connected component
+        assert_eq!(calculate_lcom(&methods, &fields), 1);
+    }
+
+    #[test]
+    fn test_lcom_methods_no_field_usage() {
+        // Methods exist, fields exist, but methods don't use any fields
+        let methods = vec![
+            MethodInfo {
+                name: "a".to_string(),
+                complexity: 1,
+                used_fields: HashSet::new(),
+            },
+            MethodInfo {
+                name: "b".to_string(),
+                complexity: 1,
+                used_fields: HashSet::new(),
+            },
+        ];
+        let fields = vec!["x".to_string(), "y".to_string()];
+        // No shared fields: 2 disconnected components
+        assert_eq!(calculate_lcom(&methods, &fields), 2);
+    }
+
+    #[test]
+    fn test_lcom_three_methods_chain_connected() {
+        // A shares field with B, B shares field with C => all connected
+        let mut fa = HashSet::new();
+        fa.insert("x".to_string());
+        let mut fb = HashSet::new();
+        fb.insert("x".to_string());
+        fb.insert("y".to_string());
+        let mut fc = HashSet::new();
+        fc.insert("y".to_string());
+
+        let methods = vec![
+            MethodInfo {
+                name: "a".to_string(),
+                complexity: 1,
+                used_fields: fa,
+            },
+            MethodInfo {
+                name: "b".to_string(),
+                complexity: 1,
+                used_fields: fb,
+            },
+            MethodInfo {
+                name: "c".to_string(),
+                complexity: 1,
+                used_fields: fc,
+            },
+        ];
+        let fields = vec!["x".to_string(), "y".to_string()];
+        assert_eq!(calculate_lcom(&methods, &fields), 1);
+    }
+
+    #[test]
+    fn test_summary_division_by_zero_empty() {
+        // Verify calculate_summary handles empty classes without division by zero
+        let summary = calculate_summary(&[]);
+        assert_eq!(summary.avg_wmc, 0.0);
+        assert_eq!(summary.avg_cbo, 0.0);
+        assert_eq!(summary.avg_rfc, 0.0);
+        assert_eq!(summary.avg_lcom, 0.0);
+    }
+
+    #[test]
+    fn test_class_hierarchy_cycle_detection() {
+        // Pathological case: cyclic inheritance (should not infinite loop)
+        let mut hierarchy = ClassHierarchy::new();
+        hierarchy.add_class("A", Some("B"));
+        hierarchy.add_class("B", Some("A"));
+
+        // Should terminate and return a reasonable depth
+        let dit_a = hierarchy.get_dit("A");
+        let dit_b = hierarchy.get_dit("B");
+        assert!(dit_a <= 2, "DIT should be bounded even with cycles");
+        assert!(dit_b <= 2, "DIT should be bounded even with cycles");
+    }
+
+    #[test]
+    fn test_class_hierarchy_self_parent() {
+        // Degenerate case: class is its own parent
+        let mut hierarchy = ClassHierarchy::new();
+        hierarchy.add_class("SelfRef", Some("SelfRef"));
+
+        // Should not infinite loop
+        let dit = hierarchy.get_dit("SelfRef");
+        assert!(dit <= 1, "Self-parent DIT should be bounded");
+    }
 
     #[test]
     fn test_class_hierarchy_empty() {

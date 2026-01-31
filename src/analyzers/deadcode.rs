@@ -89,7 +89,10 @@ impl AnalyzerTrait for Analyzer {
         let files: Vec<_> = ctx.files.iter().collect();
         let file_results: Vec<FileDeadCode> = files
             .par_iter()
-            .filter_map(|path| self.analyze_file(path).ok())
+            .filter_map(|path| {
+                let full_path = ctx.root.join(path);
+                self.analyze_file(&full_path).ok()
+            })
             .collect();
 
         // Phase 2: Build global symbol tables with qualified names
@@ -1852,6 +1855,263 @@ def plain_function():
             })
             .max()
             .unwrap_or(0)
+    }
+
+    #[test]
+    fn test_go_exported_is_entry_point() {
+        let def = Definition {
+            name: "PublicFunc".to_string(),
+            kind: "function".to_string(),
+            file: "main.go".to_string(),
+            line: 1,
+            end_line: 10,
+            visibility: "public".to_string(),
+            exported: true,
+            is_test_file: false,
+            attributes: vec![],
+            is_trait_impl: false,
+        };
+        assert!(is_entry_point("PublicFunc", &def));
+
+        let private_def = Definition {
+            name: "privateFunc".to_string(),
+            kind: "function".to_string(),
+            file: "main.go".to_string(),
+            line: 1,
+            end_line: 10,
+            visibility: "private".to_string(),
+            exported: false,
+            is_test_file: false,
+            attributes: vec![],
+            is_trait_impl: false,
+        };
+        assert!(!is_entry_point("privateFunc", &private_def));
+    }
+
+    #[test]
+    fn test_go_benchmark_and_example_entry_points() {
+        let def = Definition {
+            name: "BenchmarkSort".to_string(),
+            kind: "function".to_string(),
+            file: "sort_test.go".to_string(),
+            line: 1,
+            end_line: 10,
+            visibility: "public".to_string(),
+            exported: true,
+            is_test_file: true,
+            attributes: vec![],
+            is_trait_impl: false,
+        };
+        assert!(is_entry_point("BenchmarkSort", &def));
+
+        let example_def = Definition {
+            exported: true,
+            ..def.clone()
+        };
+        assert!(is_entry_point("ExampleSort", &example_def));
+    }
+
+    #[test]
+    fn test_typescript_function_detection() {
+        use std::path::Path;
+
+        let parser = crate::parser::Parser::new();
+        let content = br#"
+function publicHelper() {
+    return 42;
+}
+
+export function exportedFunc() {
+    return publicHelper();
+}
+"#;
+        let result = parser
+            .parse(content, Language::TypeScript, Path::new("util.ts"))
+            .unwrap();
+        let fdc = collect_file_data(&result);
+
+        assert!(
+            fdc.definitions.contains_key("publicHelper"),
+            "Should find publicHelper, got: {:?}",
+            fdc.definitions.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            fdc.definitions.contains_key("exportedFunc"),
+            "Should find exportedFunc"
+        );
+    }
+
+    #[test]
+    fn test_java_function_detection() {
+        use std::path::Path;
+
+        let parser = crate::parser::Parser::new();
+        let content = br#"
+public class MyService {
+    public void processData() {
+        helperMethod();
+    }
+
+    private void helperMethod() {
+        System.out.println("helper");
+    }
+}
+"#;
+        let result = parser
+            .parse(content, Language::Java, Path::new("MyService.java"))
+            .unwrap();
+        let fdc = collect_file_data(&result);
+
+        assert!(
+            fdc.definitions.contains_key("processData"),
+            "Should find processData, got: {:?}",
+            fdc.definitions.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            fdc.definitions.contains_key("helperMethod"),
+            "Should find helperMethod"
+        );
+    }
+
+    #[test]
+    fn test_python_function_detection() {
+        use std::path::Path;
+
+        let parser = crate::parser::Parser::new();
+        let content = br#"
+def public_func():
+    _helper()
+
+def _helper():
+    pass
+
+def __private():
+    pass
+"#;
+        let result = parser
+            .parse(content, Language::Python, Path::new("module.py"))
+            .unwrap();
+        let fdc = collect_file_data(&result);
+
+        assert!(fdc.definitions.contains_key("public_func"));
+        assert!(fdc.definitions.contains_key("_helper"));
+        assert!(fdc.definitions.contains_key("__private"));
+
+        // Check visibility
+        assert_eq!(fdc.definitions["_helper"].visibility, "internal");
+        assert_eq!(fdc.definitions["__private"].visibility, "private");
+        assert_eq!(fdc.definitions["public_func"].visibility, "public");
+    }
+
+    #[test]
+    fn test_rust_function_detection() {
+        use std::path::Path;
+
+        let parser = crate::parser::Parser::new();
+        let content = br#"
+pub fn public_api() {
+    internal_helper();
+}
+
+fn internal_helper() {
+    nested_helper();
+}
+
+fn nested_helper() {}
+"#;
+        let result = parser
+            .parse(content, Language::Rust, Path::new("lib.rs"))
+            .unwrap();
+        let fdc = collect_file_data(&result);
+
+        assert!(fdc.definitions.contains_key("public_api"));
+        assert!(fdc.definitions.contains_key("internal_helper"));
+        assert!(fdc.definitions.contains_key("nested_helper"));
+
+        assert!(fdc.definitions["public_api"].exported);
+        assert!(!fdc.definitions["internal_helper"].exported);
+    }
+
+    #[test]
+    fn test_go_function_detection() {
+        use std::path::Path;
+
+        let parser = crate::parser::Parser::new();
+        let content = br#"
+package main
+
+func PublicFunc() {
+    privateHelper()
+}
+
+func privateHelper() {
+}
+"#;
+        let result = parser
+            .parse(content, Language::Go, Path::new("main.go"))
+            .unwrap();
+        let fdc = collect_file_data(&result);
+
+        assert!(
+            fdc.definitions.contains_key("PublicFunc"),
+            "Should find PublicFunc, got: {:?}",
+            fdc.definitions.keys().collect::<Vec<_>>()
+        );
+        assert!(fdc.definitions.contains_key("privateHelper"));
+
+        assert!(fdc.definitions["PublicFunc"].exported);
+        assert!(!fdc.definitions["privateHelper"].exported);
+    }
+
+    #[test]
+    fn test_handler_patterns_are_entry_points() {
+        let base_def = Definition {
+            name: "".to_string(),
+            kind: "function".to_string(),
+            file: "handler.go".to_string(),
+            line: 1,
+            end_line: 10,
+            visibility: "private".to_string(),
+            exported: false,
+            is_test_file: false,
+            attributes: vec![],
+            is_trait_impl: false,
+        };
+
+        assert!(is_entry_point("myHandler", &base_def));
+        assert!(is_entry_point("ServeHTTP", &base_def));
+        assert!(is_entry_point("OnClick", &base_def));
+        assert!(is_entry_point("HandleRequest", &base_def));
+    }
+
+    #[test]
+    fn test_confidence_reduces_for_test_files() {
+        let test_def = Definition {
+            name: "helper".to_string(),
+            kind: "function".to_string(),
+            file: "helper_test.go".to_string(),
+            line: 1,
+            end_line: 10,
+            visibility: "private".to_string(),
+            exported: false,
+            is_test_file: true,
+            attributes: vec![],
+            is_trait_impl: false,
+        };
+        let non_test_def = Definition {
+            is_test_file: false,
+            file: "helper.go".to_string(),
+            ..test_def.clone()
+        };
+
+        let test_conf = calculate_confidence(&test_def, true, true);
+        let non_test_conf = calculate_confidence(&non_test_def, true, true);
+        assert!(
+            test_conf < non_test_conf,
+            "Test file confidence ({}) should be lower than non-test ({})",
+            test_conf,
+            non_test_conf
+        );
     }
 
     #[test]

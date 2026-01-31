@@ -321,7 +321,18 @@ impl AnalyzerTrait for Analyzer {
             return Err(Error::git("hotspot analysis requires git history"));
         }
 
-        self.analyze_project(ctx.root)
+        // Build absolute paths from the pre-filtered file set
+        let files: Vec<std::path::PathBuf> = ctx
+            .files
+            .iter()
+            .map(|p| ctx.root.join(p))
+            .collect();
+
+        let git_repo = GitRepo::open(ctx.root)?;
+        let churn_data = self.collect_churn_data(&git_repo, &files, ctx.root)?;
+        let complexity_data = self.collect_complexity_data(&files, ctx.root)?;
+
+        self.combine_analyses(&churn_data, &complexity_data)
     }
 }
 
@@ -600,6 +611,144 @@ mod tests {
         assert_eq!(summary.total_hotspots, 10);
         assert_eq!(summary.critical_count, 2);
         assert_eq!(summary.high_count, 3);
+    }
+
+    #[test]
+    fn test_combine_analyses_no_matching_complexity() {
+        // Churn data exists but no complexity data for those files
+        let mut analyzer = Analyzer::new();
+        analyzer.config.min_churn_percentile = 0.0;
+        analyzer.config.min_complexity_percentile = 0.0;
+
+        let churn = vec![make_churn_file("src/a.rs", 10, 50.0)];
+        let complexity = vec![make_complexity_file("src/b.rs", 10)];
+
+        let result = analyzer.combine_analyses(&churn, &complexity).unwrap();
+        assert!(
+            result.hotspots.is_empty(),
+            "No hotspots when churn and complexity files don't overlap"
+        );
+    }
+
+    #[test]
+    fn test_combine_analyses_churn_only_no_complexity() {
+        let mut analyzer = Analyzer::new();
+        analyzer.config.min_churn_percentile = 0.0;
+        analyzer.config.min_complexity_percentile = 0.0;
+
+        let churn = vec![make_churn_file("src/a.rs", 10, 50.0)];
+        let complexity: Vec<FileComplexity> = vec![];
+
+        let result = analyzer.combine_analyses(&churn, &complexity).unwrap();
+        assert!(result.hotspots.is_empty());
+    }
+
+    #[test]
+    fn test_combine_analyses_complexity_only_no_churn() {
+        let mut analyzer = Analyzer::new();
+        analyzer.config.min_churn_percentile = 0.0;
+        analyzer.config.min_complexity_percentile = 0.0;
+
+        let churn: Vec<FileChurn> = vec![];
+        let complexity = vec![make_complexity_file("src/a.rs", 10)];
+
+        let result = analyzer.combine_analyses(&churn, &complexity).unwrap();
+        assert!(result.hotspots.is_empty());
+    }
+
+    #[test]
+    fn test_combine_analyses_zero_complexity_file() {
+        // File with zero cyclomatic complexity (e.g. empty or no functions)
+        let mut analyzer = Analyzer::new();
+        analyzer.config.min_churn_percentile = 0.0;
+        analyzer.config.min_complexity_percentile = 0.0;
+
+        let churn = vec![
+            make_churn_file("empty.rs", 5, 30.0),
+            make_churn_file("complex.rs", 20, 100.0),
+        ];
+        let complexity = vec![
+            make_complexity_file("empty.rs", 0),
+            make_complexity_file("complex.rs", 20),
+        ];
+
+        let result = analyzer.combine_analyses(&churn, &complexity).unwrap();
+        // Both should appear since thresholds are 0, but empty.rs has 0 complexity
+        assert!(result.hotspots.len() <= 2);
+        for hotspot in &result.hotspots {
+            assert!(hotspot.score >= 0.0);
+            assert!(hotspot.score <= 1.0);
+        }
+    }
+
+    #[test]
+    fn test_combine_analyses_single_file_percentile() {
+        // With only one file, percentile_rank returns 50 for the only value
+        let mut analyzer = Analyzer::new();
+        analyzer.config.min_churn_percentile = 0.0;
+        analyzer.config.min_complexity_percentile = 0.0;
+
+        let churn = vec![make_churn_file("only.rs", 10, 50.0)];
+        let complexity = vec![make_complexity_file("only.rs", 10)];
+
+        let result = analyzer.combine_analyses(&churn, &complexity).unwrap();
+        assert_eq!(result.hotspots.len(), 1);
+        // Single file: both percentiles should be 50, score = 0.5 * 0.5 = 0.25
+        assert!(
+            (result.hotspots[0].score - 0.25).abs() < 0.001,
+            "Single file score should be 0.25, got {}",
+            result.hotspots[0].score
+        );
+    }
+
+    #[test]
+    fn test_percentile_rank_all_equal() {
+        let values = vec![5.0, 5.0, 5.0, 5.0];
+        // All equal: count_below=0, count_equal=4
+        // rank = 100 * (0 + 0.5*4) / 4 = 50
+        assert!((percentile_rank(&values, 5.0) - 50.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_percentile_rank_value_not_in_list() {
+        let values = vec![1.0, 3.0, 5.0];
+        // Value 2.0 not in list: count_below=1, count_equal=0
+        // rank = 100 * (1 + 0) / 3 = 33.33
+        assert!((percentile_rank(&values, 2.0) - 33.333).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_severity_boundary_values() {
+        let analyzer = Analyzer::new();
+        // Exactly at threshold boundaries
+        assert!(matches!(
+            analyzer.classify_severity(0.81),
+            Severity::Critical
+        ));
+        assert!(matches!(analyzer.classify_severity(0.64), Severity::High));
+        assert!(matches!(
+            analyzer.classify_severity(0.36),
+            Severity::Moderate
+        ));
+        // Just below boundaries
+        assert!(matches!(
+            analyzer.classify_severity(0.8099),
+            Severity::High
+        ));
+        assert!(matches!(
+            analyzer.classify_severity(0.6399),
+            Severity::Moderate
+        ));
+        assert!(matches!(
+            analyzer.classify_severity(0.3599),
+            Severity::Low
+        ));
+        // Zero and one
+        assert!(matches!(analyzer.classify_severity(0.0), Severity::Low));
+        assert!(matches!(
+            analyzer.classify_severity(1.0),
+            Severity::Critical
+        ));
     }
 
     #[test]
