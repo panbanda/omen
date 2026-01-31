@@ -58,15 +58,17 @@ impl MutantFeatures {
     pub fn from_mutant(mutant: &Mutant, source_context: &str) -> Self {
         let source = source_context;
 
-        // Control flow detection
-        let has_loops =
-            source.contains("for") || source.contains("while") || source.contains("loop");
-        let has_conditionals = source.contains("if") || source.contains("match");
+        // Control flow detection using word boundaries to avoid
+        // matching substrings (e.g. "for" in "formula").
+        let has_loops = contains_word(source, "for")
+            || contains_word(source, "while")
+            || contains_word(source, "loop");
+        let has_conditionals = contains_word(source, "if") || contains_word(source, "match");
 
-        let control_flow_count = source.matches("if").count() as u32
-            + source.matches("for").count() as u32
-            + source.matches("while").count() as u32
-            + source.matches("match").count() as u32;
+        let control_flow_count = count_word(source, "if")
+            + count_word(source, "for")
+            + count_word(source, "while")
+            + count_word(source, "match");
 
         let nesting_depth = estimate_nesting_depth(source);
         let cyclomatic_complexity = 1 + control_flow_count;
@@ -231,7 +233,7 @@ impl LinearRegressionModel {
 
         // Calculate feature statistics for normalization
         self.feature_means = vec![0.0; n_features];
-        self.feature_stds = vec![1.0; n_features];
+        self.feature_stds = vec![0.0; n_features];
 
         for feat in features {
             for (i, &v) in feat.iter().enumerate() {
@@ -709,6 +711,37 @@ fn count_unique_variables(source: &str) -> u32 {
     }
 
     variables.len() as u32
+}
+
+/// Check if `source` contains `word` as a whole word (not a substring of a
+/// larger identifier). A word boundary is any non-alphanumeric, non-underscore
+/// character, or the start/end of the string.
+fn contains_word(source: &str, word: &str) -> bool {
+    count_word(source, word) > 0
+}
+
+/// Count occurrences of `word` as a whole word in `source`.
+fn count_word(source: &str, word: &str) -> u32 {
+    let mut count = 0u32;
+    let bytes = source.as_bytes();
+    let word_bytes = word.as_bytes();
+    let wlen = word_bytes.len();
+
+    for (pos, window) in bytes.windows(wlen).enumerate() {
+        if window != word_bytes {
+            continue;
+        }
+        let before_ok = pos == 0 || !is_ident_byte(bytes[pos - 1]);
+        let after_ok = pos + wlen >= bytes.len() || !is_ident_byte(bytes[pos + wlen]);
+        if before_ok && after_ok {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
 }
 
 fn is_keyword(word: &str) -> bool {
