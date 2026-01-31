@@ -1,5 +1,26 @@
 # Changelog
 
+## [4.20.3](https://github.com/panbanda/omen/compare/omen-v4.20.2...omen-v4.20.3) (2026-01-31)
+
+
+### Bug Fixes
+
+* add missing MCP tool handlers and fix notification handling ([77c5097](https://github.com/panbanda/omen/commit/77c5097137daaaec057f8b87b6a94c69d86ac126))
+* correct parser language handling for all 13 supported languages ([f5b0f68](https://github.com/panbanda/omen/commit/f5b0f68c32b135a7c77dce5720af1aca49129057))
+* improve analyzer correctness for hotspot, repomap, cohesion, and deadcode ([#362](https://github.com/panbanda/omen/issues/362)) ([cf99fb5](https://github.com/panbanda/omen/commit/cf99fb5a18bd63efec89a4bc408c2a21b51aaffa))
+* improve mutation operator correctness and coverage ([1997870](https://github.com/panbanda/omen/commit/1997870cae8ab1ed11cbdde334756148caba253b))
+* improve mutation testing safety and reliability ([27b6c8a](https://github.com/panbanda/omen/commit/27b6c8af11463538cd0436b080ade7312f07f5ab))
+* prevent git argument injection in remote and blame ([ea1e810](https://github.com/panbanda/omen/commit/ea1e81036dc740b7694dd1f6b4ecd565e55cd4bd))
+* prevent git argument injection in remote and blame operations ([388d6f6](https://github.com/panbanda/omen/commit/388d6f63e6fb379de683b97f1c91f86290aa1dc5))
+* prevent panics on multi-byte UTF-8 string truncation ([#358](https://github.com/panbanda/omen/issues/358)) ([abfdaa8](https://github.com/panbanda/omen/commit/abfdaa8ccc566e3844f7ea0e854cf6ef6480ee15))
+* remove unsafe transmute of tree_sitter::Node in parser ([521c54d](https://github.com/panbanda/omen/commit/521c54d22dded58def78be330e3b79317dc3825a))
+* replace panicking unwraps with proper error handling ([09743f9](https://github.com/panbanda/omen/commit/09743f9cfe267b846c14da8904b3e5a8e320f9ab))
+
+
+### Performance Improvements
+
+* eliminate quadratic hotpaths in analyzers ([b8f8bb3](https://github.com/panbanda/omen/commit/b8f8bb3510381003d7c61ad33468a29016f16c5b))
+
 ## [4.20.2](https://github.com/panbanda/omen/compare/omen-v4.20.1...omen-v4.20.2) (2026-01-31)
 
 
