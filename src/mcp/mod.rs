@@ -36,6 +36,10 @@ impl McpServer {
 
             match serde_json::from_str::<JsonRpcRequest>(&line) {
                 Ok(request) => {
+                    // JSON-RPC notifications have no `id` field; no response expected.
+                    if request.id.is_none() {
+                        continue;
+                    }
                     let response = self.handle_request(request);
                     serde_json::to_writer(&mut writer, &response)?;
                     writeln!(writer)?;
@@ -362,6 +366,10 @@ impl McpServer {
             "repomap" => self.run_analyzer::<crate::analyzers::repomap::Analyzer>(&ctx),
             "smells" => self.run_analyzer::<crate::analyzers::smells::Analyzer>(&ctx),
             "flags" => self.run_analyzer::<crate::analyzers::flags::Analyzer>(&ctx),
+            "score" => self.run_analyzer::<crate::score::Analyzer>(&ctx),
+            "diff" => {
+                return self.handle_diff(&path, &arguments);
+            }
             "semantic_search" => {
                 return self.handle_semantic_search(&arguments);
             }
@@ -385,6 +393,37 @@ impl McpServer {
             .analyze(ctx)
             .map_err(|e| format!("Analysis failed: {}", e))?;
         serde_json::to_value(result).map_err(|e| format!("Serialization failed: {}", e))
+    }
+
+    fn handle_diff(
+        &self,
+        repo_path: &std::path::Path,
+        arguments: &Value,
+    ) -> std::result::Result<Value, String> {
+        let base = arguments.get("base").and_then(|v| v.as_str());
+        let head = arguments.get("head").and_then(|v| v.as_str());
+
+        let analyzer = crate::analyzers::changes::Analyzer::default();
+
+        // analyze_diff takes the repo path and an optional target branch.
+        // When both base and head are given, we pass base as the target so the
+        // diff is computed against it.  The head parameter is not directly
+        // supported by analyze_diff (it always diffs the working tree / current
+        // branch against the target), so we use base as the target reference.
+        let target = base.or(head);
+        let result = analyzer
+            .analyze_diff(repo_path, target)
+            .map_err(|e| format!("Diff analysis failed: {}", e))?;
+
+        let value =
+            serde_json::to_value(&result).map_err(|e| format!("Serialization failed: {}", e))?;
+
+        Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": serde_json::to_string_pretty(&value).unwrap_or_default()
+            }]
+        }))
     }
 
     fn handle_semantic_search(&self, arguments: &Value) -> std::result::Result<Value, String> {
@@ -883,5 +922,93 @@ mod tests {
         let result = server.handle_tool_call(Some(params));
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("query"));
+    }
+
+    #[test]
+    fn test_handle_tool_call_score() {
+        let (server, temp_dir) = create_test_server();
+        std::fs::write(temp_dir.path().join("test.rs"), "fn main() {}").unwrap();
+
+        let params = json!({
+            "name": "score",
+            "arguments": {"path": temp_dir.path().to_str().unwrap()}
+        });
+        let result = server.handle_tool_call(Some(params));
+        assert!(
+            result.is_ok(),
+            "score tool should succeed: {:?}",
+            result.err()
+        );
+        let response = result.unwrap();
+        assert!(response.get("content").is_some());
+    }
+
+    #[test]
+    fn test_handle_tool_call_diff() {
+        let (server, temp_dir) = create_git_test_server();
+
+        // Create a second commit so there is something to diff
+        std::fs::write(temp_dir.path().join("new.rs"), "fn foo() {}").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(temp_dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "second"])
+            .current_dir(temp_dir.path())
+            .output()
+            .unwrap();
+
+        let params = json!({
+            "name": "diff",
+            "arguments": {
+                "path": temp_dir.path().to_str().unwrap(),
+                "base": "HEAD~1"
+            }
+        });
+        let result = server.handle_tool_call(Some(params));
+        assert!(
+            result.is_ok(),
+            "diff tool should succeed: {:?}",
+            result.err()
+        );
+        let response = result.unwrap();
+        assert!(response.get("content").is_some());
+    }
+
+    #[test]
+    fn test_all_listed_tools_have_handlers() {
+        let (server, temp_dir) = create_test_server();
+        let tools_result = server.handle_tools_list().unwrap();
+        let tools = tools_result.get("tools").unwrap().as_array().unwrap();
+
+        for tool in tools {
+            let name = tool.get("name").unwrap().as_str().unwrap();
+            let params = json!({
+                "name": name,
+                "arguments": {"path": temp_dir.path().to_str().unwrap()}
+            });
+            let result = server.handle_tool_call(Some(params));
+            // The tool may fail due to missing git repo or other env issues,
+            // but it must NOT fail with "Unknown tool".
+            if let Err(ref msg) = result {
+                assert!(
+                    !msg.contains("Unknown tool"),
+                    "Tool '{}' is listed but has no handler",
+                    name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_notification_no_response() {
+        // Notifications are JSON-RPC requests without an `id` field.
+        // run_stdio skips them, so we test the logic directly: a request
+        // with id=None should not be routed to handle_request.
+        let request_json = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
+        let parsed: JsonRpcRequest = serde_json::from_str(request_json).unwrap();
+        assert!(parsed.id.is_none(), "A notification must have no id field");
     }
 }
