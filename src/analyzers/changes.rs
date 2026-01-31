@@ -213,8 +213,7 @@ impl AnalyzerTrait for Analyzer {
         // Compute state-dependent features in chronological order (oldest first)
         let mut commits_chronological = raw_commits;
         commits_chronological.reverse();
-        let (commits, file_churn_data) =
-            compute_state_dependent_features(commits_chronological);
+        let (commits, file_churn_data) = compute_state_dependent_features(commits_chronological);
 
         // Collect all unique file paths across all commits
         let all_files: Vec<String> = {
@@ -234,19 +233,13 @@ impl AnalyzerTrait for Analyzer {
             .unwrap_or(1);
 
         // Pre-compute file risk profiles once for all files
-        let file_profiles = compute_file_risk_profiles(
-            git_path,
-            &all_files,
-            &file_churn_data,
-            max_churn_count,
-        );
+        let file_profiles =
+            compute_file_risk_profiles(git_path, &all_files, &file_churn_data, max_churn_count);
 
         // Build per-commit file risk signals
         let commit_file_risks: Vec<FileRiskSignals> = commits
             .iter()
-            .map(|c| {
-                aggregate_file_risk(&file_profiles, &c.files_modified)
-            })
+            .map(|c| aggregate_file_risk(&file_profiles, &c.files_modified))
             .collect();
 
         // Calculate normalization stats (including file-level stats)
@@ -1061,9 +1054,7 @@ fn generate_recommendations(
     }
 
     if file_risk.max_complexity > HIGH_COMPLEXITY_THRESHOLD {
-        recs.push(
-            "Touches high-complexity files - ensure thorough test coverage".to_string(),
-        );
+        recs.push("Touches high-complexity files - ensure thorough test coverage".to_string());
     }
 
     if file_risk.max_churn > HIGH_CHURN_THRESHOLD {
@@ -1618,9 +1609,7 @@ fn generate_diff_recommendations(
     }
 
     if file_risk.max_complexity > HIGH_COMPLEXITY_THRESHOLD {
-        recs.push(
-            "Touches high-complexity files - ensure thorough test coverage".to_string(),
-        );
+        recs.push("Touches high-complexity files - ensure thorough test coverage".to_string());
     }
 
     if file_risk.max_churn > HIGH_CHURN_THRESHOLD {
