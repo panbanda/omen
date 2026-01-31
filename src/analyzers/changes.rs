@@ -137,6 +137,11 @@ impl Default for Weights {
 const HIGH_RISK_PERCENTILE: usize = 95;
 const MEDIUM_RISK_PERCENTILE: usize = 80;
 
+/// Thresholds for file-level risk recommendations.
+const HIGH_COMPLEXITY_THRESHOLD: f64 = 10.0;
+const HIGH_CHURN_THRESHOLD: f64 = 0.7;
+const HIGH_DIFFUSION_THRESHOLD: f64 = 0.7;
+
 /// Changes/JIT analyzer.
 pub struct Analyzer {
     days: u32,
@@ -760,8 +765,14 @@ fn compute_file_risk_profiles(
     max_churn: i32,
 ) -> HashMap<String, FileRiskProfile> {
     use rayon::prelude::*;
+    use std::cell::RefCell;
 
     let complexity_analyzer = crate::analyzers::complexity::Analyzer::default();
+    let git_path_owned = git_path.to_path_buf();
+
+    thread_local! {
+        static THREAD_REPO: RefCell<Option<GitRepo>> = const { RefCell::new(None) };
+    }
 
     files
         .par_iter()
@@ -783,17 +794,23 @@ fn compute_file_risk_profiles(
                 };
             }
 
-            // Ownership concentration via blame
-            if let Ok(repo) = GitRepo::open(git_path) {
-                if let Ok(blame) = repo.blame(&abs_path) {
-                    let max_pct = blame
-                        .authors
-                        .values()
-                        .map(|a| a.percentage)
-                        .fold(0.0f64, f64::max);
-                    profile.ownership_concentration = max_pct / 100.0;
+            // Ownership concentration via blame (reuse thread-local repo handle)
+            THREAD_REPO.with(|cell| {
+                let mut repo_opt = cell.borrow_mut();
+                if repo_opt.is_none() {
+                    *repo_opt = GitRepo::open(&git_path_owned).ok();
                 }
-            }
+                if let Some(repo) = repo_opt.as_ref() {
+                    if let Ok(blame) = repo.blame(&abs_path) {
+                        let max_pct = blame
+                            .authors
+                            .values()
+                            .map(|a| a.percentage)
+                            .fold(0.0f64, f64::max);
+                        profile.ownership_concentration = max_pct / 100.0;
+                    }
+                }
+            });
 
             (file.clone(), profile)
         })
@@ -1043,19 +1060,19 @@ fn generate_recommendations(
         );
     }
 
-    if file_risk.max_complexity > 10.0 {
+    if file_risk.max_complexity > HIGH_COMPLEXITY_THRESHOLD {
         recs.push(
             "Touches high-complexity files - ensure thorough test coverage".to_string(),
         );
     }
 
-    if file_risk.max_churn > 0.7 {
+    if file_risk.max_churn > HIGH_CHURN_THRESHOLD {
         recs.push(
             "Touches historically volatile files - changes here often introduce bugs".to_string(),
         );
     }
 
-    if file_risk.ownership_diffusion > 0.7 {
+    if file_risk.ownership_diffusion > HIGH_DIFFUSION_THRESHOLD {
         recs.push(
             "Touches files with diffuse ownership (no clear owner) - ensure someone takes responsibility for review".to_string(),
         );
@@ -1211,7 +1228,10 @@ mod tests {
         let file_risk = FileRiskSignals::default();
         let score = calculate_risk(&features, &weights, &norm, &file_risk);
         // fix contributes 0.12, exp (inverted) contributes 0.05 => 0.17 total
-        assert!(score > 0.12);
+        assert!(
+            (0.15..=0.19).contains(&score),
+            "expected ~0.17, got {score}"
+        );
     }
 
     #[test]
@@ -1597,19 +1617,19 @@ fn generate_diff_recommendations(
         );
     }
 
-    if file_risk.max_complexity > 10.0 {
+    if file_risk.max_complexity > HIGH_COMPLEXITY_THRESHOLD {
         recs.push(
             "Touches high-complexity files - ensure thorough test coverage".to_string(),
         );
     }
 
-    if file_risk.max_churn > 0.7 {
+    if file_risk.max_churn > HIGH_CHURN_THRESHOLD {
         recs.push(
             "Touches historically volatile files - changes here often introduce bugs".to_string(),
         );
     }
 
-    if file_risk.ownership_diffusion > 0.7 {
+    if file_risk.ownership_diffusion > HIGH_DIFFUSION_THRESHOLD {
         recs.push(
             "Touches files with diffuse ownership (no clear owner) - ensure someone takes responsibility for review".to_string(),
         );

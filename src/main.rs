@@ -154,7 +154,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             }
         }
         Command::Diff(_) => {
-            run_diff_analyzer(path, &config, format)?;
+            run_diff_analyzer(path, format)?;
         }
         Command::Changes(_) => {
             run_changes_analyzer(path, &config, format)?;
@@ -496,7 +496,7 @@ fn run_analyzer<A: Analyzer + Default>(
     Ok(())
 }
 
-fn run_diff_analyzer(path: &Path, _config: &Config, format: Format) -> omen::core::Result<()> {
+fn run_diff_analyzer(path: &Path, format: Format) -> omen::core::Result<()> {
     let analyzer = omen::analyzers::changes::Analyzer::default();
     let result = analyzer.analyze_diff(path, None)?;
     format.format(&result, &mut stdout())?;
