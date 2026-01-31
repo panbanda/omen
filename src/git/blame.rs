@@ -58,7 +58,7 @@ pub fn get_blame(_repo: &Repository, root: &Path, path: &Path) -> Result<BlameIn
 
     let output = std::process::Command::new("git")
         .current_dir(root)
-        .args(["blame", "--line-porcelain", &relative_path])
+        .args(["blame", "--line-porcelain", "--", &relative_path])
         .output()
         .map_err(|e| Error::git(format!("Failed to run git blame: {e}")))?;
 
