@@ -798,7 +798,10 @@ mod tests {
 
         // All nodes should have equal rank in a symmetric cycle
         let ranks: Vec<f64> = vec![pagerank[&a], pagerank[&b], pagerank[&c]];
-        let max_diff = ranks.iter().map(|r| (r - ranks[0]).abs()).fold(0.0f64, f64::max);
+        let max_diff = ranks
+            .iter()
+            .map(|r| (r - ranks[0]).abs())
+            .fold(0.0f64, f64::max);
         assert!(
             max_diff < 0.01,
             "Nodes in a symmetric cycle should have roughly equal rank, diff={}",

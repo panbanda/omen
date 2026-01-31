@@ -322,11 +322,7 @@ impl AnalyzerTrait for Analyzer {
         }
 
         // Build absolute paths from the pre-filtered file set
-        let files: Vec<std::path::PathBuf> = ctx
-            .files
-            .iter()
-            .map(|p| ctx.root.join(p))
-            .collect();
+        let files: Vec<std::path::PathBuf> = ctx.files.iter().map(|p| ctx.root.join(p)).collect();
 
         let git_repo = GitRepo::open(ctx.root)?;
         let churn_data = self.collect_churn_data(&git_repo, &files, ctx.root)?;
@@ -731,18 +727,12 @@ mod tests {
             Severity::Moderate
         ));
         // Just below boundaries
-        assert!(matches!(
-            analyzer.classify_severity(0.8099),
-            Severity::High
-        ));
+        assert!(matches!(analyzer.classify_severity(0.8099), Severity::High));
         assert!(matches!(
             analyzer.classify_severity(0.6399),
             Severity::Moderate
         ));
-        assert!(matches!(
-            analyzer.classify_severity(0.3599),
-            Severity::Low
-        ));
+        assert!(matches!(analyzer.classify_severity(0.3599), Severity::Low));
         // Zero and one
         assert!(matches!(analyzer.classify_severity(0.0), Severity::Low));
         assert!(matches!(
