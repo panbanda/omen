@@ -320,15 +320,29 @@ impl Analyzer {
             };
 
             for import in imports {
-                // Find the target component
+                // Find the target component using indexed lookups
+                // (mirrors the edge-building logic above)
                 let to_cm = if let Some(cm) = component_map.get(import) {
                     *cm
                 } else {
-                    // Try to find by suffix
-                    let found = node_indices
-                        .keys()
-                        .find(|k| k.ends_with(import) || k.contains(import));
-                    if let Some(key) = found {
+                    let import_stem = std::path::Path::new(import)
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| import.clone());
+
+                    let found_key =
+                        by_stem
+                            .get(&import_stem)
+                            .and_then(|v| v.first())
+                            .or_else(|| {
+                                import
+                                    .split('/')
+                                    .next_back()
+                                    .and_then(|seg| by_stem.get(seg))
+                                    .and_then(|v| v.first())
+                            });
+
+                    if let Some(key) = found_key {
                         match component_map.get(key) {
                             Some(cm) => *cm,
                             None => continue,

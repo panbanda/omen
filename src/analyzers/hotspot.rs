@@ -196,21 +196,23 @@ impl Analyzer {
         let complexity_map: HashMap<&str, &FileComplexity> =
             complexity.iter().map(|f| (f.path.as_str(), f)).collect();
 
-        // Calculate percentiles
-        let churn_scores: Vec<f64> = churn.iter().map(|f| f.churn_score).collect();
-        let complexity_scores: Vec<f64> = complexity
+        // Sort scores once so percentile lookups are O(log n) via binary search
+        let mut churn_scores: Vec<f64> = churn.iter().map(|f| f.churn_score).collect();
+        churn_scores.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let mut complexity_scores: Vec<f64> = complexity
             .iter()
             .map(|f| f.total_cyclomatic as f64)
             .collect();
+        complexity_scores.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
         let mut hotspots = Vec::new();
 
         for file in churn {
             // Find matching complexity data
             if let Some(cx) = complexity_map.get(file.path.as_str()) {
-                let churn_pct = percentile_rank(&churn_scores, file.churn_score);
+                let churn_pct = percentile_rank_sorted(&churn_scores, file.churn_score);
                 let complexity_pct =
-                    percentile_rank(&complexity_scores, cx.total_cyclomatic as f64);
+                    percentile_rank_sorted(&complexity_scores, cx.total_cyclomatic as f64);
 
                 // Only include files above minimum thresholds
                 if churn_pct >= self.config.min_churn_percentile
@@ -285,19 +287,20 @@ pub struct FileComplexity {
     pub avg_cyclomatic: f64,
 }
 
-/// Calculate percentile rank of a value in a list.
-fn percentile_rank(values: &[f64], value: f64) -> f64 {
-    if values.is_empty() {
+/// Calculate percentile rank of a value in a pre-sorted slice using binary search.
+/// The slice must be sorted in ascending order.
+fn percentile_rank_sorted(sorted: &[f64], value: f64) -> f64 {
+    if sorted.is_empty() {
         return 0.0;
     }
 
-    let count_below = values.iter().filter(|&&v| v < value).count();
-    let count_equal = values
-        .iter()
-        .filter(|&&v| (v - value).abs() < f64::EPSILON)
-        .count();
+    // Binary search for the first element >= value
+    let count_below = sorted.partition_point(|&v| v < value);
+    // Binary search for the first element > value (i.e., past the equal range)
+    let count_below_or_equal = sorted.partition_point(|&v| v <= value);
+    let count_equal = count_below_or_equal - count_below;
 
-    100.0 * (count_below as f64 + 0.5 * count_equal as f64) / values.len() as f64
+    100.0 * (count_below as f64 + 0.5 * count_equal as f64) / sorted.len() as f64
 }
 
 impl AnalyzerTrait for Analyzer {
@@ -418,7 +421,7 @@ mod tests {
 
     #[test]
     fn test_percentile_rank_empty() {
-        assert!((percentile_rank(&[], 5.0) - 0.0).abs() < 0.001);
+        assert!((percentile_rank_sorted(&[], 5.0) - 0.0).abs() < 0.001);
     }
 
     #[test]
@@ -426,7 +429,7 @@ mod tests {
         let values = vec![10.0];
         // Only value: count_below=0, count_equal=1
         // rank = 100 * (0 + 0.5*1) / 1 = 50
-        assert!((percentile_rank(&values, 10.0) - 50.0).abs() < 0.001);
+        assert!((percentile_rank_sorted(&values, 10.0) - 50.0).abs() < 0.001);
     }
 
     #[test]
@@ -434,7 +437,7 @@ mod tests {
         let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         // Value 1.0: count_below=0, count_equal=1
         // rank = 100 * (0 + 0.5*1) / 5 = 10
-        assert!((percentile_rank(&values, 1.0) - 10.0).abs() < 0.001);
+        assert!((percentile_rank_sorted(&values, 1.0) - 10.0).abs() < 0.001);
     }
 
     #[test]
@@ -442,7 +445,7 @@ mod tests {
         let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         // Value 5.0: count_below=4, count_equal=1
         // rank = 100 * (4 + 0.5*1) / 5 = 90
-        assert!((percentile_rank(&values, 5.0) - 90.0).abs() < 0.001);
+        assert!((percentile_rank_sorted(&values, 5.0) - 90.0).abs() < 0.001);
     }
 
     #[test]
@@ -450,7 +453,7 @@ mod tests {
         let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         // Value 3.0: count_below=2, count_equal=1
         // rank = 100 * (2 + 0.5*1) / 5 = 50
-        assert!((percentile_rank(&values, 3.0) - 50.0).abs() < 0.001);
+        assert!((percentile_rank_sorted(&values, 3.0) - 50.0).abs() < 0.001);
     }
 
     #[test]
@@ -702,7 +705,7 @@ mod tests {
         let values = vec![5.0, 5.0, 5.0, 5.0];
         // All equal: count_below=0, count_equal=4
         // rank = 100 * (0 + 0.5*4) / 4 = 50
-        assert!((percentile_rank(&values, 5.0) - 50.0).abs() < 0.001);
+        assert!((percentile_rank_sorted(&values, 5.0) - 50.0).abs() < 0.001);
     }
 
     #[test]
@@ -710,7 +713,7 @@ mod tests {
         let values = vec![1.0, 3.0, 5.0];
         // Value 2.0 not in list: count_below=1, count_equal=0
         // rank = 100 * (1 + 0) / 3 = 33.33
-        assert!((percentile_rank(&values, 2.0) - 33.333).abs() < 0.1);
+        assert!((percentile_rank_sorted(&values, 2.0) - 33.333).abs() < 0.1);
     }
 
     #[test]
@@ -739,6 +742,60 @@ mod tests {
             analyzer.classify_severity(1.0),
             Severity::Critical
         ));
+    }
+
+    #[test]
+    fn test_percentile_rank_sorted_many_duplicates() {
+        // 100 values where half are 1.0 and half are 2.0
+        let values = {
+            let mut v = vec![1.0; 50];
+            v.extend(vec![2.0; 50]);
+            v
+        };
+        // value 1.0: count_below=0, count_equal=50
+        // rank = 100 * (0 + 0.5*50) / 100 = 25
+        assert!((percentile_rank_sorted(&values, 1.0) - 25.0).abs() < 0.001);
+        // value 2.0: count_below=50, count_equal=50
+        // rank = 100 * (50 + 0.5*50) / 100 = 75
+        assert!((percentile_rank_sorted(&values, 2.0) - 75.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_percentile_rank_sorted_value_below_all() {
+        let values = vec![10.0, 20.0, 30.0];
+        // value 5.0: count_below=0, count_equal=0
+        // rank = 100 * (0 + 0) / 3 = 0
+        assert!((percentile_rank_sorted(&values, 5.0) - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_percentile_rank_sorted_value_above_all() {
+        let values = vec![10.0, 20.0, 30.0];
+        // value 40.0: count_below=3, count_equal=0
+        // rank = 100 * (3 + 0) / 3 = 100
+        assert!((percentile_rank_sorted(&values, 40.0) - 100.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_combine_analyses_large_input() {
+        let mut analyzer = Analyzer::new();
+        analyzer.config.min_churn_percentile = 0.0;
+        analyzer.config.min_complexity_percentile = 0.0;
+
+        let n = 500;
+        let churn: Vec<FileChurn> = (0..n)
+            .map(|i| make_churn_file(&format!("file_{i}.rs"), i as u32, i as f64))
+            .collect();
+        let complexity: Vec<FileComplexity> = (0..n)
+            .map(|i| make_complexity_file(&format!("file_{i}.rs"), i as u32))
+            .collect();
+
+        let result = analyzer.combine_analyses(&churn, &complexity).unwrap();
+        assert_eq!(result.hotspots.len(), n);
+        // Verify sorted descending by score
+        for w in result.hotspots.windows(2) {
+            assert!(w[0].score >= w[1].score);
+        }
     }
 
     #[test]

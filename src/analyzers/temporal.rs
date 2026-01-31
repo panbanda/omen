@@ -152,6 +152,13 @@ impl Analyzer {
                 *file_commits.entry(file.clone()).or_insert(0) += 1;
             }
 
+            // Skip mega-commits (e.g. bulk renames, formatter runs).
+            // Pairing all N files is O(N^2) and these commits rarely
+            // indicate meaningful coupling.
+            if changed_files.len() > 100 {
+                continue;
+            }
+
             // Record co-changes for all pairs
             for i in 0..changed_files.len() {
                 for j in (i + 1)..changed_files.len() {
@@ -687,6 +694,66 @@ mod tests {
         assert!(
             result.summary.total_files_analyzed > 0 || !result.couplings.is_empty(),
             "temporal analysis should process file changes from git history"
+        );
+    }
+
+    #[test]
+    fn test_mega_commit_skipped_for_pairing() {
+        // Verify that commits with >100 files do not generate co-change pairs,
+        // but individual file commit counts are still tracked.
+        use crate::git::GitRepo;
+        use std::process::Command;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Initialize git repo
+        Command::new("git")
+            .args(["init"])
+            .current_dir(temp_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(temp_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(temp_dir.path())
+            .output()
+            .unwrap();
+
+        // Create 101 source files (exceeds the 100-file threshold)
+        for i in 0..101 {
+            std::fs::write(
+                temp_dir.path().join(format!("file_{i}.rs")),
+                format!("fn f{i}() {{}}"),
+            )
+            .unwrap();
+        }
+
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(temp_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "mega commit with 101 files"])
+            .current_dir(temp_dir.path())
+            .output()
+            .unwrap();
+
+        let git_repo = GitRepo::open(temp_dir.path()).unwrap();
+        let analyzer = Analyzer::new().with_days(365).with_min_cochanges(1);
+        let result = analyzer
+            .analyze_with_git(&git_repo, temp_dir.path())
+            .unwrap();
+
+        // The mega-commit should be skipped for pairing, so no couplings
+        assert!(
+            result.couplings.is_empty(),
+            "mega-commits (>100 files) should not produce co-change pairs, got {}",
+            result.couplings.len()
         );
     }
 
