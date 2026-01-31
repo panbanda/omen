@@ -374,12 +374,6 @@ impl Renderer {
     }
 }
 
-impl Default for Renderer {
-    fn default() -> Self {
-        Self::new().expect("failed to create default renderer")
-    }
-}
-
 fn load_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let content = fs::read_to_string(path)?;
     let value = serde_json::from_str(&content)?;
@@ -1152,5 +1146,12 @@ mod tests {
             "src/main.rs"
         );
         assert_eq!(rel_path_ref("src/main.rs", &[]), "src/main.rs");
+    }
+
+    #[test]
+    fn test_renderer_new_returns_result() {
+        // Renderer::new() returns Result, not a panicking Default.
+        let renderer = Renderer::new();
+        assert!(renderer.is_ok());
     }
 }
