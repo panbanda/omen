@@ -13,8 +13,6 @@ Omen can generate comprehensive HTML health reports for any repository. These re
 | [BerriAI/litellm](https://github.com/BerriAI/litellm) | Python | LLM proxy server -- call 100+ LLM APIs in the OpenAI format | [View Report](pathname:///omen/reports/litellm.html) |
 | [discourse/discourse](https://github.com/discourse/discourse) | Ruby | Community discussion platform used by thousands of organizations | [View Report](pathname:///omen/reports/discourse.html) |
 | [Gusto/apollo-federation-ruby](https://github.com/Gusto/apollo-federation-ruby) | Ruby | Apollo Federation implementation for Ruby GraphQL backends | [View Report](pathname:///omen/reports/apollo-federation-ruby.html) |
-| [vercel/next.js](https://github.com/vercel/next.js) | TypeScript | The React framework for production -- server rendering, static generation, and more | [View Report](pathname:///omen/reports/next-js.html) |
-| [kubernetes/kubernetes](https://github.com/kubernetes/kubernetes) | Go | Production-grade container orchestration | [View Report](pathname:///omen/reports/kubernetes.html) |
 | [zed-industries/zed](https://github.com/zed-industries/zed) | Rust | High-performance multiplayer code editor | [View Report](pathname:///omen/reports/zed.html) |
 
 ## Generating Your Own Report
