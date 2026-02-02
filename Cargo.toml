@@ -68,7 +68,7 @@ blake3 = "1.5"
 indicatif = "0.18"
 
 # HTTP for remote repos (MCP server)
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-tls", "blocking", "json"] }
 tokio = { version = "1.42", features = ["rt-multi-thread", "macros", "io-std", "sync", "time", "process"] }
 
 # Logging
