@@ -195,6 +195,12 @@ impl AnalyzerTrait for Analyzer {
 
         // Add tree-sitter detected dead code, skipping items already reported by cargo
         for (qualified_name, def) in &all_definitions {
+            // Skip generated files -- they participate in the call graph for
+            // reachability but their definitions should not be reported.
+            if is_generated_file(&def.file) {
+                continue;
+            }
+
             // Extract simple name for entry point check and usage lookup
             let simple_name = qualified_name.rsplit("::").next().unwrap_or(qualified_name);
 
@@ -269,15 +275,6 @@ fn collect_file_data(result: &parser::ParseResult) -> FileDeadCode {
         usages: HashSet::new(),
         calls: Vec::new(),
     };
-
-    // Skip generated files entirely -- their definitions are not meaningful
-    // for dead code analysis and cause false positives.
-    if is_generated_file(&path_str) {
-        // Still collect usages so references from generated code to real code
-        // are tracked (prevents marking real code as unused).
-        collect_usages_and_calls(result, &mut fdc);
-        return fdc;
-    }
 
     let functions = parser::extract_functions(result);
 
@@ -2280,7 +2277,10 @@ func privateHelper() {
     }
 
     #[test]
-    fn test_generated_file_definitions_excluded_from_analysis() {
+    fn test_generated_file_definitions_collected_but_not_reported() {
+        // Generated files should have their definitions collected (so the call
+        // graph is complete for reachability), but Phase 5 should skip them
+        // when building the dead code report.
         use std::path::Path;
 
         let parser = crate::parser::Parser::new();
@@ -2300,12 +2300,16 @@ func RegisterConductorServiceServer() {
             .unwrap();
         let fdc = collect_file_data(&result);
 
-        // Definitions from generated files should be marked so the analyzer
-        // can skip them. We use an empty definitions map for generated files.
+        // Definitions ARE collected for call graph participation
         assert!(
-            fdc.definitions.is_empty(),
-            "Generated file should have no definitions tracked, got: {:?}",
-            fdc.definitions.keys().collect::<Vec<_>>()
+            !fdc.definitions.is_empty(),
+            "Generated file definitions should be collected for call graph"
+        );
+
+        // But is_generated_file returns true so Phase 5 will skip them
+        assert!(
+            is_generated_file("conductor_grpc.pb.go"),
+            "Should detect generated file"
         );
     }
 
