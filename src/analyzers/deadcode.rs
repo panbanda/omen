@@ -1036,14 +1036,12 @@ fn collect_function_value_refs(
             Err(_) => continue,
         };
 
-        if fdc.definitions.contains_key(name) {
-            fdc.calls.push(CallReference {
-                caller: caller.to_string(),
-                callee: name.to_string(),
-                file: fdc.path.clone(),
-                line: call_node.start_position().row as u32 + 1,
-            });
-        }
+        fdc.calls.push(CallReference {
+            caller: caller.to_string(),
+            callee: name.to_string(),
+            file: fdc.path.clone(),
+            line: call_node.start_position().row as u32 + 1,
+        });
     }
 }
 
@@ -2187,6 +2185,41 @@ func setup() {
         assert!(
             has_edge_to_handle_data,
             "Should create call edge for function passed as value. Calls: {:?}",
+            fdc.calls
+                .iter()
+                .map(|c| format!("{} -> {}", c.caller, c.callee))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_cross_file_function_as_value_creates_call_edge() {
+        // When a function identifier is passed as an argument but is NOT
+        // defined in the same file, a candidate call edge should still be
+        // emitted. Phase 3 global resolution will handle matching it.
+        use std::path::Path;
+
+        let parser = crate::parser::Parser::new();
+        let content = br#"
+package main
+
+func setup() {
+    registerTool("data", handleData)
+}
+"#;
+        // handleData and registerTool are NOT defined in this file.
+        let result = parser
+            .parse(content, Language::Go, Path::new("setup.go"))
+            .unwrap();
+        let fdc = collect_file_data(&result);
+
+        let has_edge = fdc
+            .calls
+            .iter()
+            .any(|c| c.caller == "setup" && c.callee == "handleData");
+        assert!(
+            has_edge,
+            "Should create candidate call edge for cross-file function-as-value. Calls: {:?}",
             fdc.calls
                 .iter()
                 .map(|c| format!("{} -> {}", c.caller, c.callee))
