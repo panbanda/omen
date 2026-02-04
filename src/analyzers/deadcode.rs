@@ -262,13 +262,24 @@ impl AnalyzerTrait for Analyzer {
 
 /// Collect definitions and usages from a parsed file.
 fn collect_file_data(result: &parser::ParseResult) -> FileDeadCode {
-    let functions = parser::extract_functions(result);
+    let path_str = result.path.to_string_lossy().to_string();
     let mut fdc = FileDeadCode {
-        path: result.path.to_string_lossy().to_string(),
+        path: path_str.clone(),
         definitions: HashMap::new(),
         usages: HashSet::new(),
         calls: Vec::new(),
     };
+
+    // Skip generated files entirely -- their definitions are not meaningful
+    // for dead code analysis and cause false positives.
+    if is_generated_file(&path_str) {
+        // Still collect usages so references from generated code to real code
+        // are tracked (prevents marking real code as unused).
+        collect_usages_and_calls(result, &mut fdc);
+        return fdc;
+    }
+
+    let functions = parser::extract_functions(result);
 
     let is_test_file = is_test_file(&fdc.path);
 
@@ -892,6 +903,14 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
                     });
                 }
             }
+
+            // Detect function-as-value references in call arguments.
+            // If an argument is a bare identifier matching a known function
+            // definition, add a synthetic call edge from the current function
+            // to that identifier so BFS can reach it.
+            if let Some(ref caller) = current_function {
+                collect_function_value_refs(&node, source, caller, fdc);
+            }
         }
 
         // Move to next node in pre-order traversal
@@ -979,6 +998,55 @@ fn extract_callee(node: &tree_sitter::Node<'_>, source: &[u8], _lang: Language) 
     None
 }
 
+/// Scan call arguments for bare identifiers that match known function definitions.
+/// These represent function-as-value references (callbacks) and get synthetic call edges
+/// so that BFS reachability can follow them.
+fn collect_function_value_refs(
+    call_node: &tree_sitter::Node<'_>,
+    source: &[u8],
+    caller: &str,
+    fdc: &mut FileDeadCode,
+) {
+    // Find the argument_list / arguments child of the call node
+    let args_node = call_node.child_by_field_name("arguments").or_else(|| {
+        // Some grammars (Go) use "argument_list" as the node kind
+        // rather than a named field
+        (0..call_node.child_count())
+            .filter_map(|i| call_node.child(i))
+            .find(|c| c.kind() == "argument_list")
+    });
+
+    let args_node = match args_node {
+        Some(n) => n,
+        None => return,
+    };
+
+    for i in 0..args_node.child_count() {
+        let arg = match args_node.child(i) {
+            Some(a) => a,
+            None => continue,
+        };
+
+        if arg.kind() != "identifier" {
+            continue;
+        }
+
+        let name = match arg.utf8_text(source) {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+
+        if fdc.definitions.contains_key(name) {
+            fdc.calls.push(CallReference {
+                caller: caller.to_string(),
+                callee: name.to_string(),
+                file: fdc.path.clone(),
+                line: call_node.start_position().row as u32 + 1,
+            });
+        }
+    }
+}
+
 fn get_visibility(name: &str, lang: Language) -> String {
     match lang {
         Language::Go => {
@@ -1015,6 +1083,52 @@ fn is_exported(name: &str, lang: Language) -> bool {
         Language::Rust => false, // Would need AST context for `pub`
         _ => false,
     }
+}
+
+fn is_generated_file(path: &str) -> bool {
+    let filename = path.rsplit('/').next().unwrap_or(path);
+    let lower = filename.to_lowercase();
+
+    // Protobuf generated files
+    if lower.ends_with(".pb.go")
+        || lower.ends_with(".pb.cc")
+        || lower.ends_with(".pb.h")
+        || lower.ends_with(".pb2.py")
+        || lower.ends_with("_pb2.py")
+        || lower.ends_with("_pb2_grpc.py")
+    {
+        return true;
+    }
+
+    // Common generated file patterns
+    if lower.ends_with(".gen.go")
+        || lower.ends_with(".generated.go")
+        || lower.ends_with(".generated.ts")
+        || lower.ends_with(".generated.js")
+    {
+        return true;
+    }
+
+    // Go-specific generated file conventions
+    if lower.ends_with("_gen.go")
+        || lower.ends_with("_generated.go")
+        || lower == "bindata.go"
+        || lower.ends_with("wire_gen.go")
+    {
+        return true;
+    }
+
+    // Mock generated files
+    if lower.starts_with("mock_") && lower.ends_with(".go") {
+        return true;
+    }
+
+    // Kubernetes code-gen (zz_generated.*.go)
+    if lower.starts_with("zz_generated.") {
+        return true;
+    }
+
+    false
 }
 
 fn is_test_file(path: &str) -> bool {
@@ -2033,6 +2147,51 @@ fn nested_helper() {}
     }
 
     #[test]
+    fn test_function_passed_as_value_creates_call_edge() {
+        // When a function is passed as an argument to another function
+        // (e.g., mcp.AddTool("name", handleSetWorkflowData)), the referenced
+        // function should get a synthetic call edge so BFS can reach it.
+        use std::path::Path;
+
+        let parser = crate::parser::Parser::new();
+        let content = br#"
+package main
+
+func registerTool(name string, handler func()) {
+    // framework registration
+}
+
+func handleData() {
+    // callback implementation
+}
+
+func setup() {
+    registerTool("data", handleData)
+}
+"#;
+        let result = parser
+            .parse(content, Language::Go, Path::new("server.go"))
+            .unwrap();
+        let fdc = collect_file_data(&result);
+
+        // handleData is passed as an argument, not called directly.
+        // There should be a call edge from setup -> handleData so that
+        // if setup is reachable, handleData is too.
+        let has_edge_to_handle_data = fdc
+            .calls
+            .iter()
+            .any(|c| c.caller == "setup" && c.callee == "handleData");
+        assert!(
+            has_edge_to_handle_data,
+            "Should create call edge for function passed as value. Calls: {:?}",
+            fdc.calls
+                .iter()
+                .map(|c| format!("{} -> {}", c.caller, c.callee))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn test_go_function_detection() {
         use std::path::Path;
 
@@ -2061,6 +2220,57 @@ func privateHelper() {
 
         assert!(fdc.definitions["PublicFunc"].exported);
         assert!(!fdc.definitions["privateHelper"].exported);
+    }
+
+    #[test]
+    fn test_generated_files_are_detected() {
+        assert!(is_generated_file("conductor_grpc.pb.go"));
+        assert!(is_generated_file("service.pb.go"));
+        assert!(is_generated_file("types.gen.go"));
+        assert!(is_generated_file("schema.generated.ts"));
+        assert!(is_generated_file("models_gen.go"));
+        assert!(is_generated_file("deep_copy_generated.go"));
+        assert!(is_generated_file("bindata.go")); // go-bindata output
+        assert!(is_generated_file("wire_gen.go")); // Wire DI
+        assert!(is_generated_file("mock_service.go")); // mockgen
+        assert!(is_generated_file("zz_generated.deepcopy.go")); // k8s code-gen
+
+        // Non-generated files
+        assert!(!is_generated_file("server.go"));
+        assert!(!is_generated_file("handler.go"));
+        assert!(!is_generated_file("main.go"));
+        assert!(!is_generated_file("generator.go")); // contains "gen" but isn't generated
+        assert!(!is_generated_file("utils.ts"));
+    }
+
+    #[test]
+    fn test_generated_file_definitions_excluded_from_analysis() {
+        use std::path::Path;
+
+        let parser = crate::parser::Parser::new();
+        let content = br#"
+package pb
+
+func mustEmbedUnimplementedConductorServiceServer() {
+    panic("unimplemented")
+}
+
+func RegisterConductorServiceServer() {
+    // generated registration
+}
+"#;
+        let result = parser
+            .parse(content, Language::Go, Path::new("conductor_grpc.pb.go"))
+            .unwrap();
+        let fdc = collect_file_data(&result);
+
+        // Definitions from generated files should be marked so the analyzer
+        // can skip them. We use an empty definitions map for generated files.
+        assert!(
+            fdc.definitions.is_empty(),
+            "Generated file should have no definitions tracked, got: {:?}",
+            fdc.definitions.keys().collect::<Vec<_>>()
+        );
     }
 
     #[test]
