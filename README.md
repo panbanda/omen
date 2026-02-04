@@ -894,6 +894,126 @@ See [`omen.example.toml`](omen.example.toml) for all options.
 > [!TIP]
 > Using Claude Code? Run the `setup-config` skill to analyze your repository and generate an `omen.toml` with intelligent defaults for your tech stack, including detected feature flag providers and language-specific exclude patterns.
 
+## GitHub Action
+
+Omen provides a GitHub Action for automated PR analysis. It runs diff risk analysis and health scoring on every pull request.
+
+### Basic Usage
+
+```yaml
+name: Omen Analysis
+on: [pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  omen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: panbanda/omen@v4
+        id: omen
+
+      - name: Print results
+        run: |
+          echo "Risk: ${{ steps.omen.outputs.risk-level }} (${{ steps.omen.outputs.risk-score }})"
+          echo "Health: ${{ steps.omen.outputs.health-grade }} (${{ steps.omen.outputs.health-score }})"
+```
+
+> [!IMPORTANT]
+> `fetch-depth: 0` is required. Omen needs full git history for accurate analysis.
+
+### With PR Comment and Labels
+
+```yaml
+      - uses: panbanda/omen@v4
+        id: omen
+        with:
+          comment: true
+          label: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+Requires additional permissions:
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+```
+
+### Inputs
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `version` | `latest` | Omen version to install |
+| `path` | `.` | Repository path to analyze |
+| `comment` | `false` | Post/update a sticky PR comment |
+| `label` | `false` | Add a risk-level label |
+| `label-template` | `risk: {{level}}` | Label name template (`{{level}}` is replaced with `low`, `medium`, or `high`) |
+| `check` | `false` | Fail if risk meets threshold |
+| `check-threshold` | `high` | Risk level to fail on (`low`, `medium`, `high`) |
+
+### Outputs
+
+All outputs are available for chaining into downstream steps:
+
+| Output | Example | Description |
+|--------|---------|-------------|
+| `risk-score` | `0.42` | Diff risk score (0.0 - 1.0) |
+| `risk-level` | `medium` | Risk level (`low`, `medium`, `high`) |
+| `health-score` | `76.9` | Health score (0 - 100) |
+| `health-grade` | `C` | Health grade (A - F) |
+| `diff-json` | `{...}` | Full `omen diff` JSON |
+| `score-json` | `{...}` | Full `omen score` JSON |
+
+### Quality Gate
+
+Fail the workflow if risk is too high:
+
+```yaml
+      - uses: panbanda/omen@v4
+        with:
+          check: true
+          check-threshold: high  # fail on high risk PRs
+```
+
+### Custom Workflows
+
+Use outputs to build custom integrations:
+
+```yaml
+      - uses: panbanda/omen@v4
+        id: omen
+
+      - name: Block high-risk PRs
+        if: steps.omen.outputs.risk-level == 'high'
+        run: |
+          gh pr edit ${{ github.event.pull_request.number }} --add-label "needs-review"
+          exit 1
+
+      - name: Notify on health drop
+        if: fromJSON(steps.omen.outputs.health-score) < 60
+        run: curl -X POST "$SLACK_WEBHOOK" -d '{"text":"Health: ${{ steps.omen.outputs.health-score }}"}'
+```
+
+### Label Template
+
+Customize label naming with `label-template`. The `{{level}}` token is replaced with the risk level:
+
+```yaml
+      - uses: panbanda/omen@v4
+        with:
+          label: true
+          label-template: 'omen/{{level}}'  # produces: omen/low, omen/medium, omen/high
+```
+
 ## MCP Server
 
 Omen includes a Model Context Protocol (MCP) server that exposes all analyzers as tools for LLMs like Claude. This enables AI assistants to analyze codebases directly.
