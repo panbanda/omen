@@ -1086,7 +1086,10 @@ fn is_exported(name: &str, lang: Language) -> bool {
 }
 
 fn is_generated_file(path: &str) -> bool {
-    let filename = path.rsplit('/').next().unwrap_or(path);
+    let filename = std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(path);
     let lower = filename.to_lowercase();
 
     // Protobuf generated files
