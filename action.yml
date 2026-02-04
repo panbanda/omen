@@ -181,6 +181,69 @@ runs:
 
         RISK_LEVEL_UPPER=$(echo "$RISK_LEVEL" | tr '[:lower:]' '[:upper:]')
 
+        # Build agent tips based on low-scoring components
+        AGENT_TIPS=""
+
+        # Map component names to omen CLI commands and improvement advice
+        add_tip() {
+          local component="$1" score="$2" threshold="$3" command="$4" advice="$5"
+          if [ "$(echo "$score < $threshold" | bc -l)" = "1" ]; then
+            AGENT_TIPS="${AGENT_TIPS}
+        **${component}** (score: ${score}) -- needs attention
+
+        \`\`\`bash
+        ${command}
+        \`\`\`
+
+        ${advice}
+
+        ---
+
+        "
+          fi
+        }
+
+        # Extract component scores and generate tips
+        while IFS='|' read -r name score; do
+          case "$name" in
+            complexity)
+              add_tip "Complexity" "$score" "80" \
+                "omen complexity --sort cyclomatic" \
+                "Focus on functions with cyclomatic complexity > 10. Extract helper functions, replace nested conditionals with early returns, and use polymorphism instead of switch statements."
+              ;;
+            duplication)
+              add_tip "Duplication" "$score" "70" \
+                "omen clones" \
+                "Look for Type-1 (exact) and Type-2 (renamed) clones. Extract shared logic into reusable functions or modules. Prioritize clones in high-churn files."
+              ;;
+            cohesion)
+              add_tip "Cohesion" "$score" "80" \
+                "omen cohesion --sort lcom" \
+                "Classes with high LCOM (Lack of Cohesion) are doing too many unrelated things. Split them into focused classes where methods share instance variables."
+              ;;
+            tdg)
+              add_tip "TDG" "$score" "75" \
+                "omen tdg --sort score" \
+                "Files with low TDG scores have compounding debt across multiple dimensions. Focus on files graded D or F -- they accumulate complexity, duplication, and coupling simultaneously."
+              ;;
+            satd)
+              add_tip "Known Debt (SATD)" "$score" "80" \
+                "omen satd --sort severity" \
+                "Resolve high-severity items first (FIXME, BUG, SECURITY). Low-severity TODOs can be batch-addressed. Remove stale debt items that are no longer relevant."
+              ;;
+            coupling)
+              add_tip "Coupling" "$score" "70" \
+                "omen graph && omen smells" \
+                "Break cyclic dependencies by introducing interfaces or extracting shared types. Reduce fan-out from hub modules by splitting responsibilities."
+              ;;
+            smells)
+              add_tip "Architectural Smells" "$score" "80" \
+                "omen smells" \
+                "Address critical smells first (cyclic dependencies, god components). Hub modules with high fan-out should be split. Unstable modules that many others depend on need stabilization."
+              ;;
+          esac
+        done < <(printf '%s' "$SCORE_JSON" | jq -r '.components | to_entries[] | "\(.key)|\(.value.score)"')
+
         BODY="<!-- omen-analysis -->
         ## Omen Analysis
 
@@ -226,6 +289,30 @@ runs:
         | Component | Score | Weight |
         |-----------|-------|--------|
         ${COMPONENTS_TABLE}
+
+        </details>
+
+        <details>
+        <summary>Tips for AI agents</summary>
+
+        Use these commands to investigate and improve low-scoring areas.
+
+        **Run full analysis:**
+
+        \`\`\`bash
+        omen -f json score    # health score with component breakdown
+        omen -f json diff     # PR risk analysis
+        omen hotspot          # high-churn + high-complexity files
+        \`\`\`
+
+        ${AGENT_TIPS:-All components are scoring well. No specific improvements needed.}
+
+        **General workflow for improving scores:**
+
+        1. Run the relevant analyzer command to identify specific files
+        2. Focus on the highest-weight components first (complexity 25%, duplication 20%, cohesion 15%, TDG 15%)
+        3. Make targeted improvements -- small refactors that reduce complexity or eliminate duplication
+        4. Re-run \`omen score\` to verify improvement
 
         </details>"
 
