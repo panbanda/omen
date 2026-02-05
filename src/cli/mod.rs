@@ -76,7 +76,7 @@ pub enum Command {
 
     /// Analyze a specific diff (PR review)
     #[command(alias = "pr")]
-    Diff(AnalyzerArgs),
+    Diff(DiffArgs),
 
     /// Generate Technical Debt Graph
     Tdg(AnalyzerArgs),
@@ -149,6 +149,13 @@ pub struct AnalyzerArgs {
     /// Exclude files matching pattern
     #[arg(short, long)]
     pub exclude: Option<String>,
+}
+
+#[derive(Args)]
+pub struct DiffArgs {
+    /// Target branch to diff against (default: auto-detect main/master)
+    #[arg(short, long)]
+    pub target: Option<String>,
 }
 
 #[derive(Args)]
@@ -708,6 +715,24 @@ mod tests {
     #[test]
     fn test_command_diff() {
         assert_parses_to!(&["omen", "diff"], Command::Diff(_));
+    }
+
+    #[test]
+    fn test_diff_target_flag() {
+        let cli = parse(&["omen", "diff", "--target", "develop"]);
+        match cli.command {
+            Command::Diff(args) => assert_eq!(args.target, Some("develop".to_string())),
+            _ => panic!("expected Diff command"),
+        }
+    }
+
+    #[test]
+    fn test_diff_target_short_flag() {
+        let cli = parse(&["omen", "diff", "-t", "release/v2"]);
+        match cli.command {
+            Command::Diff(args) => assert_eq!(args.target, Some("release/v2".to_string())),
+            _ => panic!("expected Diff command"),
+        }
     }
 
     #[test]

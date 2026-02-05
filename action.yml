@@ -1,0 +1,429 @@
+name: 'Omen Analysis'
+description: 'Run diff risk analysis and health scoring on pull requests'
+author: 'panbanda'
+
+branding:
+  icon: 'shield'
+  color: 'purple'
+
+inputs:
+  version:
+    description: 'Omen version to install (e.g. "4.20.3"). Defaults to latest release.'
+    required: false
+    default: 'latest'
+  path:
+    description: 'Repository path to analyze'
+    required: false
+    default: '.'
+  comment:
+    description: 'Post or update a sticky PR comment with analysis results'
+    required: false
+    default: 'false'
+  label:
+    description: 'Add a risk-level label to the PR'
+    required: false
+    default: 'false'
+  label-template:
+    description: 'Label name template. Use {{level}} for risk level replacement.'
+    required: false
+    default: 'risk: {{level}}'
+  check:
+    description: 'Fail the action if risk level meets or exceeds threshold'
+    required: false
+    default: 'false'
+  check-threshold:
+    description: 'Risk level threshold for check failure (low, medium, high)'
+    required: false
+    default: 'high'
+
+outputs:
+  risk-score:
+    description: 'Diff risk score (0.0 - 1.0)'
+    value: ${{ steps.diff.outputs.risk-score }}
+  risk-level:
+    description: 'Risk level (low, medium, high)'
+    value: ${{ steps.diff.outputs.risk-level }}
+  health-score:
+    description: 'Repository health score (0 - 100)'
+    value: ${{ steps.score.outputs.health-score }}
+  health-grade:
+    description: 'Health grade (A, B, C, D, F)'
+    value: ${{ steps.score.outputs.health-grade }}
+  diff-json:
+    description: 'Full omen diff JSON output'
+    value: ${{ steps.diff.outputs.diff-json }}
+  score-json:
+    description: 'Full omen score JSON output'
+    value: ${{ steps.score.outputs.score-json }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install omen
+      id: install
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+
+        # Determine target triple
+        case "$RUNNER_OS-$RUNNER_ARCH" in
+          Linux-X64)    TARGET="x86_64-unknown-linux-gnu" ;;
+          Linux-ARM64)  TARGET="aarch64-unknown-linux-gnu" ;;
+          macOS-X64)    TARGET="x86_64-apple-darwin" ;;
+          macOS-ARM64)  TARGET="aarch64-apple-darwin" ;;
+          *)
+            echo "::error::Unsupported platform: $RUNNER_OS-$RUNNER_ARCH"
+            exit 1
+            ;;
+        esac
+
+        # Resolve version
+        if [ "$INPUT_VERSION" = "latest" ]; then
+          TAG=$(gh release list --repo panbanda/omen --limit 20 --exclude-pre-releases --exclude-drafts --json tagName --jq '.[].tagName' | grep '^omen-v' | head -1)
+          if [ -z "$TAG" ]; then
+            echo "::error::Could not determine latest omen release"
+            exit 1
+          fi
+        else
+          TAG="omen-v${INPUT_VERSION}"
+        fi
+        VERSION="${TAG#omen-v}"
+        echo "Installing omen ${VERSION} for ${TARGET}"
+
+        # Download and install
+        INSTALL_DIR="$RUNNER_TEMP/omen-install"
+        mkdir -p "$INSTALL_DIR"
+        gh release download "$TAG" --repo panbanda/omen --pattern "omen_${VERSION}_${TARGET}.tar.gz" --dir "$INSTALL_DIR"
+        tar xzf "$INSTALL_DIR/omen_${VERSION}_${TARGET}.tar.gz" -C "$INSTALL_DIR"
+        chmod +x "$INSTALL_DIR/omen"
+        echo "$INSTALL_DIR" >> "$GITHUB_PATH"
+
+    - name: Run omen diff
+      id: diff
+      shell: bash
+      env:
+        INPUT_PATH: ${{ inputs.path }}
+        BASE_REF: ${{ github.event.pull_request.base.ref }}
+      run: |
+        set -euo pipefail
+
+        DIFF_ARGS=()
+        if [ -n "$BASE_REF" ]; then
+          DIFF_ARGS+=(--target "origin/$BASE_REF")
+        fi
+        DIFF_JSON=$(omen -f json -p "$INPUT_PATH" diff "${DIFF_ARGS[@]}")
+
+        # Set scalar outputs (always available)
+        echo "risk-score=$(printf '%s' "$DIFF_JSON" | jq -r '.score')" >> "$GITHUB_OUTPUT"
+        echo "risk-level=$(printf '%s' "$DIFF_JSON" | jq -r '.level')" >> "$GITHUB_OUTPUT"
+
+        # Set full JSON output if within GitHub's 1MB limit
+        DIFF_SIZE=$(printf '%s' "$DIFF_JSON" | wc -c | tr -d ' ')
+        if [ "$DIFF_SIZE" -lt 900000 ]; then
+          DELIM="OMEN_DIFF_$(date +%s%N)"
+          echo "diff-json<<${DELIM}" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$DIFF_JSON" >> "$GITHUB_OUTPUT"
+          echo "${DELIM}" >> "$GITHUB_OUTPUT"
+        else
+          echo "::warning::diff-json output exceeds 900KB ($DIFF_SIZE bytes), writing to file instead"
+          printf '%s' "$DIFF_JSON" > "$RUNNER_TEMP/omen-diff.json"
+          echo "diff-json=$RUNNER_TEMP/omen-diff.json" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Run omen score
+      id: score
+      shell: bash
+      env:
+        INPUT_PATH: ${{ inputs.path }}
+      run: |
+        set -euo pipefail
+
+        SCORE_JSON=$(omen -f json -p "$INPUT_PATH" score)
+
+        # Set scalar outputs (always available)
+        echo "health-score=$(printf '%s' "$SCORE_JSON" | jq -r '.overall_score')" >> "$GITHUB_OUTPUT"
+        echo "health-grade=$(printf '%s' "$SCORE_JSON" | jq -r '.grade')" >> "$GITHUB_OUTPUT"
+
+        # Set full JSON output if within GitHub's 1MB limit
+        SCORE_SIZE=$(printf '%s' "$SCORE_JSON" | wc -c | tr -d ' ')
+        if [ "$SCORE_SIZE" -lt 900000 ]; then
+          DELIM="OMEN_SCORE_$(date +%s%N)"
+          echo "score-json<<${DELIM}" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$SCORE_JSON" >> "$GITHUB_OUTPUT"
+          echo "${DELIM}" >> "$GITHUB_OUTPUT"
+        else
+          echo "::warning::score-json output exceeds 900KB ($SCORE_SIZE bytes), writing to file instead"
+          printf '%s' "$SCORE_JSON" > "$RUNNER_TEMP/omen-score.json"
+          echo "score-json=$RUNNER_TEMP/omen-score.json" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Post sticky comment
+      if: inputs.comment == 'true' && github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+        DIFF_JSON: ${{ steps.diff.outputs.diff-json }}
+        SCORE_JSON: ${{ steps.score.outputs.score-json }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        set -euo pipefail
+
+        # Resolve file paths for oversized JSON outputs
+        if [ -f "$DIFF_JSON" ]; then
+          DIFF_JSON=$(cat "$DIFF_JSON")
+        fi
+        if [ -f "$SCORE_JSON" ]; then
+          SCORE_JSON=$(cat "$SCORE_JSON")
+        fi
+
+        RISK_SCORE=$(printf '%s' "$DIFF_JSON" | jq -r '.score')
+        RISK_LEVEL=$(printf '%s' "$DIFF_JSON" | jq -r '.level')
+        FILES_MOD=$(printf '%s' "$DIFF_JSON" | jq -r '.files_modified')
+        LINES_ADD=$(printf '%s' "$DIFF_JSON" | jq -r '.lines_added')
+        LINES_DEL=$(printf '%s' "$DIFF_JSON" | jq -r '.lines_deleted')
+        COMMITS=$(printf '%s' "$DIFF_JSON" | jq -r '.commits')
+
+        HEALTH_SCORE=$(printf '%s' "$SCORE_JSON" | jq -r '.overall_score')
+        HEALTH_GRADE=$(printf '%s' "$SCORE_JSON" | jq -r '.grade')
+        FILES_ANALYZED=$(printf '%s' "$SCORE_JSON" | jq -r '.summary.files_analyzed')
+        CRITICAL=$(printf '%s' "$SCORE_JSON" | jq -r '.summary.critical_issues')
+
+        # Build risk factors table
+        FACTORS_TABLE=$(printf '%s' "$DIFF_JSON" | jq -r '
+          .factors | to_entries | sort_by(-.value)
+          | map("| \(.key) | \(.value | tostring | .[0:6]) |")
+          | join("\n")')
+
+        # Build recommendations list
+        RECOMMENDATIONS=$(printf '%s' "$DIFF_JSON" | jq -r '
+          .recommendations | map("- \(.)") | join("\n")')
+
+        # Build score components table
+        COMPONENTS_TABLE=$(printf '%s' "$SCORE_JSON" | jq -r '
+          .components | to_entries | sort_by(-.value.weight)
+          | map("| \(.key) | \(.value.score | . * 10 | round / 10) | \(.value.weight) |")
+          | join("\n")')
+
+        RISK_LEVEL_UPPER=$(echo "$RISK_LEVEL" | tr '[:lower:]' '[:upper:]')
+
+        # Build agent tips based on low-scoring components
+        AGENT_TIPS=""
+
+        # Map component names to omen CLI commands and improvement advice
+        add_tip() {
+          local component="$1" score="$2" threshold="$3" command="$4" advice="$5"
+          if [ "$(echo "$score < $threshold" | bc -l)" = "1" ]; then
+            AGENT_TIPS="${AGENT_TIPS}
+        **${component}** (score: ${score}) -- needs attention
+
+        \`\`\`bash
+        ${command}
+        \`\`\`
+
+        ${advice}
+
+        ---
+
+        "
+          fi
+        }
+
+        # Extract component scores and generate tips
+        while IFS='|' read -r name score; do
+          case "$name" in
+            complexity)
+              add_tip "Complexity" "$score" "80" \
+                "omen complexity --sort cyclomatic" \
+                "Focus on functions with cyclomatic complexity > 10. Extract helper functions, replace nested conditionals with early returns, and use polymorphism instead of switch statements."
+              ;;
+            duplication)
+              add_tip "Duplication" "$score" "70" \
+                "omen clones" \
+                "Look for Type-1 (exact) and Type-2 (renamed) clones. Extract shared logic into reusable functions or modules. Prioritize clones in high-churn files."
+              ;;
+            cohesion)
+              add_tip "Cohesion" "$score" "80" \
+                "omen cohesion --sort lcom" \
+                "Classes with high LCOM (Lack of Cohesion) are doing too many unrelated things. Split them into focused classes where methods share instance variables."
+              ;;
+            tdg)
+              add_tip "TDG" "$score" "75" \
+                "omen tdg --sort score" \
+                "Files with low TDG scores have compounding debt across multiple dimensions. Focus on files graded D or F -- they accumulate complexity, duplication, and coupling simultaneously."
+              ;;
+            satd)
+              add_tip "Known Debt (SATD)" "$score" "80" \
+                "omen satd --sort severity" \
+                "Resolve high-severity items first (FIXME, BUG, SECURITY). Low-severity TODOs can be batch-addressed. Remove stale debt items that are no longer relevant."
+              ;;
+            coupling)
+              add_tip "Coupling" "$score" "70" \
+                "omen graph && omen smells" \
+                "Break cyclic dependencies by introducing interfaces or extracting shared types. Reduce fan-out from hub modules by splitting responsibilities."
+              ;;
+            smells)
+              add_tip "Architectural Smells" "$score" "80" \
+                "omen smells" \
+                "Address critical smells first (cyclic dependencies, god components). Hub modules with high fan-out should be split. Unstable modules that many others depend on need stabilization."
+              ;;
+          esac
+        done < <(printf '%s' "$SCORE_JSON" | jq -r '.components | to_entries[] | "\(.key)|\(.value.score)"')
+
+        BODY="<!-- omen-analysis -->
+        ## Omen Analysis
+
+        ### Diff Risk
+
+        | | |
+        |---|---|
+        | **Risk Score** | ${RISK_SCORE} / 1.0 |
+        | **Risk Level** | ${RISK_LEVEL_UPPER} |
+        | **Files Modified** | ${FILES_MOD} |
+        | **Lines Added** | +${LINES_ADD} |
+        | **Lines Deleted** | -${LINES_DEL} |
+        | **Commits** | ${COMMITS} |
+
+        <details>
+        <summary>Risk Factors</summary>
+
+        | Factor | Score |
+        |--------|-------|
+        ${FACTORS_TABLE}
+
+        </details>
+
+        <details>
+        <summary>Recommendations</summary>
+
+        ${RECOMMENDATIONS}
+
+        </details>
+
+        ### Repository Health
+
+        | | |
+        |---|---|
+        | **Health Score** | ${HEALTH_SCORE} / 100 |
+        | **Grade** | ${HEALTH_GRADE} |
+        | **Files Analyzed** | ${FILES_ANALYZED} |
+        | **Critical Issues** | ${CRITICAL} |
+
+        <details>
+        <summary>Score Components</summary>
+
+        | Component | Score | Weight |
+        |-----------|-------|--------|
+        ${COMPONENTS_TABLE}
+
+        </details>
+
+        <details>
+        <summary>Tips for AI agents</summary>
+
+        Use these commands to investigate and improve low-scoring areas.
+
+        **Run full analysis:**
+
+        \`\`\`bash
+        omen -f json score    # health score with component breakdown
+        omen -f json diff     # PR risk analysis
+        omen hotspot          # high-churn + high-complexity files
+        \`\`\`
+
+        ${AGENT_TIPS:-All components are scoring well. No specific improvements needed.}
+
+        **General workflow for improving scores:**
+
+        1. Run the relevant analyzer command to identify specific files
+        2. Focus on the highest-weight components first (complexity 25%, duplication 20%, cohesion 15%, TDG 15%)
+        3. Make targeted improvements -- small refactors that reduce complexity or eliminate duplication
+        4. Re-run \`omen score\` to verify improvement
+
+        </details>"
+
+        # Find existing comment
+        COMMENT_ID=$(gh api "repos/${GH_REPO}/issues/${PR_NUMBER}/comments" \
+          --jq '.[] | select(.body | contains("<!-- omen-analysis -->")) | .id' \
+          | head -1 || true)
+
+        if [ -n "$COMMENT_ID" ]; then
+          gh api -X PATCH "repos/${GH_REPO}/issues/comments/${COMMENT_ID}" \
+            -f body="$BODY"
+        else
+          gh pr comment "$PR_NUMBER" --body "$BODY"
+        fi
+
+    - name: Manage risk label
+      if: inputs.label == 'true' && github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RISK_LEVEL: ${{ steps.diff.outputs.risk-level }}
+        LABEL_TEMPLATE: ${{ inputs.label-template }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        set -euo pipefail
+
+        # Compute current label
+        CURRENT_LABEL="${LABEL_TEMPLATE//\{\{level\}\}/$RISK_LEVEL}"
+
+        # Color per risk level
+        case "$RISK_LEVEL" in
+          low)    COLOR="0e8a16" ;;
+          medium) COLOR="fbca04" ;;
+          high)   COLOR="d93f0b" ;;
+          *)
+            echo "::error::Unexpected risk level: '$RISK_LEVEL'"
+            exit 1
+            ;;
+        esac
+
+        # Remove stale risk labels (other levels from same template)
+        for LEVEL in low medium high; do
+          LABEL="${LABEL_TEMPLATE//\{\{level\}\}/$LEVEL}"
+          if [ "$LABEL" != "$CURRENT_LABEL" ]; then
+            gh pr edit "$PR_NUMBER" --remove-label "$LABEL" 2>/dev/null || true
+          fi
+        done
+
+        # Create label if it doesn't exist, update color if it does
+        gh label create "$CURRENT_LABEL" --color "$COLOR" --force 2>/dev/null || true
+
+        # Add label to PR
+        gh pr edit "$PR_NUMBER" --add-label "$CURRENT_LABEL"
+
+    - name: Check threshold
+      if: inputs.check == 'true'
+      shell: bash
+      env:
+        RISK_LEVEL: ${{ steps.diff.outputs.risk-level }}
+        THRESHOLD: ${{ inputs.check-threshold }}
+      run: |
+        set -euo pipefail
+
+        # Map levels to numeric values
+        level_to_num() {
+          case "$1" in
+            low)    echo 1 ;;
+            medium) echo 2 ;;
+            high)   echo 3 ;;
+            *)      echo 0 ;;
+          esac
+        }
+
+        ACTUAL=$(level_to_num "$RISK_LEVEL")
+        LIMIT=$(level_to_num "$THRESHOLD")
+
+        if [ "$ACTUAL" -eq 0 ] || [ "$LIMIT" -eq 0 ]; then
+          echo "::error::Invalid risk level '${RISK_LEVEL}' or threshold '${THRESHOLD}' (expected low|medium|high)"
+          exit 1
+        fi
+
+        if [ "$ACTUAL" -ge "$LIMIT" ]; then
+          echo "::error::Risk level '${RISK_LEVEL}' meets or exceeds threshold '${THRESHOLD}'"
+          exit 1
+        fi
