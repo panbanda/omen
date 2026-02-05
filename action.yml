@@ -359,42 +359,68 @@ runs:
 
     - name: Manage risk label
       if: inputs.label == 'true' && github.event_name == 'pull_request'
-      shell: bash
+      uses: actions/github-script@v8
       env:
-        GH_TOKEN: ${{ github.token }}
         RISK_LEVEL: ${{ steps.diff.outputs.risk-level }}
         LABEL_TEMPLATE: ${{ inputs.label-template }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
-      run: |
-        set -euo pipefail
+      with:
+        script: |
+          const riskLevel = process.env.RISK_LEVEL;
+          const template = process.env.LABEL_TEMPLATE;
+          const prNumber = context.payload.pull_request.number;
 
-        # Compute current label
-        CURRENT_LABEL="${LABEL_TEMPLATE//\{\{level\}\}/$RISK_LEVEL}"
+          const currentLabel = template.replace('{{level}}', riskLevel);
 
-        # Color per risk level
-        case "$RISK_LEVEL" in
-          low)    COLOR="0e8a16" ;;
-          medium) COLOR="fbca04" ;;
-          high)   COLOR="d93f0b" ;;
-          *)
-            echo "::error::Unexpected risk level: '$RISK_LEVEL'"
-            exit 1
-            ;;
-        esac
+          const colors = { low: '0e8a16', medium: 'fbca04', high: 'd93f0b' };
+          const color = colors[riskLevel];
+          if (!color) {
+            core.setFailed(`Unexpected risk level: '${riskLevel}'`);
+            return;
+          }
 
-        # Remove stale risk labels (other levels from same template)
-        for LEVEL in low medium high; do
-          LABEL="${LABEL_TEMPLATE//\{\{level\}\}/$LEVEL}"
-          if [ "$LABEL" != "$CURRENT_LABEL" ]; then
-            gh pr edit "$PR_NUMBER" --remove-label "$LABEL" 2>/dev/null || true
-          fi
-        done
+          // Remove stale risk labels (other levels from same template)
+          for (const level of ['low', 'medium', 'high']) {
+            const label = template.replace('{{level}}', level);
+            if (label !== currentLabel) {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  name: label,
+                });
+              } catch {
+                // Label may not exist on this PR
+              }
+            }
+          }
 
-        # Create label if it doesn't exist, update color if it does
-        gh label create "$CURRENT_LABEL" --color "$COLOR" --force 2>/dev/null || true
+          // Create or update label with correct color
+          try {
+            await github.rest.issues.createLabel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: currentLabel,
+              color,
+            });
+          } catch (e) {
+            if (e.status === 422) {
+              await github.rest.issues.updateLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: currentLabel,
+                color,
+              });
+            }
+          }
 
-        # Add label to PR
-        gh pr edit "$PR_NUMBER" --add-label "$CURRENT_LABEL"
+          // Add label to PR
+          await github.rest.issues.addLabels({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: prNumber,
+            labels: [currentLabel],
+          });
 
     - name: Check threshold
       if: inputs.check == 'true'
