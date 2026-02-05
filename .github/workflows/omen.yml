@@ -19,7 +19,7 @@ jobs:
 
       - name: Run Omen
         id: omen
-        uses: panbanda/omen@main
+        uses: panbanda/omen@omen-v4.21.2
         with:
           comment: 'true'
           label: 'true'
