@@ -1,4 +1,4 @@
-name: Omen
+name: Omen Analysis
 
 on:
   pull_request:
