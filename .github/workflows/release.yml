@@ -32,6 +32,23 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
+  update-major-tag:
+    name: Update Major Version Tag
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+      - name: Update major version tag
+        env:
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          MAJOR="v$(echo "${TAG#omen-v}" | cut -d. -f1)"
+          git tag -f "$MAJOR" "$TAG"
+          git push origin "$MAJOR" --force
+
   build:
     name: Build (${{ matrix.target }})
     needs: release-please
