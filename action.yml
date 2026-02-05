@@ -109,12 +109,17 @@ runs:
               return;
             }
           } else {
-            const { data } = await github.rest.repos.getReleaseByTag({
-              owner: 'panbanda',
-              repo: 'omen',
-              tag: `omen-v${process.env.INPUT_VERSION}`,
-            });
-            release = data;
+            try {
+              const { data } = await github.rest.repos.getReleaseByTag({
+                owner: 'panbanda',
+                repo: 'omen',
+                tag: `omen-v${process.env.INPUT_VERSION}`,
+              });
+              release = data;
+            } catch (e) {
+              core.setFailed(`Release omen-v${process.env.INPUT_VERSION} not found`);
+              return;
+            }
           }
 
           const version = release.tag_name.replace('omen-v', '');
@@ -162,8 +167,14 @@ runs:
             args.push('--target', `origin/${process.env.BASE_REF}`);
           }
 
-          const { stdout } = await exec.getExecOutput('omen', args);
-          const diff = JSON.parse(stdout);
+          let diff;
+          try {
+            const { stdout } = await exec.getExecOutput('omen', args);
+            diff = JSON.parse(stdout);
+          } catch (e) {
+            core.setFailed(`omen diff failed: ${e.message}`);
+            return;
+          }
 
           core.setOutput('risk-score', String(diff.score));
           core.setOutput('risk-level', diff.level);
@@ -186,10 +197,16 @@ runs:
       with:
         script: |
           const fs = require('fs');
-          const { stdout } = await exec.getExecOutput('omen', [
-            '-f', 'json', '-p', process.env.INPUT_PATH, 'score',
-          ]);
-          const score = JSON.parse(stdout);
+          let score;
+          try {
+            const { stdout } = await exec.getExecOutput('omen', [
+              '-f', 'json', '-p', process.env.INPUT_PATH, 'score',
+            ]);
+            score = JSON.parse(stdout);
+          } catch (e) {
+            core.setFailed(`omen score failed: ${e.message}`);
+            return;
+          }
 
           core.setOutput('health-score', String(score.overall_score));
           core.setOutput('health-grade', score.grade);
@@ -215,10 +232,15 @@ runs:
           const fs = require('fs');
 
           function loadJson(input) {
+            if (!input) throw new Error('Missing JSON input');
             try {
               return JSON.parse(input);
             } catch {
-              return JSON.parse(fs.readFileSync(input, 'utf8'));
+              try {
+                return JSON.parse(fs.readFileSync(input, 'utf8'));
+              } catch {
+                throw new Error(`Failed to parse JSON input or read file: ${input.slice(0, 100)}`);
+              }
             }
           }
 
@@ -455,6 +477,8 @@ runs:
                 name: currentLabel,
                 color,
               });
+            } else {
+              throw e;
             }
           }
 
