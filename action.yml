@@ -61,301 +61,323 @@ runs:
   steps:
     - name: Install omen
       id: install
-      shell: bash
+      uses: actions/github-script@v8
       env:
         INPUT_VERSION: ${{ inputs.version }}
-        GH_TOKEN: ${{ github.token }}
-      run: |
-        set -euo pipefail
+        GITHUB_TOKEN: ${{ github.token }}
+      with:
+        script: |
+          const fs = require('fs');
 
-        # Determine target triple
-        case "$RUNNER_OS-$RUNNER_ARCH" in
-          Linux-X64)    TARGET="x86_64-unknown-linux-gnu" ;;
-          Linux-ARM64)  TARGET="aarch64-unknown-linux-gnu" ;;
-          macOS-X64)    TARGET="x86_64-apple-darwin" ;;
-          macOS-ARM64)  TARGET="aarch64-apple-darwin" ;;
-          *)
-            echo "::error::Unsupported platform: $RUNNER_OS-$RUNNER_ARCH"
-            exit 1
-            ;;
-        esac
+          const targets = {
+            'Linux-X64': 'x86_64-unknown-linux-gnu',
+            'Linux-ARM64': 'aarch64-unknown-linux-gnu',
+            'macOS-X64': 'x86_64-apple-darwin',
+            'macOS-ARM64': 'aarch64-apple-darwin',
+          };
+          const key = `${process.env.RUNNER_OS}-${process.env.RUNNER_ARCH}`;
+          const target = targets[key];
+          if (!target) {
+            core.setFailed(`Unsupported platform: ${key}`);
+            return;
+          }
 
-        # Resolve version
-        if [ "$INPUT_VERSION" = "latest" ]; then
-          TAG=$(gh release list --repo panbanda/omen --limit 20 --exclude-pre-releases --exclude-drafts --json tagName --jq '.[].tagName' | grep '^omen-v' | head -1)
-          if [ -z "$TAG" ]; then
-            echo "::error::Could not determine latest omen release"
-            exit 1
-          fi
-        else
-          TAG="omen-v${INPUT_VERSION}"
-        fi
-        VERSION="${TAG#omen-v}"
-        echo "Installing omen ${VERSION} for ${TARGET}"
+          let release;
+          if (process.env.INPUT_VERSION === 'latest') {
+            const { data: releases } = await github.rest.repos.listReleases({
+              owner: 'panbanda',
+              repo: 'omen',
+              per_page: 20,
+            });
+            release = releases.find(r =>
+              !r.prerelease && !r.draft && r.tag_name.startsWith('omen-v')
+            );
+            if (!release) {
+              core.setFailed('Could not determine latest omen release');
+              return;
+            }
+          } else {
+            const { data } = await github.rest.repos.getReleaseByTag({
+              owner: 'panbanda',
+              repo: 'omen',
+              tag: `omen-v${process.env.INPUT_VERSION}`,
+            });
+            release = data;
+          }
 
-        # Download and install
-        INSTALL_DIR="$RUNNER_TEMP/omen-install"
-        mkdir -p "$INSTALL_DIR"
-        gh release download "$TAG" --repo panbanda/omen --pattern "omen_${VERSION}_${TARGET}.tar.gz" --dir "$INSTALL_DIR"
-        tar xzf "$INSTALL_DIR/omen_${VERSION}_${TARGET}.tar.gz" -C "$INSTALL_DIR"
-        chmod +x "$INSTALL_DIR/omen"
-        echo "$INSTALL_DIR" >> "$GITHUB_PATH"
+          const version = release.tag_name.replace('omen-v', '');
+          core.info(`Installing omen ${version} for ${target}`);
+
+          const assetName = `omen_${version}_${target}.tar.gz`;
+          const asset = release.assets.find(a => a.name === assetName);
+          if (!asset) {
+            core.setFailed(`Asset ${assetName} not found in release ${release.tag_name}`);
+            return;
+          }
+
+          const response = await fetch(asset.url, {
+            headers: {
+              'Accept': 'application/octet-stream',
+              'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
+              'X-GitHub-Api-Version': '2022-11-28',
+            },
+          });
+          if (!response.ok) {
+            core.setFailed(`Failed to download ${assetName}: ${response.status} ${response.statusText}`);
+            return;
+          }
+
+          const installDir = `${process.env.RUNNER_TEMP}/omen-install`;
+          await io.mkdirP(installDir);
+
+          const tarPath = `${installDir}/${assetName}`;
+          fs.writeFileSync(tarPath, Buffer.from(await response.arrayBuffer()));
+          await exec.exec('tar', ['xzf', tarPath, '-C', installDir]);
+          fs.chmodSync(`${installDir}/omen`, 0o755);
+          core.addPath(installDir);
 
     - name: Run omen diff
       id: diff
-      shell: bash
+      uses: actions/github-script@v8
       env:
         INPUT_PATH: ${{ inputs.path }}
         BASE_REF: ${{ github.event.pull_request.base.ref }}
-      run: |
-        set -euo pipefail
+      with:
+        script: |
+          const fs = require('fs');
+          const args = ['-f', 'json', '-p', process.env.INPUT_PATH, 'diff'];
+          if (process.env.BASE_REF) {
+            args.push('--target', `origin/${process.env.BASE_REF}`);
+          }
 
-        DIFF_ARGS=()
-        if [ -n "$BASE_REF" ]; then
-          DIFF_ARGS+=(--target "origin/$BASE_REF")
-        fi
-        DIFF_JSON=$(omen -f json -p "$INPUT_PATH" diff "${DIFF_ARGS[@]}")
+          const { stdout } = await exec.getExecOutput('omen', args);
+          const diff = JSON.parse(stdout);
 
-        # Set scalar outputs (always available)
-        echo "risk-score=$(printf '%s' "$DIFF_JSON" | jq -r '.score')" >> "$GITHUB_OUTPUT"
-        echo "risk-level=$(printf '%s' "$DIFF_JSON" | jq -r '.level')" >> "$GITHUB_OUTPUT"
+          core.setOutput('risk-score', String(diff.score));
+          core.setOutput('risk-level', diff.level);
 
-        # Set full JSON output if within GitHub's 1MB limit
-        DIFF_SIZE=$(printf '%s' "$DIFF_JSON" | wc -c | tr -d ' ')
-        if [ "$DIFF_SIZE" -lt 900000 ]; then
-          DELIM="OMEN_DIFF_$(date +%s%N)"
-          echo "diff-json<<${DELIM}" >> "$GITHUB_OUTPUT"
-          printf '%s\n' "$DIFF_JSON" >> "$GITHUB_OUTPUT"
-          echo "${DELIM}" >> "$GITHUB_OUTPUT"
-        else
-          echo "::warning::diff-json output exceeds 900KB ($DIFF_SIZE bytes), writing to file instead"
-          printf '%s' "$DIFF_JSON" > "$RUNNER_TEMP/omen-diff.json"
-          echo "diff-json=$RUNNER_TEMP/omen-diff.json" >> "$GITHUB_OUTPUT"
-        fi
+          const json = JSON.stringify(diff);
+          if (json.length < 900000) {
+            core.setOutput('diff-json', json);
+          } else {
+            const filePath = `${process.env.RUNNER_TEMP}/omen-diff.json`;
+            fs.writeFileSync(filePath, json);
+            core.warning(`diff-json output exceeds 900KB (${json.length} bytes), writing to file instead`);
+            core.setOutput('diff-json', filePath);
+          }
 
     - name: Run omen score
       id: score
-      shell: bash
+      uses: actions/github-script@v8
       env:
         INPUT_PATH: ${{ inputs.path }}
-      run: |
-        set -euo pipefail
+      with:
+        script: |
+          const fs = require('fs');
+          const { stdout } = await exec.getExecOutput('omen', [
+            '-f', 'json', '-p', process.env.INPUT_PATH, 'score',
+          ]);
+          const score = JSON.parse(stdout);
 
-        SCORE_JSON=$(omen -f json -p "$INPUT_PATH" score)
+          core.setOutput('health-score', String(score.overall_score));
+          core.setOutput('health-grade', score.grade);
 
-        # Set scalar outputs (always available)
-        echo "health-score=$(printf '%s' "$SCORE_JSON" | jq -r '.overall_score')" >> "$GITHUB_OUTPUT"
-        echo "health-grade=$(printf '%s' "$SCORE_JSON" | jq -r '.grade')" >> "$GITHUB_OUTPUT"
-
-        # Set full JSON output if within GitHub's 1MB limit
-        SCORE_SIZE=$(printf '%s' "$SCORE_JSON" | wc -c | tr -d ' ')
-        if [ "$SCORE_SIZE" -lt 900000 ]; then
-          DELIM="OMEN_SCORE_$(date +%s%N)"
-          echo "score-json<<${DELIM}" >> "$GITHUB_OUTPUT"
-          printf '%s\n' "$SCORE_JSON" >> "$GITHUB_OUTPUT"
-          echo "${DELIM}" >> "$GITHUB_OUTPUT"
-        else
-          echo "::warning::score-json output exceeds 900KB ($SCORE_SIZE bytes), writing to file instead"
-          printf '%s' "$SCORE_JSON" > "$RUNNER_TEMP/omen-score.json"
-          echo "score-json=$RUNNER_TEMP/omen-score.json" >> "$GITHUB_OUTPUT"
-        fi
+          const json = JSON.stringify(score);
+          if (json.length < 900000) {
+            core.setOutput('score-json', json);
+          } else {
+            const filePath = `${process.env.RUNNER_TEMP}/omen-score.json`;
+            fs.writeFileSync(filePath, json);
+            core.warning(`score-json output exceeds 900KB (${json.length} bytes), writing to file instead`);
+            core.setOutput('score-json', filePath);
+          }
 
     - name: Post sticky comment
       if: inputs.comment == 'true' && github.event_name == 'pull_request'
-      shell: bash
+      uses: actions/github-script@v8
       env:
-        GH_TOKEN: ${{ github.token }}
-        GH_REPO: ${{ github.repository }}
         DIFF_JSON: ${{ steps.diff.outputs.diff-json }}
         SCORE_JSON: ${{ steps.score.outputs.score-json }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
-      run: |
-        set -euo pipefail
+      with:
+        script: |
+          const fs = require('fs');
 
-        # Resolve file paths for oversized JSON outputs
-        if [ -f "$DIFF_JSON" ]; then
-          DIFF_JSON=$(cat "$DIFF_JSON")
-        fi
-        if [ -f "$SCORE_JSON" ]; then
-          SCORE_JSON=$(cat "$SCORE_JSON")
-        fi
+          function loadJson(input) {
+            try {
+              return JSON.parse(input);
+            } catch {
+              return JSON.parse(fs.readFileSync(input, 'utf8'));
+            }
+          }
 
-        RISK_SCORE=$(printf '%s' "$DIFF_JSON" | jq -r '.score')
-        RISK_LEVEL=$(printf '%s' "$DIFF_JSON" | jq -r '.level')
-        FILES_MOD=$(printf '%s' "$DIFF_JSON" | jq -r '.files_modified')
-        LINES_ADD=$(printf '%s' "$DIFF_JSON" | jq -r '.lines_added')
-        LINES_DEL=$(printf '%s' "$DIFF_JSON" | jq -r '.lines_deleted')
-        COMMITS=$(printf '%s' "$DIFF_JSON" | jq -r '.commits')
+          const diff = loadJson(process.env.DIFF_JSON);
+          const score = loadJson(process.env.SCORE_JSON);
+          const prNumber = context.payload.pull_request.number;
 
-        HEALTH_SCORE=$(printf '%s' "$SCORE_JSON" | jq -r '.overall_score')
-        HEALTH_GRADE=$(printf '%s' "$SCORE_JSON" | jq -r '.grade')
-        FILES_ANALYZED=$(printf '%s' "$SCORE_JSON" | jq -r '.summary.files_analyzed')
-        CRITICAL=$(printf '%s' "$SCORE_JSON" | jq -r '.summary.critical_issues')
+          const factorsTable = Object.entries(diff.factors)
+            .sort((a, b) => b[1] - a[1])
+            .map(([key, value]) => `| ${key} | ${String(value).slice(0, 6)} |`)
+            .join('\n');
 
-        # Build risk factors table
-        FACTORS_TABLE=$(printf '%s' "$DIFF_JSON" | jq -r '
-          .factors | to_entries | sort_by(-.value)
-          | map("| \(.key) | \(.value | tostring | .[0:6]) |")
-          | join("\n")')
+          const recommendations = diff.recommendations
+            .map(r => `- ${r}`)
+            .join('\n');
 
-        # Build recommendations list
-        RECOMMENDATIONS=$(printf '%s' "$DIFF_JSON" | jq -r '
-          .recommendations | map("- \(.)") | join("\n")')
+          const componentsTable = Object.entries(score.components)
+            .sort((a, b) => b[1].weight - a[1].weight)
+            .map(([key, comp]) => `| ${key} | ${Math.round(comp.score * 10) / 10} | ${comp.weight} |`)
+            .join('\n');
 
-        # Build score components table
-        COMPONENTS_TABLE=$(printf '%s' "$SCORE_JSON" | jq -r '
-          .components | to_entries | sort_by(-.value.weight)
-          | map("| \(.key) | \(.value.score | . * 10 | round / 10) | \(.value.weight) |")
-          | join("\n")')
+          const tipConfig = {
+            complexity: {
+              threshold: 80,
+              label: 'Complexity',
+              command: 'omen complexity --sort cyclomatic',
+              advice: 'Focus on functions with cyclomatic complexity > 10. Extract helper functions, replace nested conditionals with early returns, and use polymorphism instead of switch statements.',
+            },
+            duplication: {
+              threshold: 70,
+              label: 'Duplication',
+              command: 'omen clones',
+              advice: 'Look for Type-1 (exact) and Type-2 (renamed) clones. Extract shared logic into reusable functions or modules. Prioritize clones in high-churn files.',
+            },
+            cohesion: {
+              threshold: 80,
+              label: 'Cohesion',
+              command: 'omen cohesion --sort lcom',
+              advice: 'Classes with high LCOM (Lack of Cohesion) are doing too many unrelated things. Split them into focused classes where methods share instance variables.',
+            },
+            tdg: {
+              threshold: 75,
+              label: 'TDG',
+              command: 'omen tdg --sort score',
+              advice: 'Files with low TDG scores have compounding debt across multiple dimensions. Focus on files graded D or F -- they accumulate complexity, duplication, and coupling simultaneously.',
+            },
+            satd: {
+              threshold: 80,
+              label: 'Known Debt (SATD)',
+              command: 'omen satd --sort severity',
+              advice: 'Resolve high-severity items first (FIXME, BUG, SECURITY). Low-severity TODOs can be batch-addressed. Remove stale debt items that are no longer relevant.',
+            },
+            coupling: {
+              threshold: 70,
+              label: 'Coupling',
+              command: 'omen graph && omen smells',
+              advice: 'Break cyclic dependencies by introducing interfaces or extracting shared types. Reduce fan-out from hub modules by splitting responsibilities.',
+            },
+            smells: {
+              threshold: 80,
+              label: 'Architectural Smells',
+              command: 'omen smells',
+              advice: 'Address critical smells first (cyclic dependencies, god components). Hub modules with high fan-out should be split. Unstable modules that many others depend on need stabilization.',
+            },
+          };
 
-        RISK_LEVEL_UPPER=$(echo "$RISK_LEVEL" | tr '[:lower:]' '[:upper:]')
+          let agentTips = '';
+          for (const [name, comp] of Object.entries(score.components)) {
+            const tip = tipConfig[name];
+            if (tip && comp.score < tip.threshold) {
+              agentTips += `\n**${tip.label}** (score: ${comp.score}) -- needs attention\n\n\`\`\`bash\n${tip.command}\n\`\`\`\n\n${tip.advice}\n\n---\n\n`;
+            }
+          }
+          if (!agentTips) {
+            agentTips = 'All components are scoring well. No specific improvements needed.';
+          }
 
-        # Build agent tips based on low-scoring components
-        AGENT_TIPS=""
+          const body = `<!-- omen-analysis -->
+          ## Omen Analysis
 
-        # Map component names to omen CLI commands and improvement advice
-        add_tip() {
-          local component="$1" score="$2" threshold="$3" command="$4" advice="$5"
-          if [ "$(echo "$score < $threshold" | bc -l)" = "1" ]; then
-            AGENT_TIPS="${AGENT_TIPS}
-        **${component}** (score: ${score}) -- needs attention
+          ### Diff Risk
 
-        \`\`\`bash
-        ${command}
-        \`\`\`
+          | | |
+          |---|---|
+          | **Risk Score** | ${diff.score} / 1.0 |
+          | **Risk Level** | ${diff.level.toUpperCase()} |
+          | **Files Modified** | ${diff.files_modified} |
+          | **Lines Added** | +${diff.lines_added} |
+          | **Lines Deleted** | -${diff.lines_deleted} |
+          | **Commits** | ${diff.commits} |
 
-        ${advice}
+          <details>
+          <summary>Risk Factors</summary>
 
-        ---
+          | Factor | Score |
+          |--------|-------|
+          ${factorsTable}
 
-        "
-          fi
-        }
+          </details>
 
-        # Extract component scores and generate tips
-        while IFS='|' read -r name score; do
-          case "$name" in
-            complexity)
-              add_tip "Complexity" "$score" "80" \
-                "omen complexity --sort cyclomatic" \
-                "Focus on functions with cyclomatic complexity > 10. Extract helper functions, replace nested conditionals with early returns, and use polymorphism instead of switch statements."
-              ;;
-            duplication)
-              add_tip "Duplication" "$score" "70" \
-                "omen clones" \
-                "Look for Type-1 (exact) and Type-2 (renamed) clones. Extract shared logic into reusable functions or modules. Prioritize clones in high-churn files."
-              ;;
-            cohesion)
-              add_tip "Cohesion" "$score" "80" \
-                "omen cohesion --sort lcom" \
-                "Classes with high LCOM (Lack of Cohesion) are doing too many unrelated things. Split them into focused classes where methods share instance variables."
-              ;;
-            tdg)
-              add_tip "TDG" "$score" "75" \
-                "omen tdg --sort score" \
-                "Files with low TDG scores have compounding debt across multiple dimensions. Focus on files graded D or F -- they accumulate complexity, duplication, and coupling simultaneously."
-              ;;
-            satd)
-              add_tip "Known Debt (SATD)" "$score" "80" \
-                "omen satd --sort severity" \
-                "Resolve high-severity items first (FIXME, BUG, SECURITY). Low-severity TODOs can be batch-addressed. Remove stale debt items that are no longer relevant."
-              ;;
-            coupling)
-              add_tip "Coupling" "$score" "70" \
-                "omen graph && omen smells" \
-                "Break cyclic dependencies by introducing interfaces or extracting shared types. Reduce fan-out from hub modules by splitting responsibilities."
-              ;;
-            smells)
-              add_tip "Architectural Smells" "$score" "80" \
-                "omen smells" \
-                "Address critical smells first (cyclic dependencies, god components). Hub modules with high fan-out should be split. Unstable modules that many others depend on need stabilization."
-              ;;
-          esac
-        done < <(printf '%s' "$SCORE_JSON" | jq -r '.components | to_entries[] | "\(.key)|\(.value.score)"')
+          <details>
+          <summary>Recommendations</summary>
 
-        BODY="<!-- omen-analysis -->
-        ## Omen Analysis
+          ${recommendations}
 
-        ### Diff Risk
+          </details>
 
-        | | |
-        |---|---|
-        | **Risk Score** | ${RISK_SCORE} / 1.0 |
-        | **Risk Level** | ${RISK_LEVEL_UPPER} |
-        | **Files Modified** | ${FILES_MOD} |
-        | **Lines Added** | +${LINES_ADD} |
-        | **Lines Deleted** | -${LINES_DEL} |
-        | **Commits** | ${COMMITS} |
+          ### Repository Health
 
-        <details>
-        <summary>Risk Factors</summary>
+          | | |
+          |---|---|
+          | **Health Score** | ${score.overall_score} / 100 |
+          | **Grade** | ${score.grade} |
+          | **Files Analyzed** | ${score.summary.files_analyzed} |
+          | **Critical Issues** | ${score.summary.critical_issues} |
 
-        | Factor | Score |
-        |--------|-------|
-        ${FACTORS_TABLE}
+          <details>
+          <summary>Score Components</summary>
 
-        </details>
+          | Component | Score | Weight |
+          |-----------|-------|--------|
+          ${componentsTable}
 
-        <details>
-        <summary>Recommendations</summary>
+          </details>
 
-        ${RECOMMENDATIONS}
+          <details>
+          <summary>Tips for AI agents</summary>
 
-        </details>
+          Use these commands to investigate and improve low-scoring areas.
 
-        ### Repository Health
+          **Run full analysis:**
 
-        | | |
-        |---|---|
-        | **Health Score** | ${HEALTH_SCORE} / 100 |
-        | **Grade** | ${HEALTH_GRADE} |
-        | **Files Analyzed** | ${FILES_ANALYZED} |
-        | **Critical Issues** | ${CRITICAL} |
+          \`\`\`bash
+          omen -f json score    # health score with component breakdown
+          omen -f json diff     # PR risk analysis
+          omen hotspot          # high-churn + high-complexity files
+          \`\`\`
 
-        <details>
-        <summary>Score Components</summary>
+          ${agentTips}
 
-        | Component | Score | Weight |
-        |-----------|-------|--------|
-        ${COMPONENTS_TABLE}
+          **General workflow for improving scores:**
 
-        </details>
+          1. Run the relevant analyzer command to identify specific files
+          2. Focus on the highest-weight components first (complexity 25%, duplication 20%, cohesion 15%, TDG 15%)
+          3. Make targeted improvements -- small refactors that reduce complexity or eliminate duplication
+          4. Re-run \`omen score\` to verify improvement
 
-        <details>
-        <summary>Tips for AI agents</summary>
+          </details>`;
 
-        Use these commands to investigate and improve low-scoring areas.
+          const comments = await github.paginate(github.rest.issues.listComments, {
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: prNumber,
+          });
+          const existing = comments.find(c => c.body.includes('<!-- omen-analysis -->'));
 
-        **Run full analysis:**
-
-        \`\`\`bash
-        omen -f json score    # health score with component breakdown
-        omen -f json diff     # PR risk analysis
-        omen hotspot          # high-churn + high-complexity files
-        \`\`\`
-
-        ${AGENT_TIPS:-All components are scoring well. No specific improvements needed.}
-
-        **General workflow for improving scores:**
-
-        1. Run the relevant analyzer command to identify specific files
-        2. Focus on the highest-weight components first (complexity 25%, duplication 20%, cohesion 15%, TDG 15%)
-        3. Make targeted improvements -- small refactors that reduce complexity or eliminate duplication
-        4. Re-run \`omen score\` to verify improvement
-
-        </details>"
-
-        # Find existing comment
-        COMMENT_ID=$(gh api "repos/${GH_REPO}/issues/${PR_NUMBER}/comments" \
-          --jq '.[] | select(.body | contains("<!-- omen-analysis -->")) | .id' \
-          | head -1 || true)
-
-        if [ -n "$COMMENT_ID" ]; then
-          gh api -X PATCH "repos/${GH_REPO}/issues/comments/${COMMENT_ID}" \
-            -f body="$BODY"
-        else
-          gh pr comment "$PR_NUMBER" --body "$BODY"
-        fi
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existing.id,
+              body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body,
+            });
+          }
 
     - name: Manage risk label
       if: inputs.label == 'true' && github.event_name == 'pull_request'
@@ -424,32 +446,23 @@ runs:
 
     - name: Check threshold
       if: inputs.check == 'true'
-      shell: bash
+      uses: actions/github-script@v8
       env:
         RISK_LEVEL: ${{ steps.diff.outputs.risk-level }}
         THRESHOLD: ${{ inputs.check-threshold }}
-      run: |
-        set -euo pipefail
+      with:
+        script: |
+          const levels = { low: 1, medium: 2, high: 3 };
+          const riskLevel = process.env.RISK_LEVEL;
+          const threshold = process.env.THRESHOLD;
+          const actual = levels[riskLevel];
+          const limit = levels[threshold];
 
-        # Map levels to numeric values
-        level_to_num() {
-          case "$1" in
-            low)    echo 1 ;;
-            medium) echo 2 ;;
-            high)   echo 3 ;;
-            *)      echo 0 ;;
-          esac
-        }
+          if (!actual || !limit) {
+            core.setFailed(`Invalid risk level '${riskLevel}' or threshold '${threshold}' (expected low|medium|high)`);
+            return;
+          }
 
-        ACTUAL=$(level_to_num "$RISK_LEVEL")
-        LIMIT=$(level_to_num "$THRESHOLD")
-
-        if [ "$ACTUAL" -eq 0 ] || [ "$LIMIT" -eq 0 ]; then
-          echo "::error::Invalid risk level '${RISK_LEVEL}' or threshold '${THRESHOLD}' (expected low|medium|high)"
-          exit 1
-        fi
-
-        if [ "$ACTUAL" -ge "$LIMIT" ]; then
-          echo "::error::Risk level '${RISK_LEVEL}' meets or exceeds threshold '${THRESHOLD}'"
-          exit 1
-        fi
+          if (actual >= limit) {
+            core.setFailed(`Risk level '${riskLevel}' meets or exceeds threshold '${threshold}'`);
+          }
