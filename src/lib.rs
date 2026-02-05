@@ -1,5 +1,5 @@
 #![cfg_attr(not(test), warn(clippy::unwrap_used))]
-//! Omen - Multi-language code analysis library.
+//! Omen - Multi-language code analysis library for AI-assisted development.
 //!
 //! Omen analyzes codebases for complexity, technical debt, dead code,
 //! code duplication, defect prediction, and dependency graphs.
