@@ -82,7 +82,7 @@ runs:
 
         # Resolve version
         if [ "$INPUT_VERSION" = "latest" ]; then
-          TAG=$(gh release list --repo panbanda/omen --limit 20 --json tagName --jq '.[].tagName' | grep '^omen-v' | head -1)
+          TAG=$(gh release list --repo panbanda/omen --limit 20 --exclude-pre-releases --exclude-drafts --json tagName --jq '.[].tagName' | grep '^omen-v' | head -1)
           if [ -z "$TAG" ]; then
             echo "::error::Could not determine latest omen release"
             exit 1
@@ -111,14 +111,22 @@ runs:
 
         DIFF_JSON=$(omen -f json -p "$INPUT_PATH" diff)
 
-        # Set outputs
-        DELIM="OMEN_DIFF_$(date +%s%N)"
-        echo "diff-json<<${DELIM}" >> "$GITHUB_OUTPUT"
-        printf '%s\n' "$DIFF_JSON" >> "$GITHUB_OUTPUT"
-        echo "${DELIM}" >> "$GITHUB_OUTPUT"
-
+        # Set scalar outputs (always available)
         echo "risk-score=$(printf '%s' "$DIFF_JSON" | jq -r '.score')" >> "$GITHUB_OUTPUT"
         echo "risk-level=$(printf '%s' "$DIFF_JSON" | jq -r '.level')" >> "$GITHUB_OUTPUT"
+
+        # Set full JSON output if within GitHub's 1MB limit
+        DIFF_SIZE=$(printf '%s' "$DIFF_JSON" | wc -c | tr -d ' ')
+        if [ "$DIFF_SIZE" -lt 900000 ]; then
+          DELIM="OMEN_DIFF_$(date +%s%N)"
+          echo "diff-json<<${DELIM}" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$DIFF_JSON" >> "$GITHUB_OUTPUT"
+          echo "${DELIM}" >> "$GITHUB_OUTPUT"
+        else
+          echo "::warning::diff-json output exceeds 900KB ($DIFF_SIZE bytes), writing to file instead"
+          printf '%s' "$DIFF_JSON" > "$RUNNER_TEMP/omen-diff.json"
+          echo "diff-json=$RUNNER_TEMP/omen-diff.json" >> "$GITHUB_OUTPUT"
+        fi
 
     - name: Run omen score
       id: score
@@ -130,14 +138,22 @@ runs:
 
         SCORE_JSON=$(omen -f json -p "$INPUT_PATH" score)
 
-        # Set outputs
-        DELIM="OMEN_SCORE_$(date +%s%N)"
-        echo "score-json<<${DELIM}" >> "$GITHUB_OUTPUT"
-        printf '%s\n' "$SCORE_JSON" >> "$GITHUB_OUTPUT"
-        echo "${DELIM}" >> "$GITHUB_OUTPUT"
-
+        # Set scalar outputs (always available)
         echo "health-score=$(printf '%s' "$SCORE_JSON" | jq -r '.overall_score')" >> "$GITHUB_OUTPUT"
         echo "health-grade=$(printf '%s' "$SCORE_JSON" | jq -r '.grade')" >> "$GITHUB_OUTPUT"
+
+        # Set full JSON output if within GitHub's 1MB limit
+        SCORE_SIZE=$(printf '%s' "$SCORE_JSON" | wc -c | tr -d ' ')
+        if [ "$SCORE_SIZE" -lt 900000 ]; then
+          DELIM="OMEN_SCORE_$(date +%s%N)"
+          echo "score-json<<${DELIM}" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$SCORE_JSON" >> "$GITHUB_OUTPUT"
+          echo "${DELIM}" >> "$GITHUB_OUTPUT"
+        else
+          echo "::warning::score-json output exceeds 900KB ($SCORE_SIZE bytes), writing to file instead"
+          printf '%s' "$SCORE_JSON" > "$RUNNER_TEMP/omen-score.json"
+          echo "score-json=$RUNNER_TEMP/omen-score.json" >> "$GITHUB_OUTPUT"
+        fi
 
     - name: Post sticky comment
       if: inputs.comment == 'true' && github.event_name == 'pull_request'
@@ -388,6 +404,11 @@ runs:
 
         ACTUAL=$(level_to_num "$RISK_LEVEL")
         LIMIT=$(level_to_num "$THRESHOLD")
+
+        if [ "$ACTUAL" -eq 0 ] || [ "$LIMIT" -eq 0 ]; then
+          echo "::error::Invalid risk level '${RISK_LEVEL}' or threshold '${THRESHOLD}' (expected low|medium|high)"
+          exit 1
+        fi
 
         if [ "$ACTUAL" -ge "$LIMIT" ]; then
           echo "::error::Risk level '${RISK_LEVEL}' meets or exceeds threshold '${THRESHOLD}'"
