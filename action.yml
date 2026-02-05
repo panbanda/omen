@@ -27,10 +27,18 @@ inputs:
     description: 'Label name template. Use {{level}} for risk level replacement.'
     required: false
     default: 'risk: {{level}}'
-  label-colors:
-    description: 'Comma-separated hex colors (without #) for low, medium, high risk labels'
+  label-color-low:
+    description: 'Hex color (without #) for the low risk label'
     required: false
-    default: '0e8a16,fbca04,d93f0b'
+    default: '0e8a16'
+  label-color-medium:
+    description: 'Hex color (without #) for the medium risk label'
+    required: false
+    default: 'fbca04'
+  label-color-high:
+    description: 'Hex color (without #) for the high risk label'
+    required: false
+    default: 'd93f0b'
   check:
     description: 'Fail the action if risk level meets or exceeds threshold'
     required: false
@@ -389,7 +397,9 @@ runs:
       env:
         RISK_LEVEL: ${{ steps.diff.outputs.risk-level }}
         LABEL_TEMPLATE: ${{ inputs.label-template }}
-        LABEL_COLORS: ${{ inputs.label-colors }}
+        COLOR_LOW: ${{ inputs.label-color-low }}
+        COLOR_MEDIUM: ${{ inputs.label-color-medium }}
+        COLOR_HIGH: ${{ inputs.label-color-high }}
       with:
         script: |
           const riskLevel = process.env.RISK_LEVEL;
@@ -397,8 +407,11 @@ runs:
           const prNumber = context.payload.pull_request.number;
           const currentLabel = template.replace('{{level}}', riskLevel);
 
-          const [lowColor, mediumColor, highColor] = process.env.LABEL_COLORS.split(',').map(c => c.trim());
-          const colors = { low: lowColor, medium: mediumColor, high: highColor };
+          const colors = {
+            low: process.env.COLOR_LOW,
+            medium: process.env.COLOR_MEDIUM,
+            high: process.env.COLOR_HIGH,
+          };
           const color = colors[riskLevel];
           if (!color) {
             core.setFailed(`Unexpected risk level: '${riskLevel}'`);
