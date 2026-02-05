@@ -915,7 +915,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: panbanda/omen@v4
+      - uses: panbanda/omen@omen-v4.21.2
         id: omen
 
       - name: Print results
@@ -930,7 +930,7 @@ jobs:
 ### With PR Comment and Labels
 
 ```yaml
-      - uses: panbanda/omen@v4
+      - uses: panbanda/omen@omen-v4.21.2
         id: omen
         with:
           comment: true
@@ -978,7 +978,7 @@ All outputs are available for chaining into downstream steps:
 Fail the workflow if risk is too high:
 
 ```yaml
-      - uses: panbanda/omen@v4
+      - uses: panbanda/omen@omen-v4.21.2
         with:
           check: true
           check-threshold: high  # fail on high risk PRs
@@ -989,7 +989,7 @@ Fail the workflow if risk is too high:
 Use outputs to build custom integrations:
 
 ```yaml
-      - uses: panbanda/omen@v4
+      - uses: panbanda/omen@omen-v4.21.2
         id: omen
 
       - name: Block high-risk PRs
@@ -1008,7 +1008,7 @@ Use outputs to build custom integrations:
 Customize label naming with `label-template`. The `{{level}}` token is replaced with the risk level:
 
 ```yaml
-      - uses: panbanda/omen@v4
+      - uses: panbanda/omen@omen-v4.21.2
         with:
           label: true
           label-template: 'omen/{{level}}'  # produces: omen/low, omen/medium, omen/high
