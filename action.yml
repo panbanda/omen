@@ -395,7 +395,7 @@ runs:
             repo: context.repo.repo,
             issue_number: prNumber,
           });
-          const existing = comments.find(c => c.body.includes('<!-- omen-analysis -->'));
+          const existing = comments.find(c => c.body?.includes('<!-- omen-analysis -->'));
 
           if (existing) {
             await github.rest.issues.updateComment({
