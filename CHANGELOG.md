@@ -1,5 +1,26 @@
 # Changelog
 
+## [4.21.0](https://github.com/panbanda/omen/compare/omen-v4.20.3...omen-v4.21.0) (2026-02-05)
+
+
+### Features
+
+* add --target flag to omen diff command ([c475177](https://github.com/panbanda/omen/commit/c475177b4a918f920b178688631ccba98af3fe2b))
+* add collapsible AI agent tips section to PR comment ([3153140](https://github.com/panbanda/omen/commit/3153140ffe92fe1d4673d533e036d16ba87cbe97))
+* add GitHub Action for PR diff risk and health scoring ([6b7440e](https://github.com/panbanda/omen/commit/6b7440e258330950f6310c244cab28eace9b2ed0))
+* add GitHub Action for PR diff risk and health scoring ([e9f8e50](https://github.com/panbanda/omen/commit/e9f8e5031460d85a611873d178ed0f52000fc965))
+
+
+### Bug Fixes
+
+* address CodeRabbit review feedback ([a514909](https://github.com/panbanda/omen/commit/a5149091344d127c5ff3af9c65a8d90fef6de505))
+* emit candidate call edges for cross-file function-as-value refs ([bbfd1f2](https://github.com/panbanda/omen/commit/bbfd1f28757bd1eae8d505029702e39184688415))
+* reduce dead code false positives for callbacks and generated files ([e474580](https://github.com/panbanda/omen/commit/e474580d2408323074e8a8b8eceab29c028e2777))
+* reduce dead code false positives for callbacks and generated files ([0a1b2d8](https://github.com/panbanda/omen/commit/0a1b2d8ef3dc8dd1394ed0cbae5efb22f334c4de))
+* resolve file paths for oversized JSON in comment step ([eadbf94](https://github.com/panbanda/omen/commit/eadbf94fb42d8796a267663c557e2c3da4690692))
+* skip generated files at reporting, not collection ([ad9bccf](https://github.com/panbanda/omen/commit/ad9bccfe2fa60bce5f8b94b0885f1a1a415d49c4))
+* use std::path::Path for portable filename extraction ([2f70fed](https://github.com/panbanda/omen/commit/2f70fed8c416910b0637d3a1bf63911b61356076))
+
 ## [4.20.3](https://github.com/panbanda/omen/compare/omen-v4.20.2...omen-v4.20.3) (2026-01-31)
 
 
