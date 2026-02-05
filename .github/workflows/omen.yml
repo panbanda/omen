@@ -1,0 +1,25 @@
+name: Omen Analysis
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Omen
+        id: omen
+        uses: panbanda/omen@main
+        with:
+          comment: 'true'
+          label: 'true'
