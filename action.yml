@@ -27,6 +27,10 @@ inputs:
     description: 'Label name template. Use {{level}} for risk level replacement.'
     required: false
     default: 'risk: {{level}}'
+  label-colors:
+    description: 'Comma-separated hex colors (without #) for low, medium, high risk labels'
+    required: false
+    default: '0e8a16,fbca04,d93f0b'
   check:
     description: 'Fail the action if risk level meets or exceeds threshold'
     required: false
@@ -291,7 +295,7 @@ runs:
 
           | | |
           |---|---|
-          | **Risk Score** | ${diff.score} / 1.0 |
+          | **Risk Score** | ${Math.round(diff.score * 100)}% |
           | **Risk Level** | ${diff.level.toUpperCase()} |
           | **Files Modified** | ${diff.files_modified} |
           | **Lines Added** | +${diff.lines_added} |
@@ -385,39 +389,44 @@ runs:
       env:
         RISK_LEVEL: ${{ steps.diff.outputs.risk-level }}
         LABEL_TEMPLATE: ${{ inputs.label-template }}
+        LABEL_COLORS: ${{ inputs.label-colors }}
       with:
         script: |
           const riskLevel = process.env.RISK_LEVEL;
           const template = process.env.LABEL_TEMPLATE;
           const prNumber = context.payload.pull_request.number;
-
           const currentLabel = template.replace('{{level}}', riskLevel);
 
-          const colors = { low: '0e8a16', medium: 'fbca04', high: 'd93f0b' };
+          const [lowColor, mediumColor, highColor] = process.env.LABEL_COLORS.split(',').map(c => c.trim());
+          const colors = { low: lowColor, medium: mediumColor, high: highColor };
           const color = colors[riskLevel];
           if (!color) {
             core.setFailed(`Unexpected risk level: '${riskLevel}'`);
             return;
           }
 
-          // Remove stale risk labels (other levels from same template)
+          // Get current labels on the PR
+          const { data: currentLabels } = await github.rest.issues.listLabelsOnIssue({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: prNumber,
+          });
+          const currentLabelNames = new Set(currentLabels.map(l => l.name));
+
+          // Remove stale risk labels that are actually on the PR
           for (const level of ['low', 'medium', 'high']) {
             const label = template.replace('{{level}}', level);
-            if (label !== currentLabel) {
-              try {
-                await github.rest.issues.removeLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: prNumber,
-                  name: label,
-                });
-              } catch {
-                // Label may not exist on this PR
-              }
+            if (label !== currentLabel && currentLabelNames.has(label)) {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                name: label,
+              });
             }
           }
 
-          // Create or update label with correct color
+          // Create or update label definition with correct color
           try {
             await github.rest.issues.createLabel({
               owner: context.repo.owner,
