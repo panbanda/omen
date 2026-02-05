@@ -1,5 +1,14 @@
 # Changelog
 
+## [4.21.1](https://github.com/panbanda/omen/compare/omen-v4.21.0...omen-v4.21.1) (2026-02-05)
+
+
+### Bug Fixes
+
+* address code review feedback on error handling ([9916923](https://github.com/panbanda/omen/commit/99169237daa06ae6aadcb7b0478f27668a54d2f1))
+* guard against null comment body when searching for existing comment ([7e2cd5f](https://github.com/panbanda/omen/commit/7e2cd5f3485e3df8eaf6699e535a3190e3388a9e))
+* improve label removal and add configurable colors ([4357bb6](https://github.com/panbanda/omen/commit/4357bb66428c416b252a6ab8c818c3c61300f460))
+
 ## [4.21.0](https://github.com/panbanda/omen/compare/omen-v4.20.3...omen-v4.21.0) (2026-02-05)
 
 
