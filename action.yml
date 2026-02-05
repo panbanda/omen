@@ -167,6 +167,14 @@ runs:
       run: |
         set -euo pipefail
 
+        # Resolve file paths for oversized JSON outputs
+        if [ -f "$DIFF_JSON" ]; then
+          DIFF_JSON=$(cat "$DIFF_JSON")
+        fi
+        if [ -f "$SCORE_JSON" ]; then
+          SCORE_JSON=$(cat "$SCORE_JSON")
+        fi
+
         RISK_SCORE=$(printf '%s' "$DIFF_JSON" | jq -r '.score')
         RISK_LEVEL=$(printf '%s' "$DIFF_JSON" | jq -r '.level')
         FILES_MOD=$(printf '%s' "$DIFF_JSON" | jq -r '.files_modified')
