@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.21.2](https://github.com/panbanda/omen/compare/omen-v4.21.1...omen-v4.21.2) (2026-02-05)
+
+
+### Bug Fixes
+
+* checkout release tag before creating major version tag ([397f561](https://github.com/panbanda/omen/commit/397f561bf649647d046228acf91a01ab4b3e9833))
+* checkout release tag before creating major version tag ([82e2200](https://github.com/panbanda/omen/commit/82e220042705f12a8efd32fdb87b36b084eae039))
+
 ## [4.21.1](https://github.com/panbanda/omen/compare/omen-v4.21.0...omen-v4.21.1) (2026-02-05)
 
 
