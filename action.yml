@@ -106,10 +106,15 @@ runs:
       shell: bash
       env:
         INPUT_PATH: ${{ inputs.path }}
+        BASE_REF: ${{ github.event.pull_request.base.ref }}
       run: |
         set -euo pipefail
 
-        DIFF_JSON=$(omen -f json -p "$INPUT_PATH" diff)
+        DIFF_ARGS=()
+        if [ -n "$BASE_REF" ]; then
+          DIFF_ARGS+=(--target "origin/$BASE_REF")
+        fi
+        DIFF_JSON=$(omen -f json -p "$INPUT_PATH" diff "${DIFF_ARGS[@]}")
 
         # Set scalar outputs (always available)
         echo "risk-score=$(printf '%s' "$DIFF_JSON" | jq -r '.score')" >> "$GITHUB_OUTPUT"

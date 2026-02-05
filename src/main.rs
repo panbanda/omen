@@ -153,8 +153,8 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 run_analyzer::<omen::analyzers::complexity::Analyzer>(path, &config, format)?;
             }
         }
-        Command::Diff(_) => {
-            run_diff_analyzer(path, format)?;
+        Command::Diff(args) => {
+            run_diff_analyzer(path, args.target.as_deref(), format)?;
         }
         Command::Changes(_) => {
             run_changes_analyzer(path, &config, format)?;
@@ -496,9 +496,9 @@ fn run_analyzer<A: Analyzer + Default>(
     Ok(())
 }
 
-fn run_diff_analyzer(path: &Path, format: Format) -> omen::core::Result<()> {
+fn run_diff_analyzer(path: &Path, target: Option<&str>, format: Format) -> omen::core::Result<()> {
     let analyzer = omen::analyzers::changes::Analyzer::default();
-    let result = analyzer.analyze_diff(path, None)?;
+    let result = analyzer.analyze_diff(path, target)?;
     format.format(&result, &mut stdout())?;
     Ok(())
 }
