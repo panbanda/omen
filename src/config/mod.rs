@@ -5,6 +5,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::core::Result;
+use crate::semantic::SearchConfig;
 
 /// Main configuration structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +36,8 @@ pub struct Config {
     pub exclude_built_assets: bool,
     /// Changes/JIT analyzer configuration.
     pub changes: ChangesConfig,
+    /// Semantic search configuration.
+    pub semantic_search: SearchConfig,
 }
 
 impl Default for Config {
@@ -52,6 +55,7 @@ impl Default for Config {
             output: OutputConfig::default(),
             exclude_built_assets: true,
             changes: ChangesConfig::default(),
+            semantic_search: SearchConfig::default(),
         }
     }
 }

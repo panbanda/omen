@@ -1,4 +1,4 @@
-//! Candle-based embedding provider using all-MiniLM-L6-v2.
+//! Candle-based embedding provider using BAAI/bge-small-en-v1.5.
 //!
 //! Runs local inference using the candle ML framework.
 
@@ -13,12 +13,12 @@ use tokenizers::Tokenizer;
 use crate::core::{Error, Result};
 
 use super::model::ModelManager;
-use super::provider::{EmbeddingProvider, MINILM_EMBEDDING_DIM};
+use super::provider::{EmbeddingProvider, BGE_SMALL_EMBEDDING_DIM};
 
 /// Maximum sequence length for the model.
-const MAX_SEQ_LENGTH: usize = 256;
+const MAX_SEQ_LENGTH: usize = 512;
 
-/// Candle-based embedding provider using all-MiniLM-L6-v2.
+/// Candle-based embedding provider using BAAI/bge-small-en-v1.5.
 pub struct CandleProvider {
     model: Mutex<BertModel>,
     tokenizer: Tokenizer,
@@ -233,7 +233,7 @@ impl EmbeddingProvider for CandleProvider {
             .map_err(|e| Error::analysis(format!("Failed to convert to vec: {}", e)))?;
 
         let embeddings: Vec<Vec<f32>> = embeddings_flat
-            .chunks(MINILM_EMBEDDING_DIM)
+            .chunks(BGE_SMALL_EMBEDDING_DIM)
             .map(|chunk| chunk.to_vec())
             .collect();
 
@@ -241,11 +241,11 @@ impl EmbeddingProvider for CandleProvider {
     }
 
     fn embedding_dim(&self) -> usize {
-        MINILM_EMBEDDING_DIM
+        BGE_SMALL_EMBEDDING_DIM
     }
 
     fn name(&self) -> &str {
-        "candle (all-MiniLM-L6-v2)"
+        "candle (bge-small-en-v1.5)"
     }
 }
 
@@ -255,12 +255,11 @@ mod tests {
 
     #[test]
     fn test_embedding_dim() {
-        // Just verify the constant is correct
-        assert_eq!(MINILM_EMBEDDING_DIM, 384);
+        assert_eq!(BGE_SMALL_EMBEDDING_DIM, 384);
     }
 
     #[test]
     fn test_max_seq_length() {
-        assert_eq!(MAX_SEQ_LENGTH, 256);
+        assert_eq!(MAX_SEQ_LENGTH, 512);
     }
 }

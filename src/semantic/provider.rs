@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::Result;
 
-/// Embedding dimension for all-MiniLM-L6-v2.
-pub const MINILM_EMBEDDING_DIM: usize = 384;
+/// Embedding dimension for BAAI/bge-small-en-v1.5 (and all-MiniLM-L6-v2).
+pub const BGE_SMALL_EMBEDDING_DIM: usize = 384;
 
 /// Embedding dimension for OpenAI text-embedding-3-small.
 pub const OPENAI_SMALL_EMBEDDING_DIM: usize = 1536;
@@ -35,10 +35,20 @@ pub trait EmbeddingProvider: Send + Sync {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type")]
 pub enum EmbeddingProviderConfig {
-    /// Local candle inference with all-MiniLM-L6-v2 (default).
+    /// Local candle inference with BAAI/bge-small-en-v1.5 (default).
     #[serde(rename = "candle")]
     #[default]
     Candle,
+    /// Ollama local embeddings API.
+    #[serde(rename = "ollama")]
+    Ollama {
+        /// Ollama server URL (default: http://localhost:11434).
+        #[serde(default = "default_ollama_url")]
+        url: String,
+        /// Model to use (default: bge-m3).
+        #[serde(default = "default_ollama_model")]
+        model: String,
+    },
     /// OpenAI embeddings API.
     #[serde(rename = "openai")]
     OpenAI {
@@ -71,6 +81,14 @@ pub enum EmbeddingProviderConfig {
     },
 }
 
+fn default_ollama_url() -> String {
+    "http://localhost:11434".to_string()
+}
+
+fn default_ollama_model() -> String {
+    "bge-m3".to_string()
+}
+
 fn default_openai_model() -> String {
     "text-embedding-3-small".to_string()
 }
@@ -86,7 +104,8 @@ fn default_voyage_model() -> String {
 impl fmt::Display for EmbeddingProviderConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Candle => write!(f, "candle (all-MiniLM-L6-v2)"),
+            Self::Candle => write!(f, "candle (bge-small-en-v1.5)"),
+            Self::Ollama { model, .. } => write!(f, "ollama ({})", model),
             Self::OpenAI { model, .. } => write!(f, "openai ({})", model),
             Self::Cohere { model, .. } => write!(f, "cohere ({})", model),
             Self::Voyage { model, .. } => write!(f, "voyage ({})", model),
@@ -129,7 +148,15 @@ mod tests {
     fn test_provider_display() {
         assert_eq!(
             EmbeddingProviderConfig::Candle.to_string(),
-            "candle (all-MiniLM-L6-v2)"
+            "candle (bge-small-en-v1.5)"
+        );
+        assert_eq!(
+            EmbeddingProviderConfig::Ollama {
+                url: "http://localhost:11434".to_string(),
+                model: "bge-m3".to_string(),
+            }
+            .to_string(),
+            "ollama (bge-m3)"
         );
         assert_eq!(
             EmbeddingProviderConfig::OpenAI {
@@ -139,5 +166,19 @@ mod tests {
             .to_string(),
             "openai (text-embedding-3-small)"
         );
+    }
+
+    #[test]
+    fn test_ollama_config_serialization() {
+        let config = EmbeddingProviderConfig::Ollama {
+            url: "http://localhost:11434".to_string(),
+            model: "bge-m3".to_string(),
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("ollama"));
+        assert!(json.contains("bge-m3"));
+
+        let deserialized: EmbeddingProviderConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, config);
     }
 }
