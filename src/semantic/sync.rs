@@ -19,6 +19,7 @@ use crate::parser::{extract_functions, Parser};
 use super::cache::{CachedSymbol, EmbeddingCache};
 use super::chunker::chunk_functions;
 use super::embed::EmbeddingEngine;
+use super::metrics::{compute_file_metrics, lookup_metrics};
 
 /// Maximum batch size for embedding generation.
 const EMBEDDING_BATCH_SIZE: usize = 64;
@@ -35,6 +36,10 @@ struct ParsedSymbol {
     content_hash: String,
     chunk_index: u32,
     total_chunks: u32,
+    cyclomatic_complexity: u32,
+    cognitive_complexity: u32,
+    tdg_score: f32,
+    tdg_grade: String,
 }
 
 /// Result of parsing a single file.
@@ -210,6 +215,10 @@ impl<'a> SyncManager<'a> {
                 embedding,
                 chunk_index: symbol.chunk_index,
                 total_chunks: symbol.total_chunks,
+                cyclomatic_complexity: symbol.cyclomatic_complexity,
+                cognitive_complexity: symbol.cognitive_complexity,
+                tdg_score: symbol.tdg_score,
+                tdg_grade: symbol.tdg_grade.clone(),
             })
             .collect();
 
@@ -291,11 +300,15 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
     let functions = extract_functions(&parse_result);
     let chunks = chunk_functions(&functions, &parse_result);
 
+    // Compute quality metrics for all symbols in this file
+    let metrics_map = compute_file_metrics(path, &parse_result.source, parse_result.language);
+
     // Create parsed symbols from chunks
     let symbols: Vec<ParsedSymbol> = chunks
         .into_iter()
         .map(|chunk| {
             let content_hash = hash_string(&chunk.content);
+            let metrics = lookup_metrics(&metrics_map, &chunk.symbol_name, chunk.start_line);
             ParsedSymbol {
                 file_path: rel_path.clone(),
                 symbol_name: chunk.symbol_name,
@@ -306,6 +319,10 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
                 content_hash,
                 chunk_index: chunk.chunk_index,
                 total_chunks: chunk.total_chunks,
+                cyclomatic_complexity: metrics.cyclomatic_complexity,
+                cognitive_complexity: metrics.cognitive_complexity,
+                tdg_score: metrics.tdg_score,
+                tdg_grade: metrics.tdg_grade,
             }
         })
         .collect();

@@ -33,7 +33,7 @@ pub struct EmbeddingCache {
     rt: Arc<Runtime>,
 }
 
-/// A cached symbol with its embedding.
+/// A cached symbol with its embedding and quality metrics.
 #[derive(Debug, Clone)]
 pub struct CachedSymbol {
     pub file_path: String,
@@ -46,6 +46,10 @@ pub struct CachedSymbol {
     pub embedding: Vec<f32>,
     pub chunk_index: u32,
     pub total_chunks: u32,
+    pub cyclomatic_complexity: u32,
+    pub cognitive_complexity: u32,
+    pub tdg_score: f32,
+    pub tdg_grade: String,
 }
 
 fn symbols_schema() -> Arc<Schema> {
@@ -67,6 +71,10 @@ fn symbols_schema() -> Arc<Schema> {
         ),
         Field::new("chunk_index", DataType::UInt32, false),
         Field::new("total_chunks", DataType::UInt32, false),
+        Field::new("cyclomatic_complexity", DataType::UInt32, false),
+        Field::new("cognitive_complexity", DataType::UInt32, false),
+        Field::new("tdg_score", DataType::Float32, false),
+        Field::new("tdg_grade", DataType::Utf8, false),
     ]))
 }
 
@@ -98,6 +106,10 @@ fn symbols_to_batch(
     let embeddings: Vec<Vec<f32>> = symbols.iter().map(|s| s.embedding.clone()).collect();
     let chunk_indices: Vec<u32> = symbols.iter().map(|s| s.chunk_index).collect();
     let total_chunks: Vec<u32> = symbols.iter().map(|s| s.total_chunks).collect();
+    let cyclomatic: Vec<u32> = symbols.iter().map(|s| s.cyclomatic_complexity).collect();
+    let cognitive: Vec<u32> = symbols.iter().map(|s| s.cognitive_complexity).collect();
+    let tdg_scores: Vec<f32> = symbols.iter().map(|s| s.tdg_score).collect();
+    let tdg_grades: Vec<&str> = symbols.iter().map(|s| s.tdg_grade.as_str()).collect();
 
     RecordBatch::try_new(
         schema,
@@ -112,6 +124,10 @@ fn symbols_to_batch(
             Arc::new(build_embedding_array(&embeddings)),
             Arc::new(UInt32Array::from(chunk_indices)),
             Arc::new(UInt32Array::from(total_chunks)),
+            Arc::new(UInt32Array::from(cyclomatic)),
+            Arc::new(UInt32Array::from(cognitive)),
+            Arc::new(Float32Array::from(tdg_scores)),
+            Arc::new(StringArray::from(tdg_grades)),
         ],
     )
 }
@@ -167,6 +183,26 @@ fn batch_to_symbols(batch: &RecordBatch) -> Vec<CachedSymbol> {
         .as_any()
         .downcast_ref::<UInt32Array>()
         .expect("column 9 is UInt32Array");
+    let cyclomatic_col = batch
+        .column(10)
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .expect("column 10 is UInt32Array");
+    let cognitive_col = batch
+        .column(11)
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .expect("column 11 is UInt32Array");
+    let tdg_score_col = batch
+        .column(12)
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .expect("column 12 is Float32Array");
+    let tdg_grade_col = batch
+        .column(13)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("column 13 is StringArray");
 
     (0..batch.num_rows())
         .map(|i| {
@@ -189,6 +225,10 @@ fn batch_to_symbols(batch: &RecordBatch) -> Vec<CachedSymbol> {
                 embedding: emb_values,
                 chunk_index: chunk_indices.value(i),
                 total_chunks: total_chunks_col.value(i),
+                cyclomatic_complexity: cyclomatic_col.value(i),
+                cognitive_complexity: cognitive_col.value(i),
+                tdg_score: tdg_score_col.value(i),
+                tdg_grade: tdg_grade_col.value(i).to_string(),
             }
         })
         .collect()
@@ -712,6 +752,10 @@ mod tests {
             embedding: vec![0.0; EMBEDDING_DIM as usize],
             chunk_index: 0,
             total_chunks: 1,
+            cyclomatic_complexity: 0,
+            cognitive_complexity: 0,
+            tdg_score: 0.0,
+            tdg_grade: String::new(),
         }
     }
 
@@ -728,6 +772,10 @@ mod tests {
             embedding,
             chunk_index: 0,
             total_chunks: 1,
+            cyclomatic_complexity: 0,
+            cognitive_complexity: 0,
+            tdg_score: 0.0,
+            tdg_grade: String::new(),
         }
     }
 
@@ -793,6 +841,10 @@ mod tests {
             embedding: vec![0.0; EMBEDDING_DIM as usize],
             chunk_index: 0,
             total_chunks: 1,
+            cyclomatic_complexity: 0,
+            cognitive_complexity: 0,
+            tdg_score: 0.0,
+            tdg_grade: String::new(),
         };
 
         let symbol2 = CachedSymbol {
@@ -806,6 +858,10 @@ mod tests {
             embedding: vec![0.0; EMBEDDING_DIM as usize],
             chunk_index: 0,
             total_chunks: 1,
+            cyclomatic_complexity: 0,
+            cognitive_complexity: 0,
+            tdg_score: 0.0,
+            tdg_grade: String::new(),
         };
 
         cache.upsert_symbol(&symbol1).unwrap();
@@ -830,6 +886,10 @@ mod tests {
             embedding: vec![0.0; EMBEDDING_DIM as usize],
             chunk_index: 0,
             total_chunks: 1,
+            cyclomatic_complexity: 0,
+            cognitive_complexity: 0,
+            tdg_score: 0.0,
+            tdg_grade: String::new(),
         };
 
         let symbol2 = CachedSymbol {
@@ -843,6 +903,10 @@ mod tests {
             embedding: vec![0.0; EMBEDDING_DIM as usize],
             chunk_index: 0,
             total_chunks: 1,
+            cyclomatic_complexity: 0,
+            cognitive_complexity: 0,
+            tdg_score: 0.0,
+            tdg_grade: String::new(),
         };
 
         let symbol3 = CachedSymbol {
@@ -856,6 +920,10 @@ mod tests {
             embedding: vec![0.0; EMBEDDING_DIM as usize],
             chunk_index: 0,
             total_chunks: 1,
+            cyclomatic_complexity: 0,
+            cognitive_complexity: 0,
+            tdg_score: 0.0,
+            tdg_grade: String::new(),
         };
 
         cache.upsert_symbol(&symbol1).unwrap();
@@ -936,6 +1004,10 @@ mod tests {
                 embedding: vec![i as f32 / 100.0; EMBEDDING_DIM as usize],
                 chunk_index: 0,
                 total_chunks: 1,
+                cyclomatic_complexity: 0,
+                cognitive_complexity: 0,
+                tdg_score: 0.0,
+                tdg_grade: String::new(),
             })
             .collect();
 
@@ -990,11 +1062,15 @@ mod tests {
     #[test]
     fn test_symbols_schema() {
         let schema = symbols_schema();
-        assert_eq!(schema.fields().len(), 10);
+        assert_eq!(schema.fields().len(), 14);
         assert_eq!(schema.field(0).name(), "file_path");
         assert_eq!(schema.field(7).name(), "embedding");
         assert_eq!(schema.field(8).name(), "chunk_index");
         assert_eq!(schema.field(9).name(), "total_chunks");
+        assert_eq!(schema.field(10).name(), "cyclomatic_complexity");
+        assert_eq!(schema.field(11).name(), "cognitive_complexity");
+        assert_eq!(schema.field(12).name(), "tdg_score");
+        assert_eq!(schema.field(13).name(), "tdg_grade");
     }
 
     #[test]
