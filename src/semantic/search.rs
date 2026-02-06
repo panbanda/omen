@@ -13,6 +13,8 @@ use super::metrics::quality_adjusted_score;
 /// A search result with similarity score and quality metrics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
+    /// Repository identifier (empty for single-repo mode).
+    pub repo_id: String,
     /// File path relative to repository root.
     pub file_path: String,
     /// Symbol name.
@@ -68,6 +70,7 @@ impl<'a> SearchEngine<'a> {
             .map(|(sym, raw_score)| {
                 let adjusted = quality_adjusted_score(raw_score, &sym.tdg_grade);
                 SearchResult {
+                    repo_id: sym.repo_id,
                     file_path: sym.file_path,
                     symbol_name: sym.symbol_name,
                     symbol_type: sym.symbol_type,
@@ -122,6 +125,48 @@ impl<'a> SearchEngine<'a> {
             .map(|(sym, raw_score)| {
                 let adjusted = quality_adjusted_score(raw_score, &sym.tdg_grade);
                 SearchResult {
+                    repo_id: sym.repo_id,
+                    file_path: sym.file_path,
+                    symbol_name: sym.symbol_name,
+                    symbol_type: sym.symbol_type,
+                    signature: sym.signature,
+                    start_line: sym.start_line,
+                    end_line: sym.end_line,
+                    score: adjusted,
+                    raw_score,
+                    chunk_index: sym.chunk_index,
+                    total_chunks: sym.total_chunks,
+                    cyclomatic_complexity: sym.cyclomatic_complexity,
+                    cognitive_complexity: sym.cognitive_complexity,
+                    tdg_score: sym.tdg_score,
+                    tdg_grade: sym.tdg_grade,
+                }
+            })
+            .collect();
+
+        Ok(deduplicate_chunks(results, top_k))
+    }
+
+    /// Search for symbols across specific repositories.
+    pub fn search_in_repos(
+        &self,
+        query: &str,
+        repo_ids: &[&str],
+        top_k: usize,
+    ) -> Result<Vec<SearchResult>> {
+        let query_embedding = self.engine.embed(query)?;
+
+        let fetch_k = top_k * 3;
+        let scored = self
+            .cache
+            .vector_search_in_repos(&query_embedding, repo_ids, fetch_k)?;
+
+        let results: Vec<SearchResult> = scored
+            .into_iter()
+            .map(|(sym, raw_score)| {
+                let adjusted = quality_adjusted_score(raw_score, &sym.tdg_grade);
+                SearchResult {
+                    repo_id: sym.repo_id,
                     file_path: sym.file_path,
                     symbol_name: sym.symbol_name,
                     symbol_type: sym.symbol_type,
@@ -167,14 +212,18 @@ impl SearchOutput {
 }
 
 /// Deduplicate search results from multi-chunk symbols.
-/// Keeps only the highest-scoring chunk per (file_path, symbol_name) pair.
-fn deduplicate_chunks(results: Vec<SearchResult>, limit: usize) -> Vec<SearchResult> {
+/// Keeps only the highest-scoring chunk per (repo_id, file_path, symbol_name) triple.
+pub(crate) fn deduplicate_chunks(results: Vec<SearchResult>, limit: usize) -> Vec<SearchResult> {
     use std::collections::HashMap;
 
-    let mut best: HashMap<(String, String), SearchResult> = HashMap::new();
+    let mut best: HashMap<(String, String, String), SearchResult> = HashMap::new();
 
     for result in results {
-        let key = (result.file_path.clone(), result.symbol_name.clone());
+        let key = (
+            result.repo_id.clone(),
+            result.file_path.clone(),
+            result.symbol_name.clone(),
+        );
         let entry = best.entry(key);
         entry
             .and_modify(|existing| {
@@ -202,6 +251,7 @@ mod tests {
     #[test]
     fn test_search_result_serialization() {
         let result = SearchResult {
+            repo_id: String::new(),
             file_path: "src/main.rs".to_string(),
             symbol_name: "main".to_string(),
             symbol_type: "function".to_string(),
@@ -240,6 +290,7 @@ mod tests {
             query: "test query".to_string(),
             total_symbols: 100,
             results: vec![SearchResult {
+                repo_id: String::new(),
                 file_path: "src/main.rs".to_string(),
                 symbol_name: "test".to_string(),
                 symbol_type: "function".to_string(),
@@ -266,6 +317,7 @@ mod tests {
     fn test_deduplicate_chunks_keeps_best_score() {
         let results = vec![
             SearchResult {
+                repo_id: String::new(),
                 file_path: "src/a.rs".to_string(),
                 symbol_name: "func".to_string(),
                 symbol_type: "function".to_string(),
@@ -282,6 +334,7 @@ mod tests {
                 tdg_grade: String::new(),
             },
             SearchResult {
+                repo_id: String::new(),
                 file_path: "src/a.rs".to_string(),
                 symbol_name: "func".to_string(),
                 symbol_type: "function".to_string(),
@@ -298,6 +351,7 @@ mod tests {
                 tdg_grade: String::new(),
             },
             SearchResult {
+                repo_id: String::new(),
                 file_path: "src/a.rs".to_string(),
                 symbol_name: "func".to_string(),
                 symbol_type: "function".to_string(),
@@ -325,6 +379,7 @@ mod tests {
     fn test_deduplicate_preserves_different_symbols() {
         let results = vec![
             SearchResult {
+                repo_id: String::new(),
                 file_path: "src/a.rs".to_string(),
                 symbol_name: "func_a".to_string(),
                 symbol_type: "function".to_string(),
@@ -341,6 +396,7 @@ mod tests {
                 tdg_grade: String::new(),
             },
             SearchResult {
+                repo_id: String::new(),
                 file_path: "src/b.rs".to_string(),
                 symbol_name: "func_b".to_string(),
                 symbol_type: "function".to_string(),
@@ -366,6 +422,7 @@ mod tests {
     fn test_deduplicate_respects_limit() {
         let results: Vec<SearchResult> = (0..10)
             .map(|i| SearchResult {
+                repo_id: String::new(),
                 file_path: format!("src/{}.rs", i),
                 symbol_name: format!("func_{}", i),
                 symbol_type: "function".to_string(),
@@ -395,6 +452,7 @@ mod tests {
         // After quality weighting, the A-grade symbol should rank higher.
         let results = vec![
             SearchResult {
+                repo_id: String::new(),
                 file_path: "src/bad.rs".to_string(),
                 symbol_name: "bad_func".to_string(),
                 symbol_type: "function".to_string(),
@@ -411,6 +469,7 @@ mod tests {
                 tdg_grade: "F".to_string(),
             },
             SearchResult {
+                repo_id: String::new(),
                 file_path: "src/good.rs".to_string(),
                 symbol_name: "good_func".to_string(),
                 symbol_type: "function".to_string(),

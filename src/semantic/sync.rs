@@ -53,12 +53,17 @@ struct ParsedFile {
 pub struct SyncManager<'a> {
     cache: &'a EmbeddingCache,
     engine: &'a EmbeddingEngine,
+    repo_id: String,
 }
 
 impl<'a> SyncManager<'a> {
     /// Create a new sync manager.
-    pub fn new(cache: &'a EmbeddingCache, engine: &'a EmbeddingEngine) -> Self {
-        Self { cache, engine }
+    pub fn new(cache: &'a EmbeddingCache, engine: &'a EmbeddingEngine, repo_id: String) -> Self {
+        Self {
+            cache,
+            engine,
+            repo_id,
+        }
     }
 
     /// Sync the index with the current file set.
@@ -70,15 +75,19 @@ impl<'a> SyncManager<'a> {
         // Get current files
         let current_files: HashSet<PathBuf> = file_set.files().iter().cloned().collect();
 
-        // Get indexed files
-        let indexed_files: HashSet<String> =
-            self.cache.get_all_indexed_files()?.into_iter().collect();
+        // Get indexed files for this repo
+        let all_indexed = self.cache.get_all_indexed_files()?;
+        let indexed_files: HashSet<String> = all_indexed
+            .into_iter()
+            .filter(|(rid, _)| rid == &self.repo_id)
+            .map(|(_, path)| path)
+            .collect();
 
         // Find files to remove (deleted or moved)
         for indexed_path in &indexed_files {
             let full_path = root_path.join(indexed_path);
             if !current_files.contains(&full_path) {
-                self.cache.remove_file(indexed_path)?;
+                self.cache.remove_file(indexed_path, &self.repo_id)?;
                 stats.removed += 1;
             }
         }
@@ -162,8 +171,11 @@ impl<'a> SyncManager<'a> {
         if all_symbols.is_empty() {
             // No symbols to embed, but still record files as indexed
             for parsed_file in &parsed_files {
-                self.cache
-                    .record_file_indexed(&parsed_file.rel_path, &parsed_file.file_hash)?;
+                self.cache.record_file_indexed(
+                    &parsed_file.rel_path,
+                    &parsed_file.file_hash,
+                    &self.repo_id,
+                )?;
                 stats.indexed += 1;
             }
             return Ok(stats);
@@ -197,7 +209,8 @@ impl<'a> SyncManager<'a> {
 
         // First, delete existing symbols for all files being re-indexed
         for parsed_file in &parsed_files {
-            self.cache.delete_file_symbols(&parsed_file.rel_path)?;
+            self.cache
+                .delete_file_symbols(&parsed_file.rel_path, &self.repo_id)?;
         }
 
         // Build all CachedSymbol structs and bulk insert
@@ -219,6 +232,7 @@ impl<'a> SyncManager<'a> {
                 cognitive_complexity: symbol.cognitive_complexity,
                 tdg_score: symbol.tdg_score,
                 tdg_grade: symbol.tdg_grade.clone(),
+                repo_id: self.repo_id.clone(),
             })
             .collect();
 
@@ -234,8 +248,11 @@ impl<'a> SyncManager<'a> {
 
         // Record all files as indexed
         for parsed_file in &parsed_files {
-            self.cache
-                .record_file_indexed(&parsed_file.rel_path, &parsed_file.file_hash)?;
+            self.cache.record_file_indexed(
+                &parsed_file.rel_path,
+                &parsed_file.file_hash,
+                &self.repo_id,
+            )?;
             stats.indexed += 1;
             stats.symbols += parsed_file.symbols.len();
         }
@@ -249,7 +266,7 @@ impl<'a> SyncManager<'a> {
     fn check_file_changed(&self, path: &Path, rel_path: &str) -> Result<bool> {
         let current_hash = hash_file(path)?;
 
-        match self.cache.get_file_hash(rel_path)? {
+        match self.cache.get_file_hash(rel_path, &self.repo_id)? {
             Some(cached_hash) => Ok(cached_hash != current_hash),
             None => Ok(true), // Not indexed yet
         }

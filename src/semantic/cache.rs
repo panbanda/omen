@@ -50,6 +50,7 @@ pub struct CachedSymbol {
     pub cognitive_complexity: u32,
     pub tdg_score: f32,
     pub tdg_grade: String,
+    pub repo_id: String,
 }
 
 fn symbols_schema() -> Arc<Schema> {
@@ -75,6 +76,7 @@ fn symbols_schema() -> Arc<Schema> {
         Field::new("cognitive_complexity", DataType::UInt32, false),
         Field::new("tdg_score", DataType::Float32, false),
         Field::new("tdg_grade", DataType::Utf8, false),
+        Field::new("repo_id", DataType::Utf8, false),
     ]))
 }
 
@@ -82,6 +84,7 @@ fn files_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("file_path", DataType::Utf8, false),
         Field::new("file_hash", DataType::Utf8, false),
+        Field::new("repo_id", DataType::Utf8, false),
     ]))
 }
 
@@ -110,6 +113,7 @@ fn symbols_to_batch(
     let cognitive: Vec<u32> = symbols.iter().map(|s| s.cognitive_complexity).collect();
     let tdg_scores: Vec<f32> = symbols.iter().map(|s| s.tdg_score).collect();
     let tdg_grades: Vec<&str> = symbols.iter().map(|s| s.tdg_grade.as_str()).collect();
+    let repo_ids: Vec<&str> = symbols.iter().map(|s| s.repo_id.as_str()).collect();
 
     RecordBatch::try_new(
         schema,
@@ -128,6 +132,7 @@ fn symbols_to_batch(
             Arc::new(UInt32Array::from(cognitive)),
             Arc::new(Float32Array::from(tdg_scores)),
             Arc::new(StringArray::from(tdg_grades)),
+            Arc::new(StringArray::from(repo_ids)),
         ],
     )
 }
@@ -203,6 +208,11 @@ fn batch_to_symbols(batch: &RecordBatch) -> Vec<CachedSymbol> {
         .as_any()
         .downcast_ref::<StringArray>()
         .expect("column 13 is StringArray");
+    let repo_id_col = batch
+        .column(14)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("column 14 is StringArray");
 
     (0..batch.num_rows())
         .map(|i| {
@@ -229,12 +239,13 @@ fn batch_to_symbols(batch: &RecordBatch) -> Vec<CachedSymbol> {
                 cognitive_complexity: cognitive_col.value(i),
                 tdg_score: tdg_score_col.value(i),
                 tdg_grade: tdg_grade_col.value(i).to_string(),
+                repo_id: repo_id_col.value(i).to_string(),
             }
         })
         .collect()
 }
 
-fn batch_to_file_entries(batch: &RecordBatch) -> Vec<(String, String)> {
+fn batch_to_file_entries(batch: &RecordBatch) -> Vec<(String, String, String)> {
     let file_paths = batch
         .column(0)
         .as_any()
@@ -245,12 +256,18 @@ fn batch_to_file_entries(batch: &RecordBatch) -> Vec<(String, String)> {
         .as_any()
         .downcast_ref::<StringArray>()
         .expect("column 1 is StringArray");
+    let repo_ids = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("column 2 is StringArray");
 
     (0..batch.num_rows())
         .map(|i| {
             (
                 file_paths.value(i).to_string(),
                 file_hashes.value(i).to_string(),
+                repo_ids.value(i).to_string(),
             )
         })
         .collect()
@@ -400,8 +417,8 @@ impl EmbeddingCache {
         self.query_symbols(&format!("file_path = '{}'", escape_sql(file_path)))
     }
 
-    /// Delete all symbols for a file.
-    pub fn delete_file_symbols(&self, file_path: &str) -> Result<()> {
+    /// Delete all symbols for a file within a specific repo.
+    pub fn delete_file_symbols(&self, file_path: &str, repo_id: &str) -> Result<()> {
         self.rt.block_on(async {
             let table = self
                 .db
@@ -410,14 +427,23 @@ impl EmbeddingCache {
                 .await
                 .map_err(|e| Error::analysis(format!("Failed to open symbols table: {}", e)))?;
 
-            let filter = format!("file_path = '{}'", escape_sql(file_path));
+            let filter = format!(
+                "repo_id = '{}' AND file_path = '{}'",
+                escape_sql(repo_id),
+                escape_sql(file_path)
+            );
             let _ = table.delete(&filter).await;
             Ok(())
         })
     }
 
     /// Record that a file has been indexed.
-    pub fn record_file_indexed(&self, file_path: &str, file_hash: &str) -> Result<()> {
+    pub fn record_file_indexed(
+        &self,
+        file_path: &str,
+        file_hash: &str,
+        repo_id: &str,
+    ) -> Result<()> {
         self.rt.block_on(async {
             let table = self
                 .db
@@ -427,7 +453,11 @@ impl EmbeddingCache {
                 .map_err(|e| Error::analysis(format!("Failed to open files table: {}", e)))?;
 
             // Delete existing entry
-            let filter = format!("file_path = '{}'", escape_sql(file_path));
+            let filter = format!(
+                "repo_id = '{}' AND file_path = '{}'",
+                escape_sql(repo_id),
+                escape_sql(file_path)
+            );
             let _ = table.delete(&filter).await;
 
             // Insert new
@@ -437,6 +467,7 @@ impl EmbeddingCache {
                 vec![
                     Arc::new(StringArray::from(vec![file_path])),
                     Arc::new(StringArray::from(vec![file_hash])),
+                    Arc::new(StringArray::from(vec![repo_id])),
                 ],
             )
             .map_err(|e| Error::analysis(format!("Failed to build file record: {}", e)))?;
@@ -452,15 +483,19 @@ impl EmbeddingCache {
         })
     }
 
-    /// Get the stored hash for a file.
-    pub fn get_file_hash(&self, file_path: &str) -> Result<Option<String>> {
-        let entries = self.query_files(&format!("file_path = '{}'", escape_sql(file_path)))?;
-        Ok(entries.into_iter().next().map(|(_, hash)| hash))
+    /// Get the stored hash for a file within a specific repo.
+    pub fn get_file_hash(&self, file_path: &str, repo_id: &str) -> Result<Option<String>> {
+        let entries = self.query_files(&format!(
+            "repo_id = '{}' AND file_path = '{}'",
+            escape_sql(repo_id),
+            escape_sql(file_path)
+        ))?;
+        Ok(entries.into_iter().next().map(|(_, hash, _)| hash))
     }
 
     /// Remove a file from the files table and its symbols.
-    pub fn remove_file(&self, file_path: &str) -> Result<()> {
-        self.delete_file_symbols(file_path)?;
+    pub fn remove_file(&self, file_path: &str, repo_id: &str) -> Result<()> {
+        self.delete_file_symbols(file_path, repo_id)?;
 
         self.rt.block_on(async {
             let table = self
@@ -470,16 +505,23 @@ impl EmbeddingCache {
                 .await
                 .map_err(|e| Error::analysis(format!("Failed to open files table: {}", e)))?;
 
-            let filter = format!("file_path = '{}'", escape_sql(file_path));
+            let filter = format!(
+                "repo_id = '{}' AND file_path = '{}'",
+                escape_sql(repo_id),
+                escape_sql(file_path)
+            );
             let _ = table.delete(&filter).await;
             Ok(())
         })
     }
 
-    /// Get all indexed file paths.
-    pub fn get_all_indexed_files(&self) -> Result<Vec<String>> {
+    /// Get all indexed files as `(repo_id, file_path)` tuples.
+    pub fn get_all_indexed_files(&self) -> Result<Vec<(String, String)>> {
         let entries = self.query_files_all()?;
-        Ok(entries.into_iter().map(|(path, _)| path).collect())
+        Ok(entries
+            .into_iter()
+            .map(|(path, _, repo_id)| (repo_id, path))
+            .collect())
     }
 
     /// Get the number of cached symbols.
@@ -624,6 +666,73 @@ impl EmbeddingCache {
         })
     }
 
+    /// Perform vector search filtered to specific repos.
+    pub fn vector_search_in_repos(
+        &self,
+        query_embedding: &[f32],
+        repo_ids: &[&str],
+        top_k: usize,
+    ) -> Result<Vec<(CachedSymbol, f32)>> {
+        if repo_ids.is_empty() {
+            return self.vector_search(query_embedding, top_k);
+        }
+
+        self.rt.block_on(async {
+            let table = self
+                .db
+                .open_table(SYMBOLS_TABLE)
+                .execute()
+                .await
+                .map_err(|e| Error::analysis(format!("Failed to open symbols table: {}", e)))?;
+
+            let count = table
+                .count_rows(None)
+                .await
+                .map_err(|e| Error::analysis(format!("Failed to count rows: {}", e)))?;
+
+            if count == 0 {
+                return Ok(Vec::new());
+            }
+
+            let repo_list: Vec<String> = repo_ids
+                .iter()
+                .map(|r| format!("'{}'", escape_sql(r)))
+                .collect();
+            let filter = format!("repo_id IN ({})", repo_list.join(", "));
+
+            let results = table
+                .vector_search(query_embedding.to_vec())
+                .map_err(|e| Error::analysis(format!("Failed to create vector query: {}", e)))?
+                .only_if(filter)
+                .limit(top_k)
+                .execute()
+                .await
+                .map_err(|e| Error::analysis(format!("Vector search failed: {}", e)))?
+                .try_collect::<Vec<_>>()
+                .await
+                .map_err(|e| Error::analysis(format!("Failed to collect search results: {}", e)))?;
+
+            let mut scored_symbols = Vec::new();
+            for batch in &results {
+                let symbols = batch_to_symbols(batch);
+                let distance_col = batch
+                    .column_by_name("_distance")
+                    .and_then(|c| c.as_any().downcast_ref::<Float32Array>());
+
+                for (i, symbol) in symbols.into_iter().enumerate() {
+                    let score = if let Some(distances) = distance_col {
+                        1.0 / (1.0 + distances.value(i))
+                    } else {
+                        0.0
+                    };
+                    scored_symbols.push((symbol, score));
+                }
+            }
+
+            Ok(scored_symbols)
+        })
+    }
+
     fn query_symbols(&self, filter: &str) -> Result<Vec<CachedSymbol>> {
         self.rt.block_on(async {
             let table = self
@@ -677,7 +786,7 @@ impl EmbeddingCache {
         })
     }
 
-    fn query_files(&self, filter: &str) -> Result<Vec<(String, String)>> {
+    fn query_files(&self, filter: &str) -> Result<Vec<(String, String, String)>> {
         self.rt.block_on(async {
             let table = self
                 .db
@@ -704,7 +813,7 @@ impl EmbeddingCache {
         })
     }
 
-    fn query_files_all(&self) -> Result<Vec<(String, String)>> {
+    fn query_files_all(&self) -> Result<Vec<(String, String, String)>> {
         self.rt.block_on(async {
             let table = self
                 .db
@@ -756,6 +865,7 @@ mod tests {
             cognitive_complexity: 0,
             tdg_score: 0.0,
             tdg_grade: String::new(),
+            repo_id: String::new(),
         }
     }
 
@@ -776,6 +886,7 @@ mod tests {
             cognitive_complexity: 0,
             tdg_score: 0.0,
             tdg_grade: String::new(),
+            repo_id: String::new(),
         }
     }
 
@@ -845,6 +956,7 @@ mod tests {
             cognitive_complexity: 0,
             tdg_score: 0.0,
             tdg_grade: String::new(),
+            repo_id: String::new(),
         };
 
         let symbol2 = CachedSymbol {
@@ -862,6 +974,7 @@ mod tests {
             cognitive_complexity: 0,
             tdg_score: 0.0,
             tdg_grade: String::new(),
+            repo_id: String::new(),
         };
 
         cache.upsert_symbol(&symbol1).unwrap();
@@ -890,6 +1003,7 @@ mod tests {
             cognitive_complexity: 0,
             tdg_score: 0.0,
             tdg_grade: String::new(),
+            repo_id: String::new(),
         };
 
         let symbol2 = CachedSymbol {
@@ -907,6 +1021,7 @@ mod tests {
             cognitive_complexity: 0,
             tdg_score: 0.0,
             tdg_grade: String::new(),
+            repo_id: String::new(),
         };
 
         let symbol3 = CachedSymbol {
@@ -924,6 +1039,7 @@ mod tests {
             cognitive_complexity: 0,
             tdg_score: 0.0,
             tdg_grade: String::new(),
+            repo_id: String::new(),
         };
 
         cache.upsert_symbol(&symbol1).unwrap();
@@ -942,7 +1058,7 @@ mod tests {
         cache.upsert_symbol(&symbol).unwrap();
         assert_eq!(cache.symbol_count().unwrap(), 1);
 
-        cache.delete_file_symbols(&symbol.file_path).unwrap();
+        cache.delete_file_symbols(&symbol.file_path, "").unwrap();
         assert_eq!(cache.symbol_count().unwrap(), 0);
     }
 
@@ -950,12 +1066,14 @@ mod tests {
     fn test_file_hash_tracking() {
         let cache = EmbeddingCache::in_memory().unwrap();
 
-        cache.record_file_indexed("src/main.rs", "hash123").unwrap();
+        cache
+            .record_file_indexed("src/main.rs", "hash123", "")
+            .unwrap();
 
-        let hash = cache.get_file_hash("src/main.rs").unwrap();
+        let hash = cache.get_file_hash("src/main.rs", "").unwrap();
         assert_eq!(hash, Some("hash123".to_string()));
 
-        let missing = cache.get_file_hash("nonexistent.rs").unwrap();
+        let missing = cache.get_file_hash("nonexistent.rs", "").unwrap();
         assert!(missing.is_none());
     }
 
@@ -966,26 +1084,29 @@ mod tests {
 
         cache.upsert_symbol(&symbol).unwrap();
         cache
-            .record_file_indexed(&symbol.file_path, "hash123")
+            .record_file_indexed(&symbol.file_path, "hash123", "")
             .unwrap();
 
-        cache.remove_file(&symbol.file_path).unwrap();
+        cache.remove_file(&symbol.file_path, "").unwrap();
 
         assert_eq!(cache.symbol_count().unwrap(), 0);
-        assert!(cache.get_file_hash(&symbol.file_path).unwrap().is_none());
+        assert!(cache
+            .get_file_hash(&symbol.file_path, "")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
     fn test_get_all_indexed_files() {
         let cache = EmbeddingCache::in_memory().unwrap();
 
-        cache.record_file_indexed("src/a.rs", "hash1").unwrap();
-        cache.record_file_indexed("src/b.rs", "hash2").unwrap();
+        cache.record_file_indexed("src/a.rs", "hash1", "").unwrap();
+        cache.record_file_indexed("src/b.rs", "hash2", "").unwrap();
 
         let files = cache.get_all_indexed_files().unwrap();
         assert_eq!(files.len(), 2);
-        assert!(files.contains(&"src/a.rs".to_string()));
-        assert!(files.contains(&"src/b.rs".to_string()));
+        assert!(files.iter().any(|(_, p)| p == "src/a.rs"));
+        assert!(files.iter().any(|(_, p)| p == "src/b.rs"));
     }
 
     #[test]
@@ -1008,6 +1129,7 @@ mod tests {
                 cognitive_complexity: 0,
                 tdg_score: 0.0,
                 tdg_grade: String::new(),
+                repo_id: String::new(),
             })
             .collect();
 
@@ -1062,7 +1184,7 @@ mod tests {
     #[test]
     fn test_symbols_schema() {
         let schema = symbols_schema();
-        assert_eq!(schema.fields().len(), 14);
+        assert_eq!(schema.fields().len(), 15);
         assert_eq!(schema.field(0).name(), "file_path");
         assert_eq!(schema.field(7).name(), "embedding");
         assert_eq!(schema.field(8).name(), "chunk_index");
@@ -1071,6 +1193,7 @@ mod tests {
         assert_eq!(schema.field(11).name(), "cognitive_complexity");
         assert_eq!(schema.field(12).name(), "tdg_score");
         assert_eq!(schema.field(13).name(), "tdg_grade");
+        assert_eq!(schema.field(14).name(), "repo_id");
     }
 
     #[test]
