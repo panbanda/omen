@@ -1,7 +1,7 @@
 //! Embedding provider abstraction for pluggable embedding backends.
 //!
 //! Supports:
-//! - Local inference with candle (all-MiniLM-L6-v2)
+//! - Local inference with candle (BAAI/bge-small-en-v1.5)
 //! - Third-party API providers (OpenAI, Cohere, etc.)
 
 use std::fmt;

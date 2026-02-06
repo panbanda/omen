@@ -13,6 +13,7 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, FieldRef, Schema};
 use futures::TryStreamExt;
+use lancedb::database::CreateTableMode;
 use lancedb::query::{ExecutableQuery, QueryBase};
 use tokio::runtime::Runtime;
 
@@ -317,23 +318,16 @@ impl EmbeddingCache {
     }
 
     fn ensure_table(&self, name: &str, schema: Arc<Schema>) -> Result<()> {
-        let result = self
-            .rt
-            .block_on(async { self.db.create_empty_table(name, schema).execute().await });
-        match result {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("already exists") {
-                    Ok(())
-                } else {
-                    Err(Error::analysis(format!(
-                        "Failed to create {} table: {}",
-                        name, msg
-                    )))
-                }
-            }
-        }
+        self.rt
+            .block_on(async {
+                self.db
+                    .create_empty_table(name, schema)
+                    .mode(CreateTableMode::exist_ok(|builder| builder))
+                    .execute()
+                    .await
+            })
+            .map_err(|e| Error::analysis(format!("Failed to create {} table: {}", name, e)))?;
+        Ok(())
     }
 
     /// Insert or update a symbol in the cache.
@@ -352,7 +346,10 @@ impl EmbeddingCache {
                 escape_sql(&symbol.file_path),
                 escape_sql(&symbol.symbol_name)
             );
-            let _ = table.delete(&filter).await;
+            table
+                .delete(&filter)
+                .await
+                .map_err(|e| Error::analysis(format!("Failed to delete symbol: {}", e)))?;
 
             // Insert new
             let batch = symbols_to_batch(std::slice::from_ref(symbol))
@@ -432,7 +429,10 @@ impl EmbeddingCache {
                 escape_sql(repo_id),
                 escape_sql(file_path)
             );
-            let _ = table.delete(&filter).await;
+            table
+                .delete(&filter)
+                .await
+                .map_err(|e| Error::analysis(format!("Failed to delete symbols: {}", e)))?;
             Ok(())
         })
     }
@@ -458,7 +458,10 @@ impl EmbeddingCache {
                 escape_sql(repo_id),
                 escape_sql(file_path)
             );
-            let _ = table.delete(&filter).await;
+            table
+                .delete(&filter)
+                .await
+                .map_err(|e| Error::analysis(format!("Failed to delete file record: {}", e)))?;
 
             // Insert new
             let schema = files_schema();
@@ -510,7 +513,10 @@ impl EmbeddingCache {
                 escape_sql(repo_id),
                 escape_sql(file_path)
             );
-            let _ = table.delete(&filter).await;
+            table
+                .delete(&filter)
+                .await
+                .map_err(|e| Error::analysis(format!("Failed to delete file: {}", e)))?;
             Ok(())
         })
     }
@@ -840,9 +846,11 @@ impl EmbeddingCache {
     }
 }
 
-/// Escape single quotes in SQL filter strings.
+/// Escape special characters in SQL filter strings.
 fn escape_sql(s: &str) -> String {
-    s.replace('\'', "''")
+    s.replace('\\', "\\\\")
+        .replace('\'', "''")
+        .replace('\0', "")
 }
 
 #[cfg(test)]
@@ -1179,6 +1187,8 @@ mod tests {
         assert_eq!(escape_sql("hello"), "hello");
         assert_eq!(escape_sql("it's"), "it''s");
         assert_eq!(escape_sql("a'b'c"), "a''b''c");
+        assert_eq!(escape_sql("back\\slash"), "back\\\\slash");
+        assert_eq!(escape_sql("null\0byte"), "nullbyte");
     }
 
     #[test]

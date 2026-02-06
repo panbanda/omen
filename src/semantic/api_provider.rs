@@ -3,6 +3,7 @@
 //! Supports Ollama (local), OpenAI, Cohere, and Voyage AI embeddings APIs.
 
 use std::env;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +21,11 @@ pub struct OllamaProvider {
 impl OllamaProvider {
     /// Create a new Ollama provider.
     pub fn new(url: String, model: String) -> Self {
-        let client = reqwest::blocking::Client::new();
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(120))
+            .build()
+            .expect("failed to build HTTP client");
         Self { url, model, client }
     }
 
@@ -116,7 +121,11 @@ impl OpenAIProvider {
                 )
             })?;
 
-        let client = reqwest::blocking::Client::new();
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(120))
+            .build()
+            .map_err(|e| Error::analysis(format!("Failed to build HTTP client: {}", e)))?;
 
         Ok(Self {
             api_key,
@@ -221,7 +230,11 @@ impl CohereProvider {
                 )
             })?;
 
-        let client = reqwest::blocking::Client::new();
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(120))
+            .build()
+            .map_err(|e| Error::analysis(format!("Failed to build HTTP client: {}", e)))?;
 
         Ok(Self {
             api_key,
@@ -322,7 +335,11 @@ impl VoyageProvider {
                 )
             })?;
 
-        let client = reqwest::blocking::Client::new();
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(120))
+            .build()
+            .map_err(|e| Error::analysis(format!("Failed to build HTTP client: {}", e)))?;
 
         Ok(Self {
             api_key,

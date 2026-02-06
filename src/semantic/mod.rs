@@ -206,7 +206,7 @@ mod tests {
     fn test_search_config_serialization() {
         let config = SearchConfig {
             provider: EmbeddingProviderConfig::Candle,
-            cache_path: Some(PathBuf::from("/tmp/search.db")),
+            cache_path: Some(PathBuf::from("/tmp/search.lance")),
             max_results: 10,
             min_score: 0.5,
         };
