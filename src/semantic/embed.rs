@@ -7,12 +7,12 @@ use std::sync::Arc;
 use crate::core::Result;
 use crate::parser::FunctionNode;
 
-use super::api_provider::{CohereProvider, OpenAIProvider, VoyageProvider};
+use super::api_provider::{CohereProvider, OllamaProvider, OpenAIProvider, VoyageProvider};
 use super::candle_provider::CandleProvider;
-use super::provider::{EmbeddingProvider, EmbeddingProviderConfig, MINILM_EMBEDDING_DIM};
+use super::provider::{EmbeddingProvider, EmbeddingProviderConfig, BGE_SMALL_EMBEDDING_DIM};
 
-/// Embedding dimension for all-MiniLM-L6-v2 (default candle provider).
-pub const EMBEDDING_DIM: usize = MINILM_EMBEDDING_DIM;
+/// Embedding dimension for BAAI/bge-small-en-v1.5 (default candle provider).
+pub const EMBEDDING_DIM: usize = BGE_SMALL_EMBEDDING_DIM;
 
 /// Embedding engine using pluggable providers.
 pub struct EmbeddingEngine {
@@ -29,6 +29,9 @@ impl EmbeddingEngine {
     pub fn with_config(config: &EmbeddingProviderConfig) -> Result<Self> {
         let provider: Arc<dyn EmbeddingProvider> = match config {
             EmbeddingProviderConfig::Candle => Arc::new(CandleProvider::new()?),
+            EmbeddingProviderConfig::Ollama { url, model } => {
+                Arc::new(OllamaProvider::new(url.clone(), model.clone()))
+            }
             EmbeddingProviderConfig::OpenAI { api_key, model } => {
                 Arc::new(OpenAIProvider::new(api_key.clone(), model.clone())?)
             }

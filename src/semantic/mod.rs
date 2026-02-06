@@ -3,7 +3,8 @@
 //! This module provides semantic search capabilities over code symbols using
 //! vector embeddings. Supports multiple embedding providers:
 //!
-//! - **Candle (default)**: Local inference with all-MiniLM-L6-v2 model
+//! - **Candle (default)**: Local inference with BAAI/bge-small-en-v1.5 model
+//! - **Ollama**: Local Ollama server (bge-m3, nomic-embed-text, etc.)
 //! - **OpenAI**: text-embedding-3-small, text-embedding-3-large, etc.
 //! - **Cohere**: embed-english-v3.0, embed-multilingual-v3.0, etc.
 //! - **Voyage**: voyage-code-2 (optimized for code), voyage-2, etc.
@@ -11,11 +12,11 @@
 //! # Architecture
 //!
 //! - **provider**: Abstraction for pluggable embedding backends
-//! - **candle_provider**: Local candle inference
-//! - **api_provider**: Third-party API providers
+//! - **candle_provider**: Local candle inference (BAAI/bge-small-en-v1.5)
+//! - **api_provider**: Third-party API providers (Ollama, OpenAI, Cohere, Voyage)
 //! - **model**: Downloads and manages the candle model
 //! - **embed**: High-level embedding generation interface
-//! - **cache**: SQLite storage for embeddings and staleness tracking
+//! - **cache**: LanceDB storage for embeddings and vector search
 //! - **sync**: Incremental indexing and staleness detection
 //! - **search**: Query engine for nearest neighbor search
 //!
@@ -70,7 +71,7 @@ pub struct SearchConfig {
     /// Embedding provider configuration (default: Candle local inference).
     #[serde(default)]
     pub provider: EmbeddingProviderConfig,
-    /// Path to the cache database (default: .omen/search.db)
+    /// Path to the LanceDB cache directory (default: .omen/search.lance)
     pub cache_path: Option<PathBuf>,
     /// Maximum number of results to return
     pub max_results: usize,

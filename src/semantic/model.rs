@@ -1,17 +1,17 @@
 //! Model management for semantic search embeddings.
 //!
-//! Downloads and caches the all-MiniLM-L6-v2 model for local candle inference.
+//! Downloads and caches the BAAI/bge-small-en-v1.5 model for local candle inference.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::core::{Error, Result};
 
-/// Hugging Face repository for all-MiniLM-L6-v2.
-pub const MODEL_REPO: &str = "sentence-transformers/all-MiniLM-L6-v2";
+/// Hugging Face repository for BAAI/bge-small-en-v1.5.
+pub const MODEL_REPO: &str = "BAAI/bge-small-en-v1.5";
 
 /// Expected model version for cache invalidation.
-const MODEL_VERSION: &str = "all-MiniLM-L6-v2-candle-v1";
+const MODEL_VERSION: &str = "bge-small-en-v1.5-candle-v1";
 
 /// Model weights file name.
 const MODEL_FILE: &str = "model.safetensors";

@@ -1,6 +1,6 @@
 //! Third-party API embedding providers.
 //!
-//! Supports OpenAI, Cohere, and Voyage AI embeddings APIs.
+//! Supports Ollama (local), OpenAI, Cohere, and Voyage AI embeddings APIs.
 
 use std::env;
 
@@ -9,6 +9,94 @@ use serde::{Deserialize, Serialize};
 use crate::core::{Error, Result};
 
 use super::provider::EmbeddingProvider;
+
+/// Ollama embeddings API provider (local).
+pub struct OllamaProvider {
+    url: String,
+    model: String,
+    client: reqwest::blocking::Client,
+}
+
+impl OllamaProvider {
+    /// Create a new Ollama provider.
+    pub fn new(url: String, model: String) -> Self {
+        let client = reqwest::blocking::Client::new();
+        Self { url, model, client }
+    }
+
+    fn embedding_dim_for_model(&self) -> usize {
+        match self.model.as_str() {
+            "bge-m3" => 1024,
+            "nomic-embed-text" => 768,
+            "mxbai-embed-large" => 1024,
+            "all-minilm" => 384,
+            "bge-small" | "snowflake-arctic-embed:xs" => 384,
+            _ => 384, // Default to small model dimensions
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct OllamaRequest {
+    model: String,
+    input: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct OllamaResponse {
+    embeddings: Vec<Vec<f32>>,
+}
+
+impl EmbeddingProvider for OllamaProvider {
+    fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        let embeddings = self.embed_batch(&[text.to_string()])?;
+        embeddings
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::analysis("Ollama returned empty embeddings for single input"))
+    }
+
+    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let request = OllamaRequest {
+            model: self.model.clone(),
+            input: texts.to_vec(),
+        };
+
+        let response = self
+            .client
+            .post(format!("{}/api/embed", self.url))
+            .json(&request)
+            .send()
+            .map_err(|e| Error::analysis(format!("Ollama API request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(Error::analysis(format!(
+                "Ollama API error ({}): {}",
+                status, body
+            )));
+        }
+
+        let response: OllamaResponse = response
+            .json()
+            .map_err(|e| Error::analysis(format!("Failed to parse Ollama response: {}", e)))?;
+
+        Ok(response.embeddings)
+    }
+
+    fn embedding_dim(&self) -> usize {
+        self.embedding_dim_for_model()
+    }
+
+    fn name(&self) -> &str {
+        "ollama"
+    }
+}
 
 /// OpenAI embeddings API provider.
 pub struct OpenAIProvider {
@@ -323,6 +411,34 @@ impl EmbeddingProvider for VoyageProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_ollama_embedding_dim() {
+        let provider =
+            OllamaProvider::new("http://localhost:11434".to_string(), "bge-m3".to_string());
+        assert_eq!(provider.embedding_dim(), 1024);
+
+        let provider = OllamaProvider::new(
+            "http://localhost:11434".to_string(),
+            "all-minilm".to_string(),
+        );
+        assert_eq!(provider.embedding_dim(), 384);
+    }
+
+    #[test]
+    fn test_ollama_embed_empty_batch() {
+        let provider =
+            OllamaProvider::new("http://localhost:11434".to_string(), "bge-m3".to_string());
+        let result = provider.embed_batch(&[]);
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_ollama_provider_name() {
+        let provider =
+            OllamaProvider::new("http://localhost:11434".to_string(), "bge-m3".to_string());
+        assert_eq!(provider.name(), "ollama");
+    }
 
     #[test]
     fn test_openai_embedding_dim() {
