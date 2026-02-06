@@ -44,6 +44,8 @@ pub struct CachedSymbol {
     pub end_line: u32,
     pub content_hash: String,
     pub embedding: Vec<f32>,
+    pub chunk_index: u32,
+    pub total_chunks: u32,
 }
 
 fn symbols_schema() -> Arc<Schema> {
@@ -63,6 +65,8 @@ fn symbols_schema() -> Arc<Schema> {
             ),
             false,
         ),
+        Field::new("chunk_index", DataType::UInt32, false),
+        Field::new("total_chunks", DataType::UInt32, false),
     ]))
 }
 
@@ -92,6 +96,8 @@ fn symbols_to_batch(
     let end_lines: Vec<u32> = symbols.iter().map(|s| s.end_line).collect();
     let content_hashes: Vec<&str> = symbols.iter().map(|s| s.content_hash.as_str()).collect();
     let embeddings: Vec<Vec<f32>> = symbols.iter().map(|s| s.embedding.clone()).collect();
+    let chunk_indices: Vec<u32> = symbols.iter().map(|s| s.chunk_index).collect();
+    let total_chunks: Vec<u32> = symbols.iter().map(|s| s.total_chunks).collect();
 
     RecordBatch::try_new(
         schema,
@@ -104,6 +110,8 @@ fn symbols_to_batch(
             Arc::new(UInt32Array::from(end_lines)),
             Arc::new(StringArray::from(content_hashes)),
             Arc::new(build_embedding_array(&embeddings)),
+            Arc::new(UInt32Array::from(chunk_indices)),
+            Arc::new(UInt32Array::from(total_chunks)),
         ],
     )
 }
@@ -149,6 +157,16 @@ fn batch_to_symbols(batch: &RecordBatch) -> Vec<CachedSymbol> {
         .as_any()
         .downcast_ref::<FixedSizeListArray>()
         .expect("column 7 is FixedSizeListArray");
+    let chunk_indices = batch
+        .column(8)
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .expect("column 8 is UInt32Array");
+    let total_chunks_col = batch
+        .column(9)
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .expect("column 9 is UInt32Array");
 
     (0..batch.num_rows())
         .map(|i| {
@@ -169,6 +187,8 @@ fn batch_to_symbols(batch: &RecordBatch) -> Vec<CachedSymbol> {
                 end_line: end_lines.value(i),
                 content_hash: content_hashes.value(i).to_string(),
                 embedding: emb_values,
+                chunk_index: chunk_indices.value(i),
+                total_chunks: total_chunks_col.value(i),
             }
         })
         .collect()
@@ -690,6 +710,8 @@ mod tests {
             end_line: 5,
             content_hash: "abc123".to_string(),
             embedding: vec![0.0; EMBEDDING_DIM as usize],
+            chunk_index: 0,
+            total_chunks: 1,
         }
     }
 
@@ -704,6 +726,8 @@ mod tests {
             end_line: 5,
             content_hash: format!("hash_{}", name),
             embedding,
+            chunk_index: 0,
+            total_chunks: 1,
         }
     }
 
@@ -767,6 +791,8 @@ mod tests {
             end_line: 5,
             content_hash: "hash1".to_string(),
             embedding: vec![0.0; EMBEDDING_DIM as usize],
+            chunk_index: 0,
+            total_chunks: 1,
         };
 
         let symbol2 = CachedSymbol {
@@ -778,6 +804,8 @@ mod tests {
             end_line: 5,
             content_hash: "hash2".to_string(),
             embedding: vec![0.0; EMBEDDING_DIM as usize],
+            chunk_index: 0,
+            total_chunks: 1,
         };
 
         cache.upsert_symbol(&symbol1).unwrap();
@@ -800,6 +828,8 @@ mod tests {
             end_line: 5,
             content_hash: "hash1".to_string(),
             embedding: vec![0.0; EMBEDDING_DIM as usize],
+            chunk_index: 0,
+            total_chunks: 1,
         };
 
         let symbol2 = CachedSymbol {
@@ -811,6 +841,8 @@ mod tests {
             end_line: 15,
             content_hash: "hash2".to_string(),
             embedding: vec![0.0; EMBEDDING_DIM as usize],
+            chunk_index: 0,
+            total_chunks: 1,
         };
 
         let symbol3 = CachedSymbol {
@@ -822,6 +854,8 @@ mod tests {
             end_line: 5,
             content_hash: "hash3".to_string(),
             embedding: vec![0.0; EMBEDDING_DIM as usize],
+            chunk_index: 0,
+            total_chunks: 1,
         };
 
         cache.upsert_symbol(&symbol1).unwrap();
@@ -900,6 +934,8 @@ mod tests {
                 end_line: 5,
                 content_hash: format!("hash_{}", i),
                 embedding: vec![i as f32 / 100.0; EMBEDDING_DIM as usize],
+                chunk_index: 0,
+                total_chunks: 1,
             })
             .collect();
 
@@ -954,9 +990,11 @@ mod tests {
     #[test]
     fn test_symbols_schema() {
         let schema = symbols_schema();
-        assert_eq!(schema.fields().len(), 8);
+        assert_eq!(schema.fields().len(), 10);
         assert_eq!(schema.field(0).name(), "file_path");
         assert_eq!(schema.field(7).name(), "embedding");
+        assert_eq!(schema.field(8).name(), "chunk_index");
+        assert_eq!(schema.field(9).name(), "total_chunks");
     }
 
     #[test]

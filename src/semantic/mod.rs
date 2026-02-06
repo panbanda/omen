@@ -45,6 +45,7 @@
 pub mod api_provider;
 pub mod cache;
 pub mod candle_provider;
+pub mod chunker;
 pub mod embed;
 pub mod model;
 pub mod provider;
