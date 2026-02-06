@@ -17,7 +17,8 @@ use crate::core::{Error, FileSet, Result, SourceFile};
 use crate::parser::{extract_functions, Parser};
 
 use super::cache::{CachedSymbol, EmbeddingCache};
-use super::embed::{format_symbol_text, EmbeddingEngine};
+use super::chunker::chunk_functions;
+use super::embed::EmbeddingEngine;
 
 /// Maximum batch size for embedding generation.
 const EMBEDDING_BATCH_SIZE: usize = 64;
@@ -32,6 +33,8 @@ struct ParsedSymbol {
     end_line: u32,
     text: String,
     content_hash: String,
+    chunk_index: u32,
+    total_chunks: u32,
 }
 
 /// Result of parsing a single file.
@@ -205,6 +208,8 @@ impl<'a> SyncManager<'a> {
                 end_line: symbol.end_line,
                 content_hash: symbol.content_hash.clone(),
                 embedding,
+                chunk_index: symbol.chunk_index,
+                total_chunks: symbol.total_chunks,
             })
             .collect();
 
@@ -282,24 +287,25 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
     let parser = Parser::new();
     let parse_result = parser.parse_source(&source_file)?;
 
-    // Extract functions
+    // Extract functions and chunk them
     let functions = extract_functions(&parse_result);
-    let source_str = String::from_utf8_lossy(&source_file.content);
+    let chunks = chunk_functions(&functions, &parse_result);
 
-    // Create parsed symbols
-    let symbols: Vec<ParsedSymbol> = functions
-        .iter()
-        .map(|func| {
-            let text = format_symbol_text(func, &source_str);
-            let content_hash = hash_string(&text);
+    // Create parsed symbols from chunks
+    let symbols: Vec<ParsedSymbol> = chunks
+        .into_iter()
+        .map(|chunk| {
+            let content_hash = hash_string(&chunk.content);
             ParsedSymbol {
                 file_path: rel_path.clone(),
-                symbol_name: func.name.clone(),
-                signature: func.signature.clone(),
-                start_line: func.start_line,
-                end_line: func.end_line,
-                text,
+                symbol_name: chunk.symbol_name,
+                signature: chunk.signature,
+                start_line: chunk.start_line,
+                end_line: chunk.end_line,
+                text: chunk.content,
                 content_hash,
+                chunk_index: chunk.chunk_index,
+                total_chunks: chunk.total_chunks,
             }
         })
         .collect();
