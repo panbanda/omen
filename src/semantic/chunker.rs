@@ -205,12 +205,13 @@ fn build_sub_chunk(start_line: u32, end_line: u32, lines: &[&str]) -> SubChunk {
 /// Fallback: split function body by lines when tree-sitter body node is unavailable.
 fn split_by_lines(func: &FunctionNode, source: &str) -> Vec<SubChunk> {
     let lines: Vec<&str> = source.lines().collect();
-    let start = (func.start_line as usize).saturating_sub(1);
+    // Skip the signature line -- the caller prepends it to each chunk
+    let start = func.start_line as usize; // start_line is 1-based, so this skips line (start_line - 1)
     let end = (func.end_line as usize).min(lines.len());
 
     if start >= end || start >= lines.len() {
         return vec![SubChunk {
-            text: func.signature.clone(),
+            text: String::new(),
             start_line: func.start_line,
             end_line: func.end_line,
         }];

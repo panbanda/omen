@@ -113,9 +113,9 @@ impl SemanticSearch {
             .clone()
             .unwrap_or_else(|| root_path.join(".omen").join("search.lance"));
 
-        // Create cache directory if needed
         if let Some(parent) = cache_path.parent() {
-            std::fs::create_dir_all(parent).ok();
+            std::fs::create_dir_all(parent)
+                .map_err(|e| Error::analysis(format!("Failed to create cache directory: {}", e)))?;
         }
 
         let cache = EmbeddingCache::open(&cache_path)?;

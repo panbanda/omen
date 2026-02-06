@@ -38,7 +38,8 @@ impl MultiRepoSearch {
         });
 
         if let Some(parent) = cache_path.parent() {
-            std::fs::create_dir_all(parent).ok();
+            std::fs::create_dir_all(parent)
+                .map_err(|e| Error::analysis(format!("Failed to create cache directory: {}", e)))?;
         }
 
         let cache = EmbeddingCache::open(&cache_path)?;
