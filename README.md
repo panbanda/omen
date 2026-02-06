@@ -621,7 +621,7 @@ omen search query "authentication" --files src/auth/,src/middleware/
 
 **Performance:**
 
-- Index stored in `.omen/search.db` (SQLite)
+- Index stored in `.omen/search.lance` (LanceDB)
 - Parallel file parsing with rayon
 - Batch embedding generation (64 symbols per batch)
 - Typical indexing: ~3.5 symbols/second on CPU

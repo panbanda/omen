@@ -63,7 +63,7 @@ Options:
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                     Sync Manager                            │
-│  - Check .omen/search.db for stale files                   │
+│  - Check .omen/search.lance for stale files                 │
 │  - Compare content hashes                                   │
 │  - Trigger incremental update                               │
 └─────────────────────────────────────────────────────────────┘
@@ -73,7 +73,7 @@ Options:
 ┌──────────────────────────┐    ┌──────────────────────────┐
 │    Symbol Extractor      │    │    Embedding Engine      │
 │  - tree-sitter parsing   │    │  - candle ML framework   │
-│  - Extract functions     │    │  - all-MiniLM-L6-v2      │
+│  - Extract functions     │    │  - BGE-small-en-v1.5     │
 │  - Parallel with rayon   │    │  - Batch embedding (64)  │
 │  - Content hashing       │    │  - 384-dim vectors       │
 └──────────────────────────┘    └──────────────────────────┘
@@ -81,43 +81,44 @@ Options:
               └───────────────┬───────────────┘
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    SQLite Cache                             │
-│  .omen/search.db                                            │
+│                    LanceDB Cache                            │
+│  .omen/search.lance                                         │
 │  - symbols: file, name, signature, lines, embedding, hash   │
-│  - files: path, content_hash, indexed_at                    │
+│  - files: path, content_hash, repo_id                       │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    Search Engine                            │
 │  - Embed query string                                       │
-│  - Cosine similarity against cached embeddings              │
+│  - Vector search against cached embeddings                  │
 │  - Rank and return top N                                    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## Embedding Model
 
-Uses [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) via the candle ML framework for local inference.
+Uses [BAAI/bge-small-en-v1.5](https://huggingface.co/BAAI/bge-small-en-v1.5) via the candle ML framework for local inference.
 
 | Property | Value |
 |----------|-------|
-| Model | all-MiniLM-L6-v2 |
+| Model | BAAI/bge-small-en-v1.5 |
 | Framework | candle (Rust) |
 | Dimensions | 384 |
-| Model size | ~80MB |
+| Model size | ~130MB |
 | Inference | CPU (no GPU required) |
 
 The model is downloaded automatically on first use and cached to `~/.cache/omen/models/`.
 
 ### Alternative Providers
 
-Omen also supports third-party embedding APIs for higher quality embeddings:
+Omen also supports alternative embedding providers:
 
 ```toml
 # omen.toml
 [semantic]
-provider = "openai"        # Uses OPENAI_API_KEY env var
+provider = "ollama"        # Local Ollama server (bge-m3, nomic-embed-text, etc.)
+# provider = "openai"      # Uses OPENAI_API_KEY env var
 # provider = "cohere"      # Uses COHERE_API_KEY env var
 # provider = "voyage"      # Uses VOYAGE_API_KEY env var (optimized for code)
 ```
@@ -136,13 +137,12 @@ Benchmark on omen codebase (~1,300 symbols):
 
 ### Search
 
-- Brute-force cosine similarity over all embeddings
+- LanceDB native vector search (approximate nearest neighbor)
 - Query time: ~50-100ms for typical codebases (<100k symbols)
-- For larger codebases, future versions may add HNSW indexing
 
 ## Storage
 
-Index stored in `.omen/search.db` (SQLite):
+Index stored in `.omen/search.lance` (LanceDB):
 
 | Repo Size | Symbols | Storage |
 |-----------|---------|---------|
