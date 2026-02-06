@@ -17,7 +17,9 @@ use crate::core::{Error, FileSet, Result, SourceFile};
 use crate::parser::{extract_functions, Parser};
 
 use super::cache::{CachedSymbol, EmbeddingCache};
-use super::embed::{format_symbol_text, EmbeddingEngine};
+use super::chunker::chunk_functions;
+use super::embed::EmbeddingEngine;
+use super::metrics::{compute_file_metrics, lookup_metrics};
 
 /// Maximum batch size for embedding generation.
 const EMBEDDING_BATCH_SIZE: usize = 64;
@@ -32,6 +34,12 @@ struct ParsedSymbol {
     end_line: u32,
     text: String,
     content_hash: String,
+    chunk_index: u32,
+    total_chunks: u32,
+    cyclomatic_complexity: u32,
+    cognitive_complexity: u32,
+    tdg_score: f32,
+    tdg_grade: String,
 }
 
 /// Result of parsing a single file.
@@ -45,12 +53,17 @@ struct ParsedFile {
 pub struct SyncManager<'a> {
     cache: &'a EmbeddingCache,
     engine: &'a EmbeddingEngine,
+    repo_id: String,
 }
 
 impl<'a> SyncManager<'a> {
     /// Create a new sync manager.
-    pub fn new(cache: &'a EmbeddingCache, engine: &'a EmbeddingEngine) -> Self {
-        Self { cache, engine }
+    pub fn new(cache: &'a EmbeddingCache, engine: &'a EmbeddingEngine, repo_id: String) -> Self {
+        Self {
+            cache,
+            engine,
+            repo_id,
+        }
     }
 
     /// Sync the index with the current file set.
@@ -62,15 +75,19 @@ impl<'a> SyncManager<'a> {
         // Get current files
         let current_files: HashSet<PathBuf> = file_set.files().iter().cloned().collect();
 
-        // Get indexed files
-        let indexed_files: HashSet<String> =
-            self.cache.get_all_indexed_files()?.into_iter().collect();
+        // Get indexed files for this repo
+        let all_indexed = self.cache.get_all_indexed_files()?;
+        let indexed_files: HashSet<String> = all_indexed
+            .into_iter()
+            .filter(|(rid, _)| rid == &self.repo_id)
+            .map(|(_, path)| path)
+            .collect();
 
         // Find files to remove (deleted or moved)
         for indexed_path in &indexed_files {
             let full_path = root_path.join(indexed_path);
             if !current_files.contains(&full_path) {
-                self.cache.remove_file(indexed_path)?;
+                self.cache.remove_file(indexed_path, &self.repo_id)?;
                 stats.removed += 1;
             }
         }
@@ -154,8 +171,11 @@ impl<'a> SyncManager<'a> {
         if all_symbols.is_empty() {
             // No symbols to embed, but still record files as indexed
             for parsed_file in &parsed_files {
-                self.cache
-                    .record_file_indexed(&parsed_file.rel_path, &parsed_file.file_hash)?;
+                self.cache.record_file_indexed(
+                    &parsed_file.rel_path,
+                    &parsed_file.file_hash,
+                    &self.repo_id,
+                )?;
                 stats.indexed += 1;
             }
             return Ok(stats);
@@ -189,7 +209,8 @@ impl<'a> SyncManager<'a> {
 
         // First, delete existing symbols for all files being re-indexed
         for parsed_file in &parsed_files {
-            self.cache.delete_file_symbols(&parsed_file.rel_path)?;
+            self.cache
+                .delete_file_symbols(&parsed_file.rel_path, &self.repo_id)?;
         }
 
         // Build all CachedSymbol structs and bulk insert
@@ -205,6 +226,13 @@ impl<'a> SyncManager<'a> {
                 end_line: symbol.end_line,
                 content_hash: symbol.content_hash.clone(),
                 embedding,
+                chunk_index: symbol.chunk_index,
+                total_chunks: symbol.total_chunks,
+                cyclomatic_complexity: symbol.cyclomatic_complexity,
+                cognitive_complexity: symbol.cognitive_complexity,
+                tdg_score: symbol.tdg_score,
+                tdg_grade: symbol.tdg_grade.clone(),
+                repo_id: self.repo_id.clone(),
             })
             .collect();
 
@@ -220,8 +248,11 @@ impl<'a> SyncManager<'a> {
 
         // Record all files as indexed
         for parsed_file in &parsed_files {
-            self.cache
-                .record_file_indexed(&parsed_file.rel_path, &parsed_file.file_hash)?;
+            self.cache.record_file_indexed(
+                &parsed_file.rel_path,
+                &parsed_file.file_hash,
+                &self.repo_id,
+            )?;
             stats.indexed += 1;
             stats.symbols += parsed_file.symbols.len();
         }
@@ -235,7 +266,7 @@ impl<'a> SyncManager<'a> {
     fn check_file_changed(&self, path: &Path, rel_path: &str) -> Result<bool> {
         let current_hash = hash_file(path)?;
 
-        match self.cache.get_file_hash(rel_path)? {
+        match self.cache.get_file_hash(rel_path, &self.repo_id)? {
             Some(cached_hash) => Ok(cached_hash != current_hash),
             None => Ok(true), // Not indexed yet
         }
@@ -282,24 +313,33 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
     let parser = Parser::new();
     let parse_result = parser.parse_source(&source_file)?;
 
-    // Extract functions
+    // Extract functions and chunk them
     let functions = extract_functions(&parse_result);
-    let source_str = String::from_utf8_lossy(&source_file.content);
+    let chunks = chunk_functions(&functions, &parse_result);
 
-    // Create parsed symbols
-    let symbols: Vec<ParsedSymbol> = functions
-        .iter()
-        .map(|func| {
-            let text = format_symbol_text(func, &source_str);
-            let content_hash = hash_string(&text);
+    // Compute quality metrics for all symbols in this file
+    let metrics_map = compute_file_metrics(path, &parse_result.source, parse_result.language);
+
+    // Create parsed symbols from chunks
+    let symbols: Vec<ParsedSymbol> = chunks
+        .into_iter()
+        .map(|chunk| {
+            let content_hash = hash_string(&chunk.content);
+            let metrics = lookup_metrics(&metrics_map, &chunk.symbol_name, chunk.start_line);
             ParsedSymbol {
                 file_path: rel_path.clone(),
-                symbol_name: func.name.clone(),
-                signature: func.signature.clone(),
-                start_line: func.start_line,
-                end_line: func.end_line,
-                text,
+                symbol_name: chunk.symbol_name,
+                signature: chunk.signature,
+                start_line: chunk.start_line,
+                end_line: chunk.end_line,
+                text: chunk.content,
                 content_hash,
+                chunk_index: chunk.chunk_index,
+                total_chunks: chunk.total_chunks,
+                cyclomatic_complexity: metrics.cyclomatic_complexity,
+                cognitive_complexity: metrics.cognitive_complexity,
+                tdg_score: metrics.tdg_score,
+                tdg_grade: metrics.tdg_grade,
             }
         })
         .collect();

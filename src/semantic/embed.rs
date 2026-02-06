@@ -76,6 +76,36 @@ impl EmbeddingEngine {
     pub fn provider_name(&self) -> &str {
         self.provider.name()
     }
+
+    /// Create a no-op embedding engine for testing.
+    #[cfg(test)]
+    pub fn noop() -> Self {
+        use super::provider::EmbeddingProvider;
+
+        struct NoopProvider;
+
+        impl EmbeddingProvider for NoopProvider {
+            fn embed(&self, _text: &str) -> Result<Vec<f32>> {
+                Ok(vec![0.0; EMBEDDING_DIM])
+            }
+
+            fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+                Ok(texts.iter().map(|_| vec![0.0; EMBEDDING_DIM]).collect())
+            }
+
+            fn embedding_dim(&self) -> usize {
+                EMBEDDING_DIM
+            }
+
+            fn name(&self) -> &str {
+                "noop"
+            }
+        }
+
+        Self {
+            provider: Arc::new(NoopProvider),
+        }
+    }
 }
 
 /// Format a symbol for embedding generation.

@@ -45,8 +45,11 @@
 pub mod api_provider;
 pub mod cache;
 pub mod candle_provider;
+pub mod chunker;
 pub mod embed;
+pub mod metrics;
 pub mod model;
+pub mod multi;
 pub mod provider;
 pub mod search;
 pub mod sync;
@@ -61,6 +64,7 @@ use crate::core::{FileSet, Result};
 pub use cache::EmbeddingCache;
 pub use embed::EmbeddingEngine;
 pub use model::ModelManager;
+pub use multi::MultiRepoSearch;
 pub use provider::{EmbeddingProvider, EmbeddingProviderConfig};
 pub use search::{SearchEngine, SearchOutput, SearchResult};
 pub use sync::{SyncManager, SyncStats};
@@ -138,7 +142,7 @@ impl SemanticSearch {
     /// Index the repository (or update the index).
     pub fn index(&self, file_config: &Config) -> Result<SyncStats> {
         let file_set = FileSet::from_path(&self.root_path, file_config)?;
-        let sync_manager = SyncManager::new(&self.cache, &self.engine);
+        let sync_manager = SyncManager::new(&self.cache, &self.engine, String::new());
         sync_manager.sync(&file_set, &self.root_path)
     }
 
