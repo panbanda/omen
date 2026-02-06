@@ -47,6 +47,7 @@ pub mod cache;
 pub mod candle_provider;
 pub mod chunker;
 pub mod embed;
+pub mod metrics;
 pub mod model;
 pub mod provider;
 pub mod search;
