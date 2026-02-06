@@ -59,7 +59,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
-use crate::core::{FileSet, Result};
+use crate::core::{Error, FileSet, Result};
 
 pub use cache::EmbeddingCache;
 pub use embed::EmbeddingEngine;
