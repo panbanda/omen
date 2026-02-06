@@ -106,7 +106,7 @@ impl SemanticSearch {
         let cache_path = config
             .cache_path
             .clone()
-            .unwrap_or_else(|| root_path.join(".omen").join("search.db"));
+            .unwrap_or_else(|| root_path.join(".omen").join("search.lance"));
 
         // Create cache directory if needed
         if let Some(parent) = cache_path.parent() {

@@ -1,15 +1,13 @@
 //! Query engine for semantic search.
 //!
-//! Performs approximate nearest neighbor search over cached embeddings.
-
-use std::cmp::Ordering;
+//! Uses LanceDB native vector search for approximate nearest neighbor queries.
 
 use serde::{Deserialize, Serialize};
 
 use crate::core::Result;
 
-use super::cache::{CachedSymbol, EmbeddingCache};
-use super::embed::{cosine_similarity, EmbeddingEngine};
+use super::cache::EmbeddingCache;
+use super::embed::EmbeddingEngine;
 
 /// A search result with similarity score.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,30 +40,14 @@ impl<'a> SearchEngine<'a> {
         Self { cache, engine }
     }
 
-    /// Search for symbols matching the query.
+    /// Search for symbols matching the query using LanceDB vector search.
     pub fn search(&self, query: &str, top_k: usize) -> Result<Vec<SearchResult>> {
-        // Generate query embedding
         let query_embedding = self.engine.embed(query)?;
 
-        // Get all cached symbols
-        let symbols = self.cache.get_all_symbols()?;
+        let scored = self.cache.vector_search(&query_embedding, top_k)?;
 
-        // Score and rank all symbols
-        let mut scored: Vec<(CachedSymbol, f32)> = symbols
-            .into_iter()
-            .map(|sym| {
-                let score = cosine_similarity(&query_embedding, &sym.embedding);
-                (sym, score)
-            })
-            .collect();
-
-        // Sort by score descending
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
-
-        // Take top-k results
         let results: Vec<SearchResult> = scored
             .into_iter()
-            .take(top_k)
             .map(|(sym, score)| SearchResult {
                 file_path: sym.file_path,
                 symbol_name: sym.symbol_name,
@@ -103,25 +85,12 @@ impl<'a> SearchEngine<'a> {
     ) -> Result<Vec<SearchResult>> {
         let query_embedding = self.engine.embed(query)?;
 
-        let mut all_symbols = Vec::new();
-        for file_path in file_paths {
-            let symbols = self.cache.get_symbols_for_file(file_path)?;
-            all_symbols.extend(symbols);
-        }
-
-        let mut scored: Vec<(CachedSymbol, f32)> = all_symbols
-            .into_iter()
-            .map(|sym| {
-                let score = cosine_similarity(&query_embedding, &sym.embedding);
-                (sym, score)
-            })
-            .collect();
-
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+        let scored = self
+            .cache
+            .vector_search_in_files(&query_embedding, file_paths, top_k)?;
 
         let results: Vec<SearchResult> = scored
             .into_iter()
-            .take(top_k)
             .map(|(sym, score)| SearchResult {
                 file_path: sym.file_path,
                 symbol_name: sym.symbol_name,

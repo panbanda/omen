@@ -1067,11 +1067,11 @@ fn run_search(
     match subcommand {
         SearchSubcommand::Index(args) => {
             if args.force {
-                // Remove existing cache
-                let cache_path = path.join(".omen").join("search.db");
-                if cache_path.exists() {
-                    std::fs::remove_file(&cache_path)?;
-                    eprintln!("Removed existing index: {}", cache_path.display());
+                // Remove existing LanceDB directory
+                let lance_path = path.join(".omen").join("search.lance");
+                if lance_path.exists() {
+                    std::fs::remove_dir_all(&lance_path)?;
+                    eprintln!("Removed existing index: {}", lance_path.display());
                 }
                 // Recreate search instance with fresh cache
                 let search = SemanticSearch::new(&search_config, path)?;

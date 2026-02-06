@@ -192,9 +192,11 @@ impl<'a> SyncManager<'a> {
             self.cache.delete_file_symbols(&parsed_file.rel_path)?;
         }
 
-        // Insert all symbols with their embeddings
-        for (i, (symbol, embedding)) in all_symbols.iter().zip(embeddings.into_iter()).enumerate() {
-            let cached_symbol = CachedSymbol {
+        // Build all CachedSymbol structs and bulk insert
+        let cached_symbols: Vec<CachedSymbol> = all_symbols
+            .iter()
+            .zip(embeddings)
+            .map(|(symbol, embedding)| CachedSymbol {
                 file_path: symbol.file_path.clone(),
                 symbol_name: symbol.symbol_name.clone(),
                 symbol_type: "function".to_string(),
@@ -203,12 +205,13 @@ impl<'a> SyncManager<'a> {
                 end_line: symbol.end_line,
                 content_hash: symbol.content_hash.clone(),
                 embedding,
-            };
-            self.cache.upsert_symbol(&cached_symbol)?;
+            })
+            .collect();
 
-            if let Some(ref bar) = write_bar {
-                bar.set_position((i + 1) as u64);
-            }
+        self.cache.insert_symbols(&cached_symbols)?;
+
+        if let Some(ref bar) = write_bar {
+            bar.set_position(cached_symbols.len() as u64);
         }
 
         if let Some(bar) = write_bar {

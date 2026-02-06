@@ -98,9 +98,14 @@ candle-core = "0.8"
 candle-nn = "0.8"
 candle-transformers = "0.8"
 hf-hub = { version = "0.4", features = ["tokio"] }
-rusqlite = { version = "0.38", features = ["bundled"] }
 tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
 dirs = "6.0"
+
+# Vector database (LanceDB) + Arrow for schema/data
+lancedb = "0.23"
+arrow-array = "56"
+arrow-schema = "56"
+futures = "0.3"
 
 [dev-dependencies]
 # Testing
