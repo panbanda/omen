@@ -146,6 +146,12 @@ impl<'a> SyncManager<'a> {
             all_symbols.extend(parsed_file.symbols.iter().cloned());
         }
 
+        // Delete existing symbols for all files being re-indexed (must happen
+        // before the empty check so that removed functions don't persist).
+        for parsed_file in &parsed_files {
+            self.cache.delete_file_symbols(&parsed_file.rel_path)?;
+        }
+
         if all_symbols.is_empty() {
             for parsed_file in &parsed_files {
                 self.cache
@@ -163,11 +169,6 @@ impl<'a> SyncManager<'a> {
             bar.set_message("to cache...");
             bar
         });
-
-        // Delete existing symbols for all files being re-indexed
-        for parsed_file in &parsed_files {
-            self.cache.delete_file_symbols(&parsed_file.rel_path)?;
-        }
 
         // Insert all symbols with their enriched text
         for (i, symbol) in all_symbols.iter().enumerate() {

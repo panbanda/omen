@@ -1010,6 +1010,29 @@ mod tests {
     }
 
     #[test]
+    fn test_handle_tools_list_has_semantic_search_hyde() {
+        let (server, _temp_dir) = create_test_server();
+        let result = server.handle_tools_list().unwrap();
+        let tools = result.get("tools").unwrap().as_array().unwrap();
+        let has_hyde = tools
+            .iter()
+            .any(|t| t.get("name").unwrap() == "semantic_search_hyde");
+        assert!(has_hyde);
+    }
+
+    #[test]
+    fn test_semantic_search_hyde_missing_document() {
+        let (server, _temp_dir) = create_test_server();
+        let params = json!({
+            "name": "semantic_search_hyde",
+            "arguments": {}
+        });
+        let result = server.handle_tool_call(Some(params));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("hypothetical_document"));
+    }
+
+    #[test]
     fn test_handle_tool_call_score() {
         let (server, temp_dir) = create_test_server();
         std::fs::write(temp_dir.path().join("test.rs"), "fn main() {}").unwrap();
