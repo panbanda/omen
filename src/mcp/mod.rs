@@ -319,6 +319,21 @@ impl McpServer {
                         },
                         "required": ["query"]
                     }
+                },
+                {
+                    "name": "semantic_search_hyde",
+                    "description": "Search using hypothetical code. Write a code snippet resembling what you want to find. This is matched against the index, producing better results than keyword queries.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "hypothetical_document": {"type": "string", "description": "A code snippet resembling the code you want to find"},
+                            "query": {"type": "string", "description": "Original query for display purposes"},
+                            "top_k": {"type": "integer", "description": "Maximum number of results (default: 10)"},
+                            "min_score": {"type": "number", "description": "Minimum similarity score 0-1 (default: 0.3)"},
+                            "files": {"type": "string", "description": "Comma-separated file paths to search within"}
+                        },
+                        "required": ["hypothetical_document"]
+                    }
                 }
             ]
         }))
@@ -372,6 +387,9 @@ impl McpServer {
             }
             "semantic_search" => {
                 return self.handle_semantic_search(&arguments);
+            }
+            "semantic_search_hyde" => {
+                return self.handle_semantic_search_hyde(&arguments);
             }
             _ => Err(format!("Unknown tool: {}", tool_name)),
         }?;
@@ -473,6 +491,73 @@ impl McpServer {
                 .search(query, Some(top_k))
                 .map_err(|e| format!("Search failed: {}", e))?
         };
+
+        let result =
+            serde_json::to_value(&output).map_err(|e| format!("Serialization failed: {}", e))?;
+
+        Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": serde_json::to_string_pretty(&result).unwrap_or_default()
+            }]
+        }))
+    }
+
+    fn handle_semantic_search_hyde(&self, arguments: &Value) -> std::result::Result<Value, String> {
+        use crate::semantic::{SearchConfig, SemanticSearch};
+
+        let hypothetical_document = arguments
+            .get("hypothetical_document")
+            .and_then(|v| v.as_str())
+            .ok_or("Missing required 'hypothetical_document' parameter")?;
+
+        let display_query = arguments
+            .get("query")
+            .and_then(|v| v.as_str())
+            .unwrap_or(hypothetical_document);
+
+        let top_k = arguments
+            .get("top_k")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(10);
+
+        let min_score = arguments
+            .get("min_score")
+            .and_then(|v| v.as_f64())
+            .map(|v| v as f32)
+            .unwrap_or(0.3);
+
+        let files: Option<Vec<&str>> = arguments
+            .get("files")
+            .and_then(|v| v.as_str())
+            .map(|s| s.split(',').collect());
+
+        let search_config = SearchConfig {
+            min_score,
+            ..SearchConfig::default()
+        };
+
+        let search = SemanticSearch::new(&search_config, &self.root_path)
+            .map_err(|e| format!("Failed to initialize semantic search: {}", e))?;
+
+        search
+            .index(&self.config)
+            .map_err(|e| format!("Failed to index: {}", e))?;
+
+        // Use the hypothetical document as the search query text
+        let mut output = if let Some(file_paths) = files {
+            search
+                .search_in_files(hypothetical_document, &file_paths, Some(top_k))
+                .map_err(|e| format!("Search failed: {}", e))?
+        } else {
+            search
+                .search(hypothetical_document, Some(top_k))
+                .map_err(|e| format!("Search failed: {}", e))?
+        };
+
+        // Replace the query in output with the display query
+        output.query = display_query.to_string();
 
         let result =
             serde_json::to_value(&output).map_err(|e| format!("Serialization failed: {}", e))?;
@@ -922,6 +1007,29 @@ mod tests {
         let result = server.handle_tool_call(Some(params));
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("query"));
+    }
+
+    #[test]
+    fn test_handle_tools_list_has_semantic_search_hyde() {
+        let (server, _temp_dir) = create_test_server();
+        let result = server.handle_tools_list().unwrap();
+        let tools = result.get("tools").unwrap().as_array().unwrap();
+        let has_hyde = tools
+            .iter()
+            .any(|t| t.get("name").unwrap() == "semantic_search_hyde");
+        assert!(has_hyde);
+    }
+
+    #[test]
+    fn test_semantic_search_hyde_missing_document() {
+        let (server, _temp_dir) = create_test_server();
+        let params = json!({
+            "name": "semantic_search_hyde",
+            "arguments": {}
+        });
+        let result = server.handle_tool_call(Some(params));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("hypothetical_document"));
     }
 
     #[test]
