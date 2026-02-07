@@ -1,6 +1,6 @@
-//! SQLite cache for embedding vectors and symbol metadata.
+//! SQLite cache for symbol metadata and enriched text.
 //!
-//! Stores embeddings keyed by (file_path, symbol_name, content_hash) for efficient
+//! Stores symbols keyed by (file_path, symbol_name, content_hash) for efficient
 //! retrieval and staleness detection.
 
 use std::path::Path;
@@ -9,12 +9,12 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::core::{Error, Result};
 
-/// SQLite cache for embeddings.
+/// SQLite cache for semantic search symbols.
 pub struct EmbeddingCache {
     conn: Connection,
 }
 
-/// A cached symbol with its embedding.
+/// A cached symbol with its enriched text for TF-IDF search.
 #[derive(Debug, Clone)]
 pub struct CachedSymbol {
     pub file_path: String,
@@ -24,11 +24,11 @@ pub struct CachedSymbol {
     pub start_line: u32,
     pub end_line: u32,
     pub content_hash: String,
-    pub embedding: Vec<f32>,
+    pub enriched_text: String,
 }
 
 impl EmbeddingCache {
-    /// Open or create an embedding cache at the given path.
+    /// Open or create a cache at the given path.
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path).map_err(|e| {
             Error::analysis(format!(
@@ -39,6 +39,7 @@ impl EmbeddingCache {
         })?;
 
         let cache = Self { conn };
+        cache.migrate_if_needed()?;
         cache.init_schema()?;
         Ok(cache)
     }
@@ -51,6 +52,29 @@ impl EmbeddingCache {
         let cache = Self { conn };
         cache.init_schema()?;
         Ok(cache)
+    }
+
+    /// Detect old schema (has `embedding` column) and drop tables to force re-index.
+    fn migrate_if_needed(&self) -> Result<()> {
+        let has_embedding: bool = self
+            .conn
+            .prepare("PRAGMA table_info(symbols)")
+            .map(|mut stmt| {
+                let rows: Vec<String> = stmt
+                    .query_map([], |row| row.get::<_, String>(1))
+                    .map(|rows| rows.filter_map(|r| r.ok()).collect())
+                    .unwrap_or_default();
+                rows.iter().any(|name| name == "embedding")
+            })
+            .unwrap_or(false);
+
+        if has_embedding {
+            self.conn
+                .execute_batch("DROP TABLE IF EXISTS symbols; DROP TABLE IF EXISTS files;")
+                .map_err(|e| Error::analysis(format!("Failed to migrate old schema: {}", e)))?;
+        }
+
+        Ok(())
     }
 
     /// Initialize the database schema.
@@ -67,7 +91,7 @@ impl EmbeddingCache {
                     start_line INTEGER NOT NULL,
                     end_line INTEGER NOT NULL,
                     content_hash TEXT NOT NULL,
-                    embedding BLOB NOT NULL,
+                    enriched_text TEXT NOT NULL,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(file_path, symbol_name)
                 );
@@ -88,12 +112,10 @@ impl EmbeddingCache {
 
     /// Insert or update a symbol in the cache.
     pub fn upsert_symbol(&self, symbol: &CachedSymbol) -> Result<()> {
-        let embedding_bytes = embedding_to_bytes(&symbol.embedding);
-
         self.conn
             .execute(
                 r#"
-                INSERT INTO symbols (file_path, symbol_name, symbol_type, signature, start_line, end_line, content_hash, embedding)
+                INSERT INTO symbols (file_path, symbol_name, symbol_type, signature, start_line, end_line, content_hash, enriched_text)
                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                 ON CONFLICT(file_path, symbol_name) DO UPDATE SET
                     symbol_type = excluded.symbol_type,
@@ -101,7 +123,7 @@ impl EmbeddingCache {
                     start_line = excluded.start_line,
                     end_line = excluded.end_line,
                     content_hash = excluded.content_hash,
-                    embedding = excluded.embedding,
+                    enriched_text = excluded.enriched_text,
                     created_at = CURRENT_TIMESTAMP
             "#,
                 params![
@@ -112,7 +134,7 @@ impl EmbeddingCache {
                     symbol.start_line,
                     symbol.end_line,
                     symbol.content_hash,
-                    embedding_bytes,
+                    symbol.enriched_text,
                 ],
             )
             .map_err(|e| Error::analysis(format!("Failed to upsert symbol: {}", e)))?;
@@ -125,10 +147,9 @@ impl EmbeddingCache {
         let result = self
             .conn
             .query_row(
-                "SELECT file_path, symbol_name, symbol_type, signature, start_line, end_line, content_hash, embedding FROM symbols WHERE file_path = ?1 AND symbol_name = ?2",
+                "SELECT file_path, symbol_name, symbol_type, signature, start_line, end_line, content_hash, enriched_text FROM symbols WHERE file_path = ?1 AND symbol_name = ?2",
                 params![file_path, symbol_name],
                 |row| {
-                    let embedding_bytes: Vec<u8> = row.get(7)?;
                     Ok(CachedSymbol {
                         file_path: row.get(0)?,
                         symbol_name: row.get(1)?,
@@ -137,7 +158,7 @@ impl EmbeddingCache {
                         start_line: row.get(4)?,
                         end_line: row.get(5)?,
                         content_hash: row.get(6)?,
-                        embedding: bytes_to_embedding(&embedding_bytes),
+                        enriched_text: row.get(7)?,
                     })
                 },
             )
@@ -151,12 +172,11 @@ impl EmbeddingCache {
     pub fn get_all_symbols(&self) -> Result<Vec<CachedSymbol>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT file_path, symbol_name, symbol_type, signature, start_line, end_line, content_hash, embedding FROM symbols")
+            .prepare("SELECT file_path, symbol_name, symbol_type, signature, start_line, end_line, content_hash, enriched_text FROM symbols")
             .map_err(|e| Error::analysis(format!("Failed to prepare query: {}", e)))?;
 
         let symbols = stmt
             .query_map([], |row| {
-                let embedding_bytes: Vec<u8> = row.get(7)?;
                 Ok(CachedSymbol {
                     file_path: row.get(0)?,
                     symbol_name: row.get(1)?,
@@ -165,7 +185,7 @@ impl EmbeddingCache {
                     start_line: row.get(4)?,
                     end_line: row.get(5)?,
                     content_hash: row.get(6)?,
-                    embedding: bytes_to_embedding(&embedding_bytes),
+                    enriched_text: row.get(7)?,
                 })
             })
             .map_err(|e| Error::analysis(format!("Failed to query symbols: {}", e)))?
@@ -179,12 +199,11 @@ impl EmbeddingCache {
     pub fn get_symbols_for_file(&self, file_path: &str) -> Result<Vec<CachedSymbol>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT file_path, symbol_name, symbol_type, signature, start_line, end_line, content_hash, embedding FROM symbols WHERE file_path = ?1")
+            .prepare("SELECT file_path, symbol_name, symbol_type, signature, start_line, end_line, content_hash, enriched_text FROM symbols WHERE file_path = ?1")
             .map_err(|e| Error::analysis(format!("Failed to prepare query: {}", e)))?;
 
         let symbols = stmt
             .query_map(params![file_path], |row| {
-                let embedding_bytes: Vec<u8> = row.get(7)?;
                 Ok(CachedSymbol {
                     file_path: row.get(0)?,
                     symbol_name: row.get(1)?,
@@ -193,7 +212,7 @@ impl EmbeddingCache {
                     start_line: row.get(4)?,
                     end_line: row.get(5)?,
                     content_hash: row.get(6)?,
-                    embedding: bytes_to_embedding(&embedding_bytes),
+                    enriched_text: row.get(7)?,
                 })
             })
             .map_err(|e| Error::analysis(format!("Failed to query symbols: {}", e)))?
@@ -281,25 +300,6 @@ impl EmbeddingCache {
     }
 }
 
-/// Convert an embedding vector to bytes for storage.
-fn embedding_to_bytes(embedding: &[f32]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(embedding.len() * 4);
-    for val in embedding {
-        bytes.extend_from_slice(&val.to_le_bytes());
-    }
-    bytes
-}
-
-/// Convert bytes back to an embedding vector.
-fn bytes_to_embedding(bytes: &[u8]) -> Vec<f32> {
-    let mut embedding = Vec::with_capacity(bytes.len() / 4);
-    for chunk in bytes.chunks_exact(4) {
-        let val = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-        embedding.push(val);
-    }
-    embedding
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,7 +313,7 @@ mod tests {
             start_line: 1,
             end_line: 5,
             content_hash: "abc123".to_string(),
-            embedding: vec![0.1, 0.2, 0.3, 0.4],
+            enriched_text: "[src/main.rs] test_func\nfn test_func() { }".to_string(),
         }
     }
 
@@ -336,7 +336,7 @@ mod tests {
             .unwrap();
         assert_eq!(retrieved.file_path, symbol.file_path);
         assert_eq!(retrieved.symbol_name, symbol.symbol_name);
-        assert_eq!(retrieved.embedding, symbol.embedding);
+        assert_eq!(retrieved.enriched_text, symbol.enriched_text);
     }
 
     #[test]
@@ -347,7 +347,7 @@ mod tests {
         cache.upsert_symbol(&symbol).unwrap();
 
         symbol.content_hash = "new_hash".to_string();
-        symbol.embedding = vec![0.5, 0.6, 0.7, 0.8];
+        symbol.enriched_text = "updated text".to_string();
         cache.upsert_symbol(&symbol).unwrap();
 
         let retrieved = cache
@@ -355,7 +355,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(retrieved.content_hash, "new_hash");
-        assert_eq!(retrieved.embedding, vec![0.5, 0.6, 0.7, 0.8]);
+        assert_eq!(retrieved.enriched_text, "updated text");
         assert_eq!(cache.symbol_count().unwrap(), 1);
     }
 
@@ -378,7 +378,7 @@ mod tests {
             start_line: 1,
             end_line: 5,
             content_hash: "hash1".to_string(),
-            embedding: vec![0.1, 0.2],
+            enriched_text: "[src/a.rs] func_a\nfn func_a() {}".to_string(),
         };
 
         let symbol2 = CachedSymbol {
@@ -389,7 +389,7 @@ mod tests {
             start_line: 1,
             end_line: 5,
             content_hash: "hash2".to_string(),
-            embedding: vec![0.3, 0.4],
+            enriched_text: "[src/b.rs] func_b\nfn func_b() {}".to_string(),
         };
 
         cache.upsert_symbol(&symbol1).unwrap();
@@ -411,7 +411,7 @@ mod tests {
             start_line: 1,
             end_line: 5,
             content_hash: "hash1".to_string(),
-            embedding: vec![0.1, 0.2],
+            enriched_text: "text1".to_string(),
         };
 
         let symbol2 = CachedSymbol {
@@ -422,7 +422,7 @@ mod tests {
             start_line: 10,
             end_line: 15,
             content_hash: "hash2".to_string(),
-            embedding: vec![0.3, 0.4],
+            enriched_text: "text2".to_string(),
         };
 
         let symbol3 = CachedSymbol {
@@ -433,7 +433,7 @@ mod tests {
             start_line: 1,
             end_line: 5,
             content_hash: "hash3".to_string(),
-            embedding: vec![0.5, 0.6],
+            enriched_text: "text3".to_string(),
         };
 
         cache.upsert_symbol(&symbol1).unwrap();
@@ -499,13 +499,50 @@ mod tests {
     }
 
     #[test]
-    fn test_embedding_bytes_roundtrip() {
-        let original = vec![0.1, 0.2, 0.3, -0.5, 1.0];
-        let bytes = embedding_to_bytes(&original);
-        let restored = bytes_to_embedding(&bytes);
+    fn test_migration_from_old_schema() {
+        // Simulate old schema with embedding column
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE symbols (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_path TEXT NOT NULL,
+                symbol_name TEXT NOT NULL,
+                symbol_type TEXT NOT NULL,
+                signature TEXT NOT NULL,
+                start_line INTEGER NOT NULL,
+                end_line INTEGER NOT NULL,
+                content_hash TEXT NOT NULL,
+                embedding BLOB NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(file_path, symbol_name)
+            );
+            CREATE TABLE files (
+                file_path TEXT PRIMARY KEY,
+                file_hash TEXT NOT NULL,
+                indexed_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+        "#,
+        )
+        .unwrap();
 
-        for (a, b) in original.iter().zip(restored.iter()) {
-            assert!((a - b).abs() < 1e-6);
-        }
+        // Wrap in EmbeddingCache -- migration should drop and recreate
+        let cache = EmbeddingCache { conn };
+        cache.migrate_if_needed().unwrap();
+        cache.init_schema().unwrap();
+
+        // Should work with new schema
+        let symbol = CachedSymbol {
+            file_path: "test.rs".to_string(),
+            symbol_name: "foo".to_string(),
+            symbol_type: "function".to_string(),
+            signature: "fn foo()".to_string(),
+            start_line: 1,
+            end_line: 3,
+            content_hash: "h".to_string(),
+            enriched_text: "text".to_string(),
+        };
+        cache.upsert_symbol(&symbol).unwrap();
+        assert_eq!(cache.symbol_count().unwrap(), 1);
     }
 }

@@ -1,7 +1,7 @@
 //! Staleness detection and incremental indexing for semantic search.
 //!
 //! Detects changed files by comparing content hashes and re-indexes only what's needed.
-//! Uses parallel file parsing and batch embedding for performance.
+//! Uses parallel file parsing for performance.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -17,12 +17,9 @@ use crate::core::{Error, FileSet, Result, SourceFile};
 use crate::parser::{extract_functions, Parser};
 
 use super::cache::{CachedSymbol, EmbeddingCache};
-use super::embed::{format_symbol_text, EmbeddingEngine};
+use super::embed::format_enriched_text;
 
-/// Maximum batch size for embedding generation.
-const EMBEDDING_BATCH_SIZE: usize = 64;
-
-/// Intermediate structure for a parsed symbol before embedding.
+/// Intermediate structure for a parsed symbol.
 #[derive(Clone)]
 struct ParsedSymbol {
     file_path: String,
@@ -30,7 +27,7 @@ struct ParsedSymbol {
     signature: String,
     start_line: u32,
     end_line: u32,
-    text: String,
+    enriched_text: String,
     content_hash: String,
 }
 
@@ -44,13 +41,12 @@ struct ParsedFile {
 /// Sync manager for incremental indexing.
 pub struct SyncManager<'a> {
     cache: &'a EmbeddingCache,
-    engine: &'a EmbeddingEngine,
 }
 
 impl<'a> SyncManager<'a> {
     /// Create a new sync manager.
-    pub fn new(cache: &'a EmbeddingCache, engine: &'a EmbeddingEngine) -> Self {
-        Self { cache, engine }
+    pub fn new(cache: &'a EmbeddingCache) -> Self {
+        Self { cache }
     }
 
     /// Sync the index with the current file set.
@@ -96,7 +92,7 @@ impl<'a> SyncManager<'a> {
             return Ok(stats);
         }
 
-        // Set up multi-progress for the three phases
+        // Set up progress bars
         let multi = if show_progress {
             Some(MultiProgress::new())
         } else {
@@ -131,7 +127,6 @@ impl<'a> SyncManager<'a> {
                     }
                 };
 
-                // Update progress
                 let count = parse_counter.fetch_add(1, Ordering::Relaxed) + 1;
                 if let Some(ref bar) = parse_bar {
                     bar.set_position(count as u64);
@@ -145,14 +140,13 @@ impl<'a> SyncManager<'a> {
             bar.finish_with_message("done");
         }
 
-        // Collect all symbols and their texts for batch embedding
+        // Collect all symbols
         let mut all_symbols: Vec<ParsedSymbol> = Vec::new();
         for parsed_file in &parsed_files {
             all_symbols.extend(parsed_file.symbols.iter().cloned());
         }
 
         if all_symbols.is_empty() {
-            // No symbols to embed, but still record files as indexed
             for parsed_file in &parsed_files {
                 self.cache
                     .record_file_indexed(&parsed_file.rel_path, &parsed_file.file_hash)?;
@@ -161,24 +155,7 @@ impl<'a> SyncManager<'a> {
             return Ok(stats);
         }
 
-        // Phase 2: Batch embed all symbols
-        let embed_bar = multi.as_ref().map(|m| {
-            let num_batches = all_symbols.len().div_ceil(EMBEDDING_BATCH_SIZE);
-            let bar = m.add(ProgressBar::new(num_batches as u64));
-            bar.set_style(progress_style.clone());
-            bar.set_prefix("Embedding");
-            bar.set_message(format!("{} symbols...", all_symbols.len()));
-            bar
-        });
-
-        let texts: Vec<String> = all_symbols.iter().map(|s| s.text.clone()).collect();
-        let embeddings = self.embed_in_batches_with_progress(&texts, embed_bar.as_ref())?;
-
-        if let Some(bar) = embed_bar {
-            bar.finish_with_message("done");
-        }
-
-        // Phase 3: Write all symbols to cache
+        // Phase 2: Write all symbols to cache
         let write_bar = multi.as_ref().map(|m| {
             let bar = m.add(ProgressBar::new(all_symbols.len() as u64));
             bar.set_style(progress_style);
@@ -187,13 +164,13 @@ impl<'a> SyncManager<'a> {
             bar
         });
 
-        // First, delete existing symbols for all files being re-indexed
+        // Delete existing symbols for all files being re-indexed
         for parsed_file in &parsed_files {
             self.cache.delete_file_symbols(&parsed_file.rel_path)?;
         }
 
-        // Insert all symbols with their embeddings
-        for (i, (symbol, embedding)) in all_symbols.iter().zip(embeddings.into_iter()).enumerate() {
+        // Insert all symbols with their enriched text
+        for (i, symbol) in all_symbols.iter().enumerate() {
             let cached_symbol = CachedSymbol {
                 file_path: symbol.file_path.clone(),
                 symbol_name: symbol.symbol_name.clone(),
@@ -202,7 +179,7 @@ impl<'a> SyncManager<'a> {
                 start_line: symbol.start_line,
                 end_line: symbol.end_line,
                 content_hash: symbol.content_hash.clone(),
-                embedding,
+                enriched_text: symbol.enriched_text.clone(),
             };
             self.cache.upsert_symbol(&cached_symbol)?;
 
@@ -234,36 +211,12 @@ impl<'a> SyncManager<'a> {
 
         match self.cache.get_file_hash(rel_path)? {
             Some(cached_hash) => Ok(cached_hash != current_hash),
-            None => Ok(true), // Not indexed yet
+            None => Ok(true),
         }
-    }
-
-    /// Embed texts in batches with optional progress bar.
-    fn embed_in_batches_with_progress(
-        &self,
-        texts: &[String],
-        progress: Option<&ProgressBar>,
-    ) -> Result<Vec<Vec<f32>>> {
-        if texts.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let mut all_embeddings = Vec::with_capacity(texts.len());
-
-        for (i, chunk) in texts.chunks(EMBEDDING_BATCH_SIZE).enumerate() {
-            let batch_embeddings = self.engine.embed_batch(chunk)?;
-            all_embeddings.extend(batch_embeddings);
-
-            if let Some(bar) = progress {
-                bar.set_position((i + 1) as u64);
-            }
-        }
-
-        Ok(all_embeddings)
     }
 }
 
-/// Parse a single file and extract symbols (no embedding yet).
+/// Parse a single file and extract symbols.
 /// This is a free function to allow parallel execution with rayon.
 fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
     let rel_path = path
@@ -274,28 +227,25 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
 
     let file_hash = hash_file(path)?;
 
-    // Parse the file
     let source_file = SourceFile::load(path)?;
     let parser = Parser::new();
     let parse_result = parser.parse_source(&source_file)?;
 
-    // Extract functions
     let functions = extract_functions(&parse_result);
     let source_str = String::from_utf8_lossy(&source_file.content);
 
-    // Create parsed symbols
     let symbols: Vec<ParsedSymbol> = functions
         .iter()
         .map(|func| {
-            let text = format_symbol_text(func, &source_str);
-            let content_hash = hash_string(&text);
+            let enriched_text = format_enriched_text(&rel_path, func, &source_str);
+            let content_hash = hash_string(&enriched_text);
             ParsedSymbol {
                 file_path: rel_path.clone(),
                 symbol_name: func.name.clone(),
                 signature: func.signature.clone(),
                 start_line: func.start_line,
                 end_line: func.end_line,
-                text,
+                enriched_text,
                 content_hash,
             }
         })
@@ -364,7 +314,6 @@ mod tests {
     fn test_hash_bytes() {
         let hash = hash_bytes(b"test data");
         assert!(!hash.is_empty());
-        // Blake3 produces 64 hex characters
         assert_eq!(hash.len(), 64);
     }
 
