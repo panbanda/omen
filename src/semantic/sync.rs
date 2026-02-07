@@ -12,6 +12,7 @@ use blake3::Hasher;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 
+use crate::analyzers::complexity::analyze_function_complexity;
 use crate::core::progress::is_tty;
 use crate::core::{Error, FileSet, Result, SourceFile};
 use crate::parser::{extract_functions, Parser};
@@ -33,6 +34,8 @@ struct ParsedChunk {
     total_chunks: u32,
     enriched_text: String,
     content_hash: String,
+    cyclomatic_complexity: Option<u32>,
+    cognitive_complexity: Option<u32>,
 }
 
 /// Result of parsing a single file.
@@ -187,6 +190,8 @@ impl<'a> SyncManager<'a> {
                 total_chunks: chunk.total_chunks,
                 content_hash: chunk.content_hash.clone(),
                 enriched_text: chunk.enriched_text.clone(),
+                cyclomatic_complexity: chunk.cyclomatic_complexity,
+                cognitive_complexity: chunk.cognitive_complexity,
             };
             self.cache.upsert_symbol(&cached_symbol)?;
 
@@ -239,6 +244,19 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
     let parse_result = parser.parse_source(&source_file)?;
 
     let functions = extract_functions(&parse_result);
+
+    // Compute complexity per function (keyed by name + start_line for uniqueness)
+    let complexity_map: std::collections::HashMap<(String, u32), (u32, u32)> = functions
+        .iter()
+        .map(|func| {
+            let metrics = analyze_function_complexity(func, &parse_result);
+            (
+                (func.name.clone(), func.start_line),
+                (metrics.cyclomatic, metrics.cognitive),
+            )
+        })
+        .collect();
+
     let chunks: Vec<Chunk> = extract_chunks(&parse_result, &functions, &rel_path);
 
     let parsed_chunks: Vec<ParsedChunk> = chunks
@@ -246,6 +264,14 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
         .map(|chunk| {
             let enriched_text = format_chunk_text(chunk);
             let content_hash = hash_string(&enriched_text);
+
+            // Look up complexity from the original function.
+            // For chunk_index > 0, find any matching function by name.
+            let complexity = complexity_map
+                .iter()
+                .find(|((name, _), _)| name == &chunk.symbol_name)
+                .map(|(_, &(cyc, cog))| (cyc, cog));
+
             ParsedChunk {
                 file_path: chunk.file_path.clone(),
                 symbol_name: chunk.symbol_name.clone(),
@@ -258,6 +284,8 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
                 total_chunks: chunk.total_chunks,
                 enriched_text,
                 content_hash,
+                cyclomatic_complexity: complexity.map(|(c, _)| c),
+                cognitive_complexity: complexity.map(|(_, c)| c),
             }
         })
         .collect();

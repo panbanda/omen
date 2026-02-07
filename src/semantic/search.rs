@@ -9,7 +9,7 @@ use crate::core::Result;
 use super::cache::EmbeddingCache;
 use super::tfidf::{DocMeta, TfidfEngine};
 
-/// A search result with similarity score.
+/// A search result with similarity score and optional quality metrics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
     /// File path relative to repository root.
@@ -26,6 +26,12 @@ pub struct SearchResult {
     pub end_line: u32,
     /// Similarity score (0-1, higher is more similar).
     pub score: f32,
+    /// Cyclomatic complexity (if computed during indexing).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cyclomatic_complexity: Option<u32>,
+    /// Cognitive complexity (if computed during indexing).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cognitive_complexity: Option<u32>,
 }
 
 /// Search engine for semantic code search.
@@ -52,6 +58,8 @@ impl<'a> SearchEngine<'a> {
                     signature: sym.signature,
                     start_line: sym.start_line,
                     end_line: sym.end_line,
+                    cyclomatic_complexity: sym.cyclomatic_complexity,
+                    cognitive_complexity: sym.cognitive_complexity,
                 };
                 (sym.enriched_text, meta)
             })
@@ -85,6 +93,25 @@ impl<'a> SearchEngine<'a> {
             .collect())
     }
 
+    /// Search with combined filters: min score and max complexity.
+    pub fn search_filtered(
+        &self,
+        query: &str,
+        top_k: usize,
+        filters: &SearchFilters,
+    ) -> Result<Vec<SearchResult>> {
+        let results = self.search(query, top_k)?;
+        Ok(results
+            .into_iter()
+            .filter(|r| r.score >= filters.min_score)
+            .filter(|r| {
+                filters
+                    .max_complexity
+                    .is_none_or(|max| r.cyclomatic_complexity.is_none_or(|c| c <= max))
+            })
+            .collect())
+    }
+
     /// Search within specific files.
     pub fn search_in_files(
         &self,
@@ -108,7 +135,18 @@ fn to_search_result((meta, score): (DocMeta, f32)) -> SearchResult {
         start_line: meta.start_line,
         end_line: meta.end_line,
         score,
+        cyclomatic_complexity: meta.cyclomatic_complexity,
+        cognitive_complexity: meta.cognitive_complexity,
     }
+}
+
+/// Filters for search results.
+#[derive(Debug, Clone, Default)]
+pub struct SearchFilters {
+    /// Minimum similarity score (0-1).
+    pub min_score: f32,
+    /// Maximum cyclomatic complexity. Symbols above this are excluded.
+    pub max_complexity: Option<u32>,
 }
 
 /// Collapse multiple chunks of the same symbol into a single result,
@@ -174,6 +212,8 @@ mod tests {
             start_line: 1,
             end_line: 10,
             score: 0.95,
+            cyclomatic_complexity: Some(5),
+            cognitive_complexity: Some(3),
         };
 
         let json = serde_json::to_string(&result).unwrap();
@@ -197,6 +237,8 @@ mod tests {
                 start_line: 1,
                 end_line: 5,
                 score: 0.8,
+                cyclomatic_complexity: None,
+                cognitive_complexity: None,
             }],
         };
 
@@ -218,6 +260,8 @@ mod tests {
             total_chunks: 1,
             content_hash: hash.to_string(),
             enriched_text: enriched_text.to_string(),
+            cyclomatic_complexity: None,
+            cognitive_complexity: None,
         }
     }
 
@@ -319,6 +363,8 @@ mod tests {
                         "[src/lib.rs] MyStruct::big_func ({}/2)\nfn big_func() {{ chunk {i} with big_func code }}",
                         i + 1
                     ),
+                    cyclomatic_complexity: None,
+                    cognitive_complexity: None,
                 })
                 .unwrap();
         }
@@ -342,5 +388,64 @@ mod tests {
             .filter(|r| r.symbol_name == "big_func")
             .count();
         assert_eq!(big_func_count, 1);
+    }
+
+    #[test]
+    fn test_search_filtered_by_complexity() {
+        let cache = EmbeddingCache::in_memory().unwrap();
+
+        // Low complexity function
+        cache
+            .upsert_symbol(&CachedSymbol {
+                file_path: "src/a.rs".to_string(),
+                symbol_name: "simple_parse".to_string(),
+                symbol_type: "function".to_string(),
+                parent_name: None,
+                signature: "fn simple_parse()".to_string(),
+                start_line: 1,
+                end_line: 5,
+                chunk_index: 0,
+                total_chunks: 1,
+                content_hash: "h1".to_string(),
+                enriched_text: "[src/a.rs] simple_parse\nfn simple_parse() { parse }".to_string(),
+                cyclomatic_complexity: Some(2),
+                cognitive_complexity: Some(1),
+            })
+            .unwrap();
+
+        // High complexity function
+        cache
+            .upsert_symbol(&CachedSymbol {
+                file_path: "src/b.rs".to_string(),
+                symbol_name: "complex_parse".to_string(),
+                symbol_type: "function".to_string(),
+                parent_name: None,
+                signature: "fn complex_parse()".to_string(),
+                start_line: 1,
+                end_line: 100,
+                chunk_index: 0,
+                total_chunks: 1,
+                content_hash: "h2".to_string(),
+                enriched_text: "[src/b.rs] complex_parse\nfn complex_parse() { parse }".to_string(),
+                cyclomatic_complexity: Some(25),
+                cognitive_complexity: Some(30),
+            })
+            .unwrap();
+
+        let engine = SearchEngine::new(&cache);
+
+        // Without filter: both appear
+        let all = engine.search("parse", 10).unwrap();
+        assert_eq!(all.len(), 2);
+
+        // With max_complexity=10: only simple_parse
+        let filters = SearchFilters {
+            min_score: 0.0,
+            max_complexity: Some(10),
+        };
+        let filtered = engine.search_filtered("parse", 10, &filters).unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].symbol_name, "simple_parse");
+        assert_eq!(filtered[0].cyclomatic_complexity, Some(2));
     }
 }

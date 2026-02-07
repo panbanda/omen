@@ -27,7 +27,7 @@ use crate::config::Config;
 use crate::core::{FileSet, Result};
 
 pub use cache::EmbeddingCache;
-pub use search::{SearchEngine, SearchOutput, SearchResult};
+pub use search::{SearchEngine, SearchFilters, SearchOutput, SearchResult};
 pub use sync::{SyncManager, SyncStats};
 pub use tfidf::TfidfEngine;
 
@@ -95,6 +95,22 @@ impl SemanticSearch {
         let search_engine = SearchEngine::new(&self.cache);
 
         let results = search_engine.search_with_threshold(query, top_k, self.config.min_score)?;
+        let total_symbols = self.cache.symbol_count()?;
+
+        Ok(SearchOutput::new(query.to_string(), total_symbols, results))
+    }
+
+    /// Search with combined filters (min score, max complexity).
+    pub fn search_filtered(
+        &self,
+        query: &str,
+        top_k: Option<usize>,
+        filters: &SearchFilters,
+    ) -> Result<SearchOutput> {
+        let top_k = top_k.unwrap_or(self.config.max_results);
+        let search_engine = SearchEngine::new(&self.cache);
+
+        let results = search_engine.search_filtered(query, top_k, filters)?;
         let total_symbols = self.cache.symbol_count()?;
 
         Ok(SearchOutput::new(query.to_string(), total_symbols, results))

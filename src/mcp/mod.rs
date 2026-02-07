@@ -315,7 +315,8 @@ impl McpServer {
                             "query": {"type": "string", "description": "Natural language search query"},
                             "top_k": {"type": "integer", "description": "Maximum number of results (default: 10)"},
                             "min_score": {"type": "number", "description": "Minimum similarity score 0-1 (default: 0.3)"},
-                            "files": {"type": "string", "description": "Comma-separated file paths to search within"}
+                            "files": {"type": "string", "description": "Comma-separated file paths to search within"},
+                            "max_complexity": {"type": "integer", "description": "Exclude symbols with cyclomatic complexity above this value"}
                         },
                         "required": ["query"]
                     }
@@ -330,7 +331,8 @@ impl McpServer {
                             "query": {"type": "string", "description": "Original query for display purposes"},
                             "top_k": {"type": "integer", "description": "Maximum number of results (default: 10)"},
                             "min_score": {"type": "number", "description": "Minimum similarity score 0-1 (default: 0.3)"},
-                            "files": {"type": "string", "description": "Comma-separated file paths to search within"}
+                            "files": {"type": "string", "description": "Comma-separated file paths to search within"},
+                            "max_complexity": {"type": "integer", "description": "Exclude symbols with cyclomatic complexity above this value"}
                         },
                         "required": ["hypothetical_document"]
                     }
@@ -445,7 +447,7 @@ impl McpServer {
     }
 
     fn handle_semantic_search(&self, arguments: &Value) -> std::result::Result<Value, String> {
-        use crate::semantic::{SearchConfig, SemanticSearch};
+        use crate::semantic::{SearchConfig, SearchFilters, SemanticSearch};
 
         let query = arguments
             .get("query")
@@ -463,6 +465,11 @@ impl McpServer {
             .and_then(|v| v.as_f64())
             .map(|v| v as f32)
             .unwrap_or(0.3);
+
+        let max_complexity = arguments
+            .get("max_complexity")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
 
         let files: Option<Vec<&str>> = arguments
             .get("files")
@@ -486,6 +493,14 @@ impl McpServer {
             search
                 .search_in_files(query, &file_paths, Some(top_k))
                 .map_err(|e| format!("Search failed: {}", e))?
+        } else if max_complexity.is_some() {
+            let filters = SearchFilters {
+                min_score,
+                max_complexity,
+            };
+            search
+                .search_filtered(query, Some(top_k), &filters)
+                .map_err(|e| format!("Search failed: {}", e))?
         } else {
             search
                 .search(query, Some(top_k))
@@ -504,7 +519,7 @@ impl McpServer {
     }
 
     fn handle_semantic_search_hyde(&self, arguments: &Value) -> std::result::Result<Value, String> {
-        use crate::semantic::{SearchConfig, SemanticSearch};
+        use crate::semantic::{SearchConfig, SearchFilters, SemanticSearch};
 
         let hypothetical_document = arguments
             .get("hypothetical_document")
@@ -528,6 +543,11 @@ impl McpServer {
             .map(|v| v as f32)
             .unwrap_or(0.3);
 
+        let max_complexity = arguments
+            .get("max_complexity")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
+
         let files: Option<Vec<&str>> = arguments
             .get("files")
             .and_then(|v| v.as_str())
@@ -549,6 +569,14 @@ impl McpServer {
         let mut output = if let Some(file_paths) = files {
             search
                 .search_in_files(hypothetical_document, &file_paths, Some(top_k))
+                .map_err(|e| format!("Search failed: {}", e))?
+        } else if max_complexity.is_some() {
+            let filters = SearchFilters {
+                min_score,
+                max_complexity,
+            };
+            search
+                .search_filtered(hypothetical_document, Some(top_k), &filters)
                 .map_err(|e| format!("Search failed: {}", e))?
         } else {
             search
