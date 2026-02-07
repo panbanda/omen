@@ -1,5 +1,20 @@
 # Changelog
 
+## [4.22.0](https://github.com/panbanda/omen/compare/omen-v4.21.2...omen-v4.22.0) (2026-02-07)
+
+
+### Features
+
+* replace neural embeddings with TF-IDF semantic search ([7162f76](https://github.com/panbanda/omen/commit/7162f7678eea69a6962a51a87ccdd8195335d9a3))
+* replace neural embeddings with TF-IDF semantic search ([90e9514](https://github.com/panbanda/omen/commit/90e95145706e386a4f4267c3cdcb7d5a9c521052))
+
+
+### Bug Fixes
+
+* address CodeRabbit review feedback ([90407d8](https://github.com/panbanda/omen/commit/90407d8cd0b2ad1c1eeb9a1b10f4d415c3c559dd))
+* remove floating major version tag and use full release tags ([a5f8429](https://github.com/panbanda/omen/commit/a5f8429f3426096a5c7fcb76f32d61692039f78f))
+* remove floating major version tag and use full release tags ([9ef964d](https://github.com/panbanda/omen/commit/9ef964dfd30be13d022c78242e1a80b2304933b3))
+
 ## [4.21.2](https://github.com/panbanda/omen/compare/omen-v4.21.1...omen-v4.21.2) (2026-02-05)
 
 
