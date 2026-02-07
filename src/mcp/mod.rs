@@ -316,7 +316,8 @@ impl McpServer {
                             "top_k": {"type": "integer", "description": "Maximum number of results (default: 10)"},
                             "min_score": {"type": "number", "description": "Minimum similarity score 0-1 (default: 0.3)"},
                             "files": {"type": "string", "description": "Comma-separated file paths to search within"},
-                            "max_complexity": {"type": "integer", "description": "Exclude symbols with cyclomatic complexity above this value"}
+                            "max_complexity": {"type": "integer", "description": "Exclude symbols with cyclomatic complexity above this value"},
+                            "include_projects": {"type": "string", "description": "Comma-separated paths to additional project roots for cross-repo search"}
                         },
                         "required": ["query"]
                     }
@@ -332,7 +333,8 @@ impl McpServer {
                             "top_k": {"type": "integer", "description": "Maximum number of results (default: 10)"},
                             "min_score": {"type": "number", "description": "Minimum similarity score 0-1 (default: 0.3)"},
                             "files": {"type": "string", "description": "Comma-separated file paths to search within"},
-                            "max_complexity": {"type": "integer", "description": "Exclude symbols with cyclomatic complexity above this value"}
+                            "max_complexity": {"type": "integer", "description": "Exclude symbols with cyclomatic complexity above this value"},
+                            "include_projects": {"type": "string", "description": "Comma-separated paths to additional project roots for cross-repo search"}
                         },
                         "required": ["hypothetical_document"]
                     }
@@ -476,6 +478,15 @@ impl McpServer {
             .and_then(|v| v.as_str())
             .map(|s| s.split(',').collect());
 
+        let include_projects: Option<Vec<std::path::PathBuf>> = arguments
+            .get("include_projects")
+            .and_then(|v| v.as_str())
+            .map(|s| {
+                s.split(',')
+                    .map(|p| std::path::PathBuf::from(p.trim()))
+                    .collect()
+            });
+
         let search_config = SearchConfig {
             min_score,
             ..SearchConfig::default()
@@ -489,7 +500,19 @@ impl McpServer {
             .index(&self.config)
             .map_err(|e| format!("Failed to index: {}", e))?;
 
-        let output = if let Some(file_paths) = files {
+        let output = if let Some(ref extra) = include_projects {
+            let mut all_projects: Vec<&std::path::Path> = vec![&self.root_path];
+            all_projects.extend(extra.iter().map(|p| p.as_path()));
+            let results = crate::semantic::multi_repo::multi_repo_search(
+                &all_projects,
+                query,
+                top_k,
+                min_score,
+            )
+            .map_err(|e| format!("Multi-repo search failed: {}", e))?;
+            let total = results.len();
+            crate::semantic::SearchOutput::new(query.to_string(), total, results)
+        } else if let Some(file_paths) = files {
             search
                 .search_in_files(query, &file_paths, Some(top_k))
                 .map_err(|e| format!("Search failed: {}", e))?
@@ -553,6 +576,15 @@ impl McpServer {
             .and_then(|v| v.as_str())
             .map(|s| s.split(',').collect());
 
+        let include_projects: Option<Vec<std::path::PathBuf>> = arguments
+            .get("include_projects")
+            .and_then(|v| v.as_str())
+            .map(|s| {
+                s.split(',')
+                    .map(|p| std::path::PathBuf::from(p.trim()))
+                    .collect()
+            });
+
         let search_config = SearchConfig {
             min_score,
             ..SearchConfig::default()
@@ -566,7 +598,19 @@ impl McpServer {
             .map_err(|e| format!("Failed to index: {}", e))?;
 
         // Use the hypothetical document as the search query text
-        let mut output = if let Some(file_paths) = files {
+        let mut output = if let Some(ref extra) = include_projects {
+            let mut all_projects: Vec<&std::path::Path> = vec![&self.root_path];
+            all_projects.extend(extra.iter().map(|p| p.as_path()));
+            let results = crate::semantic::multi_repo::multi_repo_search(
+                &all_projects,
+                hypothetical_document,
+                top_k,
+                min_score,
+            )
+            .map_err(|e| format!("Multi-repo search failed: {}", e))?;
+            let total = results.len();
+            crate::semantic::SearchOutput::new(hypothetical_document.to_string(), total, results)
+        } else if let Some(file_paths) = files {
             search
                 .search_in_files(hypothetical_document, &file_paths, Some(top_k))
                 .map_err(|e| format!("Search failed: {}", e))?

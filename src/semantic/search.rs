@@ -151,7 +151,7 @@ pub struct SearchFilters {
 
 /// Collapse multiple chunks of the same symbol into a single result,
 /// keeping the highest score. The key is (file_path, symbol_name).
-fn deduplicate_chunks(results: Vec<(DocMeta, f32)>) -> Vec<SearchResult> {
+pub fn deduplicate_chunks(results: Vec<(DocMeta, f32)>) -> Vec<SearchResult> {
     let mut best: HashMap<(String, String), SearchResult> = HashMap::new();
     // Track insertion order to preserve ranking stability
     let mut order: Vec<(String, String)> = Vec::new();

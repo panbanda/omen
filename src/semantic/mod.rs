@@ -15,6 +15,7 @@
 pub mod cache;
 pub mod chunking;
 pub mod embed;
+pub mod multi_repo;
 pub mod search;
 pub mod sync;
 pub mod tfidf;
