@@ -483,6 +483,7 @@ impl McpServer {
             .and_then(|v| v.as_str())
             .map(|s| {
                 s.split(',')
+                    .filter(|p| !p.trim().is_empty())
                     .map(|p| std::path::PathBuf::from(p.trim()))
                     .collect()
             });
@@ -500,18 +501,17 @@ impl McpServer {
             .index(&self.config)
             .map_err(|e| format!("Failed to index: {}", e))?;
 
-        let output = if let Some(ref extra) = include_projects {
+        let mut output = if let Some(ref extra) = include_projects {
             let mut all_projects: Vec<&std::path::Path> = vec![&self.root_path];
             all_projects.extend(extra.iter().map(|p| p.as_path()));
-            let results = crate::semantic::multi_repo::multi_repo_search(
+            let mr = crate::semantic::multi_repo::multi_repo_search(
                 &all_projects,
                 query,
                 top_k,
                 min_score,
             )
             .map_err(|e| format!("Multi-repo search failed: {}", e))?;
-            let total = results.len();
-            crate::semantic::SearchOutput::new(query.to_string(), total, results)
+            crate::semantic::SearchOutput::new(query.to_string(), mr.total_symbols, mr.results)
         } else if let Some(file_paths) = files {
             search
                 .search_in_files(query, &file_paths, Some(top_k))
@@ -529,6 +529,13 @@ impl McpServer {
                 .search(query, Some(top_k))
                 .map_err(|e| format!("Search failed: {}", e))?
         };
+
+        // Apply max_complexity post-filter (works regardless of search path)
+        if let Some(max) = max_complexity {
+            output
+                .results
+                .retain(|r| r.cyclomatic_complexity.is_none_or(|c| c <= max));
+        }
 
         let result =
             serde_json::to_value(&output).map_err(|e| format!("Serialization failed: {}", e))?;
@@ -581,6 +588,7 @@ impl McpServer {
             .and_then(|v| v.as_str())
             .map(|s| {
                 s.split(',')
+                    .filter(|p| !p.trim().is_empty())
                     .map(|p| std::path::PathBuf::from(p.trim()))
                     .collect()
             });
@@ -601,15 +609,18 @@ impl McpServer {
         let mut output = if let Some(ref extra) = include_projects {
             let mut all_projects: Vec<&std::path::Path> = vec![&self.root_path];
             all_projects.extend(extra.iter().map(|p| p.as_path()));
-            let results = crate::semantic::multi_repo::multi_repo_search(
+            let mr = crate::semantic::multi_repo::multi_repo_search(
                 &all_projects,
                 hypothetical_document,
                 top_k,
                 min_score,
             )
             .map_err(|e| format!("Multi-repo search failed: {}", e))?;
-            let total = results.len();
-            crate::semantic::SearchOutput::new(hypothetical_document.to_string(), total, results)
+            crate::semantic::SearchOutput::new(
+                hypothetical_document.to_string(),
+                mr.total_symbols,
+                mr.results,
+            )
         } else if let Some(file_paths) = files {
             search
                 .search_in_files(hypothetical_document, &file_paths, Some(top_k))
@@ -627,6 +638,13 @@ impl McpServer {
                 .search(hypothetical_document, Some(top_k))
                 .map_err(|e| format!("Search failed: {}", e))?
         };
+
+        // Apply max_complexity post-filter (works regardless of search path)
+        if let Some(max) = max_complexity {
+            output
+                .results
+                .retain(|r| r.cyclomatic_complexity.is_none_or(|c| c <= max));
+        }
 
         // Replace the query in output with the display query
         output.query = display_query.to_string();
