@@ -66,7 +66,7 @@ impl<'a> SearchEngine<'a> {
     pub fn search(&self, query: &str, top_k: usize) -> Result<Vec<SearchResult>> {
         let tfidf = self.build_tfidf()?;
         // Fetch extra results before dedup since chunks will be collapsed
-        let raw_results = tfidf.search(query, top_k * 3);
+        let raw_results = tfidf.search(query, top_k.saturating_mul(3));
         let deduped = deduplicate_chunks(raw_results);
         Ok(deduped.into_iter().take(top_k).collect())
     }
@@ -93,7 +93,7 @@ impl<'a> SearchEngine<'a> {
         top_k: usize,
     ) -> Result<Vec<SearchResult>> {
         let tfidf = self.build_tfidf()?;
-        let raw_results = tfidf.search_in_files(query, file_paths, top_k * 3);
+        let raw_results = tfidf.search_in_files(query, file_paths, top_k.saturating_mul(3));
         let deduped = deduplicate_chunks(raw_results);
         Ok(deduped.into_iter().take(top_k).collect())
     }
