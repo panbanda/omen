@@ -1139,6 +1139,70 @@ mod tests {
     }
 
     #[test]
+    fn test_semantic_search_with_max_complexity() {
+        let (server, temp_dir) = create_test_server();
+
+        // Create a Rust file with a simple function so the index is non-empty
+        std::fs::write(temp_dir.path().join("test.rs"), "fn simple() { return; }\n").unwrap();
+
+        let params = json!({
+            "name": "semantic_search",
+            "arguments": {
+                "query": "simple",
+                "max_complexity": 5
+            }
+        });
+        let result = server.handle_tool_call(Some(params));
+        assert!(
+            result.is_ok(),
+            "semantic_search with max_complexity should succeed: {result:?}"
+        );
+        let response = result.unwrap();
+        assert!(response.get("content").is_some());
+    }
+
+    #[test]
+    fn test_semantic_search_hyde_with_max_complexity() {
+        let (server, temp_dir) = create_test_server();
+
+        std::fs::write(temp_dir.path().join("test.rs"), "fn simple() { return; }\n").unwrap();
+
+        let params = json!({
+            "name": "semantic_search_hyde",
+            "arguments": {
+                "hypothetical_document": "fn simple() { return; }",
+                "max_complexity": 5
+            }
+        });
+        let result = server.handle_tool_call(Some(params));
+        assert!(
+            result.is_ok(),
+            "semantic_search_hyde with max_complexity should succeed: {result:?}"
+        );
+        let response = result.unwrap();
+        assert!(response.get("content").is_some());
+    }
+
+    #[test]
+    fn test_semantic_search_max_complexity_schema_exposed() {
+        let (server, _temp_dir) = create_test_server();
+        let result = server.handle_tools_list().unwrap();
+        let tools = result.get("tools").unwrap().as_array().unwrap();
+
+        for tool_name in ["semantic_search", "semantic_search_hyde"] {
+            let tool = tools
+                .iter()
+                .find(|t| t.get("name").unwrap() == tool_name)
+                .unwrap_or_else(|| panic!("tool {tool_name} not found"));
+            let props = tool.get("inputSchema").unwrap().get("properties").unwrap();
+            assert!(
+                props.get("max_complexity").is_some(),
+                "{tool_name} should expose max_complexity parameter"
+            );
+        }
+    }
+
+    #[test]
     fn test_notification_no_response() {
         // Notifications are JSON-RPC requests without an `id` field.
         // run_stdio skips them, so we test the logic directly: a request

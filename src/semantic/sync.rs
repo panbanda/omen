@@ -345,6 +345,59 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_parse_file_extracts_chunks_with_complexity() {
+        let temp = tempfile::tempdir().unwrap();
+        let file_path = temp.path().join("test.rs");
+        std::fs::write(
+            &file_path,
+            "fn simple() { return; }\nfn branchy(x: i32) { if x > 0 { if x > 10 { return; } } }\n",
+        )
+        .unwrap();
+
+        let parsed = parse_file(&file_path, temp.path()).unwrap();
+        assert!(
+            !parsed.chunks.is_empty(),
+            "should extract at least one chunk"
+        );
+
+        let simple = parsed
+            .chunks
+            .iter()
+            .find(|c| c.symbol_name == "simple")
+            .expect("should find 'simple' chunk");
+        assert!(simple.cyclomatic_complexity.is_some());
+        assert!(simple.cognitive_complexity.is_some());
+        // simple() has no branches
+        assert_eq!(simple.cyclomatic_complexity, Some(1));
+
+        let branchy = parsed
+            .chunks
+            .iter()
+            .find(|c| c.symbol_name == "branchy")
+            .expect("should find 'branchy' chunk");
+        assert!(branchy.cyclomatic_complexity.is_some());
+        // branchy() has 2 if-branches -> cyclomatic >= 3
+        assert!(branchy.cyclomatic_complexity.unwrap() >= 3);
+    }
+
+    #[test]
+    fn test_parse_file_enriched_text_format() {
+        let temp = tempfile::tempdir().unwrap();
+        let file_path = temp.path().join("lib.rs");
+        std::fs::write(&file_path, "fn hello() { println!(\"hi\"); }\n").unwrap();
+
+        let parsed = parse_file(&file_path, temp.path()).unwrap();
+        assert_eq!(parsed.chunks.len(), 1);
+
+        let chunk = &parsed.chunks[0];
+        assert_eq!(chunk.file_path, "lib.rs");
+        assert_eq!(chunk.symbol_name, "hello");
+        assert!(chunk.enriched_text.contains("[lib.rs]"));
+        assert!(chunk.enriched_text.contains("hello"));
+        assert!(!chunk.content_hash.is_empty());
+    }
+
+    #[test]
     fn test_hash_string_deterministic() {
         let hash1 = hash_string("hello world");
         let hash2 = hash_string("hello world");
