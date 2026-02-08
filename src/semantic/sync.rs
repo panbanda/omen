@@ -270,15 +270,17 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
             let content_hash = hash_string(&enriched_text);
 
             // Look up complexity from the original function. Match by name
-            // and verify the chunk falls within the function's line range
-            // to handle overloaded/duplicate function names correctly.
+            // and verify the chunk falls within the function's line range.
+            // Use the tightest (smallest) enclosing range to handle nested
+            // same-name functions correctly.
             let complexity = complexity_entries
                 .iter()
-                .find(|(name, start, end, _, _)| {
+                .filter(|(name, start, end, _, _)| {
                     name == &chunk.symbol_name
                         && chunk.start_line >= *start
                         && chunk.start_line <= *end
                 })
+                .min_by_key(|(_, start, end, _, _)| end - start)
                 .map(|(_, _, _, cyc, cog)| (*cyc, *cog));
 
             ParsedChunk {

@@ -94,13 +94,16 @@ impl<'a> SearchEngine<'a> {
     }
 
     /// Search with combined filters: min score and max complexity.
+    ///
+    /// Over-fetches before filtering to compensate for results removed by
+    /// filters, so up to `top_k` results are returned when possible.
     pub fn search_filtered(
         &self,
         query: &str,
         top_k: usize,
         filters: &SearchFilters,
     ) -> Result<Vec<SearchResult>> {
-        let results = self.search(query, top_k)?;
+        let results = self.search(query, top_k.saturating_mul(3))?;
         Ok(results
             .into_iter()
             .filter(|r| r.score >= filters.min_score)
@@ -109,6 +112,7 @@ impl<'a> SearchEngine<'a> {
                     .max_complexity
                     .is_none_or(|max| r.cyclomatic_complexity.is_none_or(|c| c <= max))
             })
+            .take(top_k)
             .collect())
     }
 
