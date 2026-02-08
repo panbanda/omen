@@ -17,16 +17,20 @@ use crate::core::{Error, FileSet, Result, SourceFile};
 use crate::parser::{extract_functions, Parser};
 
 use super::cache::{CachedSymbol, EmbeddingCache};
-use super::embed::format_enriched_text;
+use super::chunking::{extract_chunks, format_chunk_text, Chunk};
 
-/// Intermediate structure for a parsed symbol.
+/// Intermediate structure for a parsed chunk ready for caching.
 #[derive(Clone)]
-struct ParsedSymbol {
+struct ParsedChunk {
     file_path: String,
     symbol_name: String,
+    symbol_type: String,
+    parent_name: Option<String>,
     signature: String,
     start_line: u32,
     end_line: u32,
+    chunk_index: u32,
+    total_chunks: u32,
     enriched_text: String,
     content_hash: String,
 }
@@ -35,7 +39,7 @@ struct ParsedSymbol {
 struct ParsedFile {
     rel_path: String,
     file_hash: String,
-    symbols: Vec<ParsedSymbol>,
+    chunks: Vec<ParsedChunk>,
 }
 
 /// Sync manager for incremental indexing.
@@ -140,10 +144,10 @@ impl<'a> SyncManager<'a> {
             bar.finish_with_message("done");
         }
 
-        // Collect all symbols
-        let mut all_symbols: Vec<ParsedSymbol> = Vec::new();
+        // Collect all chunks
+        let mut all_chunks: Vec<ParsedChunk> = Vec::new();
         for parsed_file in &parsed_files {
-            all_symbols.extend(parsed_file.symbols.iter().cloned());
+            all_chunks.extend(parsed_file.chunks.iter().cloned());
         }
 
         // Delete existing symbols for all files being re-indexed (must happen
@@ -152,7 +156,7 @@ impl<'a> SyncManager<'a> {
             self.cache.delete_file_symbols(&parsed_file.rel_path)?;
         }
 
-        if all_symbols.is_empty() {
+        if all_chunks.is_empty() {
             for parsed_file in &parsed_files {
                 self.cache
                     .record_file_indexed(&parsed_file.rel_path, &parsed_file.file_hash)?;
@@ -161,26 +165,28 @@ impl<'a> SyncManager<'a> {
             return Ok(stats);
         }
 
-        // Phase 2: Write all symbols to cache
+        // Phase 2: Write all chunks to cache
         let write_bar = multi.as_ref().map(|m| {
-            let bar = m.add(ProgressBar::new(all_symbols.len() as u64));
+            let bar = m.add(ProgressBar::new(all_chunks.len() as u64));
             bar.set_style(progress_style);
             bar.set_prefix("Writing");
             bar.set_message("to cache...");
             bar
         });
 
-        // Insert all symbols with their enriched text
-        for (i, symbol) in all_symbols.iter().enumerate() {
+        for (i, chunk) in all_chunks.iter().enumerate() {
             let cached_symbol = CachedSymbol {
-                file_path: symbol.file_path.clone(),
-                symbol_name: symbol.symbol_name.clone(),
-                symbol_type: "function".to_string(),
-                signature: symbol.signature.clone(),
-                start_line: symbol.start_line,
-                end_line: symbol.end_line,
-                content_hash: symbol.content_hash.clone(),
-                enriched_text: symbol.enriched_text.clone(),
+                file_path: chunk.file_path.clone(),
+                symbol_name: chunk.symbol_name.clone(),
+                symbol_type: chunk.symbol_type.clone(),
+                parent_name: chunk.parent_name.clone(),
+                signature: chunk.signature.clone(),
+                start_line: chunk.start_line,
+                end_line: chunk.end_line,
+                chunk_index: chunk.chunk_index,
+                total_chunks: chunk.total_chunks,
+                content_hash: chunk.content_hash.clone(),
+                enriched_text: chunk.enriched_text.clone(),
             };
             self.cache.upsert_symbol(&cached_symbol)?;
 
@@ -198,7 +204,7 @@ impl<'a> SyncManager<'a> {
             self.cache
                 .record_file_indexed(&parsed_file.rel_path, &parsed_file.file_hash)?;
             stats.indexed += 1;
-            stats.symbols += parsed_file.symbols.len();
+            stats.symbols += parsed_file.chunks.len();
         }
 
         stats.errors = files_to_index.len() - parsed_files.len();
@@ -217,7 +223,7 @@ impl<'a> SyncManager<'a> {
     }
 }
 
-/// Parse a single file and extract symbols.
+/// Parse a single file and extract chunks.
 /// This is a free function to allow parallel execution with rayon.
 fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
     let rel_path = path
@@ -233,19 +239,23 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
     let parse_result = parser.parse_source(&source_file)?;
 
     let functions = extract_functions(&parse_result);
-    let source_str = String::from_utf8_lossy(&source_file.content);
+    let chunks: Vec<Chunk> = extract_chunks(&parse_result, &functions, &rel_path);
 
-    let symbols: Vec<ParsedSymbol> = functions
+    let parsed_chunks: Vec<ParsedChunk> = chunks
         .iter()
-        .map(|func| {
-            let enriched_text = format_enriched_text(&rel_path, func, &source_str);
+        .map(|chunk| {
+            let enriched_text = format_chunk_text(chunk);
             let content_hash = hash_string(&enriched_text);
-            ParsedSymbol {
-                file_path: rel_path.clone(),
-                symbol_name: func.name.clone(),
-                signature: func.signature.clone(),
-                start_line: func.start_line,
-                end_line: func.end_line,
+            ParsedChunk {
+                file_path: chunk.file_path.clone(),
+                symbol_name: chunk.symbol_name.clone(),
+                symbol_type: chunk.symbol_type.clone(),
+                parent_name: chunk.parent_name.clone(),
+                signature: chunk.signature.clone(),
+                start_line: chunk.start_line,
+                end_line: chunk.end_line,
+                chunk_index: chunk.chunk_index,
+                total_chunks: chunk.total_chunks,
                 enriched_text,
                 content_hash,
             }
@@ -255,7 +265,7 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
     Ok(ParsedFile {
         rel_path,
         file_hash,
-        symbols,
+        chunks: parsed_chunks,
     })
 }
 

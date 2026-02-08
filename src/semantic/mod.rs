@@ -6,12 +6,14 @@
 //! # Architecture
 //!
 //! - **tfidf**: TF-IDF engine (vocabulary, IDF, sparse vector search)
+//! - **chunking**: AST-aware chunking of long functions at statement boundaries
 //! - **embed**: Text formatting for enriched symbol representation
 //! - **cache**: SQLite storage for symbols and staleness tracking
 //! - **sync**: Incremental indexing and staleness detection
 //! - **search**: Query engine wrapping TF-IDF over cached symbols
 
 pub mod cache;
+pub mod chunking;
 pub mod embed;
 pub mod search;
 pub mod sync;

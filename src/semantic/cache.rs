@@ -20,11 +20,30 @@ pub struct CachedSymbol {
     pub file_path: String,
     pub symbol_name: String,
     pub symbol_type: String,
+    pub parent_name: Option<String>,
     pub signature: String,
     pub start_line: u32,
     pub end_line: u32,
+    pub chunk_index: u32,
+    pub total_chunks: u32,
     pub content_hash: String,
     pub enriched_text: String,
+}
+
+fn row_to_symbol(row: &rusqlite::Row<'_>) -> rusqlite::Result<CachedSymbol> {
+    Ok(CachedSymbol {
+        file_path: row.get(0)?,
+        symbol_name: row.get(1)?,
+        symbol_type: row.get(2)?,
+        parent_name: row.get(3)?,
+        signature: row.get(4)?,
+        start_line: row.get(5)?,
+        end_line: row.get(6)?,
+        chunk_index: row.get(7)?,
+        total_chunks: row.get(8)?,
+        content_hash: row.get(9)?,
+        enriched_text: row.get(10)?,
+    })
 }
 
 impl EmbeddingCache {
@@ -54,21 +73,27 @@ impl EmbeddingCache {
         Ok(cache)
     }
 
-    /// Detect old schema (has `embedding` column) and drop tables to force re-index.
+    /// Detect old schema and drop tables to force re-index.
+    ///
+    /// Triggers migration when:
+    /// - `embedding` column exists (pre-TF-IDF schema)
+    /// - `chunk_index` column is missing (pre-chunking schema)
     fn migrate_if_needed(&self) -> Result<()> {
-        let has_embedding: bool = self
+        let columns: Vec<String> = self
             .conn
             .prepare("PRAGMA table_info(symbols)")
             .map(|mut stmt| {
-                let rows: Vec<String> = stmt
-                    .query_map([], |row| row.get::<_, String>(1))
+                stmt.query_map([], |row| row.get::<_, String>(1))
                     .map(|rows| rows.filter_map(|r| r.ok()).collect())
-                    .unwrap_or_default();
-                rows.iter().any(|name| name == "embedding")
+                    .unwrap_or_default()
             })
-            .unwrap_or(false);
+            .unwrap_or_default();
 
-        if has_embedding {
+        let needs_migration = !columns.is_empty()
+            && (columns.iter().any(|name| name == "embedding")
+                || !columns.iter().any(|name| name == "chunk_index"));
+
+        if needs_migration {
             self.conn
                 .execute_batch("DROP TABLE IF EXISTS symbols; DROP TABLE IF EXISTS files;")
                 .map_err(|e| Error::analysis(format!("Failed to migrate old schema: {}", e)))?;
@@ -87,13 +112,16 @@ impl EmbeddingCache {
                     file_path TEXT NOT NULL,
                     symbol_name TEXT NOT NULL,
                     symbol_type TEXT NOT NULL,
+                    parent_name TEXT,
                     signature TEXT NOT NULL,
                     start_line INTEGER NOT NULL,
                     end_line INTEGER NOT NULL,
+                    chunk_index INTEGER NOT NULL DEFAULT 0,
+                    total_chunks INTEGER NOT NULL DEFAULT 1,
                     content_hash TEXT NOT NULL,
                     enriched_text TEXT NOT NULL,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(file_path, symbol_name)
+                    UNIQUE(file_path, symbol_name, chunk_index)
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_symbols_file_path ON symbols(file_path);
@@ -115,13 +143,15 @@ impl EmbeddingCache {
         self.conn
             .execute(
                 r#"
-                INSERT INTO symbols (file_path, symbol_name, symbol_type, signature, start_line, end_line, content_hash, enriched_text)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-                ON CONFLICT(file_path, symbol_name) DO UPDATE SET
+                INSERT INTO symbols (file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                ON CONFLICT(file_path, symbol_name, chunk_index) DO UPDATE SET
                     symbol_type = excluded.symbol_type,
+                    parent_name = excluded.parent_name,
                     signature = excluded.signature,
                     start_line = excluded.start_line,
                     end_line = excluded.end_line,
+                    total_chunks = excluded.total_chunks,
                     content_hash = excluded.content_hash,
                     enriched_text = excluded.enriched_text,
                     created_at = CURRENT_TIMESTAMP
@@ -130,9 +160,12 @@ impl EmbeddingCache {
                     symbol.file_path,
                     symbol.symbol_name,
                     symbol.symbol_type,
+                    symbol.parent_name,
                     symbol.signature,
                     symbol.start_line,
                     symbol.end_line,
+                    symbol.chunk_index,
+                    symbol.total_chunks,
                     symbol.content_hash,
                     symbol.enriched_text,
                 ],
@@ -142,25 +175,19 @@ impl EmbeddingCache {
         Ok(())
     }
 
-    /// Get a symbol from the cache by file path and symbol name.
-    pub fn get_symbol(&self, file_path: &str, symbol_name: &str) -> Result<Option<CachedSymbol>> {
+    /// Get a symbol from the cache by file path, symbol name, and chunk index.
+    pub fn get_symbol(
+        &self,
+        file_path: &str,
+        symbol_name: &str,
+        chunk_index: u32,
+    ) -> Result<Option<CachedSymbol>> {
         let result = self
             .conn
             .query_row(
-                "SELECT file_path, symbol_name, symbol_type, signature, start_line, end_line, content_hash, enriched_text FROM symbols WHERE file_path = ?1 AND symbol_name = ?2",
-                params![file_path, symbol_name],
-                |row| {
-                    Ok(CachedSymbol {
-                        file_path: row.get(0)?,
-                        symbol_name: row.get(1)?,
-                        symbol_type: row.get(2)?,
-                        signature: row.get(3)?,
-                        start_line: row.get(4)?,
-                        end_line: row.get(5)?,
-                        content_hash: row.get(6)?,
-                        enriched_text: row.get(7)?,
-                    })
-                },
+                "SELECT file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text FROM symbols WHERE file_path = ?1 AND symbol_name = ?2 AND chunk_index = ?3",
+                params![file_path, symbol_name, chunk_index],
+                row_to_symbol,
             )
             .optional()
             .map_err(|e| Error::analysis(format!("Failed to get symbol: {}", e)))?;
@@ -172,22 +199,11 @@ impl EmbeddingCache {
     pub fn get_all_symbols(&self) -> Result<Vec<CachedSymbol>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT file_path, symbol_name, symbol_type, signature, start_line, end_line, content_hash, enriched_text FROM symbols")
+            .prepare("SELECT file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text FROM symbols")
             .map_err(|e| Error::analysis(format!("Failed to prepare query: {}", e)))?;
 
         let symbols = stmt
-            .query_map([], |row| {
-                Ok(CachedSymbol {
-                    file_path: row.get(0)?,
-                    symbol_name: row.get(1)?,
-                    symbol_type: row.get(2)?,
-                    signature: row.get(3)?,
-                    start_line: row.get(4)?,
-                    end_line: row.get(5)?,
-                    content_hash: row.get(6)?,
-                    enriched_text: row.get(7)?,
-                })
-            })
+            .query_map([], row_to_symbol)
             .map_err(|e| Error::analysis(format!("Failed to query symbols: {}", e)))?
             .filter_map(|r| r.ok())
             .collect();
@@ -199,22 +215,11 @@ impl EmbeddingCache {
     pub fn get_symbols_for_file(&self, file_path: &str) -> Result<Vec<CachedSymbol>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT file_path, symbol_name, symbol_type, signature, start_line, end_line, content_hash, enriched_text FROM symbols WHERE file_path = ?1")
+            .prepare("SELECT file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text FROM symbols WHERE file_path = ?1")
             .map_err(|e| Error::analysis(format!("Failed to prepare query: {}", e)))?;
 
         let symbols = stmt
-            .query_map(params![file_path], |row| {
-                Ok(CachedSymbol {
-                    file_path: row.get(0)?,
-                    symbol_name: row.get(1)?,
-                    symbol_type: row.get(2)?,
-                    signature: row.get(3)?,
-                    start_line: row.get(4)?,
-                    end_line: row.get(5)?,
-                    content_hash: row.get(6)?,
-                    enriched_text: row.get(7)?,
-                })
-            })
+            .query_map(params![file_path], row_to_symbol)
             .map_err(|e| Error::analysis(format!("Failed to query symbols: {}", e)))?
             .filter_map(|r| r.ok())
             .collect();
@@ -309,9 +314,12 @@ mod tests {
             file_path: "src/main.rs".to_string(),
             symbol_name: "test_func".to_string(),
             symbol_type: "function".to_string(),
+            parent_name: None,
             signature: "fn test_func()".to_string(),
             start_line: 1,
             end_line: 5,
+            chunk_index: 0,
+            total_chunks: 1,
             content_hash: "abc123".to_string(),
             enriched_text: "[src/main.rs] test_func\nfn test_func() { }".to_string(),
         }
@@ -331,12 +339,15 @@ mod tests {
         cache.upsert_symbol(&symbol).unwrap();
 
         let retrieved = cache
-            .get_symbol(&symbol.file_path, &symbol.symbol_name)
+            .get_symbol(&symbol.file_path, &symbol.symbol_name, 0)
             .unwrap()
             .unwrap();
         assert_eq!(retrieved.file_path, symbol.file_path);
         assert_eq!(retrieved.symbol_name, symbol.symbol_name);
         assert_eq!(retrieved.enriched_text, symbol.enriched_text);
+        assert_eq!(retrieved.chunk_index, 0);
+        assert_eq!(retrieved.total_chunks, 1);
+        assert!(retrieved.parent_name.is_none());
     }
 
     #[test]
@@ -351,7 +362,7 @@ mod tests {
         cache.upsert_symbol(&symbol).unwrap();
 
         let retrieved = cache
-            .get_symbol(&symbol.file_path, &symbol.symbol_name)
+            .get_symbol(&symbol.file_path, &symbol.symbol_name, 0)
             .unwrap()
             .unwrap();
         assert_eq!(retrieved.content_hash, "new_hash");
@@ -362,7 +373,7 @@ mod tests {
     #[test]
     fn test_get_nonexistent_symbol() {
         let cache = EmbeddingCache::in_memory().unwrap();
-        let result = cache.get_symbol("nonexistent", "func").unwrap();
+        let result = cache.get_symbol("nonexistent", "func", 0).unwrap();
         assert!(result.is_none());
     }
 
@@ -374,9 +385,12 @@ mod tests {
             file_path: "src/a.rs".to_string(),
             symbol_name: "func_a".to_string(),
             symbol_type: "function".to_string(),
+            parent_name: None,
             signature: "fn func_a()".to_string(),
             start_line: 1,
             end_line: 5,
+            chunk_index: 0,
+            total_chunks: 1,
             content_hash: "hash1".to_string(),
             enriched_text: "[src/a.rs] func_a\nfn func_a() {}".to_string(),
         };
@@ -385,9 +399,12 @@ mod tests {
             file_path: "src/b.rs".to_string(),
             symbol_name: "func_b".to_string(),
             symbol_type: "function".to_string(),
+            parent_name: None,
             signature: "fn func_b()".to_string(),
             start_line: 1,
             end_line: 5,
+            chunk_index: 0,
+            total_chunks: 1,
             content_hash: "hash2".to_string(),
             enriched_text: "[src/b.rs] func_b\nfn func_b() {}".to_string(),
         };
@@ -407,9 +424,12 @@ mod tests {
             file_path: "src/main.rs".to_string(),
             symbol_name: "func_a".to_string(),
             symbol_type: "function".to_string(),
+            parent_name: None,
             signature: "fn func_a()".to_string(),
             start_line: 1,
             end_line: 5,
+            chunk_index: 0,
+            total_chunks: 1,
             content_hash: "hash1".to_string(),
             enriched_text: "text1".to_string(),
         };
@@ -418,9 +438,12 @@ mod tests {
             file_path: "src/main.rs".to_string(),
             symbol_name: "func_b".to_string(),
             symbol_type: "function".to_string(),
+            parent_name: None,
             signature: "fn func_b()".to_string(),
             start_line: 10,
             end_line: 15,
+            chunk_index: 0,
+            total_chunks: 1,
             content_hash: "hash2".to_string(),
             enriched_text: "text2".to_string(),
         };
@@ -429,9 +452,12 @@ mod tests {
             file_path: "src/other.rs".to_string(),
             symbol_name: "func_c".to_string(),
             symbol_type: "function".to_string(),
+            parent_name: None,
             signature: "fn func_c()".to_string(),
             start_line: 1,
             end_line: 5,
+            chunk_index: 0,
+            total_chunks: 1,
             content_hash: "hash3".to_string(),
             enriched_text: "text3".to_string(),
         };
@@ -536,13 +562,100 @@ mod tests {
             file_path: "test.rs".to_string(),
             symbol_name: "foo".to_string(),
             symbol_type: "function".to_string(),
+            parent_name: None,
             signature: "fn foo()".to_string(),
             start_line: 1,
             end_line: 3,
+            chunk_index: 0,
+            total_chunks: 1,
             content_hash: "h".to_string(),
             enriched_text: "text".to_string(),
         };
         cache.upsert_symbol(&symbol).unwrap();
         assert_eq!(cache.symbol_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_migration_from_pre_chunking_schema() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE symbols (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_path TEXT NOT NULL,
+                symbol_name TEXT NOT NULL,
+                symbol_type TEXT NOT NULL,
+                signature TEXT NOT NULL,
+                start_line INTEGER NOT NULL,
+                end_line INTEGER NOT NULL,
+                content_hash TEXT NOT NULL,
+                enriched_text TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(file_path, symbol_name)
+            );
+            CREATE TABLE files (
+                file_path TEXT PRIMARY KEY,
+                file_hash TEXT NOT NULL,
+                indexed_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+        "#,
+        )
+        .unwrap();
+
+        let cache = EmbeddingCache { conn };
+        cache.migrate_if_needed().unwrap();
+        cache.init_schema().unwrap();
+
+        // Should accept chunk fields
+        let symbol = CachedSymbol {
+            file_path: "test.rs".to_string(),
+            symbol_name: "bar".to_string(),
+            symbol_type: "function".to_string(),
+            parent_name: Some("Foo".to_string()),
+            signature: "fn bar()".to_string(),
+            start_line: 5,
+            end_line: 10,
+            chunk_index: 1,
+            total_chunks: 3,
+            content_hash: "h".to_string(),
+            enriched_text: "text".to_string(),
+        };
+        cache.upsert_symbol(&symbol).unwrap();
+        let retrieved = cache.get_symbol("test.rs", "bar", 1).unwrap().unwrap();
+        assert_eq!(retrieved.parent_name.as_deref(), Some("Foo"));
+        assert_eq!(retrieved.chunk_index, 1);
+        assert_eq!(retrieved.total_chunks, 3);
+    }
+
+    #[test]
+    fn test_multiple_chunks_same_symbol() {
+        let cache = EmbeddingCache::in_memory().unwrap();
+
+        for i in 0..3 {
+            cache
+                .upsert_symbol(&CachedSymbol {
+                    file_path: "src/lib.rs".to_string(),
+                    symbol_name: "big_func".to_string(),
+                    symbol_type: "function".to_string(),
+                    parent_name: Some("MyStruct".to_string()),
+                    signature: "fn big_func()".to_string(),
+                    start_line: 10 + i * 20,
+                    end_line: 10 + (i + 1) * 20,
+                    chunk_index: i,
+                    total_chunks: 3,
+                    content_hash: format!("h{i}"),
+                    enriched_text: format!("chunk {i}"),
+                })
+                .unwrap();
+        }
+
+        assert_eq!(cache.symbol_count().unwrap(), 3);
+
+        let syms = cache.get_symbols_for_file("src/lib.rs").unwrap();
+        assert_eq!(syms.len(), 3);
+
+        // Delete all for the file
+        cache.delete_file_symbols("src/lib.rs").unwrap();
+        assert_eq!(cache.symbol_count().unwrap(), 0);
     }
 }

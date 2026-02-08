@@ -1,5 +1,7 @@
 //! Query engine for semantic search using TF-IDF.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::core::Result;
@@ -58,10 +60,15 @@ impl<'a> SearchEngine<'a> {
     }
 
     /// Search for symbols matching the query.
+    ///
+    /// When a symbol has multiple chunks, only the best-scoring chunk is
+    /// returned so each symbol appears at most once in the results.
     pub fn search(&self, query: &str, top_k: usize) -> Result<Vec<SearchResult>> {
         let tfidf = self.build_tfidf()?;
-        let results = tfidf.search(query, top_k);
-        Ok(results.into_iter().map(to_search_result).collect())
+        // Fetch extra results before dedup since chunks will be collapsed
+        let raw_results = tfidf.search(query, top_k.saturating_mul(3));
+        let deduped = deduplicate_chunks(raw_results);
+        Ok(deduped.into_iter().take(top_k).collect())
     }
 
     /// Search for symbols with a minimum score threshold.
@@ -86,8 +93,9 @@ impl<'a> SearchEngine<'a> {
         top_k: usize,
     ) -> Result<Vec<SearchResult>> {
         let tfidf = self.build_tfidf()?;
-        let results = tfidf.search_in_files(query, file_paths, top_k);
-        Ok(results.into_iter().map(to_search_result).collect())
+        let raw_results = tfidf.search_in_files(query, file_paths, top_k.saturating_mul(3));
+        let deduped = deduplicate_chunks(raw_results);
+        Ok(deduped.into_iter().take(top_k).collect())
     }
 }
 
@@ -101,6 +109,32 @@ fn to_search_result((meta, score): (DocMeta, f32)) -> SearchResult {
         end_line: meta.end_line,
         score,
     }
+}
+
+/// Collapse multiple chunks of the same symbol into a single result,
+/// keeping the highest score. The key is (file_path, symbol_name).
+fn deduplicate_chunks(results: Vec<(DocMeta, f32)>) -> Vec<SearchResult> {
+    let mut best: HashMap<(String, String), SearchResult> = HashMap::new();
+    // Track insertion order to preserve ranking stability
+    let mut order: Vec<(String, String)> = Vec::new();
+
+    for (meta, score) in results {
+        let key = (meta.file_path.clone(), meta.symbol_name.clone());
+        match best.get(&key) {
+            Some(existing) if existing.score >= score => {}
+            _ => {
+                if !best.contains_key(&key) {
+                    order.push(key.clone());
+                }
+                best.insert(key, to_search_result((meta, score)));
+            }
+        }
+    }
+
+    order
+        .into_iter()
+        .filter_map(|key| best.remove(&key))
+        .collect()
 }
 
 /// Overall search result container.
@@ -171,34 +205,42 @@ mod tests {
         assert!(json.contains("100"));
     }
 
+    fn test_symbol(file_path: &str, name: &str, enriched_text: &str, hash: &str) -> CachedSymbol {
+        CachedSymbol {
+            file_path: file_path.to_string(),
+            symbol_name: name.to_string(),
+            symbol_type: "function".to_string(),
+            parent_name: None,
+            signature: format!("fn {name}()"),
+            start_line: 1,
+            end_line: 5,
+            chunk_index: 0,
+            total_chunks: 1,
+            content_hash: hash.to_string(),
+            enriched_text: enriched_text.to_string(),
+        }
+    }
+
     #[test]
     fn test_search_engine_with_cache() {
         let cache = EmbeddingCache::in_memory().unwrap();
 
         cache
-            .upsert_symbol(&CachedSymbol {
-                file_path: "src/parser.rs".to_string(),
-                symbol_name: "parse_source_code".to_string(),
-                symbol_type: "function".to_string(),
-                signature: "fn parse_source_code()".to_string(),
-                start_line: 1,
-                end_line: 10,
-                content_hash: "h1".to_string(),
-                enriched_text: "[src/parser.rs] parse_source_code\nfn parse_source_code(source: &str) { tree_sitter::parse(source) }".to_string(),
-            })
+            .upsert_symbol(&test_symbol(
+                "src/parser.rs",
+                "parse_source_code",
+                "[src/parser.rs] parse_source_code\nfn parse_source_code(source: &str) { tree_sitter::parse(source) }",
+                "h1",
+            ))
             .unwrap();
 
         cache
-            .upsert_symbol(&CachedSymbol {
-                file_path: "src/output.rs".to_string(),
-                symbol_name: "format_json".to_string(),
-                symbol_type: "function".to_string(),
-                signature: "fn format_json()".to_string(),
-                start_line: 1,
-                end_line: 5,
-                content_hash: "h2".to_string(),
-                enriched_text: "[src/output.rs] format_json\nfn format_json(data: &Value) { serde_json::to_string(data) }".to_string(),
-            })
+            .upsert_symbol(&test_symbol(
+                "src/output.rs",
+                "format_json",
+                "[src/output.rs] format_json\nfn format_json(data: &Value) { serde_json::to_string(data) }",
+                "h2",
+            ))
             .unwrap();
 
         let engine = SearchEngine::new(&cache);
@@ -212,20 +254,15 @@ mod tests {
         let cache = EmbeddingCache::in_memory().unwrap();
 
         cache
-            .upsert_symbol(&CachedSymbol {
-                file_path: "test.rs".to_string(),
-                symbol_name: "foo".to_string(),
-                symbol_type: "function".to_string(),
-                signature: "fn foo()".to_string(),
-                start_line: 1,
-                end_line: 3,
-                content_hash: "h".to_string(),
-                enriched_text: "[test.rs] foo\nfn foo() {}".to_string(),
-            })
+            .upsert_symbol(&test_symbol(
+                "test.rs",
+                "foo",
+                "[test.rs] foo\nfn foo() {}",
+                "h",
+            ))
             .unwrap();
 
         let engine = SearchEngine::new(&cache);
-        // Very high threshold should filter out most results
         let results = engine
             .search_with_threshold("completely unrelated query about elephants", 10, 0.99)
             .unwrap();
@@ -237,34 +274,73 @@ mod tests {
         let cache = EmbeddingCache::in_memory().unwrap();
 
         cache
-            .upsert_symbol(&CachedSymbol {
-                file_path: "src/a.rs".to_string(),
-                symbol_name: "parse_a".to_string(),
-                symbol_type: "function".to_string(),
-                signature: "fn parse_a()".to_string(),
-                start_line: 1,
-                end_line: 5,
-                content_hash: "h1".to_string(),
-                enriched_text: "[src/a.rs] parse_a\nfn parse_a() { parse }".to_string(),
-            })
+            .upsert_symbol(&test_symbol(
+                "src/a.rs",
+                "parse_a",
+                "[src/a.rs] parse_a\nfn parse_a() { parse }",
+                "h1",
+            ))
             .unwrap();
 
         cache
-            .upsert_symbol(&CachedSymbol {
-                file_path: "src/b.rs".to_string(),
-                symbol_name: "parse_b".to_string(),
-                symbol_type: "function".to_string(),
-                signature: "fn parse_b()".to_string(),
-                start_line: 1,
-                end_line: 5,
-                content_hash: "h2".to_string(),
-                enriched_text: "[src/b.rs] parse_b\nfn parse_b() { parse }".to_string(),
-            })
+            .upsert_symbol(&test_symbol(
+                "src/b.rs",
+                "parse_b",
+                "[src/b.rs] parse_b\nfn parse_b() { parse }",
+                "h2",
+            ))
             .unwrap();
 
         let engine = SearchEngine::new(&cache);
         let results = engine.search_in_files("parse", &["src/a.rs"], 10).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].file_path, "src/a.rs");
+    }
+
+    #[test]
+    fn test_deduplicate_chunks() {
+        let cache = EmbeddingCache::in_memory().unwrap();
+
+        // Insert two chunks of the same function with different content
+        for i in 0..2 {
+            cache
+                .upsert_symbol(&CachedSymbol {
+                    file_path: "src/lib.rs".to_string(),
+                    symbol_name: "big_func".to_string(),
+                    symbol_type: "function".to_string(),
+                    parent_name: Some("MyStruct".to_string()),
+                    signature: "fn big_func()".to_string(),
+                    start_line: 1 + i * 10,
+                    end_line: 10 + i * 10,
+                    chunk_index: i,
+                    total_chunks: 2,
+                    content_hash: format!("h{i}"),
+                    enriched_text: format!(
+                        "[src/lib.rs] MyStruct::big_func ({}/2)\nfn big_func() {{ chunk {i} with big_func code }}",
+                        i + 1
+                    ),
+                })
+                .unwrap();
+        }
+
+        // Insert a different function
+        cache
+            .upsert_symbol(&test_symbol(
+                "src/lib.rs",
+                "other_func",
+                "[src/lib.rs] other_func\nfn other_func() {}",
+                "h3",
+            ))
+            .unwrap();
+
+        let engine = SearchEngine::new(&cache);
+        let results = engine.search("big_func", 10).unwrap();
+
+        // big_func should appear once (best chunk), not twice
+        let big_func_count = results
+            .iter()
+            .filter(|r| r.symbol_name == "big_func")
+            .count();
+        assert_eq!(big_func_count, 1);
     }
 }
