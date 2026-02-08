@@ -1,5 +1,14 @@
 # Changelog
 
+## [4.23.0](https://github.com/panbanda/omen/compare/omen-v4.22.0...omen-v4.23.0) (2026-02-08)
+
+
+### Features
+
+* AST-aware chunking for semantic search ([#386](https://github.com/panbanda/omen/issues/386)) ([82d3833](https://github.com/panbanda/omen/commit/82d38338219d2611ac43705ba0f0c9a2ea1c137f))
+* **semantic:** add complexity metrics to search ([#387](https://github.com/panbanda/omen/issues/387)) ([af59b18](https://github.com/panbanda/omen/commit/af59b186c5b5b2208d293ae8cab0bd98a4aac15f))
+* **semantic:** add multi-repo cross-project search ([#388](https://github.com/panbanda/omen/issues/388)) ([bacfe50](https://github.com/panbanda/omen/commit/bacfe50d16663bf4c5532aca53209afcb2f4f052))
+
 ## [4.22.0](https://github.com/panbanda/omen/compare/omen-v4.21.2...omen-v4.22.0) (2026-02-07)
 
 
