@@ -245,14 +245,18 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
 
     let functions = extract_functions(&parse_result);
 
-    // Compute complexity per function (keyed by name + start_line for uniqueness)
-    let complexity_map: std::collections::HashMap<(String, u32), (u32, u32)> = functions
+    // Compute complexity per function. Store range so chunks (whose start_line
+    // may differ from the function's) can be matched by containment.
+    let complexity_entries: Vec<(String, u32, u32, u32, u32)> = functions
         .iter()
         .map(|func| {
             let metrics = analyze_function_complexity(func, &parse_result);
             (
-                (func.name.clone(), func.start_line),
-                (metrics.cyclomatic, metrics.cognitive),
+                func.name.clone(),
+                func.start_line,
+                func.end_line,
+                metrics.cyclomatic,
+                metrics.cognitive,
             )
         })
         .collect();
@@ -265,12 +269,17 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
             let enriched_text = format_chunk_text(chunk);
             let content_hash = hash_string(&enriched_text);
 
-            // Look up complexity from the original function.
-            // For chunk_index > 0, find any matching function by name.
-            let complexity = complexity_map
+            // Look up complexity from the original function. Match by name
+            // and verify the chunk falls within the function's line range
+            // to handle overloaded/duplicate function names correctly.
+            let complexity = complexity_entries
                 .iter()
-                .find(|((name, _), _)| name == &chunk.symbol_name)
-                .map(|(_, &(cyc, cog))| (cyc, cog));
+                .find(|(name, start, end, _, _)| {
+                    name == &chunk.symbol_name
+                        && chunk.start_line >= *start
+                        && chunk.start_line <= *end
+                })
+                .map(|(_, _, _, cyc, cog)| (*cyc, *cog));
 
             ParsedChunk {
                 file_path: chunk.file_path.clone(),
