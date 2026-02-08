@@ -96,7 +96,8 @@ impl EmbeddingCache {
         let needs_migration = !columns.is_empty()
             && (columns.iter().any(|name| name == "embedding")
                 || !columns.iter().any(|name| name == "chunk_index")
-                || !columns.iter().any(|name| name == "cyclomatic_complexity"));
+                || !columns.iter().any(|name| name == "cyclomatic_complexity")
+                || !columns.iter().any(|name| name == "cognitive_complexity"));
 
         if needs_migration {
             self.conn
