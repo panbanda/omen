@@ -27,7 +27,7 @@ use crate::config::Config;
 use crate::core::{FileSet, Result};
 
 pub use cache::EmbeddingCache;
-pub use search::{SearchEngine, SearchOutput, SearchResult};
+pub use search::{SearchEngine, SearchFilters, SearchOutput, SearchResult};
 pub use sync::{SyncManager, SyncStats};
 pub use tfidf::TfidfEngine;
 
@@ -100,6 +100,22 @@ impl SemanticSearch {
         Ok(SearchOutput::new(query.to_string(), total_symbols, results))
     }
 
+    /// Search with combined filters (min score, max complexity).
+    pub fn search_filtered(
+        &self,
+        query: &str,
+        top_k: Option<usize>,
+        filters: &SearchFilters,
+    ) -> Result<SearchOutput> {
+        let top_k = top_k.unwrap_or(self.config.max_results);
+        let search_engine = SearchEngine::new(&self.cache);
+
+        let results = search_engine.search_filtered(query, top_k, filters)?;
+        let total_symbols = self.cache.symbol_count()?;
+
+        Ok(SearchOutput::new(query.to_string(), total_symbols, results))
+    }
+
     /// Search within specific files.
     pub fn search_in_files(
         &self,
@@ -153,5 +169,73 @@ mod tests {
 
         let deserialized: SearchConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.max_results, 10);
+    }
+
+    #[test]
+    fn test_semantic_search_search_filtered() {
+        use crate::semantic::cache::CachedSymbol;
+
+        let temp = tempfile::tempdir().unwrap();
+        let cache_path = temp.path().join("search.db");
+        let config = SearchConfig {
+            cache_path: Some(cache_path.clone()),
+            max_results: 20,
+            min_score: 0.0,
+        };
+        let search = SemanticSearch::new(&config, temp.path()).unwrap();
+
+        // Manually insert symbols with different complexities
+        let cache = cache::EmbeddingCache::open(&cache_path).unwrap();
+        cache
+            .upsert_symbol(&CachedSymbol {
+                file_path: "src/a.rs".to_string(),
+                symbol_name: "low_complexity".to_string(),
+                symbol_type: "function".to_string(),
+                parent_name: None,
+                signature: "fn low_complexity()".to_string(),
+                start_line: 1,
+                end_line: 5,
+                chunk_index: 0,
+                total_chunks: 1,
+                content_hash: "h1".to_string(),
+                enriched_text: "[src/a.rs] low_complexity\nfn low_complexity() { return }"
+                    .to_string(),
+                cyclomatic_complexity: Some(1),
+                cognitive_complexity: Some(0),
+            })
+            .unwrap();
+        cache
+            .upsert_symbol(&CachedSymbol {
+                file_path: "src/b.rs".to_string(),
+                symbol_name: "high_complexity".to_string(),
+                symbol_type: "function".to_string(),
+                parent_name: None,
+                signature: "fn high_complexity()".to_string(),
+                start_line: 1,
+                end_line: 50,
+                chunk_index: 0,
+                total_chunks: 1,
+                content_hash: "h2".to_string(),
+                enriched_text: "[src/b.rs] high_complexity\nfn high_complexity() { return }"
+                    .to_string(),
+                cyclomatic_complexity: Some(20),
+                cognitive_complexity: Some(25),
+            })
+            .unwrap();
+
+        // Without filter: both appear
+        let all = search.search("complexity", Some(10)).unwrap();
+        assert_eq!(all.results.len(), 2);
+
+        // With max_complexity=5: only low_complexity
+        let filters = SearchFilters {
+            min_score: 0.0,
+            max_complexity: Some(5),
+        };
+        let filtered = search
+            .search_filtered("complexity", Some(10), &filters)
+            .unwrap();
+        assert_eq!(filtered.results.len(), 1);
+        assert_eq!(filtered.results[0].symbol_name, "low_complexity");
     }
 }

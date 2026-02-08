@@ -28,6 +28,8 @@ pub struct CachedSymbol {
     pub total_chunks: u32,
     pub content_hash: String,
     pub enriched_text: String,
+    pub cyclomatic_complexity: Option<u32>,
+    pub cognitive_complexity: Option<u32>,
 }
 
 fn row_to_symbol(row: &rusqlite::Row<'_>) -> rusqlite::Result<CachedSymbol> {
@@ -43,6 +45,8 @@ fn row_to_symbol(row: &rusqlite::Row<'_>) -> rusqlite::Result<CachedSymbol> {
         total_chunks: row.get(8)?,
         content_hash: row.get(9)?,
         enriched_text: row.get(10)?,
+        cyclomatic_complexity: row.get(11)?,
+        cognitive_complexity: row.get(12)?,
     })
 }
 
@@ -91,7 +95,9 @@ impl EmbeddingCache {
 
         let needs_migration = !columns.is_empty()
             && (columns.iter().any(|name| name == "embedding")
-                || !columns.iter().any(|name| name == "chunk_index"));
+                || !columns.iter().any(|name| name == "chunk_index")
+                || !columns.iter().any(|name| name == "cyclomatic_complexity")
+                || !columns.iter().any(|name| name == "cognitive_complexity"));
 
         if needs_migration {
             self.conn
@@ -120,6 +126,8 @@ impl EmbeddingCache {
                     total_chunks INTEGER NOT NULL DEFAULT 1,
                     content_hash TEXT NOT NULL,
                     enriched_text TEXT NOT NULL,
+                    cyclomatic_complexity INTEGER,
+                    cognitive_complexity INTEGER,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(file_path, symbol_name, chunk_index)
                 );
@@ -143,8 +151,8 @@ impl EmbeddingCache {
         self.conn
             .execute(
                 r#"
-                INSERT INTO symbols (file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                INSERT INTO symbols (file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text, cyclomatic_complexity, cognitive_complexity)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                 ON CONFLICT(file_path, symbol_name, chunk_index) DO UPDATE SET
                     symbol_type = excluded.symbol_type,
                     parent_name = excluded.parent_name,
@@ -154,6 +162,8 @@ impl EmbeddingCache {
                     total_chunks = excluded.total_chunks,
                     content_hash = excluded.content_hash,
                     enriched_text = excluded.enriched_text,
+                    cyclomatic_complexity = excluded.cyclomatic_complexity,
+                    cognitive_complexity = excluded.cognitive_complexity,
                     created_at = CURRENT_TIMESTAMP
             "#,
                 params![
@@ -168,6 +178,8 @@ impl EmbeddingCache {
                     symbol.total_chunks,
                     symbol.content_hash,
                     symbol.enriched_text,
+                    symbol.cyclomatic_complexity,
+                    symbol.cognitive_complexity,
                 ],
             )
             .map_err(|e| Error::analysis(format!("Failed to upsert symbol: {}", e)))?;
@@ -185,7 +197,7 @@ impl EmbeddingCache {
         let result = self
             .conn
             .query_row(
-                "SELECT file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text FROM symbols WHERE file_path = ?1 AND symbol_name = ?2 AND chunk_index = ?3",
+                "SELECT file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text, cyclomatic_complexity, cognitive_complexity FROM symbols WHERE file_path = ?1 AND symbol_name = ?2 AND chunk_index = ?3",
                 params![file_path, symbol_name, chunk_index],
                 row_to_symbol,
             )
@@ -199,7 +211,7 @@ impl EmbeddingCache {
     pub fn get_all_symbols(&self) -> Result<Vec<CachedSymbol>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text FROM symbols")
+            .prepare("SELECT file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text, cyclomatic_complexity, cognitive_complexity FROM symbols")
             .map_err(|e| Error::analysis(format!("Failed to prepare query: {}", e)))?;
 
         let symbols = stmt
@@ -215,7 +227,7 @@ impl EmbeddingCache {
     pub fn get_symbols_for_file(&self, file_path: &str) -> Result<Vec<CachedSymbol>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text FROM symbols WHERE file_path = ?1")
+            .prepare("SELECT file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text, cyclomatic_complexity, cognitive_complexity FROM symbols WHERE file_path = ?1")
             .map_err(|e| Error::analysis(format!("Failed to prepare query: {}", e)))?;
 
         let symbols = stmt
@@ -322,6 +334,8 @@ mod tests {
             total_chunks: 1,
             content_hash: "abc123".to_string(),
             enriched_text: "[src/main.rs] test_func\nfn test_func() { }".to_string(),
+            cyclomatic_complexity: None,
+            cognitive_complexity: None,
         }
     }
 
@@ -393,6 +407,8 @@ mod tests {
             total_chunks: 1,
             content_hash: "hash1".to_string(),
             enriched_text: "[src/a.rs] func_a\nfn func_a() {}".to_string(),
+            cyclomatic_complexity: None,
+            cognitive_complexity: None,
         };
 
         let symbol2 = CachedSymbol {
@@ -407,6 +423,8 @@ mod tests {
             total_chunks: 1,
             content_hash: "hash2".to_string(),
             enriched_text: "[src/b.rs] func_b\nfn func_b() {}".to_string(),
+            cyclomatic_complexity: None,
+            cognitive_complexity: None,
         };
 
         cache.upsert_symbol(&symbol1).unwrap();
@@ -432,6 +450,8 @@ mod tests {
             total_chunks: 1,
             content_hash: "hash1".to_string(),
             enriched_text: "text1".to_string(),
+            cyclomatic_complexity: None,
+            cognitive_complexity: None,
         };
 
         let symbol2 = CachedSymbol {
@@ -446,6 +466,8 @@ mod tests {
             total_chunks: 1,
             content_hash: "hash2".to_string(),
             enriched_text: "text2".to_string(),
+            cyclomatic_complexity: None,
+            cognitive_complexity: None,
         };
 
         let symbol3 = CachedSymbol {
@@ -460,6 +482,8 @@ mod tests {
             total_chunks: 1,
             content_hash: "hash3".to_string(),
             enriched_text: "text3".to_string(),
+            cyclomatic_complexity: None,
+            cognitive_complexity: None,
         };
 
         cache.upsert_symbol(&symbol1).unwrap();
@@ -570,6 +594,8 @@ mod tests {
             total_chunks: 1,
             content_hash: "h".to_string(),
             enriched_text: "text".to_string(),
+            cyclomatic_complexity: None,
+            cognitive_complexity: None,
         };
         cache.upsert_symbol(&symbol).unwrap();
         assert_eq!(cache.symbol_count().unwrap(), 1);
@@ -619,6 +645,8 @@ mod tests {
             total_chunks: 3,
             content_hash: "h".to_string(),
             enriched_text: "text".to_string(),
+            cyclomatic_complexity: None,
+            cognitive_complexity: None,
         };
         cache.upsert_symbol(&symbol).unwrap();
         let retrieved = cache.get_symbol("test.rs", "bar", 1).unwrap().unwrap();
@@ -645,6 +673,8 @@ mod tests {
                     total_chunks: 3,
                     content_hash: format!("h{i}"),
                     enriched_text: format!("chunk {i}"),
+                    cyclomatic_complexity: None,
+                    cognitive_complexity: None,
                 })
                 .unwrap();
         }
@@ -657,5 +687,117 @@ mod tests {
         // Delete all for the file
         cache.delete_file_symbols("src/lib.rs").unwrap();
         assert_eq!(cache.symbol_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_migration_from_pre_metric_schema() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE symbols (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_path TEXT NOT NULL,
+                symbol_name TEXT NOT NULL,
+                symbol_type TEXT NOT NULL,
+                parent_name TEXT,
+                signature TEXT NOT NULL,
+                start_line INTEGER NOT NULL,
+                end_line INTEGER NOT NULL,
+                chunk_index INTEGER NOT NULL DEFAULT 0,
+                total_chunks INTEGER NOT NULL DEFAULT 1,
+                content_hash TEXT NOT NULL,
+                enriched_text TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(file_path, symbol_name, chunk_index)
+            );
+            CREATE TABLE files (
+                file_path TEXT PRIMARY KEY,
+                file_hash TEXT NOT NULL,
+                indexed_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+        "#,
+        )
+        .unwrap();
+
+        let cache = EmbeddingCache { conn };
+        cache.migrate_if_needed().unwrap();
+        cache.init_schema().unwrap();
+
+        let symbol = CachedSymbol {
+            file_path: "test.rs".to_string(),
+            symbol_name: "complex_fn".to_string(),
+            symbol_type: "function".to_string(),
+            parent_name: None,
+            signature: "fn complex_fn()".to_string(),
+            start_line: 1,
+            end_line: 20,
+            chunk_index: 0,
+            total_chunks: 1,
+            content_hash: "h".to_string(),
+            enriched_text: "text".to_string(),
+            cyclomatic_complexity: Some(8),
+            cognitive_complexity: Some(12),
+        };
+        cache.upsert_symbol(&symbol).unwrap();
+        let retrieved = cache
+            .get_symbol("test.rs", "complex_fn", 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(retrieved.cyclomatic_complexity, Some(8));
+        assert_eq!(retrieved.cognitive_complexity, Some(12));
+    }
+
+    #[test]
+    fn test_complexity_round_trip() {
+        let cache = EmbeddingCache::in_memory().unwrap();
+
+        let symbol = CachedSymbol {
+            file_path: "src/lib.rs".to_string(),
+            symbol_name: "complex".to_string(),
+            symbol_type: "function".to_string(),
+            parent_name: None,
+            signature: "fn complex()".to_string(),
+            start_line: 1,
+            end_line: 50,
+            chunk_index: 0,
+            total_chunks: 1,
+            content_hash: "h".to_string(),
+            enriched_text: "text".to_string(),
+            cyclomatic_complexity: Some(15),
+            cognitive_complexity: Some(20),
+        };
+        cache.upsert_symbol(&symbol).unwrap();
+
+        let retrieved = cache
+            .get_symbol("src/lib.rs", "complex", 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(retrieved.cyclomatic_complexity, Some(15));
+        assert_eq!(retrieved.cognitive_complexity, Some(20));
+
+        // None values should round-trip as None
+        let simple = CachedSymbol {
+            file_path: "src/lib.rs".to_string(),
+            symbol_name: "simple".to_string(),
+            symbol_type: "function".to_string(),
+            parent_name: None,
+            signature: "fn simple()".to_string(),
+            start_line: 60,
+            end_line: 65,
+            chunk_index: 0,
+            total_chunks: 1,
+            content_hash: "h2".to_string(),
+            enriched_text: "text2".to_string(),
+            cyclomatic_complexity: None,
+            cognitive_complexity: None,
+        };
+        cache.upsert_symbol(&simple).unwrap();
+
+        let retrieved = cache
+            .get_symbol("src/lib.rs", "simple", 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(retrieved.cyclomatic_complexity, None);
+        assert_eq!(retrieved.cognitive_complexity, None);
     }
 }

@@ -12,6 +12,7 @@ use blake3::Hasher;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 
+use crate::analyzers::complexity::analyze_function_complexity;
 use crate::core::progress::is_tty;
 use crate::core::{Error, FileSet, Result, SourceFile};
 use crate::parser::{extract_functions, Parser};
@@ -33,6 +34,8 @@ struct ParsedChunk {
     total_chunks: u32,
     enriched_text: String,
     content_hash: String,
+    cyclomatic_complexity: Option<u32>,
+    cognitive_complexity: Option<u32>,
 }
 
 /// Result of parsing a single file.
@@ -187,6 +190,8 @@ impl<'a> SyncManager<'a> {
                 total_chunks: chunk.total_chunks,
                 content_hash: chunk.content_hash.clone(),
                 enriched_text: chunk.enriched_text.clone(),
+                cyclomatic_complexity: chunk.cyclomatic_complexity,
+                cognitive_complexity: chunk.cognitive_complexity,
             };
             self.cache.upsert_symbol(&cached_symbol)?;
 
@@ -239,6 +244,23 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
     let parse_result = parser.parse_source(&source_file)?;
 
     let functions = extract_functions(&parse_result);
+
+    // Compute complexity per function. Store range so chunks (whose start_line
+    // may differ from the function's) can be matched by containment.
+    let complexity_entries: Vec<(String, u32, u32, u32, u32)> = functions
+        .iter()
+        .map(|func| {
+            let metrics = analyze_function_complexity(func, &parse_result);
+            (
+                func.name.clone(),
+                func.start_line,
+                func.end_line,
+                metrics.cyclomatic,
+                metrics.cognitive,
+            )
+        })
+        .collect();
+
     let chunks: Vec<Chunk> = extract_chunks(&parse_result, &functions, &rel_path);
 
     let parsed_chunks: Vec<ParsedChunk> = chunks
@@ -246,6 +268,19 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
         .map(|chunk| {
             let enriched_text = format_chunk_text(chunk);
             let content_hash = hash_string(&enriched_text);
+
+            // Look up complexity from the original function. Match by name
+            // and verify the chunk falls within the function's line range
+            // to handle overloaded/duplicate function names correctly.
+            let complexity = complexity_entries
+                .iter()
+                .find(|(name, start, end, _, _)| {
+                    name == &chunk.symbol_name
+                        && chunk.start_line >= *start
+                        && chunk.start_line <= *end
+                })
+                .map(|(_, _, _, cyc, cog)| (*cyc, *cog));
+
             ParsedChunk {
                 file_path: chunk.file_path.clone(),
                 symbol_name: chunk.symbol_name.clone(),
@@ -258,6 +293,8 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
                 total_chunks: chunk.total_chunks,
                 enriched_text,
                 content_hash,
+                cyclomatic_complexity: complexity.map(|(c, _)| c),
+                cognitive_complexity: complexity.map(|(_, c)| c),
             }
         })
         .collect();
@@ -306,6 +343,59 @@ pub fn hash_string(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_file_extracts_chunks_with_complexity() {
+        let temp = tempfile::tempdir().unwrap();
+        let file_path = temp.path().join("test.rs");
+        std::fs::write(
+            &file_path,
+            "fn simple() { return; }\nfn branchy(x: i32) { if x > 0 { if x > 10 { return; } } }\n",
+        )
+        .unwrap();
+
+        let parsed = parse_file(&file_path, temp.path()).unwrap();
+        assert!(
+            !parsed.chunks.is_empty(),
+            "should extract at least one chunk"
+        );
+
+        let simple = parsed
+            .chunks
+            .iter()
+            .find(|c| c.symbol_name == "simple")
+            .expect("should find 'simple' chunk");
+        assert!(simple.cyclomatic_complexity.is_some());
+        assert!(simple.cognitive_complexity.is_some());
+        // simple() has no branches
+        assert_eq!(simple.cyclomatic_complexity, Some(1));
+
+        let branchy = parsed
+            .chunks
+            .iter()
+            .find(|c| c.symbol_name == "branchy")
+            .expect("should find 'branchy' chunk");
+        assert!(branchy.cyclomatic_complexity.is_some());
+        // branchy() has 2 if-branches -> cyclomatic >= 3
+        assert!(branchy.cyclomatic_complexity.unwrap() >= 3);
+    }
+
+    #[test]
+    fn test_parse_file_enriched_text_format() {
+        let temp = tempfile::tempdir().unwrap();
+        let file_path = temp.path().join("lib.rs");
+        std::fs::write(&file_path, "fn hello() { println!(\"hi\"); }\n").unwrap();
+
+        let parsed = parse_file(&file_path, temp.path()).unwrap();
+        assert_eq!(parsed.chunks.len(), 1);
+
+        let chunk = &parsed.chunks[0];
+        assert_eq!(chunk.file_path, "lib.rs");
+        assert_eq!(chunk.symbol_name, "hello");
+        assert!(chunk.enriched_text.contains("[lib.rs]"));
+        assert!(chunk.enriched_text.contains("hello"));
+        assert!(!chunk.content_hash.is_empty());
+    }
 
     #[test]
     fn test_hash_string_deterministic() {

@@ -16,6 +16,8 @@ pub struct DocMeta {
     pub signature: String,
     pub start_line: u32,
     pub end_line: u32,
+    pub cyclomatic_complexity: Option<u32>,
+    pub cognitive_complexity: Option<u32>,
 }
 
 /// Sparse vector: parallel arrays of column indices and values.
@@ -249,6 +251,8 @@ mod tests {
             signature: format!("fn {}()", name),
             start_line: 1,
             end_line: 5,
+            cyclomatic_complexity: None,
+            cognitive_complexity: None,
         }
     }
 
