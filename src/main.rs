@@ -1092,7 +1092,25 @@ fn run_search(
             let file_filter: Option<Vec<&str>> =
                 args.files.as_ref().map(|f| f.split(',').collect());
 
-            let output = if let Some(files) = file_filter {
+            let output = if let Some(ref include) = args.include_project {
+                // Multi-repo search: combine current project with additional projects
+                let extra_paths: Vec<std::path::PathBuf> = include
+                    .split(',')
+                    .filter(|s| !s.trim().is_empty())
+                    .map(|s| std::path::PathBuf::from(s.trim()))
+                    .collect();
+
+                let mut all_projects: Vec<&std::path::Path> = vec![path.as_path()];
+                all_projects.extend(extra_paths.iter().map(|p| p.as_path()));
+
+                let mr = omen::semantic::multi_repo::multi_repo_search(
+                    &all_projects,
+                    &args.query,
+                    args.top_k,
+                    args.min_score,
+                )?;
+                omen::semantic::SearchOutput::new(args.query.clone(), mr.total_symbols, mr.results)
+            } else if let Some(files) = file_filter {
                 search.search_in_files(&args.query, &files, Some(args.top_k))?
             } else {
                 search.search(&args.query, Some(args.top_k))?

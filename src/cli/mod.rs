@@ -426,6 +426,10 @@ pub struct SearchQueryArgs {
     /// Limit search to specific files (comma-separated)
     #[arg(long)]
     pub files: Option<String>,
+
+    /// Include additional project paths for cross-repo search (comma-separated)
+    #[arg(long)]
+    pub include_project: Option<String>,
 }
 
 #[derive(Args)]
@@ -1334,6 +1338,23 @@ mod tests {
             "src/main.rs,src/lib.rs",
         ]) {
             assert_eq!(args.files, Some("src/main.rs,src/lib.rs".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_search_query_include_project() {
+        if let SearchSubcommand::Query(args) = parse_search_subcommand(&[
+            "omen",
+            "search",
+            "query",
+            "test",
+            "--include-project",
+            "/tmp/other-repo,/tmp/another",
+        ]) {
+            assert_eq!(
+                args.include_project,
+                Some("/tmp/other-repo,/tmp/another".to_string())
+            );
         }
     }
 
