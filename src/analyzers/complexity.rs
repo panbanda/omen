@@ -335,8 +335,8 @@ fn analyze_parse_result(result: &ParseResult) -> FileResult {
     file_result
 }
 
-/// Analyze complexity for a single function.
-fn analyze_function_complexity(func: &parser::FunctionNode, result: &ParseResult) -> Metrics {
+/// Analyze complexity for a single function from its parse result.
+pub fn analyze_function_complexity(func: &parser::FunctionNode, result: &ParseResult) -> Metrics {
     let root = result.root_node();
 
     // Find the function node in the tree
