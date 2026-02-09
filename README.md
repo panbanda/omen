@@ -600,31 +600,47 @@ This prevents pushing code that fails your quality thresholds.
 <details>
 <summary><strong>Semantic Search</strong> - Natural language code discovery</summary>
 
-Search your codebase by meaning, not just keywords. Omen uses vector embeddings to find semantically similar code based on natural language queries.
+Search your codebase by meaning, not just keywords. Omen uses a TF-IDF engine with sublinear TF, smooth IDF, and bigram tokenization to find semantically similar code from natural language queries. No external models, no API keys, no GPU required.
 
 ```bash
-# Build the search index (first time)
+# Build the search index
 omen search index
 
 # Search for code
 omen search query "database connection pooling"
 omen search query "error handling middleware" --top-k 20
 omen search query "authentication" --files src/auth/,src/middleware/
+
+# Cross-repo search
+omen search query "retry logic" --include-project /path/to/other-repo
+
+# Filter by complexity
+# (via MCP: semantic_search with max_complexity parameter)
 ```
 
 **How it works:**
 
 1. **Symbol extraction** - Extracts functions from your codebase using tree-sitter
-2. **Embedding generation** - Generates 384-dimensional embeddings using all-MiniLM-L6-v2 via candle (local inference, no API keys)
-3. **Incremental indexing** - Only re-embeds files that changed since last index
-4. **Similarity search** - Ranks results by cosine similarity to your query
+2. **AST-aware chunking** - Splits long functions at statement boundaries so each chunk is focused and self-contained. Parent type context (class, struct, impl) is preserved.
+3. **TF-IDF indexing** - Builds a sparse vector index with L2-normalized cosine similarity. Indexes in ~1-2 seconds for typical codebases.
+4. **Incremental updates** - Only re-indexes files that changed since last run
+5. **Deduplication** - Each symbol appears once in results (best-scoring chunk wins)
+
+**Features:**
+
+- **HyDE search** - Write a hypothetical code snippet as your query for better matches (available via MCP `semantic_search_hyde` tool)
+- **Complexity filtering** - Exclude high-complexity functions from results (`max_complexity` parameter on MCP tools)
+- **Multi-repo search** - Query across multiple project indexes with unified IDF scoring (`--include-project`)
+- **Per-function metrics** - Results include cyclomatic and cognitive complexity when available
 
 **Performance:**
 
-- Index stored in `.omen/search.db` (SQLite)
-- Parallel file parsing with rayon
-- Batch embedding generation (64 symbols per batch)
-- Typical indexing: ~3.5 symbols/second on CPU
+| Metric | Value |
+|---|---|
+| Index time | ~1-2s (1,400 symbols) |
+| Query time | ~250ms |
+| Storage | SQLite in `.omen/search.db` |
+| Dependencies | Zero external (pure Rust TF-IDF) |
 
 **Why it matters:** Traditional grep/ripgrep finds exact matches. Semantic search finds code that *means* the same thing even with different naming. Ask "how do we validate user input" and find functions named `sanitize_params`, `check_request`, or `validate_form`.
 
@@ -783,6 +799,7 @@ Omen includes a Model Context Protocol (MCP) server that exposes all analyzers a
 - `flags` - Feature flag detection and staleness
 - `score` - Composite health score (0-100)
 - `semantic_search` - Natural language code search
+- `semantic_search_hyde` - HyDE-style search (query with a hypothetical code snippet)
 
 Each tool includes detailed descriptions with interpretation guidance, helping LLMs understand what metrics mean and when to use each analyzer.
 
