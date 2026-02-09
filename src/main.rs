@@ -170,8 +170,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         | Command::Ownership(_)
         | Command::Cohesion(_)
         | Command::Repomap(_)
-        | Command::Smells(_)
-        | Command::LintHotspot(_) => {
+        | Command::Smells(_) => {
             dispatch_analyzer(&cli.command, path, &config, format)?;
         }
         Command::Churn(args) => {
@@ -424,7 +423,7 @@ fn dispatch_analyzer(
         }
         Command::Tdg(_) => run_analyzer::<omen::analyzers::tdg::Analyzer>(path, config, format),
         Command::Graph(_) => run_analyzer::<omen::analyzers::graph::Analyzer>(path, config, format),
-        Command::Hotspot(_) | Command::LintHotspot(_) => {
+        Command::Hotspot(_) => {
             run_analyzer::<omen::analyzers::hotspot::Analyzer>(path, config, format)
         }
         Command::Temporal(_) => {

@@ -59,7 +59,6 @@ src/
     repomap/     - PageRank-ranked symbols
     smells/      - Architectural smells (Tarjan SCC)
     flags/       - Feature flag detection
-    lint_hotspot/- Lint violation density
     mutation/    - Mutation testing (21 operators, parallel execution)
   git/           - Git operations (log, blame, diff)
   parser/        - Tree-sitter wrapper
@@ -114,7 +113,6 @@ Top-level commands (flat structure):
 - `repomap` - PageRank-ranked symbol map
 - `smells` - Architectural smell detection
 - `flags` - Feature flag detection
-- `lint-hotspot` - Lint violation density
 - `mutation` - Mutation testing (21 operators across 5 languages)
 - `score` - Repository health score
 - `all` - Run all analyzers

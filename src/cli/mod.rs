@@ -111,10 +111,6 @@ pub enum Command {
     #[command(alias = "ff")]
     Flags(FlagsArgs),
 
-    /// Analyze lint violation density
-    #[command(alias = "lh")]
-    LintHotspot(AnalyzerArgs),
-
     /// Calculate composite health score
     Score(ScoreCommand),
 
@@ -805,11 +801,6 @@ mod tests {
     }
 
     #[test]
-    fn test_command_lint_hotspot() {
-        assert_parses_to!(&["omen", "lint-hotspot"], Command::LintHotspot(_));
-    }
-
-    #[test]
     fn test_command_mutation() {
         assert_parses_to!(&["omen", "mutation"], Command::Mutation(_));
     }
@@ -898,11 +889,6 @@ mod tests {
     #[test]
     fn test_alias_ctx_for_context() {
         assert_parses_to!(&["omen", "ctx"], Command::Context(_));
-    }
-
-    #[test]
-    fn test_alias_lh_for_lint_hotspot() {
-        assert_parses_to!(&["omen", "lh"], Command::LintHotspot(_));
     }
 
     #[test]
