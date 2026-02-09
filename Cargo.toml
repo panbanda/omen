@@ -48,7 +48,7 @@ tree-sitter-php = "0.23"
 tree-sitter-bash = "0.23"
 
 # Git operations
-gix = { version = "0.77", default-features = false, features = ["blocking-network-client", "blocking-http-transport-reqwest-rust-tls", "revision", "blob-diff", "merge", "blame"] }
+gix = { version = "0.78", default-features = false, features = ["blocking-network-client", "blocking-http-transport-reqwest-rust-tls", "revision", "blob-diff", "merge", "blame"] }
 
 # Parallelism
 rayon = "1.10"
@@ -68,7 +68,7 @@ blake3 = "1.5"
 indicatif = "0.18"
 
 # HTTP for remote repos (MCP server)
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "blocking", "json"] }
 tokio = { version = "1.42", features = ["rt-multi-thread", "macros", "io-std", "sync", "time", "process"] }
 
 # Logging
@@ -84,7 +84,7 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 # HTML report templating
 minijinja = { version = "2.5", features = ["builtins"] }
 pulldown-cmark = "0.13"
-minify-html = "0.16"
+minify-html = "0.18"
 flate2 = "1.1"
 
 # Utilities
@@ -98,7 +98,7 @@ rusqlite = { version = "0.38", features = ["bundled"] }
 # Testing
 insta = { version = "1.41", features = ["json", "yaml"] }
 proptest = "1.5"
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 tempfile = "3.14"
 assert_cmd = "2.0"
 predicates = "3.1"
