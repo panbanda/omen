@@ -558,7 +558,7 @@ fn get_commit_file_changes(repo: &Repository, commit: &gix::Commit<'_>) -> Resul
                         change_type,
                     });
                 }
-                Ok::<_, std::convert::Infallible>(gix::object::tree::diff::Action::Continue)
+                Ok::<_, std::convert::Infallible>(std::ops::ControlFlow::Continue(()))
             })
             .map_err(|e| Error::git(format!("{e}")))?;
     } else {
@@ -693,7 +693,7 @@ pub fn get_diff_stats(repo: &Repository, from: &str, to: &str) -> Result<Vec<Fil
                     change_type,
                 });
             }
-            Ok::<_, std::convert::Infallible>(gix::object::tree::diff::Action::Continue)
+            Ok::<_, std::convert::Infallible>(std::ops::ControlFlow::Continue(()))
         })
         .map_err(|e| Error::git(format!("{e}")))?;
 
