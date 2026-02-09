@@ -6,7 +6,94 @@ sidebar_position: 2
 
 Omen is designed to run in CI pipelines as a quality gate, risk assessment tool, and health tracker. All commands support JSON output (`-f json`) for programmatic parsing, and `omen score` returns non-zero exit codes when the score falls below a configured threshold.
 
-## GitHub Actions
+## GitHub Action
+
+Omen provides a composite GitHub Action for automated PR analysis. It runs diff risk analysis and health scoring on every pull request.
+
+### Basic Usage
+
+```yaml
+name: Omen Analysis
+on: [pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  omen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: panbanda/omen@omen-v4.23.0
+        id: omen
+
+      - name: Print results
+        run: |
+          echo "Risk: ${{ steps.omen.outputs.risk-level }} (${{ steps.omen.outputs.risk-score }})"
+          echo "Health: ${{ steps.omen.outputs.health-grade }} (${{ steps.omen.outputs.health-score }})"
+```
+
+`fetch-depth: 0` is required. Omen needs full git history for accurate analysis.
+
+### With PR Comment and Labels
+
+```yaml
+      - uses: panbanda/omen@omen-v4.23.0
+        id: omen
+        with:
+          comment: true
+          label: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+Requires additional permissions:
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+```
+
+### Action Inputs
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `version` | `latest` | Omen version to install |
+| `path` | `.` | Repository path to analyze |
+| `comment` | `false` | Post/update a sticky PR comment |
+| `label` | `false` | Add a risk-level label |
+| `label-template` | `risk: &#123;&#123;level&#125;&#125;` | Label name template |
+| `check` | `false` | Fail if risk meets threshold |
+| `check-threshold` | `high` | Risk level to fail on (`low`, `medium`, `high`) |
+
+### Action Outputs
+
+| Output | Example | Description |
+|--------|---------|-------------|
+| `risk-score` | `0.42` | Diff risk score (0.0 - 1.0) |
+| `risk-level` | `medium` | Risk level (`low`, `medium`, `high`) |
+| `health-score` | `76.9` | Health score (0 - 100) |
+| `health-grade` | `C` | Health grade (A - F) |
+| `diff-json` | `{...}` | Full `omen diff` JSON |
+| `score-json` | `{...}` | Full `omen score` JSON |
+
+### Quality Gate via Action
+
+```yaml
+      - uses: panbanda/omen@omen-v4.23.0
+        with:
+          check: true
+          check-threshold: high  # fail on high risk PRs
+```
+
+## GitHub Actions (Manual)
+
+For more control, you can install Omen manually and run commands directly.
 
 ### Quality Gate with Repository Score
 

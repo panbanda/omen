@@ -18,7 +18,7 @@ When connected to Omen's MCP server, an AI assistant can check complexity before
 
 ## Available Tools
 
-The MCP server exposes 19 tools, one for each analyzer:
+The MCP server exposes 20 tools:
 
 | Tool | Description |
 |------|-------------|
@@ -40,9 +40,10 @@ The MCP server exposes 19 tools, one for each analyzer:
 | `smells` | Architectural code smells |
 | `flags` | Feature flag usage and staleness |
 | `score` | Composite repository health score (0-100) |
-| `semantic_search` | Natural language code discovery |
+| `semantic_search` | Natural language code search with optional complexity filtering |
+| `semantic_search_hyde` | HyDE-style search using a hypothetical code snippet as query |
 
-Each tool accepts the same parameters as its CLI counterpart and returns structured results.
+Each tool accepts the same parameters as its CLI counterpart and returns structured results. The `semantic_search` and `semantic_search_hyde` tools additionally support `max_complexity` (filter out high-complexity functions) and `include_projects` (cross-repo search) parameters.
 
 ## Output Format: TOON
 
