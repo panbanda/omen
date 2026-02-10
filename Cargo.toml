@@ -29,7 +29,7 @@ anyhow = "1.0"
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml = "0.9"
+figment = { version = "0.10", features = ["toml", "env"] }
 
 # Tree-sitter for parsing
 tree-sitter = "0.24"
@@ -96,6 +96,7 @@ rusqlite = { version = "0.38", features = ["bundled"] }
 
 [dev-dependencies]
 # Testing
+figment = { version = "0.10", features = ["test"] }
 insta = { version = "1.41", features = ["json", "yaml"] }
 proptest = "1.5"
 criterion = { version = "0.8", features = ["html_reports"] }

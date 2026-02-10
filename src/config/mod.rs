@@ -2,6 +2,10 @@
 
 use std::path::Path;
 
+use figment::{
+    providers::{Env, Format, Serialized, Toml},
+    Figment,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::core::Result;
@@ -11,7 +15,7 @@ use crate::core::Result;
 #[serde(default)]
 pub struct Config {
     /// Exclude patterns (glob).
-    #[serde(alias = "exclude")]
+    #[serde(rename = "exclude")]
     pub exclude_patterns: Vec<String>,
     /// Complexity thresholds.
     pub complexity: ComplexityConfig,
@@ -57,10 +61,23 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Load configuration from file.
+    /// Load configuration from an explicit file path.
+    ///
+    /// Errors if the file does not exist. Use this for explicit `--config` flags.
+    /// Env vars with `OMEN_` prefix override file values.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
-        let content = std::fs::read_to_string(path)?;
-        let config = toml::from_str(&content)?;
+        let path = path.as_ref();
+        if !path.exists() {
+            return Err(crate::core::Error::Config(format!(
+                "config file not found: {}",
+                path.display()
+            )));
+        }
+        let config: Self = Figment::from(Serialized::defaults(Self::default()))
+            .merge(Toml::file_exact(path))
+            .merge(Env::prefixed("OMEN_").split("__"))
+            .extract()
+            .map_err(|e| crate::core::Error::Config(e.to_string()))?;
         Ok(config)
     }
 
@@ -70,23 +87,18 @@ impl Config {
     }
 
     /// Load configuration from directory, looking for omen.toml or .omen/omen.toml.
+    ///
+    /// Missing files are silently skipped (defaults are used).
+    /// Env vars with `OMEN_` prefix override file/default values.
     pub fn load_default(dir: impl AsRef<Path>) -> Result<Self> {
         let dir = dir.as_ref();
-
-        // Check omen.toml first
-        let omen_toml = dir.join("omen.toml");
-        if omen_toml.exists() {
-            return Self::load(omen_toml);
-        }
-
-        // Check .omen/omen.toml
-        let dot_omen_toml = dir.join(".omen/omen.toml");
-        if dot_omen_toml.exists() {
-            return Self::load(dot_omen_toml);
-        }
-
-        // Return default config if no file found
-        Ok(Self::default())
+        let config: Self = Figment::from(Serialized::defaults(Self::default()))
+            .merge(Toml::file(dir.join("omen.toml")))
+            .merge(Toml::file(dir.join(".omen/omen.toml")))
+            .merge(Env::prefixed("OMEN_").split("__"))
+            .extract()
+            .map_err(|e| crate::core::Error::Config(e.to_string()))?;
+        Ok(config)
     }
 
     /// Alias for load_default.
@@ -333,7 +345,7 @@ impl std::str::FromStr for OutputFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
+    use figment::Jail;
 
     #[test]
     fn test_default_config() {
@@ -345,22 +357,22 @@ mod tests {
 
     #[test]
     fn test_exclude_built_assets_default_true() {
-        let temp_dir = TempDir::new().unwrap();
-        let config_path = temp_dir.path().join("omen.toml");
-        std::fs::write(&config_path, "").unwrap();
-
-        let config = Config::from_file(&config_path).unwrap();
-        assert!(config.exclude_built_assets);
+        Jail::expect_with(|jail| {
+            jail.create_file("omen.toml", "")?;
+            let config = Config::from_file("omen.toml").unwrap();
+            assert!(config.exclude_built_assets);
+            Ok(())
+        });
     }
 
     #[test]
     fn test_exclude_built_assets_opt_out() {
-        let temp_dir = TempDir::new().unwrap();
-        let config_path = temp_dir.path().join("omen.toml");
-        std::fs::write(&config_path, "exclude_built_assets = false").unwrap();
-
-        let config = Config::from_file(&config_path).unwrap();
-        assert!(!config.exclude_built_assets);
+        Jail::expect_with(|jail| {
+            jail.create_file("omen.toml", "exclude_built_assets = false")?;
+            let config = Config::from_file("omen.toml").unwrap();
+            assert!(!config.exclude_built_assets);
+            Ok(())
+        });
     }
 
     #[test]
@@ -386,67 +398,94 @@ mod tests {
 
     #[test]
     fn test_config_from_file() {
-        let temp_dir = TempDir::new().unwrap();
-        let config_path = temp_dir.path().join("omen.toml");
-        std::fs::write(
-            &config_path,
-            r#"
-[complexity]
-cyclomatic_warn = 15
-cyclomatic_error = 25
-"#,
-        )
-        .unwrap();
-
-        let config = Config::from_file(&config_path).unwrap();
-        assert_eq!(config.complexity.cyclomatic_warn, 15);
-        assert_eq!(config.complexity.cyclomatic_error, 25);
+        Jail::expect_with(|jail| {
+            jail.create_file(
+                "omen.toml",
+                "[complexity]\ncyclomatic_warn = 15\ncyclomatic_error = 25",
+            )?;
+            let config = Config::from_file("omen.toml").unwrap();
+            assert_eq!(config.complexity.cyclomatic_warn, 15);
+            assert_eq!(config.complexity.cyclomatic_error, 25);
+            Ok(())
+        });
     }
 
     #[test]
     fn test_config_load_alias() {
-        let temp_dir = TempDir::new().unwrap();
-        let config_path = temp_dir.path().join("test.toml");
-        std::fs::write(&config_path, "[churn]\ntop = 50").unwrap();
-
-        let config = Config::load(&config_path).unwrap();
-        assert_eq!(config.churn.top, 50);
+        Jail::expect_with(|jail| {
+            jail.create_file("test.toml", "[churn]\ntop = 50")?;
+            let config = Config::load("test.toml").unwrap();
+            assert_eq!(config.churn.top, 50);
+            Ok(())
+        });
     }
 
     #[test]
     fn test_config_load_default_omen_toml() {
-        let temp_dir = TempDir::new().unwrap();
-        let config_path = temp_dir.path().join("omen.toml");
-        std::fs::write(&config_path, "[duplicates]\nmin_tokens = 100").unwrap();
-
-        let config = Config::load_default(temp_dir.path()).unwrap();
-        assert_eq!(config.duplicates.min_tokens, 100);
+        Jail::expect_with(|jail| {
+            jail.create_file("omen.toml", "[duplicates]\nmin_tokens = 100")?;
+            let config = Config::load_default(".").unwrap();
+            assert_eq!(config.duplicates.min_tokens, 100);
+            Ok(())
+        });
     }
 
     #[test]
     fn test_config_load_default_dot_omen() {
-        let temp_dir = TempDir::new().unwrap();
-        let dot_omen = temp_dir.path().join(".omen");
-        std::fs::create_dir(&dot_omen).unwrap();
-        std::fs::write(dot_omen.join("omen.toml"), "[hotspot]\ntop = 30").unwrap();
-
-        let config = Config::load_default(temp_dir.path()).unwrap();
-        assert_eq!(config.hotspot.top, 30);
+        Jail::expect_with(|jail| {
+            std::fs::create_dir(jail.directory().join(".omen")).unwrap();
+            jail.create_file(".omen/omen.toml", "[hotspot]\ntop = 30")?;
+            let config = Config::load_default(".").unwrap();
+            assert_eq!(config.hotspot.top, 30);
+            Ok(())
+        });
     }
 
     #[test]
     fn test_config_load_default_no_file() {
-        let temp_dir = TempDir::new().unwrap();
-        let config = Config::load_default(temp_dir.path()).unwrap();
-        // Should return default config
-        assert_eq!(config.complexity.cyclomatic_warn, 10);
+        Jail::expect_with(|_jail| {
+            let config = Config::load_default(".").unwrap();
+            assert_eq!(config.complexity.cyclomatic_warn, 10);
+            Ok(())
+        });
     }
 
     #[test]
     fn test_config_load_from_dir_alias() {
-        let temp_dir = TempDir::new().unwrap();
-        let config = Config::load_from_dir(temp_dir.path()).unwrap();
-        assert_eq!(config.churn.since, "6m");
+        Jail::expect_with(|_jail| {
+            let config = Config::load_from_dir(".").unwrap();
+            assert_eq!(config.churn.since, "6m");
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_from_file_errors_on_missing_file() {
+        let result = Config::from_file("/nonexistent/path/omen.toml");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not found"), "expected 'not found' in: {err}");
+    }
+
+    #[test]
+    fn test_env_var_overrides_file_value() {
+        Jail::expect_with(|jail| {
+            jail.create_file("omen.toml", "[complexity]\ncyclomatic_warn = 15")?;
+            jail.set_env("OMEN_COMPLEXITY__CYCLOMATIC_WARN", "5");
+            let config = Config::from_file("omen.toml").unwrap();
+            assert_eq!(config.complexity.cyclomatic_warn, 5);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_env_var_overrides_default_no_file() {
+        Jail::expect_with(|jail| {
+            jail.set_env("OMEN_COMPLEXITY__CYCLOMATIC_WARN", "42");
+            let config = Config::load_default(".").unwrap();
+            assert_eq!(config.complexity.cyclomatic_warn, 42);
+            Ok(())
+        });
     }
 
     #[test]
@@ -521,19 +560,16 @@ cyclomatic_error = 25
 
     #[test]
     fn test_config_with_exclude_patterns() {
-        let temp_dir = TempDir::new().unwrap();
-        let config_path = temp_dir.path().join("omen.toml");
-        std::fs::write(
-            &config_path,
-            r#"
-exclude = ["target/**", "node_modules/**"]
-"#,
-        )
-        .unwrap();
-
-        let config = Config::from_file(&config_path).unwrap();
-        assert_eq!(config.exclude_patterns.len(), 2);
-        assert!(config.exclude_patterns.contains(&"target/**".to_string()));
+        Jail::expect_with(|jail| {
+            jail.create_file(
+                "omen.toml",
+                "exclude = [\"target/**\", \"node_modules/**\"]",
+            )?;
+            let config = Config::from_file("omen.toml").unwrap();
+            assert_eq!(config.exclude_patterns.len(), 2);
+            assert!(config.exclude_patterns.contains(&"target/**".to_string()));
+            Ok(())
+        });
     }
 
     #[test]
