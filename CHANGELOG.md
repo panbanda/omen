@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.24.0](https://github.com/panbanda/omen/compare/omen-v4.23.0...omen-v4.24.0) (2026-02-10)
+
+
+### Features
+
+* **config:** replace toml with figment for layered config ([600e8f9](https://github.com/panbanda/omen/commit/600e8f98e80a9eeb7df3a75e9aae582b61b784eb))
+* **config:** replace toml with figment for layered config ([4a3cfe6](https://github.com/panbanda/omen/commit/4a3cfe6c5af8be66d49361d55593937984f7dca2))
+
 ## [4.23.0](https://github.com/panbanda/omen/compare/omen-v4.22.0...omen-v4.23.0) (2026-02-08)
 
 
