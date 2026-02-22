@@ -26,10 +26,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@4be9e76fd7c4901c61fb841f559994984270fce7 # stable
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # stable
         with:
           toolchain: stable
 
@@ -48,10 +48,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@4be9e76fd7c4901c61fb841f559994984270fce7 # stable
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # stable
         with:
           toolchain: stable
           components: llvm-tools-preview
@@ -60,7 +60,7 @@ jobs:
         uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@b49dc1819121df87df6401c0b57c45b76da49937 # cargo-llvm-cov
+        uses: taiki-e/install-action@cf805946ef1da29d90b652c870b7a19aae44b0f5 # cargo-llvm-cov
 
       - name: Check coverage threshold (80%)
         run: cargo llvm-cov --all-features --ignore-filename-regex 'main\.rs$' --fail-under-lines 80
@@ -80,10 +80,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@4be9e76fd7c4901c61fb841f559994984270fce7 # stable
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # stable
         with:
           toolchain: stable
           components: clippy, rustfmt
@@ -103,7 +103,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@4be9e76fd7c4901c61fb841f559994984270fce7 # 1.92.0
