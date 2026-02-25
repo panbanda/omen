@@ -825,7 +825,7 @@ Go, Rust, Python, TypeScript, JavaScript, TSX/JSX, Java, C, C++, C#, Ruby, PHP, 
 ### Homebrew (macOS/Linux)
 
 ```bash
-brew install panbanda/omen/omen
+brew install panbanda/brews/omen
 ```
 
 ### Cargo Install
