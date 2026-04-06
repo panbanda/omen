@@ -180,7 +180,7 @@ jobs:
           EOF
 
           if [ -n "$HOMEBREW_TAP_GITHUB_TOKEN" ]; then
-            git clone "https://x-access-token:${HOMEBREW_TAP_GITHUB_TOKEN}@github.com/panbanda/homebrew-omen.git" tap
+            git clone "https://x-access-token:${HOMEBREW_TAP_GITHUB_TOKEN}@github.com/panbanda/homebrew-brews.git" tap
             mkdir -p tap/Formula
             cp omen.rb tap/Formula/omen.rb
 
