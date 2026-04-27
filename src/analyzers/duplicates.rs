@@ -256,10 +256,8 @@ impl Analyzer {
         lines: &[&str],
         lang: &str,
     ) -> Option<CodeFragment> {
-        let content = lines.join("\n");
-
         // Normalize and tokenize
-        let normalized = self.normalize_code(&content, lang);
+        let normalized = self.normalize_code(lines, lang);
         let tokens = tokenize(&normalized);
 
         // Normalize tokens with a FRESH identifier map for each fragment.
@@ -285,10 +283,10 @@ impl Analyzer {
     }
 
     /// Normalize code for comparison.
-    fn normalize_code(&self, code: &str, lang: &str) -> String {
+    fn normalize_code(&self, lines: &[&str], lang: &str) -> String {
         let mut result = String::new();
 
-        for line in code.lines() {
+        for line in lines {
             let trimmed = line.trim();
             if trimmed.is_empty() {
                 continue;
@@ -1508,7 +1506,8 @@ mod tests {
     fn test_normalize_code() {
         let analyzer = Analyzer::new();
         let code = "  func main() {\n    // comment\n    x := 1\n  }";
-        let normalized = analyzer.normalize_code(code, "go");
+        let lines: Vec<&str> = code.lines().collect();
+        let normalized = analyzer.normalize_code(&lines, "go");
         assert!(!normalized.contains("// comment"));
         assert!(normalized.contains("func main()"));
     }
