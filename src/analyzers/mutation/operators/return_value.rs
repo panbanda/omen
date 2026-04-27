@@ -337,10 +337,9 @@ fn generate_default_replacements(original: &str, lang: Language) -> Vec<String> 
 
     match lang {
         Language::Rust => {
-            replacements.push(original.replace(
-                &original["return ".len()..original.len() - 1],
-                "Default::default()",
-            ));
+            if original.len() > "return ".len() {
+                replacements.push("return Default::default()".to_string());
+            }
         }
         Language::Go => {
             // For Go, we can't easily determine the type, so provide common defaults
@@ -445,11 +444,15 @@ mod tests {
 
         let mutants = op.generate_mutants(&result, "test");
 
-        // Should generate replacements for numeric return
-        assert!(!mutants.is_empty());
-        let replacements: Vec<_> = mutants.iter().map(|m| m.replacement.as_str()).collect();
-        assert!(replacements.iter().any(|r| r.contains("0")));
-        assert!(replacements.iter().any(|r| r.contains("1")));
+        let replacements: Vec<String> = mutants.iter().map(|m| m.replacement.clone()).collect();
+        assert_eq!(
+            replacements,
+            vec![
+                "return 0".to_string(),
+                "return 1".to_string(),
+                "return -1".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -460,9 +463,8 @@ mod tests {
 
         let mutants = op.generate_mutants(&result, "test");
 
-        // Should generate false replacement
-        assert!(!mutants.is_empty());
-        assert!(mutants.iter().any(|m| m.replacement.contains("false")));
+        let replacements: Vec<String> = mutants.iter().map(|m| m.replacement.clone()).collect();
+        assert_eq!(replacements, vec!["return false".to_string()]);
     }
 
     #[test]
@@ -473,8 +475,8 @@ mod tests {
 
         let mutants = op.generate_mutants(&result, "test");
 
-        // Should generate None replacement
-        assert!(mutants.iter().any(|m| m.replacement.contains("None")));
+        let replacements: Vec<String> = mutants.iter().map(|m| m.replacement.clone()).collect();
+        assert_eq!(replacements, vec!["return None".to_string()]);
     }
 
     #[test]
@@ -485,8 +487,11 @@ mod tests {
 
         let mutants = op.generate_mutants(&result, "test");
 
-        // Should generate Some replacement
-        assert!(mutants.iter().any(|m| m.replacement.contains("Some")));
+        let replacements: Vec<String> = mutants.iter().map(|m| m.replacement.clone()).collect();
+        assert_eq!(
+            replacements,
+            vec!["return Some(Default::default())".to_string()]
+        );
     }
 
     #[test]
@@ -497,8 +502,11 @@ mod tests {
 
         let mutants = op.generate_mutants(&result, "test");
 
-        // Should generate Err replacement
-        assert!(mutants.iter().any(|m| m.replacement.contains("Err")));
+        let replacements: Vec<String> = mutants.iter().map(|m| m.replacement.clone()).collect();
+        assert_eq!(
+            replacements,
+            vec!["return Err(Default::default())".to_string()]
+        );
     }
 
     #[test]
@@ -509,8 +517,11 @@ mod tests {
 
         let mutants = op.generate_mutants(&result, "test");
 
-        // Should generate Ok replacement
-        assert!(mutants.iter().any(|m| m.replacement.contains("Ok")));
+        let replacements: Vec<String> = mutants.iter().map(|m| m.replacement.clone()).collect();
+        assert_eq!(
+            replacements,
+            vec!["return Ok(Default::default())".to_string()]
+        );
     }
 
     #[test]
@@ -521,8 +532,8 @@ mod tests {
 
         let mutants = op.generate_mutants(&result, "test");
 
-        // Should generate False replacement (Python casing)
-        assert!(mutants.iter().any(|m| m.replacement.contains("False")));
+        let replacements: Vec<String> = mutants.iter().map(|m| m.replacement.clone()).collect();
+        assert_eq!(replacements, vec!["return False".to_string()]);
     }
 
     #[test]
@@ -533,8 +544,11 @@ mod tests {
 
         let mutants = op.generate_mutants(&result, "test");
 
-        // Should generate error replacement
-        assert!(mutants.iter().any(|m| m.replacement.contains("errors")));
+        let replacements: Vec<String> = mutants.iter().map(|m| m.replacement.clone()).collect();
+        assert_eq!(
+            replacements,
+            vec!["return errors.New(\"mutant\")".to_string()]
+        );
     }
 
     #[test]
@@ -545,11 +559,10 @@ mod tests {
 
         let mutants = op.generate_mutants(&result, "test");
 
-        // Should generate undefined or {} replacement
-        let replacements: Vec<_> = mutants.iter().map(|m| m.replacement.as_str()).collect();
-        assert!(
-            replacements.iter().any(|r| r.contains("undefined"))
-                || replacements.iter().any(|r| r.contains("{}"))
+        let replacements: Vec<String> = mutants.iter().map(|m| m.replacement.clone()).collect();
+        assert_eq!(
+            replacements,
+            vec!["return undefined;".to_string(), "return {};".to_string(),]
         );
     }
 
@@ -685,8 +698,30 @@ mod tests {
     #[test]
     fn test_generate_return_replacements_zero() {
         let replacements = generate_return_replacements("return 0;", Language::Rust);
-        assert!(replacements.iter().any(|r| r.contains("1")));
-        assert!(replacements.iter().any(|r| r.contains("-1")));
+        assert_eq!(
+            replacements,
+            vec!["return 1;".to_string(), "return -1;".to_string()]
+        );
+    }
+
+    #[test]
+    fn rust_default_replacement_function_call() {
+        let r = generate_default_replacements("return foo()", Language::Rust);
+        assert_eq!(r, vec!["return Default::default()".to_string()]);
+    }
+
+    #[test]
+    fn rust_default_replacement_short_value() {
+        let r = generate_default_replacements("return x", Language::Rust);
+        assert_eq!(r, vec!["return Default::default()".to_string()]);
+    }
+
+    #[test]
+    fn rust_default_replacement_repeated_substring() {
+        // Guards against a wrong fix that uses original.replace(value, ...),
+        // which would replace both occurrences of the substring.
+        let r = generate_default_replacements("return abcabc", Language::Rust);
+        assert_eq!(r, vec!["return Default::default()".to_string()]);
     }
 
     #[test]
