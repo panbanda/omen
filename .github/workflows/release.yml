@@ -103,6 +103,9 @@ jobs:
     needs: [release-please, build]
     if: ${{ needs.release-please.outputs.release_created }}
     runs-on: ubuntu-latest
+    env:
+      SOURCE_REPOSITORY: ${{ github.repository }}
+      HOMEBREW_TAP_REPOSITORY: panbanda/homebrew-brews
 
     permissions:
       contents: write
@@ -119,8 +122,8 @@ jobs:
         run: |
           mkdir -p dist
           TAG="${{ needs.release-please.outputs.tag_name }}"
-          gh release download "$TAG" --pattern "*.tar.gz" --dir dist
-          gh release download "$TAG" --pattern "*.sha256" --dir dist
+          gh release download "$TAG" --repo "$SOURCE_REPOSITORY" --pattern "*.tar.gz" --dir dist
+          gh release download "$TAG" --repo "$SOURCE_REPOSITORY" --pattern "*.sha256" --dir dist
 
       - name: Create consolidated checksums
         env:
@@ -128,7 +131,7 @@ jobs:
         run: |
           TAG="${{ needs.release-please.outputs.tag_name }}"
           cat dist/*.sha256 | sort > dist/checksums.txt
-          gh release upload "$TAG" dist/checksums.txt --clobber
+          gh release upload "$TAG" dist/checksums.txt --repo "$SOURCE_REPOSITORY" --clobber
 
       - name: Generate Homebrew formula
         env:
@@ -145,26 +148,26 @@ jobs:
           cat > omen.rb << EOF
           class Omen < Formula
             desc "Multi-language code analysis CLI"
-            homepage "https://github.com/panbanda/omen"
+            homepage "https://github.com/${SOURCE_REPOSITORY}"
             version "${VERSION}"
             license "MIT"
 
             on_macos do
               if Hardware::CPU.arm?
-                url "https://github.com/panbanda/omen/releases/download/${TAG}/omen_${VERSION}_aarch64-apple-darwin.tar.gz"
+                url "https://github.com/${SOURCE_REPOSITORY}/releases/download/${TAG}/omen_${VERSION}_aarch64-apple-darwin.tar.gz"
                 sha256 "${DARWIN_ARM64_SHA}"
               else
-                url "https://github.com/panbanda/omen/releases/download/${TAG}/omen_${VERSION}_x86_64-apple-darwin.tar.gz"
+                url "https://github.com/${SOURCE_REPOSITORY}/releases/download/${TAG}/omen_${VERSION}_x86_64-apple-darwin.tar.gz"
                 sha256 "${DARWIN_AMD64_SHA}"
               end
             end
 
             on_linux do
               if Hardware::CPU.arm?
-                url "https://github.com/panbanda/omen/releases/download/${TAG}/omen_${VERSION}_aarch64-unknown-linux-gnu.tar.gz"
+                url "https://github.com/${SOURCE_REPOSITORY}/releases/download/${TAG}/omen_${VERSION}_aarch64-unknown-linux-gnu.tar.gz"
                 sha256 "${LINUX_ARM64_SHA}"
               else
-                url "https://github.com/panbanda/omen/releases/download/${TAG}/omen_${VERSION}_x86_64-unknown-linux-gnu.tar.gz"
+                url "https://github.com/${SOURCE_REPOSITORY}/releases/download/${TAG}/omen_${VERSION}_x86_64-unknown-linux-gnu.tar.gz"
                 sha256 "${LINUX_AMD64_SHA}"
               end
             end
@@ -180,7 +183,7 @@ jobs:
           EOF
 
           if [ -n "$HOMEBREW_TAP_GITHUB_TOKEN" ]; then
-            git clone "https://x-access-token:${HOMEBREW_TAP_GITHUB_TOKEN}@github.com/panbanda/homebrew-brews.git" tap
+            git clone "https://x-access-token:${HOMEBREW_TAP_GITHUB_TOKEN}@github.com/${HOMEBREW_TAP_REPOSITORY}.git" tap
             mkdir -p tap/Formula
             cp omen.rb tap/Formula/omen.rb
 
