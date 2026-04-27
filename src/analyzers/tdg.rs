@@ -183,8 +183,7 @@ impl Analyzer {
         penalties: &mut Vec<PenaltyAttribution>,
     ) -> f32 {
         let mut points = self.weights.structural_complexity;
-        let lines: Vec<&str> = source.lines().collect();
-        let cyclomatic = self.estimate_cyclomatic_complexity(&lines);
+        let cyclomatic = self.estimate_cyclomatic_complexity(source);
 
         if cyclomatic > self.thresholds.max_cyclomatic_complexity {
             let excess = (cyclomatic - self.thresholds.max_cyclomatic_complexity) as f32;
@@ -320,10 +319,10 @@ impl Analyzer {
         consistency * self.weights.consistency
     }
 
-    fn estimate_cyclomatic_complexity(&self, lines: &[&str]) -> u32 {
+    fn estimate_cyclomatic_complexity(&self, source: &str) -> u32 {
         let mut complexity = 1u32; // Base complexity
 
-        for line in lines {
+        for line in source.lines() {
             let trimmed = line.trim();
 
             // Control flow statements
@@ -1230,16 +1229,14 @@ fn complex() {
     #[test]
     fn test_cyclomatic_estimation() {
         let analyzer = Analyzer::new();
-        let lines: Vec<&str> = vec![
-            "if condition {",
-            "} else if other {",
-            "    for item in list {",
-            "        if item && other {",
-            "        }",
-            "    }",
-            "}",
-        ];
-        let complexity = analyzer.estimate_cyclomatic_complexity(&lines);
+        let source = "if condition {\n\
+                      } else if other {\n\
+                      \x20   for item in list {\n\
+                      \x20       if item && other {\n\
+                      \x20       }\n\
+                      \x20   }\n\
+                      }";
+        let complexity = analyzer.estimate_cyclomatic_complexity(source);
         assert!(complexity > 1);
     }
 
