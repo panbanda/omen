@@ -1,0 +1,69 @@
+---
+source: tests/complexity_snapshot_test.rs
+expression: normalized
+---
+{
+  "files": [
+    {
+      "avg_cognitive": 1.6666666666666667,
+      "avg_cyclomatic": 2.6666666666666665,
+      "functions": [
+        {
+          "end_line": 12,
+          "file": "[FIXTURE]/sample.rs",
+          "metrics": {
+            "cognitive": 2,
+            "cyclomatic": 3,
+            "lines": 6,
+            "max_nesting": 1
+          },
+          "name": "new",
+          "start_line": 7
+        },
+        {
+          "end_line": 22,
+          "file": "[FIXTURE]/sample.rs",
+          "metrics": {
+            "cognitive": 2,
+            "cyclomatic": 3,
+            "lines": 9,
+            "max_nesting": 1
+          },
+          "name": "validate",
+          "start_line": 14
+        },
+        {
+          "end_line": 31,
+          "file": "[FIXTURE]/sample.rs",
+          "metrics": {
+            "cognitive": 1,
+            "cyclomatic": 2,
+            "lines": 7,
+            "max_nesting": 1
+          },
+          "name": "fibonacci",
+          "start_line": 25
+        }
+      ],
+      "language": "Rust",
+      "path": "[FIXTURE]/sample.rs",
+      "total_cognitive": 5,
+      "total_cyclomatic": 8,
+      "total_lines": 31
+    }
+  ],
+  "summary": {
+    "avg_cognitive": 1.6666666666666667,
+    "avg_cyclomatic": 2.6666666666666665,
+    "max_cognitive": 2,
+    "max_cyclomatic": 3,
+    "p50_cognitive": 2,
+    "p50_cyclomatic": 3,
+    "p90_cognitive": 2,
+    "p90_cyclomatic": 3,
+    "p95_cognitive": 2,
+    "p95_cyclomatic": 3,
+    "total_files": 1,
+    "total_functions": 3
+  }
+}

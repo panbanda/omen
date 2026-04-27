@@ -113,59 +113,62 @@ impl Analyzer {
     }
 
     /// Compute complexity data from complexity::Analyzer.
-    /// Returns a map of file path -> (cyclomatic, cognitive) complexity.
-    fn compute_complexity_data(&self, ctx: &AnalysisContext<'_>) -> HashMap<String, (u32, u32)> {
-        let mut data = HashMap::new();
+    /// Returns a map of file path -> (cyclomatic, cognitive) complexity, plus
+    /// a parallel map of file path -> total source line count. The line
+    /// counts are computed during complexity parsing and reused by the
+    /// duplication step so we don't read the same files twice.
+    fn compute_complexity_data(
+        &self,
+        ctx: &AnalysisContext<'_>,
+    ) -> (HashMap<String, (u32, u32)>, HashMap<String, usize>) {
+        let mut complexity = HashMap::new();
+        let mut line_counts = HashMap::new();
 
         let analyzer = complexity::Analyzer::new();
         if let Ok(analysis) = analyzer.analyze(ctx) {
             for file_result in analysis.files {
-                data.insert(
+                complexity.insert(
                     file_result.path.clone(),
                     (file_result.total_cyclomatic, file_result.total_cognitive),
                 );
+                line_counts.insert(file_result.path, file_result.total_lines);
             }
         }
 
-        data
+        (complexity, line_counts)
     }
 
     /// Compute duplication data from duplicates::Analyzer.
     /// Returns a map of file path -> duplication ratio (0.0-1.0).
-    fn compute_duplication_data(&self, ctx: &AnalysisContext<'_>) -> HashMap<String, f32> {
+    /// `line_counts` provides total lines per file (from the complexity pass)
+    /// so we can avoid re-reading every clone-source file just to count lines.
+    fn compute_duplication_data(
+        &self,
+        ctx: &AnalysisContext<'_>,
+        line_counts: &HashMap<String, usize>,
+    ) -> HashMap<String, f32> {
         let mut data = HashMap::new();
 
         let analyzer = duplicates::Analyzer::new();
         if let Ok(analysis) = analyzer.analyze(ctx) {
             // Count lines involved in clones per file
             let mut clone_lines: HashMap<String, usize> = HashMap::new();
-            let mut total_lines: HashMap<String, usize> = HashMap::new();
 
             for clone in &analysis.clones {
-                // File A
                 *clone_lines.entry(clone.file_a.clone()).or_insert(0) += clone.lines_a;
-                // File B
                 *clone_lines.entry(clone.file_b.clone()).or_insert(0) += clone.lines_b;
             }
 
-            // Get total lines per file (approximate from clone data)
-            for clone in &analysis.clones {
-                total_lines.entry(clone.file_a.clone()).or_insert_with(|| {
-                    // Estimate total lines from file (read if needed)
-                    std::fs::read_to_string(ctx.root.join(&clone.file_a))
-                        .map(|c| c.lines().count())
-                        .unwrap_or(1000)
-                });
-                total_lines.entry(clone.file_b.clone()).or_insert_with(|| {
-                    std::fs::read_to_string(ctx.root.join(&clone.file_b))
-                        .map(|c| c.lines().count())
-                        .unwrap_or(1000)
-                });
-            }
-
-            // Calculate ratio for each file that has clones
+            // Calculate ratio for each file that has clones, using total
+            // line counts from the complexity pass. If a file is not present
+            // there (e.g. its language is supported by the duplicates
+            // analyzer but not the complexity analyzer, or it failed to
+            // parse) we fall back to 1 to avoid division by zero -- the
+            // resulting ratio is then clamped by `.min(1.0)`. This matches
+            // the prior behavior for the missing-data case without doing a
+            // redundant filesystem read.
             for (file, lines) in clone_lines {
-                let total = *total_lines.get(&file).unwrap_or(&1);
+                let total = line_counts.get(&file).copied().unwrap_or(1).max(1);
                 let ratio = (lines as f32 / total as f32).min(1.0);
                 data.insert(file, ratio);
             }
@@ -411,8 +414,8 @@ impl AnalyzerTrait for Analyzer {
             .ok_or_else(|| crate::core::Error::git("Defect analyzer requires a git repository"))?;
 
         // Pre-compute data from other analyzers (runs in parallel internally)
-        let complexity_data = self.compute_complexity_data(ctx);
-        let duplication_data = self.compute_duplication_data(ctx);
+        let (complexity_data, line_counts) = self.compute_complexity_data(ctx);
+        let duplication_data = self.compute_duplication_data(ctx, &line_counts);
         let coupling_data = self.compute_coupling_data(ctx);
 
         // Pre-compute git metrics once for all files (single git log call)

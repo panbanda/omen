@@ -240,6 +240,13 @@ pub struct FileResult {
     pub avg_cyclomatic: f64,
     /// Average cognitive complexity.
     pub avg_cognitive: f64,
+    /// Total source lines in the file (matches `str::lines()` count).
+    /// Computed once during parsing so downstream analyzers (e.g. defect)
+    /// don't have to re-read the file from disk just to count lines.
+    /// `#[serde(default)]` keeps deserialization of older JSON outputs
+    /// backwards compatible.
+    #[serde(default)]
+    pub total_lines: usize,
 }
 
 /// Per-function complexity result.
@@ -302,6 +309,13 @@ pub struct AnalysisSummary {
 /// Analyze a parsed file and extract complexity metrics.
 fn analyze_parse_result(result: &ParseResult) -> FileResult {
     let functions = parser::extract_functions(result);
+    // Count source lines once here so downstream analyzers can reuse the
+    // value without re-reading the file. Using `from_utf8_lossy` keeps the
+    // count well-defined even if the file contains invalid UTF-8 (the lossy
+    // replacement does not affect newline counting).
+    let total_lines = std::str::from_utf8(&result.source)
+        .map(|s| s.lines().count())
+        .unwrap_or_else(|_| String::from_utf8_lossy(&result.source).lines().count());
     let mut file_result = FileResult {
         path: result.path.to_string_lossy().to_string(),
         language: result.language.to_string(),
@@ -310,6 +324,7 @@ fn analyze_parse_result(result: &ParseResult) -> FileResult {
         total_cognitive: 0,
         avg_cyclomatic: 0.0,
         avg_cognitive: 0.0,
+        total_lines,
     };
 
     for func in functions {
@@ -712,6 +727,7 @@ mod tests {
                 total_cognitive: 3,
                 avg_cyclomatic: 5.0,
                 avg_cognitive: 3.0,
+                total_lines: 5,
             }],
             summary: AnalysisSummary::default(),
         };
@@ -742,6 +758,7 @@ mod tests {
                 total_cognitive: 5,
                 avg_cyclomatic: 20.0,
                 avg_cognitive: 5.0,
+                total_lines: 50,
             }],
             summary: AnalysisSummary::default(),
         };
@@ -776,6 +793,7 @@ mod tests {
                 total_cognitive: 25,
                 avg_cyclomatic: 5.0,
                 avg_cognitive: 25.0,
+                total_lines: 30,
             }],
             summary: AnalysisSummary::default(),
         };
@@ -835,6 +853,7 @@ mod tests {
                 total_cognitive: 45,
                 avg_cyclomatic: 11.0,
                 avg_cognitive: 15.0,
+                total_lines: 100,
             }],
             summary: AnalysisSummary::default(),
         };
@@ -884,6 +903,48 @@ mod tests {
         assert_eq!(result.functions[0].name, "simple");
         // Cyclomatic: 1 (baseline for a simple function)
         assert_eq!(result.functions[0].metrics.cyclomatic, 1);
+    }
+
+    #[test]
+    fn test_file_result_exposes_total_lines() {
+        // Three lines of source, each terminated by `\n`.
+        let code = b"fn a() {}\nfn b() {}\nfn c() {}\n";
+        let result = parse_and_analyze(code, Language::Rust, "test.rs");
+        // `str::lines` does not count a trailing empty line, matching what
+        // the defect analyzer was previously computing via fs::read_to_string.
+        assert_eq!(result.total_lines, 3);
+    }
+
+    #[test]
+    fn test_file_result_total_lines_no_trailing_newline() {
+        let code = b"fn a() {}\nfn b() {}";
+        let result = parse_and_analyze(code, Language::Rust, "test.rs");
+        assert_eq!(result.total_lines, 2);
+    }
+
+    #[test]
+    fn test_file_result_total_lines_empty_source() {
+        let code = b"";
+        let result = parse_and_analyze(code, Language::Rust, "test.rs");
+        assert_eq!(result.total_lines, 0);
+    }
+
+    #[test]
+    fn test_file_result_total_lines_multilang() {
+        // Same line count rule applies across all supported languages because
+        // `str::lines()` is language-agnostic. Spot-check a few languages so a
+        // future regression in one parser path is caught.
+        let code = b"package main\n\nfunc main() {}\n";
+        let result = parse_and_analyze(code, Language::Go, "test.go");
+        assert_eq!(result.total_lines, 3);
+
+        let code = b"def main():\n    pass\n";
+        let result = parse_and_analyze(code, Language::Python, "test.py");
+        assert_eq!(result.total_lines, 2);
+
+        let code = b"function main() {}\n";
+        let result = parse_and_analyze(code, Language::JavaScript, "test.js");
+        assert_eq!(result.total_lines, 1);
     }
 
     #[test]
