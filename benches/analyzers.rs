@@ -403,6 +403,47 @@ fn bench_churn(c: &mut Criterion) {
     group.finish();
 }
 
+/// Build synthetic commits for microbenchmarking the conversion loop.
+fn build_synthetic_commits(num_commits: usize, files_per_commit: usize) -> Vec<omen::git::Commit> {
+    use omen::git::{ChangeType, Commit, FileChange};
+    use std::path::PathBuf;
+
+    (0..num_commits)
+        .map(|c| Commit {
+            sha: format!("sha{:040x}", c),
+            author: format!("Author {}", c % 25),
+            email: format!("author{}@example.com", c % 25),
+            timestamp: 1_700_000_000 + c as i64 * 60,
+            message: format!("Commit number {}", c),
+            files: (0..files_per_commit)
+                .map(|f| FileChange {
+                    path: PathBuf::from(format!("src/module_{}/file_{}.rs", c % 50, f)),
+                    additions: ((c + f) % 200) as u32,
+                    deletions: ((c * 3 + f) % 150) as u32,
+                    change_type: ChangeType::Modified,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+/// Microbenchmark for the commits-to-raw-commits conversion (allocation hot path).
+fn bench_changes_convert(c: &mut Criterion) {
+    let mut group = c.benchmark_group("changes_convert");
+    group.sample_size(20);
+
+    let commits = build_synthetic_commits(5_000, 30);
+    group.throughput(Throughput::Elements(commits.len() as u64));
+    group.bench_function("5000c_30f", |b| {
+        b.iter(|| {
+            let raw = changes::commits_to_raw_commits(black_box(&commits)).unwrap();
+            black_box(raw.len())
+        });
+    });
+
+    group.finish();
+}
+
 /// Benchmark the changes/JIT analyzer (git-dependent).
 fn bench_changes(c: &mut Criterion) {
     let mut group = c.benchmark_group("changes");
@@ -551,6 +592,7 @@ criterion_group!(
     targets =
         bench_churn,
         bench_changes,
+        bench_changes_convert,
         bench_defect,
         bench_ownership,
         bench_temporal,

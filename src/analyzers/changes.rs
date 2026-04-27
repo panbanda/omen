@@ -342,14 +342,16 @@ impl AnalyzerTrait for Analyzer {
 }
 
 /// Raw commit data from git log.
+#[doc(hidden)]
 #[derive(Debug, Clone)]
-struct RawCommit {
+pub struct RawCommit {
     features: CommitFeatures,
 }
 
 /// Commit features for change risk analysis.
+#[doc(hidden)]
 #[derive(Debug, Clone, Default)]
-struct CommitFeatures {
+pub struct CommitFeatures {
     commit_hash: String,
     author: String,
     message: String,
@@ -533,7 +535,7 @@ fn collect_commit_data(git_path: &Path, days: u32) -> Result<Vec<RawCommit>> {
 }
 
 /// Convert gix Commits to RawCommits for risk analysis.
-fn commits_to_raw_commits(commits: &[crate::git::Commit]) -> Result<Vec<RawCommit>> {
+pub fn commits_to_raw_commits(commits: &[crate::git::Commit]) -> Result<Vec<RawCommit>> {
     let mut raw_commits = Vec::new();
 
     for commit in commits {
@@ -546,14 +548,14 @@ fn commits_to_raw_commits(commits: &[crate::git::Commit]) -> Result<Vec<RawCommi
         let mut files_modified = Vec::new();
 
         for file_change in &commit.files {
-            let path_str = file_change.path.to_string_lossy().to_string();
+            let path_str = file_change.path.to_string_lossy().into_owned();
             let added = file_change.additions as i32;
             let deleted = file_change.deletions as i32;
 
             lines_added += added;
             lines_deleted += deleted;
-            files_modified.push(path_str.clone());
-            *lines_per_file.entry(path_str).or_insert(0) += added + deleted;
+            *lines_per_file.entry(path_str.clone()).or_insert(0) += added + deleted;
+            files_modified.push(path_str);
         }
 
         let entropy = calculate_entropy(&lines_per_file);
