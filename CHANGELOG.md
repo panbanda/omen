@@ -1,5 +1,20 @@
 # Changelog
 
+## [4.24.1](https://github.com/panbanda/omen/compare/omen-v4.24.0...omen-v4.24.1) (2026-04-29)
+
+
+### Bug Fixes
+
+* **ci:** use source repo for brew deploy ([d383a58](https://github.com/panbanda/omen/commit/d383a5800d62f8127206fe4980cb413c2d644516))
+* **mutation:** correct Rust return-value default replacement ([578af03](https://github.com/panbanda/omen/commit/578af032d68296da2003c66317ea2513848d9b53))
+* **mutation:** correct Rust return-value default replacement ([1bec48e](https://github.com/panbanda/omen/commit/1bec48e6849c661a8c8d89cf01d5197900df6288))
+
+
+### Performance Improvements
+
+* **duplicates:** drop redundant join+split in fragment normalization ([33016b2](https://github.com/panbanda/omen/commit/33016b20f24a5abdfb239b90bce31d09ebf11ef9))
+* **duplicates:** drop redundant join+split in fragment normalization ([6f6fce8](https://github.com/panbanda/omen/commit/6f6fce87151523bac01ac7f790a6293700ae8189))
+
 ## [4.24.0](https://github.com/panbanda/omen/compare/omen-v4.23.0...omen-v4.24.0) (2026-02-10)
 
 
