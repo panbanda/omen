@@ -394,12 +394,12 @@ fn extract_go_classes(path: &Path, source: &[u8], tree: &tree_sitter::Tree) -> V
 
     // Phase 1: Collect type declarations that contain struct_type
     let mut struct_defs: Vec<(String, tree_sitter::Node)> = Vec::new();
-    for i in 0..root.child_count() {
+    for i in 0..root.child_count() as u32 {
         let child = match root.child(i) {
             Some(c) if c.kind() == "type_declaration" => c,
             _ => continue,
         };
-        for j in 0..child.child_count() {
+        for j in 0..child.child_count() as u32 {
             if let Some(spec) = child.child(j) {
                 if spec.kind() == "type_spec" && has_child_of_kind(&spec, "struct_type") {
                     if let Some(name) = node_name_text(&spec, source) {
@@ -412,7 +412,7 @@ fn extract_go_classes(path: &Path, source: &[u8], tree: &tree_sitter::Tree) -> V
 
     // Phase 2: Collect method declarations and group by receiver type
     let mut method_map: HashMap<String, Vec<tree_sitter::Node>> = HashMap::new();
-    for i in 0..root.child_count() {
+    for i in 0..root.child_count() as u32 {
         let child = match root.child(i) {
             Some(c) if c.kind() == "method_declaration" => c,
             _ => continue,
@@ -517,7 +517,7 @@ fn collect_nodes_by_kind<'a>(
     source: &[u8],
     out: &mut Vec<(String, tree_sitter::Node<'a>)>,
 ) {
-    for i in 0..root.child_count() {
+    for i in 0..root.child_count() as u32 {
         let child = match root.child(i) {
             Some(c) if c.kind() == kind => c,
             _ => continue,
@@ -534,7 +534,7 @@ fn collect_impl_blocks<'a>(
     source: &[u8],
     out: &mut Vec<(String, tree_sitter::Node<'a>)>,
 ) {
-    for i in 0..root.child_count() {
+    for i in 0..root.child_count() as u32 {
         let child = match root.child(i) {
             Some(c) if c.kind() == "impl_item" => c,
             _ => continue,
@@ -569,7 +569,7 @@ fn extract_go_receiver_type(node: &tree_sitter::Node, source: &[u8]) -> Option<S
     // method_declaration has a "receiver" field containing parameter_list
     let receiver = node.child_by_field_name("receiver")?;
     // Walk through the parameter list to find the type
-    for i in 0..receiver.child_count() {
+    for i in 0..receiver.child_count() as u32 {
         if let Some(param) = receiver.child(i) {
             if param.kind() == "parameter_declaration" {
                 // The type may be a pointer_type (*Server) or type_identifier (Server)
@@ -587,7 +587,7 @@ fn extract_go_base_type(node: &tree_sitter::Node, source: &[u8]) -> Option<Strin
     match node.kind() {
         "pointer_type" => {
             // *Server -> look for the inner type_identifier
-            for i in 0..node.child_count() {
+            for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i) {
                     if child.kind() == "type_identifier" {
                         return std::str::from_utf8(&source[child.byte_range()])
@@ -617,7 +617,7 @@ fn node_name_text(node: &tree_sitter::Node, source: &[u8]) -> Option<String> {
 
 /// Checks if a node has a child of the given kind.
 fn has_child_of_kind(node: &tree_sitter::Node, kind: &str) -> bool {
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i) {
             if child.kind() == kind {
                 return true;
@@ -792,7 +792,7 @@ fn first_child_text_by_kind(
     source: &[u8],
     kinds: &[&str],
 ) -> Option<String> {
-    for i in 0..parent.child_count() {
+    for i in 0..parent.child_count() as u32 {
         let child = parent.child(i)?;
         if kinds.contains(&child.kind()) {
             return std::str::from_utf8(&source[child.byte_range()])
@@ -856,7 +856,7 @@ fn find_child_by_kind<'a>(
     node: &tree_sitter::Node<'a>,
     kind: &str,
 ) -> Option<tree_sitter::Node<'a>> {
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         let child = node.child(i)?;
         if child.kind() == kind {
             return Some(child);

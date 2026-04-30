@@ -319,7 +319,7 @@ fn affects_return_value(node: &tree_sitter::Node<'_>) -> bool {
         }
         // In Rust, the last expression in a block is implicitly returned
         if kind == "block" {
-            if let Some(last_child) = parent.child(parent.child_count().saturating_sub(2)) {
+            if let Some(last_child) = parent.child(parent.child_count().saturating_sub(2) as u32) {
                 if last_child.start_byte() <= current.start_byte()
                     && current.end_byte() <= last_child.end_byte()
                 {
