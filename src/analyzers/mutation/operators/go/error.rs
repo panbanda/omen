@@ -140,9 +140,20 @@ impl GoErrorOperator {
             return None;
         }
 
-        // Check if block contains a return statement with error
+        // Check if block contains a return statement with error.
+        // tree-sitter-go 0.25+ wraps block contents in a `statement_list` node,
+        // so we descend through it when present.
         let mut has_error_return = false;
-        for child in consequence.children(&mut consequence.walk()) {
+        let mut cursor = consequence.walk();
+        let stmt_iter = consequence.children(&mut cursor).flat_map(|child| {
+            if child.kind() == "statement_list" {
+                let mut sub = child.walk();
+                child.children(&mut sub).collect::<Vec<_>>()
+            } else {
+                vec![child]
+            }
+        });
+        for child in stmt_iter {
             if child.kind() == "return_statement" {
                 if let Ok(text) = child.utf8_text(&result.source) {
                     if text.contains("err") {

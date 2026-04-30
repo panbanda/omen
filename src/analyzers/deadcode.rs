@@ -1008,7 +1008,7 @@ fn collect_function_value_refs(
     let args_node = call_node.child_by_field_name("arguments").or_else(|| {
         // Some grammars (Go) use "argument_list" as the node kind
         // rather than a named field
-        (0..call_node.child_count())
+        (0..call_node.child_count() as u32)
             .filter_map(|i| call_node.child(i))
             .find(|c| c.kind() == "argument_list")
     });
@@ -1018,7 +1018,7 @@ fn collect_function_value_refs(
         None => return,
     };
 
-    for i in 0..args_node.child_count() {
+    for i in 0..args_node.child_count() as u32 {
         let arg = match args_node.child(i) {
             Some(a) => a,
             None => continue,
