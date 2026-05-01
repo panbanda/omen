@@ -1,5 +1,15 @@
 # Changelog
 
+## [4.24.2](https://github.com/panbanda/omen/compare/omen-v4.24.1...omen-v4.24.2) (2026-04-30)
+
+
+### Bug Fixes
+
+* adapt to tree-sitter 0.26 and tree-sitter-go 0.25 API changes ([a16ec84](https://github.com/panbanda/omen/commit/a16ec845e800fd2a419285bca11c7f0286e2d40b))
+* **deps:** update tree-sitter packages ([3f54ca2](https://github.com/panbanda/omen/commit/3f54ca25788e974eeb848b8ad0fcb495b1e1e7d0))
+* **docker:** use distroless/cc base for glibc binary ([ff0e2d8](https://github.com/panbanda/omen/commit/ff0e2d8e7eb3f528e23c38b6abc2001f985b341a))
+* **docker:** use distroless/cc base so glibc binary can start ([336546d](https://github.com/panbanda/omen/commit/336546d0e5df55eb34e4abe256c3db153c11f106))
+
 ## [4.24.1](https://github.com/panbanda/omen/compare/omen-v4.24.0...omen-v4.24.1) (2026-04-29)
 
 
