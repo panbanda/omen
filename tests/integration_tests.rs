@@ -376,10 +376,170 @@ fn test_glob_filter() {
         .expect("command runs");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("complexity output should be valid JSON");
+    let files = parsed["files"]
+        .as_array()
+        .expect("files should be an array");
     assert!(
-        stdout.contains(".py"),
-        "expected .py files in filtered output"
+        !files.is_empty(),
+        "expected filtered output to include files"
     );
+    for file in files {
+        let path = file["path"].as_str().expect("file path should be a string");
+        assert!(
+            path.ends_with(".py"),
+            "expected only Python files in filtered output, got {path}"
+        );
+    }
+}
+
+#[test]
+fn test_exclude_filter() {
+    let output = omen()
+        .args([
+            "-p",
+            fixtures_dir(),
+            "-f",
+            "json",
+            "complexity",
+            "-e",
+            "*.py",
+        ])
+        .output()
+        .expect("command runs");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("complexity output should be valid JSON");
+    let files = parsed["files"]
+        .as_array()
+        .expect("files should be an array");
+    assert!(
+        !files.is_empty(),
+        "expected output to include non-Python files"
+    );
+    for file in files {
+        let path = file["path"].as_str().expect("file path should be a string");
+        assert!(
+            !path.ends_with(".py"),
+            "expected Python files to be excluded, got {path}"
+        );
+    }
+}
+
+#[test]
+fn test_glob_filter_on_dispatched_command() {
+    // Verifies that dispatched analyzers (satd, deadcode, etc.) also respect
+    // the -g/--glob filter now that dispatch_analyzer passes AnalyzerArgs.
+    let output = omen()
+        .args([
+            "-p",
+            fixtures_dir(),
+            "-f",
+            "json",
+            "satd",
+            "-g",
+            "*.rs",
+        ])
+        .output()
+        .expect("command runs");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("satd output should be valid JSON");
+
+    // Every finding should reference a Rust file only
+    if let Some(findings) = parsed["findings"].as_array() {
+        for finding in findings {
+            if let Some(file) = finding["file"].as_str() {
+                assert!(
+                    file.ends_with(".rs"),
+                    "expected only .rs files in glob-filtered satd output, got {file}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_glob_and_exclude_combined() {
+    // Applies both -g (include) and -e (exclude) filters together and verifies
+    // the resulting file list is non-empty and satisfies both constraints.
+    let output = omen()
+        .args([
+            "-p",
+            fixtures_dir(),
+            "-f",
+            "json",
+            "complexity",
+            "-g",
+            "*.rs",
+            "-e",
+            "sample*",
+        ])
+        .output()
+        .expect("command runs");
+
+    // The command should succeed even if no files match (empty result is valid)
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("complexity output should be valid JSON");
+
+    // All returned files must be .rs files and must not start with "sample"
+    if let Some(files) = parsed["files"].as_array() {
+        for file in files {
+            let path = file["path"].as_str().expect("file path should be a string");
+            assert!(
+                path.ends_with(".rs"),
+                "combined filter: expected only .rs files, got {path}"
+            );
+            let basename = std::path::Path::new(path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(path);
+            assert!(
+                !basename.starts_with("sample"),
+                "combined filter: 'sample*' should be excluded, got {path}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_exclude_filter_on_dispatched_command() {
+    // Verifies that dispatched commands also apply the -e/--exclude filter.
+    let output = omen()
+        .args([
+            "-p",
+            fixtures_dir(),
+            "-f",
+            "json",
+            "deadcode",
+            "-e",
+            "*.py",
+        ])
+        .output()
+        .expect("command runs");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("deadcode output should be valid JSON");
+
+    // No finding should reference a Python file
+    if let Some(findings) = parsed["findings"].as_array() {
+        for finding in findings {
+            if let Some(file) = finding["file"].as_str() {
+                assert!(
+                    !file.ends_with(".py"),
+                    "expected Python files to be excluded from deadcode output, got {file}"
+                );
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

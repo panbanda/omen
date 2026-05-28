@@ -363,7 +363,7 @@ impl McpServer {
         // Try to open a git repository at the path
         let git_root = GitRepo::open(&path).ok().map(|r| r.root().to_path_buf());
 
-        let mut ctx = AnalysisContext::new(&file_set, &self.config, Some(&self.root_path));
+        let mut ctx = AnalysisContext::new(&file_set, &self.config, Some(&path));
         if let Some(ref git_path) = git_root {
             ctx = ctx.with_git_path(git_path);
         }
@@ -816,6 +816,60 @@ mod tests {
         assert!(result.is_ok());
         let response = result.unwrap();
         assert!(response.get("content").is_some());
+    }
+
+    #[test]
+    fn test_handle_tool_call_uses_requested_path_as_analysis_root() {
+        let (server, _server_root) = create_test_server();
+        let target_dir = TempDir::new().unwrap();
+        std::fs::write(
+            target_dir.path().join("target.rs"),
+            "fn target_function() {}\n",
+        )
+        .unwrap();
+
+        let params = json!({
+            "name": "complexity",
+            "arguments": {"path": target_dir.path().to_str().unwrap()}
+        });
+        let response = server.handle_tool_call(Some(params)).unwrap();
+        let text = response["content"][0]["text"]
+            .as_str()
+            .expect("tool response text should be a string");
+
+        assert!(
+            text.contains("target_function"),
+            "expected MCP analysis to read files from requested path, got {text}"
+        );
+    }
+
+    #[test]
+    fn test_handle_tool_call_without_path_uses_server_root() {
+        // When the caller does not supply an explicit "path" argument, the
+        // server must fall back to its own root_path for file discovery.
+        // This is the pre-existing default-path behaviour; the fix in this PR
+        // must not regress it.
+        let (server, server_root) = create_test_server();
+        std::fs::write(
+            server_root.path().join("root_only.rs"),
+            "fn root_symbol() {}\n",
+        )
+        .unwrap();
+
+        // No "path" key in arguments – should analyse server_root
+        let params = json!({
+            "name": "complexity",
+            "arguments": {}
+        });
+        let response = server.handle_tool_call(Some(params)).unwrap();
+        let text = response["content"][0]["text"]
+            .as_str()
+            .expect("tool response text should be a string");
+
+        assert!(
+            text.contains("root_symbol"),
+            "expected server root to be analysed when no path is given, got {text}"
+        );
     }
 
     #[test]

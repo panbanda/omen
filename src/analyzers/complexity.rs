@@ -378,7 +378,7 @@ fn find_function_at_line<'a>(
         // Only descend if line is within this node's range
         if start <= line && line <= end {
             let kind = node.kind();
-            if kind.contains("function") || kind.contains("method") || kind == "impl_item" {
+            if kind.contains("function") || kind.contains("method") {
                 return Some(node);
             }
 
@@ -932,6 +932,39 @@ fn nested(x: i32, y: i32) {
     }
 
     #[test]
+    fn test_complexity_rust_impl_methods_are_measured_individually() {
+        let code = br#"
+struct Service;
+
+impl Service {
+    fn simple(&self) {
+        println!("simple");
+    }
+
+    fn branchy(&self, x: i32) {
+        if x > 0 {
+            println!("positive");
+        }
+    }
+}
+"#;
+        let result = parse_and_analyze(code, Language::Rust, "test.rs");
+        let simple = result
+            .functions
+            .iter()
+            .find(|f| f.name == "simple")
+            .expect("simple method should be extracted");
+        let branchy = result
+            .functions
+            .iter()
+            .find(|f| f.name == "branchy")
+            .expect("branchy method should be extracted");
+
+        assert_eq!(simple.metrics.cyclomatic, 1);
+        assert!(branchy.metrics.cyclomatic > simple.metrics.cyclomatic);
+    }
+
+    #[test]
     fn test_complexity_go_simple_function() {
         let code = b"package main\n\nfunc simple() { x := 1 }";
         let result = parse_and_analyze(code, Language::Go, "test.go");
@@ -1458,6 +1491,78 @@ function classify(x: number): string {
         assert!(
             result.functions[0].metrics.cyclomatic >= 4,
             "TypeScript switch with 2 case clauses should count each case as a decision point"
+        );
+    }
+
+    // --- Tests for the find_function_at_line change (impl_item removed) ---
+
+    #[test]
+    fn test_complexity_rust_impl_block_declaration_line_not_treated_as_function() {
+        // Lines that are part of an `impl` block declaration itself (e.g. the
+        // `impl Service {` line) should NOT be returned as a function node
+        // now that the `impl_item` match was removed from find_function_at_line.
+        // We verify this indirectly: the only functions extracted from an impl
+        // block should be the actual method nodes, not a synthetic entry for
+        // the impl container.
+        let code = br#"
+struct Widget;
+
+impl Widget {
+    fn render(&self) {}
+}
+"#;
+        let result = parse_and_analyze(code, Language::Rust, "test.rs");
+        // Exactly one method – the impl block itself must not appear as a function.
+        assert_eq!(
+            result.functions.len(),
+            1,
+            "impl container must not be counted as a function; got {:?}",
+            result.functions.iter().map(|f| &f.name).collect::<Vec<_>>()
+        );
+        assert_eq!(result.functions[0].name, "render");
+    }
+
+    #[test]
+    fn test_complexity_rust_multiple_impl_blocks_methods_all_extracted() {
+        // When a type has several impl blocks (e.g. trait impls), every method
+        // must still be individually extracted after removing the impl_item catch.
+        let code = br#"
+struct Counter(i32);
+
+impl Counter {
+    fn increment(&mut self) {
+        self.0 += 1;
+    }
+    fn value(&self) -> i32 {
+        self.0
+    }
+}
+
+impl Default for Counter {
+    fn default() -> Self {
+        Counter(0)
+    }
+}
+"#;
+        let result = parse_and_analyze(code, Language::Rust, "test.rs");
+        let names: Vec<&str> = result.functions.iter().map(|f| f.name.as_str()).collect();
+        assert!(
+            names.contains(&"increment"),
+            "increment not found in {:?}",
+            names
+        );
+        assert!(names.contains(&"value"), "value not found in {:?}", names);
+        assert!(
+            names.contains(&"default"),
+            "default not found in {:?}",
+            names
+        );
+        // No extra entry for the impl blocks themselves
+        assert_eq!(
+            result.functions.len(),
+            3,
+            "expected exactly 3 methods, got {:?}",
+            names
         );
     }
 }

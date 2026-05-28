@@ -71,8 +71,7 @@ impl<'a> SyncManager<'a> {
 
         // Find files to remove (deleted or moved)
         for indexed_path in &indexed_files {
-            let full_path = root_path.join(indexed_path);
-            if !current_files.contains(&full_path) {
+            if !current_files.contains(&PathBuf::from(indexed_path)) {
                 self.cache.remove_file(indexed_path)?;
                 stats.removed += 1;
             }
@@ -81,16 +80,19 @@ impl<'a> SyncManager<'a> {
         // Check each current file for changes
         let files_to_index: Vec<_> = current_files
             .iter()
-            .filter(|path| {
-                let rel_path = path
-                    .strip_prefix(root_path)
-                    .unwrap_or(path)
-                    .to_string_lossy()
-                    .to_string();
+            .filter_map(|path| {
+                let full_path = root_path.join(path);
+                let rel_path = path.to_string_lossy().to_string();
 
-                self.check_file_changed(path, &rel_path).unwrap_or(true)
+                if self
+                    .check_file_changed(&full_path, &rel_path)
+                    .unwrap_or(true)
+                {
+                    Some(full_path)
+                } else {
+                    None
+                }
             })
-            .cloned()
             .collect();
 
         stats.checked = current_files.len();
@@ -428,5 +430,58 @@ mod tests {
         assert_eq!(stats.removed, 0);
         assert_eq!(stats.symbols, 0);
         assert_eq!(stats.errors, 0);
+    }
+
+    #[test]
+    fn test_sync_removes_stale_indexed_files() {
+        // First sync: index a file so it ends up in the cache.
+        let temp = tempfile::tempdir().unwrap();
+        let rust_file = temp.path().join("stale.rs");
+        std::fs::write(&rust_file, "fn stale_symbol() {}\n").unwrap();
+
+        let config = crate::config::Config::default();
+        let file_set_with = FileSet::from_path(temp.path(), &config).unwrap();
+        let cache = EmbeddingCache::in_memory().unwrap();
+        let sync = SyncManager::new(&cache);
+
+        let stats_first = sync.sync(&file_set_with, temp.path()).unwrap();
+        assert_eq!(stats_first.indexed, 1, "first sync should index the file");
+
+        // Now delete the file and sync with an empty FileSet.
+        std::fs::remove_file(&rust_file).unwrap();
+        let file_set_empty = FileSet::from_path(temp.path(), &config).unwrap();
+        assert!(file_set_empty.is_empty(), "file set should be empty after deletion");
+
+        let stats_second = sync.sync(&file_set_empty, temp.path()).unwrap();
+        assert_eq!(
+            stats_second.removed,
+            1,
+            "second sync should remove the stale indexed file"
+        );
+        assert_eq!(stats_second.indexed, 0, "no new files to index");
+    }
+
+    #[test]
+    fn test_sync_indexes_files_relative_to_root_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let nested = temp.path().join("only_in_temp");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(
+            nested.join("unique_semantic_sync_fixture.rs"),
+            "fn indexed_symbol() {}\n",
+        )
+        .unwrap();
+
+        let config = crate::config::Config::default();
+        let file_set = FileSet::from_path(temp.path(), &config).unwrap();
+        let cache = EmbeddingCache::in_memory().unwrap();
+        let sync = SyncManager::new(&cache);
+
+        let stats = sync.sync(&file_set, temp.path()).unwrap();
+
+        assert_eq!(stats.checked, 1);
+        assert_eq!(stats.indexed, 1);
+        assert_eq!(stats.errors, 0);
+        assert_eq!(cache.symbol_count().unwrap(), 1);
     }
 }
