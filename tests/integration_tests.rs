@@ -376,10 +376,56 @@ fn test_glob_filter() {
         .expect("command runs");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("complexity output should be valid JSON");
+    let files = parsed["files"]
+        .as_array()
+        .expect("files should be an array");
     assert!(
-        stdout.contains(".py"),
-        "expected .py files in filtered output"
+        !files.is_empty(),
+        "expected filtered output to include files"
     );
+    for file in files {
+        let path = file["path"].as_str().expect("file path should be a string");
+        assert!(
+            path.ends_with(".py"),
+            "expected only Python files in filtered output, got {path}"
+        );
+    }
+}
+
+#[test]
+fn test_exclude_filter() {
+    let output = omen()
+        .args([
+            "-p",
+            fixtures_dir(),
+            "-f",
+            "json",
+            "complexity",
+            "-e",
+            "*.py",
+        ])
+        .output()
+        .expect("command runs");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("complexity output should be valid JSON");
+    let files = parsed["files"]
+        .as_array()
+        .expect("files should be an array");
+    assert!(
+        !files.is_empty(),
+        "expected output to include non-Python files"
+    );
+    for file in files {
+        let path = file["path"].as_str().expect("file path should be a string");
+        assert!(
+            !path.ends_with(".py"),
+            "expected Python files to be excluded, got {path}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
