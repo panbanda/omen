@@ -528,6 +528,30 @@ fn bench_hotspot(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark the context pack used by humans and MCP clients.
+fn bench_context(c: &mut Criterion) {
+    let mut group = c.benchmark_group("context");
+    group.sample_size(20);
+
+    for size in [10, 50].iter() {
+        let temp = create_benchmark_repo(*size);
+        let config = Config::default();
+        let files = FileSet::from_path(temp.path(), &config).unwrap();
+
+        group.throughput(Throughput::Elements(*size as u64));
+        group.bench_with_input(BenchmarkId::new("files", size), size, |b, _| {
+            b.iter(|| {
+                let context =
+                    omen::context::build_context(temp.path(), &files, &config, Some(25), Some(25))
+                        .unwrap();
+                black_box(context.top_symbols.len() + context.risks.len())
+            });
+        });
+    }
+
+    group.finish();
+}
+
 // Group benchmarks: non-git analyzers first (faster), then git-dependent
 criterion_group!(
     name = fast_benches;
@@ -541,6 +565,7 @@ criterion_group!(
         bench_cohesion,
         bench_smells,
         bench_repomap,
+        bench_context,
         bench_flags,
         bench_tdg
 );

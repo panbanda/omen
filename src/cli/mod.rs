@@ -145,6 +145,10 @@ pub struct AnalyzerArgs {
     /// Exclude files matching pattern
     #[arg(short, long)]
     pub exclude: Option<String>,
+
+    /// Analyze only files changed since the given git ref
+    #[arg(long)]
+    pub changed_since: Option<String>,
 }
 
 #[derive(Args)]
@@ -542,6 +546,7 @@ pub enum OutputFormat {
     Json,
     Markdown,
     Text,
+    Sarif,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -657,6 +662,14 @@ mod tests {
         assert!(matches!(
             parse(&["omen", "-f", "text", "complexity"]).format,
             OutputFormat::Text
+        ));
+    }
+
+    #[test]
+    fn test_cli_format_sarif() {
+        assert!(matches!(
+            parse(&["omen", "-f", "sarif", "satd"]).format,
+            OutputFormat::Sarif
         ));
     }
 
@@ -981,6 +994,12 @@ mod tests {
     fn test_analyzer_args_glob() {
         let args = parse_complexity_args(&["omen", "complexity", "-g", "*.rs"]);
         assert_eq!(args.common.glob, Some("*.rs".to_string()));
+    }
+
+    #[test]
+    fn test_analyzer_args_changed_since() {
+        let args = parse_complexity_args(&["omen", "complexity", "--changed-since", "main"]);
+        assert_eq!(args.common.changed_since, Some("main".to_string()));
     }
 
     #[test]
