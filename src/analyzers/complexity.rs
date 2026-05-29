@@ -378,7 +378,7 @@ fn find_function_at_line<'a>(
         // Only descend if line is within this node's range
         if start <= line && line <= end {
             let kind = node.kind();
-            if kind.contains("function") || kind.contains("method") || kind == "impl_item" {
+            if kind.contains("function") || kind.contains("method") {
                 return Some(node);
             }
 
@@ -929,6 +929,39 @@ fn nested(x: i32, y: i32) {
         // Nested if should have higher cognitive complexity
         assert!(result.functions[0].metrics.cognitive >= 2);
         assert!(result.functions[0].metrics.max_nesting >= 2);
+    }
+
+    #[test]
+    fn test_complexity_rust_impl_methods_are_measured_individually() {
+        let code = br#"
+struct Service;
+
+impl Service {
+    fn simple(&self) {
+        println!("simple");
+    }
+
+    fn branchy(&self, x: i32) {
+        if x > 0 {
+            println!("positive");
+        }
+    }
+}
+"#;
+        let result = parse_and_analyze(code, Language::Rust, "test.rs");
+        let simple = result
+            .functions
+            .iter()
+            .find(|f| f.name == "simple")
+            .expect("simple method should be extracted");
+        let branchy = result
+            .functions
+            .iter()
+            .find(|f| f.name == "branchy")
+            .expect("branchy method should be extracted");
+
+        assert_eq!(simple.metrics.cyclomatic, 1);
+        assert!(branchy.metrics.cyclomatic > simple.metrics.cyclomatic);
     }
 
     #[test]

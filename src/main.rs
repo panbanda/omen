@@ -12,7 +12,7 @@ use rayon::ThreadPoolBuilder;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use omen::cli::{
-    Cli, Command, ComplexityArgs, McpSubcommand, MutationArgs, MutationSubcommand,
+    AnalyzerArgs, Cli, Command, ComplexityArgs, McpSubcommand, MutationArgs, MutationSubcommand,
     MutationTrainArgs, OutputFormat, ReportSubcommand, ScoreArgs, ScoreSubcommand,
     SearchSubcommand,
 };
@@ -150,14 +150,19 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             if args.check {
                 run_complexity_check(path, &config, args)?;
             } else {
-                run_analyzer::<omen::analyzers::complexity::Analyzer>(path, &config, format)?;
+                run_analyzer::<omen::analyzers::complexity::Analyzer>(
+                    path,
+                    &config,
+                    format,
+                    Some(&args.common),
+                )?;
             }
         }
         Command::Diff(args) => {
             run_diff_analyzer(path, args.target.as_deref(), format)?;
         }
-        Command::Changes(_) => {
-            run_changes_analyzer(path, &config, format)?;
+        Command::Changes(args) => {
+            run_changes_analyzer(path, &config, format, args)?;
         }
         Command::Satd(_)
         | Command::Deadcode(_)
@@ -174,7 +179,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             dispatch_analyzer(&cli.command, path, &config, format)?;
         }
         Command::Churn(args) => {
-            run_churn_analyzer(path, &config, format, args.days)?;
+            run_churn_analyzer(path, &config, format, args.days, &args.common)?;
         }
         Command::Flags(args) => {
             // Merge CLI --provider option into config
@@ -185,7 +190,12 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             if args.stale_days > 0 {
                 config.feature_flags.stale_days = args.stale_days;
             }
-            run_analyzer::<omen::analyzers::flags::Analyzer>(path, &config, format)?;
+            run_analyzer::<omen::analyzers::flags::Analyzer>(
+                path,
+                &config,
+                format,
+                Some(&args.common),
+            )?;
         }
         Command::Score(cmd) => {
             if cmd.args.check {
@@ -264,7 +274,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                         }
                     }
                     None => {
-                        run_analyzer::<omen::score::Analyzer>(path, &config, format)?;
+                        run_analyzer::<omen::score::Analyzer>(path, &config, format, None)?;
                     }
                 }
             }
@@ -371,7 +381,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             run_report(path, &config, &cmd.subcommand)?;
         }
         Command::Search(ref cmd) => {
-            run_search(&cli.path, &config, cmd.subcommand.clone(), format)?;
+            run_search(path, &config, cmd.subcommand.clone(), format)?;
         }
         Command::Mutation(ref cmd) => match &cmd.subcommand {
             Some(MutationSubcommand::Train(args)) => {
@@ -411,46 +421,70 @@ fn dispatch_analyzer(
     format: Format,
 ) -> omen::core::Result<()> {
     match command {
-        Command::Satd(_) => run_analyzer::<omen::analyzers::satd::Analyzer>(path, config, format),
-        Command::Deadcode(_) => {
-            run_analyzer::<omen::analyzers::deadcode::Analyzer>(path, config, format)
+        Command::Satd(args) => {
+            run_analyzer::<omen::analyzers::satd::Analyzer>(path, config, format, Some(args))
         }
-        Command::Clones(_) => {
-            run_analyzer::<omen::analyzers::duplicates::Analyzer>(path, config, format)
+        Command::Deadcode(args) => {
+            run_analyzer::<omen::analyzers::deadcode::Analyzer>(path, config, format, Some(args))
         }
-        Command::Defect(_) => {
-            run_analyzer::<omen::analyzers::defect::Analyzer>(path, config, format)
+        Command::Clones(args) => {
+            run_analyzer::<omen::analyzers::duplicates::Analyzer>(path, config, format, Some(args))
         }
-        Command::Tdg(_) => run_analyzer::<omen::analyzers::tdg::Analyzer>(path, config, format),
-        Command::Graph(_) => run_analyzer::<omen::analyzers::graph::Analyzer>(path, config, format),
-        Command::Hotspot(_) => {
-            run_analyzer::<omen::analyzers::hotspot::Analyzer>(path, config, format)
+        Command::Defect(args) => {
+            run_analyzer::<omen::analyzers::defect::Analyzer>(path, config, format, Some(args))
         }
-        Command::Temporal(_) => {
-            run_analyzer::<omen::analyzers::temporal::Analyzer>(path, config, format)
+        Command::Tdg(args) => {
+            run_analyzer::<omen::analyzers::tdg::Analyzer>(path, config, format, Some(args))
         }
-        Command::Ownership(_) => {
-            run_analyzer::<omen::analyzers::ownership::Analyzer>(path, config, format)
+        Command::Graph(args) => {
+            run_analyzer::<omen::analyzers::graph::Analyzer>(path, config, format, Some(args))
         }
-        Command::Cohesion(_) => {
-            run_analyzer::<omen::analyzers::cohesion::Analyzer>(path, config, format)
+        Command::Hotspot(args) => {
+            run_analyzer::<omen::analyzers::hotspot::Analyzer>(path, config, format, Some(args))
         }
-        Command::Repomap(_) => {
-            run_analyzer::<omen::analyzers::repomap::Analyzer>(path, config, format)
+        Command::Temporal(args) => {
+            run_analyzer::<omen::analyzers::temporal::Analyzer>(path, config, format, Some(args))
         }
-        Command::Smells(_) => {
-            run_analyzer::<omen::analyzers::smells::Analyzer>(path, config, format)
+        Command::Ownership(args) => {
+            run_analyzer::<omen::analyzers::ownership::Analyzer>(path, config, format, Some(args))
+        }
+        Command::Cohesion(args) => {
+            run_analyzer::<omen::analyzers::cohesion::Analyzer>(path, config, format, Some(args))
+        }
+        Command::Repomap(args) => {
+            run_analyzer::<omen::analyzers::repomap::Analyzer>(path, config, format, Some(args))
+        }
+        Command::Smells(args) => {
+            run_analyzer::<omen::analyzers::smells::Analyzer>(path, config, format, Some(args))
         }
         _ => unreachable!("dispatch_analyzer called with non-dispatched command"),
     }
+}
+
+fn filtered_file_set(
+    path: &PathBuf,
+    config: &Config,
+    args: Option<&AnalyzerArgs>,
+) -> omen::core::Result<FileSet> {
+    let mut file_set = FileSet::from_path(path, config)?;
+    if let Some(args) = args {
+        if let Some(ref glob) = args.glob {
+            file_set = file_set.filter_by_glob(glob);
+        }
+        if let Some(ref exclude) = args.exclude {
+            file_set = file_set.exclude_by_glob(exclude);
+        }
+    }
+    Ok(file_set)
 }
 
 fn run_analyzer<A: Analyzer + Default>(
     path: &PathBuf,
     config: &Config,
     format: Format,
+    args: Option<&AnalyzerArgs>,
 ) -> omen::core::Result<()> {
-    let file_set = FileSet::from_path(path, config)?;
+    let file_set = filtered_file_set(path, config, args)?;
 
     // Show analysis progress
     let spinner = if is_tty() {
@@ -502,9 +536,14 @@ fn run_diff_analyzer(path: &Path, target: Option<&str>, format: Format) -> omen:
     Ok(())
 }
 
-fn run_changes_analyzer(path: &Path, config: &Config, format: Format) -> omen::core::Result<()> {
-    let file_set = FileSet::from_path(path, config)?;
+fn run_changes_analyzer(
+    path: &Path,
+    config: &Config,
+    format: Format,
+    args: &AnalyzerArgs,
+) -> omen::core::Result<()> {
     let path_buf = path.to_path_buf();
+    let file_set = filtered_file_set(&path_buf, config, Some(args))?;
     let ctx = build_context(&path_buf, &file_set, config);
     let analyzer = omen::analyzers::changes::Analyzer::new().with_days(config.changes.days);
     let result = analyzer.analyze(&ctx)?;
@@ -517,7 +556,7 @@ fn run_complexity_check(
     config: &Config,
     args: &ComplexityArgs,
 ) -> omen::core::Result<()> {
-    let file_set = FileSet::from_path(path, config)?;
+    let file_set = filtered_file_set(path, config, Some(&args.common))?;
     let ctx = build_context(path, &file_set, config);
 
     let analyzer = omen::analyzers::complexity::Analyzer::default();
@@ -592,8 +631,9 @@ fn run_churn_analyzer(
     config: &Config,
     format: Format,
     days: u32,
+    args: &AnalyzerArgs,
 ) -> omen::core::Result<()> {
-    let file_set = FileSet::from_path(path, config)?;
+    let file_set = filtered_file_set(path, config, Some(args))?;
     let ctx = build_context(path, &file_set, config);
     let analyzer = omen::analyzers::churn::Analyzer::new().with_days(days);
     let result = analyzer.analyze(&ctx)?;

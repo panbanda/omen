@@ -71,8 +71,8 @@ impl<'a> SyncManager<'a> {
 
         // Find files to remove (deleted or moved)
         for indexed_path in &indexed_files {
-            let full_path = root_path.join(indexed_path);
-            if !current_files.contains(&full_path) {
+            let indexed_current_path = indexed_path_for_comparison(indexed_path, root_path);
+            if !current_files.contains(&indexed_current_path) {
                 self.cache.remove_file(indexed_path)?;
                 stats.removed += 1;
             }
@@ -81,16 +81,19 @@ impl<'a> SyncManager<'a> {
         // Check each current file for changes
         let files_to_index: Vec<_> = current_files
             .iter()
-            .filter(|path| {
-                let rel_path = path
-                    .strip_prefix(root_path)
-                    .unwrap_or(path)
-                    .to_string_lossy()
-                    .to_string();
+            .filter_map(|path| {
+                let full_path = root_path.join(path);
+                let rel_path = path.to_string_lossy().to_string();
 
-                self.check_file_changed(path, &rel_path).unwrap_or(true)
+                if self
+                    .check_file_changed(&full_path, &rel_path)
+                    .unwrap_or(true)
+                {
+                    Some(full_path)
+                } else {
+                    None
+                }
             })
-            .cloned()
             .collect();
 
         stats.checked = current_files.len();
@@ -308,6 +311,13 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
     })
 }
 
+fn indexed_path_for_comparison(indexed_path: &str, root_path: &Path) -> PathBuf {
+    let path = Path::new(indexed_path);
+    path.strip_prefix(root_path)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
 /// Statistics from a sync operation.
 #[derive(Debug, Default, Clone)]
 pub struct SyncStats {
@@ -428,5 +438,56 @@ mod tests {
         assert_eq!(stats.removed, 0);
         assert_eq!(stats.symbols, 0);
         assert_eq!(stats.errors, 0);
+    }
+
+    #[test]
+    fn test_sync_indexes_files_relative_to_root_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let nested = temp.path().join("only_in_temp");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(
+            nested.join("unique_semantic_sync_fixture.rs"),
+            "fn indexed_symbol() {}\n",
+        )
+        .unwrap();
+
+        let config = crate::config::Config::default();
+        let file_set = FileSet::from_path(temp.path(), &config).unwrap();
+        let cache = EmbeddingCache::in_memory().unwrap();
+        let sync = SyncManager::new(&cache);
+
+        let stats = sync.sync(&file_set, temp.path()).unwrap();
+
+        assert_eq!(stats.checked, 1);
+        assert_eq!(stats.indexed, 1);
+        assert_eq!(stats.errors, 0);
+        assert_eq!(cache.symbol_count().unwrap(), 1);
+
+        let stats2 = sync.sync(&file_set, temp.path()).unwrap();
+        assert_eq!(stats2.checked, 1);
+        assert_eq!(stats2.indexed, 0);
+        assert_eq!(stats2.removed, 0);
+        assert_eq!(stats2.errors, 0);
+        assert_eq!(cache.symbol_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_sync_matches_absolute_indexed_paths_to_relative_file_set() {
+        let temp = tempfile::tempdir().unwrap();
+        let file_path = temp.path().join("legacy_absolute_path.rs");
+        std::fs::write(&file_path, "fn legacy_symbol() {}\n").unwrap();
+
+        let config = crate::config::Config::default();
+        let file_set = FileSet::from_path(temp.path(), &config).unwrap();
+        let cache = EmbeddingCache::in_memory().unwrap();
+        cache
+            .record_file_indexed(file_path.to_string_lossy().as_ref(), "legacy-hash")
+            .unwrap();
+
+        let sync = SyncManager::new(&cache);
+        let stats = sync.sync(&file_set, temp.path()).unwrap();
+
+        assert_eq!(stats.checked, 1);
+        assert_eq!(stats.removed, 0);
     }
 }

@@ -57,6 +57,11 @@ Cargo.lock
 # Omen generated files
 .omen/
 
+# Graphify generated files
+/graphify-out/
+/GRAPH_REPORT.md
+/graph.json
+
 # Profiling data
 perf.data
 perf.data.old
