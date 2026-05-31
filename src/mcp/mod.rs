@@ -323,6 +323,18 @@ impl McpServer {
                     }
                 },
                 {
+                    "name": "context",
+                    "description": "Build a compact repository context pack with languages, top symbols, risks, and navigation hints",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "description": "File or directory path"},
+                            "max_symbols": {"type": "integer", "description": "Maximum symbols to include"},
+                            "max_risks": {"type": "integer", "description": "Maximum risks to include"}
+                        }
+                    }
+                },
+                {
                     "name": "semantic_search_hyde",
                     "description": "Search using hypothetical code. Write a code snippet resembling what you want to find. This is matched against the index, producing better results than keyword queries.",
                     "inputSchema": {
@@ -386,6 +398,9 @@ impl McpServer {
             "smells" => self.run_analyzer::<crate::analyzers::smells::Analyzer>(&ctx),
             "flags" => self.run_analyzer::<crate::analyzers::flags::Analyzer>(&ctx),
             "score" => self.run_analyzer::<crate::score::Analyzer>(&ctx),
+            "context" => {
+                return self.handle_context(&path, &file_set, &arguments);
+            }
             "diff" => {
                 return self.handle_diff(&path, &arguments);
             }
@@ -415,6 +430,35 @@ impl McpServer {
             .analyze(ctx)
             .map_err(|e| format!("Analysis failed: {}", e))?;
         serde_json::to_value(result).map_err(|e| format!("Serialization failed: {}", e))
+    }
+
+    fn handle_context(
+        &self,
+        path: &std::path::Path,
+        file_set: &FileSet,
+        arguments: &Value,
+    ) -> std::result::Result<Value, String> {
+        let max_symbols = arguments
+            .get("max_symbols")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize);
+        let max_risks = arguments
+            .get("max_risks")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize);
+
+        let context =
+            crate::context::build_context(path, file_set, &self.config, max_symbols, max_risks)
+                .map_err(|e| format!("Context failed: {}", e))?;
+
+        let value =
+            serde_json::to_value(&context).map_err(|e| format!("Serialization failed: {}", e))?;
+        Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": serde_json::to_string_pretty(&value).unwrap_or_default()
+            }]
+        }))
     }
 
     fn handle_diff(
@@ -776,6 +820,15 @@ mod tests {
     }
 
     #[test]
+    fn test_handle_tools_list_has_context() {
+        let (server, _temp_dir) = create_test_server();
+        let result = server.handle_tools_list().unwrap();
+        let tools = result.get("tools").unwrap().as_array().unwrap();
+        let has_context = tools.iter().any(|t| t.get("name").unwrap() == "context");
+        assert!(has_context);
+    }
+
+    #[test]
     fn test_handle_tool_call_missing_params() {
         let (server, _temp_dir) = create_test_server();
         let result = server.handle_tool_call(None);
@@ -841,6 +894,26 @@ mod tests {
             text.contains("target_function"),
             "expected MCP analysis to read files from requested path, got {text}"
         );
+    }
+
+    #[test]
+    fn test_handle_tool_call_context() {
+        let (server, temp_dir) = create_test_server();
+        std::fs::write(
+            temp_dir.path().join("test.rs"),
+            "pub fn mcp_entrypoint() {}\n// TODO: remove shortcut\n",
+        )
+        .unwrap();
+
+        let params = json!({
+            "name": "context",
+            "arguments": {"path": temp_dir.path().to_str().unwrap()}
+        });
+        let response = server.handle_tool_call(Some(params)).unwrap();
+        let text = response["content"][0]["text"].as_str().unwrap();
+
+        assert!(text.contains("hints"));
+        assert!(text.contains("mcp_entrypoint"));
     }
 
     #[test]

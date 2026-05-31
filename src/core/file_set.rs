@@ -134,6 +134,10 @@ impl FileSet {
                 // Match exclude patterns against relative path so that
                 // patterns like "tests/**" work regardless of absolute root.
                 let rel_path = path.strip_prefix(root).unwrap_or(path);
+                if exclude_built_assets && is_default_ignored_path(rel_path) {
+                    return WalkState::Continue;
+                }
+
                 let rel_str = rel_path.to_string_lossy();
                 if exclude_globs.is_match(&*rel_str) {
                     return WalkState::Continue;
@@ -223,6 +227,23 @@ impl FileSet {
                         .map(|n| glob.is_match(n.to_string_lossy().as_ref()))
                         .unwrap_or(false)
             })
+            .cloned()
+            .collect();
+
+        Self {
+            root: self.root.clone(),
+            files,
+            exclude_patterns: self.exclude_patterns.clone(),
+        }
+    }
+
+    /// Filter files by exact relative paths, returning a new FileSet.
+    pub fn filter_by_paths(&self, paths: &[PathBuf]) -> Self {
+        let wanted: std::collections::HashSet<&Path> = paths.iter().map(PathBuf::as_path).collect();
+        let files: Vec<PathBuf> = self
+            .files
+            .iter()
+            .filter(|f| wanted.contains(f.as_path()))
             .cloned()
             .collect();
 
@@ -323,6 +344,28 @@ fn is_built_asset(path: &Path) -> bool {
     // Strip the real extension, then check if the remaining stem ends with a built suffix
     let stem = &file_name[..file_name.len() - ext.len() - 1];
     BUILT_SUFFIXES.iter().any(|suffix| stem.ends_with(suffix))
+}
+
+fn is_default_ignored_path(path: &Path) -> bool {
+    const DEFAULT_IGNORED_DIRS: &[&str] = &[
+        "node_modules",
+        "target",
+        ".next",
+        "dist",
+        "build",
+        "coverage",
+        ".coverage",
+        ".turbo",
+        ".cache",
+        "vendor",
+    ];
+
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_str()
+            .is_some_and(|name| DEFAULT_IGNORED_DIRS.contains(&name))
+    })
 }
 
 /// Build a compiled GlobSet from a list of patterns.
@@ -475,6 +518,52 @@ mod tests {
         assert_eq!(file_set.len(), 1);
         let files: Vec<_> = file_set.iter().collect();
         assert!(files[0].to_string_lossy().contains("main.rs"));
+    }
+
+    #[test]
+    fn test_file_set_default_excludes_common_generated_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("src")).unwrap();
+        std::fs::create_dir_all(temp.path().join("node_modules/pkg")).unwrap();
+        std::fs::create_dir_all(temp.path().join("dist")).unwrap();
+        std::fs::create_dir_all(temp.path().join("coverage")).unwrap();
+        std::fs::write(temp.path().join("src/app.ts"), "export const app = 1;").unwrap();
+        std::fs::write(
+            temp.path().join("node_modules/pkg/index.ts"),
+            "export const dep = 1;",
+        )
+        .unwrap();
+        std::fs::write(
+            temp.path().join("dist/bundle.ts"),
+            "export const built = 1;",
+        )
+        .unwrap();
+        std::fs::write(
+            temp.path().join("coverage/generated.ts"),
+            "export const covered = 1;",
+        )
+        .unwrap();
+
+        let file_set = FileSet::from_path_default(temp.path()).unwrap();
+
+        assert_eq!(file_set.files(), &[PathBuf::from("src/app.ts")]);
+    }
+
+    #[test]
+    fn test_filter_by_paths_keeps_known_changed_files() {
+        let file_set = FileSet::from_files(
+            PathBuf::from("/repo"),
+            vec![
+                PathBuf::from("src/main.rs"),
+                PathBuf::from("src/lib.rs"),
+                PathBuf::from("tests/main.rs"),
+            ],
+        );
+
+        let filtered =
+            file_set.filter_by_paths(&[PathBuf::from("src/main.rs"), PathBuf::from("README.md")]);
+
+        assert_eq!(filtered.files(), &[PathBuf::from("src/main.rs")]);
     }
 
     #[test]

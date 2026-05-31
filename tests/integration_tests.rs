@@ -50,6 +50,27 @@ fn test_satd_runs_successfully() {
 }
 
 #[test]
+fn test_satd_sarif_output() {
+    omen()
+        .args(["-p", fixtures_dir(), "-f", "sarif", "satd"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"version\": \"2.1.0\""))
+        .stdout(predicate::str::contains("\"runs\""));
+}
+
+#[test]
+fn test_context_json_outputs_context_pack() {
+    omen()
+        .args(["-p", fixtures_dir(), "-f", "json", "context"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"hints\""))
+        .stdout(predicate::str::contains("\"top_symbols\""))
+        .stdout(predicate::str::contains("\"languages\""));
+}
+
+#[test]
 fn test_deadcode_runs_successfully() {
     omen()
         .args(["-p", fixtures_dir(), "-f", "json", "deadcode"])
@@ -169,6 +190,68 @@ fn test_text_output() {
         .args(["-p", fixtures_dir(), "-f", "text", "complexity"])
         .assert()
         .success();
+}
+
+#[test]
+fn test_changed_since_filters_analyzer_files() {
+    let temp = TempDir::new().unwrap();
+    std::fs::create_dir_all(temp.path().join("src")).unwrap();
+    std::fs::write(temp.path().join("src/a.rs"), "fn unchanged() {}\n").unwrap();
+    std::fs::write(temp.path().join("src/b.rs"), "fn changed() {}\n").unwrap();
+
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["config", "user.name", "Test User"])
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["add", "."])
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["commit", "-m", "initial"])
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+
+    std::fs::write(
+        temp.path().join("src/b.rs"),
+        "fn changed() { if true {} }\n",
+    )
+    .unwrap();
+
+    let output = omen()
+        .args([
+            "-p",
+            temp.path().to_str().unwrap(),
+            "-f",
+            "json",
+            "complexity",
+            "--changed-since",
+            "HEAD",
+        ])
+        .output()
+        .expect("command runs");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let files = parsed["files"].as_array().unwrap();
+
+    assert_eq!(files.len(), 1, "expected only changed file: {stdout}");
+    assert!(files[0]["path"].as_str().unwrap().ends_with("src/b.rs"));
+    assert!(!stdout.contains("src/a.rs"));
 }
 
 // ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ pub enum Format {
     Json,
     Markdown,
     Text,
+    Sarif,
 }
 
 impl Format {
@@ -22,6 +23,7 @@ impl Format {
             Format::Json => format_json(value, writer),
             Format::Markdown => format_markdown(value, writer),
             Format::Text => format_text(value, writer),
+            Format::Sarif => format_sarif(value, writer),
         }
     }
 
@@ -45,6 +47,116 @@ fn format_markdown<W: Write>(value: &Value, writer: &mut W) -> Result<()> {
 fn format_text<W: Write>(value: &Value, writer: &mut W) -> Result<()> {
     format_value_as_text(value, writer, 0)?;
     Ok(())
+}
+
+fn format_sarif<W: Write>(value: &Value, writer: &mut W) -> Result<()> {
+    let mut findings = Vec::new();
+    collect_sarif_findings(value, &mut findings);
+
+    let rules = serde_json::json!([{
+        "id": "omen.finding",
+        "name": "Omen finding",
+        "shortDescription": {"text": "Omen code analysis finding"},
+        "helpUri": "https://github.com/panbanda/omen"
+    }]);
+
+    let results: Vec<Value> = findings
+        .into_iter()
+        .map(|finding| {
+            serde_json::json!({
+                "ruleId": "omen.finding",
+                "level": finding.level,
+                "message": {"text": finding.message},
+                "locations": [{
+                    "physicalLocation": {
+                        "artifactLocation": {"uri": finding.file},
+                        "region": {"startLine": finding.line}
+                    }
+                }]
+            })
+        })
+        .collect();
+
+    let sarif = serde_json::json!({
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {
+                "driver": {
+                    "name": "omen",
+                    "informationUri": "https://github.com/panbanda/omen",
+                    "rules": rules
+                }
+            },
+            "results": results
+        }]
+    });
+
+    format_json(&sarif, writer)
+}
+
+#[derive(Debug)]
+struct SarifFinding {
+    file: String,
+    line: u64,
+    level: &'static str,
+    message: String,
+}
+
+fn collect_sarif_findings(value: &Value, findings: &mut Vec<SarifFinding>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(finding) = sarif_finding_from_object(map) {
+                findings.push(finding);
+            }
+            for child in map.values() {
+                collect_sarif_findings(child, findings);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_sarif_findings(item, findings);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn sarif_finding_from_object(map: &serde_json::Map<String, Value>) -> Option<SarifFinding> {
+    let file = ["file", "path", "file_path"]
+        .iter()
+        .find_map(|key| map.get(*key).and_then(Value::as_str))?;
+    let line = ["line", "start_line", "line_start"]
+        .iter()
+        .find_map(|key| map.get(*key).and_then(Value::as_u64))
+        .unwrap_or(1)
+        .max(1);
+    let message = ["text", "reason", "message", "name", "marker"]
+        .iter()
+        .find_map(|key| map.get(*key).and_then(Value::as_str))
+        .unwrap_or("Omen finding")
+        .to_string();
+    let level = map
+        .get("severity")
+        .and_then(Value::as_str)
+        .map(sarif_level)
+        .unwrap_or("warning");
+
+    Some(SarifFinding {
+        file: file.to_string(),
+        line,
+        level,
+        message,
+    })
+}
+
+fn sarif_level(severity: &str) -> &'static str {
+    match severity.to_ascii_lowercase().as_str() {
+        "critical" | "high" => "error",
+        "medium" => "warning",
+        "low" | "info" | "note" => "note",
+        _ => "warning",
+    }
 }
 
 fn format_value_as_markdown<W: Write>(value: &Value, writer: &mut W, depth: usize) -> Result<()> {
@@ -215,6 +327,27 @@ mod tests {
     #[test]
     fn test_format_default_is_json() {
         assert!(matches!(Format::default(), Format::Json));
+    }
+
+    #[test]
+    fn test_format_sarif_emits_findings_from_items_array() {
+        let value = json!({
+            "items": [{
+                "file": "src/lib.rs",
+                "line": 7,
+                "severity": "high",
+                "marker": "TODO",
+                "text": "TODO: remove shortcut"
+            }]
+        });
+        let mut buf = Vec::new();
+        Format::Sarif.format_value(&value, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("\"version\": \"2.1.0\""));
+        assert!(output.contains("\"artifactLocation\""));
+        assert!(output.contains("src/lib.rs"));
+        assert!(output.contains("\"startLine\": 7"));
+        assert!(output.contains("TODO: remove shortcut"));
     }
 
     #[test]

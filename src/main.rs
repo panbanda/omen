@@ -110,6 +110,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         OutputFormat::Json => Format::Json,
         OutputFormat::Markdown => Format::Markdown,
         OutputFormat::Text => Format::Text,
+        OutputFormat::Sarif => Format::Sarif,
     };
 
     match &cli.command {
@@ -271,6 +272,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                                 );
                                 println!("Slope: {:.2}", trend_data.slope);
                             }
+                            Format::Sarif => format.format(&trend_data, &mut stdout())?,
                         }
                     }
                     None => {
@@ -279,9 +281,9 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 }
             }
         }
-        Command::All(_) => {
+        Command::All(args) => {
             use serde_json::{json, Value};
-            let file_set = FileSet::from_path(path, &config)?;
+            let file_set = filtered_file_set(path, &config, Some(args))?;
             let git_root = omen::git::GitRepo::open(path)
                 .ok()
                 .map(|r| r.root().to_path_buf());
@@ -372,7 +374,12 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             results.push(run_and_collect!(&ctx, omen::score::Analyzer, "score"));
 
             let combined = json!({ "analyzers": results });
-            println!("{}", serde_json::to_string_pretty(&combined)?);
+            match format {
+                Format::Sarif => format.format_value(&combined, &mut stdout())?,
+                Format::Json | Format::Markdown | Format::Text => {
+                    println!("{}", serde_json::to_string_pretty(&combined)?);
+                }
+            }
         }
         Command::Context(args) => {
             run_context(path, &config, args, format)?;
@@ -468,6 +475,10 @@ fn filtered_file_set(
 ) -> omen::core::Result<FileSet> {
     let mut file_set = FileSet::from_path(path, config)?;
     if let Some(args) = args {
+        if let Some(ref changed_since) = args.changed_since {
+            let changed_files = changed_files_since(path, changed_since)?;
+            file_set = file_set.filter_by_paths(&changed_files);
+        }
         if let Some(ref glob) = args.glob {
             file_set = file_set.filter_by_glob(glob);
         }
@@ -476,6 +487,29 @@ fn filtered_file_set(
         }
     }
     Ok(file_set)
+}
+
+fn changed_files_since(path: &Path, base: &str) -> omen::core::Result<Vec<PathBuf>> {
+    use std::process::Command;
+
+    let output = Command::new("git")
+        .args(["diff", "--name-only", "--diff-filter=ACMR", base, "--"])
+        .current_dir(path)
+        .output()
+        .map_err(omen::core::Error::Io)?;
+
+    if !output.status.success() {
+        return Err(omen::core::Error::git(format!(
+            "failed to list files changed since {base}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(PathBuf::from)
+        .collect())
 }
 
 fn run_analyzer<A: Analyzer + Default>(
@@ -647,23 +681,14 @@ fn run_context(
     args: &omen::cli::ContextArgs,
     format: Format,
 ) -> omen::core::Result<()> {
-    use serde_json::json;
-
     let file_set = FileSet::from_path(path, config)?;
-    let ctx = build_context(path, &file_set, config);
-
-    // Generate context using repomap analyzer as base
-    let analyzer = omen::analyzers::repomap::Analyzer::default();
-    let repomap_result = analyzer.analyze(&ctx)?;
-
-    // Build context output
-    let context = json!({
-        "target": args.target,
-        "max_tokens": args.max_tokens,
-        "depth": args.depth,
-        "symbol": args.symbol,
-        "repomap": repomap_result,
-    });
+    let context = omen::context::build_context(
+        path,
+        &file_set,
+        config,
+        Some(args.max_tokens.saturating_div(250).clamp(5, 100)),
+        Some(25),
+    )?;
 
     match format {
         Format::Json => println!("{}", serde_json::to_string_pretty(&context)?),
@@ -677,8 +702,21 @@ fn run_context(
             if let Some(ref symbol) = args.symbol {
                 println!("**Symbol:** {}\n", symbol);
             }
-            println!("## Symbol Map\n");
-            println!("{}", serde_json::to_string_pretty(&repomap_result)?);
+            println!("## Languages\n");
+            for language in &context.languages {
+                println!("- {}: {} files", language.language, language.files);
+            }
+            println!("\n## Top Symbols\n");
+            for symbol in &context.top_symbols {
+                println!(
+                    "- `{}` ({}) at {}:{}",
+                    symbol.name, symbol.kind, symbol.file, symbol.line
+                );
+            }
+            println!("\n## Hints\n");
+            for hint in &context.hints {
+                println!("- {}", hint);
+            }
         }
         Format::Text => {
             println!("Repository Context");
@@ -692,8 +730,9 @@ fn run_context(
                 println!("Symbol: {}", symbol);
             }
             println!();
-            format.format(&repomap_result, &mut stdout())?;
+            format.format(&context, &mut stdout())?;
         }
+        Format::Sarif => format.format(&context, &mut stdout())?,
     }
 
     Ok(())
@@ -1191,6 +1230,7 @@ fn run_search(
                         println!();
                     }
                 }
+                Format::Sarif => format.format(&output, &mut stdout())?,
             }
         }
     }
@@ -1384,6 +1424,7 @@ fn run_mutation(
             );
             println!("Duration: {}ms", result.summary.duration_ms);
         }
+        Format::Sarif => format.format(&result, &mut stdout())?,
     }
 
     // Check mode: fail if score below threshold
