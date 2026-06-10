@@ -398,6 +398,17 @@ impl McpServer {
                 required: &["query"],
             },
             ToolDef {
+                name: "impact",
+                description: "Use to understand blast radius before changing a symbol. Returns transitive callers and callees by BFS depth, plus affected files.",
+                properties: vec![
+                    ("symbol", json!({"type": "string", "description": "Symbol name to analyze (bare name or qualified file:name)"})),
+                    ("depth", json!({"type": "integer", "description": "BFS depth for traversal (default: 2)"})),
+                    ("direction", json!({"type": "string", "enum": ["callers", "callees", "both"], "description": "Direction of traversal (default: both)"})),
+                    ("path", json!({"type": "string", "description": "Repository root path"})),
+                ],
+                required: &["symbol"],
+            },
+            ToolDef {
                 name: "semantic_search_hyde",
                 description: "Search using hypothetical code. Write a code snippet resembling what you want to find. This is matched against the index, producing better results than keyword queries.",
                 properties: vec![
@@ -476,6 +487,9 @@ impl McpServer {
             }
             "outline" => {
                 return self.handle_outline(&path, &arguments);
+            }
+            "impact" => {
+                return self.handle_impact(&path, &file_set, &arguments);
             }
             _ => Err(format!("Unknown tool: {}", tool_name)),
         }?;
@@ -783,6 +797,46 @@ impl McpServer {
             serde_json::to_value(&result).map_err(|e| format!("Serialization failed: {}", e))?;
 
         self.tool_response("outline", value, arguments)
+    }
+
+    fn handle_impact(
+        &self,
+        repo_path: &std::path::Path,
+        file_set: &FileSet,
+        arguments: &Value,
+    ) -> std::result::Result<Value, String> {
+        use crate::analyzers::impact::{analyze, Direction};
+
+        let symbol = arguments
+            .get("symbol")
+            .and_then(|v| v.as_str())
+            .ok_or("Missing required 'symbol' parameter")?;
+
+        let depth = arguments
+            .get("depth")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(2);
+
+        let direction = match arguments
+            .get("direction")
+            .and_then(|v| v.as_str())
+            .unwrap_or("both")
+        {
+            "callers" => Direction::Callers,
+            "callees" => Direction::Callees,
+            _ => Direction::Both,
+        };
+
+        let files: Vec<std::path::PathBuf> = file_set.iter().map(|p| repo_path.join(p)).collect();
+
+        let report = analyze(repo_path, &files, symbol, depth, direction)
+            .map_err(|e| format!("Impact analysis failed: {}", e))?;
+
+        let value =
+            serde_json::to_value(&report).map_err(|e| format!("Serialization failed: {}", e))?;
+
+        self.tool_response("impact", value, arguments)
     }
 }
 
@@ -1619,5 +1673,60 @@ mod tests {
             value["result"].get("files").is_some(),
             "envelope result should have 'files' field"
         );
+    }
+
+    #[test]
+    fn test_handle_tools_list_has_impact() {
+        let (server, _temp_dir) = create_test_server();
+        let result = server.handle_tools_list().unwrap();
+        let tools = result.get("tools").unwrap().as_array().unwrap();
+        let has_impact = tools.iter().any(|t| t.get("name").unwrap() == "impact");
+        assert!(has_impact, "tools list should include 'impact'");
+    }
+
+    #[test]
+    fn test_handle_tool_call_impact() {
+        let (server, temp_dir) = create_test_server();
+        // Create a simple a→b chain
+        std::fs::write(temp_dir.path().join("a.rs"), "fn a() { b(); }\n").unwrap();
+        std::fs::write(temp_dir.path().join("b.rs"), "fn b() {}\n").unwrap();
+
+        let params = json!({
+            "name": "impact",
+            "arguments": {
+                "symbol": "b",
+                "depth": 1,
+                "direction": "callers",
+                "path": temp_dir.path().to_str().unwrap()
+            }
+        });
+        let result = server.handle_tool_call(Some(params));
+        assert!(
+            result.is_ok(),
+            "impact tool call should succeed: {:?}",
+            result.err()
+        );
+        let response = result.unwrap();
+        let text = response["content"][0]["text"].as_str().unwrap();
+        let value: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert!(
+            value["result"].get("symbol").is_some(),
+            "envelope result should have 'symbol' field"
+        );
+        assert_eq!(value["result"]["symbol"].as_str().unwrap(), "b");
+    }
+
+    #[test]
+    fn test_handle_tool_call_impact_missing_symbol() {
+        let (server, temp_dir) = create_test_server();
+        let params = json!({
+            "name": "impact",
+            "arguments": {
+                "path": temp_dir.path().to_str().unwrap()
+            }
+        });
+        let result = server.handle_tool_call(Some(params));
+        // Should return an error (missing symbol)
+        assert!(result.is_err(), "impact without symbol should fail");
     }
 }

@@ -10,6 +10,7 @@ pub mod duplicates;
 pub mod flags;
 pub mod graph;
 pub mod hotspot;
+pub mod impact;
 pub mod mutation;
 pub mod outline;
 pub mod ownership;

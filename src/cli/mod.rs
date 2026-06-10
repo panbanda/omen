@@ -142,6 +142,10 @@ pub enum Command {
     /// Show token-cheap file outline: imports, classes, functions
     #[command(alias = "ol")]
     Outline(OutlineArgs),
+
+    /// Analyze blast radius of a symbol change (callers/callees by BFS depth)
+    #[command(alias = "blast")]
+    Impact(ImpactArgs),
 }
 
 #[derive(Args)]
@@ -547,6 +551,33 @@ pub struct OutlineArgs {
     /// Analyze a single file instead of the whole repo
     #[arg(long)]
     pub file: Option<PathBuf>,
+
+    #[command(flatten)]
+    pub common: AnalyzerArgs,
+}
+
+/// Direction for impact analysis.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum ImpactDirection {
+    Callers,
+    Callees,
+    Both,
+}
+
+/// Arguments for the impact command.
+#[derive(Args)]
+pub struct ImpactArgs {
+    /// Symbol name to analyze (bare name or qualified file:name)
+    #[arg()]
+    pub symbol: String,
+
+    /// BFS depth for traversal
+    #[arg(long, default_value = "2")]
+    pub depth: usize,
+
+    /// Direction of traversal
+    #[arg(long, value_enum, default_value = "both")]
+    pub direction: ImpactDirection,
 
     #[command(flatten)]
     pub common: AnalyzerArgs,
@@ -1662,6 +1693,78 @@ mod tests {
             assert_eq!(args.common.glob, Some("*.rs".to_string()));
         } else {
             panic!("Expected Outline command");
+        }
+    }
+
+    // Impact command tests
+
+    #[test]
+    fn test_command_impact() {
+        assert_parses_to!(&["omen", "impact", "my_symbol"], Command::Impact(_));
+    }
+
+    #[test]
+    fn test_command_impact_alias_blast() {
+        assert_parses_to!(&["omen", "blast", "my_symbol"], Command::Impact(_));
+    }
+
+    #[test]
+    fn test_impact_symbol_positional() {
+        let cli = parse(&["omen", "impact", "handle_tool_call"]);
+        if let Command::Impact(args) = cli.command {
+            assert_eq!(args.symbol, "handle_tool_call");
+        } else {
+            panic!("Expected Impact command");
+        }
+    }
+
+    #[test]
+    fn test_impact_depth_flag() {
+        let cli = parse(&["omen", "impact", "foo", "--depth", "4"]);
+        if let Command::Impact(args) = cli.command {
+            assert_eq!(args.depth, 4);
+        } else {
+            panic!("Expected Impact command");
+        }
+    }
+
+    #[test]
+    fn test_impact_direction_callers() {
+        let cli = parse(&["omen", "impact", "foo", "--direction", "callers"]);
+        if let Command::Impact(args) = cli.command {
+            assert!(matches!(args.direction, ImpactDirection::Callers));
+        } else {
+            panic!("Expected Impact command");
+        }
+    }
+
+    #[test]
+    fn test_impact_direction_callees() {
+        let cli = parse(&["omen", "impact", "foo", "--direction", "callees"]);
+        if let Command::Impact(args) = cli.command {
+            assert!(matches!(args.direction, ImpactDirection::Callees));
+        } else {
+            panic!("Expected Impact command");
+        }
+    }
+
+    #[test]
+    fn test_impact_direction_default_both() {
+        let cli = parse(&["omen", "impact", "foo"]);
+        if let Command::Impact(args) = cli.command {
+            assert!(matches!(args.direction, ImpactDirection::Both));
+        } else {
+            panic!("Expected Impact command");
+        }
+    }
+
+    #[test]
+    fn test_impact_depth_default_two() {
+        let cli = parse(&["omen", "impact", "foo"]);
+        if let Command::Impact(args) = cli.command {
+            assert_eq!(args.depth, 2);
+        } else {
+            panic!("Expected Impact command");
         }
     }
 }

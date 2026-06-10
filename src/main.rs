@@ -12,9 +12,9 @@ use rayon::ThreadPoolBuilder;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use omen::cli::{
-    AnalyzerArgs, Cli, Command, ComplexityArgs, McpSubcommand, MutationArgs, MutationSubcommand,
-    MutationTrainArgs, OutlineArgs, OutputFormat, ReportSubcommand, ScoreArgs, ScoreSubcommand,
-    SearchSubcommand,
+    AnalyzerArgs, Cli, Command, ComplexityArgs, ImpactArgs, McpSubcommand, MutationArgs,
+    MutationSubcommand, MutationTrainArgs, OutlineArgs, OutputFormat, ReportSubcommand, ScoreArgs,
+    ScoreSubcommand, SearchSubcommand,
 };
 use omen::config::Config;
 use omen::core::progress::is_tty;
@@ -396,6 +396,9 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         },
         Command::Outline(args) => {
             run_outline(path, &config, args, format)?;
+        }
+        Command::Impact(args) => {
+            run_impact(path, &config, args, format)?;
         }
     }
 
@@ -1537,6 +1540,36 @@ fn run_outline(
             )?;
         }
     }
+    Ok(())
+}
+
+fn run_impact(
+    path: &PathBuf,
+    config: &Config,
+    args: &ImpactArgs,
+    format: Format,
+) -> omen::core::Result<()> {
+    use omen::analyzers::impact::{analyze, Direction};
+    use omen::cli::ImpactDirection;
+
+    let file_set = filtered_file_set(path, config, Some(&args.common))?;
+    let files: Vec<PathBuf> = file_set.iter().map(|p| path.join(p)).collect();
+
+    let direction = match args.direction {
+        ImpactDirection::Callers => Direction::Callers,
+        ImpactDirection::Callees => Direction::Callees,
+        ImpactDirection::Both => Direction::Both,
+    };
+
+    let report = analyze(path, &files, &args.symbol, args.depth, direction)?;
+    let value = serde_json::to_value(&report)?;
+    format_with_limits(
+        value,
+        format,
+        args.common.top,
+        args.common.offset,
+        &mut std::io::stdout(),
+    )?;
     Ok(())
 }
 
