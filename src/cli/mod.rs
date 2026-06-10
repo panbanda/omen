@@ -146,6 +146,10 @@ pub enum Command {
     /// Analyze blast radius of a symbol change (callers/callees by BFS depth)
     #[command(alias = "blast")]
     Impact(ImpactArgs),
+
+    /// One-call symbol report: source, signature, location, callers/callees, complexity
+    #[command(alias = "sym")]
+    Symbol(SymbolArgs),
 }
 
 #[derive(Args)]
@@ -578,6 +582,25 @@ pub struct ImpactArgs {
     /// Direction of traversal
     #[arg(long, value_enum, default_value = "both")]
     pub direction: ImpactDirection,
+
+    #[command(flatten)]
+    pub common: AnalyzerArgs,
+}
+
+/// Arguments for the symbol command.
+#[derive(Args)]
+pub struct SymbolArgs {
+    /// Symbol name to look up (bare name or qualified file:name)
+    #[arg()]
+    pub name: String,
+
+    /// Exclude source code from the report
+    #[arg(long)]
+    pub no_source: bool,
+
+    /// Maximum source lines to include (excess triggers truncation flag)
+    #[arg(long, default_value = "200")]
+    pub max_source_lines: usize,
 
     #[command(flatten)]
     pub common: AnalyzerArgs,
@@ -1765,6 +1788,68 @@ mod tests {
             assert_eq!(args.depth, 2);
         } else {
             panic!("Expected Impact command");
+        }
+    }
+
+    // Symbol command tests
+
+    #[test]
+    fn test_command_symbol() {
+        assert_parses_to!(&["omen", "symbol", "my_symbol"], Command::Symbol(_));
+    }
+
+    #[test]
+    fn test_command_symbol_alias_sym() {
+        assert_parses_to!(&["omen", "sym", "my_symbol"], Command::Symbol(_));
+    }
+
+    #[test]
+    fn test_symbol_name_positional() {
+        let cli = parse(&["omen", "symbol", "build_context"]);
+        if let Command::Symbol(args) = cli.command {
+            assert_eq!(args.name, "build_context");
+        } else {
+            panic!("Expected Symbol command");
+        }
+    }
+
+    #[test]
+    fn test_symbol_no_source_flag() {
+        let cli = parse(&["omen", "symbol", "foo", "--no-source"]);
+        if let Command::Symbol(args) = cli.command {
+            assert!(args.no_source);
+        } else {
+            panic!("Expected Symbol command");
+        }
+    }
+
+    #[test]
+    fn test_symbol_max_source_lines_flag() {
+        let cli = parse(&["omen", "symbol", "foo", "--max-source-lines", "10"]);
+        if let Command::Symbol(args) = cli.command {
+            assert_eq!(args.max_source_lines, 10);
+        } else {
+            panic!("Expected Symbol command");
+        }
+    }
+
+    #[test]
+    fn test_symbol_max_source_lines_default() {
+        let cli = parse(&["omen", "symbol", "foo"]);
+        if let Command::Symbol(args) = cli.command {
+            assert_eq!(args.max_source_lines, 200);
+        } else {
+            panic!("Expected Symbol command");
+        }
+    }
+
+    #[test]
+    fn test_symbol_no_source_default_false() {
+        let cli = parse(&["omen", "symbol", "foo"]);
+        if let Command::Symbol(args) = cli.command {
+            assert!(!args.no_source);
+        } else {
+            panic!("Expected Symbol command");
         }
     }
 }

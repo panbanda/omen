@@ -14,7 +14,7 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use omen::cli::{
     AnalyzerArgs, Cli, Command, ComplexityArgs, ImpactArgs, McpSubcommand, MutationArgs,
     MutationSubcommand, MutationTrainArgs, OutlineArgs, OutputFormat, ReportSubcommand, ScoreArgs,
-    ScoreSubcommand, SearchSubcommand,
+    ScoreSubcommand, SearchSubcommand, SymbolArgs,
 };
 use omen::config::Config;
 use omen::core::progress::is_tty;
@@ -399,6 +399,9 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         }
         Command::Impact(args) => {
             run_impact(path, &config, args, format)?;
+        }
+        Command::Symbol(args) => {
+            run_symbol(path, &config, args, format)?;
         }
     }
 
@@ -1562,6 +1565,34 @@ fn run_impact(
     };
 
     let report = analyze(path, &files, &args.symbol, args.depth, direction)?;
+    let value = serde_json::to_value(&report)?;
+    format_with_limits(
+        value,
+        format,
+        args.common.top,
+        args.common.offset,
+        &mut std::io::stdout(),
+    )?;
+    Ok(())
+}
+
+fn run_symbol(
+    path: &PathBuf,
+    config: &Config,
+    args: &SymbolArgs,
+    format: Format,
+) -> omen::core::Result<()> {
+    use omen::symbol::{get_symbol, SymbolOptions};
+
+    let file_set = filtered_file_set(path, config, Some(&args.common))?;
+    let files: Vec<PathBuf> = file_set.iter().map(|p| path.join(p)).collect();
+
+    let opts = SymbolOptions {
+        include_source: !args.no_source,
+        max_source_lines: args.max_source_lines,
+    };
+
+    let report = get_symbol(path, &files, &args.name, &opts)?;
     let value = serde_json::to_value(&report)?;
     format_with_limits(
         value,

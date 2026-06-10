@@ -398,6 +398,17 @@ impl McpServer {
                 required: &["query"],
             },
             ToolDef {
+                name: "get_symbol",
+                description: "One-call symbol report: exact source slice, signature, location, direct callers/callees, and complexity. Use instead of reading whole files.",
+                properties: vec![
+                    ("name", json!({"type": "string", "description": "Symbol name to look up (bare name or qualified file:name)"})),
+                    ("include_source", json!({"type": "boolean", "description": "Whether to include source code (default: true)"})),
+                    ("max_source_lines", json!({"type": "integer", "description": "Maximum source lines to return (default: 200)"})),
+                    ("path", json!({"type": "string", "description": "Repository root path"})),
+                ],
+                required: &["name"],
+            },
+            ToolDef {
                 name: "impact",
                 description: "Use to understand blast radius before changing a symbol. Returns transitive callers and callees by BFS depth, plus affected files.",
                 properties: vec![
@@ -490,6 +501,9 @@ impl McpServer {
             }
             "impact" => {
                 return self.handle_impact(&path, &file_set, &arguments);
+            }
+            "get_symbol" => {
+                return self.handle_get_symbol(&path, &file_set, &arguments);
             }
             _ => Err(format!("Unknown tool: {}", tool_name)),
         }?;
@@ -837,6 +851,46 @@ impl McpServer {
             serde_json::to_value(&report).map_err(|e| format!("Serialization failed: {}", e))?;
 
         self.tool_response("impact", value, arguments)
+    }
+
+    fn handle_get_symbol(
+        &self,
+        repo_path: &std::path::Path,
+        file_set: &FileSet,
+        arguments: &Value,
+    ) -> std::result::Result<Value, String> {
+        use crate::symbol::{get_symbol, SymbolOptions};
+
+        let name = arguments
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or("Missing required 'name' parameter")?;
+
+        let include_source = arguments
+            .get("include_source")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
+        let max_source_lines = arguments
+            .get("max_source_lines")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(200);
+
+        let files: Vec<std::path::PathBuf> = file_set.iter().map(|p| repo_path.join(p)).collect();
+
+        let opts = SymbolOptions {
+            include_source,
+            max_source_lines,
+        };
+
+        let report = get_symbol(repo_path, &files, name, &opts)
+            .map_err(|e| format!("Symbol lookup failed: {}", e))?;
+
+        let value =
+            serde_json::to_value(&report).map_err(|e| format!("Serialization failed: {}", e))?;
+
+        self.tool_response("get_symbol", value, arguments)
     }
 }
 
@@ -1728,5 +1782,59 @@ mod tests {
         let result = server.handle_tool_call(Some(params));
         // Should return an error (missing symbol)
         assert!(result.is_err(), "impact without symbol should fail");
+    }
+
+    #[test]
+    fn test_handle_tools_list_has_get_symbol() {
+        let (server, _temp_dir) = create_test_server();
+        let result = server.handle_tools_list().unwrap();
+        let tools = result.get("tools").unwrap().as_array().unwrap();
+        let has_get_symbol = tools.iter().any(|t| t.get("name").unwrap() == "get_symbol");
+        assert!(has_get_symbol, "tools list should include 'get_symbol'");
+    }
+
+    #[test]
+    fn test_handle_tool_call_get_symbol() {
+        let (server, temp_dir) = create_test_server();
+        std::fs::write(
+            temp_dir.path().join("a.rs"),
+            "fn a_function() {\n    let x = 1;\n}\n",
+        )
+        .unwrap();
+
+        let params = json!({
+            "name": "get_symbol",
+            "arguments": {
+                "name": "a_function",
+                "path": temp_dir.path().to_str().unwrap()
+            }
+        });
+        let result = server.handle_tool_call(Some(params));
+        assert!(
+            result.is_ok(),
+            "get_symbol tool call should succeed: {:?}",
+            result.err()
+        );
+        let response = result.unwrap();
+        let text = response["content"][0]["text"].as_str().unwrap();
+        let value: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert!(
+            value["result"].get("name").is_some(),
+            "envelope result should have 'name' field"
+        );
+        assert_eq!(value["result"]["name"].as_str().unwrap(), "a_function");
+    }
+
+    #[test]
+    fn test_handle_tool_call_get_symbol_missing_name() {
+        let (server, temp_dir) = create_test_server();
+        let params = json!({
+            "name": "get_symbol",
+            "arguments": {
+                "path": temp_dir.path().to_str().unwrap()
+            }
+        });
+        let result = server.handle_tool_call(Some(params));
+        assert!(result.is_err(), "get_symbol without name should fail");
     }
 }
