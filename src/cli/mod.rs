@@ -134,6 +134,10 @@ pub enum Command {
     /// Mutation testing for test suite effectiveness
     #[command(alias = "mut")]
     Mutation(Box<MutationCommand>),
+
+    /// Show token-cheap file outline: imports, classes, functions
+    #[command(alias = "ol")]
+    Outline(OutlineArgs),
 }
 
 #[derive(Args)]
@@ -523,6 +527,17 @@ pub struct MutationCommand {
 pub enum MutationSubcommand {
     /// Train ML predictor from historical mutation results
     Train(MutationTrainArgs),
+}
+
+/// Arguments for the outline command.
+#[derive(Args)]
+pub struct OutlineArgs {
+    /// Analyze a single file instead of the whole repo
+    #[arg(long)]
+    pub file: Option<PathBuf>,
+
+    #[command(flatten)]
+    pub common: AnalyzerArgs,
 }
 
 /// Arguments for mutation train command.
@@ -1566,5 +1581,47 @@ mod tests {
     #[test]
     fn test_mutation_record_flag() {
         assert!(parse_mutation_args(&["omen", "mutation", "--record"]).record);
+    }
+
+    // Outline command tests
+
+    #[test]
+    fn test_command_outline() {
+        assert_parses_to!(&["omen", "outline"], Command::Outline(_));
+    }
+
+    #[test]
+    fn test_command_outline_alias_ol() {
+        assert_parses_to!(&["omen", "ol"], Command::Outline(_));
+    }
+
+    #[test]
+    fn test_outline_file_flag() {
+        let cli = parse(&["omen", "outline", "--file", "src/main.rs"]);
+        if let Command::Outline(args) = cli.command {
+            assert_eq!(args.file, Some(PathBuf::from("src/main.rs")));
+        } else {
+            panic!("Expected Outline command");
+        }
+    }
+
+    #[test]
+    fn test_outline_no_file_flag() {
+        let cli = parse(&["omen", "outline"]);
+        if let Command::Outline(args) = cli.command {
+            assert_eq!(args.file, None);
+        } else {
+            panic!("Expected Outline command");
+        }
+    }
+
+    #[test]
+    fn test_outline_common_args() {
+        let cli = parse(&["omen", "outline", "-g", "*.rs"]);
+        if let Command::Outline(args) = cli.command {
+            assert_eq!(args.common.glob, Some("*.rs".to_string()));
+        } else {
+            panic!("Expected Outline command");
+        }
     }
 }

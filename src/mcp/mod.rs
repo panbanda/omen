@@ -335,6 +335,17 @@ impl McpServer {
                     }
                 },
                 {
+                    "name": "outline",
+                    "description": "Token-cheapest file map. Returns imports, classes with methods, and top-level functions for one file or all repo files. Use before reading full source.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "description": "Repository or directory path"},
+                            "file": {"type": "string", "description": "Single file to outline (optional)"}
+                        }
+                    }
+                },
+                {
                     "name": "semantic_search_hyde",
                     "description": "Search using hypothetical code. Write a code snippet resembling what you want to find. This is matched against the index, producing better results than keyword queries.",
                     "inputSchema": {
@@ -409,6 +420,9 @@ impl McpServer {
             }
             "semantic_search_hyde" => {
                 return self.handle_semantic_search_hyde(&arguments);
+            }
+            "outline" => {
+                return self.handle_outline(&path, &arguments);
             }
             _ => Err(format!("Unknown tool: {}", tool_name)),
         }?;
@@ -700,6 +714,50 @@ impl McpServer {
             "content": [{
                 "type": "text",
                 "text": serde_json::to_string_pretty(&result).unwrap_or_default()
+            }]
+        }))
+    }
+
+    fn handle_outline(
+        &self,
+        repo_path: &std::path::Path,
+        arguments: &Value,
+    ) -> std::result::Result<Value, String> {
+        use crate::analyzers::outline::{outline_file, Analyzer as OutlineAnalyzer, OutlineResult};
+        use crate::core::Analyzer as AnalyzerTrait;
+
+        let result = if let Some(file_str) = arguments.get("file").and_then(|v| v.as_str()) {
+            // Single-file mode
+            let file_path = std::path::PathBuf::from(file_str);
+            let file_outline =
+                outline_file(&file_path).map_err(|e| format!("Outline failed: {}", e))?;
+            OutlineResult {
+                files: vec![file_outline],
+            }
+        } else {
+            // Repo mode
+            let file_set = FileSet::from_path(repo_path, &self.config)
+                .map_err(|e| format!("Failed to create file set: {}", e))?;
+            let git_root = GitRepo::open(repo_path)
+                .ok()
+                .map(|r| r.root().to_path_buf());
+            let mut ctx = AnalysisContext::new(&file_set, &self.config, Some(repo_path));
+            if let Some(ref git_path) = git_root {
+                ctx = ctx.with_git_path(git_path);
+            }
+            let analyzer = OutlineAnalyzer;
+            analyzer
+                .analyze(&ctx)
+                .map_err(|e| format!("Outline analysis failed: {}", e))?
+        };
+
+        let value =
+            serde_json::to_value(&result).map_err(|e| format!("Serialization failed: {}", e))?;
+
+        Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": serde_json::to_string_pretty(&value).unwrap_or_default()
             }]
         }))
     }
@@ -1370,5 +1428,39 @@ mod tests {
         let request_json = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
         let parsed: JsonRpcRequest = serde_json::from_str(request_json).unwrap();
         assert!(parsed.id.is_none(), "A notification must have no id field");
+    }
+
+    #[test]
+    fn test_handle_tools_list_has_outline() {
+        let (server, _temp_dir) = create_test_server();
+        let result = server.handle_tools_list().unwrap();
+        let tools = result.get("tools").unwrap().as_array().unwrap();
+        let has_outline = tools.iter().any(|t| t.get("name").unwrap() == "outline");
+        assert!(has_outline, "tools list should include 'outline'");
+    }
+
+    #[test]
+    fn test_handle_tool_call_outline_file() {
+        let (server, _temp_dir) = create_test_server();
+        let fixture =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample.rs");
+        let params = json!({
+            "name": "outline",
+            "arguments": {"file": fixture.to_str().unwrap()}
+        });
+        let result = server.handle_tool_call(Some(params));
+        assert!(
+            result.is_ok(),
+            "outline tool call should succeed: {:?}",
+            result.err()
+        );
+        let response = result.unwrap();
+        let text = response["content"][0]["text"].as_str().unwrap();
+        // Verify the response contains expected content
+        let value: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert!(
+            value.get("files").is_some(),
+            "response should have 'files' field"
+        );
     }
 }
