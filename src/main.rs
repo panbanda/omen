@@ -21,7 +21,7 @@ use omen::core::progress::is_tty;
 use omen::core::{AnalysisContext, Analyzer, FileSet};
 use omen::git::{clone_remote, is_remote_repo, CloneOptions};
 use omen::mcp::McpServer;
-use omen::output::{truncate_lists, Format};
+use omen::output::{format_with_limits, Format};
 
 fn main() -> ExitCode {
     // Initialize tracing
@@ -555,16 +555,10 @@ fn run_analyzer<A: Analyzer + Default>(
         s.finish_and_clear();
     }
 
-    // Apply --top / --offset truncation to JSON-compatible formats
-    if let (Format::Json | Format::JsonCompact, Some(top)) = (&format, args.and_then(|a| a.top)) {
-        let offset = args.and_then(|a| a.offset).unwrap_or(0);
-        let mut value = serde_json::to_value(&result)?;
-        truncate_lists(&mut value, top, offset);
-        format.format_value(&value, &mut stdout())?;
-        return Ok(());
-    }
-
-    format.format(&result, &mut stdout())?;
+    let top = args.and_then(|a| a.top);
+    let offset = args.and_then(|a| a.offset);
+    let value = serde_json::to_value(&result)?;
+    format_with_limits(value, format, top, offset, &mut stdout())?;
     Ok(())
 }
 
@@ -586,7 +580,8 @@ fn run_changes_analyzer(
     let ctx = build_context(&path_buf, &file_set, config);
     let analyzer = omen::analyzers::changes::Analyzer::new().with_days(config.changes.days);
     let result = analyzer.analyze(&ctx)?;
-    format.format(&result, &mut stdout())?;
+    let value = serde_json::to_value(&result)?;
+    format_with_limits(value, format, args.top, args.offset, &mut stdout())?;
     Ok(())
 }
 
@@ -676,7 +671,8 @@ fn run_churn_analyzer(
     let ctx = build_context(path, &file_set, config);
     let analyzer = omen::analyzers::churn::Analyzer::new().with_days(days);
     let result = analyzer.analyze(&ctx)?;
-    format.format(&result, &mut stdout())?;
+    let value = serde_json::to_value(&result)?;
+    format_with_limits(value, format, args.top, args.offset, &mut stdout())?;
     Ok(())
 }
 

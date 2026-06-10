@@ -117,6 +117,25 @@ pub fn truncate_lists(value: &mut Value, top: usize, offset: usize) -> usize {
     total_omitted
 }
 
+/// Format a JSON value with optional truncation applied for JSON formats.
+/// For non-JSON formats, truncation is not applied.
+/// `top`: max items per array (None = unlimited). `offset`: skip first N items (None = 0).
+/// When only `offset` is set, truncation is applied with top=0 (unlimited after offset).
+pub fn format_with_limits<W: Write>(
+    mut value: Value,
+    format: Format,
+    top: Option<usize>,
+    offset: Option<usize>,
+    writer: &mut W,
+) -> Result<()> {
+    if matches!(format, Format::Json | Format::JsonCompact) && (top.is_some() || offset.is_some()) {
+        let limit = top.unwrap_or(0); // 0 means unlimited
+        let off = offset.unwrap_or(0);
+        truncate_lists(&mut value, limit, off);
+    }
+    format.format_value(&value, writer)
+}
+
 fn format_markdown<W: Write>(value: &Value, writer: &mut W) -> Result<()> {
     format_value_as_markdown(value, writer, 0)?;
     Ok(())
@@ -735,5 +754,58 @@ mod tests {
         let omitted = truncate_lists(&mut value, 3, 0);
         assert_eq!(value.as_array().unwrap().len(), 3);
         assert_eq!(omitted, 2);
+    }
+
+    // --- Tests for format_with_limits ---
+
+    #[test]
+    fn test_format_with_limits_json_applies_top() {
+        // JsonCompact format with top=3: only 3 items should appear in output.
+        let value = json!({"items": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]});
+        let mut buf = Vec::new();
+        format_with_limits(value, Format::JsonCompact, Some(3), None, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        assert_eq!(parsed["items"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_format_with_limits_offset_only_no_top() {
+        // offset=2, top=None → unlimited after offset; items 2..9 (8 items).
+        let value = json!({"items": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]});
+        let mut buf = Vec::new();
+        format_with_limits(value, Format::Json, None, Some(2), &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        let items = parsed["items"].as_array().unwrap();
+        assert_eq!(
+            items.len(),
+            8,
+            "offset=2, all remaining 8 items should be returned"
+        );
+        assert_eq!(items[0], 2, "first item after offset should be index 2");
+    }
+
+    #[test]
+    fn test_format_with_limits_non_json_passes_through() {
+        // Non-JSON format (Markdown) should not apply truncation.
+        let value = json!({"items": [1, 2, 3, 4, 5]});
+        let mut buf = Vec::new();
+        format_with_limits(value, Format::Markdown, Some(2), None, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        // Markdown output should contain all 5 items (no truncation).
+        assert!(output.contains("1"), "markdown should contain item 1");
+        assert!(output.contains("5"), "markdown should contain item 5");
+    }
+
+    #[test]
+    fn test_format_with_limits_no_top_no_offset_json_passthrough() {
+        // No top and no offset: JSON format should pass through all items.
+        let value = json!({"items": [1, 2, 3]});
+        let mut buf = Vec::new();
+        format_with_limits(value, Format::Json, None, None, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        assert_eq!(parsed["items"].as_array().unwrap().len(), 3);
     }
 }

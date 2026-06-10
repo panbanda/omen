@@ -53,10 +53,26 @@ impl ToolDef {
     }
 }
 
+/// Count total items across all top-level arrays in the value.
+/// Returns `None` only if there are no arrays at all.
 fn count_items(value: &serde_json::Value) -> Option<usize> {
     match value {
         serde_json::Value::Array(arr) => Some(arr.len()),
-        serde_json::Value::Object(map) => map.values().find_map(|v| v.as_array().map(|a| a.len())),
+        serde_json::Value::Object(map) => {
+            let mut total = 0usize;
+            let mut found_any = false;
+            for v in map.values() {
+                if let Some(arr) = v.as_array() {
+                    total += arr.len();
+                    found_any = true;
+                }
+            }
+            if found_any {
+                Some(total)
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }
@@ -169,11 +185,9 @@ impl McpServer {
         let offset = args["offset"].as_u64().unwrap_or(0) as usize;
 
         let total_items = count_items(&value);
-        let omitted = crate::output::truncate_lists(&mut value, limit, offset);
-        let returned = total_items.map(|t| {
-            t.saturating_sub(omitted)
-                .min(if limit == 0 { usize::MAX } else { limit })
-        });
+        crate::output::truncate_lists(&mut value, limit, offset);
+        // Count returned items by summing array lengths AFTER truncation.
+        let returned = count_items(&value);
 
         let envelope = json!({
             "tool": tool_name,
@@ -1452,6 +1466,47 @@ mod tests {
         // Items 10-14 returned
         assert_eq!(envelope["returned"].as_u64().unwrap(), 5);
         assert_eq!(envelope["offset"].as_u64().unwrap(), 10);
+    }
+
+    #[test]
+    fn test_tool_response_multi_array_counts() {
+        // Bug: count_items only counted first array; truncate_lists truncates ALL arrays.
+        // With {"components": [101 items], "smells": [10 items]} and limit=5:
+        //   total_items must be 111 (101+10), returned must be 10 (5+5).
+        let (server, _temp_dir) = create_test_server();
+        let components: Vec<i64> = (0..101).collect();
+        let smells: Vec<i64> = (0..10).collect();
+        let value = json!({"components": components, "smells": smells});
+        let resp = server
+            .tool_response("test", value, &json!({"limit": 5}))
+            .unwrap();
+        let text = resp["content"][0]["text"].as_str().unwrap();
+        let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(
+            envelope["total_items"].as_u64().unwrap(),
+            111,
+            "total_items should sum all arrays"
+        );
+        assert_eq!(
+            envelope["returned"].as_u64().unwrap(),
+            10,
+            "returned should be sum of items in all arrays after truncation (5+5)"
+        );
+    }
+
+    #[test]
+    fn test_tool_response_single_array_counts_unchanged() {
+        // Existing semantics: single array of 60 items, limit 50 → total 60, returned 50.
+        let (server, _temp_dir) = create_test_server();
+        let items: Vec<i64> = (0..60).collect();
+        let value = json!({"items": items});
+        let resp = server
+            .tool_response("test", value, &json!({"limit": 50}))
+            .unwrap();
+        let text = resp["content"][0]["text"].as_str().unwrap();
+        let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(envelope["total_items"].as_u64().unwrap(), 60);
+        assert_eq!(envelope["returned"].as_u64().unwrap(), 50);
     }
 
     #[test]
