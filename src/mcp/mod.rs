@@ -209,11 +209,13 @@ impl McpServer {
         let tools: Vec<serde_json::Value> = vec![
             ToolDef {
                 name: "context",
-                description: "Use first. Returns top-N PageRank-ranked symbols, risks, language breakdown, and navigation hints. Cheap.",
+                description: "Use first. Returns top-N PageRank-ranked symbols, risks, language breakdown, directory tree, entry points, and navigation hints. Cheap.",
                 properties: vec![
                     ("path", json!({"type": "string", "description": "File or directory path"})),
                     ("max_symbols", json!({"type": "integer", "description": "Maximum symbols to include"})),
                     ("max_risks", json!({"type": "integer", "description": "Maximum risks to include"})),
+                    ("max_tokens", json!({"type": "integer", "description": "Token budget; response is trimmed to fit (default: 8000)"})),
+                    ("format", json!({"type": "string", "enum": ["json", "markdown"], "description": "Output format: 'markdown' returns compact agent-facing text directly (default: json)"})),
                 ],
                 required: &[],
             },
@@ -536,10 +538,33 @@ impl McpServer {
             .get("max_risks")
             .and_then(|v| v.as_u64())
             .map(|v| v as usize);
+        let max_tokens = arguments
+            .get("max_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(8000);
+        let format = arguments
+            .get("format")
+            .and_then(|v| v.as_str())
+            .unwrap_or("json");
 
-        let context =
+        let mut context =
             crate::context::build_context(path, file_set, &self.config, max_symbols, max_risks)
                 .map_err(|e| format!("Context failed: {}", e))?;
+
+        // Apply token budget
+        crate::context::apply_token_budget(&mut context, max_tokens);
+
+        if format == "markdown" {
+            // Return markdown text directly (not wrapped in JSON envelope)
+            let md = context.render_markdown();
+            return Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": md
+                }]
+            }));
+        }
 
         let value =
             serde_json::to_value(&context).map_err(|e| format!("Serialization failed: {}", e))?;
@@ -1103,6 +1128,61 @@ mod tests {
 
         assert!(text.contains("hints"));
         assert!(text.contains("mcp_entrypoint"));
+    }
+
+    #[test]
+    fn test_handle_tool_call_context_markdown_returns_text_directly() {
+        let (server, temp_dir) = create_test_server();
+        std::fs::write(
+            temp_dir.path().join("main.rs"),
+            "pub fn markdown_symbol() {}\n",
+        )
+        .unwrap();
+
+        let params = json!({
+            "name": "context",
+            "arguments": {
+                "path": temp_dir.path().to_str().unwrap(),
+                "format": "markdown"
+            }
+        });
+        let response = server.handle_tool_call(Some(params)).unwrap();
+        let text = response["content"][0]["text"].as_str().unwrap();
+
+        // Markdown mode returns text starting with "# Repository:" not JSON
+        assert!(
+            text.starts_with("# Repository:"),
+            "markdown mode should start with '# Repository:' header, got: {text}"
+        );
+        assert!(text.contains("markdown_symbol"), "should include symbol");
+    }
+
+    #[test]
+    fn test_handle_tool_call_context_max_tokens_trims_output() {
+        let (server, temp_dir) = create_test_server();
+        std::fs::write(
+            temp_dir.path().join("test.rs"),
+            "pub fn token_fn() {}\n// TODO: trim me\n",
+        )
+        .unwrap();
+
+        let params = json!({
+            "name": "context",
+            "arguments": {
+                "path": temp_dir.path().to_str().unwrap(),
+                "max_tokens": 500
+            }
+        });
+        let response = server.handle_tool_call(Some(params)).unwrap();
+        let text = response["content"][0]["text"].as_str().unwrap();
+        let byte_budget = 500 * 4;
+        // The JSON envelope wraps the result so the text can be bigger than the
+        // inner context, but the token budget should have been applied.
+        assert!(
+            text.len() < byte_budget + 1000,
+            "with max_tokens=500 output should be small, got {} bytes",
+            text.len()
+        );
     }
 
     #[test]

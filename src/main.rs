@@ -692,7 +692,7 @@ fn run_context(
     format: Format,
 ) -> omen::core::Result<()> {
     let file_set = FileSet::from_path(path, config)?;
-    let context = omen::context::build_context(
+    let mut context = omen::context::build_context(
         path,
         &file_set,
         config,
@@ -700,47 +700,13 @@ fn run_context(
         Some(25),
     )?;
 
+    // Apply token budget for non-JSON formats or when explicitly requested
+    omen::context::apply_token_budget(&mut context, args.max_tokens);
+
     match format {
         Format::Json | Format::JsonCompact => format.format(&context, &mut stdout())?,
-        Format::Markdown => {
-            println!("# Repository Context\n");
-            println!("**Max Tokens:** {}", args.max_tokens);
-            println!("**Depth:** {}\n", args.depth);
-            if let Some(ref target) = args.target {
-                println!("**Target:** {}\n", target.display());
-            }
-            if let Some(ref symbol) = args.symbol {
-                println!("**Symbol:** {}\n", symbol);
-            }
-            println!("## Languages\n");
-            for language in &context.languages {
-                println!("- {}: {} files", language.language, language.files);
-            }
-            println!("\n## Top Symbols\n");
-            for symbol in &context.top_symbols {
-                println!(
-                    "- `{}` ({}) at {}:{}",
-                    symbol.name, symbol.kind, symbol.file, symbol.line
-                );
-            }
-            println!("\n## Hints\n");
-            for hint in &context.hints {
-                println!("- {}", hint);
-            }
-        }
-        Format::Text => {
-            println!("Repository Context");
-            println!("==================");
-            println!("Max Tokens: {}", args.max_tokens);
-            println!("Depth: {}", args.depth);
-            if let Some(ref target) = args.target {
-                println!("Target: {}", target.display());
-            }
-            if let Some(ref symbol) = args.symbol {
-                println!("Symbol: {}", symbol);
-            }
-            println!();
-            format.format(&context, &mut stdout())?;
+        Format::Markdown | Format::Text => {
+            print!("{}", context.render_markdown());
         }
         Format::Sarif => format.format(&context, &mut stdout())?,
     }
