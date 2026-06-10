@@ -21,7 +21,7 @@ use omen::core::progress::is_tty;
 use omen::core::{AnalysisContext, Analyzer, FileSet};
 use omen::git::{clone_remote, is_remote_repo, CloneOptions};
 use omen::mcp::McpServer;
-use omen::output::Format;
+use omen::output::{truncate_lists, Format};
 
 fn main() -> ExitCode {
     // Initialize tracing
@@ -106,11 +106,12 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         None => Config::load_default(path)?,
     };
 
-    let format = match cli.format {
-        OutputFormat::Json => Format::Json,
-        OutputFormat::Markdown => Format::Markdown,
-        OutputFormat::Text => Format::Text,
-        OutputFormat::Sarif => Format::Sarif,
+    let format = match (cli.format, cli.compact) {
+        (OutputFormat::Json, true) => Format::JsonCompact,
+        (OutputFormat::Json, false) => Format::Json,
+        (OutputFormat::Markdown, _) => Format::Markdown,
+        (OutputFormat::Text, _) => Format::Text,
+        (OutputFormat::Sarif, _) => Format::Sarif,
     };
 
     match &cli.command {
@@ -213,8 +214,8 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                             args.samples,
                         )?;
                         match format {
-                            Format::Json => {
-                                println!("{}", serde_json::to_string_pretty(&trend_data)?);
+                            Format::Json | Format::JsonCompact => {
+                                format.format(&trend_data, &mut stdout())?;
                             }
                             Format::Markdown => {
                                 println!("# Score Trend Analysis\n");
@@ -374,12 +375,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             results.push(run_and_collect!(&ctx, omen::score::Analyzer, "score"));
 
             let combined = json!({ "analyzers": results });
-            match format {
-                Format::Sarif => format.format_value(&combined, &mut stdout())?,
-                Format::Json | Format::Markdown | Format::Text => {
-                    println!("{}", serde_json::to_string_pretty(&combined)?);
-                }
-            }
+            format.format_value(&combined, &mut stdout())?;
         }
         Command::Context(args) => {
             run_context(path, &config, args, format)?;
@@ -559,6 +555,15 @@ fn run_analyzer<A: Analyzer + Default>(
         s.finish_and_clear();
     }
 
+    // Apply --top / --offset truncation to JSON-compatible formats
+    if let (Format::Json | Format::JsonCompact, Some(top)) = (&format, args.and_then(|a| a.top)) {
+        let offset = args.and_then(|a| a.offset).unwrap_or(0);
+        let mut value = serde_json::to_value(&result)?;
+        truncate_lists(&mut value, top, offset);
+        format.format_value(&value, &mut stdout())?;
+        return Ok(());
+    }
+
     format.format(&result, &mut stdout())?;
     Ok(())
 }
@@ -691,7 +696,7 @@ fn run_context(
     )?;
 
     match format {
-        Format::Json => println!("{}", serde_json::to_string_pretty(&context)?),
+        Format::Json | Format::JsonCompact => format.format(&context, &mut stdout())?,
         Format::Markdown => {
             println!("# Repository Context\n");
             println!("**Max Tokens:** {}", args.max_tokens);
@@ -1208,7 +1213,7 @@ fn run_search(
             );
 
             match format {
-                Format::Json => println!("{}", serde_json::to_string_pretty(&output)?),
+                Format::Json | Format::JsonCompact => format.format(&output, &mut stdout())?,
                 Format::Markdown | Format::Text => {
                     println!("Query: {}", output.query);
                     println!("Total symbols indexed: {}", output.total_symbols);
@@ -1343,8 +1348,8 @@ fn run_mutation(
 
     // Output results
     match format {
-        Format::Json => {
-            println!("{}", serde_json::to_string_pretty(&result)?);
+        Format::Json | Format::JsonCompact => {
+            format.format(&result, &mut stdout())?;
         }
         Format::Markdown => {
             println!("# Mutation Testing Report\n");

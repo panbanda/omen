@@ -17,6 +17,10 @@ pub struct Cli {
     #[arg(short, long, value_enum, default_value = "markdown")]
     pub format: OutputFormat,
 
+    /// Compact JSON output (single line, no indentation; ignored for non-JSON formats)
+    #[arg(long)]
+    pub compact: bool,
+
     /// Configuration file path
     #[arg(short, long)]
     pub config: Option<PathBuf>,
@@ -149,6 +153,14 @@ pub struct AnalyzerArgs {
     /// Analyze only files changed since the given git ref
     #[arg(long)]
     pub changed_since: Option<String>,
+
+    /// Limit output to the top N results (0 = unlimited)
+    #[arg(long)]
+    pub top: Option<usize>,
+
+    /// Skip the first N results (use with --top for pagination)
+    #[arg(long)]
+    pub offset: Option<usize>,
 }
 
 #[derive(Args)]
@@ -1566,5 +1578,33 @@ mod tests {
     #[test]
     fn test_mutation_record_flag() {
         assert!(parse_mutation_args(&["omen", "mutation", "--record"]).record);
+    }
+
+    #[test]
+    fn test_cli_compact_flag() {
+        assert!(parse(&["omen", "--compact", "complexity"]).compact);
+    }
+
+    #[test]
+    fn test_cli_compact_default_false() {
+        assert!(!parse(&["omen", "complexity"]).compact);
+    }
+
+    #[test]
+    fn test_analyzer_args_top() {
+        let args = parse_complexity_args(&["omen", "complexity", "--top", "10"]);
+        assert_eq!(args.common.top, Some(10));
+    }
+
+    #[test]
+    fn test_analyzer_args_top_default_none() {
+        let args = parse_complexity_args(&["omen", "complexity"]);
+        assert_eq!(args.common.top, None);
+    }
+
+    #[test]
+    fn test_analyzer_args_offset() {
+        let args = parse_complexity_args(&["omen", "complexity", "--top", "10", "--offset", "5"]);
+        assert_eq!(args.common.offset, Some(5));
     }
 }

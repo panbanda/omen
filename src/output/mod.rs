@@ -12,6 +12,7 @@ use crate::core::Result;
 pub enum Format {
     #[default]
     Json,
+    JsonCompact,
     Markdown,
     Text,
     Sarif,
@@ -21,6 +22,7 @@ impl Format {
     pub fn format_value<W: Write>(&self, value: &Value, writer: &mut W) -> Result<()> {
         match self {
             Format::Json => format_json(value, writer),
+            Format::JsonCompact => format_json_compact(value, writer),
             Format::Markdown => format_markdown(value, writer),
             Format::Text => format_text(value, writer),
             Format::Sarif => format_sarif(value, writer),
@@ -37,6 +39,82 @@ fn format_json<W: Write>(value: &Value, writer: &mut W) -> Result<()> {
     serde_json::to_writer_pretty(&mut *writer, value)?;
     writeln!(writer)?;
     Ok(())
+}
+
+fn format_json_compact<W: Write>(value: &Value, writer: &mut W) -> Result<()> {
+    serde_json::to_writer(&mut *writer, value)?;
+    writeln!(writer)?;
+    Ok(())
+}
+
+/// Truncate top-level arrays in a JSON value for token-efficient output.
+/// `top`: max items per array (0 = unlimited). `offset`: skip first N items.
+/// Adds `<field>_omitted` count for each truncated array.
+/// Returns total items omitted across all truncated arrays.
+pub fn truncate_lists(value: &mut Value, top: usize, offset: usize) -> usize {
+    if top == 0 && offset == 0 {
+        return 0;
+    }
+    let mut total_omitted = 0usize;
+    match value {
+        Value::Object(map) => {
+            let keys: Vec<String> = map.keys().cloned().collect();
+            let mut omitted_fields: Vec<(String, usize)> = Vec::new();
+            for key in keys {
+                if let Some(Value::Array(arr)) = map.get_mut(&key) {
+                    let original_len = arr.len();
+                    // Apply offset first
+                    if offset > 0 {
+                        if offset < original_len {
+                            arr.drain(0..offset);
+                        } else {
+                            arr.clear();
+                        }
+                    }
+                    // Apply top limit
+                    if top > 0 && arr.len() > top {
+                        arr.truncate(top);
+                    }
+                    let after_offset = original_len.saturating_sub(offset);
+                    let returned = if top == 0 {
+                        after_offset
+                    } else {
+                        after_offset.min(top)
+                    };
+                    let omitted = after_offset.saturating_sub(returned);
+                    if omitted > 0 {
+                        total_omitted += omitted;
+                        omitted_fields.push((format!("{}_omitted", key), omitted));
+                    }
+                }
+            }
+            for (k, v) in omitted_fields {
+                map.insert(k, Value::Number(v.into()));
+            }
+        }
+        Value::Array(arr) => {
+            let original_len = arr.len();
+            if offset > 0 {
+                if offset < original_len {
+                    arr.drain(0..offset);
+                } else {
+                    arr.clear();
+                }
+            }
+            if top > 0 && arr.len() > top {
+                arr.truncate(top);
+            }
+            let after_offset = original_len.saturating_sub(offset);
+            let returned = if top == 0 {
+                after_offset
+            } else {
+                after_offset.min(top)
+            };
+            total_omitted = after_offset.saturating_sub(returned);
+        }
+        _ => {}
+    }
+    total_omitted
 }
 
 fn format_markdown<W: Write>(value: &Value, writer: &mut W) -> Result<()> {
@@ -584,5 +662,78 @@ mod tests {
         Format::Markdown.format_value(&value, &mut buf).unwrap();
         let output = String::from_utf8(buf).unwrap();
         assert!(output.contains("just a string"));
+    }
+
+    #[test]
+    fn test_format_json_compact_single_line() {
+        let value = json!({"name": "test", "items": [1, 2, 3]});
+        let mut buf = Vec::new();
+        Format::JsonCompact.format_value(&value, &mut buf).unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        // Compact output must not contain newlines within the JSON (only trailing newline)
+        assert_eq!(output.trim().lines().count(), 1);
+    }
+
+    #[test]
+    fn test_format_json_compact_identical_value() {
+        let value = json!({"name": "test", "count": 42, "items": [1, 2, 3]});
+        let mut buf_pretty = Vec::new();
+        let mut buf_compact = Vec::new();
+        Format::Json.format_value(&value, &mut buf_pretty).unwrap();
+        Format::JsonCompact
+            .format_value(&value, &mut buf_compact)
+            .unwrap();
+        // Parse both back and compare
+        let v1: Value = serde_json::from_slice(&buf_pretty).unwrap();
+        let v2: Value = serde_json::from_slice(&buf_compact).unwrap();
+        assert_eq!(v1, v2);
+    }
+
+    #[test]
+    fn test_truncate_lists_limits_top_level_arrays() {
+        let mut value = json!({"files": (0..100).collect::<Vec<_>>(), "summary": {"total": 100}});
+        let omitted = truncate_lists(&mut value, 10, 0);
+        assert_eq!(omitted, 90);
+        assert_eq!(value["files"].as_array().unwrap().len(), 10);
+        assert_eq!(value["files_omitted"].as_u64().unwrap(), 90);
+        // summary (not an array) is untouched
+        assert!(value["summary"].is_object());
+    }
+
+    #[test]
+    fn test_truncate_lists_zero_means_unlimited() {
+        let mut value = json!({"items": (0..100).collect::<Vec<_>>()});
+        let omitted = truncate_lists(&mut value, 0, 0);
+        assert_eq!(omitted, 0);
+        assert_eq!(value["items"].as_array().unwrap().len(), 100);
+    }
+
+    #[test]
+    fn test_truncate_lists_preserves_summary_fields() {
+        let mut value = json!({"items": [1, 2, 3], "total": 99, "grade": "A"});
+        truncate_lists(&mut value, 2, 0);
+        assert_eq!(value["total"].as_u64().unwrap(), 99);
+        assert_eq!(value["grade"].as_str().unwrap(), "A");
+    }
+
+    #[test]
+    fn test_truncate_lists_with_offset() {
+        let mut value = json!({"items": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]});
+        let omitted = truncate_lists(&mut value, 3, 5);
+        // items 5,6,7 are kept; 0-4 skipped, 8-9 omitted
+        let items = value["items"].as_array().unwrap();
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0], 5);
+        assert_eq!(items[2], 7);
+        // omitted = original(10) - offset(5) - returned(3) = 2
+        assert_eq!(omitted, 2);
+    }
+
+    #[test]
+    fn test_truncate_lists_on_root_array() {
+        let mut value = json!([0, 1, 2, 3, 4]);
+        let omitted = truncate_lists(&mut value, 3, 0);
+        assert_eq!(value.as_array().unwrap().len(), 3);
+        assert_eq!(omitted, 2);
     }
 }
