@@ -11,6 +11,7 @@ pub mod flags;
 pub mod graph;
 pub mod hotspot;
 pub mod mutation;
+pub mod outline;
 pub mod ownership;
 pub mod repomap;
 pub mod satd;

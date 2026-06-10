@@ -13,7 +13,7 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use omen::cli::{
     AnalyzerArgs, Cli, Command, ComplexityArgs, McpSubcommand, MutationArgs, MutationSubcommand,
-    MutationTrainArgs, OutputFormat, ReportSubcommand, ScoreArgs, ScoreSubcommand,
+    MutationTrainArgs, OutlineArgs, OutputFormat, ReportSubcommand, ScoreArgs, ScoreSubcommand,
     SearchSubcommand,
 };
 use omen::config::Config;
@@ -394,6 +394,9 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 run_mutation(path, &config, &cmd.args, format)?;
             }
         },
+        Command::Outline(args) => {
+            run_outline(path, &config, args, format)?;
+        }
     }
 
     Ok(())
@@ -1494,6 +1497,46 @@ fn run_mutation(
         }
     }
 
+    Ok(())
+}
+
+fn run_outline(
+    path: &PathBuf,
+    config: &Config,
+    args: &OutlineArgs,
+    format: Format,
+) -> omen::core::Result<()> {
+    use omen::analyzers::outline::{outline_file, Analyzer as OutlineAnalyzer, OutlineResult};
+
+    let result = if let Some(ref file_path) = args.file {
+        // Single-file mode
+        let file_outline = outline_file(file_path)?;
+        OutlineResult {
+            files: vec![file_outline],
+        }
+    } else {
+        // Repo mode
+        let file_set = filtered_file_set(path, config, Some(&args.common))?;
+        let ctx = build_context(path, &file_set, config);
+        let analyzer = OutlineAnalyzer;
+        analyzer.analyze(&ctx)?
+    };
+
+    match format {
+        Format::Markdown | Format::Text => {
+            print!("{}", result.to_markdown());
+        }
+        _ => {
+            let value = serde_json::to_value(&result)?;
+            omen::output::format_with_limits(
+                value,
+                format,
+                args.common.top,
+                args.common.offset,
+                &mut std::io::stdout(),
+            )?;
+        }
+    }
     Ok(())
 }
 
