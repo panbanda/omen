@@ -10,6 +10,57 @@ use crate::config::Config;
 use crate::core::{AnalysisContext, Analyzer, FileSet, Result};
 use crate::git::GitRepo;
 
+struct ToolDef {
+    name: &'static str,
+    description: &'static str,
+    properties: Vec<(&'static str, serde_json::Value)>,
+    required: &'static [&'static str],
+}
+
+impl ToolDef {
+    fn to_json(&self) -> serde_json::Value {
+        let mut props = serde_json::Map::new();
+        for (k, v) in &self.properties {
+            props.insert(k.to_string(), v.clone());
+        }
+        // Shared pagination params on every tool
+        props.insert(
+            "limit".to_string(),
+            json!({
+                "type": "integer",
+                "description": "Max items to return (default: 50, 0 = unlimited)"
+            }),
+        );
+        props.insert(
+            "offset".to_string(),
+            json!({
+                "type": "integer",
+                "description": "Item offset for pagination (default: 0)"
+            }),
+        );
+        let mut schema = json!({
+            "type": "object",
+            "properties": props
+        });
+        if !self.required.is_empty() {
+            schema["required"] = json!(self.required);
+        }
+        json!({
+            "name": self.name,
+            "description": self.description,
+            "inputSchema": schema
+        })
+    }
+}
+
+fn count_items(value: &serde_json::Value) -> Option<usize> {
+    match value {
+        serde_json::Value::Array(arr) => Some(arr.len()),
+        serde_json::Value::Object(map) => map.values().find_map(|v| v.as_array().map(|a| a.len())),
+        _ => None,
+    }
+}
+
 /// MCP Server for LLM tool integration.
 pub struct McpServer {
     config: Config,
@@ -108,251 +159,241 @@ impl McpServer {
         }))
     }
 
-    fn handle_tools_list(&self) -> std::result::Result<Value, String> {
+    fn tool_response(
+        &self,
+        tool_name: &str,
+        mut value: serde_json::Value,
+        args: &serde_json::Value,
+    ) -> std::result::Result<serde_json::Value, String> {
+        let limit = args["limit"].as_u64().unwrap_or(50) as usize;
+        let offset = args["offset"].as_u64().unwrap_or(0) as usize;
+
+        let total_items = count_items(&value);
+        let omitted = crate::output::truncate_lists(&mut value, limit, offset);
+        let returned = total_items.map(|t| {
+            t.saturating_sub(omitted)
+                .min(if limit == 0 { usize::MAX } else { limit })
+        });
+
+        let envelope = json!({
+            "tool": tool_name,
+            "total_items": total_items,
+            "returned": returned,
+            "offset": offset,
+            "result": value
+        });
+
         Ok(json!({
-            "tools": [
-                {
-                    "name": "complexity",
-                    "description": "Analyze code complexity (cyclomatic and cognitive)",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"},
-                            "threshold": {"type": "number", "description": "Minimum complexity to report"}
-                        }
-                    }
-                },
-                {
-                    "name": "satd",
-                    "description": "Detect Self-Admitted Technical Debt (TODO, FIXME, HACK, etc.)",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"}
-                        }
-                    }
-                },
-                {
-                    "name": "deadcode",
-                    "description": "Find dead/unreachable code",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"}
-                        }
-                    }
-                },
-                {
-                    "name": "churn",
-                    "description": "Analyze code churn from git history",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"},
-                            "days": {"type": "integer", "description": "Number of days to analyze"}
-                        }
-                    }
-                },
-                {
-                    "name": "clones",
-                    "description": "Detect code duplicates/clones",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"},
-                            "min_tokens": {"type": "integer", "description": "Minimum tokens for detection"},
-                            "similarity": {"type": "number", "description": "Similarity threshold (0-1)"}
-                        }
-                    }
-                },
-                {
-                    "name": "defect",
-                    "description": "Predict defect-prone files using PMAT metrics",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"},
-                            "days": {"type": "integer", "description": "Number of days to analyze"}
-                        }
-                    }
-                },
-                {
-                    "name": "changes",
-                    "description": "Analyze recent changes (JIT risk analysis)",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "commit": {"type": "string", "description": "Commit or range to analyze"},
-                            "count": {"type": "integer", "description": "Number of commits"}
-                        }
-                    }
-                },
-                {
-                    "name": "diff",
-                    "description": "Analyze a specific diff between commits",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "base": {"type": "string", "description": "Base commit/branch"},
-                            "head": {"type": "string", "description": "Head commit/branch"}
-                        },
-                        "required": ["base"]
-                    }
-                },
-                {
-                    "name": "tdg",
-                    "description": "Generate Technical Debt Graph",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"}
-                        }
-                    }
-                },
-                {
-                    "name": "graph",
-                    "description": "Analyze dependency graph structure",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"}
-                        }
-                    }
-                },
-                {
-                    "name": "hotspot",
-                    "description": "Find complexity/churn hotspots",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"},
-                            "days": {"type": "integer", "description": "Number of days for churn"}
-                        }
-                    }
-                },
-                {
-                    "name": "temporal",
-                    "description": "Detect temporally coupled files",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"},
-                            "days": {"type": "integer", "description": "Number of days to analyze"},
-                            "min_coupling": {"type": "number", "description": "Minimum coupling strength"}
-                        }
-                    }
-                },
-                {
-                    "name": "ownership",
-                    "description": "Analyze code ownership and bus factor",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"}
-                        }
-                    }
-                },
-                {
-                    "name": "cohesion",
-                    "description": "Calculate CK cohesion metrics (WMC, CBO, RFC, LCOM, DIT, NOC)",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"}
-                        }
-                    }
-                },
-                {
-                    "name": "repomap",
-                    "description": "Generate PageRank-ranked symbol map for LLM context",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"},
-                            "max_symbols": {"type": "integer", "description": "Maximum symbols to include"}
-                        }
-                    }
-                },
-                {
-                    "name": "smells",
-                    "description": "Detect architectural smells and anti-patterns",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"}
-                        }
-                    }
-                },
-                {
-                    "name": "flags",
-                    "description": "Find and assess feature flags",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"},
-                            "provider": {"type": "string", "description": "Flag provider (launchdarkly, split, etc.)"},
-                            "stale_days": {"type": "integer", "description": "Days threshold for staleness"}
-                        }
-                    }
-                },
-                {
-                    "name": "score",
-                    "description": "Calculate composite health score",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"},
-                            "analyzers": {"type": "string", "description": "Analyzers to include (comma-separated)"}
-                        }
-                    }
-                },
-                {
-                    "name": "semantic_search",
-                    "description": "Search for code symbols using natural language queries",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "query": {"type": "string", "description": "Natural language search query"},
-                            "top_k": {"type": "integer", "description": "Maximum number of results (default: 10)"},
-                            "min_score": {"type": "number", "description": "Minimum similarity score 0-1 (default: 0.3)"},
-                            "files": {"type": "string", "description": "Comma-separated file paths to search within"},
-                            "max_complexity": {"type": "integer", "description": "Exclude symbols with cyclomatic complexity above this value"},
-                            "include_projects": {"type": "string", "description": "Comma-separated paths to additional project roots for cross-repo search"}
-                        },
-                        "required": ["query"]
-                    }
-                },
-                {
-                    "name": "context",
-                    "description": "Build a compact repository context pack with languages, top symbols, risks, and navigation hints",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"},
-                            "max_symbols": {"type": "integer", "description": "Maximum symbols to include"},
-                            "max_risks": {"type": "integer", "description": "Maximum risks to include"}
-                        }
-                    }
-                },
-                {
-                    "name": "semantic_search_hyde",
-                    "description": "Search using hypothetical code. Write a code snippet resembling what you want to find. This is matched against the index, producing better results than keyword queries.",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "hypothetical_document": {"type": "string", "description": "A code snippet resembling the code you want to find"},
-                            "query": {"type": "string", "description": "Original query for display purposes"},
-                            "top_k": {"type": "integer", "description": "Maximum number of results (default: 10)"},
-                            "min_score": {"type": "number", "description": "Minimum similarity score 0-1 (default: 0.3)"},
-                            "files": {"type": "string", "description": "Comma-separated file paths to search within"},
-                            "max_complexity": {"type": "integer", "description": "Exclude symbols with cyclomatic complexity above this value"},
-                            "include_projects": {"type": "string", "description": "Comma-separated paths to additional project roots for cross-repo search"}
-                        },
-                        "required": ["hypothetical_document"]
-                    }
-                }
-            ]
+            "content": [{
+                "type": "text",
+                "text": serde_json::to_string(&envelope).unwrap_or_default()
+            }]
         }))
+    }
+
+    fn handle_tools_list(&self) -> std::result::Result<Value, String> {
+        let tools: Vec<serde_json::Value> = vec![
+            ToolDef {
+                name: "context",
+                description: "Use first. Returns top-N PageRank-ranked symbols, risks, language breakdown, and navigation hints. Cheap.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                    ("max_symbols", json!({"type": "integer", "description": "Maximum symbols to include"})),
+                    ("max_risks", json!({"type": "integer", "description": "Maximum risks to include"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "complexity",
+                description: "Returns cyclomatic and cognitive complexity per function. Fast.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                    ("threshold", json!({"type": "number", "description": "Minimum complexity to report"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "satd",
+                description: "Detects TODO/FIXME/HACK debt comments. Fast.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "deadcode",
+                description: "Use when you suspect unused symbols. Finds dead/unreachable code.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "churn",
+                description: "Use to find frequently changed files. Analyzes code churn from git history.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                    ("days", json!({"type": "integer", "description": "Number of days to analyze"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "clones",
+                description: "Use when looking for duplication or copy-paste debt. Detects code clones via MinHash+LSH.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                    ("min_tokens", json!({"type": "integer", "description": "Minimum tokens for detection"})),
+                    ("similarity", json!({"type": "number", "description": "Similarity threshold (0-1)"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "defect",
+                description: "Use to identify high-risk files. Predicts defect-prone files using PMAT metrics.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                    ("days", json!({"type": "integer", "description": "Number of days to analyze"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "changes",
+                description: "Use to assess recent commit risk. Analyzes recent changes with JIT risk analysis.",
+                properties: vec![
+                    ("commit", json!({"type": "string", "description": "Commit or range to analyze"})),
+                    ("count", json!({"type": "integer", "description": "Number of commits"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "diff",
+                description: "Use to review branch or PR risk. Analyzes diff between commits; auto-detects target branch.",
+                properties: vec![
+                    ("base", json!({"type": "string", "description": "Base commit/branch"})),
+                    ("head", json!({"type": "string", "description": "Head commit/branch"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "tdg",
+                description: "Use to understand technical debt accumulation. Generates Technical Debt Gradient with critical defect detection.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "graph",
+                description: "Use to visualize module dependencies. Generates Mermaid dependency graph.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "hotspot",
+                description: "Use to find the riskiest files. Combines high churn + high complexity.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                    ("days", json!({"type": "integer", "description": "Number of days for churn"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "temporal",
+                description: "Use to find files that always change together. Detects temporal coupling from git history.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                    ("days", json!({"type": "integer", "description": "Number of days to analyze"})),
+                    ("min_coupling", json!({"type": "number", "description": "Minimum coupling strength"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "ownership",
+                description: "Use to assess bus factor and knowledge silos. Analyzes code ownership from git blame.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "cohesion",
+                description: "Use for OO design quality assessment. Calculates CK metrics: WMC, CBO, RFC, LCOM4, DIT, NOC.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "repomap",
+                description: "Returns PageRank-ranked symbol call graph. Use for understanding code structure.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                    ("max_symbols", json!({"type": "integer", "description": "Maximum symbols to include"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "smells",
+                description: "Use to find architectural anti-patterns. Detects cycles and smells via Tarjan SCC.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "flags",
+                description: "Use to audit feature flags. Finds stale and active feature flags across providers.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                    ("provider", json!({"type": "string", "description": "Flag provider (launchdarkly, split, etc.)"})),
+                    ("stale_days", json!({"type": "integer", "description": "Days threshold for staleness"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "score",
+                description: "Use for an overall health summary. Calculates composite repository health score.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                    ("analyzers", json!({"type": "string", "description": "Analyzers to include (comma-separated)"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "semantic_search",
+                description: "Semantic symbol search via TF-IDF. Use when you know what you're looking for conceptually.",
+                properties: vec![
+                    ("query", json!({"type": "string", "description": "Natural language search query"})),
+                    ("top_k", json!({"type": "integer", "description": "Maximum number of results (default: 10)"})),
+                    ("min_score", json!({"type": "number", "description": "Minimum similarity score 0-1 (default: 0.3)"})),
+                    ("files", json!({"type": "string", "description": "Comma-separated file paths to search within"})),
+                    ("max_complexity", json!({"type": "integer", "description": "Exclude symbols with cyclomatic complexity above this value"})),
+                    ("include_projects", json!({"type": "string", "description": "Comma-separated paths to additional project roots for cross-repo search"})),
+                ],
+                required: &["query"],
+            },
+            ToolDef {
+                name: "semantic_search_hyde",
+                description: "Search using hypothetical code. Write a code snippet resembling what you want to find. This is matched against the index, producing better results than keyword queries.",
+                properties: vec![
+                    ("hypothetical_document", json!({"type": "string", "description": "A code snippet resembling the code you want to find"})),
+                    ("query", json!({"type": "string", "description": "Original query for display purposes"})),
+                    ("top_k", json!({"type": "integer", "description": "Maximum number of results (default: 10)"})),
+                    ("min_score", json!({"type": "number", "description": "Minimum similarity score 0-1 (default: 0.3)"})),
+                    ("files", json!({"type": "string", "description": "Comma-separated file paths to search within"})),
+                    ("max_complexity", json!({"type": "integer", "description": "Exclude symbols with cyclomatic complexity above this value"})),
+                    ("include_projects", json!({"type": "string", "description": "Comma-separated paths to additional project roots for cross-repo search"})),
+                ],
+                required: &["hypothetical_document"],
+            },
+        ]
+        .into_iter()
+        .map(|t| t.to_json())
+        .collect();
+
+        Ok(json!({ "tools": tools }))
     }
 
     fn handle_tool_call(&self, params: Option<Value>) -> std::result::Result<Value, String> {
@@ -413,12 +454,7 @@ impl McpServer {
             _ => Err(format!("Unknown tool: {}", tool_name)),
         }?;
 
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": serde_json::to_string_pretty(&result).unwrap_or_default()
-            }]
-        }))
+        self.tool_response(tool_name, result, &arguments)
     }
 
     fn run_analyzer<A: Analyzer + Default>(
@@ -453,12 +489,7 @@ impl McpServer {
 
         let value =
             serde_json::to_value(&context).map_err(|e| format!("Serialization failed: {}", e))?;
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": serde_json::to_string_pretty(&value).unwrap_or_default()
-            }]
-        }))
+        self.tool_response("context", value, arguments)
     }
 
     fn handle_diff(
@@ -484,12 +515,7 @@ impl McpServer {
         let value =
             serde_json::to_value(&result).map_err(|e| format!("Serialization failed: {}", e))?;
 
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": serde_json::to_string_pretty(&value).unwrap_or_default()
-            }]
-        }))
+        self.tool_response("diff", value, arguments)
     }
 
     fn handle_semantic_search(&self, arguments: &Value) -> std::result::Result<Value, String> {
@@ -584,12 +610,7 @@ impl McpServer {
         let result =
             serde_json::to_value(&output).map_err(|e| format!("Serialization failed: {}", e))?;
 
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": serde_json::to_string_pretty(&result).unwrap_or_default()
-            }]
-        }))
+        self.tool_response("semantic_search", result, arguments)
     }
 
     fn handle_semantic_search_hyde(&self, arguments: &Value) -> std::result::Result<Value, String> {
@@ -696,12 +717,7 @@ impl McpServer {
         let result =
             serde_json::to_value(&output).map_err(|e| format!("Serialization failed: {}", e))?;
 
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": serde_json::to_string_pretty(&result).unwrap_or_default()
-            }]
-        }))
+        self.tool_response("semantic_search_hyde", result, arguments)
     }
 }
 
@@ -1370,5 +1386,98 @@ mod tests {
         let request_json = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
         let parsed: JsonRpcRequest = serde_json::from_str(request_json).unwrap();
         assert!(parsed.id.is_none(), "A notification must have no id field");
+    }
+
+    #[test]
+    fn test_tool_response_envelope_fields() {
+        let (server, _temp_dir) = create_test_server();
+        let value = json!({"items": [1, 2, 3, 4, 5]});
+        let args = json!({});
+        let resp = server.tool_response("test_tool", value, &args).unwrap();
+        let text = resp["content"][0]["text"].as_str().unwrap();
+        let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(envelope["tool"].as_str().unwrap(), "test_tool");
+        assert!(envelope.get("total_items").is_some());
+        assert!(envelope.get("returned").is_some());
+        assert!(envelope.get("offset").is_some());
+        assert!(envelope.get("result").is_some());
+    }
+
+    #[test]
+    fn test_tool_response_is_compact() {
+        let (server, _temp_dir) = create_test_server();
+        let value = json!({"items": [1, 2, 3]});
+        let resp = server.tool_response("test", value, &json!({})).unwrap();
+        let text = resp["content"][0]["text"].as_str().unwrap();
+        // Compact: only one line (no internal newlines)
+        assert_eq!(text.trim().lines().count(), 1);
+    }
+
+    #[test]
+    fn test_tool_response_default_limit_50() {
+        let (server, _temp_dir) = create_test_server();
+        let items: Vec<i64> = (0..100).collect();
+        let value = json!({"items": items});
+        let resp = server.tool_response("test", value, &json!({})).unwrap();
+        let text = resp["content"][0]["text"].as_str().unwrap();
+        let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
+        let returned = envelope["returned"].as_u64().unwrap();
+        assert_eq!(returned, 50);
+        assert_eq!(envelope["total_items"].as_u64().unwrap(), 100);
+    }
+
+    #[test]
+    fn test_tool_response_zero_limit_unlimited() {
+        let (server, _temp_dir) = create_test_server();
+        let items: Vec<i64> = (0..100).collect();
+        let value = json!({"items": items});
+        let resp = server
+            .tool_response("test", value, &json!({"limit": 0}))
+            .unwrap();
+        let text = resp["content"][0]["text"].as_str().unwrap();
+        let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(envelope["returned"].as_u64().unwrap(), 100);
+    }
+
+    #[test]
+    fn test_tool_response_offset_pagination() {
+        let (server, _temp_dir) = create_test_server();
+        let items: Vec<i64> = (0..20).collect();
+        let value = json!({"items": items});
+        let resp = server
+            .tool_response("test", value, &json!({"limit": 5, "offset": 10}))
+            .unwrap();
+        let text = resp["content"][0]["text"].as_str().unwrap();
+        let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
+        // Items 10-14 returned
+        assert_eq!(envelope["returned"].as_u64().unwrap(), 5);
+        assert_eq!(envelope["offset"].as_u64().unwrap(), 10);
+    }
+
+    #[test]
+    fn test_all_tools_have_limit_and_offset_params() {
+        let (server, _temp_dir) = create_test_server();
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(1)),
+            method: "tools/list".to_string(),
+            params: None,
+        };
+        let response = server.handle_request(request);
+        let tools = response.result.unwrap();
+        let tools = tools["tools"].as_array().unwrap();
+        for tool in tools {
+            let props = &tool["inputSchema"]["properties"];
+            assert!(
+                props.get("limit").is_some(),
+                "Tool {} missing limit",
+                tool["name"]
+            );
+            assert!(
+                props.get("offset").is_some(),
+                "Tool {} missing offset",
+                tool["name"]
+            );
+        }
     }
 }
