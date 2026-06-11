@@ -409,100 +409,43 @@ mod tests {
         );
     }
 
-    /// C# invocation_expression: the call target for `new B().b()` involves a
-    /// member_access_expression. The current `extract_call_name` function does
-    /// not recurse into member access chains, so the method name `b` may not
-    /// be extracted. This test documents the current actual behaviour.
-    ///
-    /// Update this test if call-name extraction is improved for C#.
+    /// C# invocation_expression via member_access_expression chain.
+    /// `new B().b()` — the `b` identifier lives inside a member_access_expression
+    /// that is the function child of the invocation_expression.
     #[test]
-    fn test_multi_lang_csharp_current_behavior() {
+    fn test_multi_lang_csharp() {
         let dir = TempDir::new().unwrap();
+        // Use both member-access call (new B().b()) and a bare call within the
+        // same class so we cover both code paths.
         let a_src = "class A { void a() { new B().b(); } }\n";
         let b_src = "class B { void b() {} }\n";
-        fs::write(dir.path().join("A.cs"), a_src).unwrap();
-        fs::write(dir.path().join("B.cs"), b_src).unwrap();
-        let files = vec![dir.path().join("A.cs"), dir.path().join("B.cs")];
-        // C# resolves function symbols by name. `b` resolves to "B.cs:b".
-        // Callers within the member_access_expression chain are not extracted by
-        // the current call-name extractor, so the callers level has no symbols.
-        // Update this test if call-name extraction is improved for C#.
-        let report = analyze(dir.path(), &files, "b", 1, Direction::Callers)
-            .expect("analyze should not fail for C#");
-        assert_eq!(
-            report.resolved,
-            vec!["B.cs:b"],
-            "C# should resolve 'b' to B.cs:b"
-        );
-        assert_eq!(
-            report.callers.len(),
-            1,
-            "C# should have one callers BFS level"
-        );
-        // member_access_expression callers not extracted yet — callers at depth 1 are empty
-        assert!(
-            report.callers[0].symbols.is_empty(),
-            "C# callers at depth 1 should be empty due to member_access_expression limitation"
+        run_multi_lang_test(&dir, "A.cs", a_src, "B.cs", b_src);
+    }
+
+    /// C function name extraction via declarator chain.
+    /// tree-sitter-c nests the function name inside function_declarator > identifier.
+    #[test]
+    fn test_multi_lang_c() {
+        let dir = TempDir::new().unwrap();
+        run_multi_lang_test(
+            &dir,
+            "a.c",
+            "void a(void) { b(); }\n",
+            "b.c",
+            "void b(void) {}\n",
         );
     }
 
-    /// C function extraction: tree-sitter-c places the function name inside a
-    /// nested declarator node, not directly on the function_definition.  The
-    /// current extractor uses `find_named_child(node, "identifier", …)` as a
-    /// fallback, which only looks at direct children and therefore cannot
-    /// reach the nested identifier.  This test documents the current actual
-    /// behaviour: C functions *are* parsed but may not be resolved by name.
-    ///
-    /// If this test starts failing because the extractor has been improved to
-    /// handle C correctly, update this comment and upgrade the assertion.
+    /// C++ function name extraction via declarator chain (same as C).
     #[test]
-    fn test_multi_lang_c_current_behavior() {
+    fn test_multi_lang_cpp() {
         let dir = TempDir::new().unwrap();
-        let a_src = "void a(void) { b(); }\n";
-        let b_src = "void b(void) {}\n";
-        fs::write(dir.path().join("a.c"), a_src).unwrap();
-        fs::write(dir.path().join("b.c"), b_src).unwrap();
-        let files = vec![dir.path().join("a.c"), dir.path().join("b.c")];
-        let report = analyze(dir.path(), &files, "b", 1, Direction::Callers)
-            .expect("analyze should not fail for C");
-        // C extraction LIMITATION: function names inside declarator nodes are not
-        // extracted by the current tree-sitter wrapper, so "b" does not resolve.
-        // If this assertion fails, the extractor has been improved — update accordingly.
-        assert!(
-            report.resolved.is_empty(),
-            "C should not resolve 'b' due to declarator-nesting limitation; got {:?}",
-            report.resolved
-        );
-        assert!(
-            report.callers.is_empty(),
-            "C should have no callers BFS levels when symbol is unresolved; got {:?}",
-            report.callers
-        );
-    }
-
-    /// C++ function extraction has the same declarator-nesting limitation as C.
-    /// This test documents the current behaviour and must not panic.
-    #[test]
-    fn test_multi_lang_cpp_current_behavior() {
-        let dir = TempDir::new().unwrap();
-        let a_src = "void a() { b(); }\n";
-        let b_src = "void b() {}\n";
-        fs::write(dir.path().join("a.cpp"), a_src).unwrap();
-        fs::write(dir.path().join("b.cpp"), b_src).unwrap();
-        let files = vec![dir.path().join("a.cpp"), dir.path().join("b.cpp")];
-        let report = analyze(dir.path(), &files, "b", 1, Direction::Callers)
-            .expect("analyze should not fail for C++");
-        // C++ extraction LIMITATION: same declarator-nesting issue as C.
-        // "b" does not resolve and no callers BFS levels are produced.
-        assert!(
-            report.resolved.is_empty(),
-            "C++ should not resolve 'b' due to declarator-nesting limitation; got {:?}",
-            report.resolved
-        );
-        assert!(
-            report.callers.is_empty(),
-            "C++ should have no callers BFS levels when symbol is unresolved; got {:?}",
-            report.callers
+        run_multi_lang_test(
+            &dir,
+            "a.cpp",
+            "void a() { b(); }\n",
+            "b.cpp",
+            "void b() {}\n",
         );
     }
 
@@ -514,71 +457,25 @@ mod tests {
         run_multi_lang_test(&dir, "a.rb", "def a\n  b()\nend\n", "b.rb", "def b\nend\n");
     }
 
-    /// PHP `function_call_expression` uses a `name` child (PHP-grammar-specific)
-    /// rather than the `identifier` kind that `extract_call_name` looks for.
-    /// This test documents the current actual behaviour; do not panic.
-    ///
-    /// Update this test if PHP call-name extraction is improved.
+    /// PHP `function_call_expression` uses a `name` child (PHP-grammar-specific).
+    /// The call-name extractor now handles this child kind.
     #[test]
-    fn test_multi_lang_php_current_behavior() {
+    fn test_multi_lang_php() {
         let dir = TempDir::new().unwrap();
-        let a_src = "<?php\nfunction a() { b(); }\n";
-        let b_src = "<?php\nfunction b() {}\n";
-        fs::write(dir.path().join("a.php"), a_src).unwrap();
-        fs::write(dir.path().join("b.php"), b_src).unwrap();
-        let files = vec![dir.path().join("a.php"), dir.path().join("b.php")];
-        // PHP resolves function symbols. `b` resolves to "b.php:b".
-        // Callers via `function_call_expression` use a `name` child (not `identifier`),
-        // so call names are not extracted and callers at depth 1 are empty.
-        // Update this test if PHP call-name extraction is improved.
-        let report = analyze(dir.path(), &files, "b", 1, Direction::Callers)
-            .expect("analyze should not fail for PHP");
-        assert_eq!(
-            report.resolved,
-            vec!["b.php:b"],
-            "PHP should resolve 'b' to b.php:b"
-        );
-        assert_eq!(
-            report.callers.len(),
-            1,
-            "PHP should have one callers BFS level"
-        );
-        // `name` child not mapped as `identifier` — callers at depth 1 are empty
-        assert!(
-            report.callers[0].symbols.is_empty(),
-            "PHP callers at depth 1 should be empty due to function_call_expression name-child limitation"
+        run_multi_lang_test(
+            &dir,
+            "a.php",
+            "<?php\nfunction a() { b(); }\n",
+            "b.php",
+            "<?php\nfunction b() {}\n",
         );
     }
 
-    /// Bash function extraction: verify the analysis doesn't panic and documents
-    /// the current actual behaviour.
+    /// Bash: bare command invocations (`command` > `command_name` > `word`)
+    /// are mapped to call edges so callers can be traced.
     #[test]
-    fn test_multi_lang_bash_no_panic() {
+    fn test_multi_lang_bash() {
         let dir = TempDir::new().unwrap();
-        let a_src = "a() { b; }\n";
-        let b_src = "b() { :; }\n";
-        fs::write(dir.path().join("a.sh"), a_src).unwrap();
-        fs::write(dir.path().join("b.sh"), b_src).unwrap();
-        let files = vec![dir.path().join("a.sh"), dir.path().join("b.sh")];
-        // Bash resolves function symbols. `b` resolves to "b.sh:b".
-        // Simple command invocations (bare `b`) are not yet mapped to callers,
-        // so callers at depth 1 are empty.
-        let report = analyze(dir.path(), &files, "b", 1, Direction::Callers)
-            .expect("analyze should not fail for Bash");
-        assert_eq!(
-            report.resolved,
-            vec!["b.sh:b"],
-            "Bash should resolve 'b' to b.sh:b"
-        );
-        assert_eq!(
-            report.callers.len(),
-            1,
-            "Bash should have one callers BFS level"
-        );
-        // Bare command invocations are not extracted as call edges — callers symbols empty
-        assert!(
-            report.callers[0].symbols.is_empty(),
-            "Bash callers at depth 1 should be empty; bare command invocations not yet extracted"
-        );
+        run_multi_lang_test(&dir, "a.sh", "a() { b; }\n", "b.sh", "b() { :; }\n");
     }
 }

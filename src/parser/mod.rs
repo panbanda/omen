@@ -1049,7 +1049,17 @@ fn extract_function_info(
 ) -> Option<FunctionNode> {
     let name = find_child_by_field(node, "name", source)
         .or_else(|| find_named_child(node, "identifier", source))
-        .or_else(|| find_named_child(node, "property_identifier", source))?;
+        .or_else(|| find_named_child(node, "property_identifier", source))
+        .or_else(|| {
+            // C and C++ place the function name inside a declarator chain:
+            // function_definition -> declarator (function_declarator) -> declarator (identifier)
+            // Walk the declarator chain until we find an identifier.
+            if matches!(lang, Language::C | Language::Cpp) {
+                extract_c_function_name(node, source)
+            } else {
+                None
+            }
+        })?;
 
     let body = node
         .child_by_field_name("body")
@@ -1067,6 +1077,45 @@ fn extract_function_info(
         is_exported,
         signature,
     })
+}
+
+/// Recursively walk a C/C++ declarator chain to find the function name.
+///
+/// In tree-sitter-c/cpp, `function_definition` has a `declarator` field that
+/// points to a `function_declarator`.  That node in turn has a `declarator`
+/// field that is the actual `identifier`.  This function recurses through
+/// `function_declarator` and `pointer_declarator` nodes until it reaches an
+/// `identifier`.
+fn extract_c_function_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    fn recurse_declarator(decl: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+        match decl.kind() {
+            "identifier" => decl.utf8_text(source).ok().map(|s| s.to_string()),
+            "function_declarator"
+            | "pointer_declarator"
+            | "reference_declarator"
+            | "abstract_declarator" => {
+                // Try the named `declarator` field first, then first named child
+                if let Some(inner) = decl.child_by_field_name("declarator") {
+                    return recurse_declarator(inner, source);
+                }
+                for child in decl.children(&mut decl.walk()) {
+                    if child.is_named() {
+                        if let Some(name) = recurse_declarator(child, source) {
+                            return Some(name);
+                        }
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    // Walk the `declarator` field of the function_definition
+    if let Some(decl) = node.child_by_field_name("declarator") {
+        return recurse_declarator(decl, source);
+    }
+    None
 }
 
 fn find_child_by_field(node: &tree_sitter::Node<'_>, field: &str, source: &[u8]) -> Option<String> {
@@ -1417,10 +1466,12 @@ mod tests {
             .parse(content, Language::C, Path::new("main.c"))
             .unwrap();
 
-        // C function extraction works, but may not find name in all cases
-        let _functions = extract_functions(&result);
-        // Just verify parsing works - C name extraction may vary
-        assert!(result.root_node().kind() == "translation_unit");
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 1, "C should extract 1 function");
+        assert_eq!(
+            functions[0].name, "main",
+            "C function name should be 'main'"
+        );
     }
 
     #[test]
@@ -1431,8 +1482,12 @@ mod tests {
             .parse(content, Language::Cpp, Path::new("main.cpp"))
             .unwrap();
 
-        // Just verify parsing works
-        assert!(result.root_node().kind() == "translation_unit");
+        let functions = extract_functions(&result);
+        assert_eq!(functions.len(), 1, "C++ should extract 1 function");
+        assert_eq!(
+            functions[0].name, "main",
+            "C++ function name should be 'main'"
+        );
     }
 
     #[test]

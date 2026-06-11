@@ -638,6 +638,11 @@ fn extract_call_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<Stri
                 let text = child.utf8_text(source).ok()?;
                 return Some(text.to_string());
             }
+            // PHP: function_call_expression has a `name` child (kind == "name")
+            if kind == "name" {
+                let text = child.utf8_text(source).ok()?;
+                return Some(text.to_string());
+            }
             // For method calls like obj.method(), get the method name
             if kind == "selector_expression" || kind == "member_expression" {
                 // Get the rightmost identifier
@@ -650,10 +655,37 @@ fn extract_call_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<Stri
                     return Some(text.to_string());
                 }
             }
+            // C# member_access_expression: `new B().b()` → invocation_expression →
+            // member_access_expression → (object_creation_expression . identifier)
+            // Extract the rightmost identifier (the method name).
+            if kind == "member_access_expression" {
+                // Walk children to find the last identifier
+                let mut last_ident: Option<String> = None;
+                for j in 0..child.child_count() as u32 {
+                    if let Some(grandchild) = child.child(j) {
+                        if grandchild.kind() == "identifier" {
+                            if let Ok(text) = grandchild.utf8_text(source) {
+                                last_ident = Some(text.to_string());
+                            }
+                        }
+                    }
+                }
+                if let Some(name) = last_ident {
+                    return Some(name);
+                }
+            }
             // For simple function calls, use the function child
             if kind == "function" {
                 if let Some(name_node) = child.child_by_field_name("name") {
                     let text = name_node.utf8_text(source).ok()?;
+                    return Some(text.to_string());
+                }
+            }
+            // Bash: command node has a command_name child which has a word child
+            if kind == "command_name" {
+                // Get the first child of command_name (typically a `word`)
+                if let Some(word) = child.child(0) {
+                    let text = word.utf8_text(source).ok()?;
                     return Some(text.to_string());
                 }
             }
