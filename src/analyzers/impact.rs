@@ -423,9 +423,27 @@ mod tests {
         fs::write(dir.path().join("A.cs"), a_src).unwrap();
         fs::write(dir.path().join("B.cs"), b_src).unwrap();
         let files = vec![dir.path().join("A.cs"), dir.path().join("B.cs")];
-        // C# LIMITATION: nested member_access_expression call names not fully extracted.
-        // `b` may or may not resolve. Do not panic.
-        let _ = analyze(dir.path(), &files, "b", 1, Direction::Callers);
+        // C# resolves function symbols by name. `b` resolves to "B.cs:b".
+        // Callers within the member_access_expression chain are not extracted by
+        // the current call-name extractor, so the callers level has no symbols.
+        // Update this test if call-name extraction is improved for C#.
+        let report = analyze(dir.path(), &files, "b", 1, Direction::Callers)
+            .expect("analyze should not fail for C#");
+        assert_eq!(
+            report.resolved,
+            vec!["B.cs:b"],
+            "C# should resolve 'b' to B.cs:b"
+        );
+        assert_eq!(
+            report.callers.len(),
+            1,
+            "C# should have one callers BFS level"
+        );
+        // member_access_expression callers not extracted yet — callers at depth 1 are empty
+        assert!(
+            report.callers[0].symbols.is_empty(),
+            "C# callers at depth 1 should be empty due to member_access_expression limitation"
+        );
     }
 
     /// C function extraction: tree-sitter-c places the function name inside a
@@ -445,13 +463,21 @@ mod tests {
         fs::write(dir.path().join("a.c"), a_src).unwrap();
         fs::write(dir.path().join("b.c"), b_src).unwrap();
         let files = vec![dir.path().join("a.c"), dir.path().join("b.c")];
-        let report = analyze(dir.path(), &files, "b", 1, Direction::Callers).unwrap();
+        let report = analyze(dir.path(), &files, "b", 1, Direction::Callers)
+            .expect("analyze should not fail for C");
         // C extraction LIMITATION: function names inside declarator nodes are not
-        // extracted by the current tree-sitter wrapper, so "b" may not resolve.
-        // Assert the current (possibly empty) behavior so future changes are visible.
-        // resolved may be empty due to the limitation.
-        let _ = &report.resolved; // Currently expected to be empty — do not panic
-                                  // Smoke test: analysis itself must not error, only resolution may fail.
+        // extracted by the current tree-sitter wrapper, so "b" does not resolve.
+        // If this assertion fails, the extractor has been improved — update accordingly.
+        assert!(
+            report.resolved.is_empty(),
+            "C should not resolve 'b' due to declarator-nesting limitation; got {:?}",
+            report.resolved
+        );
+        assert!(
+            report.callers.is_empty(),
+            "C should have no callers BFS levels when symbol is unresolved; got {:?}",
+            report.callers
+        );
     }
 
     /// C++ function extraction has the same declarator-nesting limitation as C.
@@ -464,9 +490,20 @@ mod tests {
         fs::write(dir.path().join("a.cpp"), a_src).unwrap();
         fs::write(dir.path().join("b.cpp"), b_src).unwrap();
         let files = vec![dir.path().join("a.cpp"), dir.path().join("b.cpp")];
-        let report = analyze(dir.path(), &files, "b", 1, Direction::Callers).unwrap();
-        // C++ extraction LIMITATION: see C test above.
-        let _ = &report.resolved;
+        let report = analyze(dir.path(), &files, "b", 1, Direction::Callers)
+            .expect("analyze should not fail for C++");
+        // C++ extraction LIMITATION: same declarator-nesting issue as C.
+        // "b" does not resolve and no callers BFS levels are produced.
+        assert!(
+            report.resolved.is_empty(),
+            "C++ should not resolve 'b' due to declarator-nesting limitation; got {:?}",
+            report.resolved
+        );
+        assert!(
+            report.callers.is_empty(),
+            "C++ should have no callers BFS levels when symbol is unresolved; got {:?}",
+            report.callers
+        );
     }
 
     #[test]
@@ -490,13 +527,31 @@ mod tests {
         fs::write(dir.path().join("a.php"), a_src).unwrap();
         fs::write(dir.path().join("b.php"), b_src).unwrap();
         let files = vec![dir.path().join("a.php"), dir.path().join("b.php")];
-        // PHP LIMITATION: `name` child in function_call_expression is not `identifier`,
-        // so call names may not be extracted. Do not panic.
-        let _ = analyze(dir.path(), &files, "b", 1, Direction::Callers);
+        // PHP resolves function symbols. `b` resolves to "b.php:b".
+        // Callers via `function_call_expression` use a `name` child (not `identifier`),
+        // so call names are not extracted and callers at depth 1 are empty.
+        // Update this test if PHP call-name extraction is improved.
+        let report = analyze(dir.path(), &files, "b", 1, Direction::Callers)
+            .expect("analyze should not fail for PHP");
+        assert_eq!(
+            report.resolved,
+            vec!["b.php:b"],
+            "PHP should resolve 'b' to b.php:b"
+        );
+        assert_eq!(
+            report.callers.len(),
+            1,
+            "PHP should have one callers BFS level"
+        );
+        // `name` child not mapped as `identifier` — callers at depth 1 are empty
+        assert!(
+            report.callers[0].symbols.is_empty(),
+            "PHP callers at depth 1 should be empty due to function_call_expression name-child limitation"
+        );
     }
 
-    /// Bash function extraction: verify the analysis doesn't panic.
-    /// Bash calls are often simple command invocations; resolution may vary.
+    /// Bash function extraction: verify the analysis doesn't panic and documents
+    /// the current actual behaviour.
     #[test]
     fn test_multi_lang_bash_no_panic() {
         let dir = TempDir::new().unwrap();
@@ -505,7 +560,25 @@ mod tests {
         fs::write(dir.path().join("a.sh"), a_src).unwrap();
         fs::write(dir.path().join("b.sh"), b_src).unwrap();
         let files = vec![dir.path().join("a.sh"), dir.path().join("b.sh")];
-        // Must not panic regardless of resolution.
-        let _ = analyze(dir.path(), &files, "b", 1, Direction::Callers);
+        // Bash resolves function symbols. `b` resolves to "b.sh:b".
+        // Simple command invocations (bare `b`) are not yet mapped to callers,
+        // so callers at depth 1 are empty.
+        let report = analyze(dir.path(), &files, "b", 1, Direction::Callers)
+            .expect("analyze should not fail for Bash");
+        assert_eq!(
+            report.resolved,
+            vec!["b.sh:b"],
+            "Bash should resolve 'b' to b.sh:b"
+        );
+        assert_eq!(
+            report.callers.len(),
+            1,
+            "Bash should have one callers BFS level"
+        );
+        // Bare command invocations are not extracted as call edges — callers symbols empty
+        assert!(
+            report.callers[0].symbols.is_empty(),
+            "Bash callers at depth 1 should be empty; bare command invocations not yet extracted"
+        );
     }
 }
