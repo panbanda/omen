@@ -119,26 +119,14 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             match cmd.subcommand {
                 Some(McpSubcommand::Manifest) => {
                     // Output MCP server manifest (standalone use only, registry publishing disabled) omen:ignore
+                    // Tool names are derived from McpServer::tool_names() — the single source of
+                    // truth kept adjacent to handle_tools_list in src/mcp/mod.rs.
                     let manifest = serde_json::json!({
                         "$schema": "https://registry.modelcontextprotocol.io/schemas/server.json",
                         "name": "panbanda/omen",
                         "version": env!("CARGO_PKG_VERSION"),
                         "description": "Code analysis tools for AI assistants",
-                        "tools": [
-                            "analyze_complexity",
-                            "analyze_satd",
-                            "analyze_deadcode",
-                            "analyze_churn",
-                            "analyze_duplicates",
-                            "analyze_defect",
-                            "analyze_tdg",
-                            "analyze_graph",
-                            "analyze_hotspot",
-                            "analyze_temporal_coupling",
-                            "analyze_ownership",
-                            "analyze_cohesion",
-                            "analyze_repo_map"
-                        ]
+                        "tools": omen::mcp::McpServer::tool_names()
                     });
                     println!("{}", serde_json::to_string_pretty(&manifest)?);
                 }
@@ -375,7 +363,16 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             results.push(run_and_collect!(&ctx, omen::score::Analyzer, "score"));
 
             let combined = json!({ "analyzers": results });
-            format.format_value(&combined, &mut stdout())?;
+            // `all` is machine-first: always emit JSON unless the caller
+            // explicitly requested compact JSON, in which case honour that.
+            // Markdown/Text/Sarif are not meaningful for the combined payload.
+            // This matches the existing integration test expectation that
+            // `omen all` (no -f flag) emits valid JSON.
+            let all_format = match format {
+                Format::JsonCompact => Format::JsonCompact,
+                _ => Format::Json,
+            };
+            format_with_limits(combined, all_format, args.top, args.offset, &mut stdout())?;
         }
         Command::Context(args) => {
             run_context(path, &config, args, format)?;
@@ -1320,7 +1317,14 @@ fn run_mutation(
     // Output results
     match format {
         Format::Json | Format::JsonCompact => {
-            format.format(&result, &mut stdout())?;
+            let value = serde_json::to_value(&result)?;
+            format_with_limits(
+                value,
+                format,
+                args.common.top,
+                args.common.offset,
+                &mut stdout(),
+            )?;
         }
         Format::Markdown => {
             println!("# Mutation Testing Report\n");
@@ -1481,8 +1485,15 @@ fn run_outline(
     use omen::analyzers::outline::{outline_file, Analyzer as OutlineAnalyzer, OutlineResult};
 
     let result = if let Some(ref file_path) = args.file {
-        // Single-file mode
-        let file_outline = outline_file(file_path)?;
+        // Single-file mode: resolve relative paths against the repo root (-p),
+        // not the shell cwd, so `omen outline --file src/main.rs -p /some/repo`
+        // works regardless of where the user ran the command from.
+        let resolved = if file_path.is_relative() {
+            path.join(file_path)
+        } else {
+            file_path.clone()
+        };
+        let file_outline = outline_file(&resolved)?;
         OutlineResult {
             files: vec![file_outline],
         }
