@@ -16,6 +16,9 @@ Find refactoring targets in: `{{.paths}}`
 ## Quick Start
 
 ```bash
+# Get a quick structural overview before deciding what to refactor
+omen -f json outline --compact --top 50
+
 # Find hotspots (high churn + complexity)
 omen -f json hotspot -n 10
 
@@ -24,6 +27,9 @@ omen -f json clones --min-tokens 50
 
 # Find acknowledged debt
 omen -f json satd | jq '.items[] | select(.category == "design")'
+
+# Assess blast radius before refactoring a specific symbol
+omen -f json impact --symbol <symbol-name> --depth 2
 ```
 
 ## Priority Matrix

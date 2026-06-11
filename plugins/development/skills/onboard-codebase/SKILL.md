@@ -13,17 +13,27 @@ Omen CLI must be installed and available in PATH.
 
 ## Workflow
 
-### Step 1: Identify Key Symbols
+### Step 1: Get a Quick Code Map
+
+Run the outline command for a token-cheap overview of every file's structure:
+
+```bash
+omen -f json outline --compact --top 50
+```
+
+This returns imports, classes with methods, and top-level functions — much cheaper than reading full source files.
+
+### Step 2: Identify Key Symbols
 
 Run the repomap analysis to find the most important code:
 
 ```bash
-omen -f json repomap
+omen -f json repomap --compact --top 25
 ```
 
 PageRank-ranked symbols show what's central to the codebase.
 
-### Step 2: Map the Architecture
+### Step 3: Map the Architecture
 
 Run the dependency graph analysis to understand structure:
 
@@ -33,7 +43,7 @@ omen -f json graph
 
 This reveals how the codebase is organized and how modules relate.
 
-### Step 3: Identify Subject Matter Experts
+### Step 4: Identify Subject Matter Experts
 
 Run the ownership analysis to find who knows what:
 
@@ -43,7 +53,7 @@ omen -f json ownership
 
 This shows who has expertise in each area of the code.
 
-### Step 4: Find Complexity Hotspots
+### Step 5: Find Complexity Hotspots
 
 Run the complexity analysis to identify tricky areas:
 
