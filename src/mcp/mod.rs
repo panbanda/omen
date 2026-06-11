@@ -443,6 +443,40 @@ impl McpServer {
         Ok(json!({ "tools": tools }))
     }
 
+    /// Returns the canonical list of MCP tool names.
+    ///
+    /// This is the single source of truth kept adjacent to `handle_tools_list`
+    /// so that the manifest (in `src/main.rs`) can call it and stay in sync.
+    /// A test asserts that these names match the actual `handle_tools_list` output.
+    pub fn tool_names() -> &'static [&'static str] {
+        &[
+            "context",
+            "outline",
+            "complexity",
+            "satd",
+            "deadcode",
+            "churn",
+            "clones",
+            "defect",
+            "changes",
+            "diff",
+            "tdg",
+            "graph",
+            "hotspot",
+            "temporal",
+            "ownership",
+            "cohesion",
+            "repomap",
+            "smells",
+            "flags",
+            "score",
+            "semantic_search",
+            "get_symbol",
+            "impact",
+            "semantic_search_hyde",
+        ]
+    }
+
     fn handle_tool_call(&self, params: Option<Value>) -> std::result::Result<Value, String> {
         let params = params.ok_or("Missing params")?;
         let tool_name = params
@@ -808,8 +842,15 @@ impl McpServer {
         use crate::core::Analyzer as AnalyzerTrait;
 
         let result = if let Some(file_str) = arguments.get("file").and_then(|v| v.as_str()) {
-            // Single-file mode
-            let file_path = std::path::PathBuf::from(file_str);
+            // Single-file mode: resolve relative paths against the repo root so
+            // callers can pass repo-relative paths (e.g. "src/main.rs") without
+            // needing to know the absolute path.
+            let raw = std::path::PathBuf::from(file_str);
+            let file_path = if raw.is_relative() {
+                repo_path.join(&raw)
+            } else {
+                raw
+            };
             let file_outline =
                 outline_file(&file_path).map_err(|e| format!("Outline failed: {}", e))?;
             OutlineResult {
@@ -962,6 +1003,44 @@ mod tests {
     fn test_mcp_server_new() {
         let (server, _temp_dir) = create_test_server();
         assert!(server.root_path.exists());
+    }
+
+    /// B9: tool_names() must exactly match the names produced by handle_tools_list,
+    /// keeping the manifest and the server implementation in sync.
+    #[test]
+    fn test_tool_names_matches_handle_tools_list() {
+        let (server, _temp_dir) = create_test_server();
+        let tools_response = server.handle_tools_list().unwrap();
+        let listed: Vec<String> = tools_response["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .filter_map(|t| t["name"].as_str().map(|s| s.to_string()))
+            .collect();
+
+        let canonical: Vec<&str> = McpServer::tool_names().to_vec();
+
+        // Both slices must contain exactly the same names (order-insensitive).
+        let mut listed_sorted = listed.clone();
+        listed_sorted.sort();
+        let mut canonical_sorted: Vec<String> = canonical.iter().map(|s| s.to_string()).collect();
+        canonical_sorted.sort();
+
+        assert_eq!(
+            listed_sorted,
+            canonical_sorted,
+            "tool_names() must match handle_tools_list() tool names.\n\
+             In tool_names but not in handle_tools_list: {:?}\n\
+             In handle_tools_list but not in tool_names: {:?}",
+            canonical_sorted
+                .iter()
+                .filter(|n| !listed_sorted.contains(n))
+                .collect::<Vec<_>>(),
+            listed_sorted
+                .iter()
+                .filter(|n| !canonical_sorted.contains(n))
+                .collect::<Vec<_>>(),
+        );
     }
 
     #[test]

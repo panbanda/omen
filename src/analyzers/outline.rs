@@ -105,10 +105,24 @@ pub fn outline_file(path: &Path) -> Result<FileOutline> {
     let classes_raw = extract_classes(&result);
     let functions_raw = extract_functions(&result);
 
-    // Build class ranges to filter top-level functions
+    // Build two exclusion sets so we can correctly identify top-level functions:
+    //
+    // 1. Class body ranges (struct/class definition extent, NOT extended to impl
+    //    blocks): catches languages like Python/Java/C++ where methods are
+    //    lexically inside the class body.
+    // 2. Method (name, start_line) pairs from every class: catches languages
+    //    like Rust and Go where methods live outside the struct definition (in
+    //    impl / standalone function blocks) and therefore fall outside the class
+    //    body range.
     let class_ranges: Vec<(u32, u32)> = classes_raw
         .iter()
         .map(|c| (c.start_line, c.end_line))
+        .collect();
+
+    // Set of (name, start_line) for every method across all classes.
+    let method_keys: std::collections::HashSet<(String, u32)> = classes_raw
+        .iter()
+        .flat_map(|c| c.methods.iter().map(|m| (m.name.clone(), m.start_line)))
         .collect();
 
     // Convert class nodes
@@ -134,13 +148,17 @@ pub fn outline_file(path: &Path) -> Result<FileOutline> {
         })
         .collect();
 
-    // Top-level functions: exclude functions whose start_line falls within any class range
+    // Top-level functions: a function is a method (not top-level) if either:
+    //  (a) its start_line falls within a class body range, OR
+    //  (b) its (name, start_line) appears in the method_keys set.
     let functions: Vec<OutlineFunction> = functions_raw
         .into_iter()
         .filter(|f| {
-            !class_ranges
+            let in_class_body = class_ranges
                 .iter()
-                .any(|(start, end)| f.start_line >= *start && f.start_line <= *end)
+                .any(|(start, end)| f.start_line >= *start && f.start_line <= *end);
+            let is_method = method_keys.contains(&(f.name.clone(), f.start_line));
+            !in_class_body && !is_method
         })
         .map(|f| OutlineFunction {
             name: f.name,
@@ -166,10 +184,11 @@ pub fn outline_file(path: &Path) -> Result<FileOutline> {
 }
 
 fn truncate_120(s: &str) -> String {
-    if s.len() <= 120 {
+    // Use char-based slicing to avoid panicking on multi-byte UTF-8 characters.
+    if s.chars().count() <= 120 {
         s.to_string()
     } else {
-        s[..120].to_string()
+        s.chars().take(120).collect()
     }
 }
 
@@ -447,6 +466,83 @@ mod tests {
         let mut sorted = paths.clone();
         sorted.sort();
         assert_eq!(paths, sorted, "files should be sorted by path");
+    }
+
+    /// Regression: a free function located between a struct definition and the
+    /// corresponding impl block must appear in the top-level functions list, not
+    /// be swallowed by the class range.  impl methods must NOT appear as top-level.
+    #[test]
+    fn test_free_fn_between_struct_and_impl_not_swallowed() {
+        use tempfile::NamedTempFile;
+
+        // Rust file layout:
+        //   struct A { … }
+        //   fn free_between() { … }   ← must show up as top-level
+        //   impl A { fn method_of_a() { … } }  ← must NOT show up as top-level
+        let src = r#"
+struct A {
+    x: i32,
+}
+
+fn free_between() -> i32 {
+    42
+}
+
+impl A {
+    fn method_of_a(&self) -> i32 {
+        self.x
+    }
+}
+"#;
+        let tmp = NamedTempFile::with_suffix(".rs").unwrap();
+        std::fs::write(tmp.path(), src).unwrap();
+
+        let result = outline_file(tmp.path()).unwrap();
+
+        let top_names: Vec<&str> = result.functions.iter().map(|f| f.name.as_str()).collect();
+        assert!(
+            top_names.contains(&"free_between"),
+            "free_between should be a top-level function; got {:?}",
+            top_names
+        );
+        assert!(
+            !top_names.contains(&"method_of_a"),
+            "method_of_a is an impl method and must NOT appear as a top-level function; got {:?}",
+            top_names
+        );
+        // method_of_a must appear as a class method
+        let class_a = result
+            .classes
+            .iter()
+            .find(|c| c.name == "A")
+            .expect("struct A not found");
+        assert!(
+            class_a.methods.iter().any(|m| m.name == "method_of_a"),
+            "method_of_a must be listed under struct A's methods"
+        );
+    }
+
+    #[test]
+    fn test_truncate_120_ascii() {
+        let short = "hello";
+        assert_eq!(truncate_120(short), "hello");
+
+        let exact = "a".repeat(120);
+        assert_eq!(truncate_120(&exact).len(), 120);
+
+        let long_ascii = "a".repeat(200);
+        let result = truncate_120(&long_ascii);
+        assert_eq!(result.chars().count(), 120);
+    }
+
+    #[test]
+    fn test_truncate_120_multibyte_utf8() {
+        // Each '€' is 3 bytes in UTF-8; slicing by byte index would panic or produce invalid UTF-8.
+        let s: String = "€".repeat(200);
+        let result = truncate_120(&s);
+        assert_eq!(result.chars().count(), 120);
+        // Must be valid UTF-8 (no panic, no mojibake)
+        assert!(std::str::from_utf8(result.as_bytes()).is_ok());
     }
 
     #[test]

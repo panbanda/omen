@@ -663,7 +663,8 @@ fn extract_call_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<Stri
 }
 
 fn is_test_file(path: &Path) -> bool {
-    let path_str = path.to_string_lossy();
+    // Normalise to forward slashes so Windows paths (using `\`) are handled.
+    let path_str = path.to_string_lossy().replace('\\', "/");
     path_str.contains("/test")
         || path_str.contains("/tests/")
         || path_str.contains("_test.")
@@ -673,6 +674,10 @@ fn is_test_file(path: &Path) -> bool {
         || path_str.ends_with(".spec.ts")
         || path_str.ends_with(".test.js")
         || path_str.ends_with(".spec.js")
+        || path_str.ends_with(".test.tsx")
+        || path_str.ends_with(".spec.tsx")
+        || path_str.ends_with(".test.jsx")
+        || path_str.ends_with(".spec.jsx")
 }
 
 #[cfg(test)]
@@ -1115,5 +1120,55 @@ fn bar() {}
             candidates2.sort_by(|a, b| a.0.cmp(b.0));
             assert_eq!(candidates2[0].0, "a_module.rs:helper");
         }
+    }
+
+    // ===== is_test_file tests =====
+
+    #[test]
+    fn test_is_test_file_known_patterns() {
+        // Patterns that SHOULD be identified as test files.
+        // Note: the `/test` prefix check requires a leading `/`, so use paths
+        // with a directory component to trigger that branch.
+        let positives = [
+            "src/foo_test.go",     // _test. match
+            "src/tests/bar.rs",    // /test match
+            "src/foo.test.ts",     // .test.ts match
+            "src/foo.spec.ts",     // .spec.ts match
+            "src/foo.test.js",     // .test.js match
+            "src/foo.spec.js",     // .spec.js match
+            "src/foo.test.tsx",    // .test.tsx match (new)
+            "src/foo.spec.tsx",    // .spec.tsx match (new)
+            "src/foo.test.jsx",    // .test.jsx match (new)
+            "src/foo.spec.jsx",    // .spec.jsx match (new)
+            "src/test_helpers.rs", // test_ match
+        ];
+        for p in &positives {
+            assert!(is_test_file(Path::new(p)), "expected {p} to be a test file");
+        }
+    }
+
+    #[test]
+    fn test_is_test_file_non_test_paths() {
+        let negatives = [
+            "src/main.rs",
+            "src/foo.ts",
+            "src/foo.tsx",
+            "src/foo.jsx",
+            "src/foo.js",
+        ];
+        for p in &negatives {
+            assert!(
+                !is_test_file(Path::new(p)),
+                "expected {p} NOT to be a test file"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_is_test_file_windows_backslash() {
+        // On Windows paths may use backslash separators.
+        assert!(is_test_file(Path::new("src\\tests\\foo.rs")));
+        assert!(is_test_file(Path::new("src\\foo.test.tsx")));
     }
 }

@@ -204,8 +204,9 @@ pub fn build_context(
 }
 
 /// Apply a token budget to a context, trimming in priority order:
-/// tree → risks → top_symbols, until the serialized JSON fits within
-/// `max_tokens * 4` bytes, keeping each list at minimum 5 entries.
+/// tree → risks → top_symbols → entry_points → hints, until the serialized
+/// JSON fits within `max_tokens * 4` bytes, keeping each list at minimum
+/// `MIN_ITEMS` entries.
 pub fn apply_token_budget(ctx: &mut Context, max_tokens: usize) {
     let byte_budget = max_tokens * 4;
     const MIN_ITEMS: usize = 5;
@@ -242,6 +243,24 @@ pub fn apply_token_budget(ctx: &mut Context, max_tokens: usize) {
     // Trim top_symbols
     while ctx.top_symbols.len() > MIN_ITEMS && estimate_size(ctx) > byte_budget {
         ctx.top_symbols.pop();
+    }
+
+    if estimate_size(ctx) <= byte_budget {
+        return;
+    }
+
+    // Trim entry_points
+    while ctx.entry_points.len() > MIN_ITEMS && estimate_size(ctx) > byte_budget {
+        ctx.entry_points.pop();
+    }
+
+    if estimate_size(ctx) <= byte_budget {
+        return;
+    }
+
+    // Trim hints (last resort)
+    while ctx.hints.len() > MIN_ITEMS && estimate_size(ctx) > byte_budget {
+        ctx.hints.pop();
     }
 }
 
@@ -639,6 +658,77 @@ mod tests {
         assert!(
             context.top_symbols.len() >= 5 || symbols_before < 5,
             "symbols >= MIN_ITEMS"
+        );
+    }
+
+    /// B5: entry_points and hints must also be trimmed when the budget cannot
+    /// be met after trimming tree/risks/top_symbols alone.
+    ///
+    /// Note: the budget assertion is best-effort — if even MIN_ITEMS (5)
+    /// entries each exceed the remaining budget, trimming stops at the minimum
+    /// rather than going below it.  What we verify here is:
+    ///   1. entry_points and hints *are* trimmed (they shrink),
+    ///   2. minimums are respected (>= 5 if we started with >= 5),
+    ///   3. the final size is smaller than the original size.
+    #[test]
+    fn test_apply_token_budget_trims_entry_points_and_hints() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("src")).unwrap();
+        std::fs::write(temp.path().join("src/lib.rs"), "fn f() {}").unwrap();
+
+        let config = Config::default();
+        let files = FileSet::from_path(temp.path(), &config).unwrap();
+        let mut context = build_context(temp.path(), &files, &config, None, None).unwrap();
+
+        // Keep tree/risks/symbols tiny so their trimming alone can't fix the budget.
+        context.tree.clear();
+        context.risks.clear();
+        context.top_symbols.clear();
+
+        // Bloat entry_points and hints with large entries.
+        for i in 0..30 {
+            context.entry_points.push(EntryPoint {
+                file: format!("src/entry_{i}.rs"),
+                reason: "x".repeat(300),
+            });
+            context.hints.push("y".repeat(300));
+        }
+
+        let original_size = serde_json::to_string(&context)
+            .map(|s| s.len())
+            .unwrap_or(0);
+        assert!(original_size > 5_000, "test setup: context should be large");
+
+        let entry_before = context.entry_points.len();
+        let hints_before = context.hints.len();
+
+        // Tight budget: forces entry_points and hints to be trimmed.
+        // Use 500 tokens; even if the budget floor (MIN_ITEMS entries) cannot
+        // fit within 2000 bytes, the lists must be trimmed toward the minimum.
+        apply_token_budget(&mut context, 500);
+
+        let after_size = serde_json::to_string(&context)
+            .map(|s| s.len())
+            .unwrap_or(0);
+
+        // The lists should have been trimmed.
+        assert!(
+            context.entry_points.len() < entry_before,
+            "entry_points should have been trimmed (was {entry_before}, now {})",
+            context.entry_points.len()
+        );
+        assert!(
+            context.hints.len() < hints_before,
+            "hints should have been trimmed (was {hints_before}, now {})",
+            context.hints.len()
+        );
+        // Minimums respected.
+        assert_eq!(context.entry_points.len(), 5, "entry_points >= MIN_ITEMS");
+        assert_eq!(context.hints.len(), 5, "hints >= MIN_ITEMS");
+        // Size must have decreased.
+        assert!(
+            after_size < original_size,
+            "size should have decreased: {after_size} vs original {original_size}"
         );
     }
 

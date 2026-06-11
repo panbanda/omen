@@ -200,7 +200,7 @@ fn extract_rust_classes(result: &ParseResult) -> Vec<ClassNode> {
     let mut classes = Vec::new();
     for (struct_name, struct_node) in &struct_nodes {
         let start_line = struct_node.start_position().row as u32 + 1;
-        let mut end_line = struct_node.end_position().row as u32 + 1;
+        let end_line = struct_node.end_position().row as u32 + 1;
         let is_exported = struct_node
             .children(&mut struct_node.walk())
             .any(|c| c.kind() == "visibility_modifier");
@@ -208,14 +208,15 @@ fn extract_rust_classes(result: &ParseResult) -> Vec<ClassNode> {
         // Extract fields from struct body
         let fields = extract_rust_struct_fields(struct_node, source);
 
-        // Find impl blocks for this struct
+        // Find impl blocks for this struct and collect their methods.
+        // We intentionally do NOT extend end_line to the impl block boundaries:
+        // impl blocks in Rust can appear far from the struct definition, and
+        // stretching end_line would cause free functions that happen to fall
+        // between the struct and the impl to be mistakenly filtered out of the
+        // top-level function list in downstream analyzers (e.g. outline).
         let mut methods = Vec::new();
         for (impl_name, impl_node) in &impl_nodes {
             if impl_name == struct_name {
-                let impl_end = impl_node.end_position().row as u32 + 1;
-                if impl_end > end_line {
-                    end_line = impl_end;
-                }
                 // Extract function_item children from impl body
                 for func in extract_impl_methods(impl_node, source, result.language) {
                     methods.push(func);
@@ -328,19 +329,18 @@ fn extract_go_classes(result: &ParseResult) -> Vec<ClassNode> {
     let mut classes = Vec::new();
     for (struct_name, struct_node) in &struct_defs {
         let start_line = struct_node.start_position().row as u32 + 1;
-        let mut end_line = struct_node.end_position().row as u32 + 1;
+        let end_line = struct_node.end_position().row as u32 + 1;
         let is_exported = struct_name.chars().next().is_some_and(|c| c.is_uppercase());
 
         // Extract fields from the struct type_spec
         let fields = extract_go_fields_from_type_decl(struct_node, source);
 
+        // Collect methods without stretching end_line to method bodies.
+        // Go methods are defined outside the struct block; extending end_line
+        // would swallow free functions declared between the struct and its methods.
         let mut methods = Vec::new();
         if let Some(method_nodes) = method_map.get(struct_name) {
             for method_node in method_nodes {
-                let mend = method_node.end_position().row as u32 + 1;
-                if mend > end_line {
-                    end_line = mend;
-                }
                 if let Some(func) = extract_function_info(method_node, source, result.language) {
                     methods.push(func);
                 }
@@ -637,9 +637,12 @@ fn extract_class_fields(
     lang: Language,
 ) -> Vec<String> {
     let mut fields = Vec::new();
-    // Find the class body and look for field declarations
-    for i in 0..node.child_count() as u32 {
-        if let Some(child) = node.child(i) {
+    // Find the class body and look for field declarations.
+    // Use a tree-sitter cursor for reliable traversal.
+    let mut cursor = node.walk();
+    if cursor.goto_first_child() {
+        loop {
+            let child = cursor.node();
             let ck = child.kind();
             if ck == "class_body"
                 || ck == "block"
@@ -649,10 +652,116 @@ fn extract_class_fields(
                 || ck == "compound_statement"
             {
                 collect_fields_in_body(&child, source, lang, &mut fields);
+
+                // For Python: also walk method bodies to collect `self.x = …`
+                // assignments (e.g. inside `__init__`).
+                if lang == Language::Python {
+                    collect_python_self_fields_in_methods(&child, source, &mut fields);
+                }
+            }
+            if !cursor.goto_next_sibling() {
+                break;
             }
         }
     }
     fields
+}
+
+/// Walk method (function_definition) nodes inside a Python class body and
+/// collect any `self.attr = …` assignments found within their bodies.
+fn collect_python_self_fields_in_methods(
+    class_body: &tree_sitter::Node<'_>,
+    source: &[u8],
+    fields: &mut Vec<String>,
+) {
+    // Walk named children of the class body using a cursor for reliability.
+    let mut cursor = class_body.walk();
+    if cursor.goto_first_child() {
+        loop {
+            let method = cursor.node();
+            if method.kind() == "function_definition" {
+                // Walk the method's children looking for the body block.
+                let mut method_cursor = method.walk();
+                if method_cursor.goto_first_child() {
+                    loop {
+                        let body = method_cursor.node();
+                        if body.kind() == "block" || body.kind() == "suite" {
+                            collect_python_self_assignments(&body, source, fields);
+                        }
+                        if !method_cursor.goto_next_sibling() {
+                            break;
+                        }
+                    }
+                }
+            }
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+/// Recursively walk `node` looking for `self.attr = …` expression statements.
+fn collect_python_self_assignments(
+    node: &tree_sitter::Node<'_>,
+    source: &[u8],
+    fields: &mut Vec<String>,
+) {
+    // Use a tree-sitter cursor instead of child(i) to reliably iterate children.
+    let mut cursor = node.walk();
+    if !cursor.goto_first_child() {
+        return;
+    }
+    loop {
+        let child = cursor.node();
+        if child.kind() == "expression_statement" {
+            // Look for `assignment` inside the expression_statement.
+            let mut ec = child.walk();
+            if ec.goto_first_child() {
+                loop {
+                    let assign = ec.node();
+                    if assign.kind() == "assignment" {
+                        if let Some(left) = assign.child_by_field_name("left") {
+                            if left.kind() == "attribute" {
+                                // Verify the object is `self`.
+                                let is_self = left
+                                    .child_by_field_name("object")
+                                    .and_then(|obj| obj.utf8_text(source).ok())
+                                    .is_some_and(|t| t == "self");
+                                if is_self {
+                                    if let Some(attr) = left.child_by_field_name("attribute") {
+                                        if let Ok(name) = attr.utf8_text(source) {
+                                            if !name.is_empty()
+                                                && !fields.contains(&name.to_string())
+                                            {
+                                                fields.push(name.to_string());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if !ec.goto_next_sibling() {
+                        break;
+                    }
+                }
+            }
+        }
+        // Recurse into nested blocks (e.g. if/for inside __init__)
+        let kind = child.kind();
+        if kind == "block"
+            || kind == "suite"
+            || kind == "if_statement"
+            || kind == "for_statement"
+            || kind == "while_statement"
+        {
+            collect_python_self_assignments(&child, source, fields);
+        }
+        if !cursor.goto_next_sibling() {
+            break;
+        }
+    }
 }
 
 fn collect_fields_in_body(
@@ -2147,6 +2256,31 @@ mod tests {
         assert_eq!(classes[0].name, "UserService");
         assert!(classes[0].is_exported, "Python classes are always exported");
         assert_eq!(classes[0].methods.len(), 3);
+    }
+
+    /// B4: Python `self.x = …` assignments inside `__init__` should be collected as class fields.
+    #[test]
+    fn test_extract_classes_python_self_fields_from_init() {
+        let parser = Parser::new();
+        // Same format as the existing test_extract_classes_python test.
+        let content = b"class Person:\n    def __init__(self, name, age):\n        self.name = name\n        self.age = age\n    def greet(self):\n        return self.name\n";
+        let result = parser
+            .parse(content, Language::Python, Path::new("person.py"))
+            .unwrap();
+        let classes = extract_classes(&result);
+        assert_eq!(classes.len(), 1);
+        let person = &classes[0];
+        assert_eq!(person.name, "Person");
+        assert!(
+            person.fields.contains(&"name".to_string()),
+            "fields should include 'name', got {:?}",
+            person.fields
+        );
+        assert!(
+            person.fields.contains(&"age".to_string()),
+            "fields should include 'age', got {:?}",
+            person.fields
+        );
     }
 
     #[test]
