@@ -1,5 +1,18 @@
 # Changelog
 
+## [4.25.0](https://github.com/panbanda/omen/compare/omen-v4.24.2...omen-v4.25.0) (2026-06-11)
+
+
+### Features
+
+* add --compact and --top/--offset flags for token-efficient agent output ([#419](https://github.com/panbanda/omen/issues/419)) ([a1cd73d](https://github.com/panbanda/omen/commit/a1cd73dde4f78a2451e0f15e1b4257173d305890))
+* add agent-ready analysis outputs ([#418](https://github.com/panbanda/omen/issues/418)) ([f842988](https://github.com/panbanda/omen/commit/f842988378911f773f8e6c39d04eb9119676c20a))
+
+
+### Bug Fixes
+
+* harden graphify audit findings ([#414](https://github.com/panbanda/omen/issues/414)) ([4529430](https://github.com/panbanda/omen/commit/45294304daa91c0bd5125527cc49896cf05129b5))
+
 ## [4.24.2](https://github.com/panbanda/omen/compare/omen-v4.24.1...omen-v4.24.2) (2026-04-30)
 
 
