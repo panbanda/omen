@@ -539,5 +539,4 @@ mod tests {
         assert_eq!(stats2.errors, 0);
         assert_eq!(cache.symbol_count().unwrap(), 1);
     }
-
 }
