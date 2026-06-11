@@ -649,7 +649,7 @@ fn test_complexity_glob_no_match_produces_empty_files() {
             "json",
             "complexity",
             "-g",
-            "*.java",
+            "*.xyz",
         ])
         .output()
         .expect("command runs");
