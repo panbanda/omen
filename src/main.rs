@@ -12,16 +12,16 @@ use rayon::ThreadPoolBuilder;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use omen::cli::{
-    AnalyzerArgs, Cli, Command, ComplexityArgs, McpSubcommand, MutationArgs, MutationSubcommand,
-    MutationTrainArgs, OutputFormat, ReportSubcommand, ScoreArgs, ScoreSubcommand,
-    SearchSubcommand,
+    AnalyzerArgs, Cli, Command, ComplexityArgs, ImpactArgs, McpSubcommand, MutationArgs,
+    MutationSubcommand, MutationTrainArgs, OutlineArgs, OutputFormat, ReportSubcommand, ScoreArgs,
+    ScoreSubcommand, SearchSubcommand, SymbolArgs,
 };
 use omen::config::Config;
 use omen::core::progress::is_tty;
 use omen::core::{AnalysisContext, Analyzer, FileSet};
 use omen::git::{clone_remote, is_remote_repo, CloneOptions};
 use omen::mcp::McpServer;
-use omen::output::Format;
+use omen::output::{format_with_limits, Format};
 
 fn main() -> ExitCode {
     // Initialize tracing
@@ -106,11 +106,12 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         None => Config::load_default(path)?,
     };
 
-    let format = match cli.format {
-        OutputFormat::Json => Format::Json,
-        OutputFormat::Markdown => Format::Markdown,
-        OutputFormat::Text => Format::Text,
-        OutputFormat::Sarif => Format::Sarif,
+    let format = match (cli.format, cli.compact) {
+        (OutputFormat::Json, true) => Format::JsonCompact,
+        (OutputFormat::Json, false) => Format::Json,
+        (OutputFormat::Markdown, _) => Format::Markdown,
+        (OutputFormat::Text, _) => Format::Text,
+        (OutputFormat::Sarif, _) => Format::Sarif,
     };
 
     match &cli.command {
@@ -118,26 +119,14 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             match cmd.subcommand {
                 Some(McpSubcommand::Manifest) => {
                     // Output MCP server manifest (standalone use only, registry publishing disabled) omen:ignore
+                    // Tool names are derived from McpServer::tool_names() — the single source of
+                    // truth kept adjacent to handle_tools_list in src/mcp/mod.rs.
                     let manifest = serde_json::json!({
                         "$schema": "https://registry.modelcontextprotocol.io/schemas/server.json",
                         "name": "panbanda/omen",
                         "version": env!("CARGO_PKG_VERSION"),
                         "description": "Code analysis tools for AI assistants",
-                        "tools": [
-                            "analyze_complexity",
-                            "analyze_satd",
-                            "analyze_deadcode",
-                            "analyze_churn",
-                            "analyze_duplicates",
-                            "analyze_defect",
-                            "analyze_tdg",
-                            "analyze_graph",
-                            "analyze_hotspot",
-                            "analyze_temporal_coupling",
-                            "analyze_ownership",
-                            "analyze_cohesion",
-                            "analyze_repo_map"
-                        ]
+                        "tools": omen::mcp::McpServer::tool_names()
                     });
                     println!("{}", serde_json::to_string_pretty(&manifest)?);
                 }
@@ -213,8 +202,8 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                             args.samples,
                         )?;
                         match format {
-                            Format::Json => {
-                                println!("{}", serde_json::to_string_pretty(&trend_data)?);
+                            Format::Json | Format::JsonCompact => {
+                                format.format(&trend_data, &mut stdout())?;
                             }
                             Format::Markdown => {
                                 println!("# Score Trend Analysis\n");
@@ -374,12 +363,16 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             results.push(run_and_collect!(&ctx, omen::score::Analyzer, "score"));
 
             let combined = json!({ "analyzers": results });
-            match format {
-                Format::Sarif => format.format_value(&combined, &mut stdout())?,
-                Format::Json | Format::Markdown | Format::Text => {
-                    println!("{}", serde_json::to_string_pretty(&combined)?);
-                }
-            }
+            // `all` is machine-first: always emit JSON unless the caller
+            // explicitly requested compact JSON, in which case honour that.
+            // Markdown/Text/Sarif are not meaningful for the combined payload.
+            // This matches the existing integration test expectation that
+            // `omen all` (no -f flag) emits valid JSON.
+            let all_format = match format {
+                Format::JsonCompact => Format::JsonCompact,
+                _ => Format::Json,
+            };
+            format_with_limits(combined, all_format, args.top, args.offset, &mut stdout())?;
         }
         Command::Context(args) => {
             run_context(path, &config, args, format)?;
@@ -398,6 +391,15 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 run_mutation(path, &config, &cmd.args, format)?;
             }
         },
+        Command::Outline(args) => {
+            run_outline(path, &config, args, format)?;
+        }
+        Command::Impact(args) => {
+            run_impact(path, &config, args, format)?;
+        }
+        Command::Symbol(args) => {
+            run_symbol(path, &config, args, format)?;
+        }
     }
 
     Ok(())
@@ -559,7 +561,10 @@ fn run_analyzer<A: Analyzer + Default>(
         s.finish_and_clear();
     }
 
-    format.format(&result, &mut stdout())?;
+    let top = args.and_then(|a| a.top);
+    let offset = args.and_then(|a| a.offset);
+    let value = serde_json::to_value(&result)?;
+    format_with_limits(value, format, top, offset, &mut stdout())?;
     Ok(())
 }
 
@@ -581,7 +586,8 @@ fn run_changes_analyzer(
     let ctx = build_context(&path_buf, &file_set, config);
     let analyzer = omen::analyzers::changes::Analyzer::new().with_days(config.changes.days);
     let result = analyzer.analyze(&ctx)?;
-    format.format(&result, &mut stdout())?;
+    let value = serde_json::to_value(&result)?;
+    format_with_limits(value, format, args.top, args.offset, &mut stdout())?;
     Ok(())
 }
 
@@ -671,7 +677,8 @@ fn run_churn_analyzer(
     let ctx = build_context(path, &file_set, config);
     let analyzer = omen::analyzers::churn::Analyzer::new().with_days(days);
     let result = analyzer.analyze(&ctx)?;
-    format.format(&result, &mut stdout())?;
+    let value = serde_json::to_value(&result)?;
+    format_with_limits(value, format, args.top, args.offset, &mut stdout())?;
     Ok(())
 }
 
@@ -682,7 +689,7 @@ fn run_context(
     format: Format,
 ) -> omen::core::Result<()> {
     let file_set = FileSet::from_path(path, config)?;
-    let context = omen::context::build_context(
+    let mut context = omen::context::build_context(
         path,
         &file_set,
         config,
@@ -690,47 +697,13 @@ fn run_context(
         Some(25),
     )?;
 
+    // Apply token budget for non-JSON formats or when explicitly requested
+    omen::context::apply_token_budget(&mut context, args.max_tokens);
+
     match format {
-        Format::Json => println!("{}", serde_json::to_string_pretty(&context)?),
-        Format::Markdown => {
-            println!("# Repository Context\n");
-            println!("**Max Tokens:** {}", args.max_tokens);
-            println!("**Depth:** {}\n", args.depth);
-            if let Some(ref target) = args.target {
-                println!("**Target:** {}\n", target.display());
-            }
-            if let Some(ref symbol) = args.symbol {
-                println!("**Symbol:** {}\n", symbol);
-            }
-            println!("## Languages\n");
-            for language in &context.languages {
-                println!("- {}: {} files", language.language, language.files);
-            }
-            println!("\n## Top Symbols\n");
-            for symbol in &context.top_symbols {
-                println!(
-                    "- `{}` ({}) at {}:{}",
-                    symbol.name, symbol.kind, symbol.file, symbol.line
-                );
-            }
-            println!("\n## Hints\n");
-            for hint in &context.hints {
-                println!("- {}", hint);
-            }
-        }
-        Format::Text => {
-            println!("Repository Context");
-            println!("==================");
-            println!("Max Tokens: {}", args.max_tokens);
-            println!("Depth: {}", args.depth);
-            if let Some(ref target) = args.target {
-                println!("Target: {}", target.display());
-            }
-            if let Some(ref symbol) = args.symbol {
-                println!("Symbol: {}", symbol);
-            }
-            println!();
-            format.format(&context, &mut stdout())?;
+        Format::Json | Format::JsonCompact => format.format(&context, &mut stdout())?,
+        Format::Markdown | Format::Text => {
+            print!("{}", context.render_markdown());
         }
         Format::Sarif => format.format(&context, &mut stdout())?,
     }
@@ -1208,7 +1181,7 @@ fn run_search(
             );
 
             match format {
-                Format::Json => println!("{}", serde_json::to_string_pretty(&output)?),
+                Format::Json | Format::JsonCompact => format.format(&output, &mut stdout())?,
                 Format::Markdown | Format::Text => {
                     println!("Query: {}", output.query);
                     println!("Total symbols indexed: {}", output.total_symbols);
@@ -1343,8 +1316,15 @@ fn run_mutation(
 
     // Output results
     match format {
-        Format::Json => {
-            println!("{}", serde_json::to_string_pretty(&result)?);
+        Format::Json | Format::JsonCompact => {
+            let value = serde_json::to_value(&result)?;
+            format_with_limits(
+                value,
+                format,
+                args.common.top,
+                args.common.offset,
+                &mut stdout(),
+            )?;
         }
         Format::Markdown => {
             println!("# Mutation Testing Report\n");
@@ -1493,6 +1473,111 @@ fn run_mutation(
         }
     }
 
+    Ok(())
+}
+
+fn run_outline(
+    path: &PathBuf,
+    config: &Config,
+    args: &OutlineArgs,
+    format: Format,
+) -> omen::core::Result<()> {
+    use omen::analyzers::outline::{outline_file, Analyzer as OutlineAnalyzer, OutlineResult};
+
+    let result = if let Some(ref file_path) = args.file {
+        // Single-file mode: resolve relative paths against the repo root (-p),
+        // not the shell cwd, so `omen outline --file src/main.rs -p /some/repo`
+        // works regardless of where the user ran the command from.
+        let resolved = if file_path.is_relative() {
+            path.join(file_path)
+        } else {
+            file_path.clone()
+        };
+        let file_outline = outline_file(&resolved)?;
+        OutlineResult {
+            files: vec![file_outline],
+        }
+    } else {
+        // Repo mode
+        let file_set = filtered_file_set(path, config, Some(&args.common))?;
+        let ctx = build_context(path, &file_set, config);
+        let analyzer = OutlineAnalyzer;
+        analyzer.analyze(&ctx)?
+    };
+
+    match format {
+        Format::Markdown | Format::Text => {
+            print!("{}", result.to_markdown());
+        }
+        _ => {
+            let value = serde_json::to_value(&result)?;
+            omen::output::format_with_limits(
+                value,
+                format,
+                args.common.top,
+                args.common.offset,
+                &mut std::io::stdout(),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn run_impact(
+    path: &PathBuf,
+    config: &Config,
+    args: &ImpactArgs,
+    format: Format,
+) -> omen::core::Result<()> {
+    use omen::analyzers::impact::{analyze, Direction};
+    use omen::cli::ImpactDirection;
+
+    let file_set = filtered_file_set(path, config, Some(&args.common))?;
+    let files: Vec<PathBuf> = file_set.iter().map(|p| path.join(p)).collect();
+
+    let direction = match args.direction {
+        ImpactDirection::Callers => Direction::Callers,
+        ImpactDirection::Callees => Direction::Callees,
+        ImpactDirection::Both => Direction::Both,
+    };
+
+    let report = analyze(path, &files, &args.symbol, args.depth, direction)?;
+    let value = serde_json::to_value(&report)?;
+    format_with_limits(
+        value,
+        format,
+        args.common.top,
+        args.common.offset,
+        &mut std::io::stdout(),
+    )?;
+    Ok(())
+}
+
+fn run_symbol(
+    path: &PathBuf,
+    config: &Config,
+    args: &SymbolArgs,
+    format: Format,
+) -> omen::core::Result<()> {
+    use omen::symbol::{get_symbol, SymbolOptions};
+
+    let file_set = filtered_file_set(path, config, Some(&args.common))?;
+    let files: Vec<PathBuf> = file_set.iter().map(|p| path.join(p)).collect();
+
+    let opts = SymbolOptions {
+        include_source: !args.no_source,
+        max_source_lines: args.max_source_lines,
+    };
+
+    let report = get_symbol(path, &files, &args.name, &opts)?;
+    let value = serde_json::to_value(&report)?;
+    format_with_limits(
+        value,
+        format,
+        args.common.top,
+        args.common.offset,
+        &mut std::io::stdout(),
+    )?;
     Ok(())
 }
 

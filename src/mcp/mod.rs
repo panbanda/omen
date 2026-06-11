@@ -10,6 +10,73 @@ use crate::config::Config;
 use crate::core::{AnalysisContext, Analyzer, FileSet, Result};
 use crate::git::GitRepo;
 
+struct ToolDef {
+    name: &'static str,
+    description: &'static str,
+    properties: Vec<(&'static str, serde_json::Value)>,
+    required: &'static [&'static str],
+}
+
+impl ToolDef {
+    fn to_json(&self) -> serde_json::Value {
+        let mut props = serde_json::Map::new();
+        for (k, v) in &self.properties {
+            props.insert(k.to_string(), v.clone());
+        }
+        // Shared pagination params on every tool
+        props.insert(
+            "limit".to_string(),
+            json!({
+                "type": "integer",
+                "description": "Max items to return (default: 50, 0 = unlimited)"
+            }),
+        );
+        props.insert(
+            "offset".to_string(),
+            json!({
+                "type": "integer",
+                "description": "Item offset for pagination (default: 0)"
+            }),
+        );
+        let mut schema = json!({
+            "type": "object",
+            "properties": props
+        });
+        if !self.required.is_empty() {
+            schema["required"] = json!(self.required);
+        }
+        json!({
+            "name": self.name,
+            "description": self.description,
+            "inputSchema": schema
+        })
+    }
+}
+
+/// Count total items across all top-level arrays in the value.
+/// Returns `None` only if there are no arrays at all.
+fn count_items(value: &serde_json::Value) -> Option<usize> {
+    match value {
+        serde_json::Value::Array(arr) => Some(arr.len()),
+        serde_json::Value::Object(map) => {
+            let mut total = 0usize;
+            let mut found_any = false;
+            for v in map.values() {
+                if let Some(arr) = v.as_array() {
+                    total += arr.len();
+                    found_any = true;
+                }
+            }
+            if found_any {
+                Some(total)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 /// MCP Server for LLM tool integration.
 pub struct McpServer {
     config: Config,
@@ -108,251 +175,306 @@ impl McpServer {
         }))
     }
 
-    fn handle_tools_list(&self) -> std::result::Result<Value, String> {
+    fn tool_response(
+        &self,
+        tool_name: &str,
+        mut value: serde_json::Value,
+        args: &serde_json::Value,
+    ) -> std::result::Result<serde_json::Value, String> {
+        let limit = args["limit"].as_u64().unwrap_or(50) as usize;
+        let offset = args["offset"].as_u64().unwrap_or(0) as usize;
+
+        let total_items = count_items(&value);
+        crate::output::truncate_lists(&mut value, limit, offset);
+        // Count returned items by summing array lengths AFTER truncation.
+        let returned = count_items(&value);
+
+        let envelope = json!({
+            "tool": tool_name,
+            "total_items": total_items,
+            "returned": returned,
+            "offset": offset,
+            "result": value
+        });
+
         Ok(json!({
-            "tools": [
-                {
-                    "name": "complexity",
-                    "description": "Analyze code complexity (cyclomatic and cognitive)",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"},
-                            "threshold": {"type": "number", "description": "Minimum complexity to report"}
-                        }
-                    }
-                },
-                {
-                    "name": "satd",
-                    "description": "Detect Self-Admitted Technical Debt (TODO, FIXME, HACK, etc.)",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"}
-                        }
-                    }
-                },
-                {
-                    "name": "deadcode",
-                    "description": "Find dead/unreachable code",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"}
-                        }
-                    }
-                },
-                {
-                    "name": "churn",
-                    "description": "Analyze code churn from git history",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"},
-                            "days": {"type": "integer", "description": "Number of days to analyze"}
-                        }
-                    }
-                },
-                {
-                    "name": "clones",
-                    "description": "Detect code duplicates/clones",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"},
-                            "min_tokens": {"type": "integer", "description": "Minimum tokens for detection"},
-                            "similarity": {"type": "number", "description": "Similarity threshold (0-1)"}
-                        }
-                    }
-                },
-                {
-                    "name": "defect",
-                    "description": "Predict defect-prone files using PMAT metrics",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"},
-                            "days": {"type": "integer", "description": "Number of days to analyze"}
-                        }
-                    }
-                },
-                {
-                    "name": "changes",
-                    "description": "Analyze recent changes (JIT risk analysis)",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "commit": {"type": "string", "description": "Commit or range to analyze"},
-                            "count": {"type": "integer", "description": "Number of commits"}
-                        }
-                    }
-                },
-                {
-                    "name": "diff",
-                    "description": "Analyze a specific diff between commits",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "base": {"type": "string", "description": "Base commit/branch"},
-                            "head": {"type": "string", "description": "Head commit/branch"}
-                        },
-                        "required": ["base"]
-                    }
-                },
-                {
-                    "name": "tdg",
-                    "description": "Generate Technical Debt Graph",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"}
-                        }
-                    }
-                },
-                {
-                    "name": "graph",
-                    "description": "Analyze dependency graph structure",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"}
-                        }
-                    }
-                },
-                {
-                    "name": "hotspot",
-                    "description": "Find complexity/churn hotspots",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"},
-                            "days": {"type": "integer", "description": "Number of days for churn"}
-                        }
-                    }
-                },
-                {
-                    "name": "temporal",
-                    "description": "Detect temporally coupled files",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"},
-                            "days": {"type": "integer", "description": "Number of days to analyze"},
-                            "min_coupling": {"type": "number", "description": "Minimum coupling strength"}
-                        }
-                    }
-                },
-                {
-                    "name": "ownership",
-                    "description": "Analyze code ownership and bus factor",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"}
-                        }
-                    }
-                },
-                {
-                    "name": "cohesion",
-                    "description": "Calculate CK cohesion metrics (WMC, CBO, RFC, LCOM, DIT, NOC)",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"}
-                        }
-                    }
-                },
-                {
-                    "name": "repomap",
-                    "description": "Generate PageRank-ranked symbol map for LLM context",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"},
-                            "max_symbols": {"type": "integer", "description": "Maximum symbols to include"}
-                        }
-                    }
-                },
-                {
-                    "name": "smells",
-                    "description": "Detect architectural smells and anti-patterns",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"}
-                        }
-                    }
-                },
-                {
-                    "name": "flags",
-                    "description": "Find and assess feature flags",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"},
-                            "provider": {"type": "string", "description": "Flag provider (launchdarkly, split, etc.)"},
-                            "stale_days": {"type": "integer", "description": "Days threshold for staleness"}
-                        }
-                    }
-                },
-                {
-                    "name": "score",
-                    "description": "Calculate composite health score",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"},
-                            "analyzers": {"type": "string", "description": "Analyzers to include (comma-separated)"}
-                        }
-                    }
-                },
-                {
-                    "name": "semantic_search",
-                    "description": "Search for code symbols using natural language queries",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "query": {"type": "string", "description": "Natural language search query"},
-                            "top_k": {"type": "integer", "description": "Maximum number of results (default: 10)"},
-                            "min_score": {"type": "number", "description": "Minimum similarity score 0-1 (default: 0.3)"},
-                            "files": {"type": "string", "description": "Comma-separated file paths to search within"},
-                            "max_complexity": {"type": "integer", "description": "Exclude symbols with cyclomatic complexity above this value"},
-                            "include_projects": {"type": "string", "description": "Comma-separated paths to additional project roots for cross-repo search"}
-                        },
-                        "required": ["query"]
-                    }
-                },
-                {
-                    "name": "context",
-                    "description": "Build a compact repository context pack with languages, top symbols, risks, and navigation hints",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string", "description": "File or directory path"},
-                            "max_symbols": {"type": "integer", "description": "Maximum symbols to include"},
-                            "max_risks": {"type": "integer", "description": "Maximum risks to include"}
-                        }
-                    }
-                },
-                {
-                    "name": "semantic_search_hyde",
-                    "description": "Search using hypothetical code. Write a code snippet resembling what you want to find. This is matched against the index, producing better results than keyword queries.",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "hypothetical_document": {"type": "string", "description": "A code snippet resembling the code you want to find"},
-                            "query": {"type": "string", "description": "Original query for display purposes"},
-                            "top_k": {"type": "integer", "description": "Maximum number of results (default: 10)"},
-                            "min_score": {"type": "number", "description": "Minimum similarity score 0-1 (default: 0.3)"},
-                            "files": {"type": "string", "description": "Comma-separated file paths to search within"},
-                            "max_complexity": {"type": "integer", "description": "Exclude symbols with cyclomatic complexity above this value"},
-                            "include_projects": {"type": "string", "description": "Comma-separated paths to additional project roots for cross-repo search"}
-                        },
-                        "required": ["hypothetical_document"]
-                    }
-                }
-            ]
+            "content": [{
+                "type": "text",
+                "text": serde_json::to_string(&envelope).unwrap_or_default()
+            }]
         }))
+    }
+
+    fn handle_tools_list(&self) -> std::result::Result<Value, String> {
+        let tools: Vec<serde_json::Value> = vec![
+            ToolDef {
+                name: "context",
+                description: "Use first. Returns top-N PageRank-ranked symbols, risks, language breakdown, directory tree, entry points, and navigation hints. Cheap.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                    ("max_symbols", json!({"type": "integer", "description": "Maximum symbols to include"})),
+                    ("max_risks", json!({"type": "integer", "description": "Maximum risks to include"})),
+                    ("max_tokens", json!({"type": "integer", "description": "Token budget; response is trimmed to fit (default: 8000)"})),
+                    ("format", json!({"type": "string", "enum": ["json", "markdown"], "description": "Output format: 'markdown' returns compact agent-facing text directly (default: json)"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "outline",
+                description: "Token-cheapest file map. Returns imports, classes with methods, and top-level functions for one file or all repo files. Use before reading full source.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "Repository or directory path"})),
+                    ("file", json!({"type": "string", "description": "Single file to outline (optional; omit for whole repo)"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "complexity",
+                description: "Returns cyclomatic and cognitive complexity per function. Fast.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                    ("threshold", json!({"type": "number", "description": "Minimum complexity to report"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "satd",
+                description: "Detects TODO/FIXME/HACK debt comments. Fast.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "deadcode",
+                description: "Use when you suspect unused symbols. Finds dead/unreachable code.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "churn",
+                description: "Use to find frequently changed files. Analyzes code churn from git history.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                    ("days", json!({"type": "integer", "description": "Number of days to analyze"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "clones",
+                description: "Use when looking for duplication or copy-paste debt. Detects code clones via MinHash+LSH.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                    ("min_tokens", json!({"type": "integer", "description": "Minimum tokens for detection"})),
+                    ("similarity", json!({"type": "number", "description": "Similarity threshold (0-1)"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "defect",
+                description: "Use to identify high-risk files. Predicts defect-prone files using PMAT metrics.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                    ("days", json!({"type": "integer", "description": "Number of days to analyze"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "changes",
+                description: "Use to assess recent commit risk. Analyzes recent changes with JIT risk analysis.",
+                properties: vec![
+                    ("commit", json!({"type": "string", "description": "Commit or range to analyze"})),
+                    ("count", json!({"type": "integer", "description": "Number of commits"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "diff",
+                description: "Use to review branch or PR risk. Analyzes diff between commits; auto-detects target branch.",
+                properties: vec![
+                    ("base", json!({"type": "string", "description": "Base commit/branch"})),
+                    ("head", json!({"type": "string", "description": "Head commit/branch"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "tdg",
+                description: "Use to understand technical debt accumulation. Generates Technical Debt Gradient with critical defect detection.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "graph",
+                description: "Use to visualize module dependencies. Generates Mermaid dependency graph.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "hotspot",
+                description: "Use to find the riskiest files. Combines high churn + high complexity.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                    ("days", json!({"type": "integer", "description": "Number of days for churn"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "temporal",
+                description: "Use to find files that always change together. Detects temporal coupling from git history.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                    ("days", json!({"type": "integer", "description": "Number of days to analyze"})),
+                    ("min_coupling", json!({"type": "number", "description": "Minimum coupling strength"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "ownership",
+                description: "Use to assess bus factor and knowledge silos. Analyzes code ownership from git blame.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "cohesion",
+                description: "Use for OO design quality assessment. Calculates CK metrics: WMC, CBO, RFC, LCOM4, DIT, NOC.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "repomap",
+                description: "Returns PageRank-ranked symbol call graph. Use for understanding code structure.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                    ("max_symbols", json!({"type": "integer", "description": "Maximum symbols to include"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "smells",
+                description: "Use to find architectural anti-patterns. Detects cycles and smells via Tarjan SCC.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "flags",
+                description: "Use to audit feature flags. Finds stale and active feature flags across providers.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                    ("provider", json!({"type": "string", "description": "Flag provider (launchdarkly, split, etc.)"})),
+                    ("stale_days", json!({"type": "integer", "description": "Days threshold for staleness"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "score",
+                description: "Use for an overall health summary. Calculates composite repository health score.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                    ("analyzers", json!({"type": "string", "description": "Analyzers to include (comma-separated)"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
+                name: "semantic_search",
+                description: "Semantic symbol search via TF-IDF. Use when you know what you're looking for conceptually.",
+                properties: vec![
+                    ("query", json!({"type": "string", "description": "Natural language search query"})),
+                    ("top_k", json!({"type": "integer", "description": "Maximum number of results (default: 10)"})),
+                    ("min_score", json!({"type": "number", "description": "Minimum similarity score 0-1 (default: 0.3)"})),
+                    ("files", json!({"type": "string", "description": "Comma-separated file paths to search within"})),
+                    ("max_complexity", json!({"type": "integer", "description": "Exclude symbols with cyclomatic complexity above this value"})),
+                    ("include_projects", json!({"type": "string", "description": "Comma-separated paths to additional project roots for cross-repo search"})),
+                ],
+                required: &["query"],
+            },
+            ToolDef {
+                name: "get_symbol",
+                description: "One-call symbol report: exact source slice, signature, location, direct callers/callees, and complexity. Use instead of reading whole files.",
+                properties: vec![
+                    ("name", json!({"type": "string", "description": "Symbol name to look up (bare name or qualified file:name)"})),
+                    ("include_source", json!({"type": "boolean", "description": "Whether to include source code (default: true)"})),
+                    ("max_source_lines", json!({"type": "integer", "description": "Maximum source lines to return (default: 200)"})),
+                    ("path", json!({"type": "string", "description": "Repository root path"})),
+                ],
+                required: &["name"],
+            },
+            ToolDef {
+                name: "impact",
+                description: "Use to understand blast radius before changing a symbol. Returns transitive callers and callees by BFS depth, plus affected files.",
+                properties: vec![
+                    ("symbol", json!({"type": "string", "description": "Symbol name to analyze (bare name or qualified file:name)"})),
+                    ("depth", json!({"type": "integer", "description": "BFS depth for traversal (default: 2)"})),
+                    ("direction", json!({"type": "string", "enum": ["callers", "callees", "both"], "description": "Direction of traversal (default: both)"})),
+                    ("path", json!({"type": "string", "description": "Repository root path"})),
+                ],
+                required: &["symbol"],
+            },
+            ToolDef {
+                name: "semantic_search_hyde",
+                description: "Search using hypothetical code. Write a code snippet resembling what you want to find. This is matched against the index, producing better results than keyword queries.",
+                properties: vec![
+                    ("hypothetical_document", json!({"type": "string", "description": "A code snippet resembling the code you want to find"})),
+                    ("query", json!({"type": "string", "description": "Original query for display purposes"})),
+                    ("top_k", json!({"type": "integer", "description": "Maximum number of results (default: 10)"})),
+                    ("min_score", json!({"type": "number", "description": "Minimum similarity score 0-1 (default: 0.3)"})),
+                    ("files", json!({"type": "string", "description": "Comma-separated file paths to search within"})),
+                    ("max_complexity", json!({"type": "integer", "description": "Exclude symbols with cyclomatic complexity above this value"})),
+                    ("include_projects", json!({"type": "string", "description": "Comma-separated paths to additional project roots for cross-repo search"})),
+                ],
+                required: &["hypothetical_document"],
+            },
+        ]
+        .into_iter()
+        .map(|t| t.to_json())
+        .collect();
+
+        Ok(json!({ "tools": tools }))
+    }
+
+    /// Returns the canonical list of MCP tool names.
+    ///
+    /// This is the single source of truth kept adjacent to `handle_tools_list`
+    /// so that the manifest (in `src/main.rs`) can call it and stay in sync.
+    /// A test asserts that these names match the actual `handle_tools_list` output.
+    pub fn tool_names() -> &'static [&'static str] {
+        &[
+            "context",
+            "outline",
+            "complexity",
+            "satd",
+            "deadcode",
+            "churn",
+            "clones",
+            "defect",
+            "changes",
+            "diff",
+            "tdg",
+            "graph",
+            "hotspot",
+            "temporal",
+            "ownership",
+            "cohesion",
+            "repomap",
+            "smells",
+            "flags",
+            "score",
+            "semantic_search",
+            "get_symbol",
+            "impact",
+            "semantic_search_hyde",
+        ]
     }
 
     fn handle_tool_call(&self, params: Option<Value>) -> std::result::Result<Value, String> {
@@ -410,15 +532,19 @@ impl McpServer {
             "semantic_search_hyde" => {
                 return self.handle_semantic_search_hyde(&arguments);
             }
+            "outline" => {
+                return self.handle_outline(&path, &arguments);
+            }
+            "impact" => {
+                return self.handle_impact(&path, &file_set, &arguments);
+            }
+            "get_symbol" => {
+                return self.handle_get_symbol(&path, &file_set, &arguments);
+            }
             _ => Err(format!("Unknown tool: {}", tool_name)),
         }?;
 
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": serde_json::to_string_pretty(&result).unwrap_or_default()
-            }]
-        }))
+        self.tool_response(tool_name, result, &arguments)
     }
 
     fn run_analyzer<A: Analyzer + Default>(
@@ -446,19 +572,37 @@ impl McpServer {
             .get("max_risks")
             .and_then(|v| v.as_u64())
             .map(|v| v as usize);
+        let max_tokens = arguments
+            .get("max_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(8000);
+        let format = arguments
+            .get("format")
+            .and_then(|v| v.as_str())
+            .unwrap_or("json");
 
-        let context =
+        let mut context =
             crate::context::build_context(path, file_set, &self.config, max_symbols, max_risks)
                 .map_err(|e| format!("Context failed: {}", e))?;
 
+        // Apply token budget
+        crate::context::apply_token_budget(&mut context, max_tokens);
+
+        if format == "markdown" {
+            // Return markdown text directly (not wrapped in JSON envelope)
+            let md = context.render_markdown();
+            return Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": md
+                }]
+            }));
+        }
+
         let value =
             serde_json::to_value(&context).map_err(|e| format!("Serialization failed: {}", e))?;
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": serde_json::to_string_pretty(&value).unwrap_or_default()
-            }]
-        }))
+        self.tool_response("context", value, arguments)
     }
 
     fn handle_diff(
@@ -484,12 +628,7 @@ impl McpServer {
         let value =
             serde_json::to_value(&result).map_err(|e| format!("Serialization failed: {}", e))?;
 
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": serde_json::to_string_pretty(&value).unwrap_or_default()
-            }]
-        }))
+        self.tool_response("diff", value, arguments)
     }
 
     fn handle_semantic_search(&self, arguments: &Value) -> std::result::Result<Value, String> {
@@ -584,12 +723,7 @@ impl McpServer {
         let result =
             serde_json::to_value(&output).map_err(|e| format!("Serialization failed: {}", e))?;
 
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": serde_json::to_string_pretty(&result).unwrap_or_default()
-            }]
-        }))
+        self.tool_response("semantic_search", result, arguments)
     }
 
     fn handle_semantic_search_hyde(&self, arguments: &Value) -> std::result::Result<Value, String> {
@@ -696,12 +830,133 @@ impl McpServer {
         let result =
             serde_json::to_value(&output).map_err(|e| format!("Serialization failed: {}", e))?;
 
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": serde_json::to_string_pretty(&result).unwrap_or_default()
-            }]
-        }))
+        self.tool_response("semantic_search_hyde", result, arguments)
+    }
+
+    fn handle_outline(
+        &self,
+        repo_path: &std::path::Path,
+        arguments: &Value,
+    ) -> std::result::Result<Value, String> {
+        use crate::analyzers::outline::{outline_file, Analyzer as OutlineAnalyzer, OutlineResult};
+        use crate::core::Analyzer as AnalyzerTrait;
+
+        let result = if let Some(file_str) = arguments.get("file").and_then(|v| v.as_str()) {
+            // Single-file mode: resolve relative paths against the repo root so
+            // callers can pass repo-relative paths (e.g. "src/main.rs") without
+            // needing to know the absolute path.
+            let raw = std::path::PathBuf::from(file_str);
+            let file_path = if raw.is_relative() {
+                repo_path.join(&raw)
+            } else {
+                raw
+            };
+            let file_outline =
+                outline_file(&file_path).map_err(|e| format!("Outline failed: {}", e))?;
+            OutlineResult {
+                files: vec![file_outline],
+            }
+        } else {
+            // Repo mode
+            let file_set = FileSet::from_path(repo_path, &self.config)
+                .map_err(|e| format!("Failed to create file set: {}", e))?;
+            let git_root = GitRepo::open(repo_path)
+                .ok()
+                .map(|r| r.root().to_path_buf());
+            let mut ctx = AnalysisContext::new(&file_set, &self.config, Some(repo_path));
+            if let Some(ref git_path) = git_root {
+                ctx = ctx.with_git_path(git_path);
+            }
+            let analyzer = OutlineAnalyzer;
+            analyzer
+                .analyze(&ctx)
+                .map_err(|e| format!("Outline analysis failed: {}", e))?
+        };
+
+        let value =
+            serde_json::to_value(&result).map_err(|e| format!("Serialization failed: {}", e))?;
+
+        self.tool_response("outline", value, arguments)
+    }
+
+    fn handle_impact(
+        &self,
+        repo_path: &std::path::Path,
+        file_set: &FileSet,
+        arguments: &Value,
+    ) -> std::result::Result<Value, String> {
+        use crate::analyzers::impact::{analyze, Direction};
+
+        let symbol = arguments
+            .get("symbol")
+            .and_then(|v| v.as_str())
+            .ok_or("Missing required 'symbol' parameter")?;
+
+        let depth = arguments
+            .get("depth")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(2);
+
+        let direction = match arguments
+            .get("direction")
+            .and_then(|v| v.as_str())
+            .unwrap_or("both")
+        {
+            "callers" => Direction::Callers,
+            "callees" => Direction::Callees,
+            _ => Direction::Both,
+        };
+
+        let files: Vec<std::path::PathBuf> = file_set.iter().map(|p| repo_path.join(p)).collect();
+
+        let report = analyze(repo_path, &files, symbol, depth, direction)
+            .map_err(|e| format!("Impact analysis failed: {}", e))?;
+
+        let value =
+            serde_json::to_value(&report).map_err(|e| format!("Serialization failed: {}", e))?;
+
+        self.tool_response("impact", value, arguments)
+    }
+
+    fn handle_get_symbol(
+        &self,
+        repo_path: &std::path::Path,
+        file_set: &FileSet,
+        arguments: &Value,
+    ) -> std::result::Result<Value, String> {
+        use crate::symbol::{get_symbol, SymbolOptions};
+
+        let name = arguments
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or("Missing required 'name' parameter")?;
+
+        let include_source = arguments
+            .get("include_source")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
+        let max_source_lines = arguments
+            .get("max_source_lines")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(200);
+
+        let files: Vec<std::path::PathBuf> = file_set.iter().map(|p| repo_path.join(p)).collect();
+
+        let opts = SymbolOptions {
+            include_source,
+            max_source_lines,
+        };
+
+        let report = get_symbol(repo_path, &files, name, &opts)
+            .map_err(|e| format!("Symbol lookup failed: {}", e))?;
+
+        let value =
+            serde_json::to_value(&report).map_err(|e| format!("Serialization failed: {}", e))?;
+
+        self.tool_response("get_symbol", value, arguments)
     }
 }
 
@@ -748,6 +1003,44 @@ mod tests {
     fn test_mcp_server_new() {
         let (server, _temp_dir) = create_test_server();
         assert!(server.root_path.exists());
+    }
+
+    /// B9: tool_names() must exactly match the names produced by handle_tools_list,
+    /// keeping the manifest and the server implementation in sync.
+    #[test]
+    fn test_tool_names_matches_handle_tools_list() {
+        let (server, _temp_dir) = create_test_server();
+        let tools_response = server.handle_tools_list().unwrap();
+        let listed: Vec<String> = tools_response["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .filter_map(|t| t["name"].as_str().map(|s| s.to_string()))
+            .collect();
+
+        let canonical: Vec<&str> = McpServer::tool_names().to_vec();
+
+        // Both slices must contain exactly the same names (order-insensitive).
+        let mut listed_sorted = listed.clone();
+        listed_sorted.sort();
+        let mut canonical_sorted: Vec<String> = canonical.iter().map(|s| s.to_string()).collect();
+        canonical_sorted.sort();
+
+        assert_eq!(
+            listed_sorted,
+            canonical_sorted,
+            "tool_names() must match handle_tools_list() tool names.\n\
+             In tool_names but not in handle_tools_list: {:?}\n\
+             In handle_tools_list but not in tool_names: {:?}",
+            canonical_sorted
+                .iter()
+                .filter(|n| !listed_sorted.contains(n))
+                .collect::<Vec<_>>(),
+            listed_sorted
+                .iter()
+                .filter(|n| !canonical_sorted.contains(n))
+                .collect::<Vec<_>>(),
+        );
     }
 
     #[test]
@@ -914,6 +1207,61 @@ mod tests {
 
         assert!(text.contains("hints"));
         assert!(text.contains("mcp_entrypoint"));
+    }
+
+    #[test]
+    fn test_handle_tool_call_context_markdown_returns_text_directly() {
+        let (server, temp_dir) = create_test_server();
+        std::fs::write(
+            temp_dir.path().join("main.rs"),
+            "pub fn markdown_symbol() {}\n",
+        )
+        .unwrap();
+
+        let params = json!({
+            "name": "context",
+            "arguments": {
+                "path": temp_dir.path().to_str().unwrap(),
+                "format": "markdown"
+            }
+        });
+        let response = server.handle_tool_call(Some(params)).unwrap();
+        let text = response["content"][0]["text"].as_str().unwrap();
+
+        // Markdown mode returns text starting with "# Repository:" not JSON
+        assert!(
+            text.starts_with("# Repository:"),
+            "markdown mode should start with '# Repository:' header, got: {text}"
+        );
+        assert!(text.contains("markdown_symbol"), "should include symbol");
+    }
+
+    #[test]
+    fn test_handle_tool_call_context_max_tokens_trims_output() {
+        let (server, temp_dir) = create_test_server();
+        std::fs::write(
+            temp_dir.path().join("test.rs"),
+            "pub fn token_fn() {}\n// TODO: trim me\n",
+        )
+        .unwrap();
+
+        let params = json!({
+            "name": "context",
+            "arguments": {
+                "path": temp_dir.path().to_str().unwrap(),
+                "max_tokens": 500
+            }
+        });
+        let response = server.handle_tool_call(Some(params)).unwrap();
+        let text = response["content"][0]["text"].as_str().unwrap();
+        let byte_budget = 500 * 4;
+        // The JSON envelope wraps the result so the text can be bigger than the
+        // inner context, but the token budget should have been applied.
+        assert!(
+            text.len() < byte_budget + 1000,
+            "with max_tokens=500 output should be small, got {} bytes",
+            text.len()
+        );
     }
 
     #[test]
@@ -1370,5 +1718,282 @@ mod tests {
         let request_json = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
         let parsed: JsonRpcRequest = serde_json::from_str(request_json).unwrap();
         assert!(parsed.id.is_none(), "A notification must have no id field");
+    }
+
+    #[test]
+    fn test_tool_response_envelope_fields() {
+        let (server, _temp_dir) = create_test_server();
+        let value = json!({"items": [1, 2, 3, 4, 5]});
+        let args = json!({});
+        let resp = server.tool_response("test_tool", value, &args).unwrap();
+        let text = resp["content"][0]["text"].as_str().unwrap();
+        let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(envelope["tool"].as_str().unwrap(), "test_tool");
+        assert!(envelope.get("total_items").is_some());
+        assert!(envelope.get("returned").is_some());
+        assert!(envelope.get("offset").is_some());
+        assert!(envelope.get("result").is_some());
+    }
+
+    #[test]
+    fn test_tool_response_is_compact() {
+        let (server, _temp_dir) = create_test_server();
+        let value = json!({"items": [1, 2, 3]});
+        let resp = server.tool_response("test", value, &json!({})).unwrap();
+        let text = resp["content"][0]["text"].as_str().unwrap();
+        // Compact: only one line (no internal newlines)
+        assert_eq!(text.trim().lines().count(), 1);
+    }
+
+    #[test]
+    fn test_tool_response_default_limit_50() {
+        let (server, _temp_dir) = create_test_server();
+        let items: Vec<i64> = (0..100).collect();
+        let value = json!({"items": items});
+        let resp = server.tool_response("test", value, &json!({})).unwrap();
+        let text = resp["content"][0]["text"].as_str().unwrap();
+        let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
+        let returned = envelope["returned"].as_u64().unwrap();
+        assert_eq!(returned, 50);
+        assert_eq!(envelope["total_items"].as_u64().unwrap(), 100);
+    }
+
+    #[test]
+    fn test_tool_response_zero_limit_unlimited() {
+        let (server, _temp_dir) = create_test_server();
+        let items: Vec<i64> = (0..100).collect();
+        let value = json!({"items": items});
+        let resp = server
+            .tool_response("test", value, &json!({"limit": 0}))
+            .unwrap();
+        let text = resp["content"][0]["text"].as_str().unwrap();
+        let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(envelope["returned"].as_u64().unwrap(), 100);
+    }
+
+    #[test]
+    fn test_tool_response_offset_pagination() {
+        let (server, _temp_dir) = create_test_server();
+        let items: Vec<i64> = (0..20).collect();
+        let value = json!({"items": items});
+        let resp = server
+            .tool_response("test", value, &json!({"limit": 5, "offset": 10}))
+            .unwrap();
+        let text = resp["content"][0]["text"].as_str().unwrap();
+        let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
+        // Items 10-14 returned
+        assert_eq!(envelope["returned"].as_u64().unwrap(), 5);
+        assert_eq!(envelope["offset"].as_u64().unwrap(), 10);
+    }
+
+    #[test]
+    fn test_tool_response_multi_array_counts() {
+        // Bug: count_items only counted first array; truncate_lists truncates ALL arrays.
+        // With {"components": [101 items], "smells": [10 items]} and limit=5:
+        //   total_items must be 111 (101+10), returned must be 10 (5+5).
+        let (server, _temp_dir) = create_test_server();
+        let components: Vec<i64> = (0..101).collect();
+        let smells: Vec<i64> = (0..10).collect();
+        let value = json!({"components": components, "smells": smells});
+        let resp = server
+            .tool_response("test", value, &json!({"limit": 5}))
+            .unwrap();
+        let text = resp["content"][0]["text"].as_str().unwrap();
+        let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(
+            envelope["total_items"].as_u64().unwrap(),
+            111,
+            "total_items should sum all arrays"
+        );
+        assert_eq!(
+            envelope["returned"].as_u64().unwrap(),
+            10,
+            "returned should be sum of items in all arrays after truncation (5+5)"
+        );
+    }
+
+    #[test]
+    fn test_tool_response_single_array_counts_unchanged() {
+        // Existing semantics: single array of 60 items, limit 50 → total 60, returned 50.
+        let (server, _temp_dir) = create_test_server();
+        let items: Vec<i64> = (0..60).collect();
+        let value = json!({"items": items});
+        let resp = server
+            .tool_response("test", value, &json!({"limit": 50}))
+            .unwrap();
+        let text = resp["content"][0]["text"].as_str().unwrap();
+        let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(envelope["total_items"].as_u64().unwrap(), 60);
+        assert_eq!(envelope["returned"].as_u64().unwrap(), 50);
+    }
+
+    #[test]
+    fn test_all_tools_have_limit_and_offset_params() {
+        let (server, _temp_dir) = create_test_server();
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(1)),
+            method: "tools/list".to_string(),
+            params: None,
+        };
+        let response = server.handle_request(request);
+        let tools = response.result.unwrap();
+        let tools = tools["tools"].as_array().unwrap();
+        for tool in tools {
+            let props = &tool["inputSchema"]["properties"];
+            assert!(
+                props.get("limit").is_some(),
+                "Tool {} missing limit",
+                tool["name"]
+            );
+            assert!(
+                props.get("offset").is_some(),
+                "Tool {} missing offset",
+                tool["name"]
+            );
+        }
+    }
+
+    #[test]
+    fn test_handle_tools_list_has_outline() {
+        let (server, _temp_dir) = create_test_server();
+        let result = server.handle_tools_list().unwrap();
+        let tools = result.get("tools").unwrap().as_array().unwrap();
+        let has_outline = tools.iter().any(|t| t.get("name").unwrap() == "outline");
+        assert!(has_outline, "tools list should include 'outline'");
+    }
+
+    #[test]
+    fn test_handle_tool_call_outline_file() {
+        let (server, _temp_dir) = create_test_server();
+        let fixture =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample.rs");
+        let params = json!({
+            "name": "outline",
+            "arguments": {"file": fixture.to_str().unwrap()}
+        });
+        let result = server.handle_tool_call(Some(params));
+        assert!(
+            result.is_ok(),
+            "outline tool call should succeed: {:?}",
+            result.err()
+        );
+        let response = result.unwrap();
+        let text = response["content"][0]["text"].as_str().unwrap();
+        // Verify the response contains expected content
+        let value: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert!(
+            value["result"].get("files").is_some(),
+            "envelope result should have 'files' field"
+        );
+    }
+
+    #[test]
+    fn test_handle_tools_list_has_impact() {
+        let (server, _temp_dir) = create_test_server();
+        let result = server.handle_tools_list().unwrap();
+        let tools = result.get("tools").unwrap().as_array().unwrap();
+        let has_impact = tools.iter().any(|t| t.get("name").unwrap() == "impact");
+        assert!(has_impact, "tools list should include 'impact'");
+    }
+
+    #[test]
+    fn test_handle_tool_call_impact() {
+        let (server, temp_dir) = create_test_server();
+        // Create a simple a→b chain
+        std::fs::write(temp_dir.path().join("a.rs"), "fn a() { b(); }\n").unwrap();
+        std::fs::write(temp_dir.path().join("b.rs"), "fn b() {}\n").unwrap();
+
+        let params = json!({
+            "name": "impact",
+            "arguments": {
+                "symbol": "b",
+                "depth": 1,
+                "direction": "callers",
+                "path": temp_dir.path().to_str().unwrap()
+            }
+        });
+        let result = server.handle_tool_call(Some(params));
+        assert!(
+            result.is_ok(),
+            "impact tool call should succeed: {:?}",
+            result.err()
+        );
+        let response = result.unwrap();
+        let text = response["content"][0]["text"].as_str().unwrap();
+        let value: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert!(
+            value["result"].get("symbol").is_some(),
+            "envelope result should have 'symbol' field"
+        );
+        assert_eq!(value["result"]["symbol"].as_str().unwrap(), "b");
+    }
+
+    #[test]
+    fn test_handle_tool_call_impact_missing_symbol() {
+        let (server, temp_dir) = create_test_server();
+        let params = json!({
+            "name": "impact",
+            "arguments": {
+                "path": temp_dir.path().to_str().unwrap()
+            }
+        });
+        let result = server.handle_tool_call(Some(params));
+        // Should return an error (missing symbol)
+        assert!(result.is_err(), "impact without symbol should fail");
+    }
+
+    #[test]
+    fn test_handle_tools_list_has_get_symbol() {
+        let (server, _temp_dir) = create_test_server();
+        let result = server.handle_tools_list().unwrap();
+        let tools = result.get("tools").unwrap().as_array().unwrap();
+        let has_get_symbol = tools.iter().any(|t| t.get("name").unwrap() == "get_symbol");
+        assert!(has_get_symbol, "tools list should include 'get_symbol'");
+    }
+
+    #[test]
+    fn test_handle_tool_call_get_symbol() {
+        let (server, temp_dir) = create_test_server();
+        std::fs::write(
+            temp_dir.path().join("a.rs"),
+            "fn a_function() {\n    let x = 1;\n}\n",
+        )
+        .unwrap();
+
+        let params = json!({
+            "name": "get_symbol",
+            "arguments": {
+                "name": "a_function",
+                "path": temp_dir.path().to_str().unwrap()
+            }
+        });
+        let result = server.handle_tool_call(Some(params));
+        assert!(
+            result.is_ok(),
+            "get_symbol tool call should succeed: {:?}",
+            result.err()
+        );
+        let response = result.unwrap();
+        let text = response["content"][0]["text"].as_str().unwrap();
+        let value: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert!(
+            value["result"].get("name").is_some(),
+            "envelope result should have 'name' field"
+        );
+        assert_eq!(value["result"]["name"].as_str().unwrap(), "a_function");
+    }
+
+    #[test]
+    fn test_handle_tool_call_get_symbol_missing_name() {
+        let (server, temp_dir) = create_test_server();
+        let params = json!({
+            "name": "get_symbol",
+            "arguments": {
+                "path": temp_dir.path().to_str().unwrap()
+            }
+        });
+        let result = server.handle_tool_call(Some(params));
+        assert!(result.is_err(), "get_symbol without name should fail");
     }
 }

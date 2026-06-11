@@ -89,7 +89,7 @@ files.par_iter()
 
 **Configuration**: Config loaded from `omen.toml` or `.omen/omen.toml`. See `omen.example.toml` for all options.
 
-**MCP server**: JSON-RPC server in `mcp/` module exposing all analyzers as tools for LLM integration. Tool names are bare analyzer names (e.g., `complexity`, `satd`, `temporal`) -- no prefix.
+**MCP server**: JSON-RPC server in `mcp/` module exposing all analyzers as tools for LLM integration. Tool names are bare analyzer names (e.g., `complexity`, `satd`, `temporal`, `outline`, `impact`, `get_symbol`) -- no prefix. All tools support `limit`/`offset` envelope pagination (default limit: 50). `McpServer::tool_names()` is the single source of truth; the manifest reads from it.
 
 **`--since` flag**: Commands that accept `--since` (e.g., `report generate`, `score trend`) default to `"all"` (full repo history). The value `"all"` is handled by `is_since_all()` in `src/git/log.rs`, which causes `parse_since_to_days()` to return `None` (no time limit). Duration values like `3m`, `6m`, `1y` still work.
 
@@ -117,10 +117,17 @@ Top-level commands (flat structure):
 - `score` - Repository health score
 - `all` - Run all analyzers
 - `context` - Deep context for LLMs
+- `outline` - Token-cheap file map: imports, classes, top-level functions
+- `impact` - Blast-radius analysis for a symbol (transitive callers/callees)
+- `symbol` - One-call symbol report: source, location, callers/callees, complexity
 - `report` - HTML health reports
 - `mcp` - Start MCP server
 
-**Global flags**: `-p/--path`, `-f/--format`, `-c/--config`, `-v/--verbose`, `-j/--jobs`, `--no-cache`, `--ref`, `--shallow`
+**Global flags**: `-p/--path`, `-f/--format`, `-c/--config`, `-v/--verbose`, `-j/--jobs`, `--no-cache`, `--ref`, `--shallow`, `--compact` (emit minified JSON for token-efficient agent use)
+
+**Pagination flags** (most analyzers): `--top N` (limit to N results), `--offset N` (skip first N results). Combine for pagination.
+
+**MCP server**: The MCP server exposes all analyzers plus `outline`, `impact`, and `get_symbol` as tools. All tools support `limit` and `offset` parameters for pagination (default limit: 50). Tool names are bare analyzer names with no prefix.
 
 ### Report System
 

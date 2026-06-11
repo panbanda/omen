@@ -13,19 +13,35 @@ Omen CLI must be installed and available in PATH.
 
 ## Workflow
 
-### Step 1: Map Dependencies
+### Step 1: Check Symbol Blast Radius
 
-Run the dependency graph analysis:
+Use the `impact` command to get transitive callers and callees in one call:
 
 ```bash
-omen -f json graph
+omen -f json impact --symbol <symbol-name> --depth 2
+```
+
+This returns affected files, caller/callee BFS levels, and the total count — much faster than building the picture manually.
+
+To inspect a specific symbol first:
+
+```bash
+omen -f json symbol --name <symbol-name>
+```
+
+### Step 2: Map File-Level Dependencies
+
+Run the dependency graph analysis for file-level coupling:
+
+```bash
+omen -f json graph --compact
 ```
 
 Identify:
 - Direct dependents (files that import the target)
 - Transitive dependents (files that import the dependents)
 
-### Step 2: Check Temporal Coupling
+### Step 3: Check Temporal Coupling
 
 Run the temporal coupling analysis:
 

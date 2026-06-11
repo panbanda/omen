@@ -17,6 +17,10 @@ pub struct Cli {
     #[arg(short, long, value_enum, default_value = "markdown")]
     pub format: OutputFormat,
 
+    /// Compact JSON output (single line, no indentation; ignored for non-JSON formats)
+    #[arg(long)]
+    pub compact: bool,
+
     /// Configuration file path
     #[arg(short, long)]
     pub config: Option<PathBuf>,
@@ -134,6 +138,18 @@ pub enum Command {
     /// Mutation testing for test suite effectiveness
     #[command(alias = "mut")]
     Mutation(Box<MutationCommand>),
+
+    /// Show token-cheap file outline: imports, classes, functions
+    #[command(alias = "ol")]
+    Outline(OutlineArgs),
+
+    /// Analyze blast radius of a symbol change (callers/callees by BFS depth)
+    #[command(alias = "blast")]
+    Impact(ImpactArgs),
+
+    /// One-call symbol report: source, signature, location, callers/callees, complexity
+    #[command(alias = "sym")]
+    Symbol(SymbolArgs),
 }
 
 #[derive(Args)]
@@ -149,6 +165,14 @@ pub struct AnalyzerArgs {
     /// Analyze only files changed since the given git ref
     #[arg(long)]
     pub changed_since: Option<String>,
+
+    /// Limit output to the top N results (0 = unlimited)
+    #[arg(long)]
+    pub top: Option<usize>,
+
+    /// Skip the first N results (use with --top for pagination)
+    #[arg(long)]
+    pub offset: Option<usize>,
 }
 
 #[derive(Args)]
@@ -523,6 +547,63 @@ pub struct MutationCommand {
 pub enum MutationSubcommand {
     /// Train ML predictor from historical mutation results
     Train(MutationTrainArgs),
+}
+
+/// Arguments for the outline command.
+#[derive(Args)]
+pub struct OutlineArgs {
+    /// Analyze a single file instead of the whole repo
+    #[arg(long)]
+    pub file: Option<PathBuf>,
+
+    #[command(flatten)]
+    pub common: AnalyzerArgs,
+}
+
+/// Direction for impact analysis.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum ImpactDirection {
+    Callers,
+    Callees,
+    Both,
+}
+
+/// Arguments for the impact command.
+#[derive(Args)]
+pub struct ImpactArgs {
+    /// Symbol name to analyze (bare name or qualified file:name)
+    #[arg()]
+    pub symbol: String,
+
+    /// BFS depth for traversal
+    #[arg(long, default_value = "2")]
+    pub depth: usize,
+
+    /// Direction of traversal
+    #[arg(long, value_enum, default_value = "both")]
+    pub direction: ImpactDirection,
+
+    #[command(flatten)]
+    pub common: AnalyzerArgs,
+}
+
+/// Arguments for the symbol command.
+#[derive(Args)]
+pub struct SymbolArgs {
+    /// Symbol name to look up (bare name or qualified file:name)
+    #[arg()]
+    pub name: String,
+
+    /// Exclude source code from the report
+    #[arg(long)]
+    pub no_source: bool,
+
+    /// Maximum source lines to include (excess triggers truncation flag)
+    #[arg(long, default_value = "200")]
+    pub max_source_lines: usize,
+
+    #[command(flatten)]
+    pub common: AnalyzerArgs,
 }
 
 /// Arguments for mutation train command.
@@ -1566,5 +1647,209 @@ mod tests {
     #[test]
     fn test_mutation_record_flag() {
         assert!(parse_mutation_args(&["omen", "mutation", "--record"]).record);
+    }
+
+    #[test]
+    fn test_cli_compact_flag() {
+        assert!(parse(&["omen", "--compact", "complexity"]).compact);
+    }
+
+    #[test]
+    fn test_cli_compact_default_false() {
+        assert!(!parse(&["omen", "complexity"]).compact);
+    }
+
+    #[test]
+    fn test_analyzer_args_top() {
+        let args = parse_complexity_args(&["omen", "complexity", "--top", "10"]);
+        assert_eq!(args.common.top, Some(10));
+    }
+
+    #[test]
+    fn test_analyzer_args_top_default_none() {
+        let args = parse_complexity_args(&["omen", "complexity"]);
+        assert_eq!(args.common.top, None);
+    }
+
+    #[test]
+    fn test_analyzer_args_offset() {
+        let args = parse_complexity_args(&["omen", "complexity", "--top", "10", "--offset", "5"]);
+        assert_eq!(args.common.offset, Some(5));
+    }
+
+    // Outline command tests
+
+    #[test]
+    fn test_command_outline() {
+        assert_parses_to!(&["omen", "outline"], Command::Outline(_));
+    }
+
+    #[test]
+    fn test_command_outline_alias_ol() {
+        assert_parses_to!(&["omen", "ol"], Command::Outline(_));
+    }
+
+    #[test]
+    fn test_outline_file_flag() {
+        let cli = parse(&["omen", "outline", "--file", "src/main.rs"]);
+        if let Command::Outline(args) = cli.command {
+            assert_eq!(args.file, Some(PathBuf::from("src/main.rs")));
+        } else {
+            panic!("Expected Outline command");
+        }
+    }
+
+    #[test]
+    fn test_outline_no_file_flag() {
+        let cli = parse(&["omen", "outline"]);
+        if let Command::Outline(args) = cli.command {
+            assert_eq!(args.file, None);
+        } else {
+            panic!("Expected Outline command");
+        }
+    }
+
+    #[test]
+    fn test_outline_common_args() {
+        let cli = parse(&["omen", "outline", "-g", "*.rs"]);
+        if let Command::Outline(args) = cli.command {
+            assert_eq!(args.common.glob, Some("*.rs".to_string()));
+        } else {
+            panic!("Expected Outline command");
+        }
+    }
+
+    // Impact command tests
+
+    #[test]
+    fn test_command_impact() {
+        assert_parses_to!(&["omen", "impact", "my_symbol"], Command::Impact(_));
+    }
+
+    #[test]
+    fn test_command_impact_alias_blast() {
+        assert_parses_to!(&["omen", "blast", "my_symbol"], Command::Impact(_));
+    }
+
+    #[test]
+    fn test_impact_symbol_positional() {
+        let cli = parse(&["omen", "impact", "handle_tool_call"]);
+        if let Command::Impact(args) = cli.command {
+            assert_eq!(args.symbol, "handle_tool_call");
+        } else {
+            panic!("Expected Impact command");
+        }
+    }
+
+    #[test]
+    fn test_impact_depth_flag() {
+        let cli = parse(&["omen", "impact", "foo", "--depth", "4"]);
+        if let Command::Impact(args) = cli.command {
+            assert_eq!(args.depth, 4);
+        } else {
+            panic!("Expected Impact command");
+        }
+    }
+
+    #[test]
+    fn test_impact_direction_callers() {
+        let cli = parse(&["omen", "impact", "foo", "--direction", "callers"]);
+        if let Command::Impact(args) = cli.command {
+            assert!(matches!(args.direction, ImpactDirection::Callers));
+        } else {
+            panic!("Expected Impact command");
+        }
+    }
+
+    #[test]
+    fn test_impact_direction_callees() {
+        let cli = parse(&["omen", "impact", "foo", "--direction", "callees"]);
+        if let Command::Impact(args) = cli.command {
+            assert!(matches!(args.direction, ImpactDirection::Callees));
+        } else {
+            panic!("Expected Impact command");
+        }
+    }
+
+    #[test]
+    fn test_impact_direction_default_both() {
+        let cli = parse(&["omen", "impact", "foo"]);
+        if let Command::Impact(args) = cli.command {
+            assert!(matches!(args.direction, ImpactDirection::Both));
+        } else {
+            panic!("Expected Impact command");
+        }
+    }
+
+    #[test]
+    fn test_impact_depth_default_two() {
+        let cli = parse(&["omen", "impact", "foo"]);
+        if let Command::Impact(args) = cli.command {
+            assert_eq!(args.depth, 2);
+        } else {
+            panic!("Expected Impact command");
+        }
+    }
+
+    // Symbol command tests
+
+    #[test]
+    fn test_command_symbol() {
+        assert_parses_to!(&["omen", "symbol", "my_symbol"], Command::Symbol(_));
+    }
+
+    #[test]
+    fn test_command_symbol_alias_sym() {
+        assert_parses_to!(&["omen", "sym", "my_symbol"], Command::Symbol(_));
+    }
+
+    #[test]
+    fn test_symbol_name_positional() {
+        let cli = parse(&["omen", "symbol", "build_context"]);
+        if let Command::Symbol(args) = cli.command {
+            assert_eq!(args.name, "build_context");
+        } else {
+            panic!("Expected Symbol command");
+        }
+    }
+
+    #[test]
+    fn test_symbol_no_source_flag() {
+        let cli = parse(&["omen", "symbol", "foo", "--no-source"]);
+        if let Command::Symbol(args) = cli.command {
+            assert!(args.no_source);
+        } else {
+            panic!("Expected Symbol command");
+        }
+    }
+
+    #[test]
+    fn test_symbol_max_source_lines_flag() {
+        let cli = parse(&["omen", "symbol", "foo", "--max-source-lines", "10"]);
+        if let Command::Symbol(args) = cli.command {
+            assert_eq!(args.max_source_lines, 10);
+        } else {
+            panic!("Expected Symbol command");
+        }
+    }
+
+    #[test]
+    fn test_symbol_max_source_lines_default() {
+        let cli = parse(&["omen", "symbol", "foo"]);
+        if let Command::Symbol(args) = cli.command {
+            assert_eq!(args.max_source_lines, 200);
+        } else {
+            panic!("Expected Symbol command");
+        }
+    }
+
+    #[test]
+    fn test_symbol_no_source_default_false() {
+        let cli = parse(&["omen", "symbol", "foo"]);
+        if let Command::Symbol(args) = cli.command {
+            assert!(!args.no_source);
+        } else {
+            panic!("Expected Symbol command");
+        }
     }
 }
