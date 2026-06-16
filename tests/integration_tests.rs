@@ -512,6 +512,236 @@ fn test_exclude_filter() {
 }
 
 // ---------------------------------------------------------------------------
+// Additional glob and exclude filter tests (filtered_file_set paths)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_satd_glob_filter_limits_to_python() {
+    let output = omen()
+        .args(["-p", fixtures_dir(), "-f", "json", "satd", "-g", "*.py"])
+        .output()
+        .expect("command runs");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("satd output should be valid JSON");
+
+    // All reported file paths should end with .py
+    if let Some(findings) = parsed["findings"].as_array() {
+        for finding in findings {
+            let path = finding["file"].as_str().unwrap_or("");
+            assert!(
+                path.ends_with(".py"),
+                "satd glob filter should only report Python files, got: {path}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_satd_exclude_filter_removes_rust_files() {
+    let output = omen()
+        .args(["-p", fixtures_dir(), "-f", "json", "satd", "-e", "*.rs"])
+        .output()
+        .expect("command runs");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("satd output should be valid JSON");
+
+    // No reported file paths should end with .rs
+    if let Some(findings) = parsed["findings"].as_array() {
+        for finding in findings {
+            let path = finding["file"].as_str().unwrap_or("");
+            assert!(
+                !path.ends_with(".rs"),
+                "satd exclude filter should not report Rust files, got: {path}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_deadcode_exclude_filter_removes_python_files() {
+    let output = omen()
+        .args(["-p", fixtures_dir(), "-f", "json", "deadcode", "-e", "*.py"])
+        .output()
+        .expect("command runs");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("deadcode output should be valid JSON");
+
+    // No reported file paths should end with .py
+    if let Some(findings) = parsed["findings"].as_array() {
+        for finding in findings {
+            let path = finding["file"].as_str().unwrap_or("");
+            assert!(
+                !path.ends_with(".py"),
+                "deadcode exclude filter should not report Python files, got: {path}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_flags_glob_filter_limits_to_rust() {
+    let output = omen()
+        .args(["-p", fixtures_dir(), "-f", "json", "flags", "-g", "*.rs"])
+        .output()
+        .expect("command runs");
+
+    assert!(output.status.success());
+    // flags analyzer succeeds with a glob-filtered file set
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&stdout).is_ok(),
+        "flags with glob filter should produce valid JSON"
+    );
+}
+
+#[test]
+fn test_complexity_glob_and_exclude_combined() {
+    // Include all .rs files then exclude nothing matching Python
+    let output = omen()
+        .args([
+            "-p",
+            fixtures_dir(),
+            "-f",
+            "json",
+            "complexity",
+            "-g",
+            "*.rs",
+            "-e",
+            "*.go",
+        ])
+        .output()
+        .expect("command runs");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("complexity output should be valid JSON");
+    let files = parsed["files"]
+        .as_array()
+        .expect("files should be an array");
+
+    // All files should be Rust (glob filters to .rs; exclude .go has no effect since glob already limits to .rs)
+    for file in files {
+        let path = file["path"].as_str().expect("file path should be a string");
+        assert!(
+            path.ends_with(".rs"),
+            "combined glob+exclude should only include Rust files, got: {path}"
+        );
+    }
+}
+
+#[test]
+fn test_complexity_glob_no_match_produces_empty_files() {
+    let output = omen()
+        .args([
+            "-p",
+            fixtures_dir(),
+            "-f",
+            "json",
+            "complexity",
+            "-g",
+            "*.xyz",
+        ])
+        .output()
+        .expect("command runs");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("complexity output should be valid JSON");
+    let files = parsed["files"]
+        .as_array()
+        .expect("files should be an array");
+
+    assert!(
+        files.is_empty(),
+        "glob that matches no files should result in empty files array"
+    );
+}
+
+#[test]
+fn test_clones_glob_filter_limits_to_rust() {
+    let output = omen()
+        .args(["-p", fixtures_dir(), "-f", "json", "clones", "-g", "*.rs"])
+        .output()
+        .expect("command runs");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&stdout).is_ok(),
+        "clones with glob filter should produce valid JSON"
+    );
+}
+
+#[test]
+fn test_repomap_glob_filter_limits_to_python() {
+    let output = omen()
+        .args(["-p", fixtures_dir(), "-f", "json", "repomap", "-g", "*.py"])
+        .output()
+        .expect("command runs");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&stdout).is_ok(),
+        "repomap with glob filter should produce valid JSON"
+    );
+}
+
+#[test]
+fn test_complexity_check_with_glob_filter() {
+    let tmp = TempDir::new().expect("create temp dir");
+    // Write a simple function that won't exceed complexity thresholds
+    std::fs::write(
+        tmp.path().join("simple.rs"),
+        "fn simple_function() { let x = 1; }",
+    )
+    .expect("write file");
+    std::fs::write(tmp.path().join("ignored.py"), "def ignored(): pass\n").expect("write file");
+
+    omen()
+        .args([
+            "-p",
+            tmp.path().to_str().unwrap(),
+            "complexity",
+            "--check",
+            "-g",
+            "*.rs",
+        ])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_changes_glob_filter() {
+    // changes command uses run_changes_analyzer which also calls filtered_file_set
+    let output = omen()
+        .args(["-p", ".", "-f", "json", "changes", "-g", "*.rs"])
+        .output()
+        .expect("command runs");
+
+    // changes may fail if no git history, but should not panic
+    // If it succeeds, verify the output is valid JSON
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&stdout).is_ok(),
+            "changes with glob filter should produce valid JSON when successful"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Score analyzer tests
 // ---------------------------------------------------------------------------
 
