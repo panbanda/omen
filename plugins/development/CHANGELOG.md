@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.1.0](https://github.com/panbanda/omen/compare/omen-skills-v4.0.2...omen-skills-v4.1.0) (2026-06-11)
+
+
+### Features
+
+* add --compact and --top/--offset flags for token-efficient agent output ([#419](https://github.com/panbanda/omen/issues/419)) ([a1cd73d](https://github.com/panbanda/omen/commit/a1cd73dde4f78a2451e0f15e1b4257173d305890))
+
 ## [4.0.2](https://github.com/panbanda/omen/compare/omen-skills-v4.0.1...omen-skills-v4.0.2) (2026-01-31)
 
 
