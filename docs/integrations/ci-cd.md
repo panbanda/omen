@@ -4,11 +4,11 @@ sidebar_position: 2
 
 # CI/CD Integration
 
-Omen is designed to run in CI pipelines as a quality gate, risk assessment tool, and health tracker. All commands support JSON output (`-f json`) for programmatic parsing, and `omen score` returns non-zero exit codes when the score falls below a configured threshold.
+Omen is designed to run in CI pipelines as a quality gate, risk assessment tool, and health tracker. All commands support JSON output (`-f json`) for programmatic parsing, and `omen score` returns a non-zero exit code when the score falls below a configured `fail_under` threshold.
 
 ## GitHub Action
 
-Omen provides a composite GitHub Action for automated PR analysis. It runs diff risk analysis and health scoring on every pull request.
+Omen provides a composite GitHub Action for automated PR analysis. It runs diff risk analysis (on pull request events) and health scoring on every run, and can write results to the job summary, post a sticky PR comment, apply a risk label, and fail the build on high risk.
 
 ### Basic Usage
 
@@ -27,7 +27,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: panbanda/omen@omen-v4.23.0
+      - uses: panbanda/omen@omen-v4.26.1
         id: omen
 
       - name: Print results
@@ -36,68 +36,115 @@ jobs:
           echo "Health: ${{ steps.omen.outputs.health-grade }} (${{ steps.omen.outputs.health-score }})"
 ```
 
-`fetch-depth: 0` is required. Omen needs full git history for accurate analysis.
+`fetch-depth: 0` is required. Omen needs full git history for accurate analysis (churn, ownership, hotspot, and temporal coupling all depend on it).
 
-### With PR Comment and Labels
-
-```yaml
-      - uses: panbanda/omen@omen-v4.23.0
-        id: omen
-        with:
-          comment: true
-          label: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-```
-
-Requires additional permissions:
+### Complete Workflow
 
 ```yaml
+name: Omen Analysis
+
+on:
+  pull_request:
+
 permissions:
   contents: read
   pull-requests: write
   issues: write
+
+jobs:
+  omen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: panbanda/omen@omen-v4.26.1
+        id: omen
+        with:
+          version: latest
+          path: .
+          comment: true
+          label: true
+          label-template: 'risk: {{level}}'
+          label-color-low: '0e8a16'
+          label-color-medium: 'fbca04'
+          label-color-high: 'd93f0b'
+          check: true
+          check-threshold: high
+          summary: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Print results
+        run: |
+          echo "Risk: ${{ steps.omen.outputs.risk-level }} (${{ steps.omen.outputs.risk-score }})"
+          echo "Health: ${{ steps.omen.outputs.health-grade }} (${{ steps.omen.outputs.health-score }})"
 ```
+
+`pull-requests: write` is required when `comment` is enabled, and `issues: write` is required when `label` is enabled. Workflows that disable both features can drop to `contents: read` only.
+
+Pin the action to a release tag (the latest at time of writing is `omen-v4.26.1`; check the [releases page](https://github.com/panbanda/omen/releases/latest) for the current one) and bump it as new releases ship. The `version: latest` input controls which omen **binary** the action downloads and is independent of the action tag itself.
 
 ### Action Inputs
 
 | Input | Default | Description |
 |-------|---------|-------------|
-| `version` | `latest` | Omen version to install |
-| `path` | `.` | Repository path to analyze |
-| `comment` | `false` | Post/update a sticky PR comment |
-| `label` | `false` | Add a risk-level label |
-| `label-template` | `risk: &#123;&#123;level&#125;&#125;` | Label name template |
-| `check` | `false` | Fail if risk meets threshold |
-| `check-threshold` | `high` | Risk level to fail on (`low`, `medium`, `high`) |
+| `version` | `latest` | Omen version to install (for example `"4.20.3"`), or `latest` for the newest stable release |
+| `path` | `.` | Repository path to analyze, relative to the workflow workspace |
+| `comment` | `false` | Post or update a sticky analysis comment on pull requests |
+| `label` | `false` | Create and apply a risk-level label to pull requests |
+| `label-template` | `risk: &#123;&#123;level&#125;&#125;` | Label name template. Use `{{level}}` for risk level replacement |
+| `label-color-low` | `0e8a16` | Hex color (without `#`) for the low-risk label |
+| `label-color-medium` | `fbca04` | Hex color (without `#`) for the medium-risk label |
+| `label-color-high` | `d93f0b` | Hex color (without `#`) for the high-risk label |
+| `check` | `false` | Fail pull request analysis when the risk level meets or exceeds the configured threshold |
+| `check-threshold` | `high` | Risk level threshold for check failure (`low`, `medium`, `high`) |
+| `summary` | `true` | Write risk, change-size, repository health, and score-component results to the job step summary |
+| `github-token` | `${{ github.token }}` | GitHub token used to resolve and download releases and, when enabled, manage pull request comments and labels |
 
 ### Action Outputs
 
 | Output | Example | Description |
 |--------|---------|-------------|
-| `risk-score` | `0.42` | Diff risk score (0.0 - 1.0) |
-| `risk-level` | `medium` | Risk level (`low`, `medium`, `high`) |
-| `health-score` | `76.9` | Health score (0 - 100) |
-| `health-grade` | `C` | Health grade (A - F) |
-| `diff-json` | `{...}` | Full `omen diff` JSON |
-| `score-json` | `{...}` | Full `omen score` JSON |
+| `risk-score` | `0.42` | Pull request diff risk score (0.0 - 1.0); empty on non-pull-request events |
+| `risk-level` | `medium` | Pull request risk level (`low`, `medium`, `high`); empty on non-pull-request events |
+| `health-score` | `76.9` | Repository health score (0 - 100) |
+| `health-grade` | `C` | Health grade (A, B, C, D, F) |
+| `diff-json` | `{...}` | Full `omen diff` JSON output; empty on non-pull-request events |
+| `score-json` | `{...}` | Full `omen score` JSON output |
+
+If a JSON output would exceed the GitHub Actions output-size guard (900KB), the action writes it to a temporary file and returns the file path instead of inline JSON. Consumers should accept either form.
+
+### Job Summary
+
+When `summary: true` (the default), the action writes a job-summary table with health, PR risk, and change-size metrics, followed by a component-score breakdown table. Diff risk and change-size metrics are only available on pull request events; on other events the summary notes that they were skipped.
+
+### Sticky PR Comment
+
+When `comment: true` on a pull request event, the action posts (or updates, on subsequent pushes) a single comment marked with an `<!-- omen-analysis -->` marker. The comment leads with a **Needs attention** section that surfaces the lowest-scoring components below their attention thresholds, each with a one-line explanation and the CLI command to investigate it locally. Below that, collapsible sections cover the full component-score table, PR risk factors, recommendations, and a short "investigate locally" cheat sheet. The comment footer reports the omen version that generated it.
+
+### Risk Label
+
+When `label: true` on a pull request event, the action creates (if needed) and applies a label named from `label-template` with `{{level}}` replaced by the risk level, using the corresponding `label-color-*` input. Any stale risk label from a previous run (a different level) is removed first.
 
 ### Quality Gate via Action
 
 ```yaml
-      - uses: panbanda/omen@omen-v4.23.0
+      - uses: panbanda/omen@omen-v4.26.1
         with:
           check: true
           check-threshold: high  # fail on high risk PRs
 ```
 
+The check only runs for pull request events; on other events it is skipped with a warning, since diff risk analysis requires a PR base to compare against.
+
 ## GitHub Actions (Manual)
 
-For more control, you can install Omen manually and run commands directly.
+For more control, you can install Omen manually and run commands directly instead of using the composite action.
 
 ### Quality Gate with Repository Score
 
-The simplest integration: fail the build if the repository score drops below a threshold.
+The simplest integration: fail the build if the repository score drops below a threshold configured in `omen.toml`.
 
 ```yaml
 name: Code Quality
@@ -112,20 +159,20 @@ jobs:
           fetch-depth: 0  # Full history needed for churn, ownership, hotspot analyzers
 
       - name: Install Omen
-        run: brew install panbanda/omen/omen
+        run: brew install panbanda/brews/omen
 
       - name: Check repository score
         run: omen score
 ```
 
-`omen score` exits with code 1 if the score is below the configured minimum (default: 60). No additional scripting is needed for a basic pass/fail gate.
+`omen score` exits non-zero if the score is below `[score] fail_under` in `omen.toml`. If `fail_under` is not set, the command always exits 0.
 
-For a custom threshold:
+For a custom threshold without editing `omen.toml`:
 
 ```yaml
       - name: Check repository score
         run: |
-          SCORE=$(omen -f json score | jq '.score')
+          SCORE=$(omen -f json score | jq '.overall_score')
           echo "Repository score: $SCORE"
           if [ "$(echo "$SCORE < 70" | bc)" -eq 1 ]; then
             echo "::error::Repository score $SCORE is below threshold (70)"
@@ -152,103 +199,20 @@ jobs:
           fetch-depth: 0
 
       - name: Install Omen
-        run: brew install panbanda/omen/omen
+        run: brew install panbanda/brews/omen
 
       - name: Analyze PR changes
         run: |
-          omen diff --target ${{ github.base_ref }}
+          omen diff --target origin/${{ github.base_ref }}
 
       - name: Check change risk
         run: |
-          RESULT=$(omen -f json diff --target ${{ github.base_ref }})
-          RISK=$(echo "$RESULT" | jq '.risk_score')
+          RESULT=$(omen -f json diff --target origin/${{ github.base_ref }})
+          RISK=$(echo "$RESULT" | jq '.score')
           echo "Change risk score: $RISK"
 
           if [ "$(echo "$RISK > 0.8" | bc)" -eq 1 ]; then
             echo "::warning::High-risk changes detected (risk score: $RISK). Extra review recommended."
-          fi
-```
-
-### Complete Workflow
-
-A full workflow that runs quality gates, risk assessment, and posts a summary comment on the PR:
-
-```yaml
-name: Omen Analysis
-on:
-  pull_request:
-    types: [opened, synchronize]
-
-jobs:
-  analyze:
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install Omen
-        run: brew install panbanda/omen/omen
-
-      - name: Run analysis
-        id: analysis
-        run: |
-          # Repository score
-          SCORE=$(omen -f json score | jq '.score')
-          echo "score=$SCORE" >> "$GITHUB_OUTPUT"
-
-          # Diff analysis
-          DIFF=$(omen -f json diff --target ${{ github.base_ref }})
-          RISK=$(echo "$DIFF" | jq '.risk_score')
-          CHANGED=$(echo "$DIFF" | jq '.files_changed')
-          echo "risk=$RISK" >> "$GITHUB_OUTPUT"
-          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
-
-          # SATD check
-          SATD_SECURITY=$(omen -f json satd | jq '[.items[] | select(.category == "security")] | length')
-          echo "security_debt=$SATD_SECURITY" >> "$GITHUB_OUTPUT"
-
-          # Stale flags
-          STALE_FLAGS=$(omen -f json flags | jq '[.flags[] | select(.stale)] | length')
-          echo "stale_flags=$STALE_FLAGS" >> "$GITHUB_OUTPUT"
-
-      - name: Post summary comment
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const score = '${{ steps.analysis.outputs.score }}';
-            const risk = '${{ steps.analysis.outputs.risk }}';
-            const changed = '${{ steps.analysis.outputs.changed }}';
-            const securityDebt = '${{ steps.analysis.outputs.security_debt }}';
-            const staleFlags = '${{ steps.analysis.outputs.stale_flags }}';
-
-            const body = `## Omen Analysis
-
-            | Metric | Value |
-            |--------|-------|
-            | Repository Score | ${score}/100 |
-            | Change Risk | ${risk} |
-            | Files Changed | ${changed} |
-            | Security Debt Items | ${securityDebt} |
-            | Stale Feature Flags | ${staleFlags} |
-            `;
-
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: body
-            });
-
-      - name: Fail on quality gate
-        run: |
-          SCORE=${{ steps.analysis.outputs.score }}
-          if [ "$(echo "$SCORE < 60" | bc)" -eq 1 ]; then
-            echo "::error::Repository score $SCORE is below minimum threshold (60)"
-            exit 1
           fi
 ```
 
@@ -257,7 +221,7 @@ jobs:
 For CI environments where installing Rust tooling is impractical, use the Docker image:
 
 ```bash
-docker run --rm -v "$(pwd):/repo" ghcr.io/panbanda/omen:latest score /repo
+docker run --rm -v "$(pwd):/repo" ghcr.io/panbanda/omen:latest -p /repo score
 ```
 
 In a GitHub Actions workflow:
@@ -268,7 +232,7 @@ In a GitHub Actions workflow:
           docker run --rm \
             -v "${{ github.workspace }}:/repo" \
             ghcr.io/panbanda/omen:latest \
-            -f json score /repo
+            -f json -p /repo score
 ```
 
 The Docker image includes all tree-sitter grammars and requires no additional dependencies.
@@ -284,20 +248,11 @@ pre-push:
     omen-score:
       run: omen score
       fail_text: "Repository score is below the minimum threshold. Run 'omen score' for details."
-
-    omen-satd-security:
-      run: |
-        SECURITY=$(omen -f json satd | jq '[.items[] | select(.category == "security")] | length')
-        if [ "$SECURITY" -gt 0 ]; then
-          echo "Found $SECURITY unresolved security debt items"
-          exit 1
-        fi
-      fail_text: "Unresolved security debt detected. Run 'omen satd' for details."
 ```
 
 ## JSON Output
 
-All Omen commands support `-f json` for machine-readable output. This is the recommended format for CI integration because it provides structured data that can be parsed with `jq` or any JSON library.
+All Omen commands support `-f json` for machine-readable output. This is the recommended format for CI integration because it provides structured data that can be parsed with `jq` or any JSON library. Add the global `--compact` flag to minify the output.
 
 ```bash
 # Repository score with component breakdown
@@ -326,29 +281,14 @@ Configure the pass/fail threshold in `omen.toml`:
 
 ```toml
 [score]
-minimum_score = 60
+fail_under = 60.0
 ```
 
-When `omen score` runs, it compares the computed score against this threshold. If the score is below the minimum, the command exits with code 1. If the threshold is not set, the command always exits with code 0 (no gate).
-
-The threshold can also be overridden on the command line:
-
-```bash
-omen score --minimum 75
-```
+When `omen score` runs, it compares the computed score against this threshold. If the score is below the threshold, the command exits non-zero. If `fail_under` is not set, the command always exits 0 (no gate).
 
 ## Tips for CI Integration
 
 **Use `fetch-depth: 0`.** Many analyzers (churn, ownership, hotspot, temporal coupling, defect prediction) require Git history. Shallow clones will produce incomplete or missing results for these analyzers. Always use `fetch-depth: 0` in your checkout step.
-
-**Cache the Omen binary.** If you install via `cargo install`, cache the Cargo binary directory to avoid recompilation on every run:
-
-```yaml
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin
-          key: omen-${{ runner.os }}
-```
 
 **Run analyzers selectively.** `omen all` runs every analyzer, which may be slow on large codebases. In CI, consider running only the analyzers that matter for your quality gate:
 
@@ -356,6 +296,7 @@ omen score --minimum 75
 omen score                    # Composite score (runs necessary analyzers internally)
 omen diff --target main       # PR-specific risk
 omen satd                     # Debt check
+omen stubs --gate error       # Fail the build if any unfinished stub is found
 ```
 
 **Store results as artifacts.** Save JSON output for trend tracking:

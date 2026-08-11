@@ -83,7 +83,7 @@ Compare this to the cyclomatic complexity of 6 for the same function. The cognit
 
 ### Nesting Depth
 
-In addition to the complexity scores, the analyzer reports maximum nesting depth per function. Deeply nested code is hard to read regardless of the type of nesting. The default threshold flags functions that exceed 4 levels of nesting.
+In addition to the complexity scores, the analyzer reports maximum nesting depth per function. Deeply nested code is hard to read regardless of the type of nesting.
 
 ## How Omen Computes It
 
@@ -93,26 +93,22 @@ Because the analysis is AST-based, it works correctly across all 13 supported la
 
 ## Thresholds
 
-Default thresholds can be overridden in `omen.toml`:
+Default error thresholds can be overridden in `omen.toml`:
 
-| Metric | Warning | Error | Config Key |
-|--------|---------|-------|------------|
-| Cyclomatic complexity | 10 | 20 | `cyclomatic_warn`, `cyclomatic_error` |
-| Cognitive complexity | 15 | 30 | `cognitive_warn`, `cognitive_error` |
-| Nesting depth | 4 | -- | `max_nesting` |
+| Metric | Error | Config Key |
+|--------|-------|------------|
+| Cyclomatic complexity | 20 | `cyclomatic_error` |
+| Cognitive complexity | 30 | `cognitive_error` |
 
-These defaults are based on widely adopted industry thresholds. The cyclomatic warning at 10 follows McCabe's original recommendation. The cognitive thresholds at 15/30 follow SonarSource's recommended defaults. The nesting depth limit of 4 reflects the Linux kernel coding standard and is commonly adopted elsewhere.
+These defaults are based on widely adopted industry thresholds. McCabe's original paper recommends treating 10 as a caution point; Omen's default error threshold of 20 flags functions well past that point. The cognitive threshold of 30 follows SonarSource's guidance for functions that have become hard to follow.
 
 ### Customizing Thresholds
 
 ```toml
 # omen.toml
 [complexity]
-cyclomatic_warn = 10
 cyclomatic_error = 20
-cognitive_warn = 15
 cognitive_error = 30
-max_nesting = 4
 ```
 
 ## Output
@@ -129,6 +125,9 @@ omen complexity --language python
 
 # Analyze a specific directory
 omen -p ./src/core complexity
+
+# Exclude paths in addition to omen.toml (repeatable)
+omen complexity -e "**/generated/**" -e "**/*.pb.go"
 ```
 
 The output lists every function that exceeds a threshold, sorted by complexity score descending. Each entry includes the file path, function name, line number, cyclomatic score, cognitive score, and nesting depth.

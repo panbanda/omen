@@ -71,24 +71,14 @@ This means a codebase with 10 security-related SATD markers scores worse than on
 
 ## Configuration
 
-Score weights and thresholds are configurable in `omen.toml`:
+The `[score]` section in `omen.toml` accepts a single option, `fail_under`, which sets the pass/fail threshold for CI:
 
 ```toml
 [score]
-# Override component weights (must sum to 1.0)
-complexity_weight = 0.25
-duplication_weight = 0.20
-satd_weight = 0.10
-tdg_weight = 0.15
-coupling_weight = 0.10
-smells_weight = 0.05
-cohesion_weight = 0.15
-
-# Threshold for pass/fail in CI
-minimum_score = 60
+fail_under = 70.0
 ```
 
-If weights are overridden, they must sum to 1.0. Omen will error on startup if they don't.
+Component weights (the percentages in the table above) are not currently configurable through `omen.toml`. If `fail_under` is not set, `omen score` always exits 0 -- there is no gate by default.
 
 ## Score Trend Tracking
 
@@ -104,13 +94,13 @@ This walks the Git history, checks out historical commits (or reads cached snaps
 - Correlating score changes with specific releases or refactoring efforts
 - Providing evidence for technical debt reduction initiatives
 
-Available periods: `daily`, `weekly`, `monthly`. The `--since` flag accepts duration strings like `3m` (3 months), `1y` (1 year), `90d` (90 days).
+Available periods: `daily`, `weekly`, `monthly`. The `--since` flag accepts the same duration strings as `[churn] since` (`1m`, `3m`, `6m`, `1y`, `2y`, `all`) and defaults to `all` (full repository history).
 
 ## CI/CD Integration
 
 ### Exit Codes
 
-`omen score` exits with code 0 if the score meets the configured minimum threshold, and code 1 if it doesn't. This makes it directly usable as a quality gate:
+When `[score] fail_under` is configured, `omen score` exits non-zero if the score falls below it. This makes it directly usable as a quality gate:
 
 ```bash
 omen score || exit 1
@@ -136,8 +126,8 @@ For more complex CI logic, parse the JSON output:
 
 ```bash
 RESULT=$(omen -f json score)
-SCORE=$(echo "$RESULT" | jq '.score')
-COMPLEXITY=$(echo "$RESULT" | jq '.components.complexity')
+SCORE=$(echo "$RESULT" | jq '.overall_score')
+COMPLEXITY=$(echo "$RESULT" | jq '.components.complexity.score')
 
 echo "Overall: $SCORE, Complexity: $COMPLEXITY"
 

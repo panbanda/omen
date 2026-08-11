@@ -112,14 +112,8 @@ In `omen.toml`:
 
 ```toml
 [hotspot]
-# Time window for churn data
-since = "6m"
-
 # Number of top hotspots to display
 top = 20
-
-# Minimum severity to report
-min_severity = "moderate"
 ```
 
 ## Relationship to Other Analyzers

@@ -9,7 +9,7 @@ sidebar_position: 2
 ### Homebrew (macOS and Linux)
 
 ```bash
-brew install panbanda/omen/omen
+brew install panbanda/brews/omen
 ```
 
 ### Build from Source
@@ -32,7 +32,7 @@ docker pull ghcr.io/panbanda/omen:latest
 To analyze the current directory:
 
 ```bash
-docker run --rm -v "$(pwd):/repo" ghcr.io/panbanda/omen:latest all
+docker run --rm -v "$(pwd):/repo" ghcr.io/panbanda/omen:latest -p /repo all
 ```
 
 To analyze a specific path inside the container:
@@ -76,10 +76,11 @@ Each analyzer is a top-level subcommand:
 
 ```bash
 omen complexity
-omen coupling
+omen graph
 omen clones
 omen smells
-omen dead-code
+omen deadcode
+omen stubs
 ```
 
 ### Check the Repository Score
@@ -121,15 +122,16 @@ omen -p ./src/api complexity
 omen -p /absolute/path/to/project score
 ```
 
-### Generate a Configuration File
+### Create a Configuration File
 
-Omen supports project-level configuration through `omen.toml`. Generate a default config:
+Omen supports project-level configuration through `omen.toml`. There is no `omen init` command to scaffold one; instead, copy the annotated example and customize it:
 
 ```bash
-omen init
+curl -O https://raw.githubusercontent.com/panbanda/omen/main/omen.example.toml
+mv omen.example.toml omen.toml
 ```
 
-This creates an `omen.toml` in the current directory with default thresholds, analyzer settings, and output preferences. Edit it to customize behavior for your project.
+If you use Claude Code, the `setup-config` skill can analyze your repository and generate an `omen.toml` with intelligent defaults for your tech stack instead. See [Configuration](./configuration.md) for the full list of accepted sections.
 
 ### Filter by Language
 
@@ -138,12 +140,26 @@ omen complexity --language rust
 omen clones --language typescript
 ```
 
+### Exclude Files From Analysis
+
+Most analyzers accept a repeatable `-e`/`--exclude` flag for glob patterns, in addition to whatever is configured in `omen.toml`:
+
+```bash
+omen complexity -e "**/vendor/**" -e "**/*.pb.go"
+```
+
 ### Pipeline Integration
+
+All commands support minified JSON with the global `--compact` flag, which pairs well with CI logging:
+
+```bash
+omen -f json score --compact
+```
 
 A typical CI step that fails if the repository score drops below 60:
 
 ```bash
-SCORE=$(omen -f json score | jq '.score')
+SCORE=$(omen -f json score | jq '.overall_score')
 if [ "$(echo "$SCORE < 60" | bc)" -eq 1 ]; then
   echo "Repository score $SCORE is below threshold (60)"
   exit 1

@@ -41,14 +41,14 @@ omen -p gin-gonic/gin repomap
 
 ### Usage with LLM context
 
-The repository map is most commonly used to provide context to an LLM. The `omen context` command includes a `--repo-map` flag for this purpose:
+The repository map is most commonly used to provide context to an LLM. Run it directly for a ranked symbol list, or use the broader `omen context` command when you want an agent-oriented overview rather than the raw symbol map:
 
 ```bash
-# Include top 50 symbols by PageRank in LLM context
-omen context --repo-map --top 50
+# Top 50 symbols by PageRank
+omen repomap --top 50
 
-# Combine with other context sources
-omen context --repo-map --top 30 --file src/core/engine.go
+# Broader agent context, budgeted by token count
+omen context --max-tokens 8000
 ```
 
 This produces output suitable for pasting into a prompt or piping to an LLM-based tool.
@@ -133,7 +133,7 @@ This is particularly useful for:
 ```bash
 # Pipe repository map into an LLM prompt
 echo "Given this codebase structure:" > prompt.txt
-omen context --repo-map --top 50 >> prompt.txt
+omen repomap --top 50 >> prompt.txt
 echo "How should I implement a caching layer?" >> prompt.txt
 ```
 

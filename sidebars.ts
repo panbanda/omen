@@ -55,6 +55,7 @@ const sidebars: SidebarsConfig = {
           label: 'Specialized',
           items: [
             'analyzers/satd',
+            'analyzers/stubs',
             'analyzers/feature-flags',
             'analyzers/mutation-testing',
           ],

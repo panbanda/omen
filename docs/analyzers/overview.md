@@ -4,7 +4,7 @@ sidebar_position: 1
 
 # Analyzers Overview
 
-Omen ships with 19 analyzers that cover structural quality, defect risk, historical patterns, dependency health, and specialized concerns. Each analyzer is available as a top-level subcommand and can be run independently or as part of a full suite via `omen all`.
+Omen ships with 20 analyzers that cover structural quality, defect risk, historical patterns, dependency health, and specialized concerns. Each analyzer is available as a top-level subcommand and can be run independently or as part of a full suite via `omen all`.
 
 All analyzers parse source code through tree-sitter grammars, producing syntax-aware results rather than regex-based approximations. Output is available as formatted tables (default) or JSON (`-f json`).
 
@@ -58,8 +58,23 @@ Analyzers focused on specific concerns that cut across the categories above.
 | Analyzer | Command | What It Measures |
 |----------|---------|------------------|
 | [SATD Detection](./satd.md) | `omen satd` | Self-Admitted Technical Debt in comments (TODO, FIXME, HACK, etc.) |
+| [Stubs Detection](./stubs.md) | `omen stubs` | Incomplete/placeholder implementations (`todo!()`, elided bodies, empty bodies) |
 | [Feature Flags](./feature-flags.md) | `omen flags` | Feature flag usage, stale flags, flag-related complexity |
 | [Mutation Testing](./mutation-testing.md) | `omen mutation` | Test suite effectiveness by injecting controlled code mutations |
+
+## Agent-Facing Commands
+
+Beyond the analyzers above, Omen ships commands designed specifically for LLM/agent workflows rather than human review:
+
+| Command | What It Does |
+|---------|---------------|
+| `omen context` | Agent-oriented repository overview and navigation hints, budgeted with `--max-tokens` |
+| `omen outline` | Token-cheap map of a file's imports, classes, and top-level functions |
+| `omen impact <symbol>` | Blast-radius analysis: transitive callers and callees of a symbol |
+| `omen symbol <symbol>` | One-call symbol report: source, location, callers/callees, and complexity |
+| [`omen search`](../semantic-search.md) | Semantic (natural-language) symbol search -- `search index` and `search query` |
+
+These are also exposed as MCP tools (`context`, `outline`, `impact`, `get_symbol`, `semantic_search`) -- see [MCP Server](../integrations/mcp-server.md).
 
 ## Running Multiple Analyzers
 
@@ -81,5 +96,8 @@ All commands accept the same global flags:
 |------|-------------|
 | `-p <path>` | Target path (local directory, file, or `owner/repo` for remote) |
 | `-f json` | JSON output |
+| `--compact` | Minify JSON output to a single line |
 | `--language <lang>` | Filter to a specific language |
-| `--config <path>` | Path to `omen.toml` configuration file |
+| `-c, --config <path>` | Path to a configuration file |
+| `-e, --exclude <glob>` | Exclude a glob pattern from analysis (repeatable) |
+| `--top N` / `--offset N` | Paginate results |
