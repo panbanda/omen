@@ -14,6 +14,10 @@ categories = ["command-line-utilities", "development-tools"]
 name = "omen"
 path = "src/lib.rs"
 
+[features]
+default = ["mutation"]
+mutation = ["dep:tokio", "dep:reqwest"]
+
 [[bin]]
 name = "omen"
 path = "src/main.rs"
@@ -24,12 +28,11 @@ clap = { version = "4.5", features = ["derive", "env", "cargo"] }
 
 # Error handling
 thiserror = "2.0"
-anyhow = "1.0"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-figment = { version = "0.10", features = ["toml", "env"] }
+figment = { version = "0.10", features = ["toml", "env", "yaml", "json"] }
 
 # Tree-sitter for parsing
 tree-sitter = "0.26"
@@ -68,8 +71,8 @@ blake3 = "1.5"
 indicatif = "0.18"
 
 # HTTP for remote repos (MCP server)
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "blocking", "json"] }
-tokio = { version = "1.42", features = ["rt-multi-thread", "macros", "io-std", "sync", "time", "process"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "blocking", "json"], optional = true }
+tokio = { version = "1.42", features = ["rt-multi-thread", "macros", "io-std", "sync", "time", "process"], optional = true }
 
 # Logging
 tracing = "0.1"

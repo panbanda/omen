@@ -7,6 +7,10 @@ use crate::analyzers::{complexity, repomap, satd};
 use crate::config::Config;
 use crate::core::{AnalysisContext, Analyzer, FileSet, Language, Result};
 
+pub fn max_symbols_for_token_budget(max_tokens: usize) -> usize {
+    max_tokens.saturating_div(250).clamp(5, 100)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Context {
     pub repository: String,
@@ -373,29 +377,40 @@ fn summarize_risks(ctx: &AnalysisContext<'_>, limit: usize) -> Vec<RiskSummary> 
         let mut functions: Vec<_> = complexity
             .files
             .into_iter()
-            .flat_map(|file| file.functions)
-            .collect();
-        functions.sort_by_key(|func| std::cmp::Reverse(func.metrics.cognitive));
-        risks.extend(functions.into_iter().take(limit).filter_map(|func| {
-            if func.metrics.cognitive < 15 && func.metrics.cyclomatic < 10 {
-                return None;
-            }
-            Some(RiskSummary {
-                kind: "complexity".to_string(),
-                file: func.file,
-                line: func.start_line,
-                message: format!(
-                    "{} has cyclomatic {} and cognitive {} complexity",
-                    func.name, func.metrics.cyclomatic, func.metrics.cognitive
-                ),
-                severity: if func.metrics.cognitive >= 30 || func.metrics.cyclomatic >= 20 {
-                    "high"
-                } else {
-                    "medium"
-                }
-                .to_string(),
+            .flat_map(|file| {
+                let path = file.path;
+                file.functions
+                    .into_iter()
+                    .map(move |function| (path.clone(), function))
             })
-        }));
+            .collect();
+        functions.sort_by_key(|(_, func)| std::cmp::Reverse(func.metrics.cognitive));
+        risks.extend(
+            functions
+                .into_iter()
+                .take(limit)
+                .filter_map(|(file, func)| {
+                    if func.metrics.cognitive < 15 && func.metrics.cyclomatic < 10 {
+                        return None;
+                    }
+                    Some(RiskSummary {
+                        kind: "complexity".to_string(),
+                        file,
+                        line: func.start_line,
+                        message: format!(
+                            "{} has cyclomatic {} and cognitive {} complexity",
+                            func.name, func.metrics.cyclomatic, func.metrics.cognitive
+                        ),
+                        severity:
+                            if func.metrics.cognitive >= 30 || func.metrics.cyclomatic >= 20 {
+                                "high"
+                            } else {
+                                "medium"
+                            }
+                            .to_string(),
+                    })
+                }),
+        );
     }
 
     risks.truncate(limit);
@@ -432,6 +447,13 @@ fn build_hints(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_max_symbols_for_token_budget_is_clamped() {
+        assert_eq!(max_symbols_for_token_budget(0), 5);
+        assert_eq!(max_symbols_for_token_budget(8_000), 32);
+        assert_eq!(max_symbols_for_token_budget(100_000), 100);
+    }
 
     #[test]
     fn test_build_context_includes_repo_map_and_risks() {

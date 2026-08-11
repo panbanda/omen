@@ -80,6 +80,28 @@ fn test_deadcode_runs_successfully() {
 }
 
 #[test]
+fn test_analyzer_json_paths_are_repo_relative() {
+    for analyzer in ["complexity", "satd", "deadcode"] {
+        let output = omen()
+            .args(["-p", fixtures_dir(), "-f", "json", analyzer])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{analyzer}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(!stdout.contains(fixtures_dir()), "{analyzer}: {stdout}");
+        if analyzer == "complexity" {
+            let value: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+            assert!(value["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|file| file["functions"].as_array().unwrap())
+                .all(|function| function.get("file").is_none()));
+        }
+    }
+}
+
+#[test]
 fn test_cohesion_runs_successfully() {
     omen()
         .args(["-p", fixtures_dir(), "-f", "json", "cohesion"])
@@ -153,6 +175,32 @@ fn test_score_runs_successfully() {
         .assert()
         .success()
         .stdout(predicate::str::contains("overall_score"));
+}
+
+#[test]
+fn test_threshold_violation_exits_two_and_emits_json() {
+    omen()
+        .args([
+            "-p",
+            fixtures_dir(),
+            "-f",
+            "json",
+            "score",
+            "--check",
+            "--fail-under",
+            "99",
+        ])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("\"violations\""));
+}
+
+#[test]
+fn test_operational_failure_exits_one() {
+    omen()
+        .args(["-p", "/definitely/not/a/repository", "complexity"])
+        .assert()
+        .code(1);
 }
 
 #[test]

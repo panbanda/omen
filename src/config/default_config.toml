@@ -16,14 +16,10 @@ exclude = [
 ]
 
 [complexity]
-cyclomatic_warn = 10
 cyclomatic_error = 20
-cognitive_warn = 15
 cognitive_error = 30
-max_nesting = 5
 
 [satd]
-categories = ["design", "defect", "requirement", "test", "performance", "security"]
 custom_markers = []
 
 [churn]
@@ -40,21 +36,8 @@ top = 20
 [score]
 # fail_under = 80
 
-[score.thresholds]
-# complexity = 85
-# duplication = 65
-# satd = 75
-# tdg = 70
-# coupling = 70
-# smells = 90
-# cohesion = 70
-
 [feature_flags]
 stale_days = 90
 # Built-in providers to enable. If empty, no built-in detection runs.
 # Available: launchdarkly, flipper, split, unleash, generic, env
 providers = []
-
-[output]
-format = "text"
-color = true

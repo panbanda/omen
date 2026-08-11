@@ -79,7 +79,7 @@ Key points for custom providers:
 - Custom providers run automatically and don't need to be listed in `providers`
 
 To write tree-sitter queries:
-1. Use `omen context <file>` to see the AST structure
+1. Use `omen outline --file <file>` to inspect the file structure
 2. Match the pattern that wraps your feature flag calls
 3. Capture the flag key string with `@flag_key` or `@key`
 

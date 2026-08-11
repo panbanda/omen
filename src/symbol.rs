@@ -67,19 +67,7 @@ pub fn get_symbol(
     let candidates_idxs = index.resolve(name);
 
     if candidates_idxs.is_empty() {
-        // Build suggestions
-        let q = name.to_lowercase();
-        let mut suggestions: Vec<String> = index
-            .by_name
-            .keys()
-            .filter(|k| {
-                let kl = k.to_lowercase();
-                kl.contains(&q) || q.contains(kl.as_str())
-            })
-            .cloned()
-            .collect();
-        suggestions.sort();
-        suggestions.truncate(10);
+        let suggestions = suggestions_from_index(&index, name);
         let hint = if suggestions.is_empty() {
             String::new()
         } else {
@@ -174,6 +162,30 @@ pub fn get_symbol(
         cognitive,
         candidates,
     })
+}
+
+pub fn suggest_symbols(root: &Path, files: &[PathBuf], name: &str) -> Result<Vec<String>> {
+    let index = build_index(root, files)?;
+    Ok(suggestions_from_index(&index, name))
+}
+
+fn suggestions_from_index(
+    index: &crate::analyzers::repomap::CallGraphIndex,
+    name: &str,
+) -> Vec<String> {
+    let query = name.to_lowercase();
+    let mut suggestions: Vec<String> = index
+        .by_name
+        .keys()
+        .filter(|candidate| {
+            let candidate = candidate.to_lowercase();
+            candidate.contains(&query) || query.contains(candidate.as_str())
+        })
+        .cloned()
+        .collect();
+    suggestions.sort();
+    suggestions.truncate(10);
+    suggestions
 }
 
 /// Read lines start_line..=end_line from a file (1-indexed).

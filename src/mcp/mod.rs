@@ -51,6 +51,36 @@ struct ToolDef {
     required: &'static [&'static str],
 }
 
+fn u32_arg(arguments: &Value, name: &str, default: u32) -> u32 {
+    arguments
+        .get(name)
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .unwrap_or(default)
+}
+
+fn usize_arg(arguments: &Value, name: &str, default: usize) -> usize {
+    arguments
+        .get(name)
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(default)
+}
+
+fn f64_arg(arguments: &Value, name: &str, default: f64) -> f64 {
+    arguments
+        .get(name)
+        .and_then(Value::as_f64)
+        .unwrap_or(default)
+}
+
+fn tool_error_response(error: &str) -> Value {
+    json!({
+        "content": [{"type": "text", "text": error}],
+        "isError": true
+    })
+}
+
 impl ToolDef {
     fn to_json(&self) -> serde_json::Value {
         let mut props = serde_json::Map::new();
@@ -108,6 +138,153 @@ fn count_items(value: &serde_json::Value) -> Option<usize> {
             }
         }
         _ => None,
+    }
+}
+
+fn primary_count(tool_name: &str, value: &Value) -> Option<usize> {
+    match tool_name {
+        "complexity" => value.get("files")?.as_array().map(|files| {
+            files
+                .iter()
+                .filter_map(|file| file.get("functions")?.as_array())
+                .map(Vec::len)
+                .sum()
+        }),
+        "impact" => Some(
+            ["callers", "callees"]
+                .iter()
+                .filter_map(|name| value.get(*name)?.as_array())
+                .flatten()
+                .filter_map(|level| level.get("symbols")?.as_array())
+                .map(Vec::len)
+                .sum(),
+        ),
+        "graph" => value.get("cycles")?.as_array().map(|cycles| {
+            cycles
+                .iter()
+                .filter_map(Value::as_array)
+                .map(Vec::len)
+                .sum()
+        }),
+        tool => primary_field(tool)
+            .and_then(|field| value.get(field))
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .or_else(|| count_items(value)),
+    }
+}
+
+fn primary_field(tool_name: &str) -> Option<&'static str> {
+    match tool_name {
+        "context" => Some("top_symbols"),
+        "outline" => Some("files"),
+        "satd" | "deadcode" => Some("items"),
+        "churn" | "defect" | "tdg" | "ownership" => Some("files"),
+        "clones" => Some("clones"),
+        "changes" => Some("commits"),
+        "diff" => Some("recommendations"),
+        "hotspot" => Some("hotspots"),
+        "temporal" => Some("couplings"),
+        "cohesion" => Some("classes"),
+        "repomap" => Some("symbols"),
+        "smells" => Some("smells"),
+        "flags" => Some("flags"),
+        "semantic_search" | "semantic_search_hyde" => Some("results"),
+        "get_symbol" => Some("callers"),
+        _ => None,
+    }
+}
+
+fn truncate_primary(tool_name: &str, value: &mut Value, limit: usize, offset: usize) {
+    match tool_name {
+        "complexity" => truncate_nested(value, &["files", "functions"], limit, offset),
+        "impact" => {
+            let mut remaining_offset = offset;
+            let mut remaining_limit = if limit == 0 { usize::MAX } else { limit };
+            for name in ["callers", "callees"] {
+                truncate_nested_budget(
+                    value,
+                    &[name, "symbols"],
+                    &mut remaining_limit,
+                    &mut remaining_offset,
+                );
+            }
+        }
+        "graph" => truncate_array_children(value, "cycles", limit, offset),
+        tool if primary_field(tool).is_some() => {
+            if let Some(field) = primary_field(tool) {
+                truncate_field(value, field, limit, offset);
+            }
+        }
+        _ => {
+            crate::output::truncate_lists(value, limit, offset);
+        }
+    }
+}
+
+fn truncate_field(value: &mut Value, field: &str, limit: usize, offset: usize) {
+    let Some(items) = value.get_mut(field).and_then(Value::as_array_mut) else {
+        return;
+    };
+    let skip = offset.min(items.len());
+    items.drain(0..skip);
+    if limit > 0 {
+        items.truncate(limit);
+    }
+}
+
+fn truncate_nested(value: &mut Value, path: &[&str], limit: usize, offset: usize) {
+    let mut remaining_limit = if limit == 0 { usize::MAX } else { limit };
+    let mut remaining_offset = offset;
+    truncate_nested_budget(value, path, &mut remaining_limit, &mut remaining_offset);
+}
+
+fn truncate_nested_budget(
+    value: &mut Value,
+    path: &[&str],
+    remaining_limit: &mut usize,
+    remaining_offset: &mut usize,
+) {
+    let Some(parents) = value.get_mut(path[0]).and_then(Value::as_array_mut) else {
+        return;
+    };
+    for parent in parents {
+        let Some(items) = parent.get_mut(path[1]).and_then(Value::as_array_mut) else {
+            continue;
+        };
+        let skip = (*remaining_offset).min(items.len());
+        items.drain(0..skip);
+        *remaining_offset -= skip;
+        if *remaining_offset > 0 {
+            items.clear();
+            continue;
+        }
+        if items.len() > *remaining_limit {
+            items.truncate(*remaining_limit);
+        }
+        *remaining_limit -= items.len();
+    }
+}
+
+fn truncate_array_children(value: &mut Value, field: &str, limit: usize, offset: usize) {
+    let Some(children) = value.get_mut(field).and_then(Value::as_array_mut) else {
+        return;
+    };
+    let mut remaining_limit = if limit == 0 { usize::MAX } else { limit };
+    let mut remaining_offset = offset;
+    for child in children {
+        let Some(items) = child.as_array_mut() else {
+            continue;
+        };
+        let skip = remaining_offset.min(items.len());
+        items.drain(0..skip);
+        remaining_offset -= skip;
+        if remaining_offset > 0 {
+            items.clear();
+        } else {
+            items.truncate(remaining_limit);
+            remaining_limit -= items.len();
+        }
     }
 }
 
@@ -242,12 +419,12 @@ impl McpServer {
     }
 
     fn handle_request(&self, request: JsonRpcRequest) -> JsonRpcResponse {
-        let result = match request.method.as_str() {
-            "initialize" => self.handle_initialize(),
-            "tools/list" => self.handle_tools_list(),
-            "tools/call" => self.handle_tool_call(request.params),
-            "shutdown" => Ok(json!({})),
-            _ => Err(format!("Unknown method: {}", request.method)),
+        let (result, error_code) = match request.method.as_str() {
+            "initialize" => (self.handle_initialize(), -32603),
+            "tools/list" => (self.handle_tools_list(), -32603),
+            "tools/call" => (self.handle_tool_call(request.params), -32602),
+            "shutdown" => (Ok(json!({})), -32603),
+            _ => (Err(format!("Unknown method: {}", request.method)), -32601),
         };
 
         match result {
@@ -262,7 +439,7 @@ impl McpServer {
                 id: request.id,
                 result: None,
                 error: Some(JsonRpcError {
-                    code: -32603,
+                    code: error_code,
                     message: msg,
                     data: None,
                 }),
@@ -272,7 +449,7 @@ impl McpServer {
 
     fn handle_initialize(&self) -> std::result::Result<Value, String> {
         Ok(json!({
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": "2025-11-25",
             "capabilities": {
                 "tools": {}
             },
@@ -293,10 +470,9 @@ impl McpServer {
         let limit = args["limit"].as_u64().unwrap_or(50) as usize;
         let offset = args["offset"].as_u64().unwrap_or(0) as usize;
 
-        let total_items = count_items(&value);
-        crate::output::truncate_lists(&mut value, limit, offset);
-        // Count returned items by summing array lengths AFTER truncation.
-        let returned = count_items(&value);
+        let total_items = primary_count(tool_name, &value);
+        truncate_primary(tool_name, &mut value, limit, offset);
+        let returned = primary_count(tool_name, &value);
 
         let mut envelope = json!({
             "tool": tool_name,
@@ -321,7 +497,7 @@ impl McpServer {
         let tools: Vec<serde_json::Value> = vec![
             ToolDef {
                 name: "context",
-                description: "Use first. Returns top-N PageRank-ranked symbols, risks, language breakdown, directory tree, entry points, and navigation hints. Cheap.",
+                description: "Use first. Returns top-N PageRank-ranked symbols, risks, language breakdown, directory tree, entry points, and navigation hints. Expensive on large repos; run once and cache.",
                 properties: vec![
                     ("path", json!({"type": "string", "description": "File or directory path"})),
                     ("max_symbols", json!({"type": "integer", "description": "Maximum symbols to include"})),
@@ -345,7 +521,6 @@ impl McpServer {
                 description: "Returns cyclomatic and cognitive complexity per function. Fast.",
                 properties: vec![
                     ("path", json!({"type": "string", "description": "File or directory path"})),
-                    ("threshold", json!({"type": "number", "description": "Minimum complexity to report"})),
                 ],
                 required: &[],
             },
@@ -397,8 +572,6 @@ impl McpServer {
                 name: "changes",
                 description: "Use to assess recent commit risk. Analyzes recent changes with JIT risk analysis.",
                 properties: vec![
-                    ("commit", json!({"type": "string", "description": "Commit or range to analyze"})),
-                    ("count", json!({"type": "integer", "description": "Number of commits"})),
                 ],
                 required: &[],
             },
@@ -442,7 +615,6 @@ impl McpServer {
                 properties: vec![
                     ("path", json!({"type": "string", "description": "File or directory path"})),
                     ("days", json!({"type": "integer", "description": "Number of days to analyze"})),
-                    ("min_coupling", json!({"type": "number", "description": "Minimum coupling strength"})),
                 ],
                 required: &[],
             },
@@ -494,7 +666,6 @@ impl McpServer {
                 description: "Use for an overall health summary. Calculates composite repository health score.",
                 properties: vec![
                     ("path", json!({"type": "string", "description": "File or directory path"})),
-                    ("analyzers", json!({"type": "string", "description": "Analyzers to include (comma-separated)"})),
                 ],
                 required: &[],
             },
@@ -597,15 +768,57 @@ impl McpServer {
             .ok_or("Missing tool name")?;
         let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
 
+        if !Self::tool_names().contains(&tool_name) {
+            return Err(format!("Unknown tool: {tool_name}"));
+        }
+        let required = match tool_name {
+            "semantic_search" => Some(("query", "Missing query parameter")),
+            "semantic_search_hyde" => Some((
+                "hypothetical_document",
+                "Missing hypothetical_document parameter",
+            )),
+            "impact" => Some(("symbol", "Missing symbol parameter")),
+            "get_symbol" => Some(("name", "Missing name parameter")),
+            _ => None,
+        };
+        if let Some((field, message)) = required {
+            if arguments.get(field).and_then(Value::as_str).is_none() {
+                return Err(message.to_string());
+            }
+        }
+
+        match tool_name {
+            "semantic_search" => {
+                return Ok(self
+                    .handle_semantic_search(&arguments)
+                    .unwrap_or_else(|error| tool_error_response(&error)))
+            }
+            "semantic_search_hyde" => {
+                return Ok(self
+                    .handle_semantic_search_hyde(&arguments)
+                    .unwrap_or_else(|error| tool_error_response(&error)))
+            }
+            _ => {}
+        }
+
         let requested_path = arguments
             .get("path")
             .and_then(|v| v.as_str())
             .map(PathBuf::from)
             .unwrap_or_else(|| self.root_path.clone());
-        let path = self.resolve_confined_path(&requested_path, Some(&self.root_path))?;
+        let path = match self.resolve_confined_path(&requested_path, Some(&self.root_path)) {
+            Ok(path) => path,
+            Err(error) => return Ok(tool_error_response(&error)),
+        };
 
-        let file_set = FileSet::from_path(&path, &self.config)
-            .map_err(|e| format!("Failed to create file set: {}", e))?;
+        let file_set = match FileSet::from_path(&path, &self.config) {
+            Ok(file_set) => file_set,
+            Err(error) => {
+                return Ok(tool_error_response(&format!(
+                    "Failed to create file set: {error}"
+                )))
+            }
+        };
 
         // Try to open a git repository at the path
         let (git_root, git_skipped_reason) = match GitRepo::open(&path) {
@@ -613,7 +826,16 @@ impl McpServer {
             Err(error) => (None, Some(error.to_string())),
         };
 
-        let mut ctx = AnalysisContext::new(&file_set, &self.config, Some(&path));
+        let mut effective_config = self.config.clone();
+        if tool_name == "flags" {
+            if let Some(provider) = arguments.get("provider").and_then(Value::as_str) {
+                effective_config.feature_flags.providers = vec![provider.to_string()];
+            }
+            if let Some(days) = arguments.get("stale_days").and_then(Value::as_u64) {
+                effective_config.feature_flags.stale_days = u32::try_from(days).unwrap_or(u32::MAX);
+            }
+        }
+        let mut ctx = AnalysisContext::new(&file_set, &effective_config, Some(&path));
         if let Some(ref git_path) = git_root {
             ctx = ctx.with_git_path(git_path);
         }
@@ -622,43 +844,91 @@ impl McpServer {
             "complexity" => self.run_analyzer::<crate::analyzers::complexity::Analyzer>(&ctx),
             "satd" => self.run_analyzer::<crate::analyzers::satd::Analyzer>(&ctx),
             "deadcode" => self.run_analyzer::<crate::analyzers::deadcode::Analyzer>(&ctx),
-            "churn" => self.run_analyzer::<crate::analyzers::churn::Analyzer>(&ctx),
-            "clones" => self.run_analyzer::<crate::analyzers::duplicates::Analyzer>(&ctx),
-            "defect" => self.run_analyzer::<crate::analyzers::defect::Analyzer>(&ctx),
+            "churn" => self.run_analyzer_instance(
+                &ctx,
+                crate::analyzers::churn::Analyzer::new().with_days(u32_arg(&arguments, "days", 30)),
+            ),
+            "clones" => self.run_analyzer_instance(
+                &ctx,
+                crate::analyzers::duplicates::Analyzer::new()
+                    .with_min_tokens(usize_arg(&arguments, "min_tokens", 50))
+                    .with_similarity_threshold(f64_arg(&arguments, "similarity", 0.70)),
+            ),
+            "defect" => self.run_analyzer_instance(
+                &ctx,
+                crate::analyzers::defect::Analyzer::new()
+                    .with_churn_days(u32_arg(&arguments, "days", 30)),
+            ),
             "changes" => self.run_analyzer::<crate::analyzers::changes::Analyzer>(&ctx),
             "tdg" => self.run_analyzer::<crate::analyzers::tdg::Analyzer>(&ctx),
             "graph" => self.run_analyzer::<crate::analyzers::graph::Analyzer>(&ctx),
-            "hotspot" => self.run_analyzer::<crate::analyzers::hotspot::Analyzer>(&ctx),
-            "temporal" => self.run_analyzer::<crate::analyzers::temporal::Analyzer>(&ctx),
+            "hotspot" => self.run_analyzer_instance(
+                &ctx,
+                crate::analyzers::hotspot::Analyzer::new()
+                    .with_days(u32_arg(&arguments, "days", 90)),
+            ),
+            "temporal" => self.run_analyzer_instance(
+                &ctx,
+                crate::analyzers::temporal::Analyzer::new()
+                    .with_days(u32_arg(&arguments, "days", 30)),
+            ),
             "ownership" => self.run_analyzer::<crate::analyzers::ownership::Analyzer>(&ctx),
             "cohesion" => self.run_analyzer::<crate::analyzers::cohesion::Analyzer>(&ctx),
-            "repomap" => self.run_analyzer::<crate::analyzers::repomap::Analyzer>(&ctx),
+            "repomap" => self.run_analyzer_instance(
+                &ctx,
+                crate::analyzers::repomap::Analyzer::new().with_max_symbols(usize_arg(
+                    &arguments,
+                    "max_symbols",
+                    0,
+                )),
+            ),
             "smells" => self.run_analyzer::<crate::analyzers::smells::Analyzer>(&ctx),
-            "flags" => self.run_analyzer::<crate::analyzers::flags::Analyzer>(&ctx),
+            "flags" => {
+                let providers = arguments
+                    .get("provider")
+                    .and_then(Value::as_str)
+                    .map(|value| vec![value.to_string()])
+                    .unwrap_or_default();
+                self.run_analyzer_instance(
+                    &ctx,
+                    crate::analyzers::flags::Analyzer::new()
+                        .with_expected_ttl(u32_arg(&arguments, "stale_days", 14))
+                        .with_providers(providers),
+                )
+            }
             "score" => self.run_analyzer::<crate::score::Analyzer>(&ctx),
             "context" => {
-                return self.handle_context(&path, &file_set, &arguments);
+                return Ok(self
+                    .handle_context(&path, &file_set, &arguments)
+                    .unwrap_or_else(|error| tool_error_response(&error)));
             }
             "diff" => {
-                return self.handle_diff(&path, &arguments);
-            }
-            "semantic_search" => {
-                return self.handle_semantic_search(&arguments);
-            }
-            "semantic_search_hyde" => {
-                return self.handle_semantic_search_hyde(&arguments);
+                return Ok(self
+                    .handle_diff(&path, &arguments)
+                    .unwrap_or_else(|error| tool_error_response(&error)));
             }
             "outline" => {
-                return self.handle_outline(&path, &arguments);
+                return Ok(self
+                    .handle_outline(&path, &arguments)
+                    .unwrap_or_else(|error| tool_error_response(&error)));
             }
             "impact" => {
-                return self.handle_impact(&path, &file_set, &arguments);
+                return Ok(self
+                    .handle_impact(&path, &file_set, &arguments)
+                    .unwrap_or_else(|error| tool_error_response(&error)));
             }
             "get_symbol" => {
-                return self.handle_get_symbol(&path, &file_set, &arguments);
+                return Ok(self
+                    .handle_get_symbol(&path, &file_set, &arguments)
+                    .unwrap_or_else(|error| tool_error_response(&error)));
             }
-            _ => Err(format!("Unknown tool: {}", tool_name)),
-        }?;
+            _ => unreachable!(),
+        };
+
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => return Ok(tool_error_response(&error)),
+        };
 
         self.tool_response(tool_name, result, &arguments, git_skipped_reason.as_deref())
     }
@@ -667,7 +937,14 @@ impl McpServer {
         &self,
         ctx: &AnalysisContext<'_>,
     ) -> std::result::Result<Value, String> {
-        let analyzer = A::default();
+        self.run_analyzer_instance(ctx, A::default())
+    }
+
+    fn run_analyzer_instance<A: Analyzer>(
+        &self,
+        ctx: &AnalysisContext<'_>,
+        analyzer: A,
+    ) -> std::result::Result<Value, String> {
         let result = analyzer
             .analyze(ctx)
             .map_err(|e| format!("Analysis failed: {}", e))?;
@@ -680,7 +957,7 @@ impl McpServer {
         file_set: &FileSet,
         arguments: &Value,
     ) -> std::result::Result<Value, String> {
-        let max_symbols = arguments
+        let explicit_max_symbols = arguments
             .get("max_symbols")
             .and_then(|v| v.as_u64())
             .map(|v| v as usize);
@@ -693,14 +970,21 @@ impl McpServer {
             .and_then(|v| v.as_u64())
             .map(|v| v as usize)
             .unwrap_or(8000);
+        let max_symbols = explicit_max_symbols
+            .unwrap_or_else(|| crate::context::max_symbols_for_token_budget(max_tokens));
         let format = arguments
             .get("format")
             .and_then(|v| v.as_str())
             .unwrap_or("json");
 
-        let mut context =
-            crate::context::build_context(path, file_set, &self.config, max_symbols, max_risks)
-                .map_err(|e| format!("Context failed: {}", e))?;
+        let mut context = crate::context::build_context(
+            path,
+            file_set,
+            &self.config,
+            Some(max_symbols),
+            max_risks,
+        )
+        .map_err(|e| format!("Context failed: {}", e))?;
 
         // Apply token budget
         crate::context::apply_token_budget(&mut context, max_tokens);
@@ -1051,7 +1335,7 @@ impl McpServer {
         file_set: &FileSet,
         arguments: &Value,
     ) -> std::result::Result<Value, String> {
-        use crate::symbol::{get_symbol, SymbolOptions};
+        use crate::symbol::{get_symbol, suggest_symbols, SymbolOptions};
 
         let name = arguments
             .get("name")
@@ -1076,11 +1360,17 @@ impl McpServer {
             max_source_lines,
         };
 
-        let report = get_symbol(repo_path, &files, name, &opts)
-            .map_err(|e| format!("Symbol lookup failed: {}", e))?;
-
-        let value =
-            serde_json::to_value(&report).map_err(|e| format!("Serialization failed: {}", e))?;
+        let value = match get_symbol(repo_path, &files, name, &opts) {
+            Ok(report) => {
+                serde_json::to_value(&report).map_err(|e| format!("Serialization failed: {e}"))?
+            }
+            Err(_) => json!({
+                "name": name,
+                "found": false,
+                "suggestions": suggest_symbols(repo_path, &files, name)
+                    .map_err(|e| format!("Symbol suggestions failed: {e}"))?
+            }),
+        };
 
         self.tool_response("get_symbol", value, arguments, None)
     }
@@ -1274,7 +1564,7 @@ mod tests {
     fn test_handle_initialize() {
         let (server, _temp_dir) = create_test_server();
         let result = server.handle_initialize().unwrap();
-        assert!(result.get("protocolVersion").is_some());
+        assert_eq!(result["protocolVersion"], "2025-11-25");
         assert!(result.get("capabilities").is_some());
         assert!(result.get("serverInfo").is_some());
     }
@@ -1518,7 +1808,10 @@ mod tests {
             "arguments": {"path": target_dir.path().to_str().unwrap()}
         });
 
-        assert!(server.handle_tool_call(Some(params)).is_err());
+        // A path outside the server root is rejected as a tool-level error result
+        // (isError) rather than analyzed, so the agent can see and recover.
+        let response = server.handle_tool_call(Some(params)).unwrap();
+        assert_eq!(response["isError"], true);
     }
 
     #[test]
@@ -1631,8 +1924,37 @@ mod tests {
         };
         let response = server.handle_request(request);
         assert!(response.result.is_none());
-        assert!(response.error.is_some());
-        assert!(response.error.unwrap().message.contains("Unknown method"));
+        let error = response.error.unwrap();
+        assert_eq!(error.code, -32601);
+        assert!(error.message.contains("Unknown method"));
+    }
+
+    #[test]
+    fn test_handle_request_invalid_tool_params_uses_invalid_params_code() {
+        let (server, _temp_dir) = create_test_server();
+        let response = server.handle_request(JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(1)),
+            method: "tools/call".to_string(),
+            params: Some(json!({"name": "impact", "arguments": {}})),
+        });
+        assert_eq!(response.error.unwrap().code, -32602);
+    }
+
+    #[test]
+    fn test_handle_request_tool_execution_failure_is_tool_error_result() {
+        let (server, _temp_dir) = create_test_server();
+        let response = server.handle_request(JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(1)),
+            method: "tools/call".to_string(),
+            params: Some(json!({
+                "name": "complexity",
+                "arguments": {"path": "/definitely/not/a/repository"}
+            })),
+        });
+        assert!(response.error.is_none());
+        assert_eq!(response.result.unwrap()["isError"], true);
     }
 
     #[test]
@@ -1784,6 +2106,92 @@ mod tests {
             "churn tool should succeed with git history: {:?}",
             result.err()
         );
+    }
+
+    #[test]
+    fn test_handle_tool_call_churn_honors_days() {
+        let (server, temp_dir) = create_git_test_server();
+        let response = server
+            .handle_tool_call(Some(json!({
+                "name": "churn",
+                "arguments": {"path": temp_dir.path(), "days": 3650}
+            })))
+            .unwrap();
+        let envelope: Value =
+            serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(envelope["result"]["period_days"], 3650);
+    }
+
+    #[test]
+    fn test_handle_tool_call_repomap_honors_max_symbols() {
+        let (server, temp_dir) = create_test_server();
+        std::fs::write(
+            temp_dir.path().join("symbols.rs"),
+            "fn one() {}\nfn two() {}\nfn three() {}\n",
+        )
+        .unwrap();
+        let response = server
+            .handle_tool_call(Some(json!({
+                "name": "repomap",
+                "arguments": {"path": temp_dir.path(), "max_symbols": 1, "limit": 0}
+            })))
+            .unwrap();
+        let envelope: Value =
+            serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert!(envelope["result"]["symbols"].as_array().unwrap().len() <= 1);
+    }
+
+    #[test]
+    fn test_handle_tool_call_clones_honors_thresholds() {
+        let (server, temp_dir) = create_test_server();
+        std::fs::write(
+            temp_dir.path().join("clones.rs"),
+            "fn a() { let x = 1; let y = 2; }\nfn b() { let x = 1; let y = 2; }\n",
+        )
+        .unwrap();
+        let response = server
+            .handle_tool_call(Some(json!({
+                "name": "clones",
+                "arguments": {"path": temp_dir.path(), "min_tokens": 8, "similarity": 0.42, "limit": 0}
+            })))
+            .unwrap();
+        let envelope: Value =
+            serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(envelope["result"]["min_lines"], 1);
+        assert_eq!(envelope["result"]["threshold"], 0.42);
+    }
+
+    #[test]
+    fn test_handle_tool_call_temporal_honors_days() {
+        let (server, temp_dir) = create_git_test_server();
+        let response = server
+            .handle_tool_call(Some(json!({
+                "name": "temporal",
+                "arguments": {"path": temp_dir.path(), "days": 321}
+            })))
+            .unwrap();
+        let envelope: Value =
+            serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(envelope["result"]["period_days"], 321);
+    }
+
+    #[test]
+    fn test_handle_tool_call_flags_honors_provider() {
+        let (server, temp_dir) = create_test_server();
+        std::fs::write(
+            temp_dir.path().join("flags.rs"),
+            "fn f() { if std::env::var(\"FEATURE_ALPHA\").is_ok() {} }\n",
+        )
+        .unwrap();
+        let response = server
+            .handle_tool_call(Some(json!({
+                "name": "flags",
+                "arguments": {"path": temp_dir.path(), "provider": "nonexistent", "limit": 0}
+            })))
+            .unwrap();
+        let envelope: Value =
+            serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(envelope["result"]["summary"]["total_flags"], 0);
     }
 
     #[test]
@@ -2146,6 +2554,33 @@ mod tests {
     }
 
     #[test]
+    fn test_complexity_pagination_bounds_nested_functions_globally() {
+        let (server, _temp_dir) = create_test_server();
+        let files: Vec<Value> = (0..3)
+            .map(|file| json!({"path": format!("{file}.rs"), "functions": vec![json!({"name": "f"}); 100]}))
+            .collect();
+        let response = server
+            .tool_response(
+                "complexity",
+                json!({"files": files}),
+                &json!({"limit": 50}),
+                None,
+            )
+            .unwrap();
+        let envelope: Value =
+            serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
+        let returned: usize = envelope["result"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|file| file["functions"].as_array().unwrap().len())
+            .sum();
+        assert_eq!(envelope["total_items"], 300);
+        assert_eq!(envelope["returned"], 50);
+        assert_eq!(returned, 50);
+    }
+
+    #[test]
     fn test_all_tools_have_limit_and_offset_params() {
         let (server, _temp_dir) = create_test_server();
         let request = JsonRpcRequest {
@@ -2313,5 +2748,25 @@ mod tests {
         });
         let result = server.handle_tool_call(Some(params));
         assert!(result.is_err(), "get_symbol without name should fail");
+    }
+
+    #[test]
+    fn test_handle_tool_call_get_symbol_unknown_returns_structured_suggestions() {
+        let (server, temp_dir) = create_test_server();
+        std::fs::write(temp_dir.path().join("known.rs"), "fn known_symbol() {}\n").unwrap();
+        let response = server
+            .handle_tool_call(Some(json!({
+                "name": "get_symbol",
+                "arguments": {"name": "known", "path": temp_dir.path()}
+            })))
+            .unwrap();
+        let envelope: Value =
+            serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(envelope["result"]["found"], false);
+        assert!(envelope["result"]["suggestions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|suggestion| suggestion == "known_symbol"));
     }
 }

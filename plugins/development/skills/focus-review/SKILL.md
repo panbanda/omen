@@ -19,7 +19,7 @@ Review focus for: `{{.changed_files}}`
 omen -f json outline --compact --top 30
 
 # Check blast radius of changed symbols
-omen -f json impact --symbol <changed-symbol> --depth 2
+omen -f json impact <changed-symbol> --depth 2
 
 # Check risk of changed files
 omen -p "{{.changed_files}}" -f json defect
