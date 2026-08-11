@@ -311,7 +311,13 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                     .find(|entry| entry.get("analyzer").and_then(Value::as_str) == Some(name))?
                     .get("result")?
                     .clone();
-                serde_json::from_value(value).ok()
+                match serde_json::from_value(value) {
+                    Ok(result) => Some(result),
+                    Err(error) => {
+                        tracing::warn!(analyzer = name, %error, "Failed to parse collected analyzer result");
+                        None
+                    }
+                }
             }
 
             let file_set = filtered_file_set(path, &config, Some(args))?;

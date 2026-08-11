@@ -8,15 +8,17 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{LazyLock, OnceLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::Duration;
 
 use crate::core::{Error, Result};
 
 /// Global counter for generating unique temp file names across threads.
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
-static ACTIVE_MUTATIONS: LazyLock<parking_lot::Mutex<HashMap<PathBuf, Vec<u8>>>> =
-    LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
+type ActiveMutations = Arc<parking_lot::Mutex<HashMap<PathBuf, Vec<u8>>>>;
+
+static ACTIVE_MUTATIONS: LazyLock<ActiveMutations> =
+    LazyLock::new(|| Arc::new(parking_lot::Mutex::new(HashMap::new())));
 static SIGNAL_HANDLER: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 static INTERRUPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -76,6 +78,8 @@ pub struct MutationGuard {
     original: Vec<u8>,
     /// Whether the file has been modified.
     modified: bool,
+    active_mutations: ActiveMutations,
+    interrupted: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl MutationGuard {
@@ -83,6 +87,14 @@ impl MutationGuard {
     ///
     /// Reads and stores the original file content for later restoration.
     pub fn new(path: impl AsRef<Path>) -> Result<Self> {
+        Self::new_with_state(path, Arc::clone(&ACTIVE_MUTATIONS), None)
+    }
+
+    fn new_with_state(
+        path: impl AsRef<Path>,
+        active_mutations: ActiveMutations,
+        interrupted: Option<Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         let original = fs::read(&path).map_err(Error::Io)?;
 
@@ -90,14 +102,26 @@ impl MutationGuard {
             path,
             original,
             modified: false,
+            active_mutations,
+            interrupted,
         })
+    }
+
+    fn is_interrupted(&self) -> bool {
+        self.interrupted
+            .as_deref()
+            .unwrap_or(&INTERRUPTED)
+            .load(Ordering::SeqCst)
     }
 
     /// Apply a mutation to the file.
     ///
     /// This writes the mutated content to the file atomically.
     pub fn apply(&mut self, content: &[u8]) -> Result<()> {
-        let mut active = ACTIVE_MUTATIONS.lock();
+        let mut active = self.active_mutations.lock();
+        if self.is_interrupted() {
+            return Ok(());
+        }
         active.insert(self.path.clone(), self.original.clone());
         if let Err(error) = atomic_write(&self.path, content) {
             active.remove(&self.path);
@@ -130,7 +154,7 @@ impl MutationGuard {
         if self.modified {
             atomic_write(&self.path, &self.original)?;
             self.modified = false;
-            ACTIVE_MUTATIONS.lock().remove(&self.path);
+            self.active_mutations.lock().remove(&self.path);
         }
         Ok(())
     }
@@ -164,15 +188,23 @@ impl Drop for MutationGuard {
                 let _ = fs::write(&self.path, &self.original);
             }
         }
-        ACTIVE_MUTATIONS.lock().remove(&self.path);
+        self.active_mutations.lock().remove(&self.path);
+    }
+}
+
+fn restore_registered_mutations(
+    active_mutations: &parking_lot::Mutex<HashMap<PathBuf, Vec<u8>>>,
+    interrupted: &std::sync::atomic::AtomicBool,
+) {
+    interrupted.store(true, Ordering::SeqCst);
+    let active = active_mutations.lock();
+    for (path, original) in active.iter() {
+        let _ = atomic_write(path, original);
     }
 }
 
 pub fn restore_active_mutations() {
-    let active = ACTIVE_MUTATIONS.lock();
-    for (path, original) in active.iter() {
-        let _ = atomic_write(path, original);
-    }
+    restore_registered_mutations(&ACTIVE_MUTATIONS, &INTERRUPTED);
 }
 
 pub fn install_signal_handler() -> Result<()> {
@@ -431,14 +463,39 @@ mod tests {
 
     #[test]
     fn test_restore_active_mutations_restores_modified_files() {
+        let active_mutations = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let interrupted = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("test.rs");
         fs::write(&file_path, b"original").unwrap();
-        let mut guard = MutationGuard::new(&file_path).unwrap();
+        let mut guard = MutationGuard::new_with_state(
+            &file_path,
+            Arc::clone(&active_mutations),
+            Some(Arc::clone(&interrupted)),
+        )
+        .unwrap();
         guard.apply(b"mutated").unwrap();
 
-        restore_active_mutations();
+        restore_registered_mutations(&active_mutations, &interrupted);
 
+        assert_eq!(fs::read(&file_path).unwrap(), b"original");
+        guard.apply(b"mutated again").unwrap();
+        assert_eq!(fs::read(&file_path).unwrap(), b"original");
+    }
+
+    #[test]
+    fn test_mutation_guard_apply_is_noop_after_interrupt() {
+        let active_mutations = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let interrupted = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
+        let mut guard =
+            MutationGuard::new_with_state(&file_path, active_mutations, Some(interrupted)).unwrap();
+
+        guard.apply(b"mutated").unwrap();
+
+        assert!(!guard.is_modified());
         assert_eq!(fs::read(&file_path).unwrap(), b"original");
     }
 

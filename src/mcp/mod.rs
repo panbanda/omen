@@ -331,8 +331,7 @@ impl McpServer {
             {
                 Ok(read) => read,
                 Err(error) => {
-                    write_parse_error(&mut writer, &format!("read error: {error}"))?;
-                    continue;
+                    return Err(error.into());
                 }
             };
             if read == 0 {
@@ -349,9 +348,11 @@ impl McpServer {
                 continue;
             }
 
-            bytes.pop();
-            if bytes.last() == Some(&b'\r') {
+            if has_newline {
                 bytes.pop();
+                if bytes.last() == Some(&b'\r') {
+                    bytes.pop();
+                }
             }
             if bytes.is_empty() {
                 continue;
@@ -1408,6 +1409,26 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    struct AlwaysErrorReader {
+        attempts: usize,
+    }
+
+    impl Read for AlwaysErrorReader {
+        fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("persistent read failure"))
+        }
+    }
+
+    impl BufRead for AlwaysErrorReader {
+        fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+            self.attempts += 1;
+            assert_eq!(self.attempts, 1, "run_stream retried a failed reader");
+            Err(std::io::Error::other("persistent read failure"))
+        }
+
+        fn consume(&mut self, _amount: usize) {}
+    }
+
     fn create_test_server() -> (McpServer, TempDir) {
         let temp_dir = TempDir::new().unwrap();
         let config = Config::default();
@@ -1499,6 +1520,32 @@ mod tests {
         assert_eq!(responses.len(), 2);
         assert_eq!(responses[0]["error"]["code"], -32700);
         assert_eq!(responses[1]["id"], 1);
+    }
+
+    #[test]
+    fn test_stdio_processes_final_request_without_trailing_newline() {
+        let (server, _root) = create_test_server();
+        let input = br#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#;
+        let mut output = Vec::new();
+
+        server.run_stream(input.as_slice(), &mut output).unwrap();
+
+        let response: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(response["id"], 1);
+        assert!(response.get("result").is_some());
+        assert!(response.get("error").is_none());
+    }
+
+    #[test]
+    fn test_stdio_stops_after_persistent_read_error() {
+        let (server, _root) = create_test_server();
+        let reader = AlwaysErrorReader { attempts: 0 };
+        let mut output = Vec::new();
+
+        let error = server.run_stream(reader, &mut output).unwrap_err();
+
+        assert!(error.to_string().contains("persistent read failure"));
+        assert!(output.is_empty());
     }
 
     #[test]
