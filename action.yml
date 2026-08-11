@@ -1,5 +1,5 @@
 name: 'Omen Analysis'
-description: 'Run diff risk analysis and health scoring on pull requests'
+description: 'Run pull request diff risk analysis and repository health scoring'
 author: 'panbanda'
 
 branding:
@@ -8,19 +8,19 @@ branding:
 
 inputs:
   version:
-    description: 'Omen version to install (e.g. "4.20.3"). Defaults to latest release.'
+    description: 'Omen version to install (for example, "4.20.3"), or "latest" for the newest stable release.'
     required: false
     default: 'latest'
   path:
-    description: 'Repository path to analyze'
+    description: 'Repository path to analyze, relative to the workflow workspace.'
     required: false
     default: '.'
   comment:
-    description: 'Post or update a sticky PR comment with analysis results'
+    description: 'Post or update a sticky analysis comment on pull requests.'
     required: false
     default: 'false'
   label:
-    description: 'Add a risk-level label to the PR'
+    description: 'Create and apply a risk-level label to pull requests.'
     required: false
     default: 'false'
   label-template:
@@ -40,20 +40,28 @@ inputs:
     required: false
     default: 'd93f0b'
   check:
-    description: 'Fail the action if risk level meets or exceeds threshold'
+    description: 'Fail pull request analysis when the risk level meets or exceeds the configured threshold.'
     required: false
     default: 'false'
   check-threshold:
     description: 'Risk level threshold for check failure (low, medium, high)'
     required: false
     default: 'high'
+  summary:
+    description: 'Write risk, change-size, repository health, and score-component results to the job step summary.'
+    required: false
+    default: 'true'
+  github-token:
+    description: 'GitHub token used to resolve and download releases and, when enabled, manage pull request comments and labels.'
+    required: false
+    default: ${{ github.token }}
 
 outputs:
   risk-score:
-    description: 'Diff risk score (0.0 - 1.0)'
+    description: 'Pull request diff risk score (0.0 - 1.0); empty on non-pull-request events.'
     value: ${{ steps.diff.outputs.risk-score }}
   risk-level:
-    description: 'Risk level (low, medium, high)'
+    description: 'Pull request risk level (low, medium, high); empty on non-pull-request events.'
     value: ${{ steps.diff.outputs.risk-level }}
   health-score:
     description: 'Repository health score (0 - 100)'
@@ -62,7 +70,7 @@ outputs:
     description: 'Health grade (A, B, C, D, F)'
     value: ${{ steps.score.outputs.health-grade }}
   diff-json:
-    description: 'Full omen diff JSON output'
+    description: 'Full omen diff JSON output; empty on non-pull-request events.'
     value: ${{ steps.diff.outputs.diff-json }}
   score-json:
     description: 'Full omen score JSON output'
@@ -71,108 +79,163 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    - name: Install omen
-      id: install
+    - name: Resolve omen version
+      id: resolve
       uses: actions/github-script@v9
       env:
         INPUT_VERSION: ${{ inputs.version }}
-        GITHUB_TOKEN: ${{ github.token }}
       with:
+        github-token: ${{ inputs.github-token }}
         script: |
-          const fs = require('fs');
-
-          const targets = {
-            'Linux-X64': 'x86_64-unknown-linux-gnu',
-            'Linux-ARM64': 'aarch64-unknown-linux-gnu',
-            'macOS-X64': 'x86_64-apple-darwin',
-            'macOS-ARM64': 'aarch64-apple-darwin',
-          };
-          const key = `${process.env.RUNNER_OS}-${process.env.RUNNER_ARCH}`;
-          const target = targets[key];
-          if (!target) {
-            core.setFailed(`Unsupported platform: ${key}`);
-            return;
-          }
-
-          let release;
-          if (process.env.INPUT_VERSION === 'latest') {
-            const { data: releases } = await github.rest.repos.listReleases({
-              owner: 'panbanda',
-              repo: 'omen',
-              per_page: 20,
-            });
-            release = releases.find(r =>
-              !r.prerelease && !r.draft && r.tag_name.startsWith('omen-v')
-            );
-            if (!release) {
-              core.setFailed('Could not determine latest omen release');
-              return;
+          try {
+            const targets = {
+              'Linux-X64': 'x86_64-unknown-linux-gnu',
+              'Linux-ARM64': 'aarch64-unknown-linux-gnu',
+              'macOS-X64': 'x86_64-apple-darwin',
+              'macOS-ARM64': 'aarch64-apple-darwin',
+            };
+            const platform = `${process.env.RUNNER_OS}-${process.env.RUNNER_ARCH}`;
+            const target = targets[platform];
+            if (!target) {
+              throw new Error(`Unsupported platform: ${platform}`);
             }
-          } else {
-            try {
+
+            let release;
+            if (process.env.INPUT_VERSION === 'latest') {
+              const { data: releases } = await github.rest.repos.listReleases({
+                owner: 'panbanda',
+                repo: 'omen',
+                per_page: 20,
+              });
+              release = releases.find(candidate =>
+                !candidate.prerelease && !candidate.draft && candidate.tag_name.startsWith('omen-v')
+              );
+              if (!release) {
+                throw new Error('Could not determine the latest stable omen release');
+              }
+            } else {
               const { data } = await github.rest.repos.getReleaseByTag({
                 owner: 'panbanda',
                 repo: 'omen',
                 tag: `omen-v${process.env.INPUT_VERSION}`,
               });
               release = data;
-            } catch (e) {
-              core.setFailed(`Release omen-v${process.env.INPUT_VERSION} not found`);
-              return;
             }
+
+            const version = release.tag_name.replace(/^omen-v/, '');
+            const assetName = `omen_${version}_${target}.tar.gz`;
+            const asset = release.assets.find(candidate => candidate.name === assetName);
+            if (!asset) {
+              throw new Error(`Asset ${assetName} was not found in ${release.tag_name}`);
+            }
+
+            core.setOutput('version', version);
+            core.setOutput('target', target);
+            core.setOutput('asset-name', assetName);
+            core.setOutput('asset-url', asset.url);
+            core.info(`Resolved omen ${version} for ${target}`);
+          } catch (error) {
+            core.setFailed(`Failed to resolve omen release: ${error.message}. Check the version input against released versions at https://github.com/panbanda/omen/releases.`);
           }
 
-          const version = release.tag_name.replace('omen-v', '');
-          core.info(`Installing omen ${version} for ${target}`);
+    - name: Restore cached omen binary
+      id: omen-cache
+      uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+      with:
+        path: ${{ runner.temp }}/omen-install
+        key: omen-${{ steps.resolve.outputs.version }}-${{ steps.resolve.outputs.target }}
 
-          const assetName = `omen_${version}_${target}.tar.gz`;
-          const asset = release.assets.find(a => a.name === assetName);
-          if (!asset) {
-            core.setFailed(`Asset ${assetName} not found in release ${release.tag_name}`);
-            return;
-          }
+    - name: Install omen
+      id: install
+      uses: actions/github-script@v9
+      env:
+        OMEN_VERSION: ${{ steps.resolve.outputs.version }}
+        OMEN_TARGET: ${{ steps.resolve.outputs.target }}
+        OMEN_ASSET_NAME: ${{ steps.resolve.outputs.asset-name }}
+        OMEN_ASSET_URL: ${{ steps.resolve.outputs.asset-url }}
+        OMEN_CACHE_HIT: ${{ steps.omen-cache.outputs.cache-hit }}
+        INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require('fs');
 
-          const response = await fetch(asset.url, {
-            headers: {
-              'Accept': 'application/octet-stream',
-              'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
-              'X-GitHub-Api-Version': '2022-11-28',
-            },
-          });
-          if (!response.ok) {
-            core.setFailed(`Failed to download ${assetName}: ${response.status} ${response.statusText}`);
-            return;
-          }
-
+          const version = process.env.OMEN_VERSION;
+          const target = process.env.OMEN_TARGET;
+          const assetName = process.env.OMEN_ASSET_NAME;
           const installDir = `${process.env.RUNNER_TEMP}/omen-install`;
-          await io.mkdirP(installDir);
+          const binaryPath = `${installDir}/omen`;
 
-          const tarPath = `${installDir}/${assetName}`;
-          fs.writeFileSync(tarPath, Buffer.from(await response.arrayBuffer()));
-          await exec.exec('tar', ['xzf', tarPath, '-C', installDir]);
-          fs.chmodSync(`${installDir}/omen`, 0o755);
-          core.addPath(installDir);
+          try {
+            await core.group(`Install omen ${version} for ${target}`, async () => {
+              const cacheHit = process.env.OMEN_CACHE_HIT === 'true' && fs.existsSync(binaryPath);
+              if (cacheHit) {
+                core.info('Using cached omen binary');
+              } else {
+                if (process.env.OMEN_CACHE_HIT === 'true') {
+                  core.warning('The omen cache entry did not contain a binary; downloading it again');
+                }
+                await io.mkdirP(installDir);
+                const response = await fetch(process.env.OMEN_ASSET_URL, {
+                  headers: {
+                    'Accept': 'application/octet-stream',
+                    'Authorization': `Bearer ${process.env.INPUT_GITHUB_TOKEN}`,
+                    'X-GitHub-Api-Version': '2022-11-28',
+                  },
+                });
+                if (!response.ok) {
+                  throw new Error(`download failed for ${assetName}: ${response.status} ${response.statusText}`);
+                }
+
+                const tarPath = `${installDir}/${assetName}`;
+                fs.writeFileSync(tarPath, Buffer.from(await response.arrayBuffer()));
+                const exitCode = await exec.exec('tar', ['xzf', tarPath, '-C', installDir], {
+                  ignoreReturnCode: true,
+                });
+                if (exitCode !== 0) {
+                  throw new Error(`tar extraction failed with exit code ${exitCode}`);
+                }
+                fs.rmSync(tarPath, { force: true });
+              }
+
+              if (!fs.existsSync(binaryPath)) {
+                throw new Error(`installed binary was not found at ${binaryPath}`);
+              }
+              fs.chmodSync(binaryPath, 0o755);
+              core.addPath(installDir);
+              core.setOutput('version', version);
+            });
+          } catch (error) {
+            core.setFailed(`Failed to install omen ${version}: ${error.message}. Check the version input against released versions and retry the workflow.`);
+          }
 
     - name: Run omen diff
       id: diff
+      if: github.event_name == 'pull_request'
       uses: actions/github-script@v9
       env:
         INPUT_PATH: ${{ inputs.path }}
         BASE_REF: ${{ github.event.pull_request.base.ref }}
       with:
+        github-token: ${{ inputs.github-token }}
         script: |
           const fs = require('fs');
-          const args = ['-f', 'json', '-p', process.env.INPUT_PATH, 'diff'];
-          if (process.env.BASE_REF) {
-            args.push('--target', `origin/${process.env.BASE_REF}`);
+          const args = [
+            '-f', 'json', '-p', process.env.INPUT_PATH,
+            'diff', '--target', `origin/${process.env.BASE_REF}`,
+          ];
+          const result = await exec.getExecOutput('omen', args, { ignoreReturnCode: true });
+          if (result.exitCode !== 0) {
+            const stderr = result.stderr.trim() || '(no stderr output)';
+            core.setFailed(`omen diff failed with exit code ${result.exitCode}: ${stderr}. Run "omen ${args.join(' ')}" locally to reproduce.`);
+            return;
           }
 
           let diff;
           try {
-            const { stdout } = await exec.getExecOutput('omen', args);
-            diff = JSON.parse(stdout);
-          } catch (e) {
-            core.setFailed(`omen diff failed: ${e.message}`);
+            diff = JSON.parse(result.stdout);
+          } catch (error) {
+            core.setFailed(`omen diff returned invalid JSON: ${error.message}. Run "omen ${args.join(' ')}" locally to inspect the output.`);
             return;
           }
 
@@ -189,22 +252,36 @@ runs:
             core.setOutput('diff-json', filePath);
           }
 
+    - name: Explain skipped diff analysis
+      if: github.event_name != 'pull_request'
+      uses: actions/github-script@v9
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          core.warning(`Skipping omen diff on ${context.eventName}. Without an explicit PR base, omen auto-detects main or master, which does not reliably describe a push or manually dispatched change. Repository health scoring will still run, and the job summary remains available when enabled.`);
+
     - name: Run omen score
       id: score
       uses: actions/github-script@v9
       env:
         INPUT_PATH: ${{ inputs.path }}
       with:
+        github-token: ${{ inputs.github-token }}
         script: |
           const fs = require('fs');
+          const args = ['-f', 'json', '-p', process.env.INPUT_PATH, 'score'];
+          const result = await exec.getExecOutput('omen', args, { ignoreReturnCode: true });
+          if (result.exitCode !== 0) {
+            const stderr = result.stderr.trim() || '(no stderr output)';
+            core.setFailed(`omen score failed with exit code ${result.exitCode}: ${stderr}. Run "omen ${args.join(' ')}" locally to reproduce.`);
+            return;
+          }
+
           let score;
           try {
-            const { stdout } = await exec.getExecOutput('omen', [
-              '-f', 'json', '-p', process.env.INPUT_PATH, 'score',
-            ]);
-            score = JSON.parse(stdout);
-          } catch (e) {
-            core.setFailed(`omen score failed: ${e.message}`);
+            score = JSON.parse(result.stdout);
+          } catch (error) {
+            core.setFailed(`omen score returned invalid JSON: ${error.message}. Run "omen ${args.join(' ')}" locally to inspect the output.`);
             return;
           }
 
@@ -221,13 +298,98 @@ runs:
             core.setOutput('score-json', filePath);
           }
 
-    - name: Post sticky comment
-      if: inputs.comment == 'true' && github.event_name == 'pull_request'
+    - name: Write Omen job summary
+      if: inputs.summary == 'true'
       uses: actions/github-script@v9
       env:
         DIFF_JSON: ${{ steps.diff.outputs.diff-json }}
         SCORE_JSON: ${{ steps.score.outputs.score-json }}
       with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require('fs');
+
+          function loadJson(input, label, required = true) {
+            if (!input) {
+              if (required) throw new Error(`Missing ${label} JSON output`);
+              return null;
+            }
+            try {
+              return JSON.parse(input);
+            } catch {
+              try {
+                return JSON.parse(fs.readFileSync(input, 'utf8'));
+              } catch (error) {
+                throw new Error(`Failed to load ${label} JSON: ${error.message}`);
+              }
+            }
+          }
+
+          let diff;
+          let score;
+          try {
+            diff = loadJson(process.env.DIFF_JSON, 'diff', false);
+            score = loadJson(process.env.SCORE_JSON, 'score');
+          } catch (error) {
+            core.warning(`Skipping job summary: ${error.message}`);
+            return;
+          }
+          const riskScore = diff ? `${Math.round(diff.score * 100)}%` : 'Not available';
+          const riskLevel = diff ? String(diff.level).toUpperCase() : 'Not available';
+
+          core.summary
+            .addHeading('Omen Analysis', 2)
+            .addTable([
+              [
+                { data: 'Risk score', header: true },
+                { data: 'Risk level', header: true },
+                { data: 'Files modified', header: true },
+                { data: 'Lines added', header: true },
+                { data: 'Lines deleted', header: true },
+                { data: 'Health score', header: true },
+                { data: 'Grade', header: true },
+              ],
+              [
+                riskScore,
+                riskLevel,
+                diff ? String(diff.files_modified) : 'Not available',
+                diff ? `+${diff.lines_added}` : 'Not available',
+                diff ? `-${diff.lines_deleted}` : 'Not available',
+                `${score.overall_score} / 100`,
+                String(score.grade),
+              ],
+            ]);
+
+          if (!diff) {
+            core.summary.addRaw('Diff risk and change-size metrics are only reported for pull request events.\n\n');
+          }
+
+          const componentRows = Object.entries(score.components ?? {})
+            .sort((a, b) => b[1].weight - a[1].weight)
+            .map(([name, component]) => [
+              name,
+              String(Math.round(component.score * 10) / 10),
+              String(component.weight),
+            ]);
+          core.summary.addHeading('Score components', 3).addTable([
+            [
+              { data: 'Component', header: true },
+              { data: 'Score', header: true },
+              { data: 'Weight', header: true },
+            ],
+            ...componentRows,
+          ]);
+          await core.summary.write();
+
+    - name: Post sticky comment
+      if: inputs.comment == 'true' && github.event_name == 'pull_request' && steps.diff.outputs.diff-json != ''
+      uses: actions/github-script@v9
+      env:
+        DIFF_JSON: ${{ steps.diff.outputs.diff-json }}
+        SCORE_JSON: ${{ steps.score.outputs.score-json }}
+        OMEN_VERSION: ${{ steps.install.outputs.version }}
+      with:
+        github-token: ${{ inputs.github-token }}
         script: |
           const fs = require('fs');
 
@@ -253,9 +415,9 @@ runs:
             .map(([key, value]) => `| ${key} | ${String(value).slice(0, 6)} |`)
             .join('\n');
 
-          const recommendations = diff.recommendations
+          const recommendations = (diff.recommendations ?? [])
             .map(r => `- ${r}`)
-            .join('\n');
+            .join('\n') || 'No specific recommendations.';
 
           const componentsTable = Object.entries(score.components)
             .sort((a, b) => b[1].weight - a[1].weight)
@@ -307,13 +469,16 @@ runs:
             },
           };
 
-          let agentTips = '';
-          for (const [name, comp] of Object.entries(score.components)) {
-            const tip = tipConfig[name];
-            if (tip && comp.score < tip.threshold) {
-              agentTips += `\n**${tip.label}** (score: ${comp.score}) -- needs attention\n\n\`\`\`bash\n${tip.command}\n\`\`\`\n\n${tip.advice}\n\n---\n\n`;
-            }
-          }
+          const lowestComponents = Object.entries(score.components)
+            .filter(([name, comp]) => tipConfig[name] && comp.score < tipConfig[name].threshold)
+            .sort((a, b) => a[1].score - b[1].score)
+            .slice(0, 3);
+          let agentTips = lowestComponents
+            .map(([name, comp]) => {
+              const tip = tipConfig[name];
+              return `**${tip.label}** (score: ${comp.score}) -- needs attention\n\n\`\`\`bash\n${tip.command}\n\`\`\`\n\n${tip.advice}`;
+            })
+            .join('\n\n---\n\n');
           if (!agentTips) {
             agentTips = 'All components are scoring well. No specific improvements needed.';
           }
@@ -321,16 +486,18 @@ runs:
           const body = `<!-- omen-analysis -->
           ## Omen Analysis
 
-          ### Diff Risk
+          | Risk | Health |
+          |------|--------|
+          | **${diff.level.toUpperCase()}** (${Math.round(diff.score * 100)}%) | **${score.grade}** (${score.overall_score} / 100) |
 
-          | | |
-          |---|---|
-          | **Risk Score** | ${Math.round(diff.score * 100)}% |
-          | **Risk Level** | ${diff.level.toUpperCase()} |
-          | **Files Modified** | ${diff.files_modified} |
-          | **Lines Added** | +${diff.lines_added} |
-          | **Lines Deleted** | -${diff.lines_deleted} |
-          | **Commits** | ${diff.commits} |
+          <details>
+          <summary>Change details</summary>
+
+          | Files modified | Lines added | Lines deleted | Commits |
+          |----------------|-------------|---------------|---------|
+          | ${diff.files_modified} | +${diff.lines_added} | -${diff.lines_deleted} | ${diff.commits} |
+
+          </details>
 
           <details>
           <summary>Risk Factors</summary>
@@ -348,17 +515,10 @@ runs:
 
           </details>
 
-          ### Repository Health
-
-          | | |
-          |---|---|
-          | **Health Score** | ${score.overall_score} / 100 |
-          | **Grade** | ${score.grade} |
-          | **Files Analyzed** | ${score.summary.files_analyzed} |
-          | **Critical Issues** | ${score.summary.critical_issues} |
-
           <details>
-          <summary>Score Components</summary>
+          <summary>Repository health details</summary>
+
+          Files analyzed: ${score.summary.files_analyzed} | Critical issues: ${score.summary.critical_issues}
 
           | Component | Score | Weight |
           |-----------|-------|--------|
@@ -388,7 +548,11 @@ runs:
           3. Make targeted improvements -- small refactors that reduce complexity or eliminate duplication
           4. Re-run \`omen score\` to verify improvement
 
-          </details>`;
+          </details>
+
+          ---
+
+          Generated by omen v${process.env.OMEN_VERSION}`;
 
           const comments = await github.paginate(github.rest.issues.listComments, {
             owner: context.repo.owner,
@@ -414,7 +578,7 @@ runs:
           }
 
     - name: Manage risk label
-      if: inputs.label == 'true' && github.event_name == 'pull_request'
+      if: inputs.label == 'true' && github.event_name == 'pull_request' && steps.diff.outputs.risk-level != ''
       uses: actions/github-script@v9
       env:
         RISK_LEVEL: ${{ steps.diff.outputs.risk-level }}
@@ -423,6 +587,7 @@ runs:
         COLOR_MEDIUM: ${{ inputs.label-color-medium }}
         COLOR_HIGH: ${{ inputs.label-color-high }}
       with:
+        github-token: ${{ inputs.github-token }}
         script: |
           const riskLevel = process.env.RISK_LEVEL;
           const template = process.env.LABEL_TEMPLATE;
@@ -497,18 +662,27 @@ runs:
         RISK_LEVEL: ${{ steps.diff.outputs.risk-level }}
         THRESHOLD: ${{ inputs.check-threshold }}
       with:
+        github-token: ${{ inputs.github-token }}
         script: |
           const levels = { low: 1, medium: 2, high: 3 };
           const riskLevel = process.env.RISK_LEVEL;
           const threshold = process.env.THRESHOLD;
-          const actual = levels[riskLevel];
           const limit = levels[threshold];
 
-          if (!actual || !limit) {
-            core.setFailed(`Invalid risk level '${riskLevel}' or threshold '${threshold}' (expected low|medium|high)`);
+          if (!limit) {
+            core.setFailed(`Invalid risk threshold '${threshold}' (expected low|medium|high)`);
+            return;
+          }
+          if (!riskLevel) {
+            core.warning('Risk threshold check skipped because diff analysis is only available for pull request events.');
             return;
           }
 
+          const actual = levels[riskLevel];
+          if (!actual) {
+            core.setFailed(`Invalid risk level '${riskLevel}' (expected low|medium|high)`);
+            return;
+          }
           if (actual >= limit) {
             core.setFailed(`Risk level '${riskLevel}' meets or exceeds threshold '${threshold}'`);
           }

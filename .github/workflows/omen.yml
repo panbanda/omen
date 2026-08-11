@@ -5,6 +5,9 @@ on:
     branches: [main]
 
 permissions:
+  # Minimum feature permissions: checkout and release lookup need contents: read;
+  # sticky PR comments need pull-requests: write; risk labels need issues: write.
+  # Job summaries and threshold checks need no additional repository permission.
   contents: read
   pull-requests: write
   issues: write
@@ -13,13 +16,16 @@ jobs:
   analyze:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Run Omen
         id: omen
         uses: panbanda/omen@omen-v4.21.2
         with:
+          summary: 'true'
           comment: 'true'
           label: 'true'
