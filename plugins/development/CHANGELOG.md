@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.2.1](https://github.com/panbanda/omen/compare/omen-skills-v4.2.0...omen-skills-v4.2.1) (2026-08-11)
+
+
+### Bug Fixes
+
+* **plugins:** declare the omen MCP server so it auto-configures ([#472](https://github.com/panbanda/omen/issues/472)) ([3cf9779](https://github.com/panbanda/omen/commit/3cf9779911a0d04d7d6c4bb3b8067b206d43f16b))
+
 ## [4.2.0](https://github.com/panbanda/omen/compare/omen-skills-v4.1.0...omen-skills-v4.2.0) (2026-08-11)
 
 
