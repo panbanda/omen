@@ -5,13 +5,99 @@
 
 use std::path::Path;
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use crate::core::{Error, Result};
 
 /// SQLite cache for semantic search symbols.
 pub struct EmbeddingCache {
     conn: Connection,
+}
+
+const UPSERT_SYMBOL_SQL: &str = r#"
+    INSERT INTO symbols (file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text, cyclomatic_complexity, cognitive_complexity)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+    ON CONFLICT(file_path, symbol_name, chunk_index) DO UPDATE SET
+        symbol_type = excluded.symbol_type,
+        parent_name = excluded.parent_name,
+        signature = excluded.signature,
+        start_line = excluded.start_line,
+        end_line = excluded.end_line,
+        total_chunks = excluded.total_chunks,
+        content_hash = excluded.content_hash,
+        enriched_text = excluded.enriched_text,
+        cyclomatic_complexity = excluded.cyclomatic_complexity,
+        cognitive_complexity = excluded.cognitive_complexity,
+        created_at = CURRENT_TIMESTAMP
+"#;
+
+const RECORD_FILE_SQL: &str = r#"
+    INSERT INTO files (file_path, file_hash)
+    VALUES (?1, ?2)
+    ON CONFLICT(file_path) DO UPDATE SET
+        file_hash = excluded.file_hash,
+        indexed_at = CURRENT_TIMESTAMP
+"#;
+
+fn upsert_symbol_on(conn: &Connection, symbol: &CachedSymbol) -> Result<()> {
+    conn.prepare_cached(UPSERT_SYMBOL_SQL)
+        .and_then(|mut stmt| {
+            stmt.execute(params![
+                symbol.file_path,
+                symbol.symbol_name,
+                symbol.symbol_type,
+                symbol.parent_name,
+                symbol.signature,
+                symbol.start_line,
+                symbol.end_line,
+                symbol.chunk_index,
+                symbol.total_chunks,
+                symbol.content_hash,
+                symbol.enriched_text,
+                symbol.cyclomatic_complexity,
+                symbol.cognitive_complexity,
+            ])
+        })
+        .map_err(|e| Error::analysis(format!("Failed to upsert symbol: {e}")))?;
+    Ok(())
+}
+
+fn delete_file_symbols_on(conn: &Connection, file_path: &str) -> Result<()> {
+    conn.prepare_cached("DELETE FROM symbols WHERE file_path = ?1")
+        .and_then(|mut stmt| stmt.execute(params![file_path]))
+        .map_err(|e| Error::analysis(format!("Failed to delete symbols: {e}")))?;
+    Ok(())
+}
+
+fn record_file_indexed_on(conn: &Connection, file_path: &str, file_hash: &str) -> Result<()> {
+    conn.prepare_cached(RECORD_FILE_SQL)
+        .and_then(|mut stmt| stmt.execute(params![file_path, file_hash]))
+        .map_err(|e| Error::analysis(format!("Failed to record file indexed: {e}")))?;
+    Ok(())
+}
+
+pub(crate) struct CacheTransaction<'connection> {
+    transaction: Transaction<'connection>,
+}
+
+impl CacheTransaction<'_> {
+    pub(crate) fn upsert_symbol(&self, symbol: &CachedSymbol) -> Result<()> {
+        upsert_symbol_on(&self.transaction, symbol)
+    }
+
+    pub(crate) fn delete_file_symbols(&self, file_path: &str) -> Result<()> {
+        delete_file_symbols_on(&self.transaction, file_path)
+    }
+
+    pub(crate) fn record_file_indexed(&self, file_path: &str, file_hash: &str) -> Result<()> {
+        record_file_indexed_on(&self.transaction, file_path, file_hash)
+    }
+
+    pub(crate) fn commit(self) -> Result<()> {
+        self.transaction
+            .commit()
+            .map_err(|e| Error::analysis(format!("Failed to commit cache transaction: {e}")))
+    }
 }
 
 /// A cached symbol with its enriched text for TF-IDF search.
@@ -60,6 +146,8 @@ impl EmbeddingCache {
                 e
             ))
         })?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+            .map_err(|e| Error::analysis(format!("Failed to configure cache database: {e}")))?;
 
         let cache = Self { conn };
         cache.migrate_if_needed()?;
@@ -71,6 +159,8 @@ impl EmbeddingCache {
     pub fn in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()
             .map_err(|e| Error::analysis(format!("Failed to create in-memory database: {}", e)))?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+            .map_err(|e| Error::analysis(format!("Failed to configure cache database: {e}")))?;
 
         let cache = Self { conn };
         cache.init_schema()?;
@@ -148,43 +238,15 @@ impl EmbeddingCache {
 
     /// Insert or update a symbol in the cache.
     pub fn upsert_symbol(&self, symbol: &CachedSymbol) -> Result<()> {
-        self.conn
-            .execute(
-                r#"
-                INSERT INTO symbols (file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text, cyclomatic_complexity, cognitive_complexity)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
-                ON CONFLICT(file_path, symbol_name, chunk_index) DO UPDATE SET
-                    symbol_type = excluded.symbol_type,
-                    parent_name = excluded.parent_name,
-                    signature = excluded.signature,
-                    start_line = excluded.start_line,
-                    end_line = excluded.end_line,
-                    total_chunks = excluded.total_chunks,
-                    content_hash = excluded.content_hash,
-                    enriched_text = excluded.enriched_text,
-                    cyclomatic_complexity = excluded.cyclomatic_complexity,
-                    cognitive_complexity = excluded.cognitive_complexity,
-                    created_at = CURRENT_TIMESTAMP
-            "#,
-                params![
-                    symbol.file_path,
-                    symbol.symbol_name,
-                    symbol.symbol_type,
-                    symbol.parent_name,
-                    symbol.signature,
-                    symbol.start_line,
-                    symbol.end_line,
-                    symbol.chunk_index,
-                    symbol.total_chunks,
-                    symbol.content_hash,
-                    symbol.enriched_text,
-                    symbol.cyclomatic_complexity,
-                    symbol.cognitive_complexity,
-                ],
-            )
-            .map_err(|e| Error::analysis(format!("Failed to upsert symbol: {}", e)))?;
+        upsert_symbol_on(&self.conn, symbol)
+    }
 
-        Ok(())
+    pub(crate) fn transaction(&self) -> Result<CacheTransaction<'_>> {
+        let transaction = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| Error::analysis(format!("Failed to start cache transaction: {e}")))?;
+        Ok(CacheTransaction { transaction })
     }
 
     /// Get a symbol from the cache by file path, symbol name, and chunk index.
@@ -196,12 +258,13 @@ impl EmbeddingCache {
     ) -> Result<Option<CachedSymbol>> {
         let result = self
             .conn
-            .query_row(
+            .prepare_cached(
                 "SELECT file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text, cyclomatic_complexity, cognitive_complexity FROM symbols WHERE file_path = ?1 AND symbol_name = ?2 AND chunk_index = ?3",
-                params![file_path, symbol_name, chunk_index],
-                row_to_symbol,
             )
-            .optional()
+            .and_then(|mut stmt| {
+                stmt.query_row(params![file_path, symbol_name, chunk_index], row_to_symbol)
+                    .optional()
+            })
             .map_err(|e| Error::analysis(format!("Failed to get symbol: {}", e)))?;
 
         Ok(result)
@@ -211,7 +274,7 @@ impl EmbeddingCache {
     pub fn get_all_symbols(&self) -> Result<Vec<CachedSymbol>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text, cyclomatic_complexity, cognitive_complexity FROM symbols")
+            .prepare_cached("SELECT file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text, cyclomatic_complexity, cognitive_complexity FROM symbols")
             .map_err(|e| Error::analysis(format!("Failed to prepare query: {}", e)))?;
 
         let symbols = stmt
@@ -227,7 +290,7 @@ impl EmbeddingCache {
     pub fn get_symbols_for_file(&self, file_path: &str) -> Result<Vec<CachedSymbol>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text, cyclomatic_complexity, cognitive_complexity FROM symbols WHERE file_path = ?1")
+            .prepare_cached("SELECT file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text, cyclomatic_complexity, cognitive_complexity FROM symbols WHERE file_path = ?1")
             .map_err(|e| Error::analysis(format!("Failed to prepare query: {}", e)))?;
 
         let symbols = stmt
@@ -241,42 +304,23 @@ impl EmbeddingCache {
 
     /// Delete all symbols for a file.
     pub fn delete_file_symbols(&self, file_path: &str) -> Result<()> {
-        self.conn
-            .execute(
-                "DELETE FROM symbols WHERE file_path = ?1",
-                params![file_path],
-            )
-            .map_err(|e| Error::analysis(format!("Failed to delete symbols: {}", e)))?;
-        Ok(())
+        delete_file_symbols_on(&self.conn, file_path)
     }
 
     /// Record that a file has been indexed.
     pub fn record_file_indexed(&self, file_path: &str, file_hash: &str) -> Result<()> {
-        self.conn
-            .execute(
-                r#"
-                INSERT INTO files (file_path, file_hash)
-                VALUES (?1, ?2)
-                ON CONFLICT(file_path) DO UPDATE SET
-                    file_hash = excluded.file_hash,
-                    indexed_at = CURRENT_TIMESTAMP
-            "#,
-                params![file_path, file_hash],
-            )
-            .map_err(|e| Error::analysis(format!("Failed to record file indexed: {}", e)))?;
-        Ok(())
+        record_file_indexed_on(&self.conn, file_path, file_hash)
     }
 
     /// Get the stored hash for a file.
     pub fn get_file_hash(&self, file_path: &str) -> Result<Option<String>> {
         let result = self
             .conn
-            .query_row(
-                "SELECT file_hash FROM files WHERE file_path = ?1",
-                params![file_path],
-                |row| row.get(0),
-            )
-            .optional()
+            .prepare_cached("SELECT file_hash FROM files WHERE file_path = ?1")
+            .and_then(|mut stmt| {
+                stmt.query_row(params![file_path], |row| row.get(0))
+                    .optional()
+            })
             .map_err(|e| Error::analysis(format!("Failed to get file hash: {}", e)))?;
 
         Ok(result)
@@ -285,7 +329,8 @@ impl EmbeddingCache {
     /// Remove a file from the files table.
     pub fn remove_file(&self, file_path: &str) -> Result<()> {
         self.conn
-            .execute("DELETE FROM files WHERE file_path = ?1", params![file_path])
+            .prepare_cached("DELETE FROM files WHERE file_path = ?1")
+            .and_then(|mut stmt| stmt.execute(params![file_path]))
             .map_err(|e| Error::analysis(format!("Failed to remove file: {}", e)))?;
         self.delete_file_symbols(file_path)?;
         Ok(())
@@ -295,7 +340,7 @@ impl EmbeddingCache {
     pub fn get_all_indexed_files(&self) -> Result<Vec<String>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT file_path FROM files")
+            .prepare_cached("SELECT file_path FROM files")
             .map_err(|e| Error::analysis(format!("Failed to prepare query: {}", e)))?;
 
         let files = stmt
@@ -311,7 +356,8 @@ impl EmbeddingCache {
     pub fn symbol_count(&self) -> Result<usize> {
         let count: i64 = self
             .conn
-            .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))
+            .prepare_cached("SELECT COUNT(*) FROM symbols")
+            .and_then(|mut stmt| stmt.query_row([], |row| row.get(0)))
             .map_err(|e| Error::analysis(format!("Failed to count symbols: {}", e)))?;
         Ok(count as usize)
     }

@@ -134,7 +134,7 @@ impl Analyzer {
             let mut changed_files = Vec::with_capacity(commit.files.len());
             for file in &commit.files {
                 let path = file.path.to_string_lossy();
-                if exclude_tests && is_test_file(&path) {
+                if exclude_tests && is_test_file(&file.path) {
                     continue;
                 }
                 if exclude_globs
