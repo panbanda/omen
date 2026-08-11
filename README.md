@@ -1058,7 +1058,7 @@ Verify installation with `/skills` to see available Omen skills.
 
 ### Prerequisites
 
-Skills require the Omen MCP server to be configured (see MCP Server section above).
+Skills invoke the `omen` CLI directly, so they require the `omen` binary on your `PATH` (see Installation). Installing the plugin also registers the Omen MCP server automatically (`command: omen`, `args: ["mcp"]`) via each plugin's `mcpServers` declaration, so no manual command entry is needed; you can still configure it by hand (see the MCP Server section above) if you prefer.
 
 ## Real-World Repository Analysis Examples
 

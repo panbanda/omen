@@ -1,7 +1,7 @@
 {
   "name": "omen-reporting",
   "description": "Generate comprehensive HTML health reports with research-backed insights from specialized domain analysts",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "author": {
     "name": "Jonathan Reyes",
     "email": "me@jonathanreyes.com"
@@ -15,5 +15,11 @@
     "health-report",
     "insights",
     "technical-debt"
-  ]
+  ],
+  "mcpServers": {
+    "omen": {
+      "command": "omen",
+      "args": ["mcp"]
+    }
+  }
 }
