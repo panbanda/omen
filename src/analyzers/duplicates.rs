@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result};
+use crate::core::{percentile, AnalysisContext, Analyzer as AnalyzerTrait, Result};
 
 /// Clone type classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1344,15 +1344,6 @@ fn hash_band(values: &[u64], seed: u64) -> u64 {
 }
 
 /// Calculate percentile from sorted values.
-fn percentile(sorted: &[f64], p: f64) -> f64 {
-    if sorted.is_empty() {
-        return 0.0;
-    }
-
-    let idx = ((p / 100.0) * (sorted.len() - 1) as f64).round() as usize;
-    sorted[idx.min(sorted.len() - 1)]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1490,7 +1481,7 @@ mod tests {
 
     #[test]
     fn test_percentile() {
-        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let values: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0];
         assert!((percentile(&values, 50.0) - 3.0).abs() < 0.001);
         assert!((percentile(&values, 0.0) - 1.0).abs() < 0.001);
         assert!((percentile(&values, 100.0) - 5.0).abs() < 0.001);

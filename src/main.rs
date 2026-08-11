@@ -229,7 +229,10 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                                         println!("## Component Trends\n");
                                         println!("| Component | Slope | Correlation |");
                                         println!("|-----------|-------|-------------|");
-                                        for (name, stats) in &trend_data.component_trends {
+                                        let mut component_trends: Vec<_> =
+                                            trend_data.component_trends.iter().collect();
+                                        component_trends.sort_by_key(|(name, _)| *name);
+                                        for (name, stats) in component_trends {
                                             println!(
                                                 "| {} | {:.2} | {:.3} |",
                                                 name, stats.slope, stats.correlation
@@ -484,7 +487,7 @@ fn filtered_file_set(
         if let Some(ref glob) = args.glob {
             file_set = file_set.filter_by_glob(glob);
         }
-        if let Some(ref exclude) = args.exclude {
+        for exclude in &args.exclude {
             file_set = file_set.exclude_by_glob(exclude);
         }
     }
@@ -1247,7 +1250,7 @@ fn run_mutation(
     }
 
     // Apply exclude filter if specified
-    if let Some(ref pattern) = args.common.exclude {
+    for pattern in &args.common.exclude {
         file_set = file_set.exclude_by_glob(pattern);
     }
 

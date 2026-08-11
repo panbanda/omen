@@ -180,6 +180,7 @@ impl McpServer {
         tool_name: &str,
         mut value: serde_json::Value,
         args: &serde_json::Value,
+        git_skipped_reason: Option<&str>,
     ) -> std::result::Result<serde_json::Value, String> {
         let limit = args["limit"].as_u64().unwrap_or(50) as usize;
         let offset = args["offset"].as_u64().unwrap_or(0) as usize;
@@ -189,13 +190,16 @@ impl McpServer {
         // Count returned items by summing array lengths AFTER truncation.
         let returned = count_items(&value);
 
-        let envelope = json!({
+        let mut envelope = json!({
             "tool": tool_name,
             "total_items": total_items,
             "returned": returned,
             "offset": offset,
             "result": value
         });
+        if let Some(reason) = git_skipped_reason {
+            envelope["git_skipped_reason"] = json!(reason);
+        }
 
         Ok(json!({
             "content": [{
@@ -495,7 +499,10 @@ impl McpServer {
             .map_err(|e| format!("Failed to create file set: {}", e))?;
 
         // Try to open a git repository at the path
-        let git_root = GitRepo::open(&path).ok().map(|r| r.root().to_path_buf());
+        let (git_root, git_skipped_reason) = match GitRepo::open(&path) {
+            Ok(repo) => (Some(repo.root().to_path_buf()), None),
+            Err(error) => (None, Some(error.to_string())),
+        };
 
         let mut ctx = AnalysisContext::new(&file_set, &self.config, Some(&path));
         if let Some(ref git_path) = git_root {
@@ -544,7 +551,7 @@ impl McpServer {
             _ => Err(format!("Unknown tool: {}", tool_name)),
         }?;
 
-        self.tool_response(tool_name, result, &arguments)
+        self.tool_response(tool_name, result, &arguments, git_skipped_reason.as_deref())
     }
 
     fn run_analyzer<A: Analyzer + Default>(
@@ -602,7 +609,7 @@ impl McpServer {
 
         let value =
             serde_json::to_value(&context).map_err(|e| format!("Serialization failed: {}", e))?;
-        self.tool_response("context", value, arguments)
+        self.tool_response("context", value, arguments, None)
     }
 
     fn handle_diff(
@@ -628,7 +635,7 @@ impl McpServer {
         let value =
             serde_json::to_value(&result).map_err(|e| format!("Serialization failed: {}", e))?;
 
-        self.tool_response("diff", value, arguments)
+        self.tool_response("diff", value, arguments, None)
     }
 
     fn handle_semantic_search(&self, arguments: &Value) -> std::result::Result<Value, String> {
@@ -723,7 +730,7 @@ impl McpServer {
         let result =
             serde_json::to_value(&output).map_err(|e| format!("Serialization failed: {}", e))?;
 
-        self.tool_response("semantic_search", result, arguments)
+        self.tool_response("semantic_search", result, arguments, None)
     }
 
     fn handle_semantic_search_hyde(&self, arguments: &Value) -> std::result::Result<Value, String> {
@@ -830,7 +837,7 @@ impl McpServer {
         let result =
             serde_json::to_value(&output).map_err(|e| format!("Serialization failed: {}", e))?;
 
-        self.tool_response("semantic_search_hyde", result, arguments)
+        self.tool_response("semantic_search_hyde", result, arguments, None)
     }
 
     fn handle_outline(
@@ -876,7 +883,7 @@ impl McpServer {
         let value =
             serde_json::to_value(&result).map_err(|e| format!("Serialization failed: {}", e))?;
 
-        self.tool_response("outline", value, arguments)
+        self.tool_response("outline", value, arguments, None)
     }
 
     fn handle_impact(
@@ -916,7 +923,7 @@ impl McpServer {
         let value =
             serde_json::to_value(&report).map_err(|e| format!("Serialization failed: {}", e))?;
 
-        self.tool_response("impact", value, arguments)
+        self.tool_response("impact", value, arguments, None)
     }
 
     fn handle_get_symbol(
@@ -956,7 +963,7 @@ impl McpServer {
         let value =
             serde_json::to_value(&report).map_err(|e| format!("Serialization failed: {}", e))?;
 
-        self.tool_response("get_symbol", value, arguments)
+        self.tool_response("get_symbol", value, arguments, None)
     }
 }
 
@@ -1206,7 +1213,10 @@ mod tests {
         let text = response["content"][0]["text"].as_str().unwrap();
 
         assert!(text.contains("hints"));
-        assert!(text.contains("mcp_entrypoint"));
+        assert!(
+            text.contains("mcp_entrypoint"),
+            "expected context to contain requested symbol, got {text}"
+        );
     }
 
     #[test]
@@ -1796,7 +1806,9 @@ mod tests {
         let (server, _temp_dir) = create_test_server();
         let value = json!({"items": [1, 2, 3, 4, 5]});
         let args = json!({});
-        let resp = server.tool_response("test_tool", value, &args).unwrap();
+        let resp = server
+            .tool_response("test_tool", value, &args, None)
+            .unwrap();
         let text = resp["content"][0]["text"].as_str().unwrap();
         let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
         assert_eq!(envelope["tool"].as_str().unwrap(), "test_tool");
@@ -1807,10 +1819,28 @@ mod tests {
     }
 
     #[test]
+    fn test_tool_response_envelope_reports_skipped_git_data() {
+        let (server, _temp_dir) = create_test_server();
+        let resp = server
+            .tool_response(
+                "score",
+                json!({"components": {}}),
+                &json!({}),
+                Some("not a git repository"),
+            )
+            .unwrap();
+        let text = resp["content"][0]["text"].as_str().unwrap();
+        let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(envelope["git_skipped_reason"], "not a git repository");
+    }
+
+    #[test]
     fn test_tool_response_is_compact() {
         let (server, _temp_dir) = create_test_server();
         let value = json!({"items": [1, 2, 3]});
-        let resp = server.tool_response("test", value, &json!({})).unwrap();
+        let resp = server
+            .tool_response("test", value, &json!({}), None)
+            .unwrap();
         let text = resp["content"][0]["text"].as_str().unwrap();
         // Compact: only one line (no internal newlines)
         assert_eq!(text.trim().lines().count(), 1);
@@ -1821,7 +1851,9 @@ mod tests {
         let (server, _temp_dir) = create_test_server();
         let items: Vec<i64> = (0..100).collect();
         let value = json!({"items": items});
-        let resp = server.tool_response("test", value, &json!({})).unwrap();
+        let resp = server
+            .tool_response("test", value, &json!({}), None)
+            .unwrap();
         let text = resp["content"][0]["text"].as_str().unwrap();
         let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
         let returned = envelope["returned"].as_u64().unwrap();
@@ -1835,7 +1867,7 @@ mod tests {
         let items: Vec<i64> = (0..100).collect();
         let value = json!({"items": items});
         let resp = server
-            .tool_response("test", value, &json!({"limit": 0}))
+            .tool_response("test", value, &json!({"limit": 0}), None)
             .unwrap();
         let text = resp["content"][0]["text"].as_str().unwrap();
         let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
@@ -1848,7 +1880,7 @@ mod tests {
         let items: Vec<i64> = (0..20).collect();
         let value = json!({"items": items});
         let resp = server
-            .tool_response("test", value, &json!({"limit": 5, "offset": 10}))
+            .tool_response("test", value, &json!({"limit": 5, "offset": 10}), None)
             .unwrap();
         let text = resp["content"][0]["text"].as_str().unwrap();
         let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
@@ -1867,7 +1899,7 @@ mod tests {
         let smells: Vec<i64> = (0..10).collect();
         let value = json!({"components": components, "smells": smells});
         let resp = server
-            .tool_response("test", value, &json!({"limit": 5}))
+            .tool_response("test", value, &json!({"limit": 5}), None)
             .unwrap();
         let text = resp["content"][0]["text"].as_str().unwrap();
         let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
@@ -1890,7 +1922,7 @@ mod tests {
         let items: Vec<i64> = (0..60).collect();
         let value = json!({"items": items});
         let resp = server
-            .tool_response("test", value, &json!({"limit": 50}))
+            .tool_response("test", value, &json!({"limit": 50}), None)
             .unwrap();
         let text = resp["content"][0]["text"].as_str().unwrap();
         let envelope: serde_json::Value = serde_json::from_str(text).unwrap();

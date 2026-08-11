@@ -66,7 +66,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result};
+use crate::core::{percentile, AnalysisContext, Analyzer as AnalyzerTrait, Result};
 use crate::git::GitRepo;
 
 /// Weights for change-level defect prediction features.
@@ -252,7 +252,7 @@ impl AnalyzerTrait for Analyzer {
         if !complexity_values.is_empty() {
             let mut sorted = complexity_values.clone();
             sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            normalization.max_file_complexity = percentile(&sorted, 95).max(1.0);
+            normalization.max_file_complexity = percentile(&sorted, 95.0).max(1.0);
         }
 
         // First pass: compute all risk scores
@@ -267,8 +267,8 @@ impl AnalyzerTrait for Analyzer {
         sorted_scores.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
         let risk_thresholds = RiskThresholds {
-            high_threshold: percentile(&sorted_scores, HIGH_RISK_PERCENTILE),
-            medium_threshold: percentile(&sorted_scores, MEDIUM_RISK_PERCENTILE),
+            high_threshold: percentile(&sorted_scores, HIGH_RISK_PERCENTILE as f64),
+            medium_threshold: percentile(&sorted_scores, MEDIUM_RISK_PERCENTILE as f64),
         };
 
         // Second pass: build commit risks with risk levels
@@ -331,8 +331,8 @@ impl AnalyzerTrait for Analyzer {
                 low_risk_count,
                 bug_fix_count,
                 avg_risk_score,
-                p50_risk_score: percentile(&sorted_scores, 50),
-                p95_risk_score: percentile(&sorted_scores, 95),
+                p50_risk_score: percentile(&sorted_scores, 50.0),
+                p95_risk_score: percentile(&sorted_scores, 95.0),
             },
             weights: self.weights.clone(),
             normalization,
@@ -863,13 +863,13 @@ fn calculate_normalization_stats(commits: &[CommitFeatures]) -> NormalizationSta
     entropy.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
     NormalizationStats {
-        max_lines_added: percentile(&lines_added, 95).max(1.0) as i32,
-        max_lines_deleted: percentile(&lines_deleted, 95).max(1.0) as i32,
-        max_num_files: percentile(&num_files, 95).max(1.0) as i32,
-        max_unique_changes: percentile(&unique_changes, 95).max(1.0) as i32,
-        max_num_developers: percentile(&num_developers, 95).max(1.0) as i32,
-        max_author_experience: percentile(&author_experience, 95).max(1.0) as i32,
-        max_entropy: percentile(&entropy, 95).max(1.0),
+        max_lines_added: percentile(&lines_added, 95.0).max(1.0) as i32,
+        max_lines_deleted: percentile(&lines_deleted, 95.0).max(1.0) as i32,
+        max_num_files: percentile(&num_files, 95.0).max(1.0) as i32,
+        max_unique_changes: percentile(&unique_changes, 95.0).max(1.0) as i32,
+        max_num_developers: percentile(&num_developers, 95.0).max(1.0) as i32,
+        max_author_experience: percentile(&author_experience, 95.0).max(1.0) as i32,
+        max_entropy: percentile(&entropy, 95.0).max(1.0),
         // File-level stats are set to defaults here; caller updates from actual data.
         max_file_complexity: 15.0,
         max_file_churn: 1.0,
@@ -1081,14 +1081,6 @@ fn generate_recommendations(
 }
 
 /// Calculate percentile from sorted slice.
-fn percentile(sorted: &[f64], p: usize) -> f64 {
-    if sorted.is_empty() {
-        return 0.0;
-    }
-    let idx = (p as f64 / 100.0 * (sorted.len() - 1) as f64).round() as usize;
-    sorted[idx.min(sorted.len() - 1)]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1158,12 +1150,12 @@ mod tests {
 
     #[test]
     fn test_percentile_calculation() {
-        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let values: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
         // P50 with 10 items: idx = round(0.5 * 9) = 5, value = 6.0
-        assert!((percentile(&values, 50) - 6.0).abs() < 0.001);
+        assert!((percentile(&values, 50.0) - 6.0).abs() < 0.001);
         // P95 with 10 items: idx = round(0.95 * 9) = 9, value = 10.0
-        assert!((percentile(&values, 95) - 10.0).abs() < 0.001);
-        assert_eq!(percentile(&[], 50), 0.0);
+        assert!((percentile(&values, 95.0) - 10.0).abs() < 0.001);
+        assert_eq!(percentile::<f64>(&[], 50.0), 0.0);
     }
 
     #[test]

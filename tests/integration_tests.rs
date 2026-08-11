@@ -104,8 +104,10 @@ fn test_clones_runs_successfully() {
 
 #[test]
 fn test_defect_requires_git_repo() {
+    let temp = TempDir::new().unwrap();
+    std::fs::write(temp.path().join("sample.rs"), "pub fn sample() {}\n").unwrap();
     omen()
-        .args(["-p", fixtures_dir(), "-f", "json", "defect"])
+        .args(["-p", temp.path().to_str().unwrap(), "-f", "json", "defect"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("git"));
@@ -509,6 +511,138 @@ fn test_exclude_filter() {
             "expected Python files to be excluded, got {path}"
         );
     }
+}
+
+fn write_complexity_exclude_fixture(temp: &TempDir) {
+    let branchy = r#"
+export function branchy(a: boolean, b: boolean, c: boolean, d: boolean, e: boolean, f: boolean) {
+  if (a) return 1;
+  if (b) return 2;
+  if (c) return 3;
+  if (d) return 4;
+  if (e) return 5;
+  if (f) return 6;
+  return 0;
+}
+"#;
+    for path in [
+        "src/branchy.ts",
+        "packages/alpha/src/branchy.ts",
+        "packages/alpha/test/setup.ts",
+        "packages/alpha/test/helper.test.ts",
+    ] {
+        let path = temp.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, branchy).unwrap();
+    }
+    std::fs::write(
+        temp.path().join("omen.toml"),
+        "[complexity]\ncyclomatic_error = 3\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_complexity_check_excludes_nested_test_directory() {
+    let temp = TempDir::new().unwrap();
+    write_complexity_exclude_fixture(&temp);
+
+    omen()
+        .args([
+            "-p",
+            temp.path().to_str().unwrap(),
+            "complexity",
+            "--check",
+            "-e",
+            "packages/alpha/test/**",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Complexity threshold exceeded in 2 function(s)",
+        ));
+}
+
+#[test]
+fn test_complexity_check_honors_config_excludes() {
+    let temp = TempDir::new().unwrap();
+    write_complexity_exclude_fixture(&temp);
+    std::fs::write(
+        temp.path().join("omen.toml"),
+        "exclude = [\"packages/alpha/test/**\"]\n\n[complexity]\ncyclomatic_error = 3\n",
+    )
+    .unwrap();
+
+    omen()
+        .args(["-p", temp.path().to_str().unwrap(), "complexity", "--check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Complexity threshold exceeded in 2 function(s)",
+        ));
+}
+
+#[test]
+fn test_config_excludes_apply_to_satd_results() {
+    let temp = TempDir::new().unwrap();
+    std::fs::create_dir_all(temp.path().join("excluded")).unwrap();
+    std::fs::write(temp.path().join("keep.ts"), "// TODO: keep\n").unwrap();
+    std::fs::write(temp.path().join("excluded/debt.ts"), "// TODO: exclude\n").unwrap();
+    std::fs::write(
+        temp.path().join("omen.toml"),
+        "exclude = [\"excluded/**\"]\n",
+    )
+    .unwrap();
+
+    let output = omen()
+        .args(["-p", temp.path().to_str().unwrap(), "-f", "json", "satd"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let findings = parsed["items"].as_array().unwrap();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0]["file"], "keep.ts");
+}
+
+#[test]
+fn test_score_records_git_components_skipped_outside_repository() {
+    use omen::core::{AnalysisContext, Analyzer as _, FileSet};
+
+    let temp = TempDir::new().unwrap();
+    let config = omen::config::Config::default();
+    let files = FileSet::from_path(temp.path(), &config).unwrap();
+    let ctx = AnalysisContext::new(&files, &config, Some(temp.path()));
+    let weights = omen::score::ScoreWeights {
+        churn: 1.0,
+        ownership: 1.0,
+        defect: 1.0,
+        complexity: 0.0,
+        satd: 0.0,
+        deadcode: 0.0,
+        duplicates: 0.0,
+        cohesion: 0.0,
+        tdg: 0.0,
+        coupling: 0.0,
+        smells: 0.0,
+    };
+
+    let result = omen::score::Analyzer::with_weights(weights)
+        .analyze(&ctx)
+        .unwrap();
+    let names: Vec<&str> = result
+        .skipped_components
+        .iter()
+        .map(|component| component.name.as_str())
+        .collect();
+
+    assert!(names.contains(&"churn"));
+    assert!(names.contains(&"ownership"));
+    assert!(names.contains(&"defect"));
+    assert!(result
+        .skipped_components
+        .iter()
+        .all(|component| !component.reason.is_empty()));
 }
 
 // ---------------------------------------------------------------------------

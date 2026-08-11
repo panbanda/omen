@@ -43,10 +43,13 @@ impl AnalyzerTrait for Analyzer {
         macro_rules! run_analyzer {
             ($name:expr, $weight:expr, $analyzer:expr, $score_fn:expr, $details:expr) => {
                 if $weight > 0.0 {
-                    if let Ok(result) = $analyzer.analyze(ctx) {
-                        let score = $score_fn(&result);
-                        let details = $details(&result);
-                        acc.add($name, $weight, score, details);
+                    match $analyzer.analyze(ctx) {
+                        Ok(result) => {
+                            let score = $score_fn(&result);
+                            let details = $details(&result);
+                            acc.add($name, $weight, score, details);
+                        }
+                        Err(error) => acc.skip($name, error.to_string()),
                     }
                 }
             };
@@ -55,49 +58,55 @@ impl AnalyzerTrait for Analyzer {
         // Complexity needs inline handling: skip when no functions are detected,
         // otherwise p90_cyclomatic == 0 produces a false perfect score of 100.
         if self.weights.complexity > 0.0 {
-            if let Ok(result) = crate::analyzers::complexity::Analyzer::new().analyze(ctx) {
-                if result.summary.total_functions > 0 {
-                    let score = calculate_complexity_score(&result);
-                    acc.add(
-                        "complexity",
-                        self.weights.complexity,
-                        score,
-                        format!(
-                            "Analyzed {} files, p90 cyclomatic: {}, avg: {:.1}",
-                            result.files.len(),
-                            result.summary.p90_cyclomatic,
-                            result.summary.avg_cyclomatic
-                        ),
-                    );
+            match crate::analyzers::complexity::Analyzer::new().analyze(ctx) {
+                Ok(result) => {
+                    if result.summary.total_functions > 0 {
+                        let score = calculate_complexity_score(&result);
+                        acc.add(
+                            "complexity",
+                            self.weights.complexity,
+                            score,
+                            format!(
+                                "Analyzed {} files, p90 cyclomatic: {}, avg: {:.1}",
+                                result.files.len(),
+                                result.summary.p90_cyclomatic,
+                                result.summary.avg_cyclomatic
+                            ),
+                        );
+                    }
                 }
+                Err(error) => acc.skip("complexity", error.to_string()),
             }
         }
 
         // SATD needs file_count from ctx, so handle inline
         if self.weights.satd > 0.0 {
-            if let Ok(result) = crate::analyzers::satd::Analyzer::new().analyze(ctx) {
-                let score = calculate_satd_score(&result, ctx.files.files().len());
-                let high_priority = result
-                    .items
-                    .iter()
-                    .filter(|i| {
-                        matches!(
-                            i.severity,
-                            crate::analyzers::satd::Severity::Critical
-                                | crate::analyzers::satd::Severity::High
-                        )
-                    })
-                    .count();
-                acc.add(
-                    "satd",
-                    self.weights.satd,
-                    score,
-                    format!(
-                        "Found {} debt items ({} high priority)",
-                        result.items.len(),
-                        high_priority
-                    ),
-                );
+            match crate::analyzers::satd::Analyzer::new().analyze(ctx) {
+                Ok(result) => {
+                    let score = calculate_satd_score(&result, ctx.files.files().len());
+                    let high_priority = result
+                        .items
+                        .iter()
+                        .filter(|i| {
+                            matches!(
+                                i.severity,
+                                crate::analyzers::satd::Severity::Critical
+                                    | crate::analyzers::satd::Severity::High
+                            )
+                        })
+                        .count();
+                    acc.add(
+                        "satd",
+                        self.weights.satd,
+                        score,
+                        format!(
+                            "Found {} debt items ({} high priority)",
+                            result.items.len(),
+                            high_priority
+                        ),
+                    );
+                }
+                Err(error) => acc.skip("satd", error.to_string()),
             }
         }
 
@@ -209,6 +218,7 @@ impl AnalyzerTrait for Analyzer {
 #[derive(Default)]
 struct ScoreAccumulator {
     components: HashMap<String, ScoreComponent>,
+    skipped_components: Vec<SkippedComponent>,
     weighted_sum: f64,
     total_weight: f64,
 }
@@ -227,6 +237,13 @@ impl ScoreAccumulator {
         self.total_weight += weight;
     }
 
+    fn skip(&mut self, name: &str, reason: String) {
+        self.skipped_components.push(SkippedComponent {
+            name: name.to_string(),
+            reason,
+        });
+    }
+
     fn into_analysis(self, files_analyzed: usize) -> Result<Analysis> {
         let overall_score = if self.total_weight > 0.0 {
             self.weighted_sum / self.total_weight
@@ -240,6 +257,7 @@ impl ScoreAccumulator {
             overall_score,
             grade,
             components: self.components,
+            skipped_components: self.skipped_components,
             summary: AnalysisSummary {
                 files_analyzed,
                 analyzers_run,
@@ -655,7 +673,14 @@ pub struct Analysis {
     pub overall_score: f64,
     pub grade: String,
     pub components: HashMap<String, ScoreComponent>,
+    pub skipped_components: Vec<SkippedComponent>,
     pub summary: AnalysisSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkippedComponent {
+    pub name: String,
+    pub reason: String,
 }
 
 impl Analysis {
@@ -1128,6 +1153,7 @@ mod tests {
             overall_score: 85.0,
             grade: "B".to_string(),
             components: HashMap::new(),
+            skipped_components: Vec::new(),
             summary: AnalysisSummary {
                 files_analyzed: 10,
                 analyzers_run: 3,
@@ -1158,6 +1184,7 @@ mod tests {
             overall_score: 85.0,
             grade: "B".to_string(),
             components: HashMap::new(),
+            skipped_components: Vec::new(),
             summary: AnalysisSummary::default(),
         };
         assert!(analysis.check_threshold(80.0).is_ok());
@@ -1169,6 +1196,7 @@ mod tests {
             overall_score: 72.0,
             grade: "C".to_string(),
             components: HashMap::new(),
+            skipped_components: Vec::new(),
             summary: AnalysisSummary::default(),
         };
         assert!(analysis.check_threshold(80.0).is_err());
@@ -1180,6 +1208,7 @@ mod tests {
             overall_score: 80.0,
             grade: "B".to_string(),
             components: HashMap::new(),
+            skipped_components: Vec::new(),
             summary: AnalysisSummary::default(),
         };
         assert!(analysis.check_threshold(80.0).is_ok());

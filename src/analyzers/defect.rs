@@ -14,7 +14,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::analyzers::{complexity, duplicates, graph};
-use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result};
+use crate::core::{percentile, AnalysisContext, Analyzer as AnalyzerTrait, Result};
 use crate::git::GitRepo;
 
 /// Risk level categories (PMAT-compatible).
@@ -678,14 +678,6 @@ fn sigmoid(raw_score: f32) -> f32 {
 }
 
 /// Calculate percentile from sorted values.
-fn percentile(sorted: &[f32], p: f32) -> f32 {
-    if sorted.is_empty() {
-        return 0.0;
-    }
-    let idx = ((p / 100.0) * (sorted.len() - 1) as f32).round() as usize;
-    sorted[idx.min(sorted.len() - 1)]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -755,7 +747,7 @@ mod tests {
 
     #[test]
     fn test_percentile() {
-        let values = vec![0.1, 0.2, 0.3, 0.4, 0.5];
+        let values: Vec<f32> = vec![0.1, 0.2, 0.3, 0.4, 0.5];
         assert!((percentile(&values, 50.0) - 0.3).abs() < 0.001);
         assert!((percentile(&values, 0.0) - 0.1).abs() < 0.001);
         assert!((percentile(&values, 100.0) - 0.5).abs() < 0.001);
