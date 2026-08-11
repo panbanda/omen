@@ -16,6 +16,9 @@ use crate::report::types::*;
 
 /// The embedded HTML template (matches Go version exactly).
 const TEMPLATE_HTML: &str = include_str!("template.html");
+/// Tailwind + shadcn design tokens, compiled offline from assets/report/input.css
+/// via `bun run build`. Embedded at build time; the crate build never runs Tailwind.
+const REPORT_CSS: &str = include_str!("report.css");
 
 /// Renderer handles HTML report generation.
 pub struct Renderer {
@@ -87,6 +90,7 @@ impl Renderer {
 
         let tmpl = self.env.get_template("report")?;
         let rendered = tmpl.render(context! {
+            ReportCss => Value::from_safe_string(REPORT_CSS.to_string()),
             Metadata => data.metadata,
             Score => data.score,
             ScoreClass => data.score_class,

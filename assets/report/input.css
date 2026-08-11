@@ -1,0 +1,270 @@
+@import "tailwindcss";
+
+/*
+  Design tokens follow the shadcn/ui convention (HSL channel triples behind
+  hsl(var(--token))). Light values live on :root; the report toggles dark mode
+  by setting data-theme="dark" on <html>. Chart tokens feed ECharts via JS.
+  This file is compiled offline (bun run build) into src/report/report.css,
+  which is embedded at build time; the Rust build never runs Tailwind.
+*/
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+:root {
+  --background: 0 0% 100%;
+  --foreground: 240 10% 3.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 240 10% 3.9%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 240 10% 3.9%;
+  --primary: 240 5.9% 10%;
+  --primary-foreground: 0 0% 98%;
+  --secondary: 240 4.8% 95.9%;
+  --secondary-foreground: 240 5.9% 10%;
+  --muted: 240 4.8% 95.9%;
+  --muted-foreground: 240 3.8% 46.1%;
+  --accent: 240 4.8% 95.9%;
+  --accent-foreground: 240 5.9% 10%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 240 5.9% 90%;
+  --input: 240 5.9% 90%;
+  --ring: 240 10% 3.9%;
+  --radius: 0.5rem;
+
+  --success: 142 71% 45%;
+  --success-foreground: 0 0% 100%;
+  --warning: 38 92% 50%;
+  --warning-foreground: 240 10% 3.9%;
+  --danger: 0 84.2% 60.2%;
+  --danger-foreground: 0 0% 98%;
+
+  --chart-1: 240 5.9% 10%;
+  --chart-2: 173 58% 39%;
+  --chart-3: 197 37% 44%;
+  --chart-4: 43 74% 49%;
+  --chart-5: 262 52% 55%;
+}
+
+[data-theme="dark"] {
+  --background: 240 10% 3.9%;
+  --foreground: 0 0% 98%;
+  --card: 240 10% 5.9%;
+  --card-foreground: 0 0% 98%;
+  --popover: 240 10% 3.9%;
+  --popover-foreground: 0 0% 98%;
+  --primary: 0 0% 98%;
+  --primary-foreground: 240 5.9% 10%;
+  --secondary: 240 3.7% 15.9%;
+  --secondary-foreground: 0 0% 98%;
+  --muted: 240 3.7% 15.9%;
+  --muted-foreground: 240 5% 64.9%;
+  --accent: 240 3.7% 15.9%;
+  --accent-foreground: 0 0% 98%;
+  --destructive: 0 62.8% 50.6%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 240 3.7% 15.9%;
+  --input: 240 3.7% 15.9%;
+  --ring: 240 4.9% 83.9%;
+
+  --success: 142 65% 47%;
+  --success-foreground: 0 0% 100%;
+  --warning: 38 92% 55%;
+  --warning-foreground: 240 10% 3.9%;
+  --danger: 0 72% 58%;
+  --danger-foreground: 0 0% 100%;
+
+  --chart-1: 217 91% 60%;
+  --chart-2: 173 58% 45%;
+  --chart-3: 197 60% 55%;
+  --chart-4: 43 80% 58%;
+  --chart-5: 262 60% 66%;
+}
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-success: hsl(var(--success));
+  --color-warning: hsl(var(--warning));
+  --color-danger: hsl(var(--danger));
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: var(--font-sans);
+    font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3, h4 {
+    letter-spacing: -0.02em;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    * { transition: none !important; animation: none !important; }
+  }
+}
+
+@layer components {
+  /* Layout */
+  .report-shell {
+    @apply mx-auto flex w-full max-w-[1400px] gap-8 px-6 py-8;
+  }
+  .report-main {
+    @apply min-w-0 flex-1 space-y-8;
+  }
+
+  /* Sidebar navigation (shadcn sidebar/tabs idiom) */
+  .report-nav {
+    @apply sticky top-8 hidden h-[calc(100vh-4rem)] w-56 shrink-0 flex-col gap-1 overflow-y-auto pr-2 lg:flex;
+  }
+  .nav-link {
+    @apply flex items-center rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground;
+  }
+  .nav-link.is-active {
+    @apply bg-accent text-accent-foreground;
+  }
+
+  /* Card */
+  .card {
+    @apply rounded-lg border bg-card text-card-foreground shadow-sm;
+  }
+  .card-header {
+    @apply flex flex-col gap-1.5 p-6;
+  }
+  .card-title {
+    @apply text-lg font-semibold leading-none tracking-tight;
+  }
+  .card-description {
+    @apply text-sm text-muted-foreground;
+  }
+  .card-content {
+    @apply p-6 pt-0;
+  }
+
+  /* Section header */
+  .section-header {
+    @apply mb-4 flex flex-col gap-1;
+  }
+  .section-title {
+    @apply text-2xl font-semibold tracking-tight;
+  }
+  .section-description {
+    @apply text-sm text-muted-foreground;
+  }
+
+  /* Insight callout */
+  .insight {
+    @apply rounded-md border-l-4 border-l-primary bg-muted/40 p-4 text-sm leading-relaxed text-foreground;
+  }
+
+  /* Badge */
+  .badge {
+    @apply inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors;
+  }
+  .badge-default {
+    @apply border-transparent bg-primary text-primary-foreground;
+  }
+  .badge-secondary {
+    @apply border-transparent bg-secondary text-secondary-foreground;
+  }
+  .badge-outline {
+    @apply text-foreground;
+  }
+  .badge-success {
+    @apply border-transparent bg-success text-[hsl(var(--success-foreground))];
+  }
+  .badge-warning {
+    @apply border-transparent bg-warning text-[hsl(var(--warning-foreground))];
+  }
+  .badge-danger {
+    @apply border-transparent bg-danger text-[hsl(var(--danger-foreground))];
+  }
+
+  /* Metric / stat tiles */
+  .metric-grid {
+    @apply grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4;
+  }
+  .metric-tile {
+    @apply rounded-lg border bg-card p-4;
+  }
+  .metric-label {
+    @apply text-xs font-medium uppercase tracking-wide text-muted-foreground;
+  }
+  .metric-value {
+    @apply mt-1 text-2xl font-semibold tabular-nums tracking-tight;
+  }
+
+  /* Score hero */
+  .hero {
+    @apply flex flex-col gap-6 rounded-lg border bg-card p-8 sm:flex-row sm:items-center sm:justify-between;
+  }
+  .hero-score {
+    @apply text-6xl font-bold tabular-nums tracking-tight;
+  }
+  .hero-grade {
+    @apply inline-flex h-16 w-16 items-center justify-center rounded-full text-3xl font-bold;
+  }
+
+  /* Table (shadcn Table idiom) */
+  .table-wrap {
+    @apply relative w-full overflow-x-auto rounded-lg border;
+  }
+  table.report-table {
+    @apply w-full caption-bottom border-collapse text-sm;
+  }
+  .report-table thead {
+    @apply sticky top-0 z-10 bg-muted;
+  }
+  .report-table th {
+    @apply h-10 px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap;
+  }
+  .report-table td {
+    @apply border-t px-4 py-2.5 align-middle;
+  }
+  .report-table tbody tr {
+    @apply transition-colors hover:bg-muted/50;
+  }
+  .report-table .num {
+    @apply text-right tabular-nums;
+  }
+
+  /* Buttons / toggles */
+  .btn-ghost {
+    @apply inline-flex h-9 w-9 items-center justify-center rounded-md border bg-card text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground;
+  }
+
+  .muted { @apply text-muted-foreground; }
+  .mono { font-family: var(--font-mono); }
+}

@@ -65,3 +65,5 @@ Cargo.lock
 # Profiling data
 perf.data
 perf.data.old
+
+node_modules/
