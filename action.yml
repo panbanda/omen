@@ -334,29 +334,24 @@ runs:
             core.warning(`Skipping job summary: ${error.message}`);
             return;
           }
-          const riskScore = diff ? `${Math.round(diff.score * 100)}%` : 'Not available';
+          const signal = (n) => (n >= 80 ? 'Good' : n >= 60 ? 'Watch' : 'Needs work');
           const riskLevel = diff ? String(diff.level).toUpperCase() : 'Not available';
+          const riskScore = diff ? `${Math.round(diff.score * 100)}%` : 'Not available';
 
           core.summary
             .addHeading('Omen Analysis', 2)
             .addTable([
               [
-                { data: 'Risk score', header: true },
-                { data: 'Risk level', header: true },
-                { data: 'Files modified', header: true },
-                { data: 'Lines added', header: true },
-                { data: 'Lines deleted', header: true },
-                { data: 'Health score', header: true },
-                { data: 'Grade', header: true },
+                { data: 'Health', header: true },
+                { data: 'PR risk', header: true },
+                { data: 'Changes', header: true },
               ],
               [
-                riskScore,
-                riskLevel,
-                diff ? String(diff.files_modified) : 'Not available',
-                diff ? `+${diff.lines_added}` : 'Not available',
-                diff ? `-${diff.lines_deleted}` : 'Not available',
-                `${score.overall_score} / 100`,
-                String(score.grade),
+                `${score.grade} (${Math.round(score.overall_score)}/100)`,
+                diff ? `${riskLevel} (${riskScore})` : 'Not available',
+                diff
+                  ? `${diff.files_modified} files, +${diff.lines_added}/-${diff.lines_deleted}, ${diff.commits} commits`
+                  : 'Not available',
               ],
             ]);
 
@@ -365,17 +360,17 @@ runs:
           }
 
           const componentRows = Object.entries(score.components ?? {})
-            .sort((a, b) => b[1].weight - a[1].weight)
+            .sort((a, b) => a[1].score - b[1].score)
             .map(([name, component]) => [
               name,
-              String(Math.round(component.score * 10) / 10),
-              String(component.weight),
+              String(Math.round(component.score)),
+              signal(component.score),
             ]);
-          core.summary.addHeading('Score components', 3).addTable([
+          core.summary.addHeading('Component scores', 3).addTable([
             [
               { data: 'Component', header: true },
               { data: 'Score', header: true },
-              { data: 'Weight', header: true },
+              { data: 'Signal', header: true },
             ],
             ...componentRows,
           ]);
@@ -410,9 +405,11 @@ runs:
           const score = loadJson(process.env.SCORE_JSON);
           const prNumber = context.payload.pull_request.number;
 
+          const signal = (n) => (n >= 80 ? 'Good' : n >= 60 ? 'Watch' : 'Needs work');
+
           const factorsTable = Object.entries(diff.factors)
             .sort((a, b) => b[1] - a[1])
-            .map(([key, value]) => `| ${key} | ${String(value).slice(0, 6)} |`)
+            .map(([key, value]) => `| ${key} | ${Math.round(Number(value) * 100)}% |`)
             .join('\n');
 
           const recommendations = (diff.recommendations ?? [])
@@ -420,8 +417,8 @@ runs:
             .join('\n') || 'No specific recommendations.';
 
           const componentsTable = Object.entries(score.components)
-            .sort((a, b) => b[1].weight - a[1].weight)
-            .map(([key, comp]) => `| ${key} | ${Math.round(comp.score * 10) / 10} | ${comp.weight} |`)
+            .sort((a, b) => a[1].score - b[1].score)
+            .map(([key, comp]) => `| ${key} | ${Math.round(comp.score)} | ${signal(comp.score)} |`)
             .join('\n');
 
           const tipConfig = {
@@ -473,37 +470,47 @@ runs:
             .filter(([name, comp]) => tipConfig[name] && comp.score < tipConfig[name].threshold)
             .sort((a, b) => a[1].score - b[1].score)
             .slice(0, 3);
-          let agentTips = lowestComponents
+          const attention = lowestComponents
             .map(([name, comp]) => {
               const tip = tipConfig[name];
-              return `**${tip.label}** (score: ${comp.score}) -- needs attention\n\n\`\`\`bash\n${tip.command}\n\`\`\`\n\n${tip.advice}`;
+              return `- **${tip.label}** (${Math.round(comp.score)}/100) &mdash; ${tip.advice}\n  \`${tip.command}\``;
             })
-            .join('\n\n---\n\n');
-          if (!agentTips) {
-            agentTips = 'All components are scoring well. No specific improvements needed.';
-          }
+            .join('\n');
+          const attentionBlock = attention ||
+            'All components are above their attention thresholds. No specific action needed.';
+
+          const healthScore = Math.round(score.overall_score);
+          const riskLevel = diff.level.toUpperCase();
+          const riskPct = Math.round(diff.score * 100);
+          const criticalIssues = score.summary.critical_issues;
 
           const body = `<!-- omen-analysis -->
           ## Omen Analysis
 
-          | Risk | Health |
-          |------|--------|
-          | **${diff.level.toUpperCase()}** (${Math.round(diff.score * 100)}%) | **${score.grade}** (${score.overall_score} / 100) |
+          | Health | PR risk |
+          |--------|---------|
+          | **${score.grade}** &middot; ${healthScore}/100 | **${riskLevel}** &middot; ${riskPct}% |
+
+          **Changes:** ${diff.files_modified} files &middot; +${diff.lines_added}/-${diff.lines_deleted} &middot; ${diff.commits} commits${criticalIssues ? ` &middot; ${criticalIssues} critical issue${criticalIssues === 1 ? '' : 's'}` : ''}
+
+          ### Needs attention
+
+          ${attentionBlock}
 
           <details>
-          <summary>Change details</summary>
+          <summary>Component scores</summary>
 
-          | Files modified | Lines added | Lines deleted | Commits |
-          |----------------|-------------|---------------|---------|
-          | ${diff.files_modified} | +${diff.lines_added} | -${diff.lines_deleted} | ${diff.commits} |
+          | Component | Score | Signal |
+          |-----------|-------|--------|
+          ${componentsTable}
 
           </details>
 
           <details>
-          <summary>Risk Factors</summary>
+          <summary>PR risk factors</summary>
 
-          | Factor | Score |
-          |--------|-------|
+          | Factor | Contribution |
+          |--------|--------------|
           ${factorsTable}
 
           </details>
@@ -516,37 +523,15 @@ runs:
           </details>
 
           <details>
-          <summary>Repository health details</summary>
-
-          Files analyzed: ${score.summary.files_analyzed} | Critical issues: ${score.summary.critical_issues}
-
-          | Component | Score | Weight |
-          |-----------|-------|--------|
-          ${componentsTable}
-
-          </details>
-
-          <details>
-          <summary>Tips for AI agents</summary>
-
-          Use these commands to investigate and improve low-scoring areas.
-
-          **Run full analysis:**
+          <summary>Investigate locally</summary>
 
           \`\`\`bash
-          omen -f json score    # health score with component breakdown
-          omen -f json diff     # PR risk analysis
+          omen score            # health score with component breakdown
+          omen diff             # PR risk analysis
           omen hotspot          # high-churn + high-complexity files
           \`\`\`
 
-          ${agentTips}
-
-          **General workflow for improving scores:**
-
-          1. Run the relevant analyzer command to identify specific files
-          2. Focus on the highest-weight components first (complexity 25%, duplication 20%, cohesion 15%, TDG 15%)
-          3. Make targeted improvements -- small refactors that reduce complexity or eliminate duplication
-          4. Re-run \`omen score\` to verify improvement
+          Run the analyzer named next to each component above to find the specific files, make targeted refactors, then re-run \`omen score\` to confirm the change.
 
           </details>
 
