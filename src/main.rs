@@ -30,6 +30,41 @@ fn logging_filter(verbose: bool, rust_log: Option<&str>) -> EnvFilter {
     EnvFilter::new(directive)
 }
 
+/// Resolve the effective gate mode from the canonical `--gate` flag and the
+/// deprecated boolean `--check` flag, shared by `complexity`, `score`, and
+/// `mutation` (`stubs` only ever had `--gate`, so it calls `gate_dispatch`
+/// directly). `--gate` wins whenever it is explicitly set to anything other
+/// than its `Off` default; a bare `--check` with no `--gate` maps to `Error`,
+/// preserving every pre-existing `--check` invocation.
+fn resolve_gate_mode(gate: GateMode, check: bool) -> GateMode {
+    if gate == GateMode::Off && check {
+        GateMode::Error
+    } else {
+        gate
+    }
+}
+
+/// Shared gate/check verdict dispatch used by `complexity`, `score`,
+/// `mutation`, and `stubs`. Callers detect the threshold violation themselves
+/// (each analyzer's report shape differs) and hand the resulting
+/// `Error::ThresholdViolation` to this function only when a violation
+/// occurred; this function decides what to do with it:
+///
+/// - `off`   -- report only, never called with a violation (callers should
+///   skip the gate check entirely when the resolved mode is `Off`).
+/// - `warn`  -- print a one-line summary to stderr, exit 0 (`Ok`).
+/// - `error` -- return the violation, which `main` maps to exit code 2.
+fn gate_dispatch(gate: GateMode, violation: omen::core::Error) -> omen::core::Result<()> {
+    match gate {
+        GateMode::Off => Ok(()),
+        GateMode::Warn => {
+            eprintln!("\nGate mode 'warn': not failing the build.");
+            Ok(())
+        }
+        GateMode::Error => Err(violation),
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     tracing_subscriber::registry()
@@ -153,8 +188,9 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             }
         }
         Command::Complexity(args) => {
-            if args.check {
-                run_complexity_check(path, &config, args, format)?;
+            let gate = resolve_gate_mode(args.gate, args.check);
+            if gate != GateMode::Off {
+                run_complexity_check(path, &config, args, format, gate)?;
             } else {
                 run_analyzer::<omen::analyzers::complexity::Analyzer>(
                     path,
@@ -168,7 +204,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             run_stubs(path, &config, args, format)?;
         }
         Command::Diff(args) => {
-            run_diff_analyzer(path, args.target.as_deref(), format)?;
+            run_diff_analyzer(path, args.target.as_deref(), format, &args.common)?;
         }
         Command::Changes(args) => {
             run_changes_analyzer(path, &config, format, args)?;
@@ -196,9 +232,19 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             dispatch_analyzer(&cli.command, path, &config, format)?;
         }
         Command::Churn(args) => {
-            let days = args.days.unwrap_or_else(|| {
+            // --since is canonical; --days is a documented alias for the same
+            // window. If both are given, --since wins. Note "all"/"forever"
+            // parse to `None` (unlimited), so `--since` must be checked as a
+            // whole branch rather than folded into `--days` via `.or(..)` --
+            // otherwise an explicit `--since all` would fall through to
+            // `--days`/config instead of meaning "no limit".
+            let days = if let Some(ref since) = args.since {
+                omen::git::parse_since_to_days(since).unwrap_or(u32::MAX)
+            } else if let Some(days) = args.days {
+                days
+            } else {
                 omen::git::parse_since_to_days(&config.churn.since).unwrap_or(u32::MAX)
-            });
+            };
             run_churn_analyzer(path, &config, format, days, &args.common)?;
         }
         Command::Flags(args) => {
@@ -218,8 +264,9 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             )?;
         }
         Command::Score(cmd) => {
-            if cmd.args.check {
-                run_score_check(path, &config, &cmd.args, format)?;
+            let gate = resolve_gate_mode(cmd.args.gate, cmd.args.check);
+            if gate != GateMode::Off {
+                run_score_check(path, &config, &cmd.args, format, gate)?;
             } else {
                 match &cmd.subcommand {
                     Some(ScoreSubcommand::Trend(args)) => {
@@ -382,6 +429,17 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                         run_and_collect!(&ctx, omen::analyzers::repomap::Analyzer, "repomap"),
                         run_and_collect!(&ctx, omen::analyzers::smells::Analyzer, "smells"),
                         run_and_collect!(&ctx, omen::analyzers::flags::Analyzer, "flags"),
+                        // TODO(output-schema): the CLI-canonical command name for this
+                        // analyzer is `clones` (see Command::Clones in src/cli/mod.rs),
+                        // but this `all` payload entry -- and the module name, the
+                        // report artifact `duplicates.json`, and `report validate`'s
+                        // file list below -- all still say `duplicates`. Renaming the
+                        // "analyzer" value here is a JSON output-shape change (breaks
+                        // any consumer filtering `analyzer == "duplicates"`), so it is
+                        // intentionally deferred to the separate output-schema task
+                        // rather than done here. The CLI layer already accepts both
+                        // `clones` and `duplicates` as command names (see
+                        // `visible_alias = "duplicates"` on Command::Clones).
                         run_and_collect!(&ctx, omen::analyzers::duplicates::Analyzer, "duplicates"),
                     ]
                 });
@@ -711,10 +769,16 @@ fn run_analyzer_instance<A: Analyzer>(
     Ok(())
 }
 
-fn run_diff_analyzer(path: &Path, target: Option<&str>, format: Format) -> omen::core::Result<()> {
+fn run_diff_analyzer(
+    path: &Path,
+    target: Option<&str>,
+    format: Format,
+    args: &AnalyzerArgs,
+) -> omen::core::Result<()> {
     let analyzer = omen::analyzers::changes::Analyzer::default();
     let result = analyzer.analyze_diff(path, target)?;
-    format.format(&result, &mut stdout())?;
+    let value = serde_json::to_value(&result)?;
+    format_with_limits(value, format, args.top, args.offset, &mut stdout())?;
     Ok(())
 }
 
@@ -739,6 +803,7 @@ fn run_complexity_check(
     config: &Config,
     args: &ComplexityArgs,
     format: Format,
+    gate: GateMode,
 ) -> omen::core::Result<()> {
     let file_set = filtered_file_set(path, config, Some(&args.common))?;
     let ctx = build_context(path, &file_set, config);
@@ -788,13 +853,16 @@ fn run_complexity_check(
                 "\nThresholds: cyclomatic <= {}, cognitive <= {}",
                 max_cyclomatic, max_cognitive
             );
-            Err(omen::core::Error::threshold_violation(
-                format!(
-                    "{} function(s) exceed complexity thresholds",
-                    violations.len()
+            gate_dispatch(
+                gate,
+                omen::core::Error::threshold_violation(
+                    format!(
+                        "{} function(s) exceed complexity thresholds",
+                        violations.len()
+                    ),
+                    violations.len() as f64,
                 ),
-                violations.len() as f64,
-            ))
+            )
         }
     }
 }
@@ -859,21 +927,17 @@ fn run_stubs(
         eprintln!("  {}:{} [{}] {}", v.file, v.line, v.severity, v.snippet);
     }
 
-    match args.gate {
-        GateMode::Off => unreachable!("handled above"),
-        GateMode::Warn => {
-            eprintln!("\nGate mode 'warn': not failing the build.");
-            Ok(())
-        }
-        GateMode::Error => Err(omen::core::Error::threshold_violation(
+    gate_dispatch(
+        args.gate,
+        omen::core::Error::threshold_violation(
             format!(
                 "{} stub(s) at or above severity '{}'",
                 violations.len(),
                 gate_severity
             ),
             violations.len() as f64,
-        )),
-    }
+        ),
+    )
 }
 
 fn run_score_check(
@@ -881,6 +945,7 @@ fn run_score_check(
     config: &Config,
     args: &ScoreArgs,
     format: Format,
+    gate: GateMode,
 ) -> omen::core::Result<()> {
     let file_set = FileSet::from_path(path, config)?;
     let ctx = build_context(path, &file_set, config);
@@ -913,7 +978,7 @@ fn run_score_check(
                     &mut stdout(),
                 )?;
             }
-            Err(e)
+            gate_dispatch(gate, e)
         }
     }
 }
@@ -1019,6 +1084,10 @@ fn run_report(
                 .unwrap_or_default();
 
             // Count total analyzers to run
+            // NOTE: "duplicates"/"hotspots" here are report artifact names, not CLI
+            // command names ("clones"/"hotspot" respectively) -- see the TODO(output-
+            // schema) note near the `all` command's analyzer collection above for why
+            // the mismatch isn't resolved here.
             let analyzer_names = [
                 "complexity",
                 "satd",
@@ -1483,7 +1552,11 @@ fn run_mutation(
     use omen::analyzers::mutation::ml_predictor::{SurvivabilityPredictor, TrainingData};
     use omen::analyzers::mutation::MutantStatus;
 
-    let mut file_set = FileSet::from_path(path, config)?;
+    // Route glob/exclude/changed-since through the same shared helper every
+    // other analyzer uses, instead of hand-rolling glob/exclude here. This
+    // also means mutation now honors --changed-since, which it previously
+    // ignored entirely.
+    let file_set = filtered_file_set(path, config, Some(&args.common))?;
 
     // Load predictor model if --skip-predicted is specified omen:ignore
     let predictor = if args.skip_predicted.is_some() {
@@ -1502,16 +1575,6 @@ fn run_mutation(
     } else {
         None
     };
-
-    // Apply glob filter if specified
-    if let Some(ref pattern) = args.common.glob {
-        file_set = file_set.filter_by_glob(pattern);
-    }
-
-    // Apply exclude filter if specified
-    for pattern in &args.common.exclude {
-        file_set = file_set.exclude_by_glob(pattern);
-    }
 
     // Show analysis progress
     let spinner = if is_tty() {
@@ -1538,17 +1601,17 @@ fn run_mutation(
         .map(|s| s.trim().to_uppercase())
         .collect();
 
-    // Build analyzer
+    // Build analyzer. Note: the gate/--check threshold is intentionally
+    // *not* wired through `mutation::Analyzer::min_score` here (that would
+    // make `analyze()` itself return `Err` before the report is written to
+    // stdout, unlike every other gated command). Instead the CLI evaluates
+    // the threshold itself below, after the report has been emitted.
     let mut analyzer = mutation::Analyzer::new()
         .operators(operators)
         .test_command(args.test_command.clone())
         .timeout(args.timeout)
         .dry_run(args.dry_run)
         .allow_dirty(args.allow_dirty);
-
-    if args.check {
-        analyzer = analyzer.min_score(Some(args.min_score));
-    }
 
     // Configure ML-based filtering if --skip-predicted is set omen:ignore
     if let Some(threshold) = args.skip_predicted {
@@ -1667,16 +1730,35 @@ fn run_mutation(
             );
             println!("Duration: {}ms", result.summary.duration_ms);
         }
-        Format::Sarif => format.format(&result, &mut stdout())?,
+        Format::Sarif => {
+            let value = serde_json::to_value(&result)?;
+            format_with_limits(
+                value,
+                format,
+                args.common.top,
+                args.common.offset,
+                &mut stdout(),
+            )?;
+        }
     }
 
-    // Check mode: fail if score below threshold
-    if args.check && result.summary.mutation_score < args.min_score {
-        return Err(omen::core::Error::analysis(format!(
+    // Gate/check: fail if the mutation score is below --min-score. Uses the
+    // same shared `resolve_gate_mode`/`gate_dispatch` helpers as complexity,
+    // score, and stubs, so `--gate error` (and the deprecated `--check`
+    // alias) consistently exits 2 via `Error::ThresholdViolation` rather than
+    // the generic `Error::Analysis` this used to return.
+    let gate = resolve_gate_mode(args.gate, args.check);
+    if gate != GateMode::Off && result.summary.mutation_score < args.min_score {
+        let message = format!(
             "Mutation score {:.1}% is below minimum threshold {:.1}%",
             result.summary.mutation_score * 100.0,
             args.min_score * 100.0
-        )));
+        );
+        eprintln!("{message}");
+        gate_dispatch(
+            gate,
+            omen::core::Error::threshold_violation(message, result.summary.mutation_score),
+        )?;
     }
 
     // Save results to history if --record flag is set
@@ -1935,5 +2017,46 @@ mod tests {
         assert_eq!(logging_filter(true, None).to_string(), "debug");
         assert_eq!(logging_filter(false, None).to_string(), "off");
         assert_eq!(logging_filter(true, Some("warn")).to_string(), "warn");
+    }
+
+    #[test]
+    fn resolve_gate_mode_defaults_to_gate_value_when_check_false() {
+        assert_eq!(resolve_gate_mode(GateMode::Off, false), GateMode::Off);
+        assert_eq!(resolve_gate_mode(GateMode::Warn, false), GateMode::Warn);
+        assert_eq!(resolve_gate_mode(GateMode::Error, false), GateMode::Error);
+    }
+
+    #[test]
+    fn resolve_gate_mode_bare_check_maps_to_error() {
+        assert_eq!(resolve_gate_mode(GateMode::Off, true), GateMode::Error);
+    }
+
+    #[test]
+    fn resolve_gate_mode_explicit_gate_wins_over_check() {
+        // --gate warn --check: --gate must win, not silently escalate to error.
+        assert_eq!(resolve_gate_mode(GateMode::Warn, true), GateMode::Warn);
+        assert_eq!(resolve_gate_mode(GateMode::Error, true), GateMode::Error);
+    }
+
+    #[test]
+    fn gate_dispatch_off_never_fails() {
+        let violation = omen::core::Error::threshold_violation("violated", 0.0);
+        assert!(gate_dispatch(GateMode::Off, violation).is_ok());
+    }
+
+    #[test]
+    fn gate_dispatch_warn_returns_ok() {
+        let violation = omen::core::Error::threshold_violation("violated", 0.0);
+        assert!(gate_dispatch(GateMode::Warn, violation).is_ok());
+    }
+
+    #[test]
+    fn gate_dispatch_error_returns_the_violation() {
+        let violation = omen::core::Error::threshold_violation("violated", 42.0);
+        let result = gate_dispatch(GateMode::Error, violation);
+        assert!(matches!(
+            result,
+            Err(omen::core::Error::ThresholdViolation { score, .. }) if score == 42.0
+        ));
     }
 }
