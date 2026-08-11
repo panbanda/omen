@@ -73,7 +73,7 @@ runs:
   steps:
     - name: Install omen
       id: install
-      uses: actions/github-script@v8
+      uses: actions/github-script@v9
       env:
         INPUT_VERSION: ${{ inputs.version }}
         GITHUB_TOKEN: ${{ github.token }}
@@ -155,7 +155,7 @@ runs:
 
     - name: Run omen diff
       id: diff
-      uses: actions/github-script@v8
+      uses: actions/github-script@v9
       env:
         INPUT_PATH: ${{ inputs.path }}
         BASE_REF: ${{ github.event.pull_request.base.ref }}
@@ -191,7 +191,7 @@ runs:
 
     - name: Run omen score
       id: score
-      uses: actions/github-script@v8
+      uses: actions/github-script@v9
       env:
         INPUT_PATH: ${{ inputs.path }}
       with:
@@ -223,7 +223,7 @@ runs:
 
     - name: Post sticky comment
       if: inputs.comment == 'true' && github.event_name == 'pull_request'
-      uses: actions/github-script@v8
+      uses: actions/github-script@v9
       env:
         DIFF_JSON: ${{ steps.diff.outputs.diff-json }}
         SCORE_JSON: ${{ steps.score.outputs.score-json }}
@@ -415,7 +415,7 @@ runs:
 
     - name: Manage risk label
       if: inputs.label == 'true' && github.event_name == 'pull_request'
-      uses: actions/github-script@v8
+      uses: actions/github-script@v9
       env:
         RISK_LEVEL: ${{ steps.diff.outputs.risk-level }}
         LABEL_TEMPLATE: ${{ inputs.label-template }}
@@ -492,7 +492,7 @@ runs:
 
     - name: Check threshold
       if: inputs.check == 'true'
-      uses: actions/github-script@v8
+      uses: actions/github-script@v9
       env:
         RISK_LEVEL: ${{ steps.diff.outputs.risk-level }}
         THRESHOLD: ${{ inputs.check-threshold }}
