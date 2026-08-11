@@ -947,7 +947,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: panbanda/omen@omen-v4.21.2
+      - uses: panbanda/omen@omen-v4.26.1
         id: omen
         with:
           version: latest
@@ -971,6 +971,9 @@ jobs:
 
 > [!IMPORTANT]
 > `fetch-depth: 0` is required because history-based analysis needs complete git history. `pull-requests: write` is required when `comment` is enabled, and `issues: write` is required when `label` is enabled. Workflows that disable those features can omit the corresponding write permissions.
+
+> [!NOTE]
+> Pin the action to a release tag (the latest is [`omen-v4.26.1`](https://github.com/panbanda/omen/releases/latest)) and bump it as new releases ship. The `version: latest` input above controls which omen **binary** the action downloads and is independent of the action tag.
 
 ### Inputs
 
