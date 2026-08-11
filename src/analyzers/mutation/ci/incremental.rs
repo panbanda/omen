@@ -36,13 +36,22 @@ impl IncrementalMutation {
     ///
     /// Returns absolute paths to changed files.
     pub fn get_changed_files(&self, repo_path: &Path) -> Result<Vec<PathBuf>> {
+        if self.base_ref.starts_with('-') {
+            return Err(Error::git("base reference must not start with '-'"));
+        }
         // Check if we're in a git repository
         if !repo_path.join(".git").exists() && self.find_git_root(repo_path).is_none() {
             return Err(Error::git("Not a git repository"));
         }
 
         let output = Command::new("git")
-            .args(["diff", "--name-only", &self.base_ref])
+            .args([
+                "diff",
+                "--name-only",
+                "--end-of-options",
+                &self.base_ref,
+                "--",
+            ])
             .current_dir(repo_path)
             .output()
             .map_err(|e| Error::git(format!("Failed to run git diff: {}", e)))?;
@@ -94,6 +103,9 @@ impl IncrementalMutation {
     /// Returns a list of (start_line, end_line) tuples representing
     /// the ranges of lines that were changed.
     pub fn get_changed_lines(&self, file: &Path, repo_path: &Path) -> Result<Vec<(u32, u32)>> {
+        if self.base_ref.starts_with('-') {
+            return Err(Error::git("base reference must not start with '-'"));
+        }
         // Get the relative path from repo root
         let relative_path = file
             .strip_prefix(repo_path)
@@ -101,7 +113,14 @@ impl IncrementalMutation {
             .to_string_lossy();
 
         let output = Command::new("git")
-            .args(["diff", "-U0", &self.base_ref, "--", relative_path.as_ref()])
+            .args([
+                "diff",
+                "-U0",
+                "--end-of-options",
+                &self.base_ref,
+                "--",
+                relative_path.as_ref(),
+            ])
             .current_dir(repo_path)
             .output()
             .map_err(|e| Error::git(format!("Failed to run git diff: {}", e)))?;
@@ -271,6 +290,21 @@ mod tests {
         let inc = IncrementalMutation::new("nonexistent-branch");
         let result = inc.get_changed_files(temp.path());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_changed_files_rejects_option_like_ref() {
+        let temp = tempfile::tempdir().unwrap();
+        init_git_repo(temp.path());
+        make_commit(temp.path(), "initial");
+
+        let result = IncrementalMutation::new("--output=stolen").get_changed_files(temp.path());
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("must not start with '-'"));
     }
 
     #[test]

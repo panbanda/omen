@@ -43,7 +43,10 @@ pub use operators::{
     BitwiseOperator, BoundaryOperator, ConditionalOperator, LiteralOperator, RelationalOperator,
     ReturnValueOperator, StatementOperator, UnaryOperator,
 };
-pub use safety::{atomic_write, has_uncommitted_changes, MutationGuard};
+pub use safety::{
+    atomic_write, has_uncommitted_changes, install_signal_handler, restore_active_mutations,
+    MutationGuard,
+};
 pub use worker::{
     FileLockManager, ProgressUpdate, WorkItem, WorkQueue, WorkerPoolConfig, WorkerPoolHandle,
 };
@@ -101,6 +104,8 @@ pub struct Analyzer {
     skip_predicted_threshold: Option<f64>,
     /// Trained ML predictor for filtering mutants.
     predictor: Option<ml_predictor::SurvivabilityPredictor>,
+    /// Whether uncommitted target files may be mutated.
+    allow_dirty: bool,
 }
 
 impl Default for Analyzer {
@@ -126,6 +131,7 @@ impl Analyzer {
             output_survivors: None,
             skip_predicted_threshold: None,
             predictor: None,
+            allow_dirty: false,
         }
     }
 
@@ -150,6 +156,12 @@ impl Analyzer {
     /// Enable dry-run mode (generate only, no execution).
     pub fn dry_run(mut self, dry_run: bool) -> Self {
         self.dry_run = dry_run;
+        self
+    }
+
+    /// Allow mutation testing on files with uncommitted changes.
+    pub fn allow_dirty(mut self, allow: bool) -> Self {
+        self.allow_dirty = allow;
         self
     }
 
@@ -314,10 +326,31 @@ impl AnalyzerTrait for Analyzer {
     }
 
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
+        if !self.allow_dirty {
+            let dirty_files: Vec<_> = ctx
+                .files
+                .iter()
+                .map(|file| ctx.root.join(file))
+                .filter(|file| has_uncommitted_changes(file))
+                .collect();
+            if !dirty_files.is_empty() {
+                return Err(Error::InvalidArgument(format!(
+                    "mutation target files have uncommitted changes; commit or stash them, or allow dirty files explicitly: {}",
+                    dirty_files
+                        .iter()
+                        .map(|file| file.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+            }
+        }
+
         // If dry run, just generate mutants
         if self.dry_run {
             return self.generate_only(ctx);
         }
+
+        install_signal_handler()?;
 
         let start = Instant::now();
 
@@ -596,6 +629,7 @@ fn build_summary(files: &[FileResult], duration_ms: u64) -> Summary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::FileSet;
 
     #[test]
     fn test_analyzer_new() {
@@ -733,6 +767,39 @@ mod tests {
             analyzer.output_survivors,
             Some(PathBuf::from("survivors.json"))
         );
+    }
+
+    #[test]
+    fn test_analyzer_refuses_dirty_files_unless_allowed() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("test.rs");
+        std::fs::write(&file, "fn value() -> i32 { 1 }\n").unwrap();
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "test@example.com"],
+            vec!["config", "user.name", "Test User"],
+            vec!["add", "."],
+            vec!["commit", "-m", "initial"],
+        ] {
+            assert!(std::process::Command::new("git")
+                .args(args)
+                .current_dir(temp.path())
+                .output()
+                .unwrap()
+                .status
+                .success());
+        }
+        std::fs::write(&file, "fn value() -> i32 { 2 }\n").unwrap();
+        let files = FileSet::from_path_default(temp.path()).unwrap();
+        let config = crate::config::Config::default();
+        let ctx = AnalysisContext::new(&files, &config, Some(temp.path()));
+
+        assert!(Analyzer::new().dry_run(true).analyze(&ctx).is_err());
+        assert!(Analyzer::new()
+            .dry_run(true)
+            .allow_dirty(true)
+            .analyze(&ctx)
+            .is_ok());
     }
 
     #[test]

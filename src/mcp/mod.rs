@@ -1,7 +1,7 @@
 //! MCP (Model Context Protocol) server implementation.
 
-use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -9,6 +9,40 @@ use serde_json::{json, Value};
 use crate::config::Config;
 use crate::core::{AnalysisContext, Analyzer, FileSet, Result};
 use crate::git::GitRepo;
+
+const MAX_STDIO_LINE_SIZE: usize = 10 * 1024 * 1024;
+
+fn discard_until_newline(reader: &mut impl BufRead) -> std::io::Result<()> {
+    loop {
+        let buffer = reader.fill_buf()?;
+        if buffer.is_empty() {
+            return Ok(());
+        }
+        if let Some(position) = buffer.iter().position(|byte| *byte == b'\n') {
+            reader.consume(position + 1);
+            return Ok(());
+        }
+        let length = buffer.len();
+        reader.consume(length);
+    }
+}
+
+fn write_parse_error(writer: &mut impl Write, detail: &str) -> Result<()> {
+    let response = JsonRpcResponse {
+        jsonrpc: "2.0".to_string(),
+        id: None,
+        result: None,
+        error: Some(JsonRpcError {
+            code: -32700,
+            message: format!("Parse error: {detail}"),
+            data: None,
+        }),
+    };
+    serde_json::to_writer(&mut *writer, &response)?;
+    writeln!(writer)?;
+    writer.flush()?;
+    Ok(())
+}
 
 struct ToolDef {
     name: &'static str,
@@ -81,11 +115,24 @@ fn count_items(value: &serde_json::Value) -> Option<usize> {
 pub struct McpServer {
     config: Config,
     root_path: PathBuf,
+    allow_external_paths: bool,
 }
 
 impl McpServer {
     pub fn new(root_path: PathBuf, config: Config) -> Self {
-        Self { config, root_path }
+        Self::new_with_external_paths(root_path, config, false)
+    }
+
+    pub fn new_with_external_paths(
+        root_path: PathBuf,
+        config: Config,
+        allow_external_paths: bool,
+    ) -> Self {
+        Self {
+            config,
+            root_path,
+            allow_external_paths,
+        }
     }
 
     /// Run the MCP server with stdio transport.
@@ -95,13 +142,53 @@ impl McpServer {
         let reader = BufReader::new(stdin.lock());
         let mut writer = stdout.lock();
 
-        for line in reader.lines() {
-            let line = line?;
-            if line.is_empty() {
+        self.run_stream(reader, &mut writer)
+    }
+
+    fn run_stream<R: BufRead, W: Write>(&self, mut reader: R, mut writer: W) -> Result<()> {
+        loop {
+            let mut bytes = Vec::new();
+            let read = match (&mut reader)
+                .take((MAX_STDIO_LINE_SIZE + 2) as u64)
+                .read_until(b'\n', &mut bytes)
+            {
+                Ok(read) => read,
+                Err(error) => {
+                    write_parse_error(&mut writer, &format!("read error: {error}"))?;
+                    continue;
+                }
+            };
+            if read == 0 {
+                break;
+            }
+
+            let has_newline = bytes.last() == Some(&b'\n');
+            let content_len = bytes.len().saturating_sub(usize::from(has_newline));
+            if content_len > MAX_STDIO_LINE_SIZE {
+                if !has_newline {
+                    discard_until_newline(&mut reader)?;
+                }
+                write_parse_error(&mut writer, "request line exceeds size limit")?;
                 continue;
             }
 
-            match serde_json::from_str::<JsonRpcRequest>(&line) {
+            bytes.pop();
+            if bytes.last() == Some(&b'\r') {
+                bytes.pop();
+            }
+            if bytes.is_empty() {
+                continue;
+            }
+
+            let line = match std::str::from_utf8(&bytes) {
+                Ok(line) => line,
+                Err(error) => {
+                    write_parse_error(&mut writer, &format!("invalid UTF-8: {error}"))?;
+                    continue;
+                }
+            };
+
+            match serde_json::from_str::<JsonRpcRequest>(line) {
                 Ok(request) => {
                     // JSON-RPC notifications have no `id` field; no response expected.
                     if request.id.is_none() {
@@ -113,24 +200,45 @@ impl McpServer {
                     writer.flush()?;
                 }
                 Err(e) => {
-                    let error_response = JsonRpcResponse {
-                        jsonrpc: "2.0".to_string(),
-                        id: None,
-                        result: None,
-                        error: Some(JsonRpcError {
-                            code: -32700,
-                            message: format!("Parse error: {}", e),
-                            data: None,
-                        }),
-                    };
-                    serde_json::to_writer(&mut writer, &error_response)?;
-                    writeln!(writer)?;
-                    writer.flush()?;
+                    write_parse_error(&mut writer, &e.to_string())?;
                 }
             }
         }
 
         Ok(())
+    }
+
+    fn resolve_confined_path(
+        &self,
+        requested: &Path,
+        relative_to: Option<&Path>,
+    ) -> std::result::Result<PathBuf, String> {
+        let candidate = if requested.is_absolute() {
+            requested.to_path_buf()
+        } else {
+            relative_to.unwrap_or(&self.root_path).join(requested)
+        };
+        let canonical = candidate
+            .canonicalize()
+            .map_err(|e| format!("Failed to resolve path '{}': {e}", candidate.display()))?;
+        if self.allow_external_paths {
+            return Ok(canonical);
+        }
+        let root = self.root_path.canonicalize().map_err(|e| {
+            format!(
+                "Failed to resolve MCP root '{}': {e}",
+                self.root_path.display()
+            )
+        })?;
+        if canonical.starts_with(&root) {
+            Ok(canonical)
+        } else {
+            Err(format!(
+                "Path '{}' is outside the MCP root '{}'",
+                canonical.display(),
+                root.display()
+            ))
+        }
     }
 
     fn handle_request(&self, request: JsonRpcRequest) -> JsonRpcResponse {
@@ -489,11 +597,12 @@ impl McpServer {
             .ok_or("Missing tool name")?;
         let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
 
-        let path = arguments
+        let requested_path = arguments
             .get("path")
             .and_then(|v| v.as_str())
             .map(PathBuf::from)
             .unwrap_or_else(|| self.root_path.clone());
+        let path = self.resolve_confined_path(&requested_path, Some(&self.root_path))?;
 
         let file_set = FileSet::from_path(&path, &self.config)
             .map_err(|e| format!("Failed to create file set: {}", e))?;
@@ -676,7 +785,14 @@ impl McpServer {
                     .filter(|p| !p.trim().is_empty())
                     .map(|p| std::path::PathBuf::from(p.trim()))
                     .collect()
-            });
+            })
+            .map(|paths: Vec<PathBuf>| {
+                paths
+                    .into_iter()
+                    .map(|path| self.resolve_confined_path(&path, Some(&self.root_path)))
+                    .collect::<std::result::Result<Vec<_>, _>>()
+            })
+            .transpose()?;
 
         let search_config = SearchConfig {
             min_score,
@@ -776,7 +892,14 @@ impl McpServer {
                     .filter(|p| !p.trim().is_empty())
                     .map(|p| std::path::PathBuf::from(p.trim()))
                     .collect()
-            });
+            })
+            .map(|paths: Vec<PathBuf>| {
+                paths
+                    .into_iter()
+                    .map(|path| self.resolve_confined_path(&path, Some(&self.root_path)))
+                    .collect::<std::result::Result<Vec<_>, _>>()
+            })
+            .transpose()?;
 
         let search_config = SearchConfig {
             min_score,
@@ -853,11 +976,7 @@ impl McpServer {
             // callers can pass repo-relative paths (e.g. "src/main.rs") without
             // needing to know the absolute path.
             let raw = std::path::PathBuf::from(file_str);
-            let file_path = if raw.is_relative() {
-                repo_path.join(&raw)
-            } else {
-                raw
-            };
+            let file_path = self.resolve_confined_path(&raw, Some(repo_path))?;
             let file_outline =
                 outline_file(&file_path).map_err(|e| format!("Outline failed: {}", e))?;
             OutlineResult {
@@ -1010,6 +1129,107 @@ mod tests {
     fn test_mcp_server_new() {
         let (server, _temp_dir) = create_test_server();
         assert!(server.root_path.exists());
+    }
+
+    #[test]
+    fn test_requested_path_outside_root_is_rejected_by_default() {
+        let (server, _root) = create_test_server();
+        let outside = TempDir::new().unwrap();
+
+        let result = server.resolve_confined_path(outside.path(), None);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_requested_path_outside_root_is_allowed_with_flag() {
+        let root = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let server =
+            McpServer::new_with_external_paths(root.path().to_path_buf(), Config::default(), true);
+
+        assert_eq!(
+            server.resolve_confined_path(outside.path(), None).unwrap(),
+            outside.path().canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn test_outline_rejects_parent_traversal() {
+        let (server, root) = create_test_server();
+        let outside = root.path().parent().unwrap().join("outside.rs");
+        std::fs::write(&outside, "fn secret() {}\n").unwrap();
+        let args = json!({"file": "../outside.rs"});
+
+        let result = server.handle_outline(root.path(), &args);
+
+        assert!(result.is_err());
+        std::fs::remove_file(outside).unwrap();
+    }
+
+    #[test]
+    fn test_semantic_search_rejects_external_include_project() {
+        let (server, _root) = create_test_server();
+        let outside = TempDir::new().unwrap();
+        let args = json!({
+            "query": "test",
+            "include_projects": outside.path().to_str().unwrap()
+        });
+
+        assert!(server.handle_semantic_search(&args).is_err());
+    }
+
+    #[test]
+    fn test_semantic_search_hyde_rejects_external_include_project() {
+        let (server, _root) = create_test_server();
+        let outside = TempDir::new().unwrap();
+        let args = json!({
+            "hypothetical_document": "test",
+            "include_projects": outside.path().to_str().unwrap()
+        });
+
+        assert!(server.handle_semantic_search_hyde(&args).is_err());
+    }
+
+    #[test]
+    fn test_stdio_invalid_utf8_does_not_stop_following_request() {
+        let (server, _root) = create_test_server();
+        let mut input = vec![0xff, b'\n'];
+        input.extend_from_slice(br#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#);
+        input.push(b'\n');
+        let mut output = Vec::new();
+
+        server.run_stream(input.as_slice(), &mut output).unwrap();
+
+        let responses: Vec<Value> = String::from_utf8(output)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(responses.len(), 2);
+        assert_eq!(responses[0]["error"]["code"], -32700);
+        assert_eq!(responses[1]["id"], 1);
+    }
+
+    #[test]
+    fn test_stdio_rejects_oversized_line_and_continues() {
+        let (server, _root) = create_test_server();
+        let mut input = vec![b'x'; MAX_STDIO_LINE_SIZE + 1];
+        input.push(b'\n');
+        input.extend_from_slice(br#"{"jsonrpc":"2.0","id":2,"method":"initialize"}"#);
+        input.push(b'\n');
+        let mut output = Vec::new();
+
+        server.run_stream(input.as_slice(), &mut output).unwrap();
+
+        let responses: Vec<Value> = String::from_utf8(output)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(responses.len(), 2);
+        assert_eq!(responses[0]["error"]["code"], -32700);
+        assert_eq!(responses[1]["id"], 2);
     }
 
     /// B9: tool_names() must exactly match the names produced by handle_tools_list,
@@ -1173,17 +1393,14 @@ mod tests {
 
     #[test]
     fn test_handle_tool_call_uses_requested_path_as_analysis_root() {
-        let (server, _server_root) = create_test_server();
-        let target_dir = TempDir::new().unwrap();
-        std::fs::write(
-            target_dir.path().join("target.rs"),
-            "fn target_function() {}\n",
-        )
-        .unwrap();
+        let (server, server_root) = create_test_server();
+        let target_dir = server_root.path().join("nested");
+        std::fs::create_dir(&target_dir).unwrap();
+        std::fs::write(target_dir.join("target.rs"), "fn target_function() {}\n").unwrap();
 
         let params = json!({
             "name": "complexity",
-            "arguments": {"path": target_dir.path().to_str().unwrap()}
+            "arguments": {"path": target_dir.to_str().unwrap()}
         });
         let response = server.handle_tool_call(Some(params)).unwrap();
         let text = response["content"][0]["text"]
@@ -1293,42 +1510,39 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_tool_call_does_not_use_server_root_when_path_given() {
-        // Server is initialized with server_root (which has a file with a unique symbol)
-        // but the tool call requests a *different* path.
-        // The analysis result should only reflect the requested path, not the server root.
-        let (server, server_root) = create_test_server();
-        std::fs::write(
-            server_root.path().join("server_root_only.rs"),
-            "fn server_root_symbol() {}\n",
-        )
-        .unwrap();
-
-        // target_dir has completely different content
+    fn test_handle_tool_call_rejects_path_outside_server_root() {
+        let (server, _server_root) = create_test_server();
         let target_dir = TempDir::new().unwrap();
-        std::fs::write(
-            target_dir.path().join("target_only.rs"),
-            "fn target_only_symbol() {}\n",
-        )
-        .unwrap();
-
         let params = json!({
             "name": "complexity",
             "arguments": {"path": target_dir.path().to_str().unwrap()}
         });
-        let response = server.handle_tool_call(Some(params)).unwrap();
-        let text = response["content"][0]["text"]
-            .as_str()
-            .expect("tool response text should be a string");
 
-        assert!(
-            text.contains("target_only_symbol"),
-            "analysis should include content from the requested path, got: {text}"
+        assert!(server.handle_tool_call(Some(params)).is_err());
+    }
+
+    #[test]
+    fn test_handle_tool_call_allows_outside_path_with_flag() {
+        let server_root = TempDir::new().unwrap();
+        let target_dir = TempDir::new().unwrap();
+        std::fs::write(
+            target_dir.path().join("target.rs"),
+            "fn target_function() {}\n",
+        )
+        .unwrap();
+        let server = McpServer::new_with_external_paths(
+            server_root.path().to_path_buf(),
+            Config::default(),
+            true,
         );
-        assert!(
-            !text.contains("server_root_symbol"),
-            "analysis must not include content from server root when different path is requested, got: {text}"
-        );
+        let params = json!({
+            "name": "complexity",
+            "arguments": {"path": target_dir.path().to_str().unwrap()}
+        });
+
+        let response = server.handle_tool_call(Some(params)).unwrap();
+        let text = response["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("target_function"));
     }
 
     #[test]
@@ -1341,16 +1555,17 @@ mod tests {
         )
         .unwrap();
 
-        let target_dir = TempDir::new().unwrap();
+        let target_dir = server_root.path().join("target");
+        std::fs::create_dir(&target_dir).unwrap();
         std::fs::write(
-            target_dir.path().join("target.py"),
+            target_dir.join("target.py"),
             "# TODO: unique_target_todo\ndef target_func(): pass\n",
         )
         .unwrap();
 
         let params = json!({
             "name": "satd",
-            "arguments": {"path": target_dir.path().to_str().unwrap()}
+            "arguments": {"path": target_dir.to_str().unwrap()}
         });
         let response = server.handle_tool_call(Some(params)).unwrap();
         let text = response["content"][0]["text"]
@@ -1968,9 +2183,9 @@ mod tests {
 
     #[test]
     fn test_handle_tool_call_outline_file() {
-        let (server, _temp_dir) = create_test_server();
-        let fixture =
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample.rs");
+        let (server, temp_dir) = create_test_server();
+        let fixture = temp_dir.path().join("sample.rs");
+        std::fs::write(&fixture, "fn sample() {}\n").unwrap();
         let params = json!({
             "name": "outline",
             "arguments": {"file": fixture.to_str().unwrap()}

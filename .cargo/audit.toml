@@ -1,0 +1,19 @@
+# cargo-audit configuration. Run: cargo audit
+#
+# The ignored advisories below are transitive dependencies that cannot be
+# upgraded without upstream releases and are not reachable in omen's usage.
+# Everything else must pass. Re-evaluate on each dependency bump.
+
+[advisories]
+ignore = [
+    # rkyv 0.7 out-of-bounds read when DESERIALIZING untrusted rkyv archives
+    # containing Rc/Arc. Pulled only by minify-html -> lightningcss ->
+    # parcel_sourcemap (pinned to rkyv 0.7); omen only minifies its own
+    # generated HTML and never deserializes rkyv archives, so it is unreachable.
+    # Fix requires parcel_sourcemap to move to rkyv >=0.8.
+    "RUSTSEC-2026-0235",
+    # rand unsoundness that only manifests when calling rand::rng() from a
+    # custom global logger. Reaches the tree via the proptest dev-dependency
+    # (tests only) and a transitive rand 0.8; omen does not use this pattern.
+    "RUSTSEC-2026-0097",
+]
