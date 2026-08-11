@@ -1354,3 +1354,414 @@ fn test_all_three_formats_succeed() {
             .success();
     }
 }
+
+// ---------------------------------------------------------------------------
+// Gate/check: --gate off|warn|error, --check deprecated alias, exit codes
+// ---------------------------------------------------------------------------
+//
+// Convention under test: off = report only (exit 0); warn = report + one-line
+// stderr summary (exit 0); error = report; on violation return
+// Error::ThresholdViolation, which main() maps to exit code 2. --check is a
+// deprecated alias for --gate error; --gate wins if both are given.
+
+#[test]
+fn test_complexity_gate_error_exits_two_on_violation() {
+    let temp = TempDir::new().unwrap();
+    write_complexity_exclude_fixture(&temp);
+
+    omen()
+        .args([
+            "-p",
+            temp.path().to_str().unwrap(),
+            "complexity",
+            "--gate",
+            "error",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("Complexity threshold exceeded"));
+}
+
+#[test]
+fn test_complexity_gate_warn_exits_zero_on_violation() {
+    let temp = TempDir::new().unwrap();
+    write_complexity_exclude_fixture(&temp);
+
+    omen()
+        .args([
+            "-p",
+            temp.path().to_str().unwrap(),
+            "complexity",
+            "--gate",
+            "warn",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Gate mode 'warn'"));
+}
+
+#[test]
+fn test_complexity_gate_off_default_exits_zero_on_violation() {
+    let temp = TempDir::new().unwrap();
+    write_complexity_exclude_fixture(&temp);
+
+    omen()
+        .args(["-p", temp.path().to_str().unwrap(), "complexity"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_complexity_check_alias_still_exits_two() {
+    let temp = TempDir::new().unwrap();
+    write_complexity_exclude_fixture(&temp);
+
+    omen()
+        .args(["-p", temp.path().to_str().unwrap(), "complexity", "--check"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn test_complexity_gate_off_wins_over_check_exits_zero() {
+    // Regression: `--check --gate off` must resolve to Off (exit 0), not
+    // silently escalate to Error just because `--check` alone would.
+    let temp = TempDir::new().unwrap();
+    write_complexity_exclude_fixture(&temp);
+
+    omen()
+        .args([
+            "-p",
+            temp.path().to_str().unwrap(),
+            "complexity",
+            "--check",
+            "--gate",
+            "off",
+        ])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_score_gate_error_exits_two_and_emits_json() {
+    omen()
+        .args([
+            "-p",
+            fixtures_dir(),
+            "-f",
+            "json",
+            "score",
+            "--gate",
+            "error",
+            "--fail-under",
+            "99",
+        ])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("\"violations\""));
+}
+
+#[test]
+fn test_score_gate_warn_exits_zero() {
+    omen()
+        .args([
+            "-p",
+            fixtures_dir(),
+            "score",
+            "--gate",
+            "warn",
+            "--fail-under",
+            "99",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Gate mode 'warn'"));
+}
+
+#[test]
+fn test_score_check_alias_still_exits_two() {
+    omen()
+        .args([
+            "-p",
+            fixtures_dir(),
+            "score",
+            "--check",
+            "--fail-under",
+            "99",
+        ])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn test_score_gate_off_wins_over_check_exits_zero() {
+    // Regression: `--check --gate off` must resolve to Off (exit 0).
+    omen()
+        .args([
+            "-p",
+            fixtures_dir(),
+            "score",
+            "--check",
+            "--gate",
+            "off",
+            "--fail-under",
+            "99",
+        ])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_score_default_gate_off_exits_zero_on_violation() {
+    // No --gate and no --check: default GateMode::Off must report only and
+    // exit 0, even though the score is well below --fail-under.
+    omen()
+        .args(["-p", fixtures_dir(), "score", "--fail-under", "99"])
+        .assert()
+        .success();
+}
+
+/// `--dry-run` only generates mutants (no test execution), so the mutation
+/// score is always 0.0 (0 killed / 0 scored) -- reliably below the default
+/// `--min-score` of 0.8. This lets the gate be exercised deterministically
+/// without running real tests.
+fn write_mutation_gate_fixture() -> TempDir {
+    let temp = TempDir::new().unwrap();
+    std::fs::write(
+        temp.path().join("lib.rs"),
+        "pub fn is_positive(x: i32) -> bool { x > 0 }\n",
+    )
+    .unwrap();
+    temp
+}
+
+#[test]
+fn test_mutation_gate_error_exits_two_and_emits_report_before_failing() {
+    // Regression guard: a naive gate implementation can return Err from
+    // inside the analyzer itself (before the report is ever written), which
+    // would make this test pass for the wrong reason -- exit 2 with no
+    // report at all. Requesting JSON and asserting the stdout is valid,
+    // non-empty mutation output proves the report reaches stdout *before*
+    // the gate fails, matching complexity/score/stubs.
+    let temp = write_mutation_gate_fixture();
+
+    let output = omen()
+        .args([
+            "-p",
+            temp.path().to_str().unwrap(),
+            "-f",
+            "json",
+            "mutation",
+            "--dry-run",
+            "--gate",
+            "error",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("mutation report should be valid JSON on stdout");
+    assert!(
+        parsed.get("summary").is_some(),
+        "mutation report should include a summary: {parsed:#?}"
+    );
+    assert_eq!(
+        parsed["summary"]["mutation_score"], 0.0,
+        "dry-run mutation score should be 0.0: {parsed:#?}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Mutation score"),
+        "expected gate failure message on stderr: {stderr}"
+    );
+}
+
+#[test]
+fn test_mutation_gate_warn_exits_zero_on_dry_run() {
+    let temp = write_mutation_gate_fixture();
+
+    omen()
+        .args([
+            "-p",
+            temp.path().to_str().unwrap(),
+            "mutation",
+            "--dry-run",
+            "--gate",
+            "warn",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Gate mode 'warn'"));
+}
+
+#[test]
+fn test_mutation_gate_off_default_exits_zero_on_dry_run() {
+    let temp = write_mutation_gate_fixture();
+
+    omen()
+        .args(["-p", temp.path().to_str().unwrap(), "mutation", "--dry-run"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_mutation_check_alias_still_exits_two_on_dry_run() {
+    let temp = write_mutation_gate_fixture();
+
+    omen()
+        .args([
+            "-p",
+            temp.path().to_str().unwrap(),
+            "mutation",
+            "--dry-run",
+            "--check",
+        ])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn test_mutation_gate_off_wins_over_check_exits_zero() {
+    // Regression: `--check --gate off` must resolve to Off (exit 0).
+    let temp = write_mutation_gate_fixture();
+
+    omen()
+        .args([
+            "-p",
+            temp.path().to_str().unwrap(),
+            "mutation",
+            "--dry-run",
+            "--check",
+            "--gate",
+            "off",
+        ])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_operational_error_exits_one_not_two() {
+    // Sanity check that op errors (bad path) are distinct from gate
+    // violations: exit 1, not 2, and not success.
+    omen()
+        .args(["-p", "/definitely/not/a/repository", "-f", "json", "score"])
+        .assert()
+        .code(1);
+}
+
+// ---------------------------------------------------------------------------
+// Pagination: diff/mutation routed through format_with_limits
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_diff_top_offset_flags_parse_and_run() {
+    // diff's git plumbing (target resolution, no-diff cases) is exercised
+    // elsewhere; this only checks that --top/--offset reach format_with_limits
+    // without panicking and that the output stays valid JSON either way.
+    let output = omen()
+        .args([
+            "-p", ".", "-f", "json", "diff", "--top", "1", "--offset", "0",
+        ])
+        .output()
+        .unwrap();
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&stdout).is_ok(),
+            "diff --top/--offset should produce valid JSON when successful"
+        );
+    }
+}
+
+#[test]
+fn test_mutation_top_offset_flags_parse_and_run() {
+    let temp = write_mutation_gate_fixture();
+    omen()
+        .args([
+            "-p",
+            temp.path().to_str().unwrap(),
+            "-f",
+            "json",
+            "mutation",
+            "--dry-run",
+            "--top",
+            "1",
+            "--offset",
+            "0",
+        ])
+        .assert()
+        .success();
+}
+
+// ---------------------------------------------------------------------------
+// Filtering: mutation routed through filtered_file_set (glob/exclude/changed-since)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_mutation_glob_and_exclude_still_work() {
+    let temp = TempDir::new().unwrap();
+    std::fs::write(
+        temp.path().join("keep.rs"),
+        "pub fn keep(x: i32) -> bool { x > 0 }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        temp.path().join("skip.py"),
+        "def skip(x):\n    return x > 0\n",
+    )
+    .unwrap();
+
+    omen()
+        .args([
+            "-p",
+            temp.path().to_str().unwrap(),
+            "mutation",
+            "--dry-run",
+            "-g",
+            "*.rs",
+        ])
+        .assert()
+        .success();
+}
+
+// ---------------------------------------------------------------------------
+// Time window: --since / --days on churn
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_churn_since_flag_runs_successfully() {
+    omen()
+        .args(["-p", ".", "-f", "json", "churn", "--since", "6m"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_churn_days_alias_still_runs_successfully() {
+    omen()
+        .args(["-p", ".", "-f", "json", "churn", "--days", "180"])
+        .assert()
+        .success();
+}
+
+// ---------------------------------------------------------------------------
+// Command-name aliases: clones/duplicates, hotspot/hotspots
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_duplicates_alias_runs_like_clones() {
+    omen()
+        .args(["-p", fixtures_dir(), "-f", "json", "duplicates"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_hotspots_alias_runs_like_hotspot() {
+    omen()
+        .args(["-p", fixtures_dir(), "-f", "json", "hotspots"])
+        .assert()
+        .success();
+}

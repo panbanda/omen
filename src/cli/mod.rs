@@ -52,7 +52,7 @@ pub enum Command {
     Complexity(ComplexityArgs),
 
     /// Detect Self-Admitted Technical Debt
-    #[command(alias = "debt")]
+    #[command(visible_alias = "debt")]
     Satd(AnalyzerArgs),
 
     /// Detect incomplete/placeholder implementations (todo!(), NotImplementedError, empty bodies)
@@ -66,11 +66,11 @@ pub enum Command {
     Churn(ChurnArgs),
 
     /// Detect code duplicates/clones
-    #[command(alias = "dup", alias = "duplicates")]
+    #[command(alias = "dup", visible_alias = "duplicates")]
     Clones(AnalyzerArgs),
 
     /// Predict defect-prone files using PMAT
-    #[command(alias = "predict")]
+    #[command(visible_alias = "predict")]
     Defect(AnalyzerArgs),
 
     /// Analyze recent changes (JIT risk)
@@ -89,7 +89,12 @@ pub enum Command {
     Graph(AnalyzerArgs),
 
     /// Find complexity/churn hotspots
-    #[command(alias = "hs")]
+    // CLI-layer alias note: the canonical command name is `hotspot` (singular);
+    // the report data contract (`.omen/data/hotspots.json`, the `report validate`
+    // file list, and the MCP tool-name mapping in src/mcp/mod.rs) still uses the
+    // plural `hotspots`. `hotspots` is accepted here as a visible alias so both
+    // spellings work from the CLI without touching the JSON/report contract.
+    #[command(alias = "hs", visible_alias = "hotspots")]
     Hotspot(AnalyzerArgs),
 
     /// Detect temporally coupled files
@@ -97,7 +102,7 @@ pub enum Command {
     Temporal(AnalyzerArgs),
 
     /// Analyze code ownership and bus factor
-    #[command(alias = "own", alias = "bus-factor")]
+    #[command(alias = "own", visible_alias = "bus-factor")]
     Ownership(AnalyzerArgs),
 
     /// Calculate CK cohesion metrics
@@ -144,7 +149,7 @@ pub enum Command {
     Outline(OutlineArgs),
 
     /// Analyze blast radius of a symbol change (callers/callees by BFS depth)
-    #[command(alias = "blast")]
+    #[command(visible_alias = "blast")]
     Impact(ImpactArgs),
 
     /// One-call symbol report: source, signature, location, callers/callees, complexity
@@ -167,7 +172,7 @@ pub struct AnalyzerArgs {
     pub changed_since: Option<String>,
 
     /// Limit output to the top N results (0 = unlimited)
-    #[arg(long)]
+    #[arg(short = 'n', long)]
     pub top: Option<usize>,
 
     /// Skip the first N results (use with --top for pagination)
@@ -190,6 +195,19 @@ pub struct DiffArgs {
     /// Target branch to diff against (default: auto-detect main/master)
     #[arg(short, long)]
     pub target: Option<String>,
+
+    // `diff` analyzes a git diff, not a filtered file set, so it only takes
+    // pagination flags (not the full `AnalyzerArgs`, which would also add
+    // `--glob`/`--exclude`/`--changed-since` -- flags that would parse but
+    // silently do nothing, since diff has no file-set filtering to apply
+    // them to).
+    /// Limit output to the top N results (0 = unlimited)
+    #[arg(short = 'n', long)]
+    pub top: Option<usize>,
+
+    /// Skip the first N results (use with --top for pagination)
+    #[arg(long)]
+    pub offset: Option<usize>,
 }
 
 #[derive(Args)]
@@ -197,9 +215,17 @@ pub struct ComplexityArgs {
     #[command(flatten)]
     pub common: AnalyzerArgs,
 
-    /// Check mode: fail if any function exceeds thresholds
+    /// Check mode: fail if any function exceeds thresholds.
+    /// DEPRECATED(remove-in: 5.0): use `--gate error` instead.
     #[arg(long)]
     pub check: bool,
+
+    /// Gate mode: 'off' just reports, 'warn' reports and warns on stderr (exit 0),
+    /// 'error' reports and exits 2 if thresholds are exceeded (default: off). If
+    /// both --check and --gate are given, --gate always wins, including an
+    /// explicit `--gate off`.
+    #[arg(long, value_enum)]
+    pub gate: Option<GateMode>,
 
     /// Maximum cyclomatic complexity (default: from config or 20)
     #[arg(long)]
@@ -225,7 +251,7 @@ pub struct StubsArgs {
     pub gate_severity: GateSeverity,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum GateMode {
     Off,
     Warn,
@@ -244,7 +270,13 @@ pub struct ChurnArgs {
     #[command(flatten)]
     pub common: AnalyzerArgs,
 
-    /// Number of days to analyze
+    /// Time period to analyze (e.g., 3m, 6m, 1y, 2y, all). Canonical time window
+    /// flag; --days is a documented alias for the same window. If both are given,
+    /// --since wins.
+    #[arg(long)]
+    pub since: Option<String>,
+
+    /// Number of days to analyze (alias for --since)
     #[arg(long)]
     pub days: Option<u32>,
 }
@@ -282,9 +314,17 @@ pub enum ScoreSubcommand {
 
 #[derive(Args)]
 pub struct ScoreArgs {
-    /// Check mode: fail if score is below threshold
+    /// Check mode: fail if score is below threshold.
+    /// DEPRECATED(remove-in: 5.0): use `--gate error` instead.
     #[arg(long)]
     pub check: bool,
+
+    /// Gate mode: 'off' just reports, 'warn' reports and warns on stderr (exit 0),
+    /// 'error' reports and exits 2 if score is below --fail-under (default: off).
+    /// If both --check and --gate are given, --gate always wins, including an
+    /// explicit `--gate off`.
+    #[arg(long, value_enum)]
+    pub gate: Option<GateMode>,
 
     /// Minimum score to pass (default: from config)
     #[arg(long)]
@@ -462,8 +502,16 @@ pub struct SearchQueryArgs {
     /// Natural language query
     pub query: String,
 
-    /// Maximum number of results
-    #[arg(short = 'k', long, default_value = "10")]
+    /// Maximum number of results.
+    /// DEPRECATED(remove-in: 5.0): `-k`/`--top-k` are aliases for `-n`/`--top`;
+    /// use `-n`/`--top`.
+    #[arg(
+        short = 'n',
+        long = "top",
+        alias = "top-k",
+        short_alias = 'k',
+        default_value = "10"
+    )]
     pub top_k: usize,
 
     /// Minimum similarity score (0.0-1.0)
@@ -497,9 +545,17 @@ pub struct MutationArgs {
     #[arg(long, default_value = "CRR,ROR,AOR")]
     pub operators: String,
 
-    /// Check mode: fail if mutation score below threshold
+    /// Check mode: fail if mutation score below threshold.
+    /// DEPRECATED(remove-in: 5.0): use `--gate error` instead.
     #[arg(long)]
     pub check: bool,
+
+    /// Gate mode: 'off' just reports, 'warn' reports and warns on stderr (exit 0),
+    /// 'error' reports and exits 2 if mutation score is below --min-score (default:
+    /// off). If both --check and --gate are given, --gate always wins, including
+    /// an explicit `--gate off`.
+    #[arg(long, value_enum)]
+    pub gate: Option<GateMode>,
 
     /// Minimum mutation score (0.0-1.0)
     #[arg(long, default_value = "0.8")]
@@ -1977,5 +2033,317 @@ mod tests {
         } else {
             panic!("Expected Symbol command");
         }
+    }
+
+    // -----------------------------------------------------------------
+    // Pagination: --top/-n/--offset, --top-k alias
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_analyzer_args_top_short_n() {
+        let args = parse_complexity_args(&["omen", "complexity", "-n", "5"]);
+        assert_eq!(args.common.top, Some(5));
+    }
+
+    #[test]
+    fn test_diff_top_offset() {
+        let cli = parse(&["omen", "diff", "--top", "3", "--offset", "1"]);
+        if let Command::Diff(args) = cli.command {
+            assert_eq!(args.top, Some(3));
+            assert_eq!(args.offset, Some(1));
+        } else {
+            panic!("Expected Diff command");
+        }
+    }
+
+    #[test]
+    fn test_diff_top_short_n() {
+        let cli = parse(&["omen", "diff", "-n", "3"]);
+        if let Command::Diff(args) = cli.command {
+            assert_eq!(args.top, Some(3));
+        } else {
+            panic!("Expected Diff command");
+        }
+    }
+
+    #[test]
+    fn test_diff_rejects_no_op_filter_flags() {
+        // diff has no filtered file set to apply glob/exclude/changed-since
+        // to, so these must not parse -- advertising flags that silently do
+        // nothing is worse than rejecting them outright.
+        for args in [
+            vec!["omen", "diff", "--glob", "*.rs"],
+            vec!["omen", "diff", "--exclude", "tests/**"],
+            vec!["omen", "diff", "--changed-since", "main"],
+        ] {
+            assert!(
+                Cli::try_parse_from(&args).is_err(),
+                "expected {args:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_mutation_top_offset() {
+        let args = parse_mutation_args(&["omen", "mutation", "--top", "4", "--offset", "2"]);
+        assert_eq!(args.common.top, Some(4));
+        assert_eq!(args.common.offset, Some(2));
+    }
+
+    #[test]
+    fn test_search_query_top_long_flag_still_works() {
+        // --top is now the canonical long flag for search's result limit.
+        if let SearchSubcommand::Query(args) =
+            parse_search_subcommand(&["omen", "search", "query", "test", "--top", "15"])
+        {
+            assert_eq!(args.top_k, 15);
+        } else {
+            panic!("Expected Query subcommand");
+        }
+    }
+
+    #[test]
+    fn test_search_query_top_short_n_is_primary() {
+        // -n is now the canonical short flag for search's result limit,
+        // matching -n/--top everywhere else in the CLI.
+        if let SearchSubcommand::Query(args) =
+            parse_search_subcommand(&["omen", "search", "query", "test", "-n", "15"])
+        {
+            assert_eq!(args.top_k, 15);
+        } else {
+            panic!("Expected Query subcommand");
+        }
+    }
+
+    #[test]
+    fn test_search_query_top_short_k_deprecated_alias_still_parses() {
+        // -k is a deprecated short alias for -n/--top; must keep working.
+        if let SearchSubcommand::Query(args) =
+            parse_search_subcommand(&["omen", "search", "query", "test", "-k", "18"])
+        {
+            assert_eq!(args.top_k, 18);
+        } else {
+            panic!("Expected Query subcommand");
+        }
+    }
+
+    #[test]
+    fn test_search_query_top_k_alias_still_parses() {
+        // --top-k is a deprecated hidden alias for --top; must keep working.
+        if let SearchSubcommand::Query(args) =
+            parse_search_subcommand(&["omen", "search", "query", "test", "--top-k", "25"])
+        {
+            assert_eq!(args.top_k, 25);
+        } else {
+            panic!("Expected Query subcommand");
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Gate/check: --gate off|warn|error, --check deprecated alias
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_complexity_gate_defaults_to_none() {
+        // Unset (not `Some(GateMode::Off)`) so `resolve_gate_mode` can tell
+        // "no --gate at all" apart from an explicit `--gate off`.
+        let args = parse_complexity_args(&["omen", "complexity"]);
+        assert_eq!(args.gate, None);
+    }
+
+    #[test]
+    fn test_complexity_gate_error_parses() {
+        let args = parse_complexity_args(&["omen", "complexity", "--gate", "error"]);
+        assert_eq!(args.gate, Some(GateMode::Error));
+    }
+
+    #[test]
+    fn test_complexity_gate_warn_parses() {
+        let args = parse_complexity_args(&["omen", "complexity", "--gate", "warn"]);
+        assert_eq!(args.gate, Some(GateMode::Warn));
+    }
+
+    #[test]
+    fn test_complexity_gate_off_parses_explicitly() {
+        let args = parse_complexity_args(&["omen", "complexity", "--gate", "off"]);
+        assert_eq!(args.gate, Some(GateMode::Off));
+    }
+
+    #[test]
+    fn test_complexity_check_still_parses_deprecated() {
+        let args = parse_complexity_args(&["omen", "complexity", "--check"]);
+        assert!(args.check);
+        assert_eq!(args.gate, None);
+    }
+
+    #[test]
+    fn test_complexity_rejects_invalid_gate_value() {
+        assert!(Cli::try_parse_from(["omen", "complexity", "--gate", "bogus"]).is_err());
+    }
+
+    #[test]
+    fn test_score_gate_defaults_to_none() {
+        let cli = parse(&["omen", "score"]);
+        if let Command::Score(cmd) = cli.command {
+            assert_eq!(cmd.args.gate, None);
+        } else {
+            panic!("expected Score command");
+        }
+    }
+
+    #[test]
+    fn test_score_gate_error_parses() {
+        let cli = parse(&["omen", "score", "--gate", "error"]);
+        if let Command::Score(cmd) = cli.command {
+            assert_eq!(cmd.args.gate, Some(GateMode::Error));
+        } else {
+            panic!("expected Score command");
+        }
+    }
+
+    #[test]
+    fn test_score_gate_warn_parses() {
+        let cli = parse(&["omen", "score", "--gate", "warn"]);
+        if let Command::Score(cmd) = cli.command {
+            assert_eq!(cmd.args.gate, Some(GateMode::Warn));
+        } else {
+            panic!("expected Score command");
+        }
+    }
+
+    #[test]
+    fn test_score_gate_off_parses_explicitly() {
+        let cli = parse(&["omen", "score", "--gate", "off"]);
+        if let Command::Score(cmd) = cli.command {
+            assert_eq!(cmd.args.gate, Some(GateMode::Off));
+        } else {
+            panic!("expected Score command");
+        }
+    }
+
+    #[test]
+    fn test_mutation_gate_defaults_to_none() {
+        let args = parse_mutation_args(&["omen", "mutation"]);
+        assert_eq!(args.gate, None);
+    }
+
+    #[test]
+    fn test_mutation_gate_error_parses() {
+        let args = parse_mutation_args(&["omen", "mutation", "--gate", "error"]);
+        assert_eq!(args.gate, Some(GateMode::Error));
+    }
+
+    #[test]
+    fn test_mutation_gate_warn_parses() {
+        let args = parse_mutation_args(&["omen", "mutation", "--gate", "warn"]);
+        assert_eq!(args.gate, Some(GateMode::Warn));
+    }
+
+    #[test]
+    fn test_mutation_gate_off_parses_explicitly() {
+        let args = parse_mutation_args(&["omen", "mutation", "--gate", "off"]);
+        assert_eq!(args.gate, Some(GateMode::Off));
+    }
+
+    #[test]
+    fn test_mutation_check_still_parses_deprecated() {
+        let args = parse_mutation_args(&["omen", "mutation", "--check"]);
+        assert!(args.check);
+        assert_eq!(args.gate, None);
+    }
+
+    #[test]
+    fn test_complexity_gate_off_and_check_both_parse() {
+        // Regression: `--check --gate off` must parse cleanly and preserve
+        // both values so `resolve_gate_mode` can let --gate off win.
+        let args = parse_complexity_args(&["omen", "complexity", "--check", "--gate", "off"]);
+        assert!(args.check);
+        assert_eq!(args.gate, Some(GateMode::Off));
+    }
+
+    #[test]
+    fn test_score_gate_off_and_check_both_parse() {
+        let cli = parse(&["omen", "score", "--check", "--gate", "off"]);
+        if let Command::Score(cmd) = cli.command {
+            assert!(cmd.args.check);
+            assert_eq!(cmd.args.gate, Some(GateMode::Off));
+        } else {
+            panic!("expected Score command");
+        }
+    }
+
+    #[test]
+    fn test_mutation_gate_off_and_check_both_parse() {
+        let args = parse_mutation_args(&["omen", "mutation", "--check", "--gate", "off"]);
+        assert!(args.check);
+        assert_eq!(args.gate, Some(GateMode::Off));
+    }
+
+    // -----------------------------------------------------------------
+    // Time window: --since canonical, --days alias (churn)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_churn_since_flag() {
+        let cli = parse(&["omen", "churn", "--since", "6m"]);
+        if let Command::Churn(args) = cli.command {
+            assert_eq!(args.since, Some("6m".to_string()));
+        } else {
+            panic!("expected Churn command");
+        }
+    }
+
+    #[test]
+    fn test_churn_since_default_none() {
+        let cli = parse(&["omen", "churn"]);
+        if let Command::Churn(args) = cli.command {
+            assert_eq!(args.since, None);
+        } else {
+            panic!("expected Churn command");
+        }
+    }
+
+    #[test]
+    fn test_churn_days_still_parses_alongside_since() {
+        let cli = parse(&["omen", "churn", "--days", "30", "--since", "6m"]);
+        if let Command::Churn(args) = cli.command {
+            assert_eq!(args.days, Some(30));
+            assert_eq!(args.since, Some("6m".to_string()));
+        } else {
+            panic!("expected Churn command");
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Command-name aliases (clones/duplicates, hotspot/hotspots)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_alias_hotspots_for_hotspot() {
+        assert_parses_to!(&["omen", "hotspots"], Command::Hotspot(_));
+    }
+
+    #[test]
+    fn test_clones_visible_alias_duplicates_shown_in_help() {
+        let cmd = Cli::command();
+        let clones = cmd
+            .get_subcommands()
+            .find(|c| c.get_name() == "clones")
+            .expect("clones subcommand exists");
+        assert!(clones
+            .get_visible_aliases()
+            .any(|alias| alias == "duplicates"));
+    }
+
+    #[test]
+    fn test_hotspot_visible_alias_hotspots_shown_in_help() {
+        let cmd = Cli::command();
+        let hotspot = cmd
+            .get_subcommands()
+            .find(|c| c.get_name() == "hotspot")
+            .expect("hotspot subcommand exists");
+        assert!(hotspot
+            .get_visible_aliases()
+            .any(|alias| alias == "hotspots"));
     }
 }
