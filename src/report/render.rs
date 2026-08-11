@@ -1265,4 +1265,21 @@ mod tests {
         let renderer = Renderer::new();
         assert!(renderer.is_ok());
     }
+
+    #[test]
+    fn test_template_uses_shadcn_report_structure() {
+        assert!(TEMPLATE_HTML.contains("class=\"report-shell\""));
+        assert!(TEMPLATE_HTML.contains("class=\"report-nav\""));
+        assert!(TEMPLATE_HTML.contains("class=\"report-main\""));
+        assert!(TEMPLATE_HTML.contains("class=\"hero-grade badge"));
+        assert!(TEMPLATE_HTML.contains("class=\"table-wrap\""));
+        assert!(TEMPLATE_HTML.contains("class=\"report-table\""));
+        assert!(TEMPLATE_HTML.contains("class=\"insight\""));
+        assert!(TEMPLATE_HTML.contains("getComputedStyle(document.documentElement)"));
+        assert!(TEMPLATE_HTML.contains("setAttribute('data-theme'"));
+        assert_eq!(TEMPLATE_HTML.matches("<style>").count(), 1);
+        assert!(!TEMPLATE_HTML.contains("--bg-primary"));
+        assert!(!TEMPLATE_HTML.contains("class=\"section\""));
+        assert!(!TEMPLATE_HTML.contains("class=\"table-container\""));
+    }
 }
