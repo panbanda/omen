@@ -169,6 +169,9 @@ pub struct DuplicatesConfig {
     pub min_tokens: usize,
     /// Minimum similarity threshold (0.0-1.0).
     pub min_similarity: f64,
+    /// Exclude test files and Rust `#[cfg(test)]` code from duplication
+    /// detection. Overridden by `omen clones --include-tests`.
+    pub exclude_tests: bool,
 }
 
 impl Default for DuplicatesConfig {
@@ -176,6 +179,7 @@ impl Default for DuplicatesConfig {
         Self {
             min_tokens: 50,
             min_similarity: 0.9,
+            exclude_tests: true,
         }
     }
 }
@@ -458,6 +462,7 @@ mod tests {
         let config = DuplicatesConfig::default();
         assert_eq!(config.min_tokens, 50);
         assert_eq!(config.min_similarity, 0.9);
+        assert!(config.exclude_tests);
     }
 
     #[test]

@@ -67,7 +67,7 @@ pub enum Command {
 
     /// Detect code duplicates/clones
     #[command(alias = "dup", visible_alias = "duplicates")]
-    Clones(AnalyzerArgs),
+    Clones(ClonesArgs),
 
     /// Predict defect-prone files using PMAT
     #[command(visible_alias = "predict")]
@@ -178,6 +178,17 @@ pub struct AnalyzerArgs {
     /// Skip the first N results (use with --top for pagination)
     #[arg(long)]
     pub offset: Option<usize>,
+}
+
+#[derive(Args)]
+pub struct ClonesArgs {
+    #[command(flatten)]
+    pub common: AnalyzerArgs,
+
+    /// Include test files and `#[cfg(test)]` code in duplication detection
+    /// (excluded by default)
+    #[arg(long)]
+    pub include_tests: bool,
 }
 
 #[derive(Args)]
@@ -930,6 +941,24 @@ mod tests {
     #[test]
     fn test_command_clones() {
         assert_parses_to!(&["omen", "clones"], Command::Clones(_));
+    }
+
+    #[test]
+    fn test_command_clones_include_tests_flag() {
+        let cli = Cli::try_parse_from(["omen", "clones", "--include-tests"]).unwrap();
+        match cli.command {
+            Command::Clones(args) => assert!(args.include_tests),
+            _ => panic!("expected Command::Clones"),
+        }
+    }
+
+    #[test]
+    fn test_command_clones_include_tests_defaults_false() {
+        let cli = Cli::try_parse_from(["omen", "clones"]).unwrap();
+        match cli.command {
+            Command::Clones(args) => assert!(!args.include_tests),
+            _ => panic!("expected Command::Clones"),
+        }
     }
 
     #[test]

@@ -608,10 +608,11 @@ fn dispatch_analyzer(
             path,
             config,
             format,
-            Some(args),
+            Some(&args.common),
             omen::analyzers::duplicates::Analyzer::new()
                 .with_min_tokens(config.duplicates.min_tokens)
-                .with_similarity_threshold(config.duplicates.min_similarity),
+                .with_similarity_threshold(config.duplicates.min_similarity)
+                .with_exclude_tests(!args.include_tests && config.duplicates.exclude_tests),
         ),
         Command::Defect(args) => {
             run_analyzer::<omen::analyzers::defect::Analyzer>(path, config, format, Some(args))

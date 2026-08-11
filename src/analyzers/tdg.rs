@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::analyzers::{hotspot, temporal};
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result};
-use crate::parser::Parser;
+use crate::parser::{cfg_test_module_ranges, Parser};
 
 /// TDG weight configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -761,64 +761,6 @@ fn match_php_defect(node: &tree_sitter::Node, source: &[u8]) -> bool {
         }
     }
     false
-}
-
-/// Find byte ranges of `#[cfg(test)]` modules using tree-sitter.
-///
-/// Returns ranges covering each module's body so that line-based analysis
-/// can skip test code without fragile brace-counting heuristics.
-///
-/// Performs a full depth-first walk so nested test modules are detected.
-/// Uses a thread-local parser cache to avoid allocating a new parser per file.
-fn cfg_test_module_ranges(root: &tree_sitter::Node<'_>, source: &str) -> Vec<Range<usize>> {
-    let mut ranges = Vec::new();
-    collect_cfg_test_modules(root, source.as_bytes(), &mut ranges);
-    ranges
-}
-
-fn collect_cfg_test_modules(
-    node: &tree_sitter::Node,
-    source: &[u8],
-    ranges: &mut Vec<Range<usize>>,
-) {
-    let mut cursor = node.walk();
-    if !cursor.goto_first_child() {
-        return;
-    }
-    loop {
-        let child = cursor.node();
-        match child.kind() {
-            "mod_item" => {
-                if has_cfg_test_attribute(&child, source) {
-                    ranges.push(child.start_byte()..child.end_byte());
-                } else {
-                    collect_cfg_test_modules(&child, source, ranges);
-                }
-            }
-            // mod body: recurse into declaration_list to find nested modules
-            "declaration_list" => {
-                collect_cfg_test_modules(&child, source, ranges);
-            }
-            _ => {}
-        }
-        if !cursor.goto_next_sibling() {
-            break;
-        }
-    }
-}
-
-fn has_cfg_test_attribute(node: &tree_sitter::Node, source: &[u8]) -> bool {
-    let Some(prev) = node.prev_sibling() else {
-        return false;
-    };
-    if prev.kind() != "attribute_item" {
-        return false;
-    }
-    let Ok(text) = prev.utf8_text(source) else {
-        return false;
-    };
-    // Match #[cfg(test)] but not #[cfg(not(test))] or #[cfg(feature = "contest")]
-    text.contains("cfg(test)") && !text.contains("not(test)") && !text.contains("not(all(test")
 }
 
 // Types
