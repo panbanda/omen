@@ -965,6 +965,41 @@ impl Service {
     }
 
     #[test]
+    fn test_complexity_impl_block_not_reported_as_function() {
+        // Regression test: before the fix, impl_item nodes were returned by
+        // find_function_at_line, causing the impl block itself to appear as a
+        // function entry alongside the actual methods. After removing `impl_item`
+        // from the predicate, only the individual methods should be extracted.
+        let code = br#"
+struct Counter;
+
+impl Counter {
+    fn increment(&mut self) {}
+    fn reset(&mut self) {}
+}
+"#;
+        let result = parse_and_analyze(code, Language::Rust, "test.rs");
+
+        // The impl block "Counter" must not appear as a function entry
+        let impl_entry = result.functions.iter().find(|f| f.name == "Counter");
+        assert!(
+            impl_entry.is_none(),
+            "impl block should not be reported as a function, got: {:?}",
+            result.functions.iter().map(|f| &f.name).collect::<Vec<_>>()
+        );
+
+        // The actual methods must be present
+        assert!(
+            result.functions.iter().any(|f| f.name == "increment"),
+            "increment method should be extracted"
+        );
+        assert!(
+            result.functions.iter().any(|f| f.name == "reset"),
+            "reset method should be extracted"
+        );
+    }
+
+    #[test]
     fn test_complexity_go_simple_function() {
         let code = b"package main\n\nfunc simple() { x := 1 }";
         let result = parse_and_analyze(code, Language::Go, "test.go");

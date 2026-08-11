@@ -1283,6 +1283,77 @@ mod tests {
     }
 
     #[test]
+    fn test_handle_tool_call_does_not_use_server_root_when_path_given() {
+        // Server is initialized with server_root (which has a file with a unique symbol)
+        // but the tool call requests a *different* path.
+        // The analysis result should only reflect the requested path, not the server root.
+        let (server, server_root) = create_test_server();
+        std::fs::write(
+            server_root.path().join("server_root_only.rs"),
+            "fn server_root_symbol() {}\n",
+        )
+        .unwrap();
+
+        // target_dir has completely different content
+        let target_dir = TempDir::new().unwrap();
+        std::fs::write(
+            target_dir.path().join("target_only.rs"),
+            "fn target_only_symbol() {}\n",
+        )
+        .unwrap();
+
+        let params = json!({
+            "name": "complexity",
+            "arguments": {"path": target_dir.path().to_str().unwrap()}
+        });
+        let response = server.handle_tool_call(Some(params)).unwrap();
+        let text = response["content"][0]["text"]
+            .as_str()
+            .expect("tool response text should be a string");
+
+        assert!(
+            text.contains("target_only_symbol"),
+            "analysis should include content from the requested path, got: {text}"
+        );
+        assert!(
+            !text.contains("server_root_symbol"),
+            "analysis must not include content from server root when different path is requested, got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_handle_tool_call_satd_uses_requested_path() {
+        // satd tool should also analyze the requested path, not the server root
+        let (server, server_root) = create_test_server();
+        std::fs::write(
+            server_root.path().join("server_root.rs"),
+            "// FIXME: this is in the server root\nfn root_fn() {}\n",
+        )
+        .unwrap();
+
+        let target_dir = TempDir::new().unwrap();
+        std::fs::write(
+            target_dir.path().join("target.py"),
+            "# TODO: unique_target_todo\ndef target_func(): pass\n",
+        )
+        .unwrap();
+
+        let params = json!({
+            "name": "satd",
+            "arguments": {"path": target_dir.path().to_str().unwrap()}
+        });
+        let response = server.handle_tool_call(Some(params)).unwrap();
+        let text = response["content"][0]["text"]
+            .as_str()
+            .expect("tool response text should be a string");
+
+        assert!(
+            text.contains("unique_target_todo"),
+            "satd should find TODO in the requested path, got: {text}"
+        );
+    }
+
+    #[test]
     fn test_handle_request_initialize() {
         let (server, _temp_dir) = create_test_server();
         let request = JsonRpcRequest {

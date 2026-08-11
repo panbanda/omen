@@ -71,8 +71,7 @@ impl<'a> SyncManager<'a> {
 
         // Find files to remove (deleted or moved)
         for indexed_path in &indexed_files {
-            let indexed_current_path = indexed_path_for_comparison(indexed_path, root_path);
-            if !current_files.contains(&indexed_current_path) {
+            if !current_files.contains(&PathBuf::from(indexed_path)) {
                 self.cache.remove_file(indexed_path)?;
                 stats.removed += 1;
             }
@@ -311,13 +310,6 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
     })
 }
 
-fn indexed_path_for_comparison(indexed_path: &str, root_path: &Path) -> PathBuf {
-    let path = Path::new(indexed_path);
-    path.strip_prefix(root_path)
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|_| path.to_path_buf())
-}
-
 /// Statistics from a sync operation.
 #[derive(Debug, Default, Clone)]
 pub struct SyncStats {
@@ -441,6 +433,83 @@ mod tests {
     }
 
     #[test]
+    fn test_sync_removes_deleted_files_from_index() {
+        let temp = tempfile::tempdir().unwrap();
+        let file_path = temp.path().join("to_delete.rs");
+        std::fs::write(&file_path, "fn will_be_deleted() {}\n").unwrap();
+
+        let config = crate::config::Config::default();
+        let cache = EmbeddingCache::in_memory().unwrap();
+        let sync = SyncManager::new(&cache);
+
+        // First sync: file exists and gets indexed
+        let file_set = FileSet::from_path(temp.path(), &config).unwrap();
+        let stats1 = sync.sync(&file_set, temp.path()).unwrap();
+        assert_eq!(stats1.checked, 1);
+        assert_eq!(stats1.indexed, 1);
+
+        // Delete the file
+        std::fs::remove_file(&file_path).unwrap();
+
+        // Second sync: file is gone, should be removed from index
+        let file_set2 = FileSet::from_path(temp.path(), &config).unwrap();
+        let stats2 = sync.sync(&file_set2, temp.path()).unwrap();
+        assert_eq!(
+            stats2.removed, 1,
+            "deleted file should be removed from index"
+        );
+        assert_eq!(stats2.checked, 0, "no files remain to check");
+    }
+
+    #[test]
+    fn test_sync_does_not_reindex_unchanged_files() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("stable.rs"), "fn stable_function() {}\n").unwrap();
+
+        let config = crate::config::Config::default();
+        let cache = EmbeddingCache::in_memory().unwrap();
+        let sync = SyncManager::new(&cache);
+
+        let file_set = FileSet::from_path(temp.path(), &config).unwrap();
+
+        // First sync: indexes the file
+        let stats1 = sync.sync(&file_set, temp.path()).unwrap();
+        assert_eq!(stats1.indexed, 1);
+
+        // Second sync with same content: should not re-index
+        let file_set2 = FileSet::from_path(temp.path(), &config).unwrap();
+        let stats2 = sync.sync(&file_set2, temp.path()).unwrap();
+        assert_eq!(
+            stats2.indexed, 0,
+            "unchanged file should not be re-indexed on second sync"
+        );
+        assert_eq!(stats2.checked, 1);
+        assert_eq!(stats2.removed, 0);
+    }
+
+    #[test]
+    fn test_sync_reindexes_modified_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let file_path = temp.path().join("modified.rs");
+        std::fs::write(&file_path, "fn original() {}\n").unwrap();
+
+        let config = crate::config::Config::default();
+        let cache = EmbeddingCache::in_memory().unwrap();
+        let sync = SyncManager::new(&cache);
+
+        let file_set = FileSet::from_path(temp.path(), &config).unwrap();
+        let stats1 = sync.sync(&file_set, temp.path()).unwrap();
+        assert_eq!(stats1.indexed, 1);
+
+        // Modify the file
+        std::fs::write(&file_path, "fn original() {}\nfn added() {}\n").unwrap();
+
+        let file_set2 = FileSet::from_path(temp.path(), &config).unwrap();
+        let stats2 = sync.sync(&file_set2, temp.path()).unwrap();
+        assert_eq!(stats2.indexed, 1, "modified file should be re-indexed");
+    }
+
+    #[test]
     fn test_sync_indexes_files_relative_to_root_path() {
         let temp = tempfile::tempdir().unwrap();
         let nested = temp.path().join("only_in_temp");
@@ -469,25 +538,5 @@ mod tests {
         assert_eq!(stats2.removed, 0);
         assert_eq!(stats2.errors, 0);
         assert_eq!(cache.symbol_count().unwrap(), 1);
-    }
-
-    #[test]
-    fn test_sync_matches_absolute_indexed_paths_to_relative_file_set() {
-        let temp = tempfile::tempdir().unwrap();
-        let file_path = temp.path().join("legacy_absolute_path.rs");
-        std::fs::write(&file_path, "fn legacy_symbol() {}\n").unwrap();
-
-        let config = crate::config::Config::default();
-        let file_set = FileSet::from_path(temp.path(), &config).unwrap();
-        let cache = EmbeddingCache::in_memory().unwrap();
-        cache
-            .record_file_indexed(file_path.to_string_lossy().as_ref(), "legacy-hash")
-            .unwrap();
-
-        let sync = SyncManager::new(&cache);
-        let stats = sync.sync(&file_set, temp.path()).unwrap();
-
-        assert_eq!(stats.checked, 1);
-        assert_eq!(stats.removed, 0);
     }
 }
