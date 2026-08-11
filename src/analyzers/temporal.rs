@@ -106,6 +106,17 @@ impl Analyzer {
         exclude_tests: bool,
         exclude_patterns: &[String],
     ) -> Result<Analysis> {
+        let since_str = format!("{} days", self.config.days);
+        let commits = git_repo.log_with_stats(Some(&since_str), None)?;
+        self.analyze_commits_filtered(&commits, exclude_tests, exclude_patterns)
+    }
+
+    fn analyze_commits_filtered(
+        &self,
+        commits: &[crate::git::Commit],
+        exclude_tests: bool,
+        exclude_patterns: &[String],
+    ) -> Result<Analysis> {
         let exclude_globs = if !exclude_patterns.is_empty() {
             let mut builder = globset::GlobSetBuilder::new();
             for pat in exclude_patterns {
@@ -118,19 +129,13 @@ impl Analyzer {
             None
         };
 
-        // Format since for git log (git accepts "N days" format)
-        let since_str = format!("{} days", self.config.days);
-
-        // Get commit log with file changes
-        let commits = git_repo.log_with_stats(Some(&since_str), None)?;
-
         // Track co-changes: normalized pair -> count
         let mut cochanges: HashMap<FilePair, u32> = HashMap::new();
         let mut file_paths = Vec::new();
         let mut file_ids: HashMap<String, u32> = HashMap::new();
         let mut file_commits = Vec::new();
 
-        for commit in &commits {
+        for commit in commits {
             let mut changed_files = Vec::with_capacity(commit.files.len());
             for file in &commit.files {
                 let path = file.path.to_string_lossy();
@@ -237,15 +242,17 @@ impl AnalyzerTrait for Analyzer {
     }
 
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
-        let git_path = ctx
-            .git_path
-            .as_ref()
-            .ok_or_else(|| Error::git("Temporal coupling analysis requires git history"))?;
+        if ctx.git_path.is_none() {
+            return Err(Error::git(
+                "Temporal coupling analysis requires git history",
+            ));
+        }
 
-        let git_repo = GitRepo::open(git_path)?;
+        let since = format!("{} days", self.config.days);
+        let commits = ctx.git_log_with_stats(Some(&since), None)?;
         let exclude_tests = ctx.config.temporal.exclude_tests;
         let exclude_patterns = &ctx.config.exclude_patterns;
-        self.analyze_with_git_filtered(&git_repo, ctx.root, exclude_tests, exclude_patterns)
+        self.analyze_commits_filtered(&commits, exclude_tests, exclude_patterns)
     }
 }
 

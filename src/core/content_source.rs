@@ -39,10 +39,12 @@ impl ContentSource for FilesystemSource {
 /// Reads file contents from a git tree object at a specific commit.
 /// Does not require filesystem checkout - reads directly from git's object store.
 ///
-/// This struct stores the repo path and tree ID, reopening the repo on each read.
-/// This is thread-safe since each read is independent.
+/// The repository object database is shared while each read uses a cheap
+/// thread-local handle.
+#[derive(Clone)]
 pub struct TreeSource {
     repo_path: PathBuf,
+    repo: gix::ThreadSafeRepository,
     // Raw OID bytes. Vec to support both SHA-1 (20 bytes) and SHA-256 (32 bytes).
     tree_id: Vec<u8>,
 }
@@ -54,24 +56,32 @@ impl TreeSource {
         let repo = gix::open(&repo_path)
             .map_err(|e| super::Error::git(format!("Failed to open repository: {e}")))?;
 
-        let commit_id = repo
-            .rev_parse_single(commit_sha.as_bytes())
-            .map_err(|e| super::Error::git(format!("Failed to parse commit {commit_sha}: {e}")))?
-            .detach();
+        let tree_id = {
+            let commit_id = repo
+                .rev_parse_single(commit_sha.as_bytes())
+                .map_err(|e| {
+                    super::Error::git(format!("Failed to parse commit {commit_sha}: {e}"))
+                })?
+                .detach();
 
-        let commit = repo
-            .find_object(commit_id)
-            .map_err(|e| super::Error::git(format!("Failed to find commit: {e}")))?
-            .try_into_commit()
-            .map_err(|e| super::Error::git(format!("Not a commit: {e}")))?;
+            let commit = repo
+                .find_object(commit_id)
+                .map_err(|e| super::Error::git(format!("Failed to find commit: {e}")))?
+                .try_into_commit()
+                .map_err(|e| super::Error::git(format!("Not a commit: {e}")))?;
 
-        let tree_oid = commit
-            .tree_id()
-            .map_err(|e| super::Error::git(format!("Failed to get tree id: {e}")))?;
+            commit
+                .tree_id()
+                .map_err(|e| super::Error::git(format!("Failed to get tree id: {e}")))?
+                .as_bytes()
+                .to_vec()
+        };
 
-        let tree_id = tree_oid.as_bytes().to_vec();
-
-        Ok(Self { repo_path, tree_id })
+        Ok(Self {
+            repo_path,
+            repo: repo.into_sync(),
+            tree_id,
+        })
     }
 
     /// Get the repository path.
@@ -86,8 +96,7 @@ impl TreeSource {
 
     /// List all files in the tree (recursively).
     pub fn list_files(&self) -> Result<Vec<PathBuf>> {
-        let repo = gix::open(&self.repo_path)
-            .map_err(|e| super::Error::git(format!("Failed to open repository: {e}")))?;
+        let repo = self.repo.to_thread_local();
 
         let tree_oid = gix::ObjectId::from_bytes_or_panic(&self.tree_id);
         let tree = repo
@@ -134,9 +143,7 @@ impl ContentSource for TreeSource {
     fn read(&self, path: &Path) -> Result<Vec<u8>> {
         let path_str = path.to_string_lossy();
 
-        // Re-open repo for thread safety
-        let repo = gix::open(&self.repo_path)
-            .map_err(|e| super::Error::git(format!("Failed to open repository: {e}")))?;
+        let repo = self.repo.to_thread_local();
 
         let tree_oid = gix::ObjectId::from_bytes_or_panic(&self.tree_id);
 

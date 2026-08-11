@@ -33,10 +33,6 @@ pub struct Cli {
     #[arg(short = 'j', long)]
     pub jobs: Option<usize>,
 
-    /// Disable result caching
-    #[arg(long)]
-    pub no_cache: bool,
-
     /// Git ref (branch, tag, SHA) for remote repositories
     #[arg(long = "ref")]
     pub git_ref: Option<String>,
@@ -1323,11 +1319,6 @@ mod tests {
     }
 
     // Global flag tests
-
-    #[test]
-    fn test_no_cache_flag() {
-        assert!(parse(&["omen", "--no-cache", "complexity"]).no_cache);
-    }
 
     #[test]
     fn test_git_ref_flag() {
