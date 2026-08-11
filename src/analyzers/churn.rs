@@ -78,9 +78,6 @@ impl AnalyzerTrait for Analyzer {
             .to_str()
             .ok_or_else(|| Error::git("Invalid repository path"))?;
 
-        // Open repository with gix
-        let repo = GitRepo::open(git_path)?;
-
         // Calculate since date (u32::MAX means "all history" -- no time limit)
         let since = if self.days == u32::MAX {
             None
@@ -88,11 +85,11 @@ impl AnalyzerTrait for Analyzer {
             Some(format!("{} days", self.days))
         };
 
-        // Get commits with file changes using gix
-        let commits = repo.log_with_stats(since.as_deref(), None)?;
+        let commits = ctx.git_log_with_stats(since.as_deref(), None)?;
 
         // Convert to file metrics
         let mut file_metrics = commits_to_file_metrics(&commits);
+        let repo = GitRepo::open(git_path)?;
         let repo_root = repo.root().canonicalize().map_err(Error::Io)?;
         let analysis_root_canonical = ctx.root.canonicalize().map_err(Error::Io)?;
         let prefix = analysis_root_canonical

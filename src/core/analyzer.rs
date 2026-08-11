@@ -1,14 +1,14 @@
 //! Analyzer trait and common types.
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use serde::Serialize;
 
 use super::{ContentSource, FileSet, Result};
 use crate::config::Config;
-use crate::git::GitRepo;
+use crate::git::{Commit, GitLogData, GitRepo};
 
 /// Trait implemented by all analyzers.
 pub trait Analyzer: Send + Sync {
@@ -49,6 +49,7 @@ pub struct AnalysisContext<'a> {
     pub on_progress: Option<Box<dyn Fn(usize, usize) + Send + Sync + 'a>>,
     /// Optional content source for reading files (e.g., from git tree).
     pub content_source: Option<Arc<dyn ContentSource>>,
+    git_log_data: OnceLock<std::result::Result<Arc<GitLogData>, String>>,
 }
 
 impl<'a> AnalysisContext<'a> {
@@ -61,6 +62,7 @@ impl<'a> AnalysisContext<'a> {
             config,
             on_progress: None,
             content_source: None,
+            git_log_data: OnceLock::new(),
         }
     }
 
@@ -83,6 +85,29 @@ impl<'a> AnalysisContext<'a> {
         } else {
             Ok(None)
         }
+    }
+
+    /// Return the lazily loaded history shared by every analyzer in this context.
+    pub fn git_log_data(&self) -> Result<Arc<GitLogData>> {
+        let result = self.git_log_data.get_or_init(|| {
+            let path = self.git_path.unwrap_or(self.root);
+            GitLogData::load(path)
+                .map(Arc::new)
+                .map_err(|error| error.to_string())
+        });
+        result
+            .as_ref()
+            .map(Arc::clone)
+            .map_err(|error| super::Error::git(error.clone()))
+    }
+
+    /// Query the shared numstat history with the same window and limit as git log.
+    pub fn git_log_with_stats(
+        &self,
+        since: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<Vec<Commit>> {
+        self.git_log_data()?.query(since, limit)
     }
 
     /// Read file contents using the content source if available, otherwise from filesystem.
@@ -240,6 +265,51 @@ mod tests {
         let ctx = AnalysisContext::new(&files, &config, Some(temp_dir.path()));
         let result = ctx.open_git().unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_analysis_context_reuses_git_log_data() {
+        let temp_dir = TempDir::new().unwrap();
+        for args in [
+            &["init"][..],
+            &["config", "user.email", "test@example.com"],
+            &["config", "user.name", "Test User"],
+        ] {
+            assert!(std::process::Command::new("git")
+                .args(args)
+                .current_dir(temp_dir.path())
+                .status()
+                .unwrap()
+                .success());
+        }
+        std::fs::write(temp_dir.path().join("test.rs"), "fn main() {}\n").unwrap();
+        for args in [&["add", "."][..], &["commit", "-m", "initial"]] {
+            assert!(std::process::Command::new("git")
+                .args(args)
+                .current_dir(temp_dir.path())
+                .status()
+                .unwrap()
+                .success());
+        }
+
+        let config = Config::default();
+        let files = FileSet::from_path(temp_dir.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&files, &config, Some(temp_dir.path()))
+            .with_git_path(temp_dir.path());
+
+        let first = ctx.git_log_data().unwrap();
+        let second = ctx.git_log_data().unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+
+        let cached = first.query(Some("30 days"), None).unwrap();
+        let direct = GitRepo::open(temp_dir.path())
+            .unwrap()
+            .log_with_stats(Some("30 days"), None)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(cached).unwrap(),
+            serde_json::to_value(direct).unwrap()
+        );
     }
 
     #[test]

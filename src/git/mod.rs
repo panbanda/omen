@@ -16,6 +16,58 @@ pub use log::{
 };
 pub use remote::{clone_remote, is_remote_repo, CloneOptions};
 
+/// Parsed `git log --numstat` history shared by analyzers in one context.
+pub struct GitLogData {
+    root: PathBuf,
+    commits: Vec<Commit>,
+}
+
+impl GitLogData {
+    /// Load the complete repository history once so every requested window can
+    /// be produced without another numstat parse.
+    pub fn load(path: &Path) -> Result<Self> {
+        let repo = GitRepo::open(path)?;
+        let root = repo.root().to_path_buf();
+        let commits = repo.log_with_stats(None, None)?;
+        Ok(Self { root, commits })
+    }
+
+    /// Return the exact subset that `git log --since` would select.
+    pub fn query(&self, since: Option<&str>, limit: Option<usize>) -> Result<Vec<Commit>> {
+        let cutoff = since.map(|value| self.resolve_since(value)).transpose()?;
+        let mut commits: Vec<Commit> = self
+            .commits
+            .iter()
+            .filter(|commit| cutoff.is_none_or(|timestamp| commit.timestamp >= timestamp))
+            .cloned()
+            .collect();
+        if let Some(max) = limit {
+            commits.truncate(max);
+        }
+        Ok(commits)
+    }
+
+    fn resolve_since(&self, since: &str) -> Result<i64> {
+        let output = std::process::Command::new("git")
+            .args(["rev-parse", &format!("--since={since}")])
+            .current_dir(&self.root)
+            .output()
+            .map_err(|error| Error::git(format!("Failed to resolve git date: {error}")))?;
+        if !output.status.success() {
+            return Err(Error::git(format!(
+                "Failed to resolve git date: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+        let value = String::from_utf8_lossy(&output.stdout);
+        value
+            .trim()
+            .strip_prefix("--max-age=")
+            .and_then(|timestamp| timestamp.parse().ok())
+            .ok_or_else(|| Error::git(format!("Invalid git date result: {value}")))
+    }
+}
+
 /// Git repository wrapper for analysis operations.
 pub struct GitRepo {
     /// The gix repository handle.

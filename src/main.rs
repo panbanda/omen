@@ -301,6 +301,19 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         }
         Command::All(args) => {
             use serde_json::{json, Value};
+
+            fn collected_result<T: serde::de::DeserializeOwned>(
+                results: &[Value],
+                name: &str,
+            ) -> Option<T> {
+                let value = results
+                    .iter()
+                    .find(|entry| entry.get("analyzer").and_then(Value::as_str) == Some(name))?
+                    .get("result")?
+                    .clone();
+                serde_json::from_value(value).ok()
+            }
+
             let file_set = filtered_file_set(path, &config, Some(args))?;
             let git_root = omen::git::GitRepo::open(path)
                 .ok()
@@ -323,6 +336,19 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                         Err(e) => {
                             json!({ "analyzer": $name, "error": e.to_string() })
                         }
+                    }
+                }};
+            }
+
+            macro_rules! run_instance_and_collect {
+                ($ctx:expr, $analyzer:expr, $name:expr) => {{
+                    let a = $analyzer;
+                    match a.analyze($ctx) {
+                        Ok(result) => match serde_json::to_value(&result) {
+                            Ok(v) => json!({ "analyzer": $name, "result": v }),
+                            Err(e) => json!({ "analyzer": $name, "error": format!("serialization failed: {e}") }),
+                        },
+                        Err(e) => json!({ "analyzer": $name, "error": e.to_string() }),
                     }
                 }};
             }
@@ -369,27 +395,65 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
 
             // Group C: analyzers that internally depend on both file and git data.
             // Run after groups A and B to benefit from warm OS page cache.
-            results.push(run_and_collect!(
-                &ctx,
-                omen::analyzers::hotspot::Analyzer,
-                "hotspot"
-            ));
-            results.push(run_and_collect!(
-                &ctx,
-                omen::analyzers::tdg::Analyzer,
-                "tdg"
-            ));
-            results.push(run_and_collect!(
-                &ctx,
-                omen::analyzers::defect::Analyzer,
-                "defect"
-            ));
+            let mut hotspot_analyzer = omen::analyzers::hotspot::Analyzer::default();
+            if let Some(complexity) = collected_result(&results, "complexity") {
+                hotspot_analyzer = hotspot_analyzer.with_precomputed_complexity(complexity);
+            }
+            results.push(run_instance_and_collect!(&ctx, hotspot_analyzer, "hotspot"));
+            let mut tdg_analyzer = omen::analyzers::tdg::Analyzer::default();
+            if let Some(hotspot) = collected_result(&results, "hotspot") {
+                tdg_analyzer = tdg_analyzer.with_precomputed_hotspot(hotspot);
+            }
+            if let Some(temporal) = collected_result(&results, "temporal") {
+                tdg_analyzer = tdg_analyzer.with_precomputed_temporal(temporal);
+            }
+            results.push(run_instance_and_collect!(&ctx, tdg_analyzer, "tdg"));
+            let mut defect_analyzer = omen::analyzers::defect::Analyzer::default();
+            if let Some(complexity) = collected_result(&results, "complexity") {
+                defect_analyzer = defect_analyzer.with_precomputed_complexity(complexity);
+            }
+            if let Some(duplicates) = collected_result(&results, "duplicates") {
+                defect_analyzer = defect_analyzer.with_precomputed_duplicates(duplicates);
+            }
+            if let Some(graph) = collected_result(&results, "graph") {
+                defect_analyzer = defect_analyzer.with_precomputed_graph(graph);
+            }
+            results.push(run_instance_and_collect!(&ctx, defect_analyzer, "defect"));
             results.push(run_and_collect!(
                 &ctx,
                 omen::analyzers::changes::Analyzer,
                 "changes"
             ));
-            results.push(run_and_collect!(&ctx, omen::score::Analyzer, "score"));
+
+            let complexity = collected_result(&results, "complexity");
+            let satd = collected_result(&results, "satd");
+            let duplicates = collected_result(&results, "duplicates");
+            let cohesion = collected_result(&results, "cohesion");
+            let tdg = collected_result(&results, "tdg");
+            let graph = collected_result(&results, "graph");
+            let smells = collected_result(&results, "smells");
+            let components = omen::score::Components {
+                complexity: complexity.as_ref(),
+                satd: satd.as_ref(),
+                duplicates: duplicates.as_ref(),
+                cohesion: cohesion.as_ref(),
+                tdg: tdg.as_ref(),
+                graph: graph.as_ref(),
+                smells: smells.as_ref(),
+            };
+            let score = match omen::score::compute_from_components(
+                &components,
+                ctx.files.files().len(),
+            ) {
+                Ok(result) => match serde_json::to_value(&result) {
+                    Ok(value) => json!({ "analyzer": "score", "result": value }),
+                    Err(error) => {
+                        json!({ "analyzer": "score", "error": format!("serialization failed: {error}") })
+                    }
+                },
+                Err(error) => json!({ "analyzer": "score", "error": error.to_string() }),
+            };
+            results.push(score);
 
             let combined = json!({ "analyzers": results });
             // `all` is machine-first: always emit JSON unless the caller

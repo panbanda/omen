@@ -304,53 +304,12 @@ fn analyze_current(path: &Path, config: &Config) -> Result<super::Analysis> {
 /// Reads file contents directly from git's object store.
 pub fn analyze_at_tree(tree_source: &TreeSource, config: &Config) -> Result<super::Analysis> {
     let file_set = FileSet::from_tree_source(tree_source, config)?;
-    let content_source: Arc<dyn ContentSource> = Arc::new(TreeSourceWrapper {
-        repo_path: tree_source.repo_path().to_path_buf(),
-        tree_id: tree_source.tree_id().to_vec(),
-    });
+    let content_source: Arc<dyn ContentSource> = Arc::new(tree_source.clone());
     let root = Path::new(".");
     let ctx =
         AnalysisContext::new(&file_set, config, Some(root)).with_content_source(content_source);
     let analyzer = ScoreAnalyzer::new();
     analyzer.analyze(&ctx)
-}
-
-/// Wrapper to create a new TreeSource for the content source.
-/// This is needed because TreeSource stores state that can't be easily cloned.
-struct TreeSourceWrapper {
-    repo_path: std::path::PathBuf,
-    tree_id: Vec<u8>,
-}
-
-impl ContentSource for TreeSourceWrapper {
-    fn read(&self, path: &Path) -> Result<Vec<u8>> {
-        // Re-create TreeSource for each read (thread-safe approach)
-        let repo = gix::open(&self.repo_path)
-            .map_err(|e| Error::git(format!("Failed to open repository: {e}")))?;
-
-        let tree_oid = gix::ObjectId::from_bytes_or_panic(&self.tree_id);
-        let tree = repo
-            .find_object(tree_oid)
-            .map_err(|e| Error::git(format!("Failed to find tree: {e}")))?
-            .try_into_tree()
-            .map_err(|e| Error::git(format!("Not a tree: {e}")))?;
-
-        let path_str = path.to_string_lossy();
-        let entry = tree
-            .lookup_entry_by_path(path_str.as_ref())
-            .map_err(|e| Error::git(format!("Failed to lookup {path_str}: {e}")))?
-            .ok_or_else(|| Error::git(format!("File not found in tree: {path_str}")))?;
-
-        let object = entry
-            .object()
-            .map_err(|e| Error::git(format!("Failed to get object: {e}")))?;
-
-        let blob = object
-            .try_into_blob()
-            .map_err(|_| Error::git(format!("Not a blob: {path_str}")))?;
-
-        Ok(blob.data.to_vec())
-    }
 }
 
 /// Collect commit messages that fall within a time range (exclusive start, inclusive end).

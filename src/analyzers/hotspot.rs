@@ -62,6 +62,7 @@ impl Default for Config {
 pub struct Analyzer {
     config: Config,
     complexity_analyzer: complexity::Analyzer,
+    precomputed_complexity: Option<complexity::Analysis>,
 }
 
 impl Default for Analyzer {
@@ -75,6 +76,7 @@ impl Analyzer {
         Self {
             config: Config::default(),
             complexity_analyzer: complexity::Analyzer::new(),
+            precomputed_complexity: None,
         }
     }
 
@@ -82,11 +84,17 @@ impl Analyzer {
         Self {
             config,
             complexity_analyzer: complexity::Analyzer::new(),
+            precomputed_complexity: None,
         }
     }
 
     pub fn with_days(mut self, days: u32) -> Self {
         self.config.days = days;
+        self
+    }
+
+    pub fn with_precomputed_complexity(mut self, analysis: complexity::Analysis) -> Self {
+        self.precomputed_complexity = Some(analysis);
         self
     }
 
@@ -126,10 +134,19 @@ impl Analyzer {
         // Get all commits in the time range
         let commits = git_repo.log_with_stats(Some(&since), None)?;
 
+        self.collect_churn_from_commits(&commits, files, root)
+    }
+
+    fn collect_churn_from_commits(
+        &self,
+        commits: &[crate::git::Commit],
+        files: &[std::path::PathBuf],
+        root: &Path,
+    ) -> Result<Vec<FileChurn>> {
         // Build file -> churn map
         let mut file_churn: HashMap<String, FileChurn> = HashMap::new();
 
-        for commit in &commits {
+        for commit in commits {
             for file_change in &commit.files {
                 let path_str = file_change.path.to_string_lossy().to_string();
                 let entry = file_churn
@@ -166,6 +183,22 @@ impl Analyzer {
         files: &[std::path::PathBuf],
         root: &Path,
     ) -> Result<Vec<FileComplexity>> {
+        if let Some(analysis) = &self.precomputed_complexity {
+            return Ok(analysis
+                .files
+                .iter()
+                .map(|result| FileComplexity {
+                    path: result
+                        .path
+                        .strip_prefix("./")
+                        .unwrap_or(&result.path)
+                        .to_string(),
+                    total_cyclomatic: result.total_cyclomatic,
+                    avg_cyclomatic: result.avg_cyclomatic,
+                })
+                .collect());
+        }
+
         let results: Vec<FileComplexity> = files
             .par_iter()
             .filter_map(|file| {
@@ -327,8 +360,11 @@ impl AnalyzerTrait for Analyzer {
         // Build absolute paths from the pre-filtered file set
         let files: Vec<std::path::PathBuf> = ctx.files.iter().map(|p| ctx.root.join(p)).collect();
 
-        let git_repo = GitRepo::open(ctx.root)?;
-        let churn_data = self.collect_churn_data(&git_repo, &files, ctx.root)?;
+        let now = Utc::now();
+        let days_ago = now - chrono::Duration::days(self.config.days as i64);
+        let since = days_ago.format("%Y-%m-%d").to_string();
+        let commits = ctx.git_log_with_stats(Some(&since), None)?;
+        let churn_data = self.collect_churn_from_commits(&commits, &files, ctx.root)?;
         let complexity_data = self.collect_complexity_data(&files, ctx.root)?;
 
         self.combine_analyses(&churn_data, &complexity_data)
@@ -381,6 +417,29 @@ pub struct AnalysisSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_with_precomputed_complexity() {
+        let analysis = complexity::Analysis {
+            files: vec![complexity::FileResult {
+                path: "./src/lib.rs".to_string(),
+                language: "rust".to_string(),
+                functions: Vec::new(),
+                total_cyclomatic: 3,
+                total_cognitive: 2,
+                avg_cyclomatic: 1.5,
+                avg_cognitive: 1.0,
+            }],
+            summary: complexity::AnalysisSummary::default(),
+        };
+        let analyzer = Analyzer::new().with_precomputed_complexity(analysis);
+
+        assert!(analyzer.precomputed_complexity.is_some());
+        let collected = analyzer
+            .collect_complexity_data(&[], Path::new("."))
+            .unwrap();
+        assert_eq!(collected[0].path, "src/lib.rs");
+    }
 
     fn make_churn_file(path: &str, commits: u32, churn_score: f64) -> FileChurn {
         FileChurn {

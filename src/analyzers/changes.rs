@@ -196,7 +196,9 @@ impl AnalyzerTrait for Analyzer {
             .ok_or_else(|| crate::core::Error::git("Changes analyzer requires a git repository"))?;
 
         // Get commits from last N days
-        let raw_commits = collect_commit_data(git_path, self.days)?;
+        let since = format!("{} days", self.days);
+        let commits = ctx.git_log_with_stats(Some(&since), None)?;
+        let raw_commits = commits_to_raw_commits(&commits)?;
 
         if raw_commits.is_empty() {
             return Ok(Analysis {
@@ -521,15 +523,6 @@ fn is_automated_commit(message: &str) -> bool {
     });
 
     patterns.iter().any(|p| p.is_match(message))
-}
-
-/// Collect commit data from git log using gix.
-fn collect_commit_data(git_path: &Path, days: u32) -> Result<Vec<RawCommit>> {
-    let repo = GitRepo::open(git_path)?;
-    let since = format!("{days} days");
-    let commits = repo.log_with_stats(Some(&since), None)?;
-
-    commits_to_raw_commits(&commits)
 }
 
 /// Convert gix Commits to RawCommits for risk analysis.

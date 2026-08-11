@@ -15,7 +15,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::analyzers::{complexity, duplicates, graph};
 use crate::core::{percentile, AnalysisContext, Analyzer as AnalyzerTrait, Result};
-use crate::git::GitRepo;
 
 /// Risk level categories (PMAT-compatible).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +81,9 @@ impl Default for Config {
 /// Defect prediction analyzer using PMAT weights.
 pub struct Analyzer {
     config: Config,
+    precomputed_complexity: Option<complexity::Analysis>,
+    precomputed_duplicates: Option<duplicates::Analysis>,
+    precomputed_graph: Option<graph::Analysis>,
 }
 
 impl Default for Analyzer {
@@ -94,6 +96,9 @@ impl Analyzer {
     pub fn new() -> Self {
         Self {
             config: Config::default(),
+            precomputed_complexity: None,
+            precomputed_duplicates: None,
+            precomputed_graph: None,
         }
     }
 
@@ -112,19 +117,38 @@ impl Analyzer {
         self
     }
 
+    pub fn with_precomputed_complexity(mut self, analysis: complexity::Analysis) -> Self {
+        self.precomputed_complexity = Some(analysis);
+        self
+    }
+
+    pub fn with_precomputed_duplicates(mut self, analysis: duplicates::Analysis) -> Self {
+        self.precomputed_duplicates = Some(analysis);
+        self
+    }
+
+    pub fn with_precomputed_graph(mut self, analysis: graph::Analysis) -> Self {
+        self.precomputed_graph = Some(analysis);
+        self
+    }
+
     /// Compute complexity data from complexity::Analyzer.
     /// Returns a map of file path -> (cyclomatic, cognitive) complexity.
     fn compute_complexity_data(&self, ctx: &AnalysisContext<'_>) -> HashMap<String, (u32, u32)> {
         let mut data = HashMap::new();
 
-        let analyzer = complexity::Analyzer::new();
-        if let Ok(analysis) = analyzer.analyze(ctx) {
-            for file_result in analysis.files {
+        let mut collect = |analysis: &complexity::Analysis| {
+            for file_result in &analysis.files {
                 data.insert(
                     file_result.path.clone(),
                     (file_result.total_cyclomatic, file_result.total_cognitive),
                 );
             }
+        };
+        if let Some(analysis) = &self.precomputed_complexity {
+            collect(analysis);
+        } else if let Ok(analysis) = complexity::Analyzer::new().analyze(ctx) {
+            collect(&analysis);
         }
 
         data
@@ -135,8 +159,7 @@ impl Analyzer {
     fn compute_duplication_data(&self, ctx: &AnalysisContext<'_>) -> HashMap<String, f32> {
         let mut data = HashMap::new();
 
-        let analyzer = duplicates::Analyzer::new();
-        if let Ok(analysis) = analyzer.analyze(ctx) {
+        let mut collect = |analysis: &duplicates::Analysis| {
             // Count lines involved in clones per file
             let mut clone_lines: HashMap<String, usize> = HashMap::new();
             let mut total_lines: HashMap<String, usize> = HashMap::new();
@@ -169,6 +192,11 @@ impl Analyzer {
                 let ratio = (lines as f32 / total as f32).min(1.0);
                 data.insert(file, ratio);
             }
+        };
+        if let Some(analysis) = &self.precomputed_duplicates {
+            collect(analysis);
+        } else if let Ok(analysis) = duplicates::Analyzer::new().analyze(ctx) {
+            collect(&analysis);
         }
 
         data
@@ -179,8 +207,7 @@ impl Analyzer {
     fn compute_coupling_data(&self, ctx: &AnalysisContext<'_>) -> HashMap<String, (f32, f32)> {
         let mut data = HashMap::new();
 
-        let analyzer = graph::Analyzer::new();
-        if let Ok(analysis) = analyzer.analyze(ctx) {
+        let mut collect = |analysis: &graph::Analysis| {
             // Count incoming and outgoing edges per node
             let mut incoming: HashMap<String, usize> = HashMap::new();
             let mut outgoing: HashMap<String, usize> = HashMap::new();
@@ -202,6 +229,11 @@ impl Analyzer {
                 let ce = *outgoing.get(&node).unwrap_or(&0) as f32;
                 data.insert(node, (ca, ce));
             }
+        };
+        if let Some(analysis) = &self.precomputed_graph {
+            collect(analysis);
+        } else if let Ok(analysis) = graph::Analyzer::new().analyze(ctx) {
+            collect(&analysis);
         }
 
         data
@@ -209,32 +241,29 @@ impl Analyzer {
 
     /// Pre-compute git metrics (churn and ownership) for all files at once.
     /// Returns a map of file path -> (commit_count, contributor_count).
-    fn compute_git_metrics(&self, git_path: &std::path::Path) -> HashMap<PathBuf, (usize, usize)> {
+    fn compute_git_metrics(&self, ctx: &AnalysisContext<'_>) -> HashMap<PathBuf, (usize, usize)> {
         let mut result = HashMap::new();
 
-        if let Ok(repo) = GitRepo::open(git_path) {
-            let since = format!("{} days", self.config.churn_days);
-            if let Ok(commits) = repo.log_with_stats(Some(&since), None) {
-                // Build per-file metrics from the single git log call
-                let mut file_commits: HashMap<PathBuf, usize> = HashMap::new();
-                let mut file_contributors: HashMap<PathBuf, HashSet<String>> = HashMap::new();
+        let since = format!("{} days", self.config.churn_days);
+        if let Ok(commits) = ctx.git_log_with_stats(Some(&since), None) {
+            // Build per-file metrics from the single git log call
+            let mut file_commits: HashMap<PathBuf, usize> = HashMap::new();
+            let mut file_contributors: HashMap<PathBuf, HashSet<String>> = HashMap::new();
 
-                for commit in &commits {
-                    for file_stat in &commit.files {
-                        *file_commits.entry(file_stat.path.clone()).or_insert(0) += 1;
-                        file_contributors
-                            .entry(file_stat.path.clone())
-                            .or_default()
-                            .insert(commit.author.clone());
-                    }
+            for commit in &commits {
+                for file_stat in &commit.files {
+                    *file_commits.entry(file_stat.path.clone()).or_insert(0) += 1;
+                    file_contributors
+                        .entry(file_stat.path.clone())
+                        .or_default()
+                        .insert(commit.author.clone());
                 }
+            }
 
-                // Convert to final format
-                for (path, commit_count) in file_commits {
-                    let contributor_count =
-                        file_contributors.get(&path).map(|s| s.len()).unwrap_or(0);
-                    result.insert(path, (commit_count, contributor_count));
-                }
+            // Convert to final format
+            for (path, commit_count) in file_commits {
+                let contributor_count = file_contributors.get(&path).map(|s| s.len()).unwrap_or(0);
+                result.insert(path, (commit_count, contributor_count));
             }
         }
 
@@ -406,9 +435,11 @@ impl AnalyzerTrait for Analyzer {
     }
 
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
-        let git_path = ctx
-            .git_path
-            .ok_or_else(|| crate::core::Error::git("Defect analyzer requires a git repository"))?;
+        if ctx.git_path.is_none() {
+            return Err(crate::core::Error::git(
+                "Defect analyzer requires a git repository",
+            ));
+        }
 
         // Pre-compute data from other analyzers (runs in parallel internally)
         let complexity_data = self.compute_complexity_data(ctx);
@@ -416,7 +447,7 @@ impl AnalyzerTrait for Analyzer {
         let coupling_data = self.compute_coupling_data(ctx);
 
         // Pre-compute git metrics once for all files (single git log call)
-        let git_metrics = self.compute_git_metrics(git_path);
+        let git_metrics = self.compute_git_metrics(ctx);
 
         // Pre-filter files
         let valid_files: Vec<_> = ctx
@@ -681,6 +712,17 @@ fn sigmoid(raw_score: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_with_precomputed_complexity() {
+        let analysis = complexity::Analysis {
+            files: Vec::new(),
+            summary: complexity::AnalysisSummary::default(),
+        };
+        let analyzer = Analyzer::new().with_precomputed_complexity(analysis);
+
+        assert!(analyzer.precomputed_complexity.is_some());
+    }
 
     #[test]
     fn test_analyzer_creation() {
