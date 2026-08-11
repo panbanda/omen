@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.26.1](https://github.com/panbanda/omen/compare/omen-v4.26.0...omen-v4.26.1) (2026-08-11)
+
+
+### Bug Fixes
+
+* **action:** make the PR comment actionable, drop noise ([#466](https://github.com/panbanda/omen/issues/466)) ([ddeaba0](https://github.com/panbanda/omen/commit/ddeaba0a16b6c7c074fc89f31b710e63570227f7))
+
 ## [4.26.0](https://github.com/panbanda/omen/compare/omen-v4.25.0...omen-v4.26.0) (2026-08-11)
 
 
