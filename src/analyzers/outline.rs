@@ -94,8 +94,12 @@ impl OutlineResult {
 /// Analyze a single file and return its outline.
 pub fn outline_file(path: &Path) -> Result<FileOutline> {
     let file = SourceFile::load(path)?;
+    outline_source(&file)
+}
+
+fn outline_source(file: &SourceFile) -> Result<FileOutline> {
     let parser = Parser::new();
-    let result = parser.parse_source(&file)?;
+    let result = parser.parse_source(file)?;
 
     let imports: Vec<String> = extract_imports(&result)
         .into_iter()
@@ -171,7 +175,7 @@ pub fn outline_file(path: &Path) -> Result<FileOutline> {
 
     let loc = file.lines_of_code() as u32;
     let language = result.language.to_string();
-    let file_str = path.to_string_lossy().to_string();
+    let file_str = file.path.to_string_lossy().to_string();
 
     Ok(FileOutline {
         file: file_str,
@@ -208,11 +212,20 @@ impl AnalyzerTrait for Analyzer {
     }
 
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
-        let files: Vec<PathBuf> = ctx.files.iter().map(|p| ctx.root.join(p)).collect();
+        let files: Vec<PathBuf> = ctx.files.iter().cloned().collect();
 
         let mut file_outlines: Vec<FileOutline> = files
             .par_iter()
-            .filter_map(|path| outline_file(path).ok())
+            .filter_map(|path| {
+                if ctx.content_source.is_some() {
+                    let content = ctx.read_file(path).ok()?;
+                    let language = crate::core::Language::detect(path)?;
+                    let file = SourceFile::from_content(path, language, content);
+                    outline_source(&file).ok()
+                } else {
+                    outline_file(&ctx.root.join(path)).ok()
+                }
+            })
             .map(|mut fo| {
                 // Make paths relative to root
                 if let Ok(rel) = Path::new(&fo.file).strip_prefix(ctx.root) {
@@ -234,6 +247,41 @@ impl AnalyzerTrait for Analyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_analyzer_uses_content_source_for_historical_commits() {
+        use crate::config::Config;
+        use crate::core::{AnalysisContext, Analyzer as _, FileSet, FilesystemSource};
+        use std::sync::Arc;
+
+        let current = tempfile::tempdir().unwrap();
+        let historical = tempfile::tempdir().unwrap();
+        std::fs::write(
+            current.path().join("code.ts"),
+            "export function currentVersion() {}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            historical.path().join("code.ts"),
+            "export function historicalVersion() {}\n",
+        )
+        .unwrap();
+        let files =
+            FileSet::from_files(current.path().to_path_buf(), vec![PathBuf::from("code.ts")]);
+        let config = Config::default();
+        let source = Arc::new(FilesystemSource::new(historical.path()));
+        let ctx =
+            AnalysisContext::new(&files, &config, Some(current.path())).with_content_source(source);
+
+        let result = Analyzer.analyze(&ctx).unwrap();
+        let names: Vec<&str> = result.files[0]
+            .functions
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+
+        assert_eq!(names, vec!["historicalVersion"]);
+    }
     use std::path::PathBuf;
 
     fn fixture(name: &str) -> PathBuf {

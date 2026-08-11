@@ -26,7 +26,7 @@ use std::io::{BufRead, BufReader};
 use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Error, Result};
+use crate::core::{percentile, AnalysisContext, Analyzer as AnalyzerTrait, Error, Result};
 use crate::git::GitRepo;
 
 /// Churn analyzer using git log.
@@ -73,7 +73,8 @@ impl AnalyzerTrait for Analyzer {
         let start = Instant::now();
 
         let git_path = ctx.git_path.unwrap_or(ctx.root);
-        let repo_root = git_path
+        let analysis_root = ctx
+            .root
             .to_str()
             .ok_or_else(|| Error::git("Invalid repository path"))?;
 
@@ -91,10 +92,33 @@ impl AnalyzerTrait for Analyzer {
         let commits = repo.log_with_stats(since.as_deref(), None)?;
 
         // Convert to file metrics
-        let file_metrics = commits_to_file_metrics(&commits);
+        let mut file_metrics = commits_to_file_metrics(&commits);
+        let repo_root = repo.root().canonicalize().map_err(Error::Io)?;
+        let analysis_root_canonical = ctx.root.canonicalize().map_err(Error::Io)?;
+        let prefix = analysis_root_canonical
+            .strip_prefix(&repo_root)
+            .map_err(|_| Error::git("Analysis path is outside the discovered repository"))?;
+        let allowed: HashMap<String, String> = ctx
+            .files
+            .iter()
+            .map(|path| {
+                (
+                    prefix.join(path).to_string_lossy().replace('\\', "/"),
+                    path.to_string_lossy().replace('\\', "/"),
+                )
+            })
+            .collect();
+        file_metrics.retain(|repo_path, metrics| {
+            let Some(relative_path) = allowed.get(repo_path) else {
+                return false;
+            };
+            metrics.relative_path.clone_from(relative_path);
+            metrics.path = format!("./{relative_path}");
+            true
+        });
 
         // Build analysis from metrics
-        let analysis = build_analysis(file_metrics, repo_root, self.days);
+        let analysis = build_analysis(file_metrics, analysis_root, self.days);
 
         tracing::info!(
             "Churn analysis completed in {:?}: {} files",
@@ -409,17 +433,8 @@ fn calculate_statistics(summary: &mut Summary, files: &[FileMetrics]) {
     let mut scores: Vec<f64> = files.iter().map(|f| f.churn_score).collect();
     scores.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-    summary.p50_churn_score = percentile(&scores, 50);
-    summary.p95_churn_score = percentile(&scores, 95);
-}
-
-/// Calculate percentile from sorted slice.
-fn percentile(sorted: &[f64], p: usize) -> f64 {
-    if sorted.is_empty() {
-        return 0.0;
-    }
-    let idx = (p * sorted.len()) / 100;
-    sorted[idx.min(sorted.len() - 1)]
+    summary.p50_churn_score = percentile(&scores, 50.0);
+    summary.p95_churn_score = percentile(&scores, 95.0);
 }
 
 /// Identify hotspot and stable files.
@@ -514,6 +529,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_churn_discovers_repo_and_limits_results_to_analysis_subdirectory() {
+        use crate::config::Config;
+        use crate::core::{AnalysisContext, Analyzer as _, FileSet};
+
+        let temp = tempfile::tempdir().unwrap();
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "test@example.com"],
+            vec!["config", "user.name", "Test User"],
+        ] {
+            assert!(std::process::Command::new("git")
+                .args(args)
+                .current_dir(temp.path())
+                .status()
+                .unwrap()
+                .success());
+        }
+        std::fs::create_dir_all(temp.path().join("src/output")).unwrap();
+        std::fs::write(
+            temp.path().join("src/output/report.rs"),
+            "pub fn report() {}\n",
+        )
+        .unwrap();
+        std::fs::write(temp.path().join("outside.rs"), "pub fn outside() {}\n").unwrap();
+        assert!(std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(temp.path())
+            .status()
+            .unwrap()
+            .success());
+        assert!(std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(temp.path())
+            .status()
+            .unwrap()
+            .success());
+
+        let subdir = temp.path().join("src/output");
+        let config = Config::default();
+        let files = FileSet::from_path(&subdir, &config).unwrap();
+        let ctx = AnalysisContext::new(&files, &config, Some(&subdir)).with_git_path(&subdir);
+        let result = Analyzer::new().with_days(u32::MAX).analyze(&ctx).unwrap();
+
+        assert_eq!(result.files.len(), 1);
+        assert_eq!(result.files[0].relative_path, "report.rs");
+        assert_eq!(result.files[0].path, "./report.rs");
+    }
+
+    #[test]
     fn test_analyzer_creation() {
         let analyzer = Analyzer::new();
         assert_eq!(analyzer.name(), "churn");
@@ -554,15 +618,15 @@ mod tests {
 
     #[test]
     fn test_percentile() {
-        let sorted = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
-        assert!((percentile(&sorted, 50) - 6.0).abs() < 0.001);
-        assert!((percentile(&sorted, 90) - 10.0).abs() < 0.001);
+        let sorted: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        assert!((percentile(&sorted, 50.0) - 6.0).abs() < 0.001);
+        assert!((percentile(&sorted, 90.0) - 9.0).abs() < 0.001);
     }
 
     #[test]
     fn test_percentile_empty() {
         let sorted: Vec<f64> = vec![];
-        assert_eq!(percentile(&sorted, 50), 0.0);
+        assert_eq!(percentile(&sorted, 50.0), 0.0);
     }
 
     #[test]
@@ -854,25 +918,23 @@ mod tests {
         // 20 values: 0.05, 0.10, ..., 1.00
         let sorted: Vec<f64> = (1..=20).map(|i| i as f64 * 0.05).collect();
 
-        // p50: index = (50 * 20) / 100 = 10 -> sorted[10] = 0.55
-        assert!((percentile(&sorted, 50) - 0.55).abs() < 1e-9);
+        assert!((percentile(&sorted, 50.0) - 0.55).abs() < 1e-9);
 
-        // p95: index = (95 * 20) / 100 = 19 -> sorted[19] = 1.0
-        assert!((percentile(&sorted, 95) - 1.0).abs() < 1e-9);
+        assert!((percentile(&sorted, 95.0) - 0.95).abs() < 1e-9);
 
         // p0: index = 0 -> sorted[0] = 0.05
-        assert!((percentile(&sorted, 0) - 0.05).abs() < 1e-9);
+        assert!((percentile(&sorted, 0.0) - 0.05).abs() < 1e-9);
 
         // p100: index = 20, clamped to 19 -> sorted[19] = 1.0
-        assert!((percentile(&sorted, 100) - 1.0).abs() < 1e-9);
+        assert!((percentile(&sorted, 100.0) - 1.0).abs() < 1e-9);
     }
 
     #[test]
     fn test_percentile_single_element() {
-        let sorted = vec![0.42];
-        assert!((percentile(&sorted, 0) - 0.42).abs() < 1e-9);
-        assert!((percentile(&sorted, 50) - 0.42).abs() < 1e-9);
-        assert!((percentile(&sorted, 100) - 0.42).abs() < 1e-9);
+        let sorted: Vec<f64> = vec![0.42];
+        assert!((percentile(&sorted, 0.0) - 0.42).abs() < 1e-9);
+        assert!((percentile(&sorted, 50.0) - 0.42).abs() < 1e-9);
+        assert!((percentile(&sorted, 100.0) - 0.42).abs() < 1e-9);
     }
 
     // --- churn score normalization ---

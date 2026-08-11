@@ -15,7 +15,7 @@ use std::time::Instant;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
+use crate::core::{is_test_file, AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
 use crate::parser::{self, Parser};
 
 /// Dead code analyzer.
@@ -46,6 +46,15 @@ impl Analyzer {
     /// Analyze a single file for definitions and usages.
     fn analyze_file(&self, path: &std::path::Path) -> Result<FileDeadCode> {
         let result = self.parser.parse_file(path)?;
+        Ok(collect_file_data(&result))
+    }
+
+    fn analyze_content(&self, path: &std::path::Path, content: Vec<u8>) -> Result<FileDeadCode> {
+        let language =
+            Language::detect(path).ok_or_else(|| crate::core::Error::UnsupportedLanguage {
+                path: path.to_path_buf(),
+            })?;
+        let result = self.parser.parse(&content, language, path)?;
         Ok(collect_file_data(&result))
     }
 }
@@ -90,8 +99,13 @@ impl AnalyzerTrait for Analyzer {
         let file_results: Vec<FileDeadCode> = files
             .par_iter()
             .filter_map(|path| {
-                let full_path = ctx.root.join(path);
-                self.analyze_file(&full_path).ok()
+                if ctx.content_source.is_some() {
+                    ctx.read_file(path)
+                        .ok()
+                        .and_then(|content| self.analyze_content(path, content).ok())
+                } else {
+                    self.analyze_file(&ctx.root.join(path)).ok()
+                }
             })
             .collect();
 
@@ -1129,20 +1143,6 @@ fn is_generated_file(path: &str) -> bool {
     false
 }
 
-fn is_test_file(path: &str) -> bool {
-    path.ends_with("_test.go")
-        || path.ends_with("_test.py")
-        || path.ends_with(".test.ts")
-        || path.ends_with(".test.js")
-        || path.ends_with(".spec.ts")
-        || path.ends_with(".spec.js")
-        || path.ends_with("_spec.rb")
-        || path.ends_with("_test.rb")
-        || path.contains("/test/")
-        || path.contains("/tests/")
-        || path.contains("/__tests__/")
-}
-
 fn is_entry_point(name: &str, def: &Definition) -> bool {
     // Standard entry points
     if name == "main" || name == "init" || name == "Main" {
@@ -1293,6 +1293,44 @@ pub struct AnalysisSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_analyzer_uses_content_source_for_historical_commits() {
+        use crate::config::Config;
+        use crate::core::{AnalysisContext, Analyzer as _, FileSet, FilesystemSource};
+        use std::path::PathBuf;
+        use std::sync::Arc;
+
+        let current = tempfile::tempdir().unwrap();
+        let historical = tempfile::tempdir().unwrap();
+        std::fs::write(
+            current.path().join("code.ts"),
+            "export function currentVersion() {}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            historical.path().join("code.ts"),
+            "function historicalUnused() {}\n",
+        )
+        .unwrap();
+        let files =
+            FileSet::from_files(current.path().to_path_buf(), vec![PathBuf::from("code.ts")]);
+        let config = Config::default();
+        let source = Arc::new(FilesystemSource::new(historical.path()));
+        let ctx =
+            AnalysisContext::new(&files, &config, Some(current.path())).with_content_source(source);
+
+        let result = Analyzer::new().analyze(&ctx).unwrap();
+
+        assert!(result
+            .items
+            .iter()
+            .any(|item| item.name == "historicalUnused"));
+        assert!(!result
+            .items
+            .iter()
+            .any(|item| item.name == "currentVersion"));
+    }
 
     #[test]
     fn test_analyzer_creation() {

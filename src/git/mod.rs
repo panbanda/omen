@@ -28,8 +28,8 @@ impl GitRepo {
     /// Open a git repository at the given path.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let repo =
-            gix::open(path).map_err(|e| Error::git(format!("Failed to open repository: {e}")))?;
+        let repo = gix::discover(path)
+            .map_err(|e| Error::git(format!("Failed to discover repository: {e}")))?;
         let root = repo
             .workdir()
             .ok_or_else(|| Error::git("Not a work tree"))?

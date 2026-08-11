@@ -21,7 +21,7 @@ use std::path::Path;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Error, Result};
+use crate::core::{is_test_file, AnalysisContext, Analyzer as AnalyzerTrait, Error, Result};
 use crate::git::GitRepo;
 
 /// Default minimum number of co-changes to consider files coupled.
@@ -353,51 +353,6 @@ pub struct Summary {
     pub max_coupling_strength: f64,
     /// Total number of files analyzed.
     pub total_files_analyzed: usize,
-}
-
-/// Returns true if the path looks like a test file.
-fn is_test_file(path: &str) -> bool {
-    let lower = path.to_lowercase();
-    let parts: Vec<&str> = lower.split('/').collect();
-
-    // Directory-based patterns
-    for part in &parts {
-        match *part {
-            "test" | "tests" | "spec" | "specs" | "__tests__" | "__mocks__" | "test_helpers"
-            | "testdata" | "fixtures" => return true,
-            _ => {}
-        }
-        // Java/Maven convention: src/test/...
-        if *part == "src" {
-            if let Some(next_idx) = parts.iter().position(|p| *p == *part) {
-                if parts.get(next_idx + 1) == Some(&"test") {
-                    return true;
-                }
-            }
-        }
-    }
-
-    // Filename-based patterns
-    if let Some(filename) = parts.last() {
-        // _test.go, _test.rb, etc.
-        if filename.contains("_test.") || filename.contains("_spec.") {
-            return true;
-        }
-        // test_*.py
-        if filename.starts_with("test_") {
-            return true;
-        }
-        // *.test.ts, *.spec.js, etc.
-        let dot_parts: Vec<&str> = filename.split('.').collect();
-        if dot_parts.len() >= 3 {
-            let second_last = dot_parts[dot_parts.len() - 2];
-            if second_last == "test" || second_last == "spec" {
-                return true;
-            }
-        }
-    }
-
-    false
 }
 
 #[cfg(test)]

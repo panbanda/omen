@@ -8,7 +8,7 @@ use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result, SourceFile};
+use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Language, Result, SourceFile};
 use crate::parser::queries::satd;
 
 /// SATD analyzer.
@@ -153,8 +153,9 @@ impl AnalyzerTrait for Analyzer {
         let (items, total_loc): (Vec<SatdItem>, usize) = files
             .par_iter()
             .filter_map(|path| {
-                let full_path = ctx.root.join(path);
-                SourceFile::load(&full_path).ok()
+                let content = ctx.read_file(path).ok()?;
+                let language = Language::detect(path)?;
+                Some(SourceFile::from_content(*path, language, content))
             })
             .map(|file| {
                 let loc = file.lines_of_code();
@@ -290,6 +291,38 @@ fn severity_from_weight(weight: f64) -> Severity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_analyzer_uses_content_source_for_historical_commits() {
+        use crate::config::Config;
+        use crate::core::{AnalysisContext, Analyzer as _, FileSet, FilesystemSource};
+        use std::path::PathBuf;
+        use std::sync::Arc;
+
+        let current = tempfile::tempdir().unwrap();
+        let historical = tempfile::tempdir().unwrap();
+        std::fs::write(
+            current.path().join("debt.ts"),
+            "export const clean = true;\n",
+        )
+        .unwrap();
+        std::fs::write(
+            historical.path().join("debt.ts"),
+            "// TODO: historical debt\n",
+        )
+        .unwrap();
+        let files =
+            FileSet::from_files(current.path().to_path_buf(), vec![PathBuf::from("debt.ts")]);
+        let config = Config::default();
+        let source = Arc::new(FilesystemSource::new(historical.path()));
+        let ctx =
+            AnalysisContext::new(&files, &config, Some(current.path())).with_content_source(source);
+
+        let result = Analyzer::new().analyze(&ctx).unwrap();
+
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.items[0].file, "debt.ts");
+    }
     use crate::core::Language;
 
     #[test]

@@ -28,7 +28,7 @@ use chrono::Utc;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
+use crate::core::{is_test_file, AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
 use crate::parser::Parser;
 
 /// Default threshold for WMC above which a class is considered complex.
@@ -263,23 +263,6 @@ impl ClassHierarchy {
             .map(|c| c.len() as u32)
             .unwrap_or(0)
     }
-}
-
-/// Checks if a file is a test file.
-fn is_test_file(path: &Path) -> bool {
-    let path_str = path.to_string_lossy();
-    path_str.ends_with("_test.go")
-        || path_str.ends_with("_test.py")
-        || path_str.ends_with(".test.ts")
-        || path_str.ends_with(".test.js")
-        || path_str.ends_with(".spec.ts")
-        || path_str.ends_with(".spec.js")
-        || path_str.contains("/test/")
-        || path_str.contains("/tests/")
-        || path_str.contains("/__tests__/")
-        || path_str.starts_with("__tests__/")
-        || path_str.starts_with("test/")
-        || path_str.starts_with("tests/")
 }
 
 /// Extracts class metrics from a parsed file.

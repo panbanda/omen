@@ -34,7 +34,9 @@ use std::time::Instant;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Language, Result, SourceFile};
+use crate::core::{
+    percentile, AnalysisContext, Analyzer as AnalyzerTrait, Language, Result, SourceFile,
+};
 use crate::parser::queries::{
     get_decision_node_types, get_flat_node_types, get_nesting_node_types,
 };
@@ -659,24 +661,15 @@ fn build_summary(results: &[FileResult]) -> AnalysisSummary {
         all_cyclomatic.sort_unstable();
         all_cognitive.sort_unstable();
 
-        summary.p50_cyclomatic = percentile(&all_cyclomatic, 50);
-        summary.p90_cyclomatic = percentile(&all_cyclomatic, 90);
-        summary.p95_cyclomatic = percentile(&all_cyclomatic, 95);
-        summary.p50_cognitive = percentile(&all_cognitive, 50);
-        summary.p90_cognitive = percentile(&all_cognitive, 90);
-        summary.p95_cognitive = percentile(&all_cognitive, 95);
+        summary.p50_cyclomatic = percentile(&all_cyclomatic, 50.0);
+        summary.p90_cyclomatic = percentile(&all_cyclomatic, 90.0);
+        summary.p95_cyclomatic = percentile(&all_cyclomatic, 95.0);
+        summary.p50_cognitive = percentile(&all_cognitive, 50.0);
+        summary.p90_cognitive = percentile(&all_cognitive, 90.0);
+        summary.p95_cognitive = percentile(&all_cognitive, 95.0);
     }
 
     summary
-}
-
-/// Calculate percentile value from sorted slice.
-fn percentile(sorted: &[u32], p: usize) -> u32 {
-    if sorted.is_empty() {
-        return 0;
-    }
-    let idx = (p * sorted.len()) / 100;
-    sorted[idx.min(sorted.len() - 1)]
 }
 
 #[cfg(test)]
@@ -848,16 +841,14 @@ mod tests {
     #[test]
     fn test_percentile() {
         let sorted = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-        // p=50 -> idx=(50*10)/100=5 -> sorted[5]=6
-        assert_eq!(percentile(&sorted, 50), 6);
-        // p=90 -> idx=(90*10)/100=9 -> sorted[9]=10
-        assert_eq!(percentile(&sorted, 90), 10);
+        assert_eq!(percentile(&sorted, 50.0), 6);
+        assert_eq!(percentile(&sorted, 90.0), 9);
     }
 
     #[test]
     fn test_percentile_empty() {
         let sorted: Vec<u32> = vec![];
-        assert_eq!(percentile(&sorted, 50), 0);
+        assert_eq!(percentile(&sorted, 50.0), 0);
     }
 
     #[test]

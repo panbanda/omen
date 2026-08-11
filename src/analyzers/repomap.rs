@@ -15,7 +15,7 @@ use petgraph::Direction;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
+use crate::core::{is_test_file, AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
 use crate::parser::{extract_functions, Parser};
 
 /// Repomap analyzer configuration.
@@ -692,24 +692,6 @@ fn extract_call_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<Stri
         }
     }
     None
-}
-
-fn is_test_file(path: &Path) -> bool {
-    // Normalise to forward slashes so Windows paths (using `\`) are handled.
-    let path_str = path.to_string_lossy().replace('\\', "/");
-    path_str.contains("/test")
-        || path_str.contains("/tests/")
-        || path_str.contains("_test.")
-        || path_str.contains("test_")
-        || path_str.ends_with("_test.go")
-        || path_str.ends_with(".test.ts")
-        || path_str.ends_with(".spec.ts")
-        || path_str.ends_with(".test.js")
-        || path_str.ends_with(".spec.js")
-        || path_str.ends_with(".test.tsx")
-        || path_str.ends_with(".spec.tsx")
-        || path_str.ends_with(".test.jsx")
-        || path_str.ends_with(".spec.jsx")
 }
 
 #[cfg(test)]

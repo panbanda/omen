@@ -159,8 +159,8 @@ pub struct AnalyzerArgs {
     pub glob: Option<String>,
 
     /// Exclude files matching pattern
-    #[arg(short, long)]
-    pub exclude: Option<String>,
+    #[arg(short, long, action = clap::ArgAction::Append)]
+    pub exclude: Vec<String>,
 
     /// Analyze only files changed since the given git ref
     #[arg(long)]
@@ -1084,9 +1084,13 @@ mod tests {
     }
 
     #[test]
-    fn test_analyzer_args_exclude() {
-        let args = parse_complexity_args(&["omen", "complexity", "-e", "test"]);
-        assert_eq!(args.common.exclude, Some("test".to_string()));
+    fn test_analyzer_args_exclude_is_repeatable() {
+        let args =
+            parse_complexity_args(&["omen", "complexity", "-e", "tests/**", "-e", "fixtures/**"]);
+        assert_eq!(
+            args.common.exclude,
+            vec!["tests/**".to_string(), "fixtures/**".to_string()]
+        );
     }
 
     #[test]
