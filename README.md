@@ -199,7 +199,7 @@ omen diff --target main
 omen diff --target abc123
 
 # Output as markdown for PR comments
-omen diff --target main -f markdown
+omen -f markdown diff --target main
 ```
 
 **Risk Factors:**
@@ -275,7 +275,7 @@ File Risk:
 # Add to GitHub Actions workflow
 - name: PR Risk Assessment
   run: |
-    omen diff --target ${{ github.base_ref }} -f markdown >> $GITHUB_STEP_SUMMARY
+    omen -f markdown diff --target ${{ github.base_ref }} >> $GITHUB_STEP_SUMMARY
 ```
 
 **Why it matters:** Code review time is limited. Diff analysis helps reviewers prioritize their attention - a LOW risk PR with 10 lines changed needs less scrutiny than a MEDIUM risk PR touching 17 files. The entropy metric is particularly useful for catching PRs that bundle unrelated changes, which are harder to review and more likely to introduce bugs.
@@ -461,7 +461,7 @@ For each symbol, the map includes:
 ```
 
 > [!TIP]
-> Use `omen context --repo-map --top 50` to generate context for LLM prompts. The top 50 symbols usually capture the essential architecture.
+> Use `omen repomap --top 50` for the 50 highest-ranked symbols, or `omen context --max-tokens 8000` for broader agent context.
 
 </details>
 
@@ -565,14 +565,8 @@ omen -f json score
 Achieving a score of 100 is nearly impossible for real-world codebases. Set realistic thresholds in `omen.toml` based on your codebase:
 
 ```toml
-[score.thresholds]
-score = 80        # Overall score minimum
-complexity = 85   # Function complexity
-duplication = 65  # Code clone ratio (often the hardest to improve)
-defect = 80       # Defect probability
-debt = 75         # Technical debt density
-coupling = 70     # Module coupling
-smells = 90       # Architectural smells
+[score]
+fail_under = 70.0
 ```
 
 Run `omen score` to see your current scores, then set thresholds slightly below those values. Gradually increase them over time.
@@ -597,8 +591,9 @@ This prevents pushing code that fails your quality thresholds.
 
 </details>
 
-<details>
-<summary><strong>Semantic Search</strong> - Natural language code discovery</summary>
+### Semantic Search
+
+Natural language code discovery
 
 Search your codebase by meaning, not just keywords. Omen uses a TF-IDF engine with sublinear TF, smooth IDF, and bigram tokenization to find semantically similar code from natural language queries. No external models, no API keys, no GPU required.
 
@@ -606,9 +601,13 @@ Search your codebase by meaning, not just keywords. Omen uses a TF-IDF engine wi
 # Build the search index
 omen search index
 
+# Discard cached entries and rebuild the complete index
+omen search index --force
+
 # Search for code
 omen search query "database connection pooling"
 omen search query "error handling middleware" --top-k 20
+omen search query "validation" --min-score 0.5
 omen search query "authentication" --files src/auth/,src/middleware/
 
 # Cross-repo search
@@ -625,6 +624,8 @@ omen search query "retry logic" --include-project /path/to/other-repo
 3. **TF-IDF indexing** - Builds a sparse vector index with L2-normalized cosine similarity. Indexes in ~1-2 seconds for typical codebases.
 4. **Incremental updates** - Only re-indexes files that changed since last run
 5. **Deduplication** - Each symbol appears once in results (best-scoring chunk wins)
+
+Queries return at most 10 results by default and discard matches below a similarity score of 0.3. The index is stored in `.omen/search.db`; subsequent indexing runs update only files whose content hashes changed.
 
 **Features:**
 
@@ -646,8 +647,6 @@ omen search query "retry logic" --include-project /path/to/other-repo
 
 > [!TIP]
 > Run `omen search index` after major refactors or when onboarding to a new codebase. The index updates incrementally on subsequent runs.
-
-</details>
 
 <details>
 <summary><strong>Mutation Testing</strong> - Test suite effectiveness through code mutation</summary>
@@ -700,7 +699,12 @@ omen mutation --output-survivors survivors.json
 
 # Filter to specific files
 omen mutation --glob "src/analyzers/*.rs"
+
+# Analyze a dirty working tree (review the changes first)
+omen mutation --allow-dirty
 ```
+
+By default mutation testing refuses to run with uncommitted changes so it cannot overwrite work while applying mutants. Use `--allow-dirty` only when you have reviewed and protected the current changes.
 
 **ML-Based Prediction:**
 
@@ -780,6 +784,8 @@ Omen includes a Model Context Protocol (MCP) server that exposes all analyzers a
 
 **Available tools:**
 
+- `context` - Agent-oriented repository overview and navigation hints
+- `outline` - Token-cheap imports, classes, and function outline
 - `complexity` - Cyclomatic and cognitive complexity
 - `satd` - Self-admitted technical debt detection
 - `deadcode` - Unused functions and variables
@@ -799,13 +805,13 @@ Omen includes a Model Context Protocol (MCP) server that exposes all analyzers a
 - `flags` - Feature flag detection and staleness
 - `score` - Composite health score (0-100)
 - `semantic_search` - Natural language code search
+- `get_symbol` - Source, signature, location, relationships, and complexity for one symbol
+- `impact` - Transitive caller/callee blast-radius analysis
 - `semantic_search_hyde` - HyDE-style search (query with a hypothetical code snippet)
 
-Each tool includes detailed descriptions with interpretation guidance, helping LLMs understand what metrics mean and when to use each analyzer.
+Each tool honors the parameters advertised in its MCP input schema. Every tool also accepts `limit` (default 50) and `offset` (default 0). JSON responses are serialized compactly and wrapped in an envelope containing `tool`, `total_items`, `returned`, `offset`, and `result` (plus `git_skipped_reason` when applicable). Some tools can return agent-facing Markdown when their advertised `format` parameter allows it.
 
-Tool outputs default to [TOON (Token-Oriented Object Notation)](https://github.com/toon-format/toon) format, a compact serialization designed for LLM workflows that reduces token usage by 30-60% compared to JSON while maintaining high comprehension accuracy. JSON and Markdown formats are also available.
-
-**Why it matters:** LLMs work best when they have access to structured tools rather than parsing unstructured output. MCP is the emerging standard for LLM tool integration, supported by Claude Desktop and other AI assistants. TOON output maximizes the information density within context windows.
+**Why it matters:** LLMs work best when they have access to structured tools rather than parsing unstructured output. MCP provides a standard interface for Claude Desktop and other compatible assistants, while pagination keeps large results within context budgets.
 
 > [!TIP]
 > Configure omen as an MCP server in your AI assistant to enable natural language queries like "find the most complex functions" or "show me technical debt hotspots."
@@ -841,13 +847,13 @@ cargo install omen-cli
 docker pull ghcr.io/panbanda/omen:latest
 
 # Run analysis on current directory
-docker run --rm -v "$(pwd):/repo" ghcr.io/panbanda/omen:latest analyze /repo
+docker run --rm -v "$(pwd):/repo" ghcr.io/panbanda/omen:latest -p /repo all
 
 # Run specific analyzer
-docker run --rm -v "$(pwd):/repo" ghcr.io/panbanda/omen:latest complexity /repo
+docker run --rm -v "$(pwd):/repo" ghcr.io/panbanda/omen:latest -p /repo complexity
 
 # Get repository score
-docker run --rm -v "$(pwd):/repo" ghcr.io/panbanda/omen:latest score /repo
+docker run --rm -v "$(pwd):/repo" ghcr.io/panbanda/omen:latest -p /repo score
 ```
 
 Multi-arch images are available for `linux/amd64` and `linux/arm64`.
@@ -873,7 +879,16 @@ omen all
 
 # Check out the analyzers
 omen --help
+
+# Minify JSON onto one line (the flag is global and may follow a subcommand)
+omen -f json score --compact
+
+# Include rustc dead-code diagnostics; cargo check executes build scripts,
+# so use this only on trusted repositories
+omen deadcode --cargo-check
 ```
+
+The top-level commands are `complexity`, `satd`, `deadcode`, `churn`, `clones`, `defect`, `changes`, `diff`, `tdg`, `graph`, `hotspot`, `temporal`, `ownership`, `cohesion`, `repomap`, `smells`, `flags`, `score`, `mcp`, `all`, `context`, `report`, `search`, `mutation`, `outline`, `impact`, and `symbol`. Run `omen <command> --help` for that command's current options.
 
 ## Remote Repository Scanning
 
@@ -900,13 +915,9 @@ Omen clones to a temp directory, runs analysis, and cleans up automatically. The
 
 ## Configuration
 
-Create `omen.toml` or `.omen/omen.toml` (supports `yaml`, `json` and `toml`):
+Automatic configuration discovery loads TOML from `omen.toml` and then `.omen/omen.toml` under the analyzed repository. An explicit `--config <PATH>` accepts TOML (the default for unrecognized extensions), YAML (`.yaml` or `.yml`), or JSON (`.json`). `OMEN_` environment variables override file values; use a double underscore for nested keys, such as `OMEN_COMPLEXITY__CYCLOMATIC_ERROR=25`.
 
-```bash
-omen init
-```
-
-See [`omen.example.toml`](omen.example.toml) for all options.
+The accepted top-level keys are `exclude`, `exclude_built_assets`, `complexity`, `satd`, `churn`, `duplicates`, `hotspot`, `score`, `feature_flags`, `temporal`, and `changes`. Copy [`omen.example.toml`](omen.example.toml) to `omen.toml` or `.omen/omen.toml` and customize it. Configuration structs reject unknown keys, including unknown nested keys, so misspellings produce an error instead of being silently ignored.
 
 > [!TIP]
 > Using Claude Code? Run the `setup-config` skill to analyze your repository and generate an `omen.toml` with intelligent defaults for your tech stack, including detected feature flag providers and language-specific exclude patterns.
@@ -915,14 +926,18 @@ See [`omen.example.toml`](omen.example.toml) for all options.
 
 Omen provides a GitHub Action for automated PR analysis. It runs diff risk analysis and health scoring on every pull request.
 
-### Basic Usage
+### Complete workflow
 
 ```yaml
 name: Omen Analysis
-on: [pull_request]
+
+on:
+  pull_request:
 
 permissions:
   contents: read
+  pull-requests: write
+  issues: write
 
 jobs:
   omen:
@@ -934,6 +949,19 @@ jobs:
 
       - uses: panbanda/omen@omen-v4.21.2
         id: omen
+        with:
+          version: latest
+          path: .
+          comment: true
+          label: true
+          label-template: 'risk: {{level}}'
+          label-color-low: '0e8a16'
+          label-color-medium: 'fbca04'
+          label-color-high: 'd93f0b'
+          check: true
+          check-threshold: high
+          summary: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Print results
         run: |
@@ -942,28 +970,7 @@ jobs:
 ```
 
 > [!IMPORTANT]
-> `fetch-depth: 0` is required. Omen needs full git history for accurate analysis.
-
-### With PR Comment and Labels
-
-```yaml
-      - uses: panbanda/omen@omen-v4.21.2
-        id: omen
-        with:
-          comment: true
-          label: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-```
-
-Requires additional permissions:
-
-```yaml
-permissions:
-  contents: read
-  pull-requests: write
-  issues: write
-```
+> `fetch-depth: 0` is required because history-based analysis needs complete git history. `pull-requests: write` is required when `comment` is enabled, and `issues: write` is required when `label` is enabled. Workflows that disable those features can omit the corresponding write permissions.
 
 ### Inputs
 
@@ -974,8 +981,13 @@ permissions:
 | `comment` | `false` | Post/update a sticky PR comment |
 | `label` | `false` | Add a risk-level label |
 | `label-template` | `risk: {{level}}` | Label name template (`{{level}}` is replaced with `low`, `medium`, or `high`) |
+| `label-color-low` | `0e8a16` | Hex color (without `#`) for the low-risk label |
+| `label-color-medium` | `fbca04` | Hex color (without `#`) for the medium-risk label |
+| `label-color-high` | `d93f0b` | Hex color (without `#`) for the high-risk label |
 | `check` | `false` | Fail if risk meets threshold |
 | `check-threshold` | `high` | Risk level to fail on (`low`, `medium`, `high`) |
+| `summary` | `true` | Write risk, change-size, health, and component results to the job summary |
+| `github-token` | `${{ github.token }}` | Token used to resolve releases and manage enabled PR comments/labels |
 
 ### Outputs
 
@@ -983,57 +995,20 @@ All outputs are available for chaining into downstream steps:
 
 | Output | Example | Description |
 |--------|---------|-------------|
-| `risk-score` | `0.42` | Diff risk score (0.0 - 1.0) |
-| `risk-level` | `medium` | Risk level (`low`, `medium`, `high`) |
+| `risk-score` | `0.42` | Diff risk score (0.0 - 1.0); empty outside pull requests |
+| `risk-level` | `medium` | Risk level (`low`, `medium`, `high`); empty outside pull requests |
 | `health-score` | `76.9` | Health score (0 - 100) |
 | `health-grade` | `C` | Health grade (A - F) |
-| `diff-json` | `{...}` | Full `omen diff` JSON |
+| `diff-json` | `{...}` | Full `omen diff` JSON; empty outside pull requests |
 | `score-json` | `{...}` | Full `omen score` JSON |
 
-### Quality Gate
-
-Fail the workflow if risk is too high:
-
-```yaml
-      - uses: panbanda/omen@omen-v4.21.2
-        with:
-          check: true
-          check-threshold: high  # fail on high risk PRs
-```
-
-### Custom Workflows
-
-Use outputs to build custom integrations:
-
-```yaml
-      - uses: panbanda/omen@omen-v4.21.2
-        id: omen
-
-      - name: Block high-risk PRs
-        if: steps.omen.outputs.risk-level == 'high'
-        run: |
-          gh pr edit ${{ github.event.pull_request.number }} --add-label "needs-review"
-          exit 1
-
-      - name: Notify on health drop
-        if: fromJSON(steps.omen.outputs.health-score) < 60
-        run: curl -X POST "$SLACK_WEBHOOK" -d '{"text":"Health: ${{ steps.omen.outputs.health-score }}"}'
-```
-
-### Label Template
-
-Customize label naming with `label-template`. The `{{level}}` token is replaced with the risk level:
-
-```yaml
-      - uses: panbanda/omen@omen-v4.21.2
-        with:
-          label: true
-          label-template: 'omen/{{level}}'  # produces: omen/low, omen/medium, omen/high
-```
+If a JSON output exceeds the GitHub Actions output-size guard, the action returns a temporary file path instead of inline JSON. Consumers should accept either form.
 
 ## MCP Server
 
 Omen includes a Model Context Protocol (MCP) server that exposes all analyzers as tools for LLMs like Claude. This enables AI assistants to analyze codebases directly.
+
+The server uses stdio transport only: `omen mcp` and `omen mcp --transport stdio` are equivalent. Tool paths are confined to the configured repository root by default; `omen mcp --allow-external-paths` opts out of that boundary for clients that intentionally need broader filesystem access. There are no host or port options for the MCP server.
 
 ### Claude Desktop
 
@@ -1111,7 +1086,7 @@ Files are graded A-F based on accumulated technical debt. The reports explain wh
 Each report includes a real PR analysis demonstrating `omen diff`:
 
 ```bash
-omen diff --target main -f markdown
+omen -f markdown diff --target main
 ```
 
 Example from gin-gonic/gin (#4420 - add escaped path option):
