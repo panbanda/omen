@@ -12,8 +12,9 @@ use rayon::ThreadPoolBuilder;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use omen::cli::{
-    AnalyzerArgs, Cli, Command, ComplexityArgs, ImpactArgs, McpSubcommand, OutlineArgs,
-    OutputFormat, ReportSubcommand, ScoreArgs, ScoreSubcommand, SearchSubcommand, SymbolArgs,
+    AnalyzerArgs, Cli, Command, ComplexityArgs, GateMode, GateSeverity, ImpactArgs, McpSubcommand,
+    OutlineArgs, OutputFormat, ReportSubcommand, ScoreArgs, ScoreSubcommand, SearchSubcommand,
+    StubsArgs, SymbolArgs,
 };
 #[cfg(feature = "mutation")]
 use omen::cli::{MutationArgs, MutationSubcommand, MutationTrainArgs};
@@ -162,6 +163,9 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                     Some(&args.common),
                 )?;
             }
+        }
+        Command::Stubs(args) => {
+            run_stubs(path, &config, args, format)?;
         }
         Command::Diff(args) => {
             run_diff_analyzer(path, args.target.as_deref(), format)?;
@@ -371,6 +375,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                     vec![
                         run_and_collect!(&ctx, omen::analyzers::complexity::Analyzer, "complexity"),
                         run_and_collect!(&ctx, omen::analyzers::satd::Analyzer, "satd"),
+                        run_and_collect!(&ctx, omen::analyzers::stubs::Analyzer, "stubs"),
                         run_and_collect!(&ctx, omen::analyzers::deadcode::Analyzer, "deadcode"),
                         run_and_collect!(&ctx, omen::analyzers::cohesion::Analyzer, "cohesion"),
                         run_and_collect!(&ctx, omen::analyzers::graph::Analyzer, "graph"),
@@ -433,6 +438,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
 
             let complexity = collected_result(&results, "complexity");
             let satd = collected_result(&results, "satd");
+            let stubs = collected_result(&results, "stubs");
             let duplicates = collected_result(&results, "duplicates");
             let cohesion = collected_result(&results, "cohesion");
             let tdg = collected_result(&results, "tdg");
@@ -441,6 +447,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             let components = omen::score::Components {
                 complexity: complexity.as_ref(),
                 satd: satd.as_ref(),
+                stubs: stubs.as_ref(),
                 duplicates: duplicates.as_ref(),
                 cohesion: cohesion.as_ref(),
                 tdg: tdg.as_ref(),
@@ -792,6 +799,83 @@ fn run_complexity_check(
     }
 }
 
+/// Run the `stubs` analyzer, then apply `--gate` (off/warn/error).
+///
+/// The JSON/markdown/text report is always emitted to stdout before the gate
+/// is evaluated, so `-f json --gate error` still gives callers the full
+/// finding list on stdout; the gate verdict goes to stderr, matching how
+/// `complexity --check` behaves.
+fn run_stubs(
+    path: &PathBuf,
+    config: &Config,
+    args: &StubsArgs,
+    format: Format,
+) -> omen::core::Result<()> {
+    let file_set = filtered_file_set(path, config, Some(&args.common))?;
+    let ctx = build_context(path, &file_set, config);
+
+    let analyzer = omen::analyzers::stubs::Analyzer::new();
+    let result = analyzer.analyze(&ctx)?;
+
+    let value = serde_json::to_value(&result)?;
+    format_with_limits(
+        value,
+        format,
+        args.common.top,
+        args.common.offset,
+        &mut stdout(),
+    )?;
+
+    if args.gate == GateMode::Off {
+        return Ok(());
+    }
+
+    let gate_severity = match args.gate_severity {
+        GateSeverity::Low => omen::analyzers::stubs::Severity::Low,
+        GateSeverity::Medium => omen::analyzers::stubs::Severity::Medium,
+        GateSeverity::High => omen::analyzers::stubs::Severity::High,
+    };
+
+    let violations: Vec<_> = result
+        .stubs
+        .iter()
+        .filter(|s| s.severity >= gate_severity)
+        .collect();
+
+    if violations.is_empty() {
+        eprintln!(
+            "No stubs at or above severity '{}' found ({} total stub(s))",
+            gate_severity, result.summary.total_stubs
+        );
+        return Ok(());
+    }
+
+    eprintln!(
+        "Found {} stub(s) at or above severity '{}':\n",
+        violations.len(),
+        gate_severity
+    );
+    for v in &violations {
+        eprintln!("  {}:{} [{}] {}", v.file, v.line, v.severity, v.snippet);
+    }
+
+    match args.gate {
+        GateMode::Off => unreachable!("handled above"),
+        GateMode::Warn => {
+            eprintln!("\nGate mode 'warn': not failing the build.");
+            Ok(())
+        }
+        GateMode::Error => Err(omen::core::Error::threshold_violation(
+            format!(
+                "{} stub(s) at or above severity '{}'",
+                violations.len(),
+                gate_severity
+            ),
+            violations.len() as f64,
+        )),
+    }
+}
+
 fn run_score_check(
     path: &PathBuf,
     config: &Config,
@@ -938,6 +1022,7 @@ fn run_report(
             let analyzer_names = [
                 "complexity",
                 "satd",
+                "stubs",
                 "deadcode",
                 "churn",
                 "duplicates",
@@ -1019,6 +1104,7 @@ fn run_report(
                         "complexity"
                     );
                     run_analyzer!(omen::analyzers::satd::Analyzer::default(), "satd", "satd");
+                    run_analyzer!(omen::analyzers::stubs::Analyzer::new(), "stubs", "stubs");
                     run_analyzer!(
                         omen::analyzers::deadcode::Analyzer::default(),
                         "deadcode",
@@ -1168,6 +1254,7 @@ fn run_report(
                 "metadata",
                 "complexity",
                 "satd",
+                "stubs",
                 "deadcode",
                 "churn",
                 "duplicates",

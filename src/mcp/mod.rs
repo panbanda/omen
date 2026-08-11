@@ -179,6 +179,7 @@ fn primary_field(tool_name: &str) -> Option<&'static str> {
         "context" => Some("top_symbols"),
         "outline" => Some("files"),
         "satd" | "deadcode" => Some("items"),
+        "stubs" => Some("stubs"),
         "churn" | "defect" | "tdg" | "ownership" => Some("files"),
         "clones" => Some("clones"),
         "changes" => Some("commits"),
@@ -542,6 +543,14 @@ impl McpServer {
                 required: &[],
             },
             ToolDef {
+                name: "stubs",
+                description: "Use to find unfinished work. Detects incomplete/placeholder implementations: todo!()/NotImplementedError-style idioms, elision comments ('...rest of implementation'), and empty-but-implementable function bodies. Read-only; does not gate.",
+                properties: vec![
+                    ("path", json!({"type": "string", "description": "File or directory path"})),
+                ],
+                required: &[],
+            },
+            ToolDef {
                 name: "churn",
                 description: "Use to find frequently changed files. Analyzes code churn from git history.",
                 properties: vec![
@@ -738,6 +747,7 @@ impl McpServer {
             "outline",
             "complexity",
             "satd",
+            "stubs",
             "deadcode",
             "churn",
             "clones",
@@ -844,6 +854,7 @@ impl McpServer {
         let result = match tool_name {
             "complexity" => self.run_analyzer::<crate::analyzers::complexity::Analyzer>(&ctx),
             "satd" => self.run_analyzer::<crate::analyzers::satd::Analyzer>(&ctx),
+            "stubs" => self.run_analyzer::<crate::analyzers::stubs::Analyzer>(&ctx),
             "deadcode" => self.run_analyzer::<crate::analyzers::deadcode::Analyzer>(&ctx),
             "churn" => self.run_analyzer_instance(
                 &ctx,
@@ -1659,6 +1670,15 @@ mod tests {
     }
 
     #[test]
+    fn test_handle_tools_list_has_stubs() {
+        let (server, _temp_dir) = create_test_server();
+        let result = server.handle_tools_list().unwrap();
+        let tools = result.get("tools").unwrap().as_array().unwrap();
+        let has_stubs = tools.iter().any(|t| t.get("name").unwrap() == "stubs");
+        assert!(has_stubs);
+    }
+
+    #[test]
     fn test_handle_tools_list_has_deadcode() {
         let (server, _temp_dir) = create_test_server();
         let result = server.handle_tools_list().unwrap();
@@ -1844,6 +1864,66 @@ mod tests {
         });
         let result = server.handle_tool_call(Some(params));
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_handle_tool_call_stubs() {
+        let (server, temp_dir) = create_test_server();
+        std::fs::write(
+            temp_dir.path().join("test.rs"),
+            "fn f() {\n    todo!()\n}\n",
+        )
+        .unwrap();
+
+        let params = json!({
+            "name": "stubs",
+            "arguments": {"path": temp_dir.path().to_str().unwrap()}
+        });
+        let response = server.handle_tool_call(Some(params)).unwrap();
+        let text = response["content"][0]["text"]
+            .as_str()
+            .expect("tool response text should be a string");
+        assert!(
+            text.contains("not_implemented"),
+            "stubs should find todo!(), got: {text}"
+        );
+    }
+
+    #[test]
+    fn test_handle_tool_call_stubs_uses_requested_path() {
+        // stubs tool should also analyze the requested path, not the server root
+        let (server, server_root) = create_test_server();
+        std::fs::write(
+            server_root.path().join("server_root.rs"),
+            "fn f() {\n    todo!()\n}\n",
+        )
+        .unwrap();
+
+        let target_dir = server_root.path().join("target");
+        std::fs::create_dir(&target_dir).unwrap();
+        std::fs::write(
+            target_dir.join("target.py"),
+            "def f():\n    raise NotImplementedError\n",
+        )
+        .unwrap();
+
+        let params = json!({
+            "name": "stubs",
+            "arguments": {"path": target_dir.to_str().unwrap()}
+        });
+        let response = server.handle_tool_call(Some(params)).unwrap();
+        let text = response["content"][0]["text"]
+            .as_str()
+            .expect("tool response text should be a string");
+
+        assert!(
+            text.contains("target.py"),
+            "stubs should find the stub in the requested path, got: {text}"
+        );
+        assert!(
+            !text.contains("server_root.rs"),
+            "stubs should not analyze the server root, got: {text}"
+        );
     }
 
     #[test]

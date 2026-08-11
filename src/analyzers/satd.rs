@@ -223,7 +223,7 @@ impl AnalyzerTrait for Analyzer {
 }
 
 /// Full SATD analysis result.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Analysis {
     /// All SATD items found.
     pub items: Vec<SatdItem>,

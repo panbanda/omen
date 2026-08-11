@@ -94,7 +94,7 @@ files.par_iter()
 
 **Configuration**: Automatic discovery loads TOML from `omen.toml` and `.omen/omen.toml`. An explicit `--config` path supports TOML, YAML, or JSON. Environment variables with the `OMEN_` prefix override file values. Config types use `#[serde(deny_unknown_fields)]`, so unknown keys are errors. See `omen.example.toml` for a representative configuration.
 
-**MCP server**: JSON-RPC server in `mcp/` module exposing all analyzers as tools for LLM integration. Tool names are bare analyzer names (e.g., `complexity`, `satd`, `temporal`, `outline`, `impact`, `get_symbol`) -- no prefix. All tools support `limit`/`offset` envelope pagination (default limit: 50). `McpServer::tool_names()` is the single source of truth; the manifest reads from it.
+**MCP server**: JSON-RPC server in `mcp/` module exposing all analyzers as tools for LLM integration. Tool names are bare analyzer names (e.g., `complexity`, `satd`, `stubs`, `temporal`, `outline`, `impact`, `get_symbol`) -- no prefix. All tools support `limit`/`offset` envelope pagination (default limit: 50). `McpServer::tool_names()` is the single source of truth; the manifest reads from it. The `stubs` tool is read-only and does not expose the CLI's `--gate` option.
 
 **`--since` flag**: `score trend --since` defaults to `"all"`; `report generate --since` defaults to `"1y"`. The value `"all"` is handled by `is_since_all()` in `src/git/log.rs`, which causes `parse_since_to_days()` to return `None` (no time limit). Duration values like `3m`, `6m`, and `1y` still work.
 
@@ -103,6 +103,7 @@ files.par_iter()
 Top-level commands (flat structure):
 - `complexity` - Cyclomatic and cognitive complexity
 - `satd` - Self-admitted technical debt
+- `stubs` - Incomplete/placeholder implementations (`--gate off|warn|error`, `--gate-severity low|medium|high`)
 - `deadcode` - Unused code detection
 - `churn` - Git history file churn
 - `clones` - Code clone detection

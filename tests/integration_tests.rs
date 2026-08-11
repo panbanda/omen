@@ -60,6 +60,206 @@ fn test_satd_sarif_output() {
         .stdout(predicate::str::contains("\"runs\""));
 }
 
+// ---------------------------------------------------------------------------
+// stubs analyzer
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_stubs_runs_successfully() {
+    omen()
+        .args(["-p", fixtures_dir(), "-f", "json", "stubs"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_stubs_json_shape() {
+    omen()
+        .args(["-p", fixtures_dir(), "-f", "json", "stubs"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"stubs\""))
+        .stdout(predicate::str::contains("\"by_category\""))
+        .stdout(predicate::str::contains("\"total_stubs\""));
+}
+
+/// Writes a small multi-language fixture with one stub per pattern type
+/// (not_implemented, elision, empty_body) and returns the temp dir.
+fn write_mixed_stub_fixture() -> TempDir {
+    let temp = TempDir::new().unwrap();
+    std::fs::write(
+        temp.path().join("todo.rs"),
+        "fn f() -> i32 {\n    todo!()\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        temp.path().join("throw.ts"),
+        "function f() {\n  throw new Error('not implemented');\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        temp.path().join("elided.go"),
+        "package p\n\nfunc f() {\n\t// ... rest of the implementation\n}\n",
+    )
+    .unwrap();
+    temp
+}
+
+#[test]
+fn test_stubs_end_to_end_detects_all_pattern_types() {
+    let temp = write_mixed_stub_fixture();
+
+    let output = omen()
+        .args(["-p", temp.path().to_str().unwrap(), "-f", "json", "stubs"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+
+    // todo.rs and throw.ts each yield one not_implemented finding (2 unique
+    // sites). elided.go's function body is *only* the elision comment, so
+    // its elision and empty_body signals describe the SAME unfinished site
+    // and are merged into a single finding rather than reported twice --
+    // total is 3 unique sites, not 4 raw category matches.
+    let stubs = parsed["stubs"].as_array().unwrap();
+    assert_eq!(stubs.len(), 3, "expected 3 unique sites: {stubs:#?}");
+    assert_eq!(parsed["summary"]["total_stubs"], 3);
+    assert_eq!(parsed["by_category"]["not_implemented"], 2);
+    assert_eq!(parsed["by_category"]["empty_body"], 1);
+    assert!(parsed["by_category"].get("elision").is_none());
+
+    let go_finding = stubs
+        .iter()
+        .find(|s| s["file"] == "elided.go")
+        .expect("elided.go finding");
+    assert_eq!(go_finding["category"], "empty_body");
+    assert_eq!(
+        go_finding["categories"],
+        serde_json::json!(["elision", "empty_body"])
+    );
+
+    // Paths are repo-relative, matching the other analyzers' convention.
+    assert!(!parsed.to_string().contains(temp.path().to_str().unwrap()));
+}
+
+#[test]
+fn test_stubs_gate_off_by_default_exits_zero_even_with_stubs() {
+    let temp = write_mixed_stub_fixture();
+    omen()
+        .args(["-p", temp.path().to_str().unwrap(), "-f", "json", "stubs"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_stubs_gate_error_exits_two_on_fixture_with_stubs() {
+    let temp = write_mixed_stub_fixture();
+    omen()
+        .args([
+            "-p",
+            temp.path().to_str().unwrap(),
+            "-f",
+            "json",
+            "stubs",
+            "--gate",
+            "error",
+        ])
+        .assert()
+        .code(2)
+        // JSON report must still reach stdout even when the gate fails.
+        .stdout(predicate::str::contains("\"stubs\""))
+        .stderr(predicate::str::contains("stub"));
+}
+
+#[test]
+fn test_stubs_gate_error_exits_zero_on_clean_fixture() {
+    let temp = TempDir::new().unwrap();
+    std::fs::write(
+        temp.path().join("clean.rs"),
+        "fn add(a: i32, b: i32) -> i32 { a + b }\n",
+    )
+    .unwrap();
+
+    omen()
+        .args([
+            "-p",
+            temp.path().to_str().unwrap(),
+            "-f",
+            "json",
+            "stubs",
+            "--gate",
+            "error",
+        ])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_stubs_gate_warn_exits_zero_even_with_stubs() {
+    let temp = write_mixed_stub_fixture();
+    omen()
+        .args([
+            "-p",
+            temp.path().to_str().unwrap(),
+            "stubs",
+            "--gate",
+            "warn",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("stub"));
+}
+
+/// Acceptance test: the stubs analyzer must report zero findings on omen's
+/// own `src/` tree. This is the project's own real, complete codebase --
+/// full of legitimate doc comments, explanatory "placeholder"/"stub"
+/// wording, and panics/exceptions whose messages happen to share
+/// substrings with trigger words (e.g. `panic!("Expected Stubs command")`).
+/// Any finding here is a precision regression, not a real stub.
+#[test]
+fn test_stubs_on_own_source_reports_zero_false_positives() {
+    let repo_root = env!("CARGO_MANIFEST_DIR");
+    let output = omen()
+        .args(["-p", repo_root, "-f", "json", "stubs"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let stubs = parsed["stubs"].as_array().cloned().unwrap_or_default();
+    assert!(
+        stubs.is_empty(),
+        "expected zero stubs on omen's own source, found {}: {:#?}",
+        stubs.len(),
+        stubs
+    );
+}
+
+#[test]
+fn test_stubs_gate_severity_high_ignores_medium_findings() {
+    // This fixture yields a single Medium-severity finding (the empty
+    // function whose only content is an elision comment, merged into one
+    // `empty_body` site); gating on "high" alone must not trip on it.
+    let temp = TempDir::new().unwrap();
+    std::fs::write(
+        temp.path().join("elided.go"),
+        "package p\n\nfunc f() {\n\t// ... rest of the implementation\n}\n",
+    )
+    .unwrap();
+
+    omen()
+        .args([
+            "-p",
+            temp.path().to_str().unwrap(),
+            "stubs",
+            "--gate",
+            "error",
+            "--gate-severity",
+            "high",
+        ])
+        .assert()
+        .success();
+}
+
 #[test]
 fn test_context_json_outputs_context_pack() {
     omen()

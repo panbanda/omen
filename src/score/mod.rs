@@ -1,5 +1,6 @@
 //! Composite health score analyzer.
 
+mod debt;
 pub mod trend;
 
 use std::collections::HashMap;
@@ -79,34 +80,31 @@ impl AnalyzerTrait for Analyzer {
             }
         }
 
-        // SATD needs file_count from ctx, so handle inline
+        // SATD needs file_count from ctx, so handle inline. Stubs fold into
+        // the same "satd" debt component -- see `debt::debt_component`.
         if self.weights.satd > 0.0 {
-            match crate::analyzers::satd::Analyzer::new().analyze(ctx) {
-                Ok(result) => {
-                    let score = calculate_satd_score(&result, ctx.files.files().len());
-                    let high_priority = result
-                        .items
-                        .iter()
-                        .filter(|i| {
-                            matches!(
-                                i.severity,
-                                crate::analyzers::satd::Severity::Critical
-                                    | crate::analyzers::satd::Severity::High
-                            )
-                        })
-                        .count();
-                    acc.add(
-                        "satd",
-                        self.weights.satd,
-                        score,
-                        format!(
-                            "Found {} debt items ({} high priority)",
-                            result.items.len(),
-                            high_priority
-                        ),
+            let (satd, satd_error) = match crate::analyzers::satd::Analyzer::new().analyze(ctx) {
+                Ok(result) => (Some(result), None),
+                Err(error) => (None, Some(error.to_string())),
+            };
+            let stubs = match crate::analyzers::stubs::Analyzer::new().analyze(ctx) {
+                Ok(result) => Some(result),
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        "stubs analysis failed; debt score computed without stub findings"
                     );
+                    None
                 }
-                Err(error) => acc.skip("satd", error.to_string()),
+            };
+            match debt::debt_component(
+                satd.as_ref(),
+                satd_error.as_deref(),
+                stubs.as_ref(),
+                ctx.files.files().len(),
+            ) {
+                Some((score, details)) => acc.add("satd", self.weights.satd, score, details),
+                None => acc.skip("satd", satd_error.unwrap_or_default()),
             }
         }
 
@@ -272,6 +270,10 @@ impl ScoreAccumulator {
 pub struct Components<'a> {
     pub complexity: Option<&'a crate::analyzers::complexity::Analysis>,
     pub satd: Option<&'a crate::analyzers::satd::Analysis>,
+    /// Stubs (incomplete/placeholder implementations). Folded into the
+    /// "satd" debt component rather than a separate weighted dimension --
+    /// see `debt::debt_component`.
+    pub stubs: Option<&'a crate::analyzers::stubs::Analysis>,
     pub duplicates: Option<&'a crate::analyzers::duplicates::Analysis>,
     pub cohesion: Option<&'a crate::analyzers::cohesion::Analysis>,
     pub tdg: Option<&'a crate::analyzers::tdg::Analysis>,
@@ -312,30 +314,18 @@ pub fn compute_from_components(components: &Components<'_>, file_count: usize) -
         }
     }
 
-    score_component!(
-        components.satd,
-        "satd",
-        weights.satd,
-        |r: &crate::analyzers::satd::Analysis| calculate_satd_score(r, file_count),
-        |r: &crate::analyzers::satd::Analysis| {
-            let high_priority = r
-                .items
-                .iter()
-                .filter(|i| {
-                    matches!(
-                        i.severity,
-                        crate::analyzers::satd::Severity::Critical
-                            | crate::analyzers::satd::Severity::High
-                    )
-                })
-                .count();
-            format!(
-                "Found {} debt items ({} high priority)",
-                r.items.len(),
-                high_priority
-            )
+    // SATD + stubs fold into a single "satd" debt component (see
+    // `debt::debt_component`); handled manually rather than via
+    // `score_component!` since it must be built whenever EITHER input is
+    // present -- a report with a stubs.json but a missing/unreadable
+    // satd.json must not silently drop stub findings.
+    if weights.satd > 0.0 {
+        if let Some((score, details)) =
+            debt::debt_component(components.satd, None, components.stubs, file_count)
+        {
+            acc.add("satd", weights.satd, score, details);
         }
-    );
+    }
 
     score_component!(
         components.duplicates,
@@ -421,6 +411,7 @@ pub fn compute_from_data_dir(data_dir: &std::path::Path, file_count: usize) -> R
 
     let complexity = load(data_dir, "complexity.json");
     let satd = load(data_dir, "satd.json");
+    let stubs = load(data_dir, "stubs.json");
     let duplicates = load(data_dir, "duplicates.json");
     let cohesion = load(data_dir, "cohesion.json");
     let tdg = load(data_dir, "tdg.json");
@@ -431,6 +422,7 @@ pub fn compute_from_data_dir(data_dir: &std::path::Path, file_count: usize) -> R
         &Components {
             complexity: complexity.as_ref(),
             satd: satd.as_ref(),
+            stubs: stubs.as_ref(),
             duplicates: duplicates.as_ref(),
             cohesion: cohesion.as_ref(),
             tdg: tdg.as_ref(),
@@ -466,26 +458,6 @@ fn calculate_complexity_score(result: &crate::analyzers::complexity::Analysis) -
         50.0 + (40.0 - p90) * 1.0
     } else {
         (50.0 - (p90 - 40.0)).max(0.0)
-    }
-}
-
-fn calculate_satd_score(result: &crate::analyzers::satd::Analysis, file_count: usize) -> f64 {
-    // Score based on debt density
-    if file_count == 0 {
-        return 100.0;
-    }
-    let density = result.items.len() as f64 / file_count as f64;
-    // 0 debt: 100, 0.1 per file: 90, 0.5 per file: 70, 1+ per file: 50 or less
-    if density <= 0.0 {
-        100.0
-    } else if density <= 0.1 {
-        90.0 + (0.1 - density) * 100.0
-    } else if density <= 0.5 {
-        70.0 + (0.5 - density) * 50.0
-    } else if density <= 1.0 {
-        50.0 + (1.0 - density) * 40.0
-    } else {
-        (50.0 - (density - 1.0) * 10.0).max(0.0)
     }
 }
 
@@ -981,87 +953,64 @@ mod tests {
         );
     }
 
+    /// End-to-end proof (via `compute_from_components`) that unresolved
+    /// stubs make the composite health score strictly worse, and that zero
+    /// stubs leaves the score unchanged from before this analyzer existed.
+    /// Unit coverage of the underlying density/banding math lives in
+    /// `score::debt`.
     #[test]
-    fn test_calculate_satd_score_none() {
-        let result = crate::analyzers::satd::Analysis {
-            items: vec![],
-            by_category: std::collections::HashMap::new(),
-            density: 0.0,
-            summary: crate::analyzers::satd::AnalysisSummary {
-                total_items: 0,
-                weighted_count: 0.0,
-                density: 0.0,
-            },
-        };
-        assert_eq!(calculate_satd_score(&result, 10), 100.0);
-    }
+    fn test_compute_from_components_stubs_lower_overall_score_and_zero_stubs_is_unchanged() {
+        let satd = debt::empty_satd();
 
-    #[test]
-    fn test_calculate_satd_score_zero_files() {
-        let result = crate::analyzers::satd::Analysis {
-            items: vec![],
-            by_category: std::collections::HashMap::new(),
-            density: 0.0,
-            summary: crate::analyzers::satd::AnalysisSummary {
-                total_items: 0,
-                weighted_count: 0.0,
-                density: 0.0,
+        let without_stubs = compute_from_components(
+            &Components {
+                satd: Some(&satd),
+                ..Default::default()
             },
-        };
-        assert_eq!(calculate_satd_score(&result, 0), 100.0);
-    }
+            10,
+        )
+        .unwrap();
 
-    #[test]
-    fn test_calculate_satd_score_low_density() {
-        // 1 item in 100 files = 0.01 density, score should be high (> 90)
-        let result = crate::analyzers::satd::Analysis {
-            items: vec![crate::analyzers::satd::SatdItem {
-                file: "test.rs".to_string(),
-                line: 1,
-                marker: "TODO".to_string(),
-                text: "test".to_string(),
-                category: "design".to_string(),
-                severity: crate::analyzers::satd::Severity::Low,
-                weight: 1.0,
-            }],
-            by_category: std::collections::HashMap::new(),
-            density: 0.01,
-            summary: crate::analyzers::satd::AnalysisSummary {
-                total_items: 1,
-                weighted_count: 1.0,
-                density: 0.01,
+        let with_zero_stubs = compute_from_components(
+            &Components {
+                satd: Some(&satd),
+                stubs: Some(&debt::empty_stubs()),
+                ..Default::default()
             },
-        };
-        let score = calculate_satd_score(&result, 100);
-        assert!(score > 90.0);
-    }
+            10,
+        )
+        .unwrap();
 
-    #[test]
-    fn test_calculate_satd_score_high_density() {
-        // Many items per file
-        let items: Vec<_> = (0..20)
-            .map(|i| crate::analyzers::satd::SatdItem {
-                file: "test.rs".to_string(),
-                line: i,
-                marker: "TODO".to_string(),
-                text: "test".to_string(),
-                category: "design".to_string(),
-                severity: crate::analyzers::satd::Severity::Low,
-                weight: 1.0,
-            })
-            .collect();
-        let result = crate::analyzers::satd::Analysis {
-            items,
-            by_category: std::collections::HashMap::new(),
-            density: 4.0,
-            summary: crate::analyzers::satd::AnalysisSummary {
-                total_items: 20,
-                weighted_count: 20.0,
-                density: 4.0,
+        assert_eq!(
+            without_stubs.overall_score, with_zero_stubs.overall_score,
+            "zero stubs must leave the score unchanged"
+        );
+
+        let mut stubby = debt::empty_stubs();
+        stubby.stubs = vec![
+            debt::stub_with_severity(crate::analyzers::stubs::Severity::High),
+            debt::stub_with_severity(crate::analyzers::stubs::Severity::High),
+            debt::stub_with_severity(crate::analyzers::stubs::Severity::High),
+        ];
+        stubby.summary.total_stubs = 3;
+        stubby.summary.high_severity = 3;
+
+        let with_stubs = compute_from_components(
+            &Components {
+                satd: Some(&satd),
+                stubs: Some(&stubby),
+                ..Default::default()
             },
-        };
-        let score = calculate_satd_score(&result, 5);
-        assert!(score < 50.0);
+            10,
+        )
+        .unwrap();
+
+        assert!(
+            with_stubs.overall_score < without_stubs.overall_score,
+            "before={}, after={}",
+            without_stubs.overall_score,
+            with_stubs.overall_score
+        );
     }
 
     #[test]
