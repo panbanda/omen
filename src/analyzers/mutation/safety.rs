@@ -3,15 +3,67 @@
 //! Provides RAII-based guards to ensure source files are always restored
 //! to their original state, even if a panic occurs during mutation testing.
 
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{LazyLock, OnceLock};
+use std::time::Duration;
 
 use crate::core::{Error, Result};
 
 /// Global counter for generating unique temp file names across threads.
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+static ACTIVE_MUTATIONS: LazyLock<parking_lot::Mutex<HashMap<PathBuf, Vec<u8>>>> =
+    LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
+static SIGNAL_HANDLER: OnceLock<std::result::Result<(), String>> = OnceLock::new();
+static INTERRUPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(unix)]
+extern "C" fn mark_interrupted(_: libc::c_int) {
+    INTERRUPTED.store(true, Ordering::SeqCst);
+}
+
+#[cfg(unix)]
+fn register_interrupt_handler() -> std::result::Result<(), String> {
+    let previous = unsafe {
+        libc::signal(
+            libc::SIGINT,
+            mark_interrupted as *const () as libc::sighandler_t,
+        )
+    };
+    if previous == libc::SIG_ERR {
+        Err(std::io::Error::last_os_error().to_string())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+extern "system" fn mark_interrupted_windows(signal: u32) -> i32 {
+    const CTRL_C_EVENT: u32 = 0;
+    if signal == CTRL_C_EVENT {
+        INTERRUPTED.store(true, Ordering::SeqCst);
+        1
+    } else {
+        0
+    }
+}
+
+#[cfg(windows)]
+fn register_interrupt_handler() -> std::result::Result<(), String> {
+    #[link(name = "Kernel32")]
+    unsafe extern "system" {
+        fn SetConsoleCtrlHandler(handler: extern "system" fn(u32) -> i32, add: i32) -> i32;
+    }
+
+    if unsafe { SetConsoleCtrlHandler(mark_interrupted_windows, 1) } == 0 {
+        Err(std::io::Error::last_os_error().to_string())
+    } else {
+        Ok(())
+    }
+}
 
 /// RAII guard that ensures a file is restored to its original content.
 ///
@@ -45,7 +97,13 @@ impl MutationGuard {
     ///
     /// This writes the mutated content to the file atomically.
     pub fn apply(&mut self, content: &[u8]) -> Result<()> {
-        atomic_write(&self.path, content)?;
+        let mut active = ACTIVE_MUTATIONS.lock();
+        active.insert(self.path.clone(), self.original.clone());
+        if let Err(error) = atomic_write(&self.path, content) {
+            active.remove(&self.path);
+            return Err(error);
+        }
+        drop(active);
         self.modified = true;
         Ok(())
     }
@@ -72,6 +130,7 @@ impl MutationGuard {
         if self.modified {
             atomic_write(&self.path, &self.original)?;
             self.modified = false;
+            ACTIVE_MUTATIONS.lock().remove(&self.path);
         }
         Ok(())
     }
@@ -105,7 +164,35 @@ impl Drop for MutationGuard {
                 let _ = fs::write(&self.path, &self.original);
             }
         }
+        ACTIVE_MUTATIONS.lock().remove(&self.path);
     }
+}
+
+pub fn restore_active_mutations() {
+    let active = ACTIVE_MUTATIONS.lock();
+    for (path, original) in active.iter() {
+        let _ = atomic_write(path, original);
+    }
+}
+
+pub fn install_signal_handler() -> Result<()> {
+    SIGNAL_HANDLER
+        .get_or_init(|| {
+            register_interrupt_handler()?;
+            std::thread::Builder::new()
+                .name("omen-mutation-signal".to_string())
+                .spawn(|| loop {
+                    if INTERRUPTED.load(Ordering::SeqCst) {
+                        restore_active_mutations();
+                        std::process::exit(130);
+                    }
+                    std::thread::park_timeout(Duration::from_millis(20));
+                })
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        })
+        .clone()
+        .map_err(Error::analysis)
 }
 
 /// Write content to a file atomically.
@@ -151,6 +238,7 @@ pub fn has_uncommitted_changes(path: impl AsRef<Path>) -> bool {
             // Found git root, check if file has uncommitted changes
             let output = std::process::Command::new("git")
                 .args(["status", "--porcelain"])
+                .arg("--")
                 .arg(path)
                 .current_dir(d)
                 .output();
@@ -325,6 +413,33 @@ mod tests {
 
         // Should return false when not in a git repo
         assert!(!has_uncommitted_changes(&file_path));
+    }
+
+    #[test]
+    fn test_has_uncommitted_changes_handles_option_like_filename() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("--output=stolen");
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(temp_dir.path())
+            .output()
+            .unwrap();
+        fs::write(&file_path, b"content").unwrap();
+
+        assert!(has_uncommitted_changes(&file_path));
+    }
+
+    #[test]
+    fn test_restore_active_mutations_restores_modified_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
+        let mut guard = MutationGuard::new(&file_path).unwrap();
+        guard.apply(b"mutated").unwrap();
+
+        restore_active_mutations();
+
+        assert_eq!(fs::read(&file_path).unwrap(), b"original");
     }
 
     #[test]

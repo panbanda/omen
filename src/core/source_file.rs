@@ -1,8 +1,11 @@
 //! Source file representation.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use super::{Language, Result};
+
+pub const MAX_FILE_SIZE: usize = 5 * 1024 * 1024;
 
 /// A source file with its content loaded.
 #[derive(Debug, Clone)]
@@ -22,7 +25,25 @@ impl SourceFile {
         let language = Language::detect(path).ok_or_else(|| super::Error::UnsupportedLanguage {
             path: path.to_path_buf(),
         })?;
-        let content = std::fs::read(path)?;
+        let size = std::fs::metadata(path)?.len();
+        if size > MAX_FILE_SIZE as u64 {
+            tracing::debug!(path = %path.display(), size, "Skipping source file over size limit");
+            return Err(super::Error::InvalidArgument(format!(
+                "source file exceeds {MAX_FILE_SIZE} byte limit: {}",
+                path.display()
+            )));
+        }
+        let mut content = Vec::with_capacity((size as usize).min(MAX_FILE_SIZE));
+        std::fs::File::open(path)?
+            .take((MAX_FILE_SIZE + 1) as u64)
+            .read_to_end(&mut content)?;
+        if content.len() > MAX_FILE_SIZE {
+            tracing::debug!(path = %path.display(), "Skipping source file over size limit");
+            return Err(super::Error::InvalidArgument(format!(
+                "source file exceeds {MAX_FILE_SIZE} byte limit: {}",
+                path.display()
+            )));
+        }
 
         Ok(Self {
             path: path.to_path_buf(),
@@ -88,6 +109,7 @@ fn is_comment_line(line: &str, lang: Language) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn test_source_file_from_content() {
@@ -106,5 +128,14 @@ mod tests {
 
         assert_eq!(file.total_lines(), 3);
         assert_eq!(file.lines_of_code(), 1);
+    }
+
+    #[test]
+    fn test_load_rejects_files_over_size_limit() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("large.rs");
+        std::fs::write(&path, vec![b'x'; MAX_FILE_SIZE + 1]).unwrap();
+
+        assert!(SourceFile::load(&path).is_err());
     }
 }

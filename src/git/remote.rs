@@ -4,6 +4,61 @@ use std::path::{Path, PathBuf};
 
 use crate::core::{Error, Result};
 
+#[cfg(unix)]
+fn ensure_secure_clone_base(path: &Path) -> Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+
+    if !path.exists() {
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true).mode(0o700);
+        if let Err(error) = builder.create(path) {
+            if error.kind() != std::io::ErrorKind::AlreadyExists {
+                return Err(Error::Remote(format!(
+                    "Failed to create clone directory '{}': {error}",
+                    path.display()
+                )));
+            }
+        }
+    }
+
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        Error::Remote(format!(
+            "Failed to inspect clone directory '{}': {error}",
+            path.display()
+        ))
+    })?;
+    if !metadata.file_type().is_dir() {
+        return Err(Error::Remote(format!(
+            "Clone base '{}' is not a directory",
+            path.display()
+        )));
+    }
+    let current_uid = unsafe { libc::geteuid() };
+    if metadata.uid() != current_uid {
+        return Err(Error::Remote(format!(
+            "Clone base '{}' is not owned by the current user",
+            path.display()
+        )));
+    }
+    if metadata.mode() & 0o002 != 0 {
+        return Err(Error::Remote(format!(
+            "Clone base '{}' must not be world-writable",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_secure_clone_base(path: &Path) -> Result<()> {
+    std::fs::create_dir_all(path).map_err(|error| {
+        Error::Remote(format!(
+            "Failed to create clone directory '{}': {error}",
+            path.display()
+        ))
+    })
+}
+
 /// Clone options for remote repositories.
 #[derive(Debug, Clone, Default)]
 pub struct CloneOptions {
@@ -94,7 +149,7 @@ pub fn clone_remote(url: &str, options: CloneOptions) -> Result<PathBuf> {
         t
     } else {
         let temp_dir = std::env::temp_dir().join("omen-repos");
-        std::fs::create_dir_all(&temp_dir).ok();
+        ensure_secure_clone_base(&temp_dir)?;
         let sanitized = sanitize_repo_name(&repo_url);
         if sanitized.is_empty()
             || sanitized.contains("..")
@@ -210,6 +265,34 @@ fn sanitize_repo_name(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn test_secure_clone_base_has_private_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().join("omen-repos");
+        ensure_secure_clone_base(&base).unwrap();
+
+        assert_eq!(
+            std::fs::metadata(base).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_secure_clone_base_rejects_world_writable_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().join("omen-repos");
+        std::fs::create_dir(&base).unwrap();
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o707)).unwrap();
+
+        assert!(ensure_secure_clone_base(&base).is_err());
+    }
 
     #[test]
     fn test_parse_github_shorthand() {

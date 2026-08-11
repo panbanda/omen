@@ -131,7 +131,11 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                     println!("{}", serde_json::to_string_pretty(&manifest)?);
                 }
                 None => {
-                    let server = McpServer::new(path.clone(), config);
+                    let server = McpServer::new_with_external_paths(
+                        path.clone(),
+                        config,
+                        cmd.args.allow_external_paths,
+                    );
                     server.run_stdio()?;
                 }
             }
@@ -154,8 +158,16 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         Command::Changes(args) => {
             run_changes_analyzer(path, &config, format, args)?;
         }
+        Command::Deadcode(args) => {
+            run_analyzer_instance(
+                path,
+                &config,
+                format,
+                Some(&args.common),
+                omen::analyzers::deadcode::Analyzer::new().with_cargo_check(args.cargo_check),
+            )?;
+        }
         Command::Satd(_)
-        | Command::Deadcode(_)
         | Command::Clones(_)
         | Command::Defect(_)
         | Command::Tdg(_)
@@ -436,9 +448,6 @@ fn dispatch_analyzer(
         Command::Satd(args) => {
             run_analyzer::<omen::analyzers::satd::Analyzer>(path, config, format, Some(args))
         }
-        Command::Deadcode(args) => {
-            run_analyzer::<omen::analyzers::deadcode::Analyzer>(path, config, format, Some(args))
-        }
         Command::Clones(args) => {
             run_analyzer::<omen::analyzers::duplicates::Analyzer>(path, config, format, Some(args))
         }
@@ -497,8 +506,21 @@ fn filtered_file_set(
 fn changed_files_since(path: &Path, base: &str) -> omen::core::Result<Vec<PathBuf>> {
     use std::process::Command;
 
+    if base.starts_with('-') {
+        return Err(omen::core::Error::git(
+            "changed-since reference must not start with '-'",
+        ));
+    }
+
     let output = Command::new("git")
-        .args(["diff", "--name-only", "--diff-filter=ACMR", base, "--"])
+        .args([
+            "diff",
+            "--name-only",
+            "--diff-filter=ACMR",
+            "--end-of-options",
+            base,
+            "--",
+        ])
         .current_dir(path)
         .output()
         .map_err(omen::core::Error::Io)?;
@@ -523,6 +545,16 @@ fn run_analyzer<A: Analyzer + Default>(
     format: Format,
     args: Option<&AnalyzerArgs>,
 ) -> omen::core::Result<()> {
+    run_analyzer_instance(path, config, format, args, A::default())
+}
+
+fn run_analyzer_instance<A: Analyzer>(
+    path: &PathBuf,
+    config: &Config,
+    format: Format,
+    args: Option<&AnalyzerArgs>,
+    analyzer: A,
+) -> omen::core::Result<()> {
     let file_set = filtered_file_set(path, config, args)?;
 
     // Show analysis progress
@@ -539,7 +571,6 @@ fn run_analyzer<A: Analyzer + Default>(
         None
     };
 
-    let analyzer = A::default();
     if let Some(ref s) = spinner {
         s.set_message(format!("Analyzing {} files...", file_set.len()));
     }
@@ -1284,7 +1315,8 @@ fn run_mutation(
         .operators(operators)
         .test_command(args.test_command.clone())
         .timeout(args.timeout)
-        .dry_run(args.dry_run);
+        .dry_run(args.dry_run)
+        .allow_dirty(args.allow_dirty);
 
     if args.check {
         analyzer = analyzer.min_score(Some(args.min_score));

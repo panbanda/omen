@@ -22,6 +22,7 @@ use crate::parser::{self, Parser};
 pub struct Analyzer {
     parser: Parser,
     confidence_threshold: f64,
+    cargo_check: bool,
 }
 
 impl Default for Analyzer {
@@ -35,11 +36,17 @@ impl Analyzer {
         Self {
             parser: Parser::new(),
             confidence_threshold: 0.8,
+            cargo_check: false,
         }
     }
 
     pub fn with_confidence(mut self, threshold: f64) -> Self {
         self.confidence_threshold = threshold.clamp(0.0, 1.0);
+        self
+    }
+
+    pub fn with_cargo_check(mut self, enabled: bool) -> Self {
+        self.cargo_check = enabled;
         self
     }
 
@@ -78,7 +85,7 @@ impl AnalyzerTrait for Analyzer {
         let is_rust_project = cargo_toml.exists();
 
         // For Rust projects, use cargo check for accurate dead code detection
-        let cargo_items = if is_rust_project {
+        let cargo_items = if self.cargo_check && is_rust_project {
             tracing::info!("Detected Cargo.toml, using cargo check for Rust dead code analysis");
             match CargoDeadCodeAnalyzer::analyze(ctx.root) {
                 Ok(analysis) => analysis.items,
@@ -1336,6 +1343,12 @@ mod tests {
     fn test_analyzer_creation() {
         let analyzer = Analyzer::new();
         assert_eq!(analyzer.name(), "deadcode");
+    }
+
+    #[test]
+    fn test_cargo_check_is_opt_in() {
+        assert!(!Analyzer::new().cargo_check);
+        assert!(Analyzer::new().with_cargo_check(true).cargo_check);
     }
 
     #[test]

@@ -90,6 +90,7 @@ flate2 = "1.1"
 # Utilities
 parking_lot = "0.12"
 bstr = "1.11"
+libc = "0.2"
 
 # Semantic search (TF-IDF based, no model download required)
 rusqlite = { version = "0.40", features = ["bundled"] }

@@ -1,3 +1,4 @@
+use assert_cmd::cargo::CommandCargoExt;
 use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::TempDir;
@@ -254,6 +255,153 @@ fn test_changed_since_filters_analyzer_files() {
     assert_eq!(files.len(), 1, "expected only changed file: {stdout}");
     assert!(files[0]["path"].as_str().unwrap().ends_with("src/b.rs"));
     assert!(!stdout.contains("src/a.rs"));
+}
+
+#[test]
+fn test_changed_since_rejects_option_like_ref() {
+    omen()
+        .args([
+            "-p",
+            fixtures_dir(),
+            "complexity",
+            "--changed-since=--output=stolen",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("must not start with '-'"));
+}
+
+#[test]
+fn test_mutation_refuses_dirty_targets_unless_allowed() {
+    let temp = TempDir::new().unwrap();
+    std::fs::write(temp.path().join("lib.rs"), "pub fn value() -> i32 { 1 }\n").unwrap();
+    for args in [
+        vec!["init"],
+        vec!["config", "user.email", "test@example.com"],
+        vec!["config", "user.name", "Test User"],
+        vec!["add", "."],
+        vec!["commit", "-m", "initial"],
+    ] {
+        assert!(std::process::Command::new("git")
+            .args(args)
+            .current_dir(temp.path())
+            .status()
+            .unwrap()
+            .success());
+    }
+    std::fs::write(temp.path().join("lib.rs"), "pub fn value() -> i32 { 2 }\n").unwrap();
+
+    omen()
+        .args(["-p", temp.path().to_str().unwrap(), "mutation", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("uncommitted changes"));
+
+    omen()
+        .args([
+            "-p",
+            temp.path().to_str().unwrap(),
+            "mutation",
+            "--dry-run",
+            "--allow-dirty",
+        ])
+        .assert()
+        .success();
+}
+
+#[cfg(unix)]
+#[test]
+fn test_mutation_sigint_restores_active_source_file() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("lib.rs");
+    let marker = temp.path().join("test-started");
+    let original = "pub fn value() -> i32 { 1 }\n";
+    std::fs::write(&source, original).unwrap();
+    for args in [
+        vec!["init"],
+        vec!["config", "user.email", "test@example.com"],
+        vec!["config", "user.name", "Test User"],
+        vec!["add", "."],
+        vec!["commit", "-m", "initial"],
+    ] {
+        assert!(std::process::Command::new("git")
+            .args(args)
+            .current_dir(temp.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success());
+    }
+    let test_command = format!("touch '{}' && sleep 2", marker.display());
+    #[allow(deprecated)]
+    let mut command = std::process::Command::cargo_bin("omen").unwrap();
+    command.args([
+        "-p",
+        temp.path().to_str().unwrap(),
+        "mutation",
+        "--test-command",
+        &test_command,
+    ]);
+    let mut child = command
+        .current_dir(temp.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+
+    for _ in 0..250 {
+        if marker.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(marker.exists(), "mutation test command did not start");
+    assert_ne!(std::fs::read_to_string(&source).unwrap(), original);
+
+    assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
+    let status = child.wait().unwrap();
+
+    assert_eq!(status.code(), Some(130));
+    assert_eq!(std::fs::read_to_string(source).unwrap(), original);
+}
+
+#[test]
+fn test_deadcode_only_runs_cargo_check_when_opted_in() {
+    let temp = TempDir::new().unwrap();
+    let marker = temp.path().join("build-script-ran");
+    std::fs::create_dir(temp.path().join("src")).unwrap();
+    std::fs::write(
+        temp.path().join("Cargo.toml"),
+        "[package]\nname = \"deadcode-opt-in\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    std::fs::write(temp.path().join("src/lib.rs"), "fn unused() {}\n").unwrap();
+    std::fs::write(
+        temp.path().join("build.rs"),
+        format!(
+            "fn main() {{ std::fs::write(r#\"{}\"#, b\"ran\").unwrap(); }}\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+
+    omen()
+        .args(["-p", temp.path().to_str().unwrap(), "deadcode"])
+        .assert()
+        .success();
+    assert!(!marker.exists());
+
+    omen()
+        .args([
+            "-p",
+            temp.path().to_str().unwrap(),
+            "deadcode",
+            "--cargo-check",
+        ])
+        .assert()
+        .success();
+    assert!(marker.exists());
 }
 
 // ---------------------------------------------------------------------------

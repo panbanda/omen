@@ -2866,6 +2866,7 @@ dependencies = [
  "ignore",
  "indicatif",
  "insta",
+ "libc",
  "minify-html",
  "minijinja",
  "parking_lot",

@@ -61,7 +61,7 @@ pub enum Command {
 
     /// Find dead/unreachable code
     #[command(alias = "dc")]
-    Deadcode(AnalyzerArgs),
+    Deadcode(DeadcodeArgs),
 
     /// Analyze code churn from git history
     Churn(ChurnArgs),
@@ -173,6 +173,16 @@ pub struct AnalyzerArgs {
     /// Skip the first N results (use with --top for pagination)
     #[arg(long)]
     pub offset: Option<usize>,
+}
+
+#[derive(Args)]
+pub struct DeadcodeArgs {
+    #[command(flatten)]
+    pub common: AnalyzerArgs,
+
+    /// Runs `cargo check`, which executes build scripts — only use on trusted code
+    #[arg(long)]
+    pub cargo_check: bool,
 }
 
 #[derive(Args)]
@@ -303,6 +313,10 @@ pub struct McpArgs {
     /// Host for SSE transport
     #[arg(long, default_value = "127.0.0.1")]
     pub host: String,
+
+    /// Allow tools to access paths outside the configured repository root
+    #[arg(long)]
+    pub allow_external_paths: bool,
 }
 
 /// Context generation for LLM consumption.
@@ -520,6 +534,10 @@ pub struct MutationArgs {
     /// Skip mutants predicted to be killed above this threshold (0.0-1.0)
     #[arg(long, value_name = "THRESHOLD")]
     pub skip_predicted: Option<f64>,
+
+    /// Allow mutation testing on files with uncommitted changes
+    #[arg(long)]
+    pub allow_dirty: bool,
 }
 
 /// Mutation testing mode.
@@ -1062,6 +1080,22 @@ mod tests {
     }
 
     #[test]
+    fn test_mcp_external_paths_default_to_denied() {
+        let cli = parse(&["omen", "mcp"]);
+        if let Command::Mcp(cmd) = cli.command {
+            assert!(!cmd.args.allow_external_paths);
+        }
+    }
+
+    #[test]
+    fn test_mcp_allow_external_paths() {
+        let cli = parse(&["omen", "mcp", "--allow-external-paths"]);
+        if let Command::Mcp(cmd) = cli.command {
+            assert!(cmd.args.allow_external_paths);
+        }
+    }
+
+    #[test]
     fn test_mcp_manifest() {
         let cli = parse(&["omen", "mcp", "manifest"]);
         if let Command::Mcp(cmd) = cli.command {
@@ -1492,6 +1526,22 @@ mod tests {
         assert!(!parse_complexity_args(&["omen", "complexity"]).check);
     }
 
+    #[test]
+    fn test_deadcode_cargo_check_default_false() {
+        let cli = parse(&["omen", "deadcode"]);
+        if let Command::Deadcode(args) = cli.command {
+            assert!(!args.cargo_check);
+        }
+    }
+
+    #[test]
+    fn test_deadcode_cargo_check_opt_in() {
+        let cli = parse(&["omen", "deadcode", "--cargo-check"]);
+        if let Command::Deadcode(args) = cli.command {
+            assert!(args.cargo_check);
+        }
+    }
+
     // Mutation command tests
 
     #[test]
@@ -1508,6 +1558,12 @@ mod tests {
         assert!(!args.skip_equivalent);
         assert!(matches!(args.mode, MutationMode::All));
         assert!(args.output_survivors.is_none());
+        assert!(!args.allow_dirty);
+    }
+
+    #[test]
+    fn test_mutation_allow_dirty() {
+        assert!(parse_mutation_args(&["omen", "mutation", "--allow-dirty"]).allow_dirty);
     }
 
     #[test]
