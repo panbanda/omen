@@ -1321,7 +1321,7 @@
                         </tr>
                     </thead>
                 </table>
-                {% if HotspotsTableJson %}<script>window.__td_hotspots={{ HotspotsTableJson }};</script>{% endif %}
+                {% if HotspotsTableJson %}<script>window.__td_hotspots={{ HotspotsTableJson | tojson }};</script>{% endif %}
             </div>
         </section>
         {% endif %}
@@ -1394,7 +1394,7 @@
                         </tr>
                     </thead>
                 </table>
-                {% if CohesionTableJson %}<script>window.__td_cohesion={{ CohesionTableJson }};</script>{% endif %}
+                {% if CohesionTableJson %}<script>window.__td_cohesion={{ CohesionTableJson | tojson }};</script>{% endif %}
             </div>
         </section>
         {% endif %}
@@ -1527,7 +1527,7 @@
                         </tr>
                     </thead>
                 </table>
-                {% if GraphTableJson %}<script>window.__td_graph={{ GraphTableJson }};</script>{% endif %}
+                {% if GraphTableJson %}<script>window.__td_graph={{ GraphTableJson | tojson }};</script>{% endif %}
             </div>
             {% endif %}
         </section>
@@ -1594,7 +1594,7 @@
                         </tr>
                     </thead>
                 </table>
-                {% if SATDTableJson %}<script>window.__td_satd={{ SATDTableJson }};</script>{% endif %}
+                {% if SATDTableJson %}<script>window.__td_satd={{ SATDTableJson | tojson }};</script>{% endif %}
             </div>
         </section>
         {% endif %}
@@ -1699,7 +1699,7 @@
                         </tr>
                     </thead>
                 </table>
-                {% if TdgTableJson %}<script>window.__td_tdg={{ TdgTableJson }};</script>{% endif %}
+                {% if TdgTableJson %}<script>window.__td_tdg={{ TdgTableJson | tojson }};</script>{% endif %}
             </div>
             {% endif %}
         </section>
@@ -1826,7 +1826,7 @@
                         </tr>
                     </thead>
                 </table>
-                {% if ChurnTableJson %}<script>window.__td_churn={{ ChurnTableJson }};</script>{% endif %}
+                {% if ChurnTableJson %}<script>window.__td_churn={{ ChurnTableJson | tojson }};</script>{% endif %}
             </div>
             {% endif %}
         </section>
@@ -1922,7 +1922,7 @@
                         </tr>
                     </thead>
                 </table>
-                {% if TemporalTableJson %}<script>window.__td_temporal={{ TemporalTableJson }};</script>{% endif %}
+                {% if TemporalTableJson %}<script>window.__td_temporal={{ TemporalTableJson | tojson }};</script>{% endif %}
             </div>
         </section>
         {% endif %}
@@ -2259,12 +2259,12 @@
                     type: 'radar',
                     data: [{
                         value: [
-                            {{ Score.components.complexity | default(0) }},
-                            {{ Score.components.duplication | default(0) }},
-                            {{ Score.components.cohesion | default(0) }},
-                            {{ Score.components.coupling | default(0) }},
-                            {{ Score.components.satd | default(0) }},
-                            {{ Score.components.smells | default(0) }}
+                            {{ Score.components.complexity | default(0) | tojson }},
+                            {{ Score.components.duplication | default(0) | tojson }},
+                            {{ Score.components.cohesion | default(0) | tojson }},
+                            {{ Score.components.coupling | default(0) | tojson }},
+                            {{ Score.components.satd | default(0) | tojson }},
+                            {{ Score.components.smells | default(0) | tojson }}
                         ],
                         areaStyle: { color: 'rgba(88,166,255,0.2)' },
                         lineStyle: { color: palette.blue, width: 2 },
@@ -2286,8 +2286,8 @@
 
             const data = [
                 {% for item in Hotspots.files %}{
-                    name: '{{ item.path | rel_path(Metadata.paths) | truncate_path(60) }}',
-                    value: [{{ item.commits }}, {{ item.avg_cognitive | round(1) }}, {{ item.hotspot_score | round(3) }}]
+                    name: {{ item.path | rel_path(Metadata.paths) | truncate_path(60) | tojson }},
+                    value: [{{ item.commits | tojson }}, {{ item.avg_cognitive | round(1) | tojson }}, {{ item.hotspot_score | round(3) | tojson }}]
                 }{% if not loop.last %},{% endif %}
                 {% endfor %}
             ];
@@ -2382,7 +2382,7 @@
                         offsetCenter: [0, '60%']
                     },
                     title: { show: false },
-                    data: [{ value: {{ Duplicates.duplication_ratio | round(1) }} }]
+                    data: [{ value: {{ Duplicates.duplication_ratio | round(1) | tojson }} }]
                 }]
             });
         })();
@@ -2394,8 +2394,8 @@
     {% if Trend %}
     <script>
         var trendsDataRaw = {
-            labels: [{% for p in Trend.points %}'{{ p.date }}'{% if not loop.last %}, {% endif %}{% endfor %}],
-            scores: [{% for p in Trend.points %}{{ p.score }}{% if not loop.last %}, {% endif %}{% endfor %}]
+            labels: [{% for p in Trend.points %}{{ p.date | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}],
+            scores: [{% for p in Trend.points %}{{ p.score | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}]
         };
 
         function formatDateLabel(isoDate) {
@@ -2426,7 +2426,7 @@
         var notableCommitsByPeriod = {};
         var trendPointCommits = [
             {% for p in Trend.points %}
-            {% if p.notable_commits %}{ date: '{{ p.date }}', commits: {{ p.notable_commits | tojson }} }{% if not loop.last %},{% endif %}
+            {% if p.notable_commits %}{ date: {{ p.date | tojson }}, commits: {{ p.notable_commits | tojson }} }{% if not loop.last %},{% endif %}
             {% endif %}
             {% endfor %}
         ];
@@ -2501,7 +2501,7 @@
             var chart = initChart(el);
 
             var trendLineData = trendsData.labels.map(function(_, i) {
-                return ({{ Trend.intercept }} + {{ Trend.slope }} * i).toFixed(1);
+                return ({{ Trend.intercept | tojson }} + {{ Trend.slope | tojson }} * i).toFixed(1);
             });
 
             var yMin = Math.min.apply(null, trendsData.scores) - 5;
@@ -2592,7 +2592,7 @@
             if (!el) return;
             var chart = initChart(el);
 
-            var componentLabelsRaw = [{% for p in Trend.points %}'{{ p.date }}'{% if not loop.last %}, {% endif %}{% endfor %}];
+            var componentLabelsRaw = [{% for p in Trend.points %}{{ p.date | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}];
             var componentLabels = componentLabelsRaw.map(formatDateLabel);
 
             var componentColors = {
@@ -2675,28 +2675,28 @@
                 series: [
                     {
                         name: 'Complexity', type: 'line', smooth: 0.3, symbol: 'circle', symbolSize: 4,
-                        data: [{% for p in Trend.points %}{{ p.components.complexity | default(0) }}{% if not loop.last %}, {% endif %}{% endfor %}],
+                        data: [{% for p in Trend.points %}{{ p.components.complexity | default(0) | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}],
                         lineStyle: { color: '#3fb950' }, itemStyle: { color: '#3fb950' },
                         markLine: { silent: true, symbol: 'none', data: componentMarkLines }
                     },
                     {
                         name: 'Duplication', type: 'line', smooth: 0.3, symbol: 'circle', symbolSize: 4,
-                        data: [{% for p in Trend.points %}{{ p.components.duplication | default(0) }}{% if not loop.last %}, {% endif %}{% endfor %}],
+                        data: [{% for p in Trend.points %}{{ p.components.duplication | default(0) | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}],
                         lineStyle: { color: '#58a6ff' }, itemStyle: { color: '#58a6ff' }
                     },
                     {
                         name: 'Coupling', type: 'line', smooth: 0.3, symbol: 'circle', symbolSize: 4,
-                        data: [{% for p in Trend.points %}{{ p.components.coupling | default(0) }}{% if not loop.last %}, {% endif %}{% endfor %}],
+                        data: [{% for p in Trend.points %}{{ p.components.coupling | default(0) | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}],
                         lineStyle: { color: '#d29922' }, itemStyle: { color: '#d29922' }
                     },
                     {
                         name: 'Cohesion', type: 'line', smooth: 0.3, symbol: 'circle', symbolSize: 4,
-                        data: [{% for p in Trend.points %}{{ p.components.cohesion | default(0) }}{% if not loop.last %}, {% endif %}{% endfor %}],
+                        data: [{% for p in Trend.points %}{{ p.components.cohesion | default(0) | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}],
                         lineStyle: { color: '#a371f7' }, itemStyle: { color: '#a371f7' }
                     },
                     {
                         name: 'Smells', type: 'line', smooth: 0.3, symbol: 'circle', symbolSize: 4,
-                        data: [{% for p in Trend.points %}{{ p.components.smells | default(0) }}{% if not loop.last %}, {% endif %}{% endfor %}],
+                        data: [{% for p in Trend.points %}{{ p.components.smells | default(0) | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}],
                         lineStyle: { color: '#f85149' }, itemStyle: { color: '#f85149' }
                     }
                 ]
@@ -2719,8 +2719,8 @@
             if (!el) return;
             var chart = initChart(el);
 
-            var names = [{% for o in Ownership.top_owners %}'{{ o.name }}'{% if not loop.last %}, {% endif %}{% endfor %}];
-            var values = [{% for o in Ownership.top_owners %}{{ o.files_owned }}{% if not loop.last %}, {% endif %}{% endfor %}];
+            var names = [{% for o in Ownership.top_owners %}{{ o.name | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}];
+            var values = [{% for o in Ownership.top_owners %}{{ o.files_owned | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}];
             var barColors = [palette.blue, palette.green, palette.yellow, palette.purple, palette.red, palette.gray, palette.blue, palette.green, palette.yellow, palette.purple];
 
             chart.setOption({
