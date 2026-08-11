@@ -1,5 +1,18 @@
 # Changelog
 
+## [4.27.0](https://github.com/panbanda/omen/compare/omen-v4.26.1...omen-v4.27.0) (2026-08-11)
+
+
+### Features
+
+* add stubs analyzer for incomplete-implementation detection ([#474](https://github.com/panbanda/omen/issues/474)) ([7f291a2](https://github.com/panbanda/omen/commit/7f291a2e2da4ede2b8fba56e0f12492a4845e9cf))
+* **report:** add Back/Forward navigation buttons ([#471](https://github.com/panbanda/omen/issues/471)) ([c91c443](https://github.com/panbanda/omen/commit/c91c443b5475008e3fa74bc677a01af6f57a8ce6))
+
+
+### Bug Fixes
+
+* **plugins:** declare the omen MCP server so it auto-configures ([#472](https://github.com/panbanda/omen/issues/472)) ([3cf9779](https://github.com/panbanda/omen/commit/3cf9779911a0d04d7d6c4bb3b8067b206d43f16b))
+
 ## [4.26.1](https://github.com/panbanda/omen/compare/omen-v4.26.0...omen-v4.26.1) (2026-08-11)
 
 
