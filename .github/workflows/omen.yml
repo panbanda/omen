@@ -24,7 +24,7 @@ jobs:
 
       - name: Run Omen
         id: omen
-        uses: panbanda/omen@omen-v4.21.2
+        uses: panbanda/omen@omen-v4.26.1
         with:
           summary: 'true'
           comment: 'true'
