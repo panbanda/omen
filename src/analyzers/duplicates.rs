@@ -16,11 +16,17 @@
 //! These parameters provide good precision/recall balance for code clones.
 
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
+use std::path::Path;
 
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::core::{percentile, AnalysisContext, Analyzer as AnalyzerTrait, Result};
+use crate::core::{
+    is_test_file, percentile, AnalysisContext, Analyzer as AnalyzerTrait, Language as CoreLanguage,
+    Result,
+};
+use crate::parser::{cfg_test_module_ranges, Parser as TreeSitterParser};
 
 /// Clone type classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,6 +65,11 @@ pub struct Config {
     pub normalize_literals: bool,
     pub ignore_comments: bool,
     pub min_group_size: usize,
+    /// Exclude test code from duplication detection: whole test files
+    /// (`is_test_file`) and, for Rust, fragments inside `#[cfg(test)]`
+    /// modules. Defaults to true since repetitive test setup is expected
+    /// and low-value to flag as duplication.
+    pub exclude_tests: bool,
 }
 
 impl Default for Config {
@@ -74,6 +85,7 @@ impl Default for Config {
             normalize_literals: true,
             ignore_comments: true,
             min_group_size: 2,
+            exclude_tests: true,
         }
     }
 }
@@ -118,6 +130,11 @@ impl Analyzer {
         self
     }
 
+    pub fn with_exclude_tests(mut self, exclude_tests: bool) -> Self {
+        self.config.exclude_tests = exclude_tests;
+        self
+    }
+
     /// Extract code fragments from file content.
     fn extract_fragments(&self, path: &str, content: &[u8]) -> Vec<CodeFragment> {
         let content_str = match std::str::from_utf8(content) {
@@ -129,14 +146,30 @@ impl Analyzer {
         let lang = detect_language(path);
         let mut fragments = Vec::new();
 
+        // For Rust, find `#[cfg(test)] mod ...` line ranges so fragments
+        // inside them are excluded below -- most of omen's own test
+        // duplication is inline `#[cfg(test)] mod tests { ... }`, so
+        // file-level exclusion (skipped whole files, see `analyze`) alone
+        // is not enough.
+        let test_line_ranges = if self.config.exclude_tests && lang == "rust" {
+            rust_cfg_test_line_ranges(content_str)
+        } else {
+            Vec::new()
+        };
+
         // Try function-level extraction first
-        let func_fragments = self.extract_function_fragments(path, &lines);
+        let (func_fragments, excluded_as_test) =
+            self.extract_function_fragments(path, &lines, &test_line_ranges);
         if !func_fragments.is_empty() {
             fragments.extend(func_fragments);
         }
 
-        // Fall back to whole file as single fragment if no functions found
-        if fragments.is_empty() {
+        // Fall back to whole file as single fragment if no functions were
+        // found. If a function was dropped because it fell inside a
+        // #[cfg(test)] range, do NOT fall back to the whole file -- that
+        // would re-include the very test content the caller asked to
+        // exclude via the file's other lines.
+        if fragments.is_empty() && !excluded_as_test {
             if let Some(frag) =
                 self.create_fragment(path, 0, lines.len().saturating_sub(1), &lines, lang)
             {
@@ -148,8 +181,23 @@ impl Analyzer {
     }
 
     /// Extract function-level code fragments.
-    fn extract_function_fragments(&self, path: &str, lines: &[&str]) -> Vec<CodeFragment> {
+    ///
+    /// `test_line_ranges` are 0-indexed `[start, end)` line ranges (typically
+    /// Rust `#[cfg(test)]` modules) whose fragments should be dropped.
+    ///
+    /// Returns the fragments plus whether at least one function was dropped
+    /// specifically because it fell inside `test_line_ranges` (as opposed to
+    /// being dropped for being below `min_tokens`). Callers use this to
+    /// avoid falling back to a whole-file fragment that would re-include the
+    /// excluded test code.
+    fn extract_function_fragments(
+        &self,
+        path: &str,
+        lines: &[&str],
+        test_line_ranges: &[Range<usize>],
+    ) -> (Vec<CodeFragment>, bool) {
         let mut fragments = Vec::new();
+        let mut excluded_as_test = false;
         let lang = detect_language(path);
 
         let mut in_function = false;
@@ -190,7 +238,9 @@ impl Analyzer {
                     continue;
                 }
                 let end = if func_lines.len() > 1 { i - 1 } else { i };
-                if let Some(frag) = self.create_fragment(
+                if line_in_ranges(func_start_line, test_line_ranges) {
+                    excluded_as_test = true;
+                } else if let Some(frag) = self.create_fragment(
                     path,
                     func_start_line,
                     end,
@@ -221,7 +271,11 @@ impl Analyzer {
                 continue;
             }
 
-            if let Some(frag) = self.create_fragment(path, func_start_line, i, &func_lines, lang) {
+            if line_in_ranges(func_start_line, test_line_ranges) {
+                excluded_as_test = true;
+            } else if let Some(frag) =
+                self.create_fragment(path, func_start_line, i, &func_lines, lang)
+            {
                 fragments.push(frag);
             }
             in_function = false;
@@ -233,7 +287,9 @@ impl Analyzer {
 
         // Handle unclosed function at end of file
         if in_function && !func_lines.is_empty() {
-            if let Some(frag) = self.create_fragment(
+            if line_in_ranges(func_start_line, test_line_ranges) {
+                excluded_as_test = true;
+            } else if let Some(frag) = self.create_fragment(
                 path,
                 func_start_line,
                 lines.len().saturating_sub(1),
@@ -244,7 +300,7 @@ impl Analyzer {
             }
         }
 
-        fragments
+        (fragments, excluded_as_test)
     }
 
     /// Create a code fragment from lines if it meets minimum token requirements.
@@ -578,12 +634,17 @@ impl AnalyzerTrait for Analyzer {
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
         // Extract fragments from all files in parallel
         let max_file_size = self.max_file_size;
+        let exclude_tests = self.config.exclude_tests;
         let files_scanned = std::sync::atomic::AtomicUsize::new(0);
         let mut all_fragments: Vec<CodeFragment> = ctx
             .files
             .files()
             .par_iter()
             .filter_map(|path| {
+                // Skip whole test files (mirrors cohesion.rs's skip_test_files).
+                if exclude_tests && is_test_file(path) {
+                    return None;
+                }
                 let content = ctx.read_file(path).ok()?;
                 if max_file_size > 0 && content.len() > max_file_size {
                     return None;
@@ -878,6 +939,44 @@ fn detect_language(path: &str) -> &'static str {
     } else {
         "unknown"
     }
+}
+
+/// Find Rust `#[cfg(test)]` module bodies and convert them to 0-indexed
+/// `[start, end)` line ranges, reusing the tree-sitter based detector shared
+/// with `analyzers::tdg` (`crate::parser::cfg_test_module_ranges`) so both
+/// analyzers agree on what counts as test code and avoid `not(test)` /
+/// `contest`-style false positives.
+fn rust_cfg_test_line_ranges(content: &str) -> Vec<Range<usize>> {
+    let parser = TreeSitterParser::new();
+    let Ok(parsed) = parser.parse(
+        content.as_bytes(),
+        CoreLanguage::Rust,
+        Path::new("<duplicates>"),
+    ) else {
+        return Vec::new();
+    };
+
+    cfg_test_module_ranges(&parsed.tree.root_node(), content)
+        .into_iter()
+        .map(|byte_range| {
+            byte_offset_to_line(content, byte_range.start)
+                ..byte_offset_to_line(content, byte_range.end)
+        })
+        .collect()
+}
+
+/// Count newlines before `offset` to get the 0-indexed line number, matching
+/// tree-sitter's own row convention.
+fn byte_offset_to_line(content: &str, offset: usize) -> usize {
+    content.as_bytes()[..offset.min(content.len())]
+        .iter()
+        .filter(|&&b| b == b'\n')
+        .count()
+}
+
+/// Check whether `line` (0-indexed) falls inside any of `ranges`.
+fn line_in_ranges(line: usize, ranges: &[Range<usize>]) -> bool {
+    ranges.iter().any(|r| line >= r.start && line < r.end)
 }
 
 /// Check if a line starts a function definition.
@@ -1785,6 +1884,7 @@ func funcB() string {
             "NumHashFunctions should be positive"
         );
         assert!(cfg.num_bands > 0, "NumBands should be positive");
+        assert!(cfg.exclude_tests, "exclude_tests should default to true");
     }
 
     #[test]
@@ -1846,6 +1946,170 @@ func funcB() string {
         assert!(is_comment("// comment", "rust"));
         assert!(is_comment("// comment", "c"));
         assert!(is_comment("// comment", "python"));
+    }
+
+    /// A fragment inside `#[cfg(test)] mod tests { ... }` must be excluded
+    /// when `exclude_tests` is true (the default), and included when false
+    /// (mirrors the `omen clones --include-tests` CLI override).
+    #[test]
+    fn test_cfg_test_fragment_excluded_by_default() {
+        let code = r#"
+#[cfg(test)]
+mod tests {
+    fn helper_one() {
+        let a = 1;
+        let b = 2;
+        let c = 3;
+        let d = a + b + c;
+        let e = d * 2;
+        let f = e - 1;
+        let g = f + a;
+        let h = g - b;
+        println!("{}", h);
+    }
+}
+"#;
+
+        let excluding = Analyzer::new().with_min_tokens(10);
+        let fragments = excluding.extract_fragments("lib.rs", code.as_bytes());
+        assert!(
+            fragments.is_empty(),
+            "fragment inside #[cfg(test)] should be excluded by default, got {} fragments",
+            fragments.len()
+        );
+
+        let including = Analyzer::new()
+            .with_min_tokens(10)
+            .with_exclude_tests(false);
+        let fragments = including.extract_fragments("lib.rs", code.as_bytes());
+        assert!(
+            !fragments.is_empty(),
+            "fragment inside #[cfg(test)] should be included with exclude_tests=false"
+        );
+    }
+
+    /// A whole test FILE (matched by `crate::core::is_test_file`) should be
+    /// skipped entirely by default, and analyzed with `--include-tests`.
+    #[test]
+    fn test_exclude_tests_skips_test_files() {
+        let tmp_dir = TempDir::new().unwrap();
+
+        let code = r#"package main
+
+func duplicateHelper() int {
+    x := 1
+    y := 2
+    z := 3
+    result := x + y + z
+    if result > 5 {
+        return result
+    }
+    return 0
+}
+"#;
+        let file1 = tmp_dir.path().join("a_test.go");
+        let file2 = tmp_dir.path().join("b_test.go");
+        fs::write(&file1, code).unwrap();
+        fs::write(&file2, code).unwrap();
+
+        let config = CoreConfig::default();
+        let file_set = FileSet::from_path(tmp_dir.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&file_set, &config, Some(tmp_dir.path()));
+
+        let analyzer = Analyzer::new()
+            .with_min_tokens(10)
+            .with_similarity_threshold(0.8);
+        let analysis = analyzer.analyze(&ctx).unwrap();
+        assert_eq!(
+            analysis.total_files_scanned, 0,
+            "*_test.go files should be skipped by default"
+        );
+        assert!(analysis.groups.is_empty());
+
+        let including = Analyzer::new()
+            .with_min_tokens(10)
+            .with_similarity_threshold(0.8)
+            .with_exclude_tests(false);
+        let analysis = including.analyze(&ctx).unwrap();
+        assert_eq!(
+            analysis.total_files_scanned, 2,
+            "test files should be scanned with exclude_tests=false"
+        );
+        assert!(!analysis.groups.is_empty());
+    }
+
+    /// A production file merely named like a test keyword substring
+    /// (`contest.rs`) and a `#[cfg(not(test))]` block must NOT be excluded --
+    /// only real test files/modules should be dropped.
+    #[test]
+    fn test_contest_file_and_cfg_not_test_are_not_excluded() {
+        assert!(
+            !is_test_file(Path::new("contest.rs")),
+            "contest.rs should not be treated as a test file"
+        );
+
+        let code = r#"
+#[cfg(not(test))]
+mod real_impl {
+    fn helper_two() {
+        let a = 1;
+        let b = 2;
+        let c = 3;
+        let d = a + b + c;
+        let e = d * 2;
+        let f = e - 1;
+        let g = f + a;
+        let h = g - b;
+        println!("{}", h);
+    }
+}
+"#;
+        let analyzer = Analyzer::new().with_min_tokens(10);
+        let fragments = analyzer.extract_fragments("lib.rs", code.as_bytes());
+        assert!(
+            !fragments.is_empty(),
+            "#[cfg(not(test))] fragment must not be excluded"
+        );
+    }
+
+    /// Two identical PRODUCTION functions (outside any #[cfg(test)] module,
+    /// in non-test files) must still be detected as a clone when
+    /// exclude_tests is at its default of true.
+    #[test]
+    fn test_exclude_tests_still_detects_production_clones() {
+        let tmp_dir = TempDir::new().unwrap();
+
+        let code = r#"pub fn compute_totals() -> i32 {
+    let a = 1;
+    let b = 2;
+    let c = 3;
+    let d = a + b + c;
+    let e = d * 2;
+    let f = e - 1;
+    let g = f + a;
+    let h = g - b;
+    h
+}
+"#;
+        let file1 = tmp_dir.path().join("a.rs");
+        let file2 = tmp_dir.path().join("b.rs");
+        fs::write(&file1, code).unwrap();
+        fs::write(&file2, code).unwrap();
+
+        let config = CoreConfig::default();
+        let file_set = FileSet::from_path(tmp_dir.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&file_set, &config, Some(tmp_dir.path()));
+
+        let analyzer = Analyzer::new()
+            .with_min_tokens(10)
+            .with_similarity_threshold(0.8);
+        let analysis = analyzer.analyze(&ctx).unwrap();
+
+        assert_eq!(analysis.total_files_scanned, 2);
+        assert!(
+            !analysis.groups.is_empty(),
+            "identical production functions should still be detected as clones"
+        );
     }
 
     #[test]
