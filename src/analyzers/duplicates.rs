@@ -275,7 +275,6 @@ impl Analyzer {
             file: path.to_string(),
             start_line: (start_line + 1) as u32,
             end_line: (end_line + 1) as u32,
-            content: normalized_tokens.join(" "),
             tokens: normalized_tokens,
             normalized_hash: 0, // Set later
             signature: None,    // Set later
@@ -415,25 +414,32 @@ impl Analyzer {
 
         // Initialize Union-Find
         let mut parent: Vec<usize> = (0..fragments.len()).collect();
+        let mut sizes = vec![1usize; fragments.len()];
 
-        fn find(parent: &mut [usize], x: usize) -> usize {
-            if parent[x] != x {
-                parent[x] = find(parent, parent[x]);
+        fn find(parent: &mut [usize], mut x: usize) -> usize {
+            while parent[x] != x {
+                parent[x] = parent[parent[x]];
+                x = parent[x];
             }
-            parent[x]
+            x
         }
 
-        fn union(parent: &mut [usize], x: usize, y: usize) {
-            let px = find(parent, x);
-            let py = find(parent, y);
-            if px != py {
-                parent[px] = py;
+        fn union(parent: &mut [usize], sizes: &mut [usize], x: usize, y: usize) {
+            let mut px = find(parent, x);
+            let mut py = find(parent, y);
+            if px == py {
+                return;
             }
+            if sizes[px] < sizes[py] {
+                std::mem::swap(&mut px, &mut py);
+            }
+            parent[py] = px;
+            sizes[px] += sizes[py];
         }
 
         // Union all clone pairs
         for pair in pairs {
-            union(&mut parent, pair.idx_a, pair.idx_b);
+            union(&mut parent, &mut sizes, pair.idx_a, pair.idx_b);
         }
 
         // Group fragments by their root
@@ -701,8 +707,6 @@ struct CodeFragment {
     file: String,
     start_line: u32,
     end_line: u32,
-    #[allow(dead_code)]
-    content: String,
     tokens: Vec<String>,
     normalized_hash: u64,
     signature: Option<MinHashSignature>,
@@ -1115,184 +1119,117 @@ fn is_operator_or_delimiter(token: &str) -> bool {
 /// Tokenize code into tokens.
 fn tokenize(content: &str) -> Vec<String> {
     let mut tokens = Vec::new();
-    let chars: Vec<char> = content.chars().collect();
-    let mut i = 0;
+    let mut chars = content.char_indices().peekable();
 
-    while i < chars.len() {
-        let c = chars[i];
-
+    while let Some((start, c)) = chars.next() {
         // Skip whitespace
         if c.is_whitespace() {
-            i += 1;
             continue;
         }
 
         // String literals
         if c == '"' || c == '\'' || c == '`' {
-            tokens.push(collect_string_literal(&chars, &mut i, c));
+            let mut escaped = false;
+            for (_, current) in chars.by_ref() {
+                if escaped {
+                    escaped = false;
+                } else if current == '\\' {
+                    escaped = true;
+                } else if current == c {
+                    break;
+                }
+            }
+            let end = chars.peek().map_or(content.len(), |(index, _)| *index);
+            tokens.push(content[start..end].to_string());
             continue;
         }
 
         // Numbers
-        if c.is_ascii_digit() || (c == '-' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit())
+        if c.is_ascii_digit()
+            || (c == '-' && chars.peek().is_some_and(|(_, next)| next.is_ascii_digit()))
         {
-            tokens.push(collect_number(&chars, &mut i));
+            while chars.peek().is_some_and(|(_, next)| {
+                next.is_ascii_digit()
+                    || matches!(
+                        next,
+                        '.' | '_'
+                            | 'x'
+                            | 'X'
+                            | 'b'
+                            | 'B'
+                            | 'o'
+                            | 'O'
+                            | 'a'..='f'
+                            | 'A'..='F'
+                    )
+            }) {
+                chars.next();
+            }
+            let end = chars.peek().map_or(content.len(), |(index, _)| *index);
+            tokens.push(content[start..end].to_string());
             continue;
         }
 
         // Identifiers and keywords
         if c.is_alphabetic() || c == '_' {
-            tokens.push(collect_identifier(&chars, &mut i));
+            while chars
+                .peek()
+                .is_some_and(|(_, next)| next.is_alphanumeric() || *next == '_')
+            {
+                chars.next();
+            }
+            let end = chars.peek().map_or(content.len(), |(index, _)| *index);
+            tokens.push(content[start..end].to_string());
             continue;
         }
 
-        // Multi-character operators
-        if let Some(op) = collect_operator(&chars, &mut i) {
-            tokens.push(op);
+        // Guard operator matching by the first byte, then allocate only the
+        // operator that is actually emitted.
+        let rest = &content[start..];
+        let operator_len = if matches!(c, '<' | '>' | '.' | '=' | '!')
+            && ["<<=", ">>=", "...", "===", "!=="]
+                .iter()
+                .any(|operator| rest.starts_with(operator))
+        {
+            3
+        } else if matches!(
+            c,
+            '=' | '!' | '<' | '>' | '&' | '|' | '+' | '-' | '*' | '/' | '%' | '^' | ':' | '.' | '?'
+        ) && [
+            "==", "!=", "<=", ">=", "&&", "||", "<<", ">>", "+=", "-=", "*=", "/=", "%=", "&=",
+            "|=", "^=", "++", "--", "->", "=>", "::", "..", "??",
+        ]
+        .iter()
+        .any(|operator| rest.starts_with(operator))
+        {
+            2
+        } else {
+            0
+        };
+        if operator_len > 0 {
+            for _ in 1..operator_len {
+                chars.next();
+            }
+            tokens.push(content[start..start + operator_len].to_string());
             continue;
         }
 
         // Single character
         tokens.push(c.to_string());
-        i += 1;
     }
 
     tokens
 }
 
-fn collect_string_literal(chars: &[char], i: &mut usize, quote: char) -> String {
-    let mut s = String::new();
-    s.push(chars[*i]);
-    *i += 1;
-
-    while *i < chars.len() {
-        let c = chars[*i];
-        s.push(c);
-        *i += 1;
-
-        if c == quote {
-            break;
-        }
-        // Handle escape sequences
-        if c == '\\' && *i < chars.len() {
-            s.push(chars[*i]);
-            *i += 1;
-        }
-    }
-
-    s
-}
-
-fn collect_number(chars: &[char], i: &mut usize) -> String {
-    let mut s = String::new();
-
-    // Handle negative sign
-    if chars[*i] == '-' {
-        s.push('-');
-        *i += 1;
-    }
-
-    while *i < chars.len() {
-        let c = chars[*i];
-        if c.is_ascii_digit()
-            || c == '.'
-            || c == '_'
-            || c == 'x'
-            || c == 'X'
-            || c == 'b'
-            || c == 'B'
-            || c == 'o'
-            || c == 'O'
-            || ('a'..='f').contains(&c)
-            || ('A'..='F').contains(&c)
-            || c == 'e'
-            || c == 'E'
-        {
-            s.push(c);
-            *i += 1;
-        } else {
-            break;
-        }
-    }
-
-    s
-}
-
-fn collect_identifier(chars: &[char], i: &mut usize) -> String {
-    let mut s = String::new();
-
-    while *i < chars.len() {
-        let c = chars[*i];
-        if c.is_alphanumeric() || c == '_' {
-            s.push(c);
-            *i += 1;
-        } else {
-            break;
-        }
-    }
-
-    s
-}
-
-fn collect_operator(chars: &[char], i: &mut usize) -> Option<String> {
-    if *i >= chars.len() {
-        return None;
-    }
-
-    // Try 3-character operators
-    if *i + 2 < chars.len() {
-        let op3: String = chars[*i..*i + 3].iter().collect();
-        if matches!(op3.as_str(), "<<=" | ">>=" | "..." | "===" | "!==") {
-            *i += 3;
-            return Some(op3);
-        }
-    }
-
-    // Try 2-character operators
-    if *i + 1 < chars.len() {
-        let op2: String = chars[*i..*i + 2].iter().collect();
-        if matches!(
-            op2.as_str(),
-            "==" | "!="
-                | "<="
-                | ">="
-                | "&&"
-                | "||"
-                | "<<"
-                | ">>"
-                | "+="
-                | "-="
-                | "*="
-                | "/="
-                | "%="
-                | "&="
-                | "|="
-                | "^="
-                | "++"
-                | "--"
-                | "->"
-                | "=>"
-                | "::"
-                | ".."
-                | "??"
-        ) {
-            *i += 2;
-            return Some(op2);
-        }
-    }
-
-    None
-}
-
-/// Generate k-shingles from tokens using blake3 hashing.
+/// Generate k-shingles from tokens using BLAKE3 hashing.
 fn generate_k_shingles(tokens: &[String], k: usize) -> Vec<u64> {
     if tokens.len() < k {
         if !tokens.is_empty() {
-            let mut hasher = blake3::Hasher::new();
+            let mut bytes = Vec::new();
             for t in tokens {
-                hasher.update(t.as_bytes());
+                bytes.extend_from_slice(t.as_bytes());
             }
-            let hash = hasher.finalize();
+            let hash = blake3::hash(&bytes);
             return vec![u64::from_le_bytes(
                 hash.as_bytes()[..8]
                     .try_into()
@@ -1303,19 +1240,19 @@ fn generate_k_shingles(tokens: &[String], k: usize) -> Vec<u64> {
     }
 
     let mut shingle_set: HashSet<u64> = HashSet::new();
+    let mut bytes = Vec::new();
 
     for window in tokens.windows(k) {
-        let mut hasher = blake3::Hasher::new();
+        bytes.clear();
         for token in window {
-            hasher.update(token.as_bytes());
+            bytes.extend_from_slice(token.as_bytes());
         }
-        let hash = hasher.finalize();
-        let h = u64::from_le_bytes(
+        let hash = blake3::hash(&bytes);
+        shingle_set.insert(u64::from_le_bytes(
             hash.as_bytes()[..8]
                 .try_into()
                 .expect("blake3 hash is always 32 bytes"),
-        );
-        shingle_set.insert(h);
+        ));
     }
 
     shingle_set.into_iter().collect()

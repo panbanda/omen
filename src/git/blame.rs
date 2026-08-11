@@ -13,23 +13,10 @@ use crate::core::{Error, Result};
 pub struct BlameInfo {
     /// File path.
     pub path: String,
-    /// Lines with their authors.
-    pub lines: Vec<BlameLine>,
+    /// Total number of blamed lines.
+    pub total_lines: u32,
     /// Aggregated author statistics.
     pub authors: HashMap<String, AuthorStats>,
-}
-
-/// A single line with blame information.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BlameLine {
-    /// Line number (1-indexed).
-    pub line: u32,
-    /// Author name.
-    pub author: String,
-    /// Commit SHA.
-    pub sha: String,
-    /// Commit timestamp.
-    pub timestamp: i64,
 }
 
 /// Statistics for an author.
@@ -74,69 +61,48 @@ pub fn get_blame(_repo: &Repository, root: &Path, path: &Path) -> Result<BlameIn
 fn parse_line_porcelain(output: &[u8], path: &Path) -> Result<BlameInfo> {
     let text = String::from_utf8_lossy(output);
 
-    let mut lines = Vec::new();
-    let mut author_lines: HashMap<String, Vec<i64>> = HashMap::new();
-
-    let mut current_sha = String::new();
-    let mut current_author = String::new();
+    let mut total_lines = 0u32;
+    let mut authors: HashMap<String, AuthorStats> = HashMap::new();
+    let mut current_author = "";
     let mut current_timestamp: i64 = 0;
-    let mut current_line_num: u32 = 0;
 
     for line in text.lines() {
         if line.starts_with('\t') {
             // Content line - marks end of a blame entry
-            lines.push(BlameLine {
-                line: current_line_num,
-                author: current_author.clone(),
-                sha: current_sha.clone(),
-                timestamp: current_timestamp,
-            });
-            author_lines
-                .entry(current_author.clone())
-                .or_default()
-                .push(current_timestamp);
+            total_lines += 1;
+            if let Some(stats) = authors.get_mut(current_author) {
+                stats.lines += 1;
+                stats.first_commit = stats.first_commit.min(current_timestamp);
+                stats.last_commit = stats.last_commit.max(current_timestamp);
+            } else {
+                authors.insert(
+                    current_author.to_string(),
+                    AuthorStats {
+                        lines: 1,
+                        percentage: 0.0,
+                        first_commit: current_timestamp,
+                        last_commit: current_timestamp,
+                    },
+                );
+            }
         } else if let Some(rest) = line.strip_prefix("author ") {
-            current_author = rest.to_string();
+            current_author = rest;
         } else if let Some(rest) = line.strip_prefix("author-time ") {
             current_timestamp = rest.parse().unwrap_or(0);
-        } else if line.len() >= 40 && line.as_bytes()[0].is_ascii_hexdigit() {
-            // Header line: <sha> <orig-line> <final-line> [<num-lines>]
-            let parts: Vec<&str> = line.splitn(4, ' ').collect();
-            if parts.len() >= 3 {
-                current_sha = parts[0].to_string();
-                current_line_num = parts[2].parse().unwrap_or(0);
-            }
         }
     }
 
-    let total_lines = lines.len() as f64;
-    let mut authors = HashMap::new();
-
-    for (name, timestamps) in author_lines {
-        let line_count = timestamps.len() as u32;
-        let percentage = if total_lines > 0.0 {
-            (line_count as f64 / total_lines) * 100.0
+    for stats in authors.values_mut() {
+        stats.percentage = if total_lines > 0 {
+            (f64::from(stats.lines) / f64::from(total_lines)) * 100.0
         } else {
             0.0
         };
-
-        let first_commit = timestamps.iter().min().copied().unwrap_or(0);
-        let last_commit = timestamps.iter().max().copied().unwrap_or(0);
-
-        authors.insert(
-            name,
-            AuthorStats {
-                lines: line_count,
-                percentage,
-                first_commit,
-                last_commit,
-            },
-        );
     }
 
     Ok(BlameInfo {
         path: path.to_string_lossy().to_string(),
-        lines,
+        total_lines,
         authors,
     })
 }
@@ -175,7 +141,7 @@ mod tests {
     fn test_bus_factor_empty() {
         let info = BlameInfo {
             path: "test.rs".to_string(),
-            lines: Vec::new(),
+            total_lines: 0,
             authors: HashMap::new(),
         };
         assert_eq!(info.bus_factor(), 0);
@@ -214,7 +180,7 @@ mod tests {
 
         let info = BlameInfo {
             path: "test.rs".to_string(),
-            lines: Vec::new(),
+            total_lines: 100,
             authors,
         };
 
@@ -245,7 +211,7 @@ mod tests {
 
         let info = BlameInfo {
             path: "test.rs".to_string(),
-            lines: Vec::new(),
+            total_lines: 100,
             authors,
         };
 
@@ -269,7 +235,7 @@ mod tests {
 
         let info = BlameInfo {
             path: "test.rs".to_string(),
-            lines: Vec::new(),
+            total_lines: 80,
             authors,
         };
 
@@ -280,25 +246,11 @@ mod tests {
     fn test_ownership_ratio_empty() {
         let info = BlameInfo {
             path: "test.rs".to_string(),
-            lines: Vec::new(),
+            total_lines: 0,
             authors: HashMap::new(),
         };
 
         assert!((info.ownership_ratio()).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_blame_line_struct() {
-        let line = BlameLine {
-            line: 42,
-            author: "Alice".to_string(),
-            sha: "abc123def456".to_string(),
-            timestamp: 1700000000,
-        };
-        assert_eq!(line.line, 42);
-        assert_eq!(line.author, "Alice");
-        assert_eq!(line.sha, "abc123def456");
-        assert_eq!(line.timestamp, 1700000000);
     }
 
     #[test]
@@ -355,7 +307,7 @@ mod tests {
         let blame = result.unwrap();
 
         // Verify blame results
-        assert_eq!(blame.lines.len(), 3); // 3 lines in the file
+        assert_eq!(blame.total_lines, 3); // 3 lines in the file
         assert_eq!(blame.authors.len(), 1); // 1 author
         assert!(blame.authors.contains_key("Test Author"));
 
@@ -414,7 +366,7 @@ mod tests {
 
         // Verify we have at least one author
         assert!(!blame.authors.is_empty());
-        assert_eq!(blame.lines.len(), 4); // 4 lines in the updated file
+        assert_eq!(blame.total_lines, 4); // 4 lines in the updated file
     }
 
     #[test]
@@ -432,18 +384,13 @@ mod tests {
 
         let info = BlameInfo {
             path: "test.rs".to_string(),
-            lines: vec![BlameLine {
-                line: 1,
-                author: "Alice".to_string(),
-                sha: "abc123".to_string(),
-                timestamp: 1500,
-            }],
+            total_lines: 50,
             authors,
         };
 
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains("\"path\":\"test.rs\""));
-        assert!(json.contains("\"author\":\"Alice\""));
+        assert!(json.contains("\"total_lines\":50"));
         assert!(json.contains("\"lines\":50"));
     }
 }

@@ -563,13 +563,15 @@ impl Analyzer {
         }
 
         let d = self.config.damping;
-        let mut rank: HashMap<NodeIndex, f64> = graph
+        let initial_rank = 1.0 / n as f64;
+        let mut rank = vec![initial_rank; n];
+        let mut new_rank = vec![0.0; n];
+        let out_degrees: Vec<usize> = graph
             .node_indices()
-            .map(|idx| (idx, 1.0 / n as f64))
+            .map(|node| graph.edges_directed(node, Direction::Outgoing).count())
             .collect();
 
         for _ in 0..self.config.max_iterations {
-            let mut new_rank: HashMap<NodeIndex, f64> = HashMap::with_capacity(n);
             let mut diff = 0.0;
 
             for node in graph.node_indices() {
@@ -577,9 +579,9 @@ impl Analyzer {
                     .edges_directed(node, Direction::Incoming)
                     .map(|e| {
                         let source = e.source();
-                        let out_deg = graph.edges_directed(source, Direction::Outgoing).count();
+                        let out_deg = out_degrees[source.index()];
                         if out_deg > 0 {
-                            rank[&source] / out_deg as f64
+                            rank[source.index()] / out_deg as f64
                         } else {
                             0.0
                         }
@@ -587,18 +589,21 @@ impl Analyzer {
                     .sum();
 
                 let new_score = (1.0 - d) / n as f64 + d * incoming;
-                diff += (new_score - rank[&node]).abs();
-                new_rank.insert(node, new_score);
+                diff += (new_score - rank[node.index()]).abs();
+                new_rank[node.index()] = new_score;
             }
 
-            rank = new_rank;
+            std::mem::swap(&mut rank, &mut new_rank);
 
             if diff < self.config.tolerance {
                 break;
             }
         }
 
-        rank
+        graph
+            .node_indices()
+            .map(|node| (node, rank[node.index()]))
+            .collect()
     }
 
     /// Calculate betweenness centrality using Brandes' algorithm with parallel BFS.
@@ -611,73 +616,100 @@ impl Analyzer {
         // Use all nodes as sources (no sampling - per project requirements)
         let sources: Vec<NodeIndex> = graph.node_indices().collect();
 
-        // Parallel betweenness calculation
-        let partial_betweenness: Vec<HashMap<NodeIndex, f64>> = sources
-            .par_iter()
-            .map(|&source| {
-                let mut local_betweenness: HashMap<NodeIndex, f64> = HashMap::new();
-                let mut dist: HashMap<NodeIndex, i32> = HashMap::with_capacity(n);
-                let mut paths: HashMap<NodeIndex, f64> = HashMap::with_capacity(n);
-                let mut predecessors: HashMap<NodeIndex, Vec<NodeIndex>> =
-                    HashMap::with_capacity(n);
-                let mut stack: Vec<NodeIndex> = Vec::with_capacity(n);
-                let mut queue: VecDeque<NodeIndex> = VecDeque::with_capacity(n);
+        struct BetweennessState {
+            totals: Vec<f64>,
+            dist: Vec<i32>,
+            sigma: Vec<f64>,
+            delta: Vec<f64>,
+            predecessors: Vec<Vec<u32>>,
+            stack: Vec<usize>,
+            queue: VecDeque<usize>,
+        }
 
-                dist.insert(source, 0);
-                paths.insert(source, 1.0);
-                queue.push_back(source);
-
-                // BFS
-                while let Some(v) = queue.pop_front() {
-                    stack.push(v);
-                    let v_dist = dist[&v];
-
-                    for edge in graph.edges_directed(v, Direction::Outgoing) {
-                        let w = edge.target();
-
-                        // First visit
-                        if let std::collections::hash_map::Entry::Vacant(e) = dist.entry(w) {
-                            e.insert(v_dist + 1);
-                            queue.push_back(w);
-                        }
-
-                        // Shortest path via v
-                        if dist[&w] == v_dist + 1 {
-                            *paths.entry(w).or_insert(0.0) += *paths.get(&v).unwrap_or(&0.0);
-                            predecessors.entry(w).or_default().push(v);
-                        }
-                    }
+        impl BetweennessState {
+            fn new(n: usize) -> Self {
+                Self {
+                    totals: vec![0.0; n],
+                    dist: vec![-1; n],
+                    sigma: vec![0.0; n],
+                    delta: vec![0.0; n],
+                    predecessors: (0..n).map(|_| Vec::new()).collect(),
+                    stack: Vec::with_capacity(n),
+                    queue: VecDeque::with_capacity(n),
                 }
+            }
 
-                // Accumulate dependencies
-                let mut delta: HashMap<NodeIndex, f64> = HashMap::with_capacity(n);
-                while let Some(w) = stack.pop() {
-                    if let Some(preds) = predecessors.get(&w) {
-                        for &v in preds {
-                            let coeff = (paths.get(&v).unwrap_or(&0.0)
-                                / paths.get(&w).unwrap_or(&1.0))
-                                * (1.0 + delta.get(&w).unwrap_or(&0.0));
-                            *delta.entry(v).or_insert(0.0) += coeff;
-                        }
-                    }
-                    if w != source {
-                        *local_betweenness.entry(w).or_insert(0.0) += delta.get(&w).unwrap_or(&0.0);
-                    }
+            fn reset_scratch(&mut self) {
+                self.dist.fill(-1);
+                self.sigma.fill(0.0);
+                self.delta.fill(0.0);
+                for predecessors in &mut self.predecessors {
+                    predecessors.clear();
                 }
-
-                local_betweenness
-            })
-            .collect();
-
-        // Merge partial results
-        let mut betweenness: HashMap<NodeIndex, f64> =
-            graph.node_indices().map(|idx| (idx, 0.0)).collect();
-
-        for partial in partial_betweenness {
-            for (idx, value) in partial {
-                *betweenness.entry(idx).or_insert(0.0) += value;
+                self.stack.clear();
+                self.queue.clear();
             }
         }
+
+        // Fold source contributions into per-worker totals, then merge worker
+        // totals incrementally to keep peak memory proportional to worker count.
+        let state = sources
+            .par_iter()
+            .fold(
+                || BetweennessState::new(n),
+                |mut state, &source| {
+                    state.reset_scratch();
+                    let source_idx = source.index();
+                    state.dist[source_idx] = 0;
+                    state.sigma[source_idx] = 1.0;
+                    state.queue.push_back(source_idx);
+
+                    // BFS
+                    while let Some(v) = state.queue.pop_front() {
+                        state.stack.push(v);
+                        let v_dist = state.dist[v];
+
+                        for edge in graph.edges_directed(NodeIndex::new(v), Direction::Outgoing) {
+                            let w = edge.target().index();
+
+                            // First visit
+                            if state.dist[w] < 0 {
+                                state.dist[w] = v_dist + 1;
+                                state.queue.push_back(w);
+                            }
+
+                            // Shortest path via v
+                            if state.dist[w] == v_dist + 1 {
+                                state.sigma[w] += state.sigma[v];
+                                state.predecessors[w].push(v as u32);
+                            }
+                        }
+                    }
+
+                    // Accumulate dependencies
+                    while let Some(w) = state.stack.pop() {
+                        for predecessor_index in 0..state.predecessors[w].len() {
+                            let v = state.predecessors[w][predecessor_index] as usize;
+                            let coeff = (state.sigma[v] / state.sigma[w]) * (1.0 + state.delta[w]);
+                            state.delta[v] += coeff;
+                        }
+                        if w != source_idx {
+                            state.totals[w] += state.delta[w];
+                        }
+                    }
+
+                    state
+                },
+            )
+            .reduce(
+                || BetweennessState::new(n),
+                |mut left, right| {
+                    for (left_value, right_value) in left.totals.iter_mut().zip(right.totals) {
+                        *left_value += right_value;
+                    }
+                    left
+                },
+            );
 
         // Normalize betweenness scores
         let norm = if n > 2 {
@@ -686,6 +718,10 @@ impl Analyzer {
             1.0
         };
 
+        let mut betweenness: HashMap<NodeIndex, f64> = graph
+            .node_indices()
+            .map(|node| (node, state.totals[node.index()]))
+            .collect();
         for value in betweenness.values_mut() {
             *value *= norm;
         }
@@ -904,6 +940,24 @@ mod tests {
         let rank_a = ranks[&a];
         let rank_b = ranks[&b];
         assert!(rank_b > rank_a, "Node b should have higher PageRank");
+    }
+
+    #[test]
+    fn test_pagerank_pins_asymmetric_fixture_scores() {
+        let analyzer = Analyzer::new();
+        let mut graph: DiGraph<String, ()> = DiGraph::new();
+        let a = graph.add_node("a.rs".to_string());
+        let b = graph.add_node("b.rs".to_string());
+        let c = graph.add_node("c.rs".to_string());
+        graph.add_edge(a, b, ());
+        graph.add_edge(a, c, ());
+        graph.add_edge(b, c, ());
+
+        let ranks = analyzer.calculate_pagerank(&graph);
+
+        assert!((ranks[&a] - 0.05).abs() < 1e-12);
+        assert!((ranks[&b] - 0.07125).abs() < 1e-12);
+        assert!((ranks[&c] - 0.1318125).abs() < 1e-12);
     }
 
     #[test]
