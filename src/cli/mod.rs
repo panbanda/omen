@@ -55,6 +55,9 @@ pub enum Command {
     #[command(alias = "debt")]
     Satd(AnalyzerArgs),
 
+    /// Detect incomplete/placeholder implementations (todo!(), NotImplementedError, empty bodies)
+    Stubs(StubsArgs),
+
     /// Find dead/unreachable code
     #[command(alias = "dc")]
     Deadcode(DeadcodeArgs),
@@ -205,6 +208,35 @@ pub struct ComplexityArgs {
     /// Maximum cognitive complexity (default: from config or 30)
     #[arg(long)]
     pub max_cognitive: Option<u32>,
+}
+
+#[derive(Args)]
+pub struct StubsArgs {
+    #[command(flatten)]
+    pub common: AnalyzerArgs,
+
+    /// Gate mode: 'off' just reports, 'warn' reports and warns on stderr (exit 0),
+    /// 'error' reports and exits 2 if any stub at or above --gate-severity is found
+    #[arg(long, value_enum, default_value = "off")]
+    pub gate: GateMode,
+
+    /// Minimum severity that counts toward the gate (warn/error)
+    #[arg(long, value_enum, default_value = "low")]
+    pub gate_severity: GateSeverity,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum GateMode {
+    Off,
+    Warn,
+    Error,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+pub enum GateSeverity {
+    Low,
+    Medium,
+    High,
 }
 
 #[derive(Args)]
@@ -778,6 +810,55 @@ mod tests {
     #[test]
     fn test_command_satd() {
         assert_parses_to!(&["omen", "satd"], Command::Satd(_));
+    }
+
+    #[test]
+    fn test_command_stubs() {
+        assert_parses_to!(&["omen", "stubs"], Command::Stubs(_));
+    }
+
+    /// Extract StubsArgs from a parsed CLI, panicking if the command is wrong.
+    fn parse_stubs_args(args: &[&str]) -> StubsArgs {
+        let cli = parse(args);
+        match cli.command {
+            Command::Stubs(args) => args,
+            _ => panic!("Expected Stubs command"),
+        }
+    }
+
+    #[test]
+    fn test_stubs_gate_defaults_to_off() {
+        let args = parse_stubs_args(&["omen", "stubs"]);
+        assert!(matches!(args.gate, GateMode::Off));
+    }
+
+    #[test]
+    fn test_stubs_gate_severity_defaults_to_low() {
+        let args = parse_stubs_args(&["omen", "stubs"]);
+        assert!(matches!(args.gate_severity, GateSeverity::Low));
+    }
+
+    #[test]
+    fn test_stubs_gate_error_parses() {
+        let args = parse_stubs_args(&["omen", "stubs", "--gate", "error"]);
+        assert!(matches!(args.gate, GateMode::Error));
+    }
+
+    #[test]
+    fn test_stubs_gate_warn_parses() {
+        let args = parse_stubs_args(&["omen", "stubs", "--gate", "warn"]);
+        assert!(matches!(args.gate, GateMode::Warn));
+    }
+
+    #[test]
+    fn test_stubs_gate_severity_high_parses() {
+        let args = parse_stubs_args(&["omen", "stubs", "--gate-severity", "high"]);
+        assert!(matches!(args.gate_severity, GateSeverity::High));
+    }
+
+    #[test]
+    fn test_stubs_rejects_invalid_gate_value() {
+        assert!(Cli::try_parse_from(["omen", "stubs", "--gate", "bogus"]).is_err());
     }
 
     #[test]

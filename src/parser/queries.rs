@@ -295,6 +295,30 @@ pub fn is_logical_operator(node_type: &str) -> bool {
     matches!(node_type, "&&" | "||" | "and" | "or")
 }
 
+/// Get comment node types for a language.
+///
+/// Used by the `stubs` analyzer to extract comment text via the AST (rather
+/// than string-matching whole files), so string/char literals containing
+/// comment-like text never produce false positives.
+pub fn get_comment_node_types(lang: Language) -> &'static [&'static str] {
+    match lang {
+        Language::Rust => &["line_comment", "block_comment"],
+        Language::Java => &["line_comment", "block_comment"],
+        Language::Go
+        | Language::Python
+        | Language::TypeScript
+        | Language::JavaScript
+        | Language::Tsx
+        | Language::Jsx
+        | Language::C
+        | Language::Cpp
+        | Language::CSharp
+        | Language::Ruby
+        | Language::Php
+        | Language::Bash => &["comment"],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -404,6 +428,41 @@ mod tests {
         // Bash should have elif_clause
         let bash_types = get_flat_node_types(Language::Bash);
         assert!(bash_types.contains(&"elif_clause"));
+    }
+
+    #[test]
+    fn test_comment_node_types_per_language() {
+        let all_languages = [
+            Language::Go,
+            Language::Rust,
+            Language::Python,
+            Language::TypeScript,
+            Language::JavaScript,
+            Language::Tsx,
+            Language::Jsx,
+            Language::Java,
+            Language::CSharp,
+            Language::C,
+            Language::Cpp,
+            Language::Ruby,
+            Language::Php,
+            Language::Bash,
+        ];
+        for lang in all_languages {
+            let types = get_comment_node_types(lang);
+            assert!(!types.is_empty(), "{lang} should have comment node types");
+        }
+
+        // Rust and Java distinguish line vs block comments; everyone else uses "comment".
+        assert_eq!(
+            get_comment_node_types(Language::Rust),
+            &["line_comment", "block_comment"]
+        );
+        assert_eq!(
+            get_comment_node_types(Language::Java),
+            &["line_comment", "block_comment"]
+        );
+        assert_eq!(get_comment_node_types(Language::Go), &["comment"]);
     }
 }
 

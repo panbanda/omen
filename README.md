@@ -60,6 +60,35 @@ When developers write `TODO: fix this later` or `HACK: this is terrible but work
 </details>
 
 <details>
+<summary><strong>Stubs Detection</strong> - Incomplete or placeholder implementations left unfinished</summary>
+
+SATD is debt a developer chose to keep; a stub is work that was never finished - the kind of thing an agent or human leaves behind mid-task. Omen finds stubs via tree-sitter AST analysis (never plain string matching, so string literals containing trigger words are never false positives) and groups them by pattern type:
+
+| Category         | Severity | What it means                                                                        |
+| ----------------- | -------- | ------------------------------------------------------------------------------------- |
+| `not_implemented` | High     | Explicit not-implemented idioms: `todo!()`, `raise NotImplementedError`, `throw new Error('not implemented')` |
+| `elision`          | Medium   | Comments admitting skipped work: `// ... rest of the implementation`, `// placeholder`, `// your code here` |
+| `empty_body`       | Medium   | A function/method with an empty body that can't legitimately be empty (non-void return type, or an elision comment inside) |
+
+```bash
+omen stubs
+
+# Fail CI if any stub is found
+omen stubs --gate error
+
+# Only fail on high-severity stubs (todo!()-style idioms), warn on the rest
+omen stubs --gate error --gate-severity high
+omen stubs --gate warn
+```
+
+**Why it matters:** Unfinished work that looks complete (it compiles, it's committed) is more dangerous than code that's obviously missing - nothing signals it needs attention until it's called in production. Stubs feed into the composite health score's debt component alongside SATD, so unresolved stubs lower your repo's score just like unresolved TODOs do.
+
+> [!TIP]
+> Add `omen stubs --gate error` to CI to block merges that leave `todo!()` or `NotImplementedError` behind.
+
+</details>
+
+<details>
 <summary><strong>Dead Code Detection</strong> - Code that exists but never runs</summary>
 
 Dead code includes:
@@ -525,7 +554,7 @@ Omen computes a composite repository health score (0-100) that combines multiple
 | --------------- | ------ | -------------------------------------------------- |
 | Complexity      | 25%    | % of functions exceeding complexity thresholds     |
 | Duplication     | 20%    | Code clone ratio with non-linear penalty curve     |
-| SATD            | 10%    | Severity-weighted TODO/FIXME density per 1K LOC    |
+| SATD            | 10%    | Severity-weighted TODO/FIXME density, plus unresolved stubs (`todo!()`, `NotImplementedError`, etc.) |
 | TDG             | 15%    | Technical Debt Gradient composite score            |
 | Coupling        | 10%    | Cyclic deps, SDP violations, and instability       |
 | Smells          | 5%     | Architectural smells relative to codebase size     |
@@ -788,6 +817,7 @@ Omen includes a Model Context Protocol (MCP) server that exposes all analyzers a
 - `outline` - Token-cheap imports, classes, and function outline
 - `complexity` - Cyclomatic and cognitive complexity
 - `satd` - Self-admitted technical debt detection
+- `stubs` - Incomplete/placeholder implementation detection (read-only; does not gate)
 - `deadcode` - Unused functions and variables
 - `churn` - Git file change frequency
 - `clones` - Code clones detection
@@ -888,7 +918,7 @@ omen -f json score --compact
 omen deadcode --cargo-check
 ```
 
-The top-level commands are `complexity`, `satd`, `deadcode`, `churn`, `clones`, `defect`, `changes`, `diff`, `tdg`, `graph`, `hotspot`, `temporal`, `ownership`, `cohesion`, `repomap`, `smells`, `flags`, `score`, `mcp`, `all`, `context`, `report`, `search`, `mutation`, `outline`, `impact`, and `symbol`. Run `omen <command> --help` for that command's current options.
+The top-level commands are `complexity`, `satd`, `stubs`, `deadcode`, `churn`, `clones`, `defect`, `changes`, `diff`, `tdg`, `graph`, `hotspot`, `temporal`, `ownership`, `cohesion`, `repomap`, `smells`, `flags`, `score`, `mcp`, `all`, `context`, `report`, `search`, `mutation`, `outline`, `impact`, and `symbol`. Run `omen <command> --help` for that command's current options.
 
 ## Remote Repository Scanning
 

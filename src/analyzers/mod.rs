@@ -18,9 +18,11 @@ pub mod ownership;
 pub mod repomap;
 pub mod satd;
 pub mod smells;
+pub mod stubs;
 pub mod tdg;
 pub mod temporal;
 
 // Re-export analyzer types for convenience
 pub use complexity::Analyzer as ComplexityAnalyzer;
 pub use satd::Analyzer as SatdAnalyzer;
+pub use stubs::Analyzer as StubsAnalyzer;
