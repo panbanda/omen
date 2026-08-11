@@ -23,6 +23,40 @@ use super::safety::MutationGuard;
 use super::worker::{FileLockManager, ProgressUpdate, WorkItem, WorkQueue};
 use super::Mutant;
 
+fn build_work_items(mutants: &[Mutant], sources: &HashMap<PathBuf, Vec<u8>>) -> Vec<WorkItem> {
+    let shared_sources: HashMap<&PathBuf, Arc<Vec<u8>>> = sources
+        .iter()
+        .map(|(path, source)| (path, Arc::new(source.clone())))
+        .collect();
+    let mut file_positions = HashMap::new();
+    let mut mutants_by_file: Vec<Vec<&Mutant>> = Vec::new();
+    for mutant in mutants {
+        let position = if let Some(&position) = file_positions.get(&mutant.file_path) {
+            position
+        } else {
+            let position = mutants_by_file.len();
+            file_positions.insert(&mutant.file_path, position);
+            mutants_by_file.push(Vec::new());
+            position
+        };
+        mutants_by_file[position].push(mutant);
+    }
+
+    let mut work_items = Vec::with_capacity(mutants.len());
+    let max_mutants = mutants_by_file.iter().map(Vec::len).max().unwrap_or(0);
+    for index in 0..max_mutants {
+        for file_mutants in &mutants_by_file {
+            let Some(mutant) = file_mutants.get(index) else {
+                continue;
+            };
+            if let Some(source) = shared_sources.get(&mutant.file_path) {
+                work_items.push(WorkItem::new((*mutant).clone(), Arc::clone(source)));
+            }
+        }
+    }
+    work_items
+}
+
 /// Progress callback type for async execution.
 pub type ProgressCallback = Box<dyn Fn(ProgressUpdate) + Send + Sync>;
 
@@ -254,14 +288,7 @@ impl AsyncMutantExecutor {
         let results = Arc::new(parking_lot::Mutex::new(Vec::with_capacity(total)));
 
         // Create work items
-        let work_items: Vec<WorkItem> = mutants
-            .iter()
-            .filter_map(|mutant| {
-                sources
-                    .get(&mutant.file_path)
-                    .map(|source| WorkItem::new(mutant.clone(), Arc::new(source.clone())))
-            })
-            .collect();
+        let work_items = build_work_items(mutants, sources);
 
         let queue = Arc::new(WorkQueue::new(work_items));
 
@@ -827,6 +854,45 @@ mod tests {
         let results = executor.execute_mutants(&mutants, &sources).await.unwrap();
 
         assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_work_items_share_one_source_allocation_per_file() {
+        let path = PathBuf::from("test.rs");
+        let mutants = vec![
+            Mutant::new("mut-1", &path, "CRR", 1, 1, "1", "0", "desc", (0, 1)),
+            Mutant::new("mut-2", &path, "CRR", 1, 1, "2", "0", "desc", (2, 3)),
+        ];
+        let mut sources = HashMap::new();
+        sources.insert(path, b"1 2".to_vec());
+
+        let items = build_work_items(&mutants, &sources);
+
+        assert_eq!(items.len(), 2);
+        assert!(Arc::ptr_eq(&items[0].source, &items[1].source));
+    }
+
+    #[test]
+    fn test_work_items_interleave_files_for_parallel_workers() {
+        let path_a = PathBuf::from("a.rs");
+        let path_b = PathBuf::from("b.rs");
+        let mutants = vec![
+            Mutant::new("a-1", &path_a, "CRR", 1, 1, "1", "0", "desc", (0, 1)),
+            Mutant::new("a-2", &path_a, "CRR", 2, 1, "2", "0", "desc", (2, 3)),
+            Mutant::new("b-1", &path_b, "CRR", 1, 1, "1", "0", "desc", (0, 1)),
+            Mutant::new("b-2", &path_b, "CRR", 2, 1, "2", "0", "desc", (2, 3)),
+        ];
+        let sources = HashMap::from([(path_a, b"1 2".to_vec()), (path_b, b"1 2".to_vec())]);
+
+        let items = build_work_items(&mutants, &sources);
+        let popped_paths: Vec<_> = items
+            .iter()
+            .rev()
+            .take(2)
+            .map(|item| &item.mutant.file_path)
+            .collect();
+
+        assert_ne!(popped_paths[0], popped_paths[1]);
     }
 
     #[tokio::test]

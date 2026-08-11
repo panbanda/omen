@@ -231,7 +231,6 @@ impl Analyzer {
     }
 
     /// Get effective number of workers.
-    #[allow(dead_code)]
     fn effective_jobs(&self) -> usize {
         if self.jobs == 0 {
             std::thread::available_parallelism()
@@ -385,14 +384,16 @@ impl AnalyzerTrait for Analyzer {
 
         let executor_config = ExecutorConfig::with_command(&test_cmd)
             .timeout(self.timeout_secs)
-            .working_dir(project_root);
-        let executor = MutantExecutor::new(executor_config);
+            .working_dir(project_root)
+            .jobs(self.effective_jobs());
+        let executor = AsyncMutantExecutor::new(executor_config);
 
         let total_files = ctx.files.len();
         let counter = Arc::new(AtomicUsize::new(0));
 
-        // Process files sequentially (mutations need to be applied one at a time per file)
-        let mut file_results = Vec::new();
+        let mut file_results: HashMap<PathBuf, FileResult> = HashMap::new();
+        let mut sources = HashMap::new();
+        let mut mutants_to_execute = Vec::new();
 
         for path in ctx.files.files() {
             let mutants = match generator.generate_for_file(path) {
@@ -423,15 +424,14 @@ impl AnalyzerTrait for Analyzer {
 
             // Get source as string for predictor context
             let source_str = String::from_utf8_lossy(&source);
+            let lines: Vec<&str> = source_str.lines().collect();
 
-            // Execute each mutant
             for mutant in mutants {
                 // Check if we should skip this mutant based on ML prediction
                 if let (Some(threshold), Some(predictor)) =
                     (self.skip_predicted_threshold, &self.predictor)
                 {
                     // Extract context around the mutation (5 lines before and after)
-                    let lines: Vec<&str> = source_str.lines().collect();
                     let line_idx = mutant.line.saturating_sub(1) as usize;
                     let start = line_idx.saturating_sub(5);
                     let end = (line_idx + 6).min(lines.len());
@@ -450,11 +450,35 @@ impl AnalyzerTrait for Analyzer {
                     }
                 }
 
-                let result = match executor.execute_mutant(&mutant, &source) {
-                    Ok(r) => r,
-                    Err(_) => MutationResult::new(mutant, MutantStatus::BuildError, 0),
-                };
+                mutants_to_execute.push(mutant);
+            }
 
+            sources.insert(path.clone(), source);
+            file_results.insert(path.clone(), file_result);
+
+            let current = counter.fetch_add(1, Ordering::Relaxed) + 1;
+            ctx.report_progress(current, total_files);
+        }
+
+        let jobs = self.effective_jobs();
+        let executed_results = std::thread::scope(|scope| {
+            scope
+                .spawn(move || {
+                    let runtime = tokio::runtime::Builder::new_multi_thread()
+                        .worker_threads(jobs)
+                        .enable_all()
+                        .build()
+                        .map_err(|error| {
+                            Error::analysis(format!("Failed to create mutation runtime: {error}"))
+                        })?;
+                    runtime.block_on(executor.execute_mutants(&mutants_to_execute, &sources))
+                })
+                .join()
+        })
+        .map_err(|_| Error::analysis("Mutation executor thread panicked"))??;
+
+        for result in executed_results {
+            if let Some(file_result) = file_results.get_mut(&result.mutant.file_path) {
                 match result.status {
                     MutantStatus::Killed => file_result.killed += 1,
                     MutantStatus::Survived => file_result.survived += 1,
@@ -462,21 +486,26 @@ impl AnalyzerTrait for Analyzer {
                     MutantStatus::BuildError | MutantStatus::Equivalent => file_result.error += 1,
                     MutantStatus::Pending | MutantStatus::Skipped => {}
                 }
-
                 file_result.mutants.push(result);
             }
+        }
 
-            // Calculate score for this file
+        let mut file_results: Vec<FileResult> = file_results.into_values().collect();
+        for file_result in &mut file_results {
+            file_result.mutants.sort_by(|left, right| {
+                left.mutant
+                    .line
+                    .cmp(&right.mutant.line)
+                    .then_with(|| left.mutant.operator.cmp(&right.mutant.operator))
+                    .then_with(|| left.mutant.column.cmp(&right.mutant.column))
+                    .then_with(|| left.mutant.id.cmp(&right.mutant.id))
+            });
             let total_scored = file_result.killed + file_result.survived;
             if total_scored > 0 {
                 file_result.score = file_result.killed as f64 / total_scored as f64;
             }
-
-            file_results.push(file_result);
-
-            let current = counter.fetch_add(1, Ordering::Relaxed) + 1;
-            ctx.report_progress(current, total_files);
         }
+        file_results.sort_by(|left, right| left.path.cmp(&right.path));
 
         let duration = start.elapsed();
         let summary = build_summary(&file_results, duration.as_millis() as u64);

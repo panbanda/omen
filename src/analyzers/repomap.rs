@@ -431,13 +431,15 @@ impl Analyzer {
         }
 
         let d = self.config.damping;
-        let mut rank: HashMap<NodeIndex, f64> = graph
+        let initial_rank = 1.0 / n as f64;
+        let mut rank = vec![initial_rank; n];
+        let mut new_rank = vec![0.0; n];
+        let out_degrees: Vec<usize> = graph
             .node_indices()
-            .map(|idx| (idx, 1.0 / n as f64))
+            .map(|node| graph.edges_directed(node, Direction::Outgoing).count())
             .collect();
 
         for _ in 0..self.config.max_iterations {
-            let mut new_rank: HashMap<NodeIndex, f64> = HashMap::new();
             let mut diff = 0.0;
 
             for node in graph.node_indices() {
@@ -445,9 +447,9 @@ impl Analyzer {
                     .edges_directed(node, Direction::Incoming)
                     .map(|e| {
                         let source = e.source();
-                        let out_deg = graph.edges_directed(source, Direction::Outgoing).count();
+                        let out_deg = out_degrees[source.index()];
                         if out_deg > 0 {
-                            rank[&source] / out_deg as f64
+                            rank[source.index()] / out_deg as f64
                         } else {
                             0.0
                         }
@@ -455,18 +457,21 @@ impl Analyzer {
                     .sum();
 
                 let new_score = (1.0 - d) / n as f64 + d * incoming;
-                diff += (new_score - rank[&node]).abs();
-                new_rank.insert(node, new_score);
+                diff += (new_score - rank[node.index()]).abs();
+                new_rank[node.index()] = new_score;
             }
 
-            rank = new_rank;
+            std::mem::swap(&mut rank, &mut new_rank);
 
             if diff < self.config.tolerance {
                 break;
             }
         }
 
-        rank
+        graph
+            .node_indices()
+            .map(|node| (node, rank[node.index()]))
+            .collect()
     }
 }
 
@@ -954,6 +959,24 @@ fn bar() {}
         assert!(pagerank[&hub] > pagerank[&a]);
         assert!(pagerank[&hub] > pagerank[&b]);
         assert!(pagerank[&hub] > pagerank[&c]);
+    }
+
+    #[test]
+    fn test_pagerank_pins_asymmetric_fixture_scores() {
+        let analyzer = Analyzer::new();
+        let mut graph: DiGraph<usize, ()> = DiGraph::new();
+        let a = graph.add_node(0);
+        let b = graph.add_node(1);
+        let c = graph.add_node(2);
+        graph.add_edge(a, b, ());
+        graph.add_edge(a, c, ());
+        graph.add_edge(b, c, ());
+
+        let ranks = analyzer.calculate_pagerank(&graph);
+
+        assert!((ranks[&a] - 0.05).abs() < 1e-12);
+        assert!((ranks[&b] - 0.07125).abs() < 1e-12);
+        assert!((ranks[&c] - 0.1318125).abs() < 1e-12);
     }
 
     #[test]

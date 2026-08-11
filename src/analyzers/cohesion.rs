@@ -613,17 +613,19 @@ fn has_child_of_kind(node: &tree_sitter::Node, kind: &str) -> bool {
 /// Extracts field names from a Go struct's field_declaration_list.
 fn extract_go_struct_fields(type_decl: &tree_sitter::Node, source: &[u8]) -> Vec<String> {
     let mut fields = Vec::new();
+    let mut seen = HashSet::new();
     // type_declaration -> type_spec -> struct_type -> field_declaration_list -> field_declaration
     let mut cursor = type_decl.walk();
-    extract_go_fields_recursive(&mut cursor, source, &mut fields);
+    extract_go_fields_recursive(&mut cursor, source, &mut fields, &mut seen);
     fields
 }
 
 /// Recursively finds Go field_declaration nodes and extracts their names.
-fn extract_go_fields_recursive(
+fn extract_go_fields_recursive<'source>(
     cursor: &mut tree_sitter::TreeCursor,
-    source: &[u8],
+    source: &'source [u8],
     fields: &mut Vec<String>,
+    seen: &mut HashSet<&'source str>,
 ) {
     loop {
         let node = cursor.node();
@@ -632,7 +634,7 @@ fn extract_go_fields_recursive(
             // field_declaration has a "name" field (field_identifier)
             if let Some(name_node) = node.child_by_field_name("name") {
                 if let Ok(name) = std::str::from_utf8(&source[name_node.byte_range()]) {
-                    if !name.is_empty() && !fields.contains(&name.to_string()) {
+                    if !name.is_empty() && seen.insert(name) {
                         fields.push(name.to_string());
                     }
                 }
@@ -640,7 +642,7 @@ fn extract_go_fields_recursive(
         }
 
         if cursor.goto_first_child() {
-            extract_go_fields_recursive(cursor, source, fields);
+            extract_go_fields_recursive(cursor, source, fields, seen);
             cursor.goto_parent();
         }
 
@@ -1150,10 +1152,18 @@ fn find_field_accesses(
 /// Extracts field names from a class.
 fn extract_fields(node: &tree_sitter::Node, source: &[u8], lang: Language) -> Vec<String> {
     let mut fields = Vec::new();
+    let mut seen = HashSet::new();
     let field_types = get_field_node_types(lang);
 
     let mut cursor = node.walk();
-    extract_fields_recursive(&mut cursor, source, lang, &field_types, &mut fields);
+    extract_fields_recursive(
+        &mut cursor,
+        source,
+        lang,
+        &field_types,
+        &mut fields,
+        &mut seen,
+    );
 
     fields
 }
@@ -1165,20 +1175,21 @@ fn extract_fields_recursive(
     lang: Language,
     field_types: &[&str],
     fields: &mut Vec<String>,
+    seen: &mut HashSet<String>,
 ) {
     loop {
         let node = cursor.node();
 
         if field_types.contains(&node.kind()) {
             if let Some(name) = extract_field_name(&node, source, lang) {
-                if !fields.contains(&name) {
+                if seen.insert(name.clone()) {
                     fields.push(name);
                 }
             }
         }
 
         if cursor.goto_first_child() {
-            extract_fields_recursive(cursor, source, lang, field_types, fields);
+            extract_fields_recursive(cursor, source, lang, field_types, fields, seen);
             cursor.goto_parent();
         }
 

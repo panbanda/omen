@@ -355,14 +355,15 @@ impl Analyzer {
         providers: &[String],
         custom_providers: &[CustomProvider],
     ) -> Result<Analysis> {
-        let builtin_providers = get_builtin_providers();
+        let builtin_providers: Vec<_> = get_builtin_providers()
+            .into_iter()
+            .filter(|builtin| providers.iter().any(|provider| provider == builtin.name))
+            .collect();
 
         // Pre-compile queries for each (language, provider) combination
-        let mut compiled_queries: HashMap<(Language, String), (Query, usize)> = HashMap::new();
+        let mut compiled_queries: HashMap<Language, HashMap<String, (Query, usize)>> =
+            HashMap::new();
         for builtin in &builtin_providers {
-            if !providers.contains(&builtin.name.to_string()) {
-                continue;
-            }
             for &lang in builtin.languages {
                 if let Ok(ts_lang) = get_tree_sitter_language(lang) {
                     if let Ok(query) = Query::new(&ts_lang, builtin.query) {
@@ -371,7 +372,10 @@ impl Analyzer {
                             .iter()
                             .position(|n| *n == "key")
                             .unwrap_or(0);
-                        compiled_queries.insert((lang, builtin.name.to_string()), (query, key_idx));
+                        compiled_queries
+                            .entry(lang)
+                            .or_default()
+                            .insert(builtin.name.to_string(), (query, key_idx));
                     }
                 }
             }
@@ -389,7 +393,10 @@ impl Analyzer {
                                 .iter()
                                 .position(|n| *n == "key" || *n == "flag_key")
                                 .unwrap_or(0);
-                            compiled_queries.insert((lang, custom.name.clone()), (query, key_idx));
+                            compiled_queries
+                                .entry(lang)
+                                .or_default()
+                                .insert(custom.name.clone(), (query, key_idx));
                         }
                     }
                 }
@@ -400,7 +407,6 @@ impl Analyzer {
         let compiled_queries = Arc::new(compiled_queries);
         let builtin_providers = Arc::new(builtin_providers);
         let custom_providers: Arc<[CustomProvider]> = custom_providers.to_vec().into();
-        let providers: Arc<[String]> = providers.to_vec().into();
 
         // Get files from context
         let files: Vec<_> = ctx.files.iter().collect();
@@ -440,16 +446,15 @@ impl Analyzer {
 
                 // Apply built-in providers using pre-compiled queries
                 for builtin in builtin_providers.iter() {
-                    if !providers.contains(&builtin.name.to_string()) {
-                        continue;
-                    }
                     if !builtin.languages.contains(&language) {
                         continue;
                     }
 
                     // Look up pre-compiled query
-                    let key = (language, builtin.name.to_string());
-                    if let Some((query, key_capture_idx)) = compiled_queries.get(&key) {
+                    if let Some((query, key_capture_idx)) = compiled_queries
+                        .get(&language)
+                        .and_then(|queries| queries.get(builtin.name))
+                    {
                         let mut cursor = QueryCursor::new();
                         let mut matches = cursor.matches(
                             query,
@@ -496,8 +501,10 @@ impl Analyzer {
                     }
 
                     // Look up pre-compiled query
-                    let key = (language, custom.name.clone());
-                    if let Some((query, key_capture_idx)) = compiled_queries.get(&key) {
+                    if let Some((query, key_capture_idx)) = compiled_queries
+                        .get(&language)
+                        .and_then(|queries| queries.get(custom.name.as_str()))
+                    {
                         let mut cursor = QueryCursor::new();
                         let mut matches = cursor.matches(
                             query,

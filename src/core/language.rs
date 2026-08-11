@@ -33,22 +33,40 @@ impl Language {
 
     /// Get language from file extension.
     pub fn from_extension(ext: &str) -> Option<Self> {
-        match ext.to_lowercase().as_str() {
-            "go" => Some(Self::Go),
-            "rs" => Some(Self::Rust),
-            "py" | "pyi" => Some(Self::Python),
-            "ts" | "mts" | "cts" => Some(Self::TypeScript),
-            "js" | "mjs" | "cjs" => Some(Self::JavaScript),
-            "tsx" => Some(Self::Tsx),
-            "jsx" => Some(Self::Jsx),
-            "java" => Some(Self::Java),
-            "c" | "h" => Some(Self::C),
-            "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "hh" => Some(Self::Cpp),
-            "cs" => Some(Self::CSharp),
-            "rb" | "rake" | "gemspec" => Some(Self::Ruby),
-            "php" => Some(Self::Php),
-            "sh" | "bash" => Some(Self::Bash),
-            _ => None,
+        let matches = |candidate| ext.eq_ignore_ascii_case(candidate);
+        if matches("go") {
+            Some(Self::Go)
+        } else if matches("rs") {
+            Some(Self::Rust)
+        } else if matches("py") || matches("pyi") {
+            Some(Self::Python)
+        } else if matches("ts") || matches("mts") || matches("cts") {
+            Some(Self::TypeScript)
+        } else if matches("js") || matches("mjs") || matches("cjs") {
+            Some(Self::JavaScript)
+        } else if matches("tsx") {
+            Some(Self::Tsx)
+        } else if matches("jsx") {
+            Some(Self::Jsx)
+        } else if matches("java") {
+            Some(Self::Java)
+        } else if matches("c") || matches("h") {
+            Some(Self::C)
+        } else if ["cpp", "cc", "cxx", "hpp", "hxx", "hh"]
+            .iter()
+            .any(|candidate| matches(candidate))
+        {
+            Some(Self::Cpp)
+        } else if matches("cs") {
+            Some(Self::CSharp)
+        } else if matches("rb") || matches("rake") || matches("gemspec") {
+            Some(Self::Ruby)
+        } else if matches("php") {
+            Some(Self::Php)
+        } else if matches("sh") || matches("bash") {
+            Some(Self::Bash)
+        } else {
+            None
         }
     }
 

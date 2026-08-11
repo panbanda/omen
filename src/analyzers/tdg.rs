@@ -14,10 +14,12 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::path::Path;
 
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::analyzers::{hotspot, temporal};
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result};
+use crate::parser::Parser;
 
 /// TDG weight configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -404,32 +406,29 @@ impl Analyzer {
     }
 
     fn detect_critical_defects(&self, source: &str, language: Language) -> (i32, bool) {
-        let ts_lang: tree_sitter::Language = match language {
-            Language::Rust => tree_sitter_rust::LANGUAGE.into(),
-            Language::Go => tree_sitter_go::LANGUAGE.into(),
-            Language::Python => tree_sitter_python::LANGUAGE.into(),
-            Language::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
-            Language::TypeScript => tree_sitter_typescript::LANGUAGE_TSX.into(),
-            Language::Java => tree_sitter_java::LANGUAGE.into(),
-            Language::C => tree_sitter_c::LANGUAGE.into(),
-            Language::Cpp => tree_sitter_cpp::LANGUAGE.into(),
-            Language::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
-            Language::Ruby => tree_sitter_ruby::LANGUAGE.into(),
-            Language::PHP => tree_sitter_php::LANGUAGE_PHP.into(),
+        let parser_language = match language {
+            Language::Rust => crate::core::Language::Rust,
+            Language::Go => crate::core::Language::Go,
+            Language::Python => crate::core::Language::Python,
+            Language::JavaScript => crate::core::Language::JavaScript,
+            Language::TypeScript => crate::core::Language::TypeScript,
+            Language::Java => crate::core::Language::Java,
+            Language::C => crate::core::Language::C,
+            Language::Cpp => crate::core::Language::Cpp,
+            Language::CSharp => crate::core::Language::CSharp,
+            Language::Ruby => crate::core::Language::Ruby,
+            Language::PHP => crate::core::Language::Php,
             Language::Unknown | Language::Swift | Language::Kotlin => return (0, false),
         };
 
-        let mut parser = tree_sitter::Parser::new();
-        if parser.set_language(&ts_lang).is_err() {
-            return (0, false);
-        }
-        let tree = match parser.parse(source.as_bytes(), None) {
-            Some(t) => t,
-            None => return (0, false),
+        let parser = Parser::new();
+        let parsed = match parser.parse(source.as_bytes(), parser_language, Path::new("<tdg>")) {
+            Ok(parsed) => parsed,
+            Err(_) => return (0, false),
         };
 
         let test_ranges = if language == Language::Rust {
-            cfg_test_module_ranges(source)
+            cfg_test_module_ranges(&parsed.tree.root_node(), source)
         } else {
             Vec::new()
         };
@@ -438,7 +437,7 @@ impl Analyzer {
 
         let mut count = 0;
         count_defect_nodes(
-            &tree.root_node(),
+            &parsed.tree.root_node(),
             source.as_bytes(),
             language,
             &test_ranges,
@@ -522,55 +521,55 @@ impl AnalyzerTrait for Analyzer {
         // Run temporal coupling analysis to get per-file coupling counts
         let temporal_scores = self.compute_temporal_scores(ctx);
 
-        let mut scores = Vec::new();
+        let scores: Vec<Score> = ctx
+            .files
+            .files()
+            .par_iter()
+            .filter_map(|path| {
+                let content = String::from_utf8(ctx.read_file(path).ok()?).ok()?;
 
-        for path in ctx.files.iter() {
-            let content = match ctx.read_file(path) {
-                Ok(bytes) => match String::from_utf8(bytes) {
-                    Ok(s) => s,
-                    Err(_) => continue,
-                },
-                Err(_) => continue,
-            };
-
-            if let Some(max_size) = self.max_file_size {
-                if content.len() as u64 > max_size {
-                    continue;
+                if self
+                    .max_file_size
+                    .is_some_and(|max_size| content.len() as u64 > max_size)
+                {
+                    return None;
                 }
-            }
 
-            let file_path = path
-                .strip_prefix(ctx.root)
-                .unwrap_or(path)
-                .to_string_lossy()
-                .to_string();
+                let file_path = path
+                    .strip_prefix(ctx.root)
+                    .unwrap_or(path)
+                    .to_string_lossy()
+                    .to_string();
 
-            let language = Language::from_extension(path);
-            if let Ok(mut score) = self.analyze_source(&content, language, &file_path) {
-                // Apply hotspot score (higher hotspot = more risk = lower score)
-                // Hotspot score ranges 0-1, where 1 is worst (critical hotspot)
-                if let Some(&hs) = hotspot_scores.get(&file_path) {
-                    // Invert: hotspot 0 = full points, hotspot 1 = 0 points
-                    score.hotspot_score = self.weights.hotspot * (1.0 - hs);
+                let language = Language::from_extension(path);
+                if let Ok(mut score) = self.analyze_source(&content, language, &file_path) {
+                    // Apply hotspot score (higher hotspot = more risk = lower score)
+                    // Hotspot score ranges 0-1, where 1 is worst (critical hotspot)
+                    if let Some(&hs) = hotspot_scores.get(&file_path) {
+                        // Invert: hotspot 0 = full points, hotspot 1 = 0 points
+                        score.hotspot_score = self.weights.hotspot * (1.0 - hs);
+                    } else {
+                        // No hotspot data means no penalty (file may be new or not in git)
+                        score.hotspot_score = self.weights.hotspot;
+                    }
+
+                    // Apply temporal coupling score (more couplings = more risk = lower score)
+                    if let Some(&tc) = temporal_scores.get(&file_path) {
+                        // tc is a 0-1 normalized score where 1 = many couplings
+                        score.temporal_coupling_score = self.weights.temporal_coupling * (1.0 - tc);
+                    } else {
+                        // No coupling data means full points
+                        score.temporal_coupling_score = self.weights.temporal_coupling;
+                    }
+
+                    // Recalculate total with updated scores
+                    score.calculate_total();
+                    Some(score)
                 } else {
-                    // No hotspot data means no penalty (file may be new or not in git)
-                    score.hotspot_score = self.weights.hotspot;
+                    None
                 }
-
-                // Apply temporal coupling score (more couplings = more risk = lower score)
-                if let Some(&tc) = temporal_scores.get(&file_path) {
-                    // tc is a 0-1 normalized score where 1 = many couplings
-                    score.temporal_coupling_score = self.weights.temporal_coupling * (1.0 - tc);
-                } else {
-                    // No coupling data means full points
-                    score.temporal_coupling_score = self.weights.temporal_coupling;
-                }
-
-                // Recalculate total with updated scores
-                score.calculate_total();
-                scores.push(score);
-            }
-        }
+            })
+            .collect();
 
         Ok(aggregate_project_score(scores))
     }
@@ -771,26 +770,9 @@ fn match_php_defect(node: &tree_sitter::Node, source: &[u8]) -> bool {
 ///
 /// Performs a full depth-first walk so nested test modules are detected.
 /// Uses a thread-local parser cache to avoid allocating a new parser per file.
-fn cfg_test_module_ranges(source: &str) -> Vec<Range<usize>> {
-    use std::cell::RefCell;
-
-    thread_local! {
-        static RUST_PARSER: RefCell<tree_sitter::Parser> = RefCell::new({
-            let ts_lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
-            let mut p = tree_sitter::Parser::new();
-            p.set_language(&ts_lang).expect("built-in Rust grammar");
-            p
-        });
-    }
-
-    let tree = RUST_PARSER.with(|parser| parser.borrow_mut().parse(source.as_bytes(), None));
-    let tree = match tree {
-        Some(t) => t,
-        None => return Vec::new(),
-    };
-
+fn cfg_test_module_ranges(root: &tree_sitter::Node<'_>, source: &str) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();
-    collect_cfg_test_modules(&tree.root_node(), source.as_bytes(), &mut ranges);
+    collect_cfg_test_modules(root, source.as_bytes(), &mut ranges);
     ranges
 }
 

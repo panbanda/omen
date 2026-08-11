@@ -126,30 +126,40 @@ impl Analyzer {
 
         // Track co-changes: normalized pair -> count
         let mut cochanges: HashMap<FilePair, u32> = HashMap::new();
-        // Track individual file commits: file -> count
-        let mut file_commits: HashMap<String, u32> = HashMap::new();
+        let mut file_paths = Vec::new();
+        let mut file_ids: HashMap<String, u32> = HashMap::new();
+        let mut file_commits = Vec::new();
 
         for commit in &commits {
-            let changed_files: Vec<String> = commit
-                .files
-                .iter()
-                .map(|f| f.path.to_string_lossy().to_string())
-                .filter(|f| {
-                    if exclude_tests && is_test_file(f) {
-                        return false;
-                    }
-                    if let Some(ref gs) = exclude_globs {
-                        if gs.is_match(f) {
-                            return false;
-                        }
-                    }
-                    true
-                })
-                .collect();
+            let mut changed_files = Vec::with_capacity(commit.files.len());
+            for file in &commit.files {
+                let path = file.path.to_string_lossy();
+                if exclude_tests && is_test_file(&file.path) {
+                    continue;
+                }
+                if exclude_globs
+                    .as_ref()
+                    .is_some_and(|globs| globs.is_match(path.as_ref()))
+                {
+                    continue;
+                }
+
+                let id = if let Some(&id) = file_ids.get(path.as_ref()) {
+                    id
+                } else {
+                    let id = file_paths.len() as u32;
+                    let path = path.into_owned();
+                    file_ids.insert(path.clone(), id);
+                    file_paths.push(path);
+                    file_commits.push(0);
+                    id
+                };
+                changed_files.push(id);
+            }
 
             // Update individual file commit counts
-            for file in &changed_files {
-                *file_commits.entry(file.clone()).or_insert(0) += 1;
+            for &file in &changed_files {
+                file_commits[file as usize] += 1;
             }
 
             // Skip mega-commits (e.g. bulk renames, formatter runs).
@@ -162,7 +172,8 @@ impl Analyzer {
             // Record co-changes for all pairs
             for i in 0..changed_files.len() {
                 for j in (i + 1)..changed_files.len() {
-                    let pair = FilePair::new(&changed_files[i], &changed_files[j]);
+                    let pair =
+                        FilePair::from_paths(changed_files[i], changed_files[j], &file_paths);
                     *cochanges.entry(pair).or_insert(0) += 1;
                 }
             }
@@ -173,14 +184,14 @@ impl Analyzer {
             .into_iter()
             .filter(|(_, count)| *count >= self.config.min_cochanges)
             .map(|(pair, cochange_count)| {
-                let commits_a = file_commits.get(&pair.a).copied().unwrap_or(0);
-                let commits_b = file_commits.get(&pair.b).copied().unwrap_or(0);
+                let commits_a = file_commits[pair.a as usize];
+                let commits_b = file_commits[pair.b as usize];
                 let coupling_strength =
                     calculate_coupling_strength(cochange_count, commits_a, commits_b);
 
                 FileCoupling {
-                    file_a: pair.a,
-                    file_b: pair.b,
+                    file_a: file_paths[pair.a as usize].clone(),
+                    file_b: file_paths[pair.b as usize].clone(),
                     cochange_count,
                     coupling_strength,
                     commits_a,
@@ -197,7 +208,7 @@ impl Analyzer {
         });
 
         let generated_at = Utc::now();
-        let total_files = file_commits.len();
+        let total_files = file_paths.len();
         let summary = calculate_summary(&couplings, total_files);
 
         Ok(Analysis {
@@ -241,23 +252,17 @@ impl AnalyzerTrait for Analyzer {
 /// Represents an unordered pair of files (normalized alphabetically).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct FilePair {
-    a: String,
-    b: String,
+    a: u32,
+    b: u32,
 }
 
 impl FilePair {
-    /// Creates a normalized file pair (alphabetically ordered).
-    fn new(a: &str, b: &str) -> Self {
-        if a <= b {
-            Self {
-                a: a.to_string(),
-                b: b.to_string(),
-            }
+    /// Creates a pair whose IDs preserve alphabetical path output ordering.
+    fn from_paths(a: u32, b: u32, paths: &[String]) -> Self {
+        if paths[a as usize] <= paths[b as usize] {
+            Self { a, b }
         } else {
-            Self {
-                a: b.to_string(),
-                b: a.to_string(),
-            }
+            Self { a: b, b: a }
         }
     }
 }
@@ -398,18 +403,20 @@ mod tests {
 
     #[test]
     fn test_file_pair_normalization() {
-        let pair1 = FilePair::new("b.rs", "a.rs");
-        let pair2 = FilePair::new("a.rs", "b.rs");
-        assert_eq!(pair1.a, "a.rs");
-        assert_eq!(pair1.b, "b.rs");
+        let paths = vec!["b.rs".to_string(), "a.rs".to_string()];
+        let pair1 = FilePair::from_paths(0, 1, &paths);
+        let pair2 = FilePair::from_paths(1, 0, &paths);
+        assert_eq!(pair1.a, 1);
+        assert_eq!(pair1.b, 0);
         assert_eq!(pair1, pair2);
     }
 
     #[test]
     fn test_file_pair_same_order() {
-        let pair = FilePair::new("a.rs", "z.rs");
-        assert_eq!(pair.a, "a.rs");
-        assert_eq!(pair.b, "z.rs");
+        let paths = vec!["z.rs".to_string(), "a.rs".to_string()];
+        let pair = FilePair::from_paths(0, 1, &paths);
+        assert_eq!(pair.a, 1);
+        assert_eq!(pair.b, 0);
     }
 
     #[test]
@@ -604,8 +611,9 @@ mod tests {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
 
-        let pair1 = FilePair::new("z.rs", "a.rs");
-        let pair2 = FilePair::new("a.rs", "z.rs");
+        let paths = vec!["z.rs".to_string(), "a.rs".to_string()];
+        let pair1 = FilePair::from_paths(0, 1, &paths);
+        let pair2 = FilePair::from_paths(1, 0, &paths);
 
         let mut hasher1 = DefaultHasher::new();
         pair1.hash(&mut hasher1);

@@ -21,7 +21,6 @@ use super::cache::{CachedSymbol, EmbeddingCache};
 use super::chunking::{extract_chunks, format_chunk_text, Chunk};
 
 /// Intermediate structure for a parsed chunk ready for caching.
-#[derive(Clone)]
 struct ParsedChunk {
     file_path: String,
     symbol_name: String,
@@ -125,7 +124,7 @@ impl<'a> SyncManager<'a> {
         let root = root_path.to_path_buf();
         let parse_counter = Arc::new(AtomicUsize::new(0));
 
-        let parsed_files: Vec<_> = files_to_index
+        let mut parsed_files: Vec<_> = files_to_index
             .par_iter()
             .filter_map(|path| {
                 let result = match parse_file(path, &root) {
@@ -151,22 +150,24 @@ impl<'a> SyncManager<'a> {
 
         // Collect all chunks
         let mut all_chunks: Vec<ParsedChunk> = Vec::new();
-        for parsed_file in &parsed_files {
-            all_chunks.extend(parsed_file.chunks.iter().cloned());
+        for parsed_file in &mut parsed_files {
+            all_chunks.append(&mut parsed_file.chunks);
         }
+        let chunk_count = all_chunks.len();
+        let transaction = self.cache.transaction()?;
 
         // Delete existing symbols for all files being re-indexed (must happen
         // before the empty check so that removed functions don't persist).
         for parsed_file in &parsed_files {
-            self.cache.delete_file_symbols(&parsed_file.rel_path)?;
+            transaction.delete_file_symbols(&parsed_file.rel_path)?;
         }
 
         if all_chunks.is_empty() {
             for parsed_file in &parsed_files {
-                self.cache
-                    .record_file_indexed(&parsed_file.rel_path, &parsed_file.file_hash)?;
+                transaction.record_file_indexed(&parsed_file.rel_path, &parsed_file.file_hash)?;
                 stats.indexed += 1;
             }
+            transaction.commit()?;
             return Ok(stats);
         }
 
@@ -179,23 +180,23 @@ impl<'a> SyncManager<'a> {
             bar
         });
 
-        for (i, chunk) in all_chunks.iter().enumerate() {
+        for (i, chunk) in all_chunks.into_iter().enumerate() {
             let cached_symbol = CachedSymbol {
-                file_path: chunk.file_path.clone(),
-                symbol_name: chunk.symbol_name.clone(),
-                symbol_type: chunk.symbol_type.clone(),
-                parent_name: chunk.parent_name.clone(),
-                signature: chunk.signature.clone(),
+                file_path: chunk.file_path,
+                symbol_name: chunk.symbol_name,
+                symbol_type: chunk.symbol_type,
+                parent_name: chunk.parent_name,
+                signature: chunk.signature,
                 start_line: chunk.start_line,
                 end_line: chunk.end_line,
                 chunk_index: chunk.chunk_index,
                 total_chunks: chunk.total_chunks,
-                content_hash: chunk.content_hash.clone(),
-                enriched_text: chunk.enriched_text.clone(),
+                content_hash: chunk.content_hash,
+                enriched_text: chunk.enriched_text,
                 cyclomatic_complexity: chunk.cyclomatic_complexity,
                 cognitive_complexity: chunk.cognitive_complexity,
             };
-            self.cache.upsert_symbol(&cached_symbol)?;
+            transaction.upsert_symbol(&cached_symbol)?;
 
             if let Some(ref bar) = write_bar {
                 bar.set_position((i + 1) as u64);
@@ -208,11 +209,11 @@ impl<'a> SyncManager<'a> {
 
         // Record all files as indexed
         for parsed_file in &parsed_files {
-            self.cache
-                .record_file_indexed(&parsed_file.rel_path, &parsed_file.file_hash)?;
+            transaction.record_file_indexed(&parsed_file.rel_path, &parsed_file.file_hash)?;
             stats.indexed += 1;
-            stats.symbols += parsed_file.chunks.len();
         }
+        stats.symbols = chunk_count;
+        transaction.commit()?;
 
         stats.errors = files_to_index.len() - parsed_files.len();
 

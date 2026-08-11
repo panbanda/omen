@@ -138,10 +138,7 @@ impl Analyzer {
             Err(_) => return Ok(None),
         };
 
-        // Filter trivial lines if configured
-        let lines: Vec<_> = blame_info.lines.iter().collect();
-
-        let total_lines = lines.len();
+        let total_lines = blame_info.total_lines as usize;
         if total_lines < self.config.min_lines {
             return Ok(None);
         }
