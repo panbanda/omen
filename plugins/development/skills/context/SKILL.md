@@ -19,10 +19,10 @@ Get metrics before modifying: `{{.focus}}`
 omen -f json outline --compact --file "{{.focus}}"
 
 # Inspect a specific symbol's definition and callers
-omen -f json symbol --name "{{.focus}}"
+omen -f json symbol "{{.focus}}"
 
 # Get full deep context for LLM-assisted editing
-omen -f json context --symbol "{{.focus}}"
+omen -f json context
 ```
 
 ## What You Get

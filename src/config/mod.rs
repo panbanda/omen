@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use figment::{
-    providers::{Env, Format, Serialized, Toml},
+    providers::{Env, Format, Json, Serialized, Toml, Yaml},
     Figment,
 };
 use serde::{Deserialize, Serialize};
@@ -12,7 +12,7 @@ use crate::core::Result;
 
 /// Main configuration structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     /// Exclude patterns (glob).
     #[serde(rename = "exclude")]
@@ -33,8 +33,6 @@ pub struct Config {
     pub feature_flags: FeatureFlagsConfig,
     /// Temporal coupling configuration.
     pub temporal: TemporalConfig,
-    /// Output configuration.
-    pub output: OutputConfig,
     /// Exclude built/minified assets (e.g. *.min.js) from analysis.
     pub exclude_built_assets: bool,
     /// Changes/JIT analyzer configuration.
@@ -53,7 +51,6 @@ impl Default for Config {
             score: ScoreConfig::default(),
             feature_flags: FeatureFlagsConfig::default(),
             temporal: TemporalConfig::default(),
-            output: OutputConfig::default(),
             exclude_built_assets: true,
             changes: ChangesConfig::default(),
         }
@@ -73,8 +70,14 @@ impl Config {
                 path.display()
             )));
         }
-        let config: Self = Figment::from(Serialized::defaults(Self::default()))
-            .merge(Toml::file_exact(path))
+        let figment = Figment::from(Serialized::defaults(Self::default()));
+        let extension = path.extension().and_then(|value| value.to_str());
+        let figment = match extension {
+            Some("yaml" | "yml") => figment.merge(Yaml::file_exact(path)),
+            Some("json") => figment.merge(Json::file_exact(path)),
+            _ => figment.merge(Toml::file_exact(path)),
+        };
+        let config: Self = figment
             .merge(Env::prefixed("OMEN_").split("__"))
             .extract()
             .map_err(|e| crate::core::Error::Config(e.to_string()))?;
@@ -114,61 +117,34 @@ impl Config {
 
 /// Complexity analyzer configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ComplexityConfig {
-    /// Maximum cyclomatic complexity before warning.
-    pub cyclomatic_warn: u32,
     /// Maximum cyclomatic complexity before error.
     pub cyclomatic_error: u32,
-    /// Maximum cognitive complexity before warning.
-    pub cognitive_warn: u32,
     /// Maximum cognitive complexity before error.
     pub cognitive_error: u32,
-    /// Maximum nesting depth.
-    pub max_nesting: u32,
 }
 
 impl Default for ComplexityConfig {
     fn default() -> Self {
         Self {
-            cyclomatic_warn: 10,
             cyclomatic_error: 20,
-            cognitive_warn: 15,
             cognitive_error: 30,
-            max_nesting: 5,
         }
     }
 }
 
 /// SATD analyzer configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct SatdConfig {
-    /// Categories to detect.
-    pub categories: Vec<String>,
     /// Custom markers to detect.
     pub custom_markers: Vec<String>,
 }
 
-impl Default for SatdConfig {
-    fn default() -> Self {
-        Self {
-            categories: vec![
-                "design".to_string(),
-                "defect".to_string(),
-                "requirement".to_string(),
-                "test".to_string(),
-                "performance".to_string(),
-                "security".to_string(),
-            ],
-            custom_markers: Vec::new(),
-        }
-    }
-}
-
 /// Churn analyzer configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ChurnConfig {
     /// Time period to analyze (e.g., "6m", "1y").
     pub since: String,
@@ -187,7 +163,7 @@ impl Default for ChurnConfig {
 
 /// Clone detection configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct DuplicatesConfig {
     /// Minimum token count for clone detection.
     pub min_tokens: usize,
@@ -206,7 +182,7 @@ impl Default for DuplicatesConfig {
 
 /// Hotspot analyzer configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct HotspotConfig {
     /// Number of top hotspots to report.
     pub top: usize,
@@ -220,32 +196,16 @@ impl Default for HotspotConfig {
 
 /// Score configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 #[derive(Default)]
 pub struct ScoreConfig {
     /// Minimum overall score to pass.
     pub fail_under: Option<f64>,
-    /// Component thresholds.
-    pub thresholds: ScoreThresholds,
-}
-
-/// Score component thresholds.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-#[derive(Default)]
-pub struct ScoreThresholds {
-    pub complexity: Option<f64>,
-    pub duplication: Option<f64>,
-    pub satd: Option<f64>,
-    pub tdg: Option<f64>,
-    pub coupling: Option<f64>,
-    pub smells: Option<f64>,
-    pub cohesion: Option<f64>,
 }
 
 /// Feature flag detection configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct FeatureFlagsConfig {
     /// Days before a flag is considered stale.
     pub stale_days: u32,
@@ -258,6 +218,7 @@ pub struct FeatureFlagsConfig {
 
 /// Custom feature flag provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CustomProvider {
     /// Provider name.
     pub name: String,
@@ -270,7 +231,7 @@ pub struct CustomProvider {
 /// Output configuration.
 /// Temporal coupling configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct TemporalConfig {
     /// Exclude test files from coupling analysis.
     pub exclude_tests: bool,
@@ -284,27 +245,9 @@ impl Default for TemporalConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct OutputConfig {
-    /// Default output format.
-    pub format: OutputFormat,
-    /// Color output.
-    pub color: bool,
-}
-
-impl Default for OutputConfig {
-    fn default() -> Self {
-        Self {
-            format: OutputFormat::Text,
-            color: true,
-        }
-    }
-}
-
 /// Changes/JIT analyzer configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ChangesConfig {
     /// Number of days of history to analyze.
     pub days: u32,
@@ -350,7 +293,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert_eq!(config.complexity.cyclomatic_warn, 10);
+        assert_eq!(config.complexity.cyclomatic_error, 20);
         assert_eq!(config.churn.top, 20);
         assert!(config.exclude_built_assets);
     }
@@ -399,12 +342,8 @@ mod tests {
     #[test]
     fn test_config_from_file() {
         Jail::expect_with(|jail| {
-            jail.create_file(
-                "omen.toml",
-                "[complexity]\ncyclomatic_warn = 15\ncyclomatic_error = 25",
-            )?;
+            jail.create_file("omen.toml", "[complexity]\ncyclomatic_error = 25")?;
             let config = Config::from_file("omen.toml").unwrap();
-            assert_eq!(config.complexity.cyclomatic_warn, 15);
             assert_eq!(config.complexity.cyclomatic_error, 25);
             Ok(())
         });
@@ -445,7 +384,7 @@ mod tests {
     fn test_config_load_default_no_file() {
         Jail::expect_with(|_jail| {
             let config = Config::load_default(".").unwrap();
-            assert_eq!(config.complexity.cyclomatic_warn, 10);
+            assert_eq!(config.complexity.cyclomatic_error, 20);
             Ok(())
         });
     }
@@ -470,10 +409,10 @@ mod tests {
     #[test]
     fn test_env_var_overrides_file_value() {
         Jail::expect_with(|jail| {
-            jail.create_file("omen.toml", "[complexity]\ncyclomatic_warn = 15")?;
-            jail.set_env("OMEN_COMPLEXITY__CYCLOMATIC_WARN", "5");
+            jail.create_file("omen.toml", "[complexity]\ncyclomatic_error = 15")?;
+            jail.set_env("OMEN_COMPLEXITY__CYCLOMATIC_ERROR", "5");
             let config = Config::from_file("omen.toml").unwrap();
-            assert_eq!(config.complexity.cyclomatic_warn, 5);
+            assert_eq!(config.complexity.cyclomatic_error, 5);
             Ok(())
         });
     }
@@ -481,9 +420,9 @@ mod tests {
     #[test]
     fn test_env_var_overrides_default_no_file() {
         Jail::expect_with(|jail| {
-            jail.set_env("OMEN_COMPLEXITY__CYCLOMATIC_WARN", "42");
+            jail.set_env("OMEN_COMPLEXITY__CYCLOMATIC_ERROR", "42");
             let config = Config::load_default(".").unwrap();
-            assert_eq!(config.complexity.cyclomatic_warn, 42);
+            assert_eq!(config.complexity.cyclomatic_error, 42);
             Ok(())
         });
     }
@@ -497,18 +436,13 @@ mod tests {
     #[test]
     fn test_complexity_config_default() {
         let config = ComplexityConfig::default();
-        assert_eq!(config.cyclomatic_warn, 10);
         assert_eq!(config.cyclomatic_error, 20);
-        assert_eq!(config.cognitive_warn, 15);
         assert_eq!(config.cognitive_error, 30);
-        assert_eq!(config.max_nesting, 5);
     }
 
     #[test]
     fn test_satd_config_default() {
         let config = SatdConfig::default();
-        assert!(config.categories.contains(&"design".to_string()));
-        assert!(config.categories.contains(&"defect".to_string()));
         assert!(config.custom_markers.is_empty());
     }
 
@@ -539,13 +473,6 @@ mod tests {
     }
 
     #[test]
-    fn test_output_config_default() {
-        let config = OutputConfig::default();
-        assert_eq!(config.format, OutputFormat::Text);
-        assert!(config.color);
-    }
-
-    #[test]
     fn test_output_format_default() {
         assert_eq!(OutputFormat::default(), OutputFormat::Text);
     }
@@ -555,7 +482,7 @@ mod tests {
         let config = Config::default();
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("complexity"));
-        assert!(json.contains("cyclomatic_warn"));
+        assert!(json.contains("cyclomatic_error"));
     }
 
     #[test]
@@ -568,6 +495,26 @@ mod tests {
             let config = Config::from_file("omen.toml").unwrap();
             assert_eq!(config.exclude_patterns.len(), 2);
             assert!(config.exclude_patterns.contains(&"target/**".to_string()));
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_unknown_config_key_is_rejected_with_key_name() {
+        Jail::expect_with(|jail| {
+            jail.create_file("omen.toml", "[churn]\nunknown_window = 3")?;
+            let error = Config::from_file("omen.toml").unwrap_err().to_string();
+            assert!(error.contains("unknown_window"), "{error}");
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_yaml_config_loads() {
+        Jail::expect_with(|jail| {
+            jail.create_file("omen.yaml", "churn:\n  top: 37\n")?;
+            let config = Config::from_file("omen.yaml").unwrap();
+            assert_eq!(config.churn.top, 37);
             Ok(())
         });
     }

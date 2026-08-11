@@ -3,7 +3,7 @@
 # Documentation: https://github.com/panbanda/omen
 
 # Exclude patterns (glob) - files/directories to skip during analysis
-exclude_patterns = [
+exclude = [
     # Test files
     "*_test.rs",
     "*_test.go",
@@ -49,21 +49,13 @@ exclude_patterns = [
 
 # Complexity analysis thresholds
 [complexity]
-# Cyclomatic complexity warning threshold (default: 10)
-cyclomatic_warn = 10
 # Cyclomatic complexity error threshold (default: 20)
 cyclomatic_error = 20
-# Cognitive complexity warning threshold (default: 15)
-cognitive_warn = 15
 # Cognitive complexity error threshold (default: 30)
 cognitive_error = 30
-# Maximum nesting depth (default: 4)
-max_nesting = 4
 
 # Self-Admitted Technical Debt (SATD) detection
 [satd]
-# Categories to detect: design, defect, requirement, test, performance, security
-categories = ["design", "defect", "requirement", "test", "performance", "security"]
 # Custom markers beyond the default (TODO, FIXME, HACK, BUG, etc.)
 custom_markers = []
 
@@ -91,16 +83,6 @@ top = 20
 # Fail CI if score is below this threshold (optional)
 # fail_under = 70.0
 
-# Individual component score thresholds
-[score.thresholds]
-complexity = 85.0
-duplication = 65.0
-satd = 80.0
-tdg = 90.0
-coupling = 70.0
-smells = 90.0
-cohesion = 80.0
-
 # Feature flag detection
 [feature_flags]
 # Days before a flag is considered stale
@@ -125,33 +107,3 @@ providers = []
 #     (simple_symbol) @flag_key))
 # '''
 custom_providers = []
-
-# Semantic search configuration
-[semantic_search]
-# Maximum number of search results to return
-max_results = 20
-# Minimum similarity score (0-1) for results
-min_score = 0.3
-
-# Embedding provider configuration
-# Default: candle (local inference with all-MiniLM-L6-v2)
-[semantic_search.provider]
-type = "candle"
-
-# Alternative: OpenAI embeddings
-# [semantic_search.provider]
-# type = "open_ai"
-# model = "text-embedding-3-small"  # or "text-embedding-3-large", "text-embedding-ada-002"
-# api_key = "sk-..."  # Optional: can also use OPENAI_API_KEY env var
-
-# Alternative: Cohere embeddings
-# [semantic_search.provider]
-# type = "cohere"
-# model = "embed-english-v3.0"  # or "embed-multilingual-v3.0", "embed-english-light-v3.0"
-# api_key = "..."  # Optional: can also use COHERE_API_KEY env var
-
-# Alternative: Voyage AI embeddings (optimized for code)
-# [semantic_search.provider]
-# type = "voyage"
-# model = "voyage-code-2"  # or "voyage-2", "voyage-large-2"
-# api_key = "..."  # Optional: can also use VOYAGE_API_KEY env var

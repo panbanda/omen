@@ -131,7 +131,7 @@ impl AnalyzerTrait for Analyzer {
             .files()
             .par_iter()
             .filter_map(|path| {
-                let result = if ctx.content_source.is_some() {
+                let mut result = if ctx.content_source.is_some() {
                     // Read via content source (e.g., git tree)
                     ctx.read_file(path)
                         .ok()
@@ -146,6 +146,9 @@ impl AnalyzerTrait for Analyzer {
                 let current = counter.fetch_add(1, Ordering::Relaxed) + 1;
                 ctx.report_progress(current, total_files);
 
+                if let Some(result) = result.as_mut() {
+                    result.path = path.to_string_lossy().to_string();
+                }
                 result
             })
             .collect();
@@ -204,16 +207,20 @@ impl Analysis {
         let violations: Vec<Violation> = self
             .files
             .iter()
-            .flat_map(|file| &file.functions)
-            .filter(|func| {
-                func.metrics.cyclomatic > max_cyclomatic || func.metrics.cognitive > max_cognitive
-            })
-            .map(|func| Violation {
-                name: func.name.clone(),
-                file: func.file.clone(),
-                line: func.start_line,
-                cyclomatic: func.metrics.cyclomatic,
-                cognitive: func.metrics.cognitive,
+            .flat_map(|file| {
+                file.functions
+                    .iter()
+                    .filter(|func| {
+                        func.metrics.cyclomatic > max_cyclomatic
+                            || func.metrics.cognitive > max_cognitive
+                    })
+                    .map(|func| Violation {
+                        name: func.name.clone(),
+                        file: file.path.clone(),
+                        line: func.start_line,
+                        cyclomatic: func.metrics.cyclomatic,
+                        cognitive: func.metrics.cognitive,
+                    })
             })
             .collect();
 
@@ -249,8 +256,6 @@ pub struct FileResult {
 pub struct FunctionResult {
     /// Function name.
     pub name: String,
-    /// File path.
-    pub file: String,
     /// Start line (1-indexed).
     pub start_line: u32,
     /// End line (1-indexed).
@@ -321,7 +326,6 @@ fn analyze_parse_result(result: &ParseResult) -> FileResult {
 
         file_result.functions.push(FunctionResult {
             name: func.name,
-            file: result.path.to_string_lossy().to_string(),
             start_line: func.start_line,
             end_line: func.end_line,
             metrics,
@@ -691,7 +695,6 @@ mod tests {
                 language: "rust".to_string(),
                 functions: vec![FunctionResult {
                     name: "simple_fn".to_string(),
-                    file: "test.rs".to_string(),
                     start_line: 1,
                     end_line: 5,
                     metrics: Metrics {
@@ -721,7 +724,6 @@ mod tests {
                 language: "rust".to_string(),
                 functions: vec![FunctionResult {
                     name: "complex_fn".to_string(),
-                    file: "test.rs".to_string(),
                     start_line: 1,
                     end_line: 50,
                     metrics: Metrics {
@@ -755,7 +757,6 @@ mod tests {
                 language: "rust".to_string(),
                 functions: vec![FunctionResult {
                     name: "nested_fn".to_string(),
-                    file: "test.rs".to_string(),
                     start_line: 1,
                     end_line: 30,
                     metrics: Metrics {
@@ -789,7 +790,6 @@ mod tests {
                 functions: vec![
                     FunctionResult {
                         name: "ok_fn".to_string(),
-                        file: "test.rs".to_string(),
                         start_line: 1,
                         end_line: 5,
                         metrics: Metrics {
@@ -801,7 +801,6 @@ mod tests {
                     },
                     FunctionResult {
                         name: "bad_fn1".to_string(),
-                        file: "test.rs".to_string(),
                         start_line: 10,
                         end_line: 50,
                         metrics: Metrics {
@@ -813,7 +812,6 @@ mod tests {
                     },
                     FunctionResult {
                         name: "bad_fn2".to_string(),
-                        file: "test.rs".to_string(),
                         start_line: 60,
                         end_line: 100,
                         metrics: Metrics {

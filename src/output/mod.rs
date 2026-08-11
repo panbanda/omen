@@ -55,6 +55,9 @@ pub fn truncate_lists(value: &mut Value, top: usize, offset: usize) -> usize {
     if top == 0 && offset == 0 {
         return 0;
     }
+    if let Some(omitted) = truncate_nested_primary(value, top, offset) {
+        return omitted;
+    }
     let mut total_omitted = 0usize;
     match value {
         Value::Object(map) => {
@@ -115,6 +118,117 @@ pub fn truncate_lists(value: &mut Value, top: usize, offset: usize) -> usize {
         _ => {}
     }
     total_omitted
+}
+
+fn truncate_nested_primary(value: &mut Value, top: usize, offset: usize) -> Option<usize> {
+    let map = value.as_object_mut()?;
+    if map
+        .get("files")
+        .and_then(Value::as_array)
+        .is_some_and(|files| files.iter().any(|file| file.get("functions").is_some()))
+    {
+        return truncate_object_arrays(map.get_mut("files")?, "functions", top, offset);
+    }
+    if map.contains_key("callers") && map.contains_key("callees") {
+        let total: usize = ["callers", "callees"]
+            .iter()
+            .filter_map(|field| map.get(*field)?.as_array())
+            .flatten()
+            .filter_map(|level| level.get("symbols")?.as_array())
+            .map(Vec::len)
+            .sum();
+        let mut remaining_top = if top == 0 { usize::MAX } else { top };
+        let mut remaining_offset = offset;
+        for field in ["callers", "callees"] {
+            if let Some(levels) = map.get_mut(field) {
+                truncate_object_arrays_budget(
+                    levels,
+                    "symbols",
+                    &mut remaining_top,
+                    &mut remaining_offset,
+                );
+            }
+        }
+        let returned = total
+            .saturating_sub(offset)
+            .min(if top == 0 { usize::MAX } else { top });
+        return Some(total.saturating_sub(offset).saturating_sub(returned));
+    }
+    if let Some(cycles) = map.get_mut("cycles").and_then(Value::as_array_mut) {
+        if cycles.iter().all(Value::is_array) {
+            let total: usize = cycles
+                .iter()
+                .filter_map(Value::as_array)
+                .map(Vec::len)
+                .sum();
+            let mut remaining_top = if top == 0 { usize::MAX } else { top };
+            let mut remaining_offset = offset;
+            for cycle in cycles {
+                let items = cycle.as_array_mut()?;
+                let skip = remaining_offset.min(items.len());
+                items.drain(0..skip);
+                remaining_offset -= skip;
+                if remaining_offset > 0 {
+                    items.clear();
+                } else {
+                    items.truncate(remaining_top);
+                    remaining_top -= items.len();
+                }
+            }
+            let returned =
+                total
+                    .saturating_sub(offset)
+                    .min(if top == 0 { usize::MAX } else { top });
+            return Some(total.saturating_sub(offset).saturating_sub(returned));
+        }
+    }
+    None
+}
+
+fn truncate_object_arrays(
+    parents: &mut Value,
+    field: &str,
+    top: usize,
+    offset: usize,
+) -> Option<usize> {
+    let total: usize = parents
+        .as_array()?
+        .iter()
+        .filter_map(|parent| parent.get(field)?.as_array())
+        .map(Vec::len)
+        .sum();
+    let mut remaining_top = if top == 0 { usize::MAX } else { top };
+    let mut remaining_offset = offset;
+    truncate_object_arrays_budget(parents, field, &mut remaining_top, &mut remaining_offset);
+    let returned = total
+        .saturating_sub(offset)
+        .min(if top == 0 { usize::MAX } else { top });
+    Some(total.saturating_sub(offset).saturating_sub(returned))
+}
+
+fn truncate_object_arrays_budget(
+    parents: &mut Value,
+    field: &str,
+    remaining_top: &mut usize,
+    remaining_offset: &mut usize,
+) {
+    let Some(parents) = parents.as_array_mut() else {
+        return;
+    };
+    for parent in parents {
+        let Some(items) = parent.get_mut(field).and_then(Value::as_array_mut) else {
+            continue;
+        };
+        let skip = (*remaining_offset).min(items.len());
+        items.drain(0..skip);
+        *remaining_offset -= skip;
+        if *remaining_offset > 0 {
+            items.clear();
+            continue;
+        }
+        items.truncate(*remaining_top);
+        *remaining_top -= items.len();
+    }
 }
 
 /// Format a JSON value with optional truncation applied for JSON formats.
@@ -201,28 +315,44 @@ struct SarifFinding {
 }
 
 fn collect_sarif_findings(value: &Value, findings: &mut Vec<SarifFinding>) {
+    collect_sarif_findings_with_path(value, findings, None);
+}
+
+fn collect_sarif_findings_with_path(
+    value: &Value,
+    findings: &mut Vec<SarifFinding>,
+    parent_path: Option<&str>,
+) {
     match value {
         Value::Object(map) => {
-            if let Some(finding) = sarif_finding_from_object(map) {
+            let path = ["file", "path", "file_path"]
+                .iter()
+                .find_map(|key| map.get(*key).and_then(Value::as_str))
+                .or(parent_path);
+            if let Some(finding) = sarif_finding_from_object(map, parent_path) {
                 findings.push(finding);
             }
             for child in map.values() {
-                collect_sarif_findings(child, findings);
+                collect_sarif_findings_with_path(child, findings, path);
             }
         }
         Value::Array(items) => {
             for item in items {
-                collect_sarif_findings(item, findings);
+                collect_sarif_findings_with_path(item, findings, parent_path);
             }
         }
         _ => {}
     }
 }
 
-fn sarif_finding_from_object(map: &serde_json::Map<String, Value>) -> Option<SarifFinding> {
+fn sarif_finding_from_object(
+    map: &serde_json::Map<String, Value>,
+    parent_path: Option<&str>,
+) -> Option<SarifFinding> {
     let file = ["file", "path", "file_path"]
         .iter()
-        .find_map(|key| map.get(*key).and_then(Value::as_str))?;
+        .find_map(|key| map.get(*key).and_then(Value::as_str))
+        .or(parent_path)?;
     let line = ["line", "start_line", "line_start"]
         .iter()
         .find_map(|key| map.get(*key).and_then(Value::as_u64))

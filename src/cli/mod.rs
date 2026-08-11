@@ -18,7 +18,7 @@ pub struct Cli {
     pub format: OutputFormat,
 
     /// Compact JSON output (single line, no indentation; ignored for non-JSON formats)
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub compact: bool,
 
     /// Configuration file path
@@ -135,6 +135,7 @@ pub enum Command {
     #[command(alias = "s")]
     Search(SearchCommand),
 
+    #[cfg(feature = "mutation")]
     /// Mutation testing for test suite effectiveness
     #[command(alias = "mut")]
     Mutation(Box<MutationCommand>),
@@ -216,8 +217,8 @@ pub struct ChurnArgs {
     pub common: AnalyzerArgs,
 
     /// Number of days to analyze
-    #[arg(long, default_value = "30")]
-    pub days: u32,
+    #[arg(long)]
+    pub days: Option<u32>,
 }
 
 #[derive(Args)]
@@ -306,14 +307,6 @@ pub struct McpArgs {
     #[arg(long, value_enum, default_value = "stdio")]
     pub transport: McpTransport,
 
-    /// Port for SSE transport
-    #[arg(long, default_value = "3000")]
-    pub port: u16,
-
-    /// Host for SSE transport
-    #[arg(long, default_value = "127.0.0.1")]
-    pub host: String,
-
     /// Allow tools to access paths outside the configured repository root
     #[arg(long)]
     pub allow_external_paths: bool,
@@ -322,21 +315,9 @@ pub struct McpArgs {
 /// Context generation for LLM consumption.
 #[derive(Args)]
 pub struct ContextArgs {
-    /// Target file or directory for context
-    #[arg(long)]
-    pub target: Option<PathBuf>,
-
     /// Maximum context tokens to generate
     #[arg(long, default_value = "8000")]
     pub max_tokens: usize,
-
-    /// Focus on specific symbol/function
-    #[arg(long)]
-    pub symbol: Option<String>,
-
-    /// Depth for dependency traversal
-    #[arg(long, default_value = "2")]
-    pub depth: usize,
 }
 
 /// Report command with subcommands.
@@ -471,6 +452,7 @@ pub struct SearchQueryArgs {
 }
 
 #[derive(Args)]
+#[cfg(feature = "mutation")]
 pub struct MutationArgs {
     #[command(flatten)]
     pub common: AnalyzerArgs,
@@ -542,6 +524,7 @@ pub struct MutationArgs {
 
 /// Mutation testing mode.
 #[derive(Clone, Copy, Debug, ValueEnum)]
+#[cfg(feature = "mutation")]
 pub enum MutationMode {
     /// All operators, all mutants
     All,
@@ -553,6 +536,7 @@ pub enum MutationMode {
 
 /// Mutation testing command with subcommands.
 #[derive(Args)]
+#[cfg(feature = "mutation")]
 pub struct MutationCommand {
     #[command(subcommand)]
     pub subcommand: Option<MutationSubcommand>,
@@ -562,6 +546,7 @@ pub struct MutationCommand {
 }
 
 #[derive(Subcommand)]
+#[cfg(feature = "mutation")]
 pub enum MutationSubcommand {
     /// Train ML predictor from historical mutation results
     Train(MutationTrainArgs),
@@ -626,6 +611,7 @@ pub struct SymbolArgs {
 
 /// Arguments for mutation train command.
 #[derive(Args)]
+#[cfg(feature = "mutation")]
 pub struct MutationTrainArgs {
     /// Path to analyze (default: current directory)
     #[arg(short, long, default_value = ".")]
@@ -651,7 +637,6 @@ pub enum OutputFormat {
 #[derive(Clone, Copy, ValueEnum)]
 pub enum McpTransport {
     Stdio,
-    Sse,
 }
 
 impl Cli {
@@ -1019,7 +1004,7 @@ mod tests {
     fn test_churn_days_default() {
         let cli = parse(&["omen", "churn"]);
         if let Command::Churn(args) = cli.command {
-            assert_eq!(args.days, 30);
+            assert_eq!(args.days, None);
         }
     }
 
@@ -1027,7 +1012,7 @@ mod tests {
     fn test_churn_days_custom() {
         let cli = parse(&["omen", "churn", "--days", "30"]);
         if let Command::Churn(args) = cli.command {
-            assert_eq!(args.days, 30);
+            assert_eq!(args.days, Some(30));
         }
     }
 
@@ -1052,30 +1037,6 @@ mod tests {
         let cli = parse(&["omen", "mcp", "--transport", "stdio"]);
         if let Command::Mcp(cmd) = cli.command {
             assert!(matches!(cmd.args.transport, McpTransport::Stdio));
-        }
-    }
-
-    #[test]
-    fn test_mcp_transport_sse() {
-        let cli = parse(&["omen", "mcp", "--transport", "sse"]);
-        if let Command::Mcp(cmd) = cli.command {
-            assert!(matches!(cmd.args.transport, McpTransport::Sse));
-        }
-    }
-
-    #[test]
-    fn test_mcp_port() {
-        let cli = parse(&["omen", "mcp", "--port", "8080"]);
-        if let Command::Mcp(cmd) = cli.command {
-            assert_eq!(cmd.args.port, 8080);
-        }
-    }
-
-    #[test]
-    fn test_mcp_host() {
-        let cli = parse(&["omen", "mcp", "--host", "0.0.0.0"]);
-        if let Command::Mcp(cmd) = cli.command {
-            assert_eq!(cmd.args.host, "0.0.0.0");
         }
     }
 
@@ -1135,37 +1096,11 @@ mod tests {
         ));
     }
 
-    // Context option tests
-
-    #[test]
-    fn test_context_target() {
-        let cli = parse(&["omen", "context", "--target", "src/main.rs"]);
-        if let Command::Context(args) = cli.command {
-            assert_eq!(args.target, Some(PathBuf::from("src/main.rs")));
-        }
-    }
-
     #[test]
     fn test_context_max_tokens() {
         let cli = parse(&["omen", "context", "--max-tokens", "4000"]);
         if let Command::Context(args) = cli.command {
             assert_eq!(args.max_tokens, 4000);
-        }
-    }
-
-    #[test]
-    fn test_context_symbol() {
-        let cli = parse(&["omen", "context", "--symbol", "main"]);
-        if let Command::Context(args) = cli.command {
-            assert_eq!(args.symbol, Some("main".to_string()));
-        }
-    }
-
-    #[test]
-    fn test_context_depth() {
-        let cli = parse(&["omen", "context", "--depth", "3"]);
-        if let Command::Context(args) = cli.command {
-            assert_eq!(args.depth, 3);
         }
     }
 
@@ -1712,6 +1647,65 @@ mod tests {
     #[test]
     fn test_cli_compact_flag() {
         assert!(parse(&["omen", "--compact", "complexity"]).compact);
+    }
+
+    #[test]
+    fn test_cli_compact_flag_after_subcommand() {
+        assert!(parse(&["omen", "complexity", "--compact"]).compact);
+    }
+
+    #[test]
+    fn test_mcp_rejects_non_stdio_transport() {
+        assert!(Cli::try_parse_from(["omen", "mcp", "--transport", "sse"]).is_err());
+    }
+
+    #[test]
+    fn test_context_rejects_unused_flags() {
+        for flag in ["--target", "--symbol", "--depth"] {
+            assert!(Cli::try_parse_from(["omen", "context", flag, "value"]).is_err());
+        }
+    }
+
+    #[test]
+    fn test_plugin_fenced_omen_commands_parse() {
+        let plugins = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins");
+        let mut markdown_files = Vec::new();
+        collect_markdown_files(&plugins, &mut markdown_files);
+
+        let placeholder = regex::Regex::new(r#"\{\{[^}]+\}\}|<[^>]+>"#).unwrap();
+        let mut failures = Vec::new();
+        for path in markdown_files {
+            let content = std::fs::read_to_string(&path).unwrap();
+            let mut fenced = false;
+            for line in content.lines() {
+                if line.trim_start().starts_with("```") {
+                    fenced = !fenced;
+                    continue;
+                }
+                let line = line.trim();
+                if !fenced || !line.starts_with("omen ") {
+                    continue;
+                }
+                let command = line.split(['|', '>']).next().unwrap().trim();
+                let command = placeholder.replace_all(command, "placeholder");
+                let args: Vec<&str> = command.split_whitespace().collect();
+                if let Err(error) = Cli::try_parse_from(args) {
+                    failures.push(format!("{}: `{line}`: {error}", path.display()));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    fn collect_markdown_files(dir: &std::path::Path, files: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                collect_markdown_files(&path, files);
+            } else if path.extension().is_some_and(|extension| extension == "md") {
+                files.push(path);
+            }
+        }
     }
 
     #[test]

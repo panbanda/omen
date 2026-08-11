@@ -10,6 +10,7 @@
 //! constants, and type aliases are not yet analyzed.
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::time::Instant;
 
 use rayon::prelude::*;
@@ -267,6 +268,12 @@ impl AnalyzerTrait for Analyzer {
         }
 
         let total_items = items.len();
+        for item in &mut items {
+            let path = Path::new(&item.file);
+            if let Ok(relative) = path.strip_prefix(ctx.root) {
+                item.file = relative.to_string_lossy().to_string();
+            }
+        }
         let analysis = Analysis {
             items,
             summary: AnalysisSummary {

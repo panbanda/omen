@@ -17,10 +17,10 @@ Hunt for bugs in: `{{.paths}}`
 
 ```bash
 # Get high-risk files (threshold 0.8 = high risk)
-omen -f json defect --risk-threshold 0.8
+omen -f json defect
 
 # Find hotspots
-omen -f json hotspot --days 30
+omen -f json hotspot
 
 # Check for explicit markers
 omen -f json satd | jq '.items[] | select(.category == "defect")'

@@ -38,6 +38,20 @@ impl Analyzer {
         Self { patterns }
     }
 
+    pub fn with_custom_markers(mut self, markers: &[String]) -> Self {
+        if !markers.is_empty() {
+            let pattern = markers
+                .iter()
+                .map(|marker| regex::escape(marker))
+                .collect::<Vec<_>>()
+                .join("|");
+            if let Ok(regex) = Regex::new(&format!(r"(?i)\b({pattern})\b")) {
+                self.patterns.push(("custom".to_string(), regex, 1.0));
+            }
+        }
+        self
+    }
+
     /// Analyze a single file for SATD.
     pub fn analyze_file(&self, file: &SourceFile) -> Vec<SatdItem> {
         let content = file.content_str();
@@ -347,6 +361,23 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].category, "design");
         assert_eq!(items[1].category, "security");
+    }
+
+    #[test]
+    fn test_custom_marker_changes_detection() {
+        let file = SourceFile::from_content(
+            std::path::Path::new("test.rs"),
+            crate::core::Language::Rust,
+            b"// REVISIT: simplify this\n".to_vec(),
+        );
+        assert!(Analyzer::new().analyze_file(&file).is_empty());
+        assert_eq!(
+            Analyzer::new()
+                .with_custom_markers(&["REVISIT".to_string()])
+                .analyze_file(&file)
+                .len(),
+            1
+        );
     }
 
     #[test]

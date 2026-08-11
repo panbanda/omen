@@ -18,7 +18,7 @@ Omen CLI must be installed and available in PATH.
 Use the `impact` command to get transitive callers and callees in one call:
 
 ```bash
-omen -f json impact --symbol <symbol-name> --depth 2
+omen -f json impact <symbol-name> --depth 2
 ```
 
 This returns affected files, caller/callee BFS levels, and the total count — much faster than building the picture manually.
@@ -26,7 +26,7 @@ This returns affected files, caller/callee BFS levels, and the total count — m
 To inspect a specific symbol first:
 
 ```bash
-omen -f json symbol --name <symbol-name>
+omen -f json symbol <symbol-name>
 ```
 
 ### Step 2: Map File-Level Dependencies

@@ -12,10 +12,11 @@ use rayon::ThreadPoolBuilder;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use omen::cli::{
-    AnalyzerArgs, Cli, Command, ComplexityArgs, ImpactArgs, McpSubcommand, MutationArgs,
-    MutationSubcommand, MutationTrainArgs, OutlineArgs, OutputFormat, ReportSubcommand, ScoreArgs,
-    ScoreSubcommand, SearchSubcommand, SymbolArgs,
+    AnalyzerArgs, Cli, Command, ComplexityArgs, ImpactArgs, McpSubcommand, OutlineArgs,
+    OutputFormat, ReportSubcommand, ScoreArgs, ScoreSubcommand, SearchSubcommand, SymbolArgs,
 };
+#[cfg(feature = "mutation")]
+use omen::cli::{MutationArgs, MutationSubcommand, MutationTrainArgs};
 use omen::config::Config;
 use omen::core::progress::is_tty;
 use omen::core::{AnalysisContext, Analyzer, FileSet};
@@ -23,20 +24,30 @@ use omen::git::{clone_remote, is_remote_repo, CloneOptions};
 use omen::mcp::McpServer;
 use omen::output::{format_with_limits, Format};
 
+fn logging_filter(verbose: bool, rust_log: Option<&str>) -> EnvFilter {
+    let directive = rust_log.unwrap_or(if verbose { "debug" } else { "off" });
+    EnvFilter::new(directive)
+}
+
 fn main() -> ExitCode {
-    // Initialize tracing
+    let cli = Cli::parse();
     tracing_subscriber::registry()
         .with(fmt::layer())
-        .with(EnvFilter::from_default_env())
+        .with(logging_filter(
+            cli.verbose,
+            std::env::var("RUST_LOG").ok().as_deref(),
+        ))
         .init();
-
-    let cli = Cli::parse();
 
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("Error: {e:#}");
-            ExitCode::FAILURE
+            if matches!(e, omen::core::Error::ThresholdViolation { .. }) {
+                ExitCode::from(2)
+            } else {
+                ExitCode::FAILURE
+            }
         }
     }
 }
@@ -142,7 +153,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         }
         Command::Complexity(args) => {
             if args.check {
-                run_complexity_check(path, &config, args)?;
+                run_complexity_check(path, &config, args, format)?;
             } else {
                 run_analyzer::<omen::analyzers::complexity::Analyzer>(
                     path,
@@ -181,7 +192,10 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             dispatch_analyzer(&cli.command, path, &config, format)?;
         }
         Command::Churn(args) => {
-            run_churn_analyzer(path, &config, format, args.days, &args.common)?;
+            let days = args.days.unwrap_or_else(|| {
+                omen::git::parse_since_to_days(&config.churn.since).unwrap_or(u32::MAX)
+            });
+            run_churn_analyzer(path, &config, format, days, &args.common)?;
         }
         Command::Flags(args) => {
             // Merge CLI --provider option into config
@@ -201,7 +215,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         }
         Command::Score(cmd) => {
             if cmd.args.check {
-                run_score_check(path, &config, &cmd.args)?;
+                run_score_check(path, &config, &cmd.args, format)?;
             } else {
                 match &cmd.subcommand {
                     Some(ScoreSubcommand::Trend(args)) => {
@@ -398,6 +412,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         Command::Search(ref cmd) => {
             run_search(path, &config, cmd.subcommand.clone(), format)?;
         }
+        #[cfg(feature = "mutation")]
         Command::Mutation(ref cmd) => match &cmd.subcommand {
             Some(MutationSubcommand::Train(args)) => {
                 run_mutation_train(&args.path, args)?;
@@ -445,12 +460,22 @@ fn dispatch_analyzer(
     format: Format,
 ) -> omen::core::Result<()> {
     match command {
-        Command::Satd(args) => {
-            run_analyzer::<omen::analyzers::satd::Analyzer>(path, config, format, Some(args))
-        }
-        Command::Clones(args) => {
-            run_analyzer::<omen::analyzers::duplicates::Analyzer>(path, config, format, Some(args))
-        }
+        Command::Satd(args) => run_analyzer_instance(
+            path,
+            config,
+            format,
+            Some(args),
+            omen::analyzers::satd::Analyzer::new().with_custom_markers(&config.satd.custom_markers),
+        ),
+        Command::Clones(args) => run_analyzer_instance(
+            path,
+            config,
+            format,
+            Some(args),
+            omen::analyzers::duplicates::Analyzer::new()
+                .with_min_tokens(config.duplicates.min_tokens)
+                .with_similarity_threshold(config.duplicates.min_similarity),
+        ),
         Command::Defect(args) => {
             run_analyzer::<omen::analyzers::defect::Analyzer>(path, config, format, Some(args))
         }
@@ -460,9 +485,13 @@ fn dispatch_analyzer(
         Command::Graph(args) => {
             run_analyzer::<omen::analyzers::graph::Analyzer>(path, config, format, Some(args))
         }
-        Command::Hotspot(args) => {
-            run_analyzer::<omen::analyzers::hotspot::Analyzer>(path, config, format, Some(args))
-        }
+        Command::Hotspot(args) => run_analyzer_instance(
+            path,
+            config,
+            format,
+            Some(args),
+            omen::analyzers::hotspot::Analyzer::new(),
+        ),
         Command::Temporal(args) => {
             run_analyzer::<omen::analyzers::temporal::Analyzer>(path, config, format, Some(args))
         }
@@ -589,13 +618,16 @@ fn run_analyzer_instance<A: Analyzer>(
         }
     });
 
+    let analyzer_name = analyzer.name();
     let result = analyzer.analyze(&ctx)?;
 
     if let Some(s) = spinner {
         s.finish_and_clear();
     }
 
-    let top = args.and_then(|a| a.top);
+    let top = args
+        .and_then(|a| a.top)
+        .or_else(|| (analyzer_name == "hotspot").then_some(config.hotspot.top));
     let offset = args.and_then(|a| a.offset);
     let value = serde_json::to_value(&result)?;
     format_with_limits(value, format, top, offset, &mut stdout())?;
@@ -629,6 +661,7 @@ fn run_complexity_check(
     path: &PathBuf,
     config: &Config,
     args: &ComplexityArgs,
+    format: Format,
 ) -> omen::core::Result<()> {
     let file_set = filtered_file_set(path, config, Some(&args.common))?;
     let ctx = build_context(path, &file_set, config);
@@ -652,6 +685,18 @@ fn run_complexity_check(
             Ok(())
         }
         Err(violations) => {
+            if matches!(format, Format::Json | Format::JsonCompact) {
+                format.format(
+                    &serde_json::json!({
+                        "violations": violations,
+                        "thresholds": {
+                            "max_cyclomatic": max_cyclomatic,
+                            "max_cognitive": max_cognitive
+                        }
+                    }),
+                    &mut stdout(),
+                )?;
+            }
             eprintln!(
                 "Complexity threshold exceeded in {} function(s):\n",
                 violations.len()
@@ -677,7 +722,12 @@ fn run_complexity_check(
     }
 }
 
-fn run_score_check(path: &PathBuf, config: &Config, args: &ScoreArgs) -> omen::core::Result<()> {
+fn run_score_check(
+    path: &PathBuf,
+    config: &Config,
+    args: &ScoreArgs,
+    format: Format,
+) -> omen::core::Result<()> {
     let file_set = FileSet::from_path(path, config)?;
     let ctx = build_context(path, &file_set, config);
 
@@ -696,7 +746,21 @@ fn run_score_check(path: &PathBuf, config: &Config, args: &ScoreArgs) -> omen::c
             );
             Ok(())
         }
-        Err(e) => Err(e),
+        Err(e) => {
+            if matches!(format, Format::Json | Format::JsonCompact) {
+                format.format(
+                    &serde_json::json!({
+                        "violations": [{
+                            "kind": "score_below_threshold",
+                            "score": result.overall_score,
+                            "minimum": min_score
+                        }]
+                    }),
+                    &mut stdout(),
+                )?;
+            }
+            Err(e)
+        }
     }
 }
 
@@ -712,7 +776,13 @@ fn run_churn_analyzer(
     let analyzer = omen::analyzers::churn::Analyzer::new().with_days(days);
     let result = analyzer.analyze(&ctx)?;
     let value = serde_json::to_value(&result)?;
-    format_with_limits(value, format, args.top, args.offset, &mut stdout())?;
+    format_with_limits(
+        value,
+        format,
+        args.top.or(Some(config.churn.top)),
+        args.offset,
+        &mut stdout(),
+    )?;
     Ok(())
 }
 
@@ -727,7 +797,7 @@ fn run_context(
         path,
         &file_set,
         config,
-        Some(args.max_tokens.saturating_div(250).clamp(5, 100)),
+        Some(omen::context::max_symbols_for_token_budget(args.max_tokens)),
         Some(25),
     )?;
 
@@ -1245,6 +1315,7 @@ fn run_search(
     Ok(())
 }
 
+#[cfg(feature = "mutation")]
 fn run_mutation(
     path: &PathBuf,
     config: &Config,
@@ -1616,6 +1687,7 @@ fn run_symbol(
     Ok(())
 }
 
+#[cfg(feature = "mutation")]
 fn run_mutation_train(path: &std::path::Path, args: &MutationTrainArgs) -> omen::core::Result<()> {
     use omen::analyzers::mutation::ml_predictor::{SurvivabilityPredictor, TrainingData};
     use std::io::BufRead;
@@ -1695,4 +1767,16 @@ fn run_mutation_train(path: &std::path::Path, args: &MutationTrainArgs) -> omen:
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verbose_enables_debug_logging_without_rust_log() {
+        assert_eq!(logging_filter(true, None).to_string(), "debug");
+        assert_eq!(logging_filter(false, None).to_string(), "off");
+        assert_eq!(logging_filter(true, Some("warn")).to_string(), "warn");
+    }
 }
