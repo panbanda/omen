@@ -1,937 +1,55 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Repository Health Report - {{ Metadata.repository }}</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Cpath fill='%237A4A22' d='M160 90C160 60 352 60 352 90L352 130L160 130Z'/%3E%3Crect fill='%235E3618' x='140' y='130' width='232' height='28' rx='14'/%3E%3Cellipse fill='%233B8C8E' cx='138' cy='220' rx='28' ry='42'/%3E%3Cellipse fill='%233B8C8E' cx='374' cy='220' rx='28' ry='42'/%3E%3Cpath fill='%234FA3A5' d='M128 180C128 130 384 130 384 180V360C384 410 128 410 128 360Z'/%3E%3Cellipse fill='%23FFFFFF' cx='220' cy='240' rx='34' ry='38'/%3E%3Cellipse fill='%23FFFFFF' cx='292' cy='240' rx='34' ry='38'/%3E%3Ccircle fill='%231B1B1B' cx='228' cy='252' r='10'/%3E%3Ccircle fill='%231B1B1B' cx='300' cy='252' r='10'/%3E%3Cellipse fill='%232A2A2A' cx='256' cy='286' rx='14' ry='10'/%3E%3Crect fill='%23F2F2F2' x='242' y='304' width='12' height='24' rx='3'/%3E%3Crect fill='%23F2F2F2' x='258' y='304' width='12' height='24' rx='3'/%3E%3Cg transform='translate(330 260)'%3E%3Ccircle fill='%23C9B36D' cx='0' cy='0' r='56'/%3E%3Ccircle fill='%23FFF6D5' cx='0' cy='0' r='42'/%3E%3Crect fill='%236A4020' x='40' y='40' width='90' height='14' rx='7' transform='rotate(35)'/%3E%3C/g%3E%3Cpath fill='%233B8C8E' d='M128 330C180 360 332 360 384 330V360C384 410 128 410 128 360Z' opacity='0.6'/%3E%3C/svg%3E">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/simple-datatables@9/dist/style.min.css">
-    <style>
-        :root {
-            --bg-primary: #0d1117;
-            --bg-secondary: #161b22;
-            --bg-tertiary: #21262d;
-            --text-primary: #e6edf3;
-            --text-secondary: #8b949e;
-            --border-color: #30363d;
-            --accent-green: #3fb950;
-            --accent-yellow: #d29922;
-            --accent-red: #f85149;
-            --accent-blue: #58a6ff;
-            --accent-purple: #a371f7;
-            --sidebar-width: 220px;
-        }
-
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
-            background: var(--bg-primary);
-            color: var(--text-primary);
-            line-height: 1.6;
-        }
-
-        /* Sidebar Navigation */
-        .sidebar {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: var(--sidebar-width);
-            height: 100vh;
-            background: var(--bg-secondary);
-            border-right: 1px solid var(--border-color);
-            padding: 1.5rem 0;
-            overflow-y: auto;
-            z-index: 100;
-        }
-
-        .sidebar-header {
-            padding: 0 1rem 1rem;
-            border-bottom: 1px solid var(--border-color);
-            margin-bottom: 1rem;
-        }
-
-        .sidebar-header h2 {
-            font-size: 1rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-
-        .sidebar-score {
-            font-size: 2rem;
-            font-weight: bold;
-            margin-top: 0.25rem;
-        }
-
-        .sidebar-score.good { color: var(--accent-green); }
-        .sidebar-score.warning { color: var(--accent-yellow); }
-        .sidebar-score.danger { color: var(--accent-red); }
-
-        .nav-section {
-            padding: 0.5rem 0;
-        }
-
-        .nav-section-title {
-            font-size: 0.7rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: var(--text-secondary);
-            padding: 0.5rem 1rem;
-            margin-top: 0.5rem;
-        }
-
-        .nav-item {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.5rem 1rem;
-            color: var(--text-secondary);
-            text-decoration: none;
-            font-size: 0.85rem;
-            transition: all 0.15s;
-        }
-
-        .nav-item:hover {
-            background: var(--bg-tertiary);
-            color: var(--text-primary);
-        }
-
-        .nav-item.active {
-            background: var(--bg-tertiary);
-            color: var(--text-primary);
-            border-left: 2px solid var(--accent-blue);
-        }
-
-        .nav-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            flex-shrink: 0;
-        }
-
-        .nav-dot.good { background: var(--accent-green); }
-        .nav-dot.warning { background: var(--accent-yellow); }
-        .nav-dot.danger { background: var(--accent-red); }
-        .nav-dot.neutral { background: var(--text-secondary); }
-
-        /* Main Content */
-        .main-content {
-            padding: 2rem 3rem 2rem calc(var(--sidebar-width) + 3rem);
-            max-width: calc(1400px + var(--sidebar-width));
-            margin: 0 auto;
-        }
-
-        /* Hero Section */
-        .hero {
-            display: grid;
-            grid-template-columns: 200px 280px 1fr;
-            gap: 2rem;
-            align-items: center;
-            margin-bottom: 3rem;
-            padding-bottom: 2rem;
-            border-bottom: 1px solid var(--border-color);
-        }
-
-        .hero-score {
-            text-align: center;
-        }
-
-        .score-circle {
-            width: 160px;
-            height: 160px;
-            border-radius: 50%;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            position: relative;
-            margin: 0 auto;
-        }
-
-        .score-circle.good {
-            background: conic-gradient(var(--accent-green) 0deg, var(--accent-green) calc(var(--score) * 3.6deg), var(--bg-tertiary) calc(var(--score) * 3.6deg));
-        }
-        .score-circle.warning {
-            background: conic-gradient(var(--accent-yellow) 0deg, var(--accent-yellow) calc(var(--score) * 3.6deg), var(--bg-tertiary) calc(var(--score) * 3.6deg));
-        }
-        .score-circle.danger {
-            background: conic-gradient(var(--accent-red) 0deg, var(--accent-red) calc(var(--score) * 3.6deg), var(--bg-tertiary) calc(var(--score) * 3.6deg));
-        }
-
-        .score-circle::before {
-            content: '';
-            position: absolute;
-            width: 130px;
-            height: 130px;
-            background: var(--bg-primary);
-            border-radius: 50%;
-        }
-
-        .score-value { position: relative; font-size: 2.5rem; font-weight: bold; z-index: 1; }
-        .score-label { position: relative; color: var(--text-secondary); font-size: 0.8rem; z-index: 1; }
-
-        .hero-trend-stat {
-            margin-top: 0.75rem;
-            text-align: center;
-        }
-        .hero-trend-value {
-            font-size: 1.1rem;
-            font-weight: bold;
-            color: var(--text-secondary);
-        }
-        .hero-trend-value.down { color: var(--accent-red); }
-        .hero-trend-value.up { color: var(--accent-green); }
-        .hero-trend-rate {
-            font-size: 0.75rem;
-            color: var(--text-secondary);
-            margin-top: 0.15rem;
-        }
-
-        .hero-radar {
-            height: 200px;
-        }
-
-        .hero-metrics {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 1rem;
-        }
-
-        .metric-card {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 1rem;
-        }
-
-        .metric-card-value {
-            font-size: 1.5rem;
-            font-weight: bold;
-        }
-
-        .metric-card-label {
-            font-size: 0.75rem;
-            color: var(--text-secondary);
-            margin-top: 0.25rem;
-        }
-
-        .metric-card-value.good { color: var(--accent-green); }
-        .metric-card-value.warning { color: var(--accent-yellow); }
-        .metric-card-value.danger { color: var(--accent-red); }
-
-        /* Section Styles */
-        .section {
-            margin: 2.5rem 0;
-            scroll-margin-top: 1rem;
-        }
-
-        .section-header {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-            margin-bottom: 1rem;
-        }
-
-        .section-header h2 {
-            font-size: 1.4rem;
-            font-weight: 600;
-        }
-
-        .section-subtitle {
-            color: var(--text-secondary);
-            font-size: 0.9rem;
-            margin-bottom: 1rem;
-        }
-
-        /* Cards */
-        .card {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 1.5rem;
-            margin-bottom: 1rem;
-        }
-
-        .card h3 {
-            font-size: 1rem;
-            margin-bottom: 1rem;
-            color: var(--text-primary);
-        }
-
-        .card.highlight-red { border-left: 4px solid var(--accent-red); }
-        .card.highlight-yellow { border-left: 4px solid var(--accent-yellow); }
-        .card.highlight-green { border-left: 4px solid var(--accent-green); }
-        .card.highlight-blue { border-left: 4px solid var(--accent-blue); }
-
-        /* Recommendations List */
-        .recommendations-list {
-            display: flex;
-            flex-direction: column;
-            gap: 1.5rem;
-        }
-
-        .recommendation-category {
-            font-size: 0.85rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin-bottom: 0.75rem;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        .recommendation-item {
-            padding: 0.75rem 0;
-            border-bottom: 1px solid var(--border-color);
-        }
-
-        .recommendation-item:last-child { border-bottom: none; }
-
-        .recommendation-item strong {
-            display: block;
-            margin-bottom: 0.25rem;
-        }
-
-        .recommendation-item > div {
-            color: var(--text-secondary);
-            font-size: 0.9rem;
-            line-height: 1.5;
-        }
-
-        .recommendation-item > div p {
-            margin: 0.25rem 0;
-        }
-
-        .recommendation-item > div p:first-child {
-            margin-top: 0;
-        }
-
-        /* Stats Grid */
-        .stat-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-            gap: 1rem;
-            margin: 1rem 0;
-        }
-
-        .stat-box {
-            background: var(--bg-tertiary);
-            padding: 1rem;
-            border-radius: 8px;
-            text-align: center;
-        }
-
-        .stat-box .value {
-            font-size: 1.75rem;
-            font-weight: bold;
-        }
-
-        .stat-box .label {
-            color: var(--text-secondary);
-            font-size: 0.75rem;
-            margin-top: 0.25rem;
-        }
-
-        /* Tables */
-        .table-container {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            overflow: hidden;
-        }
-
-        /* Simple-DataTables dark theme overrides */
-        .datatable-wrapper {
-            background: var(--bg-secondary);
-            border-radius: 8px;
-            overflow: hidden;
-        }
-
-        .datatable-top, .datatable-bottom {
-            padding: 0.75rem 1rem;
-            background: var(--bg-secondary);
-        }
-
-        .datatable-search input {
-            background: var(--bg-tertiary);
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            color: var(--text-primary);
-            padding: 0.5rem 0.75rem;
-        }
-
-        .datatable-search input::placeholder {
-            color: var(--text-secondary);
-        }
-
-        .datatable-search input:focus {
-            outline: none;
-            border-color: var(--accent-blue);
-        }
-
-        .datatable-selector {
-            background: var(--bg-tertiary);
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            color: var(--text-primary);
-            padding: 0.25rem 0.5rem;
-        }
-
-        .datatable-info {
-            color: var(--text-secondary);
-            font-size: 0.85rem;
-        }
-
-        .datatable-pagination-list {
-            display: flex;
-            gap: 0.25rem;
-        }
-
-        .datatable-pagination-list-item-link {
-            background: var(--bg-tertiary);
-            border: 1px solid var(--border-color);
-            border-radius: 4px;
-            color: var(--text-primary);
-            padding: 0.25rem 0.5rem;
-            text-decoration: none;
-        }
-
-        .datatable-pagination-list-item-link:hover {
-            background: var(--bg-primary);
-        }
-
-        .datatable-pagination-list-item.datatable-active .datatable-pagination-list-item-link {
-            background: var(--accent-blue);
-            border-color: var(--accent-blue);
-        }
-
-        .datatable-pagination-list-item.datatable-disabled .datatable-pagination-list-item-link {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        /* Simple-DataTables header sorting */
-        .datatable-table th {
-            cursor: pointer;
-            user-select: none;
-        }
-
-        .datatable-table th:hover {
-            color: var(--text-primary);
-        }
-
-        .datatable-sorter {
-            color: var(--text-secondary);
-        }
-
-        .datatable-sorter::before,
-        .datatable-sorter::after {
-            border-color: var(--text-secondary) transparent;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-
-        th, td {
-            padding: 0.75rem 1rem;
-            text-align: left;
-            border-bottom: 1px solid var(--border-color);
-        }
-
-        th {
-            background: var(--bg-tertiary);
-            font-weight: 600;
-            color: var(--text-secondary);
-            font-size: 0.8rem;
-            text-transform: uppercase;
-            letter-spacing: 0.03em;
-        }
-
-        tr:hover td {
-            background: var(--bg-tertiary);
-        }
-
-        /* Badges */
-        .badge {
-            display: inline-block;
-            padding: 0.2rem 0.5rem;
-            border-radius: 4px;
-            font-size: 0.75rem;
-            font-weight: 600;
-        }
-
-        .badge.critical { background: #f8514933; color: var(--accent-red); }
-        .badge.high { background: #d2992233; color: var(--accent-yellow); }
-        .badge.medium { background: #58a6ff33; color: var(--accent-blue); }
-        .badge.low { background: #3fb95033; color: var(--accent-green); }
-
-        .files-badge {
-            display: inline-block;
-            padding: 0.15rem 0.4rem;
-            border-radius: 4px;
-            font-size: 0.75rem;
-            font-weight: 500;
-            background: var(--bg-tertiary);
-            color: var(--accent-blue);
-            cursor: help;
-            border: 1px solid var(--border-color);
-        }
-
-        .files-badge:hover {
-            background: var(--bg-secondary);
-            border-color: var(--accent-blue);
-        }
-
-        /* Tooltips */
-        .tooltip {
-            cursor: help;
-            border-bottom: 1px dotted var(--text-secondary);
-        }
-
-        /* Tippy.js dark theme */
-        .tippy-box {
-            background: var(--bg-primary);
-            border: 1px solid var(--border-color);
-            color: var(--text-primary);
-            font-size: 0.8rem;
-            font-weight: 400;
-            line-height: 1.4;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-        }
-
-        .tippy-box[data-placement^='top'] > .tippy-arrow::before {
-            border-top-color: var(--border-color);
-        }
-
-        .tippy-box[data-placement^='bottom'] > .tippy-arrow::before {
-            border-bottom-color: var(--border-color);
-        }
-
-        .tippy-content {
-            padding: 0.5rem 0.75rem;
-            white-space: pre-wrap;
-            max-width: 500px;
-            word-break: break-all;
-        }
-
-        /* Narrative / Markdown Content */
-        .narrative {
-            color: var(--text-secondary);
-            font-size: 0.95rem;
-            line-height: 1.7;
-        }
-
-        .narrative p {
-            margin: 0 0 1em 0;
-        }
-
-        .narrative p:last-child {
-            margin-bottom: 0;
-        }
-
-        .narrative h1, .narrative h2, .narrative h3, .narrative h4 {
-            color: var(--text-primary);
-            margin: 1.5em 0 0.75em 0;
-            font-weight: 600;
-        }
-
-        .narrative h1:first-child, .narrative h2:first-child, .narrative h3:first-child {
-            margin-top: 0;
-        }
-
-        .narrative h1 { font-size: 1.4rem; }
-        .narrative h2 { font-size: 1.2rem; }
-        .narrative h3 { font-size: 1.05rem; }
-        .narrative h4 { font-size: 0.95rem; }
-
-        .narrative ul, .narrative ol {
-            margin: 0.75em 0;
-            padding-left: 1.5em;
-        }
-
-        .narrative li {
-            margin: 0.35em 0;
-        }
-
-        .narrative li::marker {
-            color: var(--accent-blue);
-        }
-
-        .narrative strong {
-            color: var(--text-primary);
-            font-weight: 600;
-        }
-
-        .narrative em {
-            font-style: italic;
-        }
-
-        .narrative code {
-            background: var(--bg-tertiary);
-            padding: 0.15em 0.4em;
-            border-radius: 4px;
-            font-size: 0.9em;
-            font-family: 'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace;
-            color: var(--accent-blue);
-        }
-
-        .narrative pre {
-            background: var(--bg-tertiary);
-            padding: 1em;
-            border-radius: 6px;
-            overflow-x: auto;
-            margin: 1em 0;
-        }
-
-        .narrative pre code {
-            background: none;
-            padding: 0;
-            font-size: 0.85em;
-            color: var(--text-primary);
-        }
-
-        .narrative blockquote {
-            border-left: 3px solid var(--accent-blue);
-            margin: 1em 0;
-            padding: 0.5em 0 0.5em 1em;
-            color: var(--text-secondary);
-            background: var(--bg-tertiary);
-            border-radius: 0 4px 4px 0;
-        }
-
-        .narrative blockquote p {
-            margin: 0;
-        }
-
-        .narrative a {
-            color: var(--accent-blue);
-            text-decoration: none;
-        }
-
-        .narrative a:hover {
-            text-decoration: underline;
-        }
-
-        .narrative hr {
-            border: none;
-            border-top: 1px solid var(--border-color);
-            margin: 1.5em 0;
-        }
-
-        .narrative table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 1em 0;
-            font-size: 0.9em;
-        }
-
-        .narrative th, .narrative td {
-            padding: 0.5em 0.75em;
-            text-align: left;
-            border: 1px solid var(--border-color);
-        }
-
-        .narrative th {
-            background: var(--bg-tertiary);
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-
-        /* Charts */
-        .chart-container {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 1.5rem;
-            margin: 1rem 0;
-        }
-
-        .chart-container h3 {
-            margin-bottom: 1rem;
-            font-size: 1rem;
-        }
-
-        .chart-wrapper {
-            position: relative;
-            height: 350px;
-        }
-
-        /* Grid layouts */
-        .grid-2 {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 1.5rem;
-        }
-
-        .grid-3 {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 1rem;
-        }
-
-        /* Collapsible */
-        .collapsible {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            margin: 1rem 0;
-        }
-
-        .collapsible-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 1rem 1.5rem;
-            cursor: pointer;
-            user-select: none;
-        }
-
-        .collapsible-header:hover {
-            background: var(--bg-tertiary);
-            border-radius: 8px;
-        }
-
-        .collapsible-header h3 {
-            margin: 0;
-            font-size: 1rem;
-        }
-
-        .collapsible-toggle {
-            color: var(--text-secondary);
-            font-size: 1.2rem;
-            transition: transform 0.2s;
-        }
-
-        .collapsible.open .collapsible-toggle {
-            transform: rotate(180deg);
-        }
-
-        .collapsible-content {
-            display: none;
-            padding: 0 1.5rem 1.5rem;
-        }
-
-        .collapsible.open .collapsible-content {
-            display: block;
-        }
-
-        /* Key Findings */
-        .key-finding {
-            padding: 0.75rem 0;
-            border-bottom: 1px solid var(--border-color);
-            color: var(--text-secondary);
-        }
-
-        .key-finding:last-child {
-            border-bottom: none;
-        }
-
-        /* Progress bars */
-        .progress-bar {
-            height: 6px;
-            background: var(--bg-tertiary);
-            border-radius: 3px;
-            overflow: hidden;
-            margin-top: 0.5rem;
-        }
-
-        .progress-fill {
-            height: 100%;
-            border-radius: 3px;
-        }
-
-        .progress-fill.good { background: var(--accent-green); }
-        .progress-fill.warning { background: var(--accent-yellow); }
-        .progress-fill.danger { background: var(--accent-red); }
-
-        /* Component score cards */
-        .component-card {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: 8px;
-            padding: 1rem;
-        }
-
-        .component-card-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 0.5rem;
-        }
-
-        .component-card-name {
-            font-size: 0.85rem;
-            color: var(--text-secondary);
-        }
-
-        .component-card-score {
-            font-size: 1.25rem;
-            font-weight: bold;
-        }
-
-        .component-card-weight {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-        }
-
-        /* Report Header */
-        .report-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            padding-bottom: 1.5rem;
-            margin-bottom: 2rem;
-            border-bottom: 1px solid var(--border-color);
-        }
-
-        .report-title {
-            display: flex;
-            flex-direction: column;
-            gap: 0.5rem;
-        }
-
-        .report-title h1 {
-            font-size: 1.75rem;
-            font-weight: 600;
-            margin: 0;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        .report-title h1 code {
-            font-weight: 500;
-            color: var(--accent-blue);
-            background: var(--bg-tertiary);
-            padding: 0.1rem 0.4rem;
-            border-radius: 4px;
-            font-size: 1.5rem;
-        }
-
-        .report-meta {
-            display: flex;
-            gap: 1.5rem;
-            color: var(--text-secondary);
-            font-size: 0.85rem;
-        }
-
-        .report-meta-item {
-            display: flex;
-            align-items: center;
-            gap: 0.35rem;
-        }
-
-        .report-branding a {
-            color: var(--text-primary);
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        .report-branding a:hover {
-            color: var(--accent-blue);
-        }
-
-        .branding-text {
-            display: flex;
-            flex-direction: column;
-            align-items: flex-end;
-            line-height: 1.2;
-            text-align: right;
-        }
-
-        .branding-name {
-            font-weight: 600;
-            font-size: 1rem;
-        }
-
-        .branding-version {
-            color: var(--text-muted);
-            font-size: 0.65rem;
-            opacity: 0.7;
-        }
-
-        .omen-logo {
-            width: 32px;
-            height: 32px;
-        }
-
-        /* Footer */
-        footer {
-            text-align: center;
-            padding: 2rem;
-            border-top: 1px solid var(--border-color);
-            margin-top: 3rem;
-            color: var(--text-secondary);
-        }
-
-        footer a {
-            color: var(--accent-blue);
-        }
-
-        /* Responsive */
-        @media (max-width: 1200px) {
-            .hero {
-                grid-template-columns: 180px 1fr;
-            }
-            .hero-radar {
-                display: none;
-            }
-        }
-
-        @media (max-width: 900px) {
-            .sidebar {
-                display: none;
-            }
-            .main-content {
-                padding: 1.5rem;
-                max-width: 100%;
-            }
-            .hero {
-                grid-template-columns: 1fr;
-                text-align: center;
-            }
-            .hero-metrics {
-                grid-template-columns: repeat(2, 1fr);
-            }
-            .recommendations-grid {
-                grid-template-columns: 1fr;
-            }
-            .grid-2, .grid-3 {
-                grid-template-columns: 1fr;
-            }
-        }
-        .cell-overflow { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .event-commits { max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-size: 0.85rem; }
-    </style>
+    <style>{{ ReportCss }}</style>
+    <script>
+        try {
+            const savedTheme = localStorage.getItem('omen-report-theme');
+            const preferredTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+            document.documentElement.setAttribute('data-theme', savedTheme || preferredTheme);
+        } catch (_) {
+            document.documentElement.setAttribute('data-theme', 'light');
+        }
+    </script>
 </head>
 <body>
+    <div class="report-shell">
     <!-- Sidebar Navigation -->
-    <nav class="sidebar">
+    <nav class="report-nav">
         <div class="sidebar-header">
-            <h2>Health Score</h2>
-            <div class="sidebar-score {{ ScoreClass }}">{{ Score.score }}</div>
+            <a class="nav-brand" href="#top" aria-label="Omen report overview">
+                <span class="nav-brand-mark">O</span>
+                <span>
+                    <strong>omen</strong>
+                    <small>Repository health</small>
+                </span>
+            </a>
+            <div class="nav-score-row">
+                <span class="muted">Health score</span>
+                <span class="badge {% if Score.score >= 80 %}badge-success{% elif Score.score >= 60 %}badge-warning{% else %}badge-danger{% endif %}">{{ Score.score }}</span>
+            </div>
         </div>
 
         <div class="nav-section">
             <div class="nav-section-title">Overview</div>
-            <a href="#quick-insights" class="nav-item">
+            <a href="#quick-insights" class="nav-link">
                 <span class="nav-dot {% if Score.score < 60 %}danger{% elif Score.score < 80 %}warning{% else %}good{% endif %}"></span>
                 Quick Insights
             </a>
-            <a href="#summary" class="nav-item">
+            <a href="#summary" class="nav-link">
                 <span class="nav-dot neutral"></span>
                 Executive Summary
             </a>
-            <a href="#recommendations" class="nav-item">
+            <a href="#recommendations" class="nav-link">
                 <span class="nav-dot {% if Summary and Summary.recommendations and Summary.recommendations.high_priority %}danger{% else %}good{% endif %}"></span>
                 Recommendations
             </a>
-            <a href="#findings" class="nav-item">
+            <a href="#findings" class="nav-link">
                 <span class="nav-dot neutral"></span>
                 Key Findings
             </a>
@@ -940,31 +58,31 @@
         <div class="nav-section">
             <div class="nav-section-title">Risk Areas</div>
             {% if Hotspots and Hotspots.files %}
-            <a href="#hotspots" class="nav-item">
+            <a href="#hotspots" class="nav-link">
                 <span class="nav-dot {% if Hotspots.files | length > 20 %}danger{% elif Hotspots.files | length > 10 %}warning{% else %}good{% endif %}"></span>
                 Hotspots
             </a>
             {% endif %}
             {% if Flags and Flags.flags %}
-            <a href="#flags" class="nav-item">
+            <a href="#flags" class="nav-link">
                 <span class="nav-dot warning"></span>
                 Feature Flags
             </a>
             {% endif %}
             {% if Cohesion %}
-            <a href="#cohesion" class="nav-item">
+            <a href="#cohesion" class="nav-link">
                 <span class="nav-dot {% if Score.components.cohesion is defined and Score.components.cohesion < 70 %}danger{% elif Score.components.cohesion is defined and Score.components.cohesion < 80 %}warning{% else %}good{% endif %}"></span>
                 Low Cohesion
             </a>
             {% endif %}
             {% if Smells and Smells.smells %}
-            <a href="#smells" class="nav-item">
+            <a href="#smells" class="nav-link">
                 <span class="nav-dot {% if Smells.summary.critical_count > 0 %}danger{% elif Smells.summary.total_smells > 5 %}warning{% else %}good{% endif %}"></span>
                 Arch Smells
             </a>
             {% endif %}
             {% if Graph and Graph.summary.total_edges > 0 %}
-            <a href="#dependencies" class="nav-item">
+            <a href="#dependencies" class="nav-link">
                 <span class="nav-dot {% if Graph.summary.cycle_count > 3 %}danger{% elif Graph.summary.cycle_count > 0 %}warning{% else %}good{% endif %}"></span>
                 Dependencies
             </a>
@@ -974,19 +92,19 @@
         <div class="nav-section">
             <div class="nav-section-title">Technical Debt</div>
             {% if SATD and SATD.items %}
-            <a href="#satd" class="nav-item">
+            <a href="#satd" class="nav-link">
                 <span class="nav-dot {% if count_severity(SATD.items, "critical") > 5 %}danger{% elif count_severity(SATD.items, "critical") > 0 %}warning{% else %}good{% endif %}"></span>
                 Known Issues
             </a>
             {% endif %}
             {% if Duplicates %}
-            <a href="#duplicates" class="nav-item">
+            <a href="#duplicates" class="nav-link">
                 <span class="nav-dot {% if Duplicates.duplication_ratio > 15.0 %}danger{% elif Duplicates.duplication_ratio > 10.0 %}warning{% else %}good{% endif %}"></span>
                 Duplication
             </a>
             {% endif %}
             {% if Tdg %}
-            <a href="#tdg" class="nav-item">
+            <a href="#tdg" class="nav-link">
                 <span class="nav-dot {% if Tdg.average_score < 50.0 %}danger{% elif Tdg.average_score < 70.0 %}warning{% else %}good{% endif %}"></span>
                 Debt Gradient
             </a>
@@ -996,25 +114,25 @@
         <div class="nav-section">
             <div class="nav-section-title">Analysis</div>
             {% if Trend %}
-            <a href="#trends" class="nav-item">
+            <a href="#trends" class="nav-link">
                 <span class="nav-dot {% if Trend.slope < -0.5 %}danger{% elif Trend.slope < 0.0 %}warning{% else %}good{% endif %}"></span>
                 Trends
             </a>
             {% endif %}
             {% if Churn %}
-            <a href="#churn" class="nav-item">
+            <a href="#churn" class="nav-link">
                 <span class="nav-dot neutral"></span>
                 Change Activity
             </a>
             {% endif %}
             {% if Ownership %}
-            <a href="#ownership" class="nav-item">
+            <a href="#ownership" class="nav-link">
                 <span class="nav-dot {% if Ownership.bus_factor < 3 %}danger{% elif Ownership.bus_factor < 5 %}warning{% else %}good{% endif %}"></span>
                 Ownership
             </a>
             {% endif %}
             {% if Temporal and Temporal.couplings %}
-            <a href="#temporal" class="nav-item">
+            <a href="#temporal" class="nav-link">
                 <span class="nav-dot {% if Temporal.summary.strong_couplings > 10 %}danger{% elif Temporal.summary.strong_couplings > 3 %}warning{% else %}good{% endif %}"></span>
                 Temporal Coupling
             </a>
@@ -1023,11 +141,11 @@
 
         <div class="nav-section">
             <div class="nav-section-title">Reference</div>
-            <a href="#breakdown" class="nav-item">
+            <a href="#breakdown" class="nav-link">
                 <span class="nav-dot neutral"></span>
                 Score Breakdown
             </a>
-            <a href="#glossary" class="nav-item">
+            <a href="#glossary" class="nav-link">
                 <span class="nav-dot neutral"></span>
                 Glossary
             </a>
@@ -1035,10 +153,11 @@
     </nav>
 
     <!-- Main Content -->
-    <main class="main-content">
+    <main class="report-main">
         <!-- Report Header -->
-        <header class="report-header">
+        <header class="report-header" id="top">
             <div class="report-title">
+                <p class="report-eyebrow">Repository intelligence</p>
                 <h1>Health Report: <code>{{ Metadata.repository }}</code></h1>
                 <div class="report-meta">
                     <span class="report-meta-item">
@@ -1053,8 +172,12 @@
                     {% endif %}
                 </div>
             </div>
-            <div class="report-branding">
-                <a href="https://github.com/panbanda/omen" target="_blank">
+            <div class="report-actions">
+                <button class="btn-ghost theme-toggle" id="theme-toggle" type="button" aria-label="Switch color theme" title="Switch color theme">
+                    <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.41M17.66 6.34l1.41-1.41"></path></svg>
+                    <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"></path></svg>
+                </button>
+                <a class="report-branding" href="https://github.com/panbanda/omen" target="_blank" rel="noreferrer">
                     <span class="branding-text">
                         <span class="branding-name">omen</span>
                         <span class="branding-version">{{ Metadata.omen_version }}</span>
@@ -1065,10 +188,13 @@
 
         <!-- Hero Section -->
         <section class="hero">
-            <div class="hero-score">
-                <div class="score-circle {{ ScoreClass }}" style="--score: {{ Score.score }}">
-                    <span class="score-value">{{ Score.score }}</span>
-                    <span class="score-label">Health Score</span>
+            <div class="hero-summary">
+                <span class="hero-grade badge {% if Score.score >= 80 %}badge-success{% elif Score.score >= 60 %}badge-warning{% else %}badge-danger{% endif %}">
+                    {% if Score.score >= 90 %}A{% elif Score.score >= 80 %}B{% elif Score.score >= 70 %}C{% elif Score.score >= 60 %}C{% elif Score.score >= 50 %}D{% else %}F{% endif %}
+                </span>
+                <div>
+                    <div class="hero-score">{{ Score.score }}</div>
+                    <div class="hero-score-label">Overall health score</div>
                 </div>
                 {% if Trend %}
                 <div class="hero-trend-stat">
@@ -1084,47 +210,47 @@
                 <div id="radarChart" style="width:100%;height:200px"></div>
             </div>
 
-            <div class="hero-metrics">
-                <div class="metric-card">
-                    <div class="metric-card-value">{{ Score.files_analyzed }}</div>
-                    <div class="metric-card-label">Files Analyzed</div>
+            <div class="metric-grid hero-metrics">
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Score.files_analyzed }}</div>
+                    <div class="metric-label">Files Analyzed</div>
                 </div>
                 {% if Hotspots and Hotspots.files %}
-                <div class="metric-card">
-                    <div class="metric-card-value {% if Hotspots.files | length > 20 %}danger{% elif Hotspots.files | length > 10 %}warning{% else %}good{% endif %}">{{ Hotspots.files | length }}</div>
-                    <div class="metric-card-label">Hotspot Files</div>
+                <div class="metric-tile">
+                    <div class="metric-value {% if Hotspots.files | length > 20 %}danger{% elif Hotspots.files | length > 10 %}warning{% else %}good{% endif %}">{{ Hotspots.files | length }}</div>
+                    <div class="metric-label">Hotspot Files</div>
                 </div>
                 {% endif %}
                 {% if SATD and SATD.items %}
-                <div class="metric-card">
-                    <div class="metric-card-value {% if count_severity(SATD.items, "critical") > 5 %}danger{% elif count_severity(SATD.items, "critical") > 0 %}warning{% else %}good{% endif %}">{{ count_severity(SATD.items, "critical") }}</div>
-                    <div class="metric-card-label">Critical Issues</div>
+                <div class="metric-tile">
+                    <div class="metric-value {% if count_severity(SATD.items, "critical") > 5 %}danger{% elif count_severity(SATD.items, "critical") > 0 %}warning{% else %}good{% endif %}">{{ count_severity(SATD.items, "critical") }}</div>
+                    <div class="metric-label">Critical Issues</div>
                 </div>
                 {% endif %}
                 {% if Duplicates %}
-                <div class="metric-card">
-                    <div class="metric-card-value {% if Duplicates.duplication_ratio > 15.0 %}danger{% elif Duplicates.duplication_ratio > 10.0 %}warning{% else %}good{% endif %}">{{ Duplicates.duplication_ratio | round(1) }}%</div>
-                    <div class="metric-card-label">Duplication</div>
+                <div class="metric-tile">
+                    <div class="metric-value {% if Duplicates.duplication_ratio > 15.0 %}danger{% elif Duplicates.duplication_ratio > 10.0 %}warning{% else %}good{% endif %}">{{ Duplicates.duplication_ratio | round(1) }}%</div>
+                    <div class="metric-label">Duplication</div>
                 </div>
                 {% endif %}
             </div>
         </section>
 
         <!-- Quick Insights (Data-driven, always shown) -->
-        <section id="quick-insights" class="section">
+        <section id="quick-insights" class="card report-section">
             <div class="section-header">
-                <h2>Quick Insights</h2>
+                <h2 class="section-title">Quick Insights</h2>
+                <p class="section-description">Key findings from the analysis - prioritized by impact</p>
             </div>
-            <p class="section-subtitle">Key findings from the analysis - prioritized by impact</p>
 
             <div class="grid-2">
                 {% if SATD and SATD.items %}
                 {% set critical_count = count_severity(SATD.items, "critical") %}
                 {% set high_count = count_severity(SATD.items, "high") %}
                 {% if critical_count > 0 or high_count > 10 %}
-                <div class="card highlight-red">
+                <div class="insight insight-danger">
                     <h3>Technical Debt Hotspot</h3>
-                    <p style="color: var(--text-secondary);">
+                    <p class="muted">
                         Found <strong>{{ critical_count }} critical</strong> and <strong>{{ high_count }} high-priority</strong> debt items.
                         These are areas where the team has explicitly noted problems. Consider scheduling time to address the most impactful items.
                     </p>
@@ -1135,9 +261,9 @@
                 {% if Cohesion and Cohesion.classes %}
                 {% set god_classes = Cohesion.classes | selectattr("lcom", "gt", 50) | list %}
                 {% if god_classes | length > 5 %}
-                <div class="card highlight-yellow">
+                <div class="insight insight-warning">
                     <h3>Low Cohesion Classes</h3>
-                    <p style="color: var(--text-secondary);">
+                    <p class="muted">
                         Detected <strong>{{ god_classes | length }} classes</strong> with low cohesion (LCOM > 50).
                         These classes may be doing too many unrelated things. Consider splitting them into more focused components.
                     </p>
@@ -1146,9 +272,9 @@
                 {% endif %}
 
                 {% if Duplicates and Duplicates.duplication_ratio > 5.0 %}
-                <div class="card highlight-yellow">
+                <div class="insight insight-warning">
                     <h3>Code Duplication</h3>
-                    <p style="color: var(--text-secondary);">
+                    <p class="muted">
                         <strong>{{ Duplicates.duplication_ratio | round(1) }}%</strong> of code is duplicated across {{ Duplicates.clone_groups }} clone groups.
                         Bugs fixed in one location may need fixing in others. Consider extracting shared functionality.
                     </p>
@@ -1156,9 +282,9 @@
                 {% endif %}
 
                 {% if Churn and Churn.summary.total_commits > 100 %}
-                <div class="card highlight-blue">
+                <div class="insight insight-info">
                     <h3>Active Development</h3>
-                    <p style="color: var(--text-secondary);">
+                    <p class="muted">
                         <strong>{{ Churn.summary.total_commits }}</strong> commits across <strong>{{ Churn.summary.unique_files }}</strong> files.
                         {% if Churn.summary.hotspot_files %}The most active files are potential hotspots that warrant attention.{% endif %}
                     </p>
@@ -1166,17 +292,17 @@
                 {% endif %}
 
                 {% if Score.score >= 80 %}
-                <div class="card highlight-green">
+                <div class="insight insight-success">
                     <h3>Healthy Codebase</h3>
-                    <p style="color: var(--text-secondary);">
+                    <p class="muted">
                         Overall health score of <strong>{{ Score.score }}</strong> indicates a well-maintained codebase.
                         Continue current practices and address issues as they arise.
                     </p>
                 </div>
                 {% elif Score.score < 60 %}
-                <div class="card highlight-red">
+                <div class="insight insight-danger">
                     <h3>Attention Needed</h3>
-                    <p style="color: var(--text-secondary);">
+                    <p class="muted">
                         Health score of <strong>{{ Score.score }}</strong> suggests significant technical debt.
                         Consider allocating dedicated time for refactoring and debt reduction.
                     </p>
@@ -1188,9 +314,10 @@
         <!-- Executive Summary -->
         {% if Summary %}
         {% if Summary.executive_summary %}
-        <section id="summary" class="section">
+        <section id="summary" class="card report-section">
             <div class="section-header">
-                <h2>Executive Summary</h2>
+                <h2 class="section-title">Executive Summary</h2>
+                <p class="section-description">A concise assessment of the repository's current health and direction</p>
             </div>
             <div class="card">
                 <div class="narrative">{{ Summary.executive_summary | markdown }}</div>
@@ -1201,16 +328,16 @@
         <!-- Recommendations -->
         {% if Summary.recommendations %}
         {% if Summary.recommendations.high_priority or Summary.recommendations.medium_priority or Summary.recommendations.ongoing %}
-        <section id="recommendations" class="section">
+        <section id="recommendations" class="card report-section">
             <div class="section-header">
-                <h2>Recommendations</h2>
+                <h2 class="section-title">Recommendations</h2>
+                <p class="section-description">Prioritized actions to improve code health</p>
             </div>
-            <p class="section-subtitle">Prioritized actions to improve code health</p>
 
             <div class="recommendations-list">
                 {% if Summary.recommendations.high_priority %}
-                <div class="card highlight-red">
-                    <div class="recommendation-category" style="color: var(--accent-red);">
+                <div class="insight insight-danger">
+                    <div class="recommendation-category danger">
                         <span class="nav-dot danger"></span>
                         Critical - Address Soon
                     </div>
@@ -1224,8 +351,8 @@
                 {% endif %}
 
                 {% if Summary.recommendations.medium_priority %}
-                <div class="card highlight-yellow">
-                    <div class="recommendation-category" style="color: var(--accent-yellow);">
+                <div class="insight insight-warning">
+                    <div class="recommendation-category warning">
                         <span class="nav-dot warning"></span>
                         Important - Plan For
                     </div>
@@ -1239,8 +366,8 @@
                 {% endif %}
 
                 {% if Summary.recommendations.ongoing %}
-                <div class="card highlight-blue">
-                    <div class="recommendation-category" style="color: var(--accent-blue);">
+                <div class="insight insight-info">
+                    <div class="recommendation-category info">
                         <span class="nav-dot neutral"></span>
                         Maintenance - Keep Doing
                     </div>
@@ -1259,9 +386,10 @@
 
         <!-- Key Findings -->
         {% if Summary.key_findings %}
-        <section id="findings" class="section">
+        <section id="findings" class="card report-section">
             <div class="section-header">
-                <h2>Key Findings</h2>
+                <h2 class="section-title">Key Findings</h2>
+                <p class="section-description">The most consequential signals surfaced across all analyzers</p>
             </div>
             <div class="card">
                 {% for item in Summary.key_findings %}
@@ -1274,50 +402,50 @@
 
         <!-- Hotspots -->
         {% if Hotspots and Hotspots.files %}
-        <section id="hotspots" class="section">
+        <section id="hotspots" class="card report-section">
             <div class="section-header">
-                <h2>Hotspots</h2>
+                <h2 class="section-title">Hotspots</h2>
+                <p class="section-description">Files with both high complexity and frequent changes - highest risk for bugs</p>
             </div>
-            <p class="section-subtitle">Files with both high complexity and frequent changes - highest risk for bugs</p>
 
             {% if HotspotsInsight %}
-            <div class="card" style="margin-bottom: 1.5rem;">
+            <div class="insight">
                 <div class="narrative">{{ HotspotsInsight.section_insight | markdown }}</div>
             </div>
             {% endif %}
 
-            <div class="stat-grid">
-                <div class="stat-box">
-                    <div class="value">{{ Hotspots.files | length }}</div>
-                    <div class="label">Hotspot Files</div>
+            <div class="metric-grid">
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Hotspots.files | length }}</div>
+                    <div class="metric-label">Hotspot Files</div>
                 </div>
                 {% if Hotspots.summary %}
-                <div class="stat-box">
-                    <div class="value">{{ Hotspots.summary.max_score | round(2) }}</div>
-                    <div class="label">Highest Risk</div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Hotspots.summary.max_score | round(2) }}</div>
+                    <div class="metric-label">Highest Risk</div>
                 </div>
-                <div class="stat-box">
-                    <div class="value">{{ Hotspots.summary.avg_score | round(2) }}</div>
-                    <div class="label">Average Risk</div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Hotspots.summary.avg_score | round(2) }}</div>
+                    <div class="metric-label">Average Risk</div>
                 </div>
                 {% endif %}
             </div>
 
             <div class="chart-container">
                 <h3>Risk Landscape</h3>
-                <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 0.75rem;">Files in the upper-right are both complex and frequently changed -- the most likely sources of bugs. Bubble size reflects overall risk score. Green is low risk, yellow moderate, red high.</p>
+                <p>Files in the upper-right are both complex and frequently changed -- the most likely sources of bugs. Bubble size reflects overall risk score. Green is low risk, yellow moderate, red high.</p>
                 <div id="hotspotsScatter" style="width:100%;height:400px"></div>
             </div>
 
-            <div class="table-container">
-                <table id="hotspots-table">
+            <div class="table-wrap">
+                <table class="report-table" id="hotspots-table" data-numeric-columns="3,4,5">
                     <thead>
                         <tr>
                             <th>File</th>
                             <th>Lang</th>
-                            <th><span class="tooltip" data-tooltip="Combined score of churn frequency and code complexity. Higher risk = more likely to have bugs.">Risk</span></th>
-                            <th><span class="tooltip" data-tooltip="Number of times this file was modified in the analysis period.">Changes</span></th>
-                            <th><span class="tooltip" data-tooltip="Cyclomatic complexity - number of independent paths through the code.">Complexity</span></th>
+                            <th class="num"><span class="tooltip" data-tooltip="Combined score of churn frequency and code complexity. Higher risk = more likely to have bugs.">Risk</span></th>
+                            <th class="num"><span class="tooltip" data-tooltip="Number of times this file was modified in the analysis period.">Changes</span></th>
+                            <th class="num"><span class="tooltip" data-tooltip="Cyclomatic complexity - number of independent paths through the code.">Complexity</span></th>
                         </tr>
                     </thead>
                 </table>
@@ -1328,34 +456,35 @@
 
         <!-- Feature Flags -->
         {% if Flags and Flags.flags %}
-        <section id="flags" class="section">
+        <section id="flags" class="card report-section">
             <div class="section-header">
-                <h2>Feature Flags</h2>
+                <h2 class="section-title">Feature Flags</h2>
+                <p class="section-description">Stale feature flags that should be cleaned up</p>
             </div>
-            <p class="section-subtitle">Stale feature flags that should be cleaned up</p>
 
             {% if FlagsInsight %}
-            <div class="card" style="margin-bottom: 1.5rem;">
+            <div class="insight">
                 <div class="narrative">{{ FlagsInsight.section_insight | markdown }}</div>
             </div>
             {% endif %}
-            <div class="table-container">
-                <table id="flags-table">
+            <div class="table-wrap">
+                <table class="report-table" id="flags-table" data-numeric-columns="4">
                     <thead>
                         <tr>
                             <th>Flag</th>
                             <th><span class="tooltip" data-tooltip="Cleanup priority based on age and staleness. Critical flags are old and unchanged - likely safe to remove.">Priority</span></th>
                             <th><span class="tooltip" data-tooltip="Time since the flag was first introduced to the codebase.">Age</span></th>
-                            <th><span class="tooltip" data-tooltip="Number of files containing references to this flag. Higher spread = more cleanup effort.">Files</span></th>
+                            <th class="num"><span class="tooltip" data-tooltip="Number of files containing references to this flag. Higher spread = more cleanup effort.">Files</span></th>
                             <th>Provider</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for item in Flags.flags %}
                         {% set flag_file_count = item.complexity.file_spread or item.file_spread or (item.references | length) %}
+                        {% set flag_priority = item.priority.level or (item.stale and "HIGH" or "LOW") %}
                         <tr>
                             <td><code>{{ item.flag_key }}</code></td>
-                            <td><span class="badge {{ (item.priority.level or (item.stale and "HIGH" or "LOW")) | priority_badge }}">{{ item.priority.level or (item.stale and "High" or "Low") }}</span></td>
+                            <td><span class="badge {% if flag_priority | upper == "CRITICAL" %}badge-danger{% elif flag_priority | upper == "HIGH" %}badge-warning{% elif flag_priority | upper == "MEDIUM" %}badge-secondary{% else %}badge-success{% endif %}">{{ item.priority.level or (item.stale and "High" or "Low") }}</span></td>
                             <td><span class="time-ago" data-timestamp="{{ item.staleness.introduced_at or item.first_seen }}"></span></td>
                             <td><span class="files-badge tooltip" data-tooltip="{{ flag_files_tooltip(item.references, Metadata.paths) }}">{{ flag_file_count }} file{% if flag_file_count != 1 %}s{% endif %}</span></td>
                             <td>{{ item.provider }}</td>
@@ -1369,28 +498,28 @@
 
         <!-- Low Cohesion Classes -->
         {% if Cohesion and Cohesion.classes %}
-        <section id="cohesion" class="section">
+        <section id="cohesion" class="card report-section">
             <div class="section-header">
-                <h2>Low Cohesion Classes</h2>
+                <h2 class="section-title">Low Cohesion Classes</h2>
+                <p class="section-description">Classes doing too many unrelated things - candidates for splitting</p>
             </div>
-            <p class="section-subtitle">Classes doing too many unrelated things - candidates for splitting</p>
 
             {% if ComponentsInsight and ComponentsInsight.component_insights and ComponentsInsight.component_insights.cohesion %}
-            <div class="card" style="margin-bottom: 1.5rem;">
+            <div class="insight">
                 <div class="narrative">{{ ComponentsInsight.component_insights.cohesion | markdown }}</div>
             </div>
             {% endif %}
 
-            <div class="table-container">
-                <table id="cohesion-table">
+            <div class="table-wrap">
+                <table class="report-table" id="cohesion-table" data-numeric-columns="4,5,6">
                     <thead>
                         <tr>
                             <th>Class</th>
                             <th>File</th>
                             <th>Language</th>
-                            <th><span class="tooltip" data-tooltip="Lack of Cohesion of Methods. Higher values indicate a class is doing too many unrelated things and should be split.">LCOM</span></th>
-                            <th><span class="tooltip" data-tooltip="Weighted Methods per Class. Sum of complexity of all methods. High values indicate overly complex classes.">WMC</span></th>
-                            <th><span class="tooltip" data-tooltip="Coupling Between Objects. Number of classes this class depends on. High coupling makes changes risky.">CBO</span></th>
+                            <th class="num"><span class="tooltip" data-tooltip="Lack of Cohesion of Methods. Higher values indicate a class is doing too many unrelated things and should be split.">LCOM</span></th>
+                            <th class="num"><span class="tooltip" data-tooltip="Weighted Methods per Class. Sum of complexity of all methods. High values indicate overly complex classes.">WMC</span></th>
+                            <th class="num"><span class="tooltip" data-tooltip="Coupling Between Objects. Number of classes this class depends on. High coupling makes changes risky.">CBO</span></th>
                         </tr>
                     </thead>
                 </table>
@@ -1401,39 +530,39 @@
 
         <!-- Architectural Smells -->
         {% if Smells and Smells.smells %}
-        <section id="smells" class="section">
+        <section id="smells" class="card report-section">
             <div class="section-header">
-                <h2>Architectural Smells</h2>
+                <h2 class="section-title">Architectural Smells</h2>
+                <p class="section-description">Structural problems that make the codebase harder to change safely</p>
             </div>
-            <p class="section-subtitle">Structural problems that make the codebase harder to change safely</p>
 
             {% if SmellsInsight %}
-            <div class="card" style="margin-bottom: 1.5rem;">
+            <div class="insight">
                 <div class="narrative">{{ SmellsInsight.section_insight | markdown }}</div>
             </div>
             {% endif %}
 
-            <div class="stat-grid">
-                <div class="stat-box">
-                    <div class="value" style="color: {% if Smells.summary.total_smells > 10 %}var(--accent-red){% elif Smells.summary.total_smells > 3 %}var(--accent-yellow){% else %}var(--accent-green){% endif %}">{{ Smells.summary.total_smells }}</div>
-                    <div class="label">Total Smells</div>
+            <div class="metric-grid">
+                <div class="metric-tile">
+                    <div class="metric-value {% if Smells.summary.total_smells > 10 %}danger{% elif Smells.summary.total_smells > 3 %}warning{% else %}good{% endif %}">{{ Smells.summary.total_smells }}</div>
+                    <div class="metric-label">Total Smells</div>
                 </div>
-                <div class="stat-box">
-                    <div class="value" style="color: var(--accent-red)">{{ Smells.summary.cyclic_count }}</div>
-                    <div class="label"><span class="tooltip" data-tooltip="Files or modules that depend on each other in a cycle. Cycles make it impossible to change one without affecting all.">Cyclic Dependencies</span></div>
+                <div class="metric-tile">
+                    <div class="metric-value danger">{{ Smells.summary.cyclic_count }}</div>
+                    <div class="metric-label"><span class="tooltip" data-tooltip="Files or modules that depend on each other in a cycle. Cycles make it impossible to change one without affecting all.">Cyclic Dependencies</span></div>
                 </div>
-                <div class="stat-box">
-                    <div class="value" style="color: var(--accent-yellow)">{{ Smells.summary.hub_count }}</div>
-                    <div class="label"><span class="tooltip" data-tooltip="Files with excessive incoming and outgoing dependencies. Changes here ripple everywhere.">Hub Dependencies</span></div>
+                <div class="metric-tile">
+                    <div class="metric-value warning">{{ Smells.summary.hub_count }}</div>
+                    <div class="metric-label"><span class="tooltip" data-tooltip="Files with excessive incoming and outgoing dependencies. Changes here ripple everywhere.">Hub Dependencies</span></div>
                 </div>
-                <div class="stat-box">
-                    <div class="value" style="color: var(--accent-yellow)">{{ Smells.summary.unstable_count }}</div>
-                    <div class="label"><span class="tooltip" data-tooltip="Stable modules depending on unstable ones. The stable module is forced to change when the unstable one does.">Unstable Dependencies</span></div>
+                <div class="metric-tile">
+                    <div class="metric-value warning">{{ Smells.summary.unstable_count }}</div>
+                    <div class="metric-label"><span class="tooltip" data-tooltip="Stable modules depending on unstable ones. The stable module is forced to change when the unstable one does.">Unstable Dependencies</span></div>
                 </div>
             </div>
 
-            <div class="table-container">
-                <table id="smells-table">
+            <div class="table-wrap">
+                <table class="report-table" id="smells-table">
                     <thead>
                         <tr>
                             <th>Type</th>
@@ -1445,14 +574,14 @@
                     <tbody>
                         {% for item in Smells.smells %}
                         <tr>
-                            <td style="white-space: nowrap;"><span class="tooltip" data-tooltip="{{ item.description }}">{{ item.smell_type | smell_type_label }}</span></td>
-                            <td><span class="badge {{ item.severity | lower }}">{{ item.severity }}</span></td>
+                            <td class="cell-nowrap"><span class="tooltip" data-tooltip="{{ item.description }}">{{ item.smell_type | smell_type_label }}</span></td>
+                            <td><span class="badge {% if item.severity | lower == "critical" %}badge-danger{% elif item.severity | lower == "high" %}badge-warning{% elif item.severity | lower == "medium" %}badge-secondary{% else %}badge-success{% endif %}">{{ item.severity }}</span></td>
                             <td>
                                 {% for comp in item.components %}
-                                <code style="font-size: 0.75rem;">{{ comp | rel_path(Metadata.paths) | truncate_path(40) }}</code>{% if not loop.last %}, {% endif %}
+                                <code class="code-compact">{{ comp | rel_path(Metadata.paths) | truncate_path(40) }}</code>{% if not loop.last %}, {% endif %}
                                 {% endfor %}
                             </td>
-                            <td style="color: var(--text-secondary); font-size: 0.85rem;">{{ item.suggestion | truncate(120) }}</td>
+                            <td class="muted cell-compact">{{ item.suggestion | truncate(120) }}</td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -1463,49 +592,49 @@
 
         <!-- Dependency Graph -->
         {% if Graph and Graph.summary.total_edges > 0 %}
-        <section id="dependencies" class="section">
+        <section id="dependencies" class="card report-section">
             <div class="section-header">
-                <h2>Dependency Structure</h2>
+                <h2 class="section-title">Dependency Structure</h2>
+                <p class="section-description">Import graph analysis - cycles, bottlenecks, and instability</p>
             </div>
-            <p class="section-subtitle">Import graph analysis - cycles, bottlenecks, and instability</p>
 
             {% if GraphInsight %}
-            <div class="card" style="margin-bottom: 1.5rem;">
+            <div class="insight">
                 <div class="narrative">{{ GraphInsight.section_insight | markdown }}</div>
             </div>
             {% endif %}
 
-            <div class="stat-grid">
-                <div class="stat-box">
-                    <div class="value">{{ Graph.summary.total_nodes }}</div>
-                    <div class="label">Modules</div>
+            <div class="metric-grid">
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Graph.summary.total_nodes }}</div>
+                    <div class="metric-label">Modules</div>
                 </div>
-                <div class="stat-box">
-                    <div class="value">{{ Graph.summary.total_edges }}</div>
-                    <div class="label">Dependencies</div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Graph.summary.total_edges }}</div>
+                    <div class="metric-label">Dependencies</div>
                 </div>
-                <div class="stat-box">
-                    <div class="value">{{ Graph.summary.avg_degree | round(1) }}</div>
-                    <div class="label"><span class="tooltip" data-tooltip="Average number of imports + importers per file. Higher means more interconnected.">Avg Degree</span></div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Graph.summary.avg_degree | round(1) }}</div>
+                    <div class="metric-label"><span class="tooltip" data-tooltip="Average number of imports + importers per file. Higher means more interconnected.">Avg Degree</span></div>
                 </div>
-                <div class="stat-box">
-                    <div class="value" style="color: {% if Graph.summary.cycle_count > 3 %}var(--accent-red){% elif Graph.summary.cycle_count > 0 %}var(--accent-yellow){% else %}var(--accent-green){% endif %}">{{ Graph.summary.cycle_count }}</div>
-                    <div class="label"><span class="tooltip" data-tooltip="Strongly connected components with more than one node. Each cycle is a group of files that all depend on each other.">Dependency Cycles</span></div>
+                <div class="metric-tile">
+                    <div class="metric-value {% if Graph.summary.cycle_count > 3 %}danger{% elif Graph.summary.cycle_count > 0 %}warning{% else %}good{% endif %}">{{ Graph.summary.cycle_count }}</div>
+                    <div class="metric-label"><span class="tooltip" data-tooltip="Strongly connected components with more than one node. Each cycle is a group of files that all depend on each other.">Dependency Cycles</span></div>
                 </div>
             </div>
 
             {% if Graph.cycles %}
-            <div class="card" style="margin-bottom: 1.5rem;">
-                <h3 style="margin-bottom: 0.75rem;">Detected Cycles</h3>
+            <div class="card cycle-list">
+                <h3>Detected Cycles</h3>
                 {% for cycle in Graph.cycles %}
-                <div style="margin-bottom: 0.75rem; padding: 0.5rem 0.75rem; background: var(--bg-tertiary); border-radius: 6px; border-left: 3px solid var(--accent-red);">
-                    <div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.25rem;">Cycle ({{ cycle | length }} files)</div>
-                    <div style="display: flex; flex-wrap: wrap; gap: 0.25rem;">
+                <div class="cycle-item">
+                    <div class="cycle-label">Cycle ({{ cycle | length }} files)</div>
+                    <div class="cycle-path">
                         {% for file in cycle %}
-                        <code style="font-size: 0.75rem;">{{ file | rel_path(Metadata.paths) | truncate_path(50) }}</code>{% if not loop.last %}<span style="color: var(--accent-red); margin: 0 0.125rem;">&#8594;</span>{% endif %}
+                        <code>{{ file | rel_path(Metadata.paths) | truncate_path(50) }}</code>{% if not loop.last %}<span class="cycle-arrow">&#8594;</span>{% endif %}
                         {% endfor %}
-                        <span style="color: var(--accent-red); margin: 0 0.125rem;">&#8594;</span>
-                        <code style="font-size: 0.75rem; opacity: 0.6;">{{ cycle[0] | rel_path(Metadata.paths) | truncate_path(50) }}</code>
+                        <span class="cycle-arrow">&#8594;</span>
+                        <code class="muted">{{ cycle[0] | rel_path(Metadata.paths) | truncate_path(50) }}</code>
                     </div>
                 </div>
                 {% endfor %}
@@ -1513,17 +642,17 @@
             {% endif %}
 
             {% if Graph.nodes %}
-            <div class="table-container">
-                <table id="graph-table">
+            <div class="table-wrap">
+                <table class="report-table" id="graph-table" data-numeric-columns="3,4,5,6,7">
                     <thead>
                         <tr>
                             <th>File</th>
                             <th>Lang</th>
-                            <th><span class="tooltip" data-tooltip="Relative importance in the dependency graph. Higher PageRank = more other files depend on this (directly or transitively).">PageRank</span></th>
-                            <th><span class="tooltip" data-tooltip="How often this file sits on the shortest path between other files. High betweenness = bottleneck.">Betweenness</span></th>
-                            <th><span class="tooltip" data-tooltip="Number of files that import this file.">In</span></th>
-                            <th><span class="tooltip" data-tooltip="Number of files this file imports.">Out</span></th>
-                            <th><span class="tooltip" data-tooltip="Ratio of outgoing to total dependencies. 0 = maximally stable (many dependents), 1 = maximally unstable. Stable modules depending on unstable ones is a smell.">Instability</span></th>
+                            <th class="num"><span class="tooltip" data-tooltip="Relative importance in the dependency graph. Higher PageRank = more other files depend on this (directly or transitively).">PageRank</span></th>
+                            <th class="num"><span class="tooltip" data-tooltip="How often this file sits on the shortest path between other files. High betweenness = bottleneck.">Betweenness</span></th>
+                            <th class="num"><span class="tooltip" data-tooltip="Number of files that import this file.">In</span></th>
+                            <th class="num"><span class="tooltip" data-tooltip="Number of files this file imports.">Out</span></th>
+                            <th class="num"><span class="tooltip" data-tooltip="Ratio of outgoing to total dependencies. 0 = maximally stable (many dependents), 1 = maximally unstable. Stable modules depending on unstable ones is a smell.">Instability</span></th>
                         </tr>
                     </thead>
                 </table>
@@ -1535,34 +664,34 @@
 
         <!-- SATD / Known Issues -->
         {% if SATD and SATD.items %}
-        <section id="satd" class="section">
+        <section id="satd" class="card report-section">
             <div class="section-header">
-                <h2>Known Issues</h2>
+                <h2 class="section-title">Known Issues</h2>
+                <p class="section-description">Problems the team has documented but not yet fixed (TODO, FIXME, HACK)</p>
             </div>
-            <p class="section-subtitle">Problems the team has documented but not yet fixed (TODO, FIXME, HACK)</p>
 
             {% if SATDInsight %}
-            <div class="card" style="margin-bottom: 1.5rem;">
+            <div class="insight">
                 <div class="narrative">{{ SATDInsight.section_insight | markdown }}</div>
             </div>
             {% endif %}
 
-            <div class="stat-grid">
-                <div class="stat-box">
-                    <div class="value">{{ SATD.items | length }}</div>
-                    <div class="label">Total Issues</div>
+            <div class="metric-grid">
+                <div class="metric-tile">
+                    <div class="metric-value">{{ SATD.items | length }}</div>
+                    <div class="metric-label">Total Issues</div>
                 </div>
-                <div class="stat-box">
-                    <div class="value" style="color: var(--accent-red)">{{ count_severity(SATD.items, "critical") }}</div>
-                    <div class="label">Critical</div>
+                <div class="metric-tile">
+                    <div class="metric-value danger">{{ count_severity(SATD.items, "critical") }}</div>
+                    <div class="metric-label">Critical</div>
                 </div>
-                <div class="stat-box">
-                    <div class="value" style="color: var(--accent-yellow)">{{ count_severity(SATD.items, "high") }}</div>
-                    <div class="label">High</div>
+                <div class="metric-tile">
+                    <div class="metric-value warning">{{ count_severity(SATD.items, "high") }}</div>
+                    <div class="metric-label">High</div>
                 </div>
-                <div class="stat-box">
-                    <div class="value" style="color: var(--accent-blue)">{{ count_severity(SATD.items, "medium") }}</div>
-                    <div class="label">Medium</div>
+                <div class="metric-tile">
+                    <div class="metric-value info">{{ count_severity(SATD.items, "medium") }}</div>
+                    <div class="metric-label">Medium</div>
                 </div>
             </div>
 
@@ -1581,15 +710,15 @@
                 </div>
             </div>
 
-            <div class="table-container">
-                <table id="satd-table">
+            <div class="table-wrap">
+                <table class="report-table" id="satd-table" data-numeric-columns="5">
                     <thead>
                         <tr>
                             <th><span class="tooltip" data-tooltip="Impact level based on marker type. FIXME/XXX are critical, TODO is high, HACK/TEMP are medium.">Severity</span></th>
                             <th><span class="tooltip" data-tooltip="Type of technical debt: defect (bugs), design (architecture), requirement (missing features), etc.">Category</span></th>
                             <th>File</th>
                             <th>Lang</th>
-                            <th>Line</th>
+                            <th class="num">Line</th>
                             <th>Comment</th>
                         </tr>
                     </thead>
@@ -1601,34 +730,34 @@
 
         <!-- Duplicates -->
         {% if Duplicates %}
-        <section id="duplicates" class="section">
+        <section id="duplicates" class="card report-section">
             <div class="section-header">
-                <h2>Duplicated Code</h2>
+                <h2 class="section-title">Duplicated Code</h2>
+                <p class="section-description">Code that appears in multiple places - bugs fixed in one spot may need fixing elsewhere</p>
             </div>
-            <p class="section-subtitle">Code that appears in multiple places - bugs fixed in one spot may need fixing elsewhere</p>
 
             {% if DuplicationInsight %}
-            <div class="card" style="margin-bottom: 1.5rem;">
+            <div class="insight">
                 <div class="narrative">{{ DuplicationInsight.section_insight | markdown }}</div>
             </div>
             {% endif %}
 
-            <div class="stat-grid">
-                <div class="stat-box">
-                    <div class="value" style="color: {% if Duplicates.duplication_ratio > 15.0 %}var(--accent-red){% elif Duplicates.duplication_ratio > 10.0 %}var(--accent-yellow){% else %}var(--accent-green){% endif %}">{{ Duplicates.duplication_ratio | round(1) }}%</div>
-                    <div class="label">Duplication Rate</div>
+            <div class="metric-grid">
+                <div class="metric-tile">
+                    <div class="metric-value {% if Duplicates.duplication_ratio > 15.0 %}danger{% elif Duplicates.duplication_ratio > 10.0 %}warning{% else %}good{% endif %}">{{ Duplicates.duplication_ratio | round(1) }}%</div>
+                    <div class="metric-label">Duplication Rate</div>
                 </div>
-                <div class="stat-box">
-                    <div class="value">{{ Duplicates.clone_groups }}</div>
-                    <div class="label">Clone Groups</div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Duplicates.clone_groups }}</div>
+                    <div class="metric-label">Clone Groups</div>
                 </div>
-                <div class="stat-box">
-                    <div class="value">{{ Duplicates.duplicate_lines }}</div>
-                    <div class="label">Duplicate Lines</div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Duplicates.duplicate_lines }}</div>
+                    <div class="metric-label">Duplicate Lines</div>
                 </div>
-                <div class="stat-box">
-                    <div class="value">{{ Duplicates.total_lines }}</div>
-                    <div class="label">Total Lines</div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Duplicates.total_lines }}</div>
+                    <div class="metric-label">Total Lines</div>
                 </div>
             </div>
 
@@ -1641,35 +770,35 @@
 
         <!-- Technical Debt Gradient -->
         {% if Tdg %}
-        <section id="tdg" class="section">
+        <section id="tdg" class="card report-section">
             <div class="section-header">
-                <h2>Technical Debt Gradient</h2>
+                <h2 class="section-title">Technical Debt Gradient</h2>
+                <p class="section-description">Per-file debt scores - prioritize cleanup where it matters most</p>
             </div>
-            <p class="section-subtitle">Per-file debt scores - prioritize cleanup where it matters most</p>
 
             {% if TdgInsight %}
-            <div class="card" style="margin-bottom: 1.5rem;">
+            <div class="insight">
                 <div class="narrative">{{ TdgInsight.section_insight | markdown }}</div>
             </div>
             {% endif %}
 
-            <div class="stat-grid">
-                <div class="stat-box">
-                    <div class="value">{{ Tdg.total_files }}</div>
-                    <div class="label">Files Scored</div>
+            <div class="metric-grid">
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Tdg.total_files }}</div>
+                    <div class="metric-label">Files Scored</div>
                 </div>
-                <div class="stat-box">
-                    <div class="value {{ Tdg.average_score | round(0) | int | score_class }}">{{ Tdg.average_score | round(1) }}</div>
-                    <div class="label">Average Score</div>
+                <div class="metric-tile">
+                    <div class="metric-value {{ Tdg.average_score | round(0) | int | score_class }}">{{ Tdg.average_score | round(1) }}</div>
+                    <div class="metric-label">Average Score</div>
                 </div>
-                <div class="stat-box">
-                    <div class="value {{ Tdg.average_grade | grade_class }}">{{ Tdg.average_grade }}</div>
-                    <div class="label">Average Grade</div>
+                <div class="metric-tile">
+                    <div class="metric-value {{ Tdg.average_grade | grade_class }}">{{ Tdg.average_grade }}</div>
+                    <div class="metric-label">Average Grade</div>
                 </div>
                 {% if Tdg.grade_distribution %}
-                <div class="stat-box">
-                    <div class="value" style="color: var(--accent-red)">{{ Tdg.grade_distribution.F | default(0) }}</div>
-                    <div class="label">Failing Files</div>
+                <div class="metric-tile">
+                    <div class="metric-value danger">{{ Tdg.grade_distribution.F | default(0) }}</div>
+                    <div class="metric-label">Failing Files</div>
                 </div>
                 {% endif %}
             </div>
@@ -1684,18 +813,18 @@
             {% endif %}
 
             {% if Tdg.files %}
-            <div class="table-container">
-                <table id="tdg-table">
+            <div class="table-wrap">
+                <table class="report-table" id="tdg-table" data-numeric-columns="3,5,6,7,8">
                     <thead>
                         <tr>
                             <th>File</th>
                             <th>Lang</th>
-                            <th><span class="tooltip" data-tooltip="Overall debt score (0-100). Higher is better. Below 60 is failing.">Score</span></th>
+                            <th class="num"><span class="tooltip" data-tooltip="Overall debt score (0-100). Higher is better. Below 60 is failing.">Score</span></th>
                             <th>Grade</th>
-                            <th><span class="tooltip" data-tooltip="Cyclomatic complexity contribution (0-20).">Structural</span></th>
-                            <th><span class="tooltip" data-tooltip="Nesting depth contribution (0-15).">Semantic</span></th>
-                            <th><span class="tooltip" data-tooltip="Code duplication ratio contribution (0-15).">Duplication</span></th>
-                            <th><span class="tooltip" data-tooltip="Import count contribution (0-15).">Coupling</span></th>
+                            <th class="num"><span class="tooltip" data-tooltip="Cyclomatic complexity contribution (0-20).">Structural</span></th>
+                            <th class="num"><span class="tooltip" data-tooltip="Nesting depth contribution (0-15).">Semantic</span></th>
+                            <th class="num"><span class="tooltip" data-tooltip="Code duplication ratio contribution (0-15).">Duplication</span></th>
+                            <th class="num"><span class="tooltip" data-tooltip="Import count contribution (0-15).">Coupling</span></th>
                         </tr>
                     </thead>
                 </table>
@@ -1707,34 +836,34 @@
 
         <!-- Trends -->
         {% if Trend %}
-        <section id="trends" class="section">
+        <section id="trends" class="card report-section">
             <div class="section-header">
-                <h2>Historical Trends</h2>
+                <h2 class="section-title">Historical Trends</h2>
+                <p class="section-description">How code quality has changed over time</p>
             </div>
-            <p class="section-subtitle">How code quality has changed over time</p>
 
             {% if TrendsInsight %}
-            <div class="card" style="margin-bottom: 1.5rem;">
+            <div class="insight">
                 <div class="narrative">{{ TrendsInsight.section_insight | markdown }}</div>
             </div>
             {% endif %}
 
-            <div class="stat-grid">
-                <div class="stat-box">
-                    <div class="value">{{ Trend.start_score }}</div>
-                    <div class="label">Starting Score</div>
+            <div class="metric-grid">
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Trend.start_score }}</div>
+                    <div class="metric-label">Starting Score</div>
                 </div>
-                <div class="stat-box">
-                    <div class="value">{{ Trend.end_score }}</div>
-                    <div class="label">Current Score</div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Trend.end_score }}</div>
+                    <div class="metric-label">Current Score</div>
                 </div>
-                <div class="stat-box">
-                    <div class="value" style="color: {% if Trend.slope < 0.0 %}var(--accent-yellow){% else %}var(--accent-green){% endif %}">{{ Trend.slope | round(2) }}</div>
-                    <div class="label">Monthly Change</div>
+                <div class="metric-tile">
+                    <div class="metric-value {% if Trend.slope < 0.0 %}warning{% else %}good{% endif %}">{{ Trend.slope | round(2) }}</div>
+                    <div class="metric-label">Monthly Change</div>
                 </div>
-                <div class="stat-box">
-                    <div class="value">{{ Trend.r_squared | round(2) }}</div>
-                    <div class="label">Trend Fit (R2)</div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Trend.r_squared | round(2) }}</div>
+                    <div class="metric-label">Trend Fit (R2)</div>
                 </div>
             </div>
 
@@ -1755,26 +884,28 @@
             {% if TrendsInsight and TrendsInsight.historical_events %}
             <div class="card">
                 <h3>Notable Events</h3>
-                <table id="notable-events-table">
+                <div class="table-wrap">
+                    <table class="report-table" id="notable-events-table" data-numeric-columns="2">
                     <thead>
                         <tr>
                             <th>Period</th>
-                            <th>Change</th>
+                            <th class="num">Change</th>
                             <th>Driver</th>
                             <th>Description</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for item in TrendsInsight.historical_events %}
-                        <tr style="background: {% if item.change < 0 %}#f8514915{% else %}#3fb95015{% endif %};" data-period="{{ item.period }}" data-driver="{{ item.primary_driver }}">
+                        <tr class="{% if item.change < 0 %}event-negative{% else %}event-positive{% endif %}" data-period="{{ item.period }}" data-driver="{{ item.primary_driver }}">
                             <td><strong>{{ item.period }}</strong></td>
-                            <td><span class="badge {% if item.change < -5 %}critical{% elif item.change < 0 %}high{% else %}low{% endif %}">{% if item.change > 0 %}+{% endif %}{{ item.change }} pts</span></td>
+                            <td class="num"><span class="badge {% if item.change < -5 %}badge-danger{% elif item.change < 0 %}badge-warning{% else %}badge-success{% endif %}">{% if item.change > 0 %}+{% endif %}{{ item.change }} pts</span></td>
                             <td>{{ item.primary_driver }}</td>
-                            <td class="event-description" style="color: var(--text-secondary); font-size: 0.85rem;"></td>
+                            <td class="event-description muted cell-compact"></td>
                         </tr>
                         {% endfor %}
                     </tbody>
-                </table>
+                    </table>
+                </div>
             </div>
             {% endif %}
         </section>
@@ -1782,47 +913,47 @@
 
         <!-- Change Activity / Churn -->
         {% if Churn %}
-        <section id="churn" class="section">
+        <section id="churn" class="card report-section">
             <div class="section-header">
-                <h2>Change Activity</h2>
+                <h2 class="section-title">Change Activity</h2>
+                <p class="section-description">How frequently code is being modified</p>
             </div>
-            <p class="section-subtitle">How frequently code is being modified</p>
 
             {% if ChurnInsight %}
-            <div class="card" style="margin-bottom: 1.5rem;">
+            <div class="insight">
                 <div class="narrative">{{ ChurnInsight.section_insight | markdown }}</div>
             </div>
             {% endif %}
 
-            <div class="stat-grid">
-                <div class="stat-box">
-                    <div class="value">{{ Churn.summary.total_commits }}</div>
-                    <div class="label">Total Changes</div>
+            <div class="metric-grid">
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Churn.summary.total_commits }}</div>
+                    <div class="metric-label">Total Changes</div>
                 </div>
-                <div class="stat-box">
-                    <div class="value">{{ Churn.summary.unique_files }}</div>
-                    <div class="label">Files Changed</div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Churn.summary.unique_files }}</div>
+                    <div class="metric-label">Files Changed</div>
                 </div>
-                <div class="stat-box">
-                    <div class="value">{{ Churn.summary.total_added }}</div>
-                    <div class="label">Lines Added</div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Churn.summary.total_added }}</div>
+                    <div class="metric-label">Lines Added</div>
                 </div>
-                <div class="stat-box">
-                    <div class="value">{{ Churn.summary.total_deleted }}</div>
-                    <div class="label">Lines Deleted</div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Churn.summary.total_deleted }}</div>
+                    <div class="metric-label">Lines Deleted</div>
                 </div>
             </div>
 
             {% if Churn.files %}
-            <div class="table-container">
-                <table id="churn-table">
+            <div class="table-wrap">
+                <table class="report-table" id="churn-table" data-numeric-columns="3,4,5">
                     <thead>
                         <tr>
                             <th>File</th>
                             <th>Lang</th>
-                            <th><span class="tooltip" data-tooltip="Number of commits that modified this file in the analysis period.">Changes</span></th>
-                            <th><span class="tooltip" data-tooltip="Number of unique authors who modified this file.">Contributors</span></th>
-                            <th><span class="tooltip" data-tooltip="Normalized score combining commit frequency and lines changed. Higher = more volatile.">Churn Score</span></th>
+                            <th class="num"><span class="tooltip" data-tooltip="Number of commits that modified this file in the analysis period.">Changes</span></th>
+                            <th class="num"><span class="tooltip" data-tooltip="Number of unique authors who modified this file.">Contributors</span></th>
+                            <th class="num"><span class="tooltip" data-tooltip="Normalized score combining commit frequency and lines changed. Higher = more volatile.">Churn Score</span></th>
                         </tr>
                     </thead>
                 </table>
@@ -1834,35 +965,35 @@
 
         <!-- Ownership -->
         {% if Ownership %}
-        <section id="ownership" class="section">
+        <section id="ownership" class="card report-section">
             <div class="section-header">
-                <h2>Code Ownership</h2>
+                <h2 class="section-title">Code Ownership</h2>
+                <p class="section-description">How knowledge is distributed - concentrated knowledge is a risk</p>
             </div>
-            <p class="section-subtitle">How knowledge is distributed - concentrated knowledge is a risk</p>
 
             {% if OwnershipInsight %}
-            <div class="card" style="margin-bottom: 1.5rem;">
+            <div class="insight">
                 <div class="narrative">{{ OwnershipInsight.section_insight | markdown }}</div>
             </div>
             {% endif %}
 
-            <div class="stat-grid">
-                <div class="stat-box">
-                    <div class="value" style="color: {% if Ownership.bus_factor < 3 %}var(--accent-red){% elif Ownership.bus_factor < 5 %}var(--accent-yellow){% else %}var(--accent-green){% endif %}">{{ Ownership.bus_factor }}</div>
-                    <div class="label"><span class="tooltip" data-tooltip="Minimum people who would need to leave before critical knowledge is lost. Higher is better; 1 is a serious risk.">Bus Factor</span></div>
+            <div class="metric-grid">
+                <div class="metric-tile">
+                    <div class="metric-value {% if Ownership.bus_factor < 3 %}danger{% elif Ownership.bus_factor < 5 %}warning{% else %}good{% endif %}">{{ Ownership.bus_factor }}</div>
+                    <div class="metric-label"><span class="tooltip" data-tooltip="Minimum people who would need to leave before critical knowledge is lost. Higher is better; 1 is a serious risk.">Bus Factor</span></div>
                 </div>
-                <div class="stat-box">
-                    <div class="value" style="color: var(--accent-yellow)">{{ Ownership.knowledge_silos }}</div>
-                    <div class="label"><span class="tooltip" data-tooltip="Files where one person has written most of the code. If they leave, knowledge is lost.">Knowledge Silos</span></div>
+                <div class="metric-tile">
+                    <div class="metric-value warning">{{ Ownership.knowledge_silos }}</div>
+                    <div class="metric-label"><span class="tooltip" data-tooltip="Files where one person has written most of the code. If they leave, knowledge is lost.">Knowledge Silos</span></div>
                 </div>
-                <div class="stat-box">
-                    <div class="value">{{ Ownership.total_files }}</div>
-                    <div class="label">Total Files</div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Ownership.total_files }}</div>
+                    <div class="metric-label">Total Files</div>
                 </div>
                 {% if Ownership.total_files > 0 %}
-                <div class="stat-box">
-                    <div class="value" style="color: var(--accent-yellow)">{{ percent(Ownership.knowledge_silos, Ownership.total_files) | round(1) }}%</div>
-                    <div class="label">Files at Risk</div>
+                <div class="metric-tile">
+                    <div class="metric-value warning">{{ percent(Ownership.knowledge_silos, Ownership.total_files) | round(1) }}%</div>
+                    <div class="metric-label">Files at Risk</div>
                 </div>
                 {% endif %}
             </div>
@@ -1880,45 +1011,45 @@
 
         <!-- Temporal Coupling -->
         {% if Temporal and Temporal.couplings %}
-        <section id="temporal" class="section">
+        <section id="temporal" class="card report-section">
             <div class="section-header">
-                <h2>Temporal Coupling</h2>
+                <h2 class="section-title">Temporal Coupling</h2>
+                <p class="section-description">Files that frequently change together - reveals hidden dependencies not in the import graph</p>
             </div>
-            <p class="section-subtitle">Files that frequently change together - reveals hidden dependencies not in the import graph</p>
 
             {% if TemporalInsight %}
-            <div class="card" style="margin-bottom: 1.5rem;">
+            <div class="insight">
                 <div class="narrative">{{ TemporalInsight.section_insight | markdown }}</div>
             </div>
             {% endif %}
 
-            <div class="stat-grid">
-                <div class="stat-box">
-                    <div class="value">{{ Temporal.summary.total_couplings }}</div>
-                    <div class="label">Coupled Pairs</div>
+            <div class="metric-grid">
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Temporal.summary.total_couplings }}</div>
+                    <div class="metric-label">Coupled Pairs</div>
                 </div>
-                <div class="stat-box">
-                    <div class="value" style="color: {% if Temporal.summary.strong_couplings > 10 %}var(--accent-red){% elif Temporal.summary.strong_couplings > 3 %}var(--accent-yellow){% else %}var(--accent-green){% endif %}">{{ Temporal.summary.strong_couplings }}</div>
-                    <div class="label"><span class="tooltip" data-tooltip="Pairs with coupling strength >= 0.5. These files almost always change together.">Strong Couplings</span></div>
+                <div class="metric-tile">
+                    <div class="metric-value {% if Temporal.summary.strong_couplings > 10 %}danger{% elif Temporal.summary.strong_couplings > 3 %}warning{% else %}good{% endif %}">{{ Temporal.summary.strong_couplings }}</div>
+                    <div class="metric-label"><span class="tooltip" data-tooltip="Pairs with coupling strength >= 0.5. These files almost always change together.">Strong Couplings</span></div>
                 </div>
-                <div class="stat-box">
-                    <div class="value">{{ Temporal.summary.avg_coupling_strength | round(2) }}</div>
-                    <div class="label">Avg Strength</div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Temporal.summary.avg_coupling_strength | round(2) }}</div>
+                    <div class="metric-label">Avg Strength</div>
                 </div>
-                <div class="stat-box">
-                    <div class="value">{{ Temporal.summary.max_coupling_strength | round(2) }}</div>
-                    <div class="label">Max Strength</div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Temporal.summary.max_coupling_strength | round(2) }}</div>
+                    <div class="metric-label">Max Strength</div>
                 </div>
             </div>
 
-            <div class="table-container">
-                <table id="temporal-table">
+            <div class="table-wrap">
+                <table class="report-table" id="temporal-table" data-numeric-columns="3,4">
                     <thead>
                         <tr>
                             <th>File A</th>
                             <th>File B</th>
-                            <th><span class="tooltip" data-tooltip="Number of commits where both files changed together.">Co-changes</span></th>
-                            <th><span class="tooltip" data-tooltip="Ratio of co-changes to the maximum commits of either file. 1.0 = always change together.">Strength</span></th>
+                            <th class="num"><span class="tooltip" data-tooltip="Number of commits where both files changed together.">Co-changes</span></th>
+                            <th class="num"><span class="tooltip" data-tooltip="Ratio of co-changes to the maximum commits of either file. 1.0 = always change together.">Strength</span></th>
                         </tr>
                     </thead>
                 </table>
@@ -1928,11 +1059,11 @@
         {% endif %}
 
         <!-- Score Breakdown -->
-        <section id="breakdown" class="section">
+        <section id="breakdown" class="card report-section">
             <div class="section-header">
-                <h2>Score Breakdown</h2>
+                <h2 class="section-title">Score Breakdown</h2>
+                <p class="section-description">How the health score is calculated from individual components</p>
             </div>
-            <p class="section-subtitle">How the health score is calculated from individual components</p>
 
             <div class="grid-3">
                 {% if Score.components.complexity is defined %}
@@ -2015,7 +1146,11 @@
         </section>
 
         <!-- Glossary -->
-        <section id="glossary" class="section">
+        <section id="glossary" class="card report-section">
+            <div class="section-header">
+                <h2 class="section-title">Glossary</h2>
+                <p class="section-description">Definitions for the quality and risk terminology used in this report</p>
+            </div>
             <div class="collapsible" id="glossary-collapse">
                 <div class="collapsible-header" onclick="toggleCollapsible('glossary-collapse')">
                     <h3>Glossary of Terms</h3>
@@ -2025,67 +1160,67 @@
                     <div class="grid-2">
                         <div class="card">
                             <h3>Health Score</h3>
-                            <p style="color: var(--text-secondary);">A weighted composite metric (0-100) measuring overall code quality. Above 80 is good, 60-80 needs attention, below 60 is concerning.</p>
+                            <p class="muted">A weighted composite metric (0-100) measuring overall code quality. Above 80 is good, 60-80 needs attention, below 60 is concerning.</p>
                         </div>
                         <div class="card">
                             <h3>Hotspot</h3>
-                            <p style="color: var(--text-secondary);">A file that is both complex AND frequently changed. These are the highest-risk areas because they're hard to change safely but get changed often.</p>
+                            <p class="muted">A file that is both complex AND frequently changed. These are the highest-risk areas because they're hard to change safely but get changed often.</p>
                         </div>
                         <div class="card">
                             <h3>Bus Factor</h3>
-                            <p style="color: var(--text-secondary);">The minimum number of people who would need to leave before critical knowledge is lost. Higher is better; 1 is a serious risk.</p>
+                            <p class="muted">The minimum number of people who would need to leave before critical knowledge is lost. Higher is better; 1 is a serious risk.</p>
                         </div>
                         <div class="card">
                             <h3>Knowledge Silo</h3>
-                            <p style="color: var(--text-secondary);">A file that only one person has ever touched. If that person leaves, the knowledge goes with them.</p>
+                            <p class="muted">A file that only one person has ever touched. If that person leaves, the knowledge goes with them.</p>
                         </div>
                         <div class="card">
                             <h3>Cyclomatic Complexity</h3>
-                            <p style="color: var(--text-secondary);">The number of independent paths through code. More paths means more test cases needed and more ways things can go wrong.</p>
+                            <p class="muted">The number of independent paths through code. More paths means more test cases needed and more ways things can go wrong.</p>
                         </div>
                         <div class="card">
                             <h3>Cognitive Complexity</h3>
-                            <p style="color: var(--text-secondary);">How hard code is to understand. Accounts for nesting, breaks in flow, and things that make humans struggle to follow the logic.</p>
+                            <p class="muted">How hard code is to understand. Accounts for nesting, breaks in flow, and things that make humans struggle to follow the logic.</p>
                         </div>
                         <div class="card">
                             <h3>LCOM (Cohesion)</h3>
-                            <p style="color: var(--text-secondary);">How well a class's methods work together. High LCOM means methods don't share data - the class is probably doing too many unrelated things.</p>
+                            <p class="muted">How well a class's methods work together. High LCOM means methods don't share data - the class is probably doing too many unrelated things.</p>
                         </div>
                         <div class="card">
                             <h3>CBO (Coupling)</h3>
-                            <p style="color: var(--text-secondary);">How many other classes a class depends on. High coupling means changes ripple through the codebase - everything is connected to everything.</p>
+                            <p class="muted">How many other classes a class depends on. High coupling means changes ripple through the codebase - everything is connected to everything.</p>
                         </div>
                         <div class="card">
                             <h3>Churn Rate</h3>
-                            <p style="color: var(--text-secondary);">How frequently a file changes. High churn indicates instability - the code may be unclear, have bugs, or be undergoing active development.</p>
+                            <p class="muted">How frequently a file changes. High churn indicates instability - the code may be unclear, have bugs, or be undergoing active development.</p>
                         </div>
                         <div class="card">
                             <h3>Self-Admitted Technical Debt (SATD)</h3>
-                            <p style="color: var(--text-secondary);">Code issues the team has documented (TODO, FIXME, HACK, XXX). These represent known shortcuts that need eventual attention.</p>
+                            <p class="muted">Code issues the team has documented (TODO, FIXME, HACK, XXX). These represent known shortcuts that need eventual attention.</p>
                         </div>
                         <div class="card">
                             <h3>Code Clone / Duplicate</h3>
-                            <p style="color: var(--text-secondary);">Similar code appearing in multiple places. When a bug is fixed in one spot, it may need fixing elsewhere. Candidates for refactoring into shared functions.</p>
+                            <p class="muted">Similar code appearing in multiple places. When a bug is fixed in one spot, it may need fixing elsewhere. Candidates for refactoring into shared functions.</p>
                         </div>
                         <div class="card">
                             <h3>Technical Debt Gradient</h3>
-                            <p style="color: var(--text-secondary);">Per-file quality score (0-100) combining complexity, duplication, coupling, and other factors. Lower scores mean more accumulated debt.</p>
+                            <p class="muted">Per-file quality score (0-100) combining complexity, duplication, coupling, and other factors. Lower scores mean more accumulated debt.</p>
                         </div>
                         <div class="card">
                             <h3>Temporal Coupling</h3>
-                            <p style="color: var(--text-secondary);">Files that frequently change together in the same commits. High temporal coupling suggests hidden dependencies not visible in the import graph.</p>
+                            <p class="muted">Files that frequently change together in the same commits. High temporal coupling suggests hidden dependencies not visible in the import graph.</p>
                         </div>
                         <div class="card">
                             <h3>Architectural Smell</h3>
-                            <p style="color: var(--text-secondary);">A structural pattern that violates design principles: cyclic dependencies, hub-like modules, or stable code depending on unstable code.</p>
+                            <p class="muted">A structural pattern that violates design principles: cyclic dependencies, hub-like modules, or stable code depending on unstable code.</p>
                         </div>
                         <div class="card">
                             <h3>Instability</h3>
-                            <p style="color: var(--text-secondary);">Ratio of outgoing to total dependencies. 0 = maximally stable (many things depend on it), 1 = maximally unstable (depends on many things).</p>
+                            <p class="muted">Ratio of outgoing to total dependencies. 0 = maximally stable (many things depend on it), 1 = maximally unstable (depends on many things).</p>
                         </div>
                         <div class="card">
                             <h3>PageRank</h3>
-                            <p style="color: var(--text-secondary);">Importance of a file in the dependency graph. Files with high PageRank are depended on by many other important files.</p>
+                            <p class="muted">Importance of a file in the dependency graph. Files with high PageRank are depended on by many other important files.</p>
                         </div>
                     </div>
                 </div>
@@ -2096,6 +1231,7 @@
             <p>Generated <span class="human-date" data-iso="{{ Metadata.generated_at }}">{{ Metadata.generated_at }}</span> using <a href="https://github.com/panbanda/omen">Omen</a></p>
         </footer>
     </main>
+    </div>
 
     <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/simple-datatables@9"></script>
@@ -2110,12 +1246,28 @@
             el.classList.toggle('open');
         }
 
-        // Highlight active nav item on scroll
-        const sections = document.querySelectorAll('.section[id]');
-        const navItems = document.querySelectorAll('.nav-item');
+        // Theme toggle updates the shadcn token scope and asks charts to rebuild.
+        const themeToggle = document.getElementById('theme-toggle');
+        function setTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            try { localStorage.setItem('omen-report-theme', theme); } catch (_) {}
+            if (typeof window.reinitCharts === 'function') {
+                window.requestAnimationFrame(window.reinitCharts);
+            }
+        }
+        if (themeToggle) {
+            themeToggle.addEventListener('click', function() {
+                const current = document.documentElement.getAttribute('data-theme');
+                setTheme(current === 'dark' ? 'light' : 'dark');
+            });
+        }
 
-        window.addEventListener('scroll', () => {
-            let current = '';
+        // Highlight active nav item on scroll
+        const sections = document.querySelectorAll('.report-section[id]');
+        const navItems = document.querySelectorAll('.nav-link');
+
+        function updateActiveNav() {
+            let current = sections.length ? sections[0].getAttribute('id') : '';
             sections.forEach(section => {
                 const sectionTop = section.offsetTop;
                 if (window.scrollY >= sectionTop - 100) {
@@ -2124,15 +1276,17 @@
             });
 
             navItems.forEach(item => {
-                item.classList.remove('active');
+                item.classList.remove('is-active');
                 if (item.getAttribute('href') === '#' + current) {
-                    item.classList.add('active');
+                    item.classList.add('is-active');
                 }
             });
-        });
+        }
+        window.addEventListener('scroll', updateActiveNav, { passive: true });
+        updateActiveNav();
 
         // Format large numbers with commas
-        document.querySelectorAll('.stat-box .value, .metric-card-value').forEach(el => {
+        document.querySelectorAll('.metric-value').forEach(el => {
             const text = el.textContent.trim();
             if (/^\d+$/.test(text)) {
                 el.textContent = parseInt(text, 10).toLocaleString();
@@ -2179,6 +1333,19 @@
             'churn-table': window.__td_churn,
             'temporal-table': window.__td_temporal
         };
+        function applyNumericColumns(table) {
+            const columns = (table.dataset.numericColumns || '')
+                .split(',')
+                .map(Number)
+                .filter(Boolean);
+            columns.forEach(function(column) {
+                table.querySelectorAll('tr').forEach(function(row) {
+                    const cell = row.children[column - 1];
+                    if (cell) cell.classList.add('num');
+                });
+            });
+        }
+
         const tableIds = ['hotspots-table', 'flags-table', 'cohesion-table', 'satd-table', 'churn-table', 'smells-table', 'graph-table', 'tdg-table', 'temporal-table'];
         tableIds.forEach(id => {
             const table = document.getElementById(id);
@@ -2192,6 +1359,12 @@
                 });
             } else if (table.querySelector('tbody tr')) {
                 dataTableInstances[id] = new simpleDatatables.DataTable(table, dataTableConfig);
+            }
+            applyNumericColumns(table);
+            if (dataTableInstances[id]) {
+                ['datatable.page', 'datatable.sort', 'datatable.search', 'datatable.perpage', 'datatable.update'].forEach(function(eventName) {
+                    dataTableInstances[id].on(eventName, function() { applyNumericColumns(table); });
+                });
             }
         });
 
@@ -2220,6 +1393,7 @@
     <script>
         // All chart instances for resize handling
         const echartsInstances = [];
+        const chartInitializers = [];
         function initChart(el) {
             if (!el) return null;
             const chart = echarts.init(el, null, { renderer: 'canvas' });
@@ -2227,15 +1401,45 @@
             return chart;
         }
 
-        // Shared palette matching CSS vars
-        const palette = {
-            blue: '#58a6ff', green: '#3fb950', yellow: '#d29922',
-            red: '#f85149', purple: '#a371f7', gray: '#8b949e',
-            bg: '#161b22', border: '#30363d', text: '#8b949e', textPrimary: '#e6edf3'
+        function chartToken(styles, name, alpha) {
+            const channels = styles.getPropertyValue(name).trim();
+            return 'hsl(' + channels + (alpha === undefined ? '' : ' / ' + alpha) + ')';
+        }
+
+        function readChartPalette() {
+            const styles = getComputedStyle(document.documentElement);
+            return {
+                blue: chartToken(styles, '--chart-1'),
+                green: chartToken(styles, '--chart-2'),
+                purple: chartToken(styles, '--chart-3'),
+                yellow: chartToken(styles, '--chart-4'),
+                red: chartToken(styles, '--chart-5'),
+                gray: chartToken(styles, '--muted-foreground'),
+                bg: chartToken(styles, '--background'),
+                border: chartToken(styles, '--border'),
+                text: chartToken(styles, '--muted-foreground'),
+                textPrimary: chartToken(styles, '--foreground')
+            };
+        }
+
+        function alphaColor(color, alpha) {
+            return color.replace(/\)$/, ' / ' + alpha + ')');
+        }
+
+        let palette = readChartPalette();
+        function registerChart(initializer) {
+            chartInitializers.push(initializer);
+            initializer();
+        }
+        window.reinitCharts = function() {
+            echartsInstances.splice(0).forEach(function(chart) { chart.dispose(); });
+            window._trendsChart = null;
+            palette = readChartPalette();
+            chartInitializers.forEach(function(initializer) { initializer(); });
         };
 
         // --- 1. Radar Chart ---
-        (function() {
+        registerChart(function() {
             const el = document.getElementById('radarChart');
             if (!el) return;
             const chart = initChart(el);
@@ -2266,20 +1470,20 @@
                             {{ Score.components.satd | default(0) | tojson }},
                             {{ Score.components.smells | default(0) | tojson }}
                         ],
-                        areaStyle: { color: 'rgba(88,166,255,0.2)' },
+                        areaStyle: { color: alphaColor(palette.blue, 0.2) },
                         lineStyle: { color: palette.blue, width: 2 },
                         itemStyle: { color: palette.blue },
                         emphasis: {
-                            areaStyle: { color: 'rgba(88,166,255,0.35)' }
+                            areaStyle: { color: alphaColor(palette.blue, 0.35) }
                         }
                     }]
                 }]
             });
-        })();
+        });
 
         // --- 8. Hotspot Scatter ---
         {% if Hotspots and Hotspots.files %}
-        (function() {
+        registerChart(function() {
             const el = document.getElementById('hotspotsScatter');
             if (!el) return;
             const chart = initChart(el);
@@ -2343,12 +1547,12 @@
                     }
                 }]
             });
-        })();
+        });
         {% endif %}
 
         // --- 9. Duplication Gauge ---
         {% if Duplicates %}
-        (function() {
+        registerChart(function() {
             var el = document.getElementById('duplicationGauge');
             if (!el) return;
             var chart = initChart(el);
@@ -2385,7 +1589,7 @@
                     data: [{ value: {{ Duplicates.duplication_ratio | round(1) | tojson }} }]
                 }]
             });
-        })();
+        });
         {% endif %}
 
         // Score Breakdown Bar chart removed (redundant with component cards below)
@@ -2474,28 +1678,31 @@
             return rawLabels.findIndex(function(label) { return label.startsWith(datePrefix); });
         }
 
-        // Build annotation markLines for health score chart (icon-only, details on hover)
-        var healthMarkLines = [];
-        scoreAnnotations.forEach(function(ann) {
-            var idx = findLabelIndex(trendsData.rawLabels, ann.date);
-            if (idx !== -1) {
-                var color = ann.change < 0 ? '#f85149' : '#3fb950';
-                healthMarkLines.push({
-                    xAxis: trendsData.labels[idx],
-                    lineStyle: { color: color + '88', type: 'dashed', width: 2 },
-                    label: {
-                        formatter: ann.change < 0 ? '\u25BC' : '\u25B2',
-                        fontSize: 12,
-                        color: color,
-                        position: 'insideStartTop',
-                        distance: 4
-                    }
-                });
-            }
-        });
+        // Build annotation markLines from the active token palette.
+        function buildHealthMarkLines() {
+            var healthMarkLines = [];
+            scoreAnnotations.forEach(function(ann) {
+                var idx = findLabelIndex(trendsData.rawLabels, ann.date);
+                if (idx !== -1) {
+                    var color = ann.change < 0 ? palette.red : palette.green;
+                    healthMarkLines.push({
+                        xAxis: trendsData.labels[idx],
+                        lineStyle: { color: alphaColor(color, 0.55), type: 'dashed', width: 2 },
+                        label: {
+                            formatter: ann.change < 0 ? '\u25BC' : '\u25B2',
+                            fontSize: 12,
+                            color: color,
+                            position: 'insideStartTop',
+                            distance: 4
+                        }
+                    });
+                }
+            });
+            return healthMarkLines;
+        }
 
         // --- 2. Trends Chart ---
-        (function() {
+        registerChart(function() {
             var el = document.getElementById('trendsChart');
             if (!el) return;
             var chart = initChart(el);
@@ -2533,7 +1740,7 @@
                 },
                 grid: { left: 50, right: 30, top: 40, bottom: 80 },
                 dataZoom: [
-                    { type: 'slider', start: 0, end: 100, bottom: 10, textStyle: { color: palette.text }, borderColor: palette.border, fillerColor: 'rgba(88,166,255,0.1)' },
+                    { type: 'slider', start: 0, end: 100, bottom: 10, textStyle: { color: palette.text }, borderColor: palette.border, fillerColor: alphaColor(palette.blue, 0.1) },
                     { type: 'inside' }
                 ],
                 xAxis: {
@@ -2562,11 +1769,11 @@
                         symbolSize: 6,
                         lineStyle: { color: palette.blue, width: 2 },
                         itemStyle: { color: palette.blue },
-                        areaStyle: { color: 'rgba(88,166,255,0.15)' },
+                        areaStyle: { color: alphaColor(palette.blue, 0.15) },
                         markLine: {
                             silent: true,
                             symbol: 'none',
-                            data: healthMarkLines
+                            data: buildHealthMarkLines()
                         }
                     },
                     {
@@ -2575,19 +1782,19 @@
                         data: trendLineData,
                         smooth: false,
                         symbol: 'none',
-                        lineStyle: { color: '#d2992288', type: 'dashed', width: 2 },
-                        itemStyle: { color: '#d29922' }
+                        lineStyle: { color: alphaColor(palette.yellow, 0.55), type: 'dashed', width: 2 },
+                        itemStyle: { color: palette.yellow }
                     }
                 ]
             });
 
             // Store for connect
             window._trendsChart = chart;
-        })();
+        });
 
         // --- 3. Component Trends Chart ---
         {% if Trend.component_trends %}
-        (function() {
+        registerChart(function() {
             var el = document.getElementById('componentTrendsChart');
             if (!el) return;
             var chart = initChart(el);
@@ -2596,11 +1803,11 @@
             var componentLabels = componentLabelsRaw.map(formatDateLabel);
 
             var componentColors = {
-                complexity: '#3fb950',
-                duplication: '#58a6ff',
-                coupling: '#d29922',
-                cohesion: '#a371f7',
-                smells: '#f85149'
+                complexity: palette.green,
+                duplication: palette.blue,
+                coupling: palette.yellow,
+                cohesion: palette.purple,
+                smells: palette.red
             };
 
             // Build component annotation markLines (icon-only, details on hover)
@@ -2613,7 +1820,7 @@
                     if (idx !== -1) {
                         componentMarkLines.push({
                             xAxis: componentLabels[idx],
-                            lineStyle: { color: color + '88', type: 'dashed', width: 2 },
+                            lineStyle: { color: alphaColor(color, 0.55), type: 'dashed', width: 2 },
                             label: {
                                 formatter: '\u25C6',
                                 fontSize: 10,
@@ -2655,7 +1862,7 @@
                 },
                 grid: { left: 50, right: 30, top: 40, bottom: 80 },
                 dataZoom: [
-                    { type: 'slider', start: 0, end: 100, bottom: 10, textStyle: { color: palette.text }, borderColor: palette.border, fillerColor: 'rgba(88,166,255,0.1)' },
+                    { type: 'slider', start: 0, end: 100, bottom: 10, textStyle: { color: palette.text }, borderColor: palette.border, fillerColor: alphaColor(palette.blue, 0.1) },
                     { type: 'inside' }
                 ],
                 xAxis: {
@@ -2676,28 +1883,28 @@
                     {
                         name: 'Complexity', type: 'line', smooth: 0.3, symbol: 'circle', symbolSize: 4,
                         data: [{% for p in Trend.points %}{{ p.components.complexity | default(0) | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}],
-                        lineStyle: { color: '#3fb950' }, itemStyle: { color: '#3fb950' },
+                        lineStyle: { color: palette.green }, itemStyle: { color: palette.green },
                         markLine: { silent: true, symbol: 'none', data: componentMarkLines }
                     },
                     {
                         name: 'Duplication', type: 'line', smooth: 0.3, symbol: 'circle', symbolSize: 4,
                         data: [{% for p in Trend.points %}{{ p.components.duplication | default(0) | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}],
-                        lineStyle: { color: '#58a6ff' }, itemStyle: { color: '#58a6ff' }
+                        lineStyle: { color: palette.blue }, itemStyle: { color: palette.blue }
                     },
                     {
                         name: 'Coupling', type: 'line', smooth: 0.3, symbol: 'circle', symbolSize: 4,
                         data: [{% for p in Trend.points %}{{ p.components.coupling | default(0) | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}],
-                        lineStyle: { color: '#d29922' }, itemStyle: { color: '#d29922' }
+                        lineStyle: { color: palette.yellow }, itemStyle: { color: palette.yellow }
                     },
                     {
                         name: 'Cohesion', type: 'line', smooth: 0.3, symbol: 'circle', symbolSize: 4,
                         data: [{% for p in Trend.points %}{{ p.components.cohesion | default(0) | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}],
-                        lineStyle: { color: '#a371f7' }, itemStyle: { color: '#a371f7' }
+                        lineStyle: { color: palette.purple }, itemStyle: { color: palette.purple }
                     },
                     {
                         name: 'Smells', type: 'line', smooth: 0.3, symbol: 'circle', symbolSize: 4,
                         data: [{% for p in Trend.points %}{{ p.components.smells | default(0) | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}],
-                        lineStyle: { color: '#f85149' }, itemStyle: { color: '#f85149' }
+                        lineStyle: { color: palette.red }, itemStyle: { color: palette.red }
                     }
                 ]
             });
@@ -2706,7 +1913,7 @@
             if (window._trendsChart) {
                 echarts.connect([window._trendsChart, chart]);
             }
-        })();
+        });
         {% endif %}
     </script>
     {% endif %}
@@ -2714,7 +1921,7 @@
     {% if Ownership and Ownership.top_owners %}
     <script>
         // --- 4. Ownership Chart ---
-        (function() {
+        registerChart(function() {
             var el = document.getElementById('ownershipChart');
             if (!el) return;
             var chart = initChart(el);
@@ -2750,7 +1957,7 @@
                             value: v,
                             itemStyle: {
                                 color: new echarts.graphic.LinearGradient(0, 0, 1, 0, [
-                                    { offset: 0, color: barColors[i % barColors.length] + '88' },
+                                    { offset: 0, color: alphaColor(barColors[i % barColors.length], 0.55) },
                                     { offset: 1, color: barColors[i % barColors.length] }
                                 ]),
                                 borderRadius: [0, 4, 4, 0]
@@ -2767,24 +1974,24 @@
                     barMaxWidth: 24
                 }]
             });
-        })();
+        });
     </script>
     {% endif %}
 
     {% if Tdg and Tdg.grade_distribution %}
     <script>
         // --- 5. TDG Grade Chart ---
-        (function() {
+        registerChart(function() {
             var el = document.getElementById('tdgGradeChart');
             if (!el) return;
             var chart = initChart(el);
 
             var gradeOrder = ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C+', 'C', 'C-', 'D', 'F'];
             var gradeColors = {
-                'A+': '#3fb950', 'A': '#3fb950', 'A-': '#56d364',
-                'B+': '#58a6ff', 'B': '#58a6ff', 'B-': '#79c0ff',
-                'C+': '#d29922', 'C': '#d29922', 'C-': '#e3b341',
-                'D': '#f85149', 'F': '#da3633'
+                'A+': palette.green, 'A': palette.green, 'A-': palette.green,
+                'B+': palette.green, 'B': palette.green, 'B-': palette.green,
+                'C+': palette.yellow, 'C': palette.yellow, 'C-': palette.yellow,
+                'D': palette.red, 'F': palette.red
             };
             var tdgDist = {{ Tdg.grade_distribution | tojson }};
             var presentGrades = gradeOrder.filter(function(g) { return (tdgDist[g] || 0) > 0; });
@@ -2831,14 +2038,14 @@
                     barMaxWidth: 40
                 }]
             });
-        })();
+        });
     </script>
     {% endif %}
 
     {% if SATD and SATD.items %}
     <script>
         // --- 6 & 7. SATD Charts ---
-        (function() {
+        registerChart(function() {
             var satdItems = {{ SATDStats | tojson }};
             var donutRadius = ['40%', '70%'];
 
@@ -2952,7 +2159,7 @@
                     }]
                 });
             }
-        })();
+        });
     </script>
     {% endif %}
 

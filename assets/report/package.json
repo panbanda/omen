@@ -1,0 +1,14 @@
+{
+  "name": "omen-report-styles",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Tailwind + shadcn design tokens for the omen HTML health report. Compiled offline into src/report/report.css and embedded at build time; not required to build the Rust crate.",
+  "scripts": {
+    "build": "tailwindcss -i ./input.css -o ../../src/report/report.css --minify",
+    "watch": "tailwindcss -i ./input.css -o ../../src/report/report.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.1.0",
+    "tailwindcss": "^4.1.0"
+  }
+}

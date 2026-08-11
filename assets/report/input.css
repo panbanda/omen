@@ -1,0 +1,625 @@
+@import "tailwindcss";
+
+/*
+  Design tokens follow the shadcn/ui convention (HSL channel triples behind
+  hsl(var(--token))). Light values live on :root; the report toggles dark mode
+  by setting data-theme="dark" on <html>. Chart tokens feed ECharts via JS.
+  This file is compiled offline (bun run build) into src/report/report.css,
+  which is embedded at build time; the Rust build never runs Tailwind.
+*/
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+:root {
+  --background: 0 0% 100%;
+  --foreground: 240 10% 3.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 240 10% 3.9%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 240 10% 3.9%;
+  --primary: 240 5.9% 10%;
+  --primary-foreground: 0 0% 98%;
+  --secondary: 240 4.8% 95.9%;
+  --secondary-foreground: 240 5.9% 10%;
+  --muted: 240 4.8% 95.9%;
+  --muted-foreground: 240 3.8% 46.1%;
+  --accent: 240 4.8% 95.9%;
+  --accent-foreground: 240 5.9% 10%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 240 5.9% 90%;
+  --input: 240 5.9% 90%;
+  --ring: 240 10% 3.9%;
+  --radius: 0.5rem;
+
+  --success: 142 71% 45%;
+  --success-foreground: 0 0% 100%;
+  --warning: 38 92% 50%;
+  --warning-foreground: 240 10% 3.9%;
+  --danger: 0 84.2% 60.2%;
+  --danger-foreground: 0 0% 98%;
+
+  --chart-1: 221 83% 53%;
+  --chart-2: 142 71% 40%;
+  --chart-3: 262 52% 55%;
+  --chart-4: 38 92% 50%;
+  --chart-5: 0 84.2% 60.2%;
+}
+
+[data-theme="dark"] {
+  --background: 240 10% 3.9%;
+  --foreground: 0 0% 98%;
+  --card: 240 10% 5.9%;
+  --card-foreground: 0 0% 98%;
+  --popover: 240 10% 3.9%;
+  --popover-foreground: 0 0% 98%;
+  --primary: 0 0% 98%;
+  --primary-foreground: 240 5.9% 10%;
+  --secondary: 240 3.7% 15.9%;
+  --secondary-foreground: 0 0% 98%;
+  --muted: 240 3.7% 15.9%;
+  --muted-foreground: 240 5% 64.9%;
+  --accent: 240 3.7% 15.9%;
+  --accent-foreground: 0 0% 98%;
+  --destructive: 0 62.8% 50.6%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 240 3.7% 15.9%;
+  --input: 240 3.7% 15.9%;
+  --ring: 240 4.9% 83.9%;
+
+  --success: 142 65% 47%;
+  --success-foreground: 0 0% 100%;
+  --warning: 38 92% 55%;
+  --warning-foreground: 240 10% 3.9%;
+  --danger: 0 72% 58%;
+  --danger-foreground: 0 0% 100%;
+
+  --chart-1: 217 91% 60%;
+  --chart-2: 142 65% 47%;
+  --chart-3: 262 60% 66%;
+  --chart-4: 38 92% 55%;
+  --chart-5: 0 72% 58%;
+}
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-success: hsl(var(--success));
+  --color-warning: hsl(var(--warning));
+  --color-danger: hsl(var(--danger));
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: var(--font-sans);
+    font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3, h4 {
+    letter-spacing: -0.02em;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    * { transition: none !important; animation: none !important; }
+  }
+}
+
+@layer components {
+  /* Layout */
+  .report-shell {
+    @apply mx-auto flex w-full max-w-[1400px] gap-8 px-6 py-8;
+  }
+  .report-main {
+    @apply min-w-0 flex-1 space-y-8;
+  }
+
+  /* Sidebar navigation (shadcn sidebar/tabs idiom) */
+  .report-nav {
+    @apply sticky top-8 hidden h-[calc(100vh-4rem)] w-56 shrink-0 flex-col gap-1 overflow-y-auto pr-2 lg:flex;
+  }
+  .nav-link {
+    @apply flex items-center rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground;
+  }
+  .nav-link.is-active {
+    @apply bg-accent text-accent-foreground;
+  }
+
+  /* Card */
+  .card {
+    @apply rounded-lg border bg-card text-card-foreground;
+  }
+  .card-header {
+    @apply flex flex-col gap-1.5 p-6;
+  }
+  .card-title {
+    @apply text-lg font-semibold leading-none tracking-tight;
+  }
+  .card-description {
+    @apply text-sm text-muted-foreground;
+  }
+  .card-content {
+    @apply p-6 pt-0;
+  }
+
+  /* Section header */
+  .section-header {
+    @apply mb-4 flex flex-col gap-1;
+  }
+  .section-title {
+    @apply text-2xl font-semibold tracking-tight;
+  }
+  .section-description {
+    @apply text-sm text-muted-foreground;
+  }
+
+  /* Insight callout */
+  .insight {
+    @apply rounded-md border-l-4 border-l-primary bg-muted/40 p-4 text-sm leading-relaxed text-foreground;
+  }
+
+  /* Badge */
+  .badge {
+    @apply inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors;
+  }
+  .badge-default {
+    @apply border-transparent bg-primary text-primary-foreground;
+  }
+  .badge-secondary {
+    @apply border-transparent bg-secondary text-secondary-foreground;
+  }
+  .badge-outline {
+    @apply text-foreground;
+  }
+  .badge-success {
+    @apply border-transparent bg-success text-[hsl(var(--success-foreground))];
+  }
+  .badge-warning {
+    @apply border-transparent bg-warning text-[hsl(var(--warning-foreground))];
+  }
+  .badge-danger {
+    @apply border-transparent bg-danger text-[hsl(var(--danger-foreground))];
+  }
+
+  /* Metric / stat tiles */
+  .metric-grid {
+    @apply grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4;
+  }
+  .metric-tile {
+    @apply rounded-lg border bg-card p-4;
+  }
+  .metric-label {
+    @apply text-xs font-medium uppercase tracking-wide text-muted-foreground;
+  }
+  .metric-value {
+    @apply mt-1 text-2xl font-semibold tabular-nums tracking-tight;
+  }
+
+  /* Score hero */
+  .hero {
+    @apply flex flex-col gap-6 rounded-lg border bg-card p-8 sm:flex-row sm:items-center sm:justify-between;
+  }
+  .hero-score {
+    @apply text-6xl font-bold tabular-nums tracking-tight;
+  }
+  .hero-grade {
+    @apply inline-flex h-16 w-16 items-center justify-center rounded-full text-3xl font-bold;
+  }
+
+  /* Table (shadcn Table idiom) */
+  .table-wrap {
+    @apply relative w-full overflow-x-auto rounded-lg border;
+  }
+  table.report-table {
+    @apply w-full caption-bottom border-collapse text-sm;
+  }
+  .report-table thead {
+    @apply sticky top-0 z-10 bg-muted;
+  }
+  .report-table th {
+    @apply h-10 px-4 text-left align-middle font-medium text-muted-foreground whitespace-nowrap;
+  }
+  .report-table td {
+    @apply border-t px-4 py-2.5 align-middle;
+  }
+  .report-table tbody tr {
+    @apply transition-colors hover:bg-muted/50;
+  }
+  .report-table .num {
+    @apply text-right tabular-nums;
+  }
+
+  /* Buttons / toggles */
+  .btn-ghost {
+    @apply inline-flex h-9 w-9 items-center justify-center rounded-md border bg-card text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground;
+  }
+
+  .muted { @apply text-muted-foreground; }
+  .mono { font-family: var(--font-mono); }
+
+  /* Report-specific shadcn compositions */
+  .report-section {
+    @apply scroll-mt-6 p-6;
+  }
+  .report-section > * + * {
+    margin-top: 1.5rem;
+  }
+  .report-section > .section-header {
+    @apply mb-0 border-b pb-5;
+  }
+  .report-section > .card {
+    @apply p-5;
+  }
+
+  .sidebar-header {
+    @apply mb-3 border-b pb-4;
+  }
+  .nav-brand {
+    @apply mb-4 flex items-center gap-3 rounded-md px-2 py-1 text-sm;
+  }
+  .nav-brand-mark {
+    @apply inline-flex h-8 w-8 items-center justify-center rounded-md bg-primary text-sm font-bold text-primary-foreground;
+  }
+  .nav-brand strong,
+  .nav-brand small {
+    @apply block;
+  }
+  .nav-brand small {
+    @apply text-xs font-normal text-muted-foreground;
+  }
+  .nav-score-row {
+    @apply flex items-center justify-between px-2 text-xs;
+  }
+  .nav-section {
+    @apply py-1;
+  }
+  .nav-section-title {
+    @apply px-3 pb-1 pt-3 text-[0.6875rem] font-semibold uppercase tracking-[0.12em] text-muted-foreground;
+  }
+  .nav-dot {
+    @apply h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground;
+  }
+  .nav-dot.good { background-color: hsl(var(--success)); }
+  .nav-dot.warning { background-color: hsl(var(--warning)); }
+  .nav-dot.danger { background-color: hsl(var(--danger)); }
+
+  .report-header {
+    @apply flex flex-col gap-5 border-b pb-6 sm:flex-row sm:items-start sm:justify-between;
+  }
+  .report-title {
+    @apply min-w-0 space-y-2;
+  }
+  .report-eyebrow {
+    @apply text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground;
+  }
+  .report-title h1 {
+    @apply flex flex-wrap items-baseline gap-2 text-3xl font-semibold tracking-tight;
+  }
+  .report-title h1 code {
+    @apply max-w-full overflow-hidden text-ellipsis rounded-md bg-muted px-2 py-1 font-mono text-2xl text-foreground;
+  }
+  .report-meta {
+    @apply flex flex-wrap gap-x-5 gap-y-2 text-sm text-muted-foreground;
+  }
+  .report-meta-item,
+  .report-actions {
+    @apply flex items-center gap-2;
+  }
+  .report-branding {
+    @apply rounded-md border px-3 py-1.5 transition-colors hover:bg-accent;
+  }
+  .branding-text,
+  .branding-name,
+  .branding-version {
+    @apply block;
+  }
+  .branding-name { @apply text-sm font-semibold; }
+  .branding-version { @apply text-[0.6875rem] text-muted-foreground; }
+  .theme-icon {
+    @apply h-4 w-4;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .theme-icon-moon { @apply hidden; }
+  [data-theme="dark"] .theme-icon-sun { @apply hidden; }
+  [data-theme="dark"] .theme-icon-moon { @apply block; }
+
+  .hero {
+    @apply gap-8 overflow-hidden;
+    background-image: linear-gradient(135deg, hsl(var(--card)), hsl(var(--muted) / 0.35));
+  }
+  .hero-summary {
+    @apply flex min-w-[220px] items-center gap-4;
+  }
+  .hero-score-label,
+  .hero-trend-rate {
+    @apply text-xs text-muted-foreground;
+  }
+  .hero-trend-stat {
+    @apply border-l pl-4;
+  }
+  .hero-trend-value {
+    @apply text-sm font-semibold text-muted-foreground;
+  }
+  .hero-trend-value.up { color: hsl(var(--success)); }
+  .hero-trend-value.down { color: hsl(var(--danger)); }
+  .hero-radar {
+    @apply min-w-[250px] flex-1;
+  }
+  .hero-metrics {
+    @apply min-w-[260px] flex-1;
+  }
+
+  .grid-2 {
+    @apply grid grid-cols-1 gap-4 md:grid-cols-2;
+  }
+  .grid-3 {
+    @apply grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3;
+  }
+  .insight h3,
+  .chart-container h3,
+  .report-section > .card h3 {
+    @apply mb-2 text-sm font-semibold;
+  }
+  .insight-danger { border-left-color: hsl(var(--danger)); }
+  .insight-warning { border-left-color: hsl(var(--warning)); }
+  .insight-success { border-left-color: hsl(var(--success)); }
+  .insight-info { border-left-color: hsl(var(--chart-1)); }
+
+  .good { color: hsl(var(--success)); }
+  .warning { color: hsl(var(--warning)); }
+  .danger { color: hsl(var(--danger)); }
+  .info { color: hsl(var(--chart-1)); }
+  .badge.critical,
+  .badge.badge-danger {
+    border-color: transparent;
+    background-color: hsl(var(--danger));
+    color: hsl(var(--danger-foreground));
+  }
+  .badge.high,
+  .badge.badge-warning {
+    border-color: transparent;
+    background-color: hsl(var(--warning));
+    color: hsl(var(--warning-foreground));
+  }
+  .badge.medium {
+    border-color: transparent;
+    background-color: hsl(var(--secondary));
+    color: hsl(var(--secondary-foreground));
+  }
+  .badge.low,
+  .badge.good,
+  .badge.badge-success {
+    border-color: transparent;
+    background-color: hsl(var(--success));
+    color: hsl(var(--success-foreground));
+  }
+  .badge.warning { color: hsl(var(--warning-foreground)); }
+  .badge.danger { color: hsl(var(--danger-foreground)); }
+
+  code {
+    @apply rounded bg-muted px-1.5 py-0.5 font-mono text-[0.9em];
+  }
+  .files-badge {
+    @apply inline-flex cursor-help items-center rounded-md border bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground;
+  }
+  .tooltip {
+    @apply cursor-help border-b border-dotted border-muted-foreground;
+  }
+
+  .narrative {
+    @apply text-sm leading-relaxed text-muted-foreground;
+  }
+  .narrative > * + * { margin-top: 0.875rem; }
+  .narrative h1,
+  .narrative h2,
+  .narrative h3,
+  .narrative h4 {
+    @apply font-semibold text-foreground;
+  }
+  .narrative h1 { @apply text-xl; }
+  .narrative h2 { @apply text-lg; }
+  .narrative ul { @apply list-disc pl-6; }
+  .narrative ol { @apply list-decimal pl-6; }
+  .narrative li + li { @apply mt-1; }
+  .narrative a { color: hsl(var(--chart-1)); text-decoration: underline; }
+  .narrative blockquote {
+    @apply rounded-r-md border-l-4 bg-muted/50 px-4 py-3;
+    border-left-color: hsl(var(--chart-1));
+  }
+  .narrative pre {
+    @apply overflow-x-auto rounded-md border bg-muted p-4;
+  }
+
+  .chart-container {
+    @apply rounded-lg border bg-card p-5;
+  }
+  .chart-container > p {
+    @apply mb-3 text-sm text-muted-foreground;
+  }
+  .chart-wrapper { @apply relative h-[350px]; }
+
+  .key-finding {
+    @apply border-b py-3 first:pt-0 last:border-b-0 last:pb-0;
+  }
+  .recommendations-list { @apply space-y-4; }
+  .recommendation-category {
+    @apply mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide;
+  }
+  .recommendation-item {
+    @apply border-b py-3 last:border-0 last:pb-0;
+  }
+  .recommendation-item > div {
+    @apply mt-1 text-sm text-muted-foreground;
+  }
+
+  .cycle-list { @apply space-y-3; }
+  .cycle-item {
+    @apply rounded-md border-l-4 bg-muted/40 px-3 py-2;
+    border-left-color: hsl(var(--danger));
+  }
+  .cycle-label { @apply mb-1 text-xs text-muted-foreground; }
+  .cycle-path { @apply flex flex-wrap items-center gap-1; }
+  .cycle-arrow { color: hsl(var(--danger)); }
+
+  .component-card {
+    @apply rounded-lg border bg-card p-4;
+  }
+  .component-card-header {
+    @apply mb-2 flex items-center justify-between;
+  }
+  .component-card-name { @apply text-sm text-muted-foreground; }
+  .component-card-score { @apply text-xl font-semibold tabular-nums; }
+  .component-card-weight { @apply text-xs text-muted-foreground; }
+  .progress-bar { @apply mt-2 h-1.5 overflow-hidden rounded-full bg-muted; }
+  .progress-fill { @apply h-full rounded-full; }
+  .progress-fill.good { background-color: hsl(var(--success)); }
+  .progress-fill.warning { background-color: hsl(var(--warning)); }
+  .progress-fill.danger { background-color: hsl(var(--danger)); }
+
+  .collapsible {
+    @apply overflow-hidden rounded-lg border bg-card;
+  }
+  .collapsible-header {
+    @apply flex cursor-pointer select-none items-center justify-between px-5 py-4 transition-colors hover:bg-muted/50;
+  }
+  .collapsible-header h3 { @apply text-sm font-semibold; }
+  .collapsible-toggle { @apply text-sm text-muted-foreground transition-transform; }
+  .collapsible.open .collapsible-toggle { transform: rotate(180deg); }
+  .collapsible-content { @apply hidden border-t p-5; }
+  .collapsible.open .collapsible-content { @apply block; }
+  .collapsible-content .card { @apply p-4; }
+  .collapsible-content .card h3 { @apply mb-2 text-sm font-semibold; }
+  .collapsible-content .card p { @apply text-sm leading-relaxed text-muted-foreground; }
+
+  .event-negative { background-color: hsl(var(--danger) / 0.06); }
+  .event-positive { background-color: hsl(var(--success) / 0.06); }
+  .cell-nowrap { @apply whitespace-nowrap; }
+  .cell-compact { @apply text-xs; }
+  .code-compact { @apply text-xs; }
+
+  .cell-overflow {
+    max-width: 300px;
+    @apply overflow-hidden text-ellipsis whitespace-nowrap;
+  }
+  .event-commits {
+    max-width: 400px;
+    @apply overflow-hidden text-ellipsis whitespace-nowrap text-xs text-muted-foreground;
+  }
+
+  /* simple-datatables adopts the same tokens as the source table */
+  .datatable-wrapper {
+    @apply overflow-hidden bg-card text-foreground;
+  }
+  .datatable-top,
+  .datatable-bottom {
+    @apply flex flex-wrap items-center justify-between gap-3 border-b bg-card px-4 py-3 text-sm;
+  }
+  .datatable-bottom { @apply border-b-0 border-t; }
+  .datatable-search input,
+  .datatable-selector {
+    @apply rounded-md border bg-background px-3 py-2 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring;
+  }
+  .datatable-info { @apply text-xs text-muted-foreground; }
+  .datatable-pagination-list { @apply flex gap-1; }
+  .datatable-pagination-list-item-link {
+    @apply inline-flex min-w-8 items-center justify-center rounded-md border bg-card px-2 py-1 text-xs hover:bg-accent;
+  }
+  .datatable-pagination-list-item.datatable-active .datatable-pagination-list-item-link {
+    @apply border-primary bg-primary text-primary-foreground;
+  }
+  .datatable-pagination-list-item.datatable-disabled { @apply pointer-events-none opacity-50; }
+  .datatable-sorter { @apply text-muted-foreground; }
+  .datatable-table { @apply w-full border-collapse text-sm; }
+  .datatable-table thead { @apply sticky top-0 z-10 bg-muted; }
+  .datatable-table th {
+    @apply h-10 whitespace-nowrap px-4 text-left align-middle text-xs font-medium text-muted-foreground;
+  }
+  .datatable-table td { @apply border-t px-4 py-2.5 align-middle; }
+  .datatable-table tbody tr { @apply transition-colors hover:bg-muted/50; }
+  .datatable-table .num { @apply text-right tabular-nums; }
+
+  .tippy-box {
+    @apply rounded-md border bg-popover text-xs text-popover-foreground;
+  }
+  .tippy-content { @apply max-w-[500px] whitespace-pre-wrap break-all px-3 py-2; }
+
+  footer {
+    @apply border-t py-8 text-center text-sm text-muted-foreground;
+  }
+  footer a { color: hsl(var(--chart-1)); }
+}
+
+@media (max-width: 1200px) {
+  .hero { align-items: stretch; }
+  .hero-radar { display: none; }
+}
+
+@media (max-width: 767px) {
+  .report-shell { padding: 1rem; }
+  .hero { padding: 1.5rem; }
+  .hero-summary { flex-wrap: wrap; }
+  .hero-metrics { min-width: 0; }
+  .report-section { padding: 1.25rem; }
+}
+
+@media print {
+  :root,
+  [data-theme="dark"] {
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 36%;
+    --border: 240 5.9% 82%;
+  }
+  .report-shell { max-width: none; padding: 0; display: block; }
+  .report-nav,
+  .report-actions,
+  .datatable-top,
+  .datatable-bottom { display: none !important; }
+  .report-main > * { break-inside: avoid; }
+  .card,
+  .hero,
+  .chart-container,
+  .metric-tile { box-shadow: none !important; }
+  .table-wrap { overflow: visible; }
+  .datatable-wrapper { overflow: visible; }
+  .datatable-container { overflow: visible !important; }
+  a { color: inherit !important; text-decoration: none !important; }
+}
