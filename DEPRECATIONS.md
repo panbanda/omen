@@ -7,7 +7,7 @@ plus its code.
 Every deprecation in the codebase is tagged with a greppable marker so you can
 find all sites for a given removal milestone:
 
-```
+```sh
 rg "DEPRECATED(remove-in: 5.0)"
 ```
 

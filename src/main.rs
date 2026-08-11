@@ -33,15 +33,17 @@ fn logging_filter(verbose: bool, rust_log: Option<&str>) -> EnvFilter {
 /// Resolve the effective gate mode from the canonical `--gate` flag and the
 /// deprecated boolean `--check` flag, shared by `complexity`, `score`, and
 /// `mutation` (`stubs` only ever had `--gate`, so it calls `gate_dispatch`
-/// directly). `--gate` wins whenever it is explicitly set to anything other
-/// than its `Off` default; a bare `--check` with no `--gate` maps to `Error`,
-/// preserving every pre-existing `--check` invocation.
-fn resolve_gate_mode(gate: GateMode, check: bool) -> GateMode {
-    if gate == GateMode::Off && check {
+/// directly). `gate` is `Option<GateMode>` -- not defaulted in clap -- so an
+/// explicitly passed `--gate off` can be told apart from "no --gate at all";
+/// `--gate` (any value, including `off`) always wins over `--check`. A bare
+/// `--check` with no `--gate` maps to `Error`, preserving every pre-existing
+/// `--check` invocation.
+fn resolve_gate_mode(gate: Option<GateMode>, check: bool) -> GateMode {
+    gate.unwrap_or(if check {
         GateMode::Error
     } else {
-        gate
-    }
+        GateMode::Off
+    })
 }
 
 /// Shared gate/check verdict dispatch used by `complexity`, `score`,
@@ -204,7 +206,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             run_stubs(path, &config, args, format)?;
         }
         Command::Diff(args) => {
-            run_diff_analyzer(path, args.target.as_deref(), format, &args.common)?;
+            run_diff_analyzer(path, args.target.as_deref(), format, args.top, args.offset)?;
         }
         Command::Changes(args) => {
             run_changes_analyzer(path, &config, format, args)?;
@@ -773,12 +775,13 @@ fn run_diff_analyzer(
     path: &Path,
     target: Option<&str>,
     format: Format,
-    args: &AnalyzerArgs,
+    top: Option<usize>,
+    offset: Option<usize>,
 ) -> omen::core::Result<()> {
     let analyzer = omen::analyzers::changes::Analyzer::default();
     let result = analyzer.analyze_diff(path, target)?;
     let value = serde_json::to_value(&result)?;
-    format_with_limits(value, format, args.top, args.offset, &mut stdout())?;
+    format_with_limits(value, format, top, offset, &mut stdout())?;
     Ok(())
 }
 
@@ -1685,7 +1688,15 @@ fn run_mutation(
 
             if !result.files.is_empty() {
                 println!("## Files\n");
-                for file in &result.files {
+                // Apply the same --top/--offset pagination the JSON/SARIF
+                // branches get from `format_with_limits`, so `mutation -f
+                // markdown --top N` doesn't dump every file while JSON does
+                // not. Summary totals above are computed from the full
+                // `result`, not this paginated slice.
+                let offset = args.common.offset.unwrap_or(0);
+                let top = args.common.top.unwrap_or(0); // 0 = unlimited
+                let limit = if top == 0 { usize::MAX } else { top };
+                for file in result.files.iter().skip(offset).take(limit) {
                     println!("### {} (score: {:.1}%)\n", file.path, file.score * 100.0);
                     if file.skipped > 0 {
                         println!(
@@ -2020,22 +2031,51 @@ mod tests {
     }
 
     #[test]
-    fn resolve_gate_mode_defaults_to_gate_value_when_check_false() {
-        assert_eq!(resolve_gate_mode(GateMode::Off, false), GateMode::Off);
-        assert_eq!(resolve_gate_mode(GateMode::Warn, false), GateMode::Warn);
-        assert_eq!(resolve_gate_mode(GateMode::Error, false), GateMode::Error);
+    fn resolve_gate_mode_no_gate_no_check_is_off() {
+        assert_eq!(resolve_gate_mode(None, false), GateMode::Off);
+    }
+
+    #[test]
+    fn resolve_gate_mode_explicit_gate_used_when_check_false() {
+        assert_eq!(resolve_gate_mode(Some(GateMode::Off), false), GateMode::Off);
+        assert_eq!(
+            resolve_gate_mode(Some(GateMode::Warn), false),
+            GateMode::Warn
+        );
+        assert_eq!(
+            resolve_gate_mode(Some(GateMode::Error), false),
+            GateMode::Error
+        );
     }
 
     #[test]
     fn resolve_gate_mode_bare_check_maps_to_error() {
-        assert_eq!(resolve_gate_mode(GateMode::Off, true), GateMode::Error);
+        // --check with no --gate at all: preserves every pre-existing --check
+        // invocation, which must still exit 2 on violation.
+        assert_eq!(resolve_gate_mode(None, true), GateMode::Error);
     }
 
     #[test]
     fn resolve_gate_mode_explicit_gate_wins_over_check() {
         // --gate warn --check: --gate must win, not silently escalate to error.
-        assert_eq!(resolve_gate_mode(GateMode::Warn, true), GateMode::Warn);
-        assert_eq!(resolve_gate_mode(GateMode::Error, true), GateMode::Error);
+        assert_eq!(
+            resolve_gate_mode(Some(GateMode::Warn), true),
+            GateMode::Warn
+        );
+        assert_eq!(
+            resolve_gate_mode(Some(GateMode::Error), true),
+            GateMode::Error
+        );
+    }
+
+    #[test]
+    fn resolve_gate_mode_explicit_gate_off_wins_over_check() {
+        // Regression: `--check --gate off` must resolve to Off, not silently
+        // escalate to Error just because the bare-check branch also produces
+        // Error. Before the fix, `gate: GateMode` (non-Option, defaulting to
+        // Off) made an explicit `--gate off` indistinguishable from "no
+        // --gate at all", so this case incorrectly resolved to Error.
+        assert_eq!(resolve_gate_mode(Some(GateMode::Off), true), GateMode::Off);
     }
 
     #[test]

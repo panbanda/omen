@@ -1423,6 +1423,26 @@ fn test_complexity_check_alias_still_exits_two() {
 }
 
 #[test]
+fn test_complexity_gate_off_wins_over_check_exits_zero() {
+    // Regression: `--check --gate off` must resolve to Off (exit 0), not
+    // silently escalate to Error just because `--check` alone would.
+    let temp = TempDir::new().unwrap();
+    write_complexity_exclude_fixture(&temp);
+
+    omen()
+        .args([
+            "-p",
+            temp.path().to_str().unwrap(),
+            "complexity",
+            "--check",
+            "--gate",
+            "off",
+        ])
+        .assert()
+        .success();
+}
+
+#[test]
 fn test_score_gate_error_exits_two_and_emits_json() {
     omen()
         .args([
@@ -1473,6 +1493,34 @@ fn test_score_check_alias_still_exits_two() {
         .code(2);
 }
 
+#[test]
+fn test_score_gate_off_wins_over_check_exits_zero() {
+    // Regression: `--check --gate off` must resolve to Off (exit 0).
+    omen()
+        .args([
+            "-p",
+            fixtures_dir(),
+            "score",
+            "--check",
+            "--gate",
+            "off",
+            "--fail-under",
+            "99",
+        ])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_score_default_gate_off_exits_zero_on_violation() {
+    // No --gate and no --check: default GateMode::Off must report only and
+    // exit 0, even though the score is well below --fail-under.
+    omen()
+        .args(["-p", fixtures_dir(), "score", "--fail-under", "99"])
+        .assert()
+        .success();
+}
+
 /// `--dry-run` only generates mutants (no test execution), so the mutation
 /// score is always 0.0 (0 killed / 0 scored) -- reliably below the default
 /// `--min-score` of 0.8. This lets the gate be exercised deterministically
@@ -1488,21 +1536,46 @@ fn write_mutation_gate_fixture() -> TempDir {
 }
 
 #[test]
-fn test_mutation_gate_error_exits_two_on_dry_run() {
+fn test_mutation_gate_error_exits_two_and_emits_report_before_failing() {
+    // Regression guard: a naive gate implementation can return Err from
+    // inside the analyzer itself (before the report is ever written), which
+    // would make this test pass for the wrong reason -- exit 2 with no
+    // report at all. Requesting JSON and asserting the stdout is valid,
+    // non-empty mutation output proves the report reaches stdout *before*
+    // the gate fails, matching complexity/score/stubs.
     let temp = write_mutation_gate_fixture();
 
-    omen()
+    let output = omen()
         .args([
             "-p",
             temp.path().to_str().unwrap(),
+            "-f",
+            "json",
             "mutation",
             "--dry-run",
             "--gate",
             "error",
         ])
-        .assert()
-        .code(2)
-        .stderr(predicate::str::contains("Mutation score"));
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("mutation report should be valid JSON on stdout");
+    assert!(
+        parsed.get("summary").is_some(),
+        "mutation report should include a summary: {parsed:#?}"
+    );
+    assert_eq!(
+        parsed["summary"]["mutation_score"], 0.0,
+        "dry-run mutation score should be 0.0: {parsed:#?}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Mutation score"),
+        "expected gate failure message on stderr: {stderr}"
+    );
 }
 
 #[test]
@@ -1547,6 +1620,25 @@ fn test_mutation_check_alias_still_exits_two_on_dry_run() {
         ])
         .assert()
         .code(2);
+}
+
+#[test]
+fn test_mutation_gate_off_wins_over_check_exits_zero() {
+    // Regression: `--check --gate off` must resolve to Off (exit 0).
+    let temp = write_mutation_gate_fixture();
+
+    omen()
+        .args([
+            "-p",
+            temp.path().to_str().unwrap(),
+            "mutation",
+            "--dry-run",
+            "--check",
+            "--gate",
+            "off",
+        ])
+        .assert()
+        .success();
 }
 
 #[test]
@@ -1596,6 +1688,8 @@ fn test_mutation_top_offset_flags_parse_and_run() {
             "--dry-run",
             "--top",
             "1",
+            "--offset",
+            "0",
         ])
         .assert()
         .success();
