@@ -173,6 +173,14 @@
                 </div>
             </div>
             <div class="report-actions">
+                <div class="nav-history" role="group" aria-label="Navigation history">
+                    <button class="btn-ghost nav-history-btn" id="nav-back" type="button" aria-label="Go back" title="Back" disabled>
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+                    </button>
+                    <button class="btn-ghost nav-history-btn" id="nav-forward" type="button" aria-label="Go forward" title="Forward" disabled>
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>
+                    </button>
+                </div>
                 <button class="btn-ghost theme-toggle" id="theme-toggle" type="button" aria-label="Switch color theme" title="Switch color theme">
                     <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.41M17.66 6.34l1.41-1.41"></path></svg>
                     <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"></path></svg>
@@ -1284,6 +1292,57 @@
         }
         window.addEventListener('scroll', updateActiveNav, { passive: true });
         updateActiveNav();
+
+        // In-report navigation history: back/forward through visited sections.
+        // Self-contained so it works even without browser chrome (e.g. an
+        // embedded pane or `omen report serve`). Driven by hashchange, which
+        // fires for every in-page anchor the sidebar and links use.
+        (function initNavHistory() {
+            const backBtn = document.getElementById('nav-back');
+            const forwardBtn = document.getElementById('nav-forward');
+            if (!backBtn || !forwardBtn) {
+                return;
+            }
+            const trail = [location.hash || '#top'];
+            let index = 0;
+            let programmatic = false;
+
+            function refresh() {
+                backBtn.disabled = index <= 0;
+                forwardBtn.disabled = index >= trail.length - 1;
+            }
+            function navigate(hash) {
+                programmatic = true;
+                location.hash = hash;
+            }
+            window.addEventListener('hashchange', () => {
+                const hash = location.hash || '#top';
+                if (programmatic) {
+                    programmatic = false;
+                } else if (hash !== trail[index]) {
+                    // A fresh forward navigation truncates any forward trail.
+                    trail.splice(index + 1);
+                    trail.push(hash);
+                    index = trail.length - 1;
+                }
+                refresh();
+            });
+            backBtn.addEventListener('click', () => {
+                if (index > 0) {
+                    index -= 1;
+                    navigate(trail[index]);
+                    refresh();
+                }
+            });
+            forwardBtn.addEventListener('click', () => {
+                if (index < trail.length - 1) {
+                    index += 1;
+                    navigate(trail[index]);
+                    refresh();
+                }
+            });
+            refresh();
+        })();
 
         // Format large numbers with commas
         document.querySelectorAll('.metric-value').forEach(el => {

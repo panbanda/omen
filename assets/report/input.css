@@ -264,6 +264,23 @@
   .btn-ghost {
     @apply inline-flex h-9 w-9 items-center justify-center rounded-md border bg-card text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground;
   }
+  .btn-ghost:disabled {
+    @apply cursor-not-allowed opacity-40;
+  }
+  .btn-ghost:disabled:hover {
+    @apply bg-card text-muted-foreground;
+  }
+  .nav-history {
+    @apply inline-flex items-center gap-1;
+  }
+  .nav-history-btn svg {
+    @apply h-4 w-4;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
 
   .muted { @apply text-muted-foreground; }
   .mono { font-family: var(--font-mono); }
