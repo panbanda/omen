@@ -22,7 +22,7 @@ Omen detects flags from popular feature flag providers, identifies all reference
 
 ## Built-in Providers
 
-Omen recognizes feature flag patterns from five providers out of the box, covering the most common platforms across JavaScript/TypeScript, Python, and Ruby ecosystems.
+Omen can recognize feature flag patterns from six providers -- `launchdarkly`, `flipper`, `split`, `unleash`, `generic`, and `env` -- covering the most common platforms across JavaScript/TypeScript, Python, and Ruby ecosystems. Detection is opt-in: `[feature_flags] providers` in `omen.toml` defaults to an empty list, so no built-in provider runs until you enable it. See [Configuration](#configuration) later in this page.
 
 ### LaunchDarkly
 
@@ -137,66 +137,51 @@ A flag is considered stale when the most recent commit touching any line that re
 
 This is a conservative heuristic: a flag that was introduced 6 months ago and hasn't been touched since is very likely either fully rolled out (and the flag can be removed) or abandoned (and the flag-guarded code is dead weight).
 
-The threshold is configurable:
+Lower thresholds are more aggressive about flagging staleness. Higher thresholds tolerate longer-lived flags, which may be appropriate for organizations with longer release cycles or flags that are intentionally long-lived (like kill switches).
+
+## Configuration
+
+The `[feature_flags]` section in `omen.toml` controls which built-in providers run and the staleness threshold:
 
 ```toml
 # omen.toml
-[flags]
-stale_threshold_days = 90
+[feature_flags]
+stale_days = 90
+providers = ["launchdarkly"]
 ```
 
-Lower values are more aggressive about flagging staleness. Higher values tolerate longer-lived flags, which may be appropriate for organizations with longer release cycles or flags that are intentionally long-lived (like kill switches).
+`providers` defaults to an empty list -- no built-in detection runs until you list the providers you want (`launchdarkly`, `flipper`, `split`, `unleash`, `generic`, `env`).
 
-## Custom Provider Configuration
+### Custom Provider Configuration
 
-For internal feature flag systems or providers not covered by the built-in set, Omen supports custom provider definitions in `omen.toml`. Custom providers are defined using tree-sitter query patterns.
-
-### Example: Custom Provider
-
-Suppose your codebase uses a homegrown feature flag library where flags are checked via `FeatureGate.check("flag-name")`:
+For internal feature flag systems or providers not covered by the built-in set, Omen supports custom provider definitions in `omen.toml`. Custom providers are defined using tree-sitter query patterns and are checked alongside built-in providers.
 
 ```toml
 # omen.toml
-[flags]
-stale_threshold_days = 90
+[feature_flags]
+stale_days = 90
+providers = ["launchdarkly"]
 
-[[flags.custom_providers]]
-name = "FeatureGate"
-languages = ["typescript", "javascript"]
-
-# Tree-sitter query to match the pattern.
-# The @flag capture must extract the flag key string.
-query = """
-(call_expression
-  function: (member_expression
-    object: (identifier) @_obj
-    property: (property_identifier) @_method)
-  arguments: (arguments
-    (string) @flag)
-  (#eq? @_obj "FeatureGate")
-  (#eq? @_method "check"))
-"""
-
-[[flags.custom_providers]]
-name = "feature_enabled"
-languages = ["python"]
-
-query = """
+[[feature_flags.custom_providers]]
+name = "my_feature_system"
+languages = ["ruby", "python"]
+query = '''
 (call
-  function: (identifier) @_func
+  receiver: (constant) @receiver
+  (#eq? @receiver "Feature")
+  method: (identifier) @method
+  (#match? @method "^enabled\\?$")
   arguments: (argument_list
-    (string) @flag)
-  (#eq? @_func "feature_enabled"))
-"""
+    .
+    (simple_symbol) @flag_key))
+'''
 ```
 
 Each custom provider requires:
 
 - **name**: A human-readable name for the provider (appears in output).
 - **languages**: Which languages this provider applies to.
-- **query**: A tree-sitter query pattern. The query must include a capture named `@flag` that matches the string literal containing the flag key.
-
-Custom providers are checked alongside built-in providers. If a flag matches both a built-in and a custom provider, the built-in provider takes precedence.
+- **query**: A tree-sitter query pattern. The query must include a capture named `@flag_key` that matches the string or symbol literal containing the flag key.
 
 ### Writing Tree-sitter Queries
 

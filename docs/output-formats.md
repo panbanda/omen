@@ -4,16 +4,15 @@ sidebar_position: 20
 
 # Output Formats
 
-All Omen commands support four output formats, controlled by the `-f` or `--format` flag:
+All Omen commands support three output formats, controlled by the `-f` or `--format` flag:
 
 ```bash
 omen -f markdown complexity
 omen -f json score
 omen -f text churn
-omen -f toon all
 ```
 
-The default format is markdown. The MCP server defaults to TOON.
+The default format is markdown.
 
 ## Markdown (default)
 
@@ -52,7 +51,7 @@ Markdown output renders cleanly in terminals that support Unicode box-drawing ch
 
 ## JSON
 
-Machine-parseable output with full nesting. Use this for CI/CD pipelines, scripting, or programmatic consumption.
+Machine-parseable output with full nesting. Use this for CI/CD pipelines, scripting, or programmatic consumption. This is also the format used by the MCP server.
 
 ```bash
 omen -f json complexity
@@ -98,8 +97,19 @@ JSON output is stable and suitable for piping to tools like `jq`:
 omen -f json complexity | jq '.functions[] | select(.level == "error") | .function'
 
 # Get the repository score as a number
-omen -f json score | jq '.score'
+omen -f json score | jq '.overall_score'
 ```
+
+### Compact JSON
+
+The global `--compact` flag minifies JSON output to a single line. It is a clap global flag, so it may appear before or after the subcommand, and it is ignored for non-JSON formats:
+
+```bash
+omen -f json score --compact
+omen --compact -f json complexity
+```
+
+This is the format used for MCP tool responses and is useful whenever token efficiency matters more than human readability -- for example, when piping results into an LLM prompt or storing them as a CI artifact.
 
 ## Text
 
@@ -125,42 +135,19 @@ Functions exceeding thresholds:
   src/scoring/composite.rs:89  calculate_score  cyclomatic=18  cognitive=19  nesting=4  WARN
 ```
 
-## TOON
-
-Token-Oriented Object Notation (TOON) is a compact structured format designed for LLM workflows. It is 30-60% smaller than equivalent JSON while maintaining high comprehension accuracy for language models.
-
-```bash
-omen -f toon complexity
-```
-
-Example output:
-
-```
-@complexity_analysis
-  summary{files:42 functions:318 warnings:12 errors:3}
-  #functions
-    [src/analyzer/complexity.rs:45|analyze_function|cyc:24|cog:31|nest:5|ERROR]
-    [src/git/blame.rs:112|compute_ownership|cyc:22|cog:28|nest:6|ERROR]
-    [src/scoring/composite.rs:89|calculate_score|cyc:18|cog:19|nest:4|WARN]
-```
-
-TOON reduces token consumption when analysis results are fed into LLM prompts, which matters for cost and context window utilization. It uses delimiters (`@`, `#`, `{}`, `[]`, `|`) instead of verbose JSON syntax (quoted keys, colons, commas, braces).
-
-The MCP server uses TOON as its default output format because MCP responses are consumed by language models, where token efficiency directly impacts cost and available context.
-
-For the TOON specification, see [github.com/toon-format/toon](https://github.com/toon-format/toon).
-
 ## Format Comparison
-
-The same data in all four formats, showing relative verbosity:
 
 | Format   | Approximate Token Count | Best For |
 |----------|------------------------|----------|
 | Markdown | 100% (baseline)        | Human reading, documentation, PR comments |
 | JSON     | 120-140%               | CI/CD, scripting, programmatic access |
 | Text     | 70-80%                 | Minimal environments, simple text processing |
-| TOON     | 40-60%                 | LLM consumption, MCP server, token-constrained contexts |
+| JSON + `--compact` | 90-110%      | MCP tool responses, LLM prompts, token-constrained contexts |
+
+## Pagination for Large Results
+
+Most analyzers support `--top N` and `--offset N` on the CLI to page through large result sets. The MCP server uses an equivalent `limit`/`offset` envelope on every tool call (default `limit`: 50): the response wraps the analysis result together with `tool`, `total_items`, `returned`, and `offset` fields (plus `git_skipped_reason` when applicable), so a client can request additional pages without re-running the full analysis. See [MCP Server](./integrations/mcp-server.md) for details.
 
 ## Setting a Default Format
 
-The format can be set per-invocation with `-f`. There is no configuration file option to change the default format -- it is always markdown for CLI usage and TOON for MCP. This keeps behavior predictable: running `omen complexity` in a terminal always produces the same format regardless of project configuration.
+The format can be set per-invocation with `-f`. There is no configuration file option to change the default format -- it is always markdown for CLI usage. This keeps behavior predictable: running `omen complexity` in a terminal always produces the same format regardless of project configuration.

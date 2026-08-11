@@ -98,7 +98,7 @@ Runs all 21 operators. Takes significantly longer but provides the most complete
 ### Dry Run
 
 ```bash
-omen mutation --mode dry-run
+omen mutation --dry-run
 ```
 
 Generates all mutations and reports them without executing the test suite. Useful for reviewing what mutations would be created, estimating runtime, and validating configuration.
@@ -199,63 +199,52 @@ These thresholds are based on empirical data from Papadakis et al. (2019). In pr
 
 ## Configuration
 
-```toml
-# omen.toml
-[mutation]
-# Execution mode: "fast", "thorough", "dry-run"
-mode = "fast"
+Mutation testing is configured entirely through CLI flags rather than `omen.toml` -- `mutation` is not one of the accepted top-level configuration sections. The relevant flags:
 
-# Staleness threshold for incremental mode (in commits)
-incremental_lookback = 1
+| Flag | Purpose |
+|------|---------|
+| `--mode fast\|thorough` | Which operator set to run (see Execution Modes above) |
+| `--dry-run` | Generate mutants and report them without running the test suite |
+| `--jobs N` | Limit parallel worker count (default: all available cores) |
+| `--coverage <path>` | Coverage file to skip untested code (auto-detected if omitted) |
+| `--incremental` | Only mutate files changed since the last run |
+| `--glob <pattern>` | Restrict mutation to files matching a glob |
+| `--output-survivors <path>` | Write surviving mutants to a file for investigation |
+| `--record` | Append outcomes to `.omen/mutation-history.jsonl` for later training |
+| `--skip-predicted <threshold>` | Skip mutants the trained model predicts will be killed above this confidence |
+| `--model <path>` | Use a custom trained-model path instead of `.omen/mutation-model.json` |
+| `--allow-dirty` | Permit running against a working tree with uncommitted changes |
 
-# Maximum number of parallel test workers
-jobs = 0  # 0 = use all available cores
+### Working Tree Safety
 
-# Test command to run for each mutation
-test_command = "cargo test"
+By default, mutation testing refuses to run against a dirty working tree, because it applies mutants directly to source files and could otherwise clobber uncommitted work. Commit or stash your changes first, or pass `--allow-dirty` only once you've reviewed and are prepared to lose the current changes:
 
-# Timeout per mutation test run (seconds)
-timeout = 60
-
-# Operators to include (empty = all applicable operators for detected languages)
-operators = []
-
-# Operators to exclude
-exclude_operators = []
-
-# Files/directories to exclude from mutation
-exclude = ["tests/", "test_helpers/", "fixtures/"]
-
-# Coverage file path (empty = auto-detect)
-coverage_path = ""
+```bash
+omen mutation --allow-dirty
 ```
 
-### Customizing the Test Command
+### Test Command
 
-Omen needs to know how to run your test suite. The `test_command` is the shell command that will be executed for each mutation. It should:
+Omen runs your project's test suite for each mutation. A fast, focused test command keeps mutation runs practical, since the total runtime scales with the number of mutants:
 
-- Run the relevant tests (not necessarily the entire suite)
-- Exit with code 0 on success, non-zero on failure
-- Be as fast as possible (mutations multiply the total runtime)
-
-```toml
+```bash
 # Rust
-test_command = "cargo test --lib"
+cargo test --lib
 
 # JavaScript/TypeScript
-test_command = "npm test"
+npm test
 
 # Python
-test_command = "pytest tests/ -x --no-header -q"
+pytest tests/ -x --no-header -q
 
 # Go
-test_command = "go test ./..."
+go test ./...
 
 # Ruby
-test_command = "bundle exec rspec --fail-fast"
+bundle exec rspec --fail-fast
 ```
 
-The `-x` / `--fail-fast` flags (where available) are recommended: once a test fails, the mutation is killed and there is no need to run remaining tests.
+`-x` / `--fail-fast` flags (where available) are recommended: once a test fails, the mutation is killed and there is no need to run remaining tests. Run `omen mutation --help` for the current flag that selects the test command for your project.
 
 ## Output
 
@@ -267,7 +256,7 @@ omen mutation
 omen -f json mutation
 
 # Dry run to see what would be mutated
-omen mutation --mode dry-run
+omen mutation --dry-run
 
 # Incremental mode for PRs
 omen mutation --incremental

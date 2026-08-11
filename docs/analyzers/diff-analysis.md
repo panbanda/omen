@@ -126,11 +126,11 @@ jobs:
           fetch-depth: 0  # Full history required for accurate diff
 
       - name: Install Omen
-        run: brew install panbanda/omen/omen
+        run: brew install panbanda/brews/omen
 
       - name: Run diff analysis
         run: |
-          RISK=$(omen -f json diff --target origin/main | jq -r '.risk_level')
+          RISK=$(omen -f json diff --target origin/main | jq -r '.level')
           echo "Risk level: $RISK"
 
           if [ "$RISK" = "HIGH" ]; then
@@ -152,7 +152,7 @@ jobs:
 diff-analysis:
   stage: review
   script:
-    - brew install panbanda/omen/omen
+    - brew install panbanda/brews/omen
     - omen -f json diff --target origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -163,7 +163,7 @@ diff-analysis:
 To fail a pipeline when the diff risk exceeds a threshold:
 
 ```bash
-SCORE=$(omen -f json diff --target origin/main | jq '.risk_score')
+SCORE=$(omen -f json diff --target origin/main | jq '.score')
 if [ "$(echo "$SCORE > 0.5" | bc -l)" -eq 1 ]; then
   echo "Diff risk score $SCORE exceeds threshold (0.5)"
   exit 1
@@ -172,13 +172,7 @@ fi
 
 ## Configuration
 
-In `omen.toml`:
-
-```toml
-[diff]
-# Default target branch when --target is not specified
-default_target = "main"
-```
+`diff` is not one of the accepted `omen.toml` sections. When `--target` is omitted, Omen auto-detects `main` or `master` as the comparison branch; there is no config file override for the default target. Run `omen diff --help` for the current set of CLI flags.
 
 ## Relationship to Other Analyzers
 

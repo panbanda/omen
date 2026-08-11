@@ -5,7 +5,7 @@ slug: /
 
 # Introduction
 
-Omen is a multi-language code analysis CLI built in Rust. It uses tree-sitter to parse source code across 13 languages and runs 19 analyzers that surface complexity, technical debt, defect risk, code clones, dependency problems, and more.
+Omen is a multi-language code analysis CLI built in Rust. It uses tree-sitter to parse source code across 13 languages and runs 20 analyzers that surface complexity, technical debt, defect risk, unfinished stubs, code clones, dependency problems, and more.
 
 ## Why Omen Exists
 
@@ -19,7 +19,7 @@ An omen is a sign of things to come. Code analysis is the same idea applied to s
 
 ## Key Capabilities
 
-### 19 Analyzers
+### 20 Analyzers
 
 Omen ships with a broad set of analyzers covering structural, historical, and predictive dimensions of code quality:
 
@@ -27,11 +27,11 @@ Omen ships with a broad set of analyzers covering structural, historical, and pr
 |---|---|
 | Structural | Complexity, coupling, cohesion, code smells, dead code |
 | Duplication | Code clone detection (Type 1, 2, and 3 clones) |
-| Technical debt | SATD detection, technical debt gradient, dependency analysis |
+| Technical debt | SATD detection, stubs detection, technical debt gradient, dependency analysis |
 | Predictive | Defect prediction, hotspot detection, churn analysis |
-| Testing | Mutation testing, coverage analysis |
+| Testing | Mutation testing |
 | Composite | Repository score, dependency graph |
-| Discovery | Semantic search, file statistics |
+| Discovery | Semantic search |
 
 ### 13 Languages
 
@@ -43,7 +43,7 @@ Omen includes a built-in MCP (Model Context Protocol) server, allowing LLMs and 
 
 ### Semantic Search
 
-Natural language code discovery powered by local vector embeddings. Omen extracts symbols from the codebase, generates embeddings using all-MiniLM-L6-v2 via the candle inference library, and indexes them in a local SQLite database. No API keys required for the default provider.
+Natural language code discovery powered by a local TF-IDF engine (sublinear TF, smooth IDF, bigram tokenization) -- no external models, no API keys, no GPU required. Omen extracts symbols from the codebase and indexes them in a local SQLite database at `.omen/search.db`.
 
 ### Mutation Testing
 

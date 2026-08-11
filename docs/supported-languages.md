@@ -47,6 +47,7 @@ Not all analyzers apply equally to all languages. Some analyzers are universal (
 |----------|:--:|:----:|:------:|:--:|:--:|:-------:|:----:|:-:|:---:|:--:|:----:|:---:|:----:|
 | Complexity | x | x | x | x | x | x | x | x | x | x | x | x | x |
 | SATD | x | x | x | x | x | x | x | x | x | x | x | x | x |
+| Stubs | x | x | x | x | x | x | x | x | x | x | x | x | x |
 | Dead Code | x | x | x | x | x | x | x | x | x | x | x | x | x |
 | Churn | x | x | x | x | x | x | x | x | x | x | x | x | x |
 | Code Clones | x | x | x | x | x | x | x | x | x | x | x | x | x |
@@ -73,6 +74,7 @@ The following analyzers work identically across all 13 languages. They rely on g
 
 - **Complexity** -- cyclomatic and cognitive complexity, nesting depth
 - **SATD** -- comment scanning for technical debt markers
+- **Stubs** -- AST-based detection of incomplete/placeholder implementations
 - **Dead Code** -- unreachable functions and unused exports
 - **Churn** -- file change frequency from Git history
 - **Code Clones** -- token-based duplicate detection
@@ -85,7 +87,7 @@ The following analyzers work identically across all 13 languages. They rely on g
 - **Ownership** -- contributor distribution from Git blame
 - **Temporal Coupling** -- co-change detection from Git history
 - **Diff Analysis** -- structural analysis of uncommitted changes
-- **Semantic Search** -- embedding-based code discovery
+- **Semantic Search** -- TF-IDF-based code discovery
 
 ### CK Metrics (Cohesion)
 

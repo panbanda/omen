@@ -60,7 +60,13 @@ Functions that are exported or public are not flagged as dead code because they 
 
 ### Rust-specific handling
 
-For Rust projects, Omen can leverage `cargo check` output for more reliable dead code detection. The Rust compiler's own dead code analysis accounts for conditional compilation (`#[cfg(...)]`), trait bounds, and macro expansions that tree-sitter parsing alone cannot resolve.
+For Rust projects, `--cargo-check` layers rustc's own dead-code diagnostics on top of Omen's tree-sitter analysis for more reliable detection. The Rust compiler's dead code analysis accounts for conditional compilation (`#[cfg(...)]`), trait bounds, and macro expansions that tree-sitter parsing alone cannot resolve.
+
+```bash
+omen deadcode --cargo-check
+```
+
+`--cargo-check` runs `cargo check`, which executes any build scripts (`build.rs`) and proc macros in the target repository. Only use it on repositories whose build scripts you trust -- it is not safe to run against arbitrary or untrusted source, including via `omen -p owner/repo --cargo-check deadcode` against a repository you haven't reviewed.
 
 ## Example Output
 
@@ -165,7 +171,7 @@ A public function in a library may have no callers within the repository but be 
 
 ### Conditional compilation
 
-Code behind feature flags, `#[cfg(...)]` attributes, or `#ifdef` blocks may appear dead in one configuration but be live in another. Omen's tree-sitter analysis sees the code as written, not as compiled. For Rust projects, using `cargo check` integration provides better accuracy.
+Code behind feature flags, `#[cfg(...)]` attributes, or `#ifdef` blocks may appear dead in one configuration but be live in another. Omen's tree-sitter analysis sees the code as written, not as compiled. For Rust projects, `--cargo-check` (trusted repositories only -- see above) provides better accuracy.
 
 ## Practical Applications
 

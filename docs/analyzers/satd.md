@@ -178,24 +178,18 @@ The output is sorted by severity (highest first), then by file path. This puts s
 
 ## Configuration
 
-Default markers can be extended or replaced in `omen.toml`:
+The `[satd]` section accepts one option: `custom_markers`, a list of additional comment markers to detect on top of the built-in set (TODO, FIXME, HACK, BUG, and others):
 
 ```toml
 [satd]
-# Add custom markers to existing categories
-[satd.markers]
-design = ["HACK", "KLUDGE", "SMELL", "REFACTOR", "UGLY", "WORKAROUND", "CLEANUP"]
-defect = ["BUG", "FIXME", "BROKEN", "DEFECT", "REGRESSION"]
-requirement = ["TODO", "FEAT", "MISSING", "NEEDED", "PLACEHOLDER"]
-test = ["FAILING", "SKIP", "DISABLED", "FLAKY", "PENDING"]
-performance = ["SLOW", "OPTIMIZE", "PERF", "N+1", "BOTTLENECK"]
-security = ["SECURITY", "VULN", "UNSAFE", "INSECURE", "XXE", "SQLI", "XSS"]
-
-# Exclude specific directories from SATD scanning
-exclude = ["vendor", "third_party", "generated"]
+custom_markers = ["KLUDGE", "TECHDEBT"]
 ```
 
-When custom markers are specified, they replace the defaults for that category entirely. If you want to add markers without removing the defaults, include the default markers in your list.
+To exclude directories from SATD scanning specifically, use the top-level `exclude` list, which applies to every analyzer:
+
+```toml
+exclude = ["vendor/**", "third_party/**", "**/*.generated.*"]
+```
 
 ## How Omen Detects SATD
 

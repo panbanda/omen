@@ -105,19 +105,7 @@ Low risk: 103 (72.5%)
 
 ## Configuration
 
-In `omen.toml`:
-
-```toml
-[defect]
-# Adjust factor weights (must sum to 1.0)
-process_weight = 0.30
-metrics_weight = 0.25
-age_weight = 0.20
-size_weight = 0.25
-
-# Time window for process metrics
-since = "6m"
-```
+`defect` is not one of the accepted `omen.toml` sections, so the PMAT factor weights shown above are not currently configurable through the config file. Run `omen defect --help` for the current set of CLI flags.
 
 ## Interpreting Results
 

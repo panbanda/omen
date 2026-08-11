@@ -100,17 +100,7 @@ Patterns to watch for in high-risk commits:
 
 ## Configuration
 
-In `omen.toml`:
-
-```toml
-[changes]
-# Number of recent commits to analyze
-limit = 100
-
-# Percentile thresholds for risk classification
-high_percentile = 95
-medium_percentile = 80
-```
+`changes` is an accepted top-level `omen.toml` section, but its field list isn't documented here -- `omen.example.toml` (the canonical example config) does not include a `[changes]` block. Run `omen changes --help` for the current set of CLI flags, including how many recent commits are analyzed.
 
 ## Comparison with File-Level Defect Prediction
 
