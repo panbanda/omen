@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.2.0](https://github.com/panbanda/omen/compare/omen-skills-v4.1.0...omen-skills-v4.2.0) (2026-08-11)
+
+
+### Features
+
+* overhaul agent-facing CLI and MCP DX ([#460](https://github.com/panbanda/omen/issues/460)) ([a527afe](https://github.com/panbanda/omen/commit/a527afec2bce6fe4ca3a8729cdd33ca1287bb5cf))
+
 ## [4.1.0](https://github.com/panbanda/omen/compare/omen-skills-v4.0.2...omen-skills-v4.1.0) (2026-06-11)
 
 

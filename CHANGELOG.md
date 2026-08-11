@@ -1,5 +1,27 @@
 # Changelog
 
+## [4.26.0](https://github.com/panbanda/omen/compare/omen-v4.25.0...omen-v4.26.0) (2026-08-11)
+
+
+### Features
+
+* overhaul agent-facing CLI and MCP DX ([#460](https://github.com/panbanda/omen/issues/460)) ([a527afe](https://github.com/panbanda/omen/commit/a527afec2bce6fe4ca3a8729cdd33ca1287bb5cf))
+
+
+### Bug Fixes
+
+* address code-review findings on the merged security/perf work ([#465](https://github.com/panbanda/omen/issues/465)) ([8aae3d0](https://github.com/panbanda/omen/commit/8aae3d0e9b063345958ab6e8e04c39b03d56a7f0))
+* correctness bugs across analyzers (closes [#452](https://github.com/panbanda/omen/issues/452), [#453](https://github.com/panbanda/omen/issues/453), [#454](https://github.com/panbanda/omen/issues/454)) ([#458](https://github.com/panbanda/omen/issues/458)) ([389e379](https://github.com/panbanda/omen/commit/389e379e3f8f38aaba4264fce18f4011d375aa92))
+* **deps:** update rust crate gix to 0.86 ([#449](https://github.com/panbanda/omen/issues/449)) ([eddf3b4](https://github.com/panbanda/omen/commit/eddf3b4c34b7b07791515ff8bb5b4c71a1368c19))
+* **deps:** update rust crate rusqlite to 0.40 ([#450](https://github.com/panbanda/omen/issues/450)) ([531953d](https://github.com/panbanda/omen/commit/531953d0387b20fec0210d9d6899cf067af0271b))
+* **report:** stored XSS via repo-derived data in HTML reports ([#457](https://github.com/panbanda/omen/issues/457)) ([d2f6dc7](https://github.com/panbanda/omen/commit/d2f6dc7ce825de22a84c31075cfacc1f494b178b))
+
+
+### Performance Improvements
+
+* eliminate redundant analyzer runs in 'omen all' and score ([#461](https://github.com/panbanda/omen/issues/461)) ([5c7d626](https://github.com/panbanda/omen/commit/5c7d62639eeeedd4edc69345874e222514683a95))
+* optimize analyzer hot loops, algorithms, and memory ([#462](https://github.com/panbanda/omen/issues/462)) ([9987320](https://github.com/panbanda/omen/commit/9987320c78193f95991a303c39b8cf91c0b8f847))
+
 ## [4.25.0](https://github.com/panbanda/omen/compare/omen-v4.24.2...omen-v4.25.0) (2026-06-11)
 
 
