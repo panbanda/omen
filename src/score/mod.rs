@@ -402,8 +402,21 @@ pub fn compute_from_components(components: &Components<'_>, file_count: usize) -
 /// Used by `report generate` to avoid redundantly re-running all sub-analyzers.
 pub fn compute_from_data_dir(data_dir: &std::path::Path, file_count: usize) -> Result<Analysis> {
     fn load<T: serde::de::DeserializeOwned>(data_dir: &std::path::Path, name: &str) -> Option<T> {
-        let content = std::fs::read_to_string(data_dir.join(name)).ok()?;
-        serde_json::from_str(&content).ok()
+        let path = data_dir.join(name);
+        let content = match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(error) => {
+                tracing::warn!(path = %path.display(), %error, "Failed to read score component");
+                return None;
+            }
+        };
+        match serde_json::from_str(&content) {
+            Ok(result) => Some(result),
+            Err(error) => {
+                tracing::warn!(path = %path.display(), %error, "Failed to parse score component");
+                None
+            }
+        }
     }
 
     let complexity = load(data_dir, "complexity.json");

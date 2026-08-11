@@ -40,9 +40,9 @@ fn ensure_secure_clone_base(path: &Path) -> Result<()> {
             path.display()
         )));
     }
-    if metadata.mode() & 0o002 != 0 {
+    if metadata.mode() & 0o077 != 0 {
         return Err(Error::Remote(format!(
-            "Clone base '{}' must not be world-writable",
+            "Clone base '{}' must not grant permissions to group or other users",
             path.display()
         )));
     }
@@ -290,6 +290,19 @@ mod tests {
         let base = temp.path().join("omen-repos");
         std::fs::create_dir(&base).unwrap();
         std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o707)).unwrap();
+
+        assert!(ensure_secure_clone_base(&base).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_secure_clone_base_rejects_group_readable_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().join("omen-repos");
+        std::fs::create_dir(&base).unwrap();
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o750)).unwrap();
 
         assert!(ensure_secure_clone_base(&base).is_err());
     }
