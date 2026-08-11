@@ -39,31 +39,36 @@ Omen is a multi-language code analysis CLI built in Rust. It uses tree-sitter fo
 ```
 src/
   cli/           - CLI entry point using clap
-  config/        - Configuration loading (TOML)
+  config/        - Configuration loading and schema
   core/          - Core types and traits
   analyzers/     - Analysis implementations
-    complexity/  - Cyclomatic and cognitive complexity
-    satd/        - Self-admitted technical debt
-    deadcode/    - Unused code detection
-    churn/       - Git history file churn
-    clones/      - Code clone detection (MinHash+LSH)
-    defect/      - Defect probability (PMAT)
-    changes/     - JIT commit-level risk
-    diff/        - PR/branch diff analysis
-    tdg/         - Technical Debt Gradient
-    graph/       - Dependency graph (Mermaid)
-    hotspot/     - High churn + complexity
-    temporal/    - Temporal coupling
-    ownership/   - Code ownership and bus factor
-    cohesion/    - CK metrics (WMC, CBO, RFC, LCOM4, DIT, NOC)
-    repomap/     - PageRank-ranked symbols
-    smells/      - Architectural smells (Tarjan SCC)
-    flags/       - Feature flag detection
+    complexity.rs - Cyclomatic and cognitive complexity
+    satd.rs       - Self-admitted technical debt
+    deadcode.rs   - Unused code detection
+    churn.rs      - Git history file churn
+    duplicates.rs - Code clone detection (MinHash+LSH)
+    defect.rs     - Defect probability (PMAT)
+    changes.rs    - JIT commit-level risk
+    tdg.rs        - Technical Debt Gradient
+    graph.rs      - Dependency graph (Mermaid)
+    hotspot.rs    - High churn + complexity
+    temporal.rs   - Temporal coupling
+    ownership.rs  - Code ownership and bus factor
+    cohesion.rs   - CK metrics (WMC, CBO, RFC, LCOM4, DIT, NOC)
+    repomap.rs    - PageRank-ranked symbols
+    outline.rs    - File and symbol outlines
+    impact.rs     - Symbol blast-radius analysis
+    smells.rs     - Architectural smells (Tarjan SCC)
+    flags.rs      - Feature flag detection
     mutation/    - Mutation testing (21 operators, parallel execution)
+  semantic/      - TF-IDF indexing, search, cache, and multi-repo support
+  context.rs     - Agent-oriented repository context
+  symbol.rs      - Symbol lookup and relationship reports
   git/           - Git operations (log, blame, diff)
   parser/        - Tree-sitter wrapper
   mcp/           - MCP server for LLM integration
   output/        - Output formatting (JSON/Markdown/text)
+  report/        - minijinja report rendering and embedded HTML template
   score/         - Repository health scoring
 ```
 
@@ -87,11 +92,11 @@ files.par_iter()
     .collect()
 ```
 
-**Configuration**: Config loaded from `omen.toml` or `.omen/omen.toml`. See `omen.example.toml` for all options.
+**Configuration**: Automatic discovery loads TOML from `omen.toml` and `.omen/omen.toml`. An explicit `--config` path supports TOML, YAML, or JSON. Environment variables with the `OMEN_` prefix override file values. Config types use `#[serde(deny_unknown_fields)]`, so unknown keys are errors. See `omen.example.toml` for a representative configuration.
 
 **MCP server**: JSON-RPC server in `mcp/` module exposing all analyzers as tools for LLM integration. Tool names are bare analyzer names (e.g., `complexity`, `satd`, `temporal`, `outline`, `impact`, `get_symbol`) -- no prefix. All tools support `limit`/`offset` envelope pagination (default limit: 50). `McpServer::tool_names()` is the single source of truth; the manifest reads from it.
 
-**`--since` flag**: Commands that accept `--since` (e.g., `report generate`, `score trend`) default to `"all"` (full repo history). The value `"all"` is handled by `is_since_all()` in `src/git/log.rs`, which causes `parse_since_to_days()` to return `None` (no time limit). Duration values like `3m`, `6m`, `1y` still work.
+**`--since` flag**: `score trend --since` defaults to `"all"`; `report generate --since` defaults to `"1y"`. The value `"all"` is handled by `is_since_all()` in `src/git/log.rs`, which causes `parse_since_to_days()` to return `None` (no time limit). Duration values like `3m`, `6m`, and `1y` still work.
 
 ### CLI Commands
 
@@ -121,26 +126,33 @@ Top-level commands (flat structure):
 - `impact` - Blast-radius analysis for a symbol (transitive callers/callees)
 - `symbol` - One-call symbol report: source, location, callers/callees, complexity
 - `report` - HTML health reports
+- `search` - Semantic symbol search (`index` and `query`)
 - `mcp` - Start MCP server
 
-**Global flags**: `-p/--path`, `-f/--format`, `-c/--config`, `-v/--verbose`, `-j/--jobs`, `--no-cache`, `--ref`, `--shallow`, `--compact` (emit minified JSON for token-efficient agent use)
+**Global options**: `-p/--path`, `-f/--format`, `-c/--config`, `-v/--verbose`, `-j/--jobs`, `--ref`, and `--shallow`. `--compact` is a clap global flag, so it may appear before or after a subcommand; with `-f json` it emits minified single-line JSON and is ignored for other formats.
 
 **Pagination flags** (most analyzers): `--top N` (limit to N results), `--offset N` (skip first N results). Combine for pagination.
 
-**MCP server**: The MCP server exposes all analyzers plus `outline`, `impact`, and `get_symbol` as tools. All tools support `limit` and `offset` parameters for pagination (default limit: 50). Tool names are bare analyzer names with no prefix.
+**Special safety flags**: `deadcode --cargo-check` executes `cargo check`, including build scripts, and is for trusted repositories only. Mutation testing refuses dirty working trees unless `mutation --allow-dirty` is supplied. MCP transport is stdio-only; `mcp --allow-external-paths` permits tool paths outside the configured repository root.
+
+**MCP server**: `McpServer::tool_names()` defines the complete tool list: `context`, `outline`, `complexity`, `satd`, `deadcode`, `churn`, `clones`, `defect`, `changes`, `diff`, `tdg`, `graph`, `hotspot`, `temporal`, `ownership`, `cohesion`, `repomap`, `smells`, `flags`, `score`, `semantic_search`, `get_symbol`, `impact`, and `semantic_search_hyde`. Every tool honors its advertised input schema and supports `limit`/`offset` envelope pagination (default limit: 50). JSON tool output is compact.
 
 ### Report System
 
-`omen report generate` runs all analyzers in parallel, then invokes LLM analyst agents to produce insight narratives, and renders an HTML report via `src/report/render.rs`.
+`omen report generate` runs the report analyzers and writes JSON data. The reporting plugin can then invoke analyst agents for narratives before `omen report render` renders the HTML with minijinja.
 
 Key files:
 - `src/report/render.rs` -- loads JSON data files + optional insight JSON files, renders HTML
 - `src/report/types.rs` -- all Rust types for report data and insights (must match agent output schemas)
-- `src/report/template.html` -- Handlebars HTML template
+- `src/report/template.html` -- minijinja (Jinja2 syntax) HTML template
+- `assets/report/input.css` -- Tailwind v4 + shadcn design-token source for the report stylesheet
+- `src/report/report.css` -- stylesheet compiled from `assets/report/input.css`, embedded into the template as `ReportCss`
 - `plugins/reporting/commands/generate-report.md` -- orchestration command (runs analyzers, spawns agents)
 - `plugins/reporting/agents/` -- 12 analyst agents that produce `{section_insight: string}` JSON
 
 When adding a new report section: add the insight type to `types.rs`, add a field to `RenderData`, add loading logic in `render.rs`, add the template section in `template.html`, and create an analyst agent.
+
+The report stylesheet is compiled offline from `assets/report/input.css` to `src/report/report.css` (see `assets/report/README.md`; run `bun run build` after editing `input.css`), and both `report.css` and `template.html` are embedded with `include_str!`. The report is a single self-contained HTML file, and ordinary `cargo build` and `cargo install` do not require a JavaScript toolchain.
 
 ### Plugin Structure
 
