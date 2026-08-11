@@ -325,8 +325,15 @@ runs:
             }
           }
 
-          const diff = loadJson(process.env.DIFF_JSON, 'diff', false);
-          const score = loadJson(process.env.SCORE_JSON, 'score');
+          let diff;
+          let score;
+          try {
+            diff = loadJson(process.env.DIFF_JSON, 'diff', false);
+            score = loadJson(process.env.SCORE_JSON, 'score');
+          } catch (error) {
+            core.warning(`Skipping job summary: ${error.message}`);
+            return;
+          }
           const riskScore = diff ? `${Math.round(diff.score * 100)}%` : 'Not available';
           const riskLevel = diff ? String(diff.level).toUpperCase() : 'Not available';
 
@@ -357,7 +364,7 @@ runs:
             core.summary.addRaw('Diff risk and change-size metrics are only reported for pull request events.\n\n');
           }
 
-          const componentRows = Object.entries(score.components)
+          const componentRows = Object.entries(score.components ?? {})
             .sort((a, b) => b[1].weight - a[1].weight)
             .map(([name, component]) => [
               name,
