@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.28.1](https://github.com/panbanda/omen/compare/omen-v4.28.0...omen-v4.28.1) (2026-08-12)
+
+
+### Bug Fixes
+
+* correct per-function complexity for nested functions ([#481](https://github.com/panbanda/omen/issues/481)) ([8796fb5](https://github.com/panbanda/omen/commit/8796fb596926001d04dfc6b3c1e8cf55c26d30ce))
+
 ## [4.28.0](https://github.com/panbanda/omen/compare/omen-v4.27.0...omen-v4.28.0) (2026-08-11)
 
 
