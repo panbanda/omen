@@ -1058,7 +1058,13 @@ pub fn extract_imports(result: &ParseResult) -> Vec<ImportNode> {
     imports
 }
 
-fn get_function_node_types(lang: Language) -> Vec<&'static str> {
+/// Get the AST node kinds that represent a function/method definition in
+/// `lang`. This is the same list `extract_functions` uses to decide what
+/// counts as its own reportable function -- reused by the complexity
+/// analyzer to identify function-definition nodes precisely (narrower than
+/// a loose `kind.contains("function")` substring match, which can admit
+/// non-definition kinds in some grammars).
+pub fn get_function_node_types(lang: Language) -> Vec<&'static str> {
     match lang {
         Language::Go => vec!["function_declaration", "method_declaration"],
         Language::Rust => vec!["function_item", "impl_item"],
@@ -1097,10 +1103,6 @@ fn extract_function_info(
             }
         })?;
 
-    let body = node
-        .child_by_field_name("body")
-        .or_else(|| find_node_child(node, "block"));
-
     let is_exported = check_is_exported(node, source, lang);
 
     let signature = extract_signature(node, source, lang);
@@ -1109,10 +1111,33 @@ fn extract_function_info(
         name,
         start_line: node.start_position().row as u32 + 1,
         end_line: node.end_position().row as u32 + 1,
-        body_byte_range: body.map(|b| (b.start_byte(), b.end_byte())),
+        body_byte_range: function_body_byte_range(node),
         is_exported,
         signature,
     })
+}
+
+/// Get a function-like node's body node, if present.
+///
+/// Shared by `extract_function_info` (to populate
+/// `FunctionNode::body_byte_range`) and by the complexity analyzer (to
+/// re-locate the exact same AST node later by byte range). Using the same
+/// lookup in both places guarantees the two stay in sync.
+fn function_body_node<'a>(node: &tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
+    node.child_by_field_name("body")
+        .or_else(|| find_node_child(node, "block"))
+}
+
+/// Get the byte range of a function-like node's body, if present.
+///
+/// This uniquely identifies the specific function/method definition a
+/// `FunctionNode` was extracted from, even when several functions share a
+/// start line -- e.g. multiple functions on one line in minified/generated
+/// code, or a nested function whose declaration starts on the same line as
+/// its enclosing function. Line numbers alone cannot disambiguate those
+/// cases; byte ranges always can.
+pub fn function_body_byte_range(node: &tree_sitter::Node<'_>) -> Option<(usize, usize)> {
+    function_body_node(node).map(|b| (b.start_byte(), b.end_byte()))
 }
 
 /// Recursively walk a C/C++ declarator chain to find the function name.

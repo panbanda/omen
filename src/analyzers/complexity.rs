@@ -38,7 +38,8 @@ use crate::core::{
     percentile, AnalysisContext, Analyzer as AnalyzerTrait, Language, Result, SourceFile,
 };
 use crate::parser::queries::{
-    get_decision_node_types, get_flat_node_types, get_nesting_node_types,
+    get_decision_node_types, get_flat_node_types, get_nested_scope_node_types,
+    get_nesting_node_types,
 };
 use crate::parser::{self, ParseResult, Parser};
 
@@ -346,14 +347,14 @@ pub fn analyze_function_complexity(func: &parser::FunctionNode, result: &ParseRe
     let root = result.root_node();
 
     // Find the function node in the tree
-    let func_node = find_function_at_line(&root, func.start_line);
+    let func_node = find_function_node(&root, func, result.language);
 
     let (cyclomatic, cognitive, max_nesting) = if let Some(node) = func_node {
         let body = node.child_by_field_name("body").unwrap_or(node);
         (
             1 + count_decision_points(&body, &result.source, result.language),
             calculate_cognitive_complexity(&body, &result.source, result.language, 0),
-            calculate_max_nesting(&body, &result.source, 0),
+            calculate_max_nesting(&body, result.language, 0),
         )
     } else {
         (1, 0, 0)
@@ -367,14 +368,38 @@ pub fn analyze_function_complexity(func: &parser::FunctionNode, result: &ParseRe
     }
 }
 
-/// Find a function node at a specific line.
+/// Find the exact AST node that `func` (from `parser::extract_functions`) was
+/// extracted from.
 /// Uses iterative cursor traversal for performance.
-fn find_function_at_line<'a>(
+///
+/// Resolving by line number alone is ambiguous whenever more than one
+/// function starts on the same line -- common in minified/generated code
+/// (e.g. `function a() {} function b(x) { if (x) {} }`), and also for a
+/// nested function whose declaration happens to start on the same line as
+/// its enclosing function/method. So this prefers matching on
+/// `func.body_byte_range`, which uniquely identifies the specific node: it
+/// is computed by `parser::function_body_byte_range` both when `func` was
+/// extracted and here when re-locating it, so an exact match can only come
+/// from the same node.
+///
+/// Falls back to line-based resolution (preferring an exact start-line
+/// match, then the innermost containing node) only when `func` has no body
+/// byte range to match against.
+///
+/// Only considers nodes whose kind is one of `lang`'s actual function/method
+/// definition kinds (`parser::get_function_node_types`), not a loose
+/// `kind.contains("function")` substring match, which can admit
+/// non-definition kinds in some grammars.
+fn find_function_node<'a>(
     root: &tree_sitter::Node<'a>,
-    target_line: u32,
+    func: &parser::FunctionNode,
+    lang: Language,
 ) -> Option<tree_sitter::Node<'a>> {
-    let line = target_line.saturating_sub(1); // Convert to 0-indexed
+    let function_kinds = parser::get_function_node_types(lang);
+    let line = func.start_line.saturating_sub(1); // Convert to 0-indexed
     let mut cursor = root.walk();
+    let mut exact_line_match: Option<tree_sitter::Node<'a>> = None;
+    let mut innermost_containing: Option<tree_sitter::Node<'a>> = None;
 
     loop {
         let node = cursor.node();
@@ -384,8 +409,23 @@ fn find_function_at_line<'a>(
         // Only descend if line is within this node's range
         if start <= line && line <= end {
             let kind = node.kind();
-            if kind.contains("function") || kind.contains("method") {
-                return Some(node);
+            if function_kinds.contains(&kind) {
+                if let Some(target_range) = func.body_byte_range {
+                    if parser::function_body_byte_range(&node) == Some(target_range) {
+                        // Unambiguous: this node's body occupies exactly the
+                        // same bytes `func`'s body was extracted from.
+                        return Some(node);
+                    }
+                }
+                // Remember as fallbacks, but keep descending: a more
+                // specific (nested) function node may also contain this
+                // line and should take precedence. The last recorded match
+                // at each tier is the innermost one, since traversal is
+                // depth-first.
+                if start == line {
+                    exact_line_match = Some(node);
+                }
+                innermost_containing = Some(node);
             }
 
             // Try to go deeper
@@ -400,7 +440,7 @@ fn find_function_at_line<'a>(
                 break;
             }
             if !cursor.goto_parent() {
-                return None;
+                return exact_line_match.or(innermost_containing);
             }
         }
     }
@@ -408,17 +448,33 @@ fn find_function_at_line<'a>(
 
 /// Count decision points for cyclomatic complexity.
 /// Uses iterative cursor traversal for performance.
+///
+/// Does not descend into nested function-like scopes (closures, lambdas,
+/// nested function/method definitions) -- their decision points belong to
+/// themselves, not to the function whose body is being walked here. The
+/// starting `node` itself is exempt from this check, since callers may pass
+/// the function node directly when it has no separate `body` field.
+///
+/// Only considers named nodes: in some grammars (notably Ruby, where
+/// statement kinds are bare keywords like `"if"`/`"while"`/`"case"`) the
+/// anonymous keyword token that starts a construct has the same `kind()`
+/// string as the construct's own named node, e.g. an `if` node's own literal
+/// `if` keyword is itself a child node of kind `"if"`. Without the
+/// `is_named()` guard, that keyword token would be counted as a second,
+/// phantom decision point on top of the statement it belongs to.
 fn count_decision_points(node: &tree_sitter::Node<'_>, source: &[u8], lang: Language) -> u32 {
     let decision_types = get_decision_node_types(lang);
+    let boundary_types = get_nested_scope_node_types(lang);
     let mut count = 0;
     let mut cursor = node.walk();
+    let start_depth = cursor.depth();
 
     loop {
         let current = cursor.node();
         let kind = current.kind();
 
         // Count decision points
-        if decision_types.contains(&kind) {
+        if current.is_named() && decision_types.contains(&kind) {
             count += 1;
         }
 
@@ -431,8 +487,10 @@ fn count_decision_points(node: &tree_sitter::Node<'_>, source: &[u8], lang: Lang
             }
         }
 
-        // Traverse tree
-        if cursor.goto_first_child() {
+        // Traverse tree, stopping at nested function-scope boundaries.
+        let is_nested_scope_boundary =
+            cursor.depth() != start_depth && boundary_types.contains(&kind);
+        if !is_nested_scope_boundary && cursor.goto_first_child() {
             continue;
         }
 
@@ -440,7 +498,7 @@ fn count_decision_points(node: &tree_sitter::Node<'_>, source: &[u8], lang: Lang
             if cursor.goto_next_sibling() {
                 break;
             }
-            if !cursor.goto_parent() {
+            if !cursor.goto_parent() || cursor.depth() < start_depth {
                 return count;
             }
         }
@@ -454,6 +512,11 @@ fn count_decision_points(node: &tree_sitter::Node<'_>, source: &[u8], lang: Lang
 /// - Nesting constructs (if, for, while, etc.) add +1 plus nesting depth
 /// - Flat constructs (else, elif, break, continue) add +1 only (no nesting penalty)
 /// - Logical operators (&&, ||, and, or) add +1 each (no nesting penalty)
+///
+/// Like `count_decision_points`, this does not descend into nested
+/// function-like scopes: a nested function's own control flow is scored
+/// separately, not attributed to the enclosing function. The starting
+/// `node` itself is exempt from this boundary check.
 fn calculate_cognitive_complexity(
     node: &tree_sitter::Node<'_>,
     source: &[u8],
@@ -462,6 +525,7 @@ fn calculate_cognitive_complexity(
 ) -> u32 {
     let nesting_types = get_nesting_node_types(lang);
     let flat_types = get_flat_node_types(lang);
+    let boundary_types = get_nested_scope_node_types(lang);
 
     let mut complexity = 0;
     let mut cursor = node.walk();
@@ -484,15 +548,19 @@ fn calculate_cognitive_complexity(
 
         let current_depth = depth_at_level[level];
 
-        // Check if this is a complexity-adding construct
-        if nesting_types.contains(&kind) {
+        // Check if this is a complexity-adding construct. Requires
+        // `is_named()`: in grammars where a statement kind is a bare
+        // keyword (e.g. Ruby's "if"/"while"/"case"), the anonymous keyword
+        // token itself shares that kind string with its parent statement
+        // node, and must not be double-counted as a second construct.
+        if current.is_named() && nesting_types.contains(&kind) {
             // Nesting constructs: +1 base plus nesting penalty
             complexity += 1 + current_depth;
             // Children will have increased depth
             if level + 1 < depth_at_level.len() {
                 depth_at_level[level + 1] = current_depth + 1;
             }
-        } else if flat_types.contains(&kind) {
+        } else if current.is_named() && flat_types.contains(&kind) {
             // Flat constructs: +1 only, NO nesting penalty per SonarSource spec
             complexity += 1;
             // Children stay at same depth
@@ -520,8 +588,12 @@ fn calculate_cognitive_complexity(
             }
         }
 
-        // Traverse tree
-        if cursor.goto_first_child() {
+        // Traverse tree, stopping at nested function-scope boundaries. The
+        // starting node (cursor_depth == start_depth) is exempt so the
+        // function's own top node is always descended into.
+        let is_nested_scope_boundary =
+            cursor_depth != start_depth && boundary_types.contains(&kind);
+        if !is_nested_scope_boundary && cursor.goto_first_child() {
             continue;
         }
 
@@ -538,7 +610,12 @@ fn calculate_cognitive_complexity(
 
 /// Calculate maximum nesting depth.
 /// Uses iterative cursor traversal with depth tracking for performance.
-fn calculate_max_nesting(node: &tree_sitter::Node<'_>, _source: &[u8], initial_depth: u32) -> u32 {
+///
+/// Like `count_decision_points`, does not descend into nested function-like
+/// scopes: a nested function's own nesting depth is measured separately, not
+/// folded into the enclosing function's. The starting `node` itself is
+/// exempt from this boundary check.
+fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_depth: u32) -> u32 {
     const NESTING_KINDS: &[&str] = &[
         "if_statement",
         "if_expression",
@@ -558,6 +635,7 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, _source: &[u8], initial_d
         "begin",
     ];
 
+    let boundary_types = get_nested_scope_node_types(lang);
     let mut max_depth = initial_depth;
     let mut cursor = node.walk();
     let start_depth = cursor.depth();
@@ -582,8 +660,11 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, _source: &[u8], initial_d
             max_depth = current_depth;
         }
 
-        // Set depth for children
-        let child_depth = if NESTING_KINDS.contains(&kind) {
+        // Set depth for children. Requires `is_named()` for the same reason
+        // as `count_decision_points`: Ruby's bare-keyword statement kinds
+        // (e.g. "if") collide with their own anonymous keyword token, which
+        // must not be treated as a second nesting construct.
+        let child_depth = if current.is_named() && NESTING_KINDS.contains(&kind) {
             current_depth + 1
         } else {
             current_depth
@@ -593,8 +674,12 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, _source: &[u8], initial_d
             depth_at_level[level + 1] = child_depth;
         }
 
-        // Traverse tree
-        if cursor.goto_first_child() {
+        // Traverse tree, stopping at nested function-scope boundaries. The
+        // starting node (cursor_depth == start_depth) is exempt so the
+        // function's own top node is always descended into.
+        let is_nested_scope_boundary =
+            cursor_depth != start_depth && boundary_types.contains(&kind);
+        if !is_nested_scope_boundary && cursor.goto_first_child() {
             continue;
         }
 
@@ -1515,6 +1600,284 @@ function classify(x: number): string {
         assert!(
             result.functions[0].metrics.cyclomatic >= 4,
             "TypeScript switch with 2 case clauses should count each case as a decision point"
+        );
+    }
+
+    // Nested-function complexity isolation tests.
+    //
+    // Regression coverage for the bug where `find_function_at_line` resolved
+    // to the OUTERMOST enclosing function for any target line (so a nested
+    // function's complexity was reported as its parent's), and the decision
+    // counters walked into nested function bodies (so a parent's complexity
+    // absorbed its children's). Every function must report only its own
+    // decision points, not those of functions nested inside it.
+
+    fn find_fn<'a>(result: &'a FileResult, name: &str) -> &'a FunctionResult {
+        result
+            .functions
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| {
+                panic!(
+                    "function `{name}` not found in {:?}",
+                    result.functions.iter().map(|f| &f.name).collect::<Vec<_>>()
+                )
+            })
+    }
+
+    #[test]
+    fn test_nested_function_complexity_typescript() {
+        let code = br#"
+function outer(x: number) {
+  if (x > 0) {} if (x > 1) {} if (x > 2) {} if (x > 3) {} if (x > 4) {}
+  function inner(y: number): number { return y + 1; }
+  return inner(x);
+}
+"#;
+        let result = parse_and_analyze(code, Language::TypeScript, "test.ts");
+        assert_eq!(result.functions.len(), 2);
+
+        let outer = find_fn(&result, "outer");
+        let inner = find_fn(&result, "inner");
+
+        // outer: 1 (baseline) + 5 (its own ifs) = 6; inner's body must not
+        // contribute since inner is a separate, nested function.
+        assert_eq!(
+            outer.metrics.cyclomatic, 6,
+            "outer must count only its own 5 ifs"
+        );
+        // inner has no decision points of its own: baseline only.
+        assert_eq!(
+            inner.metrics.cyclomatic, 1,
+            "inner must not inherit outer's complexity"
+        );
+    }
+
+    #[test]
+    fn test_nested_function_complexity_rust() {
+        let code = br#"
+fn outer(x: i32) {
+    if x > 0 {} if x > 1 {} if x > 2 {} if x > 3 {} if x > 4 {}
+    fn inner(y: i32) -> i32 { y + 1 }
+    inner(x);
+}
+"#;
+        let result = parse_and_analyze(code, Language::Rust, "test.rs");
+        assert_eq!(result.functions.len(), 2);
+
+        let outer = find_fn(&result, "outer");
+        let inner = find_fn(&result, "inner");
+
+        assert_eq!(
+            outer.metrics.cyclomatic, 6,
+            "outer must count only its own 5 ifs"
+        );
+        assert_eq!(
+            inner.metrics.cyclomatic, 1,
+            "inner must not inherit outer's complexity"
+        );
+    }
+
+    #[test]
+    fn test_nested_function_complexity_python() {
+        let code = br#"
+def outer(x):
+    if x > 0: pass
+    if x > 1: pass
+    if x > 2: pass
+    if x > 3: pass
+    if x > 4: pass
+    def inner(y):
+        return y + 1
+    return inner(x)
+"#;
+        let result = parse_and_analyze(code, Language::Python, "test.py");
+        assert_eq!(result.functions.len(), 2);
+
+        let outer = find_fn(&result, "outer");
+        let inner = find_fn(&result, "inner");
+
+        assert_eq!(
+            outer.metrics.cyclomatic, 6,
+            "outer must count only its own 5 ifs"
+        );
+        assert_eq!(
+            inner.metrics.cyclomatic, 1,
+            "inner must not inherit outer's complexity"
+        );
+    }
+
+    #[test]
+    fn test_nested_function_complexity_go() {
+        let code = br#"
+package main
+
+func outer(x int) int {
+	if x > 0 {
+	}
+	if x > 1 {
+	}
+	if x > 2 {
+	}
+	if x > 3 {
+	}
+	if x > 4 {
+	}
+	inner := func(y int) int {
+		if y > 0 {
+		}
+		return y + 1
+	}
+	return inner(x)
+}
+"#;
+        let result = parse_and_analyze(code, Language::Go, "test.go");
+
+        let outer = find_fn(&result, "outer");
+        // outer's own 5 ifs only; the func literal's `if y > 0` must not leak
+        // into outer's count even though Go func literals are not extracted
+        // as their own top-level function entries.
+        assert_eq!(
+            outer.metrics.cyclomatic, 6,
+            "outer must not absorb the func literal's decision point"
+        );
+    }
+
+    #[test]
+    fn test_nested_function_complexity_js_closure_callback() {
+        // A JS closure/callback case: the outer function's cyclomatic must
+        // exclude the arrow callback's decision points, and the arrow (also
+        // extracted as its own function since it matches the JS function
+        // node types) must report only its own.
+        let code = br#"
+function outer(items, flag) {
+  if (flag) {} if (items.length > 0) {}
+  return items.map(x => { if (x) {} return x; });
+}
+"#;
+        let result = parse_and_analyze(code, Language::JavaScript, "test.js");
+        let outer = find_fn(&result, "outer");
+        // baseline 1 + its own 2 ifs = 3 (the arrow's if must not count here)
+        assert_eq!(
+            outer.metrics.cyclomatic, 3,
+            "outer must not absorb the callback arrow's decision points"
+        );
+
+        // The arrow function is extracted separately and must report only
+        // its own single `if`.
+        let arrow = result
+            .functions
+            .iter()
+            .find(|f| f.name != "outer")
+            .expect("arrow callback should be extracted as its own function");
+        assert_eq!(
+            arrow.metrics.cyclomatic, 2,
+            "arrow callback must count only its own if, not outer's"
+        );
+    }
+
+    #[test]
+    fn test_flat_function_complexity_unchanged_after_nested_fix() {
+        // Regression: a flat function (no nested functions) with N branches
+        // must still report cyclomatic N+1, exactly as before the fix.
+        let code = br#"
+fn flat(x: i32) -> i32 {
+    if x > 0 {} if x > 1 {} if x > 2 {} if x > 3 {} if x > 4 {}
+    x
+}
+"#;
+        let result = parse_and_analyze(code, Language::Rust, "test.rs");
+        assert_eq!(result.functions.len(), 1);
+        assert_eq!(result.functions[0].metrics.cyclomatic, 6);
+    }
+
+    // Regression coverage from code review (over-correction + resolution-by-line bugs).
+
+    #[test]
+    fn test_ruby_each_do_block_counts_toward_enclosing_method() {
+        // `do...end` blocks passed to iterators (each, map, etc.) are ordinary
+        // call blocks, not anonymous function definitions -- unlike Rust
+        // closures or JS arrows, they do not introduce a new function scope.
+        // Control flow inside them is control flow of the enclosing method.
+        let code = br#"
+def process(items)
+  items.each do |item|
+    if item.valid?
+      save(item)
+    end
+  end
+end
+"#;
+        let result = parse_and_analyze(code, Language::Ruby, "test.rb");
+        assert_eq!(result.functions.len(), 1);
+        let process = &result.functions[0];
+        assert_eq!(
+            process.metrics.cyclomatic, 2,
+            "if inside .each do...end block must count toward the enclosing method"
+        );
+        assert!(
+            process.metrics.cognitive >= 1,
+            "cognitive complexity must reflect the if inside the block"
+        );
+        assert!(
+            process.metrics.max_nesting >= 1,
+            "max_nesting must reflect the if inside the block"
+        );
+    }
+
+    #[test]
+    fn test_ruby_curly_brace_block_counts_toward_enclosing_method() {
+        // Same as the do...end case, but for `{ ... }` block syntax.
+        let code = br#"
+def process(items)
+  items.each { |item| if item.valid? then save(item) end }
+end
+"#;
+        let result = parse_and_analyze(code, Language::Ruby, "test.rb");
+        assert_eq!(result.functions.len(), 1);
+        assert_eq!(
+            result.functions[0].metrics.cyclomatic, 2,
+            "if inside a {{ }} block must count toward the enclosing method"
+        );
+    }
+
+    #[test]
+    fn test_two_functions_sharing_start_line_resolve_independently() {
+        // Common in minified/generated code: multiple function declarations
+        // on a single line. Resolving by start line alone is ambiguous;
+        // resolution must use the extracted node's own byte range so each
+        // function gets its own complexity.
+        let code = b"function a() {} function b(x) { if (x) {} }";
+        let result = parse_and_analyze(code, Language::JavaScript, "test.js");
+        assert_eq!(result.functions.len(), 2);
+
+        let a = find_fn(&result, "a");
+        let b = find_fn(&result, "b");
+        assert_eq!(a.metrics.cyclomatic, 1, "a has no branches of its own");
+        assert_eq!(
+            b.metrics.cyclomatic, 2,
+            "b's own if must not resolve to a just because they share a start line"
+        );
+    }
+
+    #[test]
+    fn test_nested_function_sharing_outer_start_line_resolves_to_itself() {
+        // A nested function whose declaration starts on the exact same line
+        // as its enclosing method (common when code is on one line) must
+        // still resolve to itself, not the enclosing method.
+        let code = b"class C { m() { function inner(x) { if (x) {} } return 1; } }";
+        let result = parse_and_analyze(code, Language::JavaScript, "test.js");
+        assert_eq!(result.functions.len(), 2);
+
+        let m = find_fn(&result, "m");
+        let inner = find_fn(&result, "inner");
+        assert_eq!(
+            inner.metrics.cyclomatic, 2,
+            "inner's own if must resolve to inner, not m, even though they share a start line"
+        );
+        assert_eq!(
+            m.metrics.cyclomatic, 1,
+            "m has no branches of its own (inner's if must not leak into m either)"
         );
     }
 }
