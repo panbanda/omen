@@ -227,6 +227,58 @@ pub fn get_flat_node_types(lang: Language) -> &'static [&'static str] {
     }
 }
 
+/// Get node kinds that introduce a nested function-like scope: named nested
+/// functions/methods, closures, lambdas, arrow functions, and (for Ruby)
+/// blocks.
+///
+/// Used to bound per-function complexity analysis: when walking a function's
+/// body to count decision points, cognitive complexity, or nesting depth,
+/// traversal must stop upon entering one of these node kinds so a nested
+/// function's own control flow is attributed to itself, not to the enclosing
+/// function. This list is intentionally broader than
+/// `parser::get_function_node_types` (which drives what gets reported as its
+/// own top-level function entry) -- it also covers scopes such as JS
+/// `function_expression` and Ruby blocks that create a new scope but are not
+/// independently reported.
+pub fn get_nested_scope_node_types(lang: Language) -> &'static [&'static str] {
+    match lang {
+        Language::Go => &["func_literal"],
+        Language::Rust => &["function_item", "closure_expression"],
+        Language::Python => &["function_definition", "lambda"],
+        Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => &[
+            "function_declaration",
+            "function_expression",
+            "arrow_function",
+            "method_definition",
+            "generator_function",
+            "generator_function_declaration",
+        ],
+        Language::Java | Language::CSharp => &[
+            "method_declaration",
+            "constructor_declaration",
+            "lambda_expression",
+            "local_function_statement",
+            "anonymous_method_expression",
+        ],
+        Language::C => &[],
+        Language::Cpp => &["lambda_expression"],
+        // `block`/`do_block` are deliberately excluded: in Ruby, `items.each do |x|
+        // ... end` and `items.each { |x| ... }` are ordinary call blocks, not
+        // anonymous function definitions -- they share the enclosing method's
+        // scope (they can even reassign local variables from that scope), so
+        // control flow inside them is control flow of the enclosing method.
+        // `lambda`/`->() {}` genuinely creates a new function scope and stays.
+        Language::Ruby => &["method", "singleton_method", "lambda"],
+        Language::Php => &[
+            "function_definition",
+            "method_declaration",
+            "anonymous_function_creation_expression",
+            "arrow_function",
+        ],
+        Language::Bash => &["function_definition"],
+    }
+}
+
 /// Get class/struct node types.
 pub fn get_class_node_types(lang: Language) -> &'static [&'static str] {
     match lang {
