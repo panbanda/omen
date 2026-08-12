@@ -238,7 +238,15 @@ impl Analyzer {
                 None => continue,
             };
 
-            for import in imports {
+            // `build_dependency_graph` collapses a repeated import into a
+            // single edge; this loop must be driven off that same edge set,
+            // or importing the same target twice pushes two identical
+            // UnstableDependency smells for one real edge.
+            let mut unique_imports: Vec<&String> = imports.iter().collect();
+            unique_imports.sort();
+            unique_imports.dedup();
+
+            for import in unique_imports {
                 // Imports are already resolved to on-disk paths (Phase 2).
                 let to_cm = match component_map.get(import) {
                     Some(cm) => *cm,
@@ -891,6 +899,53 @@ mod tests {
         assert_eq!(
             b.fan_in, 1,
             "repeated import must not create a parallel edge"
+        );
+    }
+
+    #[test]
+    fn test_repeated_import_produces_single_unstable_dependency_smell() {
+        // The unstable-dependency smell loop iterated the raw (possibly
+        // duplicated) resolved-imports list instead of the deduped graph
+        // edges, so a file importing the same unstable target twice could
+        // push two identical `UnstableDependency` smells even though
+        // `build_dependency_graph` collapses them to a single edge.
+        let analysis = analyze_fixture(&[
+            // stable.ts: fan_in=4 (d1..d4), fan_out=1 (deduped edge to
+            // unstable.ts, despite two duplicate import statements) ->
+            // instability = 1/5 = 0.2 (stable).
+            (
+                "stable.ts",
+                "import { x } from './unstable.js';\nimport { y } from './unstable.js';\n",
+            ),
+            // unstable.ts: fan_in=1, fan_out=4 -> instability = 4/5 = 0.8
+            // (unstable). diff vs stable.ts = 0.6, over the 0.4 threshold.
+            (
+                "unstable.ts",
+                "import './u1.js';\nimport './u2.js';\nimport './u3.js';\nimport './u4.js';\nexport const x = 1;\nexport const y = 2;\n",
+            ),
+            ("u1.ts", "export const u1 = 1;\n"),
+            ("u2.ts", "export const u2 = 1;\n"),
+            ("u3.ts", "export const u3 = 1;\n"),
+            ("u4.ts", "export const u4 = 1;\n"),
+            ("d1.ts", "import './stable.js';\n"),
+            ("d2.ts", "import './stable.js';\n"),
+            ("d3.ts", "import './stable.js';\n"),
+            ("d4.ts", "import './stable.js';\n"),
+        ]);
+
+        let unstable_smells: Vec<_> = analysis
+            .smells
+            .iter()
+            .filter(|s| {
+                s.smell_type == SmellType::UnstableDependency
+                    && s.components == vec!["stable.ts".to_string(), "unstable.ts".to_string()]
+            })
+            .collect();
+        assert_eq!(
+            unstable_smells.len(),
+            1,
+            "a repeated import must produce a single UnstableDependency smell, found: {:?}",
+            unstable_smells
         );
     }
 

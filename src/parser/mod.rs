@@ -1267,8 +1267,17 @@ fn extract_rust_import(node: &tree_sitter::Node<'_>, source: &[u8]) -> Vec<Impor
                 }
                 return out;
             }
+            "use_wildcard" => {
+                // `use crate::foo::*;` -- the dependency is on the module
+                // `crate::foo`, not the literal `crate::foo::*` text (which
+                // breaks segment matching in the resolver).
+                let Some(path) = rust_use_wildcard_path(&child, source) else {
+                    return Vec::new();
+                };
+                return vec![ImportNode::new_use(path, line)];
+            }
             _ => {
-                // scoped_identifier, identifier, use_as_clause, use_wildcard
+                // scoped_identifier, identifier, use_as_clause
                 let Ok(text) = child.utf8_text(source) else {
                     return Vec::new();
                 };
@@ -1287,6 +1296,17 @@ fn extract_rust_import(node: &tree_sitter::Node<'_>, source: &[u8]) -> Vec<Impor
         }
     }
     Vec::new()
+}
+
+/// Extract the path a Rust `use_wildcard` node covers (the part before
+/// `::*`), e.g. `crate::foo::*` -> `crate::foo`, `bar::*` -> `bar`. The path
+/// is the wildcard node's one named child (an `identifier` or
+/// `scoped_identifier`); tree-sitter-rust exposes it positionally rather
+/// than through a named field.
+fn rust_use_wildcard_path(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    node.named_child(0)
+        .and_then(|p| p.utf8_text(source).ok())
+        .map(|s| s.to_string())
 }
 
 /// Recursively expand a Rust `use_list` (the `{a, b, c::{d}}` part of a
@@ -1315,9 +1335,15 @@ fn collect_rust_use_list(
             "self" if !base_path.is_empty() => {
                 out.push(ImportNode::new_use(base_path.to_string(), line));
             }
-            // `use foo::*` inside a group -- the dependency is on the module.
+            // `use foo::{bar::*}` -- the wildcard's own inner path (`bar`)
+            // must be joined onto the group's base path: the dependency is
+            // on `foo::bar`, not bare `foo`. A bare `use foo::{*}` (no inner
+            // path) falls back to the group's base path itself.
             "use_wildcard" if !base_path.is_empty() => {
-                out.push(ImportNode::new_use(base_path.to_string(), line));
+                let path = rust_use_wildcard_path(&item, source)
+                    .map(|inner| join(&inner))
+                    .unwrap_or_else(|| base_path.to_string());
+                out.push(ImportNode::new_use(path, line));
             }
             "scoped_use_list" => {
                 let sub_base = item
@@ -1833,6 +1859,40 @@ mod tests {
                 "crate::analyzers::defect::b",
             ]
         );
+    }
+
+    #[test]
+    fn test_extract_rust_top_level_wildcard_strips_star() {
+        // `use crate::foo::*;` at the top level (not inside a `{}` group)
+        // must resolve to the base module `crate::foo`, not the raw
+        // `crate::foo::*` text -- the trailing `::*` breaks segment matching
+        // in the resolver and silently drops the edge.
+        let parser = Parser::new();
+        let content = b"use crate::foo::*;\n\nfn main() {}";
+        let result = parser
+            .parse(content, Language::Rust, Path::new("main.rs"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].path, "crate::foo");
+        assert_eq!(imports[0].kind, ImportKind::Use);
+    }
+
+    #[test]
+    fn test_extract_rust_grouped_wildcard_keeps_inner_path() {
+        // `use foo::{bar::*}` -- the wildcard's own inner path (`bar`) must
+        // be joined onto the group's base path (`foo`), not dropped: the
+        // real dependency is on `foo::bar`, not bare `foo`.
+        let parser = Parser::new();
+        let content = b"use foo::{bar::*};\n\nfn main() {}";
+        let result = parser
+            .parse(content, Language::Rust, Path::new("main.rs"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].path, "foo::bar");
     }
 
     #[test]

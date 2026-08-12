@@ -211,9 +211,27 @@ impl ImportIndex {
             module_segments.join("/")
         };
 
-        // Handle super:: relative to current file
+        // Handle super:: relative to current file. `mod.rs`/`lib.rs`/
+        // `main.rs` stand in for their OWN directory (that directory IS the
+        // module they define), so `super::` -- the module's parent -- is one
+        // level further up than that. Every other file (e.g. `src/a/b.rs`,
+        // module `crate::a::b`) already lives in its own module's directory
+        // (`src/a/`), so `super::` is just one level up from the file, not
+        // two -- using two levels for a plain leaf module file resolves
+        // `super::x` against the wrong (grandparent) directory and drops or
+        // mis-resolves the edge.
         if import_path.starts_with("super::") {
-            if let Some(parent) = from_file.parent().and_then(|p| p.parent()) {
+            let is_directory_stand_in = from_file
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n == "mod.rs" || n == "lib.rs" || n == "main.rs");
+            let super_base = if is_directory_stand_in {
+                from_file.parent().and_then(|p| p.parent())
+            } else {
+                from_file.parent()
+            };
+
+            if let Some(parent) = super_base {
                 let resolved = parent.join(&module_path);
                 if let Some(normalized) = normalize_path(&resolved) {
                     for ext in &["", ".rs"] {
@@ -780,5 +798,63 @@ mod tests {
             "repeated import must produce exactly one edge, not a parallel edge"
         );
         assert_eq!(graph.edge_count(), 1);
+    }
+
+    #[test]
+    fn test_super_resolution_from_mod_rs_file() {
+        // `super::x` from `src/a/mod.rs` (module `crate::a`) means
+        // `crate::x` -- a's own directory `src/a` IS module a's directory,
+        // so its parent module's directory is one level further up, `src`.
+        let root = Path::new("/project");
+        let files = vec![
+            std::path::PathBuf::from("/project/src/a/mod.rs"),
+            std::path::PathBuf::from("/project/src/x.rs"),
+        ];
+        let index = ImportIndex::new(&files, root);
+
+        assert_eq!(
+            index.find_match("super::x", Path::new("src/a/mod.rs")),
+            Some("src/x.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn test_super_resolution_from_nested_non_mod_rs_file() {
+        // `super::x` from `src/a/b.rs` (module `crate::a::b`) means
+        // `crate::a::x` -- a sibling of `b` within module `a`, which lives
+        // in a's directory `src/a/`. `b.rs` is a leaf file, not a directory
+        // stand-in like `mod.rs`, so its OWN directory (one level up from
+        // the file) is the `super::` base -- not two levels up.
+        let root = Path::new("/project");
+        let files = vec![
+            std::path::PathBuf::from("/project/src/a/b.rs"),
+            std::path::PathBuf::from("/project/src/a/x.rs"),
+        ];
+        let index = ImportIndex::new(&files, root);
+
+        assert_eq!(
+            index.find_match("super::x", Path::new("src/a/b.rs")),
+            Some("src/a/x.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn test_super_resolution_from_lib_rs_and_main_rs() {
+        let root = Path::new("/project");
+        let files = vec![
+            std::path::PathBuf::from("/project/src/a/lib.rs"),
+            std::path::PathBuf::from("/project/src/a/main.rs"),
+            std::path::PathBuf::from("/project/src/x.rs"),
+        ];
+        let index = ImportIndex::new(&files, root);
+
+        assert_eq!(
+            index.find_match("super::x", Path::new("src/a/lib.rs")),
+            Some("src/x.rs".to_string())
+        );
+        assert_eq!(
+            index.find_match("super::x", Path::new("src/a/main.rs")),
+            Some("src/x.rs".to_string())
+        );
     }
 }
