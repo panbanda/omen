@@ -18,13 +18,13 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 use petgraph::algo::tarjan_scc;
-use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::Direction;
-use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
-use crate::parser::{extract_imports, Parser};
+use crate::analyzers::import_resolver::{
+    build_dependency_graph, extract_resolved_imports, ImportIndex,
+};
+use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result};
 
 /// Detection thresholds.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,97 +105,16 @@ impl Analyzer {
     pub fn analyze_repo(&self, ctx: &AnalysisContext<'_>) -> Result<Analysis> {
         // Phase 1: Get files from context (already filtered by language)
         let files: Vec<_> = ctx.files.iter().collect();
+        let file_paths: Vec<std::path::PathBuf> = files.iter().map(|p| (*p).clone()).collect();
 
-        // Phase 2: Parallel parsing - extract imports using content_source
-        let file_imports: Vec<(String, Vec<String>)> = files
-            .par_iter()
-            .filter_map(|path| {
-                let rel_path = path
-                    .strip_prefix(ctx.root)
-                    .unwrap_or(path)
-                    .to_string_lossy()
-                    .to_string();
-
-                // Read file via context (supports both filesystem and git tree)
-                let content = ctx.read_file(path).ok()?;
-                let lang = Language::detect(path)?;
-
-                // Parse with the content
-                let parser = Parser::new();
-                let parse_result = parser.parse(&content, lang, path).ok()?;
-                let imports = extract_imports(&parse_result);
-                let import_paths: Vec<String> = imports.into_iter().map(|imp| imp.path).collect();
-
-                Some((rel_path, import_paths))
-            })
-            .collect();
-
-        // Phase 3: Build graph and lookup index
-        let mut graph: DiGraph<String, ()> = DiGraph::new();
-        let mut node_indices: HashMap<String, NodeIndex> = HashMap::new();
-
-        // Build index for O(1) lookups: stem -> list of full paths
-        let mut by_stem: HashMap<String, Vec<String>> = HashMap::new();
-        let mut by_name: HashMap<String, Vec<String>> = HashMap::new();
-
-        // Create all nodes first
-        for (rel_path, _) in &file_imports {
-            if !node_indices.contains_key(rel_path) {
-                let idx = graph.add_node(rel_path.clone());
-                node_indices.insert(rel_path.clone(), idx);
-
-                // Index by file stem
-                if let Some(stem) = std::path::Path::new(rel_path).file_stem() {
-                    let stem_str = stem.to_string_lossy().to_string();
-                    by_stem.entry(stem_str).or_default().push(rel_path.clone());
-                }
-
-                // Index by file name
-                if let Some(name) = std::path::Path::new(rel_path).file_name() {
-                    let name_str = name.to_string_lossy().to_string();
-                    by_name.entry(name_str).or_default().push(rel_path.clone());
-                }
-            }
-        }
-
-        // Phase 4: Add edges based on imports using indexed lookups
-        for (from_file, imports) in &file_imports {
-            let from_idx = node_indices[from_file];
-
-            for import in imports {
-                // 1. Try exact path match
-                if let Some(&to_idx) = node_indices.get(import) {
-                    graph.add_edge(from_idx, to_idx, ());
-                    continue;
-                }
-
-                // 2. Try matching by import as stem or name (O(1) lookup)
-                let import_stem = std::path::Path::new(import)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| import.clone());
-
-                if let Some(matches) = by_stem.get(&import_stem) {
-                    if let Some(first_match) = matches.first() {
-                        if let Some(&to_idx) = node_indices.get(first_match) {
-                            graph.add_edge(from_idx, to_idx, ());
-                            continue;
-                        }
-                    }
-                }
-
-                // 3. Try matching by import containing a path segment
-                if let Some(last_segment) = import.split('/').next_back() {
-                    if let Some(matches) = by_stem.get(last_segment) {
-                        if let Some(first_match) = matches.first() {
-                            if let Some(&to_idx) = node_indices.get(first_match) {
-                                graph.add_edge(from_idx, to_idx, ());
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // Build the shared import index, then extract+resolve every file's
+        // imports and build the graph through the same shared functions
+        // `graph` uses. Sharing this whole pipeline (not just the resolver)
+        // is what guarantees the two analyzers can never disagree on edges
+        // or cycles for the same input (issue #479).
+        let file_index = ImportIndex::new(&file_paths, ctx.root);
+        let file_imports = extract_resolved_imports(&file_paths, ctx, &file_index, false);
+        let (graph, node_indices) = build_dependency_graph(&file_imports, false);
 
         // Calculate component metrics
         let mut components: Vec<ComponentMetrics> = Vec::new();
@@ -320,36 +239,10 @@ impl Analyzer {
             };
 
             for import in imports {
-                // Find the target component using indexed lookups
-                // (mirrors the edge-building logic above)
-                let to_cm = if let Some(cm) = component_map.get(import) {
-                    *cm
-                } else {
-                    let import_stem = std::path::Path::new(import)
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_else(|| import.clone());
-
-                    let found_key =
-                        by_stem
-                            .get(&import_stem)
-                            .and_then(|v| v.first())
-                            .or_else(|| {
-                                import
-                                    .split('/')
-                                    .next_back()
-                                    .and_then(|seg| by_stem.get(seg))
-                                    .and_then(|v| v.first())
-                            });
-
-                    if let Some(key) = found_key {
-                        match component_map.get(key) {
-                            Some(cm) => *cm,
-                            None => continue,
-                        }
-                    } else {
-                        continue;
-                    }
+                // Imports are already resolved to on-disk paths (Phase 2).
+                let to_cm = match component_map.get(import) {
+                    Some(cm) => *cm,
+                    None => continue,
                 };
 
                 let is_from_stable = from_cm.instability < self.config.thresholds.stable_threshold;
@@ -849,6 +742,156 @@ mod tests {
             }
         }
         assert!(found_cycle, "Multi-node cycle should be detected");
+    }
+
+    /// Write files (relative path -> content) into a fresh temp dir and run
+    /// the smells analyzer over it from the filesystem.
+    fn analyze_fixture(files: &[(&str, &str)]) -> Analysis {
+        use crate::config::Config;
+        use crate::core::{AnalysisContext, FileSet};
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        for (rel_path, content) in files {
+            let full_path = temp_dir.path().join(rel_path);
+            std::fs::create_dir_all(full_path.parent().unwrap()).unwrap();
+            std::fs::write(full_path, content).unwrap();
+        }
+
+        let config = Config::default();
+        let file_set = FileSet::from_path(temp_dir.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&file_set, &config, Some(temp_dir.path()));
+        Analyzer::new().analyze_repo(&ctx).unwrap()
+    }
+
+    #[test]
+    fn test_no_phantom_self_cycle_on_same_named_ts_files() {
+        // Issue #479: `packages/brain/src/types.ts` imports a DIFFERENT file
+        // (`packages/mcp/src/types.ts`) that happens to share the same file
+        // stem. The old global-stem `.first()` matching in smells.rs could
+        // fabricate a self-edge instead of resolving the relative ESM
+        // specifier to the actual file it points at.
+        let analysis = analyze_fixture(&[
+            (
+                "packages/brain/src/types.ts",
+                "import type { M } from '../../mcp/src/types.js';\nexport type B = M;\n",
+            ),
+            ("packages/mcp/src/types.ts", "export type M = number;\n"),
+        ]);
+
+        assert_eq!(
+            analysis.summary.cyclic_count,
+            0,
+            "no cyclic dependency should be reported, found: {:?}",
+            analysis
+                .smells
+                .iter()
+                .filter(|s| s.smell_type == SmellType::CyclicDependency)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_no_phantom_cycle_in_ts_monorepo_with_barrels() {
+        // A small TS "monorepo" with several `index.ts` barrels and `.js`
+        // ESM-style relative imports, but NO real import cycle. Global-stem
+        // matching can wire barrels to the wrong same-named file and
+        // fabricate cycles that do not exist in the real import graph.
+        let analysis = analyze_fixture(&[
+            ("pkg-a/src/index.ts", "export * from './widget.js';\n"),
+            ("pkg-a/src/widget.ts", "export const widget = 1;\n"),
+            (
+                "pkg-b/src/index.ts",
+                "import { widget } from '../../pkg-a/src/index.js';\nexport const used = widget;\n",
+            ),
+            ("pkg-c/src/index.ts", "export const c = 1;\n"),
+        ]);
+
+        assert_eq!(
+            analysis.summary.cyclic_count,
+            0,
+            "no cyclic dependency should be reported in an acyclic monorepo, found: {:?}",
+            analysis
+                .smells
+                .iter()
+                .filter(|s| s.smell_type == SmellType::CyclicDependency)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_real_ts_cycle_is_still_detected() {
+        // Do not over-correct: a genuine two-file cycle must still be caught.
+        let analysis = analyze_fixture(&[
+            ("a.ts", "import { b } from './b.js';\nexport const a = b;\n"),
+            ("b.ts", "import { a } from './a.js';\nexport const b = a;\n"),
+        ]);
+
+        assert_eq!(
+            analysis.summary.cyclic_count, 1,
+            "the real a.ts <-> b.ts cycle must still be reported"
+        );
+        let cyclic = analysis
+            .smells
+            .iter()
+            .find(|s| s.smell_type == SmellType::CyclicDependency)
+            .expect("expected a cyclic dependency smell");
+        assert_eq!(cyclic.metrics.cycle_length, Some(2));
+    }
+
+    #[test]
+    fn test_self_import_is_not_a_cyclic_smell() {
+        // A file importing itself (`import "./a.js"` inside a.ts) is not a
+        // real cyclic dependency between two components. `graph` has always
+        // rejected self-edges when building its graph; `smells` must apply
+        // the same rule so the two analyzers cannot disagree (issue #479).
+        let analysis = analyze_fixture(&[(
+            "a.ts",
+            "import { helper } from './a.js';\nexport function helper() {}\n",
+        )]);
+
+        assert_eq!(
+            analysis.summary.cyclic_count,
+            0,
+            "a file importing itself is not a cyclic-dependency smell, found: {:?}",
+            analysis
+                .smells
+                .iter()
+                .filter(|s| s.smell_type == SmellType::CyclicDependency)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_repeated_import_produces_single_edge_not_parallel_edges() {
+        // Importing the same target twice (e.g. two named imports resolving
+        // to the same file) must not inflate fan_in/fan_out with duplicate
+        // parallel edges -- `graph` already dedups, `smells` must match.
+        let analysis = analyze_fixture(&[
+            (
+                "a.ts",
+                "import { x } from './b.js';\nimport { y } from './b.js';\n",
+            ),
+            ("b.ts", "export const x = 1;\nexport const y = 2;\n"),
+        ]);
+
+        let a = analysis
+            .components
+            .iter()
+            .find(|c| c.id == "a.ts")
+            .expect("a.ts component");
+        let b = analysis
+            .components
+            .iter()
+            .find(|c| c.id == "b.ts")
+            .expect("b.ts component");
+        assert_eq!(
+            a.fan_out, 1,
+            "repeated import must not create a parallel edge"
+        );
+        assert_eq!(
+            b.fan_in, 1,
+            "repeated import must not create a parallel edge"
+        );
     }
 
     #[test]

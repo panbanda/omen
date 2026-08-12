@@ -907,6 +907,15 @@ fn extract_cpp_field_name(
     }
 }
 
+/// Distinguishes a genuine dependency import from a module containment
+/// declaration (Rust `mod foo;`), which declares that `foo` is part of this
+/// module tree but is not itself a dependency edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportKind {
+    Use,
+    ModDeclaration,
+}
+
 /// An import statement.
 #[derive(Debug, Clone)]
 pub struct ImportNode {
@@ -916,6 +925,28 @@ pub struct ImportNode {
     pub line: u32,
     /// Imported names (if any).
     pub names: Vec<String>,
+    /// Whether this is a real dependency import or a containment declaration.
+    pub kind: ImportKind,
+}
+
+impl ImportNode {
+    fn new_use(path: String, line: u32) -> Self {
+        Self {
+            path,
+            line,
+            names: Vec::new(),
+            kind: ImportKind::Use,
+        }
+    }
+
+    fn new_mod_declaration(path: String, line: u32) -> Self {
+        Self {
+            path,
+            line,
+            names: Vec::new(),
+            kind: ImportKind::ModDeclaration,
+        }
+    }
 }
 
 /// Extract functions from a parse result.
@@ -972,9 +1003,7 @@ pub fn extract_imports(result: &ParseResult) -> Vec<ImportNode> {
                 }
             }
             Language::Rust if node.kind() == "use_declaration" => {
-                if let Some(import) = extract_rust_import(&node, source) {
-                    imports.push(import);
-                }
+                imports.extend(extract_rust_import(&node, source));
             }
             Language::Rust if node.kind() == "mod_item" => {
                 if let Some(import) = extract_rust_mod(&node, source) {
@@ -988,8 +1017,14 @@ pub fn extract_imports(result: &ParseResult) -> Vec<ImportNode> {
                     imports.push(import);
                 }
             }
+            // `export_statement` also covers `export * from '...'` and
+            // `export { x } from '...'` re-exports (barrel files) -- these
+            // are real dependency edges, not just `import_statement`.
+            // `extract_js_import` naturally filters out plain
+            // `export function foo() {}`/`export const x = 1`, which have
+            // no `source` field.
             Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx
-                if node.kind() == "import_statement" =>
+                if node.kind() == "import_statement" || node.kind() == "export_statement" =>
             {
                 if let Some(import) = extract_js_import(&node, source) {
                     imports.push(import);
@@ -1200,54 +1235,120 @@ fn extract_go_import(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<Impo
             .map(|s| s.trim_matches('"').to_string())
     })?;
 
-    Some(ImportNode {
+    Some(ImportNode::new_use(
         path,
-        line: node.start_position().row as u32 + 1,
-        names: Vec::new(),
-    })
+        node.start_position().row as u32 + 1,
+    ))
 }
 
-fn extract_rust_import(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<ImportNode> {
-    // use_declaration children: optional visibility_modifier, then the use argument
-    // The argument can be: scoped_identifier, use_as_clause, scoped_use_list, use_wildcard, identifier
+/// Extract one `ImportNode` per dependency named by a Rust `use` declaration.
+///
+/// A grouped import like `use crate::parent::{a, b};` names two distinct
+/// dependencies (`crate::parent::a` and `crate::parent::b`), not one
+/// dependency on `crate::parent` itself -- so each leaf of the group (including
+/// nested groups) is expanded into its own `ImportNode` joined onto the
+/// group's base path. Resolving grouped imports to the base path instead of
+/// their leaves is what caused false dependency cycles through parent modules
+/// (issue #479).
+fn extract_rust_import(node: &tree_sitter::Node<'_>, source: &[u8]) -> Vec<ImportNode> {
+    let line = node.start_position().row as u32 + 1;
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         match child.kind() {
             "use" | "visibility_modifier" | ";" => continue,
             "scoped_use_list" => {
-                // e.g., use std::collections::{HashMap, HashSet}
-                // Extract just the base path (the part before the {})
-                if let Some(path_node) = child.child_by_field_name("path") {
-                    let path = path_node.utf8_text(source).ok()?.to_string();
-                    return Some(ImportNode {
-                        path,
-                        line: node.start_position().row as u32 + 1,
-                        names: Vec::new(),
-                    });
+                let base = child
+                    .child_by_field_name("path")
+                    .and_then(|p| p.utf8_text(source).ok())
+                    .unwrap_or("");
+                let mut out = Vec::new();
+                if let Some(list) = child.child_by_field_name("list") {
+                    collect_rust_use_list(&list, base, source, line, &mut out);
                 }
+                return out;
             }
             _ => {
                 // scoped_identifier, identifier, use_as_clause, use_wildcard
-                let text = child.utf8_text(source).ok()?.to_string();
+                let Ok(text) = child.utf8_text(source) else {
+                    return Vec::new();
+                };
                 // For use_as_clause like "crate::foo as bar", take the path part
                 let path = if child.kind() == "use_as_clause" {
-                    if let Some(path_node) = child.child_by_field_name("path") {
-                        path_node.utf8_text(source).ok()?.to_string()
-                    } else {
-                        text
-                    }
+                    child
+                        .child_by_field_name("path")
+                        .and_then(|p| p.utf8_text(source).ok())
+                        .unwrap_or(text)
+                        .to_string()
                 } else {
-                    text
+                    text.to_string()
                 };
-                return Some(ImportNode {
-                    path,
-                    line: node.start_position().row as u32 + 1,
-                    names: Vec::new(),
-                });
+                return vec![ImportNode::new_use(path, line)];
             }
         }
     }
-    None
+    Vec::new()
+}
+
+/// Recursively expand a Rust `use_list` (the `{a, b, c::{d}}` part of a
+/// grouped import) into one leaf `ImportNode` per item, joined onto
+/// `base_path`.
+fn collect_rust_use_list(
+    list: &tree_sitter::Node<'_>,
+    base_path: &str,
+    source: &[u8],
+    line: u32,
+    out: &mut Vec<ImportNode>,
+) {
+    let join = |segment: &str| -> String {
+        if base_path.is_empty() {
+            segment.to_string()
+        } else {
+            format!("{base_path}::{segment}")
+        }
+    };
+
+    let mut cursor = list.walk();
+    for item in list.children(&mut cursor) {
+        match item.kind() {
+            "{" | "}" | "," => continue,
+            // `use foo::{self, bar}` -- `self` names the module itself.
+            "self" if !base_path.is_empty() => {
+                out.push(ImportNode::new_use(base_path.to_string(), line));
+            }
+            // `use foo::*` inside a group -- the dependency is on the module.
+            "use_wildcard" if !base_path.is_empty() => {
+                out.push(ImportNode::new_use(base_path.to_string(), line));
+            }
+            "scoped_use_list" => {
+                let sub_base = item
+                    .child_by_field_name("path")
+                    .and_then(|p| p.utf8_text(source).ok())
+                    .map(join)
+                    .unwrap_or_else(|| base_path.to_string());
+                if let Some(sub_list) = item.child_by_field_name("list") {
+                    collect_rust_use_list(&sub_list, &sub_base, source, line, out);
+                }
+            }
+            // Bare nested group with no path segment, e.g. use foo::{{a, b}}
+            "use_list" => {
+                collect_rust_use_list(&item, base_path, source, line, out);
+            }
+            "use_as_clause" => {
+                if let Some(path_text) = item
+                    .child_by_field_name("path")
+                    .and_then(|p| p.utf8_text(source).ok())
+                {
+                    out.push(ImportNode::new_use(join(path_text), line));
+                }
+            }
+            _ => {
+                // identifier / scoped_identifier leaf
+                if let Ok(text) = item.utf8_text(source) {
+                    out.push(ImportNode::new_use(join(text), line));
+                }
+            }
+        }
+    }
 }
 
 fn extract_rust_mod(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<ImportNode> {
@@ -1271,38 +1372,34 @@ fn extract_rust_mod(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<Impor
         return None;
     }
     let name = name?;
-    Some(ImportNode {
-        path: name,
-        line: node.start_position().row as u32 + 1,
-        names: Vec::new(),
-    })
+    Some(ImportNode::new_mod_declaration(
+        name,
+        node.start_position().row as u32 + 1,
+    ))
 }
 
 fn extract_python_import(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<ImportNode> {
     let path = node.utf8_text(source).ok()?.to_string();
-    Some(ImportNode {
+    Some(ImportNode::new_use(
         path,
-        line: node.start_position().row as u32 + 1,
-        names: Vec::new(),
-    })
+        node.start_position().row as u32 + 1,
+    ))
 }
 
 fn extract_js_import(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<ImportNode> {
     let path = find_child_by_field(node, "source", source)?;
-    Some(ImportNode {
-        path: path.trim_matches(|c| c == '"' || c == '\'').to_string(),
-        line: node.start_position().row as u32 + 1,
-        names: Vec::new(),
-    })
+    Some(ImportNode::new_use(
+        path.trim_matches(|c| c == '"' || c == '\'').to_string(),
+        node.start_position().row as u32 + 1,
+    ))
 }
 
 fn extract_java_import(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<ImportNode> {
     let path = node.utf8_text(source).ok()?.to_string();
-    Some(ImportNode {
+    Some(ImportNode::new_use(
         path,
-        line: node.start_position().row as u32 + 1,
-        names: Vec::new(),
-    })
+        node.start_position().row as u32 + 1,
+    ))
 }
 
 fn extract_ruby_import(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<ImportNode> {
@@ -1315,29 +1412,17 @@ fn extract_ruby_import(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<Im
         "require" | "require_relative" => {
             let string_node = find_node_child(&args, "string")?;
             let content = find_named_child(&string_node, "string_content", source)?;
-            Some(ImportNode {
-                path: content,
-                line,
-                names: Vec::new(),
-            })
+            Some(ImportNode::new_use(content, line))
         }
         "include" | "extend" | "prepend" => {
             let path = find_named_child(&args, "constant", source)
                 .or_else(|| find_named_child(&args, "scope_resolution", source))?;
-            Some(ImportNode {
-                path,
-                line,
-                names: Vec::new(),
-            })
+            Some(ImportNode::new_use(path, line))
         }
         "autoload" => {
             let string_node = find_node_child(&args, "string")?;
             let content = find_named_child(&string_node, "string_content", source)?;
-            Some(ImportNode {
-                path: content,
-                line,
-                names: Vec::new(),
-            })
+            Some(ImportNode::new_use(content, line))
         }
         _ => None,
     }
@@ -1347,11 +1432,10 @@ fn extract_ruby_superclass(node: &tree_sitter::Node<'_>, source: &[u8]) -> Optio
     let superclass = find_node_child(node, "superclass")?;
     let path = find_named_child(&superclass, "constant", source)
         .or_else(|| find_named_child(&superclass, "scope_resolution", source))?;
-    Some(ImportNode {
+    Some(ImportNode::new_use(
         path,
-        line: node.start_position().row as u32 + 1,
-        names: Vec::new(),
-    })
+        node.start_position().row as u32 + 1,
+    ))
 }
 
 /// Find byte ranges of Rust `#[cfg(test)]` modules using tree-sitter.
@@ -1711,6 +1795,11 @@ mod tests {
 
     #[test]
     fn test_extract_rust_use_group() {
+        // Regression for issue #479 / Bug 2: a grouped import names a distinct
+        // dependency per item. Collapsing to the shared base path (the old
+        // behavior) makes every item in the group resolve to the *parent*
+        // module instead of the item actually being used, which is what
+        // fabricated cycles through sibling modules.
         let parser = Parser::new();
         let content = b"use std::collections::{HashMap, HashSet};\n\nfn main() {}";
         let result = parser
@@ -1718,9 +1807,32 @@ mod tests {
             .unwrap();
 
         let imports = extract_imports(&result);
-        assert_eq!(imports.len(), 1);
-        // Group imports should extract the base path
-        assert_eq!(imports[0].path, "std::collections");
+        assert_eq!(imports.len(), 2);
+        assert_eq!(imports[0].path, "std::collections::HashMap");
+        assert_eq!(imports[1].path, "std::collections::HashSet");
+        assert!(imports.iter().all(|i| i.kind == ImportKind::Use));
+    }
+
+    #[test]
+    fn test_extract_rust_use_group_nested() {
+        // Nested groups, e.g. `use crate::analyzers::{tdg, defect::{a, b}};`
+        // must expand every leaf onto its full path, not just the outer base.
+        let parser = Parser::new();
+        let content = b"use crate::analyzers::{tdg, defect::{a, b}};\n\nfn main() {}";
+        let result = parser
+            .parse(content, Language::Rust, Path::new("main.rs"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        let paths: Vec<&str> = imports.iter().map(|i| i.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "crate::analyzers::tdg",
+                "crate::analyzers::defect::a",
+                "crate::analyzers::defect::b",
+            ]
+        );
     }
 
     #[test]
@@ -1736,6 +1848,21 @@ mod tests {
         assert_eq!(imports[0].path, "config");
         assert_eq!(imports[1].path, "utils");
         assert_eq!(imports[2].path, "helpers");
+        // Mod declarations are containment, not a dependency edge.
+        assert!(imports.iter().all(|i| i.kind == ImportKind::ModDeclaration));
+    }
+
+    #[test]
+    fn test_extract_rust_use_declarations_are_kind_use() {
+        let parser = Parser::new();
+        let content = b"use crate::config::Config;\n\nfn main() {}";
+        let result = parser
+            .parse(content, Language::Rust, Path::new("main.rs"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].kind, ImportKind::Use);
     }
 
     #[test]
@@ -1760,6 +1887,23 @@ mod tests {
 
         let imports = extract_imports(&result);
         assert!(!imports.is_empty());
+    }
+
+    #[test]
+    fn test_extract_js_re_exports() {
+        // Barrel files re-export via `export * from` / `export {..} from`,
+        // which are real dependency edges (this is exactly the monorepo
+        // barrel pattern from issue #479) but were not previously extracted.
+        let parser = Parser::new();
+        let content = b"export * from './widget';\nexport { widget as w } from './widget';\nexport function local() {}\n";
+        let result = parser
+            .parse(content, Language::TypeScript, Path::new("index.ts"))
+            .unwrap();
+
+        let imports = extract_imports(&result);
+        let paths: Vec<&str> = imports.iter().map(|i| i.path.as_str()).collect();
+        assert_eq!(paths, vec!["./widget", "./widget"]);
+        assert!(imports.iter().all(|i| i.kind == ImportKind::Use));
     }
 
     #[test]

@@ -34,8 +34,11 @@ use petgraph::Direction;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::analyzers::import_resolver::{
+    build_dependency_graph, extract_resolved_imports, ImportIndex,
+};
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
-use crate::parser::{extract_imports, Parser};
+use crate::parser::{extract_imports, ImportKind, Parser};
 
 /// Graph analyzer configuration.
 #[derive(Debug, Clone)]
@@ -50,305 +53,6 @@ pub struct Config {
     pub resolve_imports: bool,
     /// Include external dependencies.
     pub include_external: bool,
-}
-
-/// Pre-built index for O(1) file path lookups during import resolution.
-#[allow(dead_code)]
-struct FilePathIndex {
-    /// Full relative path -> relative path (identity mapping for exact matches).
-    by_full_path: HashMap<String, String>,
-    /// File stem (without extension) -> list of relative paths.
-    by_stem: HashMap<String, Vec<String>>,
-    /// File name (with extension) -> list of relative paths.
-    by_name: HashMap<String, Vec<String>>,
-    /// Normalized path segments for partial matching.
-    by_segments: HashMap<String, Vec<String>>,
-}
-
-impl FilePathIndex {
-    fn new(files: &[std::path::PathBuf], root: &Path) -> Self {
-        let mut by_full_path = HashMap::with_capacity(files.len());
-        let mut by_stem: HashMap<String, Vec<String>> = HashMap::new();
-        let mut by_name: HashMap<String, Vec<String>> = HashMap::new();
-        let mut by_segments: HashMap<String, Vec<String>> = HashMap::new();
-
-        for file in files {
-            let rel = file.strip_prefix(root).unwrap_or(file);
-            let rel_str = rel.to_string_lossy().to_string();
-
-            // Full path lookup
-            by_full_path.insert(rel_str.clone(), rel_str.clone());
-
-            // File stem lookup (e.g., "mod" from "mod.rs")
-            if let Some(stem) = rel.file_stem() {
-                let stem_str = stem.to_string_lossy().to_string();
-                by_stem.entry(stem_str).or_default().push(rel_str.clone());
-            }
-
-            // File name lookup (e.g., "mod.rs")
-            if let Some(name) = rel.file_name() {
-                let name_str = name.to_string_lossy().to_string();
-                by_name.entry(name_str).or_default().push(rel_str.clone());
-            }
-
-            // Segment-based lookup for partial path matching
-            // e.g., "src/utils/helpers" can match "utils/helpers.rs"
-            for component in rel.iter() {
-                let comp_str = component.to_string_lossy().to_string();
-                if !comp_str.is_empty() && comp_str != "." {
-                    by_segments
-                        .entry(comp_str)
-                        .or_default()
-                        .push(rel_str.clone());
-                }
-            }
-        }
-
-        Self {
-            by_full_path,
-            by_stem,
-            by_name,
-            by_segments,
-        }
-    }
-
-    /// Try to find a file matching the import path.
-    fn find_match(&self, import_path: &str, from_file: &Path) -> Option<String> {
-        // 0. Handle Rust crate-relative imports (crate::, super::, self::)
-        if import_path.starts_with("crate::")
-            || import_path.starts_with("super::")
-            || import_path.starts_with("self::")
-        {
-            let stripped = import_path
-                .strip_prefix("crate::")
-                .or_else(|| import_path.strip_prefix("super::"))
-                .or_else(|| import_path.strip_prefix("self::"))
-                .unwrap_or(import_path);
-
-            // Take the module path part (strip trailing type names which are CamelCase)
-            // e.g., crate::config::Config -> config, crate::analyzers::graph -> analyzers/graph
-            let segments: Vec<&str> = stripped.split("::").collect();
-
-            // Find the last segment that looks like a module (lowercase/snake_case)
-            let module_segments: Vec<&str> = segments
-                .iter()
-                .take_while(|s| {
-                    s.chars()
-                        .next()
-                        .map(|c| c.is_lowercase() || c == '_')
-                        .unwrap_or(false)
-                })
-                .copied()
-                .collect();
-
-            let module_path = if module_segments.is_empty() {
-                // All segments start with uppercase - use all as path
-                segments.join("/")
-            } else {
-                module_segments.join("/")
-            };
-
-            // Handle super:: relative to current file
-            if import_path.starts_with("super::") {
-                if let Some(parent) = from_file.parent().and_then(|p| p.parent()) {
-                    let resolved = parent.join(&module_path);
-                    let normalized = normalize_path(&resolved);
-                    for ext in &["", ".rs"] {
-                        let candidate = if ext.is_empty() {
-                            normalized.clone()
-                        } else {
-                            format!("{}{}", normalized, ext)
-                        };
-                        if self.by_full_path.contains_key(&candidate) {
-                            return Some(candidate);
-                        }
-                    }
-                    let mod_rs = format!("{}/mod.rs", normalized);
-                    if self.by_full_path.contains_key(&mod_rs) {
-                        return Some(mod_rs);
-                    }
-                }
-            }
-
-            // Try common Rust source roots with the module path
-            let source_roots = ["src", "lib", ""];
-            for root in &source_roots {
-                let base = if root.is_empty() {
-                    module_path.clone()
-                } else {
-                    format!("{}/{}", root, module_path)
-                };
-
-                // Try direct file match (e.g., src/config.rs)
-                let rs_path = format!("{}.rs", base);
-                if self.by_full_path.contains_key(&rs_path) {
-                    return Some(rs_path);
-                }
-
-                // Try mod.rs (e.g., src/config/mod.rs)
-                let mod_path = format!("{}/mod.rs", base);
-                if self.by_full_path.contains_key(&mod_path) {
-                    return Some(mod_path);
-                }
-            }
-
-            // Fall through to other matching strategies
-        }
-
-        // 1. Handle relative imports (./foo, ../foo)
-        if import_path.starts_with("./") || import_path.starts_with("../") {
-            if let Some(parent) = from_file.parent() {
-                let resolved = parent.join(import_path);
-                let normalized = normalize_path(&resolved);
-
-                // Try exact match with common extensions
-                for ext in &[
-                    "", ".rs", ".go", ".py", ".ts", ".tsx", ".js", ".jsx", ".java",
-                ] {
-                    let with_ext = if ext.is_empty() {
-                        normalized.clone()
-                    } else {
-                        format!(
-                            "{}.{}",
-                            normalized.trim_end_matches(&format!(".{}", &ext[1..])),
-                            &ext[1..]
-                        )
-                    };
-
-                    if self.by_full_path.contains_key(&with_ext) {
-                        return Some(with_ext);
-                    }
-
-                    // Try index files (e.g., ./utils -> ./utils/index.ts)
-                    let index_path = format!("{}/index{}", normalized, ext);
-                    if self.by_full_path.contains_key(&index_path) {
-                        return Some(index_path);
-                    }
-                }
-            }
-        }
-
-        // 2. Try exact stem match
-        if let Some(matches) = self.by_stem.get(import_path) {
-            if matches.len() == 1 {
-                return Some(matches[0].clone());
-            }
-            // Multiple matches - prefer shortest path (most specific)
-            if !matches.is_empty() {
-                let mut sorted = matches.clone();
-                sorted.sort_by_key(|s| s.len());
-                return Some(sorted[0].clone());
-            }
-        }
-
-        // 3. Try snake_case conversion for Ruby CamelCase constants
-        //    e.g., "OrderSearcher" -> "order_searcher", "ActiveModel::Validations" -> "active_model/validations"
-        if import_path.contains("::") {
-            // Scoped constant: split on ::, convert each segment, join with /
-            // e.g., ActiveModel::Validations -> active_model/validations
-            let snake_path: String = import_path
-                .split("::")
-                .map(camel_to_snake)
-                .collect::<Vec<_>>()
-                .join("/");
-            // Match on path segment boundaries (must be preceded by / or start of string)
-            let with_slash = format!("/{}", snake_path);
-            if let Some(matched) = self
-                .by_full_path
-                .keys()
-                .find(|k| k.starts_with(&snake_path) || k.contains(&with_slash))
-            {
-                return Some(matched.clone());
-            }
-            // Also try the last segment as a stem match
-            if let Some(last) = snake_path.rsplit('/').next() {
-                if let Some(matches) = self.by_stem.get(last) {
-                    for candidate in matches {
-                        if candidate.contains(&snake_path) {
-                            return Some(candidate.clone());
-                        }
-                    }
-                }
-            }
-        } else {
-            let snake = camel_to_snake(import_path);
-            if snake != import_path {
-                if let Some(matches) = self.by_stem.get(&snake) {
-                    if matches.len() == 1 {
-                        return Some(matches[0].clone());
-                    }
-                    if !matches.is_empty() {
-                        let mut sorted = matches.clone();
-                        sorted.sort_by_key(|s| s.len());
-                        return Some(sorted[0].clone());
-                    }
-                }
-            }
-        }
-
-        // 4. Try segment-based matching for module paths like "utils/helpers"
-        let segments: Vec<&str> = import_path.split('/').filter(|s| !s.is_empty()).collect();
-        if let Some(last_segment) = segments.last() {
-            if let Some(candidates) = self.by_stem.get(*last_segment) {
-                // Find candidates that match the full path pattern
-                for candidate in candidates {
-                    if candidate.contains(import_path) {
-                        return Some(candidate.clone());
-                    }
-                }
-                // Fall back to first match with the stem
-                if !candidates.is_empty() {
-                    return Some(candidates[0].clone());
-                }
-            }
-        }
-
-        None
-    }
-}
-
-/// Convert CamelCase to snake_case for Ruby constant-to-filename resolution.
-/// Handles consecutive uppercase (e.g., HTTPClient -> http_client).
-fn camel_to_snake(name: &str) -> String {
-    let mut result = String::with_capacity(name.len() + 4);
-    let chars: Vec<char> = name.chars().collect();
-    for (i, &c) in chars.iter().enumerate() {
-        if c.is_uppercase() {
-            if i > 0 {
-                let prev = chars[i - 1];
-                let next_is_lower = chars.get(i + 1).is_some_and(|n| n.is_lowercase());
-                // Insert underscore before: uppercase after lowercase, or
-                // start of new word in consecutive uppercase (e.g., the P in HTTPParser)
-                if prev.is_lowercase() || (prev.is_uppercase() && next_is_lower) {
-                    result.push('_');
-                }
-            }
-            for lc in c.to_lowercase() {
-                result.push(lc);
-            }
-        } else {
-            result.push(c);
-        }
-    }
-    result
-}
-
-/// Normalize a path by removing . and resolving ..
-fn normalize_path(path: &Path) -> String {
-    let mut components = Vec::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::Normal(c) => {
-                components.push(c.to_string_lossy().to_string());
-            }
-            std::path::Component::ParentDir => {
-                components.pop();
-            }
-            std::path::Component::CurDir => {}
-            _ => {}
-        }
-    }
-    components.join("/")
 }
 
 impl Default for Config {
@@ -406,85 +110,45 @@ impl Analyzer {
     /// Uses ctx.read_file() to support both filesystem and git tree sources.
     pub fn analyze_files(&self, ctx: &AnalysisContext<'_>) -> Result<Analysis> {
         let files: Vec<_> = ctx.files.iter().collect();
+        let file_paths: Vec<std::path::PathBuf> = files.iter().map(|p| (*p).clone()).collect();
 
-        // Build file path index for O(1) lookups during import resolution
-        let file_index = FilePathIndex::new(
-            &files.iter().map(|p| (*p).clone()).collect::<Vec<_>>(),
-            ctx.root,
-        );
+        let file_imports: Vec<(String, Vec<String>)> = if self.config.resolve_imports {
+            // Shared with `smells` (same resolver AND same extraction step)
+            // so the two analyzers can never disagree on the edges they
+            // build for the same input (issue #479).
+            let file_index = ImportIndex::new(&file_paths, ctx.root);
+            extract_resolved_imports(&file_paths, ctx, &file_index, self.config.include_external)
+        } else {
+            // No CLI flag ever sets `resolve_imports = false`; kept for API
+            // completeness. Uses raw unresolved import specifiers as
+            // pseudo-targets instead of resolving them to files.
+            files
+                .par_iter()
+                .filter_map(|file| {
+                    let rel_path = file.strip_prefix(ctx.root).unwrap_or(file);
+                    let path_str = rel_path.to_string_lossy().to_string();
 
-        // Parallel parsing: extract imports from all files concurrently
-        let file_imports: Vec<(String, Vec<String>)> = files
-            .par_iter()
-            .filter_map(|file| {
-                let rel_path = file.strip_prefix(ctx.root).unwrap_or(file);
-                let path_str = rel_path.to_string_lossy().to_string();
+                    let content = ctx.read_file(file).ok()?;
+                    let lang = Language::detect(file)?;
 
-                // Read file via context (supports both filesystem and git tree)
-                let content = ctx.read_file(file).ok()?;
-                let lang = Language::detect(file)?;
+                    let parser = Parser::new();
+                    let result = parser.parse(&content, lang, file).ok()?;
+                    let imports: Vec<String> = extract_imports(&result)
+                        .into_iter()
+                        .filter(|imp| imp.kind == ImportKind::Use)
+                        .map(|imp| imp.path)
+                        .collect();
 
-                // Parse and extract imports using thread-local parser
-                let parser = Parser::new();
-                let result = parser.parse(&content, lang, file).ok()?;
-                let imports = extract_imports(&result);
+                    Some((path_str, imports))
+                })
+                .collect()
+        };
 
-                // Resolve imports using the pre-built index
-                let resolved: Vec<String> = if self.config.resolve_imports {
-                    imports
-                        .iter()
-                        .filter_map(|imp| {
-                            file_index.find_match(&imp.path, rel_path).or_else(|| {
-                                if self.config.include_external {
-                                    Some(imp.path.clone())
-                                } else {
-                                    None
-                                }
-                            })
-                        })
-                        .collect()
-                } else {
-                    imports.iter().map(|imp| imp.path.clone()).collect()
-                };
-
-                Some((path_str, resolved))
-            })
-            .collect();
-
-        // Build graph (sequential, but fast since parsing is done)
-        let mut graph: DiGraph<String, ()> = DiGraph::with_capacity(files.len(), files.len() * 4);
-        let mut node_indices: HashMap<String, NodeIndex> = HashMap::with_capacity(files.len());
-
-        // First pass: create all nodes
-        for (path_str, _) in &file_imports {
-            if !node_indices.contains_key(path_str) {
-                let idx = graph.add_node(path_str.clone());
-                node_indices.insert(path_str.clone(), idx);
-            }
-        }
-
-        // Second pass: create edges
-        for (from_path, imports) in &file_imports {
-            let from_idx = node_indices[from_path];
-
-            for import in imports {
-                // Add target node if not exists (external dependency)
-                let to_idx = if let Some(&idx) = node_indices.get(import) {
-                    idx
-                } else if self.config.include_external {
-                    let idx = graph.add_node(import.clone());
-                    node_indices.insert(import.clone(), idx);
-                    idx
-                } else {
-                    continue;
-                };
-
-                // Add edge (avoid self-loops)
-                if from_idx != to_idx && !graph.contains_edge(from_idx, to_idx) {
-                    graph.add_edge(from_idx, to_idx, ());
-                }
-            }
-        }
+        // Build graph applying the shared edge rules (no self-loops, no
+        // parallel edges for a repeated import) -- the same rules `smells`
+        // applies, via the same function.
+        let (graph, node_indices) =
+            build_dependency_graph(&file_imports, self.config.include_external);
 
         // Calculate metrics
         let pagerank = self.calculate_pagerank(&graph);
@@ -890,6 +554,217 @@ pub struct AnalysisSummary {
 mod tests {
     use super::*;
 
+    /// Write files (relative path -> content) into a fresh temp dir and build
+    /// the dependency graph over it from the filesystem.
+    fn analyze_fixture(files: &[(&str, &str)]) -> Analysis {
+        let temp_dir = tempfile::tempdir().unwrap();
+        for (rel_path, content) in files {
+            let full_path = temp_dir.path().join(rel_path);
+            std::fs::create_dir_all(full_path.parent().unwrap()).unwrap();
+            std::fs::write(full_path, content).unwrap();
+        }
+
+        let analyzer = Analyzer::new();
+        let mut analysis = analyzer.analyze_project(temp_dir.path()).unwrap();
+        analysis.summary.cycle_count = analysis.cycles.len();
+        analysis
+    }
+
+    #[test]
+    fn test_no_false_cycle_for_rust_sibling_modules_via_parent() {
+        // Bug 2: tdg and defect each import a sibling module (hotspot)
+        // through a grouped `use crate::analyzers::{hotspot};`. Neither tdg
+        // nor defect actually depend on each other, or on analyzers/mod.rs
+        // as anything but their container -- so no cycle should be reported.
+        let analysis = analyze_fixture(&[
+            ("src/lib.rs", "pub mod analyzers;\n"),
+            (
+                "src/analyzers/mod.rs",
+                "pub mod tdg;\npub mod defect;\npub mod hotspot;\n",
+            ),
+            (
+                "src/analyzers/tdg.rs",
+                "use crate::analyzers::{hotspot};\npub fn a() {}\n",
+            ),
+            (
+                "src/analyzers/defect.rs",
+                "use crate::analyzers::{hotspot};\npub fn b() {}\n",
+            ),
+            ("src/analyzers/hotspot.rs", "pub fn h() {}\n"),
+        ]);
+
+        assert_eq!(
+            analysis.summary.cycle_count, 0,
+            "no cycle should be reported for sibling modules through a parent, found: {:?}",
+            analysis.cycles
+        );
+    }
+
+    #[test]
+    fn test_real_rust_cycle_is_still_detected() {
+        // Do not over-correct: a genuine two-module cycle must still be caught.
+        let analysis = analyze_fixture(&[
+            ("src/lib.rs", "pub mod a;\npub mod b;\n"),
+            ("src/a.rs", "use crate::b;\npub fn f() { b::g(); }\n"),
+            ("src/b.rs", "use crate::a;\npub fn g() { a::f(); }\n"),
+        ]);
+
+        assert_eq!(
+            analysis.summary.cycle_count, 1,
+            "the real a.rs <-> b.rs cycle must still be reported, cycles: {:?}",
+            analysis.cycles
+        );
+    }
+
+    #[test]
+    fn test_real_rust_cycle_via_item_not_submodule_is_still_detected() {
+        // Regression: `use crate::a::{b};` where `b` is a function defined
+        // directly in a.rs (not a submodule file `a/b.rs`) must still
+        // resolve to a.rs. Over-correcting the grouped-import expansion so
+        // that per-leaf resolution gives up when `a/b.rs` doesn't exist
+        // silently drops the real a.rs <-> c.rs dependency and hides the
+        // cycle.
+        let analysis = analyze_fixture(&[
+            ("src/lib.rs", "pub mod a;\npub mod c;\n"),
+            ("src/a.rs", "use crate::c;\npub fn b() {}\n"),
+            ("src/c.rs", "use crate::a::{b};\n"),
+        ]);
+
+        assert_eq!(
+            analysis.summary.cycle_count, 1,
+            "the real a.rs <-> c.rs cycle must still be reported, cycles: {:?}",
+            analysis.cycles
+        );
+    }
+
+    #[test]
+    fn test_graph_and_smells_agree_on_edges_and_cycles() {
+        // graph and smells must build the SAME edge set -- not just the same
+        // cycle count -- for the same input, since they now share both the
+        // resolver and the extraction/edge-building step. Includes: a real
+        // cross-package cycle, a self-import (must not become a self-loop
+        // edge in either), and a barrel re-export (`export * from`, the
+        // issue #479 monorepo pattern).
+        use crate::analyzers::import_resolver::{build_dependency_graph, extract_resolved_imports};
+        use crate::analyzers::smells;
+        use crate::config::Config;
+        use crate::core::{AnalysisContext, FileSet};
+        use std::collections::HashSet;
+
+        let files: &[(&str, &str)] = &[
+            (
+                "packages/brain/src/types.ts",
+                "import type { M } from '../../mcp/src/types.js';\nexport type B = M;\n",
+            ),
+            ("packages/mcp/src/types.ts", "export type M = number;\n"),
+            ("a.ts", "import { b } from './b.js';\nexport const a = b;\n"),
+            ("b.ts", "import { a } from './a.js';\nexport const b = a;\n"),
+            (
+                "self.ts",
+                "import { helper } from './self.js';\nexport function helper() {}\n",
+            ),
+            ("pkg/index.ts", "export * from './widget';\n"),
+            ("pkg/widget.ts", "export const widget = 1;\n"),
+        ];
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        for (rel_path, content) in files {
+            let full_path = temp_dir.path().join(rel_path);
+            std::fs::create_dir_all(full_path.parent().unwrap()).unwrap();
+            std::fs::write(full_path, content).unwrap();
+        }
+
+        let graph_analysis = Analyzer::new().analyze_project(temp_dir.path()).unwrap();
+
+        let config = Config::default();
+        let file_set = FileSet::from_path(temp_dir.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&file_set, &config, Some(temp_dir.path()));
+        let smells_analysis = smells::Analyzer::new().analyze_repo(&ctx).unwrap();
+
+        // graph's public edge list, as a set: must have no self-loops and no
+        // duplicate (parallel) edges.
+        let graph_edges: HashSet<(String, String)> = graph_analysis
+            .edges
+            .iter()
+            .map(|e| (e.from.clone(), e.to.clone()))
+            .collect();
+        assert_eq!(
+            graph_edges.len(),
+            graph_analysis.edges.len(),
+            "graph's edge list must not contain duplicates"
+        );
+        assert!(
+            graph_edges.iter().all(|(from, to)| from != to),
+            "graph's edge list must not contain self-loops: {:?}",
+            graph_edges
+        );
+
+        // Independently rebuild the canonical edge set via the exact shared
+        // functions both analyzers call, and require graph's public edges
+        // to match it exactly.
+        let all_files: Vec<_> = file_set.iter().cloned().collect();
+        let file_index = ImportIndex::new(&all_files, temp_dir.path());
+        let file_imports = extract_resolved_imports(&all_files, &ctx, &file_index, false);
+        let (canonical_graph, canonical_indices) = build_dependency_graph(&file_imports, false);
+        let canonical_edges: HashSet<(String, String)> = canonical_graph
+            .edge_indices()
+            .map(|e| {
+                let (from, to) = canonical_graph.edge_endpoints(e).unwrap();
+                (canonical_graph[from].clone(), canonical_graph[to].clone())
+            })
+            .collect();
+        assert_eq!(
+            graph_edges, canonical_edges,
+            "graph's public edges must match the canonical shared-builder edge set"
+        );
+
+        // smells doesn't expose raw edges, but its per-file fan_in/fan_out
+        // are derived directly from its internal graph's degrees -- if that
+        // graph has the same edge set as the canonical one, these must
+        // match graph's public in_degree/out_degree for every file exactly.
+        let graph_degrees: HashMap<&str, (usize, usize)> = graph_analysis
+            .nodes
+            .iter()
+            .map(|n| (n.path.as_str(), (n.in_degree, n.out_degree)))
+            .collect();
+        for component in &smells_analysis.components {
+            let (expected_in, expected_out) = graph_degrees
+                .get(component.id.as_str())
+                .unwrap_or_else(|| panic!("graph has no node for {}", component.id));
+            assert_eq!(
+                (component.fan_in, component.fan_out),
+                (*expected_in, *expected_out),
+                "fan_in/fan_out for {} must match graph's in_degree/out_degree",
+                component.id
+            );
+        }
+        assert_eq!(smells_analysis.components.len(), graph_analysis.nodes.len());
+
+        // canonical builder must also agree with graph's degree sequence,
+        // and with cycle counts on both sides.
+        for (path, &idx) in &canonical_indices {
+            let in_deg = canonical_graph
+                .edges_directed(idx, Direction::Incoming)
+                .count();
+            let out_deg = canonical_graph
+                .edges_directed(idx, Direction::Outgoing)
+                .count();
+            let (expected_in, expected_out) = graph_degrees[path.as_str()];
+            assert_eq!((in_deg, out_deg), (expected_in, expected_out));
+        }
+
+        assert_eq!(
+            graph_analysis.cycles.len(),
+            smells_analysis.summary.cyclic_count,
+            "graph and smells must agree on cycle count: graph={:?} smells cyclic_count={}",
+            graph_analysis.cycles,
+            smells_analysis.summary.cyclic_count
+        );
+        // The known real cycle (a.ts <-> b.ts) is the only one either should
+        // find; the self-import and the barrel re-export must not add any.
+        assert_eq!(graph_analysis.cycles.len(), 1);
+    }
+
     #[test]
     fn test_analyzer_creation() {
         let analyzer = Analyzer::new();
@@ -1202,133 +1077,5 @@ mod tests {
         };
         assert_eq!(edge.from, "a.rs");
         assert_eq!(edge.to, "b.rs");
-    }
-
-    #[test]
-    fn test_camel_to_snake() {
-        assert_eq!(camel_to_snake("OrderSearcher"), "order_searcher");
-        assert_eq!(camel_to_snake("ApplicationRecord"), "application_record");
-        assert_eq!(camel_to_snake("HTTPClient"), "http_client");
-        assert_eq!(camel_to_snake("Foo"), "foo");
-        assert_eq!(camel_to_snake("FooBar"), "foo_bar");
-        assert_eq!(camel_to_snake("already_snake"), "already_snake");
-        assert_eq!(camel_to_snake("JSON"), "json");
-        assert_eq!(camel_to_snake("HTMLParser"), "html_parser");
-    }
-
-    #[test]
-    fn test_find_match_ruby_constant_to_snake_case() {
-        let root = Path::new("/project");
-        let files = vec![
-            std::path::PathBuf::from("/project/app/models/concerns/order_searcher.rb"),
-            std::path::PathBuf::from("/project/app/models/concerns/feature_gate.rb"),
-            std::path::PathBuf::from("/project/app/models/application_record.rb"),
-        ];
-        let index = FilePathIndex::new(&files, root);
-
-        // CamelCase constant should resolve to snake_case file
-        assert_eq!(
-            index.find_match("OrderSearcher", Path::new("app/models/order.rb")),
-            Some("app/models/concerns/order_searcher.rb".to_string())
-        );
-        assert_eq!(
-            index.find_match("FeatureGate", Path::new("app/models/order.rb")),
-            Some("app/models/concerns/feature_gate.rb".to_string())
-        );
-        assert_eq!(
-            index.find_match("ApplicationRecord", Path::new("app/models/order.rb")),
-            Some("app/models/application_record.rb".to_string())
-        );
-    }
-
-    #[test]
-    fn test_find_match_ruby_scoped_constant() {
-        let root = Path::new("/project");
-        let files = vec![
-            std::path::PathBuf::from("/project/app/models/concerns/active_model/validations.rb"),
-            std::path::PathBuf::from("/project/lib/active_record/base.rb"),
-        ];
-        let index = FilePathIndex::new(&files, root);
-
-        // Scoped constant ActiveModel::Validations -> active_model/validations
-        assert_eq!(
-            index.find_match("ActiveModel::Validations", Path::new("app/models/user.rb")),
-            Some("app/models/concerns/active_model/validations.rb".to_string())
-        );
-        assert_eq!(
-            index.find_match("ActiveRecord::Base", Path::new("app/models/user.rb")),
-            Some("lib/active_record/base.rb".to_string())
-        );
-    }
-
-    #[test]
-    fn test_find_match_scoped_constant_no_substring_collision() {
-        let root = Path::new("/project");
-        let files = vec![std::path::PathBuf::from(
-            "/project/packages/connect/app/controllers/connect/sign_up_controller.rb",
-        )];
-        let index = FilePathIndex::new(&files, root);
-
-        // T::Sig -> t/sig should NOT match connect/sign_up_controller.rb
-        // (substring "t/sig" appears in "connect/sign_up" but not on segment boundaries)
-        assert_eq!(
-            index.find_match("T::Sig", Path::new("app/models/user.rb")),
-            None
-        );
-    }
-
-    #[test]
-    fn test_find_match_rust_crate_import() {
-        let root = Path::new("/project");
-        let files = vec![
-            std::path::PathBuf::from("/project/src/config/mod.rs"),
-            std::path::PathBuf::from("/project/src/utils.rs"),
-            std::path::PathBuf::from("/project/src/analyzers/graph.rs"),
-        ];
-        let index = FilePathIndex::new(&files, root);
-
-        // crate::config::Config -> should match src/config/mod.rs
-        assert_eq!(
-            index.find_match("crate::config", Path::new("src/main.rs")),
-            Some("src/config/mod.rs".to_string())
-        );
-
-        // crate::utils -> should match src/utils.rs
-        assert_eq!(
-            index.find_match("crate::utils", Path::new("src/main.rs")),
-            Some("src/utils.rs".to_string())
-        );
-
-        // crate::analyzers::graph -> should match src/analyzers/graph.rs
-        assert_eq!(
-            index.find_match("crate::analyzers::graph", Path::new("src/main.rs")),
-            Some("src/analyzers/graph.rs".to_string())
-        );
-    }
-
-    #[test]
-    fn test_find_match_rust_mod_declaration() {
-        let root = Path::new("/project");
-        let files = vec![
-            std::path::PathBuf::from("/project/src/config.rs"),
-            std::path::PathBuf::from("/project/src/config/mod.rs"),
-            std::path::PathBuf::from("/project/src/utils.rs"),
-        ];
-        let index = FilePathIndex::new(&files, root);
-
-        // mod config -> should match src/config.rs or src/config/mod.rs
-        let result = index.find_match("config", Path::new("src/lib.rs"));
-        assert!(
-            result == Some("src/config.rs".to_string())
-                || result == Some("src/config/mod.rs".to_string()),
-            "Expected config.rs or config/mod.rs, got {:?}",
-            result
-        );
-
-        // mod utils -> should match src/utils.rs
-        assert_eq!(
-            index.find_match("utils", Path::new("src/lib.rs")),
-            Some("src/utils.rs".to_string())
-        );
     }
 }
