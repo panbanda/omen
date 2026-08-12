@@ -1098,11 +1098,11 @@ The [`examples/repos/`](examples/repos/) directory contains comprehensive health
 
 | Repository | Language | Health Score | Key Insights |
 |------------|----------|--------------|--------------|
-| [gin-gonic/gin](examples/repos/gin-gonic-gin.md) | Go | 95/100 | Exceptionally healthy web framework with zero duplication and clean architecture |
-| [excalidraw/excalidraw](examples/repos/excalidraw-excalidraw.md) | TypeScript | 86/100 | Highest-scoring repo with 100% coupling score; App.tsx needs refactoring |
-| [BurntSushi/ripgrep](examples/repos/burntSushi-ripgrep.md) | Rust | 76/100 | Mature codebase with excellent architecture; duplication in tests is intentional |
-| [tiangolo/fastapi](examples/repos/tiangolo-fastapi.md) | Python | 74/100 | Great complexity scores (98/100); duplication from versioned examples in docs |
-| [discourse/discourse](examples/repos/discourse-discourse.md) | Ruby | 69/100 | Largest codebase (10K+ files); excellent defect management despite size |
+| [tiangolo/fastapi](examples/repos/tiangolo-fastapi.md) | Python | 91/100 (A) | Top scorer: perfect cohesion, complexity, and coupling; duplication comes from versioned docs examples |
+| [gin-gonic/gin](examples/repos/gin-gonic-gin.md) | Go | 87/100 (B) | Clean, mature web framework; perfect coupling and smells, with cohesion the main headroom |
+| [discourse/discourse](examples/repos/discourse-discourse.md) | Ruby | 84/100 (B) | Largest codebase (14K+ files) yet strong debt, complexity, and defect management; coupling is the drag |
+| [excalidraw/excalidraw](examples/repos/excalidraw-excalidraw.md) | TypeScript | 77/100 (C) | Healthy complexity and low duplication; coupling and architectural smells pull the score down |
+| [BurntSushi/ripgrep](examples/repos/burntSushi-ripgrep.md) | Rust | 74/100 (C) | Excellent architecture and complexity; lower duplication/SATD scores reflect a mature, long-lived codebase |
 
 ### What the Reports Demonstrate
 
