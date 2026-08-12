@@ -844,6 +844,13 @@ pub struct SmellsInsight {
     pub section_insight: String,
 }
 
+/// StubsInsight contains incomplete-code (stubs) analysis narrative.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct StubsInsight {
+    #[serde(default)]
+    pub section_insight: String,
+}
+
 /// GraphInsight contains dependency graph analysis.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GraphInsight {
@@ -888,6 +895,7 @@ pub struct RenderData {
     pub ownership_insight: Option<OwnershipInsight>,
     pub temporal_insight: Option<TemporalInsight>,
     pub smells_insight: Option<SmellsInsight>,
+    pub stubs_insight: Option<StubsInsight>,
     pub graph_insight: Option<GraphInsight>,
     pub tdg_insight: Option<TdgInsight>,
     pub component_trends: HashMap<String, ComponentTrendStats>,

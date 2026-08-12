@@ -854,6 +854,12 @@
                 <p class="section-description">Half-finished work left in the codebase - not-implemented markers, placeholder comments, and empty function bodies</p>
             </div>
 
+            {% if StubsInsight %}
+            <div class="insight">
+                <div class="narrative">{{ StubsInsight.section_insight | markdown }}</div>
+            </div>
+            {% endif %}
+
             <div class="metric-grid">
                 <div class="metric-tile">
                     <div class="metric-value {% if Stubs.summary.total_stubs > 0 %}warning{% else %}good{% endif %}">{{ Stubs.summary.total_stubs }}</div>

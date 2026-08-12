@@ -117,6 +117,7 @@ impl Renderer {
             Smells => data.smells,
             SmellsInsight => data.smells_insight,
             Stubs => data.stubs,
+            StubsInsight => data.stubs_insight,
             Graph => data.graph,
             GraphInsight => data.graph_insight,
             Tdg => data.tdg,
@@ -372,6 +373,9 @@ impl Renderer {
             }
             if let Ok(insight) = load_json::<SmellsInsight>(&insights_dir.join("smells.json")) {
                 data.smells_insight = Some(insight);
+            }
+            if let Ok(insight) = load_json::<StubsInsight>(&insights_dir.join("stubs.json")) {
+                data.stubs_insight = Some(insight);
             }
             if let Ok(insight) = load_json::<GraphInsight>(&insights_dir.join("graph.json")) {
                 data.graph_insight = Some(insight);
@@ -1023,6 +1027,12 @@ mod tests {
     #[test]
     fn test_renderer_includes_stubs_section() {
         let data_dir = tempfile::tempdir().unwrap();
+        let insights_dir = data_dir.path().join("insights");
+        fs::create_dir(&insights_dir).unwrap();
+        write_fixture(
+            &insights_dir.join("stubs.json"),
+            json!({ "section_insight": "Two reachable **todo!()** calls remain." }),
+        );
         write_fixture(
             &data_dir.path().join("stubs.json"),
             json!({
@@ -1058,6 +1068,9 @@ mod tests {
         assert!(html.contains("Incomplete Code"));
         assert!(html.contains("Total Stubs"));
         assert!(html.contains("fn f() { todo!() }"));
+        // Insight narrative renders as markdown.
+        assert!(html.contains("Two reachable"));
+        assert!(html.contains("<strong>todo!()</strong>"));
         // Malicious file path is HTML-escaped: the tag's angle brackets become
         // entities, so it renders as inert text rather than a live element.
         assert!(!html.contains("<img src=x onerror=alert(1)>"));
