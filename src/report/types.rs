@@ -521,6 +521,50 @@ pub struct SmellsSummary {
 }
 
 // ============================================================================
+// Stubs (Incomplete Code) Types
+// ============================================================================
+
+/// StubsData represents the stubs.json structure.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct StubsData {
+    #[serde(default)]
+    pub stubs: Vec<StubItem>,
+    #[serde(default)]
+    pub by_category: std::collections::BTreeMap<String, usize>,
+    #[serde(default)]
+    pub summary: StubsSummary,
+}
+
+/// A single incomplete-code finding.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StubItem {
+    pub file: String,
+    #[serde(default)]
+    pub line: u32,
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub severity: String,
+    #[serde(default)]
+    pub snippet: String,
+    #[serde(default)]
+    pub language: String,
+}
+
+/// Summary statistics for the stubs analyzer.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct StubsSummary {
+    #[serde(default)]
+    pub total_stubs: usize,
+    #[serde(default)]
+    pub high_severity: usize,
+    #[serde(default)]
+    pub medium_severity: usize,
+    #[serde(default)]
+    pub low_severity: usize,
+}
+
+// ============================================================================
 // Dependency Graph Types
 // ============================================================================
 
@@ -852,6 +896,7 @@ pub struct RenderData {
     pub smells: Option<SmellsData>,
     pub graph: Option<GraphData>,
     pub tdg: Option<TdgData>,
+    pub stubs: Option<StubsData>,
 }
 
 impl RenderData {
@@ -1085,6 +1130,39 @@ mod tests {
         assert_eq!(data.smells.len(), 1);
         assert_eq!(data.smells[0].smell_type, "CyclicDependency");
         assert_eq!(data.summary.critical_count, 1);
+    }
+
+    #[test]
+    fn test_stubs_deserialize() {
+        let json = r#"{
+            "stubs": [
+                {
+                    "file": "src/a.rs",
+                    "line": 42,
+                    "lines": [42],
+                    "category": "not_implemented",
+                    "categories": ["not_implemented"],
+                    "severity": "high",
+                    "snippet": "fn f() { todo!() }",
+                    "language": "rust"
+                }
+            ],
+            "by_category": { "not_implemented": 1 },
+            "summary": {
+                "total_stubs": 1,
+                "high_severity": 1,
+                "medium_severity": 0,
+                "low_severity": 0
+            }
+        }"#;
+        let data: StubsData = serde_json::from_str(json).unwrap();
+        assert_eq!(data.stubs.len(), 1);
+        assert_eq!(data.stubs[0].file, "src/a.rs");
+        assert_eq!(data.stubs[0].line, 42);
+        assert_eq!(data.stubs[0].severity, "high");
+        assert_eq!(data.by_category.get("not_implemented"), Some(&1));
+        assert_eq!(data.summary.total_stubs, 1);
+        assert_eq!(data.summary.high_severity, 1);
     }
 
     #[test]

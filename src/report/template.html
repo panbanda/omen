@@ -109,6 +109,12 @@
                 Debt Gradient
             </a>
             {% endif %}
+            {% if Stubs %}
+            <a href="#stubs" class="nav-link">
+                <span class="nav-dot {% if Stubs.summary.high_severity > 0 %}danger{% elif Stubs.summary.total_stubs > 0 %}warning{% else %}good{% endif %}"></span>
+                Incomplete Code
+            </a>
+            {% endif %}
         </div>
 
         <div class="nav-section">
@@ -173,14 +179,6 @@
                 </div>
             </div>
             <div class="report-actions">
-                <div class="nav-history" role="group" aria-label="Navigation history">
-                    <button class="btn-ghost nav-history-btn" id="nav-back" type="button" aria-label="Go back" title="Back" disabled>
-                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
-                    </button>
-                    <button class="btn-ghost nav-history-btn" id="nav-forward" type="button" aria-label="Go forward" title="Forward" disabled>
-                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>
-                    </button>
-                </div>
                 <button class="btn-ghost theme-toggle" id="theme-toggle" type="button" aria-label="Switch color theme" title="Switch color theme">
                     <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.41M17.66 6.34l1.41-1.41"></path></svg>
                     <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"></path></svg>
@@ -239,6 +237,12 @@
                 <div class="metric-tile">
                     <div class="metric-value {% if Duplicates.duplication_ratio > 15.0 %}danger{% elif Duplicates.duplication_ratio > 10.0 %}warning{% else %}good{% endif %}">{{ Duplicates.duplication_ratio | round(1) }}%</div>
                     <div class="metric-label">Duplication</div>
+                </div>
+                {% endif %}
+                {% if Stubs %}
+                <div class="metric-tile">
+                    <div class="metric-value {% if Stubs.summary.high_severity > 0 %}danger{% elif Stubs.summary.total_stubs > 0 %}warning{% else %}good{% endif %}">{{ Stubs.summary.total_stubs }}</div>
+                    <div class="metric-label">Incomplete Code</div>
                 </div>
                 {% endif %}
             </div>
@@ -842,6 +846,87 @@
         </section>
         {% endif %}
 
+        <!-- Incomplete Code (stubs) -->
+        {% if Stubs %}
+        <section id="stubs" class="card report-section">
+            <div class="section-header">
+                <h2 class="section-title">Incomplete Code</h2>
+                <p class="section-description">Half-finished work left in the codebase - not-implemented markers, placeholder comments, and empty function bodies</p>
+            </div>
+
+            <div class="metric-grid">
+                <div class="metric-tile">
+                    <div class="metric-value {% if Stubs.summary.total_stubs > 0 %}warning{% else %}good{% endif %}">{{ Stubs.summary.total_stubs }}</div>
+                    <div class="metric-label">Total Stubs</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-value danger">{{ Stubs.summary.high_severity }}</div>
+                    <div class="metric-label">High</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-value warning">{{ Stubs.summary.medium_severity }}</div>
+                    <div class="metric-label">Medium</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-value info">{{ Stubs.summary.low_severity }}</div>
+                    <div class="metric-label">Low</div>
+                </div>
+            </div>
+
+            {% if Stubs.summary.total_stubs > 0 %}
+            <div class="metric-grid" style="margin-top: 1rem;">
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Stubs.by_category.not_implemented | default(0) }}</div>
+                    <div class="metric-label">Not Implemented</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Stubs.by_category.elision | default(0) }}</div>
+                    <div class="metric-label">Placeholder / Elision</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Stubs.by_category.empty_body | default(0) }}</div>
+                    <div class="metric-label">Empty Body</div>
+                </div>
+            </div>
+
+            <div class="table-wrap">
+                <table class="report-table" id="stubs-table" data-numeric-columns="5">
+                    <thead>
+                        <tr>
+                            <th><span class="tooltip" data-tooltip="Impact level. not-implemented idioms are High, placeholder comments Medium, empty bodies Low.">Severity</span></th>
+                            <th><span class="tooltip" data-tooltip="Pattern type: not_implemented (todo!/NotImplementedError), elision (placeholder comment), or empty_body.">Category</span></th>
+                            <th>File</th>
+                            <th>Lang</th>
+                            <th class="num">Line</th>
+                            <th>Snippet</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for stub in Stubs.stubs[:100] %}
+                        <tr>
+                            <td><span class="badge {% if stub.severity == 'high' %}critical{% elif stub.severity == 'medium' %}high{% else %}medium{% endif %}">{{ stub.severity }}</span></td>
+                            <td>{{ stub.category }}</td>
+                            <td><code>{{ stub.file | truncate_path(60) }}</code></td>
+                            <td>{{ stub.language }}</td>
+                            <td class="num">{{ stub.line }}</td>
+                            <td><code>{{ stub.snippet }}</code></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% if Stubs.stubs | length > 100 %}
+                <p class="muted" style="margin-top: 0.75rem; font-size: 0.8rem;">Showing the first 100 of {{ Stubs.stubs | length }} stubs.</p>
+                {% endif %}
+            </div>
+            {% else %}
+            <div class="insight insight-success">
+                <h3>No incomplete code detected</h3>
+                <p class="muted">No not-implemented markers, placeholder comments, or empty function bodies were found. Nothing looks half-finished.</p>
+            </div>
+            {% endif %}
+        </section>
+        {% endif %}
+
         <!-- Trends -->
         {% if Trend %}
         <section id="trends" class="card report-section">
@@ -1293,57 +1378,6 @@
         window.addEventListener('scroll', updateActiveNav, { passive: true });
         updateActiveNav();
 
-        // In-report navigation history: back/forward through visited sections.
-        // Self-contained so it works even without browser chrome (e.g. an
-        // embedded pane or `omen report serve`). Driven by hashchange, which
-        // fires for every in-page anchor the sidebar and links use.
-        (function initNavHistory() {
-            const backBtn = document.getElementById('nav-back');
-            const forwardBtn = document.getElementById('nav-forward');
-            if (!backBtn || !forwardBtn) {
-                return;
-            }
-            const trail = [location.hash || '#top'];
-            let index = 0;
-            let programmatic = false;
-
-            function refresh() {
-                backBtn.disabled = index <= 0;
-                forwardBtn.disabled = index >= trail.length - 1;
-            }
-            function navigate(hash) {
-                programmatic = true;
-                location.hash = hash;
-            }
-            window.addEventListener('hashchange', () => {
-                const hash = location.hash || '#top';
-                if (programmatic) {
-                    programmatic = false;
-                } else if (hash !== trail[index]) {
-                    // A fresh forward navigation truncates any forward trail.
-                    trail.splice(index + 1);
-                    trail.push(hash);
-                    index = trail.length - 1;
-                }
-                refresh();
-            });
-            backBtn.addEventListener('click', () => {
-                if (index > 0) {
-                    index -= 1;
-                    navigate(trail[index]);
-                    refresh();
-                }
-            });
-            forwardBtn.addEventListener('click', () => {
-                if (index < trail.length - 1) {
-                    index += 1;
-                    navigate(trail[index]);
-                    refresh();
-                }
-            });
-            refresh();
-        })();
-
         // Format large numbers with commas
         document.querySelectorAll('.metric-value').forEach(el => {
             const text = el.textContent.trim();
@@ -1405,7 +1439,7 @@
             });
         }
 
-        const tableIds = ['hotspots-table', 'flags-table', 'cohesion-table', 'satd-table', 'churn-table', 'smells-table', 'graph-table', 'tdg-table', 'temporal-table'];
+        const tableIds = ['hotspots-table', 'flags-table', 'cohesion-table', 'satd-table', 'stubs-table', 'churn-table', 'smells-table', 'graph-table', 'tdg-table', 'temporal-table'];
         tableIds.forEach(id => {
             const table = document.getElementById(id);
             if (!table) return;
