@@ -8,12 +8,14 @@ Omen can generate comprehensive HTML health reports for any repository. These re
 
 ## Analyzed Repositories
 
-| Repository | Language | Description | Report |
-|---|---|---|---|
-| [BerriAI/litellm](https://github.com/BerriAI/litellm) | Python | LLM proxy server -- call 100+ LLM APIs in the OpenAI format | [View Report](pathname:///omen/reports/litellm.html) |
-| [discourse/discourse](https://github.com/discourse/discourse) | Ruby | Community discussion platform used by thousands of organizations | [View Report](pathname:///omen/reports/discourse.html) |
-| [Gusto/apollo-federation-ruby](https://github.com/Gusto/apollo-federation-ruby) | Ruby | Apollo Federation implementation for Ruby GraphQL backends | [View Report](pathname:///omen/reports/apollo-federation-ruby.html) |
-| [zed-industries/zed](https://github.com/zed-industries/zed) | Rust | High-performance multiplayer code editor | [View Report](pathname:///omen/reports/zed.html) |
+Reports below were regenerated with omen 4.28.0 over each project's full git history.
+
+| Repository | Language | Health | Description | Report |
+|---|---|---|---|---|
+| [BerriAI/litellm](https://github.com/BerriAI/litellm) | Python | 86 (B) | LLM proxy server -- call 100+ LLM APIs in the OpenAI format | [View Report](pathname:///omen/reports/litellm.html) |
+| [discourse/discourse](https://github.com/discourse/discourse) | Ruby | 84 (B) | Community discussion platform used by thousands of organizations | [View Report](pathname:///omen/reports/discourse.html) |
+| [Gusto/apollo-federation-ruby](https://github.com/Gusto/apollo-federation-ruby) | Ruby | 84 (B) | Apollo Federation implementation for Ruby GraphQL backends | [View Report](pathname:///omen/reports/apollo-federation-ruby.html) |
+| [zed-industries/zed](https://github.com/zed-industries/zed) | Rust | 81 (B) | High-performance multiplayer code editor | [View Report](pathname:///omen/reports/zed.html) |
 
 ## Generating Your Own Report
 
