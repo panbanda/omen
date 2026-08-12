@@ -2848,7 +2848,7 @@ dependencies = [
 
 [[package]]
 name = "omen-cli"
-version = "4.28.0"
+version = "4.28.1"
 dependencies = [
  "assert_cmd",
  "blake3",
