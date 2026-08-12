@@ -116,6 +116,8 @@ impl Renderer {
             TemporalInsight => data.temporal_insight,
             Smells => data.smells,
             SmellsInsight => data.smells_insight,
+            Stubs => data.stubs,
+            StubsInsight => data.stubs_insight,
             Graph => data.graph,
             GraphInsight => data.graph_insight,
             Tdg => data.tdg,
@@ -297,6 +299,11 @@ impl Renderer {
             data.smells = Some(smells);
         }
 
+        // Load stubs (incomplete code)
+        if let Ok(stubs) = load_json::<StubsData>(&data_dir.join("stubs.json")) {
+            data.stubs = Some(stubs);
+        }
+
         // Load dependency graph
         if let Ok(graph) = load_json::<GraphData>(&data_dir.join("graph.json")) {
             data.graph = Some(graph);
@@ -366,6 +373,9 @@ impl Renderer {
             }
             if let Ok(insight) = load_json::<SmellsInsight>(&insights_dir.join("smells.json")) {
                 data.smells_insight = Some(insight);
+            }
+            if let Ok(insight) = load_json::<StubsInsight>(&insights_dir.join("stubs.json")) {
+                data.stubs_insight = Some(insight);
             }
             if let Ok(insight) = load_json::<GraphInsight>(&insights_dir.join("graph.json")) {
                 data.graph_insight = Some(insight);
@@ -1012,6 +1022,87 @@ mod tests {
         assert!(html.contains("&lt;svg onload=alert(1)>"));
         assert!(html.contains("Normal Author"));
         assert!(html.contains("<strong>bold</strong>"));
+    }
+
+    #[test]
+    fn test_renderer_includes_stubs_section() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let insights_dir = data_dir.path().join("insights");
+        fs::create_dir(&insights_dir).unwrap();
+        write_fixture(
+            &insights_dir.join("stubs.json"),
+            json!({ "section_insight": "Two reachable **todo!()** calls remain." }),
+        );
+        write_fixture(
+            &data_dir.path().join("stubs.json"),
+            json!({
+                "stubs": [{
+                    "file": "src/<img src=x onerror=alert(1)>.rs",
+                    "line": 7,
+                    "lines": [7],
+                    "category": "not_implemented",
+                    "categories": ["not_implemented"],
+                    "severity": "high",
+                    "snippet": "fn f() { todo!() }",
+                    "language": "rust"
+                }],
+                "by_category": { "not_implemented": 1 },
+                "summary": {
+                    "total_stubs": 1,
+                    "high_severity": 1,
+                    "medium_severity": 0,
+                    "low_severity": 0
+                }
+            }),
+        );
+
+        let mut output = Vec::new();
+        Renderer::new()
+            .unwrap()
+            .render(data_dir.path(), &mut output)
+            .unwrap();
+        let html = String::from_utf8(output).unwrap();
+
+        // Section, sidebar link, and stub content render.
+        assert!(html.contains(r#"id=stubs"#) || html.contains(r#"id="stubs""#));
+        assert!(html.contains("Incomplete Code"));
+        assert!(html.contains("Total Stubs"));
+        assert!(html.contains("fn f() { todo!() }"));
+        // Insight narrative renders as markdown.
+        assert!(html.contains("Two reachable"));
+        assert!(html.contains("<strong>todo!()</strong>"));
+        // Malicious file path is HTML-escaped: the tag's angle brackets become
+        // entities, so it renders as inert text rather than a live element.
+        assert!(!html.contains("<img src=x onerror=alert(1)>"));
+        assert!(html.contains("&lt;img src=x onerror=alert(1)>"));
+    }
+
+    #[test]
+    fn test_renderer_stubs_empty_state() {
+        let data_dir = tempfile::tempdir().unwrap();
+        write_fixture(
+            &data_dir.path().join("stubs.json"),
+            json!({
+                "stubs": [],
+                "by_category": {},
+                "summary": {
+                    "total_stubs": 0,
+                    "high_severity": 0,
+                    "medium_severity": 0,
+                    "low_severity": 0
+                }
+            }),
+        );
+
+        let mut output = Vec::new();
+        Renderer::new()
+            .unwrap()
+            .render(data_dir.path(), &mut output)
+            .unwrap();
+        let html = String::from_utf8(output).unwrap();
+
+        assert!(html.contains("Incomplete Code"));
+        assert!(html.contains("No incomplete code detected"));
     }
 
     #[test]

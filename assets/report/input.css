@@ -147,7 +147,30 @@
 
   /* Sidebar navigation (shadcn sidebar/tabs idiom) */
   .report-nav {
-    @apply sticky top-8 hidden h-[calc(100vh-4rem)] w-56 shrink-0 flex-col gap-1 overflow-y-auto pr-2 lg:flex;
+    @apply sticky top-8 hidden h-[calc(100vh-4rem)] w-56 shrink-0 flex-col gap-1 overflow-y-auto overscroll-contain pb-6 pr-2 lg:flex;
+
+    scroll-behavior: smooth;
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+    scrollbar-gutter: stable;
+  }
+  .report-nav::-webkit-scrollbar {
+    width: 8px;
+  }
+  .report-nav::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .report-nav::-webkit-scrollbar-thumb {
+    border-radius: 9999px;
+    background-color: transparent;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  .report-nav:hover::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--border));
+  }
+  .report-nav::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted-foreground) / 0.5);
   }
   .nav-link {
     @apply flex items-center rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground;
@@ -217,13 +240,13 @@
     @apply grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4;
   }
   .metric-tile {
-    @apply rounded-lg border bg-card p-4;
+    @apply flex min-w-0 flex-col justify-center rounded-lg border bg-card p-4;
   }
   .metric-label {
-    @apply text-xs font-medium uppercase tracking-wide text-muted-foreground;
+    @apply mt-1 whitespace-normal text-xs font-medium uppercase leading-tight tracking-wide text-muted-foreground;
   }
   .metric-value {
-    @apply mt-1 text-2xl font-semibold tabular-nums tracking-tight;
+    @apply text-2xl font-semibold tabular-nums leading-none tracking-tight;
   }
 
   /* Score hero */
@@ -264,24 +287,6 @@
   .btn-ghost {
     @apply inline-flex h-9 w-9 items-center justify-center rounded-md border bg-card text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground;
   }
-  .btn-ghost:disabled {
-    @apply cursor-not-allowed opacity-40;
-  }
-  .btn-ghost:disabled:hover {
-    @apply bg-card text-muted-foreground;
-  }
-  .nav-history {
-    @apply inline-flex items-center gap-1;
-  }
-  .nav-history-btn svg {
-    @apply h-4 w-4;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.8;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-  }
-
   .muted { @apply text-muted-foreground; }
   .mono { font-family: var(--font-mono); }
 
@@ -398,7 +403,9 @@
     @apply min-w-[250px] flex-1;
   }
   .hero-metrics {
-    @apply min-w-[260px] flex-1;
+    @apply min-w-[260px] flex-1 gap-3;
+
+    grid-template-columns: repeat(auto-fit, minmax(116px, 1fr));
   }
 
   .grid-2 {
