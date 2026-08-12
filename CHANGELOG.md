@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.28.0](https://github.com/panbanda/omen/compare/omen-v4.27.0...omen-v4.28.0) (2026-08-11)
+
+
+### Features
+
+* **clones:** exclude test code from the duplication metric by default ([#477](https://github.com/panbanda/omen/issues/477)) ([f619bae](https://github.com/panbanda/omen/commit/f619baeba22b2db83412cb3239ee872c32a2e764))
+
 ## [4.27.0](https://github.com/panbanda/omen/compare/omen-v4.26.1...omen-v4.27.0) (2026-08-11)
 
 
