@@ -68,11 +68,20 @@ impl Renderer {
         let data = self.load_data(data_dir)?;
         let roots = &data.metadata.paths;
 
-        let hotspots_json = data
-            .hotspots
-            .as_ref()
-            .map(|h| build_hotspots_json(&h.files, roots));
-        let satd_json = data.satd.as_ref().map(|s| build_satd_json(&s.items, roots));
+        let hotspots_json = data.hotspots.as_ref().map(|h| {
+            let annotations = data
+                .hotspots_insight
+                .as_ref()
+                .map(|i| i.item_annotations.as_slice());
+            build_hotspots_json(&h.files, roots, annotations)
+        });
+        let satd_json = data.satd.as_ref().map(|s| {
+            let annotations = data
+                .satd_insight
+                .as_ref()
+                .map(|i| i.item_annotations.as_slice());
+            build_satd_json(&s.items, roots, annotations)
+        });
         let churn_json = data.churn.as_ref().map(|c| build_churn_json(&c.files));
         let cohesion_json = data
             .cohesion
@@ -770,7 +779,31 @@ fn rows_to_json(rows: &[Vec<String>]) -> Value {
     Value::from_serialize(rows)
 }
 
-fn build_hotspots_json(files: &[HotspotItem], roots: &[String]) -> Value {
+/// Renders an analyst annotation as a verified/unverified badge followed by its
+/// comment, so a reader can tell a confirmed defect from an unchecked comment
+/// marker. `evidence`, when present, is surfaced as a title tooltip.
+fn annotation_cell(comment: &str, verified: bool, evidence: &str) -> String {
+    let (badge_class, status) = if verified {
+        ("badge-success", "Verified")
+    } else {
+        ("badge-warning", "Unverified")
+    };
+    let title = if evidence.is_empty() {
+        String::new()
+    } else {
+        format!(" title=\"{}\"", html_escape(evidence))
+    };
+    format!(
+        "<span class=\"badge {badge_class}\"{title}>{status}</span> {}",
+        html_escape(comment)
+    )
+}
+
+fn build_hotspots_json(
+    files: &[HotspotItem],
+    roots: &[String],
+    annotations: Option<&[FileAnnotation]>,
+) -> Value {
     let rows: Vec<Vec<String>> = files
         .iter()
         .map(|item| {
@@ -778,26 +811,39 @@ fn build_hotspots_json(files: &[HotspotItem], roots: &[String]) -> Value {
             let lang = lang_from_path(&item.path);
             let score = item.hotspot_score;
             let badge = hotspot_badge(score);
-            vec![
+            let mut row = vec![
                 format!("<code>{}</code>", html_escape(&truncate_path(&path, 60))),
                 lang,
                 format!("<span class=\"badge {badge}\">{:.3}</span>", score),
                 item.commits.to_string(),
                 format!("{:.1}", item.avg_cognitive),
-            ]
+            ];
+            if let Some(annotations) = annotations {
+                let note = annotations
+                    .iter()
+                    .find(|a| rel_path_ref(&a.file, roots) == path)
+                    .map(|a| annotation_cell(&a.comment, a.verified, &a.evidence))
+                    .unwrap_or_default();
+                row.push(note);
+            }
+            row
         })
         .collect();
     rows_to_json(&rows)
 }
 
-fn build_satd_json(items: &[SATDItem], roots: &[String]) -> Value {
+fn build_satd_json(
+    items: &[SATDItem],
+    roots: &[String],
+    annotations: Option<&[SATDAnnotation]>,
+) -> Value {
     let rows: Vec<Vec<String>> = items
         .iter()
         .map(|item| {
             let sev_lower = item.severity.to_lowercase();
             let path = rel_path_ref(&item.file, roots);
             let lang = lang_from_path(&item.file);
-            vec![
+            let mut row = vec![
                 format!(
                     "<span class=\"badge {sev_lower}\">{}</span>",
                     html_escape(&item.severity)
@@ -807,7 +853,16 @@ fn build_satd_json(items: &[SATDItem], roots: &[String]) -> Value {
                 lang,
                 item.line.to_string(),
                 html_escape(&item.content),
-            ]
+            ];
+            if let Some(annotations) = annotations {
+                let note = annotations
+                    .iter()
+                    .find(|a| rel_path_ref(&a.file, roots) == path && a.line == item.line)
+                    .map(|a| annotation_cell(&a.comment, a.verified, &a.evidence))
+                    .unwrap_or_default();
+                row.push(note);
+            }
+            row
         })
         .collect();
     rows_to_json(&rows)
@@ -1323,7 +1378,7 @@ mod tests {
             },
         ];
         let roots = vec!["/root".to_string()];
-        let json = tojson_filter(build_hotspots_json(&files, &roots));
+        let json = tojson_filter(build_hotspots_json(&files, &roots, None));
         let parsed: Vec<Vec<String>> = serde_json::from_str(json.as_str().unwrap()).unwrap();
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].len(), 5);
@@ -1332,6 +1387,115 @@ mod tests {
         assert!(parsed[0][2].contains("critical"));
         assert!(parsed[1][2].contains("low"));
         assert_eq!(parsed[0][3], "42");
+    }
+
+    #[test]
+    fn test_build_hotspots_json_with_unverified_annotation() {
+        let files = vec![HotspotItem {
+            path: "/root/src/main.rs".to_string(),
+            hotspot_score: 0.85,
+            commits: 42,
+            avg_cognitive: 12.3,
+        }];
+        let roots = vec!["/root".to_string()];
+        let annotations = vec![FileAnnotation {
+            file: "/root/src/main.rs".to_string(),
+            comment: "TODO says this leaks memory".to_string(),
+            verified: false,
+            evidence: String::new(),
+        }];
+        let json = tojson_filter(build_hotspots_json(&files, &roots, Some(&annotations)));
+        let parsed: Vec<Vec<String>> = serde_json::from_str(json.as_str().unwrap()).unwrap();
+        assert_eq!(parsed[0].len(), 6);
+        assert!(parsed[0][5].contains("badge-warning"));
+        assert!(parsed[0][5].contains("Unverified"));
+        assert!(parsed[0][5].contains("TODO says this leaks memory"));
+    }
+
+    #[test]
+    fn test_build_hotspots_json_with_verified_annotation() {
+        let files = vec![HotspotItem {
+            path: "/root/src/main.rs".to_string(),
+            hotspot_score: 0.85,
+            commits: 42,
+            avg_cognitive: 12.3,
+        }];
+        let roots = vec!["/root".to_string()];
+        let annotations = vec![FileAnnotation {
+            file: "/root/src/main.rs".to_string(),
+            comment: "confirmed unbounded recursion".to_string(),
+            verified: true,
+            evidence: "read main.rs:10-40, recursion has no base case".to_string(),
+        }];
+        let json = tojson_filter(build_hotspots_json(&files, &roots, Some(&annotations)));
+        let parsed: Vec<Vec<String>> = serde_json::from_str(json.as_str().unwrap()).unwrap();
+        assert_eq!(parsed[0].len(), 6);
+        assert!(parsed[0][5].contains("badge-success"));
+        assert!(parsed[0][5].contains("Verified"));
+        assert!(parsed[0][5].contains("read main.rs:10-40, recursion has no base case"));
+    }
+
+    #[test]
+    fn test_build_satd_json_without_annotations() {
+        let items = vec![SATDItem {
+            file: "/root/src/main.rs".to_string(),
+            line: 10,
+            severity: "high".to_string(),
+            category: "defect".to_string(),
+            content: "TODO: fix this".to_string(),
+        }];
+        let roots = vec!["/root".to_string()];
+        let json = tojson_filter(build_satd_json(&items, &roots, None));
+        let parsed: Vec<Vec<String>> = serde_json::from_str(json.as_str().unwrap()).unwrap();
+        assert_eq!(parsed[0].len(), 6);
+    }
+
+    #[test]
+    fn test_build_satd_json_with_unverified_annotation() {
+        let items = vec![SATDItem {
+            file: "/root/src/main.rs".to_string(),
+            line: 10,
+            severity: "high".to_string(),
+            category: "defect".to_string(),
+            content: "TODO: fix this".to_string(),
+        }];
+        let roots = vec!["/root".to_string()];
+        let annotations = vec![SATDAnnotation {
+            file: "/root/src/main.rs".to_string(),
+            line: 10,
+            comment: "restates the TODO".to_string(),
+            verified: false,
+            evidence: String::new(),
+        }];
+        let json = tojson_filter(build_satd_json(&items, &roots, Some(&annotations)));
+        let parsed: Vec<Vec<String>> = serde_json::from_str(json.as_str().unwrap()).unwrap();
+        assert_eq!(parsed[0].len(), 7);
+        assert!(parsed[0][6].contains("badge-warning"));
+        assert!(parsed[0][6].contains("Unverified"));
+        assert!(parsed[0][6].contains("restates the TODO"));
+    }
+
+    #[test]
+    fn test_build_satd_json_annotation_line_mismatch_not_applied() {
+        let items = vec![SATDItem {
+            file: "/root/src/main.rs".to_string(),
+            line: 10,
+            severity: "high".to_string(),
+            category: "defect".to_string(),
+            content: "TODO: fix this".to_string(),
+        }];
+        let roots = vec!["/root".to_string()];
+        let annotations = vec![SATDAnnotation {
+            file: "/root/src/main.rs".to_string(),
+            line: 99,
+            comment: "unrelated".to_string(),
+            verified: true,
+            evidence: String::new(),
+        }];
+        let json = tojson_filter(build_satd_json(&items, &roots, Some(&annotations)));
+        let parsed: Vec<Vec<String>> = serde_json::from_str(json.as_str().unwrap()).unwrap();
+        assert_eq!(parsed[0].len(), 7);
+        assert_eq!(parsed[0][6], "");
     }
 
     #[test]

@@ -7,6 +7,12 @@ description: Analyzes architectural smells to identify structural issues like cy
 
 Analyze architectural smell data to find structural design problems.
 
+## Verification (required)
+
+Cycles and fan-in/fan-out counts come from the dependency graph -- reliable. Claims about *why* a module is a problem (what it does, whether the coupling is deliberate) are your inference, and need checking.
+
+Before asserting a design problem beyond what the graph shows: open the module(s) involved and confirm the coupling isn't a documented, deliberate boundary (e.g., a shared types/interface module is supposed to have high fan-in). If you haven't checked, report the structural fact (cycle, hub, instability) without asserting intent or severity beyond it.
+
 ## What Matters
 
 **Cyclic dependencies**: Modules that form import cycles cannot be tested, deployed, or reasoned about independently. These are the highest-priority architectural issue.

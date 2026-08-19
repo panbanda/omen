@@ -670,6 +670,13 @@ pub struct TdgFile {
 pub struct Recommendation {
     pub title: String,
     pub description: String,
+    /// Whether the analyst opened the cited source and confirmed the claim
+    /// describes current behavior, rather than restating a comment.
+    #[serde(default)]
+    pub verified: bool,
+    /// What the analyst checked to reach the verified conclusion.
+    #[serde(default)]
+    pub evidence: String,
 }
 
 /// Recommendations groups recommendations by priority.
@@ -760,6 +767,13 @@ pub struct ComponentsInsight {
 pub struct FileAnnotation {
     pub file: String,
     pub comment: String,
+    /// Whether the analyst opened the cited source and confirmed the claim
+    /// describes current behavior, rather than restating a comment.
+    #[serde(default)]
+    pub verified: bool,
+    /// What the analyst checked to reach the verified conclusion.
+    #[serde(default)]
+    pub evidence: String,
 }
 
 /// HotspotsInsight contains hotspot analysis.
@@ -787,6 +801,13 @@ pub struct SATDAnnotation {
     #[serde(default)]
     pub line: i32,
     pub comment: String,
+    /// Whether the analyst opened the cited source and confirmed the claim
+    /// describes current behavior, rather than restating a comment.
+    #[serde(default)]
+    pub verified: bool,
+    /// What the analyst checked to reach the verified conclusion.
+    #[serde(default)]
+    pub evidence: String,
 }
 
 /// SATDInsight contains SATD analysis.
@@ -1286,5 +1307,85 @@ mod tests {
         let flags: FlagsData = serde_json::from_str(json).unwrap();
         assert_eq!(flags.flags[0].priority.level, "");
         assert_eq!(flags.flags[0].priority.score, 0.0);
+    }
+
+    #[test]
+    fn test_satd_annotation_deserialize_verified_defaults_when_missing() {
+        let json = r#"{
+            "file": "src/foo.rs",
+            "line": 12,
+            "comment": "TODO: fix this"
+        }"#;
+        let annotation: SATDAnnotation = serde_json::from_str(json).unwrap();
+        assert!(!annotation.verified);
+        assert_eq!(annotation.evidence, "");
+    }
+
+    #[test]
+    fn test_satd_annotation_deserialize_verified_present() {
+        let json = r#"{
+            "file": "src/foo.rs",
+            "line": 12,
+            "comment": "TODO: fix this",
+            "verified": true,
+            "evidence": "opened src/foo.rs:12 and confirmed the branch is unreachable"
+        }"#;
+        let annotation: SATDAnnotation = serde_json::from_str(json).unwrap();
+        assert!(annotation.verified);
+        assert_eq!(
+            annotation.evidence,
+            "opened src/foo.rs:12 and confirmed the branch is unreachable"
+        );
+    }
+
+    #[test]
+    fn test_file_annotation_deserialize_verified_defaults_when_missing() {
+        let json = r#"{
+            "file": "src/bar.rs",
+            "comment": "high churn"
+        }"#;
+        let annotation: FileAnnotation = serde_json::from_str(json).unwrap();
+        assert!(!annotation.verified);
+        assert_eq!(annotation.evidence, "");
+    }
+
+    #[test]
+    fn test_file_annotation_deserialize_verified_present() {
+        let json = r#"{
+            "file": "src/bar.rs",
+            "comment": "high churn",
+            "verified": true,
+            "evidence": "reviewed git log for src/bar.rs"
+        }"#;
+        let annotation: FileAnnotation = serde_json::from_str(json).unwrap();
+        assert!(annotation.verified);
+        assert_eq!(annotation.evidence, "reviewed git log for src/bar.rs");
+    }
+
+    #[test]
+    fn test_recommendation_deserialize_verified_defaults_when_missing() {
+        let json = r#"{
+            "title": "Fix null check",
+            "description": "Add a null check before dereferencing"
+        }"#;
+        let recommendation: Recommendation = serde_json::from_str(json).unwrap();
+        assert!(!recommendation.verified);
+        assert_eq!(recommendation.evidence, "");
+    }
+
+    #[test]
+    fn test_recommendation_deserialize_verified_present() {
+        let json = r#"{
+            "title": "Fix null check",
+            "description": "Add a null check before dereferencing",
+            "verified": true,
+            "evidence": "confirmed missing null check at src/baz.rs:42"
+        }"#;
+        let recommendation: Recommendation = serde_json::from_str(json).unwrap();
+        assert!(recommendation.verified);
+        assert_eq!(
+            recommendation.evidence,
+            "confirmed missing null check at src/baz.rs:42"
+        );
     }
 }

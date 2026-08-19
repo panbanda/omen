@@ -355,7 +355,7 @@
                     </div>
                     {% for item in Summary.recommendations.high_priority %}
                     <div class="recommendation-item">
-                        <strong>{{ item.title }}</strong>
+                        <strong>{{ item.title }}</strong>{% if not item.verified %} <span class="badge badge-warning tooltip" data-tooltip="{% if item.evidence %}{{ item.evidence }}{% else %}Derived from a comment or heuristic; not confirmed by reading the code.{% endif %}">Unverified</span>{% endif %}
                         <div>{{ item.description | markdown }}</div>
                     </div>
                     {% endfor %}
@@ -370,7 +370,7 @@
                     </div>
                     {% for item in Summary.recommendations.medium_priority %}
                     <div class="recommendation-item">
-                        <strong>{{ item.title }}</strong>
+                        <strong>{{ item.title }}</strong>{% if not item.verified %} <span class="badge badge-warning tooltip" data-tooltip="{% if item.evidence %}{{ item.evidence }}{% else %}Derived from a comment or heuristic; not confirmed by reading the code.{% endif %}">Unverified</span>{% endif %}
                         <div>{{ item.description | markdown }}</div>
                     </div>
                     {% endfor %}
@@ -385,7 +385,7 @@
                     </div>
                     {% for item in Summary.recommendations.ongoing %}
                     <div class="recommendation-item">
-                        <strong>{{ item.title }}</strong>
+                        <strong>{{ item.title }}</strong>{% if not item.verified %} <span class="badge badge-warning tooltip" data-tooltip="{% if item.evidence %}{{ item.evidence }}{% else %}Derived from a comment or heuristic; not confirmed by reading the code.{% endif %}">Unverified</span>{% endif %}
                         <div>{{ item.description | markdown }}</div>
                     </div>
                     {% endfor %}
@@ -458,6 +458,9 @@
                             <th class="num"><span class="tooltip" data-tooltip="Combined score of churn frequency and code complexity. Higher risk = more likely to have bugs.">Risk</span></th>
                             <th class="num"><span class="tooltip" data-tooltip="Number of times this file was modified in the analysis period.">Changes</span></th>
                             <th class="num"><span class="tooltip" data-tooltip="Cyclomatic complexity - number of independent paths through the code.">Complexity</span></th>
+                            {% if HotspotsInsight and HotspotsInsight.item_annotations %}
+                            <th><span class="tooltip" data-tooltip="Analyst note on this file. Verified means the analyst opened the source and confirmed the claim; unverified means it is derived from a comment or heuristic and has not been checked.">Analyst Note</span></th>
+                            {% endif %}
                         </tr>
                     </thead>
                 </table>
@@ -732,6 +735,9 @@
                             <th>Lang</th>
                             <th class="num">Line</th>
                             <th>Comment</th>
+                            {% if SATDInsight and SATDInsight.item_annotations %}
+                            <th><span class="tooltip" data-tooltip="Analyst note on this item. Verified means the analyst opened the source and confirmed the claim; unverified means it is derived from the comment text and has not been checked.">Analyst Note</span></th>
+                            {% endif %}
                         </tr>
                     </thead>
                 </table>
