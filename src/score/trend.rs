@@ -252,7 +252,11 @@ fn sample_times(
     }
 
     if let Some(n) = samples {
-        let n = n.max(2) as i64;
+        // A single sample is the latest state rather than a degenerate trend.
+        if n <= 1 {
+            return vec![end];
+        }
+        let n = n as i64;
         return (0..n)
             .map(|i| start + Duration::seconds(total_seconds * i / (n - 1)))
             .collect();
@@ -847,6 +851,23 @@ fn complex(x: i32) -> i32 {
         assert_eq!(
             times.iter().map(|t| t.timestamp()).collect::<Vec<_>>(),
             vec![0, 7 * day, 10 * day]
+        );
+    }
+
+    #[test]
+    fn test_sample_times_single_sample() {
+        let day = 86_400;
+        let start = DateTime::from_timestamp(0, 0).unwrap();
+        let end = DateTime::from_timestamp(100 * day, 0).unwrap();
+
+        // A single sample is the latest state, not a two-point trend.
+        assert_eq!(
+            sample_times(start, end, Some(1), TrendPeriod::Monthly),
+            vec![end]
+        );
+        assert_eq!(
+            sample_times(start, end, Some(0), TrendPeriod::Monthly),
+            vec![end]
         );
     }
 
