@@ -33,20 +33,6 @@ pub fn analyze_trend(
     // Parse the "since" parameter to determine how far back to go
     let start_time = parse_since_to_datetime(since, now)?;
 
-    // If an explicit sample count is given, divide the range into evenly-spaced
-    // intervals. Otherwise fall back to the period-based fixed interval.
-    let interval = if let Some(n) = samples {
-        let n = n.max(2);
-        let total_seconds = (now - start_time).num_seconds();
-        Duration::seconds(total_seconds / (n as i64 - 1))
-    } else {
-        match period {
-            TrendPeriod::Daily => Duration::days(1),
-            TrendPeriod::Weekly => Duration::days(7),
-            TrendPeriod::Monthly => Duration::days(30),
-        }
-    };
-
     // Get commits in the time range
     let since_arg = if crate::git::is_since_all(since) {
         None
@@ -54,55 +40,33 @@ pub fn analyze_trend(
         Some(since)
     };
     let commits = repo.log(since_arg, None, None)?;
-    if commits.is_empty() {
+
+    // Sample across the span the repository actually covers. Using `now` as the
+    // window end would stretch the grid over commit-less time (for `--since all`
+    // that means back to the epoch), leaving only a handful of sample points
+    // landing on real commits.
+    let Some((window_start, window_end)) = trend_window(&commits, start_time, now) else {
         return Ok(TrendData::default());
-    }
+    };
 
     // Build list of commits to analyze at each sample point
     let mut sample_commits: Vec<(DateTime<Utc>, String)> = Vec::new();
-    let mut current_time = start_time;
 
-    while current_time <= now {
-        if let Some(commit) = find_commit_at_time(&commits, current_time) {
+    for sample_time in sample_times(window_start, window_end, samples, period) {
+        if let Some(commit) = find_commit_at_time(&commits, sample_time) {
             // Avoid duplicate commits (same commit for multiple time points)
             if sample_commits
                 .last()
                 .map(|(_, sha)| sha != &commit.sha)
                 .unwrap_or(true)
             {
-                sample_commits.push((current_time, commit.sha.clone()));
+                sample_commits.push((sample_time, commit.sha.clone()));
             }
         }
-        current_time += interval;
     }
 
     // Analyze commits in parallel using worktrees
-    let points = analyze_commits_parallel(path, config, &sample_commits, &commits)?;
-
-    // Always include the current HEAD if not already included
-    let mut final_points = points;
-    let head_date = now.format("%Y-%m-%d").to_string();
-    if final_points.last().map(|p| &p.date) != Some(&head_date) {
-        if let Ok(score_data) = analyze_current(path, config) {
-            let last_ts = final_points
-                .last()
-                .and_then(|p| chrono::NaiveDate::parse_from_str(&p.date, "%Y-%m-%d").ok())
-                .and_then(|d| d.and_hms_opt(0, 0, 0))
-                .map(|dt| dt.and_utc().timestamp())
-                .unwrap_or(0);
-            let head_commits = collect_commits_in_range(&commits, last_ts, now.timestamp());
-            final_points.push(TrendPoint {
-                date: head_date,
-                score: score_data.overall_score as i32,
-                components: score_data
-                    .components
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.score as i32))
-                    .collect(),
-                notable_commits: head_commits,
-            });
-        }
-    }
+    let final_points = analyze_commits_parallel(path, config, &sample_commits, &commits)?;
 
     // Calculate linear regression for overall score
     let (slope, intercept, r_squared) = if final_points.len() >= 2 {
@@ -246,6 +210,70 @@ pub fn default_sample_count(days: f64) -> usize {
     (count.round() as usize).max(2)
 }
 
+/// Determine the time window to sample over: bounded below by `since` (or the
+/// first commit, whichever is later) and above by the most recent commit.
+///
+/// The upper bound is the last commit rather than `now` so a repository whose
+/// history has gone quiet does not get a trailing stretch of empty samples, nor
+/// a phantom final point dated today.
+fn trend_window(
+    commits: &[Commit],
+    since: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+    let first = commits.iter().map(|c| c.timestamp).min()?;
+    let last = commits.iter().map(|c| c.timestamp).max()?;
+
+    let start = DateTime::from_timestamp(first, 0)?.max(since);
+    let end = DateTime::from_timestamp(last, 0)?.min(now);
+
+    if end < start {
+        return None;
+    }
+    Some((start, end))
+}
+
+/// Build the sample grid across `[start, end]`.
+///
+/// With an explicit sample count the grid has exactly that many points, spaced
+/// evenly, with the first and last landing on the window bounds. Offsets are
+/// computed from the index rather than accumulated so integer truncation cannot
+/// drift the final point away from `end`. Without one, points are spaced by the
+/// requested period, with `end` always included as the final point.
+fn sample_times(
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    samples: Option<usize>,
+    period: TrendPeriod,
+) -> Vec<DateTime<Utc>> {
+    let total_seconds = (end - start).num_seconds();
+    if total_seconds <= 0 {
+        return vec![start];
+    }
+
+    if let Some(n) = samples {
+        let n = n.max(2) as i64;
+        return (0..n)
+            .map(|i| start + Duration::seconds(total_seconds * i / (n - 1)))
+            .collect();
+    }
+
+    let interval = match period {
+        TrendPeriod::Daily => Duration::days(1),
+        TrendPeriod::Weekly => Duration::days(7),
+        TrendPeriod::Monthly => Duration::days(30),
+    };
+
+    let mut times = Vec::new();
+    let mut current = start;
+    while current < end {
+        times.push(current);
+        current += interval;
+    }
+    times.push(end);
+    times
+}
+
 /// Parse "since" string (like "3m", "6m", "1y", "all") to a DateTime.
 fn parse_since_to_datetime(since: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>> {
     if crate::git::is_since_all(since) {
@@ -290,14 +318,6 @@ fn find_commit_at_time(
         .iter()
         .filter(|c| c.timestamp <= target_ts)
         .min_by_key(|c| (target_ts - c.timestamp).abs())
-}
-
-/// Analyze the current working directory.
-fn analyze_current(path: &Path, config: &Config) -> Result<super::Analysis> {
-    let file_set = FileSet::from_path(path, config)?;
-    let ctx = AnalysisContext::new(&file_set, config, Some(path));
-    let analyzer = ScoreAnalyzer::new();
-    analyzer.analyze(&ctx)
 }
 
 /// Analyze code at a specific git tree (commit) without filesystem checkout.
@@ -738,6 +758,102 @@ fn complex(x: i32) -> i32 {
         // Score should be between 0 and 100
         assert!(analysis.overall_score >= 0.0);
         assert!(analysis.overall_score <= 100.0);
+    }
+
+    fn commit_at(sha: &str, timestamp: i64) -> Commit {
+        Commit {
+            sha: sha.to_string(),
+            author: "A".to_string(),
+            email: "a@test.com".to_string(),
+            timestamp,
+            message: format!("{sha} message"),
+            files: vec![],
+        }
+    }
+
+    #[test]
+    fn test_trend_window_clamps_to_commit_range() {
+        let day = 86_400;
+        let commits = vec![
+            commit_at("newest", 100 * day),
+            commit_at("middle", 50 * day),
+            commit_at("oldest", 10 * day),
+        ];
+
+        // "since all" starts at the epoch; the window must start at the first
+        // commit and end at the last commit, not at wall-clock now.
+        let epoch = DateTime::from_timestamp(0, 0).unwrap();
+        let now = DateTime::from_timestamp(400 * day, 0).unwrap();
+        let (start, end) = trend_window(&commits, epoch, now).unwrap();
+        assert_eq!(start.timestamp(), 10 * day);
+        assert_eq!(end.timestamp(), 100 * day);
+    }
+
+    #[test]
+    fn test_trend_window_respects_later_since() {
+        let day = 86_400;
+        let commits = vec![
+            commit_at("newest", 100 * day),
+            commit_at("oldest", 10 * day),
+        ];
+
+        let since = DateTime::from_timestamp(40 * day, 0).unwrap();
+        let now = DateTime::from_timestamp(400 * day, 0).unwrap();
+        let (start, end) = trend_window(&commits, since, now).unwrap();
+        assert_eq!(start.timestamp(), 40 * day);
+        assert_eq!(end.timestamp(), 100 * day);
+    }
+
+    #[test]
+    fn test_trend_window_empty_commits() {
+        let now = Utc::now();
+        assert!(trend_window(&[], now - Duration::days(10), now).is_none());
+    }
+
+    #[test]
+    fn test_sample_times_returns_requested_count() {
+        let day = 86_400;
+        let start = DateTime::from_timestamp(0, 0).unwrap();
+        let end = DateTime::from_timestamp(100 * day, 0).unwrap();
+
+        for n in [2usize, 5, 20, 50, 100] {
+            let times = sample_times(start, end, Some(n), TrendPeriod::Monthly);
+            assert_eq!(times.len(), n, "sample count {n}");
+            assert_eq!(times[0], start);
+            assert_eq!(*times.last().unwrap(), end, "last sample for {n}");
+        }
+    }
+
+    #[test]
+    fn test_sample_times_evenly_spaced() {
+        let day = 86_400;
+        let start = DateTime::from_timestamp(0, 0).unwrap();
+        let end = DateTime::from_timestamp(100 * day, 0).unwrap();
+        let times = sample_times(start, end, Some(5), TrendPeriod::Monthly);
+        let expected: Vec<i64> = vec![0, 25 * day, 50 * day, 75 * day, 100 * day];
+        assert_eq!(
+            times.iter().map(|t| t.timestamp()).collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_sample_times_period_mode_ends_at_window_end() {
+        let day = 86_400;
+        let start = DateTime::from_timestamp(0, 0).unwrap();
+        let end = DateTime::from_timestamp(10 * day, 0).unwrap();
+        let times = sample_times(start, end, None, TrendPeriod::Weekly);
+        // Weekly steps: day 0, day 7, then the window end at day 10.
+        assert_eq!(
+            times.iter().map(|t| t.timestamp()).collect::<Vec<_>>(),
+            vec![0, 7 * day, 10 * day]
+        );
+    }
+
+    #[test]
+    fn test_sample_times_degenerate_window() {
+        let t = DateTime::from_timestamp(500, 0).unwrap();
+        assert_eq!(sample_times(t, t, Some(10), TrendPeriod::Monthly), vec![t]);
     }
 
     #[test]
