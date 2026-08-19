@@ -7,6 +7,10 @@ description: Analyzes feature flags to identify stale flags and cleanup opportun
 
 Analyze feature flag data to find cleanup opportunities.
 
+## Verification (required)
+
+"Security-sensitive code" is your inference from a flag's name or file path, not a fact the analyzer gives you. Before calling a flag high-risk on that basis, open the files that reference it and confirm what they actually do. If you haven't checked, describe the flag's age and reference count without asserting what the guarded code does.
+
 ## What Matters
 
 **Age = risk**:

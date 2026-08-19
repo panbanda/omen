@@ -20,21 +20,21 @@ Use the Task tool to spawn all 13 agents simultaneously. Each agent reads its da
 
 **Use the hotspot-analyst agent** to analyze `<dir>/hotspots.json` and write `<dir>/insights/hotspots.json`:
 ```json
-{"section_insight": "string", "item_annotations": [{"file": "path", "comment": "string"}]}
+{"section_insight": "string", "item_annotations": [{"file": "path", "comment": "string", "verified": false, "evidence": "string"}]}
 ```
 
 ---
 
 **Use the satd-analyst agent** to analyze `<dir>/satd.json` and write `<dir>/insights/satd.json`:
 ```json
-{"section_insight": "string", "item_annotations": [{"file": "path", "line": 0, "comment": "string"}]}
+{"section_insight": "string", "item_annotations": [{"file": "path", "line": 0, "comment": "string", "verified": false, "evidence": "string"}]}
 ```
 
 ---
 
 **Use the ownership-analyst agent** to analyze `<dir>/ownership.json` and write `<dir>/insights/ownership.json`:
 ```json
-{"section_insight": "string", "item_annotations": [{"file": "path", "comment": "string"}]}
+{"section_insight": "string", "item_annotations": [{"file": "path", "comment": "string", "verified": false, "evidence": "string"}]}
 ```
 
 ---
@@ -115,5 +115,5 @@ Wait for all 13 analysts to finish, then:
 
 **Use the summary-analyst agent** to read all `<dir>/insights/*.json` plus `<dir>/score.json` and write `<dir>/insights/summary.json`:
 ```json
-{"executive_summary": "markdown", "key_findings": ["string"], "recommendations": {"high_priority": [{"title": "string", "description": "string"}], "medium_priority": [], "ongoing": []}}
+{"executive_summary": "markdown", "key_findings": ["string"], "recommendations": {"high_priority": [{"title": "string", "description": "string", "verified": false, "evidence": "string"}], "medium_priority": [], "ongoing": []}}
 ```

@@ -15,6 +15,10 @@ Analyze TDG data to find files where debt is compounding across dimensions.
 
 **Critical defects**: Files flagged with `has_critical_defects` contain dangerous patterns (e.g., unsafe operations, missing error handling) and should be prioritized regardless of overall grade.
 
+## Verification
+
+`has_critical_defects` and the component scores are analyzer-computed, not inferred -- you can cite them directly. If you name the specific pattern involved (e.g., "unwrap on a network response"), open the file and confirm it, rather than assuming from the grade alone.
+
 ## What to Report
 
 - Grade distribution and what it says about overall codebase health
