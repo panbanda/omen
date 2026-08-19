@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.3](https://github.com/panbanda/omen/compare/omen-reporting-v2.0.2...omen-reporting-v2.0.3) (2026-08-19)
+
+
+### Bug Fixes
+
+* **reporting:** require analysts to verify claims against source ([#492](https://github.com/panbanda/omen/issues/492)) ([2597c85](https://github.com/panbanda/omen/commit/2597c85b0312f0983dbcc47984731c3977155e1e)), closes [#490](https://github.com/panbanda/omen/issues/490)
+
 ## [2.0.2](https://github.com/panbanda/omen/compare/omen-reporting-v2.0.1...omen-reporting-v2.0.2) (2026-08-11)
 
 

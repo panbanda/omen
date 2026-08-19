@@ -1,6 +1,6 @@
 {
-  ".": "4.28.1",
+  ".": "4.28.2",
   "plugins/development": "4.2.1",
-  "plugins/reporting": "2.0.2",
+  "plugins/reporting": "2.0.3",
   ".claude-plugin": "8.0.0"
 }
