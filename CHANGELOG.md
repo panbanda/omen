@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.28.2](https://github.com/panbanda/omen/compare/omen-v4.28.1...omen-v4.28.2) (2026-08-19)
+
+
+### Bug Fixes
+
+* **reporting:** require analysts to verify claims against source ([#492](https://github.com/panbanda/omen/issues/492)) ([2597c85](https://github.com/panbanda/omen/commit/2597c85b0312f0983dbcc47984731c3977155e1e)), closes [#490](https://github.com/panbanda/omen/issues/490)
+* **score:** sample trend across actual commit range, not epoch-to-now ([#489](https://github.com/panbanda/omen/issues/489)) ([6cdf6c7](https://github.com/panbanda/omen/commit/6cdf6c7f1387a69b056e0ae7084b1631a6231f3e))
+
 ## [4.28.1](https://github.com/panbanda/omen/compare/omen-v4.28.0...omen-v4.28.1) (2026-08-12)
 
 
