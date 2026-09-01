@@ -170,6 +170,13 @@ impl AnalyzerTrait for Analyzer {
         let mut reachable: HashSet<String> = HashSet::new();
         let mut queue: Vec<String> = Vec::new();
 
+        // Module scope is itself an entry point: its code runs on load.
+        for caller in call_graph.keys() {
+            if caller.ends_with(&format!("::{MODULE_SCOPE}")) && reachable.insert(caller.clone()) {
+                queue.push(caller.clone());
+            }
+        }
+
         // Identify entry points using qualified names
         for (qualified_name, def) in &all_definitions {
             // Extract simple name from qualified name for entry point check
@@ -891,6 +898,11 @@ fn extract_attribute_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option
     None
 }
 
+/// Caller recorded for calls made at module scope rather than inside a
+/// function. Not a valid identifier in any supported language, so it can
+/// never collide with a real definition.
+const MODULE_SCOPE: &str = "<module>";
+
 /// Walk AST to collect identifier usages and function calls.
 /// Uses iterative traversal with a single TreeCursor for performance.
 fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode) {
@@ -924,7 +936,15 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
             }
         }
 
-        let current_function = scopes.last().map(|(_, name)| name.clone());
+        // Code at module scope runs when the file is loaded, so calls made
+        // there have a real caller -- `export const W = memo(Internal)`
+        // genuinely reaches `Internal`.
+        let current_function = Some(
+            scopes
+                .last()
+                .map(|(_, name)| name.clone())
+                .unwrap_or_else(|| MODULE_SCOPE.to_string()),
+        );
 
         // Collect usages from identifiers (excluding definitions)
         if (kind == "identifier" || kind == "type_identifier") && !is_definition_context(&node) {
@@ -2717,6 +2737,30 @@ mod arrow_function_tests {
             .find(|call| call.callee == "helper")
             .expect("call to helper should be recorded");
         assert_eq!(call.caller, "a");
+    }
+
+    #[test]
+    fn test_module_scope_calls_have_a_caller() {
+        // `export const W = memo(Internal)` genuinely reaches `Internal`.
+        // Without a module-scope caller the reference records no call edge and
+        // `Internal` looks unreachable -- the React `memo` wrapper pattern.
+        let fdc = js_file_data("const Internal = () => {};\nexport const W = memo(Internal);\n");
+        let call = fdc
+            .calls
+            .iter()
+            .find(|call| call.callee == "memo")
+            .expect("module-scope call should be recorded");
+        assert_eq!(call.caller, MODULE_SCOPE);
+        assert!(
+            fdc.calls
+                .iter()
+                .any(|call| call.callee == "Internal" && call.caller == MODULE_SCOPE),
+            "the function-as-value reference should reach Internal, got {:?}",
+            fdc.calls
+                .iter()
+                .map(|c| (&c.caller, &c.callee))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
