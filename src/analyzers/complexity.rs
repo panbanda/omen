@@ -342,6 +342,13 @@ fn analyze_parse_result(result: &ParseResult) -> FileResult {
     file_result
 }
 
+/// Whether `node`'s body is itself a nested function scope rather than a
+/// block of statements belonging to `node`.
+fn body_is_a_nested_function(node: &tree_sitter::Node<'_>, lang: Language) -> bool {
+    node.child_by_field_name("body")
+        .is_some_and(|body| get_nested_scope_node_types(lang).contains(&body.kind()))
+}
+
 /// Analyze complexity for a single function from its parse result.
 pub fn analyze_function_complexity(func: &parser::FunctionNode, result: &ParseResult) -> Metrics {
     let root = result.root_node();
@@ -349,15 +356,22 @@ pub fn analyze_function_complexity(func: &parser::FunctionNode, result: &ParseRe
     // Find the function node in the tree
     let func_node = find_function_node(&root, func, result.language);
 
-    let (cyclomatic, cognitive, max_nesting) = if let Some(node) = func_node {
-        let body = node.child_by_field_name("body").unwrap_or(node);
-        (
-            1 + count_decision_points(&body, &result.source, result.language),
-            calculate_cognitive_complexity(&body, &result.source, result.language, 0),
-            calculate_max_nesting(&body, result.language, 0),
-        )
-    } else {
-        (1, 0, 0)
+    let (cyclomatic, cognitive, max_nesting) = match func_node {
+        // A concise arrow body can itself be another function, as in
+        // `a => b => ...`. The walkers exempt their own starting node from
+        // the nested-scope check, so handing them that inner function would
+        // make the outer one absorb all of its complexity. The inner
+        // function is extracted and measured in its own right.
+        Some(node) if body_is_a_nested_function(&node, result.language) => (1, 0, 0),
+        Some(node) => {
+            let body = node.child_by_field_name("body").unwrap_or(node);
+            (
+                1 + count_decision_points(&body, &result.source, result.language),
+                calculate_cognitive_complexity(&body, &result.source, result.language, 0),
+                calculate_max_nesting(&body, result.language, 0),
+            )
+        }
+        None => (1, 0, 0),
     };
 
     Metrics {
@@ -1764,11 +1778,12 @@ function outer(items, flag) {
         );
 
         // The arrow function is extracted separately and must report only
-        // its own single `if`.
+        // its own single `if`. It has no binding, so it is anonymous rather
+        // than named after its parameter.
         let arrow = result
             .functions
             .iter()
-            .find(|f| f.name != "outer")
+            .find(|f| f.name.starts_with("<anonymous>:"))
             .expect("arrow callback should be extracted as its own function");
         assert_eq!(
             arrow.metrics.cyclomatic, 2,
@@ -1879,5 +1894,140 @@ end
             m.metrics.cyclomatic, 1,
             "m has no branches of its own (inner's if must not leak into m either)"
         );
+    }
+
+    // --- Issue #495: arrow functions must not be dropped -------------------
+
+    /// Every JS-family language and a file extension for each.
+    const JS_FAMILY: &[(Language, &str)] = &[
+        (Language::JavaScript, "js"),
+        (Language::TypeScript, "ts"),
+        (Language::Tsx, "tsx"),
+        (Language::Jsx, "jsx"),
+    ];
+
+    #[test]
+    fn test_arrow_functions_are_counted_in_every_shape() {
+        // The reproduction table from issue #495: each of these declares one
+        // function with one `if`, so each must report cognitive 1 -- and the
+        // single-unparenthesised-parameter form must not be named after its
+        // own parameter.
+        let cases: &[(&str, &str)] = &[
+            ("const f = a => { if (a) {} return a; };", "f"),
+            ("const f = (a) => { if (a) {} return a; };", "f"),
+            ("const f = () => { if (globalThis) {} return 1; };", "f"),
+            ("const f = ({ a }) => { if (a) {} return a; };", "f"),
+        ];
+
+        for (lang, ext) in JS_FAMILY {
+            for (code, expected_name) in cases {
+                let result = parse_and_analyze(code.as_bytes(), *lang, &format!("t.{ext}"));
+                assert_eq!(
+                    result.functions.len(),
+                    1,
+                    "{lang:?}: {code:?} -> {:?}",
+                    result.functions.iter().map(|f| &f.name).collect::<Vec<_>>()
+                );
+                assert_eq!(
+                    result.functions[0].name, *expected_name,
+                    "{lang:?}: {code:?}"
+                );
+                assert_eq!(result.total_cognitive, 1, "{lang:?}: {code:?}");
+            }
+        }
+
+        // A destructuring parameter binds no single name, so the arrow is
+        // anonymous -- but its complexity is still reported.
+        let typed = "const f = (a: number) => { if (a) {} return a; };";
+        for (lang, ext) in [(Language::TypeScript, "ts"), (Language::Tsx, "tsx")] {
+            let result = parse_and_analyze(typed.as_bytes(), lang, &format!("t.{ext}"));
+            assert_eq!(result.functions.len(), 1, "{lang:?}");
+            assert_eq!(result.functions[0].name, "f", "{lang:?}");
+            assert_eq!(result.total_cognitive, 1, "{lang:?}");
+        }
+    }
+
+    #[test]
+    fn test_arrow_callback_complexity_is_attributed_to_the_arrow() {
+        // Both callback forms from the issue: `outer` keeps its own
+        // complexity and the callback reports its own, in both cases.
+        for code in [
+            "export function outer(xs) { return xs.map(x => { if (x) {} return x; }); }",
+            "export function outer(xs) { return xs.map((x) => { if (x) {} return x; }); }",
+        ] {
+            for (lang, ext) in JS_FAMILY {
+                let result = parse_and_analyze(code.as_bytes(), *lang, &format!("t.{ext}"));
+                assert_eq!(result.functions.len(), 2, "{lang:?}: {code:?}");
+                assert_eq!(find_fn(&result, "outer").metrics.cognitive, 0, "{lang:?}");
+                let callback = result
+                    .functions
+                    .iter()
+                    .find(|f| f.name.starts_with("<anonymous>:"))
+                    .unwrap_or_else(|| panic!("{lang:?}: no anonymous callback in {code:?}"));
+                assert_eq!(callback.metrics.cognitive, 1, "{lang:?}: {code:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_file_with_four_functions_reports_four() {
+        // The issue's summary case: an arrow, a declaration, a class method
+        // and a default export.
+        let code = br#"
+const named = (a) => { if (a) {} return a; };
+function plain(a) { if (a) {} return a; }
+class K { m(a) { if (a) {} return a; } }
+export default function anon(a) { if (a) {} return a; }
+"#;
+        let result = parse_and_analyze(code, Language::TypeScript, "t.ts");
+        assert_eq!(
+            result.functions.len(),
+            4,
+            "got {:?}",
+            result.functions.iter().map(|f| &f.name).collect::<Vec<_>>()
+        );
+        assert_eq!(result.total_cognitive, 4);
+        for name in ["named", "plain", "m", "anon"] {
+            assert_eq!(find_fn(&result, name).metrics.cognitive, 1, "{name}");
+        }
+    }
+
+    #[test]
+    fn test_curried_arrow_does_not_absorb_the_inner_arrow() {
+        // The outer arrow's body *is* the inner arrow, so the walkers must
+        // treat it as a nested scope boundary rather than as their own root.
+        let code = b"const c = a => b => { if (a) { if (b) {} } return a; };";
+        for (lang, ext) in JS_FAMILY {
+            let result = parse_and_analyze(code, *lang, &format!("t.{ext}"));
+            assert_eq!(result.functions.len(), 2, "{lang:?}");
+
+            let outer = find_fn(&result, "c");
+            assert_eq!(outer.metrics.cyclomatic, 1, "{lang:?}: outer cyclomatic");
+            assert_eq!(outer.metrics.cognitive, 0, "{lang:?}: outer cognitive");
+            assert_eq!(outer.metrics.max_nesting, 0, "{lang:?}: outer nesting");
+
+            let inner = result
+                .functions
+                .iter()
+                .find(|f| f.name.starts_with("<anonymous>:"))
+                .expect("inner arrow should be extracted");
+            assert_eq!(inner.metrics.cyclomatic, 3, "{lang:?}: inner cyclomatic");
+            assert_eq!(inner.metrics.cognitive, 3, "{lang:?}: inner cognitive");
+            assert_eq!(inner.metrics.max_nesting, 2, "{lang:?}: inner nesting");
+        }
+    }
+
+    #[test]
+    fn test_function_expression_complexity_is_reported() {
+        for (lang, ext) in JS_FAMILY {
+            let result = parse_and_analyze(
+                b"const f = function (a) { if (a) {} return a; };",
+                *lang,
+                &format!("t.{ext}"),
+            );
+            assert_eq!(result.functions.len(), 1, "{lang:?}");
+            assert_eq!(result.functions[0].name, "f", "{lang:?}");
+            assert_eq!(result.total_cognitive, 1, "{lang:?}");
+        }
     }
 }

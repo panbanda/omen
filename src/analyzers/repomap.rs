@@ -181,7 +181,12 @@ pub fn build_index(repo_path: &Path, files: &[PathBuf]) -> Result<CallGraphIndex
             let lang = Language::detect(path)?;
             let parser = Parser::new();
             let parse_result = parser.parse_file(path).ok()?;
-            let functions = extract_functions(&parse_result);
+            // Symbols are addressed by name, so only bound functions can be
+            // referenced from elsewhere or ranked meaningfully.
+            let functions: Vec<_> = extract_functions(&parse_result)
+                .into_iter()
+                .filter(|func| func.is_bound)
+                .collect();
             let source = &parse_result.source;
 
             let rel_path = path
@@ -231,7 +236,11 @@ pub fn build_index(repo_path: &Path, files: &[PathBuf]) -> Result<CallGraphIndex
     let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
 
     for (idx, sym) in symbols.iter().enumerate() {
-        by_qualified.insert(sym.qualified_name.clone(), idx);
+        // `path:name` is not unique -- two same-named functions in one file
+        // collide. First-wins at least makes the choice deterministic.
+        by_qualified
+            .entry(sym.qualified_name.clone())
+            .or_insert(idx);
         by_name.entry(sym.name.clone()).or_default().push(idx);
     }
 

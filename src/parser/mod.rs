@@ -1127,7 +1127,11 @@ struct JsBinding {
 }
 
 /// Whether `child` occupies `parent`'s `field` slot.
-fn occupies_field(parent: &tree_sitter::Node<'_>, field: &str, child: &tree_sitter::Node<'_>) -> bool {
+fn occupies_field(
+    parent: &tree_sitter::Node<'_>,
+    field: &str,
+    child: &tree_sitter::Node<'_>,
+) -> bool {
     parent
         .child_by_field_name(field)
         .is_some_and(|slot| slot.id() == child.id())
@@ -1186,9 +1190,7 @@ fn resolve_js_binding(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<JsB
             let left = parent.child_by_field_name("left")?;
             match left.kind() {
                 "identifier" => node_text(&left, source)?,
-                "member_expression" => {
-                    node_text(&left.child_by_field_name("property")?, source)?
-                }
+                "member_expression" => node_text(&left.child_by_field_name("property")?, source)?,
                 // `obj[k] = ...` has no static name.
                 _ => return None,
             }
@@ -1225,6 +1227,30 @@ fn node_text(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
     node.utf8_text(source).ok().map(|text| text.to_string())
 }
 
+/// The name a function-like node is bound to in its enclosing scope, or
+/// `None` when it has no external binding.
+///
+/// Exposed so consumers that track a call graph can name the function a call
+/// was made from, which for `const f = () => { ... }` lives on the binding
+/// rather than on the function node.
+pub fn function_binding_name(
+    node: &tree_sitter::Node<'_>,
+    source: &[u8],
+    lang: Language,
+) -> Option<String> {
+    if is_js_family(lang) {
+        resolve_js_binding(node, source)
+            .map(|binding| binding.name)
+            .or_else(|| {
+                JS_DECLARATION_KINDS
+                    .contains(&node.kind())
+                    .then(|| find_child_by_field(node, "name", source))?
+            })
+    } else {
+        find_child_by_field(node, "name", source)
+    }
+}
+
 fn extract_function_info(
     node: &tree_sitter::Node<'_>,
     source: &[u8],
@@ -1241,10 +1267,11 @@ fn extract_function_info(
         let intrinsic = find_child_by_field(node, "name", source);
         let binding = resolve_js_binding(node, source);
 
-        let binding_name = binding
-            .as_ref()
-            .map(|b| b.name.clone())
-            .or_else(|| JS_DECLARATION_KINDS.contains(&node.kind()).then(|| intrinsic.clone())?);
+        let binding_name = binding.as_ref().map(|b| b.name.clone()).or_else(|| {
+            JS_DECLARATION_KINDS
+                .contains(&node.kind())
+                .then(|| intrinsic.clone())?
+        });
 
         let name = binding_name
             .clone()
@@ -2996,7 +3023,8 @@ mod tests {
                     .filter_map(|f| f.binding_name.as_deref())
                     .collect();
                 assert_eq!(
-                    bound, *expected,
+                    bound,
+                    *expected,
                     "{lang:?}: bindings for {source:?} (all: {:?})",
                     names(&funcs)
                 );
@@ -3019,7 +3047,12 @@ mod tests {
         for (lang, ext) in JS_FAMILY {
             for source in cases {
                 let funcs = js_functions(*lang, ext, source);
-                assert_eq!(funcs.len(), 1, "{lang:?}: {source:?} -> {:?}", names(&funcs));
+                assert_eq!(
+                    funcs.len(),
+                    1,
+                    "{lang:?}: {source:?} -> {:?}",
+                    names(&funcs)
+                );
                 let func = &funcs[0];
                 assert!(
                     !func.is_bound && func.binding_name.is_none(),
@@ -3129,7 +3162,11 @@ mod tests {
         for (lang, ext) in JS_FAMILY {
             let funcs = js_functions(*lang, ext, "export default function () {};");
             assert_eq!(funcs.len(), 1, "{lang:?}: {:?}", names(&funcs));
-            assert_eq!(funcs[0].binding_name.as_deref(), Some("default"), "{lang:?}");
+            assert_eq!(
+                funcs[0].binding_name.as_deref(),
+                Some("default"),
+                "{lang:?}"
+            );
             assert!(funcs[0].is_exported, "{lang:?}");
 
             let gen = js_functions(*lang, ext, "const g = function* () {};");

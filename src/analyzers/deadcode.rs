@@ -304,7 +304,13 @@ fn collect_file_data(result: &parser::ParseResult) -> FileDeadCode {
         calls: Vec::new(),
     };
 
-    let functions = parser::extract_functions(result);
+    // Only functions with an external binding can be referenced by name, and
+    // so only they can be judged unused. An anonymous callback would never
+    // match a usage and would be reported as dead with high confidence.
+    let functions: Vec<parser::FunctionNode> = parser::extract_functions(result)
+        .into_iter()
+        .filter(|func| func.is_bound)
+        .collect();
 
     let is_test_file = is_test_file(&fdc.path);
 
@@ -891,23 +897,34 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
     let source = &result.source;
     let lang = result.language;
     let mut cursor = result.tree.walk();
-    let mut current_function: Option<String> = None;
-    let mut function_depth = 0u32;
+    // A stack rather than a single slot: leaving a nested function must
+    // restore the enclosing one, otherwise every call made after a nested
+    // function in the same body loses its caller.
+    let mut scopes: Vec<(u32, String)> = Vec::new();
 
     // Iterative pre-order traversal
     loop {
         let node = cursor.node();
         let kind = node.kind();
 
-        // Track function context using depth
+        // Arriving at depth d means every scope opened at depth >= d has been
+        // left behind.
+        while scopes
+            .last()
+            .is_some_and(|(depth, _)| *depth >= cursor.depth())
+        {
+            scopes.pop();
+        }
+
+        // Track function context. The name may live on the binding rather
+        // than on the function node, as it does for `const f = () => {}`.
         if is_function_node(kind) {
-            if let Some(name_node) = node.child_by_field_name("name") {
-                if let Ok(name) = name_node.utf8_text(source) {
-                    current_function = Some(name.to_string());
-                    function_depth = cursor.depth();
-                }
+            if let Some(name) = parser::function_binding_name(&node, source, lang) {
+                scopes.push((cursor.depth(), name));
             }
         }
+
+        let current_function = scopes.last().map(|(_, name)| name.clone());
 
         // Collect usages from identifiers (excluding definitions)
         if (kind == "identifier" || kind == "type_identifier") && !is_definition_context(&node) {
@@ -945,14 +962,6 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
 
         // No children, try siblings or go up
         loop {
-            // Clear function context when leaving its scope
-            if current_function.is_some()
-                && cursor.depth() <= function_depth
-                && is_function_node(cursor.node().kind())
-            {
-                current_function = None;
-            }
-
             if cursor.goto_next_sibling() {
                 break;
             }
@@ -972,6 +981,9 @@ fn is_function_node(kind: &str) -> bool {
             | "method_definition"
             | "function_item"
             | "arrow_function"
+            | "function_expression"
+            | "generator_function"
+            | "generator_function_declaration"
             | "method"
     )
 }
@@ -1758,6 +1770,7 @@ impl MyStruct {
     fn method_one(&self) {}
 
     pub fn method_two(&mut self) {}
+
 }
 
 trait MyTrait {
@@ -2644,5 +2657,86 @@ impl CargoDeadCodeAnalyzer {
         } else {
             "unknown".to_string()
         }
+    }
+}
+
+#[cfg(test)]
+mod arrow_function_tests {
+    use super::*;
+
+    // --- Issue #495: arrows as first-class functions -----------------------
+
+    fn js_file_data(source: &str) -> FileDeadCode {
+        use std::path::Path;
+        let result = crate::parser::Parser::new()
+            .parse(source.as_bytes(), Language::TypeScript, Path::new("t.ts"))
+            .unwrap();
+        collect_file_data(&result)
+    }
+
+    #[test]
+    fn test_anonymous_callbacks_are_not_definitions() {
+        // An anonymous callback can never be referenced by name, so treating
+        // it as a definition would report it as dead with high confidence.
+        let fdc = js_file_data("xs.map(x => x + 1);\nys.forEach(function () {});\n");
+        assert!(
+            fdc.definitions.is_empty(),
+            "anonymous callbacks became definitions: {:?}",
+            fdc.definitions.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_bound_arrow_is_a_definition() {
+        let fdc = js_file_data("const helper = () => {};\n");
+        assert!(
+            fdc.definitions.contains_key("helper"),
+            "got {:?}",
+            fdc.definitions.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_exported_arrow_is_marked_exported() {
+        // Without this, every exported React component and hook would be
+        // reported as dead code.
+        let fdc = js_file_data("export const useThing = () => {};\n");
+        let definition = fdc
+            .definitions
+            .get("useThing")
+            .expect("useThing should be a definition");
+        assert!(definition.exported, "exported arrow not marked exported");
+    }
+
+    #[test]
+    fn test_calls_inside_arrows_are_attributed_to_the_arrow() {
+        let fdc = js_file_data("const a = () => { helper(); };\n");
+        let call = fdc
+            .calls
+            .iter()
+            .find(|call| call.callee == "helper")
+            .expect("call to helper should be recorded");
+        assert_eq!(call.caller, "a");
+    }
+
+    #[test]
+    fn test_leaving_a_nested_function_restores_the_enclosing_scope() {
+        // `after()` is called by `outer`, not by nobody: the scope tracker
+        // must restore `outer` after the nested arrow closes.
+        let fdc = js_file_data("function outer() { const inner = () => { deep(); }; after(); }\n");
+
+        let deep = fdc
+            .calls
+            .iter()
+            .find(|call| call.callee == "deep")
+            .expect("call to deep should be recorded");
+        assert_eq!(deep.caller, "inner");
+
+        let after = fdc
+            .calls
+            .iter()
+            .find(|call| call.callee == "after")
+            .expect("call to after should be recorded");
+        assert_eq!(after.caller, "outer");
     }
 }
