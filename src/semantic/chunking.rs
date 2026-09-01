@@ -282,6 +282,8 @@ mod tests {
     fn test_short_function_single_chunk() {
         let func = FunctionNode {
             name: "foo".to_string(),
+            binding_name: Some("foo".to_string()),
+            is_bound: true,
             start_line: 1,
             end_line: 3,
             body_byte_range: None,
@@ -311,6 +313,8 @@ mod tests {
         let line_count = body.lines().count() as u32;
         let func = FunctionNode {
             name: "long_func".to_string(),
+            binding_name: Some("long_func".to_string()),
+            is_bound: true,
             start_line: 1,
             end_line: line_count,
             body_byte_range: None,
@@ -342,6 +346,8 @@ mod tests {
 
         let func = FunctionNode {
             name: "bar".to_string(),
+            binding_name: Some("bar".to_string()),
+            is_bound: true,
             start_line: 3,
             end_line: 5,
             body_byte_range: None,
@@ -361,6 +367,8 @@ mod tests {
 
         let func = FunctionNode {
             name: "free".to_string(),
+            binding_name: Some("free".to_string()),
+            is_bound: true,
             start_line: 1,
             end_line: 1,
             body_byte_range: None,
@@ -473,6 +481,8 @@ mod tests {
         let pr = parse_lang(source, Language::Go);
         let func = FunctionNode {
             name: "Start".to_string(),
+            binding_name: Some("Start".to_string()),
+            is_bound: true,
             start_line: 3,
             end_line: 5,
             body_byte_range: None,
@@ -489,6 +499,8 @@ mod tests {
         let pr = parse_lang(source, Language::Python);
         let func = FunctionNode {
             name: "bar".to_string(),
+            binding_name: Some("bar".to_string()),
+            is_bound: true,
             start_line: 2,
             end_line: 3,
             body_byte_range: None,
@@ -505,6 +517,8 @@ mod tests {
         let pr = parse_lang(source, Language::TypeScript);
         let func = FunctionNode {
             name: "render".to_string(),
+            binding_name: Some("render".to_string()),
+            is_bound: true,
             start_line: 2,
             end_line: 4,
             body_byte_range: None,
@@ -521,6 +535,8 @@ mod tests {
         let pr = parse_lang(source, Language::Java);
         let func = FunctionNode {
             name: "run".to_string(),
+            binding_name: Some("run".to_string()),
+            is_bound: true,
             start_line: 2,
             end_line: 4,
             body_byte_range: None,
@@ -537,6 +553,8 @@ mod tests {
         let pr = parse_lang(source, Language::Cpp);
         let func = FunctionNode {
             name: "start".to_string(),
+            binding_name: Some("start".to_string()),
+            is_bound: true,
             start_line: 3,
             end_line: 5,
             body_byte_range: None,
@@ -553,6 +571,8 @@ mod tests {
         let pr = parse_lang(source, Language::C);
         let func = FunctionNode {
             name: "draw".to_string(),
+            binding_name: Some("draw".to_string()),
+            is_bound: true,
             start_line: 2,
             end_line: 2,
             body_byte_range: None,
@@ -569,6 +589,8 @@ mod tests {
         let pr = parse_lang(source, Language::Ruby);
         let func = FunctionNode {
             name: "bark".to_string(),
+            binding_name: Some("bark".to_string()),
+            is_bound: true,
             start_line: 2,
             end_line: 4,
             body_byte_range: None,
@@ -586,6 +608,8 @@ mod tests {
         let pr = parse_lang(source, Language::Php);
         let func = FunctionNode {
             name: "index".to_string(),
+            binding_name: Some("index".to_string()),
+            is_bound: true,
             start_line: 3,
             end_line: 5,
             body_byte_range: None,
@@ -602,6 +626,8 @@ mod tests {
         let pr = parse_lang(source, Language::CSharp);
         let func = FunctionNode {
             name: "Process".to_string(),
+            binding_name: Some("Process".to_string()),
+            is_bound: true,
             start_line: 2,
             end_line: 4,
             body_byte_range: None,
@@ -618,6 +644,8 @@ mod tests {
         let pr = parse_lang(source, Language::Bash);
         let func = FunctionNode {
             name: "my_func".to_string(),
+            binding_name: Some("my_func".to_string()),
+            is_bound: true,
             start_line: 2,
             end_line: 4,
             body_byte_range: None,
@@ -635,6 +663,8 @@ mod tests {
         let pr = parse_rust(source);
         let func = FunctionNode {
             name: "fmt".to_string(),
+            binding_name: Some("fmt".to_string()),
+            is_bound: true,
             start_line: 3,
             end_line: 5,
             body_byte_range: None,

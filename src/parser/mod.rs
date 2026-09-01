@@ -117,10 +117,23 @@ pub fn get_tree_sitter_language(lang: Language) -> Result<TsLanguage> {
 }
 
 /// A function extracted from the AST.
-#[derive(Debug, Clone)]
+///
+/// `name` is for display. `binding_name` is the name callers can actually
+/// reach the function by, which is not always the same thing: in
+/// `const h = function named() {}` callers use `h`, while `named` is only
+/// visible inside the body. Anything that indexes symbols -- dead code, the
+/// repo map, outlines, semantic search -- must key off `binding_name` and
+/// skip functions where it is `None`. Complexity, which measures bodies
+/// rather than names, uses every function regardless.
+#[derive(Debug, Clone, Default)]
 pub struct FunctionNode {
-    /// Function name.
+    /// Function name, for display. Falls back to the intrinsic name and then
+    /// to `<anonymous>:<line>` when there is no binding.
     pub name: String,
+    /// The externally callable name, or `None` for a callback or an IIFE.
+    pub binding_name: Option<String>,
+    /// Whether this function has a `binding_name`.
+    pub is_bound: bool,
     /// Start line (1-indexed).
     pub start_line: u32,
     /// End line (1-indexed).
@@ -1070,10 +1083,17 @@ pub fn get_function_node_types(lang: Language) -> Vec<&'static str> {
         Language::Rust => vec!["function_item", "impl_item"],
         Language::Python => vec!["function_definition"],
         Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => {
+            // TypeScript's bodyless `function_signature`, `method_signature`
+            // and `abstract_method_signature` are deliberately absent: they
+            // declare a type, not an implementation, so there is no body to
+            // measure.
             vec![
                 "function_declaration",
+                "generator_function_declaration",
                 "method_definition",
                 "arrow_function",
+                "function_expression",
+                "generator_function",
             ]
         }
         Language::Java | Language::CSharp => vec!["method_declaration", "constructor_declaration"],
@@ -1084,32 +1104,185 @@ pub fn get_function_node_types(lang: Language) -> Vec<&'static str> {
     }
 }
 
+/// Whether `lang` uses the JavaScript/TypeScript grammar family.
+fn is_js_family(lang: Language) -> bool {
+    matches!(
+        lang,
+        Language::JavaScript | Language::TypeScript | Language::Tsx | Language::Jsx
+    )
+}
+
+/// The JS-family node kinds whose own `name` field *is* their binding, because
+/// the declaration introduces the name into the surrounding scope.
+const JS_DECLARATION_KINDS: &[&str] = &[
+    "function_declaration",
+    "generator_function_declaration",
+    "method_definition",
+];
+
+/// A JS/TS function's externally visible binding.
+struct JsBinding {
+    name: String,
+    is_exported: bool,
+}
+
+/// Whether `child` occupies `parent`'s `field` slot.
+fn occupies_field(parent: &tree_sitter::Node<'_>, field: &str, child: &tree_sitter::Node<'_>) -> bool {
+    parent
+        .child_by_field_name(field)
+        .is_some_and(|slot| slot.id() == child.id())
+}
+
+/// Resolve the name a JS/TS function expression is bound to in its enclosing
+/// scope, e.g. `f` in `const f = () => {}`.
+///
+/// The walk is deliberately shallow and guarded: it ascends only through
+/// wrappers that do not change what the expression is bound to, and then
+/// inspects exactly one parent, requiring that the function occupies that
+/// parent's value slot. Searching further up would name the callback in
+/// `const f = xs.map(x => x)` after `f`.
+fn resolve_js_binding(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<JsBinding> {
+    let mut current = *node;
+    while let Some(parent) = current.parent() {
+        match parent.kind() {
+            "parenthesized_expression"
+            | "as_expression"
+            | "satisfies_expression"
+            | "non_null_expression" => current = parent,
+            _ => break,
+        }
+    }
+
+    let parent = current.parent()?;
+    let name = match parent.kind() {
+        "variable_declarator" if occupies_field(&parent, "value", &current) => {
+            let name_node = parent.child_by_field_name("name")?;
+            // A destructuring pattern binds no single name.
+            if name_node.kind() != "identifier" {
+                return None;
+            }
+            node_text(&name_node, source)?
+        }
+        "pair" if occupies_field(&parent, "value", &current) => {
+            let key = parent.child_by_field_name("key")?;
+            match key.kind() {
+                "property_identifier" => node_text(&key, source)?,
+                // A string key carries its quotes; a computed key is not a
+                // static name at all.
+                "string" => node_text(&key, source)?
+                    .trim_matches(|c| c == '"' || c == '\'' || c == '`')
+                    .to_string(),
+                _ => return None,
+            }
+        }
+        // TypeScript and JavaScript name the class-field slot differently.
+        "public_field_definition" if occupies_field(&parent, "value", &current) => {
+            node_text(&parent.child_by_field_name("name")?, source)?
+        }
+        "field_definition" if occupies_field(&parent, "value", &current) => {
+            node_text(&parent.child_by_field_name("property")?, source)?
+        }
+        "assignment_expression" if occupies_field(&parent, "right", &current) => {
+            let left = parent.child_by_field_name("left")?;
+            match left.kind() {
+                "identifier" => node_text(&left, source)?,
+                "member_expression" => {
+                    node_text(&left.child_by_field_name("property")?, source)?
+                }
+                // `obj[k] = ...` has no static name.
+                _ => return None,
+            }
+        }
+        // Only a default export fills the `value` slot. TypeScript's
+        // `export = () => {}` attaches the function as an unnamed child, so
+        // the field guard correctly excludes it.
+        "export_statement" if occupies_field(&parent, "value", &current) => "default".to_string(),
+        _ => return None,
+    };
+
+    Some(JsBinding {
+        name,
+        is_exported: js_binding_is_exported(&parent),
+    })
+}
+
+/// Whether the declaration that provides a JS/TS binding is exported.
+///
+/// Only the declaration chain is followed, never arbitrary ancestors: a
+/// callback inside an exported initializer is not itself exported.
+fn js_binding_is_exported(binding_parent: &tree_sitter::Node<'_>) -> bool {
+    match binding_parent.kind() {
+        "export_statement" => true,
+        "variable_declarator" => binding_parent
+            .parent()
+            .and_then(|declaration| declaration.parent())
+            .is_some_and(|grandparent| grandparent.kind() == "export_statement"),
+        _ => false,
+    }
+}
+
+fn node_text(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    node.utf8_text(source).ok().map(|text| text.to_string())
+}
+
 fn extract_function_info(
     node: &tree_sitter::Node<'_>,
     source: &[u8],
     lang: Language,
 ) -> Option<FunctionNode> {
-    let name = find_child_by_field(node, "name", source)
-        .or_else(|| find_named_child(node, "identifier", source))
-        .or_else(|| find_named_child(node, "property_identifier", source))
-        .or_else(|| {
-            // C and C++ place the function name inside a declarator chain:
-            // function_definition -> declarator (function_declarator) -> declarator (identifier)
-            // Walk the declarator chain until we find an identifier.
-            if matches!(lang, Language::C | Language::Cpp) {
-                extract_c_function_name(node, source)
-            } else {
-                None
-            }
-        })?;
+    let start_line = node.start_position().row as u32 + 1;
 
-    let is_exported = check_is_exported(node, source, lang);
+    let (name, binding_name, is_exported) = if is_js_family(lang) {
+        // The function's own name, where the grammar gives it one. Note this
+        // must not fall back to a bare `identifier` child the way the other
+        // languages do: an arrow function's single unparenthesised parameter
+        // is exactly such a child, and matching it names the function after
+        // its own parameter.
+        let intrinsic = find_child_by_field(node, "name", source);
+        let binding = resolve_js_binding(node, source);
+
+        let binding_name = binding
+            .as_ref()
+            .map(|b| b.name.clone())
+            .or_else(|| JS_DECLARATION_KINDS.contains(&node.kind()).then(|| intrinsic.clone())?);
+
+        let name = binding_name
+            .clone()
+            .or_else(|| intrinsic.clone())
+            .unwrap_or_else(|| format!("<anonymous>:{start_line}"));
+
+        let is_exported = match &binding {
+            Some(b) => b.is_exported,
+            None => check_is_exported(node, source, lang),
+        };
+
+        (name, binding_name, is_exported)
+    } else {
+        let name = find_child_by_field(node, "name", source)
+            .or_else(|| find_named_child(node, "identifier", source))
+            .or_else(|| find_named_child(node, "property_identifier", source))
+            .or_else(|| {
+                // C and C++ place the function name inside a declarator chain:
+                // function_definition -> declarator (function_declarator) -> declarator (identifier)
+                // Walk the declarator chain until we find an identifier.
+                if matches!(lang, Language::C | Language::Cpp) {
+                    extract_c_function_name(node, source)
+                } else {
+                    None
+                }
+            })?;
+
+        let is_exported = check_is_exported(node, source, lang);
+        (name.clone(), Some(name), is_exported)
+    };
 
     let signature = extract_signature(node, source, lang);
 
     Some(FunctionNode {
         name,
-        start_line: node.start_position().row as u32 + 1,
+        is_bound: binding_name.is_some(),
+        binding_name,
+        start_line,
         end_line: node.end_position().row as u32 + 1,
         body_byte_range: function_body_byte_range(node),
         is_exported,
@@ -2768,5 +2941,221 @@ mod tests {
             .expect("second should have body");
         let body2 = std::str::from_utf8(&content[s2..e2]).unwrap();
         assert!(body2.contains("let b"));
+    }
+
+    // --- Issue #495: JS/TS anonymous function naming ---------------------
+
+    /// Extract functions from a JS-family snippet under one language.
+    fn js_functions(lang: Language, ext: &str, source: &str) -> Vec<FunctionNode> {
+        let parser = Parser::new();
+        let result = parser
+            .parse(source.as_bytes(), lang, Path::new(&format!("t.{ext}")))
+            .expect("parse should succeed");
+        extract_functions(&result)
+    }
+
+    /// The JS-family languages, with a file extension for each.
+    const JS_FAMILY: &[(Language, &str)] = &[
+        (Language::JavaScript, "js"),
+        (Language::TypeScript, "ts"),
+        (Language::Tsx, "tsx"),
+        (Language::Jsx, "jsx"),
+    ];
+
+    fn find_by_name<'a>(funcs: &'a [FunctionNode], name: &str) -> &'a FunctionNode {
+        funcs
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| panic!("no function named {name}, got {:?}", names(funcs)))
+    }
+
+    fn names(funcs: &[FunctionNode]) -> Vec<&str> {
+        funcs.iter().map(|f| f.name.as_str()).collect()
+    }
+
+    #[test]
+    fn test_js_binding_names_across_languages() {
+        // (source, expected binding names -- every other extracted function must be unbound)
+        let cases: &[(&str, &[&str])] = &[
+            ("const f = () => {};", &["f"]),
+            ("const f = (a, b) => a + b;", &["f"]),
+            ("let g = function () {};", &["g"]),
+            ("function* gen() {}", &["gen"]),
+            ("const o = { m: () => {} };", &["m"]),
+            ("const o = { \"q-k\": () => {} };", &["q-k"]),
+            ("obj.method = () => {};", &["method"]),
+            ("handler = () => {};", &["handler"]),
+            ("export default () => {};", &["default"]),
+        ];
+
+        for (lang, ext) in JS_FAMILY {
+            for (source, expected) in cases {
+                let funcs = js_functions(*lang, ext, source);
+                let bound: Vec<&str> = funcs
+                    .iter()
+                    .filter_map(|f| f.binding_name.as_deref())
+                    .collect();
+                assert_eq!(
+                    bound, *expected,
+                    "{lang:?}: bindings for {source:?} (all: {:?})",
+                    names(&funcs)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_js_unbound_functions_are_not_named_after_context() {
+        // Each of these has exactly one function, and it has no external binding.
+        let cases = &[
+            "xs.map(x => x + 1);",
+            "xs.map((x) => x + 1);",
+            "(function () {})();",
+            "(() => {})();",
+            "const o = { [k]: () => {} };",
+            "obj[k] = () => {};",
+        ];
+
+        for (lang, ext) in JS_FAMILY {
+            for source in cases {
+                let funcs = js_functions(*lang, ext, source);
+                assert_eq!(funcs.len(), 1, "{lang:?}: {source:?} -> {:?}", names(&funcs));
+                let func = &funcs[0];
+                assert!(
+                    !func.is_bound && func.binding_name.is_none(),
+                    "{lang:?}: {source:?} should be unbound, got {:?}",
+                    func.binding_name
+                );
+                assert!(
+                    func.name.starts_with("<anonymous>:"),
+                    "{lang:?}: {source:?} should be anonymous, got {:?}",
+                    func.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_js_arrow_is_not_named_after_its_own_parameter() {
+        // The pre-fix bug: `x => ...` reported the function under its parameter's name.
+        for (lang, ext) in JS_FAMILY {
+            let funcs = js_functions(*lang, ext, "xs.map(x => x + 1);");
+            assert_eq!(funcs.len(), 1);
+            assert_ne!(funcs[0].name, "x", "{lang:?}: named after its parameter");
+        }
+    }
+
+    #[test]
+    fn test_js_callback_inside_a_binding_does_not_steal_the_binding() {
+        // The binding walk must not ascend past the callback's own argument slot.
+        for (lang, ext) in JS_FAMILY {
+            let funcs = js_functions(*lang, ext, "const f = xs.map(x => x);");
+            assert_eq!(funcs.len(), 1, "{lang:?}: {:?}", names(&funcs));
+            assert!(
+                !funcs[0].is_bound,
+                "{lang:?}: callback wrongly bound to {:?}",
+                funcs[0].binding_name
+            );
+        }
+    }
+
+    #[test]
+    fn test_js_named_function_expression_binds_to_its_variable() {
+        // Callers invoke `h`; `named` is only visible inside the body.
+        for (lang, ext) in JS_FAMILY {
+            let funcs = js_functions(*lang, ext, "const h = function named() {};");
+            assert_eq!(funcs.len(), 1, "{lang:?}: {:?}", names(&funcs));
+            assert_eq!(funcs[0].binding_name.as_deref(), Some("h"), "{lang:?}");
+        }
+    }
+
+    #[test]
+    fn test_js_named_function_expression_without_binding_is_unbound() {
+        // `mapper` is a display name, but nothing outside can call it.
+        for (lang, ext) in JS_FAMILY {
+            let funcs = js_functions(*lang, ext, "xs.map(function mapper() {});");
+            assert_eq!(funcs.len(), 1, "{lang:?}: {:?}", names(&funcs));
+            assert_eq!(funcs[0].name, "mapper", "{lang:?}");
+            assert!(!funcs[0].is_bound, "{lang:?}: mapper should be unbound");
+        }
+    }
+
+    #[test]
+    fn test_js_class_property_arrow_takes_the_field_name() {
+        // JS uses `field_definition.property`; TS uses `public_field_definition.name`.
+        for (lang, ext) in JS_FAMILY {
+            let funcs = js_functions(*lang, ext, "class A { f = () => {} }");
+            let f = find_by_name(&funcs, "f");
+            assert_eq!(f.binding_name.as_deref(), Some("f"), "{lang:?}");
+        }
+    }
+
+    #[test]
+    fn test_js_export_status_follows_the_binding_chain() {
+        for (lang, ext) in JS_FAMILY {
+            let exported = js_functions(*lang, ext, "export const f = () => {};");
+            assert!(
+                find_by_name(&exported, "f").is_exported,
+                "{lang:?}: export const arrow should be exported"
+            );
+
+            let default_export = js_functions(*lang, ext, "export default () => {};");
+            assert!(
+                find_by_name(&default_export, "default").is_exported,
+                "{lang:?}: default export should be exported"
+            );
+
+            let local = js_functions(*lang, ext, "const f = () => {};");
+            assert!(
+                !find_by_name(&local, "f").is_exported,
+                "{lang:?}: unexported arrow should not be exported"
+            );
+
+            // A callback inside an exported initializer is not itself exported.
+            let nested = js_functions(*lang, ext, "export const f = () => xs.map(x => x);");
+            let callback = nested
+                .iter()
+                .find(|func| !func.is_bound)
+                .expect("callback should be extracted");
+            assert!(
+                !callback.is_exported,
+                "{lang:?}: nested callback wrongly marked exported"
+            );
+        }
+    }
+
+    #[test]
+    fn test_js_function_expressions_and_generators_are_extracted() {
+        for (lang, ext) in JS_FAMILY {
+            let funcs = js_functions(*lang, ext, "export default function () {};");
+            assert_eq!(funcs.len(), 1, "{lang:?}: {:?}", names(&funcs));
+            assert_eq!(funcs[0].binding_name.as_deref(), Some("default"), "{lang:?}");
+            assert!(funcs[0].is_exported, "{lang:?}");
+
+            let gen = js_functions(*lang, ext, "const g = function* () {};");
+            assert_eq!(gen.len(), 1, "{lang:?}: {:?}", names(&gen));
+            assert_eq!(gen[0].binding_name.as_deref(), Some("g"), "{lang:?}");
+        }
+    }
+
+    #[test]
+    fn test_ts_export_assignment_is_not_named_default() {
+        // `export = () => {}` is a TS export assignment, not a default export.
+        let funcs = js_functions(Language::TypeScript, "ts", "export = () => {};");
+        assert_eq!(funcs.len(), 1, "{:?}", names(&funcs));
+        assert_ne!(funcs[0].name, "default");
+        assert!(!funcs[0].is_bound);
+    }
+
+    #[test]
+    fn test_non_js_languages_report_declarations_as_bound() {
+        let parser = Parser::new();
+        let result = parser
+            .parse(b"fn main() {}", Language::Rust, Path::new("main.rs"))
+            .unwrap();
+        let funcs = extract_functions(&result);
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].binding_name.as_deref(), Some("main"));
+        assert!(funcs[0].is_bound);
     }
 }
