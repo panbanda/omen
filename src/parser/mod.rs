@@ -1167,24 +1167,17 @@ fn resolve_js_binding(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<JsB
             }
             node_text(&name_node, source)?
         }
-        "pair" if occupies_field(&parent, "value", &current) => {
-            let key = parent.child_by_field_name("key")?;
-            match key.kind() {
-                "property_identifier" => node_text(&key, source)?,
-                // A string key carries its quotes; a computed key is not a
-                // static name at all.
-                "string" => node_text(&key, source)?
-                    .trim_matches(|c| c == '"' || c == '\'' || c == '`')
-                    .to_string(),
-                _ => return None,
-            }
-        }
+        // An object-literal property is only reachable through its object,
+        // and usage collection tracks bare identifiers rather than property
+        // access -- so binding these would make every entry of a mock or
+        // config object read as "no references found".
+        "pair" => return None,
         // TypeScript and JavaScript name the class-field slot differently.
         "public_field_definition" if occupies_field(&parent, "value", &current) => {
-            node_text(&parent.child_by_field_name("name")?, source)?
+            static_property_name(&parent.child_by_field_name("name")?, source)?
         }
         "field_definition" if occupies_field(&parent, "value", &current) => {
-            node_text(&parent.child_by_field_name("property")?, source)?
+            static_property_name(&parent.child_by_field_name("property")?, source)?
         }
         "assignment_expression" if occupies_field(&parent, "right", &current) => {
             let left = parent.child_by_field_name("left")?;
@@ -1206,6 +1199,19 @@ fn resolve_js_binding(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<JsB
         name,
         is_exported: js_binding_is_exported(&parent),
     })
+}
+
+/// A property key usable as a static name, or `None` for anything callers
+/// cannot reach with plain `obj.name` syntax.
+///
+/// Computed keys (`[makeName()]`) are not names at all. String keys are names
+/// but can only be called as `obj["k"]()`, which the call-graph consumers do
+/// not resolve -- binding one would make the function look dead.
+fn static_property_name(key: &tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    match key.kind() {
+        "property_identifier" | "private_property_identifier" => node_text(key, source),
+        _ => None,
+    }
 }
 
 /// Whether the declaration that provides a JS/TS binding is exported.
@@ -1268,9 +1274,15 @@ fn extract_function_info(
         let binding = resolve_js_binding(node, source);
 
         let binding_name = binding.as_ref().map(|b| b.name.clone()).or_else(|| {
-            JS_DECLARATION_KINDS
-                .contains(&node.kind())
-                .then(|| intrinsic.clone())?
+            if !JS_DECLARATION_KINDS.contains(&node.kind()) {
+                return None;
+            }
+            // `class C { [makeName()]() {} }` declares no static name.
+            if node.kind() == "method_definition" {
+                static_property_name(&node.child_by_field_name("name")?, source)
+            } else {
+                intrinsic.clone()
+            }
         });
 
         let name = binding_name
@@ -3008,8 +3020,6 @@ mod tests {
             ("const f = (a, b) => a + b;", &["f"]),
             ("let g = function () {};", &["g"]),
             ("function* gen() {}", &["gen"]),
-            ("const o = { m: () => {} };", &["m"]),
-            ("const o = { \"q-k\": () => {} };", &["q-k"]),
             ("obj.method = () => {};", &["method"]),
             ("handler = () => {};", &["handler"]),
             ("export default () => {};", &["default"]),
@@ -3040,7 +3050,13 @@ mod tests {
             "xs.map((x) => x + 1);",
             "(function () {})();",
             "(() => {})();",
+            // An object-literal property is reachable only through its
+            // object, and usage collection tracks bare identifiers rather
+            // than property access -- so binding these would make every entry
+            // of a mock or config object read as "no references found".
+            "const o = { m: () => {} };",
             "const o = { [k]: () => {} };",
+            "const o = { \"q-k\": () => {} };",
             "obj[k] = () => {};",
         ];
 
@@ -3110,6 +3126,25 @@ mod tests {
             assert_eq!(funcs.len(), 1, "{lang:?}: {:?}", names(&funcs));
             assert_eq!(funcs[0].name, "mapper", "{lang:?}");
             assert!(!funcs[0].is_bound, "{lang:?}: mapper should be unbound");
+        }
+    }
+
+    #[test]
+    fn test_js_computed_names_are_not_bindings() {
+        // `[makeName()]` is not a static name, so nothing can address it.
+        for (lang, ext) in JS_FAMILY {
+            for source in [
+                "class A { [makeName()] = () => {} }",
+                "class A { [makeName()]() {} }",
+            ] {
+                let funcs = js_functions(*lang, ext, source);
+                assert_eq!(funcs.len(), 1, "{lang:?}: {source:?}");
+                assert!(
+                    !funcs[0].is_bound,
+                    "{lang:?}: {source:?} wrongly bound to {:?}",
+                    funcs[0].binding_name
+                );
+            }
         }
     }
 

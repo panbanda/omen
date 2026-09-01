@@ -170,10 +170,12 @@ impl AnalyzerTrait for Analyzer {
         let mut reachable: HashSet<String> = HashSet::new();
         let mut queue: Vec<String> = Vec::new();
 
-        // Module scope is itself an entry point: its code runs on load.
-        for caller in call_graph.keys() {
-            if caller.ends_with(&format!("::{MODULE_SCOPE}")) && reachable.insert(caller.clone()) {
-                queue.push(caller.clone());
+        // Module scope is itself an entry point: its code runs on load. The
+        // pseudo-callers stay out of `reachable`, which counts definitions --
+        // nothing calls them, so they cannot be reached twice.
+        for call in &all_calls {
+            if call.from_module_scope {
+                queue.push(format!("{}::{}", call.file, call.caller));
             }
         }
 
@@ -380,21 +382,34 @@ fn collect_file_data(result: &parser::ParseResult) -> FileDeadCode {
             }
         }
 
-        fdc.definitions.insert(
-            func.name.clone(),
-            Definition {
-                name: func.name.clone(),
-                kind: "function".to_string(),
-                file: fdc.path.clone(),
-                line: func.start_line,
-                end_line: func.end_line,
-                visibility,
-                exported,
-                is_test_file: is_in_test_context,
-                attributes,
-                is_trait_impl,
-            },
-        );
+        let definition = Definition {
+            name: func.name.clone(),
+            kind: "function".to_string(),
+            file: fdc.path.clone(),
+            line: func.start_line,
+            end_line: func.end_line,
+            visibility,
+            exported,
+            is_test_file: is_in_test_context,
+            attributes,
+            is_trait_impl,
+        };
+
+        // Definitions are keyed by bare name, so a file holding both
+        // `export const f = () => {}` and an object property `f: () => {}`
+        // has two entries competing for one key. Losing the exported one
+        // would report a live export as dead, so it wins; otherwise the
+        // first definition stands.
+        match fdc.definitions.entry(func.name.clone()) {
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(definition);
+            }
+            std::collections::hash_map::Entry::Occupied(mut slot) => {
+                if definition.exported && !slot.get().exported {
+                    slot.insert(definition);
+                }
+            }
+        }
     }
 
     // Extract usages and calls by walking the AST
@@ -898,9 +913,8 @@ fn extract_attribute_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option
     None
 }
 
-/// Caller recorded for calls made at module scope rather than inside a
-/// function. Not a valid identifier in any supported language, so it can
-/// never collide with a real definition.
+/// Caller name recorded for calls made at module scope. Paired with
+/// `CallReference::from_module_scope`, which is what consumers test.
 const MODULE_SCOPE: &str = "<module>";
 
 /// Walk AST to collect identifier usages and function calls.
@@ -912,7 +926,7 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
     // A stack rather than a single slot: leaving a nested function must
     // restore the enclosing one, otherwise every call made after a nested
     // function in the same body loses its caller.
-    let mut scopes: Vec<(u32, String)> = Vec::new();
+    let mut scopes: Vec<(u32, Option<String>)> = Vec::new();
 
     // Iterative pre-order traversal
     loop {
@@ -930,21 +944,26 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
 
         // Track function context. The name may live on the binding rather
         // than on the function node, as it does for `const f = () => {}`.
+        // Unbound functions are pushed too, with no name, so that a call
+        // inside an anonymous callback is not mistaken for module-level code.
         if is_function_node(kind) {
-            if let Some(name) = parser::function_binding_name(&node, source, lang) {
-                scopes.push((cursor.depth(), name));
-            }
+            scopes.push((
+                cursor.depth(),
+                parser::function_binding_name(&node, source, lang),
+            ));
         }
 
         // Code at module scope runs when the file is loaded, so calls made
         // there have a real caller -- `export const W = memo(Internal)`
-        // genuinely reaches `Internal`.
-        let current_function = Some(
-            scopes
-                .last()
-                .map(|(_, name)| name.clone())
-                .unwrap_or_else(|| MODULE_SCOPE.to_string()),
-        );
+        // genuinely reaches `Internal`. Inside an anonymous function with no
+        // named ancestor there is nothing to attribute a call to, and
+        // guessing would make unreachable code look reachable.
+        let from_module_scope = scopes.is_empty();
+        let current_function = if from_module_scope {
+            Some(MODULE_SCOPE.to_string())
+        } else {
+            scopes.iter().rev().find_map(|(_, name)| name.clone())
+        };
 
         // Collect usages from identifiers (excluding definitions)
         if (kind == "identifier" || kind == "type_identifier") && !is_definition_context(&node) {
@@ -961,6 +980,7 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
                         caller: caller.clone(),
                         callee,
                         file: fdc.path.clone(),
+                        from_module_scope,
                         line: node.start_position().row as u32 + 1,
                     });
                 }
@@ -971,7 +991,7 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
             // definition, add a synthetic call edge from the current function
             // to that identifier so BFS can reach it.
             if let Some(ref caller) = current_function {
-                collect_function_value_refs(&node, source, caller, fdc);
+                collect_function_value_refs(&node, source, caller, from_module_scope, fdc);
             }
         }
 
@@ -1018,6 +1038,9 @@ fn is_definition_context(node: &tree_sitter::Node<'_>) -> bool {
                     parent_kind,
                     "function_declaration"
                         | "function_definition"
+                        | "function_expression"
+                        | "generator_function"
+                        | "generator_function_declaration"
                         | "method_declaration"
                         | "variable_declarator"
                         | "let_declaration"
@@ -1062,6 +1085,7 @@ fn collect_function_value_refs(
     call_node: &tree_sitter::Node<'_>,
     source: &[u8],
     caller: &str,
+    from_module_scope: bool,
     fdc: &mut FileDeadCode,
 ) {
     // Find the argument_list / arguments child of the call node
@@ -1097,6 +1121,7 @@ fn collect_function_value_refs(
             caller: caller.to_string(),
             callee: name.to_string(),
             file: fdc.path.clone(),
+            from_module_scope,
             line: call_node.start_position().row as u32 + 1,
         });
     }
@@ -1305,6 +1330,10 @@ struct CallReference {
     caller: String,
     callee: String,
     file: String,
+    /// Whether the call was made at module scope rather than inside a
+    /// function. Structural rather than a reserved caller name, which a
+    /// property binding could otherwise collide with.
+    from_module_scope: bool,
     #[allow(dead_code)]
     line: u32,
 }
@@ -2759,6 +2788,35 @@ mod arrow_function_tests {
             fdc.calls
                 .iter()
                 .map(|c| (&c.caller, &c.callee))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_named_function_expression_name_is_not_a_usage() {
+        // The intrinsic name of `function dead() {}` is visible only inside
+        // its own body, so counting it as a usage would mask the finding.
+        let fdc = js_file_data("const dead = function dead() {};\n");
+        assert!(
+            !fdc.usages.contains("dead"),
+            "the intrinsic name leaked into usages: {:?}",
+            fdc.usages
+        );
+    }
+
+    #[test]
+    fn test_module_scope_calls_are_flagged_structurally() {
+        // The marker is a field, not a reserved caller name, so a property
+        // literally called `<module>` cannot forge module reachability.
+        let fdc = js_file_data("const o = { \"<module>\": () => forged() };\n");
+        assert!(
+            fdc.calls
+                .iter()
+                .all(|call| !call.from_module_scope || call.callee != "forged"),
+            "a property key forged a module-scope call: {:?}",
+            fdc.calls
+                .iter()
+                .map(|c| (&c.caller, &c.callee, c.from_module_scope))
                 .collect::<Vec<_>>()
         );
     }
