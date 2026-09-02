@@ -107,6 +107,13 @@ impl Analyzer {
         self
     }
 
+    /// Build from the loaded configuration, so every entry point -- the
+    /// subcommand, `omen all`, `report generate`, `score` -- uses the same
+    /// window rather than the default.
+    pub fn from_config(config: &crate::config::Config) -> Self {
+        Self::new().with_churn_days(config.defect.churn_days)
+    }
+
     pub fn with_churn_days(mut self, days: u32) -> Self {
         self.config.churn_days = days;
         self
@@ -239,13 +246,30 @@ impl Analyzer {
         data
     }
 
+    /// Commits per 30 days, so a window other than the default 30 does not
+    /// silently inflate or deflate the churn factor.
+    ///
+    /// All-history windows have no meaningful width, so their raw count is
+    /// used as-is rather than divided by a sentinel.
+    fn monthly_commit_rate(&self, commit_count: usize) -> f32 {
+        match self.config.churn_days {
+            0 | u32::MAX => commit_count as f32,
+            days => commit_count as f32 * 30.0 / days as f32,
+        }
+    }
+
     /// Pre-compute git metrics (churn and ownership) for all files at once.
     /// Returns a map of file path -> (commit_count, contributor_count).
-    fn compute_git_metrics(&self, ctx: &AnalysisContext<'_>) -> HashMap<PathBuf, (usize, usize)> {
+    fn compute_git_metrics(
+        &self,
+        ctx: &AnalysisContext<'_>,
+    ) -> (HashMap<PathBuf, (usize, usize)>, usize) {
         let mut result = HashMap::new();
+        let mut commits_matched = 0;
 
         let since = format!("{} days", self.config.churn_days);
         if let Ok(commits) = ctx.git_log_with_stats(Some(&since), None) {
+            commits_matched = commits.len();
             // Build per-file metrics from the single git log call
             let mut file_commits: HashMap<PathBuf, usize> = HashMap::new();
             let mut file_contributors: HashMap<PathBuf, HashSet<String>> = HashMap::new();
@@ -267,7 +291,7 @@ impl Analyzer {
             }
         }
 
-        result
+        (result, commits_matched)
     }
 
     /// Get file metrics for defect prediction.
@@ -289,8 +313,9 @@ impl Analyzer {
         // Get churn and ownership from pre-computed git metrics
         let file_pathbuf = PathBuf::from(file_path);
         if let Some(&(commit_count, contributor_count)) = git_metrics.get(&file_pathbuf) {
-            // Normalize churn score (max ~20 commits/month = high churn)
-            metrics.churn_score = (commit_count as f32 / 20.0).min(1.0);
+            // Normalize churn as a monthly rate (~20 commits/month = high
+            // churn), so the score means the same thing at any window width.
+            metrics.churn_score = (self.monthly_commit_rate(commit_count) / 20.0).min(1.0);
             metrics.ownership_diffusion = contributor_count as f32;
         }
 
@@ -447,7 +472,7 @@ impl AnalyzerTrait for Analyzer {
         let coupling_data = self.compute_coupling_data(ctx);
 
         // Pre-compute git metrics once for all files (single git log call)
-        let git_metrics = self.compute_git_metrics(ctx);
+        let (git_metrics, commits_matched) = self.compute_git_metrics(ctx);
 
         // Pre-filter files
         let valid_files: Vec<_> = ctx
@@ -555,6 +580,7 @@ impl AnalyzerTrait for Analyzer {
             files: file_scores,
             summary,
             weights: self.config.weights.clone(),
+            churn_window: ctx.churn_window(self.config.churn_days, commits_matched),
         })
     }
 }
@@ -588,6 +614,10 @@ pub struct Analysis {
     pub files: Vec<FileScore>,
     pub summary: Summary,
     pub weights: Weights,
+    /// The churn window these numbers came from. Defaulted so older
+    /// serialized results still deserialize.
+    #[serde(default)]
+    pub churn_window: Option<crate::git::ChurnWindow>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -956,6 +986,96 @@ mod tests {
             "Estimated metrics should have lower confidence: {} vs {}",
             conf_estimated,
             conf_real
+        );
+    }
+
+    // --- Issue #496: churn must not depend on the wall clock ---------------
+
+    /// A repo whose entire history predates any plausible wall clock, so a
+    /// window measured from "now" matches nothing.
+    fn init_old_repo(path: &std::path::Path) {
+        let run = |args: &[&str], date: Option<&str>| {
+            let mut cmd = std::process::Command::new("git");
+            cmd.args(args).current_dir(path);
+            if let Some(date) = date {
+                cmd.env("GIT_AUTHOR_DATE", date)
+                    .env("GIT_COMMITTER_DATE", date);
+            }
+            cmd.output().expect("git command failed");
+        };
+        run(&["init"], None);
+        run(&["config", "user.email", "test@example.com"], None);
+        run(&["config", "user.name", "Test Author"], None);
+
+        for i in 0..3 {
+            std::fs::write(
+                path.join("a.py"),
+                format!("def f(x):\n    if x:\n        return {i}\n    return 0\n"),
+            )
+            .unwrap();
+            run(&["add", "-A"], None);
+            run(
+                &["commit", "-m", &format!("commit {i}")],
+                Some("2020-06-01T00:00:00+0000"),
+            );
+        }
+    }
+
+    #[test]
+    fn test_churn_factor_is_non_zero_at_an_old_revision() {
+        // The regression the issue asks for: analyzing a commit older than
+        // the default window used to give every file a churn factor of zero,
+        // making 0.30 of the model's weight a constant while the output
+        // still looked like a full prediction.
+        let temp = tempfile::tempdir().unwrap();
+        init_old_repo(temp.path());
+
+        let config = crate::config::Config::default();
+        let files = crate::core::FileSet::from_path(temp.path(), &config).unwrap();
+        let ctx = crate::core::AnalysisContext::new(&files, &config, Some(temp.path()))
+            .with_git_path(temp.path());
+
+        let analysis = Analyzer::new().analyze(&ctx).expect("defect analysis");
+
+        let window = analysis
+            .churn_window
+            .as_ref()
+            .expect("the window used should be reported");
+        assert!(
+            window.commits_matched > 0,
+            "a 30-day window ending at the analyzed revision should match its \
+             own commits, got {window:?}"
+        );
+        assert_eq!(window.days, Some(30));
+        assert!(window.anchor_date.is_some());
+
+        let scored = analysis
+            .files
+            .iter()
+            .find(|f| f.file_path.ends_with("a.py"))
+            .expect("a.py should be scored");
+        let churn = scored
+            .contributing_factors
+            .get("churn")
+            .copied()
+            .unwrap_or(0.0);
+        assert!(churn > 0.0, "churn factor was {churn}, expected non-zero");
+    }
+
+    #[test]
+    fn test_churn_is_normalized_as_a_monthly_rate() {
+        // Widening the window must not inflate the churn factor: 10 commits
+        // in 30 days and 10 in 60 days are different rates.
+        let narrow = Analyzer::new().with_churn_days(30);
+        let wide = Analyzer::new().with_churn_days(60);
+        assert_eq!(narrow.monthly_commit_rate(10), 10.0);
+        assert_eq!(wide.monthly_commit_rate(10), 5.0);
+        // All-history has no meaningful width, so the raw count is used.
+        assert_eq!(
+            Analyzer::new()
+                .with_churn_days(u32::MAX)
+                .monthly_commit_rate(10),
+            10.0
         );
     }
 }

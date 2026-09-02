@@ -93,6 +93,13 @@ impl Analyzer {
         format!("{} days", self.config.days)
     }
 
+    /// Build from the loaded configuration, so every entry point -- the
+    /// subcommand, `omen all`, `report generate` -- uses the same window
+    /// rather than the default.
+    pub fn from_config(config: &crate::config::Config) -> Self {
+        Self::new().with_days(config.hotspot.days)
+    }
+
     pub fn with_days(mut self, days: u32) -> Self {
         self.config.days = days;
         self
@@ -290,7 +297,11 @@ impl Analyzer {
                 .count(),
         };
 
-        Ok(Analysis { hotspots, summary })
+        Ok(Analysis {
+            hotspots,
+            summary,
+            churn_window: None,
+        })
     }
 
     fn classify_severity(&self, score: f64) -> Severity {
@@ -367,7 +378,9 @@ impl AnalyzerTrait for Analyzer {
         let churn_data = self.collect_churn_from_commits(&commits, &files, ctx.root)?;
         let complexity_data = self.collect_complexity_data(&files, ctx.root)?;
 
-        self.combine_analyses(&churn_data, &complexity_data)
+        let mut analysis = self.combine_analyses(&churn_data, &complexity_data)?;
+        analysis.churn_window = ctx.churn_window(self.config.days, commits.len());
+        Ok(analysis)
     }
 }
 
@@ -375,6 +388,10 @@ impl AnalyzerTrait for Analyzer {
 pub struct Analysis {
     pub hotspots: Vec<Hotspot>,
     pub summary: AnalysisSummary,
+    /// The churn window these numbers came from. Defaulted so older
+    /// serialized results still deserialize.
+    #[serde(default)]
+    pub churn_window: Option<crate::git::ChurnWindow>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -900,6 +917,67 @@ mod tests {
             total_commits > 0,
             "churn data should have commits > 0, got {}",
             total_commits
+        );
+    }
+
+    // --- Issue #496: an empty window must not read as "no hotspots" --------
+
+    fn init_old_repo(path: &std::path::Path) {
+        let run = |args: &[&str], date: Option<&str>| {
+            let mut cmd = std::process::Command::new("git");
+            cmd.args(args).current_dir(path);
+            if let Some(date) = date {
+                cmd.env("GIT_AUTHOR_DATE", date)
+                    .env("GIT_COMMITTER_DATE", date);
+            }
+            cmd.output().expect("git command failed");
+        };
+        run(&["init"], None);
+        run(&["config", "user.email", "test@example.com"], None);
+        run(&["config", "user.name", "Test Author"], None);
+
+        for i in 0..3 {
+            std::fs::write(
+                path.join("a.py"),
+                format!("def f(x):\n    if x:\n        return {i}\n    return 0\n"),
+            )
+            .unwrap();
+            run(&["add", "-A"], None);
+            run(
+                &["commit", "-m", &format!("commit {i}")],
+                Some("2020-06-01T00:00:00+0000"),
+            );
+        }
+    }
+
+    #[test]
+    fn test_hotspots_are_found_at_an_old_revision() {
+        // Before the fix a checkout older than the 90-day window produced an
+        // empty list, indistinguishable from a genuinely clean repository.
+        let temp = tempfile::tempdir().unwrap();
+        init_old_repo(temp.path());
+
+        let config = crate::config::Config::default();
+        let files = crate::core::FileSet::from_path(temp.path(), &config).unwrap();
+        let ctx = crate::core::AnalysisContext::new(&files, &config, Some(temp.path()))
+            .with_git_path(temp.path());
+
+        let analysis = Analyzer::new().analyze(&ctx).expect("hotspot analysis");
+
+        let window = analysis
+            .churn_window
+            .as_ref()
+            .expect("the window used should be reported");
+        assert!(
+            window.commits_matched > 0,
+            "a 90-day window ending at the analyzed revision should match its \
+             own commits, got {window:?}"
+        );
+        assert_eq!(window.days, Some(90));
+        assert!(window.history_complete);
+        assert!(
+            !analysis.hotspots.is_empty(),
+            "a churned, branching file should be a hotspot"
         );
     }
 }

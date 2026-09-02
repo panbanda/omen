@@ -101,6 +101,23 @@ impl<'a> AnalysisContext<'a> {
             .map_err(|error| super::Error::git(error.clone()))
     }
 
+    /// Describe the churn window an analyzer used, so an empty one is
+    /// visible in the output rather than silently indistinguishable from a
+    /// clean repository.
+    pub fn churn_window(
+        &self,
+        days: u32,
+        commits_matched: usize,
+    ) -> Option<crate::git::ChurnWindow> {
+        let data = self.git_log_data().ok()?;
+        Some(crate::git::ChurnWindow::new(
+            days,
+            data.anchor(),
+            commits_matched,
+            data.history_complete(),
+        ))
+    }
+
     /// Query the shared numstat history with the same window and limit as git log.
     pub fn git_log_with_stats(
         &self,

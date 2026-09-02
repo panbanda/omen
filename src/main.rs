@@ -92,6 +92,17 @@ fn main() -> ExitCode {
 
 /// Resolve the repository path, cloning if it's a remote reference.
 /// Returns (resolved_path, cleanup_path) where cleanup_path is Some if we cloned a temp repo.
+/// Resolve the churn window for `defect`/`hotspot`, erroring on input that is
+/// neither a duration nor "all" rather than silently widening to all history.
+fn resolve_churn_window(
+    args: &omen::cli::ChurnWindowArgs,
+    config_days: u32,
+) -> omen::core::Result<u32> {
+    omen::cli::ChurnWindow::resolve(args.since.as_deref(), args.days, config_days)
+        .map(|window| window.as_days())
+        .map_err(omen::core::Error::config)
+}
+
 fn resolve_repo_path(cli: &Cli) -> omen::core::Result<(PathBuf, Option<PathBuf>)> {
     let path_str = cli.path.to_string_lossy();
 
@@ -466,7 +477,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
 
             // Group C: analyzers that internally depend on both file and git data.
             // Run after groups A and B to benefit from warm OS page cache.
-            let mut hotspot_analyzer = omen::analyzers::hotspot::Analyzer::default();
+            let mut hotspot_analyzer = omen::analyzers::hotspot::Analyzer::from_config(&config);
             if let Some(complexity) = collected_result(&results, "complexity") {
                 hotspot_analyzer = hotspot_analyzer.with_precomputed_complexity(complexity);
             }
@@ -479,7 +490,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 tdg_analyzer = tdg_analyzer.with_precomputed_temporal(temporal);
             }
             results.push(run_instance_and_collect!(&ctx, tdg_analyzer, "tdg"));
-            let mut defect_analyzer = omen::analyzers::defect::Analyzer::default();
+            let mut defect_analyzer = omen::analyzers::defect::Analyzer::from_config(&config);
             if let Some(complexity) = collected_result(&results, "complexity") {
                 defect_analyzer = defect_analyzer.with_precomputed_complexity(complexity);
             }
@@ -615,7 +626,14 @@ fn dispatch_analyzer(
                 .with_exclude_tests(!args.include_tests && config.duplicates.exclude_tests),
         ),
         Command::Defect(args) => {
-            run_analyzer::<omen::analyzers::defect::Analyzer>(path, config, format, Some(args))
+            let window = resolve_churn_window(&args.window, config.defect.churn_days)?;
+            run_analyzer_instance(
+                path,
+                config,
+                format,
+                Some(&args.common),
+                omen::analyzers::defect::Analyzer::new().with_churn_days(window),
+            )
         }
         Command::Tdg(args) => {
             run_analyzer::<omen::analyzers::tdg::Analyzer>(path, config, format, Some(args))
@@ -623,13 +641,16 @@ fn dispatch_analyzer(
         Command::Graph(args) => {
             run_analyzer::<omen::analyzers::graph::Analyzer>(path, config, format, Some(args))
         }
-        Command::Hotspot(args) => run_analyzer_instance(
-            path,
-            config,
-            format,
-            Some(args),
-            omen::analyzers::hotspot::Analyzer::new(),
-        ),
+        Command::Hotspot(args) => {
+            let window = resolve_churn_window(&args.window, config.hotspot.days)?;
+            run_analyzer_instance(
+                path,
+                config,
+                format,
+                Some(&args.common),
+                omen::analyzers::hotspot::Analyzer::new().with_days(window),
+            )
+        }
         Command::Temporal(args) => {
             run_analyzer::<omen::analyzers::temporal::Analyzer>(path, config, format, Some(args))
         }
@@ -954,7 +975,8 @@ fn run_score_check(
     let file_set = FileSet::from_path(path, config)?;
     let ctx = build_context(path, &file_set, config);
 
-    let analyzer = omen::score::Analyzer::default();
+    let analyzer =
+        omen::score::Analyzer::default().with_defect_churn_days(config.defect.churn_days);
     let result = analyzer.analyze(&ctx)?;
 
     let min_score = args
@@ -1242,12 +1264,12 @@ fn run_report(
                         "flags"
                     );
                     run_analyzer!(
-                        omen::analyzers::defect::Analyzer::default(),
+                        omen::analyzers::defect::Analyzer::from_config(config),
                         "defect",
                         "defect"
                     );
                     run_analyzer!(
-                        omen::analyzers::hotspot::Analyzer::default(),
+                        omen::analyzers::hotspot::Analyzer::from_config(config),
                         "hotspots",
                         "hotspots"
                     );

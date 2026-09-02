@@ -1450,6 +1450,7 @@ fn risky() {
                 critical_count: 0,
                 high_count: 1,
             },
+            churn_window: None,
         };
 
         let temporal_analysis = tp::Analysis {

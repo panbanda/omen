@@ -27,6 +27,8 @@ pub struct Config {
     pub duplicates: DuplicatesConfig,
     /// Hotspot configuration.
     pub hotspot: HotspotConfig,
+    /// Defect analyzer configuration.
+    pub defect: DefectConfig,
     /// Score thresholds.
     pub score: ScoreConfig,
     /// Feature flag configuration.
@@ -48,6 +50,7 @@ impl Default for Config {
             churn: ChurnConfig::default(),
             duplicates: DuplicatesConfig::default(),
             hotspot: HotspotConfig::default(),
+            defect: DefectConfig::default(),
             score: ScoreConfig::default(),
             feature_flags: FeatureFlagsConfig::default(),
             temporal: TemporalConfig::default(),
@@ -190,11 +193,29 @@ impl Default for DuplicatesConfig {
 pub struct HotspotConfig {
     /// Number of top hotspots to report.
     pub top: usize,
+    /// Days of history to measure churn over, ending at the analyzed
+    /// revision's own date.
+    pub days: u32,
 }
 
 impl Default for HotspotConfig {
     fn default() -> Self {
-        Self { top: 20 }
+        Self { top: 20, days: 90 }
+    }
+}
+
+/// Defect analyzer configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DefectConfig {
+    /// Days of history to measure churn over, ending at the analyzed
+    /// revision's own date.
+    pub churn_days: u32,
+}
+
+impl Default for DefectConfig {
+    fn default() -> Self {
+        Self { churn_days: 30 }
     }
 }
 

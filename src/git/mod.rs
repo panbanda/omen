@@ -7,6 +7,7 @@ mod remote;
 use std::path::{Path, PathBuf};
 
 use gix::Repository;
+use serde::{Deserialize, Serialize};
 
 use crate::core::{Error, Result};
 
@@ -39,6 +40,11 @@ impl GitLogData {
     /// this is `commits[0]`.
     pub fn anchor(&self) -> Option<i64> {
         self.commits.first().map(|commit| commit.commit_time)
+    }
+
+    /// Whether the loaded history is complete, i.e. not a shallow clone.
+    pub fn history_complete(&self) -> bool {
+        !self.root.join(".git").join("shallow").exists()
     }
 
     /// Return the exact subset that `git log --since` would select.
@@ -88,6 +94,42 @@ impl GitLogData {
             .strip_prefix("--max-age=")
             .and_then(|timestamp| timestamp.parse().ok())
             .ok_or_else(|| Error::git(format!("Invalid git date result: {value}")))
+    }
+}
+
+/// The churn window an analyzer actually used.
+///
+/// Emitted so an empty window reads as "no data" rather than as "nothing to
+/// report", and so the numbers document the window that produced them.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChurnWindow {
+    /// Window width in days. `None` means all of history.
+    pub days: Option<u32>,
+    /// Date of the revision the window ends at (RFC 3339), or `None` when the
+    /// repository has no commits.
+    pub anchor_date: Option<String>,
+    /// Commits the window actually matched.
+    pub commits_matched: usize,
+    /// False for a shallow clone, where a valid HEAD coexists with truncated
+    /// history, so a low match count proves nothing.
+    pub history_complete: bool,
+}
+
+impl ChurnWindow {
+    pub fn new(
+        days: u32,
+        anchor: Option<i64>,
+        commits_matched: usize,
+        history_complete: bool,
+    ) -> Self {
+        Self {
+            days: (days != u32::MAX).then_some(days),
+            anchor_date: anchor
+                .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
+                .map(|date| date.to_rfc3339()),
+            commits_matched,
+            history_complete,
+        }
     }
 }
 
