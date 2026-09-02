@@ -1,5 +1,14 @@
 # Changelog
 
+## [4.28.3](https://github.com/panbanda/omen/compare/omen-v4.28.2...omen-v4.28.3) (2026-09-02)
+
+
+### Bug Fixes
+
+* anchor churn windows at the analyzed revision ([#496](https://github.com/panbanda/omen/issues/496)) ([#501](https://github.com/panbanda/omen/issues/501)) ([5e96350](https://github.com/panbanda/omen/commit/5e9635069e9f04dfa9f1439eee0f313114362c64))
+* **deps:** update rust crate gix to 0.87 ([#498](https://github.com/panbanda/omen/issues/498)) ([8a1147c](https://github.com/panbanda/omen/commit/8a1147ca4ee54795b5c52e4efdd60f725a472141))
+* name JS/TS arrow functions from their binding context ([#495](https://github.com/panbanda/omen/issues/495)) ([#500](https://github.com/panbanda/omen/issues/500)) ([352fbeb](https://github.com/panbanda/omen/commit/352fbebce70f918fd760c26273a0ab14a2dbee99))
+
 ## [4.28.2](https://github.com/panbanda/omen/compare/omen-v4.28.1...omen-v4.28.2) (2026-08-19)
 
 
