@@ -94,23 +94,7 @@ impl GitLogData {
             }
         }
 
-        let output = std::process::Command::new("git")
-            .args(["rev-parse", &format!("--since={since}")])
-            .current_dir(&self.root)
-            .output()
-            .map_err(|error| Error::git(format!("Failed to resolve git date: {error}")))?;
-        if !output.status.success() {
-            return Err(Error::git(format!(
-                "Failed to resolve git date: {}",
-                String::from_utf8_lossy(&output.stderr)
-            )));
-        }
-        let value = String::from_utf8_lossy(&output.stdout);
-        value
-            .trim()
-            .strip_prefix("--max-age=")
-            .and_then(|timestamp| timestamp.parse().ok())
-            .ok_or_else(|| Error::git(format!("Invalid git date result: {value}")))
+        log::git_resolved_since(&self.root, since)
     }
 }
 
@@ -551,6 +535,26 @@ mod tests {
                 commit.commit_time
             );
         }
+    }
+
+    #[test]
+    fn test_gix_log_filters_on_absolute_dates_too() {
+        // `GitRepo::log` uses the gix walk, which has no git process to defer
+        // to -- so an absolute date must be resolved before filtering, not
+        // treated as "no lower bound".
+        let temp = tempfile::tempdir().unwrap();
+        init_old_repo(temp.path());
+        let repo = GitRepo::open(temp.path()).unwrap();
+
+        let all = repo.log(None, None, None).unwrap();
+        assert_eq!(all.len(), 2);
+
+        let since_mid = repo.log(Some("2020-03-01"), None, None).unwrap();
+        assert_eq!(
+            since_mid.len(),
+            1,
+            "an absolute date must filter the gix walk, not be ignored"
+        );
     }
 
     #[test]

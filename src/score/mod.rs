@@ -1765,4 +1765,17 @@ mod tests {
         let score = calculate_defect_score(&result);
         assert!(score < 40.0);
     }
+
+    #[test]
+    fn test_score_forwards_the_configured_defect_window() {
+        // The window used to reach only the score gate; ordinary `omen
+        // score`, MCP and each trend sample built the analyzer with defaults.
+        let mut config = crate::config::Config::default();
+        config.defect.churn_days = 365;
+        assert_eq!(Analyzer::from_config(&config).defect_churn_days, 365);
+        assert_eq!(
+            Analyzer::default().defect_churn_days,
+            crate::config::DefectConfig::default().churn_days
+        );
+    }
 }

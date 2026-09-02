@@ -131,9 +131,7 @@ impl Analyzer {
     /// subcommand, `omen all`, `report generate`, `score` -- uses the same
     /// window rather than the default.
     pub fn from_config(config: &crate::config::Config) -> Self {
-        // A config or MCP caller can supply zero, which the CLI rejects; a
-        // window with no width would divide by zero.
-        Self::new().with_churn_days(config.defect.churn_days.max(1))
+        Self::new().with_churn_days(config.defect.churn_days)
     }
 
     pub fn with_churn_days(mut self, days: u32) -> Self {

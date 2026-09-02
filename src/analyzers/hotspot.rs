@@ -100,9 +100,7 @@ impl Analyzer {
     /// subcommand, `omen all`, `report generate` -- uses the same window
     /// rather than the default.
     pub fn from_config(config: &crate::config::Config) -> Self {
-        // A config or MCP caller can supply zero, which the CLI rejects; a
-        // zero-day window matches only commits sharing HEAD's exact second.
-        Self::new().with_days(config.hotspot.days.max(1))
+        Self::new().with_days(config.hotspot.days)
     }
 
     pub fn with_days(mut self, days: u32) -> Self {

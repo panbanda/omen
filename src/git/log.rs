@@ -84,10 +84,7 @@ pub fn get_log(
         .map_err(|e| Error::git(format!("Failed to get HEAD: {e}")))?;
 
     let cutoff_time = match since {
-        Some(since) => match anchored_cutoff(repo, since)? {
-            Cutoff::At(cutoff) => Some(cutoff),
-            Cutoff::All | Cutoff::Unresolved => None,
-        },
+        Some(since) => resolve_cutoff(repo, since)?,
         None => None,
     };
 
@@ -216,6 +213,45 @@ pub fn anchored_cutoff(repo: &Repository, since: &str) -> Result<Cutoff> {
         return Ok(Cutoff::All);
     };
     Ok(cutoff_from(anchor, duration))
+}
+
+/// Resolve any `since` string to a concrete cutoff, asking git to parse the
+/// absolute dates this module's own duration parser does not understand.
+///
+/// The gix walks need this: they have no git process to defer to, so without
+/// it an absolute date would silently mean "no lower bound".
+pub fn resolve_cutoff(repo: &Repository, since: &str) -> Result<Option<i64>> {
+    match anchored_cutoff(repo, since)? {
+        Cutoff::At(cutoff) => Ok(Some(cutoff)),
+        Cutoff::All => Ok(None),
+        Cutoff::Unresolved => {
+            let Some(workdir) = repo.workdir() else {
+                return Ok(None);
+            };
+            Ok(git_resolved_since(workdir, since).ok())
+        }
+    }
+}
+
+/// Ask `git rev-parse` to turn a date expression into a timestamp.
+pub fn git_resolved_since(repo_path: &std::path::Path, since: &str) -> Result<i64> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", &format!("--since={since}")])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|error| Error::git(format!("Failed to resolve git date: {error}")))?;
+    if !output.status.success() {
+        return Err(Error::git(format!(
+            "Failed to resolve git date: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    let value = String::from_utf8_lossy(&output.stdout);
+    value
+        .trim()
+        .strip_prefix("--max-age=")
+        .and_then(|timestamp| timestamp.parse().ok())
+        .ok_or_else(|| Error::git(format!("Invalid git date result: {value}")))
 }
 
 /// Turn an anchor and a window width into a cutoff.
@@ -512,10 +548,7 @@ pub fn get_log_with_stats_gix(
         .map_err(|e| Error::git(format!("Failed to get HEAD: {e}")))?;
 
     let cutoff_time = match since {
-        Some(since) => match anchored_cutoff(repo, since)? {
-            Cutoff::At(cutoff) => Some(cutoff),
-            Cutoff::All | Cutoff::Unresolved => None,
-        },
+        Some(since) => resolve_cutoff(repo, since)?,
         None => None,
     };
 

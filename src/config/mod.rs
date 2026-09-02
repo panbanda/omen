@@ -84,6 +84,7 @@ impl Config {
             .merge(Env::prefixed("OMEN_").split("__"))
             .extract()
             .map_err(|e| crate::core::Error::Config(e.to_string()))?;
+        config.validate()?;
         Ok(config)
     }
 
@@ -104,12 +105,29 @@ impl Config {
             .merge(Env::prefixed("OMEN_").split("__"))
             .extract()
             .map_err(|e| crate::core::Error::Config(e.to_string()))?;
+        config.validate()?;
         Ok(config)
     }
 
     /// Alias for load_default.
     pub fn load_from_dir(dir: impl AsRef<Path>) -> Result<Self> {
         Self::load_default(dir)
+    }
+
+    /// Reject configuration that cannot mean anything, rather than silently
+    /// substituting a value the user did not ask for.
+    pub fn validate(&self) -> Result<()> {
+        for (key, days) in [
+            ("hotspot.days", self.hotspot.days),
+            ("defect.churn_days", self.defect.churn_days),
+        ] {
+            if days == 0 {
+                return Err(crate::core::Error::Config(format!(
+                    "{key} = 0: a window of 0 days contains no history"
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Create default config file content.
@@ -551,5 +569,28 @@ mod tests {
         assert_eq!(config.stale_days, 0);
         assert!(config.providers.is_empty());
         assert!(config.custom_providers.is_empty());
+    }
+
+    #[test]
+    fn test_zero_day_windows_are_rejected_at_load() {
+        // Otherwise an aggregate path would silently substitute a window the
+        // user never asked for.
+        let mut config = Config::default();
+        assert!(config.validate().is_ok());
+
+        config.hotspot.days = 0;
+        assert!(config.validate().is_err());
+
+        let mut config = Config::default();
+        config.defect.churn_days = 0;
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("defect.churn_days"), "got {error}");
+    }
+
+    #[test]
+    fn test_churn_window_defaults() {
+        let config = Config::default();
+        assert_eq!(config.hotspot.days, 90);
+        assert_eq!(config.defect.churn_days, 30);
     }
 }
