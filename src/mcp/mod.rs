@@ -914,7 +914,9 @@ impl McpServer {
                         .with_providers(providers),
                 )
             }
-            "score" => self.run_analyzer::<crate::score::Analyzer>(&ctx),
+            "score" => {
+                self.run_analyzer_instance(&ctx, crate::score::Analyzer::from_config(&self.config))
+            }
             "context" => {
                 return Ok(self
                     .handle_context(&path, &file_set, &arguments)

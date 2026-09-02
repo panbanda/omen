@@ -40,6 +40,13 @@ impl Analyzer {
         }
     }
 
+    /// Build from the loaded configuration, so scoring uses the configured
+    /// churn window wherever it runs -- the subcommand, the gate, MCP, and
+    /// each trend sample.
+    pub fn from_config(config: &crate::config::Config) -> Self {
+        Self::default().with_defect_churn_days(config.defect.churn_days)
+    }
+
     pub fn with_defect_churn_days(mut self, days: u32) -> Self {
         self.defect_churn_days = days;
         self

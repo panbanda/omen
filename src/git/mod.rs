@@ -21,6 +21,7 @@ pub use remote::{clone_remote, is_remote_repo, CloneOptions};
 pub struct GitLogData {
     root: PathBuf,
     commits: Vec<Commit>,
+    history_complete: bool,
 }
 
 impl GitLogData {
@@ -29,8 +30,22 @@ impl GitLogData {
     pub fn load(path: &Path) -> Result<Self> {
         let repo = GitRepo::open(path)?;
         let root = repo.root().to_path_buf();
+        // Asked while the repository is open: in a worktree, a submodule or a
+        // separate git dir, `.git` is a file and the shallow marker lives in
+        // the resolved common directory, so looking for `root/.git/shallow`
+        // would call a shallow clone complete.
+        let history_complete = !repo.is_shallow();
         let commits = repo.log_with_stats(None, None)?;
-        Ok(Self { root, commits })
+        Ok(Self {
+            root,
+            commits,
+            history_complete,
+        })
+    }
+
+    /// Whether the loaded history is complete, i.e. not a shallow clone.
+    pub fn history_complete(&self) -> bool {
+        self.history_complete
     }
 
     /// The committer time of the newest commit reachable from HEAD, which is
@@ -40,11 +55,6 @@ impl GitLogData {
     /// this is `commits[0]`.
     pub fn anchor(&self) -> Option<i64> {
         self.commits.first().map(|commit| commit.commit_time)
-    }
-
-    /// Whether the loaded history is complete, i.e. not a shallow clone.
-    pub fn history_complete(&self) -> bool {
-        !self.root.join(".git").join("shallow").exists()
     }
 
     /// Return the exact subset that `git log --since` would select.
@@ -71,9 +81,16 @@ impl GitLogData {
     /// than "no data". It also makes results deterministic. An absolute date
     /// is already a fixed point, so it is handed to git as before.
     fn resolve_since(&self, since: &str) -> Result<i64> {
+        if is_since_all(since) {
+            return Ok(i64::MIN);
+        }
         if let Some(duration) = log::parse_since_duration(since) {
             if let Some(anchor) = self.anchor() {
-                return Ok(anchor.saturating_sub(duration.as_secs() as i64));
+                return Ok(match log::cutoff_from(anchor, duration) {
+                    log::Cutoff::At(cutoff) => cutoff,
+                    // A window reaching past the epoch is all of history.
+                    _ => i64::MIN,
+                });
             }
         }
 
@@ -163,6 +180,12 @@ impl GitRepo {
     /// Check if path is inside this repository.
     pub fn contains(&self, path: &Path) -> bool {
         path.starts_with(&self.root)
+    }
+
+    /// Whether this is a shallow clone, where a valid HEAD coexists with
+    /// truncated history.
+    pub fn is_shallow(&self) -> bool {
+        self.repo.is_shallow()
     }
 
     /// Get the current branch name.

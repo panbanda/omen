@@ -358,7 +358,13 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                         }
                     }
                     None => {
-                        run_analyzer::<omen::score::Analyzer>(path, &config, format, None)?;
+                        run_analyzer_instance(
+                            path,
+                            &config,
+                            format,
+                            None,
+                            omen::score::Analyzer::from_config(&config),
+                        )?;
                     }
                 }
             }

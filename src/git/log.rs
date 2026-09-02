@@ -84,7 +84,10 @@ pub fn get_log(
         .map_err(|e| Error::git(format!("Failed to get HEAD: {e}")))?;
 
     let cutoff_time = match since {
-        Some(since) => anchored_cutoff(repo, since)?,
+        Some(since) => match anchored_cutoff(repo, since)? {
+            Cutoff::At(cutoff) => Some(cutoff),
+            Cutoff::All | Cutoff::Unresolved => None,
+        },
         None => None,
     };
 
@@ -164,41 +167,69 @@ pub fn get_log(
 
 /// The committer time of the repository's HEAD commit, or `None` when HEAD is
 /// unborn and there is therefore no history to window.
+///
+/// Only an unborn HEAD yields `None`. Every other failure propagates: a
+/// corrupt ref silently becoming "no history" is exactly the kind of quiet
+/// degradation this whole change is meant to remove.
 pub fn head_commit_time(repo: &Repository) -> Result<Option<i64>> {
-    let head = match repo.head_id() {
-        Ok(head) => head,
-        // An unborn HEAD means an empty repository, not a failure.
-        Err(_) => return Ok(None),
-    };
+    let mut head = repo
+        .head()
+        .map_err(|e| Error::git(format!("Failed to read HEAD: {e}")))?;
+    if head.is_unborn() {
+        return Ok(None);
+    }
     let commit = head
-        .object()
-        .map_err(|e| Error::git(format!("Failed to read HEAD commit: {e}")))?
-        .try_into_commit()
-        .map_err(|e| Error::git(format!("HEAD is not a commit: {e}")))?;
+        .peel_to_commit()
+        .map_err(|e| Error::git(format!("Failed to peel HEAD to a commit: {e}")))?;
     let committer = commit
         .committer()
         .map_err(|e| Error::git(format!("Failed to read HEAD committer: {e}")))?;
     Ok(Some(committer.seconds()))
 }
 
+/// How a `since` string resolved against the analyzed revision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cutoff {
+    /// No lower bound: all of history.
+    All,
+    /// A relative window, anchored at the revision, ending at this timestamp.
+    At(i64),
+    /// Not a relative duration; git must resolve it (an absolute date).
+    Unresolved,
+}
+
 /// Resolve a relative `since` window against the analyzed revision's own date.
-///
-/// Returns `None` when `since` is not a relative duration -- an absolute date
-/// is already a fixed point and needs no anchor.
 ///
 /// Anchoring at HEAD rather than at the wall clock is what makes a window
 /// meaningful in a worktree, at a release tag, mid-bisect, or in a repository
 /// that simply has not been committed to lately. It also makes the result
 /// deterministic: the same revision analyzed on two different days scores the
 /// same.
-pub fn anchored_cutoff(repo: &Repository, since: &str) -> Result<Option<i64>> {
+pub fn anchored_cutoff(repo: &Repository, since: &str) -> Result<Cutoff> {
+    if is_since_all(since) {
+        return Ok(Cutoff::All);
+    }
     let Some(duration) = parse_since_duration(since) else {
-        return Ok(None);
+        return Ok(Cutoff::Unresolved);
     };
     let Some(anchor) = head_commit_time(repo)? else {
-        return Ok(None);
+        return Ok(Cutoff::All);
     };
-    Ok(Some(anchor.saturating_sub(duration.as_secs() as i64)))
+    Ok(cutoff_from(anchor, duration))
+}
+
+/// Turn an anchor and a window width into a cutoff.
+///
+/// A window wide enough to reach past the epoch is all of history. It must not
+/// become a negative timestamp: git's approxidate reads `--since=@-3710...`
+/// as roughly *now* and returns an empty log -- the exact silent-empty failure
+/// this change exists to fix. The all-history sentinel (`u32::MAX` days)
+/// always lands here.
+pub fn cutoff_from(anchor: i64, duration: std::time::Duration) -> Cutoff {
+    match anchor.checked_sub(duration.as_secs() as i64) {
+        Some(cutoff) if cutoff > 0 => Cutoff::At(cutoff),
+        _ => Cutoff::All,
+    }
 }
 
 /// Returns true if the since string means "all history" (no time limit).
@@ -268,9 +299,16 @@ pub fn get_log_with_stats(
         // A relative window is measured from the analyzed revision, not from
         // the wall clock, so an old checkout still sees its own history.
         match anchored_cutoff(repo, since_str)? {
-            Some(cutoff) => cmd.arg(format!("--since=@{cutoff}")),
-            None => cmd.arg(format!("--since={since_str}")),
-        };
+            Cutoff::At(cutoff) => {
+                cmd.arg(format!("--since=@{cutoff}"));
+            }
+            Cutoff::Unresolved => {
+                cmd.arg(format!("--since={since_str}"));
+            }
+            // No lower bound at all: asking git for one would only risk
+            // resolving it back to the present.
+            Cutoff::All => {}
+        }
     }
 
     if let Some(max) = limit {
@@ -474,7 +512,10 @@ pub fn get_log_with_stats_gix(
         .map_err(|e| Error::git(format!("Failed to get HEAD: {e}")))?;
 
     let cutoff_time = match since {
-        Some(since) => anchored_cutoff(repo, since)?,
+        Some(since) => match anchored_cutoff(repo, since)? {
+            Cutoff::At(cutoff) => Some(cutoff),
+            Cutoff::All | Cutoff::Unresolved => None,
+        },
         None => None,
     };
 
@@ -1082,6 +1123,30 @@ mod tests {
             !messages.iter().any(|m| m.contains("Add file2")),
             "Should NOT contain 'Add file2' commit, got: {:?}",
             messages
+        );
+    }
+
+    #[test]
+    fn test_wide_windows_become_all_history_not_a_negative_cutoff() {
+        use std::time::Duration;
+        let anchor = 1_700_000_000;
+
+        assert_eq!(
+            cutoff_from(anchor, Duration::from_secs(30 * 86_400)),
+            Cutoff::At(anchor - 30 * 86_400)
+        );
+
+        // The all-history sentinel: `u32::MAX days` reaches far past the
+        // epoch. It must not become `--since=@-371...`, which git's
+        // approxidate reads as roughly *now* and answers with an empty log --
+        // the silent-empty failure this change exists to remove.
+        let sentinel = parse_since_duration(&format!("{} days", u32::MAX)).unwrap();
+        assert_eq!(cutoff_from(anchor, sentinel), Cutoff::All);
+
+        // So does any window wider than the anchor itself.
+        assert_eq!(
+            cutoff_from(anchor, Duration::from_secs(anchor as u64 + 1)),
+            Cutoff::All
         );
     }
 

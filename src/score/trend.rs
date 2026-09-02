@@ -326,11 +326,12 @@ fn find_commit_at_time(
 ) -> Option<&crate::git::Commit> {
     let target_ts = target.timestamp();
 
-    // Find the commit with timestamp closest to but not after target
+    // Committer time, matching the window bounds: a rebase can move an author
+    // date far out of order and select the wrong tree.
     commits
         .iter()
-        .filter(|c| c.timestamp <= target_ts)
-        .min_by_key(|c| (target_ts - c.timestamp).abs())
+        .filter(|c| c.commit_time <= target_ts)
+        .min_by_key(|c| (target_ts - c.commit_time).abs())
 }
 
 /// Analyze code at a specific git tree (commit) without filesystem checkout.
@@ -341,7 +342,7 @@ pub fn analyze_at_tree(tree_source: &TreeSource, config: &Config) -> Result<supe
     let root = Path::new(".");
     let ctx =
         AnalysisContext::new(&file_set, config, Some(root)).with_content_source(content_source);
-    let analyzer = ScoreAnalyzer::new();
+    let analyzer = ScoreAnalyzer::from_config(config);
     analyzer.analyze(&ctx)
 }
 
@@ -350,10 +351,10 @@ pub fn analyze_at_tree(tree_source: &TreeSource, config: &Config) -> Result<supe
 fn collect_commits_in_range(commits: &[Commit], after_ts: i64, up_to_ts: i64) -> Vec<String> {
     let mut messages: Vec<&Commit> = commits
         .iter()
-        .filter(|c| c.timestamp > after_ts && c.timestamp <= up_to_ts)
+        .filter(|c| c.commit_time > after_ts && c.commit_time <= up_to_ts)
         .collect();
     // Most recent first
-    messages.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    messages.sort_by(|a, b| b.commit_time.cmp(&a.commit_time));
     messages
         .into_iter()
         .take(5)

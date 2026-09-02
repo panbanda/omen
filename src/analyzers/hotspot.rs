@@ -90,6 +90,9 @@ impl Analyzer {
     /// The churn window as a relative duration string. The git layer anchors
     /// it at the analyzed revision's own date.
     fn since(&self) -> String {
+        if self.config.days == u32::MAX {
+            return "all".to_string();
+        }
         format!("{} days", self.config.days)
     }
 
@@ -97,7 +100,9 @@ impl Analyzer {
     /// subcommand, `omen all`, `report generate` -- uses the same window
     /// rather than the default.
     pub fn from_config(config: &crate::config::Config) -> Self {
-        Self::new().with_days(config.hotspot.days)
+        // A config or MCP caller can supply zero, which the CLI rejects; a
+        // zero-day window matches only commits sharing HEAD's exact second.
+        Self::new().with_days(config.hotspot.days.max(1))
     }
 
     pub fn with_days(mut self, days: u32) -> Self {

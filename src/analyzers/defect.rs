@@ -60,6 +60,26 @@ impl Default for Weights {
     }
 }
 
+/// The precomputed inputs every file's score is derived from.
+struct ScoringInputs<'a> {
+    complexity_data: &'a HashMap<String, (u32, u32)>,
+    duplication_data: &'a HashMap<String, f32>,
+    coupling_data: &'a HashMap<String, (f32, f32)>,
+    git_metrics: &'a HashMap<PathBuf, (usize, usize)>,
+    /// Window width used to normalize churn into a per-30-day rate.
+    window_days: u32,
+}
+
+/// Git-derived inputs for one analysis run.
+struct GitMetrics {
+    /// file -> (commit count, distinct contributors)
+    per_file: HashMap<PathBuf, (usize, usize)>,
+    commits_matched: usize,
+    /// Days between the oldest and newest matched commit, which is the real
+    /// width of an all-history window.
+    observed_span_days: u32,
+}
+
 /// Configuration for defect analyzer.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -111,7 +131,9 @@ impl Analyzer {
     /// subcommand, `omen all`, `report generate`, `score` -- uses the same
     /// window rather than the default.
     pub fn from_config(config: &crate::config::Config) -> Self {
-        Self::new().with_churn_days(config.defect.churn_days)
+        // A config or MCP caller can supply zero, which the CLI rejects; a
+        // window with no width would divide by zero.
+        Self::new().with_churn_days(config.defect.churn_days.max(1))
     }
 
     pub fn with_churn_days(mut self, days: u32) -> Self {
@@ -246,30 +268,45 @@ impl Analyzer {
         data
     }
 
+    /// The window width in days actually used, which for all-history is the
+    /// span the repository really covers rather than the sentinel.
+    ///
+    /// Without this, 20 commits spread over ten years would score the same as
+    /// 20 in a month.
+    fn effective_window_days(&self, observed_span_days: u32) -> u32 {
+        match self.config.churn_days {
+            u32::MAX => observed_span_days.max(1),
+            0 => 1,
+            days => days,
+        }
+    }
+
     /// Commits per 30 days, so a window other than the default 30 does not
     /// silently inflate or deflate the churn factor.
-    ///
-    /// All-history windows have no meaningful width, so their raw count is
-    /// used as-is rather than divided by a sentinel.
-    fn monthly_commit_rate(&self, commit_count: usize) -> f32 {
-        match self.config.churn_days {
-            0 | u32::MAX => commit_count as f32,
-            days => commit_count as f32 * 30.0 / days as f32,
-        }
+    fn monthly_commit_rate(&self, commit_count: usize, window_days: u32) -> f32 {
+        commit_count as f32 * 30.0 / window_days.max(1) as f32
     }
 
     /// Pre-compute git metrics (churn and ownership) for all files at once.
     /// Returns a map of file path -> (commit_count, contributor_count).
-    fn compute_git_metrics(
-        &self,
-        ctx: &AnalysisContext<'_>,
-    ) -> (HashMap<PathBuf, (usize, usize)>, usize) {
+    fn compute_git_metrics(&self, ctx: &AnalysisContext<'_>) -> Result<GitMetrics> {
         let mut result = HashMap::new();
-        let mut commits_matched = 0;
+        let mut observed_span_days = 0;
 
-        let since = format!("{} days", self.config.churn_days);
-        if let Ok(commits) = ctx.git_log_with_stats(Some(&since), None) {
+        let since = self.since();
+        // A git failure is a real failure. Swallowing it would put every file
+        // at churn 0 while the output still looked like a full prediction --
+        // the very shape of bug this analyzer was fixed for.
+        let commits_matched;
+        {
+            let commits = ctx.git_log_with_stats(Some(&since), None)?;
             commits_matched = commits.len();
+            if let (Some(newest), Some(oldest)) = (
+                commits.iter().map(|c| c.commit_time).max(),
+                commits.iter().map(|c| c.commit_time).min(),
+            ) {
+                observed_span_days = ((newest - oldest) / 86_400).max(0) as u32;
+            }
             // Build per-file metrics from the single git log call
             let mut file_commits: HashMap<PathBuf, usize> = HashMap::new();
             let mut file_contributors: HashMap<PathBuf, HashSet<String>> = HashMap::new();
@@ -291,7 +328,20 @@ impl Analyzer {
             }
         }
 
-        (result, commits_matched)
+        Ok(GitMetrics {
+            per_file: result,
+            commits_matched,
+            observed_span_days,
+        })
+    }
+
+    /// The churn window as a relative duration string. The git layer anchors
+    /// it at the analyzed revision's own date.
+    fn since(&self) -> String {
+        if self.config.churn_days == u32::MAX {
+            return "all".to_string();
+        }
+        format!("{} days", self.config.churn_days)
     }
 
     /// Get file metrics for defect prediction.
@@ -300,11 +350,16 @@ impl Analyzer {
         &self,
         root_path: &std::path::Path,
         file_path: &str,
-        complexity_data: &HashMap<String, (u32, u32)>,
-        duplication_data: &HashMap<String, f32>,
-        coupling_data: &HashMap<String, (f32, f32)>,
-        git_metrics: &HashMap<PathBuf, (usize, usize)>,
+        inputs: &ScoringInputs<'_>,
     ) -> FileMetrics {
+        let ScoringInputs {
+            complexity_data,
+            duplication_data,
+            coupling_data,
+            git_metrics,
+            window_days,
+        } = inputs;
+        let window_days = *window_days;
         let mut metrics = FileMetrics {
             file_path: file_path.to_string(),
             ..Default::default()
@@ -315,7 +370,8 @@ impl Analyzer {
         if let Some(&(commit_count, contributor_count)) = git_metrics.get(&file_pathbuf) {
             // Normalize churn as a monthly rate (~20 commits/month = high
             // churn), so the score means the same thing at any window width.
-            metrics.churn_score = (self.monthly_commit_rate(commit_count) / 20.0).min(1.0);
+            metrics.churn_score =
+                (self.monthly_commit_rate(commit_count, window_days) / 20.0).min(1.0);
             metrics.ownership_diffusion = contributor_count as f32;
         }
 
@@ -472,7 +528,9 @@ impl AnalyzerTrait for Analyzer {
         let coupling_data = self.compute_coupling_data(ctx);
 
         // Pre-compute git metrics once for all files (single git log call)
-        let (git_metrics, commits_matched) = self.compute_git_metrics(ctx);
+        let git = self.compute_git_metrics(ctx)?;
+        let window_days = self.effective_window_days(git.observed_span_days);
+        let git_metrics = git.per_file;
 
         // Pre-filter files
         let valid_files: Vec<_> = ctx
@@ -488,6 +546,14 @@ impl AnalyzerTrait for Analyzer {
             })
             .collect();
 
+        let scoring_inputs = ScoringInputs {
+            complexity_data: &complexity_data,
+            duplication_data: &duplication_data,
+            coupling_data: &coupling_data,
+            git_metrics: &git_metrics,
+            window_days,
+        };
+
         // Process files in parallel
         let weights = &self.config.weights;
         let file_scores: Vec<FileScore> = valid_files
@@ -496,14 +562,7 @@ impl AnalyzerTrait for Analyzer {
                 let file_path = path.strip_prefix(ctx.root).unwrap_or(path);
                 let file_str = file_path.to_string_lossy();
 
-                let metrics = self.get_file_metrics(
-                    ctx.root,
-                    &file_str,
-                    &complexity_data,
-                    &duplication_data,
-                    &coupling_data,
-                    &git_metrics,
-                );
+                let metrics = self.get_file_metrics(ctx.root, &file_str, &scoring_inputs);
                 let prob = self.calculate_probability(&metrics);
                 let confidence = self.calculate_confidence(&metrics);
                 let risk = RiskLevel::from_probability(prob);
@@ -580,7 +639,7 @@ impl AnalyzerTrait for Analyzer {
             files: file_scores,
             summary,
             weights: self.config.weights.clone(),
-            churn_window: ctx.churn_window(self.config.churn_days, commits_matched),
+            churn_window: ctx.churn_window(self.config.churn_days, git.commits_matched),
         })
     }
 }
@@ -1066,16 +1125,31 @@ mod tests {
     fn test_churn_is_normalized_as_a_monthly_rate() {
         // Widening the window must not inflate the churn factor: 10 commits
         // in 30 days and 10 in 60 days are different rates.
-        let narrow = Analyzer::new().with_churn_days(30);
-        let wide = Analyzer::new().with_churn_days(60);
-        assert_eq!(narrow.monthly_commit_rate(10), 10.0);
-        assert_eq!(wide.monthly_commit_rate(10), 5.0);
-        // All-history has no meaningful width, so the raw count is used.
+        let analyzer = Analyzer::new();
+        assert_eq!(analyzer.monthly_commit_rate(10, 30), 10.0);
+        assert_eq!(analyzer.monthly_commit_rate(10, 60), 5.0);
+    }
+
+    #[test]
+    fn test_all_history_window_uses_the_span_actually_covered() {
+        // Otherwise 20 commits over ten years would score like 20 in a month.
+        let all = Analyzer::new().with_churn_days(u32::MAX);
+        assert_eq!(all.effective_window_days(3650), 3650);
+        assert_eq!(all.monthly_commit_rate(20, 3650), 20.0 * 30.0 / 3650.0);
+
+        // A fixed window ignores the observed span.
         assert_eq!(
             Analyzer::new()
-                .with_churn_days(u32::MAX)
-                .monthly_commit_rate(10),
-            10.0
+                .with_churn_days(30)
+                .effective_window_days(3650),
+            30
+        );
+
+        // Degenerate widths never divide by zero.
+        assert_eq!(all.effective_window_days(0), 1);
+        assert_eq!(
+            Analyzer::new().with_churn_days(0).effective_window_days(0),
+            1
         );
     }
 }
