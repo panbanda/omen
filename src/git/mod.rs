@@ -32,13 +32,22 @@ impl GitLogData {
         Ok(Self { root, commits })
     }
 
+    /// The committer time of the newest commit reachable from HEAD, which is
+    /// the date of the revision being analyzed.
+    ///
+    /// `log_with_stats(None, None)` is reverse-chronological from HEAD, so
+    /// this is `commits[0]`.
+    pub fn anchor(&self) -> Option<i64> {
+        self.commits.first().map(|commit| commit.commit_time)
+    }
+
     /// Return the exact subset that `git log --since` would select.
     pub fn query(&self, since: Option<&str>, limit: Option<usize>) -> Result<Vec<Commit>> {
         let cutoff = since.map(|value| self.resolve_since(value)).transpose()?;
         let mut commits: Vec<Commit> = self
             .commits
             .iter()
-            .filter(|commit| cutoff.is_none_or(|timestamp| commit.timestamp >= timestamp))
+            .filter(|commit| cutoff.is_none_or(|timestamp| commit.commit_time >= timestamp))
             .cloned()
             .collect();
         if let Some(max) = limit {
@@ -47,7 +56,21 @@ impl GitLogData {
         Ok(commits)
     }
 
+    /// Resolve a `since` window to a cutoff timestamp.
+    ///
+    /// A relative duration is measured from the analyzed revision's own date
+    /// rather than from the wall clock: a worktree, a release tag, a bisect
+    /// step or a repository nobody has touched this quarter would otherwise
+    /// match no commits at all, and report that as "nothing to see" rather
+    /// than "no data". It also makes results deterministic. An absolute date
+    /// is already a fixed point, so it is handed to git as before.
     fn resolve_since(&self, since: &str) -> Result<i64> {
+        if let Some(duration) = log::parse_since_duration(since) {
+            if let Some(anchor) = self.anchor() {
+                return Ok(anchor.saturating_sub(duration.as_secs() as i64));
+            }
+        }
+
         let output = std::process::Command::new("git")
             .args(["rev-parse", &format!("--since={since}")])
             .current_dir(&self.root)
@@ -125,6 +148,13 @@ impl GitRepo {
             .head_id()
             .map_err(|e| Error::git(format!("Failed to get HEAD: {e}")))?;
         Ok(head.to_string())
+    }
+
+    /// Committer time of HEAD, or `None` when HEAD is unborn.
+    ///
+    /// This is the anchor every relative time window is measured from.
+    pub fn head_commit_time(&self) -> Result<Option<i64>> {
+        log::head_commit_time(&self.repo)
     }
 
     /// Get commit log with optional path filter.
@@ -385,5 +415,90 @@ mod tests {
         let result = repo.blame(&file_path);
         // blame might work or fail depending on gix implementation
         assert!(result.is_ok() || result.is_err());
+    }
+
+    // --- Issue #496: windows anchored at the analyzed revision -------------
+
+    /// Build a repo whose entire history predates any plausible wall clock,
+    /// so a window measured from "now" matches nothing.
+    fn init_old_repo(path: &std::path::Path) -> Vec<String> {
+        let run = |args: &[&str], date: Option<&str>| {
+            let mut cmd = std::process::Command::new("git");
+            cmd.args(args).current_dir(path);
+            if let Some(date) = date {
+                cmd.env("GIT_AUTHOR_DATE", date)
+                    .env("GIT_COMMITTER_DATE", date);
+            }
+            cmd.output().expect("git command failed");
+        };
+        run(&["init"], None);
+        run(&["config", "user.email", "test@example.com"], None);
+        run(&["config", "user.name", "Test Author"], None);
+
+        // Far enough apart that a 30-day window reaches only HEAD.
+        let dates = ["2020-01-01T00:00:00+0000", "2020-06-01T00:00:00+0000"];
+        for (i, date) in dates.iter().enumerate() {
+            std::fs::write(path.join("a.txt"), format!("line {i}\n")).unwrap();
+            run(&["add", "-A"], None);
+            run(&["commit", "-m", &format!("commit {i}")], Some(date));
+        }
+        dates.iter().map(|d| d.to_string()).collect()
+    }
+
+    #[test]
+    fn test_relative_window_is_anchored_at_head_not_the_wall_clock() {
+        // The bug: `--since=30 days` resolves against the current time, so a
+        // checkout older than the window matches nothing and the analyzers
+        // report "no data" as though it meant "nothing to report".
+        let temp = tempfile::tempdir().unwrap();
+        init_old_repo(temp.path());
+
+        let data = GitLogData::load(temp.path()).expect("history should load");
+        assert_eq!(data.commits.len(), 2, "fixture should have two commits");
+
+        let recent = data.query(Some("30 days"), None).expect("query");
+        assert_eq!(
+            recent.len(),
+            1,
+            "a 30-day window ending at HEAD (2020-06-01) should contain only \
+             the HEAD commit, not zero commits"
+        );
+
+        let wide = data.query(Some("1y"), None).expect("query");
+        assert_eq!(wide.len(), 2, "a one-year window should reach both commits");
+
+        let all = data.query(None, None).expect("query");
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn test_window_is_measured_from_committer_time() {
+        // `git log --since` filters on committer date, and gix orders by it,
+        // so the window must use the same clock rather than the author date.
+        let temp = tempfile::tempdir().unwrap();
+        init_old_repo(temp.path());
+
+        let data = GitLogData::load(temp.path()).expect("history should load");
+        for commit in &data.commits {
+            assert!(
+                commit.commit_time > 0,
+                "committer time should be populated, got {}",
+                commit.commit_time
+            );
+        }
+    }
+
+    #[test]
+    fn test_absolute_since_dates_still_resolve() {
+        let temp = tempfile::tempdir().unwrap();
+        init_old_repo(temp.path());
+
+        let data = GitLogData::load(temp.path()).expect("history should load");
+        let since_mid = data.query(Some("2020-01-10"), None).expect("query");
+        assert_eq!(
+            since_mid.len(),
+            1,
+            "an absolute date is not relative to HEAD and must still work"
+        );
     }
 }

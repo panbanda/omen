@@ -17,8 +17,16 @@ pub struct Commit {
     pub author: String,
     /// Author email.
     pub email: String,
-    /// Commit timestamp.
+    /// Author timestamp, for attribution and display.
     pub timestamp: i64,
+    /// Committer timestamp.
+    ///
+    /// This is the clock `git log --since` filters on and gix's
+    /// `ByCommitTime` orders by, so every time window must use it. The author
+    /// date can be moved arbitrarily far out of topological order by a
+    /// rebase.
+    #[serde(default)]
+    pub commit_time: i64,
     /// Commit message (first line).
     pub message: String,
     /// Files changed in this commit.
@@ -75,14 +83,10 @@ pub fn get_log(
         .head_id()
         .map_err(|e| Error::git(format!("Failed to get HEAD: {e}")))?;
 
-    let cutoff_time = since.and_then(parse_since_duration).map(|duration| {
-        let now = std::time::SystemTime::now();
-        now.checked_sub(duration)
-            .unwrap_or(std::time::UNIX_EPOCH)
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0)
-    });
+    let cutoff_time = match since {
+        Some(since) => anchored_cutoff(repo, since)?,
+        None => None,
+    };
 
     let walk = repo
         .rev_walk([head])
@@ -102,10 +106,15 @@ pub fn get_log(
 
         let author = commit.author().map_err(|e| Error::git(format!("{e}")))?;
         let timestamp = author.seconds();
+        let commit_time = commit
+            .committer()
+            .map(|committer| committer.seconds())
+            .unwrap_or(timestamp);
 
-        // Skip commits older than cutoff
+        // Skip commits older than the cutoff. The walk is ordered by
+        // committer time, so the filter must use the same clock.
         if let Some(cutoff) = cutoff_time {
-            if timestamp < cutoff {
+            if commit_time < cutoff {
                 break;
             }
         }
@@ -134,6 +143,7 @@ pub fn get_log(
             author: author.name.to_string(),
             email: author.email.to_string(),
             timestamp,
+            commit_time,
             message,
             files: Vec::new(), // File changes calculated separately if needed
         });
@@ -150,6 +160,45 @@ pub fn get_log(
     }
 
     Ok(commits)
+}
+
+/// The committer time of the repository's HEAD commit, or `None` when HEAD is
+/// unborn and there is therefore no history to window.
+pub fn head_commit_time(repo: &Repository) -> Result<Option<i64>> {
+    let head = match repo.head_id() {
+        Ok(head) => head,
+        // An unborn HEAD means an empty repository, not a failure.
+        Err(_) => return Ok(None),
+    };
+    let commit = head
+        .object()
+        .map_err(|e| Error::git(format!("Failed to read HEAD commit: {e}")))?
+        .try_into_commit()
+        .map_err(|e| Error::git(format!("HEAD is not a commit: {e}")))?;
+    let committer = commit
+        .committer()
+        .map_err(|e| Error::git(format!("Failed to read HEAD committer: {e}")))?;
+    Ok(Some(committer.seconds()))
+}
+
+/// Resolve a relative `since` window against the analyzed revision's own date.
+///
+/// Returns `None` when `since` is not a relative duration -- an absolute date
+/// is already a fixed point and needs no anchor.
+///
+/// Anchoring at HEAD rather than at the wall clock is what makes a window
+/// meaningful in a worktree, at a release tag, mid-bisect, or in a repository
+/// that simply has not been committed to lately. It also makes the result
+/// deterministic: the same revision analyzed on two different days scores the
+/// same.
+pub fn anchored_cutoff(repo: &Repository, since: &str) -> Result<Option<i64>> {
+    let Some(duration) = parse_since_duration(since) else {
+        return Ok(None);
+    };
+    let Some(anchor) = head_commit_time(repo)? else {
+        return Ok(None);
+    };
+    Ok(Some(anchor.saturating_sub(duration.as_secs() as i64)))
 }
 
 /// Returns true if the since string means "all history" (no time limit).
@@ -169,7 +218,7 @@ pub fn parse_since_to_days(since: &str) -> Option<u32> {
 }
 
 /// Parse "since" duration strings like "30 days ago", "1 week", "6m", "1y".
-fn parse_since_duration(since: &str) -> Option<std::time::Duration> {
+pub fn parse_since_duration(since: &str) -> Option<std::time::Duration> {
     let since = since.trim().to_lowercase();
 
     // Handle "X days ago" format
@@ -213,10 +262,15 @@ pub fn get_log_with_stats(
     // Build git log command with numstat
     let mut cmd = std::process::Command::new("git");
     cmd.current_dir(repo_path);
-    cmd.args(["log", "--format=%H|%an|%ae|%at|%s", "--numstat"]);
+    cmd.args(["log", "--format=%H|%an|%ae|%at|%ct|%s", "--numstat"]);
 
     if let Some(since_str) = since {
-        cmd.arg(format!("--since={}", since_str));
+        // A relative window is measured from the analyzed revision, not from
+        // the wall clock, so an old checkout still sees its own history.
+        match anchored_cutoff(repo, since_str)? {
+            Some(cutoff) => cmd.arg(format!("--since=@{cutoff}")),
+            None => cmd.arg(format!("--since={since_str}")),
+        };
     }
 
     if let Some(max) = limit {
@@ -340,8 +394,8 @@ fn parse_git_log_numstat(output: &[u8]) -> Result<Vec<Commit>> {
 
         // Check if this is a commit line (contains |)
         if line.contains('|') {
-            let parts: Vec<&str> = line.splitn(5, '|').collect();
-            if parts.len() == 5 {
+            let parts: Vec<&str> = line.splitn(6, '|').collect();
+            if parts.len() == 6 {
                 // Save previous commit
                 if let Some(commit) = current_commit.take() {
                     commits.push(commit);
@@ -352,13 +406,15 @@ fn parse_git_log_numstat(output: &[u8]) -> Result<Vec<Commit>> {
                 let author = parts[1].to_string();
                 let email = parts[2].to_string();
                 let timestamp: i64 = parts[3].parse().unwrap_or(0);
-                let message = parts[4].to_string();
+                let commit_time: i64 = parts[4].parse().unwrap_or(timestamp);
+                let message = parts[5].to_string();
 
                 current_commit = Some(Commit {
                     sha,
                     author,
                     email,
                     timestamp,
+                    commit_time,
                     message,
                     files: Vec::new(),
                 });
@@ -417,14 +473,10 @@ pub fn get_log_with_stats_gix(
         .head_id()
         .map_err(|e| Error::git(format!("Failed to get HEAD: {e}")))?;
 
-    let cutoff_time = since.and_then(parse_since_duration).map(|duration| {
-        let now = std::time::SystemTime::now();
-        now.checked_sub(duration)
-            .unwrap_or(std::time::UNIX_EPOCH)
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0)
-    });
+    let cutoff_time = match since {
+        Some(since) => anchored_cutoff(repo, since)?,
+        None => None,
+    };
 
     let walk = repo
         .rev_walk([head])
@@ -444,10 +496,15 @@ pub fn get_log_with_stats_gix(
 
         let author = commit.author().map_err(|e| Error::git(format!("{e}")))?;
         let timestamp = author.seconds();
+        let commit_time = commit
+            .committer()
+            .map(|committer| committer.seconds())
+            .unwrap_or(timestamp);
 
-        // Skip commits older than cutoff
+        // Skip commits older than the cutoff. The walk is ordered by
+        // committer time, so the filter must use the same clock.
         if let Some(cutoff) = cutoff_time {
-            if timestamp < cutoff {
+            if commit_time < cutoff {
                 break;
             }
         }
@@ -466,6 +523,7 @@ pub fn get_log_with_stats_gix(
             author: author.name.to_string(),
             email: author.email.to_string(),
             timestamp,
+            commit_time,
             message,
             files,
         });
@@ -762,6 +820,7 @@ mod tests {
             author: "Test Author".to_string(),
             email: "test@example.com".to_string(),
             timestamp: 1704067200,
+            commit_time: 1704067200,
             message: "Initial commit".to_string(),
             files: vec![],
         };
@@ -816,6 +875,7 @@ mod tests {
             author: "Test Author".to_string(),
             email: "test@example.com".to_string(),
             timestamp: 1704067200,
+            commit_time: 1704067200,
             message: "Test commit".to_string(),
             files: vec![],
         };
@@ -859,6 +919,7 @@ mod tests {
             author: "Test Author".to_string(),
             email: "test@example.com".to_string(),
             timestamp: 1704067200,
+            commit_time: 1704067200,
             message: "Test commit".to_string(),
             files: vec![
                 FileChange {

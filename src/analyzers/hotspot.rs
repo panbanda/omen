@@ -19,7 +19,6 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use chrono::Utc;
 use ignore::WalkBuilder;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -88,6 +87,12 @@ impl Analyzer {
         }
     }
 
+    /// The churn window as a relative duration string. The git layer anchors
+    /// it at the analyzed revision's own date.
+    fn since(&self) -> String {
+        format!("{} days", self.config.days)
+    }
+
     pub fn with_days(mut self, days: u32) -> Self {
         self.config.days = days;
         self
@@ -126,12 +131,9 @@ impl Analyzer {
         files: &[std::path::PathBuf],
         root: &Path,
     ) -> Result<Vec<FileChurn>> {
-        // Get cutoff timestamp
-        let now = Utc::now();
-        let days_ago = now - chrono::Duration::days(self.config.days as i64);
-        let since = days_ago.format("%Y-%m-%d").to_string();
-
-        // Get all commits in the time range
+        // A relative window, not a date computed from the wall clock: the
+        // git layer anchors it at the analyzed revision.
+        let since = self.since();
         let commits = git_repo.log_with_stats(Some(&since), None)?;
 
         self.collect_churn_from_commits(&commits, files, root)
@@ -360,9 +362,7 @@ impl AnalyzerTrait for Analyzer {
         // Build absolute paths from the pre-filtered file set
         let files: Vec<std::path::PathBuf> = ctx.files.iter().map(|p| ctx.root.join(p)).collect();
 
-        let now = Utc::now();
-        let days_ago = now - chrono::Duration::days(self.config.days as i64);
-        let since = days_ago.format("%Y-%m-%d").to_string();
+        let since = self.since();
         let commits = ctx.git_log_with_stats(Some(&since), None)?;
         let churn_data = self.collect_churn_from_commits(&commits, &files, ctx.root)?;
         let complexity_data = self.collect_complexity_data(&files, ctx.root)?;
