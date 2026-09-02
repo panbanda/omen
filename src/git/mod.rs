@@ -7,6 +7,7 @@ mod remote;
 use std::path::{Path, PathBuf};
 
 use gix::Repository;
+use serde::{Deserialize, Serialize};
 
 use crate::core::{Error, Result};
 
@@ -20,6 +21,7 @@ pub use remote::{clone_remote, is_remote_repo, CloneOptions};
 pub struct GitLogData {
     root: PathBuf,
     commits: Vec<Commit>,
+    history_complete: bool,
 }
 
 impl GitLogData {
@@ -28,8 +30,31 @@ impl GitLogData {
     pub fn load(path: &Path) -> Result<Self> {
         let repo = GitRepo::open(path)?;
         let root = repo.root().to_path_buf();
+        // Asked while the repository is open: in a worktree, a submodule or a
+        // separate git dir, `.git` is a file and the shallow marker lives in
+        // the resolved common directory, so looking for `root/.git/shallow`
+        // would call a shallow clone complete.
+        let history_complete = !repo.is_shallow();
         let commits = repo.log_with_stats(None, None)?;
-        Ok(Self { root, commits })
+        Ok(Self {
+            root,
+            commits,
+            history_complete,
+        })
+    }
+
+    /// Whether the loaded history is complete, i.e. not a shallow clone.
+    pub fn history_complete(&self) -> bool {
+        self.history_complete
+    }
+
+    /// The committer time of the newest commit reachable from HEAD, which is
+    /// the date of the revision being analyzed.
+    ///
+    /// `log_with_stats(None, None)` is reverse-chronological from HEAD, so
+    /// this is `commits[0]`.
+    pub fn anchor(&self) -> Option<i64> {
+        self.commits.first().map(|commit| commit.commit_time)
     }
 
     /// Return the exact subset that `git log --since` would select.
@@ -38,7 +63,7 @@ impl GitLogData {
         let mut commits: Vec<Commit> = self
             .commits
             .iter()
-            .filter(|commit| cutoff.is_none_or(|timestamp| commit.timestamp >= timestamp))
+            .filter(|commit| cutoff.is_none_or(|timestamp| commit.commit_time >= timestamp))
             .cloned()
             .collect();
         if let Some(max) = limit {
@@ -47,24 +72,65 @@ impl GitLogData {
         Ok(commits)
     }
 
+    /// Resolve a `since` window to a cutoff timestamp.
+    ///
+    /// A relative duration is measured from the analyzed revision's own date
+    /// rather than from the wall clock: a worktree, a release tag, a bisect
+    /// step or a repository nobody has touched this quarter would otherwise
+    /// match no commits at all, and report that as "nothing to see" rather
+    /// than "no data". It also makes results deterministic. An absolute date
+    /// is already a fixed point, so it is handed to git as before.
     fn resolve_since(&self, since: &str) -> Result<i64> {
-        let output = std::process::Command::new("git")
-            .args(["rev-parse", &format!("--since={since}")])
-            .current_dir(&self.root)
-            .output()
-            .map_err(|error| Error::git(format!("Failed to resolve git date: {error}")))?;
-        if !output.status.success() {
-            return Err(Error::git(format!(
-                "Failed to resolve git date: {}",
-                String::from_utf8_lossy(&output.stderr)
-            )));
+        if is_since_all(since) {
+            return Ok(i64::MIN);
         }
-        let value = String::from_utf8_lossy(&output.stdout);
-        value
-            .trim()
-            .strip_prefix("--max-age=")
-            .and_then(|timestamp| timestamp.parse().ok())
-            .ok_or_else(|| Error::git(format!("Invalid git date result: {value}")))
+        if let Some(duration) = log::parse_since_duration(since) {
+            if let Some(anchor) = self.anchor() {
+                return Ok(match log::cutoff_from(anchor, duration) {
+                    log::Cutoff::At(cutoff) => cutoff,
+                    // A window reaching past the epoch is all of history.
+                    _ => i64::MIN,
+                });
+            }
+        }
+
+        log::git_resolved_since(&self.root, since)
+    }
+}
+
+/// The churn window an analyzer actually used.
+///
+/// Emitted so an empty window reads as "no data" rather than as "nothing to
+/// report", and so the numbers document the window that produced them.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChurnWindow {
+    /// Window width in days. `None` means all of history.
+    pub days: Option<u32>,
+    /// Date of the revision the window ends at (RFC 3339), or `None` when the
+    /// repository has no commits.
+    pub anchor_date: Option<String>,
+    /// Commits the window actually matched.
+    pub commits_matched: usize,
+    /// False for a shallow clone, where a valid HEAD coexists with truncated
+    /// history, so a low match count proves nothing.
+    pub history_complete: bool,
+}
+
+impl ChurnWindow {
+    pub fn new(
+        days: u32,
+        anchor: Option<i64>,
+        commits_matched: usize,
+        history_complete: bool,
+    ) -> Self {
+        Self {
+            days: (days != u32::MAX).then_some(days),
+            anchor_date: anchor
+                .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
+                .map(|date| date.to_rfc3339()),
+            commits_matched,
+            history_complete,
+        }
     }
 }
 
@@ -100,6 +166,12 @@ impl GitRepo {
         path.starts_with(&self.root)
     }
 
+    /// Whether this is a shallow clone, where a valid HEAD coexists with
+    /// truncated history.
+    pub fn is_shallow(&self) -> bool {
+        self.repo.is_shallow()
+    }
+
     /// Get the current branch name.
     pub fn current_branch(&self) -> Result<String> {
         let head = self
@@ -125,6 +197,13 @@ impl GitRepo {
             .head_id()
             .map_err(|e| Error::git(format!("Failed to get HEAD: {e}")))?;
         Ok(head.to_string())
+    }
+
+    /// Committer time of HEAD, or `None` when HEAD is unborn.
+    ///
+    /// This is the anchor every relative time window is measured from.
+    pub fn head_commit_time(&self) -> Result<Option<i64>> {
+        log::head_commit_time(&self.repo)
     }
 
     /// Get commit log with optional path filter.
@@ -385,5 +464,110 @@ mod tests {
         let result = repo.blame(&file_path);
         // blame might work or fail depending on gix implementation
         assert!(result.is_ok() || result.is_err());
+    }
+
+    // --- Issue #496: windows anchored at the analyzed revision -------------
+
+    /// Build a repo whose entire history predates any plausible wall clock,
+    /// so a window measured from "now" matches nothing.
+    fn init_old_repo(path: &std::path::Path) -> Vec<String> {
+        let run = |args: &[&str], date: Option<&str>| {
+            let mut cmd = std::process::Command::new("git");
+            cmd.args(args).current_dir(path);
+            if let Some(date) = date {
+                cmd.env("GIT_AUTHOR_DATE", date)
+                    .env("GIT_COMMITTER_DATE", date);
+            }
+            cmd.output().expect("git command failed");
+        };
+        run(&["init"], None);
+        run(&["config", "user.email", "test@example.com"], None);
+        run(&["config", "user.name", "Test Author"], None);
+
+        // Far enough apart that a 30-day window reaches only HEAD.
+        let dates = ["2020-01-01T00:00:00+0000", "2020-06-01T00:00:00+0000"];
+        for (i, date) in dates.iter().enumerate() {
+            std::fs::write(path.join("a.txt"), format!("line {i}\n")).unwrap();
+            run(&["add", "-A"], None);
+            run(&["commit", "-m", &format!("commit {i}")], Some(date));
+        }
+        dates.iter().map(|d| d.to_string()).collect()
+    }
+
+    #[test]
+    fn test_relative_window_is_anchored_at_head_not_the_wall_clock() {
+        // The bug: `--since=30 days` resolves against the current time, so a
+        // checkout older than the window matches nothing and the analyzers
+        // report "no data" as though it meant "nothing to report".
+        let temp = tempfile::tempdir().unwrap();
+        init_old_repo(temp.path());
+
+        let data = GitLogData::load(temp.path()).expect("history should load");
+        assert_eq!(data.commits.len(), 2, "fixture should have two commits");
+
+        let recent = data.query(Some("30 days"), None).expect("query");
+        assert_eq!(
+            recent.len(),
+            1,
+            "a 30-day window ending at HEAD (2020-06-01) should contain only \
+             the HEAD commit, not zero commits"
+        );
+
+        let wide = data.query(Some("1y"), None).expect("query");
+        assert_eq!(wide.len(), 2, "a one-year window should reach both commits");
+
+        let all = data.query(None, None).expect("query");
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn test_window_is_measured_from_committer_time() {
+        // `git log --since` filters on committer date, and gix orders by it,
+        // so the window must use the same clock rather than the author date.
+        let temp = tempfile::tempdir().unwrap();
+        init_old_repo(temp.path());
+
+        let data = GitLogData::load(temp.path()).expect("history should load");
+        for commit in &data.commits {
+            assert!(
+                commit.commit_time > 0,
+                "committer time should be populated, got {}",
+                commit.commit_time
+            );
+        }
+    }
+
+    #[test]
+    fn test_gix_log_filters_on_absolute_dates_too() {
+        // `GitRepo::log` uses the gix walk, which has no git process to defer
+        // to -- so an absolute date must be resolved before filtering, not
+        // treated as "no lower bound".
+        let temp = tempfile::tempdir().unwrap();
+        init_old_repo(temp.path());
+        let repo = GitRepo::open(temp.path()).unwrap();
+
+        let all = repo.log(None, None, None).unwrap();
+        assert_eq!(all.len(), 2);
+
+        let since_mid = repo.log(Some("2020-03-01"), None, None).unwrap();
+        assert_eq!(
+            since_mid.len(),
+            1,
+            "an absolute date must filter the gix walk, not be ignored"
+        );
+    }
+
+    #[test]
+    fn test_absolute_since_dates_still_resolve() {
+        let temp = tempfile::tempdir().unwrap();
+        init_old_repo(temp.path());
+
+        let data = GitLogData::load(temp.path()).expect("history should load");
+        let since_mid = data.query(Some("2020-01-10"), None).expect("query");
+        assert_eq!(
+            since_mid.len(),
+            1,
+            "an absolute date is not relative to HEAD and must still work"
+        );
     }
 }

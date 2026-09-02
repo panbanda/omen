@@ -12,9 +12,20 @@ use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result};
 pub use trend::{analyze_trend, default_sample_count};
 
 /// Score analyzer - calculates composite health score.
-#[derive(Default)]
 pub struct Analyzer {
     weights: ScoreWeights,
+    /// Churn window handed to the defect analyzer, so scoring honours the
+    /// configured window rather than always using the default.
+    defect_churn_days: u32,
+}
+
+impl Default for Analyzer {
+    fn default() -> Self {
+        Self {
+            weights: ScoreWeights::default(),
+            defect_churn_days: crate::config::DefectConfig::default().churn_days,
+        }
+    }
 }
 
 impl Analyzer {
@@ -23,7 +34,22 @@ impl Analyzer {
     }
 
     pub fn with_weights(weights: ScoreWeights) -> Self {
-        Self { weights }
+        Self {
+            weights,
+            ..Self::default()
+        }
+    }
+
+    /// Build from the loaded configuration, so scoring uses the configured
+    /// churn window wherever it runs -- the subcommand, the gate, MCP, and
+    /// each trend sample.
+    pub fn from_config(config: &crate::config::Config) -> Self {
+        Self::default().with_defect_churn_days(config.defect.churn_days)
+    }
+
+    pub fn with_defect_churn_days(mut self, days: u32) -> Self {
+        self.defect_churn_days = days;
+        self
     }
 }
 
@@ -167,7 +193,7 @@ impl AnalyzerTrait for Analyzer {
         run_analyzer!(
             "defect",
             self.weights.defect,
-            crate::analyzers::defect::Analyzer::new(),
+            crate::analyzers::defect::Analyzer::new().with_churn_days(self.defect_churn_days),
             calculate_defect_score,
             |r: &crate::analyzers::defect::Analysis| format!(
                 "{} high-risk files, avg probability: {:.1}%",
@@ -1496,6 +1522,7 @@ mod tests {
                 p95_probability: 0.15,
             },
             weights: crate::analyzers::defect::Weights::default(),
+            churn_window: None,
         };
         let score = calculate_defect_score(&result);
         assert_eq!(score, 100.0);
@@ -1733,8 +1760,22 @@ mod tests {
                 p95_probability: 0.95,
             },
             weights: crate::analyzers::defect::Weights::default(),
+            churn_window: None,
         };
         let score = calculate_defect_score(&result);
         assert!(score < 40.0);
+    }
+
+    #[test]
+    fn test_score_forwards_the_configured_defect_window() {
+        // The window used to reach only the score gate; ordinary `omen
+        // score`, MCP and each trend sample built the analyzer with defaults.
+        let mut config = crate::config::Config::default();
+        config.defect.churn_days = 365;
+        assert_eq!(Analyzer::from_config(&config).defect_churn_days, 365);
+        assert_eq!(
+            Analyzer::default().defect_churn_days,
+            crate::config::DefectConfig::default().churn_days
+        );
     }
 }

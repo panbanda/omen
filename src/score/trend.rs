@@ -28,10 +28,19 @@ pub fn analyze_trend(
     samples: Option<usize>,
 ) -> Result<TrendData> {
     let repo = GitRepo::open(path)?;
-    let now = Utc::now();
+
+    // Measure the window from the analyzed revision, not the wall clock, so
+    // an old checkout still produces a trend instead of an empty one. An
+    // unborn HEAD has no history to plot.
+    let Some(anchor) = repo.head_commit_time()? else {
+        return Ok(TrendData::default());
+    };
+    let Some(anchor) = DateTime::from_timestamp(anchor, 0) else {
+        return Ok(TrendData::default());
+    };
 
     // Parse the "since" parameter to determine how far back to go
-    let start_time = parse_since_to_datetime(since, now)?;
+    let start_time = parse_since_to_datetime(since, anchor)?;
 
     // Get commits in the time range
     let since_arg = if crate::git::is_since_all(since) {
@@ -45,7 +54,7 @@ pub fn analyze_trend(
     // window end would stretch the grid over commit-less time (for `--since all`
     // that means back to the epoch), leaving only a handful of sample points
     // landing on real commits.
-    let Some((window_start, window_end)) = trend_window(&commits, start_time, now) else {
+    let Some((window_start, window_end)) = trend_window(&commits, start_time, anchor) else {
         return Ok(TrendData::default());
     };
 
@@ -219,13 +228,13 @@ pub fn default_sample_count(days: f64) -> usize {
 fn trend_window(
     commits: &[Commit],
     since: DateTime<Utc>,
-    now: DateTime<Utc>,
+    anchor: DateTime<Utc>,
 ) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
-    let first = commits.iter().map(|c| c.timestamp).min()?;
-    let last = commits.iter().map(|c| c.timestamp).max()?;
+    let first = commits.iter().map(|c| c.commit_time).min()?;
+    let last = commits.iter().map(|c| c.commit_time).max()?;
 
     let start = DateTime::from_timestamp(first, 0)?.max(since);
-    let end = DateTime::from_timestamp(last, 0)?.min(now);
+    let end = DateTime::from_timestamp(last, 0)?.min(anchor);
 
     if end < start {
         return None;
@@ -317,11 +326,12 @@ fn find_commit_at_time(
 ) -> Option<&crate::git::Commit> {
     let target_ts = target.timestamp();
 
-    // Find the commit with timestamp closest to but not after target
+    // Committer time, matching the window bounds: a rebase can move an author
+    // date far out of order and select the wrong tree.
     commits
         .iter()
-        .filter(|c| c.timestamp <= target_ts)
-        .min_by_key(|c| (target_ts - c.timestamp).abs())
+        .filter(|c| c.commit_time <= target_ts)
+        .min_by_key(|c| (target_ts - c.commit_time).abs())
 }
 
 /// Analyze code at a specific git tree (commit) without filesystem checkout.
@@ -332,7 +342,7 @@ pub fn analyze_at_tree(tree_source: &TreeSource, config: &Config) -> Result<supe
     let root = Path::new(".");
     let ctx =
         AnalysisContext::new(&file_set, config, Some(root)).with_content_source(content_source);
-    let analyzer = ScoreAnalyzer::new();
+    let analyzer = ScoreAnalyzer::from_config(config);
     analyzer.analyze(&ctx)
 }
 
@@ -341,10 +351,10 @@ pub fn analyze_at_tree(tree_source: &TreeSource, config: &Config) -> Result<supe
 fn collect_commits_in_range(commits: &[Commit], after_ts: i64, up_to_ts: i64) -> Vec<String> {
     let mut messages: Vec<&Commit> = commits
         .iter()
-        .filter(|c| c.timestamp > after_ts && c.timestamp <= up_to_ts)
+        .filter(|c| c.commit_time > after_ts && c.commit_time <= up_to_ts)
         .collect();
     // Most recent first
-    messages.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    messages.sort_by(|a, b| b.commit_time.cmp(&a.commit_time));
     messages
         .into_iter()
         .take(5)
@@ -770,6 +780,7 @@ fn complex(x: i32) -> i32 {
             author: "A".to_string(),
             email: "a@test.com".to_string(),
             timestamp,
+            commit_time: timestamp,
             message: format!("{sha} message"),
             files: vec![],
         }
@@ -885,6 +896,7 @@ fn complex(x: i32) -> i32 {
                 author: "A".to_string(),
                 email: "a@test.com".to_string(),
                 timestamp: 100,
+                commit_time: 100,
                 message: "first commit".to_string(),
                 files: vec![],
             },
@@ -893,6 +905,7 @@ fn complex(x: i32) -> i32 {
                 author: "B".to_string(),
                 email: "b@test.com".to_string(),
                 timestamp: 200,
+                commit_time: 200,
                 message: "second commit".to_string(),
                 files: vec![],
             },
@@ -901,6 +914,7 @@ fn complex(x: i32) -> i32 {
                 author: "C".to_string(),
                 email: "c@test.com".to_string(),
                 timestamp: 300,
+                commit_time: 300,
                 message: "third commit".to_string(),
                 files: vec![],
             },
@@ -909,6 +923,7 @@ fn complex(x: i32) -> i32 {
                 author: "D".to_string(),
                 email: "d@test.com".to_string(),
                 timestamp: 400,
+                commit_time: 400,
                 message: "fourth commit".to_string(),
                 files: vec![],
             },
@@ -939,6 +954,7 @@ fn complex(x: i32) -> i32 {
                 author: "A".to_string(),
                 email: "a@test.com".to_string(),
                 timestamp: (i + 1) * 100,
+                commit_time: (i + 1) * 100,
                 message: format!("commit {}", i),
                 files: vec![],
             })

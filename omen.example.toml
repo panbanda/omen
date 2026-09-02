@@ -77,6 +77,15 @@ min_similarity = 0.9
 [hotspot]
 # Number of top hotspots to report
 top = 20
+# Days of history to measure churn over. The window ends at the analyzed
+# revision's own date, not at the current time, so an old checkout still
+# sees its own history.
+days = 90
+
+# Defect probability (PMAT)
+[defect]
+# Days of history to measure churn over, ending at the analyzed revision.
+churn_days = 30
 
 # Repository health score
 [score]

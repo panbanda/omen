@@ -27,6 +27,8 @@ pub struct Config {
     pub duplicates: DuplicatesConfig,
     /// Hotspot configuration.
     pub hotspot: HotspotConfig,
+    /// Defect analyzer configuration.
+    pub defect: DefectConfig,
     /// Score thresholds.
     pub score: ScoreConfig,
     /// Feature flag configuration.
@@ -48,6 +50,7 @@ impl Default for Config {
             churn: ChurnConfig::default(),
             duplicates: DuplicatesConfig::default(),
             hotspot: HotspotConfig::default(),
+            defect: DefectConfig::default(),
             score: ScoreConfig::default(),
             feature_flags: FeatureFlagsConfig::default(),
             temporal: TemporalConfig::default(),
@@ -81,6 +84,7 @@ impl Config {
             .merge(Env::prefixed("OMEN_").split("__"))
             .extract()
             .map_err(|e| crate::core::Error::Config(e.to_string()))?;
+        config.validate()?;
         Ok(config)
     }
 
@@ -101,12 +105,29 @@ impl Config {
             .merge(Env::prefixed("OMEN_").split("__"))
             .extract()
             .map_err(|e| crate::core::Error::Config(e.to_string()))?;
+        config.validate()?;
         Ok(config)
     }
 
     /// Alias for load_default.
     pub fn load_from_dir(dir: impl AsRef<Path>) -> Result<Self> {
         Self::load_default(dir)
+    }
+
+    /// Reject configuration that cannot mean anything, rather than silently
+    /// substituting a value the user did not ask for.
+    pub fn validate(&self) -> Result<()> {
+        for (key, days) in [
+            ("hotspot.days", self.hotspot.days),
+            ("defect.churn_days", self.defect.churn_days),
+        ] {
+            if days == 0 {
+                return Err(crate::core::Error::Config(format!(
+                    "{key} = 0: a window of 0 days contains no history"
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Create default config file content.
@@ -190,11 +211,29 @@ impl Default for DuplicatesConfig {
 pub struct HotspotConfig {
     /// Number of top hotspots to report.
     pub top: usize,
+    /// Days of history to measure churn over, ending at the analyzed
+    /// revision's own date.
+    pub days: u32,
 }
 
 impl Default for HotspotConfig {
     fn default() -> Self {
-        Self { top: 20 }
+        Self { top: 20, days: 90 }
+    }
+}
+
+/// Defect analyzer configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DefectConfig {
+    /// Days of history to measure churn over, ending at the analyzed
+    /// revision's own date.
+    pub churn_days: u32,
+}
+
+impl Default for DefectConfig {
+    fn default() -> Self {
+        Self { churn_days: 30 }
     }
 }
 
@@ -530,5 +569,28 @@ mod tests {
         assert_eq!(config.stale_days, 0);
         assert!(config.providers.is_empty());
         assert!(config.custom_providers.is_empty());
+    }
+
+    #[test]
+    fn test_zero_day_windows_are_rejected_at_load() {
+        // Otherwise an aggregate path would silently substitute a window the
+        // user never asked for.
+        let mut config = Config::default();
+        assert!(config.validate().is_ok());
+
+        config.hotspot.days = 0;
+        assert!(config.validate().is_err());
+
+        let mut config = Config::default();
+        config.defect.churn_days = 0;
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("defect.churn_days"), "got {error}");
+    }
+
+    #[test]
+    fn test_churn_window_defaults() {
+        let config = Config::default();
+        assert_eq!(config.hotspot.days, 90);
+        assert_eq!(config.defect.churn_days, 30);
     }
 }

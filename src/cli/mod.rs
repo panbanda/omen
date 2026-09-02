@@ -71,7 +71,7 @@ pub enum Command {
 
     /// Predict defect-prone files using PMAT
     #[command(visible_alias = "predict")]
-    Defect(AnalyzerArgs),
+    Defect(DefectArgs),
 
     /// Analyze recent changes (JIT risk)
     #[command(alias = "jit")]
@@ -95,7 +95,7 @@ pub enum Command {
     // plural `hotspots`. `hotspots` is accepted here as a visible alias so both
     // spellings work from the CLI without touching the JSON/report contract.
     #[command(alias = "hs", visible_alias = "hotspots")]
-    Hotspot(AnalyzerArgs),
+    Hotspot(HotspotArgs),
 
     /// Detect temporally coupled files
     #[command(alias = "tc", visible_alias = "temporal-coupling")]
@@ -274,6 +274,91 @@ pub enum GateSeverity {
     Low,
     Medium,
     High,
+}
+
+/// A churn time window: a relative duration, or all of history.
+///
+/// Unlike `churn`, these analyzers reject anything else rather than silently
+/// widening to all history -- `parse_since_to_days` returns `None` both for
+/// "all" and for garbage, so a permissive parse would make `--since
+/// 2024-01-01` mean "every commit ever".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChurnWindow {
+    Days(u32),
+    All,
+}
+
+impl ChurnWindow {
+    /// Resolve `--since` (canonical) over `--days` (alias) over the config.
+    pub fn resolve(
+        since: Option<&str>,
+        days: Option<u32>,
+        config_days: u32,
+    ) -> std::result::Result<Self, String> {
+        if let Some(since) = since {
+            return since.parse();
+        }
+        match days.unwrap_or(config_days) {
+            0 => Err("a window of 0 days contains no history".to_string()),
+            days => Ok(Self::Days(days)),
+        }
+    }
+
+    /// Days for analyzer builders; `u32::MAX` is the all-history sentinel.
+    pub fn as_days(self) -> u32 {
+        match self {
+            Self::Days(days) => days,
+            Self::All => u32::MAX,
+        }
+    }
+}
+
+impl std::str::FromStr for ChurnWindow {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        if crate::git::is_since_all(value) {
+            return Ok(Self::All);
+        }
+        match crate::git::parse_since_to_days(value) {
+            Some(0) | None => Err(format!(
+                "invalid time window {value:?}: expected a duration such as 30d, 3m, 1y, or \"all\""
+            )),
+            Some(days) => Ok(Self::Days(days)),
+        }
+    }
+}
+
+/// The `--since`/`--days` pair shared by `defect` and `hotspot`.
+#[derive(Args)]
+pub struct ChurnWindowArgs {
+    /// Time period to measure churn over (e.g. 30d, 3m, 1y, all). The window
+    /// ends at the analyzed revision's own date, not at the current time.
+    /// Canonical flag; --days is an alias. If both are given, --since wins.
+    #[arg(long)]
+    pub since: Option<String>,
+
+    /// Days of history to measure churn over (alias for --since)
+    #[arg(long)]
+    pub days: Option<u32>,
+}
+
+#[derive(Args)]
+pub struct DefectArgs {
+    #[command(flatten)]
+    pub common: AnalyzerArgs,
+
+    #[command(flatten)]
+    pub window: ChurnWindowArgs,
+}
+
+#[derive(Args)]
+pub struct HotspotArgs {
+    #[command(flatten)]
+    pub common: AnalyzerArgs,
+
+    #[command(flatten)]
+    pub window: ChurnWindowArgs,
 }
 
 #[derive(Args)]
@@ -2374,5 +2459,62 @@ mod tests {
         assert!(hotspot
             .get_visible_aliases()
             .any(|alias| alias == "hotspots"));
+    }
+
+    // --- Issue #496: churn window flags -----------------------------------
+
+    #[test]
+    fn test_churn_window_parses_durations_and_all() {
+        use std::str::FromStr;
+        assert_eq!(ChurnWindow::from_str("30d"), Ok(ChurnWindow::Days(30)));
+        assert_eq!(ChurnWindow::from_str("3m"), Ok(ChurnWindow::Days(90)));
+        assert_eq!(ChurnWindow::from_str("1y"), Ok(ChurnWindow::Days(365)));
+        assert_eq!(ChurnWindow::from_str("all"), Ok(ChurnWindow::All));
+        assert_eq!(ChurnWindow::All.as_days(), u32::MAX);
+    }
+
+    #[test]
+    fn test_churn_window_rejects_input_it_cannot_measure() {
+        use std::str::FromStr;
+        // The trap this guards: `parse_since_to_days` returns None for "all"
+        // *and* for anything unparseable, so a permissive parse would make an
+        // absolute date silently mean "every commit ever".
+        for bad in ["2024-01-01", "yesterday", "", "0d"] {
+            assert!(
+                ChurnWindow::from_str(bad).is_err(),
+                "{bad:?} should be rejected, not widened to all history"
+            );
+        }
+    }
+
+    #[test]
+    fn test_churn_window_precedence() {
+        // --since wins over --days wins over config.
+        assert_eq!(
+            ChurnWindow::resolve(Some("1y"), Some(7), 30),
+            Ok(ChurnWindow::Days(365))
+        );
+        assert_eq!(
+            ChurnWindow::resolve(None, Some(7), 30),
+            Ok(ChurnWindow::Days(7))
+        );
+        assert_eq!(
+            ChurnWindow::resolve(None, None, 30),
+            Ok(ChurnWindow::Days(30))
+        );
+        // `--since all` must be a whole branch, not folded into --days.
+        assert_eq!(
+            ChurnWindow::resolve(Some("all"), Some(7), 30),
+            Ok(ChurnWindow::All)
+        );
+        assert!(ChurnWindow::resolve(None, Some(0), 30).is_err());
+    }
+
+    #[test]
+    fn test_defect_and_hotspot_accept_window_flags() {
+        assert_parses_to!(&["omen", "defect", "--since", "1y"], Command::Defect(_));
+        assert_parses_to!(&["omen", "defect", "--days", "90"], Command::Defect(_));
+        assert_parses_to!(&["omen", "hotspot", "--since", "all"], Command::Hotspot(_));
+        assert_parses_to!(&["omen", "hotspot", "--days", "180"], Command::Hotspot(_));
     }
 }

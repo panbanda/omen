@@ -17,8 +17,16 @@ pub struct Commit {
     pub author: String,
     /// Author email.
     pub email: String,
-    /// Commit timestamp.
+    /// Author timestamp, for attribution and display.
     pub timestamp: i64,
+    /// Committer timestamp.
+    ///
+    /// This is the clock `git log --since` filters on and gix's
+    /// `ByCommitTime` orders by, so every time window must use it. The author
+    /// date can be moved arbitrarily far out of topological order by a
+    /// rebase.
+    #[serde(default)]
+    pub commit_time: i64,
     /// Commit message (first line).
     pub message: String,
     /// Files changed in this commit.
@@ -75,14 +83,10 @@ pub fn get_log(
         .head_id()
         .map_err(|e| Error::git(format!("Failed to get HEAD: {e}")))?;
 
-    let cutoff_time = since.and_then(parse_since_duration).map(|duration| {
-        let now = std::time::SystemTime::now();
-        now.checked_sub(duration)
-            .unwrap_or(std::time::UNIX_EPOCH)
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0)
-    });
+    let cutoff_time = match since {
+        Some(since) => resolve_cutoff(repo, since)?,
+        None => None,
+    };
 
     let walk = repo
         .rev_walk([head])
@@ -102,10 +106,15 @@ pub fn get_log(
 
         let author = commit.author().map_err(|e| Error::git(format!("{e}")))?;
         let timestamp = author.seconds();
+        let commit_time = commit
+            .committer()
+            .map(|committer| committer.seconds())
+            .unwrap_or(timestamp);
 
-        // Skip commits older than cutoff
+        // Skip commits older than the cutoff. The walk is ordered by
+        // committer time, so the filter must use the same clock.
         if let Some(cutoff) = cutoff_time {
-            if timestamp < cutoff {
+            if commit_time < cutoff {
                 break;
             }
         }
@@ -134,6 +143,7 @@ pub fn get_log(
             author: author.name.to_string(),
             email: author.email.to_string(),
             timestamp,
+            commit_time,
             message,
             files: Vec::new(), // File changes calculated separately if needed
         });
@@ -150,6 +160,112 @@ pub fn get_log(
     }
 
     Ok(commits)
+}
+
+/// The committer time of the repository's HEAD commit, or `None` when HEAD is
+/// unborn and there is therefore no history to window.
+///
+/// Only an unborn HEAD yields `None`. Every other failure propagates: a
+/// corrupt ref silently becoming "no history" is exactly the kind of quiet
+/// degradation this whole change is meant to remove.
+pub fn head_commit_time(repo: &Repository) -> Result<Option<i64>> {
+    let mut head = repo
+        .head()
+        .map_err(|e| Error::git(format!("Failed to read HEAD: {e}")))?;
+    if head.is_unborn() {
+        return Ok(None);
+    }
+    let commit = head
+        .peel_to_commit()
+        .map_err(|e| Error::git(format!("Failed to peel HEAD to a commit: {e}")))?;
+    let committer = commit
+        .committer()
+        .map_err(|e| Error::git(format!("Failed to read HEAD committer: {e}")))?;
+    Ok(Some(committer.seconds()))
+}
+
+/// How a `since` string resolved against the analyzed revision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cutoff {
+    /// No lower bound: all of history.
+    All,
+    /// A relative window, anchored at the revision, ending at this timestamp.
+    At(i64),
+    /// Not a relative duration; git must resolve it (an absolute date).
+    Unresolved,
+}
+
+/// Resolve a relative `since` window against the analyzed revision's own date.
+///
+/// Anchoring at HEAD rather than at the wall clock is what makes a window
+/// meaningful in a worktree, at a release tag, mid-bisect, or in a repository
+/// that simply has not been committed to lately. It also makes the result
+/// deterministic: the same revision analyzed on two different days scores the
+/// same.
+pub fn anchored_cutoff(repo: &Repository, since: &str) -> Result<Cutoff> {
+    if is_since_all(since) {
+        return Ok(Cutoff::All);
+    }
+    let Some(duration) = parse_since_duration(since) else {
+        return Ok(Cutoff::Unresolved);
+    };
+    let Some(anchor) = head_commit_time(repo)? else {
+        return Ok(Cutoff::All);
+    };
+    Ok(cutoff_from(anchor, duration))
+}
+
+/// Resolve any `since` string to a concrete cutoff, asking git to parse the
+/// absolute dates this module's own duration parser does not understand.
+///
+/// The gix walks need this: they have no git process to defer to, so without
+/// it an absolute date would silently mean "no lower bound".
+pub fn resolve_cutoff(repo: &Repository, since: &str) -> Result<Option<i64>> {
+    match anchored_cutoff(repo, since)? {
+        Cutoff::At(cutoff) => Ok(Some(cutoff)),
+        Cutoff::All => Ok(None),
+        Cutoff::Unresolved => {
+            let Some(workdir) = repo.workdir() else {
+                return Ok(None);
+            };
+            Ok(git_resolved_since(workdir, since).ok())
+        }
+    }
+}
+
+/// Ask `git rev-parse` to turn a date expression into a timestamp.
+pub fn git_resolved_since(repo_path: &std::path::Path, since: &str) -> Result<i64> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", &format!("--since={since}")])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|error| Error::git(format!("Failed to resolve git date: {error}")))?;
+    if !output.status.success() {
+        return Err(Error::git(format!(
+            "Failed to resolve git date: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    let value = String::from_utf8_lossy(&output.stdout);
+    value
+        .trim()
+        .strip_prefix("--max-age=")
+        .and_then(|timestamp| timestamp.parse().ok())
+        .ok_or_else(|| Error::git(format!("Invalid git date result: {value}")))
+}
+
+/// Turn an anchor and a window width into a cutoff.
+///
+/// A window wide enough to reach past the epoch is all of history. It must not
+/// become a negative timestamp: git's approxidate reads `--since=@-3710...`
+/// as roughly *now* and returns an empty log -- the exact silent-empty failure
+/// this change exists to fix. The all-history sentinel (`u32::MAX` days)
+/// always lands here.
+pub fn cutoff_from(anchor: i64, duration: std::time::Duration) -> Cutoff {
+    match anchor.checked_sub(duration.as_secs() as i64) {
+        Some(cutoff) if cutoff > 0 => Cutoff::At(cutoff),
+        _ => Cutoff::All,
+    }
 }
 
 /// Returns true if the since string means "all history" (no time limit).
@@ -169,7 +285,7 @@ pub fn parse_since_to_days(since: &str) -> Option<u32> {
 }
 
 /// Parse "since" duration strings like "30 days ago", "1 week", "6m", "1y".
-fn parse_since_duration(since: &str) -> Option<std::time::Duration> {
+pub fn parse_since_duration(since: &str) -> Option<std::time::Duration> {
     let since = since.trim().to_lowercase();
 
     // Handle "X days ago" format
@@ -213,10 +329,22 @@ pub fn get_log_with_stats(
     // Build git log command with numstat
     let mut cmd = std::process::Command::new("git");
     cmd.current_dir(repo_path);
-    cmd.args(["log", "--format=%H|%an|%ae|%at|%s", "--numstat"]);
+    cmd.args(["log", "--format=%H|%an|%ae|%at|%ct|%s", "--numstat"]);
 
     if let Some(since_str) = since {
-        cmd.arg(format!("--since={}", since_str));
+        // A relative window is measured from the analyzed revision, not from
+        // the wall clock, so an old checkout still sees its own history.
+        match anchored_cutoff(repo, since_str)? {
+            Cutoff::At(cutoff) => {
+                cmd.arg(format!("--since=@{cutoff}"));
+            }
+            Cutoff::Unresolved => {
+                cmd.arg(format!("--since={since_str}"));
+            }
+            // No lower bound at all: asking git for one would only risk
+            // resolving it back to the present.
+            Cutoff::All => {}
+        }
     }
 
     if let Some(max) = limit {
@@ -340,8 +468,8 @@ fn parse_git_log_numstat(output: &[u8]) -> Result<Vec<Commit>> {
 
         // Check if this is a commit line (contains |)
         if line.contains('|') {
-            let parts: Vec<&str> = line.splitn(5, '|').collect();
-            if parts.len() == 5 {
+            let parts: Vec<&str> = line.splitn(6, '|').collect();
+            if parts.len() == 6 {
                 // Save previous commit
                 if let Some(commit) = current_commit.take() {
                     commits.push(commit);
@@ -352,13 +480,15 @@ fn parse_git_log_numstat(output: &[u8]) -> Result<Vec<Commit>> {
                 let author = parts[1].to_string();
                 let email = parts[2].to_string();
                 let timestamp: i64 = parts[3].parse().unwrap_or(0);
-                let message = parts[4].to_string();
+                let commit_time: i64 = parts[4].parse().unwrap_or(timestamp);
+                let message = parts[5].to_string();
 
                 current_commit = Some(Commit {
                     sha,
                     author,
                     email,
                     timestamp,
+                    commit_time,
                     message,
                     files: Vec::new(),
                 });
@@ -417,14 +547,10 @@ pub fn get_log_with_stats_gix(
         .head_id()
         .map_err(|e| Error::git(format!("Failed to get HEAD: {e}")))?;
 
-    let cutoff_time = since.and_then(parse_since_duration).map(|duration| {
-        let now = std::time::SystemTime::now();
-        now.checked_sub(duration)
-            .unwrap_or(std::time::UNIX_EPOCH)
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0)
-    });
+    let cutoff_time = match since {
+        Some(since) => resolve_cutoff(repo, since)?,
+        None => None,
+    };
 
     let walk = repo
         .rev_walk([head])
@@ -444,10 +570,15 @@ pub fn get_log_with_stats_gix(
 
         let author = commit.author().map_err(|e| Error::git(format!("{e}")))?;
         let timestamp = author.seconds();
+        let commit_time = commit
+            .committer()
+            .map(|committer| committer.seconds())
+            .unwrap_or(timestamp);
 
-        // Skip commits older than cutoff
+        // Skip commits older than the cutoff. The walk is ordered by
+        // committer time, so the filter must use the same clock.
         if let Some(cutoff) = cutoff_time {
-            if timestamp < cutoff {
+            if commit_time < cutoff {
                 break;
             }
         }
@@ -466,6 +597,7 @@ pub fn get_log_with_stats_gix(
             author: author.name.to_string(),
             email: author.email.to_string(),
             timestamp,
+            commit_time,
             message,
             files,
         });
@@ -762,6 +894,7 @@ mod tests {
             author: "Test Author".to_string(),
             email: "test@example.com".to_string(),
             timestamp: 1704067200,
+            commit_time: 1704067200,
             message: "Initial commit".to_string(),
             files: vec![],
         };
@@ -816,6 +949,7 @@ mod tests {
             author: "Test Author".to_string(),
             email: "test@example.com".to_string(),
             timestamp: 1704067200,
+            commit_time: 1704067200,
             message: "Test commit".to_string(),
             files: vec![],
         };
@@ -859,6 +993,7 @@ mod tests {
             author: "Test Author".to_string(),
             email: "test@example.com".to_string(),
             timestamp: 1704067200,
+            commit_time: 1704067200,
             message: "Test commit".to_string(),
             files: vec![
                 FileChange {
@@ -1021,6 +1156,30 @@ mod tests {
             !messages.iter().any(|m| m.contains("Add file2")),
             "Should NOT contain 'Add file2' commit, got: {:?}",
             messages
+        );
+    }
+
+    #[test]
+    fn test_wide_windows_become_all_history_not_a_negative_cutoff() {
+        use std::time::Duration;
+        let anchor = 1_700_000_000;
+
+        assert_eq!(
+            cutoff_from(anchor, Duration::from_secs(30 * 86_400)),
+            Cutoff::At(anchor - 30 * 86_400)
+        );
+
+        // The all-history sentinel: `u32::MAX days` reaches far past the
+        // epoch. It must not become `--since=@-371...`, which git's
+        // approxidate reads as roughly *now* and answers with an empty log --
+        // the silent-empty failure this change exists to remove.
+        let sentinel = parse_since_duration(&format!("{} days", u32::MAX)).unwrap();
+        assert_eq!(cutoff_from(anchor, sentinel), Cutoff::All);
+
+        // So does any window wider than the anchor itself.
+        assert_eq!(
+            cutoff_from(anchor, Duration::from_secs(anchor as u64 + 1)),
+            Cutoff::All
         );
     }
 

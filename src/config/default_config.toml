@@ -32,6 +32,10 @@ min_similarity = 0.9
 
 [hotspot]
 top = 20
+days = 90
+
+[defect]
+churn_days = 30
 
 [score]
 # fail_under = 80

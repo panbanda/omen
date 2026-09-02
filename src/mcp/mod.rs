@@ -868,16 +868,22 @@ impl McpServer {
             ),
             "defect" => self.run_analyzer_instance(
                 &ctx,
-                crate::analyzers::defect::Analyzer::new()
-                    .with_churn_days(u32_arg(&arguments, "days", 30)),
+                crate::analyzers::defect::Analyzer::new().with_churn_days(u32_arg(
+                    &arguments,
+                    "days",
+                    self.config.defect.churn_days,
+                )),
             ),
             "changes" => self.run_analyzer::<crate::analyzers::changes::Analyzer>(&ctx),
             "tdg" => self.run_analyzer::<crate::analyzers::tdg::Analyzer>(&ctx),
             "graph" => self.run_analyzer::<crate::analyzers::graph::Analyzer>(&ctx),
             "hotspot" => self.run_analyzer_instance(
                 &ctx,
-                crate::analyzers::hotspot::Analyzer::new()
-                    .with_days(u32_arg(&arguments, "days", 90)),
+                crate::analyzers::hotspot::Analyzer::new().with_days(u32_arg(
+                    &arguments,
+                    "days",
+                    self.config.hotspot.days,
+                )),
             ),
             "temporal" => self.run_analyzer_instance(
                 &ctx,
@@ -908,7 +914,9 @@ impl McpServer {
                         .with_providers(providers),
                 )
             }
-            "score" => self.run_analyzer::<crate::score::Analyzer>(&ctx),
+            "score" => {
+                self.run_analyzer_instance(&ctx, crate::score::Analyzer::from_config(&self.config))
+            }
             "context" => {
                 return Ok(self
                     .handle_context(&path, &file_set, &arguments)
