@@ -40,6 +40,8 @@ mod tests {
     fn test_format_enriched_text() {
         let func = FunctionNode {
             name: "test_func".to_string(),
+            binding_name: Some("test_func".to_string()),
+            is_bound: true,
             start_line: 1,
             end_line: 3,
             body_byte_range: None,
@@ -56,6 +58,8 @@ mod tests {
     fn test_format_enriched_text_truncation() {
         let func = FunctionNode {
             name: "test_func".to_string(),
+            binding_name: Some("test_func".to_string()),
+            is_bound: true,
             start_line: 1,
             end_line: 1,
             body_byte_range: None,
@@ -72,6 +76,8 @@ mod tests {
     fn test_format_enriched_text_multibyte() {
         let func = FunctionNode {
             name: "test_func".to_string(),
+            binding_name: Some("test_func".to_string()),
+            is_bound: true,
             start_line: 1,
             end_line: 1,
             body_byte_range: None,

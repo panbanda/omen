@@ -107,7 +107,12 @@ fn outline_source(file: &SourceFile) -> Result<FileOutline> {
         .collect();
 
     let classes_raw = extract_classes(&result);
-    let functions_raw = extract_functions(&result);
+    // An outline lists what a reader can navigate to by name, so anonymous
+    // callbacks are noise rather than content.
+    let functions_raw: Vec<_> = extract_functions(&result)
+        .into_iter()
+        .filter(|func| func.is_bound)
+        .collect();
 
     // Build two exclusion sets so we can correctly identify top-level functions:
     //

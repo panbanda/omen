@@ -246,7 +246,11 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
     let parser = Parser::new();
     let parse_result = parser.parse_source(&source_file)?;
 
-    let functions = extract_functions(&parse_result);
+    // Search results are only useful if the symbol has a name to search for.
+    let functions: Vec<_> = extract_functions(&parse_result)
+        .into_iter()
+        .filter(|func| func.is_bound)
+        .collect();
 
     // Compute complexity per function. Store range so chunks (whose start_line
     // may differ from the function's) can be matched by containment.
