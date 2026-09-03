@@ -103,6 +103,11 @@ jobs:
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created }}
     runs-on: ubuntu-latest
+    # Protected environment: keep CARGO_REGISTRY_TOKEN as an environment secret
+    # with required reviewers. Switch to crates.io trusted publishing
+    # (rust-lang/crates-io-auth-action) once the crate exists and the GitHub
+    # publisher is configured on crates.io.
+    environment: crates-io
     permissions:
       contents: read
     steps:
