@@ -9,6 +9,7 @@ description = "Multi-language code analysis CLI for AI assistants"
 repository = "https://github.com/panbanda/omen"
 keywords = ["code-analysis", "complexity", "technical-debt", "mcp", "cli"]
 categories = ["command-line-utilities", "development-tools"]
+exclude = [".github/", ".claude-plugin/", ".cargo/", "assets/", "docs/", "plugins/", "site/", "action.yml", "Dockerfile", "CITATION.cff", "CLAUDE.md", "DEPRECATIONS.md", "lefthook.yml", "release-please-config.json", ".release-please-manifest.json"]
 
 [lib]
 name = "omen"

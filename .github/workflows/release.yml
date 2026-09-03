@@ -35,7 +35,7 @@ jobs:
   build:
     name: Build (${{ matrix.target }})
     needs: release-please
-    if: ${{ needs.release-please.outputs.release_created }}
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
 
     strategy:
       fail-fast: false
@@ -98,10 +98,46 @@ jobs:
           TAG="${{ needs.release-please.outputs.tag_name }}"
           gh release upload "$TAG" dist/*.tar.gz dist/*.sha256 --clobber
 
+  crates-io:
+    name: Publish to crates.io
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    # Protected environment: keep CARGO_REGISTRY_TOKEN as an environment secret
+    # with required reviewers. Switch to crates.io trusted publishing
+    # (rust-lang/crates-io-auth-action) once the crate exists and the GitHub
+    # publisher is configured on crates.io.
+    environment: crates-io
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+
+      # Verification builds dependency build scripts, which must not see the
+      # registry token, so package first without it and publish unverified.
+      - name: Package and verify omen-cli
+        run: cargo package --locked
+
+      - name: Publish omen-cli
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          out=$(cargo publish --locked --no-verify 2>&1) && echo "$out" || {
+            echo "$out"
+            echo "$out" | grep -q "already exists" || exit 1
+          }
+
   homebrew:
     name: Update Homebrew Formula
     needs: [release-please, build]
-    if: ${{ needs.release-please.outputs.release_created }}
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-latest
     env:
       SOURCE_REPOSITORY: ${{ github.repository }}
@@ -198,7 +234,7 @@ jobs:
   docker:
     name: Build Docker Images
     needs: [release-please, build]
-    if: ${{ needs.release-please.outputs.release_created }}
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
 
     strategy:
       fail-fast: false
@@ -253,7 +289,7 @@ jobs:
   docker-manifest:
     name: Create Docker Manifest
     needs: [release-please, docker]
-    if: ${{ needs.release-please.outputs.release_created }}
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-latest
 
     permissions:
