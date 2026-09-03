@@ -1,167 +1,108 @@
 # Contributing to Omen
 
-Thank you for your interest in contributing to Omen. This document provides guidelines and information for contributors.
+Thanks for helping with Omen. This page covers how the project is built, tested, and released so a change lands without surprises.
 
-## Code of Conduct
+## Prerequisites
 
-Be respectful and constructive in all interactions. We welcome contributors of all experience levels.
-
-## Getting Started
-
-### Prerequisites
-
-- Go 1.25 or later
-- [Task](https://taskfile.dev/) (task runner)
+- Rust 1.92 or later (`rustup update stable`)
 - Git
+- [lefthook](https://github.com/evilmartians/lefthook) for the pre-push hooks (optional but recommended)
 
-### Setup
+## Setup
 
 ```bash
-# Clone the repository
 git clone https://github.com/panbanda/omen.git
 cd omen
-
-# Install git hooks
-task setup
-
-# Build the project
-go build -o omen ./cmd/omen
-
-# Run tests
-task test
+lefthook install          # runs fmt, clippy and cargo check before every push
+cargo build
+cargo test --all-features
 ```
 
-## Development Workflow
+`cargo run -- --help` lists the analyzers. `cargo run -- -p . score` runs the health score against this repository.
 
-### Before Making Changes
+## Development workflow
 
-1. Check existing [issues](https://github.com/panbanda/omen/issues) and [pull requests](https://github.com/panbanda/omen/pulls) to avoid duplicate work
-2. For significant changes, open an issue first to discuss the approach
-3. Fork the repository and create a feature branch from `main`
+1. Check open [issues](https://github.com/panbanda/omen/issues) and [pull requests](https://github.com/panbanda/omen/pulls) so you don't duplicate work.
+2. For a large change, open an issue first and describe the approach.
+3. Branch from `main` in your fork.
+4. Keep the pull request to one concern.
 
-### Making Changes
+Before pushing, the hooks run the same checks CI does:
 
-1. Write code following the patterns established in the codebase
-2. Add tests for new functionality
-3. Run the full test suite: `task test`
-4. Run the linter: `task lint`
-5. Format and tidy: `task tidy`
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo check --all-features
+cargo test --all-features
+```
 
-### Commit Messages
+CI also enforces 80% line coverage with `cargo llvm-cov --all-features` and runs `cargo audit`.
 
-Use [Conventional Commits](https://www.conventionalcommits.org/) format:
+## Commit messages
+
+Releases are cut by release-please from commit messages, so use [Conventional Commits](https://www.conventionalcommits.org/):
 
 ```
 <type>(<scope>): <description>
-
-[optional body]
-
-[optional footer]
 ```
 
-Types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `chore`
+Types: `feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `chore`. A `feat` bumps the minor version, a `fix` bumps the patch version, and a `!` after the type marks a breaking change.
 
 Examples:
-- `feat(analyzer): add support for Kotlin`
-- `fix(parser): handle empty files gracefully`
+
+- `feat(analyzers): add Kotlin support to complexity`
+- `fix(parser): handle empty files`
 - `docs: update installation instructions`
 
-### Pull Requests
-
-1. Keep PRs focused on a single concern
-2. Update documentation if needed
-3. Ensure all CI checks pass
-4. Request review from maintainers
-
-## Project Structure
+## Project layout
 
 ```
-omen/
-├── cmd/omen/          # CLI entry point
-├── pkg/               # Public API (stable)
-│   ├── parser/        # Tree-sitter wrapper
-│   ├── models/        # Data structures
-│   └── config/        # Configuration loading
-├── internal/          # Implementation details
-│   ├── analyzer/      # Analysis implementations
-│   ├── fileproc/      # Concurrent file processing
-│   ├── scanner/       # File discovery
-│   ├── cache/         # Result caching
-│   ├── output/        # Output formatting
-│   ├── mcpserver/     # MCP server
-│   └── vcs/           # Git operations
-└── skills/            # Claude Code skills
+src/
+├── main.rs        CLI entry point
+├── lib.rs         Public library surface (the omen crate)
+├── cli/           Argument parsing and subcommand dispatch
+├── analyzers/     One module per analyzer (complexity, satd, churn, hotspot, ...)
+├── parser/        Tree-sitter wrapper and language detection
+├── mcp/           MCP server exposing the analyzers as tools
+├── output/        Table, JSON and markdown formatting
+├── report/        HTML health report
+├── score/         Repository health score
+├── semantic/      Embeddings and semantic search
+├── git/           Git history, churn and ownership
+├── config/        omen.toml loading
+└── core/          Shared types and file processing
+plugins/           Claude Code plugins (omen-development, omen-reporting)
+action.yml         GitHub Action
 ```
 
-## Adding New Features
+## Adding an analyzer
 
-### Adding a New Analyzer
+1. Add a module under `src/analyzers/` following an existing one such as `stubs.rs` or `satd.rs`, and register it in `src/analyzers/mod.rs`.
+2. Add the subcommand in `src/cli/`.
+3. Register an MCP tool for it in `src/mcp/`.
+4. Add tests next to the code and, when the analyzer reads source files, fixtures in more than one language.
+5. Document the command in `README.md`.
 
-1. Create a new file in `internal/analyzer/` following the existing pattern:
-   - Constructor: `NewXxxAnalyzer()`
-   - Single file: `AnalyzeFile(path)`
-   - Project-wide: `AnalyzeProject(files)` or `AnalyzeProjectWithProgress(files, progressFn)`
-   - Cleanup: `Close()`
+## Adding a language
 
-2. Add result types to `pkg/models/`
-
-3. Register the CLI command in `cmd/omen/`
-
-4. Add MCP tool registration in `internal/mcpserver/`
-
-5. Write tests covering the new functionality
-
-### Adding Language Support
-
-1. Update `pkg/parser/parser.go`:
-   - Add to `DetectLanguage()` extension mapping
-   - Add to `GetTreeSitterLanguage()`
-   - Add to `getFunctionNodeTypes()` and `getClassNodeTypes()`
-
-2. Add tree-sitter query files if needed in `internal/analyzer/featureflags/queries/<lang>/`
-
-3. Add test files in the new language
-
-### Adding Feature Flag Provider Support
-
-1. Create query file: `internal/analyzer/featureflags/queries/<lang>/<provider>.scm`
-2. Query must capture `@flag_key` for the flag identifier
-3. Add provider detection logic
-4. Add tests with sample code
+1. Add the tree-sitter grammar crate to `Cargo.toml`.
+2. Extend language detection and the node-type mappings in `src/parser/`.
+3. Add tree-sitter queries where an analyzer needs them (for example the feature-flag queries).
+4. Add fixture files in the new language and extend the analyzer tests.
 
 ## Testing
 
 ```bash
-# Run all tests
-task test
-
-# Run specific test
-go test ./internal/analyzer -run TestComplexity
-
-# Run with verbose output
-go test -v ./internal/analyzer/...
-
-# Run with race detection
-go test -race ./...
+cargo test --all-features                   # everything
+cargo test --all-features complexity        # tests matching a name
+cargo test --all-features -- --nocapture    # show output
+cargo llvm-cov --all-features               # coverage report
 ```
 
-## Reporting Issues
+## Reporting issues
 
-When reporting bugs, include:
-
-- Omen version (`omen --version`)
-- Go version (`go version`)
-- Operating system
-- Steps to reproduce
-- Expected vs actual behavior
-- Relevant log output
-
-For feature requests, describe the use case and expected behavior.
-
-## Questions
-
-Open a [GitHub Discussion](https://github.com/panbanda/omen/discussions) for questions or ideas that aren't bug reports or feature requests.
+Include the Omen version (`omen --version`), operating system, the command you ran, what you expected, what happened, and a small repository or snippet that reproduces it when possible. For feature requests, describe the use case.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the same license as the project (see [LICENSE](LICENSE)).
+Contributions are licensed under the project's Apache-2.0 license (see [LICENSE](LICENSE)).
