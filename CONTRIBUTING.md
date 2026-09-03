@@ -13,10 +13,11 @@ Thanks for helping with Omen. This page covers how the project is built, tested,
 ```bash
 git clone https://github.com/panbanda/omen.git
 cd omen
-lefthook install          # runs fmt, clippy and cargo check before every push
 cargo build
 cargo test --all-features
 ```
+
+Optional: `lefthook install` adds a pre-push hook that runs `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings` and `cargo check --all-features`.
 
 `cargo run -- --help` lists the analyzers. `cargo run -- -p . score` runs the health score against this repository.
 
@@ -27,16 +28,15 @@ cargo test --all-features
 3. Branch from `main` in your fork.
 4. Keep the pull request to one concern.
 
-Before pushing, the hooks run the same checks CI does:
+Run what CI runs before opening the PR:
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo check --all-features
+cargo clippy --all-targets --all-features
 cargo test --all-features
 ```
 
-CI also enforces 80% line coverage with `cargo llvm-cov --all-features` and runs `cargo audit`.
+CI also enforces 80% line coverage with `cargo llvm-cov --all-features` and runs `cargo audit`. The optional lefthook hook covers formatting, clippy and `cargo check` only, not the tests.
 
 ## Commit messages
 
