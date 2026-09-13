@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "split": "development",
+  "oracle": "Partial source-reviewed relationships, not exhaustive labels or independent held-out evaluation",
+  "cases": [
+    {
+      "id": "rack_escape_path",
+      "language": "ruby",
+      "repository": "rack/rack",
+      "directory": "real-rack",
+      "revision": "a9833c8f3bd6b6d1e0ab35de00a1f1a16b5095f5",
+      "query": "lib/rack/utils.rb:escape_path",
+      "required": [],
+      "forbidden": [
+        "lib/rack/utils.rb:escape"
+      ],
+      "oracle": "Lines 45-47 call URI_PARSER.escape, not Rack::Utils.escape. Negative receiver-binding check; external URI parser is outside this index."
+    },
+    {
+      "id": "rack_build_query",
+      "language": "ruby",
+      "repository": "rack/rack",
+      "directory": "real-rack",
+      "revision": "a9833c8f3bd6b6d1e0ab35de00a1f1a16b5095f5",
+      "query": "lib/rack/utils.rb:build_query",
+      "required": [
+        "lib/rack/utils.rb:escape"
+      ],
+      "forbidden": [],
+      "oracle": "Lines 109-117 call local escape inside an ordinary Ruby iteration block, which must not be pruned as a function declaration."
+    },
+    {
+      "id": "zod_base64url",
+      "language": "typescript",
+      "repository": "colinhacks/zod",
+      "directory": "real-zod",
+      "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
+      "query": "packages/zod/src/v4/core/util.ts:base64urlToUint8Array",
+      "required": [
+        "packages/zod/src/v4/core/util.ts:base64ToUint8Array"
+      ],
+      "forbidden": [],
+      "oracle": "Lines 1078-1082 call base64ToUint8Array with normalized input."
+    },
+    {
+      "id": "zod_hide",
+      "language": "typescript",
+      "repository": "colinhacks/zod",
+      "directory": "real-zod",
+      "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
+      "query": "packages/zod/src/v4/core/util.ts:hide",
+      "required": [
+        "packages/zod/src/v4/core/util.ts:own"
+      ],
+      "forbidden": [],
+      "oracle": "Lines 1137-1139 directly return own(inst,key,value,false)."
+    },
+    {
+      "id": "ripgrep_is_match",
+      "language": "rust",
+      "repository": "BurntSushi/ripgrep",
+      "directory": "real-ripgrep",
+      "revision": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "query": "crates/globset/src/lib.rs:is_match",
+      "required": [
+        "crates/globset/src/lib.rs:is_match_candidate"
+      ],
+      "forbidden": ["crates/globset/src/glob.rs:as_ref"],
+      "oracle": "First is_match declaration, lines 342-344: self.is_match_candidate(...). Generic path.as_ref() is not glob.rs:as_ref (that implementation returns Glob, not Path). Query is ambiguous across impls; check applies to reported primary only. Other edges unreviewed."
+    },
+    {
+      "id": "cobra_exact_valid",
+      "language": "go",
+      "repository": "spf13/cobra",
+      "directory": "real-cobra",
+      "revision": "adbc8813901bba65827259daa8e22ff94ec1f30e",
+      "query": "args.go:ExactValidArgs",
+      "required": [
+        "args.go:ExactArgs",
+        "args.go:MatchAll"
+      ],
+      "forbidden": [
+        "args.go:OnlyValidArgs"
+      ],
+      "oracle": "Lines 142-144 invoke ExactArgs and MatchAll. OnlyValidArgs is passed as a function value, not directly called by this function."
+    }
+  ]
+}

@@ -2,6 +2,13 @@
 
 # Omen
 
+Call-graph reports expose `call_resolutions` (symbol) and input-wide
+`resolution_summary` (impact). These distinguish unique name candidates from
+ambiguous and unresolved calls. Unique candidates are not compiler-proven
+bindings; excluded edges do not establish that an edit is safe. See the
+[improvement standard](docs/IMPROVEMENT_STANDARD.md) and
+[measured results](docs/benchmarks/README.md) for limits and regression gates.
+
 <img src="assets/omen-logo.jpg" alt="Omen - Code Analysis CLI" width="100%">
 
 [![Rust Version](https://img.shields.io/badge/rust-1.92%2B-orange)](https://www.rust-lang.org/)

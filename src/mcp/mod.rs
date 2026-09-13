@@ -694,7 +694,7 @@ impl McpServer {
             },
             ToolDef {
                 name: "get_symbol",
-                description: "One-call symbol report: exact source slice, signature, location, direct callers/callees, and complexity. Use instead of reading whole files.",
+                description: "Symbol source, location, complexity and name-based callers/callees. call_resolutions exposes unique, ambiguous and unresolved candidates. Edges are not compiler-proven; ambiguous and unknown calls are excluded from the graph.",
                 properties: vec![
                     ("name", json!({"type": "string", "description": "Symbol name to look up (bare name or qualified file:name)"})),
                     ("include_source", json!({"type": "boolean", "description": "Whether to include source code (default: true)"})),
@@ -705,7 +705,7 @@ impl McpServer {
             },
             ToolDef {
                 name: "impact",
-                description: "Use to understand blast radius before changing a symbol. Returns transitive callers and callees by BFS depth, plus affected files.",
+                description: "Explore possible blast radius using name-based call edges and BFS. Includes input-wide resolution_summary. Ambiguous and unresolved calls are excluded, so this is not an exhaustive safety check for edits.",
                 properties: vec![
                     ("symbol", json!({"type": "string", "description": "Symbol name to analyze (bare name or qualified file:name)"})),
                     ("depth", json!({"type": "integer", "description": "BFS depth for traversal (default: 2)"})),

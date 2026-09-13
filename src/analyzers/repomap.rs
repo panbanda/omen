@@ -58,6 +58,58 @@ pub struct SymbolInfo {
     pub is_exported: bool,
 }
 
+/// Source evidence for a candidate; path:name alone is not a unique identity.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SymbolLocation {
+    pub qualified_name: String,
+    pub file: String,
+    pub line: u32,
+    pub end_line: u32,
+}
+
+impl From<&SymbolInfo> for SymbolLocation {
+    fn from(symbol: &SymbolInfo) -> Self {
+        Self {
+            qualified_name: symbol.qualified_name.clone(),
+            file: symbol.file.clone(),
+            line: symbol.line,
+            end_line: symbol.end_line,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolutionStatus {
+    UniqueCandidate,
+    Ambiguous,
+    Unresolved,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolutionBasis {
+    SameFileName,
+    NameOnly,
+}
+
+/// Name evidence, not a compiler-proven binding. Calls are deduplicated by name.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CallResolution {
+    pub caller: SymbolLocation,
+    pub call: String,
+    pub status: ResolutionStatus,
+    pub basis: ResolutionBasis,
+    pub candidates: Vec<SymbolLocation>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct ResolutionSummary {
+    pub unique_candidate: usize,
+    pub ambiguous: usize,
+    pub unresolved: usize,
+}
+
 /// Index of the call graph for a repository — the parsed/collected phase.
 /// Callers can use `resolve`, `callers`, and `callees` without re-parsing.
 pub struct CallGraphIndex {
@@ -66,27 +118,41 @@ pub struct CallGraphIndex {
     pub by_qualified: HashMap<String, usize>,
     pub by_name: HashMap<String, Vec<usize>>,
     pub(crate) node_indices: HashMap<usize, NodeIndex>,
+    pub call_resolutions: Vec<CallResolution>,
+    pub(crate) call_resolution_ranges: Vec<std::ops::Range<usize>>,
 }
 
 impl CallGraphIndex {
     /// Resolve a symbol query to zero or more symbol indices.
     ///
-    /// Resolution tiers:
-    /// 1. Exact qualified-name match (`file.rs:name`) → returns that one index.
-    /// 2. If `name` contains `:` → treat as `file:name` (same-file match).
-    /// 3. Bare-name lookup → all matches from `by_name`, sorted lex by qualified_name.
+    /// Qualified queries preserve same-file duplicates; bare queries return all
+    /// matches. Results are ordered by file, name, and source position.
     pub fn resolve(&self, name: &str) -> Vec<usize> {
-        // Tier 1: exact qualified name
-        if let Some(&idx) = self.by_qualified.get(name) {
-            return vec![idx];
-        }
-        // Tier 2: name contains ':' — treat as file:name already tried above
-        if name.contains(':') {
-            // already tried qualified, no match
-            return vec![];
+        if let Some((file, bare)) = name.rsplit_once(':') {
+            return self
+                .by_name
+                .get(bare)
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|&idx| self.symbols[idx].file == file)
+                .collect();
         }
         // Tier 3: bare name → all candidates (already sorted lex by qualified_name)
         self.by_name.get(name).cloned().unwrap_or_default()
+    }
+
+    /// Counts across all extracted calls in the input, not just traversed edges.
+    pub fn resolution_summary(&self) -> ResolutionSummary {
+        let mut summary = ResolutionSummary::default();
+        for call in &self.call_resolutions {
+            match call.status {
+                ResolutionStatus::UniqueCandidate => summary.unique_candidate += 1,
+                ResolutionStatus::Ambiguous => summary.ambiguous += 1,
+                ResolutionStatus::Unresolved => summary.unresolved += 1,
+            }
+        }
+        summary
     }
 
     /// BFS returning callers of `roots` up to `depth` levels.
@@ -229,7 +295,10 @@ pub fn build_index(repo_path: &Path, files: &[PathBuf]) -> Result<CallGraphIndex
         .collect();
 
     // Flatten
-    let symbols: Vec<SymbolInfo> = file_symbols.into_iter().flatten().collect();
+    let mut symbols: Vec<SymbolInfo> = file_symbols.into_iter().flatten().collect();
+    symbols.sort_by(|a, b| {
+        (&a.qualified_name, a.line, a.end_line).cmp(&(&b.qualified_name, b.line, b.end_line))
+    });
 
     // Build lookup indices
     let mut by_qualified: HashMap<String, usize> = HashMap::with_capacity(symbols.len());
@@ -258,34 +327,51 @@ pub fn build_index(repo_path: &Path, files: &[PathBuf]) -> Result<CallGraphIndex
         node_indices.insert(idx, node_idx);
     }
 
-    // Create edges based on calls
+    let mut call_resolutions = Vec::new();
+    let mut call_resolution_ranges = Vec::with_capacity(symbols.len());
+    // Only unambiguous name candidates become edges. Preserve uncertainty.
     for (caller_idx, symbol) in symbols.iter().enumerate() {
         let caller_node = node_indices[&caller_idx];
+        let start = call_resolutions.len();
 
         for call in &symbol.calls {
-            // 1. Try exact qualified name match
-            if let Some(&callee_idx) = by_qualified.get(call) {
-                let callee_node = node_indices[&callee_idx];
-                graph.add_edge(caller_node, callee_node, ());
-                continue;
+            let mut candidates: Vec<usize> = by_name
+                .get(call)
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|&idx| language_family(&symbol.file) == language_family(&symbols[idx].file))
+                .collect();
+            let has_local = candidates
+                .iter()
+                .any(|&idx| symbols[idx].file == symbol.file);
+            if has_local {
+                candidates.retain(|&idx| symbols[idx].file == symbol.file);
             }
-
-            // 2. Try same-file match
-            let same_file_key = format!("{}:{}", symbol.file, call);
-            if let Some(&callee_idx) = by_qualified.get(&same_file_key) {
-                let callee_node = node_indices[&callee_idx];
-                graph.add_edge(caller_node, callee_node, ());
-                continue;
-            }
-
-            // 3. Use name index for O(1) lookup (already sorted for determinism)
-            if let Some(indices) = by_name.get(call) {
-                if let Some(&callee_idx) = indices.first() {
-                    let callee_node = node_indices[&callee_idx];
-                    graph.add_edge(caller_node, callee_node, ());
+            let status = match candidates.as_slice() {
+                [] => ResolutionStatus::Unresolved,
+                [idx] => {
+                    graph.add_edge(caller_node, node_indices[idx], ());
+                    ResolutionStatus::UniqueCandidate
                 }
-            }
+                _ => ResolutionStatus::Ambiguous,
+            };
+            call_resolutions.push(CallResolution {
+                caller: symbol.into(),
+                call: call.clone(),
+                status,
+                basis: if has_local {
+                    ResolutionBasis::SameFileName
+                } else {
+                    ResolutionBasis::NameOnly
+                },
+                candidates: candidates
+                    .iter()
+                    .map(|&idx| (&symbols[idx]).into())
+                    .collect(),
+            });
         }
+        call_resolution_ranges.push(start..call_resolutions.len());
     }
 
     Ok(CallGraphIndex {
@@ -294,6 +380,16 @@ pub fn build_index(repo_path: &Path, files: &[PathBuf]) -> Result<CallGraphIndex
         by_qualified,
         by_name,
         node_indices,
+        call_resolutions,
+        call_resolution_ranges,
+    })
+}
+
+fn language_family(file: &str) -> Option<Language> {
+    Language::detect(Path::new(file)).map(|lang| match lang {
+        Language::TypeScript | Language::Tsx | Language::Jsx => Language::JavaScript,
+        Language::Cpp => Language::C,
+        other => other,
     })
 }
 
@@ -587,7 +683,13 @@ fn extract_calls_from_body(
     let mut cursor = body.walk();
     let call_node_kinds = get_call_node_kinds(lang);
 
-    collect_calls(&mut cursor, source, &call_node_kinds, &mut calls);
+    collect_calls(
+        &mut cursor,
+        source,
+        &call_node_kinds,
+        crate::parser::queries::get_nested_scope_node_types(lang),
+        &mut calls,
+    );
 
     calls
 }
@@ -597,9 +699,13 @@ fn collect_calls(
     cursor: &mut tree_sitter::TreeCursor<'_>,
     source: &[u8],
     call_kinds: &[&str],
+    nested_scopes: &[&str],
     calls: &mut Vec<String>,
 ) {
     let node = cursor.node();
+    if nested_scopes.contains(&node.kind()) {
+        return;
+    }
 
     if call_kinds.contains(&node.kind()) {
         if let Some(name) = extract_call_name(&node, source) {
@@ -611,7 +717,7 @@ fn collect_calls(
 
     if cursor.goto_first_child() {
         loop {
-            collect_calls(cursor, source, call_kinds, calls);
+            collect_calls(cursor, source, call_kinds, nested_scopes, calls);
             if !cursor.goto_next_sibling() {
                 break;
             }
@@ -657,8 +763,14 @@ fn extract_call_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<Stri
                 let text = child.utf8_text(source).ok()?;
                 return Some(text.to_string());
             }
-            // For method calls like obj.method(), get the method name
-            if kind == "selector_expression" || kind == "member_expression" {
+            // Rust self.method(): keep the explicit receiver boundary. Arbitrary
+            // Rust field calls need receiver/type evidence before adding edges.
+            let rust_self_call = kind == "field_expression"
+                && child
+                    .child_by_field_name("value")
+                    .is_some_and(|receiver| receiver.kind() == "self");
+            // For supported member calls, get the method name.
+            if kind == "selector_expression" || kind == "member_expression" || rust_self_call {
                 // Get the rightmost identifier
                 if let Some(right) = child
                     .child_by_field_name("field")

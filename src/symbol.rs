@@ -27,6 +27,9 @@ pub struct SymbolReport {
     pub callers: Vec<ImpactSymbol>,
     /// Direct callees (depth=1).
     pub callees: Vec<ImpactSymbol>,
+    /// Evidence for name-based calls; unique candidates are not proven bindings.
+    #[serde(default)]
+    pub call_resolutions: Vec<crate::analyzers::repomap::CallResolution>,
     /// Cyclomatic complexity of the symbol (None if unavailable).
     pub cyclomatic: Option<u32>,
     /// Cognitive complexity of the symbol (None if unavailable).
@@ -158,6 +161,8 @@ pub fn get_symbol(
         source_truncated,
         callers,
         callees,
+        call_resolutions: index.call_resolutions[index.call_resolution_ranges[primary_idx].clone()]
+            .to_vec(),
         cyclomatic,
         cognitive,
         candidates,
