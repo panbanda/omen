@@ -30,6 +30,9 @@ pub struct ImpactLevel {
 /// The full result of an impact analysis.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImpactReport {
+    /// Evidence counts across all input files, not just the traversed subgraph.
+    #[serde(default)]
+    pub resolution_summary: crate::analyzers::repomap::ResolutionSummary,
     /// The query symbol name.
     pub symbol: String,
     /// Qualified names of all resolved root symbols.
@@ -81,6 +84,7 @@ pub fn analyze(
         suggestions.sort();
         suggestions.truncate(10);
         return Ok(ImpactReport {
+            resolution_summary: index.resolution_summary(),
             symbol: symbol.to_string(),
             resolved: vec![],
             callers: vec![],
@@ -158,6 +162,7 @@ pub fn analyze(
     files_affected.sort();
 
     Ok(ImpactReport {
+        resolution_summary: index.resolution_summary(),
         symbol: symbol.to_string(),
         resolved,
         callers: caller_impact,

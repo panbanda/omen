@@ -1,0 +1,354 @@
+{
+  "version": 1,
+  "split": "development",
+  "oracle": "Author-reviewed closed-world direct targets; runtime not executed by harness",
+  "cases": [
+    {
+      "id": "rust_unique",
+      "language": "rust",
+      "category": "unique",
+      "files": {
+        "z.rs": "pub fn helper() -> &'static str { \"Z\" }\n",
+        "main.rs": "mod z;\nuse z::helper;\nfn caller() -> &'static str { helper() }\nfn main(){println!(\"{}\",caller());}\n"
+      },
+      "expected": [
+        "z.rs:helper"
+      ]
+    },
+    {
+      "id": "rust_import_late",
+      "language": "rust",
+      "category": "import_late",
+      "files": {
+        "z.rs": "pub fn helper() -> &'static str { \"Z\" }\n",
+        "main.rs": "mod z;\nmod a;\nuse z::helper;\nfn caller() -> &'static str { helper() }\nfn main(){println!(\"{}\",caller());}\n",
+        "a.rs": "pub fn helper()-> &'static str{\"A\"}"
+      },
+      "expected": [
+        "z.rs:helper"
+      ]
+    },
+    {
+      "id": "rust_import_early",
+      "language": "rust",
+      "category": "import_early",
+      "files": {
+        "z.rs": "pub fn helper() -> &'static str { \"Z\" }\n",
+        "main.rs": "mod z;\nmod a;\nuse a::helper;\nfn caller() -> &'static str { helper() }\nfn main(){println!(\"{}\",caller());}\n",
+        "a.rs": "pub fn helper()-> &'static str{\"A\"}"
+      },
+      "expected": [
+        "a.rs:helper"
+      ]
+    },
+    {
+      "id": "rust_foreign_name",
+      "language": "rust",
+      "category": "foreign_name",
+      "files": {
+        "z.rs": "pub fn helper() -> &'static str { \"Z\" }\n",
+        "main.rs": "mod z;\nuse z::helper;\nfn caller() -> &'static str { helper() }\nfn main(){println!(\"{}\",caller());}\n",
+        "a.rb": "def helper\n 'WRONG'\nend"
+      },
+      "expected": [
+        "z.rs:helper"
+      ]
+    },
+    {
+      "id": "rust_alias",
+      "language": "rust",
+      "category": "alias",
+      "files": {
+        "z.rs": "pub fn helper() -> &'static str { \"Z\" }\n",
+        "main.rs": "mod z;\nmod a;\nuse z::helper as selected;\nfn caller() -> &'static str { selected() }\nfn main(){println!(\"{}\",caller());}\n",
+        "a.rs": "pub fn helper()-> &'static str{\"A\"}"
+      },
+      "expected": [
+        "z.rs:helper"
+      ]
+    },
+    {
+      "id": "rust_parameter_shadow",
+      "language": "rust",
+      "category": "parameter_shadow",
+      "files": {
+        "z.rs": "pub fn helper() -> &'static str { \"Z\" }\n",
+        "main.rs": "mod z;\nfn helper()-> &'static str{\"WRONG\"}\nfn caller(helper: fn()-> &'static str)-> &'static str{helper()}\nfn main(){println!(\"{}\",caller(z::helper));}"
+      },
+      "expected": [
+        "z.rs:helper"
+      ]
+    },
+    {
+      "id": "rust_nested_uncalled",
+      "language": "rust",
+      "category": "nested_uncalled",
+      "files": {
+        "main.rs": "fn helper()-> &'static str{\"WRONG\"}\nfn caller()-> &'static str{fn inner()-> &'static str{helper()} \"OK\"}\nfn main(){println!(\"{}\",caller());}"
+      },
+      "expected": []
+    },
+    {
+      "id": "typescript_unique",
+      "language": "typescript",
+      "category": "unique",
+      "files": {
+        "z.ts": "export function helper(): string {return \"Z\";}\n",
+        "main.ts": "import {helper} from \"./z.ts\";\nfunction caller(): string{return helper();}\nconsole.log(caller());"
+      },
+      "expected": [
+        "z.ts:helper"
+      ]
+    },
+    {
+      "id": "typescript_import_late",
+      "language": "typescript",
+      "category": "import_late",
+      "files": {
+        "z.ts": "export function helper(): string {return \"Z\";}\n",
+        "main.ts": "import {helper} from \"./z.ts\";\nfunction caller(): string{return helper();}\nconsole.log(caller());",
+        "a.ts": "export function helper():string{return \"A\";}"
+      },
+      "expected": [
+        "z.ts:helper"
+      ]
+    },
+    {
+      "id": "typescript_import_early",
+      "language": "typescript",
+      "category": "import_early",
+      "files": {
+        "z.ts": "export function helper(): string {return \"Z\";}\n",
+        "main.ts": "import {helper} from \"./a.ts\";\nfunction caller(): string{return helper();}\nconsole.log(caller());",
+        "a.ts": "export function helper():string{return \"A\";}"
+      },
+      "expected": [
+        "a.ts:helper"
+      ]
+    },
+    {
+      "id": "typescript_foreign_name",
+      "language": "typescript",
+      "category": "foreign_name",
+      "files": {
+        "z.ts": "export function helper(): string {return \"Z\";}\n",
+        "main.ts": "import {helper} from \"./z.ts\";\nfunction caller(): string{return helper();}\nconsole.log(caller());",
+        "a.rb": "def helper\n 'WRONG'\nend"
+      },
+      "expected": [
+        "z.ts:helper"
+      ]
+    },
+    {
+      "id": "typescript_alias",
+      "language": "typescript",
+      "category": "alias",
+      "files": {
+        "z.ts": "export function helper(): string {return \"Z\";}\n",
+        "main.ts": "import {helper as selected} from \"./z.ts\";\nfunction caller(): string{return selected();}\nconsole.log(caller());",
+        "a.ts": "export function helper():string{return \"A\";}"
+      },
+      "expected": [
+        "z.ts:helper"
+      ]
+    },
+    {
+      "id": "typescript_parameter_shadow",
+      "language": "typescript",
+      "category": "parameter_shadow",
+      "files": {
+        "z.ts": "export function helper(): string {return \"Z\";}\n",
+        "main.ts": "import {helper as actual} from \"./z.ts\";\nfunction helper():string{return \"WRONG\";}\nfunction caller(helper:()=>string):string{return helper();}\nconsole.log(caller(actual));"
+      },
+      "expected": [
+        "z.ts:helper"
+      ]
+    },
+    {
+      "id": "typescript_nested_uncalled",
+      "language": "typescript",
+      "category": "nested_uncalled",
+      "files": {
+        "main.ts": "function helper():string{return \"WRONG\";}\nfunction caller():string{function inner(){return helper();} return \"OK\";}\nconsole.log(caller());"
+      },
+      "expected": []
+    },
+    {
+      "id": "ruby_unique",
+      "language": "ruby",
+      "category": "unique",
+      "files": {
+        "z.rb": "module Z\n def self.helper\n \"Z\"\n end\nend",
+        "main.rb": "require_relative \"z\"\ndef caller\n Z.helper()\nend\nputs caller"
+      },
+      "expected": [
+        "z.rb:helper"
+      ]
+    },
+    {
+      "id": "ruby_import_late",
+      "language": "ruby",
+      "category": "import_late",
+      "files": {
+        "z.rb": "module Z\n def self.helper\n \"Z\"\n end\nend",
+        "main.rb": "require_relative \"z\"\nrequire_relative \"a\"\ndef caller\n Z.helper()\nend\nputs caller",
+        "a.rb": "module A\n def self.helper\n \"A\"\n end\nend"
+      },
+      "expected": [
+        "z.rb:helper"
+      ]
+    },
+    {
+      "id": "ruby_import_early",
+      "language": "ruby",
+      "category": "import_early",
+      "files": {
+        "z.rb": "module Z\n def self.helper\n \"Z\"\n end\nend",
+        "main.rb": "require_relative \"z\"\nrequire_relative \"a\"\ndef caller\n A.helper()\nend\nputs caller",
+        "a.rb": "module A\n def self.helper\n \"A\"\n end\nend"
+      },
+      "expected": [
+        "a.rb:helper"
+      ]
+    },
+    {
+      "id": "ruby_foreign_name",
+      "language": "ruby",
+      "category": "foreign_name",
+      "files": {
+        "z.rb": "module Z\n def self.helper\n \"Z\"\n end\nend",
+        "main.rb": "require_relative \"z\"\ndef caller\n Z.helper()\nend\nputs caller",
+        "a.py": "def helper():\n return \"WRONG\""
+      },
+      "expected": [
+        "z.rb:helper"
+      ]
+    },
+    {
+      "id": "ruby_alias",
+      "language": "ruby",
+      "category": "alias",
+      "files": {
+        "z.rb": "module Z\n def self.helper\n \"Z\"\n end\nend",
+        "main.rb": "require_relative \"z\"\nrequire_relative \"a\"\nmodule Z\n class << self\n alias_method :selected, :helper\n end\nend\ndef caller\n Z.selected()\nend\nputs caller",
+        "a.rb": "module A\n def self.helper\n \"A\"\n end\nend"
+      },
+      "expected": [
+        "z.rb:helper"
+      ]
+    },
+    {
+      "id": "ruby_parameter_shadow",
+      "language": "ruby",
+      "category": "parameter_shadow",
+      "files": {
+        "z.rb": "module Z\n def self.helper\n \"Z\"\n end\nend",
+        "main.rb": "require_relative \"z\"\ndef helper\n \"WRONG\"\nend\ndef caller(helper)\n helper.call()\nend\nputs caller(Z.method(:helper))"
+      },
+      "expected": [
+        "z.rb:helper"
+      ]
+    },
+    {
+      "id": "ruby_nested_uncalled",
+      "language": "ruby",
+      "category": "nested_uncalled",
+      "files": {
+        "main.rb": "def helper\n \"WRONG\"\nend\ndef caller\n def inner\n helper()\n end\n \"OK\"\nend\nputs caller"
+      },
+      "expected": []
+    },
+    {
+      "id": "go_unique",
+      "language": "go",
+      "category": "unique",
+      "files": {
+        "go.mod": "module quality.local/case\n\ngo 1.20\n",
+        "z/helper.go": "package z\nfunc Helper()string{return \"Z\"}",
+        "main.go": "package main\nimport \"fmt\"\nimport \"quality.local/case/z\"\nfunc caller()string{return z.Helper()}\nfunc main(){fmt.Println(caller())}"
+      },
+      "expected": [
+        "z/helper.go:Helper"
+      ]
+    },
+    {
+      "id": "go_import_late",
+      "language": "go",
+      "category": "import_late",
+      "files": {
+        "go.mod": "module quality.local/case\n\ngo 1.20\n",
+        "z/helper.go": "package z\nfunc Helper()string{return \"Z\"}",
+        "main.go": "package main\nimport \"fmt\"\nimport \"quality.local/case/z\"\nfunc caller()string{return z.Helper()}\nfunc main(){fmt.Println(caller())}",
+        "a/helper.go": "package a\nfunc Helper()string{return \"A\"}"
+      },
+      "expected": [
+        "z/helper.go:Helper"
+      ]
+    },
+    {
+      "id": "go_import_early",
+      "language": "go",
+      "category": "import_early",
+      "files": {
+        "go.mod": "module quality.local/case\n\ngo 1.20\n",
+        "z/helper.go": "package z\nfunc Helper()string{return \"Z\"}",
+        "main.go": "package main\nimport \"fmt\"\nimport \"quality.local/case/a\"\nfunc caller()string{return a.Helper()}\nfunc main(){fmt.Println(caller())}",
+        "a/helper.go": "package a\nfunc Helper()string{return \"A\"}"
+      },
+      "expected": [
+        "a/helper.go:Helper"
+      ]
+    },
+    {
+      "id": "go_foreign_name",
+      "language": "go",
+      "category": "foreign_name",
+      "files": {
+        "go.mod": "module quality.local/case\n\ngo 1.20\n",
+        "z/helper.go": "package z\nfunc Helper()string{return \"Z\"}",
+        "main.go": "package main\nimport \"fmt\"\nimport \"quality.local/case/z\"\nfunc caller()string{return z.Helper()}\nfunc main(){fmt.Println(caller())}",
+        "a.rs": "pub fn Helper()-> &'static str{\"WRONG\"}"
+      },
+      "expected": [
+        "z/helper.go:Helper"
+      ]
+    },
+    {
+      "id": "go_alias",
+      "language": "go",
+      "category": "alias",
+      "files": {
+        "go.mod": "module quality.local/case\n\ngo 1.20\n",
+        "z/helper.go": "package z\nfunc Helper()string{return \"Z\"}",
+        "main.go": "package main\nimport \"fmt\"\nimport selected \"quality.local/case/z\"\nfunc caller()string{return selected.Helper()}\nfunc main(){fmt.Println(caller())}",
+        "a/helper.go": "package a\nfunc Helper()string{return \"A\"}"
+      },
+      "expected": [
+        "z/helper.go:Helper"
+      ]
+    },
+    {
+      "id": "go_parameter_shadow",
+      "language": "go",
+      "category": "parameter_shadow",
+      "files": {
+        "go.mod": "module quality.local/case\n\ngo 1.20\n",
+        "z/helper.go": "package z\nfunc Helper()string{return \"Z\"}",
+        "main.go": "package main\nimport \"fmt\"\nimport \"quality.local/case/z\"\nfunc helper()string{return \"WRONG\"}\nfunc caller(helper func()string)string{return helper()}\nfunc main(){fmt.Println(caller(z.Helper))}"
+      },
+      "expected": [
+        "z/helper.go:Helper"
+      ]
+    },
+    {
+      "id": "go_nested_uncalled",
+      "language": "go",
+      "category": "nested_uncalled",
+      "files": {
+        "go.mod": "module quality.local/case\n\ngo 1.20\n",
+        "main.go": "package main\nimport \"fmt\"\nfunc helper()string{return \"WRONG\"}\nfunc caller()string{inner:=func()string{return helper()}; _=inner; return \"OK\"}\nfunc main(){fmt.Println(caller())}"
+      },
+      "expected": []
+    }
+  ]
+}
