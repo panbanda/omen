@@ -8,6 +8,9 @@ fn fixture(files: &[(&str, &str)]) -> (TempDir, Vec<std::path::PathBuf>) {
         .iter()
         .map(|(name, src)| {
             let path = dir.path().join(name);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
             std::fs::write(&path, src).unwrap();
             path
         })
@@ -244,4 +247,69 @@ fn rust_generic_receiver_is_not_guessed_from_a_bare_name() {
     ]);
     let report = get_symbol(dir.path(), &paths, "caller", &SymbolOptions::default()).unwrap();
     assert!(report.callees.is_empty());
+}
+
+#[test]
+fn imported_module_disambiguates_name_candidates() {
+    for (ext, main, a, z) in [
+        (
+            "rs",
+            "mod a; mod z; use z::helper; fn caller(){helper();}",
+            "fn helper(){}",
+            "fn helper(){}",
+        ),
+        (
+            "ts",
+            "import {helper} from './z.ts'; function caller(){helper();}",
+            "export function helper(){}",
+            "export function helper(){}",
+        ),
+        (
+            "rb",
+            "require_relative 'z'\ndef caller\n Z.helper()\nend\n",
+            "module A\n def self.helper; end\nend",
+            "module Z\n def self.helper; end\nend",
+        ),
+        (
+            "go",
+            "package main\nimport \"quality.local/case/z\"\nfunc caller(){z.Helper()}",
+            "package a\nfunc Helper(){}",
+            "package z\nfunc Helper(){}",
+        ),
+    ] {
+        let main_name = format!("main.{ext}");
+        let a_name = if ext == "go" {
+            "a/helper.go".to_string()
+        } else {
+            format!("a.{ext}")
+        };
+        let z_name = if ext == "go" {
+            "z/helper.go".to_string()
+        } else {
+            format!("z.{ext}")
+        };
+        let (dir, paths) = fixture(&[(&main_name, main), (&a_name, a), (&z_name, z)]);
+        let report = get_symbol(dir.path(), &paths, "caller", &SymbolOptions::default()).unwrap();
+        assert_eq!(
+            report.callees.len(),
+            1,
+            "{ext}: {:?}",
+            report.call_resolutions
+        );
+        assert_eq!(report.callees[0].file, z_name, "{ext}");
+    }
+}
+
+#[test]
+fn unmatched_constant_receiver_does_not_fall_back_to_local_method() {
+    let (dir, paths) = fixture(&[(
+        "main.rb",
+        "def escape(value)\n value\nend\ndef escape_path(value)\n URI_PARSER.escape(value)\nend\n",
+    )]);
+    let report = get_symbol(dir.path(), &paths, "escape_path", &SymbolOptions::default()).unwrap();
+    assert!(report.callees.is_empty());
+    assert_eq!(
+        report.call_resolutions[0].status,
+        omen::analyzers::repomap::ResolutionStatus::Unresolved
+    );
 }

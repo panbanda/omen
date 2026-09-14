@@ -7,7 +7,7 @@ Both binaries were built with Rust 1.98.1, `--locked`, the dev profile,
 `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_DEV_OPT_LEVEL=0 CARGO_INCREMENTAL=0`.
 Host: Linux x86_64; harness: Python 3.12.14.
 
-## Development corpus: targeted gains, failed overall gate
+## Development corpus: semantic gate passed
 
 28 authored cases: seven each for Rust, TypeScript, Ruby and Go. Labels are
 source-reviewed, closed-world direct call targets. Fixture programs were not
@@ -16,25 +16,25 @@ corpus hash: [synthetic.json](synthetic.json).
 
 | Metric | Original | Rebuilt |
 | --- | ---: | ---: |
-| Correct edges | 8 | 8 |
+| Correct edges | 8 | 17 |
 | Incorrect edges | 17 | 4 |
-| Missed true edges | 16 | 16 |
-| Precision | 32.0% | 66.7% |
-| Recall | 33.3% | 33.3% |
-| Response bytes, once per case | 9,710 | 15,650 |
-| Cases regressing versus original | — | 4 |
+| Missed true edges | 16 | 7 |
+| Precision | 32.0% | 81.0% |
+| Recall | 33.3% | 70.8% |
+| Response bytes, once per case | 9,710 | 15,669 |
+| Cases regressing versus original | — | 0 |
 
-The four regressions are `rust_import_early`, `typescript_import_early`,
-`ruby_import_early`, and `go_import_early`. The old alphabetical guess happened
-to be right in those cases. Keeping ambiguity as evidence loses an asserted true
-edge until import binding is implemented. **The combined change fails semantic
-non-regression.** It also increases response bytes by about 61.2%. Neither loss
-is canceled out by improved aggregate precision.
+Import-path evidence restores the four correct edges that the old alphabetical
+guess happened to select, and resolves three additional late-import cases.
+Explicit Ruby receiver evidence resolves the fourth. **The combined change passes
+semantic non-regression with strict gains.** Response bytes still increase by
+about 61.4%; that resource loss remains separate from semantic correctness.
 
-Each language has two correct, one incorrect, and four missed edges after the
-change. Remaining false edges are the parameter-shadow cases. Missing targets
-are imports, aliases, and shadowed function parameters. Candidate lists can help
-an agent investigate but are not scored as correct asserted edges.
+Go has five correct, one incorrect and one missed edge. Each other language has
+four correct, one incorrect and two missed edges. Remaining false edges are the
+parameter-shadow cases. Missing targets are three aliases and four shadowed
+function parameters. Candidate lists can help an agent investigate but are not
+scored as correct asserted edges.
 
 ## Real-repository checks
 
@@ -52,11 +52,9 @@ not counted as true or false. These are development checks, not held-out tests.
 | spf13/cobra | adbc8813901bba65827259daa8e22ff94ec1f30e | Calls to ExactArgs/MatchAll; OnlyValidArgs is passed, not called |
 
 Raw observations: [real-repositories.json](real-repositories.json).
-Of six reviewed cases, four satisfy their labels before and five after. One
-case improves (ripgrep), five are unchanged, and none regress. All observations
-were error-free and deterministic. The non-regression gate passes, but absolute
-correctness does not: Rack's `escape_path` still points at the wrong receiver's
-`escape`. Passing non-regression must not conceal that existing failure.
+Of six reviewed cases, four satisfy their labels before and all six after. Rack
+and ripgrep improve; four cases are unchanged and none regress. All observations
+were error-free and deterministic, and the partial-label non-regression gate passes.
 
 The ripgrep query exposed an unrecognized `self.method()` AST form. A failing
 regression drove support for that form. An intermediate attempt to extract every
@@ -65,15 +63,14 @@ that attempt was rejected and replaced with explicit-self handling. Its failure
 is preserved as a regression test and a negative label in the real corpus.
 
 This does not resolve Rust receiver types or impl scopes. Same-file names are
-still candidates; traits and deref can invalidate them. The Rack receiver mismatch
-is a known unresolved issue. Project test suites and coding-agent task success
+still candidates; traits and deref can invalidate them. Project test suites and coding-agent task success
 were not measured. Merely returning JSON is not a successful correctness check.
 The initially considered TypeFest repository was excluded before measurement
 because this experiment targets runtime call relationships, not type utilities.
 
 ## Validation and interpretation
 
-All 2,279 Rust tests passed, with six ignored; the six Python scorer tests and
+All 2,281 Rust tests passed, with six ignored; the six Python scorer tests and
 format check passed. Tests cover direct calls across all 14 language variants,
 nested scopes across 13 applicable variants, duplicates, order invariance,
 same-line evidence ownership, transitive nested calls, and impact uncertainty.
@@ -92,8 +89,8 @@ do not make 28 cases into 840 independent correctness examples.
 
 Actual model edits, tokens/cost, peak memory, retrieval quality, complete impact,
 compiler binding, and independent held-out generalization remain unmeasured.
-Therefore `broad_improvement_proven` is always false. Keep this PR experimental
-until the lost import edges and resource regressions have explicit remedies.
+Therefore `broad_improvement_proven` is always false. The semantic and partial
+real-repository gates pass, while response budgeting remains a measured regression.
 
 ## Reproduction
 

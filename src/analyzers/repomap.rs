@@ -16,7 +16,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::core::{is_test_file, AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
-use crate::parser::{extract_functions, Parser};
+use crate::parser::{extract_functions, extract_imports, ImportKind, Parser};
 
 /// Repomap analyzer configuration.
 #[derive(Debug, Clone)]
@@ -55,6 +55,8 @@ pub struct SymbolInfo {
     pub end_line: u32,
     pub signature: String,
     pub calls: Vec<String>,
+    /// Dependency paths declared by this symbol's file.
+    pub imports: Vec<String>,
     pub is_exported: bool,
 }
 
@@ -90,6 +92,8 @@ pub enum ResolutionStatus {
 #[serde(rename_all = "snake_case")]
 pub enum ResolutionBasis {
     SameFileName,
+    ReceiverName,
+    ImportedPath,
     NameOnly,
 }
 
@@ -254,6 +258,11 @@ pub fn build_index(repo_path: &Path, files: &[PathBuf]) -> Result<CallGraphIndex
                 .filter(|func| func.is_bound)
                 .collect();
             let source = &parse_result.source;
+            let imports: Vec<String> = extract_imports(&parse_result)
+                .into_iter()
+                .filter(|import| import.kind == ImportKind::Use)
+                .map(|import| import.path)
+                .collect();
 
             let rel_path = path
                 .strip_prefix(repo_path)
@@ -285,6 +294,7 @@ pub fn build_index(repo_path: &Path, files: &[PathBuf]) -> Result<CallGraphIndex
                         end_line: func.end_line,
                         signature: func.signature.clone(),
                         calls,
+                        imports: imports.clone(),
                         is_exported: func.is_exported,
                     }
                 })
@@ -335,8 +345,13 @@ pub fn build_index(repo_path: &Path, files: &[PathBuf]) -> Result<CallGraphIndex
         let start = call_resolutions.len();
 
         for call in &symbol.calls {
+            let (receiver, bare_call) = call
+                .rsplit_once('.')
+                .map_or((None, call.as_str()), |(receiver, name)| {
+                    (Some(receiver), name)
+                });
             let mut candidates: Vec<usize> = by_name
-                .get(call)
+                .get(bare_call)
                 .into_iter()
                 .flatten()
                 .copied()
@@ -345,9 +360,40 @@ pub fn build_index(repo_path: &Path, files: &[PathBuf]) -> Result<CallGraphIndex
             let has_local = candidates
                 .iter()
                 .any(|&idx| symbols[idx].file == symbol.file);
-            if has_local {
+            let basis = if let Some(receiver) = receiver {
+                let qualified: Vec<usize> = candidates
+                    .iter()
+                    .copied()
+                    .filter(|&idx| receiver_matches_file(receiver, &symbols[idx].file))
+                    .collect();
+                // An explicit receiver absent from the index is unresolved.
+                // Falling back would link a same-named method on another object.
+                candidates = qualified;
+                ResolutionBasis::ReceiverName
+            } else if has_local {
                 candidates.retain(|&idx| symbols[idx].file == symbol.file);
-            }
+                ResolutionBasis::SameFileName
+            } else {
+                let imported: Vec<usize> = candidates
+                    .iter()
+                    .copied()
+                    .filter(|&idx| {
+                        symbol.imports.iter().any(|path| {
+                            import_matches_file(
+                                path,
+                                &symbols[idx].file,
+                                language_family(&symbol.file),
+                            )
+                        })
+                    })
+                    .collect();
+                if !imported.is_empty() {
+                    candidates = imported;
+                    ResolutionBasis::ImportedPath
+                } else {
+                    ResolutionBasis::NameOnly
+                }
+            };
             let status = match candidates.as_slice() {
                 [] => ResolutionStatus::Unresolved,
                 [idx] => {
@@ -360,11 +406,7 @@ pub fn build_index(repo_path: &Path, files: &[PathBuf]) -> Result<CallGraphIndex
                 caller: symbol.into(),
                 call: call.clone(),
                 status,
-                basis: if has_local {
-                    ResolutionBasis::SameFileName
-                } else {
-                    ResolutionBasis::NameOnly
-                },
+                basis,
                 candidates: candidates
                     .iter()
                     .map(|&idx| (&symbols[idx]).into())
@@ -391,6 +433,48 @@ fn language_family(file: &str) -> Option<Language> {
         Language::Cpp => Language::C,
         other => other,
     })
+}
+
+/// Conservatively relate an import path to a candidate source file. This only
+/// narrows an existing same-name set; it never invents a symbol or edge.
+fn import_matches_file(import: &str, file: &str, language: Option<Language>) -> bool {
+    let file = Path::new(file);
+    let file_stem = file.file_stem().and_then(|value| value.to_str());
+    let parent = file
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|value| value.to_str());
+    match language {
+        Some(Language::Rust) => import
+            .rsplit("::")
+            .nth(1)
+            .is_some_and(|module| Some(module) == file_stem || Some(module) == parent),
+        Some(Language::Go) => import
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .is_some_and(|module| Some(module) == parent || Some(module) == file_stem),
+        Some(Language::JavaScript) | Some(Language::Ruby) => {
+            let imported = Path::new(import.trim_start_matches("./"));
+            let imported_stem = imported.file_stem().and_then(|value| value.to_str());
+            imported_stem == file_stem || imported_stem == parent
+        }
+        _ => false,
+    }
+}
+
+fn receiver_matches_file(receiver: &str, file: &str) -> bool {
+    let receiver = receiver.rsplit("::").next().unwrap_or(receiver);
+    let file = Path::new(file);
+    [
+        file.file_stem().and_then(|value| value.to_str()),
+        file.parent()
+            .and_then(Path::file_name)
+            .and_then(|value| value.to_str()),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|component| component.eq_ignore_ascii_case(receiver))
 }
 
 /// Repomap analyzer.
@@ -746,6 +830,22 @@ fn get_call_node_kinds(lang: Language) -> Vec<&'static str> {
 
 /// Extract the function name from a call expression.
 fn extract_call_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
+    // Ruby constant receivers carry useful module evidence (`A.helper`). Keep
+    // that boundary instead of collapsing every call to the bare method name.
+    if matches!(node.kind(), "call" | "method_call") {
+        if let (Some(receiver), Some(method)) = (
+            node.child_by_field_name("receiver"),
+            node.child_by_field_name("method"),
+        ) {
+            if matches!(receiver.kind(), "constant" | "scope_resolution") {
+                return Some(format!(
+                    "{}.{}",
+                    receiver.utf8_text(source).ok()?,
+                    method.utf8_text(source).ok()?
+                ));
+            }
+        }
+    }
     // Try to find the function/identifier node
     for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i) {

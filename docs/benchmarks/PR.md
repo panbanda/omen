@@ -19,18 +19,19 @@ errors, validated warmups, alternating run order and per-case regression gates.
 ## Evidence
 
 - 28 development cases across Rust, TypeScript, Ruby and Go: incorrect edges
-  17 → 4, correct edges 8 → 8, missed edges 16 → 16. Precision 32% → 66.7%.
-- Four import cases regress; the aggregate semantic non-regression gate fails.
-- Response bytes increase 9,710 → 15,650 across the fixed cases.
+  17 → 4, correct edges 8 → 17, missed edges 16 → 7. Precision 32% → 81%;
+  recall 33.3% → 70.8%. No case regresses, so the semantic gate passes.
+- Response bytes increase 9,710 → 15,669 across the fixed cases; this remains
+  a separately disclosed resource regression.
 - Six partially labeled real-code queries on pinned Rack, Zod, ripgrep and Cobra
-  revisions: one improvement, five unchanged, zero regressions. Fully satisfied
-  reviewed cases increase 4/6 → 5/6. Rack receiver binding remains wrong.
+  revisions: two improvements, four unchanged, zero regressions. Fully satisfied
+  reviewed cases increase 4/6 → 6/6.
 - Both final experiments use 30 paired repetitions. No model editing, actual
   tokens, memory, held-out generalization or release performance claim is made.
 
 ## Validation
 
-- 2,279 Rust tests pass; six ignored. Six Python scorer tests pass. Formatting passes.
+- 2,281 Rust tests pass; six ignored. Six Python scorer tests pass. Formatting passes.
 - Cross-language regression coverage: 14 direct-call variants and 13 applicable
   nested-scope variants, plus duplicates, determinism and evidence ownership.
 - Strict Clippy fails on existing diagnostics in files unchanged from baseline;
@@ -38,6 +39,6 @@ errors, validated warmups, alternating run order and per-case regression gates.
 
 See `docs/benchmarks/README.md` and the raw JSON reports for reproduction and limits.
 
-Keep this PR in draft: import/alias binding and response budgeting are required
-before claiming overall non-regression. The proposed change is measured progress,
-not proof that the approach is better in every dimension.
+Semantic and partial real-repository non-regression gates pass. Alias handling,
+lexical parameter binding, response budgeting and held-out model-editing studies
+remain follow-up work; this is not proof of improvement in every dimension.
