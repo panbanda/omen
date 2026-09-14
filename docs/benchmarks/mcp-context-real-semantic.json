@@ -1,0 +1,475 @@
+{
+  "standard": "omen-improvement-v1",
+  "corpus_sha256": "8b02a021c56cbc698b273932a2d40e01c192a1e1ff21729383b044931e211cff",
+  "baseline": {
+    "label": "aa8aafe",
+    "sha256": "cf615db3731a9f9d2ef28d4df0be6c22579cc329e0d260d0d0c7b920366c6ea7"
+  },
+  "candidate": {
+    "label": "compact-mcp-context",
+    "sha256": "79bcb9a7d55395d55c3dc790d517063776fb0cd7d9936daa95b478d8b8eeaf7a"
+  },
+  "repetitions": 3,
+  "warmups": 1,
+  "order": "alternating",
+  "broad_improvement_proven": false,
+  "unmeasured": [
+    "model editing",
+    "actual tokens/cost",
+    "peak RSS",
+    "release performance",
+    "compiler binding",
+    "held-out generalization"
+  ],
+  "cases": [
+    {
+      "id": "rack_escape_path",
+      "language": "ruby",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          181.17727099888725,
+          185.1970670031733,
+          176.9620809936896,
+          201.6505959982169
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          825,
+          825,
+          825,
+          825
+        ],
+        "report_sha256": [
+          "405cc5f82892610298258760d70a613ad26a90216c390e5decc60e268ede3272",
+          "405cc5f82892610298258760d70a613ad26a90216c390e5decc60e268ede3272",
+          "405cc5f82892610298258760d70a613ad26a90216c390e5decc60e268ede3272",
+          "405cc5f82892610298258760d70a613ad26a90216c390e5decc60e268ede3272"
+        ],
+        "predicted": [],
+        "p50_ms": 185.1970670031733,
+        "checks": {
+          "missing": [],
+          "forbidden": []
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          70.18443100241711,
+          74.8721249983646,
+          66.64788000489352,
+          66.00675800291356
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          825,
+          825,
+          825,
+          825
+        ],
+        "report_sha256": [
+          "405cc5f82892610298258760d70a613ad26a90216c390e5decc60e268ede3272",
+          "405cc5f82892610298258760d70a613ad26a90216c390e5decc60e268ede3272",
+          "405cc5f82892610298258760d70a613ad26a90216c390e5decc60e268ede3272",
+          "405cc5f82892610298258760d70a613ad26a90216c390e5decc60e268ede3272"
+        ],
+        "predicted": [],
+        "p50_ms": 66.64788000489352,
+        "checks": {
+          "missing": [],
+          "forbidden": []
+        }
+      }
+    },
+    {
+      "id": "rack_build_query",
+      "language": "ruby",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          184.9833710002713,
+          180.51638399629155,
+          175.92529999819817,
+          205.69910100311972
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          2199,
+          2199,
+          2199,
+          2199
+        ],
+        "report_sha256": [
+          "eed77499f0b008280a42ea2e50a3a16cb5705e182496abeff25ac8722be9898a",
+          "eed77499f0b008280a42ea2e50a3a16cb5705e182496abeff25ac8722be9898a",
+          "eed77499f0b008280a42ea2e50a3a16cb5705e182496abeff25ac8722be9898a",
+          "eed77499f0b008280a42ea2e50a3a16cb5705e182496abeff25ac8722be9898a"
+        ],
+        "predicted": [
+          "lib/rack/utils.rb:escape"
+        ],
+        "p50_ms": 180.51638399629155,
+        "checks": {
+          "missing": [],
+          "forbidden": []
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          83.13977099896874,
+          95.32608700101264,
+          77.7781459983089,
+          74.22687699727248
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          2199,
+          2199,
+          2199,
+          2199
+        ],
+        "report_sha256": [
+          "eed77499f0b008280a42ea2e50a3a16cb5705e182496abeff25ac8722be9898a",
+          "eed77499f0b008280a42ea2e50a3a16cb5705e182496abeff25ac8722be9898a",
+          "eed77499f0b008280a42ea2e50a3a16cb5705e182496abeff25ac8722be9898a",
+          "eed77499f0b008280a42ea2e50a3a16cb5705e182496abeff25ac8722be9898a"
+        ],
+        "predicted": [
+          "lib/rack/utils.rb:escape"
+        ],
+        "p50_ms": 77.7781459983089,
+        "checks": {
+          "missing": [],
+          "forbidden": []
+        }
+      }
+    },
+    {
+      "id": "zod_base64url",
+      "language": "typescript",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          618.8423309940845,
+          728.7353110004915,
+          680.9939640006633,
+          635.7906620032736
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1416,
+          1416,
+          1416,
+          1416
+        ],
+        "report_sha256": [
+          "9886ca7e7fd129d3caec18c2ef7ea726507194465524e2dea70d7bd710dbbb83",
+          "9886ca7e7fd129d3caec18c2ef7ea726507194465524e2dea70d7bd710dbbb83",
+          "9886ca7e7fd129d3caec18c2ef7ea726507194465524e2dea70d7bd710dbbb83",
+          "9886ca7e7fd129d3caec18c2ef7ea726507194465524e2dea70d7bd710dbbb83"
+        ],
+        "predicted": [
+          "packages/zod/src/v4/core/util.ts:base64ToUint8Array"
+        ],
+        "p50_ms": 680.9939640006633,
+        "checks": {
+          "missing": [],
+          "forbidden": []
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          235.41634700086433,
+          246.9148399977712,
+          216.4183239947306,
+          235.90052800136618
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1416,
+          1416,
+          1416,
+          1416
+        ],
+        "report_sha256": [
+          "9886ca7e7fd129d3caec18c2ef7ea726507194465524e2dea70d7bd710dbbb83",
+          "9886ca7e7fd129d3caec18c2ef7ea726507194465524e2dea70d7bd710dbbb83",
+          "9886ca7e7fd129d3caec18c2ef7ea726507194465524e2dea70d7bd710dbbb83",
+          "9886ca7e7fd129d3caec18c2ef7ea726507194465524e2dea70d7bd710dbbb83"
+        ],
+        "predicted": [
+          "packages/zod/src/v4/core/util.ts:base64ToUint8Array"
+        ],
+        "p50_ms": 235.90052800136618,
+        "checks": {
+          "missing": [],
+          "forbidden": []
+        }
+      }
+    },
+    {
+      "id": "zod_hide",
+      "language": "typescript",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          635.4342429985991,
+          722.805026001879,
+          705.4851600041729,
+          643.5358000017004
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          836,
+          836,
+          836,
+          836
+        ],
+        "report_sha256": [
+          "f65dd3b327f9c4ac22c1bd8047946d48cddae83e5e6c096fe36b0ff4322668fe",
+          "f65dd3b327f9c4ac22c1bd8047946d48cddae83e5e6c096fe36b0ff4322668fe",
+          "f65dd3b327f9c4ac22c1bd8047946d48cddae83e5e6c096fe36b0ff4322668fe",
+          "f65dd3b327f9c4ac22c1bd8047946d48cddae83e5e6c096fe36b0ff4322668fe"
+        ],
+        "predicted": [
+          "packages/zod/src/v4/core/util.ts:own"
+        ],
+        "p50_ms": 705.4851600041729,
+        "checks": {
+          "missing": [],
+          "forbidden": []
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          219.44143699511187,
+          216.87137099797837,
+          240.22238299949095,
+          215.12335200532107
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          836,
+          836,
+          836,
+          836
+        ],
+        "report_sha256": [
+          "f65dd3b327f9c4ac22c1bd8047946d48cddae83e5e6c096fe36b0ff4322668fe",
+          "f65dd3b327f9c4ac22c1bd8047946d48cddae83e5e6c096fe36b0ff4322668fe",
+          "f65dd3b327f9c4ac22c1bd8047946d48cddae83e5e6c096fe36b0ff4322668fe",
+          "f65dd3b327f9c4ac22c1bd8047946d48cddae83e5e6c096fe36b0ff4322668fe"
+        ],
+        "predicted": [
+          "packages/zod/src/v4/core/util.ts:own"
+        ],
+        "p50_ms": 216.87137099797837,
+        "checks": {
+          "missing": [],
+          "forbidden": []
+        }
+      }
+    },
+    {
+      "id": "ripgrep_is_match",
+      "language": "rust",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          332.78019999852404,
+          329.2864830000326,
+          431.03871300263563,
+          343.0967620006413
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1119,
+          1119,
+          1119,
+          1119
+        ],
+        "report_sha256": [
+          "b505fc3744a19d62c6296c070eeb9ebaa9f1829171dfc56bffaeffc98080d762",
+          "b505fc3744a19d62c6296c070eeb9ebaa9f1829171dfc56bffaeffc98080d762",
+          "b505fc3744a19d62c6296c070eeb9ebaa9f1829171dfc56bffaeffc98080d762",
+          "b505fc3744a19d62c6296c070eeb9ebaa9f1829171dfc56bffaeffc98080d762"
+        ],
+        "predicted": [
+          "crates/globset/src/lib.rs:is_match_candidate"
+        ],
+        "p50_ms": 343.0967620006413,
+        "checks": {
+          "missing": [],
+          "forbidden": []
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          131.6525250003906,
+          136.1166599963326,
+          160.91997199691832,
+          125.3567980020307
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1119,
+          1119,
+          1119,
+          1119
+        ],
+        "report_sha256": [
+          "b505fc3744a19d62c6296c070eeb9ebaa9f1829171dfc56bffaeffc98080d762",
+          "b505fc3744a19d62c6296c070eeb9ebaa9f1829171dfc56bffaeffc98080d762",
+          "b505fc3744a19d62c6296c070eeb9ebaa9f1829171dfc56bffaeffc98080d762",
+          "b505fc3744a19d62c6296c070eeb9ebaa9f1829171dfc56bffaeffc98080d762"
+        ],
+        "predicted": [
+          "crates/globset/src/lib.rs:is_match_candidate"
+        ],
+        "p50_ms": 136.1166599963326,
+        "checks": {
+          "missing": [],
+          "forbidden": []
+        }
+      }
+    },
+    {
+      "id": "cobra_exact_valid",
+      "language": "go",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          189.54874599876348,
+          169.28236700186972,
+          152.15477700257907,
+          167.43310199672123
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1397,
+          1397,
+          1397,
+          1397
+        ],
+        "report_sha256": [
+          "fd108a4bdd83dc21d7a4005ecd3e80bed96e5c81aba54d2407a4958d63be5d5e",
+          "fd108a4bdd83dc21d7a4005ecd3e80bed96e5c81aba54d2407a4958d63be5d5e",
+          "fd108a4bdd83dc21d7a4005ecd3e80bed96e5c81aba54d2407a4958d63be5d5e",
+          "fd108a4bdd83dc21d7a4005ecd3e80bed96e5c81aba54d2407a4958d63be5d5e"
+        ],
+        "predicted": [
+          "args.go:ExactArgs",
+          "args.go:MatchAll"
+        ],
+        "p50_ms": 167.43310199672123,
+        "checks": {
+          "missing": [],
+          "forbidden": []
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          60.85504200018477,
+          55.33728299633367,
+          70.55629899696214,
+          62.39258900313871
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          1397,
+          1397,
+          1397,
+          1397
+        ],
+        "report_sha256": [
+          "fd108a4bdd83dc21d7a4005ecd3e80bed96e5c81aba54d2407a4958d63be5d5e",
+          "fd108a4bdd83dc21d7a4005ecd3e80bed96e5c81aba54d2407a4958d63be5d5e",
+          "fd108a4bdd83dc21d7a4005ecd3e80bed96e5c81aba54d2407a4958d63be5d5e",
+          "fd108a4bdd83dc21d7a4005ecd3e80bed96e5c81aba54d2407a4958d63be5d5e"
+        ],
+        "predicted": [
+          "args.go:ExactArgs",
+          "args.go:MatchAll"
+        ],
+        "p50_ms": 62.39258900313871,
+        "checks": {
+          "missing": [],
+          "forbidden": []
+        }
+      }
+    }
+  ],
+  "non_regression": true
+}

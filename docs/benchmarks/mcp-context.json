@@ -1,0 +1,654 @@
+{
+  "binary_sha256": "79bcb9a7d55395d55c3dc790d517063776fb0cd7d9936daa95b478d8b8eeaf7a",
+  "baseline_sha256": "cf615db3731a9f9d2ef28d4df0be6c22579cc329e0d260d0d0c7b920366c6ea7",
+  "tiktoken_version": "0.14.0",
+  "repetitions": 3,
+  "scope": "Same-binary full vs compact ablation; lossless code data, not model task success. Only result.generated_at excluded from cross-call equality.",
+  "rows": [
+    {
+      "repository": "rack/rack",
+      "revision": "a9833c8f3bd6b6d1e0ab35de00a1f1a16b5095f5",
+      "tool": "context",
+      "bytes": [
+        8087,
+        6157
+      ],
+      "tokens": {
+        "cl100k_base": [
+          2191,
+          1719
+        ],
+        "o200k_base": [
+          2210,
+          1761
+        ]
+      },
+      "lossless": true,
+      "elapsed_ms": [
+        [
+          75.13084999663988,
+          77.67186399723869,
+          74.33114400191698
+        ],
+        [
+          64.80760800332064,
+          78.06461300060619,
+          63.954843004466966
+        ]
+      ],
+      "median_ms": [
+        75.13084999663988,
+        64.80760800332064
+      ]
+    },
+    {
+      "repository": "rack/rack",
+      "revision": "a9833c8f3bd6b6d1e0ab35de00a1f1a16b5095f5",
+      "tool": "repomap",
+      "bytes": [
+        23068,
+        13937
+      ],
+      "tokens": {
+        "cl100k_base": [
+          6674,
+          4498
+        ],
+        "o200k_base": [
+          6685,
+          4613
+        ]
+      },
+      "lossless": true,
+      "elapsed_ms": [
+        [
+          28.851758994278498,
+          29.7699869988719,
+          33.24797099776333
+        ],
+        [
+          32.37144499871647,
+          31.536536997009534,
+          34.25218799384311
+        ]
+      ],
+      "median_ms": [
+        29.7699869988719,
+        32.37144499871647
+      ]
+    },
+    {
+      "repository": "rack/rack",
+      "revision": "a9833c8f3bd6b6d1e0ab35de00a1f1a16b5095f5",
+      "tool": "impact",
+      "bytes": [
+        643,
+        643
+      ],
+      "tokens": {
+        "cl100k_base": [
+          176,
+          176
+        ],
+        "o200k_base": [
+          182,
+          182
+        ]
+      },
+      "lossless": true,
+      "elapsed_ms": [
+        [
+          65.32133599830559,
+          53.905166998447385,
+          55.19694599934155
+        ],
+        [
+          60.51804999879096,
+          64.76599500456359,
+          72.5442210023175
+        ]
+      ],
+      "median_ms": [
+        55.19694599934155,
+        64.76599500456359
+      ]
+    },
+    {
+      "repository": "rack/rack",
+      "revision": "a9833c8f3bd6b6d1e0ab35de00a1f1a16b5095f5",
+      "tool": "get_symbol",
+      "bytes": [
+        2269,
+        2269
+      ],
+      "tokens": {
+        "cl100k_base": [
+          591,
+          591
+        ],
+        "o200k_base": [
+          614,
+          614
+        ]
+      },
+      "lossless": true,
+      "elapsed_ms": [
+        [
+          71.55663399316836,
+          67.27007200242952,
+          68.74831999448361
+        ],
+        [
+          68.88453500141622,
+          63.67385500197997,
+          67.3950399941532
+        ]
+      ],
+      "median_ms": [
+        68.74831999448361,
+        67.3950399941532
+      ]
+    },
+    {
+      "repository": "colinhacks/zod",
+      "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
+      "tool": "context",
+      "bytes": [
+        12660,
+        10372
+      ],
+      "tokens": {
+        "cl100k_base": [
+          3361,
+          2809
+        ],
+        "o200k_base": [
+          3407,
+          2897
+        ]
+      },
+      "lossless": true,
+      "elapsed_ms": [
+        [
+          330.7286330018542,
+          316.1170530001982,
+          314.9764059999143
+        ],
+        [
+          317.55859999975655,
+          298.49427299632225,
+          282.66327299934346
+        ]
+      ],
+      "median_ms": [
+        316.1170530001982,
+        298.49427299632225
+      ]
+    },
+    {
+      "repository": "colinhacks/zod",
+      "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
+      "tool": "repomap",
+      "bytes": [
+        28484,
+        19353
+      ],
+      "tokens": {
+        "cl100k_base": [
+          8110,
+          6041
+        ],
+        "o200k_base": [
+          8133,
+          6073
+        ]
+      },
+      "lossless": true,
+      "elapsed_ms": [
+        [
+          105.02429799817037,
+          108.03003299952252,
+          117.15238200122258
+        ],
+        [
+          126.67942799453158,
+          110.47525300091365,
+          110.53934899973683
+        ]
+      ],
+      "median_ms": [
+        108.03003299952252,
+        110.53934899973683
+      ]
+    },
+    {
+      "repository": "colinhacks/zod",
+      "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
+      "tool": "impact",
+      "bytes": [
+        715,
+        715
+      ],
+      "tokens": {
+        "cl100k_base": [
+          202,
+          202
+        ],
+        "o200k_base": [
+          207,
+          207
+        ]
+      },
+      "lossless": true,
+      "elapsed_ms": [
+        [
+          164.67631999694277,
+          186.59249000484124,
+          190.92802099476103
+        ],
+        [
+          173.90875099954428,
+          175.1610349965631,
+          169.3961689961725
+        ]
+      ],
+      "median_ms": [
+        186.59249000484124,
+        173.90875099954428
+      ]
+    },
+    {
+      "repository": "colinhacks/zod",
+      "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
+      "tool": "get_symbol",
+      "bytes": [
+        906,
+        906
+      ],
+      "tokens": {
+        "cl100k_base": [
+          255,
+          255
+        ],
+        "o200k_base": [
+          260,
+          260
+        ]
+      },
+      "lossless": true,
+      "elapsed_ms": [
+        [
+          200.57249999808846,
+          177.08136200235458,
+          178.1510979999439
+        ],
+        [
+          199.78317100321874,
+          188.41593700199155,
+          174.91186699771788
+        ]
+      ],
+      "median_ms": [
+        178.1510979999439,
+        188.41593700199155
+      ]
+    },
+    {
+      "repository": "BurntSushi/ripgrep",
+      "revision": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "tool": "context",
+      "bytes": [
+        9405,
+        7387
+      ],
+      "tokens": {
+        "cl100k_base": [
+          2667,
+          2180
+        ],
+        "o200k_base": [
+          2706,
+          2244
+        ]
+      },
+      "lossless": true,
+      "elapsed_ms": [
+        [
+          199.84798699442763,
+          224.84293199522654,
+          208.65986199351028
+        ],
+        [
+          244.96472300234018,
+          223.09339600178646,
+          214.10063700022874
+        ]
+      ],
+      "median_ms": [
+        208.65986199351028,
+        223.09339600178646
+      ]
+    },
+    {
+      "repository": "BurntSushi/ripgrep",
+      "revision": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "tool": "repomap",
+      "bytes": [
+        27610,
+        18479
+      ],
+      "tokens": {
+        "cl100k_base": [
+          8016,
+          5955
+        ],
+        "o200k_base": [
+          8066,
+          6006
+        ]
+      },
+      "lossless": true,
+      "elapsed_ms": [
+        [
+          105.09013599948958,
+          104.48080200148979,
+          96.97464799683075
+        ],
+        [
+          91.23481400456512,
+          86.68578699871432,
+          103.54300399922067
+        ]
+      ],
+      "median_ms": [
+        104.48080200148979,
+        91.23481400456512
+      ]
+    },
+    {
+      "repository": "BurntSushi/ripgrep",
+      "revision": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "tool": "impact",
+      "bytes": [
+        875,
+        875
+      ],
+      "tokens": {
+        "cl100k_base": [
+          262,
+          262
+        ],
+        "o200k_base": [
+          255,
+          255
+        ]
+      },
+      "lossless": true,
+      "elapsed_ms": [
+        [
+          87.71497599809663,
+          92.41003700299188,
+          93.00691800308414
+        ],
+        [
+          91.69243100041058,
+          95.4716769992956,
+          108.3065130005707
+        ]
+      ],
+      "median_ms": [
+        92.41003700299188,
+        95.4716769992956
+      ]
+    },
+    {
+      "repository": "BurntSushi/ripgrep",
+      "revision": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "tool": "get_symbol",
+      "bytes": [
+        1443,
+        1263
+      ],
+      "tokens": {
+        "cl100k_base": [
+          410,
+          380
+        ],
+        "o200k_base": [
+          403,
+          374
+        ]
+      },
+      "lossless": true,
+      "elapsed_ms": [
+        [
+          99.3770429995493,
+          94.56825199595187,
+          103.96913399745245
+        ],
+        [
+          103.32202900463017,
+          108.76745499990648,
+          102.90084099688102
+        ]
+      ],
+      "median_ms": [
+        99.3770429995493,
+        103.32202900463017
+      ]
+    },
+    {
+      "repository": "spf13/cobra",
+      "revision": "adbc8813901bba65827259daa8e22ff94ec1f30e",
+      "tool": "context",
+      "bytes": [
+        7939,
+        5925
+      ],
+      "tokens": {
+        "cl100k_base": [
+          2165,
+          1675
+        ],
+        "o200k_base": [
+          2163,
+          1698
+        ]
+      },
+      "lossless": true,
+      "elapsed_ms": [
+        [
+          78.71288300520973,
+          78.71974400040926,
+          75.59645699802786
+        ],
+        [
+          80.76953500130912,
+          85.95561100082705,
+          76.11999299842864
+        ]
+      ],
+      "median_ms": [
+        78.71288300520973,
+        80.76953500130912
+      ]
+    },
+    {
+      "repository": "spf13/cobra",
+      "revision": "adbc8813901bba65827259daa8e22ff94ec1f30e",
+      "tool": "repomap",
+      "bytes": [
+        25760,
+        16629
+      ],
+      "tokens": {
+        "cl100k_base": [
+          7215,
+          5154
+        ],
+        "o200k_base": [
+          7208,
+          5148
+        ]
+      },
+      "lossless": true,
+      "elapsed_ms": [
+        [
+          27.87131300283363,
+          27.698894002242014,
+          28.150136000476778
+        ],
+        [
+          26.57348499633372,
+          29.838825998012908,
+          25.826689998211805
+        ]
+      ],
+      "median_ms": [
+        27.87131300283363,
+        26.57348499633372
+      ]
+    },
+    {
+      "repository": "spf13/cobra",
+      "revision": "adbc8813901bba65827259daa8e22ff94ec1f30e",
+      "tool": "impact",
+      "bytes": [
+        981,
+        981
+      ],
+      "tokens": {
+        "cl100k_base": [
+          263,
+          263
+        ],
+        "o200k_base": [
+          265,
+          265
+        ]
+      },
+      "lossless": true,
+      "elapsed_ms": [
+        [
+          46.237952999945264,
+          46.26118799933465,
+          55.247111995413434
+        ],
+        [
+          48.35234599886462,
+          58.46152599406196,
+          53.87433700525435
+        ]
+      ],
+      "median_ms": [
+        46.26118799933465,
+        53.87433700525435
+      ]
+    },
+    {
+      "repository": "spf13/cobra",
+      "revision": "adbc8813901bba65827259daa8e22ff94ec1f30e",
+      "tool": "get_symbol",
+      "bytes": [
+        1467,
+        1467
+      ],
+      "tokens": {
+        "cl100k_base": [
+          383,
+          383
+        ],
+        "o200k_base": [
+          388,
+          388
+        ]
+      },
+      "lossless": true,
+      "elapsed_ms": [
+        [
+          57.59089400089579,
+          50.294681001105346,
+          59.09957299445523
+        ],
+        [
+          59.38032799895154,
+          58.05415999930119,
+          55.633742005738895
+        ]
+      ],
+      "median_ms": [
+        57.59089400089579,
+        58.05415999930119
+      ]
+    }
+  ],
+  "total_tokens": {
+    "cl100k_base": [
+      42941,
+      32543
+    ],
+    "o200k_base": [
+      43152,
+      32985
+    ]
+  },
+  "identity_checks": [
+    {
+      "language": "ruby",
+      "correct_definitions": [
+        1,
+        2
+      ],
+      "total": 2,
+      "safe_ambiguity": true
+    },
+    {
+      "language": "typescript",
+      "correct_definitions": [
+        1,
+        2
+      ],
+      "total": 2,
+      "safe_ambiguity": true
+    },
+    {
+      "language": "rust",
+      "correct_definitions": [
+        1,
+        2
+      ],
+      "total": 2,
+      "safe_ambiguity": true
+    },
+    {
+      "language": "go",
+      "correct_definitions": [
+        1,
+        2
+      ],
+      "total": 2,
+      "safe_ambiguity": true
+    }
+  ],
+  "schema_tokens": {
+    "cl100k_base": [
+      2930,
+      3137
+    ],
+    "o200k_base": [
+      3108,
+      3320
+    ]
+  },
+  "full_vs_compact_plus_schema_delta": {
+    "cl100k_base": [
+      42941,
+      32750
+    ],
+    "o200k_base": [
+      43152,
+      33197
+    ]
+  },
+  "gate": true
+}

@@ -65,12 +65,36 @@ pub fn get_symbol(
     name: &str,
     opts: &SymbolOptions,
 ) -> Result<SymbolReport> {
-    let index = build_index(root, files)?;
+    get_symbol_at_line(root, files, name, opts, None)
+}
 
-    let candidates_idxs = index.resolve(name);
+/// Select a definition by its exact start line, including same-file duplicates.
+pub fn get_symbol_at_line(
+    root: &Path,
+    files: &[PathBuf],
+    name: &str,
+    opts: &SymbolOptions,
+    start_line: Option<u32>,
+) -> Result<SymbolReport> {
+    let index = build_index(root, files)?;
+    report_from_index(root, &index, name, opts, start_line)
+}
+
+pub(crate) fn report_from_index(
+    root: &Path,
+    index: &crate::analyzers::repomap::CallGraphIndex,
+    name: &str,
+    opts: &SymbolOptions,
+    start_line: Option<u32>,
+) -> Result<SymbolReport> {
+    let candidates_idxs: Vec<_> = index
+        .resolve(name)
+        .into_iter()
+        .filter(|&i| start_line.is_none_or(|line| index.symbols[i].line == line))
+        .collect();
 
     if candidates_idxs.is_empty() {
-        let suggestions = suggestions_from_index(&index, name);
+        let suggestions = suggestions_from_index(index, name);
         let hint = if suggestions.is_empty() {
             String::new()
         } else {
