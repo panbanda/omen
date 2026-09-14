@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "split": "development",
+  "oracle": "Source-reviewed direct calls; scope location accuracy is separately asserted in scoped_resolution.rs",
+  "cases": [
+    {"id":"ts_alias","language":"typescript","files":{"main.ts":"import {helper as renamed} from './a'; function caller(){renamed();}","a.ts":"export function helper(){}","b.ts":"export function helper(){}"},"expected":["a.ts:helper"]},
+    {"id":"rust_alias","language":"rust","files":{"main.rs":"use crate::a::helper as renamed; fn caller(){renamed();}","a.rs":"pub fn helper(){}","b.rs":"pub fn helper(){}"},"expected":["a.rs:helper"]},
+    {"id":"ts_scope","language":"typescript","files":{"main.ts":"function helper(){} function caller(){function helper(){} helper();}"},"expected":["main.ts:helper"]},
+    {"id":"rust_scope","language":"rust","files":{"main.rs":"fn helper(){} fn caller(){fn helper(){} helper();}"},"expected":["main.rs:helper"]},
+    {"id":"ts_invisible","language":"typescript","files":{"main.ts":"function other(){function helper(){}} function caller(){helper();}"},"expected":[]},
+    {"id":"ts_relative","language":"typescript","files":{"src/main.ts":"import {helper} from './a'; function caller(){helper();}","src/a.ts":"export function helper(){}","vendor/a.ts":"export function helper(){}"},"expected":["src/a.ts:helper"]},
+    {"id":"ts_this","language":"typescript","files":{"main.ts":"class A {helper(){} caller(){this.helper();}} class B {helper(){}}"},"expected":["main.ts:helper"]},
+    {"id":"rust_self","language":"rust","files":{"main.rs":"struct A;struct B;impl A{fn helper(&self){} fn caller(&self){self.helper();}}impl B{fn helper(&self){}}"},"expected":["main.rs:helper"]}
+  ]
+}

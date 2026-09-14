@@ -18,6 +18,8 @@ use serde::{Deserialize, Serialize};
 use crate::core::{is_test_file, AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
 use crate::parser::{extract_functions, extract_imports, ImportKind, Parser};
 
+mod bindings;
+
 /// Repomap analyzer configuration.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -58,6 +60,11 @@ pub struct SymbolInfo {
     /// Dependency paths declared by this symbol's file.
     pub imports: Vec<String>,
     pub is_exported: bool,
+    /// Lexical function-body scope, in bytes; None denotes file scope.
+    pub lexical_scope: Option<(usize, usize)>,
+    pub body_start: usize,
+    pub import_bindings: Vec<bindings::ImportBinding>,
+    pub owner: Option<String>,
 }
 
 /// Source evidence for a candidate; path:name alone is not a unique identity.
@@ -91,6 +98,9 @@ pub enum ResolutionStatus {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ResolutionBasis {
+    EnclosingType,
+    LexicalScope,
+    ImportedAlias,
     SameFileName,
     ReceiverName,
     ImportedPath,
@@ -258,6 +268,8 @@ pub fn build_index(repo_path: &Path, files: &[PathBuf]) -> Result<CallGraphIndex
                 .filter(|func| func.is_bound)
                 .collect();
             let source = &parse_result.source;
+            let classes = crate::parser::extract_classes(&parse_result);
+            let import_bindings = bindings::extract(&parse_result.tree.root_node(), source);
             let imports: Vec<String> = extract_imports(&parse_result)
                 .into_iter()
                 .filter(|import| import.kind == ImportKind::Use)
@@ -270,9 +282,26 @@ pub fn build_index(repo_path: &Path, files: &[PathBuf]) -> Result<CallGraphIndex
                 .to_string_lossy()
                 .to_string();
 
+            let scopes: Vec<_> = functions.iter().filter_map(|f| f.body_byte_range).collect();
             let symbols: Vec<SymbolInfo> = functions
                 .into_iter()
                 .map(|func| {
+                    let owners: Vec<_> = classes
+                        .iter()
+                        .filter(|class| {
+                            class.methods.iter().any(|method| {
+                                match (method.body_byte_range, func.body_byte_range) {
+                                    (Some(a), Some(b)) => a == b,
+                                    (None, None) => {
+                                        method.name == func.name
+                                            && method.start_line == func.start_line
+                                            && method.end_line == func.end_line
+                                    }
+                                    _ => false,
+                                }
+                            })
+                        })
+                        .collect();
                     let qualified_name = format!("{}:{}", rel_path, func.name);
                     let calls = if let Some((start, end)) = func.body_byte_range {
                         let root = parse_result.tree.root_node();
@@ -296,6 +325,16 @@ pub fn build_index(repo_path: &Path, files: &[PathBuf]) -> Result<CallGraphIndex
                         calls,
                         imports: imports.clone(),
                         is_exported: func.is_exported,
+                        lexical_scope: func.body_byte_range.and_then(|(start, end)| {
+                            scopes
+                                .iter()
+                                .copied()
+                                .filter(|&(a, b)| a < start && end < b)
+                                .min_by_key(|(a, b)| b - a)
+                        }),
+                        body_start: func.body_byte_range.map_or(0, |(start, _)| start),
+                        import_bindings: import_bindings.clone(),
+                        owner: (owners.len() == 1).then(|| owners[0].name.clone()),
                     }
                 })
                 .collect();
@@ -350,21 +389,63 @@ pub fn build_index(repo_path: &Path, files: &[PathBuf]) -> Result<CallGraphIndex
                 .map_or((None, call.as_str()), |(receiver, name)| {
                     (Some(receiver), name)
                 });
+            let binding = symbol
+                .import_bindings
+                .iter()
+                .find(|b| b.local == bare_call && receiver.is_none())
+                .filter(|_| {
+                    !by_name.get(bare_call).into_iter().flatten().any(|&i| {
+                        symbols[i].file == symbol.file
+                            && symbols[i].lexical_scope.is_some_and(|(a, b)| {
+                                a <= symbol.body_start && symbol.body_start < b
+                            })
+                    })
+                });
+            let lookup = binding.map_or(bare_call, |b| b.original.as_str());
             let mut candidates: Vec<usize> = by_name
-                .get(bare_call)
+                .get(lookup)
                 .into_iter()
                 .flatten()
                 .copied()
                 .filter(|&idx| language_family(&symbol.file) == language_family(&symbols[idx].file))
+                .filter(|&idx| {
+                    symbols[idx].lexical_scope.is_none_or(|(a, b)| {
+                        symbols[idx].file == symbol.file
+                            && a <= symbol.body_start
+                            && symbol.body_start < b
+                    })
+                })
                 .collect();
             let has_local = candidates
                 .iter()
                 .any(|&idx| symbols[idx].file == symbol.file);
-            let basis = if let Some(receiver) = receiver {
+            let basis = if let Some(binding) = binding {
+                candidates.retain(|&idx| {
+                    bindings::matches(&symbol.file, &binding.path, &symbols[idx].file)
+                        .unwrap_or_else(|| {
+                            import_matches_file(
+                                &binding.path,
+                                &symbols[idx].file,
+                                language_family(&symbol.file),
+                            )
+                        })
+                });
+                ResolutionBasis::ImportedAlias
+            } else if matches!(receiver, Some("self" | "this")) {
+                candidates.retain(|&idx| {
+                    symbols[idx].file == symbol.file
+                        && symbol.owner.is_some()
+                        && symbols[idx].owner == symbol.owner
+                });
+                ResolutionBasis::EnclosingType
+            } else if let Some(receiver) = receiver {
                 let qualified: Vec<usize> = candidates
                     .iter()
                     .copied()
-                    .filter(|&idx| receiver_matches_file(receiver, &symbols[idx].file))
+                    .filter(|&idx| {
+                        symbols[idx].owner.as_deref() == Some(receiver)
+                            || receiver_matches_file(receiver, &symbols[idx].file)
+                    })
                     .collect();
                 // An explicit receiver absent from the index is unresolved.
                 // Falling back would link a same-named method on another object.
@@ -372,7 +453,21 @@ pub fn build_index(repo_path: &Path, files: &[PathBuf]) -> Result<CallGraphIndex
                 ResolutionBasis::ReceiverName
             } else if has_local {
                 candidates.retain(|&idx| symbols[idx].file == symbol.file);
-                ResolutionBasis::SameFileName
+                let nearest = candidates
+                    .iter()
+                    .filter_map(|&idx| symbols[idx].lexical_scope)
+                    .map(|(a, b)| b - a)
+                    .min();
+                if let Some(width) = nearest {
+                    candidates.retain(|&idx| {
+                        symbols[idx]
+                            .lexical_scope
+                            .is_some_and(|(a, b)| b - a == width)
+                    });
+                    ResolutionBasis::LexicalScope
+                } else {
+                    ResolutionBasis::SameFileName
+                }
             } else {
                 let imported: Vec<usize> = candidates
                     .iter()
@@ -837,7 +932,7 @@ fn extract_call_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<Stri
             node.child_by_field_name("receiver"),
             node.child_by_field_name("method"),
         ) {
-            if matches!(receiver.kind(), "constant" | "scope_resolution") {
+            if matches!(receiver.kind(), "constant" | "scope_resolution" | "self") {
                 return Some(format!(
                     "{}.{}",
                     receiver.utf8_text(source).ok()?,
@@ -878,6 +973,15 @@ fn extract_call_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<Stri
                     .or_else(|| child.child(child.child_count().saturating_sub(1) as u32))
                 {
                     let text = right.utf8_text(source).ok()?;
+                    let receiver = child
+                        .child_by_field_name("object")
+                        .or_else(|| child.child_by_field_name("value"));
+                    if let Some(receiver) = receiver {
+                        let name = receiver.utf8_text(source).ok()?;
+                        if matches!(name, "self" | "this") {
+                            return Some(format!("{name}.{text}"));
+                        }
+                    }
                     return Some(text.to_string());
                 }
             }
