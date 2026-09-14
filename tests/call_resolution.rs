@@ -233,7 +233,10 @@ fn rust_self_calls_have_name_evidence() {
         "struct A; impl A {fn helper(&self){} fn caller(&self){self.helper();}}",
     )]);
     let report = get_symbol(dir.path(), &paths, "caller", &SymbolOptions::default()).unwrap();
-    assert!(report.call_resolutions.iter().any(|c| c.call == "helper"));
+    assert!(report
+        .call_resolutions
+        .iter()
+        .any(|c| c.call == "self.helper"));
 }
 
 #[test]
