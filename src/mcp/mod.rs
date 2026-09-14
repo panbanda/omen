@@ -110,6 +110,10 @@ impl ToolDef {
                 "description": "Item offset for pagination (default: 0)"
             }),
         );
+        if self.name == "task_context" {
+            props.remove("limit");
+            props.remove("offset");
+        }
         let mut schema = json!({
             "type": "object",
             "properties": props
@@ -302,6 +306,7 @@ pub struct McpServer {
     config: Config,
     root_path: PathBuf,
     allow_external_paths: bool,
+    index_cache: std::sync::Mutex<crate::task_context::cache::IndexCache>,
 }
 
 impl McpServer {
@@ -318,6 +323,7 @@ impl McpServer {
             config,
             root_path,
             allow_external_paths,
+            index_cache: std::sync::Mutex::new(crate::task_context::cache::IndexCache::default()),
         }
     }
 
@@ -716,6 +722,19 @@ impl McpServer {
                 required: &["name"],
             },
             ToolDef {
+                name: "task_context",
+                description: "Bounded context for one exact definition: candidate callers/callees, test/role convention hints, syntax uses, uncertainty, content fingerprint. Not exhaustive impact or compiler/data-flow proof. Uses a session-local content-validated index.",
+                properties: vec![
+                    ("name", json!({"type":"string", "description":"Symbol name, preferably file:name"})),
+                    ("start_line", json!({"type":"integer", "minimum":1, "description":"Exact definition start line"})),
+                    ("depth", json!({"type":"integer", "minimum":0, "maximum":4, "description":"Graph radius, default 2"})),
+                    ("max_bytes", json!({"type":"integer", "minimum":1024, "maximum":1048576, "description":"Hard result UTF-8 byte budget, not envelope/tokens; default 12000"})),
+                    ("include_history", json!({"type":"boolean", "description":"30-day co-change hints, default false; not semantic dependencies"})),
+                    ("path", json!({"type":"string", "description":"Repository root"})),
+                ],
+                required: &["name"],
+            },
+            ToolDef {
                 name: "impact",
                 description: "Explore possible blast radius using name-based call edges and BFS. Includes input-wide resolution_summary. Ambiguous and unresolved calls are excluded, so this is not an exhaustive safety check for edits.",
                 properties: vec![
@@ -778,6 +797,7 @@ impl McpServer {
             "score",
             "semantic_search",
             "get_symbol",
+            "task_context",
             "impact",
             "semantic_search_hyde",
         ]
@@ -801,7 +821,7 @@ impl McpServer {
                 "Missing hypothetical_document parameter",
             )),
             "impact" => Some(("symbol", "Missing symbol parameter")),
-            "get_symbol" => Some(("name", "Missing name parameter")),
+            "get_symbol" | "task_context" => Some(("name", "Missing name parameter")),
             _ => None,
         };
         if let Some((field, message)) = required {
@@ -952,6 +972,11 @@ impl McpServer {
             "get_symbol" => {
                 return Ok(self
                     .handle_get_symbol(&path, &file_set, &arguments)
+                    .unwrap_or_else(|error| tool_error_response(&error)));
+            }
+            "task_context" => {
+                return Ok(self
+                    .handle_task_context(&path, &file_set, &arguments)
                     .unwrap_or_else(|error| tool_error_response(&error)));
             }
             _ => unreachable!(),
@@ -1402,8 +1427,13 @@ impl McpServer {
                     .ok_or("start_line must be a positive u32")?,
             ),
         };
-        let index =
-            crate::analyzers::repomap::build_index(repo_path, &files).map_err(|e| e.to_string())?;
+        let snapshot = self
+            .index_cache
+            .lock()
+            .map_err(|_| "Index cache lock poisoned")?
+            .load(repo_path, &files)
+            .map_err(|e| e.to_string())?;
+        let index = &snapshot.index;
         let matches: Vec<_> = index
             .resolve(name)
             .into_iter()
@@ -1422,7 +1452,7 @@ impl McpServer {
                     "choices": choices,
                     "hint": "Call get_symbol with a choice's name and start_line. No definition selected."}), arguments, None);
         }
-        let value = match report_from_index(repo_path, &index, name, &opts, start_line) {
+        let value = match report_from_index(repo_path, index, name, &opts, start_line) {
             Ok(report) => {
                 serde_json::to_value(&report).map_err(|e| format!("Serialization failed: {e}"))?
             }
@@ -1435,6 +1465,54 @@ impl McpServer {
         };
 
         self.tool_response("get_symbol", value, arguments, None)
+    }
+
+    fn handle_task_context(
+        &self,
+        root: &Path,
+        files: &FileSet,
+        args: &Value,
+    ) -> std::result::Result<Value, String> {
+        let name = args["name"].as_str().ok_or("Missing name")?;
+        let integer = |key: &str, default: usize| -> std::result::Result<usize, String> {
+            match args.get(key) {
+                None => Ok(default),
+                Some(v) => v
+                    .as_u64()
+                    .and_then(|n| usize::try_from(n).ok())
+                    .ok_or_else(|| format!("Invalid {key}")),
+            }
+        };
+        let start_line = if args.get("start_line").is_some() {
+            Some(
+                u32::try_from(integer("start_line", 0)?)
+                    .ok()
+                    .filter(|n| *n > 0)
+                    .ok_or("Invalid start_line")?,
+            )
+        } else {
+            None
+        };
+        let options = crate::task_context::Options {
+            start_line,
+            depth: integer("depth", 2)?,
+            max_bytes: integer("max_bytes", 12_000)?,
+            include_history: args["include_history"].as_bool().unwrap_or(false),
+        };
+        let paths: Vec<_> = files.iter().map(|path| root.join(path)).collect();
+        let snapshot = self
+            .index_cache
+            .lock()
+            .map_err(|_| "Index cache lock poisoned")?
+            .load(root, &paths)
+            .map_err(|e| e.to_string())?;
+        let value = crate::task_context::build(&snapshot, root, name, &options)
+            .map_err(|e| e.to_string())?;
+        // Generic pagination would break the explicit result budget and its
+        // seed-first neighborhood. This tool owns its own omission contract.
+        Ok(
+            json!({"content":[{"type":"text", "text": json!({"tool":"task_context", "result":value}).to_string()}]}),
+        )
     }
 }
 
@@ -2865,6 +2943,11 @@ mod tests {
         let tools = tools["tools"].as_array().unwrap();
         for tool in tools {
             let props = &tool["inputSchema"]["properties"];
+            if tool["name"] == "task_context" {
+                assert!(props.get("max_bytes").is_some());
+                assert!(props.get("limit").is_none());
+                continue;
+            }
             assert!(
                 props.get("limit").is_some(),
                 "Tool {} missing limit",
