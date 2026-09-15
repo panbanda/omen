@@ -1,0 +1,2271 @@
+{
+  "standard": "omen-improvement-v1",
+  "corpus_sha256": "5ebd86c0f79506651dc7ad20ab6257e8b6164f1834b50612c4212c81861e19cc",
+  "baseline": {
+    "label": "aa8aafe",
+    "sha256": "cf615db3731a9f9d2ef28d4df0be6c22579cc329e0d260d0d0c7b920366c6ea7"
+  },
+  "candidate": {
+    "label": "scoped-resolution",
+    "sha256": "ff6e09b3c0082bd4b88cf40a8d595b13d77667f3fa19c40bf73515c1b13cfff4"
+  },
+  "repetitions": 3,
+  "warmups": 1,
+  "order": "alternating",
+  "broad_improvement_proven": false,
+  "unmeasured": [
+    "model editing",
+    "actual tokens/cost",
+    "peak RSS",
+    "release performance",
+    "compiler binding",
+    "held-out generalization"
+  ],
+  "cases": [
+    {
+      "id": "rust_unique",
+      "language": "rust",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          18.12591699854238,
+          26.855389995034784,
+          25.092039999435656,
+          15.712706001068
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          594,
+          594,
+          594,
+          594
+        ],
+        "report_sha256": [
+          "a365da8d952e9205fac1649d07de69dc7b8a1eb11c72a3f1f3c3a0aa42fc0f89",
+          "a365da8d952e9205fac1649d07de69dc7b8a1eb11c72a3f1f3c3a0aa42fc0f89",
+          "a365da8d952e9205fac1649d07de69dc7b8a1eb11c72a3f1f3c3a0aa42fc0f89",
+          "a365da8d952e9205fac1649d07de69dc7b8a1eb11c72a3f1f3c3a0aa42fc0f89"
+        ],
+        "predicted": [
+          "z.rs:helper"
+        ],
+        "p50_ms": 25.092039999435656,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          28.43089799716836,
+          22.413550002966076,
+          18.201018996478524,
+          16.081549001683015
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          594,
+          594,
+          594,
+          594
+        ],
+        "report_sha256": [
+          "a365da8d952e9205fac1649d07de69dc7b8a1eb11c72a3f1f3c3a0aa42fc0f89",
+          "a365da8d952e9205fac1649d07de69dc7b8a1eb11c72a3f1f3c3a0aa42fc0f89",
+          "a365da8d952e9205fac1649d07de69dc7b8a1eb11c72a3f1f3c3a0aa42fc0f89",
+          "a365da8d952e9205fac1649d07de69dc7b8a1eb11c72a3f1f3c3a0aa42fc0f89"
+        ],
+        "predicted": [
+          "z.rs:helper"
+        ],
+        "p50_ms": 18.201018996478524,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "rust_import_late",
+      "language": "rust",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          18.196361997979693,
+          19.748976999835577,
+          26.145043993892614,
+          35.03176300000632
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          594,
+          594,
+          594,
+          594
+        ],
+        "report_sha256": [
+          "fe61617dd0e9acdd1e7d167c34e3907b15db1f49005b8e8ce993cefbcbd47507",
+          "fe61617dd0e9acdd1e7d167c34e3907b15db1f49005b8e8ce993cefbcbd47507",
+          "fe61617dd0e9acdd1e7d167c34e3907b15db1f49005b8e8ce993cefbcbd47507",
+          "fe61617dd0e9acdd1e7d167c34e3907b15db1f49005b8e8ce993cefbcbd47507"
+        ],
+        "predicted": [
+          "z.rs:helper"
+        ],
+        "p50_ms": 26.145043993892614,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          10.46003500232473,
+          11.420896000345238,
+          9.454665996599942,
+          15.916431999357883
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          594,
+          594,
+          594,
+          594
+        ],
+        "report_sha256": [
+          "fe61617dd0e9acdd1e7d167c34e3907b15db1f49005b8e8ce993cefbcbd47507",
+          "fe61617dd0e9acdd1e7d167c34e3907b15db1f49005b8e8ce993cefbcbd47507",
+          "fe61617dd0e9acdd1e7d167c34e3907b15db1f49005b8e8ce993cefbcbd47507",
+          "fe61617dd0e9acdd1e7d167c34e3907b15db1f49005b8e8ce993cefbcbd47507"
+        ],
+        "predicted": [
+          "z.rs:helper"
+        ],
+        "p50_ms": 11.420896000345238,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "rust_import_early",
+      "language": "rust",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          19.40117999765789,
+          39.29713300021831,
+          19.954009003413375,
+          14.024082003743388
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          594,
+          594,
+          594,
+          594
+        ],
+        "report_sha256": [
+          "b58981b7cf32bec6594cff03fd8265de7fa66c5ca300ac7d9a324c774313ab15",
+          "b58981b7cf32bec6594cff03fd8265de7fa66c5ca300ac7d9a324c774313ab15",
+          "b58981b7cf32bec6594cff03fd8265de7fa66c5ca300ac7d9a324c774313ab15",
+          "b58981b7cf32bec6594cff03fd8265de7fa66c5ca300ac7d9a324c774313ab15"
+        ],
+        "predicted": [
+          "a.rs:helper"
+        ],
+        "p50_ms": 19.954009003413375,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          19.975912000518292,
+          12.75188400177285,
+          11.379304000001866,
+          16.604263000772335
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          594,
+          594,
+          594,
+          594
+        ],
+        "report_sha256": [
+          "b58981b7cf32bec6594cff03fd8265de7fa66c5ca300ac7d9a324c774313ab15",
+          "b58981b7cf32bec6594cff03fd8265de7fa66c5ca300ac7d9a324c774313ab15",
+          "b58981b7cf32bec6594cff03fd8265de7fa66c5ca300ac7d9a324c774313ab15",
+          "b58981b7cf32bec6594cff03fd8265de7fa66c5ca300ac7d9a324c774313ab15"
+        ],
+        "predicted": [
+          "a.rs:helper"
+        ],
+        "p50_ms": 12.75188400177285,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "rust_foreign_name",
+      "language": "rust",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          35.97149300185265,
+          28.055254006176256,
+          19.969231994764414,
+          19.948461995227262
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          594,
+          594,
+          594,
+          594
+        ],
+        "report_sha256": [
+          "a365da8d952e9205fac1649d07de69dc7b8a1eb11c72a3f1f3c3a0aa42fc0f89",
+          "a365da8d952e9205fac1649d07de69dc7b8a1eb11c72a3f1f3c3a0aa42fc0f89",
+          "a365da8d952e9205fac1649d07de69dc7b8a1eb11c72a3f1f3c3a0aa42fc0f89",
+          "a365da8d952e9205fac1649d07de69dc7b8a1eb11c72a3f1f3c3a0aa42fc0f89"
+        ],
+        "predicted": [
+          "z.rs:helper"
+        ],
+        "p50_ms": 19.969231994764414,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          17.52736799971899,
+          19.962742997449823,
+          31.996048004657496,
+          16.006976999051403
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          594,
+          594,
+          594,
+          594
+        ],
+        "report_sha256": [
+          "a365da8d952e9205fac1649d07de69dc7b8a1eb11c72a3f1f3c3a0aa42fc0f89",
+          "a365da8d952e9205fac1649d07de69dc7b8a1eb11c72a3f1f3c3a0aa42fc0f89",
+          "a365da8d952e9205fac1649d07de69dc7b8a1eb11c72a3f1f3c3a0aa42fc0f89",
+          "a365da8d952e9205fac1649d07de69dc7b8a1eb11c72a3f1f3c3a0aa42fc0f89"
+        ],
+        "predicted": [
+          "z.rs:helper"
+        ],
+        "p50_ms": 19.962742997449823,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "rust_alias",
+      "language": "rust",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          19.495722001011018,
+          14.912650003680028,
+          29.85783999611158,
+          38.63941600138787
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          465,
+          465,
+          465,
+          465
+        ],
+        "report_sha256": [
+          "67f59afccb298c42445934346df15ea12b0bfa2d1a9a4a67645ac628ae80d53d",
+          "67f59afccb298c42445934346df15ea12b0bfa2d1a9a4a67645ac628ae80d53d",
+          "67f59afccb298c42445934346df15ea12b0bfa2d1a9a4a67645ac628ae80d53d",
+          "67f59afccb298c42445934346df15ea12b0bfa2d1a9a4a67645ac628ae80d53d"
+        ],
+        "predicted": [],
+        "p50_ms": 29.85783999611158,
+        "score": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 1,
+          "precision": null,
+          "recall": 0.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          13.57630999700632,
+          9.663839999120682,
+          23.894191996078007,
+          20.126569004787598
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          599,
+          599,
+          599,
+          599
+        ],
+        "report_sha256": [
+          "6857aaa9093b49e3e22df9ea53252149b51741da87d97753e726335647cf8b27",
+          "6857aaa9093b49e3e22df9ea53252149b51741da87d97753e726335647cf8b27",
+          "6857aaa9093b49e3e22df9ea53252149b51741da87d97753e726335647cf8b27",
+          "6857aaa9093b49e3e22df9ea53252149b51741da87d97753e726335647cf8b27"
+        ],
+        "predicted": [
+          "z.rs:helper"
+        ],
+        "p50_ms": 20.126569004787598,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "rust_parameter_shadow",
+      "language": "rust",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          15.51679200201761,
+          16.100642998935655,
+          13.848269001755398,
+          34.04374999809079
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          630,
+          630,
+          630,
+          630
+        ],
+        "report_sha256": [
+          "5b11817afd823390d2859a934bbe4473c717dfd5b44a77d65ac5b583eae840f8",
+          "5b11817afd823390d2859a934bbe4473c717dfd5b44a77d65ac5b583eae840f8",
+          "5b11817afd823390d2859a934bbe4473c717dfd5b44a77d65ac5b583eae840f8",
+          "5b11817afd823390d2859a934bbe4473c717dfd5b44a77d65ac5b583eae840f8"
+        ],
+        "predicted": [
+          "main.rs:helper"
+        ],
+        "p50_ms": 16.100642998935655,
+        "score": {
+          "tp": 0,
+          "fp": 1,
+          "fn": 1,
+          "precision": 0.0,
+          "recall": 0.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          27.25729799567489,
+          10.474032002093736,
+          11.59630899928743,
+          19.201340001018252
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          630,
+          630,
+          630,
+          630
+        ],
+        "report_sha256": [
+          "5b11817afd823390d2859a934bbe4473c717dfd5b44a77d65ac5b583eae840f8",
+          "5b11817afd823390d2859a934bbe4473c717dfd5b44a77d65ac5b583eae840f8",
+          "5b11817afd823390d2859a934bbe4473c717dfd5b44a77d65ac5b583eae840f8",
+          "5b11817afd823390d2859a934bbe4473c717dfd5b44a77d65ac5b583eae840f8"
+        ],
+        "predicted": [
+          "main.rs:helper"
+        ],
+        "p50_ms": 11.59630899928743,
+        "score": {
+          "tp": 0,
+          "fp": 1,
+          "fn": 1,
+          "precision": 0.0,
+          "recall": 0.0
+        }
+      }
+    },
+    {
+      "id": "rust_nested_uncalled",
+      "language": "rust",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          16.5629320035805,
+          35.89492900209734,
+          19.939496996812522,
+          18.909753998741508
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          332,
+          332,
+          332,
+          332
+        ],
+        "report_sha256": [
+          "d8442ec581d5fc41693c7acfc44a335bf8875425aae87d8618c5b6c959367fe7",
+          "d8442ec581d5fc41693c7acfc44a335bf8875425aae87d8618c5b6c959367fe7",
+          "d8442ec581d5fc41693c7acfc44a335bf8875425aae87d8618c5b6c959367fe7",
+          "d8442ec581d5fc41693c7acfc44a335bf8875425aae87d8618c5b6c959367fe7"
+        ],
+        "predicted": [],
+        "p50_ms": 19.939496996812522,
+        "score": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "precision": null,
+          "recall": null
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          11.723280003934633,
+          16.207382999709807,
+          13.138217997038737,
+          11.951291999139357
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          332,
+          332,
+          332,
+          332
+        ],
+        "report_sha256": [
+          "d8442ec581d5fc41693c7acfc44a335bf8875425aae87d8618c5b6c959367fe7",
+          "d8442ec581d5fc41693c7acfc44a335bf8875425aae87d8618c5b6c959367fe7",
+          "d8442ec581d5fc41693c7acfc44a335bf8875425aae87d8618c5b6c959367fe7",
+          "d8442ec581d5fc41693c7acfc44a335bf8875425aae87d8618c5b6c959367fe7"
+        ],
+        "predicted": [],
+        "p50_ms": 13.138217997038737,
+        "score": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "precision": null,
+          "recall": null
+        }
+      }
+    },
+    {
+      "id": "typescript_unique",
+      "language": "typescript",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          28.059382006176747,
+          36.83708100288641,
+          15.032445000542793,
+          15.784032999363262
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          597,
+          597,
+          597,
+          597
+        ],
+        "report_sha256": [
+          "3e3ef4eaa16245db88c123526158d96d11f9cbd724d5a504669f41cc07314209",
+          "3e3ef4eaa16245db88c123526158d96d11f9cbd724d5a504669f41cc07314209",
+          "3e3ef4eaa16245db88c123526158d96d11f9cbd724d5a504669f41cc07314209",
+          "3e3ef4eaa16245db88c123526158d96d11f9cbd724d5a504669f41cc07314209"
+        ],
+        "predicted": [
+          "z.ts:helper"
+        ],
+        "p50_ms": 15.784032999363262,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          19.660268000734504,
+          29.068515003018547,
+          19.258476000686642,
+          11.039138000342064
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          598,
+          598,
+          598,
+          598
+        ],
+        "report_sha256": [
+          "1668e6dc6fec85b258f0e2f4ee2cecc26341290354ab8bd8f4d05f56ed825447",
+          "1668e6dc6fec85b258f0e2f4ee2cecc26341290354ab8bd8f4d05f56ed825447",
+          "1668e6dc6fec85b258f0e2f4ee2cecc26341290354ab8bd8f4d05f56ed825447",
+          "1668e6dc6fec85b258f0e2f4ee2cecc26341290354ab8bd8f4d05f56ed825447"
+        ],
+        "predicted": [
+          "z.ts:helper"
+        ],
+        "p50_ms": 19.258476000686642,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "typescript_import_late",
+      "language": "typescript",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          14.019800997630227,
+          21.759399001894053,
+          15.181613998720422,
+          13.987726997584105
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          597,
+          597,
+          597,
+          597
+        ],
+        "report_sha256": [
+          "3e3ef4eaa16245db88c123526158d96d11f9cbd724d5a504669f41cc07314209",
+          "3e3ef4eaa16245db88c123526158d96d11f9cbd724d5a504669f41cc07314209",
+          "3e3ef4eaa16245db88c123526158d96d11f9cbd724d5a504669f41cc07314209",
+          "3e3ef4eaa16245db88c123526158d96d11f9cbd724d5a504669f41cc07314209"
+        ],
+        "predicted": [
+          "z.ts:helper"
+        ],
+        "p50_ms": 15.181613998720422,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          14.213816997653339,
+          24.14711599703878,
+          11.029278000933118,
+          12.581877999764401
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          598,
+          598,
+          598,
+          598
+        ],
+        "report_sha256": [
+          "1668e6dc6fec85b258f0e2f4ee2cecc26341290354ab8bd8f4d05f56ed825447",
+          "1668e6dc6fec85b258f0e2f4ee2cecc26341290354ab8bd8f4d05f56ed825447",
+          "1668e6dc6fec85b258f0e2f4ee2cecc26341290354ab8bd8f4d05f56ed825447",
+          "1668e6dc6fec85b258f0e2f4ee2cecc26341290354ab8bd8f4d05f56ed825447"
+        ],
+        "predicted": [
+          "z.ts:helper"
+        ],
+        "p50_ms": 12.581877999764401,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "typescript_import_early",
+      "language": "typescript",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          52.190367998264264,
+          44.88047100312542,
+          16.897173001780175,
+          12.239824995049275
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          597,
+          597,
+          597,
+          597
+        ],
+        "report_sha256": [
+          "0dd922ef5edc9104d9b4d5af90e13d092efed343ec2010079fe526ad370d4fa4",
+          "0dd922ef5edc9104d9b4d5af90e13d092efed343ec2010079fe526ad370d4fa4",
+          "0dd922ef5edc9104d9b4d5af90e13d092efed343ec2010079fe526ad370d4fa4",
+          "0dd922ef5edc9104d9b4d5af90e13d092efed343ec2010079fe526ad370d4fa4"
+        ],
+        "predicted": [
+          "a.ts:helper"
+        ],
+        "p50_ms": 16.897173001780175,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          28.8399519995437,
+          15.043371000501793,
+          18.857144001231063,
+          13.090275999275036
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          598,
+          598,
+          598,
+          598
+        ],
+        "report_sha256": [
+          "1ad94f4f98d32185f83f24bc9f7ea517ec7817ec38b584414b66cba31995974f",
+          "1ad94f4f98d32185f83f24bc9f7ea517ec7817ec38b584414b66cba31995974f",
+          "1ad94f4f98d32185f83f24bc9f7ea517ec7817ec38b584414b66cba31995974f",
+          "1ad94f4f98d32185f83f24bc9f7ea517ec7817ec38b584414b66cba31995974f"
+        ],
+        "predicted": [
+          "a.ts:helper"
+        ],
+        "p50_ms": 15.043371000501793,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "typescript_foreign_name",
+      "language": "typescript",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          34.23512799781747,
+          17.525596005725674,
+          13.769861005130224,
+          16.585124998528045
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          597,
+          597,
+          597,
+          597
+        ],
+        "report_sha256": [
+          "3e3ef4eaa16245db88c123526158d96d11f9cbd724d5a504669f41cc07314209",
+          "3e3ef4eaa16245db88c123526158d96d11f9cbd724d5a504669f41cc07314209",
+          "3e3ef4eaa16245db88c123526158d96d11f9cbd724d5a504669f41cc07314209",
+          "3e3ef4eaa16245db88c123526158d96d11f9cbd724d5a504669f41cc07314209"
+        ],
+        "predicted": [
+          "z.ts:helper"
+        ],
+        "p50_ms": 16.585124998528045,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          28.03766800207086,
+          30.344334998517297,
+          10.55715000256896,
+          11.017821998393629
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          598,
+          598,
+          598,
+          598
+        ],
+        "report_sha256": [
+          "1668e6dc6fec85b258f0e2f4ee2cecc26341290354ab8bd8f4d05f56ed825447",
+          "1668e6dc6fec85b258f0e2f4ee2cecc26341290354ab8bd8f4d05f56ed825447",
+          "1668e6dc6fec85b258f0e2f4ee2cecc26341290354ab8bd8f4d05f56ed825447",
+          "1668e6dc6fec85b258f0e2f4ee2cecc26341290354ab8bd8f4d05f56ed825447"
+        ],
+        "predicted": [
+          "z.ts:helper"
+        ],
+        "p50_ms": 11.017821998393629,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "typescript_alias",
+      "language": "typescript",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          16.03831400279887,
+          21.703986007196363,
+          14.124933004495688,
+          22.000730998115614
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          468,
+          468,
+          468,
+          468
+        ],
+        "report_sha256": [
+          "8e063d95cdb3313c28524f05dcf53d6a73444a841ba258fafb435dd7aeb9e1ac",
+          "8e063d95cdb3313c28524f05dcf53d6a73444a841ba258fafb435dd7aeb9e1ac",
+          "8e063d95cdb3313c28524f05dcf53d6a73444a841ba258fafb435dd7aeb9e1ac",
+          "8e063d95cdb3313c28524f05dcf53d6a73444a841ba258fafb435dd7aeb9e1ac"
+        ],
+        "predicted": [],
+        "p50_ms": 21.703986007196363,
+        "score": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 1,
+          "precision": null,
+          "recall": 0.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          13.82117799948901,
+          21.29450099891983,
+          10.544810997089371,
+          23.982765000255313
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          602,
+          602,
+          602,
+          602
+        ],
+        "report_sha256": [
+          "425fa5da483a8366746b35598c7cc10041323597064262caf52bb11f12425a3b",
+          "425fa5da483a8366746b35598c7cc10041323597064262caf52bb11f12425a3b",
+          "425fa5da483a8366746b35598c7cc10041323597064262caf52bb11f12425a3b",
+          "425fa5da483a8366746b35598c7cc10041323597064262caf52bb11f12425a3b"
+        ],
+        "predicted": [
+          "z.ts:helper"
+        ],
+        "p50_ms": 21.29450099891983,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "typescript_parameter_shadow",
+      "language": "typescript",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          16.57387800514698,
+          22.256645002926234,
+          27.02994699939154,
+          22.332878994347993
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          626,
+          626,
+          626,
+          626
+        ],
+        "report_sha256": [
+          "863fb6dd0e39283cb6391fc26daa8bba34a2f39c7be2d2c35d99d61e53355d7e",
+          "863fb6dd0e39283cb6391fc26daa8bba34a2f39c7be2d2c35d99d61e53355d7e",
+          "863fb6dd0e39283cb6391fc26daa8bba34a2f39c7be2d2c35d99d61e53355d7e",
+          "863fb6dd0e39283cb6391fc26daa8bba34a2f39c7be2d2c35d99d61e53355d7e"
+        ],
+        "predicted": [
+          "main.ts:helper"
+        ],
+        "p50_ms": 22.332878994347993,
+        "score": {
+          "tp": 0,
+          "fp": 1,
+          "fn": 1,
+          "precision": 0.0,
+          "recall": 0.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          16.577808994043153,
+          13.141768999048509,
+          20.00114999827929,
+          28.02814399910858
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          626,
+          626,
+          626,
+          626
+        ],
+        "report_sha256": [
+          "863fb6dd0e39283cb6391fc26daa8bba34a2f39c7be2d2c35d99d61e53355d7e",
+          "863fb6dd0e39283cb6391fc26daa8bba34a2f39c7be2d2c35d99d61e53355d7e",
+          "863fb6dd0e39283cb6391fc26daa8bba34a2f39c7be2d2c35d99d61e53355d7e",
+          "863fb6dd0e39283cb6391fc26daa8bba34a2f39c7be2d2c35d99d61e53355d7e"
+        ],
+        "predicted": [
+          "main.ts:helper"
+        ],
+        "p50_ms": 20.00114999827929,
+        "score": {
+          "tp": 0,
+          "fp": 1,
+          "fn": 1,
+          "precision": 0.0,
+          "recall": 0.0
+        }
+      }
+    },
+    {
+      "id": "typescript_nested_uncalled",
+      "language": "typescript",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          14.142279003863223,
+          16.98783900064882,
+          20.010834996355698,
+          23.945808999997098
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          337,
+          337,
+          337,
+          337
+        ],
+        "report_sha256": [
+          "33d5cc843ee9b5a25db0a621af08a3462c51096831a3bf7c2fb923083e3977da",
+          "33d5cc843ee9b5a25db0a621af08a3462c51096831a3bf7c2fb923083e3977da",
+          "33d5cc843ee9b5a25db0a621af08a3462c51096831a3bf7c2fb923083e3977da",
+          "33d5cc843ee9b5a25db0a621af08a3462c51096831a3bf7c2fb923083e3977da"
+        ],
+        "predicted": [],
+        "p50_ms": 20.010834996355698,
+        "score": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "precision": null,
+          "recall": null
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          10.19596800324507,
+          16.09707200259436,
+          23.75810699595604,
+          16.046115997596644
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          337,
+          337,
+          337,
+          337
+        ],
+        "report_sha256": [
+          "33d5cc843ee9b5a25db0a621af08a3462c51096831a3bf7c2fb923083e3977da",
+          "33d5cc843ee9b5a25db0a621af08a3462c51096831a3bf7c2fb923083e3977da",
+          "33d5cc843ee9b5a25db0a621af08a3462c51096831a3bf7c2fb923083e3977da",
+          "33d5cc843ee9b5a25db0a621af08a3462c51096831a3bf7c2fb923083e3977da"
+        ],
+        "predicted": [],
+        "p50_ms": 16.09707200259436,
+        "score": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "precision": null,
+          "recall": null
+        }
+      }
+    },
+    {
+      "id": "ruby_unique",
+      "language": "ruby",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          14.640786997915711,
+          20.085878000827506,
+          15.159376001975033,
+          20.6295539974235
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          566,
+          566,
+          566,
+          566
+        ],
+        "report_sha256": [
+          "cbbd5d43e8d19488b8899c5f6cf053316ff1a1d6700869060727c7f24156f0d1",
+          "cbbd5d43e8d19488b8899c5f6cf053316ff1a1d6700869060727c7f24156f0d1",
+          "cbbd5d43e8d19488b8899c5f6cf053316ff1a1d6700869060727c7f24156f0d1",
+          "cbbd5d43e8d19488b8899c5f6cf053316ff1a1d6700869060727c7f24156f0d1"
+        ],
+        "predicted": [
+          "z.rb:helper"
+        ],
+        "p50_ms": 20.085878000827506,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          16.82852600060869,
+          11.788928000896703,
+          13.005633998545818,
+          15.375559996755328
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          566,
+          566,
+          566,
+          566
+        ],
+        "report_sha256": [
+          "cbbd5d43e8d19488b8899c5f6cf053316ff1a1d6700869060727c7f24156f0d1",
+          "cbbd5d43e8d19488b8899c5f6cf053316ff1a1d6700869060727c7f24156f0d1",
+          "cbbd5d43e8d19488b8899c5f6cf053316ff1a1d6700869060727c7f24156f0d1",
+          "cbbd5d43e8d19488b8899c5f6cf053316ff1a1d6700869060727c7f24156f0d1"
+        ],
+        "predicted": [
+          "z.rb:helper"
+        ],
+        "p50_ms": 13.005633998545818,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "ruby_import_late",
+      "language": "ruby",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          24.433090002276003,
+          39.64247499970952,
+          21.760770003311336,
+          26.226231006148737
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          566,
+          566,
+          566,
+          566
+        ],
+        "report_sha256": [
+          "dcd35deb5b389296d4661417710371b38f1a64bf523b9f77c890276b6b0f82e2",
+          "dcd35deb5b389296d4661417710371b38f1a64bf523b9f77c890276b6b0f82e2",
+          "dcd35deb5b389296d4661417710371b38f1a64bf523b9f77c890276b6b0f82e2",
+          "dcd35deb5b389296d4661417710371b38f1a64bf523b9f77c890276b6b0f82e2"
+        ],
+        "predicted": [
+          "z.rb:helper"
+        ],
+        "p50_ms": 26.226231006148737,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          19.331564995809458,
+          17.4809149975772,
+          30.4378299988457,
+          35.98818700265838
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          566,
+          566,
+          566,
+          566
+        ],
+        "report_sha256": [
+          "dcd35deb5b389296d4661417710371b38f1a64bf523b9f77c890276b6b0f82e2",
+          "dcd35deb5b389296d4661417710371b38f1a64bf523b9f77c890276b6b0f82e2",
+          "dcd35deb5b389296d4661417710371b38f1a64bf523b9f77c890276b6b0f82e2",
+          "dcd35deb5b389296d4661417710371b38f1a64bf523b9f77c890276b6b0f82e2"
+        ],
+        "predicted": [
+          "z.rb:helper"
+        ],
+        "p50_ms": 30.4378299988457,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "ruby_import_early",
+      "language": "ruby",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          35.5833000066923,
+          52.15710199991008,
+          35.69060700101545,
+          39.65594100009184
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          566,
+          566,
+          566,
+          566
+        ],
+        "report_sha256": [
+          "beb9e32cc2594990fb3659e00ae758a3f8876c1280765dbc30d310afbefd5580",
+          "beb9e32cc2594990fb3659e00ae758a3f8876c1280765dbc30d310afbefd5580",
+          "beb9e32cc2594990fb3659e00ae758a3f8876c1280765dbc30d310afbefd5580",
+          "beb9e32cc2594990fb3659e00ae758a3f8876c1280765dbc30d310afbefd5580"
+        ],
+        "predicted": [
+          "a.rb:helper"
+        ],
+        "p50_ms": 39.65594100009184,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          35.99838299851399,
+          24.086279998300597,
+          75.2273440011777,
+          60.7808870045119
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          566,
+          566,
+          566,
+          566
+        ],
+        "report_sha256": [
+          "beb9e32cc2594990fb3659e00ae758a3f8876c1280765dbc30d310afbefd5580",
+          "beb9e32cc2594990fb3659e00ae758a3f8876c1280765dbc30d310afbefd5580",
+          "beb9e32cc2594990fb3659e00ae758a3f8876c1280765dbc30d310afbefd5580",
+          "beb9e32cc2594990fb3659e00ae758a3f8876c1280765dbc30d310afbefd5580"
+        ],
+        "predicted": [
+          "a.rb:helper"
+        ],
+        "p50_ms": 60.7808870045119,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "ruby_foreign_name",
+      "language": "ruby",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          25.902885005052667,
+          16.148004004207905,
+          14.846606005448848,
+          15.446079996763729
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          566,
+          566,
+          566,
+          566
+        ],
+        "report_sha256": [
+          "cbbd5d43e8d19488b8899c5f6cf053316ff1a1d6700869060727c7f24156f0d1",
+          "cbbd5d43e8d19488b8899c5f6cf053316ff1a1d6700869060727c7f24156f0d1",
+          "cbbd5d43e8d19488b8899c5f6cf053316ff1a1d6700869060727c7f24156f0d1",
+          "cbbd5d43e8d19488b8899c5f6cf053316ff1a1d6700869060727c7f24156f0d1"
+        ],
+        "predicted": [
+          "z.rb:helper"
+        ],
+        "p50_ms": 15.446079996763729,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          23.617255996214226,
+          11.258553000516258,
+          11.898842996743042,
+          12.410215997078922
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          566,
+          566,
+          566,
+          566
+        ],
+        "report_sha256": [
+          "cbbd5d43e8d19488b8899c5f6cf053316ff1a1d6700869060727c7f24156f0d1",
+          "cbbd5d43e8d19488b8899c5f6cf053316ff1a1d6700869060727c7f24156f0d1",
+          "cbbd5d43e8d19488b8899c5f6cf053316ff1a1d6700869060727c7f24156f0d1",
+          "cbbd5d43e8d19488b8899c5f6cf053316ff1a1d6700869060727c7f24156f0d1"
+        ],
+        "predicted": [
+          "z.rb:helper"
+        ],
+        "p50_ms": 11.898842996743042,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "ruby_alias",
+      "language": "ruby",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          14.546847000019625,
+          14.581488001567777,
+          25.37440200103447,
+          41.15134500170825
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          441,
+          441,
+          441,
+          441
+        ],
+        "report_sha256": [
+          "f322a03df50a8137c186b711d05c0f1663e5b384dc792c00572fb6566a84497a",
+          "f322a03df50a8137c186b711d05c0f1663e5b384dc792c00572fb6566a84497a",
+          "f322a03df50a8137c186b711d05c0f1663e5b384dc792c00572fb6566a84497a",
+          "f322a03df50a8137c186b711d05c0f1663e5b384dc792c00572fb6566a84497a"
+        ],
+        "predicted": [],
+        "p50_ms": 25.37440200103447,
+        "score": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 1,
+          "precision": null,
+          "recall": 0.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          11.086243997851852,
+          13.983992001158185,
+          24.2278029982117,
+          42.573778999212664
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          441,
+          441,
+          441,
+          441
+        ],
+        "report_sha256": [
+          "f322a03df50a8137c186b711d05c0f1663e5b384dc792c00572fb6566a84497a",
+          "f322a03df50a8137c186b711d05c0f1663e5b384dc792c00572fb6566a84497a",
+          "f322a03df50a8137c186b711d05c0f1663e5b384dc792c00572fb6566a84497a",
+          "f322a03df50a8137c186b711d05c0f1663e5b384dc792c00572fb6566a84497a"
+        ],
+        "predicted": [],
+        "p50_ms": 24.2278029982117,
+        "score": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 1,
+          "precision": null,
+          "recall": 0.0
+        }
+      }
+    },
+    {
+      "id": "ruby_parameter_shadow",
+      "language": "ruby",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          43.90170099941315,
+          20.065257005626336,
+          20.068142002855893,
+          19.641641003545374
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          585,
+          585,
+          585,
+          585
+        ],
+        "report_sha256": [
+          "bec240f218cd2936a1898c589ef01b88091c6103b454ddd47ecffefae54cbc2a",
+          "bec240f218cd2936a1898c589ef01b88091c6103b454ddd47ecffefae54cbc2a",
+          "bec240f218cd2936a1898c589ef01b88091c6103b454ddd47ecffefae54cbc2a",
+          "bec240f218cd2936a1898c589ef01b88091c6103b454ddd47ecffefae54cbc2a"
+        ],
+        "predicted": [
+          "main.rb:helper"
+        ],
+        "p50_ms": 20.065257005626336,
+        "score": {
+          "tp": 0,
+          "fp": 1,
+          "fn": 1,
+          "precision": 0.0,
+          "recall": 0.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          39.71309600456152,
+          13.257371996587608,
+          10.629217998939566,
+          16.33484000194585
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          585,
+          585,
+          585,
+          585
+        ],
+        "report_sha256": [
+          "bec240f218cd2936a1898c589ef01b88091c6103b454ddd47ecffefae54cbc2a",
+          "bec240f218cd2936a1898c589ef01b88091c6103b454ddd47ecffefae54cbc2a",
+          "bec240f218cd2936a1898c589ef01b88091c6103b454ddd47ecffefae54cbc2a",
+          "bec240f218cd2936a1898c589ef01b88091c6103b454ddd47ecffefae54cbc2a"
+        ],
+        "predicted": [
+          "main.rb:helper"
+        ],
+        "p50_ms": 13.257371996587608,
+        "score": {
+          "tp": 0,
+          "fp": 1,
+          "fn": 1,
+          "precision": 0.0,
+          "recall": 0.0
+        }
+      }
+    },
+    {
+      "id": "ruby_nested_uncalled",
+      "language": "ruby",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          28.265599998121615,
+          22.906400001375005,
+          29.784209000354167,
+          32.197389999055304
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          272,
+          272,
+          272,
+          272
+        ],
+        "report_sha256": [
+          "3aba2e94b54cbb798f11d97e019b5a2cd1ee8cc416f5211a382f49e95870f668",
+          "3aba2e94b54cbb798f11d97e019b5a2cd1ee8cc416f5211a382f49e95870f668",
+          "3aba2e94b54cbb798f11d97e019b5a2cd1ee8cc416f5211a382f49e95870f668",
+          "3aba2e94b54cbb798f11d97e019b5a2cd1ee8cc416f5211a382f49e95870f668"
+        ],
+        "predicted": [],
+        "p50_ms": 29.784209000354167,
+        "score": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "precision": null,
+          "recall": null
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          31.044859999383334,
+          19.529252000211272,
+          27.91466400231002,
+          34.42979999817908
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          272,
+          272,
+          272,
+          272
+        ],
+        "report_sha256": [
+          "3aba2e94b54cbb798f11d97e019b5a2cd1ee8cc416f5211a382f49e95870f668",
+          "3aba2e94b54cbb798f11d97e019b5a2cd1ee8cc416f5211a382f49e95870f668",
+          "3aba2e94b54cbb798f11d97e019b5a2cd1ee8cc416f5211a382f49e95870f668",
+          "3aba2e94b54cbb798f11d97e019b5a2cd1ee8cc416f5211a382f49e95870f668"
+        ],
+        "predicted": [],
+        "p50_ms": 27.91466400231002,
+        "score": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "precision": null,
+          "recall": null
+        }
+      }
+    },
+    {
+      "id": "go_unique",
+      "language": "go",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          16.334788997482974,
+          18.423794004775118,
+          37.577622999378946,
+          36.963562000892125
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          679,
+          679,
+          679,
+          679
+        ],
+        "report_sha256": [
+          "885176bf96139cc2089f697db06bc5eb396464eb7e718291e2e9cc80848d7546",
+          "885176bf96139cc2089f697db06bc5eb396464eb7e718291e2e9cc80848d7546",
+          "885176bf96139cc2089f697db06bc5eb396464eb7e718291e2e9cc80848d7546",
+          "885176bf96139cc2089f697db06bc5eb396464eb7e718291e2e9cc80848d7546"
+        ],
+        "predicted": [
+          "z/helper.go:Helper"
+        ],
+        "p50_ms": 36.963562000892125,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          10.732152994023636,
+          12.26032600243343,
+          13.226290000602603,
+          35.407237002800684
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          679,
+          679,
+          679,
+          679
+        ],
+        "report_sha256": [
+          "885176bf96139cc2089f697db06bc5eb396464eb7e718291e2e9cc80848d7546",
+          "885176bf96139cc2089f697db06bc5eb396464eb7e718291e2e9cc80848d7546",
+          "885176bf96139cc2089f697db06bc5eb396464eb7e718291e2e9cc80848d7546",
+          "885176bf96139cc2089f697db06bc5eb396464eb7e718291e2e9cc80848d7546"
+        ],
+        "predicted": [
+          "z/helper.go:Helper"
+        ],
+        "p50_ms": 13.226290000602603,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "go_import_late",
+      "language": "go",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          39.41480899811722,
+          54.13869099720614,
+          29.745020001428202,
+          25.072310003452003
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          679,
+          679,
+          679,
+          679
+        ],
+        "report_sha256": [
+          "885176bf96139cc2089f697db06bc5eb396464eb7e718291e2e9cc80848d7546",
+          "885176bf96139cc2089f697db06bc5eb396464eb7e718291e2e9cc80848d7546",
+          "885176bf96139cc2089f697db06bc5eb396464eb7e718291e2e9cc80848d7546",
+          "885176bf96139cc2089f697db06bc5eb396464eb7e718291e2e9cc80848d7546"
+        ],
+        "predicted": [
+          "z/helper.go:Helper"
+        ],
+        "p50_ms": 29.745020001428202,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          39.984985000046436,
+          28.083738005079795,
+          27.902765999897383,
+          32.06427999975858
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          679,
+          679,
+          679,
+          679
+        ],
+        "report_sha256": [
+          "885176bf96139cc2089f697db06bc5eb396464eb7e718291e2e9cc80848d7546",
+          "885176bf96139cc2089f697db06bc5eb396464eb7e718291e2e9cc80848d7546",
+          "885176bf96139cc2089f697db06bc5eb396464eb7e718291e2e9cc80848d7546",
+          "885176bf96139cc2089f697db06bc5eb396464eb7e718291e2e9cc80848d7546"
+        ],
+        "predicted": [
+          "z/helper.go:Helper"
+        ],
+        "p50_ms": 28.083738005079795,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "go_import_early",
+      "language": "go",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          20.00649899855489,
+          14.962959998229053,
+          12.713935997453518,
+          14.054377999855205
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          679,
+          679,
+          679,
+          679
+        ],
+        "report_sha256": [
+          "183448317ceccce326f63b6cf35328ae41073c719fc4b4e57f08556939b4dd20",
+          "183448317ceccce326f63b6cf35328ae41073c719fc4b4e57f08556939b4dd20",
+          "183448317ceccce326f63b6cf35328ae41073c719fc4b4e57f08556939b4dd20",
+          "183448317ceccce326f63b6cf35328ae41073c719fc4b4e57f08556939b4dd20"
+        ],
+        "predicted": [
+          "a/helper.go:Helper"
+        ],
+        "p50_ms": 14.054377999855205,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          18.302130003576167,
+          11.812393997388426,
+          10.983970998495352,
+          11.301227001240477
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          679,
+          679,
+          679,
+          679
+        ],
+        "report_sha256": [
+          "183448317ceccce326f63b6cf35328ae41073c719fc4b4e57f08556939b4dd20",
+          "183448317ceccce326f63b6cf35328ae41073c719fc4b4e57f08556939b4dd20",
+          "183448317ceccce326f63b6cf35328ae41073c719fc4b4e57f08556939b4dd20",
+          "183448317ceccce326f63b6cf35328ae41073c719fc4b4e57f08556939b4dd20"
+        ],
+        "predicted": [
+          "a/helper.go:Helper"
+        ],
+        "p50_ms": 11.301227001240477,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "go_foreign_name",
+      "language": "go",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          15.231022996886168,
+          12.724302003334742,
+          13.558644001022913,
+          13.142858995706774
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          679,
+          679,
+          679,
+          679
+        ],
+        "report_sha256": [
+          "885176bf96139cc2089f697db06bc5eb396464eb7e718291e2e9cc80848d7546",
+          "885176bf96139cc2089f697db06bc5eb396464eb7e718291e2e9cc80848d7546",
+          "885176bf96139cc2089f697db06bc5eb396464eb7e718291e2e9cc80848d7546",
+          "885176bf96139cc2089f697db06bc5eb396464eb7e718291e2e9cc80848d7546"
+        ],
+        "predicted": [
+          "z/helper.go:Helper"
+        ],
+        "p50_ms": 13.142858995706774,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          9.360745003505144,
+          12.098223000066355,
+          11.16835800348781,
+          10.20190699637169
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          679,
+          679,
+          679,
+          679
+        ],
+        "report_sha256": [
+          "885176bf96139cc2089f697db06bc5eb396464eb7e718291e2e9cc80848d7546",
+          "885176bf96139cc2089f697db06bc5eb396464eb7e718291e2e9cc80848d7546",
+          "885176bf96139cc2089f697db06bc5eb396464eb7e718291e2e9cc80848d7546",
+          "885176bf96139cc2089f697db06bc5eb396464eb7e718291e2e9cc80848d7546"
+        ],
+        "predicted": [
+          "z/helper.go:Helper"
+        ],
+        "p50_ms": 11.16835800348781,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "go_alias",
+      "language": "go",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          19.312707001517992,
+          24.00681099970825,
+          20.050560000527184,
+          20.020310003019404
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          686,
+          686,
+          686,
+          686
+        ],
+        "report_sha256": [
+          "f85a67392285a086e672e789c76b0914ffe99e842df50dd650ffde9074b1ec31",
+          "f85a67392285a086e672e789c76b0914ffe99e842df50dd650ffde9074b1ec31",
+          "f85a67392285a086e672e789c76b0914ffe99e842df50dd650ffde9074b1ec31",
+          "f85a67392285a086e672e789c76b0914ffe99e842df50dd650ffde9074b1ec31"
+        ],
+        "predicted": [
+          "z/helper.go:Helper"
+        ],
+        "p50_ms": 20.050560000527184,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          10.211752000031993,
+          28.09199000330409,
+          15.915629999653902,
+          23.277126005268656
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          686,
+          686,
+          686,
+          686
+        ],
+        "report_sha256": [
+          "f85a67392285a086e672e789c76b0914ffe99e842df50dd650ffde9074b1ec31",
+          "f85a67392285a086e672e789c76b0914ffe99e842df50dd650ffde9074b1ec31",
+          "f85a67392285a086e672e789c76b0914ffe99e842df50dd650ffde9074b1ec31",
+          "f85a67392285a086e672e789c76b0914ffe99e842df50dd650ffde9074b1ec31"
+        ],
+        "predicted": [
+          "z/helper.go:Helper"
+        ],
+        "p50_ms": 23.277126005268656,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "go_parameter_shadow",
+      "language": "go",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          16.02503399772104,
+          20.002933000796475,
+          23.99538399913581,
+          16.314469001372345
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          681,
+          681,
+          681,
+          681
+        ],
+        "report_sha256": [
+          "c6414c6f76ba50eeffdf369da646015347ccb79813c29273fc2921fbade22f3d",
+          "c6414c6f76ba50eeffdf369da646015347ccb79813c29273fc2921fbade22f3d",
+          "c6414c6f76ba50eeffdf369da646015347ccb79813c29273fc2921fbade22f3d",
+          "c6414c6f76ba50eeffdf369da646015347ccb79813c29273fc2921fbade22f3d"
+        ],
+        "predicted": [
+          "main.go:helper"
+        ],
+        "p50_ms": 20.002933000796475,
+        "score": {
+          "tp": 0,
+          "fp": 1,
+          "fn": 1,
+          "precision": 0.0,
+          "recall": 0.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          19.746628997381777,
+          15.952565998304635,
+          11.971792002441362,
+          13.064722996205091
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          681,
+          681,
+          681,
+          681
+        ],
+        "report_sha256": [
+          "c6414c6f76ba50eeffdf369da646015347ccb79813c29273fc2921fbade22f3d",
+          "c6414c6f76ba50eeffdf369da646015347ccb79813c29273fc2921fbade22f3d",
+          "c6414c6f76ba50eeffdf369da646015347ccb79813c29273fc2921fbade22f3d",
+          "c6414c6f76ba50eeffdf369da646015347ccb79813c29273fc2921fbade22f3d"
+        ],
+        "predicted": [
+          "main.go:helper"
+        ],
+        "p50_ms": 13.064722996205091,
+        "score": {
+          "tp": 0,
+          "fp": 1,
+          "fn": 1,
+          "precision": 0.0,
+          "recall": 0.0
+        }
+      }
+    },
+    {
+      "id": "go_nested_uncalled",
+      "language": "go",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          15.129881001485046,
+          32.019393001974095,
+          20.61906800372526,
+          12.74904899764806
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          402,
+          402,
+          402,
+          402
+        ],
+        "report_sha256": [
+          "5e6e4d859c13af4b86bc4ffdd4e47951a18a3f5ba1e768605ab71a48b532ff38",
+          "5e6e4d859c13af4b86bc4ffdd4e47951a18a3f5ba1e768605ab71a48b532ff38",
+          "5e6e4d859c13af4b86bc4ffdd4e47951a18a3f5ba1e768605ab71a48b532ff38",
+          "5e6e4d859c13af4b86bc4ffdd4e47951a18a3f5ba1e768605ab71a48b532ff38"
+        ],
+        "predicted": [],
+        "p50_ms": 20.61906800372526,
+        "score": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "precision": null,
+          "recall": null
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          15.075981005793437,
+          15.948729997035116,
+          16.15957600006368,
+          9.764110000105575
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          402,
+          402,
+          402,
+          402
+        ],
+        "report_sha256": [
+          "5e6e4d859c13af4b86bc4ffdd4e47951a18a3f5ba1e768605ab71a48b532ff38",
+          "5e6e4d859c13af4b86bc4ffdd4e47951a18a3f5ba1e768605ab71a48b532ff38",
+          "5e6e4d859c13af4b86bc4ffdd4e47951a18a3f5ba1e768605ab71a48b532ff38",
+          "5e6e4d859c13af4b86bc4ffdd4e47951a18a3f5ba1e768605ab71a48b532ff38"
+        ],
+        "predicted": [],
+        "p50_ms": 15.948729997035116,
+        "score": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "precision": null,
+          "recall": null
+        }
+      }
+    }
+  ],
+  "non_regression": true
+}

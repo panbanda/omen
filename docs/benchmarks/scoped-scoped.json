@@ -1,0 +1,661 @@
+{
+  "standard": "omen-improvement-v1",
+  "corpus_sha256": "eed24ebc7ae23853c611fccdc7aa89ae9346cab96572b6d0b366a9a640c8dea9",
+  "baseline": {
+    "label": "aa8aafe",
+    "sha256": "cf615db3731a9f9d2ef28d4df0be6c22579cc329e0d260d0d0c7b920366c6ea7"
+  },
+  "candidate": {
+    "label": "scoped-resolution",
+    "sha256": "ff6e09b3c0082bd4b88cf40a8d595b13d77667f3fa19c40bf73515c1b13cfff4"
+  },
+  "repetitions": 3,
+  "warmups": 1,
+  "order": "alternating",
+  "broad_improvement_proven": false,
+  "unmeasured": [
+    "model editing",
+    "actual tokens/cost",
+    "peak RSS",
+    "release performance",
+    "compiler binding",
+    "held-out generalization"
+  ],
+  "cases": [
+    {
+      "id": "ts_alias",
+      "language": "typescript",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          15.567237998766359,
+          24.015484006667975,
+          27.080372005002573,
+          19.397004005440976
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          451,
+          451,
+          451,
+          451
+        ],
+        "report_sha256": [
+          "8c94b7574caa42c8a541858f2810b9ff050d3d16ef5557c00921018c29493441",
+          "8c94b7574caa42c8a541858f2810b9ff050d3d16ef5557c00921018c29493441",
+          "8c94b7574caa42c8a541858f2810b9ff050d3d16ef5557c00921018c29493441",
+          "8c94b7574caa42c8a541858f2810b9ff050d3d16ef5557c00921018c29493441"
+        ],
+        "predicted": [],
+        "p50_ms": 24.015484006667975,
+        "score": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 1,
+          "precision": null,
+          "recall": 0.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          12.077792001946364,
+          31.853123000473715,
+          24.234231997979805,
+          16.33401799335843
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          585,
+          585,
+          585,
+          585
+        ],
+        "report_sha256": [
+          "d5942409a5b89ffd16eeaf5349165cf573bca0a6a8f1e71584b9f709e1a7bd42",
+          "d5942409a5b89ffd16eeaf5349165cf573bca0a6a8f1e71584b9f709e1a7bd42",
+          "d5942409a5b89ffd16eeaf5349165cf573bca0a6a8f1e71584b9f709e1a7bd42",
+          "d5942409a5b89ffd16eeaf5349165cf573bca0a6a8f1e71584b9f709e1a7bd42"
+        ],
+        "predicted": [
+          "a.ts:helper"
+        ],
+        "p50_ms": 24.234231997979805,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "rust_alias",
+      "language": "rust",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          15.725965997262392,
+          16.844905003381427,
+          14.217313000699505,
+          40.952755996841006
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          445,
+          445,
+          445,
+          445
+        ],
+        "report_sha256": [
+          "647043748ce6a77562da3f013984d1b032a3be87a5382496d4df59d4566bc604",
+          "647043748ce6a77562da3f013984d1b032a3be87a5382496d4df59d4566bc604",
+          "647043748ce6a77562da3f013984d1b032a3be87a5382496d4df59d4566bc604",
+          "647043748ce6a77562da3f013984d1b032a3be87a5382496d4df59d4566bc604"
+        ],
+        "predicted": [],
+        "p50_ms": 16.844905003381427,
+        "score": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 1,
+          "precision": null,
+          "recall": 0.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          11.720035996404476,
+          16.281599004287273,
+          11.792943994805682,
+          19.291796001198236
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          579,
+          579,
+          579,
+          579
+        ],
+        "report_sha256": [
+          "00c8d2b40d92cdaf3e2b0a95d9c807f164266df3db9c636f7eb60b5fcda17e4d",
+          "00c8d2b40d92cdaf3e2b0a95d9c807f164266df3db9c636f7eb60b5fcda17e4d",
+          "00c8d2b40d92cdaf3e2b0a95d9c807f164266df3db9c636f7eb60b5fcda17e4d",
+          "00c8d2b40d92cdaf3e2b0a95d9c807f164266df3db9c636f7eb60b5fcda17e4d"
+        ],
+        "predicted": [
+          "a.rs:helper"
+        ],
+        "p50_ms": 16.281599004287273,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "ts_scope",
+      "language": "typescript",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          15.97832900006324,
+          28.150568003184162,
+          42.59151599399047,
+          15.984007994120475
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          622,
+          622,
+          622,
+          622
+        ],
+        "report_sha256": [
+          "0a91b4e1e553edc18d3e50fbac4e83a4c162065176076f7d4baccd5c30d6e809",
+          "0a91b4e1e553edc18d3e50fbac4e83a4c162065176076f7d4baccd5c30d6e809",
+          "0a91b4e1e553edc18d3e50fbac4e83a4c162065176076f7d4baccd5c30d6e809",
+          "0a91b4e1e553edc18d3e50fbac4e83a4c162065176076f7d4baccd5c30d6e809"
+        ],
+        "predicted": [],
+        "p50_ms": 28.150568003184162,
+        "score": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 1,
+          "precision": null,
+          "recall": 0.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          12.044101000356022,
+          15.867027002968825,
+          10.461496996867936,
+          10.78997000149684
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          614,
+          614,
+          614,
+          614
+        ],
+        "report_sha256": [
+          "fc36ad0f975cb51392d147f5316d216a07bc6f9d4b894710fb5164993b6dee30",
+          "fc36ad0f975cb51392d147f5316d216a07bc6f9d4b894710fb5164993b6dee30",
+          "fc36ad0f975cb51392d147f5316d216a07bc6f9d4b894710fb5164993b6dee30",
+          "fc36ad0f975cb51392d147f5316d216a07bc6f9d4b894710fb5164993b6dee30"
+        ],
+        "predicted": [
+          "main.ts:helper"
+        ],
+        "p50_ms": 10.78997000149684,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "rust_scope",
+      "language": "rust",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          22.373498999513686,
+          38.38858399831224,
+          32.918771998083685,
+          22.979569002927747
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          610,
+          610,
+          610,
+          610
+        ],
+        "report_sha256": [
+          "1950d003fdae36142a608482db3feda62b366921d4f4c1a165a033fbdc7094af",
+          "1950d003fdae36142a608482db3feda62b366921d4f4c1a165a033fbdc7094af",
+          "1950d003fdae36142a608482db3feda62b366921d4f4c1a165a033fbdc7094af",
+          "1950d003fdae36142a608482db3feda62b366921d4f4c1a165a033fbdc7094af"
+        ],
+        "predicted": [],
+        "p50_ms": 32.918771998083685,
+        "score": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 1,
+          "precision": null,
+          "recall": 0.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          10.82618399959756,
+          26.276737000443973,
+          17.722431002766825,
+          10.338337000575848
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          602,
+          602,
+          602,
+          602
+        ],
+        "report_sha256": [
+          "c6179ee5426612831a8e40b85e150cfc3db67f4e81554c4ee461bc9edd147603",
+          "c6179ee5426612831a8e40b85e150cfc3db67f4e81554c4ee461bc9edd147603",
+          "c6179ee5426612831a8e40b85e150cfc3db67f4e81554c4ee461bc9edd147603",
+          "c6179ee5426612831a8e40b85e150cfc3db67f4e81554c4ee461bc9edd147603"
+        ],
+        "predicted": [
+          "main.rs:helper"
+        ],
+        "p50_ms": 17.722431002766825,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "ts_invisible",
+      "language": "typescript",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          13.94317600352224,
+          17.449732004024554,
+          13.447817000269424,
+          27.288915000099223
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          595,
+          595,
+          595,
+          595
+        ],
+        "report_sha256": [
+          "cd7bb3252505c471d74c4e55f979bcb6ef2acf22c89ab0fb714f3a620ae3825a",
+          "cd7bb3252505c471d74c4e55f979bcb6ef2acf22c89ab0fb714f3a620ae3825a",
+          "cd7bb3252505c471d74c4e55f979bcb6ef2acf22c89ab0fb714f3a620ae3825a",
+          "cd7bb3252505c471d74c4e55f979bcb6ef2acf22c89ab0fb714f3a620ae3825a"
+        ],
+        "predicted": [
+          "main.ts:helper"
+        ],
+        "p50_ms": 17.449732004024554,
+        "score": {
+          "tp": 0,
+          "fp": 1,
+          "fn": 0,
+          "precision": 0.0,
+          "recall": null
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          11.808087998360861,
+          10.12608300516149,
+          11.521161999553442,
+          26.941003001411445
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          449,
+          449,
+          449,
+          449
+        ],
+        "report_sha256": [
+          "bde9396f255abaf855bafc63b84867488a9cadeb5e9308c89733f376c9a7f004",
+          "bde9396f255abaf855bafc63b84867488a9cadeb5e9308c89733f376c9a7f004",
+          "bde9396f255abaf855bafc63b84867488a9cadeb5e9308c89733f376c9a7f004",
+          "bde9396f255abaf855bafc63b84867488a9cadeb5e9308c89733f376c9a7f004"
+        ],
+        "predicted": [],
+        "p50_ms": 11.521161999553442,
+        "score": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 0,
+          "precision": null,
+          "recall": null
+        }
+      }
+    },
+    {
+      "id": "ts_relative",
+      "language": "typescript",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          33.13981500105001,
+          26.565299995127134,
+          17.01515999593539,
+          14.002900999912526
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          614,
+          614,
+          614,
+          614
+        ],
+        "report_sha256": [
+          "4164d0e1eb6dbe1f595d43de069ca6cb7683b77388275fae7d097c3bd711de94",
+          "4164d0e1eb6dbe1f595d43de069ca6cb7683b77388275fae7d097c3bd711de94",
+          "4164d0e1eb6dbe1f595d43de069ca6cb7683b77388275fae7d097c3bd711de94",
+          "4164d0e1eb6dbe1f595d43de069ca6cb7683b77388275fae7d097c3bd711de94"
+        ],
+        "predicted": [
+          "src/a.ts:helper"
+        ],
+        "p50_ms": 17.01515999593539,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          28.232109994860366,
+          14.739500998985022,
+          10.007245000451803,
+          25.166195002384484
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          615,
+          615,
+          615,
+          615
+        ],
+        "report_sha256": [
+          "f73c5a1c6859acbaff7b267cbcc5c840929f5a04bf78ace044df1292ff779964",
+          "f73c5a1c6859acbaff7b267cbcc5c840929f5a04bf78ace044df1292ff779964",
+          "f73c5a1c6859acbaff7b267cbcc5c840929f5a04bf78ace044df1292ff779964",
+          "f73c5a1c6859acbaff7b267cbcc5c840929f5a04bf78ace044df1292ff779964"
+        ],
+        "predicted": [
+          "src/a.ts:helper"
+        ],
+        "p50_ms": 14.739500998985022,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "ts_this",
+      "language": "typescript",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          25.879730004817247,
+          20.92955399712082,
+          39.907297999889124,
+          15.125934995012358
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          598,
+          598,
+          598,
+          598
+        ],
+        "report_sha256": [
+          "24ee263742fa80168f1ee641d7d3a1544f97b13c0089fd647abeb50836b8f641",
+          "24ee263742fa80168f1ee641d7d3a1544f97b13c0089fd647abeb50836b8f641",
+          "24ee263742fa80168f1ee641d7d3a1544f97b13c0089fd647abeb50836b8f641",
+          "24ee263742fa80168f1ee641d7d3a1544f97b13c0089fd647abeb50836b8f641"
+        ],
+        "predicted": [],
+        "p50_ms": 20.92955399712082,
+        "score": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 1,
+          "precision": null,
+          "recall": 0.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          12.679835999733768,
+          15.13730700389715,
+          13.04721599444747,
+          10.935777994745877
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          596,
+          596,
+          596,
+          596
+        ],
+        "report_sha256": [
+          "43cbe01221434c3cbeeef41c17762762d2c2489ebb630127c65fdb501d9959a1",
+          "43cbe01221434c3cbeeef41c17762762d2c2489ebb630127c65fdb501d9959a1",
+          "43cbe01221434c3cbeeef41c17762762d2c2489ebb630127c65fdb501d9959a1",
+          "43cbe01221434c3cbeeef41c17762762d2c2489ebb630127c65fdb501d9959a1"
+        ],
+        "predicted": [
+          "main.ts:helper"
+        ],
+        "p50_ms": 13.04721599444747,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    },
+    {
+      "id": "rust_self",
+      "language": "rust",
+      "non_regression": true,
+      "baseline": {
+        "reliable": true,
+        "elapsed_ms": [
+          32.06566299922997,
+          48.008603997004684,
+          20.725896996736992,
+          16.217753996897954
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          606,
+          606,
+          606,
+          606
+        ],
+        "report_sha256": [
+          "443050f1c6dd66d23b07015ab57ff05224389cdff48079d8fe0c1b4d3e998e4e",
+          "443050f1c6dd66d23b07015ab57ff05224389cdff48079d8fe0c1b4d3e998e4e",
+          "443050f1c6dd66d23b07015ab57ff05224389cdff48079d8fe0c1b4d3e998e4e",
+          "443050f1c6dd66d23b07015ab57ff05224389cdff48079d8fe0c1b4d3e998e4e"
+        ],
+        "predicted": [],
+        "p50_ms": 20.725896996736992,
+        "score": {
+          "tp": 0,
+          "fp": 0,
+          "fn": 1,
+          "precision": null,
+          "recall": 0.0
+        }
+      },
+      "candidate": {
+        "reliable": true,
+        "elapsed_ms": [
+          28.571941002155654,
+          23.975714000698645,
+          15.182741000899114,
+          10.199472999374848
+        ],
+        "errors": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "output_bytes": [
+          604,
+          604,
+          604,
+          604
+        ],
+        "report_sha256": [
+          "d02f77344650e0d4a3d0ca0cd2f7ac89831de5335853f47b60a98e895321e11f",
+          "d02f77344650e0d4a3d0ca0cd2f7ac89831de5335853f47b60a98e895321e11f",
+          "d02f77344650e0d4a3d0ca0cd2f7ac89831de5335853f47b60a98e895321e11f",
+          "d02f77344650e0d4a3d0ca0cd2f7ac89831de5335853f47b60a98e895321e11f"
+        ],
+        "predicted": [
+          "main.rs:helper"
+        ],
+        "p50_ms": 15.182741000899114,
+        "score": {
+          "tp": 1,
+          "fp": 0,
+          "fn": 0,
+          "precision": 1.0,
+          "recall": 1.0
+        }
+      }
+    }
+  ],
+  "non_regression": true
+}
