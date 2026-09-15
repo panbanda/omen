@@ -10,6 +10,8 @@ use crate::config::Config;
 use crate::core::{AnalysisContext, Analyzer, FileSet, Result};
 use crate::git::GitRepo;
 
+mod compact;
+
 const MAX_STDIO_LINE_SIZE: usize = 10 * 1024 * 1024;
 
 fn discard_until_newline(reader: &mut impl BufRead) -> std::io::Result<()> {
@@ -86,6 +88,12 @@ impl ToolDef {
         let mut props = serde_json::Map::new();
         for (k, v) in &self.properties {
             props.insert(k.to_string(), v.clone());
+        }
+        if matches!(self.name, "context" | "repomap" | "get_symbol" | "impact") {
+            props.insert("compact".to_string(), json!({
+                "type": "boolean",
+                "description": "Opt-in lossless tables. table_paths are JSON pointers into result; zip each table's columns with its rows to restore records. Falls back to normal JSON if larger."
+            }));
         }
         // Shared pagination params on every tool
         props.insert(
@@ -486,6 +494,9 @@ impl McpServer {
         if let Some(reason) = git_skipped_reason {
             envelope["git_skipped_reason"] = json!(reason);
         }
+        if args["compact"].as_bool().unwrap_or(false) {
+            envelope = compact::encode(envelope);
+        }
 
         Ok(json!({
             "content": [{
@@ -698,6 +709,7 @@ impl McpServer {
                 properties: vec![
                     ("name", json!({"type": "string", "description": "Symbol name to look up (bare name or qualified file:name)"})),
                     ("include_source", json!({"type": "boolean", "description": "Whether to include source code (default: true)"})),
+                    ("start_line", json!({"type": "integer", "minimum": 1, "description": "Exact definition start line; combine with file:name to select same-file duplicates. Ambiguous queries return choices without source or graph attribution."})),
                     ("max_source_lines", json!({"type": "integer", "description": "Maximum source lines to return (default: 200)"})),
                     ("path", json!({"type": "string", "description": "Repository root path"})),
                 ],
@@ -1355,7 +1367,7 @@ impl McpServer {
         file_set: &FileSet,
         arguments: &Value,
     ) -> std::result::Result<Value, String> {
-        use crate::symbol::{get_symbol, suggest_symbols, SymbolOptions};
+        use crate::symbol::{report_from_index, suggest_symbols, SymbolOptions};
 
         let name = arguments
             .get("name")
@@ -1380,7 +1392,37 @@ impl McpServer {
             max_source_lines,
         };
 
-        let value = match get_symbol(repo_path, &files, name, &opts) {
+        let start_line = match arguments.get("start_line") {
+            None => None,
+            Some(value) => Some(
+                value
+                    .as_u64()
+                    .and_then(|n| u32::try_from(n).ok())
+                    .filter(|&n| n > 0)
+                    .ok_or("start_line must be a positive u32")?,
+            ),
+        };
+        let index =
+            crate::analyzers::repomap::build_index(repo_path, &files).map_err(|e| e.to_string())?;
+        let matches: Vec<_> = index
+            .resolve(name)
+            .into_iter()
+            .filter(|&i| start_line.is_none_or(|line| index.symbols[i].line == line))
+            .collect();
+        if matches.len() > 1 {
+            let choices: Vec<_> = matches
+                .into_iter()
+                .map(|i| {
+                    json!({"name": index.symbols[i].qualified_name,
+                        "start_line": index.symbols[i].line,
+                        "signature": index.symbols[i].signature})
+                })
+                .collect();
+            return self.tool_response("get_symbol", json!({"name": name, "found": true, "ambiguous": true,
+                    "choices": choices,
+                    "hint": "Call get_symbol with a choice's name and start_line. No definition selected."}), arguments, None);
+        }
+        let value = match report_from_index(repo_path, &index, name, &opts, start_line) {
             Ok(report) => {
                 serde_json::to_value(&report).map_err(|e| format!("Serialization failed: {e}"))?
             }
@@ -1453,6 +1495,100 @@ mod tests {
         let config = Config::default();
         let server = McpServer::new(temp_dir.path().to_path_buf(), config);
         (server, temp_dir)
+    }
+
+    #[test]
+    fn ambiguous_lookup_requires_definition_selection() {
+        let (server, dir) = create_test_server();
+        std::fs::write(
+            dir.path().join("same.rb"),
+            "class A\n  def helper\n    1\n  end\nend\nclass B\n  def helper\n    2\n  end\nend\n",
+        )
+        .unwrap();
+        let call = |extra: Value| {
+            let mut args = json!({"path": dir.path(), "name": "same.rb:helper"});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let response = server
+                .handle_tool_call(Some(json!({"name": "get_symbol", "arguments": args})))
+                .unwrap();
+            serde_json::from_str::<Value>(response["content"][0]["text"].as_str().unwrap()).unwrap()
+        };
+        let ambiguous = call(json!({}));
+        assert_eq!(ambiguous["result"]["ambiguous"], true);
+        assert_eq!(ambiguous["result"]["choices"].as_array().unwrap().len(), 2);
+        assert!(ambiguous["result"].get("source").is_none());
+        assert!(ambiguous["result"].get("callees").is_none());
+        let selected = call(json!({"start_line": 7}));
+        assert_eq!(selected["result"]["start_line"], 7);
+        assert!(selected["result"]["source"].as_str().unwrap().contains('2'));
+        assert_eq!(call(json!({"start_line": 99}))["result"]["found"], false);
+    }
+
+    #[test]
+    fn compact_preserves_pagination_and_default_schema() {
+        let (server, _dir) = create_test_server();
+        let records: Vec<_> = (0..100)
+            .map(|i| {
+                json!({
+                    "qualified_name": format!("module/file.rs:symbol_{i}"),
+                    "file": "module/file.rs", "line": i + 1
+                })
+            })
+            .collect();
+        let value = json!({"symbols": records});
+        let response = server
+            .tool_response(
+                "repomap",
+                value.clone(),
+                &json!({"limit": 30, "offset": 10, "compact": true}),
+                None,
+            )
+            .unwrap();
+        let packed: Value =
+            serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(packed["total_items"], 100);
+        assert_eq!(packed["returned"], 30);
+        assert_eq!(packed["offset"], 10);
+        assert_eq!(packed["table_paths"], json!(["/symbols"]));
+        let table = &packed["result"]["symbols"];
+        let columns = table["columns"].as_array().unwrap();
+        let line_column = columns.iter().position(|v| v == "line").unwrap();
+        assert_eq!(table["rows"][0][line_column], 11);
+        assert_eq!(table["rows"][29][line_column], 40);
+        let normal = server
+            .tool_response("repomap", value, &json!({"limit": 30, "offset": 10}), None)
+            .unwrap();
+        let normal: Value =
+            serde_json::from_str(normal["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert!(normal.get("encoding").is_none());
+        assert!(normal["result"]["symbols"].is_array());
+    }
+
+    #[test]
+    fn symbol_line_selector_rejects_invalid_values() {
+        let (server, dir) = create_test_server();
+        std::fs::write(dir.path().join("main.rs"), "fn helper() {}\n").unwrap();
+        for line in [
+            json!(0),
+            json!(-1),
+            json!(1.5),
+            json!("7"),
+            json!(4294967296_u64),
+        ] {
+            let result = server.handle_tool_call(Some(json!({
+                "name": "get_symbol", "arguments": {
+                    "path": dir.path(), "name": "helper", "start_line": line
+                }
+            })));
+            let response = result.unwrap();
+            assert_eq!(response["isError"], true);
+            assert!(response["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("start_line"));
+        }
     }
 
     #[test]
