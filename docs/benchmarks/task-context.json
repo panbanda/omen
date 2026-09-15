@@ -1,0 +1,1250 @@
+{
+  "baseline_sha256": "cf615db3731a9f9d2ef28d4df0be6c22579cc329e0d260d0d0c7b920366c6ea7",
+  "candidate_sha256": "8ee393278e14804f392e68fd7c85d999b433fb15f61bd2367633188415a7a941",
+  "retrieval": [
+    {
+      "language": "rust",
+      "one_call_retrieval": [
+        {
+          "correct": 3,
+          "irrelevant": 0,
+          "missing": 1
+        },
+        {
+          "correct": 4,
+          "irrelevant": 0,
+          "missing": 0
+        }
+      ],
+      "response_tokens": [
+        202,
+        529
+      ],
+      "expected_definitions": [
+        "a.rs:helper",
+        "a.rs:service",
+        "a.rs:test_service",
+        "a.rs:wrapper"
+      ]
+    },
+    {
+      "language": "typescript",
+      "one_call_retrieval": [
+        {
+          "correct": 3,
+          "irrelevant": 0,
+          "missing": 1
+        },
+        {
+          "correct": 4,
+          "irrelevant": 0,
+          "missing": 0
+        }
+      ],
+      "response_tokens": [
+        202,
+        532
+      ],
+      "expected_definitions": [
+        "a.ts:helper",
+        "a.ts:service",
+        "a.ts:test_service",
+        "a.ts:wrapper"
+      ]
+    },
+    {
+      "language": "ruby",
+      "one_call_retrieval": [
+        {
+          "correct": 3,
+          "irrelevant": 0,
+          "missing": 1
+        },
+        {
+          "correct": 4,
+          "irrelevant": 0,
+          "missing": 0
+        }
+      ],
+      "response_tokens": [
+        202,
+        530
+      ],
+      "expected_definitions": [
+        "a.rb:helper",
+        "a.rb:service",
+        "a.rb:test_service",
+        "a.rb:wrapper"
+      ]
+    },
+    {
+      "language": "go",
+      "one_call_retrieval": [
+        {
+          "correct": 3,
+          "irrelevant": 0,
+          "missing": 1
+        },
+        {
+          "correct": 4,
+          "irrelevant": 0,
+          "missing": 0
+        }
+      ],
+      "response_tokens": [
+        201,
+        528
+      ],
+      "expected_definitions": [
+        "a.go:TestService",
+        "a.go:helper",
+        "a.go:service",
+        "a.go:wrapper"
+      ]
+    }
+  ],
+  "cache": [
+    {
+      "repository": "rack/rack",
+      "revision": "a9833c8f3bd6b6d1e0ab35de00a1f1a16b5095f5",
+      "observations": [
+        {
+          "elapsed_ms": 159.11923500243574,
+          "cache": {
+            "graph_rebuilt": true,
+            "parsed_files": 98,
+            "reused_files": 0
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 4.658910998841748,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 4.427913001563866,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 3.5433770026429556,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 3.605860001698602,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 4.378839999844786,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 4.3947140002273954,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 4.456415997992735,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 5.173122000996955,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 4.548044002149254,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 3.2990999970934354,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 3.4246579962200485,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 3.372820996446535,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 3.7838680000277236,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 3.486856003291905,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 3.5925799966207705,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 3.321959993627388,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 4.487273006816395,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 3.2831459975568578,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 4.417648000526242,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 3.7293549976311624,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 3.453292003541719,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 4.268764998414554,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 3.521863996866159,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 4.344098000728991,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 3.415594997932203,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 4.367993999039754,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 4.337448001024313,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 3.3815739952842705,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 3.388142999028787,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        },
+        {
+          "elapsed_ms": 4.237699002260342,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 98
+          },
+          "tokens": 1185
+        }
+      ]
+    },
+    {
+      "repository": "colinhacks/zod",
+      "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
+      "observations": [
+        {
+          "elapsed_ms": 640.0034910038812,
+          "cache": {
+            "graph_rebuilt": true,
+            "parsed_files": 521,
+            "reused_files": 0
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 15.363542006525677,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 12.339253997197375,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 12.861166993388906,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 12.542509000923019,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 11.868578003486618,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 12.360966000414919,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 13.812623998092022,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 11.865262997162063,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 12.25192299898481,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 12.830740997742396,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 12.641788001928944,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 11.702188006893266,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 13.250180993054528,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 13.991142994200345,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 13.316955002665054,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 14.163512001687195,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 14.529460000630934,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 13.68526400619885,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 12.631753001187462,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 12.79720100137638,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 11.970560997724533,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 12.667351998970844,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 12.39142200211063,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 12.592254002811387,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 12.353135003650095,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 12.464592000469565,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 11.900425000931136,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 14.949390999390744,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 12.828889004595112,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        },
+        {
+          "elapsed_ms": 12.577982000948396,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 521
+          },
+          "tokens": 580
+        }
+      ]
+    },
+    {
+      "repository": "BurntSushi/ripgrep",
+      "revision": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "observations": [
+        {
+          "elapsed_ms": 280.3806869997061,
+          "cache": {
+            "graph_rebuilt": true,
+            "parsed_files": 113,
+            "reused_files": 0
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 6.418520002625883,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 4.887953997240402,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 4.813261999515817,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 4.557016996841412,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 4.519351001363248,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 4.590046999510378,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 4.756537004141137,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 4.545219002466183,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 4.5055910013616085,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 4.520902999502141,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 3.442895998887252,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 3.5686350020114332,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 3.499901002214756,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 4.084318003151566,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 3.596025999286212,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 4.7028560002218,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 5.7436180068179965,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 4.825019001145847,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 4.655835997255053,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 5.042625998612493,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 4.0004519978538156,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 3.6840179964201525,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 4.633943004591856,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 4.230856997310184,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 4.916146004688926,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 3.720492997672409,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 3.7545430022873916,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 4.865299997618422,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 4.585510003380477,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        },
+        {
+          "elapsed_ms": 4.614102996129077,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 113
+          },
+          "tokens": 639
+        }
+      ]
+    },
+    {
+      "repository": "spf13/cobra",
+      "revision": "adbc8813901bba65827259daa8e22ff94ec1f30e",
+      "observations": [
+        {
+          "elapsed_ms": 97.79138799785869,
+          "cache": {
+            "graph_rebuilt": true,
+            "parsed_files": 36,
+            "reused_files": 0
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 4.150877000938635,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 2.5060300031327643,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 2.607702997920569,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 2.67275999794947,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 2.557037994847633,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 3.5227150001446716,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 3.495765005936846,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 4.297478997614235,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 3.513972995278891,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 2.704027996514924,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 2.6321289988118224,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 2.5281039997935295,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 2.5936909951269627,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 2.584367000963539,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 2.56907499715453,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 3.8281739980448037,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 2.4679819980519824,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 2.6960550021613017,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 2.5656699945102446,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 3.507492998323869,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 2.4798700032988563,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 2.4513579992344603,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 3.3797409996623173,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 2.4213430006057024,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 2.6561259946902283,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 2.4544829939259216,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 3.4166370023740456,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 2.4547629946027882,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 2.452620006806683,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        },
+        {
+          "elapsed_ms": 2.6047790015581995,
+          "cache": {
+            "graph_rebuilt": false,
+            "parsed_files": 0,
+            "reused_files": 36
+          },
+          "tokens": 917
+        }
+      ]
+    }
+  ],
+  "scope": "Development one-call neighborhood recall and deterministic cache work counts. Extra facts can cost more tokens. Debug cold/warm times are descriptive, not release speedup proof.",
+  "gate": true
+}

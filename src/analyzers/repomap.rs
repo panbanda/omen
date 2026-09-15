@@ -48,6 +48,7 @@ impl Default for Config {
 }
 
 /// Internal structure to hold symbol info during collection.
+#[derive(Clone)]
 pub struct SymbolInfo {
     pub name: String,
     pub qualified_name: String,
@@ -254,13 +255,20 @@ impl CallGraphIndex {
 ///
 /// This contains the parse/symbol-collection/graph-build phases (no PageRank).
 pub fn build_index(repo_path: &Path, files: &[PathBuf]) -> Result<CallGraphIndex> {
+    build_index_with_parser(repo_path, files, &|path| Parser::new().parse_file(path))
+}
+
+pub(crate) fn build_index_with_parser(
+    repo_path: &Path,
+    files: &[PathBuf],
+    parse: &(impl Fn(&Path) -> Result<crate::parser::ParseResult> + Sync),
+) -> Result<CallGraphIndex> {
     // Phase 1: Parallel parsing - extract symbols from all files
     let file_symbols: Vec<Vec<SymbolInfo>> = files
         .par_iter()
         .filter_map(|path| {
             let lang = Language::detect(path)?;
-            let parser = Parser::new();
-            let parse_result = parser.parse_file(path).ok()?;
+            let parse_result = parse(path).ok()?;
             // Symbols are addressed by name, so only bound functions can be
             // referenced from elsewhere or ranked meaningfully.
             let functions: Vec<_> = extract_functions(&parse_result)
