@@ -15,7 +15,7 @@ claim is justified by these results. Every gain below has a narrower scope.
 | Incremental indexing | Content-validated syntax reuse and unchanged graph reuse | #510: 768 cold parses; zero parses/rebuilds over 30 warm requests per real repo; edit/delete fresh-rebuild equality | Dependency-local graph updates, release latency and peak RSS evaluation |
 | History awareness | Optional co-change hints separated from edges | #510: controlled Git history fixture, missing-history handling | Held-out historical bug-fix retrieval/ranking gains |
 | Confidence/provenance | New resolution bases, parse diagnostics, explicit uncertainty/omissions | #509/#510: behavior and evidence retention tests | Independently measured calibration and reliable typed bindings |
-| Coding-agent outcomes | Registered paired-outcome scorer with fail-closed checks | This PR: 11 scorer tests and CI job | Configured model runner, authorized budget, independent held-out tasks and logs |
+| Coding-agent outcomes | Registered paired-outcome scorer with fail-closed checks | This PR: 18 scorer tests and CI job | Configured model runner, authorized budget, independent held-out tasks and logs |
 
 ## Tradeoffs that must stay visible
 
@@ -41,7 +41,5 @@ claim is justified by these results. Every gain below has a narrower scope.
 5. Run paired coding tasks and independently verify patches/test logs. Apply
    `AGENT_EVALUATION.md`; never present synthetic scorer fixtures as model wins.
 
-Implementation PR stack: #508 → #509 → #510. This evaluation PR is independent
-against main. The existing CI pull-request branch filter is main-only; stacked
-implementation PRs must be retargeted as their parents merge to trigger that CI.
-No new PR was merged as part of this batch.
+Implementation PR stack: #508 → #509 → #510, all merged to main. This
+evaluation PR is independent against main.

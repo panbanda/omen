@@ -1,4 +1,12 @@
+import contextlib
+import io
+import json
+import pathlib
+import tempfile
 import unittest
+from unittest import mock
+
+import agent_evaluation
 from agent_evaluation import digest, score
 
 
@@ -79,6 +87,37 @@ class EvaluationTests(unittest.TestCase):
         for run in runs: run['registration_sha256'] = digest(plan)
         with self.assertRaises(ValueError): score(plan, runs)
 
+    def test_candidate_unrelated_edits_rejected_even_when_baseline_matches(self):
+        plan, runs = fixture()
+        for run in runs:
+            if run['case_id'] == '0': run['unrelated_edits'] = 1
+        report = score(plan, runs)
+        self.assertFalse(report['reported_outcome_gate'])
+        self.assertEqual(report['cases'][0]['candidate_unrelated_edits'], 1)
+
+    def test_unapplied_patch_is_not_success(self):
+        plan, runs = fixture()
+        for run in runs:
+            if run['variant'] == 'candidate': run['patch_applies'] = False
+        self.assertFalse(score(plan, runs)['reported_outcome_gate'])
+
+    def test_token_regression_blocks_quality_gain(self):
+        plan, runs = fixture()
+        for run in runs:
+            if run['variant'] == 'candidate': run['input_tokens'] = 1000
+        self.assertFalse(score(plan, runs)['reported_outcome_gate'])
+
+    def test_cost_regression_blocks_quality_gain(self):
+        plan, runs = fixture()
+        for run in runs:
+            if run['variant'] == 'candidate': run['cost_usd'] = .02
+        self.assertFalse(score(plan, runs)['reported_outcome_gate'])
+
+    def test_malformed_cases_rejected_as_invalid_evidence(self):
+        plan, runs = fixture()
+        for cases in [[{}], 'not-a-list', [{'id': ''}], [None]]:
+            with self.assertRaises(ValueError): score(dict(plan, cases=cases), runs)
+
     def test_zero_token_connection_failure_is_retained(self):
         plan, runs = fixture()
         runs[0].update(status='error', tests_pass=False, input_tokens=0, output_tokens=0)
@@ -86,6 +125,38 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(report['pairs'], 30)
         self.assertFalse(report['reported_outcome_gate'])
         self.assertIsNone(report['repository_weighted_intervals']['token_ratio'])
+
+
+class MainTests(unittest.TestCase):
+    def run_main(self, plan, runs):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = [pathlib.Path(directory, name) for name in ['plan.json', 'runs.json', 'out.json']]
+            paths[0].write_text(json.dumps(plan))
+            paths[1].write_text(json.dumps(runs))
+            argv = ['agent_evaluation.py', '--registration', str(paths[0]),
+                    '--runs', str(paths[1]), '--output', str(paths[2])]
+            printed = io.StringIO()
+            with mock.patch('sys.argv', argv), contextlib.redirect_stdout(printed):
+                error = None
+                try:
+                    agent_evaluation.main()
+                except SystemExit as exit_error:
+                    error = exit_error
+            return error, json.loads(printed.getvalue()), json.loads(paths[2].read_text())
+
+    def test_passing_gate_writes_report_and_exits_zero(self):
+        error, summary, report = self.run_main(*fixture())
+        self.assertIsNone(error)
+        self.assertTrue(summary['reported_outcome_gate'])
+        self.assertEqual(summary['pairs'], 30)
+        self.assertFalse(report['outcomes_independently_verified'])
+
+    def test_failing_gate_exits_nonzero_after_writing_report(self):
+        plan, runs = fixture(4)
+        error, summary, report = self.run_main(plan, runs)
+        self.assertEqual(error.code, 1)
+        self.assertFalse(summary['reported_outcome_gate'])
+        self.assertFalse(report['adequate_held_out_sample'])
 
 
 if __name__ == '__main__':

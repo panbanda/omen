@@ -35,7 +35,9 @@ def score(registration, runs):
     if not isinstance(model, str) or not model or not sha(prompt) or type(budget) is not int or budget <= 0:
         raise ValueError('register immutable model, prompt and positive token budget')
     cases = registration.get('cases', [])
-    if not cases or len({c['id'] for c in cases}) != len(cases):
+    if not isinstance(cases, list) or not cases or any(not isinstance(c, dict) or not isinstance(c.get('id'), str) or not c['id'] for c in cases):
+        raise ValueError('each registered case needs a non-empty string id')
+    if len({c['id'] for c in cases}) != len(cases):
         raise ValueError('missing/duplicate registered cases')
     planned = {c['id']: c for c in cases}
     development = registration.get('development_repositories')
@@ -110,7 +112,7 @@ def score(registration, runs):
                    c['cost_usd'] / b['cost_usd'] if b['cost_usd'] else 1.0]
         by_repo.setdefault(b['repository'], []).append(metrics)
         rows.append({'case_id': case_id, 'baseline_success': success(b), 'candidate_success': success(c),
-                     'extra_unrelated_edits': max(0, c['unrelated_edits'] - b['unrelated_edits'])})
+                     'candidate_unrelated_edits': c['unrelated_edits']})
     clusters = [[statistics.mean(m[i] for m in cases) for i in range(4)] for cases in by_repo.values()]
     rng = random.Random(0)
     draws = [[], [], [], []]
@@ -128,7 +130,7 @@ def score(registration, runs):
     gate = (adequate and intervals[0][0] > 0 and
             all(interval[1] <= 1 + RESOURCE_MARGIN for interval in intervals[1:]) and
             not new_cost_from_zero and not new_tokens_from_zero and all(sum(deltas) >= 0 for deltas in by_language.values()) and
-            all(row['extra_unrelated_edits'] == 0 for row in rows))
+            all(row['candidate_unrelated_edits'] == 0 for row in rows))
     return {'registration_sha256': registration_hash, 'pairs': len(rows), 'repositories': len(clusters),
             'adequate_held_out_sample': adequate, 'reported_outcome_gate': gate,
             'outcomes_independently_verified': False,

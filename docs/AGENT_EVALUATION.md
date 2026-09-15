@@ -65,7 +65,9 @@ predeclared comparisons use Bonferroni-adjusted two-sided intervals:
 3. Elapsed-time-ratio upper bound must be at most 1.05.
 4. Cost-ratio upper bound must be at most 1.05.
 
-No language may have a net success drop, and no case may gain unrelated edits.
+No language may have a net success drop, and no candidate run may make any
+unrelated edit. The baseline's unrelated-edit count is not an allowance: a
+candidate is rejected on its own count.
 Zero-token connection failures remain in the sample. A positive token/cost
 increase from a zero baseline makes the ratio unmeasurable and fails the combined
 gate (reported interval is null). Development or insufficient
@@ -80,11 +82,14 @@ python3 scripts/agent_evaluation.py --registration registration.json \
 
 ## Proof supplied by this PR
 
-Eleven deterministic unit tests validate scorer behavior, including rejection of
-missing observations, confounded pairs, invalid costs/tokens, leaking held-out
-repositories, resource regressions, unrelated edits and false success on timeouts.
+Eighteen deterministic unit tests validate scorer behavior, including rejection of
+missing observations, confounded pairs, malformed cases, invalid costs/tokens,
+leaking held-out repositories, token/time/cost regressions, unapplied patches,
+candidate unrelated edits and false success on timeouts, plus both CLI exit paths.
 Synthetic outcomes in tests are explicitly fixture data, not model results.
-A CI job runs these tests without model access, network requests or API keys.
+A CI job runs these tests without running a model and without configuring any
+model credential. The job is not network-isolated: `actions/checkout` reaches
+GitHub. Isolation is limited to what the scorer does, not to the runner.
 
 The resulting flag is named `reported_outcome_gate`, not “understanding proven.”
 Only independently collected and verified runs can support a coding-agent claim.
