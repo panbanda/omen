@@ -36,5 +36,6 @@ pub mod report;
 pub mod score;
 pub mod semantic;
 pub mod symbol;
+pub mod task_context;
 
 pub use core::{AnalysisContext, AnalysisResult, Analyzer};
