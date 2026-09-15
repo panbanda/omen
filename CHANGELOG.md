@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.29.0](https://github.com/panbanda/omen/compare/omen-v4.28.3...omen-v4.29.0) (2026-09-15)
+
+
+### Features
+
+* **analysis:** expose call evidence and reproducible quality gates ([#506](https://github.com/panbanda/omen/issues/506)) ([aa8aafe](https://github.com/panbanda/omen/commit/aa8aafecc45d1a579238a10bafca9301957980ed))
+* **mcp:** compact context losslessly and disambiguate definitions ([#508](https://github.com/panbanda/omen/issues/508)) ([0652ad8](https://github.com/panbanda/omen/commit/0652ad87d68b0fca7c68875e6963958af88fc383))
+
 ## [4.28.3](https://github.com/panbanda/omen/compare/omen-v4.28.2...omen-v4.28.3) (2026-09-02)
 
 
