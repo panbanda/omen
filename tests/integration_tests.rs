@@ -1765,3 +1765,139 @@ fn test_hotspots_alias_runs_like_hotspot() {
         .assert()
         .success();
 }
+
+// ---------------------------------------------------------------------------
+// Paired coding-agent evaluation gate
+// ---------------------------------------------------------------------------
+
+/// A complete, internally consistent evaluation in which every candidate
+/// succeeds and every baseline fails.
+fn eval_fixture(count: usize) -> (serde_json::Value, serde_json::Value) {
+    use serde_json::json;
+
+    let languages = ["rust", "go", "ruby", "typescript"];
+    let cases: Vec<serde_json::Value> = (0..count)
+        .map(|i| {
+            json!({
+                "id": i.to_string(),
+                "repository": format!("repo-{}", i % 5),
+                "revision": "b".repeat(40),
+                "language": languages[i % 4],
+            })
+        })
+        .collect();
+    let registration = json!({
+        "version": 1,
+        "split": "held_out",
+        "development_repositories": [],
+        "model_snapshot": "fixed-test-snapshot",
+        "prompt_sha256": "a".repeat(64),
+        "token_budget": 2000,
+        "cases": cases,
+    });
+    let hash = omen::eval::digest(&registration);
+    let mut runs = Vec::new();
+    for case in registration["cases"].as_array().expect("cases") {
+        for variant in ["baseline", "candidate"] {
+            runs.push(json!({
+                "repository": case["repository"],
+                "revision": case["revision"],
+                "language": case["language"],
+                "case_id": case["id"],
+                "variant": variant,
+                "registration_sha256": hash,
+                "model_snapshot": "fixed-test-snapshot",
+                "prompt_sha256": "a".repeat(64),
+                "token_budget": 2000,
+                "seed": 0,
+                "patch_sha256": "c".repeat(64),
+                "test_log_sha256": "d".repeat(64),
+                "tool_snapshot_sha256": "e".repeat(64),
+                "status": "completed",
+                "tests_pass": variant == "candidate",
+                "patch_applies": true,
+                "input_tokens": 500,
+                "output_tokens": 200,
+                "elapsed_ms": 1000,
+                "cost_usd": 0.01,
+                "unrelated_edits": 0,
+            }));
+        }
+    }
+    (registration, serde_json::Value::Array(runs))
+}
+
+fn write_eval_fixture(dir: &TempDir, count: usize) -> (String, String, String) {
+    let (registration, runs) = eval_fixture(count);
+    let registration_path = dir.path().join("registration.json");
+    let runs_path = dir.path().join("runs.json");
+    let output_path = dir.path().join("report.json");
+    std::fs::write(
+        &registration_path,
+        serde_json::to_string(&registration).expect("registration"),
+    )
+    .expect("write registration");
+    std::fs::write(&runs_path, serde_json::to_string(&runs).expect("runs")).expect("write runs");
+    (
+        registration_path.to_string_lossy().into_owned(),
+        runs_path.to_string_lossy().into_owned(),
+        output_path.to_string_lossy().into_owned(),
+    )
+}
+
+#[test]
+fn test_eval_passing_gate_writes_report_and_exits_zero() {
+    let dir = TempDir::new().expect("temp dir");
+    let (registration, runs, output) = write_eval_fixture(&dir, 30);
+
+    omen()
+        .args(["-f", "json", "eval"])
+        .args(["--registration", &registration])
+        .args(["--runs", &runs])
+        .args(["--output", &output])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"reported_outcome_gate\": true"));
+
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&output).expect("report written"))
+            .expect("valid report json");
+    assert_eq!(written["pairs"], 30);
+    assert_eq!(written["outcomes_independently_verified"], false);
+}
+
+#[test]
+fn test_eval_failing_gate_exits_two_after_writing_report() {
+    let dir = TempDir::new().expect("temp dir");
+    let (registration, runs, output) = write_eval_fixture(&dir, 4);
+
+    omen()
+        .args(["-f", "json", "eval"])
+        .args(["--registration", &registration])
+        .args(["--runs", &runs])
+        .args(["--output", &output])
+        .assert()
+        .code(2);
+
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&output).expect("report written"))
+            .expect("valid report json");
+    assert_eq!(written["adequate_held_out_sample"], false);
+    assert_eq!(written["reported_outcome_gate"], false);
+}
+
+#[test]
+fn test_eval_rejects_non_array_runs_document() {
+    let dir = TempDir::new().expect("temp dir");
+    let (registration, _, _) = write_eval_fixture(&dir, 30);
+    let runs_path = dir.path().join("object-runs.json");
+    std::fs::write(&runs_path, "{}").expect("write runs");
+
+    omen()
+        .args(["eval"])
+        .args(["--registration", &registration])
+        .args(["--runs", &runs_path.to_string_lossy()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("runs file must be a JSON array"));
+}
