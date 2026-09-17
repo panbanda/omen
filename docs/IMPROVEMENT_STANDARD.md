@@ -63,7 +63,10 @@ There is no weighted overall score. “Better in every aspect” requires all de
 dimensions to be measured and non-inferior, with a strict improvement in at least
 one. The included development harness always reports broad_improvement_proven=false.
 
-Run `python3 scripts/quality_benchmark.py --help` for the paired CLI harness.
-Its corpus is freshly reconstructed, not a recovery of previous raw measurements.
-Real-repository source is analyzed read-only; executing project code is a separate
-trusted-code experiment. No model calls are made by this harness.
+The paired CLI harness that implemented this standard was removed along with the
+repository's Python tooling, so nothing currently runs it; reproducing a paired
+run needs a Rust replacement first. Its corpora remain under
+`tests/fixtures/quality/` and the recorded results under `docs/benchmarks/`.
+That corpus was freshly reconstructed, not a recovery of previous raw
+measurements. Real-repository source was analyzed read-only; executing project
+code is a separate trusted-code experiment. The harness made no model calls.

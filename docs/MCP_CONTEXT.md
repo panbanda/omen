@@ -40,22 +40,19 @@ byte savings that can increase tokens. This runtime check is not a promise
 of fewer tokens for every tokenizer or response. Exact token counts are evaluated
 separately by the benchmark. Small responses may remain unchanged.
 
-## Reproduce the proof
+## How the proof was produced
 
-Build baseline commit `aa8aafecc45d1a579238a10bafca9301957980ed` separately, then
-build the candidate. Install `tiktoken==0.14.0` in an evaluation environment.
-Check out the four repositories at revisions in `tests/fixtures/quality/real.json`.
+The benchmark that produced these numbers was removed along with the
+repository's Python tooling and cannot be rerun as written; reproducing it needs
+a Rust replacement. The raw reports it wrote remain in
+`docs/benchmarks/mcp-context*.json`, and the four repositories it used stay
+pinned in `tests/fixtures/quality/real.json`. It ran against baseline commit
+`aa8aafecc45d1a579238a10bafca9301957980ed` and counted tokens with
+`tiktoken==0.14.0`.
 
-```sh
-python scripts/mcp_context_benchmark.py \
-  --baseline /path/to/baseline/omen --binary /path/to/candidate/omen \
-  --real-root .. --repetitions 3 --output docs/benchmarks/mcp-context.json
-python -m unittest discover -s scripts -p 'test*benchmark.py'
-```
-
-The test sends actual MCP stdio requests to both compact and normal modes of the
+It sent actual MCP stdio requests to both compact and normal modes of the
 candidate: 16 repository/tool combinations, three repetitions, alternating order
-(48 pairs). It checks exact reconstruction of code data, deterministic results,
+(48 pairs). It checked exact reconstruction of code data, deterministic results,
 zero token regressions per case on `cl100k_base` and `o200k_base`, and aggregate
 strict savings. Wall-clock `result.generated_at` is the only cross-call equality
 exclusion. Rust round-trip tests check complete exact reconstruction, including
