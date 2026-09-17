@@ -1898,6 +1898,6 @@ fn test_eval_rejects_non_array_runs_document() {
         .args(["--registration", &registration])
         .args(["--runs", &runs_path.to_string_lossy()])
         .assert()
-        .failure()
+        .code(1)
         .stderr(predicate::str::contains("runs file must be a JSON array"));
 }

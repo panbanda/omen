@@ -118,6 +118,14 @@ fn amount(run: &Value, key: &str) -> Result<f64> {
     Ok(number)
 }
 
+/// Total tokens for a run. Both counts and their sum are validated here so no
+/// caller can sum them itself and overflow.
+fn token_total(run: &Value) -> Result<u64> {
+    whole(run, "input_tokens")?
+        .checked_add(whole(run, "output_tokens")?)
+        .ok_or_else(|| invalid("invalid/exceeded resource budget"))
+}
+
 fn boolean(run: &Value, key: &str) -> Result<bool> {
     run.get(key)
         .and_then(Value::as_bool)
@@ -268,14 +276,12 @@ pub fn score(registration: &Value, runs: &[Value]) -> Result<Report> {
             .ok_or_else(|| invalid("unknown run status"))?;
         let tests_pass = boolean(run, "tests_pass")?;
         boolean(run, "patch_applies")?;
-        let input_tokens = whole(run, "input_tokens")?;
-        let output_tokens = whole(run, "output_tokens")?;
+        let tokens = token_total(run)?;
         whole(run, "unrelated_edits")?;
         whole(run, "seed")?;
         let elapsed = amount(run, "elapsed_ms")?;
         amount(run, "cost_usd")?;
 
-        let tokens = input_tokens.saturating_add(output_tokens);
         if (tokens == 0 && status == "completed") || tokens > budget || elapsed <= 0.0 {
             return Err(invalid("invalid/exceeded resource budget"));
         }
@@ -336,10 +342,8 @@ pub fn score(registration: &Value, runs: &[Value]) -> Result<Report> {
         if baseline_cost == 0.0 && candidate_cost > 0.0 {
             new_cost_from_zero = true;
         }
-        let baseline_tokens =
-            (whole(baseline, "input_tokens")? + whole(baseline, "output_tokens")?) as f64;
-        let candidate_tokens =
-            (whole(candidate, "input_tokens")? + whole(candidate, "output_tokens")?) as f64;
+        let baseline_tokens = token_total(baseline)? as f64;
+        let candidate_tokens = token_total(candidate)? as f64;
         if baseline_tokens == 0.0 && candidate_tokens > 0.0 {
             new_tokens_from_zero = true;
         }
@@ -718,6 +722,19 @@ mod tests {
         let (plan, mut runs) = fixture(30);
         runs[0]["status"] = json!("error");
         runs[0]["tests_pass"] = json!(true);
+        assert!(score(&plan, &runs).is_err());
+    }
+
+    #[test]
+    fn overflowing_token_counts_are_rejected() {
+        let (mut plan, mut runs) = fixture(30);
+        plan["token_budget"] = json!(u64::MAX);
+        restamp(&plan, &mut runs);
+        for run in runs.iter_mut() {
+            run["token_budget"] = json!(u64::MAX);
+        }
+        runs[0]["input_tokens"] = json!(u64::MAX);
+        runs[0]["output_tokens"] = json!(u64::MAX);
         assert!(score(&plan, &runs).is_err());
     }
 

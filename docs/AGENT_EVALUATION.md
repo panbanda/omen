@@ -89,11 +89,12 @@ omen -f json eval --registration registration.json \
 
 ## Proof supplied by this implementation
 
-Nineteen unit tests in `src/eval/mod.rs` validate scorer behavior, including
+Twenty unit tests in `src/eval/mod.rs` validate scorer behavior, including
 rejection of missing observations, confounded pairs, malformed cases, invalid
-costs/tokens, leaking held-out repositories, token/time/cost regressions,
-unapplied patches, candidate unrelated edits and false success on timeouts, plus
-canonical-digest and determinism checks. Three CLI tests in
+costs/tokens, token counts that overflow their sum, leaking held-out
+repositories, token/time/cost regressions, unapplied patches, candidate
+unrelated edits and false success on timeouts, plus canonical-digest and
+determinism checks. Three CLI tests in
 `tests/integration_tests.rs` cover both exit paths and a malformed runs file.
 Synthetic outcomes in tests are explicitly fixture data, not model results.
 These run in the existing `Test` CI job without running a model and without
