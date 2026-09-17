@@ -12,9 +12,9 @@ use rayon::ThreadPoolBuilder;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use omen::cli::{
-    AnalyzerArgs, Cli, Command, ComplexityArgs, GateMode, GateSeverity, ImpactArgs, McpSubcommand,
-    OutlineArgs, OutputFormat, ReportSubcommand, ScoreArgs, ScoreSubcommand, SearchSubcommand,
-    StubsArgs, SymbolArgs,
+    AnalyzerArgs, Cli, Command, ComplexityArgs, EvalArgs, GateMode, GateSeverity, ImpactArgs,
+    McpSubcommand, OutlineArgs, OutputFormat, ReportSubcommand, ScoreArgs, ScoreSubcommand,
+    SearchSubcommand, StubsArgs, SymbolArgs,
 };
 #[cfg(feature = "mutation")]
 use omen::cli::{MutationArgs, MutationSubcommand, MutationTrainArgs};
@@ -583,6 +583,9 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         }
         Command::Symbol(args) => {
             run_symbol(path, &config, args, format)?;
+        }
+        Command::Eval(args) => {
+            run_eval(args, format)?;
         }
     }
 
@@ -1963,6 +1966,34 @@ fn run_symbol(
         args.common.offset,
         &mut std::io::stdout(),
     )?;
+    Ok(())
+}
+
+/// Score paired coding-agent runs. A failed gate is a threshold violation, so
+/// the process exits 2 like every other omen gate.
+fn run_eval(args: &EvalArgs, format: Format) -> omen::core::Result<()> {
+    let registration: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&args.registration)?)?;
+    let runs_document: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&args.runs)?)?;
+    let runs = runs_document.as_array().ok_or_else(|| {
+        omen::core::Error::InvalidArgument("runs file must be a JSON array".to_string())
+    })?;
+
+    let report = omen::eval::score(&registration, runs)?;
+    let value = serde_json::to_value(&report)?;
+
+    if let Some(path) = &args.output {
+        std::fs::write(path, format!("{}\n", serde_json::to_string_pretty(&value)?))?;
+    }
+    format_with_limits(value, format, None, None, &mut stdout())?;
+
+    if !report.reported_outcome_gate {
+        return Err(omen::core::Error::threshold_violation(
+            "reported outcome gate failed",
+            0.0,
+        ));
+    }
     Ok(())
 }
 

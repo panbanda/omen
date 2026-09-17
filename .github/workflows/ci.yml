@@ -15,17 +15,6 @@ env:
   RUSTFLAGS: -Dwarnings
 
 jobs:
-  evaluation-gate:
-    name: Agent evaluation contract
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Test paired evaluation safeguards
-        run: python3 -m unittest discover -s scripts -p 'test_agent_evaluation.py'
-
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

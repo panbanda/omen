@@ -1,6 +1,6 @@
 # Coding-agent evaluation: separate outcomes from infrastructure
 
-`scripts/agent_evaluation.py` validates and scores complete paired run records.
+`omen eval` (`src/eval/`) validates and scores complete paired run records.
 It **does not** call a model, execute patches, verify log contents, or establish
 that a model's code understanding improved. No real model trials were run in
 this pass; no model API credential was configured. Provider/model selection,
@@ -36,7 +36,7 @@ run, including errors and timeouts. A run records:
 
 - `case_id`, `repository`, `revision`, `language`, `variant`, and paired `seed`.
 - Registered `model_snapshot`, `prompt_sha256`, `token_budget`, and canonical
-  `registration_sha256` (computed by `agent_evaluation.digest`).
+  `registration_sha256` (computed by `omen::eval::digest`).
 - SHA-256 hashes of `tool_snapshot_sha256`, `patch_sha256`, `test_log_sha256`.
 - `status`: `completed`, `error`, or `timeout`; booleans `tests_pass` and
   `patch_applies`; independently reviewed integer `unrelated_edits`.
@@ -56,9 +56,12 @@ tests, and no unrelated edits. The scorer rejects missing/duplicate/unregistered
 runs, changed model/prompt/budget/revision/seed, missing hashes, invalid resources,
 and held-out/development overlap. Errors/timeouts remain failures.
 
-It computes 2000 deterministic repository-cluster bootstrap draws. Repositories
-are equally weighted; tasks within each repository are equally weighted. Four
-predeclared comparisons use Bonferroni-adjusted two-sided intervals:
+It computes 2000 repository-cluster bootstrap draws. Repositories are equally
+weighted; tasks within each repository are equally weighted. Clusters are
+visited in sorted repository order and drawn with a SplitMix64 generator seeded
+at zero, written out in `src/eval/` rather than taken from a crate, so the draws
+are reproducible across toolchains and releases. Four predeclared comparisons
+use Bonferroni-adjusted two-sided intervals:
 
 1. Success-rate delta lower bound must be positive.
 2. Token-ratio upper bound must be at most 1.05.
@@ -74,22 +77,29 @@ gate (reported interval is null). Development or insufficient
 samples never pass. Do not tune margins after observing results. These intervals
 do not remove dataset bias, benchmark contamination, or uncertain success labels.
 
+The report is written to stdout in the selected `--format`. A failed gate is a
+threshold violation, so the command exits 2 like every other omen gate; invalid
+evidence is an error and exits 1.
+
 ```sh
-python3 -m unittest discover -s scripts -p 'test_agent_evaluation.py'
-python3 scripts/agent_evaluation.py --registration registration.json \
+cargo test eval::
+omen -f json eval --registration registration.json \
   --runs complete-runs.json --output agent-results.json
 ```
 
-## Proof supplied by this PR
+## Proof supplied by this implementation
 
-Eighteen deterministic unit tests validate scorer behavior, including rejection of
-missing observations, confounded pairs, malformed cases, invalid costs/tokens,
-leaking held-out repositories, token/time/cost regressions, unapplied patches,
-candidate unrelated edits and false success on timeouts, plus both CLI exit paths.
+Twenty unit tests in `src/eval/mod.rs` validate scorer behavior, including
+rejection of missing observations, confounded pairs, malformed cases, invalid
+costs/tokens, token counts that overflow their sum, leaking held-out
+repositories, token/time/cost regressions, unapplied patches, candidate
+unrelated edits and false success on timeouts, plus canonical-digest and
+determinism checks. Three CLI tests in
+`tests/integration_tests.rs` cover both exit paths and a malformed runs file.
 Synthetic outcomes in tests are explicitly fixture data, not model results.
-A CI job runs these tests without running a model and without configuring any
-model credential. The job is not network-isolated: `actions/checkout` reaches
-GitHub. Isolation is limited to what the scorer does, not to the runner.
+These run in the existing `Test` CI job without running a model and without
+configuring any model credential. CI is not network-isolated: `actions/checkout`
+reaches GitHub. Isolation is limited to what the scorer does, not to the runner.
 
-The resulting flag is named `reported_outcome_gate`, not “understanding proven.”
+The resulting flag is named `reported_outcome_gate`, not "understanding proven."
 Only independently collected and verified runs can support a coding-agent claim.

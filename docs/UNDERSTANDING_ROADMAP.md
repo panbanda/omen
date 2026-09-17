@@ -15,7 +15,7 @@ claim is justified by these results. Every gain below has a narrower scope.
 | Incremental indexing | Content-validated syntax reuse and unchanged graph reuse | #510: 768 cold parses; zero parses/rebuilds over 30 warm requests per real repo; edit/delete fresh-rebuild equality | Dependency-local graph updates, release latency and peak RSS evaluation |
 | History awareness | Optional co-change hints separated from edges | #510: controlled Git history fixture, missing-history handling | Held-out historical bug-fix retrieval/ranking gains |
 | Confidence/provenance | New resolution bases, parse diagnostics, explicit uncertainty/omissions | #509/#510: behavior and evidence retention tests | Independently measured calibration and reliable typed bindings |
-| Coding-agent outcomes | Registered paired-outcome scorer with fail-closed checks | This PR: 18 scorer tests and CI job | Configured model runner, authorized budget, independent held-out tasks and logs |
+| Coding-agent outcomes | Registered paired-outcome scorer with fail-closed checks | `omen eval`: 20 unit tests and 3 CLI tests | Configured model runner, authorized budget, independent held-out tasks and logs |
 
 ## Tradeoffs that must stay visible
 

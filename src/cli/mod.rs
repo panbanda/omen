@@ -152,6 +152,9 @@ pub enum Command {
     #[command(visible_alias = "blast")]
     Impact(ImpactArgs),
 
+    /// Score registered, paired coding-agent outcome records (fail-closed)
+    Eval(EvalArgs),
+
     /// One-call symbol report: source, signature, location, callers/callees, complexity
     #[command(alias = "sym")]
     Symbol(SymbolArgs),
@@ -768,6 +771,22 @@ pub struct ImpactArgs {
 
     #[command(flatten)]
     pub common: AnalyzerArgs,
+}
+
+/// Arguments for the eval command.
+#[derive(Args)]
+pub struct EvalArgs {
+    /// Registration JSON: model snapshot, prompt hash, token budget and planned cases
+    #[arg(long)]
+    pub registration: PathBuf,
+
+    /// JSON array of every registered run, including errors and timeouts
+    #[arg(long)]
+    pub runs: PathBuf,
+
+    /// Also write the full report as pretty JSON to this path
+    #[arg(long)]
+    pub output: Option<PathBuf>,
 }
 
 /// Arguments for the symbol command.

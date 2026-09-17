@@ -61,6 +61,7 @@ src/
     smells.rs     - Architectural smells (Tarjan SCC)
     flags.rs      - Feature flag detection
     mutation/    - Mutation testing (21 operators, parallel execution)
+  eval/          - Fail-closed scoring of paired coding-agent outcome records
   semantic/      - TF-IDF indexing, search, cache, and multi-repo support
   context.rs     - Agent-oriented repository context
   symbol.rs      - Symbol lookup and relationship reports
@@ -126,6 +127,7 @@ Top-level commands (flat structure):
 - `outline` - Token-cheap file map: imports, classes, top-level functions
 - `impact` - Blast-radius analysis for a symbol (transitive callers/callees)
 - `symbol` - One-call symbol report: source, location, callers/callees, complexity
+- `eval` - Score registered, paired coding-agent outcome records (exits 2 on a failed gate)
 - `report` - HTML health reports
 - `search` - Semantic symbol search (`index` and `query`)
 - `mcp` - Start MCP server
