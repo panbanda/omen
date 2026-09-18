@@ -463,7 +463,7 @@ impl Analyzer {
                         );
 
                         while let Some(query_match) = matches.next() {
-                            for capture in query_match.captures {
+                            for capture in query_match.captures() {
                                 if capture.index as usize != *key_capture_idx {
                                     continue;
                                 }
@@ -513,7 +513,7 @@ impl Analyzer {
                         );
 
                         while let Some(query_match) = matches.next() {
-                            for capture in query_match.captures {
+                            for capture in query_match.captures() {
                                 if capture.index as usize != *key_capture_idx {
                                     continue;
                                 }

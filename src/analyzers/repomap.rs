@@ -847,7 +847,7 @@ fn extract_call_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<Stri
         }
     }
     // Try to find the function/identifier node
-    for i in 0..node.child_count() as u32 {
+    for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
             let kind = child.kind();
             if kind == "identifier"
@@ -875,7 +875,7 @@ fn extract_call_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<Stri
                 if let Some(right) = child
                     .child_by_field_name("field")
                     .or_else(|| child.child_by_field_name("property"))
-                    .or_else(|| child.child(child.child_count().saturating_sub(1) as u32))
+                    .or_else(|| child.child(child.child_count().saturating_sub(1)))
                 {
                     let text = right.utf8_text(source).ok()?;
                     return Some(text.to_string());
@@ -887,7 +887,7 @@ fn extract_call_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<Stri
             if kind == "member_access_expression" {
                 // Walk children to find the last identifier
                 let mut last_ident: Option<String> = None;
-                for j in 0..child.child_count() as u32 {
+                for j in 0..child.child_count() {
                     if let Some(grandchild) = child.child(j) {
                         if grandchild.kind() == "identifier" {
                             if let Ok(text) = grandchild.utf8_text(source) {
