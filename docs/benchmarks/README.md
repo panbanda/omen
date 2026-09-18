@@ -102,14 +102,18 @@ export PATH="/root/.cargo/bin:$PATH"
 export RUSTUP_TOOLCHAIN=stable
 export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_DEV_OPT_LEVEL=0 CARGO_INCREMENTAL=0
 cargo build --locked -j 8
+omen -f json benchmark \
+  --baseline /absolute/path/to/original-omen --candidate target/debug/omen \
+  --baseline-label 22b57e8d1bbdc39ad3222a8f3495dcf7362a8caa \
+  --candidate-label b34fb4d1f73aae6f9c3b5568f211c318d3a837c0 \
+  --repetitions 30 --enforce > synthetic.json
 ```
 
-The paired harness that consumed those two binaries was removed along with the
-repository's Python tooling, so these results cannot currently be regenerated; a
-Rust replacement is needed. It compared a baseline binary against the candidate
-over 30 repetitions and exited 2 for the four synthetic regressions after
-writing its report. For real checks it read the pinned manifest at
-`tests/fixtures/quality/real.json`, whose `directory` names had to be cloned
-under a common parent at each exact revision; it refused dirty or wrong-revision
-checkouts. It made no network requests, executed no fixture or project code, and
-called no models.
+The report is written to stdout in the selected `--format`, so `-f json` is
+required to reproduce these files. The synthetic command intentionally exits 2
+for the four regressions, after writing its report. For real checks, clone the
+named repositories into the `directory` names in the manifest under a common
+parent, check out each exact revision, then add
+`--corpus tests/fixtures/quality/real.json --real-root PARENT`. The harness
+refuses dirty or wrong-revision real checkouts. It makes no network requests,
+executes no fixture/project code, and calls no models.

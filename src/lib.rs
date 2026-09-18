@@ -24,6 +24,7 @@
 //! ```
 
 pub mod analyzers;
+pub mod benchmark;
 pub mod cli;
 pub mod config;
 pub mod context;

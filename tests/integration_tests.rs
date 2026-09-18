@@ -1901,3 +1901,60 @@ fn test_eval_rejects_non_array_runs_document() {
         .code(1)
         .stderr(predicate::str::contains("runs file must be a JSON array"));
 }
+
+// ---------------------------------------------------------------------------
+// Paired quality benchmark
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_benchmark_help_lists_paired_binaries() {
+    omen()
+        .args(["benchmark", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--baseline"))
+        .stdout(predicate::str::contains("--candidate"));
+}
+
+#[test]
+fn test_benchmark_rejects_too_few_repetitions_before_touching_binaries() {
+    omen()
+        .args(["benchmark"])
+        .args(["--baseline", "/nonexistent/baseline"])
+        .args(["--candidate", "/nonexistent/candidate"])
+        .args(["--baseline-label", "a", "--candidate-label", "b"])
+        .args(["--repetitions", "1"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("repetitions >= 2"));
+}
+
+#[test]
+fn test_benchmark_rejects_wrong_corpus_version() {
+    let dir = TempDir::new().expect("temp dir");
+    let corpus = dir.path().join("corpus.json");
+    std::fs::write(&corpus, r#"{"version": 2, "cases": []}"#).expect("write corpus");
+
+    omen()
+        .args(["benchmark"])
+        .args(["--baseline", "/nonexistent/baseline"])
+        .args(["--candidate", "/nonexistent/candidate"])
+        .args(["--baseline-label", "a", "--candidate-label", "b"])
+        .args(["--corpus", &corpus.to_string_lossy()])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("version 1 and nonempty cases"));
+}
+
+#[test]
+fn test_benchmark_rejects_non_finite_timeout() {
+    omen()
+        .args(["benchmark"])
+        .args(["--baseline", "/nonexistent/baseline"])
+        .args(["--candidate", "/nonexistent/candidate"])
+        .args(["--baseline-label", "a", "--candidate-label", "b"])
+        .args(["--timeout", "inf"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("timeout"));
+}

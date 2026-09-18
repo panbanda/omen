@@ -100,13 +100,15 @@ libc = "0.2"
 # Semantic search (TF-IDF based, no model download required)
 rusqlite = { version = "0.40", features = ["bundled"] }
 
+# Scratch directories for the paired quality benchmark
+tempfile = "3.14"
+
 [dev-dependencies]
 # Testing
 figment = { version = "0.10", features = ["test"] }
 insta = { version = "1.41", features = ["json", "yaml"] }
 proptest = "1.5"
 criterion = { version = "0.8", features = ["html_reports"] }
-tempfile = "3.14"
 assert_cmd = "2.0"
 predicates = "3.1"
 
