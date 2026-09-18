@@ -152,6 +152,9 @@ pub enum Command {
     #[command(visible_alias = "blast")]
     Impact(ImpactArgs),
 
+    /// Compare two omen binaries over a fixed corpus (paired quality benchmark)
+    Benchmark(BenchmarkArgs),
+
     /// Score registered, paired coding-agent outcome records (fail-closed)
     Eval(EvalArgs),
 
@@ -771,6 +774,46 @@ pub struct ImpactArgs {
 
     #[command(flatten)]
     pub common: AnalyzerArgs,
+}
+
+/// Arguments for the benchmark command.
+#[derive(Args)]
+pub struct BenchmarkArgs {
+    /// Baseline omen binary
+    #[arg(long)]
+    pub baseline: PathBuf,
+
+    /// Candidate omen binary
+    #[arg(long)]
+    pub candidate: PathBuf,
+
+    /// Label recorded for the baseline binary (commit SHA or release)
+    #[arg(long)]
+    pub baseline_label: String,
+
+    /// Label recorded for the candidate binary (commit SHA or release)
+    #[arg(long)]
+    pub candidate_label: String,
+
+    /// Corpus manifest
+    #[arg(long, default_value = "tests/fixtures/quality/corpus.json")]
+    pub corpus: PathBuf,
+
+    /// Observations per case beyond the retained warmup (minimum 2)
+    #[arg(long, default_value = "7")]
+    pub repetitions: usize,
+
+    /// Per-invocation timeout in seconds
+    #[arg(long, default_value = "30")]
+    pub timeout: f64,
+
+    /// Parent directory holding the real repositories named by the corpus
+    #[arg(long, default_value = "..")]
+    pub real_root: PathBuf,
+
+    /// Exit 2 if any case regresses
+    #[arg(long)]
+    pub enforce: bool,
 }
 
 /// Arguments for the eval command.

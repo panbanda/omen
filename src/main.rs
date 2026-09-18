@@ -12,9 +12,9 @@ use rayon::ThreadPoolBuilder;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use omen::cli::{
-    AnalyzerArgs, Cli, Command, ComplexityArgs, EvalArgs, GateMode, GateSeverity, ImpactArgs,
-    McpSubcommand, OutlineArgs, OutputFormat, ReportSubcommand, ScoreArgs, ScoreSubcommand,
-    SearchSubcommand, StubsArgs, SymbolArgs,
+    AnalyzerArgs, BenchmarkArgs, Cli, Command, ComplexityArgs, EvalArgs, GateMode, GateSeverity,
+    ImpactArgs, McpSubcommand, OutlineArgs, OutputFormat, ReportSubcommand, ScoreArgs,
+    ScoreSubcommand, SearchSubcommand, StubsArgs, SymbolArgs,
 };
 #[cfg(feature = "mutation")]
 use omen::cli::{MutationArgs, MutationSubcommand, MutationTrainArgs};
@@ -586,6 +586,9 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         }
         Command::Eval(args) => {
             run_eval(args, format)?;
+        }
+        Command::Benchmark(args) => {
+            run_benchmark(args, format)?;
         }
     }
 
@@ -1966,6 +1969,34 @@ fn run_symbol(
         args.common.offset,
         &mut std::io::stdout(),
     )?;
+    Ok(())
+}
+
+/// Compare two omen binaries over the corpus. With `--enforce` a regression is
+/// a threshold violation, so the process exits 2 like every other omen gate.
+fn run_benchmark(args: &BenchmarkArgs, format: Format) -> omen::core::Result<()> {
+    let options = omen::benchmark::Options {
+        baseline: args.baseline.clone(),
+        candidate: args.candidate.clone(),
+        baseline_label: args.baseline_label.clone(),
+        candidate_label: args.candidate_label.clone(),
+        corpus: args.corpus.clone(),
+        repetitions: args.repetitions,
+        // A negative or NaN timeout collapses to zero, which `run` rejects.
+        timeout: std::time::Duration::from_secs_f64(args.timeout.max(0.0)),
+        real_root: args.real_root.clone(),
+    };
+
+    let report = omen::benchmark::run(&options)?;
+    let value = serde_json::to_value(&report)?;
+    format_with_limits(value, format, None, None, &mut stdout())?;
+
+    if args.enforce && !report.non_regression {
+        return Err(omen::core::Error::threshold_violation(
+            "quality benchmark regressed",
+            0.0,
+        ));
+    }
     Ok(())
 }
 
