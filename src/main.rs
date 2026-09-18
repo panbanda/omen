@@ -1982,8 +1982,12 @@ fn run_benchmark(args: &BenchmarkArgs, format: Format) -> omen::core::Result<()>
         candidate_label: args.candidate_label.clone(),
         corpus: args.corpus.clone(),
         repetitions: args.repetitions,
-        // A negative or NaN timeout collapses to zero, which `run` rejects.
-        timeout: std::time::Duration::from_secs_f64(args.timeout.max(0.0)),
+        // from_secs_f64 panics on infinity and on NaN, so convert fallibly.
+        timeout: std::time::Duration::try_from_secs_f64(args.timeout).map_err(|_| {
+            omen::core::Error::InvalidArgument(
+                "timeout must be a finite, non-negative number of seconds".to_string(),
+            )
+        })?,
         real_root: args.real_root.clone(),
     };
 

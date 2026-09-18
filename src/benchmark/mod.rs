@@ -185,11 +185,19 @@ pub fn file_digest(path: &Path) -> Result<String> {
 }
 
 /// Reject fixture paths that could escape the scratch directory.
+///
+/// A corpus is portable data, so this cannot rely on how the host platform
+/// parses paths. Unix `std::path` has no notion of Windows prefixes: it reads
+/// `C:/target` as two ordinary components. Colons and backslashes are
+/// therefore rejected outright, and `Component::Normal` covers absolute
+/// paths, traversal, and the prefixes Windows itself parses.
 pub fn is_safe_fixture_path(name: &str) -> bool {
     !name.is_empty()
         && !name.contains('\\')
-        && !name.starts_with('/')
-        && !name.split('/').any(|part| part == ".." || part == ".")
+        && !name.contains(':')
+        && Path::new(name)
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)))
 }
 
 /// Run one binary against one prepared case root, retaining any failure.
@@ -303,10 +311,76 @@ fn verify_real_checkout(root: &Path, revision: &str, case_id: &str) -> Result<()
         .args(["-C".as_ref(), root.as_os_str()])
         .args(["status", "--porcelain"])
         .output()?;
+    if !status.status.success() {
+        return Err(invalid(format!("git status failed: {case_id}")));
+    }
     if !status.stdout.is_empty() {
         return Err(invalid(format!("dirty real repository: {case_id}")));
     }
     Ok(())
+}
+
+/// Require an array of strings, rejecting a non-array or any non-string entry.
+fn require_strings(case: &Value, key: &str, case_id: &str) -> Result<()> {
+    match case.get(key) {
+        None => Ok(()),
+        Some(Value::Array(items)) if items.iter().all(Value::is_string) => Ok(()),
+        Some(_) => Err(invalid(format!(
+            "{key} must be an array of strings: {case_id}"
+        ))),
+    }
+}
+
+/// Reject a malformed case before it can be coerced into a passing result.
+///
+/// Silently defaulting a non-string fixture body to an empty file, or a
+/// malformed label list to no labels, would let a case record zero false
+/// positives and zero misses and pass the gate on nothing at all.
+fn validate_case(case: &Value) -> Result<()> {
+    let case_id = case.get("id").and_then(Value::as_str).unwrap_or_default();
+    if !case.get("language").is_some_and(Value::is_string) {
+        return Err(invalid(format!("case needs a string language: {case_id}")));
+    }
+
+    if case.get("repository").is_some() {
+        if case.get("expected").is_some() {
+            return Err(invalid(format!(
+                "a real case cannot also declare expected: {case_id}"
+            )));
+        }
+        for key in ["repository", "directory", "revision", "query"] {
+            if !case.get(key).is_some_and(Value::is_string) {
+                return Err(invalid(format!(
+                    "real case needs a string {key}: {case_id}"
+                )));
+            }
+        }
+        require_strings(case, "required", case_id)?;
+        require_strings(case, "forbidden", case_id)?;
+        return Ok(());
+    }
+
+    let files = case
+        .get("files")
+        .and_then(Value::as_object)
+        .filter(|files| !files.is_empty())
+        .ok_or_else(|| invalid(format!("synthetic case needs files: {case_id}")))?;
+    for (name, source) in files {
+        if !is_safe_fixture_path(name) {
+            return Err(invalid(format!("unsafe fixture path: {case_id}")));
+        }
+        if !source.is_string() {
+            return Err(invalid(format!(
+                "fixture contents must be a string: {case_id}"
+            )));
+        }
+    }
+    match case.get("expected") {
+        Some(Value::Array(items)) if items.iter().all(Value::is_string) => Ok(()),
+        _ => Err(invalid(format!(
+            "synthetic case needs expected as an array of strings: {case_id}"
+        ))),
+    }
 }
 
 fn strings(value: Option<&Value>) -> Vec<String> {
@@ -347,6 +421,7 @@ pub fn run(options: &Options) -> Result<Report> {
         if !seen.insert(id) {
             return Err(invalid("duplicate case IDs"));
         }
+        validate_case(case)?;
     }
 
     let binaries = [
@@ -386,6 +461,7 @@ pub fn run(options: &Options) -> Result<Report> {
                     std::fs::create_dir_all(parent)?;
                 }
                 std::fs::write(destination, source.as_str().unwrap_or_default())?;
+                // validated above
             }
             scratch.path().to_path_buf()
         };
@@ -604,6 +680,71 @@ mod tests {
         assert_eq!(median(&[1.0, 2.0, 3.0]), 2.0);
         assert_eq!(median(&[1.0, 2.0, 3.0, 5.0]), 2.5);
         assert_eq!(median(&[4.0]), 4.0);
+    }
+
+    /// Both binary paths point at a file that exists, so path resolution cannot
+    /// be the reason a case is rejected. A malformed corpus that is merely
+    /// coerced instead of rejected produces a report, not an error, and these
+    /// assertions fail.
+    fn options_for(corpus: &Path) -> Options {
+        Options {
+            baseline: corpus.to_path_buf(),
+            candidate: corpus.to_path_buf(),
+            baseline_label: "a".to_string(),
+            candidate_label: "b".to_string(),
+            corpus: corpus.to_path_buf(),
+            repetitions: 2,
+            timeout: Duration::from_secs(5),
+            real_root: PathBuf::from(".."),
+        }
+    }
+
+    fn rejects(corpus_json: &str) -> bool {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let corpus = dir.path().join("corpus.json");
+        std::fs::write(&corpus, corpus_json).expect("write corpus");
+        run(&options_for(&corpus)).is_err()
+    }
+
+    #[test]
+    fn windows_drive_prefixes_are_rejected() {
+        assert!(!is_safe_fixture_path("C:/target"));
+        assert!(!is_safe_fixture_path("C:target"));
+    }
+
+    #[test]
+    fn non_string_fixture_contents_are_rejected() {
+        assert!(rejects(
+            r#"{"version":1,"cases":[{"id":"a","language":"rust","files":{"main.rs":7},"expected":[]}]}"#
+        ));
+    }
+
+    #[test]
+    fn non_string_expected_entries_are_rejected() {
+        assert!(rejects(
+            r#"{"version":1,"cases":[{"id":"a","language":"rust","files":{"main.rs":"fn a(){}"},"expected":[7]}]}"#
+        ));
+    }
+
+    #[test]
+    fn non_array_expected_is_rejected() {
+        assert!(rejects(
+            r#"{"version":1,"cases":[{"id":"a","language":"rust","files":{"main.rs":"fn a(){}"},"expected":"nope"}]}"#
+        ));
+    }
+
+    #[test]
+    fn non_string_real_labels_are_rejected() {
+        assert!(rejects(
+            r#"{"version":1,"cases":[{"id":"a","language":"ruby","repository":"o/r","directory":"d","revision":"abc","query":"q","required":[7],"forbidden":[]}]}"#
+        ));
+    }
+
+    #[test]
+    fn synthetic_case_without_files_is_rejected() {
+        assert!(rejects(
+            r#"{"version":1,"cases":[{"id":"a","language":"rust","expected":[]}]}"#
+        ));
     }
 
     #[test]

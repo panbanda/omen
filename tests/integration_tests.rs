@@ -1945,3 +1945,16 @@ fn test_benchmark_rejects_wrong_corpus_version() {
         .code(1)
         .stderr(predicate::str::contains("version 1 and nonempty cases"));
 }
+
+#[test]
+fn test_benchmark_rejects_non_finite_timeout() {
+    omen()
+        .args(["benchmark"])
+        .args(["--baseline", "/nonexistent/baseline"])
+        .args(["--candidate", "/nonexistent/candidate"])
+        .args(["--baseline-label", "a", "--candidate-label", "b"])
+        .args(["--timeout", "inf"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("timeout"));
+}
