@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.30.0](https://github.com/panbanda/omen/compare/omen-v4.29.0...omen-v4.30.0) (2026-09-18)
+
+
+### Features
+
+* **benchmark:** port the paired quality benchmark to Rust ([#515](https://github.com/panbanda/omen/issues/515)) ([78f1b19](https://github.com/panbanda/omen/commit/78f1b196309b709541f22231cd8ba4e9294cc670))
+
+
+### Bug Fixes
+
+* **deps:** update rust crate tree-sitter to 0.27 ([#503](https://github.com/panbanda/omen/issues/503)) ([966c7eb](https://github.com/panbanda/omen/commit/966c7ebb045293f0ae28698700f6fb73842d6268))
+
 ## [4.29.0](https://github.com/panbanda/omen/compare/omen-v4.28.3...omen-v4.29.0) (2026-09-15)
 
 
