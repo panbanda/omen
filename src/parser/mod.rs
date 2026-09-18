@@ -179,7 +179,7 @@ fn extract_rust_classes(result: &ParseResult) -> Vec<ClassNode> {
 
     // Phase 1: collect struct_item nodes
     let mut struct_nodes: Vec<(String, tree_sitter::Node)> = Vec::new();
-    for i in 0..root.child_count() as u32 {
+    for i in 0..root.child_count() {
         if let Some(child) = root.child(i) {
             if child.kind() == "struct_item" {
                 if let Some(name_node) = child.child_by_field_name("name") {
@@ -195,7 +195,7 @@ fn extract_rust_classes(result: &ParseResult) -> Vec<ClassNode> {
 
     // Phase 2: collect impl_item blocks
     let mut impl_nodes: Vec<(String, tree_sitter::Node)> = Vec::new();
-    for i in 0..root.child_count() as u32 {
+    for i in 0..root.child_count() {
         if let Some(child) = root.child(i) {
             if child.kind() == "impl_item" {
                 if let Some(type_node) = child.child_by_field_name("type") {
@@ -253,10 +253,10 @@ fn extract_rust_classes(result: &ParseResult) -> Vec<ClassNode> {
 
 fn extract_rust_struct_fields(node: &tree_sitter::Node<'_>, source: &[u8]) -> Vec<String> {
     let mut fields = Vec::new();
-    for i in 0..node.child_count() as u32 {
+    for i in 0..node.child_count() {
         if let Some(body) = node.child(i) {
             if body.kind() == "field_declaration_list" {
-                for j in 0..body.child_count() as u32 {
+                for j in 0..body.child_count() {
                     if let Some(field) = body.child(j) {
                         if field.kind() == "field_declaration" {
                             if let Some(name_node) = field.child_by_field_name("name") {
@@ -282,10 +282,10 @@ fn extract_impl_methods(
 ) -> Vec<FunctionNode> {
     let mut methods = Vec::new();
     // Look for declaration_list inside the impl block
-    for i in 0..impl_node.child_count() as u32 {
+    for i in 0..impl_node.child_count() {
         if let Some(child) = impl_node.child(i) {
             if child.kind() == "declaration_list" {
-                for j in 0..child.child_count() as u32 {
+                for j in 0..child.child_count() {
                     if let Some(item) = child.child(j) {
                         if item.kind() == "function_item" {
                             if let Some(func) = extract_function_info(&item, source, lang) {
@@ -306,12 +306,12 @@ fn extract_go_classes(result: &ParseResult) -> Vec<ClassNode> {
 
     // Phase 1: collect type_declaration nodes containing struct_type
     let mut struct_defs: Vec<(String, tree_sitter::Node)> = Vec::new();
-    for i in 0..root.child_count() as u32 {
+    for i in 0..root.child_count() {
         let child = match root.child(i) {
             Some(c) if c.kind() == "type_declaration" => c,
             _ => continue,
         };
-        for j in 0..child.child_count() as u32 {
+        for j in 0..child.child_count() {
             if let Some(spec) = child.child(j) {
                 if spec.kind() == "type_spec" && has_go_struct_type(&spec) {
                     if let Some(name_node) = spec.child_by_field_name("name") {
@@ -329,7 +329,7 @@ fn extract_go_classes(result: &ParseResult) -> Vec<ClassNode> {
     // Phase 2: collect method_declarations and group by receiver type
     let mut method_map: std::collections::HashMap<String, Vec<tree_sitter::Node>> =
         std::collections::HashMap::new();
-    for i in 0..root.child_count() as u32 {
+    for i in 0..root.child_count() {
         let child = match root.child(i) {
             Some(c) if c.kind() == "method_declaration" => c,
             _ => continue,
@@ -375,7 +375,7 @@ fn extract_go_classes(result: &ParseResult) -> Vec<ClassNode> {
 }
 
 fn has_go_struct_type(type_spec: &tree_sitter::Node<'_>) -> bool {
-    for i in 0..type_spec.child_count() as u32 {
+    for i in 0..type_spec.child_count() {
         if let Some(child) = type_spec.child(i) {
             if child.kind() == "struct_type" {
                 return true;
@@ -387,7 +387,7 @@ fn has_go_struct_type(type_spec: &tree_sitter::Node<'_>) -> bool {
 
 fn extract_go_method_receiver_type(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
     let receiver = node.child_by_field_name("receiver")?;
-    for i in 0..receiver.child_count() as u32 {
+    for i in 0..receiver.child_count() {
         if let Some(param) = receiver.child(i) {
             if param.kind() == "parameter_declaration" {
                 if let Some(type_node) = param.child_by_field_name("type") {
@@ -402,7 +402,7 @@ fn extract_go_method_receiver_type(node: &tree_sitter::Node<'_>, source: &[u8]) 
 fn extract_go_base_type_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
     match node.kind() {
         "pointer_type" => {
-            for i in 0..node.child_count() as u32 {
+            for i in 0..node.child_count() {
                 if let Some(child) = node.child(i) {
                     if child.kind() == "type_identifier" {
                         return node
@@ -443,7 +443,7 @@ fn collect_go_fields_recursive(
             }
         }
     }
-    for i in 0..node.child_count() as u32 {
+    for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
             collect_go_fields_recursive(&child, source, fields);
         }
@@ -558,7 +558,7 @@ fn class_is_exported(node: &tree_sitter::Node<'_>, source: &[u8], lang: Language
         }
         Language::Java => {
             // Check for "public" in modifiers
-            for i in 0..node.child_count() as u32 {
+            for i in 0..node.child_count() {
                 if let Some(child) = node.child(i) {
                     if child.kind() == "modifiers" {
                         if let Ok(text) = child.utf8_text(source) {
@@ -570,7 +570,7 @@ fn class_is_exported(node: &tree_sitter::Node<'_>, source: &[u8], lang: Language
             false
         }
         Language::CSharp => {
-            for i in 0..node.child_count() as u32 {
+            for i in 0..node.child_count() {
                 if let Some(child) = node.child(i) {
                     if child.kind() == "modifier" {
                         if let Ok(text) = child.utf8_text(source) {
@@ -617,7 +617,7 @@ fn collect_methods_recursive(
     method_kinds: &[&str],
     methods: &mut Vec<FunctionNode>,
 ) {
-    for i in 0..node.child_count() as u32 {
+    for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
             if method_kinds.contains(&child.kind()) {
                 if let Some(func) = extract_function_info(&child, source, lang) {
@@ -784,7 +784,7 @@ fn collect_fields_in_body(
     lang: Language,
     fields: &mut Vec<String>,
 ) {
-    for i in 0..node.child_count() as u32 {
+    for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
             match lang {
                 Language::Java => {
@@ -799,7 +799,7 @@ fn collect_fields_in_body(
                             }
                         } else {
                             // try finding variable_declarator children
-                            for j in 0..child.child_count() as u32 {
+                            for j in 0..child.child_count() {
                                 if let Some(vd) = child.child(j) {
                                     if vd.kind() == "variable_declarator" {
                                         if let Some(name_node) = vd.child_by_field_name("name") {
@@ -832,7 +832,7 @@ fn collect_fields_in_body(
                     // depth-1 assignments that look like self.x = ...
                     // We keep it simple: look for expression_statement -> assignment with left = attribute
                     if child.kind() == "expression_statement" {
-                        for j in 0..child.child_count() as u32 {
+                        for j in 0..child.child_count() {
                             if let Some(assign) = child.child(j) {
                                 if assign.kind() == "assignment" {
                                     if let Some(left) = assign.child_by_field_name("left") {
@@ -858,7 +858,7 @@ fn collect_fields_in_body(
                 Language::CSharp => {
                     if child.kind() == "field_declaration" {
                         // Find variable_declarator children
-                        for j in 0..child.child_count() as u32 {
+                        for j in 0..child.child_count() {
                             if let Some(vd) = child.child(j) {
                                 if vd.kind() == "variable_declarator" {
                                     if let Some(name_node) = vd.child_by_field_name("name") {
@@ -890,7 +890,7 @@ fn find_child_by_kind_local<'a>(
     node: &tree_sitter::Node<'a>,
     kind: &str,
 ) -> Option<tree_sitter::Node<'a>> {
-    for i in 0..node.child_count() as u32 {
+    for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
             if child.kind() == kind {
                 return Some(child);
@@ -913,7 +913,7 @@ fn extract_cpp_field_name(
         }
         return;
     }
-    for i in 0..declarator.child_count() as u32 {
+    for i in 0..declarator.child_count() {
         if let Some(child) = declarator.child(i) {
             extract_cpp_field_name(&child, source, fields);
         }

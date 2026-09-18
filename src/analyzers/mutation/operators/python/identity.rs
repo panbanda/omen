@@ -64,7 +64,7 @@ impl PythonIdentityOperator {
         };
 
         // Look for specific operators in children
-        for i in 0..node.child_count() as u32 {
+        for i in 0..node.child_count() {
             let child = match node.child(i) {
                 Some(c) => c,
                 None => continue,
