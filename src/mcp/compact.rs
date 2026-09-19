@@ -1,4 +1,6 @@
 //! Lossless, opt-in tables for repeated flat records. No source or evidence is dropped.
+use std::collections::HashSet;
+
 use serde_json::{json, Value};
 
 use crate::core::{Error, Result};
@@ -24,10 +26,10 @@ pub(super) fn encode(envelope: Value) -> Value {
 /// Invert [`encode`], expanding every declared table back into its records.
 ///
 /// This is the reference decoder for `omen.tables.v1`. An envelope without that
-/// encoding is returned untouched. A declared path that is missing, or a row
-/// whose arity disagrees with its columns, is rejected rather than silently
-/// reshaped: a decoder that guesses would defeat the losslessness it exists to
-/// demonstrate.
+/// encoding is returned untouched. A declared path that is missing, a duplicated
+/// column name, or a row whose arity disagrees with its columns is rejected
+/// rather than silently reshaped: a decoder that guesses would defeat the
+/// losslessness it exists to demonstrate.
 pub fn decode(mut envelope: Value) -> Result<Value> {
     if envelope.get("encoding") != Some(&json!("omen.tables.v1")) {
         return Ok(envelope);
@@ -41,6 +43,15 @@ pub fn decode(mut envelope: Value) -> Result<Value> {
             .ok_or_else(|| Error::Mcp(format!("no table at {path:?}")))?;
         let columns: Vec<String> = serde_json::from_value(table["columns"].clone())
             .map_err(|e| Error::Mcp(format!("unreadable columns at {path:?}: {e}")))?;
+        let mut seen = HashSet::with_capacity(columns.len());
+        for column in &columns {
+            if !seen.insert(column) {
+                return Err(Error::Mcp(format!(
+                    "duplicate column {column:?} at {path:?}"
+                )));
+            }
+        }
+
         let rows = table["rows"]
             .as_array()
             .ok_or_else(|| Error::Mcp(format!("no rows at {path:?}")))?;
@@ -174,6 +185,17 @@ mod tests {
     #[test]
     fn decode_rejects_row_and_column_disagreement() {
         let bad = json!({"result": {"columns": ["x", "y"], "rows": [[1]]},
+            "encoding": "omen.tables.v1", "table_paths": [""]});
+        assert!(decode(bad).is_err());
+    }
+
+    #[test]
+    fn decode_rejects_duplicate_column_names() {
+        // Collecting pairs into a map would keep only the last value for a
+        // repeated key, dropping a column's data while still satisfying the
+        // arity check. encode cannot emit this, but a public decoder is fed
+        // whatever a caller has.
+        let bad = json!({"result": {"columns": ["a", "a"], "rows": [[1, 2]]},
             "encoding": "omen.tables.v1", "table_paths": [""]});
         assert!(decode(bad).is_err());
     }
