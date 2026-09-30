@@ -40,42 +40,36 @@ byte savings that can increase tokens. This runtime check is not a promise
 of fewer tokens for every tokenizer or response. Exact token counts are evaluated
 separately by the benchmark. Small responses may remain unchanged.
 
-## How the proof was produced
+## What is guaranteed
 
-The benchmark that produced these numbers was removed along with the
-repository's Python tooling and cannot be rerun as written; reproducing it needs
-a Rust replacement. The raw reports it wrote remain in
-`docs/benchmarks/mcp-context*.json`, and the four repositories it used stay
-pinned in `tests/fixtures/quality/real.json`. It ran against baseline commit
-`aa8aafecc45d1a579238a10bafca9301957980ed` and counted tokens with
-`tiktoken==0.14.0`.
+The lossless encoding is guaranteed in this repository, not by a benchmark.
+`src/mcp/compact.rs` ships `encode` and its inverse `decode`, and its tests
+assert `decode(encode(x)) == x` over escaped JSON Pointer keys, every scalar type
+including nulls, and a root-level table. A declared table path that is missing,
+or a row whose arity disagrees with its columns, is rejected rather than silently
+reshaped. `decode` is public as `omen::mcp::decode`, so a client reconstructs
+records with the same code these tests cover.
 
-It sent actual MCP stdio requests to both compact and normal modes of the
-candidate: 16 repository/tool combinations, three repetitions, alternating order
-(48 pairs). It checked exact reconstruction of code data, deterministic results,
-zero token regressions per case on `cl100k_base` and `o200k_base`, and aggregate
-strict savings. Wall-clock `result.generated_at` is the only cross-call equality
-exclusion. Rust round-trip tests check complete exact reconstruction, including
-metadata and escaped paths. Schema costs are reported separately. An amortization
-gate charges the entire schema increase over the previous release once against
-the savings over these 16 responses; this is not a historical session replay.
+The token measurements below are a historical record, not a reproducible result.
+They came from a Python harness that was removed along with the rest of the
+repository's Python tooling, together with the raw reports it wrote. It ran
+against baseline commit `aa8aafecc45d1a579238a10bafca9301957980ed`, counted
+tokens with `tiktoken==0.14.0`, and sent real MCP stdio requests over 16
+repository/tool combinations in alternating order. Nothing in the repository
+reproduces those numbers today.
 
-Eight independently specified duplicate-method start lines across Ruby,
-TypeScript, Rust, and Go test exact definition selection before and after; four
-additional checks require explicit ambiguity without false attribution.
-
-These are development checks, not held-out coding-agent task results. Token
+These were development checks, not held-out coding-agent task results. Token
 counts do not prove better model comprehension. No claim is made about model
 task success, latency, peak memory, compiler-level binding, or complete graph
-recall. Timings are descriptive shared-host debug observations. Existing call-edge
-accuracy gates must also pass before adoption.
+recall. Existing call-edge accuracy gates must also pass before adoption.
 
 ## Measured development results (2026-09-14)
 
-Baseline: merged PR #506 (`aa8aafe`). The baseline binary SHA-256 matches the
-candidate recorded by that PR's synthetic benchmark. See the three raw reports
-in `docs/benchmarks/mcp-context*.json` for binary hashes, pinned revisions,
-observations, and per-case gates.
+Baseline: merged PR #506 (`aa8aafe`). The baseline binary SHA-256 matched the
+candidate recorded by that PR's synthetic benchmark. The three raw reports that
+held the binary hashes, pinned revisions, observations and per-case gates were
+removed along with the Python tooling that produced them, so the figures below
+cannot be re-derived from this repository.
 
 | Check | Full / before | Compact / after |
 | --- | ---: | ---: |

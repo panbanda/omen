@@ -12,6 +12,9 @@ use crate::git::GitRepo;
 
 mod compact;
 
+/// Reference decoder for the `omen.tables.v1` compact encoding.
+pub use compact::decode;
+
 const MAX_STDIO_LINE_SIZE: usize = 10 * 1024 * 1024;
 
 fn discard_until_newline(reader: &mut impl BufRead) -> std::io::Result<()> {
