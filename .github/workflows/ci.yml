@@ -60,7 +60,7 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@9458fed45835344deb5e69e06e831be047c96abf # cargo-llvm-cov
+        uses: taiki-e/install-action@3f7c3597aa4e6da3f315e128de702ce61e7b2877 # cargo-llvm-cov
 
       - name: Check coverage threshold (80%)
         run: cargo llvm-cov --all-features --ignore-filename-regex 'main\.rs$' --fail-under-lines 80
@@ -118,7 +118,7 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       - name: Install cargo-audit
-        uses: taiki-e/install-action@9458fed45835344deb5e69e06e831be047c96abf # cargo-audit
+        uses: taiki-e/install-action@f84dff0ad3f25ff0e5dc531e626734a4e7d11ac7 # cargo-audit
         with:
           tool: cargo-audit
 
