@@ -25,8 +25,15 @@ are not evidence of accuracy on code that the author did not see.
 - `container` is the nearest type or function that contains the definition.
 - `exported` is `true` only when the syntax makes the definition a part of the
   public interface of its package.
+  A `protected` member is not exported. A nested function is exported only
+  when the language makes it global, as Ruby, PHP, and Bash do.
+- A declaration without a body, such as a C prototype, is a symbol. A call
+  binds to the definition, not to the declaration.
 - `expected` lists each definition to which the call binds. An empty list means
   that omen must not report an edge.
+- A call through a local variable binds to a closure when the function assigns
+  that closure to the variable one time. A call through a parameter binds to
+  no definition.
 - `candidates_required` lists definitions that omen must offer as candidates.
   The harness measures candidates and edges separately.
 - An import `path` is the path in the source, without quotation marks. For a

@@ -321,6 +321,61 @@ fn each_language_labels_each_category() {
     );
 }
 
+const LANGUAGES: [Language; 14] = [
+    Language::Go,
+    Language::Rust,
+    Language::Python,
+    Language::TypeScript,
+    Language::JavaScript,
+    Language::Tsx,
+    Language::Jsx,
+    Language::Java,
+    Language::C,
+    Language::Cpp,
+    Language::CSharp,
+    Language::Ruby,
+    Language::Php,
+    Language::Bash,
+];
+
+/// A new `Language` variant does not compile here until `LANGUAGES` has it.
+fn listed(language: Language) -> bool {
+    match language {
+        Language::Go
+        | Language::Rust
+        | Language::Python
+        | Language::TypeScript
+        | Language::JavaScript
+        | Language::Tsx
+        | Language::Jsx
+        | Language::Java
+        | Language::C
+        | Language::Cpp
+        | Language::CSharp
+        | Language::Ruby
+        | Language::Php
+        | Language::Bash => LANGUAGES.contains(&language),
+    }
+}
+
+#[test]
+fn each_supported_language_has_a_case() {
+    if std::env::var_os("OMEN_TRUTH_LANGUAGE").is_some() {
+        return;
+    }
+    let with_case: BTreeSet<String> = load_cases(&truth_root())
+        .iter()
+        .map(|case| language_name(case.labels.language))
+        .collect();
+    let missing: Vec<String> = LANGUAGES
+        .iter()
+        .filter(|language| listed(**language))
+        .map(|language| language_name(*language))
+        .filter(|name| !with_case.contains(name))
+        .collect();
+    assert!(missing.is_empty(), "no fixture case for: {missing:?}");
+}
+
 /// CI runs this test with `OMEN_TRUTH_BASE_DIR` set to the fixture directory of
 /// the base branch.
 #[test]

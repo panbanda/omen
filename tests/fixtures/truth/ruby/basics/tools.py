@@ -1,0 +1,2 @@
+def external():
+    return "tool"
