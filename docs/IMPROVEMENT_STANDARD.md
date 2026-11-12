@@ -34,6 +34,21 @@ predictions have undefined precision, not 100% precision. Empty gold sets have
 undefined recall. Report null for undefined metrics. Never pool away a failing
 language or case. Unknown or unmeasured dimensions are not passes.
 
+## Ground truth
+
+The fixtures in `tests/fixtures/truth/` label symbols, calls, and imports for
+each supported language. `cargo test --test truth` compares the facts that omen
+reports with these labels. `tests/fixtures/truth/README.md` gives the rules.
+
+- The test reports each language and each dimension separately. It does not
+  calculate one total.
+- `expected_failures.json` lists each fact that omen reports incorrectly. A
+  change that corrects a fact must remove its entry in the same pull request.
+- A pull request must not add an entry for a fact that the base branch checked.
+  CI enforces this rule.
+- An author wrote and examined the labels. They are development data. A pass
+  is not evidence of accuracy on other code, and it is not a held-out result.
+
 ## Reproducible experiments
 
 Record baseline/candidate commit and binary hashes, corpus hash, exact commands,
