@@ -1,0 +1,692 @@
+[
+  {
+    "id": "go/basics/calls/alias/no_missed_edge",
+    "reason": "no edge to util/util.go:Helper:3",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/calls/bound_closure/no_missed_edge",
+    "reason": "no edge to main.go:add:22",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/calls/callback/no_missed_edge",
+    "reason": "no edge to main.go:twiceLocal:34",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/calls/declared_receiver/no_missed_edge",
+    "reason": "no edge to shapes/shapes.go:Area:31",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/calls/inferred_receiver/no_missed_edge",
+    "reason": "no edge to shapes/shapes.go:Area:23",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/calls/interface_dispatch/candidates",
+    "reason": "not offered: shapes/shapes.go:Area:6",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/calls/shadowing/no_missed_edge",
+    "reason": "no edge to main.go:Helper:43",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/calls/std_method/no_false_edge",
+    "reason": "false edge to other/other.go:WriteString:11",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/alias/found",
+    "reason": "'example.com/shop/util' not extracted at main.go:10; extracted there: ['\"example.com/shop/util\"']",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/alias/names",
+    "reason": "'example.com/shop/util' not extracted at main.go:10; extracted there: ['\"example.com/shop/util\"']",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/alias/target",
+    "reason": "'example.com/shop/util' not extracted at main.go:10; extracted there: ['\"example.com/shop/util\"']",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/blank/found",
+    "reason": "'embed' not extracted at main.go:4; extracted there: ['\"embed\"']",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/blank/names",
+    "reason": "'embed' not extracted at main.go:4; extracted there: ['\"embed\"']",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/blank/target",
+    "reason": "'embed' not extracted at main.go:4; extracted there: ['\"embed\"']",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/dot/found",
+    "reason": "'example.com/shop/other' not extracted at main.go:8; extracted there: ['\"example.com/shop/other\"']",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/dot/names",
+    "reason": "'example.com/shop/other' not extracted at main.go:8; extracted there: ['\"example.com/shop/other\"']",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/dot/target",
+    "reason": "'example.com/shop/other' not extracted at main.go:8; extracted there: ['\"example.com/shop/other\"']",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/grouped_fmt/found",
+    "reason": "'fmt' not extracted at main.go:5; extracted there: ['\"fmt\"']",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/grouped_fmt/names",
+    "reason": "'fmt' not extracted at main.go:5; extracted there: ['\"fmt\"']",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/grouped_fmt/target",
+    "reason": "'fmt' not extracted at main.go:5; extracted there: ['\"fmt\"']",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/grouped_strings/found",
+    "reason": "'strings' not extracted at main.go:6; extracted there: ['\"strings\"']",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/grouped_strings/names",
+    "reason": "'strings' not extracted at main.go:6; extracted there: ['\"strings\"']",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/grouped_strings/target",
+    "reason": "'strings' not extracted at main.go:6; extracted there: ['\"strings\"']",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/package/found",
+    "reason": "'example.com/shop/shapes' not extracted at main.go:9; extracted there: ['\"example.com/shop/shapes\"']",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/package/names",
+    "reason": "'example.com/shop/shapes' not extracted at main.go:9; extracted there: ['\"example.com/shop/shapes\"']",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/package/target",
+    "reason": "'example.com/shop/shapes' not extracted at main.go:9; extracted there: ['\"example.com/shop/shapes\"']",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/std_single/found",
+    "reason": "'math' not extracted at shapes/shapes.go:3; extracted there: ['import \"math', '\"math\"']",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/std_single/names",
+    "reason": "'math' not extracted at shapes/shapes.go:3; extracted there: ['import \"math', '\"math\"']",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/std_single/target",
+    "reason": "'math' not extracted at shapes/shapes.go:3; extracted there: ['import \"math', '\"math\"']",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/unlabelled:main.go:10:\\\"example.com/shop/util\\\"/absent",
+    "reason": "extracted but not a labelled import",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/unlabelled:main.go:3:import (\\n\\t_ \\\"embed\\\"\\n\\t\\\"fmt\\\"\\n\\t\\\"strings\\\"\\n\\n\\t. \\\"example.com/shop/other\\\"\\n\\t\\\"example.com/shop/shapes\\\"\\n\\ttools \\\"example.com/shop/util\\\"\\n)/absent",
+    "reason": "extracted but not a labelled import",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/unlabelled:main.go:4:\\\"embed\\\"/absent",
+    "reason": "extracted but not a labelled import",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/unlabelled:main.go:5:\\\"fmt\\\"/absent",
+    "reason": "extracted but not a labelled import",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/unlabelled:main.go:6:\\\"strings\\\"/absent",
+    "reason": "extracted but not a labelled import",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/unlabelled:main.go:8:\\\"example.com/shop/other\\\"/absent",
+    "reason": "extracted but not a labelled import",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/unlabelled:main.go:9:\\\"example.com/shop/shapes\\\"/absent",
+    "reason": "extracted but not a labelled import",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/unlabelled:shapes/shapes.go:3:\\\"math\\\"/absent",
+    "reason": "extracted but not a labelled import",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/imports/unlabelled:shapes/shapes.go:3:import \\\"math/absent",
+    "reason": "extracted but not a labelled import",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/add/container",
+    "reason": "main.go:add:22 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/add/exported",
+    "reason": "main.go:add:22 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/add/found",
+    "reason": "main.go:add:22 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/add/kind",
+    "reason": "main.go:add:22 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/add/range",
+    "reason": "main.go:add:22 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/circle/kind",
+    "reason": "expected Some(Struct), got None",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/circle_area/kind",
+    "reason": "expected Some(Method), got Some(Function)",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/circle_scaled/kind",
+    "reason": "expected Some(Method), got Some(Function)",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/scale/container",
+    "reason": "shapes/shapes.go:Scale:17 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/scale/exported",
+    "reason": "shapes/shapes.go:Scale:17 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/scale/found",
+    "reason": "shapes/shapes.go:Scale:17 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/scale/kind",
+    "reason": "shapes/shapes.go:Scale:17 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/scale/range",
+    "reason": "shapes/shapes.go:Scale:17 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/shadow_helper/container",
+    "reason": "main.go:Helper:43 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/shadow_helper/exported",
+    "reason": "main.go:Helper:43 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/shadow_helper/found",
+    "reason": "main.go:Helper:43 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/shadow_helper/kind",
+    "reason": "main.go:Helper:43 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/shadow_helper/range",
+    "reason": "main.go:Helper:43 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/shape/container",
+    "reason": "shapes/shapes.go:Shape:5 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/shape/exported",
+    "reason": "shapes/shapes.go:Shape:5 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/shape/found",
+    "reason": "shapes/shapes.go:Shape:5 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/shape/kind",
+    "reason": "shapes/shapes.go:Shape:5 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/shape/range",
+    "reason": "shapes/shapes.go:Shape:5 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/shape_area/container",
+    "reason": "shapes/shapes.go:Area:6 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/shape_area/exported",
+    "reason": "shapes/shapes.go:Area:6 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/shape_area/found",
+    "reason": "shapes/shapes.go:Area:6 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/shape_area/kind",
+    "reason": "shapes/shapes.go:Area:6 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/shape_area/range",
+    "reason": "shapes/shapes.go:Area:6 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/square/kind",
+    "reason": "expected Some(Struct), got None",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "go/basics/symbols/square_area/kind",
+    "reason": "expected Some(Method), got Some(Function)",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/calls/associated/candidates",
+    "reason": "not offered: shapes.rs:new:23",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/calls/associated/no_missed_edge",
+    "reason": "no edge to shapes.rs:new:23",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/calls/bound_closure/no_missed_edge",
+    "reason": "no edge to main.rs:add:25",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/calls/callback/no_missed_edge",
+    "reason": "no edge to main.rs:twice_local:29",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/calls/declared_receiver/candidates",
+    "reason": "not offered: shapes.rs:area:41",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/calls/declared_receiver/no_missed_edge",
+    "reason": "no edge to shapes.rs:area:41",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/calls/dynamic_dispatch/candidates",
+    "reason": "not offered: shapes.rs:area:12, shapes.rs:area:47",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/calls/inferred_receiver/candidates",
+    "reason": "not offered: shapes.rs:area:27",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/calls/inferred_receiver/no_missed_edge",
+    "reason": "no edge to shapes.rs:area:27",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/calls/reexport/no_missed_edge",
+    "reason": "no edge to shapes.rs:describe:52",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/calls/shadowing/no_false_edge",
+    "reason": "false edge to util.rs:helper:1",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/calls/shadowing/no_missed_edge",
+    "reason": "no edge to main.rs:helper:38",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/calls/square_constructor/no_missed_edge",
+    "reason": "no edge to shapes.rs:new:37",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/calls/trait_impl_delegates/no_missed_edge",
+    "reason": "no edge to shapes.rs:area:27",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/imports/alias/names",
+    "reason": "expected {ImportedName { name: \"twice\", alias: Some(\"double\") }}, got {}",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/imports/alias/target",
+    "reason": "expected {\"util.rs\"}, got {}",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/imports/crate_path/names",
+    "reason": "expected {ImportedName { name: \"Unit\", alias: None }}, got {}",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/imports/grouped_circle/names",
+    "reason": "expected {ImportedName { name: \"Circle\", alias: None }}, got {}",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/imports/grouped_circle/target",
+    "reason": "expected {\"shapes.rs\"}, got {}",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/imports/grouped_shape/names",
+    "reason": "expected {ImportedName { name: \"Shape\", alias: None }}, got {}",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/imports/grouped_shape/target",
+    "reason": "expected {\"shapes.rs\"}, got {}",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/imports/grouped_square/names",
+    "reason": "expected {ImportedName { name: \"Square\", alias: None }}, got {}",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/imports/grouped_square/target",
+    "reason": "expected {\"shapes.rs\"}, got {}",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/imports/named/names",
+    "reason": "expected {ImportedName { name: \"helper\", alias: None }}, got {}",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/imports/named/target",
+    "reason": "expected {\"util.rs\"}, got {}",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/imports/reexport/names",
+    "reason": "expected {ImportedName { name: \"describe\", alias: None }}, got {}",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/imports/reexport/target",
+    "reason": "expected {\"shapes.rs\"}, got {}",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/imports/relative/names",
+    "reason": "expected {ImportedName { name: \"twice\", alias: None }}, got {}",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/imports/std/names",
+    "reason": "expected {ImportedName { name: \"HashMap\", alias: None }}, got {}",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/add/container",
+    "reason": "main.rs:add:25 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/add/exported",
+    "reason": "main.rs:add:25 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/add/found",
+    "reason": "main.rs:add:25 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/add/kind",
+    "reason": "main.rs:add:25 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/add/range",
+    "reason": "main.rs:add:25 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/circle/kind",
+    "reason": "expected Some(Struct), got None",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/circle_area/kind",
+    "reason": "expected Some(Method), got Some(Function)",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/circle_new/kind",
+    "reason": "expected Some(Method), got Some(Function)",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/circle_scaled/kind",
+    "reason": "expected Some(Method), got Some(Function)",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/circle_shape_area/exported",
+    "reason": "expected Some(true), got Some(false)",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/circle_shape_area/kind",
+    "reason": "expected Some(Method), got Some(Function)",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/describe/exported",
+    "reason": "expected Some(false), got Some(true)",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/inner/container",
+    "reason": "expected Some(\"run\"), got None",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/scale/container",
+    "reason": "shapes.rs:Scale:20 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/scale/exported",
+    "reason": "shapes.rs:Scale:20 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/scale/found",
+    "reason": "shapes.rs:Scale:20 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/scale/kind",
+    "reason": "shapes.rs:Scale:20 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/scale/range",
+    "reason": "shapes.rs:Scale:20 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/shadow_helper/container",
+    "reason": "main.rs:helper:38 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/shadow_helper/exported",
+    "reason": "main.rs:helper:38 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/shadow_helper/found",
+    "reason": "main.rs:helper:38 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/shadow_helper/kind",
+    "reason": "main.rs:helper:38 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/shadow_helper/range",
+    "reason": "main.rs:helper:38 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/shape/container",
+    "reason": "shapes.rs:Shape:11 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/shape/exported",
+    "reason": "shapes.rs:Shape:11 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/shape/found",
+    "reason": "shapes.rs:Shape:11 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/shape/kind",
+    "reason": "shapes.rs:Shape:11 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/shape/range",
+    "reason": "shapes.rs:Shape:11 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/shape_area/container",
+    "reason": "shapes.rs:area:12 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/shape_area/exported",
+    "reason": "shapes.rs:area:12 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/shape_area/found",
+    "reason": "shapes.rs:area:12 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/shape_area/kind",
+    "reason": "shapes.rs:area:12 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/shape_area/range",
+    "reason": "shapes.rs:area:12 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/square/kind",
+    "reason": "expected Some(Struct), got None",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/square_area/kind",
+    "reason": "expected Some(Method), got Some(Function)",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/square_new/kind",
+    "reason": "expected Some(Method), got Some(Function)",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/unit/container",
+    "reason": "shapes.rs:Unit:15 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/unit/exported",
+    "reason": "shapes.rs:Unit:15 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/unit/found",
+    "reason": "shapes.rs:Unit:15 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/unit/kind",
+    "reason": "shapes.rs:Unit:15 was not extracted",
+    "tracking": "phase-2-shared-index"
+  },
+  {
+    "id": "rust/basics/symbols/unit/range",
+    "reason": "shapes.rs:Unit:15 was not extracted",
+    "tracking": "phase-2-shared-index"
+  }
+]
