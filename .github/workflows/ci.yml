@@ -74,11 +74,21 @@ jobs:
           if git cat-file -e "origin/$BASE_REF:tests/fixtures/truth" 2>/dev/null; then
             git archive "origin/$BASE_REF" tests/fixtures/truth | tar -x -C "$RUNNER_TEMP/base"
           fi
+          if git cat-file -e "origin/$BASE_REF:tests/fixtures/quality" 2>/dev/null; then
+            git archive "origin/$BASE_REF" tests/fixtures/quality | tar -x -C "$RUNNER_TEMP/base"
+          fi
 
       - name: Compare the ledger with the base branch
         run: cargo test --test truth -- --ignored ledger_never_grows
         env:
           OMEN_TRUTH_BASE_DIR: ${{ runner.temp }}/base/tests/fixtures/truth
+
+      # The base branch can have the corpora without a ledger. The test then
+      # accepts each ledger entry as new.
+      - name: Compare the corpus ledger with the base branch
+        run: cargo test --test corpus_truth -- --ignored ledger_never_grows
+        env:
+          OMEN_QUALITY_BASE_DIR: ${{ runner.temp }}/base/tests/fixtures/quality
 
   coverage:
     name: Coverage (80% minimum)

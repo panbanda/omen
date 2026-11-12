@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 
 use omen::analyzers::repomap::build_index;
 use omen::benchmark::truth::{
-    bless, check_ledger, render_table, summarize, Assertion, LedgerEntry,
+    bless, check_ledger, ledger_growth, render_table, summarize, Assertion, LedgerEntry,
 };
 use omen::benchmark::{load_cases, materialize};
 use omen::core::FileSet;
@@ -63,6 +63,44 @@ struct Observation {
     candidates: BTreeSet<String>,
 }
 
+impl<'a> Expectation<'a> {
+    fn of_case(corpus: &'a str, case: &'a Value, expected: &'a [String]) -> Self {
+        let text = |key: &str| case.get(key).and_then(Value::as_str);
+        Self {
+            corpus,
+            language: text("language").unwrap_or_default(),
+            case: text("id").unwrap_or_default(),
+            query: text("query").unwrap_or(DEFAULT_QUERY),
+            expected,
+        }
+    }
+}
+
+/// The first two parts of each id of a case: `<language>/<corpus>.<case>`.
+fn case_prefix(expectation: &Expectation) -> String {
+    format!(
+        "{}/{}.{}",
+        expectation.language, expectation.corpus, expectation.case
+    )
+}
+
+/// The assertion ids and the case prefixes of a corpus. This function does not
+/// run omen, thus it can read the corpus of a different revision.
+fn expectation_ids(corpus: &str, cases: &[Value]) -> (BTreeSet<String>, BTreeSet<String>) {
+    let mut ids = BTreeSet::new();
+    let mut case_ids = BTreeSet::new();
+    for case in cases {
+        let expected = strings(case.get("expected"));
+        let expectation = Expectation::of_case(corpus, case, &expected);
+        let prefix = case_prefix(&expectation);
+        let assertions =
+            case_assertions(&expectation, None).unwrap_or_else(|error| panic!("{prefix}: {error}"));
+        ids.extend(assertions.into_iter().map(|assertion| assertion.id));
+        case_ids.insert(prefix);
+    }
+    (ids, case_ids)
+}
+
 /// Make the assertions of one case. `observed` is `None` when omen finds no
 /// symbol for the query.
 ///
@@ -88,10 +126,7 @@ fn case_assertions(
         return Err("a callee occurs twice in `expected`".to_string());
     }
 
-    let prefix = format!(
-        "{}/{}.{}",
-        expectation.language, expectation.corpus, expectation.case
-    );
+    let prefix = case_prefix(expectation);
     // `escape_debug` keeps a line break in a name out of the id.
     let query = expectation.query.escape_debug();
     let no_symbol = format!("omen finds no symbol for the query {query}");
@@ -176,26 +211,18 @@ fn observe(root: &Path, query: &str) -> Option<Observation> {
 }
 
 fn run_corpus(corpus: &str) -> Vec<Assertion> {
-    let path = quality_root().join(format!("{corpus}.json"));
-    let cases = load_cases(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    let cases = load_corpus(&quality_root(), corpus);
     let mut assertions = Vec::new();
     for case in &cases {
-        let text = |key: &str| case.get(key).and_then(Value::as_str);
-        let id = text("id").unwrap_or_default();
+        let expected = strings(case.get("expected"));
+        let expectation = Expectation::of_case(corpus, case, &expected);
+        let id = expectation.case;
         let scratch = tempfile::Builder::new()
             .prefix("omen-corpus-truth-")
             .tempdir()
             .expect("temp dir");
         materialize(case, scratch.path()).unwrap_or_else(|error| panic!("{corpus}.{id}: {error}"));
-        let query = text("query").unwrap_or(DEFAULT_QUERY);
-        let expectation = Expectation {
-            corpus,
-            language: text("language").unwrap_or_default(),
-            case: id,
-            query,
-            expected: &strings(case.get("expected")),
-        };
-        let observed = observe(scratch.path(), query);
+        let observed = observe(scratch.path(), expectation.query);
         assertions.extend(
             case_assertions(&expectation, observed.as_ref())
                 .unwrap_or_else(|error| panic!("{corpus}.{id}: {error}")),
@@ -204,8 +231,13 @@ fn run_corpus(corpus: &str) -> Vec<Assertion> {
     assertions
 }
 
-fn load_ledger() -> Vec<LedgerEntry> {
-    match std::fs::read_to_string(quality_root().join(LEDGER_FILE)) {
+fn load_corpus(root: &Path, corpus: &str) -> Vec<Value> {
+    let path = root.join(format!("{corpus}.json"));
+    load_cases(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+}
+
+fn load_ledger(root: &Path) -> Vec<LedgerEntry> {
+    match std::fs::read_to_string(root.join(LEDGER_FILE)) {
         Ok(text) => serde_json::from_str(&text).expect("the ledger must be valid JSON"),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(error) => panic!("{LEDGER_FILE}: {error}"),
@@ -233,19 +265,55 @@ fn corpus_expectations_agree_with_omen_or_the_ledger() {
     }
 
     if std::env::var_os("OMEN_TRUTH_BLESS").is_some() {
-        let blessed = bless(&assertions, &load_ledger(), BLESS_TRACKING);
+        let blessed = bless(&assertions, &load_ledger(&quality_root()), BLESS_TRACKING);
         let mut text = serde_json::to_string_pretty(&blessed).unwrap();
         text.push('\n');
         std::fs::write(quality_root().join(LEDGER_FILE), text).unwrap();
     }
 
-    let violations = check_ledger(&assertions, &load_ledger());
+    let violations = check_ledger(&assertions, &load_ledger(&quality_root()));
     let report: Vec<String> = violations.iter().map(ToString::to_string).collect();
     assert!(
         violations.is_empty(),
         "{} ledger violations:\n{}",
         violations.len(),
         report.join("\n")
+    );
+}
+
+/// CI runs this test with `OMEN_QUALITY_BASE_DIR` set to the fixture directory
+/// of the base branch.
+#[test]
+#[ignore = "needs OMEN_QUALITY_BASE_DIR"]
+fn ledger_never_grows() {
+    let base = PathBuf::from(
+        std::env::var_os("OMEN_QUALITY_BASE_DIR").expect("set OMEN_QUALITY_BASE_DIR"),
+    );
+    if !base.join(LEDGER_FILE).is_file() {
+        // The base branch did not make these checks. Thus each entry is new.
+        return;
+    }
+    let mut base_ids = BTreeSet::new();
+    let mut base_case_ids = BTreeSet::new();
+    for corpus in CORPORA {
+        // A corpus that the base branch does not have gives only new checks.
+        if !base.join(format!("{corpus}.json")).is_file() {
+            continue;
+        }
+        let (ids, case_ids) = expectation_ids(corpus, &load_corpus(&base, corpus));
+        base_ids.extend(ids);
+        base_case_ids.extend(case_ids);
+    }
+    let grown = ledger_growth(
+        &base_ids,
+        &base_case_ids,
+        &load_ledger(&base),
+        &load_ledger(&quality_root()),
+    );
+    assert!(
+        grown.is_empty(),
+        "the base branch made these checks and they are now in the ledger:\n{}",
+        grown.join("\n")
     );
 }
 
@@ -405,4 +473,42 @@ fn a_callee_that_occurs_twice_is_an_error() {
         expected: &expected(&["a.rs:helper", "a.rs:helper"]),
     };
     assert!(case_assertions(&expectation, None).is_err());
+}
+
+#[test]
+fn the_ids_of_a_corpus_come_from_the_expectations_alone() {
+    let cases: Vec<Value> = serde_json::from_str(
+        r#"[{"id":"go_unique","language":"go","files":{},"expected":["z/helper.go:Helper"]},
+            {"id":"ts_invisible","language":"typescript","query":"main.ts:caller","files":{},"expected":[]}]"#,
+    )
+    .expect("cases");
+    let (ids, case_ids) = expectation_ids("corpus", &cases);
+    assert_eq!(
+        ids.iter().map(String::as_str).collect::<Vec<&str>>(),
+        [
+            "go/corpus.go_unique/edges/forbidden/caller->*",
+            "go/corpus.go_unique/edges/required/caller->z/helper.go:Helper",
+            "go/corpus.go_unique/offers/required/caller->z/helper.go:Helper",
+            "typescript/corpus.ts_invisible/edges/forbidden/main.ts:caller->*",
+        ]
+    );
+    assert_eq!(
+        case_ids.iter().map(String::as_str).collect::<Vec<&str>>(),
+        ["go/corpus.go_unique", "typescript/corpus.ts_invisible"]
+    );
+}
+
+#[test]
+fn an_observation_does_not_change_the_ids() {
+    let callees = expected(&["a.rs:helper"]);
+    let ids = |observed: Option<&Observation>| -> Vec<String> {
+        assertions_for(&callees, observed)
+            .into_iter()
+            .map(|assertion| assertion.id)
+            .collect()
+    };
+    assert_eq!(
+        ids(None),
+        ids(Some(&observation(&["b.rs:helper"], &["c.rs:helper"])))
+    );
 }
