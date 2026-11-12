@@ -39,11 +39,10 @@ budgets and omission counts, ambiguous selection, nested syntax-scope exclusion,
 directory-role labeling, missing history, and co-change hints remaining separate
 from graph edges.
 
-```sh
-python scripts/task_context_benchmark.py --baseline /path/to/aa8aafe/omen \
-  --candidate /path/to/candidate/omen --real-root .. \
-  --output docs/benchmarks/task-context.json
-```
+The figures below came from a Python harness that was removed along with the
+rest of the repository's Python tooling; it has no Rust port, so they cannot be
+reproduced from this repository. Its raw report is kept at
+`docs/benchmarks/task-context.json`.
 
 The committed raw report records pinned repository revisions and binary hashes.
 Four language fixtures specify four expected neighborhood definitions each:

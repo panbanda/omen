@@ -43,7 +43,7 @@ all case-level measurements are in `docs/benchmarks/scoped-*.json`.
 
 ```sh
 cargo test --test scoped_resolution --test call_resolution
-python scripts/quality_benchmark.py --baseline /path/to/baseline \
+omen -f json benchmark --baseline /path/to/baseline \
   --candidate /path/to/candidate --baseline-label aa8aafe \
   --candidate-label scoped-resolution --corpus tests/fixtures/quality/scoped.json \
   --repetitions 3 --enforce

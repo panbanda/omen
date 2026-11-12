@@ -5,7 +5,8 @@ raw results. Baseline: `22b57e8d1bbdc39ad3222a8f3495dcf7362a8caa`.
 Candidate source: `b34fb4d1f73aae6f9c3b5568f211c318d3a837c0`.
 Both binaries were built with Rust 1.98.1, `--locked`, the dev profile,
 `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_DEV_OPT_LEVEL=0 CARGO_INCREMENTAL=0`.
-Host: Linux x86_64; harness: Python 3.12.14.
+Host: Linux x86_64; harness: Python 3.12.14 at the time of measurement. That
+harness has since been ported to `omen benchmark`, which the commands below use.
 
 ## Development corpus: semantic gate passed
 
