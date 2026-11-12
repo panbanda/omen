@@ -49,6 +49,13 @@ reports with these labels. `tests/fixtures/truth/README.md` gives the rules.
 - An author wrote and examined the labels. They are development data. A pass
   is not evidence of accuracy on other code, and it is not a held-out result.
 
+The tokenized corpora `corpus.json` and `scoped.json` in
+`tests/fixtures/quality/` also run as an absolute check.
+`cargo test --test corpus_truth` compares the current source with the `expected`
+list of each case. It reports each corpus and each language separately, with
+edges and candidates as separate checks.
+`tests/fixtures/quality/expected_failures.json` obeys the same ledger rules.
+
 ## Reproducible experiments
 
 Record baseline/candidate commit and binary hashes, corpus hash, exact commands,

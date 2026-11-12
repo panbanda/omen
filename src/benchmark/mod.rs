@@ -398,13 +398,9 @@ fn strings(value: Option<&Value>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Validate and run the paired benchmark.
-pub fn run(options: &Options) -> Result<Report> {
-    if options.repetitions < 2 || options.timeout.is_zero() {
-        return Err(invalid("require repetitions >= 2 and positive timeout"));
-    }
-
-    let corpus: Value = serde_json::from_slice(&std::fs::read(&options.corpus)?)?;
+/// Read the cases of a corpus file in file order. Reject a malformed corpus.
+pub fn load_cases(corpus: &Path) -> Result<Vec<Value>> {
+    let corpus: Value = serde_json::from_slice(&std::fs::read(corpus)?)?;
     if corpus.get("version") != Some(&Value::from(1)) {
         return Err(invalid("require version 1 and nonempty cases"));
     }
@@ -425,6 +421,39 @@ pub fn run(options: &Options) -> Result<Report> {
         }
         validate_case(case)?;
     }
+    Ok(cases.clone())
+}
+
+/// Write the files of a synthetic case below `root`.
+pub fn materialize(case: &Value, root: &Path) -> Result<()> {
+    let case_id = case.get("id").and_then(Value::as_str).unwrap_or_default();
+    let files = case
+        .get("files")
+        .and_then(Value::as_object)
+        .ok_or_else(|| invalid(format!("synthetic case needs files: {case_id}")))?;
+    for (name, source) in files {
+        if !is_safe_fixture_path(name) {
+            return Err(invalid("unsafe fixture path"));
+        }
+        let source = source
+            .as_str()
+            .ok_or_else(|| invalid(format!("fixture contents must be a string: {case_id}")))?;
+        let destination = root.join(name);
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(destination, source)?;
+    }
+    Ok(())
+}
+
+/// Validate and run the paired benchmark.
+pub fn run(options: &Options) -> Result<Report> {
+    if options.repetitions < 2 || options.timeout.is_zero() {
+        return Err(invalid("require repetitions >= 2 and positive timeout"));
+    }
+
+    let cases = &load_cases(&options.corpus)?;
 
     let binaries = [
         std::fs::canonicalize(&options.baseline)?,
@@ -450,21 +479,7 @@ pub fn run(options: &Options) -> Result<Report> {
             verify_real_checkout(&root, revision, case_id)?;
             root
         } else {
-            let files = case
-                .get("files")
-                .and_then(Value::as_object)
-                .ok_or_else(|| invalid(format!("synthetic case needs files: {case_id}")))?;
-            for (name, source) in files {
-                if !is_safe_fixture_path(name) {
-                    return Err(invalid("unsafe fixture path"));
-                }
-                let destination = scratch.path().join(name);
-                if let Some(parent) = destination.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                std::fs::write(destination, source.as_str().unwrap_or_default())?;
-                // validated above
-            }
+            materialize(case, scratch.path())?;
             scratch.path().to_path_buf()
         };
 
@@ -757,5 +772,74 @@ mod tests {
         assert!(!is_safe_fixture_path("../escape.rs"));
         assert!(!is_safe_fixture_path("a/../../escape.rs"));
         assert!(!is_safe_fixture_path("a\\b.rs"));
+    }
+
+    fn case(json: &str) -> Value {
+        serde_json::from_str(json).expect("case")
+    }
+
+    fn corpus_file(json: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let corpus = dir.path().join("corpus.json");
+        std::fs::write(&corpus, json).expect("write corpus");
+        (dir, corpus)
+    }
+
+    #[test]
+    fn materialize_writes_each_file_below_the_root() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let case = case(
+            r#"{"id":"a","language":"rust","files":{"src/main.rs":"fn a(){}","z.rs":"fn z(){}"},"expected":[]}"#,
+        );
+        materialize(&case, dir.path()).expect("materialize");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("src/main.rs")).expect("read"),
+            "fn a(){}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("z.rs")).expect("read"),
+            "fn z(){}"
+        );
+    }
+
+    #[test]
+    fn materialize_rejects_a_path_outside_the_root() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path().join("root");
+        std::fs::create_dir(&root).expect("create root");
+        let case = case(
+            r#"{"id":"a","language":"rust","files":{"../escape.rs":"fn a(){}"},"expected":[]}"#,
+        );
+        assert!(materialize(&case, &root).is_err());
+        assert!(!dir.path().join("escape.rs").exists());
+    }
+
+    #[test]
+    fn load_cases_keeps_the_file_order() {
+        let (_dir, corpus) = corpus_file(
+            r#"{"version":1,"cases":[{"id":"b","language":"rust","files":{"main.rs":"fn a(){}"},"expected":[]},{"id":"a","language":"go","files":{"main.go":"package main"},"expected":["main.go:a"]}]}"#,
+        );
+        let cases = load_cases(&corpus).expect("load");
+        let ids: Vec<&str> = cases
+            .iter()
+            .filter_map(|case| case.get("id").and_then(Value::as_str))
+            .collect();
+        assert_eq!(ids, ["b", "a"]);
+    }
+
+    #[test]
+    fn load_cases_rejects_a_duplicate_case_id() {
+        let (_dir, corpus) = corpus_file(
+            r#"{"version":1,"cases":[{"id":"a","language":"rust","files":{"main.rs":"fn a(){}"},"expected":[]},{"id":"a","language":"rust","files":{"main.rs":"fn a(){}"},"expected":[]}]}"#,
+        );
+        assert!(load_cases(&corpus).is_err());
+    }
+
+    #[test]
+    fn load_cases_rejects_a_malformed_case() {
+        let (_dir, corpus) = corpus_file(
+            r#"{"version":1,"cases":[{"id":"a","language":"rust","files":{"main.rs":7},"expected":[]}]}"#,
+        );
+        assert!(load_cases(&corpus).is_err());
     }
 }
