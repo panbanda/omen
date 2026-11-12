@@ -71,7 +71,14 @@ struct Case {
 fn load_cases(root: &Path) -> Vec<Case> {
     let mut cases = Vec::new();
     for language_dir in sorted_entries(root) {
-        if !language_dir.is_dir() {
+        // With `OMEN_TRUTH_LANGUAGE`, do not read the cases of other languages.
+        // An author can then work while another case is not complete.
+        let other_language = std::env::var("OMEN_TRUTH_LANGUAGE").is_ok_and(|only| {
+            language_dir
+                .file_name()
+                .is_some_and(|name| name != only.as_str())
+        });
+        if !language_dir.is_dir() || other_language {
             continue;
         }
         for dir in sorted_entries(&language_dir) {
