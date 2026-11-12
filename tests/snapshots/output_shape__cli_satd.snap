@@ -1,0 +1,25 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&output, case.dynamic_key_objects)"
+---
+{
+  "by_category": {
+    "<key>": "number"
+  },
+  "density": "number",
+  "items": [
+    {
+      "category": "string",
+      "file": "string",
+      "line": "number",
+      "marker": "string",
+      "severity": "string",
+      "text": "string"
+    }
+  ],
+  "summary": {
+    "density": "number",
+    "total_items": "number",
+    "weighted_count": "number"
+  }
+}

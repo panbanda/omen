@@ -1,0 +1,59 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&response, &dynamic_key_objects)"
+---
+{
+  "id": "number",
+  "jsonrpc": "string",
+  "result": {
+    "content": [
+      {
+        "text": {
+          "offset": "number",
+          "result": {
+            "average_grade": "string",
+            "average_score": "number",
+            "files": [
+              {
+                "confidence": "number",
+                "consistency_score": "number",
+                "coupling_score": "number",
+                "critical_defects_count": "number",
+                "doc_coverage": "number",
+                "duplication_ratio": "number",
+                "entropy_score": "number",
+                "file_path": "string",
+                "grade": "string",
+                "has_critical_defects": "bool",
+                "hotspot_score": "number",
+                "language": "string",
+                "penalties_applied?": [
+                  {
+                    "amount": "number",
+                    "issue": "string",
+                    "source_metric": "string"
+                  }
+                ],
+                "semantic_complexity": "number",
+                "structural_complexity": "number",
+                "temporal_coupling_score": "number",
+                "total": "number"
+              }
+            ],
+            "grade_distribution": {
+              "<key>": "number"
+            },
+            "language_distribution": {
+              "<key>": "number"
+            },
+            "total_files": "number"
+          },
+          "returned": "number",
+          "tool": "string",
+          "total_items": "number"
+        },
+        "type": "string"
+      }
+    ]
+  }
+}

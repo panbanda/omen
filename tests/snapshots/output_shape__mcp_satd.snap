@@ -1,0 +1,42 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&response, &dynamic_key_objects)"
+---
+{
+  "id": "number",
+  "jsonrpc": "string",
+  "result": {
+    "content": [
+      {
+        "text": {
+          "offset": "number",
+          "result": {
+            "by_category": {
+              "<key>": "number"
+            },
+            "density": "number",
+            "items": [
+              {
+                "category": "string",
+                "file": "string",
+                "line": "number",
+                "marker": "string",
+                "severity": "string",
+                "text": "string"
+              }
+            ],
+            "summary": {
+              "density": "number",
+              "total_items": "number",
+              "weighted_count": "number"
+            }
+          },
+          "returned": "number",
+          "tool": "string",
+          "total_items": "number"
+        },
+        "type": "string"
+      }
+    ]
+  }
+}

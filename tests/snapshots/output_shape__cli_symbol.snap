@@ -1,0 +1,47 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&output, case.dynamic_key_objects)"
+---
+{
+  "call_resolutions": [
+    {
+      "basis": "string",
+      "call": "string",
+      "caller": {
+        "end_line": "number",
+        "file": "string",
+        "line": "number",
+        "qualified_name": "string"
+      },
+      "candidates": [
+        {
+          "end_line": "number",
+          "file": "string",
+          "line": "number",
+          "qualified_name": "string"
+        }
+      ],
+      "status": "string"
+    }
+  ],
+  "callees": [
+    {
+      "file": "string",
+      "line": "number",
+      "qualified_name": "string"
+    }
+  ],
+  "callers": [],
+  "candidates": [],
+  "cognitive": "number",
+  "cyclomatic": "number",
+  "end_line": "number",
+  "file": "string",
+  "kind": "string",
+  "name": "string",
+  "qualified_name": "string",
+  "signature": "string",
+  "source": "string",
+  "source_truncated": "bool",
+  "start_line": "number"
+}

@@ -1,0 +1,67 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&response, &dynamic_key_objects)"
+---
+{
+  "id": "number",
+  "jsonrpc": "string",
+  "result": {
+    "content": [
+      {
+        "text": {
+          "offset": "number",
+          "result": {
+            "entry_points": [
+              {
+                "file": "string",
+                "reason": "string"
+              }
+            ],
+            "file_count": "number",
+            "hints": [
+              "string"
+            ],
+            "languages": [
+              {
+                "files": "number",
+                "language": "string"
+              }
+            ],
+            "repository": "string",
+            "risks": [
+              {
+                "file": "string",
+                "kind": "string",
+                "line": "number",
+                "message": "string",
+                "severity": "string"
+              }
+            ],
+            "top_symbols": [
+              {
+                "file": "string",
+                "kind": "string",
+                "line": "number",
+                "name": "string",
+                "score": "number"
+              }
+            ],
+            "tree": [
+              {
+                "files": "number",
+                "languages": [
+                  "string"
+                ],
+                "path": "string"
+              }
+            ]
+          },
+          "returned": "number",
+          "tool": "string",
+          "total_items": "number"
+        },
+        "type": "string"
+      }
+    ]
+  }
+}

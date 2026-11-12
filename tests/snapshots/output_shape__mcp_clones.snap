@@ -1,0 +1,84 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&response, &dynamic_key_objects)"
+---
+{
+  "id": "number",
+  "jsonrpc": "string",
+  "result": {
+    "content": [
+      {
+        "text": {
+          "offset": "number",
+          "result": {
+            "clones": [
+              {
+                "clone_type": "string",
+                "end_line_a": "number",
+                "end_line_b": "number",
+                "file_a": "string",
+                "file_b": "string",
+                "group_id": "number",
+                "lines_a": "number",
+                "lines_b": "number",
+                "similarity": "number",
+                "start_line_a": "number",
+                "start_line_b": "number"
+              }
+            ],
+            "groups": [
+              {
+                "average_similarity": "number",
+                "clone_type": "string",
+                "id": "number",
+                "instances": [
+                  {
+                    "end_line": "number",
+                    "file": "string",
+                    "lines": "number",
+                    "normalized_hash": "number",
+                    "similarity": "number",
+                    "start_line": "number"
+                  }
+                ],
+                "total_lines": "number",
+                "total_tokens": "number"
+              }
+            ],
+            "min_lines": "number",
+            "summary": {
+              "avg_similarity": "number",
+              "duplicated_lines": "number",
+              "duplication_ratio": "number",
+              "file_occurrences": {
+                "extra.rs": "number"
+              },
+              "hotspots": [
+                {
+                  "clone_group_count": "number",
+                  "duplicate_lines": "number",
+                  "file": "string",
+                  "severity": "number"
+                }
+              ],
+              "p50_similarity": "number",
+              "p95_similarity": "number",
+              "total_clones": "number",
+              "total_groups": "number",
+              "total_lines": "number",
+              "type1_count": "number",
+              "type2_count": "number",
+              "type3_count": "number"
+            },
+            "threshold": "number",
+            "total_files_scanned": "number"
+          },
+          "returned": "number",
+          "tool": "string",
+          "total_items": "number"
+        },
+        "type": "string"
+      }
+    ]
+  }
+}

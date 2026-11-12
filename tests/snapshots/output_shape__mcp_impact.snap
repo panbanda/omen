@@ -1,0 +1,56 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&response, &dynamic_key_objects)"
+---
+{
+  "id": "number",
+  "jsonrpc": "string",
+  "result": {
+    "content": [
+      {
+        "text": {
+          "offset": "number",
+          "result": {
+            "callees": [
+              {
+                "depth": "number",
+                "symbols": [
+                  {
+                    "file": "string",
+                    "line": "number",
+                    "qualified_name": "string"
+                  }
+                ]
+              }
+            ],
+            "callers": [
+              {
+                "depth": "number",
+                "symbols": []
+              }
+            ],
+            "files_affected": [
+              "string"
+            ],
+            "resolution_summary": {
+              "ambiguous": "number",
+              "unique_candidate": "number",
+              "unresolved": "number"
+            },
+            "resolved": [
+              "string"
+            ],
+            "suggestions": [],
+            "symbol": "string",
+            "total_callees": "number",
+            "total_callers": "number"
+          },
+          "returned": "number",
+          "tool": "string",
+          "total_items": "number"
+        },
+        "type": "string"
+      }
+    ]
+  }
+}

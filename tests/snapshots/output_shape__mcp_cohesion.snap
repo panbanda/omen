@@ -1,0 +1,69 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&response, &dynamic_key_objects)"
+---
+{
+  "id": "number",
+  "jsonrpc": "string",
+  "result": {
+    "content": [
+      {
+        "text": {
+          "offset": "number",
+          "result": {
+            "classes": [
+              {
+                "cbo": "number",
+                "class_name": "string",
+                "coupled_classes": [
+                  "string"
+                ],
+                "dit": "number",
+                "end_line": "number",
+                "fields": [
+                  "string"
+                ],
+                "language": "string",
+                "lcom": "number",
+                "loc": "number",
+                "methods": [
+                  "string"
+                ],
+                "noc": "number",
+                "nof": "number",
+                "nom": "number",
+                "path": "string",
+                "rfc": "number",
+                "start_line": "number",
+                "violations": [
+                  "string"
+                ],
+                "wmc": "number"
+              }
+            ],
+            "generated_at": "string",
+            "summary": {
+              "avg_cbo": "number",
+              "avg_lcom": "number",
+              "avg_rfc": "number",
+              "avg_wmc": "number",
+              "low_cohesion_count": "number",
+              "max_cbo": "number",
+              "max_dit": "number",
+              "max_lcom": "number",
+              "max_rfc": "number",
+              "max_wmc": "number",
+              "total_classes": "number",
+              "total_files": "number",
+              "violation_count": "number"
+            }
+          },
+          "returned": "number",
+          "tool": "string",
+          "total_items": "number"
+        },
+        "type": "string"
+      }
+    ]
+  }
+}

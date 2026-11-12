@@ -1,0 +1,45 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&response, &dynamic_key_objects)"
+---
+{
+  "id": "number",
+  "jsonrpc": "string",
+  "result": {
+    "content": [
+      {
+        "text": {
+          "offset": "number",
+          "result": {
+            "churn_window": {
+              "anchor_date": "string",
+              "commits_matched": "number",
+              "days": "number",
+              "history_complete": "bool"
+            },
+            "hotspots": [
+              {
+                "avg_complexity": "number",
+                "churn_percentile": "number",
+                "commits": "number",
+                "complexity_percentile": "number",
+                "file": "string",
+                "score": "number",
+                "severity": "string"
+              }
+            ],
+            "summary": {
+              "critical_count": "number",
+              "high_count": "number",
+              "total_hotspots": "number"
+            }
+          },
+          "returned": "number",
+          "tool": "string",
+          "total_items": "number"
+        },
+        "type": "string"
+      }
+    ]
+  }
+}

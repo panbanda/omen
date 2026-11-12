@@ -1,0 +1,37 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&output, case.dynamic_key_objects)"
+---
+{
+  "flags": [
+    {
+      "age_days": "number",
+      "file_spread": "number",
+      "first_seen": "string",
+      "key": "string",
+      "last_seen": "string",
+      "priority": {
+        "level": "string",
+        "max_complexity": "number",
+        "score": "number"
+      },
+      "provider": "string",
+      "references": [
+        {
+          "file": "string",
+          "line": "number"
+        }
+      ],
+      "stale": "bool"
+    }
+  ],
+  "generated_at": "string",
+  "stale_count": "number",
+  "summary": {
+    "by_provider": {
+      "<key>": "number"
+    },
+    "stale_flags": "number",
+    "total_flags": "number"
+  }
+}

@@ -1,0 +1,40 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&output, case.dynamic_key_objects)"
+---
+{
+  "files": [
+    {
+      "concentration": "number",
+      "contributors": [
+        {
+          "email": "string",
+          "lines_owned": "number",
+          "name": "string",
+          "percentage": "number"
+        }
+      ],
+      "is_silo": "bool",
+      "ownership_percent": "number",
+      "path": "string",
+      "primary_owner": "string",
+      "risk_level": "string",
+      "total_lines": "number"
+    }
+  ],
+  "generated_at": "string",
+  "summary": {
+    "avg_contributors": "number",
+    "bus_factor": "number",
+    "high_risk_count": "number",
+    "max_concentration": "number",
+    "silo_count": "number",
+    "top_contributors": [
+      {
+        "files_owned": "number",
+        "name": "string"
+      }
+    ],
+    "total_files": "number"
+  }
+}

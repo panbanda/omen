@@ -1,0 +1,50 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&response, &dynamic_key_objects)"
+---
+{
+  "id": "number",
+  "jsonrpc": "string",
+  "result": {
+    "content": [
+      {
+        "text": {
+          "offset": "number",
+          "result": {
+            "cycles": [
+              [
+                "string"
+              ]
+            ],
+            "edges": [
+              {
+                "from": "string",
+                "to": "string"
+              }
+            ],
+            "nodes": [
+              {
+                "betweenness": "number",
+                "in_degree": "number",
+                "instability": "number",
+                "out_degree": "number",
+                "pagerank": "number",
+                "path": "string"
+              }
+            ],
+            "summary": {
+              "avg_degree": "number",
+              "cycle_count": "number",
+              "total_edges": "number",
+              "total_nodes": "number"
+            }
+          },
+          "returned": "number",
+          "tool": "string",
+          "total_items": "number"
+        },
+        "type": "string"
+      }
+    ]
+  }
+}

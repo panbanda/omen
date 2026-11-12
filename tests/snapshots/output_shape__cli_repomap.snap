@@ -1,0 +1,27 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&output, case.dynamic_key_objects)"
+---
+{
+  "generated_at": "string",
+  "summary": {
+    "avg_connections": "number",
+    "avg_pagerank": "number",
+    "max_pagerank": "number",
+    "total_files": "number",
+    "total_symbols": "number"
+  },
+  "symbols": [
+    {
+      "file": "string",
+      "in_degree": "number",
+      "kind": "string",
+      "line": "number",
+      "name": "string",
+      "out_degree": "number",
+      "pagerank": "number",
+      "qualified_name": "string",
+      "signature": "string"
+    }
+  ]
+}

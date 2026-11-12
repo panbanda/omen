@@ -1,0 +1,63 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&response, &dynamic_key_objects)"
+---
+{
+  "id": "number",
+  "jsonrpc": "string",
+  "result": {
+    "content": [
+      {
+        "text": {
+          "offset": "number",
+          "result": {
+            "churn_window": {
+              "anchor_date": "string",
+              "commits_matched": "number",
+              "days": "number",
+              "history_complete": "bool"
+            },
+            "files": [
+              {
+                "confidence": "number",
+                "contributing_factors": {
+                  "churn": "number",
+                  "complexity": "number",
+                  "coupling": "number",
+                  "duplication": "number",
+                  "ownership": "number"
+                },
+                "file_path": "string",
+                "probability": "number",
+                "recommendations": [
+                  "string"
+                ],
+                "risk_level": "string"
+              }
+            ],
+            "summary": {
+              "avg_probability": "number",
+              "high_risk_count": "number",
+              "low_risk_count": "number",
+              "medium_risk_count": "number",
+              "p50_probability": "number",
+              "p95_probability": "number",
+              "total_files": "number"
+            },
+            "weights": {
+              "churn": "number",
+              "complexity": "number",
+              "coupling": "number",
+              "duplication": "number",
+              "ownership": "number"
+            }
+          },
+          "returned": "number",
+          "tool": "string",
+          "total_items": "number"
+        },
+        "type": "string"
+      }
+    ]
+  }
+}

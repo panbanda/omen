@@ -1,0 +1,28 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&output, case.dynamic_key_objects)"
+---
+{
+  "churn_window": {
+    "anchor_date": "string",
+    "commits_matched": "number",
+    "days": "number",
+    "history_complete": "bool"
+  },
+  "hotspots": [
+    {
+      "avg_complexity": "number",
+      "churn_percentile": "number",
+      "commits": "number",
+      "complexity_percentile": "number",
+      "file": "string",
+      "score": "number",
+      "severity": "string"
+    }
+  ],
+  "summary": {
+    "critical_count": "number",
+    "high_count": "number",
+    "total_hotspots": "number"
+  }
+}

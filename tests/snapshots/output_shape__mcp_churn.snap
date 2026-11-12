@@ -1,0 +1,66 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&response, &dynamic_key_objects)"
+---
+{
+  "id": "number",
+  "jsonrpc": "string",
+  "result": {
+    "content": [
+      {
+        "text": {
+          "offset": "number",
+          "result": {
+            "files": [
+              {
+                "additions": "number",
+                "change_frequency": "number",
+                "churn_rate": "number",
+                "churn_score": "number",
+                "commits": "number",
+                "days_active": "number",
+                "deletions": "number",
+                "first_commit": "string",
+                "last_commit": "string",
+                "path": "string",
+                "relative_churn": "number",
+                "relative_path": "string",
+                "total_loc": "number",
+                "unique_authors": [
+                  "string"
+                ]
+              }
+            ],
+            "generated_at": "string",
+            "period_days": "number",
+            "repository_root": "string",
+            "summary": {
+              "author_contributions": {
+                "<key>": "number"
+              },
+              "avg_commits_per_file": "number",
+              "hotspot_files": [
+                "string"
+              ],
+              "max_churn_score": "number",
+              "mean_churn_score": "number",
+              "p50_churn_score": "number",
+              "p95_churn_score": "number",
+              "stable_files": [],
+              "stddev_churn_score": "number",
+              "total_additions": "number",
+              "total_deletions": "number",
+              "total_file_changes": "number",
+              "total_files_changed": "number",
+              "variance_churn_score": "number"
+            }
+          },
+          "returned": "number",
+          "tool": "string",
+          "total_items": "number"
+        },
+        "type": "string"
+      }
+    ]
+  }
+}
