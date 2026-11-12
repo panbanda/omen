@@ -914,7 +914,7 @@ fn collect_calls(
 }
 
 /// Get node kinds that represent function calls for a language.
-fn get_call_node_kinds(lang: Language) -> Vec<&'static str> {
+pub(crate) fn get_call_node_kinds(lang: Language) -> Vec<&'static str> {
     match lang {
         Language::Go => vec!["call_expression"],
         Language::Rust => vec!["call_expression", "method_call_expression"],

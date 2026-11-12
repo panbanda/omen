@@ -978,7 +978,7 @@ fn extract_methods_recursive(
 }
 
 /// Gets method node types for a language.
-fn get_method_node_types(lang: Language) -> Vec<&'static str> {
+pub(crate) fn get_method_node_types(lang: Language) -> Vec<&'static str> {
     match lang {
         Language::Java => vec!["method_declaration", "constructor_declaration"],
         Language::TypeScript | Language::JavaScript => {
@@ -1200,7 +1200,7 @@ fn extract_fields_recursive(
 }
 
 /// Gets field node types for a language.
-fn get_field_node_types(lang: Language) -> Vec<&'static str> {
+pub(crate) fn get_field_node_types(lang: Language) -> Vec<&'static str> {
     match lang {
         Language::Java => vec!["field_declaration"],
         Language::TypeScript | Language::JavaScript => {

@@ -147,7 +147,7 @@ fn find_parent(parents: &[ParentSpan], start_line: u32, end_line: u32) -> Option
     best.map(|p| p.name.clone())
 }
 
-fn get_type_node_kinds(lang: Language) -> Vec<&'static str> {
+pub(crate) fn get_type_node_kinds(lang: Language) -> Vec<&'static str> {
     match lang {
         Language::Rust => vec!["struct_item", "enum_item", "impl_item", "trait_item"],
         Language::Go => vec!["type_declaration"],
