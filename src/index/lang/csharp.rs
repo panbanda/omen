@@ -13,6 +13,33 @@ const USING_DIRECTIVE: &str = "using_directive";
 const FILE_SCOPED_NAMESPACE_DECLARATION: &str = "file_scoped_namespace_declaration";
 const STATIC_KEYWORD: &str = "static";
 
+use crate::index::calls::{Call, CallSyntax, Callee, LocalName};
+use crate::index::model::{Receiver, ReferenceKind};
+
+const VARIABLE_DECLARATION: &str = "variable_declaration";
+const CONSTRUCTOR_INITIALIZER: &str = "constructor_initializer";
+const IDENTIFIER: &str = "identifier";
+
+const CALL_SYNTAX: CallSyntax = CallSyntax {
+    calls: &[("invocation_expression", "function", "arguments")],
+    constructions: &[("object_creation_expression", "type", "arguments")],
+    members: &[("member_access_expression", "expression", "name")],
+    paths: &[],
+    names: &[IDENTIFIER],
+    self_words: &["this"],
+    super_words: &["base"],
+    locals: &[],
+    parameters: &[("parameter", "name", "type")],
+    return_type_field: "returns",
+    literals: &[
+        ("integer_literal", "int"),
+        ("real_literal", "double"),
+        ("string_literal", "string"),
+        ("character_literal", "char"),
+        ("boolean_literal", "bool"),
+    ],
+};
+
 pub struct CSharp;
 
 const LAMBDA_EXPRESSION: &str = "lambda_expression";
@@ -94,6 +121,82 @@ fn has_modifier(node: Node<'_>, keywords: &[&str], context: &Context<'_, '_>) ->
 }
 
 impl LanguageSpec for CSharp {
+    fn call_syntax(&self) -> CallSyntax {
+        CALL_SYNTAX
+    }
+
+    fn call_kinds(&self) -> Vec<&'static str> {
+        let mut kinds = self.call_syntax().call_kinds();
+        kinds.push(CONSTRUCTOR_INITIALIZER);
+        kinds
+    }
+
+    fn local_kinds(&self) -> Vec<&'static str> {
+        let mut kinds = self.call_syntax().local_kinds();
+        kinds.push(VARIABLE_DECLARATION);
+        kinds
+    }
+
+    fn call_hook_kinds(&self) -> Vec<&'static str> {
+        vec![VARIABLE_DECLARATION, CONSTRUCTOR_INITIALIZER]
+    }
+
+    /// `: base(...)` after a constructor calls the constructor of the parent class.
+    fn call<'tree>(&self, node: Node<'tree>, context: &Context<'_, 'tree>) -> Option<Call<'tree>> {
+        if node.kind() != CONSTRUCTOR_INITIALIZER {
+            return self.call_syntax().call(node, context);
+        }
+        let mut cursor = node.walk();
+        let word = node
+            .children(&mut cursor)
+            .find(|child| context.text(*child) == "base")?;
+        let mut cursor = node.walk();
+        let arguments = node
+            .named_children(&mut cursor)
+            .last()
+            .map_or(0, |arguments| arguments.named_child_count());
+        Some(Call {
+            callee: Callee {
+                name_node: word,
+                receiver: Some(Receiver::Super),
+                qualifier: None,
+            },
+            kind: ReferenceKind::Call,
+            arguments: vec![crate::index::calls::Argument::Other; arguments],
+        })
+    }
+
+    /// The type of a variable is on the declaration. The value of a
+    /// declarator is its last child and has no field name. A field is a local
+    /// name of its class.
+    fn locals(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
+        if node.kind() != VARIABLE_DECLARATION {
+            self.call_syntax().locals(node, context, out);
+            return;
+        }
+        let type_name = node
+            .child_by_field_name("type")
+            .map(|type_name| context.text(type_name));
+        let mut cursor = node.walk();
+        for declarator in node.named_children(&mut cursor) {
+            if declarator.kind() != VARIABLE_DECLARATOR {
+                continue;
+            }
+            let Some(name) = declarator.child_by_field_name("name") else {
+                continue;
+            };
+            let value = declarator
+                .named_child(declarator.named_child_count().saturating_sub(1) as u32)
+                .filter(|value| *value != name);
+            out.push(LocalName {
+                name: context.text(name),
+                type_name: type_name.clone(),
+                value_start: value.map(|value| value.start_byte()),
+                is_parameter: false,
+            });
+        }
+    }
+
     fn import_kinds(&self) -> Vec<&'static str> {
         vec![USING_DIRECTIVE]
     }
@@ -414,6 +517,69 @@ mod tests {
                 "1 Named Shop.Shapes.Circle Circle->Circle ambiguous(a/Circle.cs,b/Circle.cs)",
                 "2 Wildcard Shop.Shapes -->- package(a/Circle.cs,b/Circle.cs)",
                 "3 Wildcard Shop.Shapes.Circle -->- ambiguous(a/Circle.cs,b/Circle.cs)",
+            ]
+        );
+    }
+
+    const CALL_FILES: &[(&str, &str)] = &[
+        (
+            "Program.cs",
+            "using System;\nusing Shop.Shapes;\nusing Tools = Shop.Util.Helpers;\nusing static Shop.Other.Others;\n\nnamespace Shop;\n\npublic class Program\n{\n    private Counter counter = new Counter();\n\n    static int Local()\n    {\n        return 4;\n    }\n\n    static int Run()\n    {\n        int Inner()\n        {\n            return 5;\n        }\n        int total = Local() + Tools.Helper() + OnlyHere() + Inner();\n        Func<int, int> add = n => n + Local();\n        return total + add(1);\n    }\n\n    static double Measure(Circle size, IShape shape)\n    {\n        var made = new Circle(1.0);\n        return size.Area() + shape.Area() + made.Area() + Math.Max(1, 2);\n    }\n\n    static int Shadow()\n    {\n        Func<int> Helper = () => 9;\n        return Helper() + Shop.Util.Helpers.Helper();\n    }\n\n    int Tally()\n    {\n        return counter.Next() + Tools.Twice(2) + Tools.Twice(2.0) + Tools.Twice(Local()) + Missing();\n    }\n\n    private sealed class Counter\n    {\n        public int Next()\n        {\n            return 1;\n        }\n    }\n}\n",
+        ),
+        (
+            "Other/Others.cs",
+            "namespace Shop.Other;\n\npublic static class Others\n{\n    public static int OnlyHere()\n    {\n        return 3;\n    }\n}\n",
+        ),
+        (
+            "Shapes/Shapes.cs",
+            "namespace Shop.Shapes;\n\npublic interface IShape\n{\n    double Area();\n}\n\npublic class Circle : IShape\n{\n    public Circle(double radius)\n    {\n    }\n\n    public double Area()\n    {\n        return this.Scaled() + Edge();\n    }\n\n    private double Scaled()\n    {\n        return 1;\n    }\n\n    protected virtual string Name()\n    {\n        return \"\";\n    }\n\n    internal double Edge()\n    {\n        return 1;\n    }\n}\n\ninternal class Ring : Circle\n{\n    public Ring(double radius) : base(radius)\n    {\n    }\n\n    protected override string Name()\n    {\n        return base.Name();\n    }\n}\n",
+        ),
+        (
+            "Util/Helpers.cs",
+            "namespace Shop.Util;\n\npublic static class Helpers\n{\n    public static int Helper()\n    {\n        return 1;\n    }\n\n    public static int Twice(int value)\n    {\n        return value * 2;\n    }\n\n    public static double Twice(double value)\n    {\n        return value * 2;\n    }\n}\n",
+        ),
+    ];
+
+    #[test]
+    fn test_calls_in_the_program_class() {
+        use crate::index::resolve::testing::rows;
+        assert_eq!(
+            rows(CALL_FILES, "Program.cs"),
+            [
+                "10 Program>Counter UniqueCandidate QualifiedPath [Program.cs#Program.Counter]",
+                "23 Program.Run>Local UniqueCandidate EnclosingType [Program.cs#Program.Local]",
+                "23 Program.Run>Tools.Helper UniqueCandidate QualifiedPath [Util/Helpers.cs#Helpers.Helper]",
+                "23 Program.Run>OnlyHere UniqueCandidate ImportedModule [Other/Others.cs#Others.OnlyHere]",
+                "23 Program.Run>Inner UniqueCandidate LexicalScope [Program.cs#Program.Run.Inner]",
+                "24 Program.Run.add>Local UniqueCandidate EnclosingType [Program.cs#Program.Local]",
+                "25 Program.Run>add UniqueCandidate LexicalScope [Program.cs#Program.Run.add]",
+                "30 Program.Measure>Circle UniqueCandidate QualifiedPath [Shapes/Shapes.cs#Circle.Circle]",
+                "31 Program.Measure>size.Area UniqueCandidate ReceiverDeclaredType [Shapes/Shapes.cs#Circle.Area]",
+                "31 Program.Measure>shape.Area Ambiguous NameOnly [Shapes/Shapes.cs#Circle.Area, Shapes/Shapes.cs#IShape.Area]",
+                "31 Program.Measure>made.Area UniqueCandidate ReceiverDeclaredType [Shapes/Shapes.cs#Circle.Area]",
+                "31 Program.Measure>Math.Max Unresolved - []",
+                "37 Program.Shadow>Helper UniqueCandidate LexicalScope [Program.cs#Program.Shadow.Helper]",
+                "37 Program.Shadow>Shop.Util.Helpers::Helper UniqueCandidate QualifiedPath [Util/Helpers.cs#Helpers.Helper]",
+                "42 Program.Tally>counter.Next UniqueCandidate ReceiverDeclaredType [Program.cs#Program.Counter.Next]",
+                "42 Program.Tally>Tools.Twice UniqueCandidate ArgumentType [Util/Helpers.cs#Helpers.Twice]",
+                "42 Program.Tally>Tools.Twice UniqueCandidate ArgumentType [Util/Helpers.cs#Helpers.Twice~2]",
+                "42 Program.Tally>Tools.Twice Ambiguous QualifiedPath [Util/Helpers.cs#Helpers.Twice, Util/Helpers.cs#Helpers.Twice~2]",
+                "42 Program.Tally>Local UniqueCandidate EnclosingType [Program.cs#Program.Local]",
+                "42 Program.Tally>Missing Unresolved - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_calls_with_this_and_base() {
+        use crate::index::resolve::testing::rows;
+        assert_eq!(
+            rows(CALL_FILES, "Shapes/Shapes.cs"),
+            [
+                "16 Circle.Area>self.Scaled UniqueCandidate EnclosingType [Shapes/Shapes.cs#Circle.Scaled]",
+                "16 Circle.Area>Edge UniqueCandidate EnclosingType [Shapes/Shapes.cs#Circle.Edge]",
+                "37 Ring.Ring>super.base UniqueCandidate EnclosingType [Shapes/Shapes.cs#Circle.Circle]",
+                "43 Ring.Name>super.Name UniqueCandidate EnclosingType [Shapes/Shapes.cs#Circle.Name]",
             ]
         );
     }
