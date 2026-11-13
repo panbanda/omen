@@ -186,6 +186,25 @@ fn call_edges_of_the_two_indexes() {
     let old = old_edges(&root, &files);
     let index = CodeIndex::from_files(&root, &files);
     let (new, outcomes) = new_edges(&index);
+    // The calls for which only the name gives a definition. They are not
+    // edges. A call with one candidate is an edge with `--min-basis name_only`.
+    let name_only: Vec<usize> = index
+        .files
+        .iter()
+        .flat_map(|file| &file.references)
+        .map(|reference| &reference.resolution)
+        .filter(|resolution| {
+            resolution.status == ResolutionStatus::Ambiguous
+                && resolution.basis == Some(omen::index::model::ResolutionBasis::NameOnly)
+                && !resolution.candidates.is_empty()
+        })
+        .map(|resolution| resolution.candidates.len())
+        .collect();
+    println!("name_only_calls: {}", name_only.len());
+    println!(
+        "name_only_calls_with_one_candidate: {}",
+        name_only.iter().filter(|count| **count == 1).count()
+    );
 
     let rows: BTreeSet<&Row> = old.keys().chain(new.keys()).collect();
     let mut classes: BTreeMap<&str, Vec<String>> = BTreeMap::new();
