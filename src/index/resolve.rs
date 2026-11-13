@@ -12,7 +12,7 @@ use std::sync::{Arc, OnceLock};
 use parking_lot::RwLock;
 use rayon::prelude::*;
 
-use super::calls::{element_type, one_result, required_type, split_type, Argument};
+use super::calls::{element_type, one_result, required_type, split_list, split_type, Argument};
 use super::extract::{name_path, FileSymbols, LinkFacts, Local};
 use super::model::{
     ImportBinding, ImportKind, ImportTarget, Receiver, Reference, ReferenceKind, Resolution,
@@ -648,8 +648,9 @@ impl<'a> Resolver<'a> {
         let element = local.name.element;
         if let Some(type_name) = &local.name.type_name {
             let (_, name) = split_type(type_name);
+            // The declared type of a loop variable is the type of the element.
             if !name.is_empty() && !["var", "auto", "let", "_"].contains(&name.as_str()) {
-                return Some(self.types_of_text(type_name, file, element));
+                return Some(self.types_of_text(type_name, file, false));
             }
         }
         if depth > 4 {
@@ -695,22 +696,27 @@ impl<'a> Resolver<'a> {
             return None;
         }
         let type_name = self.symbol(owner).name.as_str();
-        let fields: Vec<Id> = self
+        let mut owner_path = self.facts(owner).container_path.clone();
+        owner_path.push(type_name.to_string());
+        // Two or more assignments can give one field. They must agree on the type.
+        let declared: BTreeSet<(&'a str, usize)> = self
             .named(name, owner.0)
             .filter(|id| {
                 let field = self.symbol(*id);
                 field.kind == SymbolKind::Field
                     && field.container.as_deref() == Some(type_name)
                     && if id.0 == owner.0 {
-                        self.facts(*id).parent == Some(owner.1)
+                        self.facts(*id).container_path == owner_path
                     } else {
                         self.types(type_name, None, id.0) == [owner]
                     }
             })
+            .map(|id| (self.facts(id).return_type.as_deref().unwrap_or(""), id.0))
             .collect();
-        match fields.as_slice() {
-            [only] => return Some((self.facts(*only).return_type.as_deref()?, only.0)),
-            [] => {}
+        let texts: BTreeSet<&str> = declared.iter().map(|(text, _)| *text).collect();
+        match (texts.len(), declared.first()) {
+            (1, Some((text, text_file))) if !text.is_empty() => return Some((text, *text_file)),
+            (0, _) => {}
             _ => return None,
         }
         let inherited: Vec<(&'a str, usize)> = self
@@ -722,6 +728,16 @@ impl<'a> Resolver<'a> {
             [only] => Some(*only),
             _ => None,
         }
+    }
+
+    /// The declared type of the field `name` of the object, in a language
+    /// where a method names a field of its object without `this`.
+    fn own_field(&self, file: usize, chain: &[Id], name: &str) -> Option<(&'a str, usize)> {
+        if !matches!(self.family(file), Family::Java | Family::CSharp | Family::C) {
+            return None;
+        }
+        let owner = self.enclosing_type(chain)?;
+        self.field_text(owner, name, &mut BTreeSet::new())
     }
 
     /// The types of a chain of member accesses: a local name or the object
@@ -741,13 +757,15 @@ impl<'a> Resolver<'a> {
         let (root, fields) = path.split_first()?;
         let mut owners: Vec<Id> = if SELF_WORDS.contains(&root.as_str()) {
             self.enclosing_type(chain).into_iter().collect()
-        } else {
-            let local = self.local(chain, file, root)?;
+        } else if let Some(local) = self.local(chain, file, root) {
             if fields.is_empty() && element {
                 let declared = local.name.type_name.as_deref()?;
                 return Some(self.types_of_text(declared, file, true));
             }
             self.local_types(local, file, depth + 1)?
+        } else {
+            let (text, text_file) = self.own_field(file, chain, root)?;
+            self.types_of_text(text, text_file, element && fields.is_empty())
         };
         for (position, field) in fields.iter().enumerate() {
             let [owner] = owners.as_slice() else {
@@ -821,7 +839,20 @@ impl<'a> Resolver<'a> {
             };
         }
         let declared = self.facts(*callee).return_type.as_deref()?;
-        let declared = one_result(declared, index)?;
+        let mut declared = one_result(declared, index)?;
+        // Rust `call()?` gives the value of a `Result` or of an `Option`.
+        // The other ways to get the value give no type.
+        if self.family(file) == Family::Rust {
+            let wrapper = declared
+                .strip_prefix("Result<")
+                .or_else(|| declared.strip_prefix("Option<"))
+                .and_then(|rest| rest.strip_suffix('>'));
+            match (wrapper, facts.reference_facts[position].tried) {
+                (Some(inside), true) => declared = split_list(inside).first().copied()?,
+                (Some(_), false) => return None,
+                (None, _) => {}
+            }
+        }
         let (_, name) = split_type(declared);
         if ["Self", "self", "static"].contains(&name.as_str()) {
             return if element { None } else { own_type() };
@@ -1006,7 +1037,13 @@ impl<'a> Resolver<'a> {
         }
         let types = self.types(x, None, file);
         if types.is_empty() {
-            return Outcome::none(Status::Unresolved);
+            return match self.own_field(file, chain, x) {
+                Some((text, text_file)) => {
+                    let types = self.types_of_text(text, text_file, false);
+                    self.on_types(&types, name, arity, Basis::ReceiverDeclaredType, file)
+                }
+                None => Outcome::none(Status::Unresolved),
+            };
         }
         self.on_types(&types, name, arity, Basis::QualifiedPath, file)
     }
@@ -1561,7 +1598,8 @@ impl<'a> Resolver<'a> {
                     let path = name_path(qualifier).filter(|path| {
                         path.len() > 1
                             && (SELF_WORDS.contains(&path[0].as_str())
-                                || self.local(&chain, file, &path[0]).is_some())
+                                || self.local(&chain, file, &path[0]).is_some()
+                                || self.own_field(file, &chain, &path[0]).is_some())
                     });
                     match path {
                         Some(path) => {
@@ -1637,6 +1675,49 @@ pub fn resolve_references(files: &mut [FileSymbols]) {
 #[cfg(test)]
 mod tests {
     use super::testing::rows;
+
+    /// The rows of the calls of `name`.
+    fn rows_of(files: &[(&str, &str)], file: &str, name: &str) -> Vec<String> {
+        rows(files, file)
+            .into_iter()
+            .filter(|row| {
+                let callee = row.split(' ').nth(1).unwrap_or_default();
+                callee.ends_with(&format!(".{name}")) || callee.ends_with(&format!(":{name}"))
+            })
+            .map(|row| {
+                let mut parts = row.splitn(3, ' ');
+                let line = parts.next().unwrap_or_default();
+                let outcome = parts.nth(1).unwrap_or_default();
+                format!("{line} {outcome}")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_names_from_a_tuple_of_values_are_not_results_rust() {
+        let source = "pub enum Query {\n    Nothing,\n}\n\nimpl Query {\n    fn or(left: u32) -> u32 {\n        left\n    }\n\n    fn union(&self) -> u32 {\n        use self::Query::*;\n        let (or, other) = (Query::or, 1);\n        or(other)\n    }\n}\n";
+        assert_eq!(
+            rows(&[("a.rs", source)], "a.rs"),
+            ["13 Query.union>or UniqueCandidate ImportedModule [a.rs#Query.or]"]
+        );
+    }
+
+    #[test]
+    fn test_field_receiver_rust() {
+        let source = "pub struct Item;\n\nimpl Item {\n    pub fn name(&self) -> u32 {\n        1\n    }\n}\n\npub struct Cart {\n    lead: Item,\n    items: Vec<Item>,\n    boxed: Option<Item>,\n}\n\nimpl Cart {\n    fn find(&self) -> (Item, u32) {\n        (Item, 1)\n    }\n\n    fn load(&self) -> Result<Item, String> {\n        Ok(Item)\n    }\n\n    fn run(&self) -> Result<u32, String> {\n        self.lead.name();\n        for item in &self.items {\n            item.name();\n        }\n        let (found, _) = self.find();\n        found.name();\n        let loaded = self.load()?;\n        loaded.name();\n        let kept = self.load();\n        kept.name();\n        self.boxed.name();\n        self.items.name();\n        Ok(1)\n    }\n}\n";
+        assert_eq!(
+            rows_of(&[("a.rs", source)], "a.rs", "name"),
+            [
+                "25 UniqueCandidate ReceiverDeclaredType [a.rs#Item.name]",
+                "27 UniqueCandidate ReceiverDeclaredType [a.rs#Item.name]",
+                "30 UniqueCandidate ReceiverDeclaredType [a.rs#Item.name]",
+                "32 UniqueCandidate ReceiverDeclaredType [a.rs#Item.name]",
+                "34 Ambiguous NameOnly [a.rs#Item.name]",
+                "35 Unresolved - []",
+                "36 Unresolved - []",
+            ]
+        );
+    }
 
     #[test]
     fn test_qualified_path_rust() {

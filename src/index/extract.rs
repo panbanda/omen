@@ -149,6 +149,8 @@ pub struct ReferenceFacts {
     /// The names of the receiver expression when it is a chain of member
     /// accesses with two or more names, as `c.parent` is.
     pub receiver_path: Option<Vec<String>>,
+    /// `?` follows the call, as Rust `call()?` has. `?.` is not this mark.
+    pub tried: bool,
 }
 
 /// The names of a chain of member accesses: `a.b.c` gives `a`, `b`, `c`.
@@ -943,6 +945,8 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
                 .and_then(|text| std::str::from_utf8(text).ok())
                 .and_then(name_path)
                 .filter(|path| path.len() > 1),
+            tried: parsed.source.get(end_byte) == Some(&b'?')
+                && parsed.source.get(end_byte + 1) != Some(&b'.'),
         });
     }
     FileSymbols {

@@ -34,7 +34,7 @@ const CALL_SYNTAX: CallSyntax = CallSyntax {
     literals: &[],
 };
 
-use crate::index::calls::{Call, Callee};
+use crate::index::calls::{Call, Callee, LocalName};
 use crate::index::model::ReferenceKind;
 
 const TOKEN_TREE: &str = "token_tree";
@@ -46,6 +46,10 @@ const TRAIT_ITEM: &str = "trait_item";
 const MOD_ITEM: &str = "mod_item";
 const CLOSURE_EXPRESSION: &str = "closure_expression";
 const LET_DECLARATION: &str = "let_declaration";
+const FOR_EXPRESSION: &str = "for_expression";
+const REFERENCE_EXPRESSION: &str = "reference_expression";
+const TUPLE_PATTERN: &str = "tuple_pattern";
+const TUPLE_EXPRESSION: &str = "tuple_expression";
 const IDENTIFIER: &str = "identifier";
 const TYPE_IDENTIFIER: &str = "type_identifier";
 const GENERIC_TYPE: &str = "generic_type";
@@ -63,6 +67,11 @@ const DEFINITIONS: &[DefinitionRule] = &[
     DefinitionRule::new("type_item", SymbolKind::TypeAlias, NameRule::Field("name")),
     DefinitionRule::new(MOD_ITEM, SymbolKind::Module, NameRule::Field("name")),
     DefinitionRule::new(CLOSURE_EXPRESSION, SymbolKind::Function, NameRule::Hook),
+    DefinitionRule::new(
+        "field_declaration",
+        SymbolKind::Field,
+        NameRule::Field("name"),
+    ),
 ];
 
 /// The name of a type without its path, its generic arguments, and its reference.
@@ -132,7 +141,76 @@ impl LanguageSpec for Rust {
     }
 
     fn call_hook_kinds(&self) -> Vec<&'static str> {
-        vec![TOKEN_TREE]
+        vec![
+            TOKEN_TREE,
+            FOR_EXPRESSION,
+            REFERENCE_EXPRESSION,
+            TUPLE_PATTERN,
+            TUPLE_EXPRESSION,
+        ]
+    }
+
+    fn local_kinds(&self) -> Vec<&'static str> {
+        let mut kinds = self.call_syntax().local_kinds();
+        kinds.push(FOR_EXPRESSION);
+        kinds
+    }
+
+    /// `for name in values` binds an element of the values. `let (a, b) =
+    /// call()` gives each name one result of the call. The value of `&value`
+    /// is the value.
+    fn locals(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
+        let value = node.child_by_field_name("value").map(|value| {
+            let inner = (value.kind() == REFERENCE_EXPRESSION)
+                .then(|| value.child_by_field_name("value"))
+                .flatten();
+            inner.unwrap_or(value)
+        });
+        let pattern = node.child_by_field_name("pattern");
+        if node.kind() == FOR_EXPRESSION {
+            let name = pattern.filter(|pattern| pattern.kind() == IDENTIFIER);
+            if let (Some(name), Some(value)) = (name, value) {
+                out.push(LocalName {
+                    name: context.text(name),
+                    type_name: None,
+                    value_start: Some(value.start_byte()),
+                    is_parameter: false,
+                    element: true,
+                    result_index: None,
+                });
+            }
+            return;
+        }
+        let first = out.len();
+        self.call_syntax().locals(node, context, out);
+        if node.kind() != LET_DECLARATION {
+            return;
+        }
+        for local in &mut out[first..] {
+            local.value_start = value.map(|value| value.start_byte());
+        }
+        let names = pattern.filter(|pattern| pattern.kind() == TUPLE_PATTERN);
+        // A tuple of values gives each name its own value. No rule reads it.
+        let value = value.filter(|value| value.kind() != TUPLE_EXPRESSION);
+        let (Some(names), Some(value)) = (names, value) else {
+            return;
+        };
+        let mut cursor = names.walk();
+        let parts = names
+            .children(&mut cursor)
+            .filter(|part| !["(", ")", ","].contains(&part.kind()));
+        for (index, part) in parts.enumerate() {
+            if part.kind() == IDENTIFIER {
+                out.push(LocalName {
+                    name: context.text(part),
+                    type_name: None,
+                    value_start: Some(value.start_byte()),
+                    is_parameter: false,
+                    element: false,
+                    result_index: Some(index),
+                });
+            }
+        }
     }
 
     /// The arguments of a macro are tokens, not expressions. In them, a name

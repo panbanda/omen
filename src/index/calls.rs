@@ -391,7 +391,7 @@ pub fn required_type(text: &str) -> &str {
 }
 
 /// Splits a list at each comma that is not in brackets.
-fn split_list(list: &str) -> Vec<&str> {
+pub fn split_list(list: &str) -> Vec<&str> {
     let mut parts = Vec::new();
     let (mut depth, mut start) = (0usize, 0usize);
     for (position, character) in list.char_indices() {

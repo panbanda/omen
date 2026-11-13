@@ -23,3 +23,13 @@ mod checks {
 pub fn qualified() -> u32 {
     crate::util::helper() + super::util::twice(1)
 }
+
+pub struct Pair {
+    lead: super::shapes::Circle,
+}
+
+impl Pair {
+    pub fn lead_area(&self) -> f64 {
+        self.lead.area()
+    }
+}
