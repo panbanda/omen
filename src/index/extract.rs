@@ -57,6 +57,8 @@ impl DefinitionRule {
 pub enum ScopeRole {
     Type,
     Function,
+    /// A module is a container, but a function in it is not a method.
+    Module,
     /// A namespace is a part of the key of a symbol, but it is not a container.
     Namespace,
 }
@@ -111,6 +113,14 @@ impl<'tree> Context<'_, 'tree> {
             .find(|scope| scope.role != ScopeRole::Namespace)
     }
 
+    /// The names of the scopes that contain the current node.
+    pub fn path(&self) -> Vec<String> {
+        self.scopes
+            .last()
+            .map(|scope| scope.path.clone())
+            .unwrap_or_default()
+    }
+
     pub fn in_function(&self) -> bool {
         self.scopes
             .iter()
@@ -161,6 +171,7 @@ pub trait LanguageSpec: Sync {
 pub fn language_spec(language: Language) -> Option<&'static dyn LanguageSpec> {
     match language {
         Language::Go => Some(&lang::go::Go),
+        Language::Rust => Some(&lang::rust::Rust),
         _ => None,
     }
 }
@@ -263,18 +274,16 @@ impl<'tree> Extractor<'_, 'tree> {
             name: context.text(name_node),
             kind,
             container: container.map(|scope| scope.name.clone()),
-            container_path: self
-                .scopes
-                .last()
-                .map(|scope| scope.path.clone())
-                .unwrap_or_default(),
+            container_path: context.path(),
             receiver_type: None,
             supertypes: Vec::new(),
             span: Span::of(&node),
             body: node.child_by_field_name("body"),
             role: ScopeRole::Function,
         };
-        if draft.kind.is_type() {
+        if draft.kind == SymbolKind::Module {
+            draft.role = ScopeRole::Module;
+        } else if draft.kind.is_type() {
             draft.role = ScopeRole::Type;
         }
         if !self.spec.refine(&mut draft, &context) || draft.name.is_empty() {
