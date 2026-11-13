@@ -146,8 +146,8 @@ pub struct ReferenceFacts {
     /// The byte range of the receiver expression. When the receiver is a
     /// call, the call with this range gives the type of the receiver.
     pub receiver: Option<(usize, usize)>,
-    /// The names of the receiver expression when it is a chain of member
-    /// accesses with two or more names, as `c.parent` is.
+    /// The names of the receiver expression when it is one name or a chain
+    /// of member accesses, as `c.parent` is.
     pub receiver_path: Option<Vec<String>>,
     /// `?` follows the call, as Rust `call()?` has. `?.` is not this mark.
     pub tried: bool,
@@ -970,8 +970,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             receiver_path: receiver
                 .and_then(|(start, end)| parsed.source.get(start..end))
                 .and_then(|text| std::str::from_utf8(text).ok())
-                .and_then(name_path)
-                .filter(|path| path.len() > 1),
+                .and_then(name_path),
             tried: parsed.source.get(end_byte) == Some(&b'?')
                 && parsed.source.get(end_byte + 1) != Some(&b'.'),
         });

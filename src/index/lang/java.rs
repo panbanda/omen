@@ -168,24 +168,16 @@ impl LanguageSpec for Java {
 
     fn local_kinds(&self) -> Vec<&'static str> {
         let mut kinds = self.call_syntax().local_kinds();
-        kinds.extend([
-            LOCAL_VARIABLE_DECLARATION,
-            FIELD_DECLARATION,
-            ENHANCED_FOR_STATEMENT,
-        ]);
+        kinds.extend([LOCAL_VARIABLE_DECLARATION, ENHANCED_FOR_STATEMENT]);
         kinds
     }
 
     fn call_hook_kinds(&self) -> Vec<&'static str> {
-        vec![
-            LOCAL_VARIABLE_DECLARATION,
-            FIELD_DECLARATION,
-            ENHANCED_FOR_STATEMENT,
-        ]
+        vec![LOCAL_VARIABLE_DECLARATION, ENHANCED_FOR_STATEMENT]
     }
 
     /// The type of a variable is on the declaration, and each declarator has
-    /// a name and a value. A field is a local name of its class.
+    /// a name and a value.
     fn locals(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
         if node.kind() == ENHANCED_FOR_STATEMENT {
             // `for (Type name : values)` binds an element of the values. With
@@ -203,7 +195,7 @@ impl LanguageSpec for Java {
             }
             return;
         }
-        if ![LOCAL_VARIABLE_DECLARATION, FIELD_DECLARATION].contains(&node.kind()) {
+        if node.kind() != LOCAL_VARIABLE_DECLARATION {
             self.call_syntax().locals(node, context, out);
             return;
         }

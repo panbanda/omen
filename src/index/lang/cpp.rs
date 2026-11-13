@@ -323,7 +323,8 @@ fn declared_type(text: &str, array: bool) -> String {
             .first()
             .map_or("", |pointee| *pointee)
             .to_string();
-        text.replace_range(at..end, &pointee);
+        // The mark `*` tells the resolver that the member is a pointer.
+        text.replace_range(at..end, &format!("{pointee}*"));
     }
     for prefix in ["std::array<", "array<"] {
         if !text.starts_with(prefix) {
@@ -1380,8 +1381,8 @@ void Holder::run(Item& given, std::unique_ptr<Item> passed) {
                 "28 given.get UniqueCandidate ReceiverDeclaredType [holder.cpp#Item.get]"
                     .to_string(),
                 "30 (..).reset Ambiguous NameOnly [holder.cpp#Item.reset]".to_string(),
-                // A data member can be a smart pointer in a different file.
-                "31 (..).reset Ambiguous NameOnly [holder.cpp#Item.reset]".to_string(),
+                // A data member with a declared value type is an object.
+                format!("31 (..).reset {reset}"),
             ]
         );
     }

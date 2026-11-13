@@ -1588,10 +1588,20 @@ impl<'a> Resolver<'a> {
                 // of its last field.
                 let types = match call {
                     Some(call) => self.result_types(file, call, depth + 1),
-                    None => facts.reference_facts[position]
-                        .receiver_path
-                        .as_ref()
-                        .and_then(|path| self.path_types(file, &chain, path, false, depth + 1)),
+                    None => match facts.reference_facts[position].receiver_path.as_deref() {
+                        // C++ `name.reset()` can call a smart pointer, and the
+                        // extraction gives no name for the receiver. A member
+                        // with a declared type that is not a pointer is an
+                        // object, thus the call is a call of that type.
+                        Some([name]) => self
+                            .own_field(file, &chain, name)
+                            .filter(|(declared, _)| !declared.contains('*'))
+                            .map(|(declared, text_file)| {
+                                self.types_of_text(declared, text_file, false)
+                            }),
+                        Some(path) => self.path_types(file, &chain, path, false, depth + 1),
+                        None => None,
+                    },
                 };
                 match types {
                     Some(types) => {
