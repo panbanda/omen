@@ -18,6 +18,7 @@ const USING_DECLARATION: &str = "using_declaration";
 const OPTIONAL_PARAMETER_DECLARATION: &str = "optional_parameter_declaration";
 const ARGUMENT_LIST: &str = "argument_list";
 const INITIALIZER_LIST: &str = "initializer_list";
+const FOR_RANGE_LOOP: &str = "for_range_loop";
 
 /// `Type{...}` is a construction. A field access with `.` or `->` gives a
 /// member, and `scope::name` gives a path.
@@ -67,6 +68,10 @@ const DEFINITIONS: &[DefinitionRule] = &[
         NameRule::Field("name"),
     ),
     DefinitionRule::new(LAMBDA_EXPRESSION, SymbolKind::Function, NameRule::Hook),
+    // The name of each declarator of a data member is one field. A field
+    // access and the name of a member function have this node kind too, and
+    // `name_node` rejects them.
+    DefinitionRule::new(FIELD_IDENTIFIER, SymbolKind::Field, NameRule::Hook),
 ];
 
 const FUNCTION_NAME_KINDS: &[&str] = &[
@@ -248,6 +253,196 @@ fn parameter_count(parameters: Node<'_>, context: &Context<'_, '_>) -> usize {
     }
 }
 
+/// The declarators that are between a field declaration and the name of a
+/// data member: a pointer, a reference, or an array.
+const MEMBER_WRAPPERS: &[&str] = &[
+    c::POINTER_DECLARATOR,
+    c::REFERENCE_DECLARATOR,
+    c::ARRAY_DECLARATOR,
+];
+
+/// The field declaration of a data member, and the array mark of its
+/// declarator. `None` means that the name is not the name of a data member.
+fn data_member<'tree>(
+    name: Node<'tree>,
+    context: &Context<'_, 'tree>,
+) -> Option<(Node<'tree>, bool)> {
+    // The walk gives the first parent without a search. A field access and
+    // the name of a member function stop here.
+    let mut parent = context.parent(name)?;
+    let mut array = false;
+    while MEMBER_WRAPPERS.contains(&parent.kind()) {
+        array |= parent.kind() == c::ARRAY_DECLARATOR;
+        parent = parent.parent()?;
+    }
+    (parent.kind() == c::FIELD_DECLARATION).then_some((parent, array))
+}
+
+/// The text between the `<` at `open` and the `>` that closes it.
+fn template_arguments(text: &str, open: usize) -> Option<(&str, usize)> {
+    let mut depth = 0usize;
+    for (position, character) in text[open..].char_indices() {
+        match character {
+            '<' => depth += 1,
+            '>' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((&text[open + 1..open + position], open + position + 1));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The declared type in the form that the resolver reads. A smart pointer
+/// `std::unique_ptr<T>` or `std::shared_ptr<T>` is `T`, as a pointer is.
+/// `std::array<T, N>` is `T[]`, and so is an array declarator.
+fn declared_type(text: &str, array: bool) -> String {
+    const SMART_POINTERS: &[&str] = &[
+        "std::unique_ptr<",
+        "std::shared_ptr<",
+        "unique_ptr<",
+        "shared_ptr<",
+    ];
+    let mut text: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    loop {
+        let found = SMART_POINTERS
+            .iter()
+            .filter_map(|prefix| text.find(prefix).map(|at| (at, prefix.len())))
+            .min();
+        let Some((at, length)) = found else {
+            break;
+        };
+        let Some((inside, end)) = template_arguments(&text, at + length - 1) else {
+            break;
+        };
+        // A deleter is the second argument of `std::unique_ptr`.
+        let pointee = crate::index::calls::split_list(inside)
+            .first()
+            .map_or("", |pointee| *pointee)
+            .to_string();
+        text.replace_range(at..end, &pointee);
+    }
+    for prefix in ["std::array<", "array<"] {
+        if !text.starts_with(prefix) {
+            continue;
+        }
+        if let Some((inside, end)) = template_arguments(&text, prefix.len() - 1) {
+            let element = crate::index::calls::split_list(inside)
+                .first()
+                .map_or("", |element| *element)
+                .to_string();
+            if end == text.len() {
+                text = format!("{element}[]");
+            }
+        }
+    }
+    if array {
+        text.push_str("[]");
+    }
+    text
+}
+
+const FIELD_EXPRESSION: &str = "field_expression";
+
+/// The members of `std::unique_ptr` and `std::shared_ptr`. `owner.reset()`
+/// calls the pointer, and `owner->reset()` calls the object.
+const SMART_POINTER_MEMBERS: &[&str] = &[
+    "get",
+    "reset",
+    "release",
+    "swap",
+    "use_count",
+    "unique",
+    "owner_before",
+    "get_deleter",
+];
+
+/// Adds the declared type of each declaration of `name` below `node`.
+fn declared_types_of(node: Node<'_>, name: &str, context: &Context<'_, '_>, out: &mut Vec<String>) {
+    let declares = [
+        c::DECLARATION,
+        c::PARAMETER_DECLARATION,
+        OPTIONAL_PARAMETER_DECLARATION,
+    ]
+    .contains(&node.kind());
+    if declares {
+        let mut names = Vec::new();
+        c::declared_names(node, context, &mut names);
+        out.extend(
+            names
+                .into_iter()
+                .filter(|local| local.name == name)
+                .map(|local| local.type_name.unwrap_or_default()),
+        );
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        declared_types_of(child, name, context, out);
+    }
+}
+
+/// Tells if the function that contains `call` declares `name` one or more
+/// times, each time with a type that is not a smart pointer and not `auto`.
+fn is_local_value(call: Node<'_>, name: &str, context: &Context<'_, '_>) -> bool {
+    let mut function = call.parent();
+    while let Some(node) = function.filter(|node| node.kind() != c::FUNCTION_DEFINITION) {
+        function = node.parent();
+    }
+    let Some(function) = function else {
+        return false;
+    };
+    let mut types = Vec::new();
+    declared_types_of(function, name, context, &mut types);
+    !types.is_empty()
+        && types.iter().all(|declared| {
+            !declared.is_empty() && !declared.contains("ptr") && !declared.contains("auto")
+        })
+}
+
+/// What a call `receiver.member()` is, when `member` is also a member of a
+/// smart pointer.
+enum PointerMember {
+    /// The call is a different call, or the receiver is an object for sure.
+    No,
+    /// The receiver is one name that can be a smart pointer.
+    OneName,
+    /// The receiver is a chain. The resolver gives a chain a type.
+    Chain,
+}
+
+fn pointer_member(call: Node<'_>, context: &Context<'_, '_>) -> PointerMember {
+    let function = call
+        .child_by_field_name("function")
+        .filter(|function| function.kind() == FIELD_EXPRESSION);
+    let Some(function) = function else {
+        return PointerMember::No;
+    };
+    let dot = function
+        .child_by_field_name("operator")
+        .is_some_and(|operator| context.text(operator) == ".");
+    let member = function
+        .child_by_field_name("field")
+        .map(|field| context.text(field));
+    let is_member = member.is_some_and(|member| SMART_POINTER_MEMBERS.contains(&member.as_str()));
+    let Some(receiver) = function
+        .child_by_field_name("argument")
+        .filter(|_| dot && is_member)
+    else {
+        return PointerMember::No;
+    };
+    if receiver.kind() != c::IDENTIFIER {
+        return PointerMember::Chain;
+    }
+    if is_local_value(call, &context.text(receiver), context) {
+        PointerMember::No
+    } else {
+        PointerMember::OneName
+    }
+}
+
 impl LanguageSpec for Cpp {
     fn call_syntax(&self) -> CallSyntax {
         CALL_SYNTAX
@@ -266,6 +461,7 @@ impl LanguageSpec for Cpp {
             OPTIONAL_PARAMETER_DECLARATION,
             NAMESPACE_ALIAS_DEFINITION,
             USING_DECLARATION,
+            FOR_RANGE_LOOP,
         ]
     }
 
@@ -276,6 +472,8 @@ impl LanguageSpec for Cpp {
             OPTIONAL_PARAMETER_DECLARATION,
             ARGUMENT_LIST,
             INITIALIZER_LIST,
+            FOR_RANGE_LOOP,
+            FIELD_EXPRESSION,
         ]
     }
 
@@ -283,7 +481,20 @@ impl LanguageSpec for Cpp {
     /// make an object, thus they call a constructor of the type.
     fn call<'tree>(&self, node: Node<'tree>, context: &Context<'_, 'tree>) -> Option<Call<'tree>> {
         if node.kind() != c::DECLARATION {
-            return self.call_syntax().call(node, context);
+            // The syntax does not tell if the receiver of `owner.reset()` is a
+            // smart pointer. A declared pointee type must not give an edge to
+            // a member of the pointee. Thus one name becomes an expression
+            // without a type, and a chain gives no call.
+            let mut call = self.call_syntax().call(node, context)?;
+            match pointer_member(node, context) {
+                PointerMember::No => {}
+                PointerMember::OneName => {
+                    call.callee.receiver = Some(crate::index::model::Receiver::Expression);
+                    call.callee.qualifier = None;
+                }
+                PointerMember::Chain => return None,
+            }
+            return Some(call);
         }
         if !context.in_function() {
             return None;
@@ -335,7 +546,38 @@ impl LanguageSpec for Cpp {
                     out.push(namespace("*".to_string(), target));
                 }
             }
-            _ => c::declared_names(node, context, out),
+            FOR_RANGE_LOOP => {
+                // `for (Type name : values)` binds an element of the values.
+                // With `auto`, the declared type of the values gives the type.
+                let field = |field| node.child_by_field_name(field);
+                let mut name = field("declarator");
+                while let Some(wrapper) = name.filter(|name| MEMBER_WRAPPERS.contains(&name.kind()))
+                {
+                    name = wrapper.named_child(0);
+                }
+                let name = name.filter(|name| name.kind() == c::IDENTIFIER);
+                if let (Some(name), Some(values)) = (name, field("right")) {
+                    out.push(LocalName {
+                        name: context.text(name),
+                        type_name: field("type")
+                            .map(|declared| declared_type(&context.text(declared), false)),
+                        value_start: Some(values.start_byte()),
+                        is_parameter: false,
+                        element: true,
+                        result_index: None,
+                    });
+                }
+            }
+            _ => {
+                let first = out.len();
+                c::declared_names(node, context, out);
+                for local in &mut out[first..] {
+                    local.type_name = local
+                        .type_name
+                        .take()
+                        .map(|declared| declared_type(&declared, false));
+                }
+            }
         }
     }
 
@@ -387,6 +629,9 @@ impl LanguageSpec for Cpp {
         node: Node<'tree>,
         context: &Context<'_, 'tree>,
     ) -> Option<Node<'tree>> {
+        if node.kind() == FIELD_IDENTIFIER {
+            return data_member(node, context).map(|_| node);
+        }
         if node.kind() == LAMBDA_EXPRESSION {
             // A lambda has a name only when a declaration binds it to one variable.
             let declarator = node
@@ -412,6 +657,16 @@ impl LanguageSpec for Cpp {
     }
 
     fn refine<'tree>(&self, draft: &mut Draft<'tree>, context: &Context<'_, 'tree>) -> bool {
+        if draft.kind == SymbolKind::Field {
+            let Some((declaration, array)) = data_member(draft.node, context) else {
+                return false;
+            };
+            draft.return_type = declaration
+                .child_by_field_name("type")
+                .map(|declared| declared_type(&context.text(declared), array));
+            draft.span = Span::of(&declaration);
+            return true;
+        }
         if !c::refine(draft) {
             return false;
         }
@@ -510,6 +765,9 @@ impl LanguageSpec for Cpp {
                 .parent()
                 .and_then(|declarator| declarator.parent())
                 .unwrap_or(node),
+            FIELD_IDENTIFIER => {
+                data_member(node, context).map_or(node, |(declaration, _)| declaration)
+            }
             _ => c::function_holder(node),
         };
         match context.scopes.last() {
@@ -937,6 +1195,193 @@ mod tests {
             [
                 "7 Circle.area>self.scaled UniqueCandidate EnclosingType [shapes.cpp#Circle.scaled]",
                 "11 Circle.area~2>scaled UniqueCandidate EnclosingType [shapes.cpp#Circle.scaled]",
+            ]
+        );
+    }
+    const FIELD_SOURCE: &str = r#"#include <array>
+#include <memory>
+#include <vector>
+
+class Item {
+public:
+    int name() const { return 1; }
+    Item* getOut() { return this; }
+};
+
+class Node {
+public:
+    int run(const std::vector<Item>& given);
+    Item spare;
+
+private:
+    Node* parent_;
+    Item item_, *extra_;
+    Item& ref_;
+    std::unique_ptr<Item> owned_;
+    std::shared_ptr<Node> shared_;
+    std::vector<Item> items_;
+    std::array<Item, 3> fixed_;
+    Item raw_[2];
+    std::vector<std::unique_ptr<Item>> boxes_;
+    int count_ = 0;
+    static int total_;
+    void helper();
+};
+
+int Node::run(const std::vector<Item>& given) {
+    parent_->item_.name();
+    this->parent_->extra_->name();
+    owned_->name();
+    shared_->parent_->spare.name();
+    ref_.getOut()->name();
+    for (auto& each : items_) { each.name(); }
+    for (const auto& each : fixed_) { each.name(); }
+    for (auto each : raw_) { each.name(); }
+    for (auto& each : given) { each.name(); }
+    for (auto& each : this->boxes_) { each->name(); }
+    for (Item each : items_) { each.name(); }
+    std::unique_ptr<Item> local = nullptr;
+    local->name();
+    items_.name();
+    count_.name();
+    this->missing_.name();
+    parent_->missing_.name();
+    return 0;
+}
+"#;
+
+    #[test]
+    fn test_data_members_have_the_declared_type() {
+        use crate::index::extract::testing::fields;
+        assert_eq!(
+            fields(Language::Cpp, FIELD_SOURCE),
+            [
+                "Field spare Node 14-14 not_exported",
+                "Field parent_ Node 17-17 not_exported",
+                "Field item_ Node 18-18 not_exported",
+                "Field extra_ Node 18-18 not_exported",
+                "Field ref_ Node 19-19 not_exported",
+                "Field owned_ Node 20-20 not_exported",
+                "Field shared_ Node 21-21 not_exported",
+                "Field items_ Node 22-22 not_exported",
+                "Field fixed_ Node 23-23 not_exported",
+                "Field raw_ Node 24-24 not_exported",
+                "Field boxes_ Node 25-25 not_exported",
+                "Field count_ Node 26-26 not_exported",
+                "Field total_ Node 27-27 not_exported",
+            ]
+        );
+        // A data member does not change the rows of the other symbols.
+        assert_eq!(
+            rows(Language::Cpp, FIELD_SOURCE),
+            [
+                "Class Item - 5-9 not_exported",
+                "Method name Item 7-7 not_exported",
+                "Method getOut Item 8-8 not_exported",
+                "Class Node - 11-29 not_exported",
+                "Method run Node 13-13 not_exported",
+                "Method helper Node 28-28 not_exported",
+                "Method run Node 31-50 unknown",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_member_chains_and_range_for_give_the_receiver_type() {
+        use crate::index::resolve::testing::rows;
+        let found: Vec<String> = rows(&[("node.cpp", FIELD_SOURCE)], "node.cpp")
+            .into_iter()
+            .filter(|row| row.contains("name ") || row.contains(".getOut "))
+            .map(|row| row.replace("Node.run~2>", "").replace("Node.run>", ""))
+            .collect();
+        let name = "UniqueCandidate ReceiverDeclaredType [node.cpp#Item.name]";
+        let no_type = "Ambiguous NameOnly [node.cpp#Item.name]";
+        assert_eq!(
+            found,
+            [
+                format!("32 parent_->item_::name {name}"),
+                format!("33 (..).name {name}"),
+                format!("34 owned_.name {name}"),
+                format!("35 shared_->parent_->spare::name {name}"),
+                format!("36 (..).name {name}"),
+                "36 ref_.getOut UniqueCandidate ReceiverDeclaredType [node.cpp#Item.getOut]"
+                    .to_string(),
+                format!("37 each.name {name}"),
+                format!("38 each.name {name}"),
+                format!("39 each.name {name}"),
+                format!("40 each.name {name}"),
+                format!("41 each.name {name}"),
+                format!("42 each.name {name}"),
+                format!("44 local.name {name}"),
+                // A collection is not an element.
+                "45 items_.name Unresolved - []".to_string(),
+                "46 count_.name Unresolved - []".to_string(),
+                // A hop without a declared type gives candidates and no edge.
+                format!("47 (..).name {no_type}"),
+                format!("48 parent_->missing_::name {no_type}"),
+            ]
+        );
+    }
+    #[test]
+    fn test_a_member_of_the_smart_pointer_itself_gives_no_edge() {
+        use crate::index::resolve::testing::rows;
+        // `owned_.reset()` calls `std::unique_ptr::reset`. `Item::reset` has
+        // the same name, and an edge to it is false.
+        let source = r#"#include <memory>
+
+class Item {
+public:
+    void reset() {}
+    Item* get() { return this; }
+};
+
+class Holder {
+public:
+    void run(Item& given, std::unique_ptr<Item> passed);
+
+private:
+    std::unique_ptr<Item> owned_;
+    Item plain_;
+    Holder* next_;
+};
+
+void Holder::run(Item& given, std::unique_ptr<Item> passed) {
+    owned_.reset();
+    owned_->reset();
+    this->owned_.reset();
+    next_->owned_.get();
+    passed.reset();
+    passed->reset();
+    Item local;
+    local.reset();
+    given.get();
+    auto made = std::make_unique<Item>();
+    made.reset();
+    plain_.reset();
+}
+"#;
+        let found: Vec<String> = rows(&[("holder.cpp", source)], "holder.cpp")
+            .into_iter()
+            .filter(|row| row.contains("reset ") || row.contains("get "))
+            .map(|row| row.replace("Holder.run~2>", "").replace("Holder.run>", ""))
+            .collect();
+        let reset = "UniqueCandidate ReceiverDeclaredType [holder.cpp#Item.reset]";
+        assert_eq!(
+            found,
+            [
+                // The receiver is not a local name with a declared value type.
+                "20 (..).reset Ambiguous NameOnly [holder.cpp#Item.reset]".to_string(),
+                format!("21 owned_.reset {reset}"),
+                // Lines 22 and 23 have a chain before `.`. They give no row.
+                "24 (..).reset Ambiguous NameOnly [holder.cpp#Item.reset]".to_string(),
+                format!("25 passed.reset {reset}"),
+                // A local name and a parameter with a value type are safe.
+                format!("27 local.reset {reset}"),
+                "28 given.get UniqueCandidate ReceiverDeclaredType [holder.cpp#Item.get]"
+                    .to_string(),
+                "30 (..).reset Ambiguous NameOnly [holder.cpp#Item.reset]".to_string(),
+                // A data member can be a smart pointer in a different file.
+                "31 (..).reset Ambiguous NameOnly [holder.cpp#Item.reset]".to_string(),
             ]
         );
     }

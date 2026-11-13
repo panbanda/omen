@@ -52,4 +52,28 @@ private:
 
 std::string describe();
 
+class Pair {
+public:
+    explicit Pair(Circle* lead) : lead_(lead), next_(nullptr), rest_{lead, lead} {
+    }
+    double lead_area() const {
+        return lead_->area();
+    }
+    double next_area() const {
+        return this->next_->lead_->area();
+    }
+    double rest_area() const {
+        double total = 0.0;
+        for (const auto* member : rest_) {
+            total += member->area();
+        }
+        return total;
+    }
+
+private:
+    Circle* lead_;
+    Pair* next_;
+    Circle* rest_[2];
+};
+
 #endif
