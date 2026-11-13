@@ -52,28 +52,60 @@ caller and one callee name.
 | Repository | Same | Only shared index | Only old index | Different target |
 | --- | --- | --- | --- | --- |
 | rack | 307 | 259 | 276 | 4 |
-| zod | 1,451 | 1,089 | 487 | 56 |
+| zod | 1,449 | 1,087 | 489 | 56 |
 | ripgrep | 1,200 | 2,542 | 6 | 6 |
 | cobra | 1,311 | 203 | 190 | 0 |
-| litellm, Python files | 175,949 | 169,853 | 4,641 | 70 |
+| litellm, Python files | 175,929 | 169,823 | 4,661 | 70 |
 
 A person read the first rows of each class in sorted order and compared them
 with the source. Most rows that only the old index has are a name of the
 standard library that the old index gave to a function of the repository with
 the same name: `next`, `partial`, `err.Error()`, `drop`.
 
+## Calls with name-only candidates
+
+A call for which only the name gives a definition is not an edge. It lists
+the definitions with the name as candidates. `--min-basis name_only` makes an
+edge of each such call that has one candidate.
+
+| Repository | Calls with name-only candidates | Of these, with one candidate |
+| --- | --- | --- |
+| rack | 3,071 | 1,118 |
+| zod | 9,478 | 321 |
+| ripgrep | 2,336 | 905 |
+| cobra | 114 | 112 |
+| litellm, Python files | 62,477 | 11,000 |
+
 ## Labelled cases
 
 `tests/fixtures/quality/real.json` has 42 cases on these repositories. Each
 label comes from the source at the pinned revision, not from the output of an
-index. Checked against the reports of the comparison test, by the file and the
-name of each callee:
+index. `omen benchmark` ran the cases with two binaries:
 
-| Index | Cases that pass |
+| Binary | Cases that pass |
 | --- | --- |
-| Old index | 13 of 42 |
-| Shared index | 42 of 42 |
+| Baseline: main at a233332, before the shared index | 15 of 42 |
+| Candidate: this branch | 42 of 42 |
 
-This check did not go through `omen benchmark`. That command needs a git
-checkout of each repository at its revision, and the measurements above used
-archives of the same revisions.
+No case passes with the baseline and fails with the candidate.
+[shared-index-real.json](shared-index-real.json) has the full report.
+
+The command, with a clean git checkout of each repository at its revision in
+`<real-root>/real-<name>`:
+
+```sh
+omen -f json benchmark \
+  --corpus tests/fixtures/quality/real.json \
+  --real-root <real-root> \
+  --baseline <omen of main at a233332> \
+  --candidate <omen of this branch> \
+  --repetitions 2 --timeout 900
+```
+
+The baseline binary is a debug build and the candidate binary is a release
+build. Thus the times in the report do not compare the two indexes. Use the
+table of the cost above for the time.
+
+The report of `symbol` does not list a definition as its own callee. Two
+cobra cases have a recursive call in the source, and their labels do not
+include it.

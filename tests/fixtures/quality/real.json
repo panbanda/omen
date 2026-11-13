@@ -65,7 +65,9 @@
       "required": [
         "crates/globset/src/lib.rs:is_match_candidate"
       ],
-      "forbidden": ["crates/globset/src/glob.rs:as_ref"],
+      "forbidden": [
+        "crates/globset/src/glob.rs:as_ref"
+      ],
       "oracle": "First is_match declaration, lines 342-344: self.is_match_candidate(...). Generic path.as_ref() is not glob.rs:as_ref (that implementation returns Glob, not Path). Query is ambiguous across impls; check applies to reported primary only. Other edges unreviewed."
     },
     {
@@ -219,11 +221,10 @@
       "revision": "adbc8813901bba65827259daa8e22ff94ec1f30e",
       "query": "command.go:getOut",
       "required": [
-        "command.go:getOut",
         "command.go:HasParent"
       ],
       "forbidden": [],
-      "oracle": "Label from the source. `getOut` returns `c.parent.getOut(def)` when `c.HasParent()`. The call is recursive through the field `parent *Command`."
+      "oracle": "Label from the source. `getOut` returns `c.parent.getOut(def)` when `c.HasParent()`. The recursive call through the field `parent *Command` is not in the label, because the report of `symbol` does not list a definition as its own callee."
     },
     {
       "id": "cobra_same_package_helper",
@@ -246,12 +247,11 @@
       "revision": "adbc8813901bba65827259daa8e22ff94ec1f30e",
       "query": "command.go:SetGlobalNormalizationFunc",
       "required": [
-        "command.go:SetGlobalNormalizationFunc",
         "command.go:Flags",
         "command.go:PersistentFlags"
       ],
       "forbidden": [],
-      "oracle": "Label from the source. The method calls `c.Flags()`, `c.PersistentFlags()`, and `command.SetGlobalNormalizationFunc(n)` for each `command` of `range c.commands`, a field with the type `[]*Command`."
+      "oracle": "Label from the source. The method calls `c.Flags()` and `c.PersistentFlags()`. It also calls itself for each `command` of `range c.commands`. That call is not in the label, because the report of `symbol` does not list a definition as its own callee."
     },
     {
       "id": "ripgrep_close_field_receiver",
@@ -391,19 +391,17 @@
       "oracle": "Label from the source. The file imports the workspace package `zod`, whose package.json exports the source entry. `z.discriminatedUnion` and `z.object` are functions of the classic schemas module."
     },
     {
-      "id": "zod_normalize_params_namespace",
+      "id": "zod_namespace_import_strict_object",
       "language": "typescript",
       "repository": "colinhacks/zod",
       "directory": "real-zod",
       "revision": "59bbc03e10c636b9eb3c393dfeb552819774ec21",
-      "query": "packages/zod/src/v4/classic/schemas.ts:lowercase",
+      "query": "packages/bench/init.ts:zod4",
       "required": [
-        "packages/zod/src/v4/core/api.ts:_lowercase"
+        "packages/zod/src/v4/classic/schemas.ts:strictObject"
       ],
-      "forbidden": [
-        "packages/zod/src/v4/classic/schemas.ts:lowercase"
-      ],
-      "oracle": "Label from the source. The method `lowercase` at line 427 calls `checks.lowercase(...)`, which the checks module exports again from core/api.ts `_lowercase`. It does not call itself."
+      "forbidden": [],
+      "oracle": "Label from the source. Line 1: `import * as z4 from \"zod\"`. The method `zod4` at line 66 calls `z4.strictObject(...)`. The package exports `src/index.ts`, which exports the classic module again, and `strictObject` is at line 1745 of classic/schemas.ts."
     },
     {
       "id": "zod_set_has_builtin",
