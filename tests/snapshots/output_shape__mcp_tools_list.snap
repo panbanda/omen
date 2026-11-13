@@ -19,7 +19,7 @@ expression: "responses[0]"
             },
             "format": {
               "default": "json",
-              "description": "The output format. With `markdown`, the result is text without an envelope.",
+              "description": "The output format. With `markdown`, the result is text without an envelope. `limit` and `offset` then apply to the symbols in the text.",
               "enum": [
                 "json",
                 "markdown"
@@ -29,28 +29,33 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "max_risks": {
               "description": "The maximum number of risks.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "max_symbols": {
               "description": "The maximum number of symbols. The default comes from `max_tokens`.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "max_tokens": {
               "default": 8000,
               "description": "The token budget. The tool removes content until the result is in the budget.",
+              "maximum": 4294967295,
               "minimum": 1,
               "type": "integer"
             },
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -75,12 +80,14 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -101,12 +108,14 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -127,12 +136,14 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -153,12 +164,14 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -179,12 +192,14 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -212,12 +227,14 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -238,18 +255,21 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "min_tokens": {
               "default": 50,
               "description": "The minimum number of tokens in a clone.",
+              "maximum": 4294967295,
               "minimum": 1,
               "type": "integer"
             },
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -283,12 +303,14 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -309,12 +331,14 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -343,12 +367,14 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -369,12 +395,14 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -395,12 +423,14 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -427,12 +457,14 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -460,12 +492,14 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -486,12 +520,14 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -512,12 +548,14 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -543,18 +581,21 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "max_symbols": {
               "default": 0,
               "description": "The maximum number of symbols that the analyzer keeps. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -575,12 +616,14 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -601,12 +644,14 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -615,12 +660,11 @@ expression: "responses[0]"
               "type": "string"
             },
             "provider": {
-              "description": "The flag provider to find, such as `launchdarkly` or `unleash`. The default is the providers in the configuration.",
+              "description": "The flag provider to find, such as `launchdarkly` or `unleash`. The default is `feature_flags.providers` in the configuration.",
               "type": "string"
             },
             "stale_days": {
-              "default": 14,
-              "description": "The age in days after which a flag is stale.",
+              "description": "The age in days after which a flag is stale. When the configuration has the value 0, the server uses 14. The default is `feature_flags.stale_days` in the configuration.",
               "maximum": 36500,
               "minimum": 0,
               "type": "integer"
@@ -638,12 +682,14 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -678,11 +724,13 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "max_complexity": {
               "description": "The maximum cyclomatic complexity of a result. The tool removes symbols above this value.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -696,6 +744,7 @@ expression: "responses[0]"
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -706,6 +755,7 @@ expression: "responses[0]"
             "top_k": {
               "default": 10,
               "description": "The maximum number of results.",
+              "maximum": 4294967295,
               "minimum": 1,
               "type": "integer"
             }
@@ -735,12 +785,14 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "max_source_lines": {
               "default": 200,
               "description": "The maximum number of source lines in the result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -751,6 +803,7 @@ expression: "responses[0]"
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -760,6 +813,7 @@ expression: "responses[0]"
             },
             "start_line": {
               "description": "The line on which the definition starts. Use it to select one of two definitions with the same name.",
+              "maximum": 4294967295,
               "minimum": 1,
               "type": "integer"
             }
@@ -805,6 +859,7 @@ expression: "responses[0]"
             },
             "start_line": {
               "description": "The line on which the definition starts. Use it to select one of two definitions with the same name.",
+              "maximum": 4294967295,
               "minimum": 1,
               "type": "integer"
             }
@@ -829,6 +884,7 @@ expression: "responses[0]"
             "depth": {
               "default": 2,
               "description": "The maximum depth of the traversal.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -845,12 +901,14 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -896,11 +954,13 @@ expression: "responses[0]"
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
             "max_complexity": {
               "description": "The maximum cyclomatic complexity of a result. The tool removes symbols above this value.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -914,6 +974,7 @@ expression: "responses[0]"
             "offset": {
               "default": 0,
               "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
             },
@@ -924,6 +985,7 @@ expression: "responses[0]"
             "top_k": {
               "default": 10,
               "description": "The maximum number of results.",
+              "maximum": 4294967295,
               "minimum": 1,
               "type": "integer"
             }

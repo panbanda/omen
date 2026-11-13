@@ -2,7 +2,7 @@
 
 use serde_json::{json, Map, Value};
 
-use super::{Param, ParamDefault, ParamType, ToolSpec, MAX_COUNT};
+use super::{Param, ParamDefault, ParamType, ToolSpec};
 
 /// The entry of one tool in the `tools/list` result.
 pub(in crate::mcp) fn tool_definition(spec: &ToolSpec) -> Value {
@@ -38,11 +38,6 @@ pub(in crate::mcp) fn input_schema(spec: &ToolSpec) -> Value {
 fn property(param: &Param) -> Value {
     let mut property = match param.kind {
         ParamType::String => json!({"type": "string"}),
-        // `MAX_COUNT` is the limit of the integer type, not a limit of the
-        // parameter. The schema does not show it, to keep `tools/list` small.
-        ParamType::Integer { minimum, maximum } if maximum == MAX_COUNT => {
-            json!({"type": "integer", "minimum": minimum})
-        }
         ParamType::Integer { minimum, maximum } => {
             json!({"type": "integer", "minimum": minimum, "maximum": maximum})
         }
@@ -53,14 +48,24 @@ fn property(param: &Param) -> Value {
         ParamType::Enum(values) => json!({"type": "string", "enum": values}),
         ParamType::StringArray => json!({"type": "array", "items": {"type": "string"}}),
     };
-    property["description"] = json!(param.description);
-    if let Some(default) = param.default {
-        property["default"] = match default {
-            ParamDefault::String(value) => json!(value),
-            ParamDefault::Integer(value) => json!(value),
-            ParamDefault::Number(value) => json!(value),
-            ParamDefault::Boolean(value) => json!(value),
-        };
+    property["description"] = match param.default {
+        Some(ParamDefault::Configuration(key)) => json!(format!(
+            "{} The default is `{key}` in the configuration.",
+            param.description
+        )),
+        _ => json!(param.description),
+    };
+    let default = match param.default {
+        Some(ParamDefault::String(value)) => Some(json!(value)),
+        Some(ParamDefault::Integer(value)) => Some(json!(value)),
+        Some(ParamDefault::Number(value)) => Some(json!(value)),
+        Some(ParamDefault::Boolean(value)) => Some(json!(value)),
+        // The value is not the same for each server, thus the schema cannot
+        // show it. The description above names the configuration key.
+        Some(ParamDefault::Configuration(_)) | None => None,
+    };
+    if let Some(default) = default {
+        property["default"] = default;
     }
     property
 }
@@ -146,8 +151,43 @@ mod tests {
         assert_eq!(properties["direction"]["default"], "both");
         assert_eq!(properties["limit"]["default"], 50);
         assert_eq!(properties["limit"]["minimum"], 0);
-        assert!(properties["limit"].get("maximum").is_none());
+        assert_eq!(properties["limit"]["maximum"], 4294967295_u64);
         assert_eq!(properties["offset"]["default"], 0);
+    }
+
+    #[test]
+    fn each_integer_property_has_the_bounds_that_the_validation_applies() {
+        for spec in super::super::all() {
+            let schema = input_schema(spec);
+            for param in spec.parameters() {
+                if let ParamType::Integer { minimum, maximum } = param.kind {
+                    let property = &schema["properties"][param.name];
+                    assert_eq!(property["minimum"], minimum, "{}.{}", spec.name, param.name);
+                    assert_eq!(property["maximum"], maximum, "{}.{}", spec.name, param.name);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_default_from_the_configuration_is_not_in_the_schema() {
+        for (tool, param) in [
+            ("flags", "stale_days"),
+            ("flags", "provider"),
+            ("defect", "days"),
+            ("hotspot", "days"),
+        ] {
+            let schema = input_schema(find(tool).expect("specification"));
+            let property = &schema["properties"][param];
+            assert!(property.get("default").is_none(), "{tool}.{param}");
+            assert!(
+                property["description"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("in the configuration."),
+                "{tool}.{param}"
+            );
+        }
     }
 
     #[test]

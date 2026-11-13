@@ -48,7 +48,8 @@ pub(super) static CONTEXT: ToolSpec = ToolSpec {
         Param::choice(
             "format",
             &["json", "markdown"],
-            "The output format. With `markdown`, the result is text without an envelope.",
+            "The output format. With `markdown`, the result is text without an envelope. \
+             `limit` and `offset` then apply to the symbols in the text.",
         )
         .with_default(ParamDefault::String("json")),
         COMPACT,
@@ -74,6 +75,15 @@ fn context(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
     crate::context::apply_token_budget(&mut context, max_tokens);
 
     if arguments.string("format") == Some("markdown") {
+        // The text has no envelope, thus apply the page to the symbols here.
+        let offset = arguments.count("offset").unwrap_or(0);
+        let limit = arguments.count("limit").unwrap_or(0);
+        context
+            .top_symbols
+            .drain(0..offset.min(context.top_symbols.len()));
+        if limit > 0 {
+            context.top_symbols.truncate(limit);
+        }
         return Ok(ToolOutput::Text(context.render_markdown()));
     }
     Ok(ToolOutput::data(serde_json::to_value(&context)?))

@@ -617,6 +617,180 @@ mod tests {
     }
 
     #[test]
+    fn score_with_limit_1_gives_one_component_and_each_envelope_field() {
+        let (server, dir) = create_test_server();
+        write_call_chain(dir.path(), 3);
+        let full = envelope_of(&server, "score", json!({"limit": 0}));
+        let names: Vec<String> = full["result"]["components"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        assert!(names.len() > 1, "the result must have many components");
+        assert_eq!(full["total_items"], names.len());
+        assert_eq!(full["returned"], names.len());
+        assert_eq!(full["has_more"], false);
+        assert_eq!(full["truncated"], json!([]));
+
+        let first = envelope_of(&server, "score", json!({"limit": 1}));
+        assert_eq!(first["tool"], "score");
+        assert_eq!(first["total_items"], names.len());
+        assert_eq!(first["returned"], 1);
+        assert_eq!(first["offset"], 0);
+        assert_eq!(first["has_more"], true);
+        assert_eq!(first["next_offset"], 1);
+        assert_eq!(
+            first["truncated"],
+            json!([{"path": "/components", "total": names.len(), "returned": 1}])
+        );
+        let components = first["result"]["components"].as_object().unwrap();
+        assert_eq!(components.keys().collect::<Vec<_>>(), [&names[0]]);
+        assert_eq!(
+            first["result"]["skipped_components"],
+            full["result"]["skipped_components"]
+        );
+        assert_eq!(
+            first["result"]["overall_score"],
+            full["result"]["overall_score"]
+        );
+    }
+
+    /// Calls a tool one page at a time until `has_more` is false, and makes
+    /// sure that the pages together hold the items of the call without a limit.
+    fn assert_pages_give_all_items(
+        server: &McpServer,
+        tool: &str,
+        arguments: Value,
+        limit: usize,
+        items: fn(&Value) -> Vec<Value>,
+    ) {
+        let with = |extra: Value| {
+            let mut all = arguments.clone();
+            all.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            envelope_of(server, tool, all)
+        };
+        let expected = items(&with(json!({"limit": 0}))["result"]);
+        assert!(expected.len() > limit, "{tool}: the fixture is too small");
+        let mut collected = Vec::new();
+        let mut offset = 0;
+        loop {
+            let page = with(json!({"limit": limit, "offset": offset}));
+            let page_items = items(&page["result"]);
+            assert_eq!(page["returned"], page_items.len(), "{tool}");
+            assert_eq!(page["total_items"], expected.len(), "{tool}");
+            collected.extend(page_items);
+            if page["has_more"] == false {
+                assert!(page["next_offset"].is_null());
+                break;
+            }
+            let next = page["next_offset"].as_u64().unwrap() as usize;
+            assert!(next > offset, "{tool}: the offset must increase");
+            offset = next;
+        }
+        assert_eq!(collected, expected, "{tool}");
+    }
+
+    fn nested_items(result: &Value, parents: &[&str], child: &str) -> Vec<Value> {
+        parents
+            .iter()
+            .filter_map(|parent| result[*parent].as_array())
+            .flatten()
+            .filter_map(|element| element[child].as_array())
+            .flatten()
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn the_pages_of_the_tools_with_a_nested_primary_list_give_all_items() {
+        let (server, dir) = create_test_server();
+        write_call_chain(dir.path(), 7);
+        std::fs::write(
+            dir.path().join("second.rs"),
+            "fn middle() { bottom(); }\nfn top() { middle(); }\nfn bottom() {}\n",
+        )
+        .unwrap();
+        assert_pages_give_all_items(&server, "complexity", json!({}), 3, |result| {
+            nested_items(result, &["files"], "functions")
+        });
+        // `middle` has one caller and one callee, thus the pages go from the
+        // `callers` list to the `callees` list.
+        assert_pages_give_all_items(
+            &server,
+            "impact",
+            json!({"symbol": "middle"}),
+            1,
+            |result| nested_items(result, &["callers", "callees"], "symbols"),
+        );
+        assert_pages_give_all_items(
+            &server,
+            "impact",
+            json!({"symbol": "target"}),
+            2,
+            |result| nested_items(result, &["callers", "callees"], "symbols"),
+        );
+        assert_pages_give_all_items(&server, "score", json!({}), 2, |result| {
+            result["components"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(name, component)| json!([name, component]))
+                .collect()
+        });
+    }
+
+    fn write_symbols(directory: &Path) {
+        std::fs::write(
+            directory.join("symbols.rs"),
+            "pub fn alpha_symbol() { beta_symbol(); }\npub fn beta_symbol() { gamma_symbol(); }\npub fn gamma_symbol() {}\n",
+        )
+        .unwrap();
+    }
+
+    fn markdown_symbols(server: &McpServer, extra: Value) -> Vec<&'static str> {
+        let mut arguments = json!({"format": "markdown"});
+        arguments
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let result = call(server, "context", arguments);
+        assert!(result.get("isError").is_none(), "{result}");
+        let text = result["content"][0]["text"].as_str().unwrap().to_string();
+        ["alpha_symbol", "beta_symbol", "gamma_symbol"]
+            .into_iter()
+            .filter(|name| text.contains(name))
+            .collect()
+    }
+
+    #[test]
+    fn context_markdown_applies_limit_and_offset_to_the_symbols() {
+        let (server, dir) = create_test_server();
+        write_symbols(dir.path());
+        let json_order: Vec<String> = envelope_of(&server, "context", json!({}))["result"]
+            ["top_symbols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|symbol| symbol["name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(json_order.len(), 3);
+        assert_eq!(markdown_symbols(&server, json!({})).len(), 3);
+        assert_eq!(markdown_symbols(&server, json!({"limit": 0})).len(), 3);
+        assert_eq!(
+            markdown_symbols(&server, json!({"limit": 1})),
+            [json_order[0].as_str()]
+        );
+        assert_eq!(
+            markdown_symbols(&server, json!({"limit": 1, "offset": 1})),
+            [json_order[1].as_str()]
+        );
+        assert!(markdown_symbols(&server, json!({"offset": 3})).is_empty());
+    }
+
+    #[test]
     fn initialize_gives_instructions_for_an_agent() {
         let (server, _dir) = create_test_server();
         let result = server.handle_initialize().unwrap();

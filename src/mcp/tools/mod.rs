@@ -68,6 +68,9 @@ pub(super) enum ParamDefault {
     Integer(u64),
     Number(f64),
     Boolean(bool),
+    /// The value comes from this key of the configuration. The schema shows
+    /// no default, and it adds a sentence with the key to the description.
+    Configuration(&'static str),
 }
 
 /// The list in the result to which `limit` and `offset` apply.
@@ -85,8 +88,9 @@ pub(super) enum Pagination {
     },
     /// The arrays that are the elements of one array, as one sequence.
     Children(&'static str),
-    /// Each array at the top level of the result, independently.
-    AllLists,
+    /// The entries of one object at the top level of the result, in the
+    /// sequence of their keys.
+    Entries(&'static str),
 }
 
 impl Param {
@@ -239,6 +243,20 @@ pub(super) fn names() -> &'static [&'static str] {
     NAMES.get_or_init(|| TOOLS.iter().map(|spec| spec.name).collect())
 }
 
+/// The integer that a JSON number holds.
+///
+/// JSON Schema accepts a number with a zero fraction, such as `30.0`, as an
+/// integer. Thus this function accepts it also.
+pub(super) fn integer_value(value: &Value) -> Option<u64> {
+    if let Some(integer) = value.as_u64() {
+        return Some(integer);
+    }
+    let number = value.as_f64()?;
+    // An `f64` holds each integer to 2^53 exactly. All bounds are below that.
+    let exact = number.fract() == 0.0 && (0.0..=9_007_199_254_740_992.0).contains(&number);
+    exact.then_some(number as u64)
+}
+
 /// The arguments of one call, read through the specification of the tool.
 ///
 /// Each accessor gives the value from the call, or the default of the
@@ -270,11 +288,6 @@ impl<'a> Arguments<'a> {
         self.values.and_then(|values| values.get(name))
     }
 
-    /// True when the call gives a value for the parameter.
-    pub(super) fn given(&self, name: &str) -> bool {
-        self.param(name).is_some() && self.value(name).is_some()
-    }
-
     pub(super) fn string(&self, name: &str) -> Option<&'a str> {
         let param = self.param(name)?;
         self.value(name)
@@ -288,7 +301,7 @@ impl<'a> Arguments<'a> {
     pub(super) fn integer(&self, name: &str) -> Option<u64> {
         let param = self.param(name)?;
         self.value(name)
-            .and_then(Value::as_u64)
+            .and_then(integer_value)
             .or(match param.default {
                 Some(ParamDefault::Integer(default)) => Some(default),
                 _ => None,
@@ -453,7 +466,7 @@ mod tests {
             for param in spec.parameters() {
                 let agrees = matches!(
                     (param.kind, param.default),
-                    (_, None)
+                    (_, None | Some(ParamDefault::Configuration(_)))
                         | (ParamType::String, Some(ParamDefault::String(_)))
                         | (ParamType::Integer { .. }, Some(ParamDefault::Integer(_)))
                         | (ParamType::Number { .. }, Some(ParamDefault::Number(_)))
@@ -469,6 +482,27 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_parameters_with_a_default_from_the_configuration_are_known() {
+        let mut found = Vec::new();
+        for spec in all() {
+            for param in spec.parameters() {
+                if let Some(ParamDefault::Configuration(key)) = param.default {
+                    found.push((spec.name, param.name, key));
+                }
+            }
+        }
+        assert_eq!(
+            found,
+            [
+                ("defect", "days", "defect.churn_days"),
+                ("hotspot", "days", "hotspot.days"),
+                ("flags", "provider", "feature_flags.providers"),
+                ("flags", "stale_days", "feature_flags.stale_days"),
+            ]
+        );
     }
 
     #[test]

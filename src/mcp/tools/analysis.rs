@@ -109,13 +109,8 @@ pub(super) static DEFECT: ToolSpec = ToolSpec {
     description: "Gives the defect probability of each file from PMAT metrics.",
     params: &[
         PATH,
-        Param::integer(
-            "days",
-            1,
-            MAX_DAYS,
-            "The number of days of git history to read. \
-             The default is `defect.churn_days` in the configuration.",
-        ),
+        Param::integer("days", 1, MAX_DAYS, DAYS_DESCRIPTION)
+            .with_default(ParamDefault::Configuration("defect.churn_days")),
     ],
     paginated: Pagination::Field("files"),
     handler: |server, arguments| {
@@ -190,13 +185,8 @@ pub(super) static HOTSPOT: ToolSpec = ToolSpec {
     description: "Finds the files that have high churn and high complexity.",
     params: &[
         PATH,
-        Param::integer(
-            "days",
-            1,
-            MAX_DAYS,
-            "The number of days of git history to read. \
-             The default is `hotspot.days` in the configuration.",
-        ),
+        Param::integer("days", 1, MAX_DAYS, DAYS_DESCRIPTION)
+            .with_default(ParamDefault::Configuration("hotspot.days")),
     ],
     paginated: Pagination::Field("hotspots"),
     handler: |server, arguments| {
@@ -289,23 +279,23 @@ pub(super) static FLAGS: ToolSpec = ToolSpec {
         PATH,
         Param::string(
             "provider",
-            "The flag provider to find, such as `launchdarkly` or `unleash`. \
-             The default is the providers in the configuration.",
-        ),
+            "The flag provider to find, such as `launchdarkly` or `unleash`.",
+        )
+        .with_default(ParamDefault::Configuration("feature_flags.providers")),
         Param::integer(
             "stale_days",
             0,
             MAX_DAYS,
-            "The age in days after which a flag is stale.",
+            "The age in days after which a flag is stale. \
+             When the configuration has the value 0, the server uses 14.",
         )
-        .with_default(ParamDefault::Integer(14)),
+        .with_default(ParamDefault::Configuration("feature_flags.stale_days")),
     ],
     paginated: Pagination::Field("flags"),
     handler: flags,
 };
 
 fn flags(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
-    let stale_days = arguments.count_u32("stale_days").unwrap_or(14);
     let providers: Vec<String> = arguments
         .string("provider")
         .map(|provider| vec![provider.to_string()])
@@ -314,23 +304,23 @@ fn flags(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
     if !providers.is_empty() {
         config.feature_flags.providers = providers.clone();
     }
-    if arguments.given("stale_days") {
+    // Without the argument, the analyzer uses the configured value, or 14
+    // when the configured value is 0.
+    let mut analyzer = crate::analyzers::flags::Analyzer::new().with_providers(providers);
+    if let Some(stale_days) = arguments.count_u32("stale_days") {
+        // A configured value above 0 has priority in the analyzer, thus the
+        // argument must replace it. The value 0 selects the second setting.
         config.feature_flags.stale_days = stale_days;
+        analyzer = analyzer.with_expected_ttl(stale_days);
     }
-    server.analyze_with_config(
-        arguments,
-        &config,
-        crate::analyzers::flags::Analyzer::new()
-            .with_expected_ttl(stale_days)
-            .with_providers(providers),
-    )
+    server.analyze_with_config(arguments, &config, analyzer)
 }
 
 pub(super) static SCORE: ToolSpec = ToolSpec {
     name: "score",
     description: "Gives the health score of the repository and the score of each component.",
     params: &[PATH],
-    paginated: Pagination::AllLists,
+    paginated: Pagination::Entries("components"),
     handler: |server, arguments| {
         server.analyze(
             arguments,

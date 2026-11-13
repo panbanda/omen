@@ -95,23 +95,16 @@ impl Paging {
 fn count_all_lists(value: &Value) -> Option<usize> {
     match value {
         Value::Array(items) => Some(items.len()),
-        Value::Object(_) => {
-            let lengths = list_lengths(value);
-            (!lengths.is_empty()).then(|| lengths.iter().map(|(_, length)| length).sum())
+        Value::Object(entries) => {
+            let lengths: Vec<usize> = entries
+                .values()
+                .filter_map(Value::as_array)
+                .map(Vec::len)
+                .collect();
+            (!lengths.is_empty()).then(|| lengths.iter().sum())
         }
         _ => None,
     }
-}
-
-/// The name and the length of each array at the top level of an object, in
-/// the sequence of the names.
-fn list_lengths(value: &Value) -> Vec<(String, usize)> {
-    value
-        .as_object()
-        .into_iter()
-        .flatten()
-        .filter_map(|(name, entry)| Some((name.clone(), entry.as_array()?.len())))
-        .collect()
 }
 
 /// One limit and one offset that apply to many arrays as one sequence.
@@ -218,35 +211,26 @@ fn paginate(pagination: Pagination, value: &mut Value, page: Page) -> Paging {
             );
             sequence.finish()
         }
-        Pagination::AllLists => paginate_all_lists(value, page),
-    }
-}
-
-/// Cuts each array at the top level with the same limit and offset.
-fn paginate_all_lists(value: &mut Value, page: Page) -> Paging {
-    let before = list_lengths(value);
-    let total = count_all_lists(value);
-    crate::output::truncate_lists(value, page.limit, page.offset);
-    let after = list_lengths(value);
-
-    let mut has_more = false;
-    let mut truncated = Vec::new();
-    for ((name, total), (_, returned)) in before.into_iter().zip(after) {
-        has_more |= page.offset.saturating_add(returned) < total;
-        if returned < total {
-            truncated.push(Truncation {
-                path: format!("/{name}"),
-                total,
-                returned,
-            });
+        Pagination::Entries(field) => {
+            let Some(entries) = value.get_mut(field).and_then(Value::as_object_mut) else {
+                return Paging::untouched(None);
+            };
+            // The map has its keys in sorted sequence, thus the pages are stable.
+            let mut items: Vec<Value> = std::mem::take(entries)
+                .into_iter()
+                .map(|(key, entry)| json!([key, entry]))
+                .collect();
+            let mut sequence = Sequence::new(page);
+            sequence.apply(format!("/{field}"), std::iter::once(&mut items));
+            for item in items {
+                if let Value::Array(mut pair) = item {
+                    if let (Some(entry), Some(Value::String(key))) = (pair.pop(), pair.pop()) {
+                        entries.insert(key, entry);
+                    }
+                }
+            }
+            sequence.finish()
         }
-    }
-    Paging {
-        total,
-        returned: count_all_lists(value),
-        // Each list moves forward by the limit, not by the sum of the items.
-        next_offset: has_more.then(|| page.offset.saturating_add(page.limit)),
-        truncated,
     }
 }
 
@@ -325,7 +309,13 @@ mod tests {
             git_skipped_reason: Some("not a git repository".to_string()),
             ..ToolData::new(json!({"components": {}}))
         };
-        let envelope = build("score", Pagination::AllLists, data, DEFAULT_PAGE, false);
+        let envelope = build(
+            "score",
+            Pagination::Entries("components"),
+            data,
+            DEFAULT_PAGE,
+            false,
+        );
         assert_eq!(envelope["git_skipped_reason"], "not a git repository");
     }
 
@@ -410,53 +400,143 @@ mod tests {
         assert_eq!(envelope["result"]["choices"], json!([1, 2]));
     }
 
+    const COMPONENTS: Pagination = Pagination::Entries("components");
+
+    fn score_result() -> Value {
+        json!({
+            "overall_score": 80,
+            "components": {
+                "cohesion": {"score": 90}, "complexity": {"score": 70}, "satd": {"score": 60}
+            },
+            "skipped_components": [{"name": "coupling"}, {"name": "smells"}]
+        })
+    }
+
     #[test]
-    fn all_lists_pagination_counts_and_cuts_each_list() {
-        let components: Vec<i64> = (0..101).collect();
-        let smells: Vec<i64> = (0..10).collect();
-        let envelope = envelope(
-            "score",
-            Pagination::AllLists,
-            json!({"components": components, "smells": smells}),
-            page(5, 0),
-        );
-        assert_eq!(envelope["total_items"], 111);
-        assert_eq!(envelope["returned"], 10);
-        assert_eq!(envelope["has_more"], true);
-        assert_eq!(envelope["next_offset"], 5);
+    fn entries_pagination_with_limit_1_gives_the_first_entry_and_each_envelope_field() {
+        let envelope = envelope("score", COMPONENTS, score_result(), page(1, 0));
         assert_eq!(
-            envelope["truncated"],
-            json!([
-                {"path": "/components", "total": 101, "returned": 5},
-                {"path": "/smells", "total": 10, "returned": 5}
-            ])
+            envelope,
+            json!({
+                "tool": "score",
+                "total_items": 3,
+                "returned": 1,
+                "offset": 0,
+                "has_more": true,
+                "next_offset": 1,
+                "truncated": [{"path": "/components", "total": 3, "returned": 1}],
+                "result": {
+                    "overall_score": 80,
+                    "components": {"cohesion": {"score": 90}},
+                    "skipped_components": [{"name": "coupling"}, {"name": "smells"}]
+                }
+            })
         );
     }
 
     #[test]
-    fn all_lists_pagination_has_more_until_the_longest_list_ends() {
-        let value = json!({"long": [1, 2, 3, 4, 5, 6, 7], "short": [1, 2]});
-        let middle = envelope("score", Pagination::AllLists, value.clone(), page(3, 3));
-        assert_eq!(middle["result"]["long"], json!([4, 5, 6]));
-        assert_eq!(middle["result"]["short"], json!([]));
-        assert_eq!(middle["next_offset"], 6);
-        let last = envelope("score", Pagination::AllLists, value, page(3, 6));
-        assert_eq!(last["result"]["long"], json!([7]));
-        assert_eq!(last["has_more"], false);
+    fn entries_pagination_applies_the_offset_in_the_sequence_of_the_keys() {
+        let envelope = envelope("score", COMPONENTS, score_result(), page(5, 1));
+        assert_eq!(
+            envelope["result"]["components"],
+            json!({"complexity": {"score": 70}, "satd": {"score": 60}})
+        );
+        assert_eq!(envelope["total_items"], 3);
+        assert_eq!(envelope["returned"], 2);
+        assert_eq!(envelope["has_more"], false);
+        assert!(envelope["next_offset"].is_null());
     }
 
     #[test]
-    fn a_result_without_a_list_has_null_counts() {
-        let envelope = envelope(
-            "score",
-            Pagination::AllLists,
-            json!({"score": 90}),
-            DEFAULT_PAGE,
-        );
+    fn entries_pagination_has_null_counts_without_the_object() {
+        let envelope = envelope("score", COMPONENTS, json!({"score": 90}), DEFAULT_PAGE);
         assert!(envelope["total_items"].is_null());
         assert!(envelope["returned"].is_null());
         assert_eq!(envelope["has_more"], false);
         assert_eq!(envelope["truncated"], json!([]));
+    }
+
+    /// The items of the primary list of a result, as one sequence.
+    fn primary_items(pagination: Pagination, result: &Value) -> Vec<Value> {
+        let arrays = |values: Vec<&Value>| -> Vec<Value> {
+            values
+                .into_iter()
+                .filter_map(Value::as_array)
+                .flatten()
+                .cloned()
+                .collect()
+        };
+        match pagination {
+            Pagination::None => Vec::new(),
+            Pagination::Field(field) => arrays(vec![&result[field]]),
+            Pagination::Nested { parents, child } => arrays(
+                parents
+                    .iter()
+                    .filter_map(|parent| result[*parent].as_array())
+                    .flatten()
+                    .map(|element| &element[child])
+                    .collect(),
+            ),
+            Pagination::Children(field) => {
+                arrays(result[field].as_array().into_iter().flatten().collect())
+            }
+            Pagination::Entries(field) => result[field]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .map(|(key, entry)| json!([key, entry]))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn the_pages_of_each_pagination_kind_give_each_item_one_time() {
+        let level = |names: &[&str]| json!({"symbols": names});
+        let cases = [
+            (
+                ITEMS,
+                json!({"items": [1, 2, 3, 4, 5, 6, 7], "other": [1, 2]}),
+            ),
+            (FUNCTIONS, files_with_functions()),
+            (
+                Pagination::Nested {
+                    parents: &["callers", "callees"],
+                    child: "symbols",
+                },
+                json!({
+                    "callers": [level(&["a", "b"]), level(&[]), level(&["c"])],
+                    "callees": [level(&["d", "e", "f"])]
+                }),
+            ),
+            (
+                Pagination::Children("cycles"),
+                json!({"cycles": [["a", "b"], [], ["c", "d", "e"]], "nodes": [1, 2, 3]}),
+            ),
+            (COMPONENTS, score_result()),
+        ];
+        for (pagination, result) in cases {
+            let all = primary_items(pagination, &result);
+            for limit in [1, 2, 3, 7, 1000] {
+                let mut collected = Vec::new();
+                let mut offset = 0;
+                loop {
+                    let page = envelope("tool", pagination, result.clone(), page(limit, offset));
+                    let items = primary_items(pagination, &page["result"]);
+                    assert_eq!(page["returned"], items.len(), "{pagination:?}");
+                    assert_eq!(page["total_items"], all.len(), "{pagination:?}");
+                    assert_eq!(page["offset"], offset);
+                    collected.extend(items);
+                    if page["has_more"] == false {
+                        assert!(page["next_offset"].is_null());
+                        break;
+                    }
+                    let next = page["next_offset"].as_u64().expect("next offset") as usize;
+                    assert!(next > offset, "{pagination:?}: the offset must increase");
+                    offset = next;
+                }
+                assert_eq!(collected, all, "{pagination:?} with limit {limit}");
+            }
+        }
     }
 
     fn files_with_functions() -> Value {

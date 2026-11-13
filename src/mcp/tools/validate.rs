@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use super::{Arguments, Param, ParamType, ToolSpec};
+use super::{integer_value, Arguments, Param, ParamType, ToolSpec};
 use crate::mcp::error::{ErrorCode, ToolError};
 
 /// Checks the arguments of one call.
@@ -112,9 +112,9 @@ fn expected(param: &Param) -> String {
 fn check(param: &Param, value: &Value) -> bool {
     match param.kind {
         ParamType::String => value.is_string(),
-        ParamType::Integer { minimum, maximum } => value
-            .as_u64()
-            .is_some_and(|number| (minimum..=maximum).contains(&number)),
+        ParamType::Integer { minimum, maximum } => {
+            integer_value(value).is_some_and(|number| (minimum..=maximum).contains(&number))
+        }
         ParamType::Number { minimum, maximum } => value
             .as_f64()
             .is_some_and(|number| (minimum..=maximum).contains(&number)),
@@ -249,6 +249,19 @@ mod tests {
             assert_eq!(problem.param.as_deref(), Some("depth"));
             assert_eq!(problem.expected.as_deref(), Some("an integer from 0 to 4"));
             assert_eq!(problem.received, Some(wrong));
+        }
+    }
+
+    #[test]
+    fn a_number_without_a_fraction_is_a_valid_integer() {
+        let values = json!({"name": "run", "depth": 3.0, "limit": 7.0});
+        let arguments = validate(&SAMPLE, &values).expect("3.0 is an integer in JSON Schema");
+        assert_eq!(arguments.integer("depth"), Some(3));
+        assert_eq!(arguments.count("limit"), Some(7));
+
+        for wrong in [json!(3.5), json!(5.0), json!(-1.0), json!(1e300)] {
+            let problem = one_problem(json!({"name": "run", "depth": wrong}));
+            assert_eq!(problem.code, ErrorCode::InvalidArgument, "{wrong}");
         }
     }
 

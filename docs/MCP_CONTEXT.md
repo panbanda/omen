@@ -28,6 +28,11 @@ The server validates the arguments of each call before it runs the tool. Each
 input schema has `additionalProperties: false`. The server does not replace an
 incorrect value with a default. One call reports all its problems.
 
+The schema shows each bound that the validation applies. A number with a zero
+fraction, such as `30.0`, is a valid integer. The schema shows a `default` only
+when the value is the same for each server. When a default comes from the
+configuration, the description of the parameter names the configuration key.
+
 | Code | Cause |
 |---|---|
 | `missing_argument` | A required argument is absent. |
@@ -92,15 +97,20 @@ Each tool gives its result in the same envelope:
 `path` in `truncated` is a JSON pointer from `result`. The segment `*` means
 each element of an array, such as `/files/*/functions`.
 
-`limit` has the default 50, and the value 0 removes the limit. `score` cuts
-each of its lists with the same `limit` and `offset`. Thus its `next_offset` is
-`offset` plus `limit`.
+`limit` has the default 50, and the value 0 removes the limit. When `has_more`
+is `true`, send the same call with `offset` set to `next_offset`. The pages
+together hold each item one time.
+
+The primary list of `score` is the `components` object. `limit` and `offset`
+apply to its entries in the sequence of their keys. `skipped_components` and
+the overall score are complete on each page.
+
+`context` with `format: "markdown"` gives text without an envelope. `limit` and
+`offset` then apply to the symbols in the text.
 
 `task_context` has no `limit` and no `offset`, because `max_bytes` controls its
 size. Its `total_items` and `returned` count the symbols, its `has_more` is
 always `false`, and `truncated` shows the lists that the byte budget cut.
-
-`context` with `format: "markdown"` gives text without an envelope.
 
 `initialize` gives an `instructions` string that tells an agent which tool to
 call first, and how to use the pagination and the errors.
