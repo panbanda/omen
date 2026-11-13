@@ -316,10 +316,27 @@ fn kill_group(group: u32) {
     }
 }
 
+/// Tell if the group has a process.
+///
+/// A process that ended, and that its parent did not reap, is a process of
+/// the group. Thus a group exists until its last process is reaped. The rule
+/// is the same on Linux and on macOS, but the two systems report it in
+/// different ways:
+///
+/// - Linux gives success for signal 0 when the group has only such
+///   processes.
+/// - macOS does not count such processes as targets of a signal. It gives
+///   `EPERM` when the group has only such processes, and `ESRCH` when the
+///   group does not exist.
+///
+/// `EPERM` also means that the group has a process to which the caller
+/// cannot send a signal. Such a group exists. Only `ESRCH` means that the
+/// group has no process.
 #[cfg(unix)]
 fn group_exists(group: u32) -> bool {
     // SAFETY: signal 0 does only the existence check.
-    unsafe { libc::killpg(group as libc::pid_t, 0) == 0 }
+    let result = unsafe { libc::killpg(group as libc::pid_t, 0) };
+    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 #[cfg(unix)]
@@ -1060,6 +1077,40 @@ mod tests {
         (child, group.unwrap())
     }
 
+    /// Waits until the process ended, and does not reap it. The process is
+    /// then a zombie until its parent calls `wait`.
+    #[cfg(unix)]
+    fn wait_for_end_without_reap(child: &std::process::Child) {
+        // SAFETY: `waitid` writes only to `info`. `WNOWAIT` keeps the process
+        // in the state in which a later `wait` can reap it.
+        let result = unsafe {
+            let mut info: libc::siginfo_t = std::mem::zeroed();
+            libc::waitid(
+                libc::P_PID,
+                child.id() as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        };
+        assert_eq!(result, 0, "{}", std::io::Error::last_os_error());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_group_with_a_leader_that_ended_and_is_not_reaped_exists() {
+        let registry = local_registry();
+        let (mut child, mut group) = spawn_sleeper(&registry);
+
+        group.kill();
+        wait_for_end_without_reap(&child);
+        let exists_before_the_reap = group.exists();
+        child.wait().unwrap();
+        group.wait_for_exit();
+
+        assert!(exists_before_the_reap);
+        assert!(!group.exists());
+    }
+
     #[cfg(unix)]
     #[test]
     fn test_process_group_stays_registered_until_it_exits() {
@@ -1068,9 +1119,10 @@ mod tests {
         let id = child.id();
         assert!(registry.lock().contains(&id));
 
-        // The leader is not reaped, so the group has a process during the
-        // wait. This is the interval in which an interrupt must see the group.
+        // The leader ended and is not reaped, so the group has a process. This
+        // is the interval in which an interrupt must see the group.
         group.kill();
+        wait_for_end_without_reap(&child);
         assert!(group.exists());
         assert!(registry.lock().contains(&id), "the kill removed the group");
 
@@ -1156,9 +1208,10 @@ mod tests {
                     &registry,
                     &not_interrupted,
                     || {
+                        // This closure runs below the registry lock. Thus the
+                        // interrupt path, which starts after this message,
+                        // cannot read the registry before the registration.
                         sender.send(()).unwrap();
-                        // Give the interrupt path time to try the lock.
-                        std::thread::sleep(Duration::from_millis(100));
                         let mut command = std::process::Command::new("sh");
                         command.args(["-c", "sleep 30 & wait"]);
                         std::os::unix::process::CommandExt::process_group(&mut command, 0);
@@ -1174,8 +1227,10 @@ mod tests {
         terminate_registered_process_groups(&registry);
 
         let (mut child, group) = spawner.join().unwrap();
-        let group = group.unwrap();
+        let mut group = group.unwrap();
         assert!(!child.wait().unwrap().success());
+        // The system reaps the descendant of the test command. Wait for that.
+        group.wait_for_exit();
         assert!(!group.exists());
     }
 
