@@ -651,8 +651,9 @@ impl<'a> Resolver<'a> {
                 || (path.len() == 1 && binding.local_name.as_deref() == Some(path[0]))
         });
         if let Some(binding) = binding {
-            let outcome = self.imported(binding, name);
+            let mut outcome = self.imported(binding, name);
             if outcome.status != Status::Unresolved || self.target_files(binding).is_empty() {
+                outcome.basis = outcome.basis.map(|_| Basis::QualifiedPath);
                 return outcome;
             }
         }
@@ -673,13 +674,8 @@ impl<'a> Resolver<'a> {
             })
             .collect();
         let found = self.preferred(self.top_level(name, &modules), reference.arity);
-        Outcome::of(Basis::QualifiedPath, found).unwrap_or_else(|| {
-            Outcome::none(if modules.is_empty() && binding.is_none() {
-                Status::External
-            } else {
-                Status::Unresolved
-            })
-        })
+        Outcome::of(Basis::QualifiedPath, found)
+            .unwrap_or_else(|| Outcome::none(Status::Unresolved))
     }
 
     fn bare(&self, file: usize, reference: &Reference, chain: &[Id]) -> Outcome {

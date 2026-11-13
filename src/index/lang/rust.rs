@@ -16,6 +16,28 @@ const SCOPED_USE_LIST: &str = "scoped_use_list";
 const USE_LIST: &str = "use_list";
 const SELF: &str = "self";
 
+use crate::index::calls::CallSyntax;
+
+/// `self` is the object and `Self` is its type. `super` is a module in a
+/// path, not a parent type, thus the table has no parent words.
+const CALL_SYNTAX: CallSyntax = CallSyntax {
+    calls: &[("call_expression", "function", "arguments")],
+    constructions: &[],
+    members: &[("field_expression", "value", "field")],
+    paths: &[("scoped_identifier", "path", "name")],
+    names: &[IDENTIFIER],
+    self_words: &["self", "Self"],
+    super_words: &[],
+    locals: &[(LET_DECLARATION, "pattern", "type", "value")],
+    parameters: &[("parameter", "pattern", "type")],
+    return_type_field: "return_type",
+};
+
+use crate::index::calls::{Call, Callee};
+use crate::index::model::ReferenceKind;
+
+const TOKEN_TREE: &str = "token_tree";
+
 pub struct Rust;
 
 const IMPL_ITEM: &str = "impl_item";
@@ -102,6 +124,46 @@ fn trait_visibility(implementation: Node<'_>, context: &Context<'_, '_>) -> Expo
 }
 
 impl LanguageSpec for Rust {
+    fn call_kinds(&self) -> Vec<&'static str> {
+        let mut kinds = self.call_syntax().call_kinds();
+        kinds.push(IDENTIFIER);
+        kinds
+    }
+
+    fn call_hook_kinds(&self) -> Vec<&'static str> {
+        vec![TOKEN_TREE]
+    }
+
+    /// The arguments of a macro are tokens, not expressions. In them, a name
+    /// directly before `(` is a call of that name. The number of arguments is
+    /// not known, and a path or a receiver before the name gives no call.
+    fn call<'tree>(&self, node: Node<'tree>, context: &Context<'_, 'tree>) -> Option<Call<'tree>> {
+        if node.kind() != IDENTIFIER {
+            return self.call_syntax().call(node, context);
+        }
+        node.parent().filter(|parent| parent.kind() == TOKEN_TREE)?;
+        let arguments = node.next_sibling()?;
+        if arguments.kind() != TOKEN_TREE || !context.text(arguments).starts_with('(') {
+            return None;
+        }
+        let qualified = node
+            .prev_sibling()
+            .is_some_and(|before| [".", "::", ":"].contains(&context.text(before).as_str()));
+        (!qualified).then_some(Call {
+            callee: Callee {
+                name_node: node,
+                receiver: None,
+                qualifier: None,
+            },
+            kind: ReferenceKind::Call,
+            arity: usize::MAX,
+        })
+    }
+
+    fn call_syntax(&self) -> CallSyntax {
+        CALL_SYNTAX
+    }
+
     fn import_kinds(&self) -> Vec<&'static str> {
         vec![USE_DECLARATION, MOD_ITEM]
     }
@@ -186,6 +248,7 @@ impl LanguageSpec for Rust {
         if let Some(scope) = context.scopes.last() {
             if scope.node.kind() == IMPL_ITEM {
                 draft.receiver_type = Some(scope.name.clone());
+                draft.trait_implementation = scope.node.child_by_field_name("trait").is_some();
             }
         }
         true
@@ -562,6 +625,90 @@ mod tests {
         assert_eq!(
             rows(&files, "main.rs")[2],
             "3 Named a::deep deep->deep a.rs [b.rs#deep]"
+        );
+    }
+
+    const CALL_FILES: &[(&str, &str)] = &[
+        (
+            "main.rs",
+            "mod other;\nmod shapes;\nmod util;\n\nuse std::collections::HashMap;\nuse shapes::{Circle, Shape, Square};\nuse util::helper;\nuse util::twice as double;\nuse other::*;\npub(crate) use shapes::describe;\n\nfn local() -> u32 {\n    4\n}\n\nfn run() -> u32 {\n    fn inner() -> u32 {\n        5\n    }\n    let total = local() + helper() + double(2) + inner() + only_here();\n    let circle = Circle::new(1.0);\n    let _ = circle.area();\n    let numbers: Vec<u32> = vec![1].into_iter().map(|n| local()).collect();\n    let add = |n: u32| n + 1;\n    total + add(1)\n}\n\nfn measure(size: Square, shape: &dyn Shape) -> f64 {\n    size.area() + shape.area()\n}\n\nfn shadow(callback: fn() -> u32) -> u32 {\n    let helper = || 9;\n    helper() + callback()\n}\n\nfn external() -> usize {\n    let mut seen = HashMap::new();\n    seen.insert(1, 2);\n    describe();\n    util::helper() + crate::util::helper() as usize\n}\n",
+        ),
+        ("other.rs", "pub fn only_here() -> u32 {\n    3\n}\n\npub fn insert() {}\n"),
+        (
+            "shapes.rs",
+            "use super::util::twice;\n\npub struct Circle;\npub struct Square;\n\npub trait Shape {\n    fn area(&self) -> f64;\n}\n\nimpl Circle {\n    pub fn new(radius: f64) -> Self {\n        Circle\n    }\n\n    pub fn area(&self) -> f64 {\n        self.scaled() + Self::unit()\n    }\n\n    fn scaled(&self) -> f64 {\n        twice(1) as f64\n    }\n\n    fn unit() -> f64 {\n        1.0\n    }\n}\n\nimpl Square {\n    pub fn area(&self) -> f64 {\n        1.0\n    }\n}\n\nimpl Shape for Circle {\n    fn area(&self) -> f64 {\n        Circle::area(self)\n    }\n}\n\npub fn describe() {}\n",
+        ),
+        ("util.rs", "pub fn helper() -> u32 {\n    1\n}\n\npub fn twice(value: u32) -> u32 {\n    value\n}\n"),
+    ];
+
+    #[test]
+    fn test_calls_with_names_and_imports() {
+        use crate::index::resolve::testing::rows;
+        assert_eq!(
+            rows(CALL_FILES, "main.rs")[..11],
+            [
+                "20 run>local UniqueCandidate SameFile [main.rs#local]",
+                "20 run>helper UniqueCandidate ImportedName [util.rs#helper]",
+                "20 run>double UniqueCandidate ImportedAlias [util.rs#twice]",
+                "20 run>inner UniqueCandidate LexicalScope [main.rs#run.inner]",
+                "20 run>only_here UniqueCandidate ImportedModule [other.rs#only_here]",
+                "21 run>Circle::new UniqueCandidate QualifiedPath [shapes.rs#Circle.new]",
+                "22 run>circle.area UniqueCandidate ReceiverDeclaredType [shapes.rs#Circle.area]",
+                "23 run>(..).collect Unresolved - []",
+                "23 run>(..).map Unresolved - []",
+                "23 run>(..).into_iter Unresolved - []",
+                "23 run>local UniqueCandidate SameFile [main.rs#local]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_receivers_and_values() {
+        use crate::index::resolve::testing::rows;
+        assert_eq!(
+            rows(CALL_FILES, "main.rs")[11..],
+            [
+                "25 run>add UniqueCandidate LexicalScope [main.rs#run.add]",
+                "29 measure>size.area UniqueCandidate ReceiverDeclaredType [shapes.rs#Square.area]",
+                "29 measure>shape.area Ambiguous NameOnly [shapes.rs#Circle.area, shapes.rs#Circle.area~2, shapes.rs#Shape.area, shapes.rs#Square.area]",
+                "34 shadow>helper UniqueCandidate LexicalScope [main.rs#shadow.helper]",
+                "34 shadow>callback Unresolved - []",
+                "38 external>HashMap::new External - []",
+                "39 external>seen.insert Unresolved - []",
+                "40 external>describe UniqueCandidate ImportedName [shapes.rs#describe]",
+                "41 external>util::helper UniqueCandidate QualifiedPath [util.rs#helper]",
+                "41 external>crate::util::helper Unresolved - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_calls_in_impl_blocks() {
+        use crate::index::resolve::testing::rows;
+        assert_eq!(
+            rows(CALL_FILES, "shapes.rs"),
+            [
+                "16 Circle.area>self.scaled UniqueCandidate EnclosingType [shapes.rs#Circle.scaled]",
+                "16 Circle.area>self.unit UniqueCandidate EnclosingType [shapes.rs#Circle.unit]",
+                "20 Circle.scaled>twice UniqueCandidate ImportedName [util.rs#twice]",
+                "36 Circle.area~2>Circle::area UniqueCandidate QualifiedPath [shapes.rs#Circle.area]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_calls_in_macro_arguments() {
+        use crate::index::resolve::testing::rows;
+        let files = [(
+            "main.rs",
+            "fn local() -> u32 {\n    4\n}\n\nfn main() {\n    println!(\"{} {}\", local(), other.local(), a::local(), local);\n    assert!(local() > 0);\n}\n",
+        )];
+        assert_eq!(
+            rows(&files, "main.rs"),
+            [
+                "6 main>local UniqueCandidate SameFile [main.rs#local]",
+                "7 main>local UniqueCandidate SameFile [main.rs#local]",
+            ]
         );
     }
 }
