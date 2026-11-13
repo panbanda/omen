@@ -48,7 +48,18 @@ pub(super) fn build(
         paging.total = Some(items.total);
         paging.returned = Some(items.returned);
     }
-    paging.truncated.extend(data.truncated);
+    for entry in data.truncated {
+        // When the tool and the pagination cut the same list, one entry
+        // gives the total before the two cuts.
+        match paging
+            .truncated
+            .iter_mut()
+            .find(|existing| existing.path == entry.path)
+        {
+            Some(existing) => existing.total = existing.total.max(entry.total),
+            None => paging.truncated.push(entry),
+        }
+    }
 
     let mut envelope = json!({
         "tool": tool,
@@ -694,6 +705,25 @@ mod tests {
             json!([{"path": "/symbols", "total": 9, "returned": 2}])
         );
         assert_eq!(envelope["result"]["symbols"], json!([1, 2]));
+    }
+
+    #[test]
+    fn a_list_that_the_tool_and_the_pagination_cut_has_one_entry() {
+        let data = ToolData {
+            truncated: vec![Truncation {
+                path: "/items".to_string(),
+                total: 9,
+                returned: 4,
+            }],
+            ..ToolData::new(json!({"items": [1, 2, 3, 4]}))
+        };
+        let envelope = build("search", ITEMS, data, page(2, 0), false);
+        assert_eq!(
+            envelope["truncated"],
+            json!([{"path": "/items", "total": 9, "returned": 2}])
+        );
+        assert_eq!(envelope["total_items"], 4);
+        assert_eq!(envelope["next_offset"], 2);
     }
 
     #[test]

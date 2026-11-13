@@ -598,6 +598,258 @@ mod tests {
     }
 
     #[test]
+    fn task_context_reports_the_syntax_facts_that_its_byte_budget_removed() {
+        let (server, dir) = create_test_server();
+        write_call_chain(dir.path(), 60);
+        let envelope = envelope_of(
+            &server,
+            "task_context",
+            json!({"name": "target", "max_bytes": 2048}),
+        );
+        assert!(envelope["result"]["syntax_facts"].is_null(), "{envelope}");
+        assert_eq!(envelope["result"]["omitted"]["syntax_facts"], 1);
+        assert!(envelope["truncated"]
+            .as_array()
+            .unwrap()
+            .contains(&json!({"path": "/syntax_facts", "total": 1, "returned": 0})));
+
+        let complete = envelope_of(
+            &server,
+            "task_context",
+            json!({"name": "target", "max_bytes": 1048576}),
+        );
+        assert!(complete["result"]["syntax_facts"].is_object());
+        assert_eq!(complete["truncated"], json!([]));
+    }
+
+    #[test]
+    fn get_symbol_reports_the_source_lines_that_it_cut() {
+        let (server, dir) = create_test_server();
+        std::fs::write(
+            dir.path().join("long.rs"),
+            "fn long_function() -> u32 {\n    let a = 1;\n    let b = 2;\n    a + b\n}\n",
+        )
+        .unwrap();
+        let cut = envelope_of(
+            &server,
+            "get_symbol",
+            json!({"name": "long_function", "max_source_lines": 2}),
+        );
+        assert_eq!(cut["result"]["source_truncated"], true);
+        assert_eq!(
+            cut["truncated"],
+            json!([{"path": "/source", "total": 5, "returned": 2}])
+        );
+        let complete = envelope_of(&server, "get_symbol", json!({"name": "long_function"}));
+        assert_eq!(complete["truncated"], json!([]));
+    }
+
+    #[test]
+    fn context_reports_the_lists_that_its_token_budget_cut() {
+        let (server, dir) = create_test_server();
+        for directory in 0..12 {
+            let path = dir.path().join(format!("module_{directory}"));
+            std::fs::create_dir(&path).unwrap();
+            write_call_chain(&path, 4);
+        }
+        let lists = ["entry_points", "hints", "risks", "top_symbols", "tree"];
+        let lengths = |envelope: &Value| -> Vec<usize> {
+            lists
+                .iter()
+                .map(|list| envelope["result"][*list].as_array().unwrap().len())
+                .collect()
+        };
+        let arguments =
+            |max_tokens: u64| json!({"max_symbols": 40, "max_tokens": max_tokens, "limit": 0});
+        let complete = envelope_of(&server, "context", arguments(1_000_000));
+        assert_eq!(complete["truncated"], json!([]));
+        let cut = envelope_of(&server, "context", arguments(300));
+        let expected: Vec<Value> = lists
+            .iter()
+            .zip(lengths(&complete).into_iter().zip(lengths(&cut)))
+            .filter(|(_, (total, returned))| returned < total)
+            .map(|(list, (total, returned))| {
+                json!({"path": format!("/{list}"), "total": total, "returned": returned})
+            })
+            .collect();
+        assert!(!expected.is_empty(), "the budget must cut a list: {cut}");
+        assert_eq!(cut["truncated"], json!(expected));
+        // The counts describe the list after the budget. `truncated` has the total before it.
+        assert_eq!(
+            cut["total_items"],
+            cut["result"]["top_symbols"].as_array().unwrap().len()
+        );
+    }
+
+    /// Writes two functions that agree with the query `parse config`. The
+    /// function with the higher complexity agrees better.
+    fn write_search_fixture(directory: &Path) {
+        std::fs::write(
+            directory.join("parse.rs"),
+            "pub fn first_reader(parse: u32, config: u32) -> u32 {\n    if parse > config { if parse > 2 { if config > 3 { if parse > 4 { return config; } return parse; } return config; } return parse; }\n    0\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.join("simple.rs"),
+            "pub fn second_reader(parse: u32, config: u32) -> u32 {\n    let width = 1;\n    let height = 2;\n    let depth = 3;\n    let colour = 4;\n    parse + config + width + height + depth + colour\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.join("other.rs"),
+            "pub fn unrelated_helper() -> u32 {\n    7\n}\n",
+        )
+        .unwrap();
+    }
+
+    fn search_tools() -> [(&'static str, &'static str); 2] {
+        [
+            ("semantic_search", "query"),
+            ("semantic_search_hyde", "hypothetical_document"),
+        ]
+    }
+
+    fn search_results(server: &McpServer, tool: &str, arguments: Value) -> Value {
+        envelope_of(server, tool, arguments)
+    }
+
+    fn with_arguments(mut base: Value, extra: Value) -> Value {
+        base.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        base
+    }
+
+    fn symbol_names(envelope: &Value) -> Vec<&str> {
+        envelope["result"]["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|result| result["symbol_name"].as_str().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn search_applies_max_complexity_before_top_k_on_each_path() {
+        let (server, dir) = create_test_server();
+        write_search_fixture(dir.path());
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        for (tool, text) in search_tools() {
+            let base = json!({text: "parse config", "min_score": 0.0});
+            let ranked = search_results(&server, tool, base.clone());
+            let results = ranked["result"]["results"].as_array().unwrap();
+            assert_eq!(results[0]["symbol_name"], "first_reader");
+            assert_eq!(results[1]["symbol_name"], "second_reader");
+            let complex = results[0]["cyclomatic_complexity"].as_u64().unwrap();
+            let simple = results[1]["cyclomatic_complexity"].as_u64().unwrap();
+            assert!(simple < complex, "the fixture needs two complexities");
+
+            let filter = json!({"top_k": 1, "max_complexity": simple});
+            for (path, extra) in [
+                ("root", json!({})),
+                ("files", json!({"files": ["parse.rs", "simple.rs"]})),
+                ("projects", json!({"include_projects": ["sub"]})),
+            ] {
+                let arguments = with_arguments(with_arguments(base.clone(), filter.clone()), extra);
+                let found = search_results(&server, tool, arguments);
+                assert_eq!(
+                    symbol_names(&found),
+                    ["second_reader"],
+                    "{tool} on the {path} path"
+                );
+                assert_eq!(found["total_items"], 1, "{tool} on the {path} path");
+                assert_eq!(found["returned"], 1);
+                assert_eq!(found["has_more"], false);
+            }
+        }
+    }
+
+    #[test]
+    fn search_applies_min_score_when_files_are_given() {
+        let (server, dir) = create_test_server();
+        write_search_fixture(dir.path());
+        for (tool, text) in search_tools() {
+            let base =
+                json!({text: "parse config", "files": ["parse.rs", "simple.rs", "other.rs"]});
+            let all = search_results(
+                &server,
+                tool,
+                with_arguments(base.clone(), json!({"min_score": 0.0})),
+            );
+            let scores: Vec<f64> = all["result"]["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|result| result["score"].as_f64().unwrap())
+                .collect();
+            assert!(scores.len() >= 2, "{tool}: {all}");
+            let threshold = (scores[0] + scores[1]) / 2.0;
+            let found = search_results(
+                &server,
+                tool,
+                with_arguments(base.clone(), json!({"min_score": threshold})),
+            );
+            assert_eq!(symbol_names(&found), ["first_reader"], "{tool}");
+
+            let default = search_results(&server, tool, base);
+            for result in default["result"]["results"].as_array().unwrap() {
+                assert!(result["score"].as_f64().unwrap() >= 0.3, "{tool}: {result}");
+            }
+        }
+    }
+
+    #[test]
+    fn search_applies_files_together_with_include_projects() {
+        let (server, dir) = create_test_server();
+        write_search_fixture(dir.path());
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        for (tool, text) in search_tools() {
+            let base = json!({text: "parse config", "min_score": 0.0, "files": ["simple.rs"]});
+            let only_files = search_results(&server, tool, base.clone());
+            assert_eq!(symbol_names(&only_files), ["second_reader"]);
+
+            let empty = search_results(
+                &server,
+                tool,
+                with_arguments(base.clone(), json!({"include_projects": []})),
+            );
+            assert_eq!(empty["result"], only_files["result"], "{tool}");
+
+            let both = search_results(
+                &server,
+                tool,
+                with_arguments(base, json!({"include_projects": ["sub"]})),
+            );
+            assert_eq!(symbol_names(&both), ["second_reader"], "{tool}");
+        }
+    }
+
+    #[test]
+    fn search_reports_the_results_that_top_k_cut() {
+        let (server, dir) = create_test_server();
+        write_search_fixture(dir.path());
+        let all = search_results(
+            &server,
+            "semantic_search",
+            json!({"query": "parse config", "min_score": 0.0, "top_k": 100}),
+        );
+        let total = all["result"]["results"].as_array().unwrap().len();
+        assert!(total >= 2);
+        assert_eq!(all["truncated"], json!([]));
+        let cut = search_results(
+            &server,
+            "semantic_search",
+            json!({"query": "parse config", "min_score": 0.0, "top_k": 1}),
+        );
+        assert_eq!(cut["returned"], 1);
+        assert_eq!(cut["total_items"], 1);
+        assert_eq!(cut["has_more"], false);
+        assert_eq!(
+            cut["truncated"],
+            json!([{"path": "/results", "total": total, "returned": 1}])
+        );
+    }
+
+    #[test]
     fn a_cut_page_gives_the_offset_of_the_next_page() {
         let (server, dir) = create_test_server();
         write_call_chain(dir.path(), 5);

@@ -97,6 +97,26 @@ Each tool gives its result in the same envelope:
 `path` in `truncated` is a JSON pointer from `result`. The segment `*` means
 each element of an array, such as `/files/*/functions`.
 
+`truncated` also shows the data that a tool cut before the pagination:
+
+- `task_context`: each list that `max_bytes` cut, and `/syntax_facts` with the
+  total 1 when the budget removed that object.
+- `get_symbol`: `/source`, in lines, when `max_source_lines` cut the source.
+- `context`: each list that `max_tokens` cut.
+- `semantic_search` and `semantic_search_hyde`: `/results` when `top_k` cut the
+  results that the filters accepted.
+
+`total_items` and `returned` count the list after such a cut. The entry in
+`truncated` gives the total before the cut.
+
+These limits do not appear in `truncated`, because the server does not know
+the total without them: `max_symbols` and `max_risks` of `context`,
+`max_symbols` of `repomap`, and `depth` of `impact` and `task_context`.
+
+The search tools apply `min_score`, `files`, and `max_complexity` first, and
+then `top_k`. An empty `include_projects` is the same as no `include_projects`.
+With `include_projects`, `files` applies to the paths in each project.
+
 `limit` has the default 50, and the value 0 removes the limit. When `has_more`
 is `true`, send the same call with `offset` set to `next_offset`. The pages
 together hold each item one time.

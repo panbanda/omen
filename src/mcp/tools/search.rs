@@ -3,13 +3,20 @@
 use std::path::{Path, PathBuf};
 
 use super::{
-    Arguments, HandlerResult, Pagination, Param, ParamDefault, ToolOutput, ToolSpec, MAX_COUNT,
+    Arguments, HandlerResult, Pagination, Param, ParamDefault, ToolData, ToolOutput, ToolSpec,
+    MAX_COUNT,
 };
+use crate::mcp::envelope::Truncation;
 use crate::mcp::McpServer;
-use crate::semantic::{SearchConfig, SearchFilters, SearchOutput, SemanticSearch};
+use crate::semantic::{SearchConfig, SearchOutput, SemanticSearch};
 
-const TOP_K: Param = Param::integer("top_k", 1, MAX_COUNT, "The maximum number of results.")
-    .with_default(ParamDefault::Integer(10));
+const TOP_K: Param = Param::integer(
+    "top_k",
+    1,
+    MAX_COUNT,
+    "The maximum number of results. It applies after the other filters.",
+)
+.with_default(ParamDefault::Integer(10));
 
 const MIN_SCORE: Param = Param::number(
     "min_score",
@@ -21,7 +28,8 @@ const MIN_SCORE: Param = Param::number(
 
 const FILES: Param = Param::string_array(
     "files",
-    "The files in which to search. The default is all files.",
+    "The files in which to search, as paths from the root of their project. \
+     The default is all files. With `include_projects`, the list applies to each project.",
 );
 
 const MAX_COMPLEXITY: Param = Param::integer(
@@ -96,21 +104,18 @@ fn search(
     let min_score = arguments.number("min_score").unwrap_or(0.3) as f32;
     let max_complexity = arguments.count_u32("max_complexity");
     let files = arguments.strings("files");
-    let include_projects: Option<Vec<PathBuf>> = arguments
+    let include_projects: Vec<PathBuf> = arguments
         .strings("include_projects")
-        .map(|projects| {
-            projects
-                .into_iter()
-                .map(|project| {
-                    server.resolve_confined_path(
-                        "include_projects",
-                        Path::new(project),
-                        Some(&server.root_path),
-                    )
-                })
-                .collect::<Result<Vec<_>, _>>()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|project| {
+            server.resolve_confined_path(
+                "include_projects",
+                Path::new(project),
+                Some(&server.root_path),
+            )
         })
-        .transpose()?;
+        .collect::<Result<Vec<_>, _>>()?;
 
     let search_config = SearchConfig {
         min_score,
@@ -119,33 +124,76 @@ fn search(
     let search = SemanticSearch::new(&search_config, &server.root_path)?;
     search.index(&server.config)?;
 
-    let mut output = if let Some(projects) = &include_projects {
+    // Get all the results in rank sequence. The filters must apply before
+    // `top_k`, or a result that a filter removes takes the place of a result
+    // that the filters accept.
+    let all = Some(usize::MAX);
+    let mut output = if !include_projects.is_empty() {
         let mut all_projects: Vec<&Path> = vec![&server.root_path];
-        all_projects.extend(projects.iter().map(PathBuf::as_path));
-        let found =
-            crate::semantic::multi_repo::multi_repo_search(&all_projects, text, top_k, min_score)?;
+        all_projects.extend(include_projects.iter().map(PathBuf::as_path));
+        let found = crate::semantic::multi_repo::multi_repo_search(
+            &all_projects,
+            text,
+            usize::MAX,
+            min_score,
+        )?;
         SearchOutput::new(text.to_string(), found.total_symbols, found.results)
     } else if let Some(files) = &files {
-        search.search_in_files(text, files, Some(top_k))?
-    } else if max_complexity.is_some() {
-        let filters = SearchFilters {
-            min_score,
-            max_complexity,
-        };
-        search.search_filtered(text, Some(top_k), &filters)?
+        search.search_in_files(text, files, all)?
     } else {
-        search.search(text, Some(top_k))?
+        search.search(text, all)?
     };
 
-    // Not each search path applies the filter, thus apply it here also.
-    if let Some(maximum) = max_complexity {
-        output.results.retain(|result| {
-            result
-                .cyclomatic_complexity
-                .is_none_or(|complexity| complexity <= maximum)
-        });
-    }
+    let labelled = !include_projects.is_empty();
+    output.results.retain(|result| {
+        let file = if labelled {
+            file_in_project(&result.file)
+        } else {
+            &result.file
+        };
+        result.score >= min_score
+            && files.as_ref().is_none_or(|files| files.contains(&file))
+            && max_complexity.is_none_or(|maximum| {
+                result
+                    .cyclomatic_complexity
+                    .is_none_or(|complexity| complexity <= maximum)
+            })
+    });
+    let accepted = output.results.len();
+    output.results.truncate(top_k);
     output.query = shown_query.to_string();
 
-    Ok(ToolOutput::data(serde_json::to_value(&output)?))
+    let truncated = if output.results.len() < accepted {
+        vec![Truncation {
+            path: "/results".to_string(),
+            total: accepted,
+            returned: output.results.len(),
+        }]
+    } else {
+        Vec::new()
+    };
+    Ok(ToolOutput::Data(ToolData {
+        truncated,
+        ..ToolData::new(serde_json::to_value(&output)?)
+    }))
+}
+
+/// The path of a result without the `[project] ` label that a search in
+/// more than one project puts before it.
+fn file_in_project(file: &str) -> &str {
+    file.strip_prefix('[')
+        .and_then(|labelled| labelled.split_once("] "))
+        .map_or(file, |(_, path)| path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::file_in_project;
+
+    #[test]
+    fn file_in_project_removes_only_the_project_label() {
+        assert_eq!(file_in_project("[omen] src/main.rs"), "src/main.rs");
+        assert_eq!(file_in_project("src/main.rs"), "src/main.rs");
+        assert_eq!(file_in_project("[id]/page.tsx"), "[id]/page.tsx");
+    }
 }
