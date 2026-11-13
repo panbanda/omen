@@ -22,15 +22,23 @@ fn fixture(files: &[(&str, &str)]) -> (TempDir, Vec<std::path::PathBuf>) {
 fn ambiguous_names_are_not_asserted_edges() {
     let (dir, paths) = fixture(&[
         ("main.rs", "fn caller(){helper(); external();}"),
-        ("a.rs", "fn helper(){}"),
-        ("z.rs", "fn helper(){}"),
+        ("a.rs", "pub fn helper(){}"),
+        ("z.rs", "pub fn helper(){}"),
     ]);
     let report = get_symbol(dir.path(), &paths, "caller", &SymbolOptions::default()).unwrap();
     assert!(report.callees.is_empty());
     let json = serde_json::to_value(report).unwrap();
-    // A Rust file does not see a function of a different file without an
-    // import. The two `helper` functions are not candidates.
-    assert_eq!(json["call_resolutions"][0]["status"], "unresolved");
+    // No import gives `helper`. The two public definitions with the name
+    // stay visible as candidates, and no one of them is an edge.
+    assert_eq!(json["call_resolutions"][0]["status"], "ambiguous");
+    assert_eq!(json["call_resolutions"][0]["basis"], "name_only");
+    assert_eq!(
+        json["call_resolutions"][0]["candidates"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
     assert_eq!(json["call_resolutions"][1]["status"], "unresolved");
 }
 
@@ -205,8 +213,8 @@ fn javascript_family_remains_connected() {
 fn impact_reports_input_wide_uncertainty() {
     let (dir, paths) = fixture(&[
         ("main.rs", "fn caller(){helper(); external();}"),
-        ("a.rs", "fn helper(){}"),
-        ("z.rs", "fn helper(){}"),
+        ("a.rs", "pub fn helper(){}"),
+        ("z.rs", "pub fn helper(){}"),
     ]);
     let report = omen::analyzers::impact::analyze(
         dir.path(),
@@ -216,8 +224,8 @@ fn impact_reports_input_wide_uncertainty() {
         omen::analyzers::impact::Direction::Both,
     )
     .unwrap();
-    assert_eq!(report.resolution_summary.ambiguous, 0);
-    assert_eq!(report.resolution_summary.unresolved, 2);
+    assert_eq!(report.resolution_summary.ambiguous, 1);
+    assert_eq!(report.resolution_summary.unresolved, 1);
     assert_eq!(report.total_callees, 0);
 }
 

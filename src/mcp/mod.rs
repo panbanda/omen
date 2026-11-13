@@ -682,6 +682,38 @@ mod tests {
     }
 
     #[test]
+    fn context_reports_the_lists_that_max_symbols_and_max_risks_cut() {
+        let (server, dir) = create_test_server();
+        write_call_chain(dir.path(), 6);
+        std::fs::write(
+            dir.path().join("notes.rs"),
+            "// TODO: first\n// TODO: second\n// TODO: third\nfn noted() {}\n",
+        )
+        .unwrap();
+        let whole = envelope_of(
+            &server,
+            "context",
+            json!({"max_symbols": 1000, "max_risks": 1000, "max_tokens": 1_000_000, "limit": 0}),
+        );
+        assert_eq!(whole["truncated"], json!([]));
+        let symbols = whole["result"]["top_symbols"].as_array().unwrap().len();
+        let risks = whole["result"]["risks"].as_array().unwrap().len();
+        assert!(symbols > 2 && risks > 1, "{whole}");
+        let cut = envelope_of(
+            &server,
+            "context",
+            json!({"max_symbols": 2, "max_risks": 1, "max_tokens": 1_000_000, "limit": 0}),
+        );
+        assert_eq!(
+            cut["truncated"],
+            json!([
+                {"path": "/risks", "total": risks, "returned": 1},
+                {"path": "/top_symbols", "total": symbols, "returned": 2}
+            ])
+        );
+    }
+
+    #[test]
     fn context_reports_the_lists_that_its_token_budget_cut() {
         let (server, dir) = create_test_server();
         for directory in 0..12 {
@@ -697,7 +729,7 @@ mod tests {
                 .collect()
         };
         let arguments =
-            |max_tokens: u64| json!({"max_symbols": 40, "max_tokens": max_tokens, "limit": 0});
+            |max_tokens: u64| json!({"max_symbols": 1000, "max_tokens": max_tokens, "limit": 0});
         let complete = envelope_of(&server, "context", arguments(1_000_000));
         assert_eq!(complete["truncated"], json!([]));
         let cut = envelope_of(&server, "context", arguments(300));

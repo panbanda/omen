@@ -65,14 +65,22 @@ fn context(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
         .count("max_symbols")
         .unwrap_or_else(|| crate::context::max_symbols_for_token_budget(max_tokens));
 
-    let mut context = crate::context::build_context(
+    let (mut context, totals) = crate::context::build_context_with_totals(
         &scope.path,
         &scope.file_set,
         &server.config,
         Some(max_symbols),
         arguments.count("max_risks"),
     )?;
-    let before_budget = context_list_lengths(&context);
+    // The totals are the lengths before `max_symbols` and `max_risks`.
+    let mut before_budget = context_list_lengths(&context);
+    for (path, total) in &mut before_budget {
+        match *path {
+            "/risks" => *total = totals.risks.max(*total),
+            "/top_symbols" => *total = totals.top_symbols.max(*total),
+            _ => {}
+        }
+    }
     crate::context::apply_token_budget(&mut context, max_tokens);
     let truncated: Vec<Truncation> = before_budget
         .into_iter()
@@ -197,12 +205,43 @@ pub(super) static GET_SYMBOL: ToolSpec = ToolSpec {
             "The maximum number of source lines in the result.",
         )
         .with_default(ParamDefault::Integer(200)),
+        MIN_BASIS,
         PATH,
         COMPACT,
     ],
     paginated: Pagination::Field("callers"),
     handler: get_symbol,
 };
+
+/// The basis names from the weakest evidence to the strongest evidence, in the
+/// order of `ResolutionBasis::RANKED`.
+const MIN_BASIS: Param = Param::choice(
+    "min_basis",
+    &[
+        "name_only",
+        "same_package",
+        "imported_module",
+        "qualified_path",
+        "argument_type",
+        "receiver_declared_type",
+        "enclosing_type",
+        "imported_alias",
+        "imported_name",
+        "same_file",
+        "lexical_scope",
+        "scip",
+    ],
+    "The weakest basis of a call that gives a caller or a callee. \
+     The value `name_only` adds each call whose one candidate has only the name.",
+)
+.with_default(ParamDefault::String("same_package"));
+
+fn min_basis(arguments: &Arguments<'_>) -> crate::index::model::ResolutionBasis {
+    arguments
+        .string("min_basis")
+        .and_then(crate::index::model::ResolutionBasis::from_name)
+        .unwrap_or(crate::index::view::DEFAULT_MIN_BASIS)
+}
 
 fn absolute_files(scope_path: &Path, file_set: &FileSet) -> Vec<PathBuf> {
     file_set.iter().map(|file| scope_path.join(file)).collect()
@@ -216,6 +255,7 @@ fn get_symbol(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
     let options = SymbolOptions {
         include_source: arguments.boolean("include_source").unwrap_or(true),
         max_source_lines: arguments.count("max_source_lines").unwrap_or(200),
+        min_basis: min_basis(arguments),
     };
     let start_line = arguments.count_u32("start_line");
     let files = absolute_files(&scope.path, &scope.file_set);
@@ -470,6 +510,7 @@ pub(super) static IMPACT: ToolSpec = ToolSpec {
             "The direction of the traversal.",
         )
         .with_default(ParamDefault::String("both")),
+        MIN_BASIS,
         PATH,
         COMPACT,
     ],
@@ -493,13 +534,13 @@ fn impact(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
     };
     let files = absolute_files(&scope.path, &scope.file_set);
     let view = server.load_view(&scope.path, &files)?;
-    let report = analyze_view(&view, symbol, depth, direction);
+    let report = analyze_view(&view, symbol, depth, direction, min_basis(arguments));
     if report.resolved.is_empty() {
         return Err(symbol_not_found("symbol", symbol, report.suggestions));
     }
     // The traversal stops at `depth`. The totals without a limit tell if
     // the limit cut callers or callees.
-    let all = analyze_view(&view, symbol, usize::MAX, direction);
+    let all = analyze_view(&view, symbol, usize::MAX, direction, min_basis(arguments));
     let mut truncated = Vec::new();
     for (path, total, returned) in [
         ("/callers", all.total_callers, report.total_callers),

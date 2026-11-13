@@ -67,7 +67,13 @@ pub fn analyze(
     direction: Direction,
 ) -> Result<ImpactReport> {
     let index = CallView::from_index(&CodeIndex::from_files(root, files));
-    Ok(analyze_view(&index, symbol, depth, direction))
+    Ok(analyze_view(
+        &index,
+        symbol,
+        depth,
+        direction,
+        crate::index::view::DEFAULT_MIN_BASIS,
+    ))
 }
 
 /// Run the impact analysis on a view of the shared index.
@@ -76,6 +82,7 @@ pub fn analyze_view(
     symbol: &str,
     depth: usize,
     direction: Direction,
+    min_basis: crate::index::model::ResolutionBasis,
 ) -> ImpactReport {
     let root_indices = index.resolve(symbol);
 
@@ -113,14 +120,14 @@ pub fn analyze_view(
 
     // BFS callers
     let caller_levels = if direction == Direction::Callers || direction == Direction::Both {
-        index.callers(&root_indices, depth)
+        index.callers(&root_indices, depth, min_basis)
     } else {
         vec![]
     };
 
     // BFS callees
     let callee_levels = if direction == Direction::Callees || direction == Direction::Both {
-        index.callees(&root_indices, depth)
+        index.callees(&root_indices, depth, min_basis)
     } else {
         vec![]
     };
@@ -381,7 +388,7 @@ mod tests {
         run_multi_lang_test(
             &dir,
             "a.py",
-            "def a():\n    b()\n",
+            "from b import b\n\n\ndef a():\n    b()\n",
             "b.py",
             "def b():\n    pass\n",
         );
@@ -457,7 +464,7 @@ mod tests {
         run_multi_lang_test(
             &dir,
             "a.c",
-            "void a(void) { b(); }\n",
+            "void b(void);\nvoid a(void) { b(); }\n",
             "b.c",
             "void b(void) {}\n",
         );
@@ -470,7 +477,7 @@ mod tests {
         run_multi_lang_test(
             &dir,
             "a.cpp",
-            "void a() { b(); }\n",
+            "void b();\nvoid a() { b(); }\n",
             "b.cpp",
             "void b() {}\n",
         );
@@ -498,7 +505,7 @@ mod tests {
         run_multi_lang_test(
             &dir,
             "a.php",
-            "<?php\nfunction a() { b(); }\n",
+            "<?php\nrequire 'b.php';\nfunction a() { b(); }\n",
             "b.php",
             "<?php\nfunction b() {}\n",
         );
@@ -509,6 +516,12 @@ mod tests {
     #[test]
     fn test_multi_lang_bash() {
         let dir = TempDir::new().unwrap();
-        run_multi_lang_test(&dir, "a.sh", "a() { b; }\n", "b.sh", "b() { :; }\n");
+        run_multi_lang_test(
+            &dir,
+            "a.sh",
+            "source ./b.sh\na() { b; }\n",
+            "b.sh",
+            "b() { :; }\n",
+        );
     }
 }

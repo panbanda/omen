@@ -1284,8 +1284,24 @@ impl<'a> Resolver<'a> {
                 .collect();
             return outcome;
         }
+        let declared: Vec<Id> = same_file
+            .iter()
+            .copied()
+            .filter(|id| family == Family::C && self.symbol(*id).body_range.is_none())
+            .collect();
         same_file.retain(|id| self.symbol(*id).body_range.is_some() || family != Family::C);
         if let Some(outcome) = Outcome::of(Basis::SameFile, same_file) {
+            return outcome;
+        }
+        // A C file can declare a function of a different file itself, without
+        // a header. The declaration in the file is the evidence, and the one
+        // definition with a body is the callee.
+        let linked: Vec<Id> = self
+            .definitions(declared, file, arity)
+            .into_iter()
+            .filter(|id| self.symbol(*id).body_range.is_some())
+            .collect();
+        if let Some(outcome) = Outcome::of(Basis::SameFile, linked) {
             return outcome;
         }
         let binding = self.files[file].imports.iter().find(|binding| {
@@ -1362,35 +1378,34 @@ impl<'a> Resolver<'a> {
             })
             .collect();
         let anywhere = self.definitions(anywhere, file, arity);
-        // A Ruby file calls a top-level method of a file that it loads. A
-        // method with the name in a different file can be a method of an
-        // object, thus the name is not sufficient for an edge.
-        if family == Family::Ruby && !anywhere.is_empty() {
+        // No rule with better evidence gave a definition. The definitions
+        // with the name stay visible as candidates. A name is not sufficient
+        // for an edge, also when only one definition has it: on real
+        // repositories most edges of this kind were wrong.
+        if !anywhere.is_empty() {
             return Outcome::offered(Basis::NameOnly, anywhere);
         }
-        Outcome::of(Basis::NameOnly, anywhere).unwrap_or_else(|| {
-            // A Ruby method calls a method of its object without `self`. A
-            // module that other types include does not tell which type.
-            let owner = self
-                .enclosing_type(chain)
-                .filter(|_| family == Family::Ruby);
-            let Some(owner) = owner else {
-                return Outcome::none(Status::Unresolved);
-            };
-            // The object is an object of a type that includes the module, or
-            // of a subtype of such a type. One method for all these types is
-            // the callee.
-            let found: BTreeSet<Id> = self
-                .including_types(owner)
-                .into_iter()
-                .flat_map(|includer| self.members(includer, name, arity, &mut BTreeSet::new()))
-                .collect();
-            match found.into_iter().collect::<Vec<Id>>().as_slice() {
-                [only] => Outcome::of(Basis::EnclosingType, vec![*only])
-                    .unwrap_or_else(|| Outcome::none(Status::Unresolved)),
-                _ => Outcome::offered(Basis::NameOnly, self.methods_by_name(name, file)),
-            }
-        })
+        // A Ruby method calls a method of its object without `self`. A
+        // module that other types include does not tell which type.
+        let owner = self
+            .enclosing_type(chain)
+            .filter(|_| family == Family::Ruby);
+        let Some(owner) = owner else {
+            return Outcome::none(Status::Unresolved);
+        };
+        // The object is an object of a type that includes the module, or of
+        // a subtype of such a type. One method for all these types is the
+        // callee.
+        let found: BTreeSet<Id> = self
+            .including_types(owner)
+            .into_iter()
+            .flat_map(|includer| self.members(includer, name, arity, &mut BTreeSet::new()))
+            .collect();
+        match found.into_iter().collect::<Vec<Id>>().as_slice() {
+            [only] => Outcome::of(Basis::EnclosingType, vec![*only])
+                .unwrap_or_else(|| Outcome::none(Status::Unresolved)),
+            _ => Outcome::offered(Basis::NameOnly, self.methods_by_name(name, file)),
+        }
     }
 
     /// The types that include the Ruby module `module`, and their subtypes.

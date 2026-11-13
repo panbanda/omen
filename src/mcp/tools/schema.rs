@@ -139,6 +139,7 @@ mod tests {
                 "depth",
                 "direction",
                 "limit",
+                "min_basis",
                 "offset",
                 "path",
                 "symbol"

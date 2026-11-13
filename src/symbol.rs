@@ -46,6 +46,8 @@ pub struct SymbolOptions {
     pub include_source: bool,
     /// Maximum source lines to return (excess triggers source_truncated=true).
     pub max_source_lines: usize,
+    /// The weakest basis that gives a caller or a callee.
+    pub min_basis: crate::index::model::ResolutionBasis,
 }
 
 impl Default for SymbolOptions {
@@ -53,6 +55,7 @@ impl Default for SymbolOptions {
         Self {
             include_source: true,
             max_source_lines: 200,
+            min_basis: crate::index::view::DEFAULT_MIN_BASIS,
         }
     }
 }
@@ -89,6 +92,20 @@ pub fn report_from_index(
     opts: &SymbolOptions,
     start_line: Option<u32>,
 ) -> Result<SymbolReport> {
+    let read = |path: &Path| Ok(std::fs::read(root.join(path))?);
+    report_with_reader(index, name, opts, start_line, &read)
+}
+
+/// Makes the report with `read` as the source of the content of a file. The
+/// path that `read` gets is relative to the root of the repository. A report
+/// for a commit reads the files of that commit.
+pub fn report_with_reader(
+    index: &CallView,
+    name: &str,
+    opts: &SymbolOptions,
+    start_line: Option<u32>,
+    read: &dyn Fn(&Path) -> Result<Vec<u8>>,
+) -> Result<SymbolReport> {
     let candidates_idxs: Vec<_> = index
         .resolve(name)
         .into_iter()
@@ -117,24 +134,26 @@ pub fn report_from_index(
         .map(|&i| index.symbols[i].qualified_name.clone())
         .collect();
 
+    let content = read(Path::new(&sym.file)).ok();
+
     // Source slice
-    let (source, source_truncated) = if opts.include_source {
-        read_source_slice(
-            root,
-            &sym.file,
+    let (source, source_truncated) = match (&content, opts.include_source) {
+        (Some(content), true) => source_slice(
+            &String::from_utf8_lossy(content),
             sym.line,
             sym.end_line,
             opts.max_source_lines,
-        )
-    } else {
-        (None, false)
+        ),
+        _ => (None, false),
     };
 
     // Complexity from complexity analyzer on the symbol's file
     let (cyclomatic, cognitive) = {
-        let file_path = root.join(&sym.file);
         let complexity_analyzer = crate::analyzers::complexity::Analyzer::new();
-        if let Ok(file_result) = complexity_analyzer.analyze_file(&file_path) {
+        let analyzed = content
+            .ok_or_else(|| crate::core::Error::analysis("the file has no content"))
+            .and_then(|content| complexity_analyzer.analyze_content(Path::new(&sym.file), content));
+        if let Ok(file_result) = analyzed {
             // Find the function matching name + start_line
             let found = file_result
                 .functions
@@ -152,7 +171,7 @@ pub fn report_from_index(
     };
 
     // Direct callers/callees using CallGraphIndex
-    let caller_levels = index.callers(&[primary_idx], 1);
+    let caller_levels = index.callers(&[primary_idx], 1, opts.min_basis);
     let callers: Vec<ImpactSymbol> = caller_levels
         .into_iter()
         .flat_map(|level| {
@@ -164,7 +183,7 @@ pub fn report_from_index(
         })
         .collect();
 
-    let callee_levels = index.callees(&[primary_idx], 1);
+    let callee_levels = index.callees(&[primary_idx], 1, opts.min_basis);
     let callees: Vec<ImpactSymbol> = callee_levels
         .into_iter()
         .flat_map(|level| {
@@ -216,21 +235,14 @@ fn suggestions_from_index(index: &CallView, name: &str) -> Vec<String> {
     suggestions
 }
 
-/// Read lines start_line..=end_line from a file (1-indexed).
-/// Returns (Some(text), truncated) or (None, false) on IO error.
-fn read_source_slice(
-    root: &Path,
-    rel_file: &str,
+/// The lines start_line..=end_line of the content of a file (1-indexed), and
+/// a flag that tells if `max_lines` cut them.
+fn source_slice(
+    content: &str,
     start_line: u32,
     end_line: u32,
     max_lines: usize,
 ) -> (Option<String>, bool) {
-    let path = root.join(rel_file);
-    let content = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(_) => return (None, false),
-    };
-
     let lines: Vec<&str> = content.lines().collect();
     let start = (start_line as usize).saturating_sub(1);
     let end = (end_line as usize).min(lines.len());
@@ -323,6 +335,7 @@ mod tests {
         let opts = SymbolOptions {
             include_source: false,
             max_source_lines: 200,
+            ..SymbolOptions::default()
         };
         let report = get_symbol(dir.path(), &fs, "a", &opts).unwrap();
         assert!(
@@ -347,6 +360,7 @@ mod tests {
         let opts = SymbolOptions {
             include_source: true,
             max_source_lines: 5,
+            ..SymbolOptions::default()
         };
         let report = get_symbol(dir.path(), &files, "bigfn", &opts).unwrap();
         assert!(

@@ -15,6 +15,10 @@ use super::build::CodeIndex;
 use super::model::{Receiver, ResolutionBasis, ResolutionStatus, SymbolKind};
 use crate::core::{Error, Language, Result};
 
+/// The weakest basis that gives an edge when the caller does not select
+/// one. A candidate that has only the name is not an edge.
+pub const DEFAULT_MIN_BASIS: ResolutionBasis = ResolutionBasis::SamePackage;
+
 /// One definition of the view. `qualified_name` is the key of the symbol:
 /// `rel/path#Container.name`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,8 +81,11 @@ pub struct CallView {
     pub symbols: Vec<ViewSymbol>,
     pub by_name: HashMap<String, Vec<usize>>,
     by_key: HashMap<String, usize>,
-    callees: Vec<Vec<usize>>,
-    callers: Vec<Vec<usize>>,
+    /// For each definition, the definitions that it calls, with the basis
+    /// of the call. A call whose one candidate has only the name is here
+    /// with the basis `NameOnly`. It is an edge only on request.
+    callees: Vec<Vec<(usize, ResolutionBasis)>>,
+    callers: Vec<Vec<(usize, ResolutionBasis)>>,
     pub call_resolutions: Vec<CallEvidence>,
     call_resolution_ranges: Vec<Range<usize>>,
 }
@@ -110,8 +117,10 @@ impl CallView {
                 });
             }
         }
-        let mut callees: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); symbols.len()];
-        let mut callers: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); symbols.len()];
+        let mut callees: Vec<BTreeSet<(usize, ResolutionBasis)>> =
+            vec![BTreeSet::new(); symbols.len()];
+        let mut callers: Vec<BTreeSet<(usize, ResolutionBasis)>> =
+            vec![BTreeSet::new(); symbols.len()];
         let mut evidence: Vec<Vec<CallEvidence>> = vec![Vec::new(); symbols.len()];
         for reference in index.files.iter().flat_map(|file| &file.references) {
             let caller = reference
@@ -131,10 +140,20 @@ impl CallView {
                 resolution.status,
                 ResolutionStatus::Resolved | ResolutionStatus::UniqueCandidate
             );
-            if is_edge {
+            // One candidate that has only the name is an edge when the
+            // caller of the view asks for the basis `NameOnly`.
+            let by_name_only = resolution.status == ResolutionStatus::Ambiguous
+                && resolution.basis == Some(ResolutionBasis::NameOnly)
+                && candidates.len() == 1;
+            let basis = match (is_edge, by_name_only) {
+                (true, _) => resolution.basis,
+                (false, true) => Some(ResolutionBasis::NameOnly),
+                (false, false) => None,
+            };
+            if let Some(basis) = basis {
                 for candidate in &candidates {
-                    callees[caller].insert(*candidate);
-                    callers[*candidate].insert(caller);
+                    callees[caller].insert((*candidate, basis));
+                    callers[*candidate].insert((caller, basis));
                 }
             }
             let call = match (&reference.receiver, &reference.qualifier) {
@@ -235,25 +254,42 @@ impl CallView {
     }
 
     /// The callers of `roots`, one list for each level, up to `depth` levels.
-    /// Each list is in the order of the definitions.
-    pub fn callers(&self, roots: &[usize], depth: usize) -> Vec<Vec<usize>> {
-        self.levels(roots, depth, &self.callers)
+    /// Each list is in the order of the definitions. An edge counts when its
+    /// basis is `min_basis` or a stronger basis.
+    pub fn callers(
+        &self,
+        roots: &[usize],
+        depth: usize,
+        min_basis: ResolutionBasis,
+    ) -> Vec<Vec<usize>> {
+        self.levels(roots, depth, &self.callers, min_basis)
     }
 
     /// The callees of `roots`, one list for each level, up to `depth` levels.
-    pub fn callees(&self, roots: &[usize], depth: usize) -> Vec<Vec<usize>> {
-        self.levels(roots, depth, &self.callees)
+    pub fn callees(
+        &self,
+        roots: &[usize],
+        depth: usize,
+        min_basis: ResolutionBasis,
+    ) -> Vec<Vec<usize>> {
+        self.levels(roots, depth, &self.callees, min_basis)
     }
 
-    fn levels(&self, roots: &[usize], depth: usize, edges: &[Vec<usize>]) -> Vec<Vec<usize>> {
+    fn levels(
+        &self,
+        roots: &[usize],
+        depth: usize,
+        edges: &[Vec<(usize, ResolutionBasis)>],
+        min_basis: ResolutionBasis,
+    ) -> Vec<Vec<usize>> {
         let mut seen: BTreeSet<usize> = roots.iter().copied().collect();
         let mut frontier: Vec<usize> = roots.to_vec();
         let mut levels = Vec::new();
         for _ in 0..depth {
             let mut next = BTreeSet::new();
             for symbol in &frontier {
-                for other in &edges[*symbol] {
-                    if seen.insert(*other) {
+                for (other, basis) in &edges[*symbol] {
+                    if basis.rank() >= min_basis.rank() && seen.insert(*other) {
                         next.insert(*other);
                     }
                 }
@@ -342,6 +378,22 @@ mod tests {
     }
 
     #[test]
+    fn test_name_only_candidate_is_an_edge_only_on_request() {
+        let view = view(&[
+            ("a.py", "def run():\n    return helper()\n"),
+            ("b.py", "def helper():\n    return 1\n"),
+        ]);
+        let run = view.resolve("run");
+        let calls = view.calls_of(run[0]);
+        assert_eq!(calls[0].status, ResolutionStatus::Ambiguous);
+        assert_eq!(calls[0].basis, Some(ResolutionBasis::NameOnly));
+        assert_eq!(calls[0].candidates[0].qualified_name, "b.py#helper");
+        assert!(view.callees(&run, 1, DEFAULT_MIN_BASIS).is_empty());
+        let lowered = view.callees(&run, 1, ResolutionBasis::NameOnly);
+        assert_eq!(view.symbols[lowered[0][0]].qualified_name, "b.py#helper");
+    }
+
+    #[test]
     fn test_levels_follow_only_edges() {
         let view = view(FILES);
         let names = |levels: Vec<Vec<usize>>| -> Vec<Vec<&str>> {
@@ -357,18 +409,21 @@ mod tests {
         };
         let run = view.resolve("run");
         assert_eq!(
-            names(view.callees(&run, 5)),
+            names(view.callees(&run, 5, DEFAULT_MIN_BASIS)),
             [
                 vec!["shop.py#Item.name"],
                 vec!["shop.py#helper"],
                 vec!["shop.py#leaf"]
             ]
         );
-        assert_eq!(names(view.callees(&run, 1)), [vec!["shop.py#Item.name"]]);
-        assert!(view.callees(&run, 0).is_empty());
+        assert_eq!(
+            names(view.callees(&run, 1, DEFAULT_MIN_BASIS)),
+            [vec!["shop.py#Item.name"]]
+        );
+        assert!(view.callees(&run, 0, DEFAULT_MIN_BASIS).is_empty());
         let leaf = view.resolve("leaf");
         assert_eq!(
-            names(view.callers(&leaf, 2)),
+            names(view.callers(&leaf, 2, DEFAULT_MIN_BASIS)),
             [vec!["shop.py#helper"], vec!["shop.py#Item.name"]]
         );
         // `len` is not in the repository. The call is evidence, not an edge.

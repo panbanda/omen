@@ -676,10 +676,10 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             run_outline(path, &config, args, format)?;
         }
         Command::Impact(args) => {
-            run_impact(path, &config, args, format)?;
+            run_impact(path, &config, args, format, local_ref(cli))?;
         }
         Command::Symbol(args) => {
-            run_symbol(path, &config, args, format)?;
+            run_symbol(path, &config, args, format, local_ref(cli))?;
         }
         Command::Eval(args) => {
             run_eval(args, format)?;
@@ -2036,17 +2036,54 @@ fn run_outline(
     Ok(())
 }
 
+/// The value of `--ref` for a repository on the disk. A remote repository is
+/// a clone at that commit, thus its files on the disk are the commit.
+fn local_ref(cli: &Cli) -> Option<&str> {
+    cli.git_ref
+        .as_deref()
+        .filter(|_| !is_remote_repo(&cli.path.to_string_lossy()))
+}
+
+/// The files of `symbol` and `impact`, and the source of their content. With
+/// `--ref`, the files and their content come from that commit.
+fn index_scope(
+    path: &PathBuf,
+    config: &Config,
+    common: &AnalyzerArgs,
+    git_ref: Option<&str>,
+) -> omen::core::Result<(
+    FileSet,
+    Option<std::sync::Arc<dyn omen::core::ContentSource>>,
+)> {
+    let Some(reference) = git_ref else {
+        return Ok((filtered_file_set(path, config, Some(common))?, None));
+    };
+    let tree = omen::core::TreeSource::new(path, reference)?;
+    let mut file_set = FileSet::from_tree_source(&tree, config)?;
+    if let Some(glob) = &common.glob {
+        file_set = file_set.filter_by_glob(glob);
+    }
+    for exclude in &common.exclude {
+        file_set = file_set.exclude_by_glob(exclude);
+    }
+    Ok((file_set, Some(std::sync::Arc::new(tree))))
+}
+
 fn run_impact(
     path: &PathBuf,
     config: &Config,
     args: &ImpactArgs,
     format: Format,
+    git_ref: Option<&str>,
 ) -> omen::core::Result<()> {
     use omen::analyzers::impact::{analyze_view, Direction};
     use omen::cli::ImpactDirection;
 
-    let file_set = filtered_file_set(path, config, Some(&args.common))?;
-    let ctx = omen::core::AnalysisContext::new(&file_set, config, Some(path));
+    let (file_set, source) = index_scope(path, config, &args.common, git_ref)?;
+    let mut ctx = omen::core::AnalysisContext::new(&file_set, config, Some(path));
+    if let Some(source) = source {
+        ctx = ctx.with_content_source(source);
+    }
     let view = omen::index::view::CallView::from_index(&*ctx.code_index()?);
 
     let direction = match args.direction {
@@ -2055,7 +2092,7 @@ fn run_impact(
         ImpactDirection::Both => Direction::Both,
     };
 
-    let report = analyze_view(&view, &args.symbol, args.depth, direction);
+    let report = analyze_view(&view, &args.symbol, args.depth, direction, args.min_basis);
     let value = serde_json::to_value(&report)?;
     format_with_limits(
         value,
@@ -2072,19 +2109,25 @@ fn run_symbol(
     config: &Config,
     args: &SymbolArgs,
     format: Format,
+    git_ref: Option<&str>,
 ) -> omen::core::Result<()> {
-    use omen::symbol::{report_from_index, SymbolOptions};
+    use omen::symbol::{report_with_reader, SymbolOptions};
 
-    let file_set = filtered_file_set(path, config, Some(&args.common))?;
-    let ctx = omen::core::AnalysisContext::new(&file_set, config, Some(path));
+    let (file_set, source) = index_scope(path, config, &args.common, git_ref)?;
+    let mut ctx = omen::core::AnalysisContext::new(&file_set, config, Some(path));
+    if let Some(source) = source {
+        ctx = ctx.with_content_source(source);
+    }
     let view = omen::index::view::CallView::from_index(&*ctx.code_index()?);
 
     let opts = SymbolOptions {
         include_source: !args.no_source,
         max_source_lines: args.max_source_lines,
+        min_basis: args.min_basis,
     };
 
-    let report = report_from_index(path, &view, &args.name, &opts, None)?;
+    let read = |file: &std::path::Path| ctx.read_file(file);
+    let report = report_with_reader(&view, &args.name, &opts, None, &read)?;
     let value = serde_json::to_value(&report)?;
     format_with_limits(
         value,

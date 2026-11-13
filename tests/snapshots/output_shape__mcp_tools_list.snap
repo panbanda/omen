@@ -796,6 +796,25 @@ expression: "responses[0]"
               "minimum": 0,
               "type": "integer"
             },
+            "min_basis": {
+              "default": "same_package",
+              "description": "The weakest basis of a call that gives a caller or a callee. The value `name_only` adds each call whose one candidate has only the name.",
+              "enum": [
+                "name_only",
+                "same_package",
+                "imported_module",
+                "qualified_path",
+                "argument_type",
+                "receiver_declared_type",
+                "enclosing_type",
+                "imported_alias",
+                "imported_name",
+                "same_file",
+                "lexical_scope",
+                "scip"
+              ],
+              "type": "string"
+            },
             "name": {
               "description": "The symbol name. Use a bare name or the qualified form `file:name`.",
               "type": "string"
@@ -904,6 +923,25 @@ expression: "responses[0]"
               "maximum": 4294967295,
               "minimum": 0,
               "type": "integer"
+            },
+            "min_basis": {
+              "default": "same_package",
+              "description": "The weakest basis of a call that gives a caller or a callee. The value `name_only` adds each call whose one candidate has only the name.",
+              "enum": [
+                "name_only",
+                "same_package",
+                "imported_module",
+                "qualified_path",
+                "argument_type",
+                "receiver_declared_type",
+                "enclosing_type",
+                "imported_alias",
+                "imported_name",
+                "same_file",
+                "lexical_scope",
+                "scip"
+              ],
+              "type": "string"
             },
             "offset": {
               "default": 0,

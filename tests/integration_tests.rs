@@ -509,6 +509,64 @@ fn test_changed_since_filters_analyzer_files() {
     assert!(!stdout.contains("src/a.rs"));
 }
 
+/// `symbol` and `impact` with `--ref` read the files of that commit, not the
+/// files on the disk.
+#[test]
+fn test_symbol_and_impact_read_the_commit_of_ref() {
+    let temp = TempDir::new().unwrap();
+    let git = |arguments: &[&str]| {
+        let output = std::process::Command::new("git")
+            .args(arguments)
+            .current_dir(temp.path())
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "Test"]);
+    std::fs::write(
+        temp.path().join("shop.py"),
+        "def old_only():\n    return leaf()\n\n\ndef leaf():\n    return 1\n",
+    )
+    .unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "first"]);
+    let first = git(&["rev-parse", "HEAD"]);
+    std::fs::write(temp.path().join("shop.py"), "def leaf():\n    return 2\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "second"]);
+    let root = temp.path().to_str().unwrap();
+
+    let at_ref = omen()
+        .args([
+            "-p", root, "--ref", &first, "-f", "json", "symbol", "old_only",
+        ])
+        .output()
+        .unwrap();
+    assert!(at_ref.status.success(), "{at_ref:?}");
+    let report: serde_json::Value = serde_json::from_slice(&at_ref.stdout).unwrap();
+    assert_eq!(report["qualified_name"], "shop.py#old_only");
+    assert_eq!(report["callees"][0]["qualified_name"], "shop.py#leaf");
+    assert_eq!(report["source"], "def old_only():\n    return leaf()");
+
+    omen()
+        .args(["-p", root, "-f", "json", "symbol", "old_only"])
+        .assert()
+        .failure();
+
+    let impact = omen()
+        .args(["-p", root, "--ref", &first, "-f", "json", "impact", "leaf"])
+        .output()
+        .unwrap();
+    assert!(impact.status.success(), "{impact:?}");
+    let report: serde_json::Value = serde_json::from_slice(&impact.stdout).unwrap();
+    assert_eq!(
+        report["callers"][0]["symbols"][0]["qualified_name"],
+        "shop.py#old_only"
+    );
+}
+
 #[test]
 fn test_changed_since_rejects_option_like_ref() {
     omen()

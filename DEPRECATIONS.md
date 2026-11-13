@@ -134,7 +134,10 @@ The commands `symbol` and `impact`, and the MCP tools `get_symbol` and
 | `start_line` | The first line of the node, which could be an annotation. | The line of the declaration, after annotations, attributes, and decorators. | Use `start_line` with the name to select a definition. |
 | `call_resolutions` of `symbol` and `get_symbol` | One entry for each called name. `basis` was always a string. | One entry for each call site, with its `line`. `basis` is `null` when no rule applied. `status` can be `external`. | Read `line`. Accept `null` for `basis`. |
 | `resolution_summary` of `impact` | `unique_candidate`, `ambiguous`, `unresolved`. | Also `external`. | None, unless the client rejects unknown keys. |
-| A call to a name without an import, in a language that needs one | An edge to the one definition with that name in the repository. | No edge. | None. |
+| A call for which only the name gives a definition | An edge to the one definition with that name in the repository. | No edge. The call has the status `ambiguous` and the basis `name_only`, and it lists each definition with the name that the caller can see. | Read `candidates` of `call_resolutions`. Use `--min-basis name_only`, or the MCP parameter `min_basis`, to get an edge for a call with one such candidate. |
+| `--min-basis` of `symbol` and `impact`, `min_basis` of `get_symbol` and `impact` | Not available. | The weakest basis of a call that gives a caller or a callee. The default is `same_package`, which excludes `name_only`. | None. |
+| `--ref` with `symbol` and `impact` on a local repository | The commands read the files on the disk. | The commands read the files of that commit. | None. |
+| `truncated` of the MCP tools `context` and `repomap` | Only the cut of the token budget. | Also the cut of `max_symbols` and `max_risks`, with the total before the cut. | Read `truncated`. |
 | `truncated` of the MCP tool `impact` | Always empty. | `/callers` and `/callees` have the number of definitions without the `depth` limit and the number in the result. | Read `truncated` to know that `depth` cut the result. |
 
 ### MCP server

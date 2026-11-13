@@ -213,6 +213,55 @@ pub enum ResolutionBasis {
     NameOnly,
 }
 
+impl ResolutionBasis {
+    /// Each basis, from the weakest evidence to the strongest evidence.
+    pub const RANKED: [Self; 12] = [
+        Self::NameOnly,
+        Self::SamePackage,
+        Self::ImportedModule,
+        Self::QualifiedPath,
+        Self::ArgumentType,
+        Self::ReceiverDeclaredType,
+        Self::EnclosingType,
+        Self::ImportedAlias,
+        Self::ImportedName,
+        Self::SameFile,
+        Self::LexicalScope,
+        Self::Scip,
+    ];
+
+    /// The position of the basis in `RANKED`.
+    pub fn rank(self) -> usize {
+        Self::RANKED
+            .iter()
+            .position(|basis| *basis == self)
+            .unwrap_or(0)
+    }
+
+    /// The name of the basis in the output, for example `name_only`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::NameOnly => "name_only",
+            Self::SamePackage => "same_package",
+            Self::ImportedModule => "imported_module",
+            Self::QualifiedPath => "qualified_path",
+            Self::ArgumentType => "argument_type",
+            Self::ReceiverDeclaredType => "receiver_declared_type",
+            Self::EnclosingType => "enclosing_type",
+            Self::ImportedAlias => "imported_alias",
+            Self::ImportedName => "imported_name",
+            Self::SameFile => "same_file",
+            Self::LexicalScope => "lexical_scope",
+            Self::Scip => "scip",
+        }
+    }
+
+    /// The basis that has this name in the output.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::RANKED.into_iter().find(|basis| basis.name() == name)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Resolution {
     pub status: ResolutionStatus,
