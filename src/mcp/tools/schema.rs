@@ -172,7 +172,9 @@ mod tests {
     #[test]
     fn a_default_from_the_configuration_is_not_in_the_schema() {
         for (tool, param) in [
-            ("flags", "stale_days"),
+            ("churn", "days"),
+            ("clones", "min_tokens"),
+            ("clones", "similarity"),
             ("flags", "provider"),
             ("defect", "days"),
             ("hotspot", "days"),
@@ -188,6 +190,12 @@ mod tests {
                 "{tool}.{param}"
             );
         }
+    }
+
+    #[test]
+    fn the_default_of_flags_stale_days_is_the_default_of_the_cli_flag() {
+        let schema = input_schema(find("flags").expect("specification"));
+        assert_eq!(schema["properties"]["stale_days"]["default"], 90);
     }
 
     #[test]

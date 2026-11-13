@@ -33,6 +33,36 @@ fraction, such as `30.0`, is a valid integer. The schema shows a `default` only
 when the value is the same for each server. When a default comes from the
 configuration, the description of the parameter names the configuration key.
 
+### The same answer as the CLI
+
+A tool and its CLI command give the same data for the same repository and the
+same options. An argument that is absent takes the value that the command
+takes: the value in the configuration, or the built-in default.
+
+| Tool | Parameter | Value when the argument is absent |
+|---|---|---|
+| `churn` | `days` | `churn.since` (built-in default `6m`) |
+| `clones` | `min_tokens` | `duplicates.min_tokens` (50) |
+| `clones` | `similarity` | `duplicates.min_similarity` (0.9) |
+| `clones` | `include_tests` | `false`; `duplicates.exclude_tests` then applies |
+| `defect` | `days` | `defect.churn_days` (30) |
+| `hotspot` | `days` | `hotspot.days` (90) |
+| `flags` | `provider` | `feature_flags.providers` |
+| `flags` | `stale_days` | 90, the default of `--stale-days`; 0 selects `feature_flags.stale_days` |
+
+`changes` reads `changes.days`, and `satd` reads `satd.custom_markers`. They
+have no parameter for these values.
+
+`tests/parity.rs` compares each tool with its command on a fixture repository,
+with and without a configuration file. Its tables list each permitted
+difference, each parameter with its flag, and each parameter or flag that only
+one side has. These differences are permitted:
+
+- `generated_at`, because the two sides run at different times.
+- `repository_root` of `churn`: the server makes the path canonical.
+- The default page: `limit` has the default 50, and most commands have no
+  default for `--top`.
+
 | Code | Cause |
 |---|---|
 | `missing_argument` | A required argument is absent. |

@@ -129,7 +129,7 @@ expression: "responses[0]"
         "name": "complexity"
       },
       {
-        "description": "Finds debt comments such as TODO, FIXME, and HACK.",
+        "description": "Finds debt comments such as TODO, FIXME, and HACK. The tool also finds the markers in `satd.custom_markers` of the configuration.",
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
@@ -218,8 +218,7 @@ expression: "responses[0]"
           "additionalProperties": false,
           "properties": {
             "days": {
-              "default": 30,
-              "description": "The number of days of git history to read.",
+              "description": "The number of days of git history to read. The default is `churn.since` in the configuration.",
               "maximum": 36500,
               "minimum": 1,
               "type": "integer"
@@ -252,6 +251,11 @@ expression: "responses[0]"
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
+            "include_tests": {
+              "default": false,
+              "description": "If true, the tool also reads test code. If false, `duplicates.exclude_tests` of the configuration applies.",
+              "type": "boolean"
+            },
             "limit": {
               "default": 50,
               "description": "The maximum number of items in the result. The value 0 removes the limit.",
@@ -260,8 +264,7 @@ expression: "responses[0]"
               "type": "integer"
             },
             "min_tokens": {
-              "default": 50,
-              "description": "The minimum number of tokens in a clone.",
+              "description": "The minimum number of tokens in a clone. The default is `duplicates.min_tokens` in the configuration.",
               "maximum": 4294967295,
               "minimum": 1,
               "type": "integer"
@@ -278,8 +281,7 @@ expression: "responses[0]"
               "type": "string"
             },
             "similarity": {
-              "default": 0.7,
-              "description": "The minimum similarity of two fragments.",
+              "description": "The minimum similarity of two fragments. The default is `duplicates.min_similarity` in the configuration.",
               "maximum": 1.0,
               "minimum": 0.0,
               "type": "number"
@@ -324,7 +326,7 @@ expression: "responses[0]"
         "name": "defect"
       },
       {
-        "description": "Gives the risk of each recent commit. The tool uses just-in-time risk analysis.",
+        "description": "Gives the risk of each recent commit. The tool uses just-in-time risk analysis. `changes.days` of the configuration gives the number of days of history.",
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
@@ -664,7 +666,8 @@ expression: "responses[0]"
               "type": "string"
             },
             "stale_days": {
-              "description": "The age in days after which a flag is stale. When the configuration has the value 0, the server uses 14. The default is `feature_flags.stale_days` in the configuration.",
+              "default": 90,
+              "description": "The age in days after which a flag is stale. The value 0 selects `feature_flags.stale_days` of the configuration.",
               "maximum": 36500,
               "minimum": 0,
               "type": "integer"

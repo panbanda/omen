@@ -27,11 +27,16 @@ pub(super) static COMPLEXITY: ToolSpec = ToolSpec {
 
 pub(super) static SATD: ToolSpec = ToolSpec {
     name: "satd",
-    description: "Finds debt comments such as TODO, FIXME, and HACK.",
+    description: "Finds debt comments such as TODO, FIXME, and HACK. \
+        The tool also finds the markers in `satd.custom_markers` of the configuration.",
     params: &[PATH],
     paginated: Pagination::Field("items"),
     handler: |server, arguments| {
-        server.analyze(arguments, crate::analyzers::satd::Analyzer::default())
+        server.analyze(
+            arguments,
+            crate::analyzers::satd::Analyzer::new()
+                .with_custom_markers(&server.config.satd.custom_markers),
+        )
     },
 };
 
@@ -61,11 +66,15 @@ pub(super) static CHURN: ToolSpec = ToolSpec {
     params: &[
         PATH,
         Param::integer("days", 1, MAX_DAYS, DAYS_DESCRIPTION)
-            .with_default(ParamDefault::Integer(30)),
+            .with_default(ParamDefault::Configuration("churn.since")),
     ],
     paginated: Pagination::Field("files"),
     handler: |server, arguments| {
-        let days = arguments.count_u32("days").unwrap_or(30);
+        // `churn.since` is a duration such as `6m`. The value `all` has no
+        // number of days, and `u32::MAX` is the value for all the history.
+        let days = arguments.count_u32("days").unwrap_or_else(|| {
+            crate::git::parse_since_to_days(&server.config.churn.since).unwrap_or(u32::MAX)
+        });
         server.analyze(
             arguments,
             crate::analyzers::churn::Analyzer::new().with_days(days),
@@ -84,22 +93,39 @@ pub(super) static CLONES: ToolSpec = ToolSpec {
             MAX_COUNT,
             "The minimum number of tokens in a clone.",
         )
-        .with_default(ParamDefault::Integer(50)),
+        .with_default(ParamDefault::Configuration("duplicates.min_tokens")),
         Param::number(
             "similarity",
             0.0,
             1.0,
             "The minimum similarity of two fragments.",
         )
-        .with_default(ParamDefault::Number(0.7)),
+        .with_default(ParamDefault::Configuration("duplicates.min_similarity")),
+        Param::boolean(
+            "include_tests",
+            "If true, the tool also reads test code. \
+             If false, `duplicates.exclude_tests` of the configuration applies.",
+        )
+        .with_default(ParamDefault::Boolean(false)),
     ],
     paginated: Pagination::Field("clones"),
     handler: |server, arguments| {
+        let configured = &server.config.duplicates;
+        let include_tests = arguments.boolean("include_tests").unwrap_or(false);
         server.analyze(
             arguments,
             crate::analyzers::duplicates::Analyzer::new()
-                .with_min_tokens(arguments.count("min_tokens").unwrap_or(50))
-                .with_similarity_threshold(arguments.number("similarity").unwrap_or(0.7)),
+                .with_min_tokens(
+                    arguments
+                        .count("min_tokens")
+                        .unwrap_or(configured.min_tokens),
+                )
+                .with_similarity_threshold(
+                    arguments
+                        .number("similarity")
+                        .unwrap_or(configured.min_similarity),
+                )
+                .with_exclude_tests(!include_tests && configured.exclude_tests),
         )
     },
 };
@@ -126,11 +152,15 @@ pub(super) static DEFECT: ToolSpec = ToolSpec {
 
 pub(super) static CHANGES: ToolSpec = ToolSpec {
     name: "changes",
-    description: "Gives the risk of each recent commit. The tool uses just-in-time risk analysis.",
+    description: "Gives the risk of each recent commit. The tool uses just-in-time risk analysis. \
+        `changes.days` of the configuration gives the number of days of history.",
     params: &[PATH],
     paginated: Pagination::Field("commits"),
     handler: |server, arguments| {
-        server.analyze(arguments, crate::analyzers::changes::Analyzer::default())
+        server.analyze(
+            arguments,
+            crate::analyzers::changes::Analyzer::new().with_days(server.config.changes.days),
+        )
     },
 };
 
@@ -287,9 +317,9 @@ pub(super) static FLAGS: ToolSpec = ToolSpec {
             0,
             MAX_DAYS,
             "The age in days after which a flag is stale. \
-             When the configuration has the value 0, the server uses 14.",
+             The value 0 selects `feature_flags.stale_days` of the configuration.",
         )
-        .with_default(ParamDefault::Configuration("feature_flags.stale_days")),
+        .with_default(ParamDefault::Integer(90)),
     ],
     paginated: Pagination::Field("flags"),
     handler: flags,
@@ -302,18 +332,19 @@ fn flags(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
         .unwrap_or_default();
     let mut config = server.config.clone();
     if !providers.is_empty() {
-        config.feature_flags.providers = providers.clone();
+        config.feature_flags.providers = providers;
     }
-    // Without the argument, the analyzer uses the configured value, or 14
-    // when the configured value is 0.
-    let mut analyzer = crate::analyzers::flags::Analyzer::new().with_providers(providers);
-    if let Some(stale_days) = arguments.count_u32("stale_days") {
-        // A configured value above 0 has priority in the analyzer, thus the
-        // argument must replace it. The value 0 selects the second setting.
+    // The same rule as the `flags` command: the default is 90, and only the
+    // value 0 lets the configured value apply.
+    let stale_days = arguments.count_u32("stale_days").unwrap_or(90);
+    if stale_days > 0 {
         config.feature_flags.stale_days = stale_days;
-        analyzer = analyzer.with_expected_ttl(stale_days);
     }
-    server.analyze_with_config(arguments, &config, analyzer)
+    server.analyze_with_config(
+        arguments,
+        &config,
+        crate::analyzers::flags::Analyzer::default(),
+    )
 }
 
 pub(super) static SCORE: ToolSpec = ToolSpec {
