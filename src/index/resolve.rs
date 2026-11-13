@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use super::calls::split_type;
+use super::calls::{split_type, Argument};
 use super::extract::{FileSymbols, LinkFacts, Local};
 use super::model::{
     ImportBinding, ImportKind, ImportTarget, Receiver, Reference, ReferenceKind, Resolution,
@@ -864,8 +864,73 @@ impl<'a> Resolver<'a> {
         self.preferred(result, arity)
     }
 
+    /// Selects one overload by the types of the arguments.
+    ///
+    /// The candidates must be overloads: they have one name, and the number
+    /// of their parameters is the number of the arguments. An argument has a
+    /// known type only when it is a literal or a local name with a declared
+    /// type. The rule binds only when each argument at a position where the
+    /// overloads differ has a known type, and exactly one overload has
+    /// exactly those types there. The rule does not use a wider type, a boxed
+    /// type, or a conversion. In each other case the call stays ambiguous.
+    fn overload(&self, file: usize, position: usize, candidates: &[Id]) -> Option<Id> {
+        let facts = &self.files[file].reference_facts[position];
+        let arguments = &facts.arguments;
+        let chain = self.chain(file, facts.owner);
+        let mut overloads = Vec::new();
+        for id in candidates {
+            let types = self.facts(*id).parameter_types.as_ref()?;
+            if types.len() != arguments.len()
+                || self.symbol(*id).name != self.symbol(candidates[0]).name
+            {
+                return None;
+            }
+            overloads.push((*id, types));
+        }
+        let mut matching: Vec<Id> = candidates.to_vec();
+        for (at, argument) in arguments.iter().enumerate() {
+            let differs = overloads
+                .iter()
+                .any(|(_, types)| types[at] != overloads[0].1[at]);
+            if !differs {
+                continue;
+            }
+            let known = match argument {
+                Argument::Literal(name) => name.clone(),
+                Argument::Name(name) => {
+                    let declared = self.local(&chain, file, name)?.name.type_name.as_ref()?;
+                    let declared: String = declared.split_whitespace().collect();
+                    let declared = declared.trim_start_matches(':').to_string();
+                    if ["var", "auto", "let"].contains(&declared.as_str()) {
+                        return None;
+                    }
+                    declared
+                }
+                Argument::Other => return None,
+            };
+            matching.retain(|id| {
+                overloads
+                    .iter()
+                    .any(|(overload, types)| overload == id && types[at] == known)
+            });
+        }
+        match matching.as_slice() {
+            [only] => Some(*only),
+            _ => None,
+        }
+    }
+
     fn resolve(&self, file: usize, position: usize, depth: usize) -> Outcome {
         let mut outcome = self.resolve_by_rules(file, position, depth);
+        if outcome.status == Status::Ambiguous && outcome.basis != Some(Basis::NameOnly) {
+            if let Some(only) = self.overload(file, position, &outcome.candidates) {
+                outcome = Outcome {
+                    status: Status::UniqueCandidate,
+                    basis: Some(Basis::ArgumentType),
+                    candidates: vec![only],
+                };
+            }
+        }
         // A Python call of a class makes an object. It runs the constructor.
         if self.family(file) == Family::Python {
             let arity = self.files[file].references[position].arity;

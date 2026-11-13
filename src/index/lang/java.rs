@@ -13,6 +13,48 @@ const SCOPED_IDENTIFIER: &str = "scoped_identifier";
 const IDENTIFIER: &str = "identifier";
 const ASTERISK: &str = "asterisk";
 
+use crate::index::calls::{CallSyntax, LocalName};
+
+const LOCAL_VARIABLE_DECLARATION: &str = "local_variable_declaration";
+const FIELD_DECLARATION: &str = "field_declaration";
+
+/// A method call has its object and its name in the call node. Thus the call
+/// node is also the callee expression.
+const CALL_SYNTAX: CallSyntax = CallSyntax {
+    calls: &[
+        ("method_invocation", "", "arguments"),
+        (
+            "explicit_constructor_invocation",
+            "constructor",
+            "arguments",
+        ),
+    ],
+    constructions: &[("object_creation_expression", "type", "arguments")],
+    members: &[
+        ("method_invocation", "object", "name"),
+        ("field_access", "object", "field"),
+    ],
+    paths: &[],
+    names: &[IDENTIFIER],
+    self_words: &["this"],
+    super_words: &["super"],
+    locals: &[],
+    parameters: &[
+        ("formal_parameter", "name", "type"),
+        ("spread_parameter", "name", "type"),
+    ],
+    return_type_field: "type",
+    literals: &[
+        ("decimal_integer_literal", "int"),
+        ("hex_integer_literal", "int"),
+        ("decimal_floating_point_literal", "double"),
+        ("string_literal", "String"),
+        ("character_literal", "char"),
+        ("true", "boolean"),
+        ("false", "boolean"),
+    ],
+};
+
 pub struct Java;
 
 const LAMBDA_EXPRESSION: &str = "lambda_expression";
@@ -112,6 +154,46 @@ fn collect_type_names(node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<S
 }
 
 impl LanguageSpec for Java {
+    fn call_syntax(&self) -> CallSyntax {
+        CALL_SYNTAX
+    }
+
+    fn local_kinds(&self) -> Vec<&'static str> {
+        let mut kinds = self.call_syntax().local_kinds();
+        kinds.extend([LOCAL_VARIABLE_DECLARATION, FIELD_DECLARATION]);
+        kinds
+    }
+
+    fn call_hook_kinds(&self) -> Vec<&'static str> {
+        vec![LOCAL_VARIABLE_DECLARATION, FIELD_DECLARATION]
+    }
+
+    /// The type of a variable is on the declaration, and each declarator has
+    /// a name and a value. A field is a local name of its class.
+    fn locals(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
+        if ![LOCAL_VARIABLE_DECLARATION, FIELD_DECLARATION].contains(&node.kind()) {
+            self.call_syntax().locals(node, context, out);
+            return;
+        }
+        let type_name = node
+            .child_by_field_name("type")
+            .map(|type_name| context.text(type_name));
+        let mut cursor = node.walk();
+        for declarator in node.children_by_field_name("declarator", &mut cursor) {
+            let Some(name) = declarator.child_by_field_name("name") else {
+                continue;
+            };
+            out.push(LocalName {
+                name: context.text(name),
+                type_name: type_name.clone(),
+                value_start: declarator
+                    .child_by_field_name("value")
+                    .map(|value| value.start_byte()),
+                is_parameter: false,
+            });
+        }
+    }
+
     fn import_kinds(&self) -> Vec<&'static str> {
         vec![IMPORT_DECLARATION]
     }
@@ -375,6 +457,102 @@ mod tests {
         assert_eq!(
             rows(&files, "Main.java"),
             ["1 Named shop.Circle Circle->Circle ambiguous(a/Circle.java,b/Circle.java)"]
+        );
+    }
+
+    const CALL_FILES: &[(&str, &str)] = &[
+        (
+            "Main.java",
+            "import java.util.List;\nimport java.util.function.*;\n\nimport shop.other.*;\nimport shop.shapes.Circle;\nimport shop.shapes.Shape;\nimport shop.util.Util;\n\nimport static shop.util.Util.helper;\n\npublic class Main {\n    private Counter counter = new Counter();\n\n    static int local() {\n        return 4;\n    }\n\n    static int run() {\n        int total = local() + helper() + Other.onlyHere();\n        List<Integer> numbers = List.of(1).stream().map(n -> local()).toList();\n        IntUnaryOperator add = n -> n + 1;\n        return total + add.applyAsInt(numbers.size());\n    }\n\n    static double measure(Circle size, Shape shape) {\n        var made = new Circle(1.0);\n        return size.area() + shape.area() + made.area() + Util.helper();\n    }\n\n    static int shadow() {\n        IntSupplier helper = () -> 9;\n        return helper();\n    }\n\n    int tally() {\n        return counter.next() + this.counter.next() + Math.max(1, 2) + missing();\n    }\n\n    private static class Counter {\n        int next() {\n            return 1;\n        }\n    }\n}\n",
+        ),
+        (
+            "shop/other/Other.java",
+            "package shop.other;\n\npublic class Other {\n    public static int onlyHere() {\n        return 3;\n    }\n}\n",
+        ),
+        (
+            "shop/shapes/Circle.java",
+            "package shop.shapes;\n\npublic class Circle implements Shape {\n    public Circle(double radius) {\n    }\n\n    public double area() {\n        return this.scaled(1) + edge();\n    }\n\n    private double scaled(double factor) {\n        return factor;\n    }\n\n    protected String name() {\n        return \"circle\";\n    }\n\n    double edge() {\n        return 1;\n    }\n}\n\nclass Ring extends Circle {\n    Ring(double radius) {\n        super(radius);\n    }\n\n    protected String name() {\n        return \"ring of \" + super.name() + edge();\n    }\n}\n",
+        ),
+        (
+            "shop/shapes/Shape.java",
+            "package shop.shapes;\n\npublic interface Shape {\n    double area();\n}\n",
+        ),
+        (
+            "shop/util/Util.java",
+            "package shop.util;\n\npublic class Util {\n    public static int helper() {\n        return 1;\n    }\n}\n",
+        ),
+    ];
+
+    #[test]
+    fn test_calls_in_the_main_class() {
+        use crate::index::resolve::testing::rows;
+        assert_eq!(
+            rows(CALL_FILES, "Main.java"),
+            [
+                "12 Main>Counter UniqueCandidate QualifiedPath [Main.java#Main.Counter]",
+                "19 Main.run>local UniqueCandidate EnclosingType [Main.java#Main.local]",
+                "19 Main.run>helper UniqueCandidate ImportedName [shop/util/Util.java#Util.helper]",
+                "19 Main.run>Other.onlyHere UniqueCandidate QualifiedPath [shop/other/Other.java#Other.onlyHere]",
+                "20 Main.run>(..).toList Unresolved - []",
+                "20 Main.run>(..).map Unresolved - []",
+                "20 Main.run>(..).stream Unresolved - []",
+                "20 Main.run>List.of External - []",
+                "20 Main.run>local UniqueCandidate EnclosingType [Main.java#Main.local]",
+                "22 Main.run>add.applyAsInt UniqueCandidate LexicalScope [Main.java#Main.run.add]",
+                "22 Main.run>numbers.size Unresolved - []",
+                "26 Main.measure>Circle UniqueCandidate QualifiedPath [shop/shapes/Circle.java#Circle.Circle]",
+                "27 Main.measure>size.area UniqueCandidate ReceiverDeclaredType [shop/shapes/Circle.java#Circle.area]",
+                "27 Main.measure>shape.area Ambiguous NameOnly [shop/shapes/Circle.java#Circle.area, shop/shapes/Shape.java#Shape.area]",
+                "27 Main.measure>made.area UniqueCandidate ReceiverDeclaredType [shop/shapes/Circle.java#Circle.area]",
+                "27 Main.measure>Util.helper UniqueCandidate QualifiedPath [shop/util/Util.java#Util.helper]",
+                "32 Main.shadow>helper UniqueCandidate ImportedName [shop/util/Util.java#Util.helper]",
+                "36 Main.tally>counter.next UniqueCandidate ReceiverDeclaredType [Main.java#Main.Counter.next]",
+                "36 Main.tally>(..).next Unresolved - []",
+                "36 Main.tally>Math.max Unresolved - []",
+                "36 Main.tally>missing Unresolved - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_calls_with_this_and_super() {
+        use crate::index::resolve::testing::rows;
+        assert_eq!(
+            rows(CALL_FILES, "shop/shapes/Circle.java"),
+            [
+                "8 Circle.area>self.scaled UniqueCandidate EnclosingType [shop/shapes/Circle.java#Circle.scaled]",
+                "8 Circle.area>edge UniqueCandidate EnclosingType [shop/shapes/Circle.java#Circle.edge]",
+                "26 Ring.Ring>super.super UniqueCandidate EnclosingType [shop/shapes/Circle.java#Circle.Circle]",
+                "30 Ring.name>super.name UniqueCandidate EnclosingType [shop/shapes/Circle.java#Circle.name]",
+                "30 Ring.name>edge UniqueCandidate EnclosingType [shop/shapes/Circle.java#Circle.edge]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_overload_by_the_exact_type_of_an_argument() {
+        use crate::index::resolve::testing::rows;
+        let files = [(
+            "Util.java",
+            "public class Util {\n    static int twice(int value) { return 1; }\n    static int twice(double value) { return 2; }\n    static int wide(long value) { return 3; }\n    static int wide(double value) { return 4; }\n    static int pair(int left, String right) { return 5; }\n    static int pair(int left, int right) { return 6; }\n\n    static int run(int given) {\n        double real = 2.0;\n        var inferred = 2.0;\n        return twice(2) + twice(2.0) + twice(real) + twice(given)\n            + wide(2) + twice(run(1)) + twice(inferred) + twice(2.0f)\n            + pair(run(1), \"a\") + pair(1, 2) + twice(1, 2);\n    }\n}\n",
+        )];
+        assert_eq!(
+            rows(&files, "Util.java"),
+            [
+                "12 Util.run>twice UniqueCandidate ArgumentType [Util.java#Util.twice]",
+                "12 Util.run>twice UniqueCandidate ArgumentType [Util.java#Util.twice~2]",
+                "12 Util.run>twice UniqueCandidate ArgumentType [Util.java#Util.twice~2]",
+                "12 Util.run>twice UniqueCandidate ArgumentType [Util.java#Util.twice]",
+                "13 Util.run>wide Ambiguous EnclosingType [Util.java#Util.wide, Util.java#Util.wide~2]",
+                "13 Util.run>twice Ambiguous EnclosingType [Util.java#Util.twice, Util.java#Util.twice~2]",
+                "13 Util.run>run UniqueCandidate EnclosingType [Util.java#Util.run]",
+                "13 Util.run>twice Ambiguous EnclosingType [Util.java#Util.twice, Util.java#Util.twice~2]",
+                "13 Util.run>twice Ambiguous EnclosingType [Util.java#Util.twice, Util.java#Util.twice~2]",
+                "14 Util.run>pair UniqueCandidate ArgumentType [Util.java#Util.pair]",
+                "14 Util.run>run UniqueCandidate EnclosingType [Util.java#Util.run]",
+                "14 Util.run>pair UniqueCandidate ArgumentType [Util.java#Util.pair~2]",
+                "14 Util.run>twice Ambiguous EnclosingType [Util.java#Util.twice, Util.java#Util.twice~2]",
+            ]
         );
     }
 }

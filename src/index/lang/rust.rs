@@ -31,6 +31,7 @@ const CALL_SYNTAX: CallSyntax = CallSyntax {
     locals: &[(LET_DECLARATION, "pattern", "type", "value")],
     parameters: &[("parameter", "pattern", "type")],
     return_type_field: "return_type",
+    literals: &[],
 };
 
 use crate::index::calls::{Call, Callee};
@@ -156,7 +157,7 @@ impl LanguageSpec for Rust {
                 qualifier: None,
             },
             kind: ReferenceKind::Call,
-            arity: usize::MAX,
+            arguments: Vec::new(),
         })
     }
 

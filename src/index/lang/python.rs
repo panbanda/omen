@@ -35,6 +35,7 @@ const CALL_SYNTAX: CallSyntax = CallSyntax {
         ("typed_default_parameter", "name", "type"),
     ],
     return_type_field: "return_type",
+    literals: &[],
 };
 
 pub struct Python;

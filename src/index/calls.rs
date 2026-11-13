@@ -31,6 +31,10 @@ pub struct CallSyntax {
     pub parameters: &'static [(&'static str, &'static str, &'static str)],
     /// The field of a definition node that has the type of the result.
     pub return_type_field: &'static str,
+    /// `(literal kind, type name)`. The type name is the name that a
+    /// parameter of exactly that type has in the source. The names `int`,
+    /// `double`, and `number` also read the suffix of the literal.
+    pub literals: &'static [(&'static str, &'static str)],
 }
 
 impl CallSyntax {
@@ -57,6 +61,7 @@ impl CallSyntax {
         kinds.extend(self.members.iter().map(|rule| rule.0));
         kinds.extend(self.paths.iter().map(|rule| rule.0));
         kinds.extend(self.names);
+        kinds.extend(self.literals.iter().map(|rule| rule.0));
         kinds
     }
 
@@ -115,6 +120,10 @@ impl CallSyntax {
     fn is_name_chain(&self, node: Node<'_>) -> bool {
         if self.names.contains(&node.kind()) {
             return true;
+        }
+        // A call node can also be a member rule. A call is not a name.
+        if self.calls.iter().any(|rule| rule.0 == node.kind()) {
+            return false;
         }
         let rule = self.members.iter().chain(self.paths);
         rule.filter(|(kind, _, _)| node.kind() == *kind)
@@ -185,9 +194,15 @@ impl CallSyntax {
         context: &Context<'_, 'tree>,
     ) -> Option<Call<'tree>> {
         let kind = node.kind();
-        let arity = |field: &str| {
-            node.child_by_field_name(field)
-                .map_or(0, |arguments| arguments.named_child_count())
+        let read_arguments = |field: &str| -> Vec<Argument> {
+            let Some(arguments) = node.child_by_field_name(field) else {
+                return Vec::new();
+            };
+            let mut cursor = arguments.walk();
+            arguments
+                .named_children(&mut cursor)
+                .map(|argument| self.argument(argument, context))
+                .collect()
         };
         if let Some((_, callee, arguments)) = self.calls.iter().find(|rule| rule.0 == kind) {
             let callee = if callee.is_empty() {
@@ -198,7 +213,7 @@ impl CallSyntax {
             return Some(Call {
                 callee: self.callee(callee, context)?,
                 kind: ReferenceKind::Call,
-                arity: arity(arguments),
+                arguments: read_arguments(arguments),
             });
         }
         let (_, type_field, arguments) = self.constructions.iter().find(|rule| rule.0 == kind)?;
@@ -211,8 +226,25 @@ impl CallSyntax {
                 qualifier,
             },
             kind: ReferenceKind::Construct,
-            arity: arity(arguments),
+            arguments: read_arguments(arguments),
         })
+    }
+
+    /// The fact that the syntax gives about the type of one argument.
+    fn argument(&self, node: Node<'_>, context: &Context<'_, '_>) -> Argument {
+        // Some grammars put each argument in a node of its own.
+        let node = match node.kind() {
+            "argument" => node.named_child(0).unwrap_or(node),
+            _ => node,
+        };
+        if self.names.contains(&node.kind()) {
+            return Argument::Name(context.text(node));
+        }
+        self.literals
+            .iter()
+            .find(|(kind, _)| node.kind() == *kind)
+            .and_then(|(_, base)| literal_type(base, &context.text(node)))
+            .map_or(Argument::Other, Argument::Literal)
     }
 
     /// Adds the local names that a declaration node or a parameter node binds.
@@ -259,7 +291,44 @@ pub struct Callee<'tree> {
 pub struct Call<'tree> {
     pub callee: Callee<'tree>,
     pub kind: ReferenceKind,
-    pub arity: usize,
+    pub arguments: Vec<Argument>,
+}
+
+/// What the syntax tells about the type of an argument of a call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Argument {
+    /// A literal. The text is the name of its type.
+    Literal(String),
+    /// One name, for example a local variable.
+    Name(String),
+    Other,
+}
+
+/// The type name of a number literal with its suffix, or of a different
+/// literal. The result is `None` for a suffix that this function does not know.
+fn literal_type(base: &str, text: &str) -> Option<String> {
+    let hexadecimal = text.starts_with("0x") || text.starts_with("0X");
+    let base = match base {
+        "number" if !hexadecimal && text.contains(['.', 'e', 'E']) => "double",
+        "number" => "int",
+        other => other,
+    };
+    let suffix: String = text
+        .chars()
+        .rev()
+        .take_while(|character| character.is_ascii_alphabetic())
+        .collect();
+    let name = match (base, suffix.to_ascii_lowercase().as_str()) {
+        ("int" | "double", _) if hexadecimal => "int",
+        ("int", "") => "int",
+        ("int", "l") => "long",
+        ("double", "" | "d") => "double",
+        ("double", "f") => "float",
+        ("double", "m") => "decimal",
+        ("int" | "double", _) => return None,
+        (other, _) => other,
+    };
+    Some(name.to_string())
 }
 
 /// A name that a function binds: a parameter or a local variable.
@@ -321,5 +390,22 @@ mod tests {
         assert_eq!(split("\\Shop\\Shapes\\Circle"), "Shop\\Shapes|Circle");
         assert_eq!(split("?Circle"), "|Circle");
         assert_eq!(split("[]int"), "|");
+    }
+
+    #[test]
+    fn test_literal_type_reads_the_suffix() {
+        let name = |base, text| literal_type(base, text).unwrap_or_else(|| "-".to_string());
+        assert_eq!(name("int", "2"), "int");
+        assert_eq!(name("int", "2L"), "long");
+        assert_eq!(name("int", "2u"), "-");
+        assert_eq!(name("int", "0xFF"), "int");
+        assert_eq!(name("double", "2.0"), "double");
+        assert_eq!(name("double", "2.0f"), "float");
+        assert_eq!(name("double", "2.0m"), "decimal");
+        assert_eq!(name("number", "2"), "int");
+        assert_eq!(name("number", "2.5"), "double");
+        assert_eq!(name("number", "1e3"), "double");
+        assert_eq!(name("number", "2.5f"), "float");
+        assert_eq!(name("String", "\"a\""), "String");
     }
 }

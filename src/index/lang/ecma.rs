@@ -37,6 +37,7 @@ const JAVASCRIPT_CALLS: CallSyntax = CallSyntax {
     locals: &[(VARIABLE_DECLARATOR, "name", "", "value")],
     parameters: &[],
     return_type_field: "",
+    literals: &[],
 };
 
 const TYPESCRIPT_CALLS: CallSyntax = CallSyntax {

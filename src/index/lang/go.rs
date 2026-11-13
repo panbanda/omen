@@ -29,6 +29,7 @@ const CALL_SYNTAX: CallSyntax = CallSyntax {
         ("variadic_parameter_declaration", "name", "type"),
     ],
     return_type_field: "result",
+    literals: &[],
 };
 
 pub struct Go;

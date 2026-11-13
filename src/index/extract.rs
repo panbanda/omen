@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use tree_sitter::Node;
 
-use super::calls::{split_type, Call, CallSyntax, LocalName};
+use super::calls::{split_type, Argument, Call, CallSyntax, LocalName};
 use super::lang;
 use super::model::{
     symbol_key, Exported, ImportBinding, ImportKind, ImportTarget, Reference, ReferenceKind,
@@ -98,6 +98,9 @@ pub struct Draft<'tree> {
     /// The number of declared parameters, if the language links definitions
     /// to declarations.
     pub parameter_count: Option<usize>,
+    /// The declared type of each parameter, without white space. A parameter
+    /// without a declared type has an empty text.
+    pub parameter_types: Option<Vec<String>>,
     /// The node ID of the nearest definition that contains this definition.
     pub owner: Option<usize>,
     /// The declared type of the result, as the source has it.
@@ -117,6 +120,7 @@ pub struct LinkFacts {
     /// name of a definition is a part of this path.
     pub container_path: Vec<String>,
     pub parameter_count: Option<usize>,
+    pub parameter_types: Option<Vec<String>>,
     /// The position in `FileSymbols::symbols` of the nearest definition that
     /// contains the symbol.
     pub parent: Option<usize>,
@@ -133,6 +137,24 @@ pub struct ReferenceFacts {
     pub start_byte: usize,
     /// The position in `FileSymbols::symbols` of the enclosing definition.
     pub owner: Option<usize>,
+    pub arguments: Vec<Argument>,
+}
+
+/// The declared types of the parameters in a parameter list, without white
+/// space and without the `:` of a type annotation.
+pub fn parameter_types(parameters: Node<'_>, source: &[u8]) -> Vec<String> {
+    let mut cursor = parameters.walk();
+    parameters
+        .named_children(&mut cursor)
+        .map(|parameter| {
+            let text = parameter
+                .child_by_field_name("type")
+                .and_then(|type_node| type_node.utf8_text(source).ok())
+                .unwrap_or("");
+            let text: String = text.split_whitespace().collect();
+            text.trim_start_matches(':').to_string()
+        })
+        .collect()
 }
 
 /// A local name and the definition that binds it.
@@ -434,6 +456,7 @@ impl<'tree> Extractor<'_, 'tree> {
         } else {
             rule.kind
         };
+        let parameters = node.child_by_field_name("parameters");
         let mut draft = Draft {
             node,
             name_node,
@@ -446,7 +469,8 @@ impl<'tree> Extractor<'_, 'tree> {
             span: Span::of(&node),
             body: node.child_by_field_name("body"),
             role: ScopeRole::Function,
-            parameter_count: None,
+            parameter_count: parameters.map(|parameters| parameters.named_child_count()),
+            parameter_types: parameters.map(|parameters| parameter_types(parameters, self.source)),
             owner: self.owner(),
             return_type: (!self.return_type_field.is_empty())
                 .then(|| node.child_by_field_name(self.return_type_field))
@@ -723,6 +747,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         link_facts.push(LinkFacts {
             container_path: draft.container_path,
             parameter_count: draft.parameter_count,
+            parameter_types: draft.parameter_types,
             parent,
             return_type: draft.return_type,
             trait_implementation: draft.trait_implementation,
@@ -749,14 +774,18 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             via_closure,
             receiver: call.callee.receiver,
             qualifier: call.callee.qualifier,
-            arity: call.arity,
+            arity: call.arguments.len(),
             resolution: Resolution {
                 status: ResolutionStatus::Unresolved,
                 basis: None,
                 candidates: Vec::new(),
             },
         });
-        reference_facts.push(ReferenceFacts { start_byte, owner });
+        reference_facts.push(ReferenceFacts {
+            start_byte,
+            owner,
+            arguments: call.arguments,
+        });
     }
     FileSymbols {
         file: file.to_string(),

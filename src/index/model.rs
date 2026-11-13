@@ -200,6 +200,10 @@ pub enum ResolutionBasis {
     ImportedModule,
     EnclosingType,
     ReceiverDeclaredType,
+    /// One overload has exactly the types of the arguments. An argument has a
+    /// known type only when it is a literal or a local name with a declared
+    /// type. A wider type or a conversion does not give this basis.
+    ArgumentType,
     QualifiedPath,
     SamePackage,
     NameOnly,
