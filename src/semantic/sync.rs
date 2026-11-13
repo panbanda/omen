@@ -3,7 +3,7 @@
 //! Detects changed files by comparing content hashes and re-indexes only what's needed.
 //! Uses parallel file parsing for performance.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -18,7 +18,7 @@ use crate::core::{Error, FileSet, Result, SourceFile};
 use crate::parser::{extract_functions, Parser};
 
 use super::cache::{CachedSymbol, EmbeddingCache};
-use super::chunking::{extract_chunks, format_chunk_text, Chunk};
+use super::chunking::{definition_ordinals, extract_chunks, format_chunk_text, Chunk};
 
 /// Intermediate structure for a parsed chunk ready for caching.
 struct ParsedChunk {
@@ -28,6 +28,7 @@ struct ParsedChunk {
     parent_name: Option<String>,
     signature: String,
     definition_line: u32,
+    definition_ordinal: u32,
     start_line: u32,
     end_line: u32,
     chunk_index: u32,
@@ -78,7 +79,7 @@ impl<'a> SyncManager<'a> {
         }
 
         // Check each current file for changes
-        let files_to_index: Vec<_> = current_files
+        let mut files_to_index: Vec<_> = current_files
             .iter()
             .filter_map(|path| {
                 let full_path = root_path.join(path);
@@ -94,6 +95,10 @@ impl<'a> SyncManager<'a> {
                 }
             })
             .collect();
+
+        // A set has a random order. A fixed order gives the same row order in
+        // the cache in each run.
+        files_to_index.sort();
 
         stats.checked = current_files.len();
 
@@ -189,6 +194,7 @@ impl<'a> SyncManager<'a> {
                 parent_name: chunk.parent_name,
                 signature: chunk.signature,
                 definition_line: chunk.definition_line,
+                definition_ordinal: chunk.definition_ordinal,
                 start_line: chunk.start_line,
                 end_line: chunk.end_line,
                 chunk_index: chunk.chunk_index,
@@ -256,16 +262,14 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
 
     // Compute complexity per function. A chunk matches a function by name and
     // by the first line of the definition.
-    let complexity_entries: Vec<(String, u32, u32, u32, u32)> = functions
+    let complexity_entries: HashMap<(String, u32, u32), (u32, u32)> = functions
         .iter()
-        .map(|func| {
+        .zip(definition_ordinals(&functions))
+        .map(|(func, ordinal)| {
             let metrics = analyze_function_complexity(func, &parse_result);
             (
-                func.name.clone(),
-                func.start_line,
-                func.end_line,
-                metrics.cyclomatic,
-                metrics.cognitive,
+                (func.name.clone(), func.start_line, ordinal),
+                (metrics.cyclomatic, metrics.cognitive),
             )
         })
         .collect();
@@ -279,13 +283,11 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
             let content_hash = hash_string(&enriched_text);
 
             // Look up the complexity of the definition of the chunk.
-            let complexity = complexity_entries
-                .iter()
-                .filter(|(name, start, _, _, _)| {
-                    name == &chunk.symbol_name && *start == chunk.definition_line
-                })
-                .min_by_key(|(_, start, end, _, _)| end - start)
-                .map(|(_, _, _, cyc, cog)| (*cyc, *cog));
+            let complexity = complexity_entries.get(&(
+                chunk.symbol_name.clone(),
+                chunk.definition_line,
+                chunk.definition_ordinal,
+            ));
 
             ParsedChunk {
                 file_path: chunk.file_path.clone(),
@@ -294,14 +296,15 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
                 parent_name: chunk.parent_name.clone(),
                 signature: chunk.signature.clone(),
                 definition_line: chunk.definition_line,
+                definition_ordinal: chunk.definition_ordinal,
                 start_line: chunk.start_line,
                 end_line: chunk.end_line,
                 chunk_index: chunk.chunk_index,
                 total_chunks: chunk.total_chunks,
                 enriched_text,
                 content_hash,
-                cyclomatic_complexity: complexity.map(|(c, _)| c),
-                cognitive_complexity: complexity.map(|(_, c)| c),
+                cyclomatic_complexity: complexity.map(|(cyclomatic, _)| *cyclomatic),
+                cognitive_complexity: complexity.map(|(_, cognitive)| *cognitive),
             }
         })
         .collect();

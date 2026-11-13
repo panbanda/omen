@@ -7,7 +7,7 @@ use std::path::Path;
 use crate::core::Result;
 
 use super::cache::EmbeddingCache;
-use super::search::{deduplicate_chunks, SearchResult};
+use super::search::{deduplicate_chunks, documents, SearchResult};
 use super::tfidf::{DocMeta, TfidfEngine};
 
 /// Result of a multi-repo search including the total indexed symbol count.
@@ -51,21 +51,7 @@ pub fn multi_repo_search(
         let cache = EmbeddingCache::open(&cache_path)?;
         let symbols = cache.get_all_symbols()?;
 
-        for sym in symbols {
-            let prefixed_path = format!("[{}] {}", repo_label, sym.file_path);
-            let meta = DocMeta {
-                file_path: prefixed_path,
-                symbol_name: sym.symbol_name,
-                symbol_type: sym.symbol_type,
-                signature: sym.signature,
-                definition_line: sym.definition_line,
-                start_line: sym.start_line,
-                end_line: sym.end_line,
-                cyclomatic_complexity: sym.cyclomatic_complexity,
-                cognitive_complexity: sym.cognitive_complexity,
-            };
-            docs.push((sym.enriched_text, meta));
-        }
+        docs.extend(documents(symbols, Some(repo_label)));
     }
 
     if docs.is_empty() {
@@ -167,6 +153,7 @@ mod tests {
                     end_line: 5,
                     chunk_index: 0,
                     definition_line: 0,
+                    definition_ordinal: 0,
                     total_chunks: 1,
                     content_hash: "h".to_string(),
                     enriched_text: text.to_string(),
@@ -219,6 +206,7 @@ mod tests {
                     end_line: 5,
                     chunk_index: 0,
                     definition_line: 0,
+                    definition_ordinal: 0,
                     total_chunks: 1,
                     content_hash: "h".to_string(),
                     enriched_text: text.to_string(),

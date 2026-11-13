@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::Result;
 
-use super::cache::EmbeddingCache;
+use super::cache::{CachedSymbol, EmbeddingCache};
 use super::tfidf::{DocMeta, TfidfEngine};
 
 /// A search result with similarity score and optional quality metrics.
@@ -48,24 +48,7 @@ impl<'a> SearchEngine<'a> {
     /// Build a TF-IDF engine from cached symbols.
     fn build_tfidf(&self) -> Result<TfidfEngine> {
         let symbols = self.cache.get_all_symbols()?;
-        let docs: Vec<_> = symbols
-            .into_iter()
-            .map(|sym| {
-                let meta = DocMeta {
-                    file_path: sym.file_path,
-                    symbol_name: sym.symbol_name,
-                    symbol_type: sym.symbol_type,
-                    signature: sym.signature,
-                    definition_line: sym.definition_line,
-                    start_line: sym.start_line,
-                    end_line: sym.end_line,
-                    cyclomatic_complexity: sym.cyclomatic_complexity,
-                    cognitive_complexity: sym.cognitive_complexity,
-                };
-                (sym.enriched_text, meta)
-            })
-            .collect();
-        Ok(TfidfEngine::fit(&docs))
+        Ok(TfidfEngine::fit(&documents(symbols, None)))
     }
 
     /// Search for symbols matching the query.
@@ -154,12 +137,58 @@ pub struct SearchFilters {
     pub max_complexity: Option<u32>,
 }
 
-/// The file, the name, and the first line of a definition.
-type DefinitionKey = (String, String, u32);
+/// The documents of the symbols for the TF-IDF engine.
+///
+/// A long definition has more than one chunk. The `start_line` and the
+/// `end_line` of each document are the lines of the definition, not of the
+/// chunk. Thus a result gives the line that `get_symbol` accepts. `label` goes
+/// before the path of each file.
+pub(super) fn documents(symbols: Vec<CachedSymbol>, label: Option<&str>) -> Vec<(String, DocMeta)> {
+    let mut last_lines: HashMap<DefinitionKey, u32> = HashMap::new();
+    for symbol in &symbols {
+        let last = last_lines.entry(definition_key(symbol)).or_insert(0);
+        *last = (*last).max(symbol.end_line);
+    }
+    symbols
+        .into_iter()
+        .map(|symbol| {
+            let end_line = last_lines[&definition_key(&symbol)];
+            let file_path = match label {
+                Some(label) => format!("[{label}] {}", symbol.file_path),
+                None => symbol.file_path,
+            };
+            let meta = DocMeta {
+                file_path,
+                symbol_name: symbol.symbol_name,
+                symbol_type: symbol.symbol_type,
+                signature: symbol.signature,
+                definition_line: symbol.definition_line,
+                definition_ordinal: symbol.definition_ordinal,
+                start_line: symbol.definition_line,
+                end_line,
+                cyclomatic_complexity: symbol.cyclomatic_complexity,
+                cognitive_complexity: symbol.cognitive_complexity,
+            };
+            (symbol.enriched_text, meta)
+        })
+        .collect()
+}
+
+fn definition_key(symbol: &CachedSymbol) -> DefinitionKey {
+    (
+        symbol.file_path.clone(),
+        symbol.symbol_name.clone(),
+        symbol.definition_line,
+        symbol.definition_ordinal,
+    )
+}
+
+/// The file, the name, the first line, and the ordinal of a definition.
+type DefinitionKey = (String, String, u32, u32);
 
 /// Collapse multiple chunks of the same symbol into a single result,
-/// keeping the highest score. The key is the file, the name, and the first line
-/// of the definition. Two definitions with one name in one file stay separate.
+/// keeping the highest score. The key is the file, the name, the first line,
+/// and the ordinal of the definition. Two definitions with one name in one file stay separate.
 pub fn deduplicate_chunks(results: Vec<(DocMeta, f32)>) -> Vec<SearchResult> {
     let mut best: HashMap<DefinitionKey, SearchResult> = HashMap::new();
     // Track insertion order to preserve ranking stability
@@ -170,6 +199,7 @@ pub fn deduplicate_chunks(results: Vec<(DocMeta, f32)>) -> Vec<SearchResult> {
             meta.file_path.clone(),
             meta.symbol_name.clone(),
             meta.definition_line,
+            meta.definition_ordinal,
         );
         match best.get(&key) {
             Some(existing) if existing.score >= score => {}
@@ -271,6 +301,7 @@ mod tests {
             end_line: 5,
             chunk_index: 0,
             definition_line: 0,
+            definition_ordinal: 0,
             total_chunks: 1,
             content_hash: hash.to_string(),
             enriched_text: enriched_text.to_string(),
@@ -355,15 +386,16 @@ mod tests {
         assert_eq!(results[0].file, "src/a.rs");
     }
 
-    fn meta_at(definition_line: u32, start_line: u32) -> DocMeta {
+    fn meta_at(definition_line: u32, definition_ordinal: u32) -> DocMeta {
         DocMeta {
             file_path: "src/lib.rs".to_string(),
             symbol_name: "area".to_string(),
             symbol_type: "function".to_string(),
             signature: "fn area()".to_string(),
             definition_line,
-            start_line,
-            end_line: start_line + 3,
+            definition_ordinal,
+            start_line: definition_line,
+            end_line: definition_line + 3,
             cyclomatic_complexity: None,
             cognitive_complexity: None,
         }
@@ -371,7 +403,7 @@ mod tests {
 
     #[test]
     fn deduplication_keeps_definitions_with_one_name_in_one_file() {
-        let results = deduplicate_chunks(vec![(meta_at(10, 10), 0.5), (meta_at(20, 20), 0.4)]);
+        let results = deduplicate_chunks(vec![(meta_at(10, 0), 0.5), (meta_at(20, 0), 0.4)]);
         let lines: Vec<u32> = results.iter().map(|result| result.start_line).collect();
         assert_eq!(lines, vec![10, 20]);
     }
@@ -379,12 +411,18 @@ mod tests {
     #[test]
     fn deduplication_joins_the_chunks_of_one_definition() {
         let results = deduplicate_chunks(vec![
-            (meta_at(10, 10), 0.4),
-            (meta_at(10, 14), 0.6),
-            (meta_at(20, 20), 0.5),
+            (meta_at(10, 0), 0.4),
+            (meta_at(10, 0), 0.6),
+            (meta_at(20, 0), 0.5),
         ]);
-        let lines: Vec<u32> = results.iter().map(|result| result.start_line).collect();
-        assert_eq!(lines, vec![14, 20]);
+        let scores: Vec<f32> = results.iter().map(|result| result.score).collect();
+        assert_eq!(scores, vec![0.6, 0.5]);
+    }
+
+    #[test]
+    fn deduplication_keeps_definitions_with_one_name_on_one_line() {
+        let results = deduplicate_chunks(vec![(meta_at(10, 0), 0.5), (meta_at(10, 1), 0.4)]);
+        assert_eq!(results.len(), 2);
     }
 
     #[test]
@@ -404,6 +442,7 @@ mod tests {
                     end_line: 10 + i * 10,
                     chunk_index: i,
                     definition_line: 0,
+                    definition_ordinal: 0,
                     total_chunks: 2,
                     content_hash: format!("h{i}"),
                     enriched_text: format!(
@@ -453,6 +492,7 @@ mod tests {
                 end_line: 5,
                 chunk_index: 0,
                 definition_line: 0,
+                definition_ordinal: 0,
                 total_chunks: 1,
                 content_hash: "h1".to_string(),
                 enriched_text: "[src/a.rs] simple_parse\nfn simple_parse() { parse }".to_string(),
@@ -473,6 +513,7 @@ mod tests {
                 end_line: 100,
                 chunk_index: 0,
                 definition_line: 0,
+                definition_ordinal: 0,
                 total_chunks: 1,
                 content_hash: "h2".to_string(),
                 enriched_text: "[src/b.rs] complex_parse\nfn complex_parse() { parse }".to_string(),

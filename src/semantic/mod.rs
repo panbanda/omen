@@ -199,6 +199,7 @@ mod tests {
                 end_line: 5,
                 chunk_index: 0,
                 definition_line: 0,
+                definition_ordinal: 0,
                 total_chunks: 1,
                 content_hash: "h1".to_string(),
                 enriched_text: "[src/a.rs] low_complexity\nfn low_complexity() { return }"
@@ -218,6 +219,7 @@ mod tests {
                 end_line: 50,
                 chunk_index: 0,
                 definition_line: 0,
+                definition_ordinal: 0,
                 total_chunks: 1,
                 content_hash: "h2".to_string(),
                 enriched_text: "[src/b.rs] high_complexity\nfn high_complexity() { return }"

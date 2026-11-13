@@ -107,6 +107,63 @@ fn a_correct_result_stays_when_unrelated_code_is_added() {
 }
 
 #[test]
+fn two_definitions_with_one_name_on_one_line_are_two_results() {
+    assert_eq!(
+        start_lines("one_line", "same_line", "same_line"),
+        vec![1, 1]
+    );
+}
+
+#[test]
+fn a_long_definition_has_the_lines_of_the_definition() {
+    let index_directory = tempfile::tempdir().unwrap();
+    let config = SearchConfig {
+        cache_path: Some(index_directory.path().join("search.db")),
+        ..SearchConfig::default()
+    };
+    let search = SemanticSearch::new(&config, fixture("long")).unwrap();
+    search.index(&Config::default()).unwrap();
+    let results = search.search("zzmarker", Some(usize::MAX)).unwrap().results;
+    assert_eq!(results.len(), 1, "{results:?}");
+    assert_eq!(results[0].symbol_name, "long_definition");
+    assert_eq!((results[0].start_line, results[0].end_line), (1, 12));
+}
+
+#[test]
+fn equal_scores_give_one_order_in_each_run() {
+    let directory = tempfile::tempdir().unwrap();
+    for number in 0..12 {
+        std::fs::write(
+            directory.path().join(format!("same{number}.go")),
+            "package same\n\nfunc Repeat() int {\n\treturn 1\n}\n",
+        )
+        .unwrap();
+    }
+    let runs: Vec<Vec<(String, u32)>> = (0..5)
+        .map(|_| {
+            let index_directory = tempfile::tempdir().unwrap();
+            let config = SearchConfig {
+                cache_path: Some(index_directory.path().join("search.db")),
+                ..SearchConfig::default()
+            };
+            let search = SemanticSearch::new(&config, directory.path()).unwrap();
+            search.index(&Config::default()).unwrap();
+            search
+                .search("repeat", Some(usize::MAX))
+                .unwrap()
+                .results
+                .into_iter()
+                .map(|result| (result.file, result.start_line))
+                .collect()
+        })
+        .collect();
+    let mut sorted = runs[0].clone();
+    sorted.sort();
+    assert_eq!(runs[0], sorted);
+    assert!(runs.iter().all(|run| *run == runs[0]));
+}
+
+#[test]
 fn a_query_without_a_shared_term_has_no_result() {
     let names = default_search_names(&fixture("go"), "zzqx wvvk");
     assert!(names.is_empty(), "{names:?}");
