@@ -115,7 +115,25 @@ the total without them: `max_symbols` and `max_risks` of `context`,
 
 The search tools apply `min_score`, `files`, and `max_complexity` first, and
 then `top_k`. An empty `include_projects` is the same as no `include_projects`.
-With `include_projects`, `files` applies to the paths in each project.
+With `include_projects`, the `file` of each result has a `[label] ` before the
+path. `files` then accepts two forms. A path applies to each project. A path
+with a `[label] ` before it, as a result gives it, applies to that project
+only. A label that is not the label of a project of the search is an
+`invalid_argument` error, with the valid labels in `suggestions`.
+
+### Identifiers go from one tool to a different tool
+
+A tool accepts each identifier and each path that a different tool gives:
+
+- A `qualified_name` (`file:name`) is a valid `name` of `get_symbol` and
+  `task_context`, and a valid `symbol` of `impact`.
+- A `file` is a valid `file` of `outline`, a valid `path` of each tool, and the
+  file part of a `file:name`.
+- The `file` of a search result is a valid entry of `files`.
+
+Each path is from the `path` argument, which has the MCP root as its default.
+`outline` gives paths in this form also. When `path` is a file, a tool reads
+that one file.
 
 `limit` has the default 50, and the value 0 removes the limit. When `has_more`
 is `true`, send the same call with `offset` set to `next_offset`. The pages

@@ -708,7 +708,7 @@ expression: "responses[0]"
           "additionalProperties": false,
           "properties": {
             "files": {
-              "description": "The files in which to search, as paths from the root of their project. The default is all files. With `include_projects`, the list applies to each project.",
+              "description": "The files in which to search, as paths from the root of their project. The default is all files. With `include_projects`, a path applies to each project, and a path with a `[label] ` before it, as in the `file` of a result, applies to that project.",
               "items": {
                 "type": "string"
               },
@@ -934,7 +934,7 @@ expression: "responses[0]"
           "additionalProperties": false,
           "properties": {
             "files": {
-              "description": "The files in which to search, as paths from the root of their project. The default is all files. With `include_projects`, the list applies to each project.",
+              "description": "The files in which to search, as paths from the root of their project. The default is all files. With `include_projects`, a path applies to each project, and a path with a `[label] ` before it, as in the `file` of a result, applies to that project.",
               "items": {
                 "type": "string"
               },

@@ -1,5 +1,6 @@
 //! The tools that search the semantic index.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::{
@@ -7,6 +8,7 @@ use super::{
     MAX_COUNT,
 };
 use crate::mcp::envelope::Truncation;
+use crate::mcp::error::{ErrorCode, ToolError};
 use crate::mcp::McpServer;
 use crate::semantic::{SearchConfig, SearchOutput, SemanticSearch};
 
@@ -29,7 +31,8 @@ const MIN_SCORE: Param = Param::number(
 const FILES: Param = Param::string_array(
     "files",
     "The files in which to search, as paths from the root of their project. \
-     The default is all files. With `include_projects`, the list applies to each project.",
+     The default is all files. With `include_projects`, a path applies to each project, \
+     and a path with a `[label] ` before it, as in the `file` of a result, applies to that project.",
 );
 
 const MAX_COMPLEXITY: Param = Param::integer(
@@ -145,14 +148,25 @@ fn search(
     };
 
     let labelled = !include_projects.is_empty();
+    if let (true, Some(files)) = (labelled, &files) {
+        let labels = project_labels(&server.root_path, &include_projects);
+        for file in files {
+            if let Some(label) = file_label(file) {
+                if !labels.iter().any(|known| known == label) {
+                    return Err(unknown_project_label(file, label, labels));
+                }
+            }
+        }
+    }
     output.results.retain(|result| {
-        let file = if labelled {
-            file_in_project(&result.file)
-        } else {
-            &result.file
+        // A plain path in `files` applies to each project. A path with a
+        // `[project] ` label is equal to the `file` of a result.
+        let in_files = |files: &Vec<&str>| {
+            files.contains(&result.file.as_str())
+                || (labelled && files.contains(&file_in_project(&result.file)))
         };
         result.score >= min_score
-            && files.as_ref().is_none_or(|files| files.contains(&file))
+            && files.as_ref().is_none_or(in_files)
             && max_complexity.is_none_or(|maximum| {
                 result
                     .cyclomatic_complexity
@@ -186,9 +200,77 @@ fn file_in_project(file: &str) -> &str {
         .map_or(file, |(_, path)| path)
 }
 
+/// The project label of a file in the `[project] path` form.
+fn file_label(file: &str) -> Option<&str> {
+    file.strip_prefix('[')
+        .and_then(|labelled| labelled.split_once("] "))
+        .map(|(label, _)| label)
+}
+
+/// The label of each project of a search, in the sequence of the projects.
+///
+/// `multi_repo_search` makes the same labels: the name of the directory, with
+/// a number after the second and each subsequent use of one name. A test
+/// compares these labels with the labels in the results.
+fn project_labels(root: &Path, include_projects: &[PathBuf]) -> Vec<String> {
+    let mut uses: BTreeMap<String, usize> = BTreeMap::new();
+    std::iter::once(root)
+        .chain(include_projects.iter().map(PathBuf::as_path))
+        .map(|project| {
+            let name = project
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let count = uses.entry(name.clone()).or_insert(0);
+            *count += 1;
+            if *count > 1 {
+                format!("{name}-{count}")
+            } else {
+                name
+            }
+        })
+        .collect()
+}
+
+fn unknown_project_label(file: &str, label: &str, labels: Vec<String>) -> ToolError {
+    ToolError::new(
+        ErrorCode::InvalidArgument,
+        format!("The label `{label}` in `files` is not the label of a project of this search."),
+    )
+    .with_param("files")
+    .with_expected("a path, or a path with the `[label] ` of a project of this search")
+    .with_received(&serde_json::json!(file))
+    .with_suggestions(labels)
+    .with_next("Use a label from `suggestions`, or remove the label to search in each project.")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::file_in_project;
+    use std::path::{Path, PathBuf};
+
+    use super::{file_in_project, file_label, project_labels};
+
+    #[test]
+    fn file_label_gives_the_label_of_a_labelled_path_only() {
+        assert_eq!(file_label("[omen] src/main.rs"), Some("omen"));
+        assert_eq!(file_label("src/main.rs"), None);
+        assert_eq!(file_label("[id]/page.tsx"), None);
+    }
+
+    #[test]
+    fn project_labels_number_a_name_that_more_than_one_project_has() {
+        let projects = [
+            PathBuf::from("/work/app"),
+            PathBuf::from("/other/omen"),
+            PathBuf::from("/third/app"),
+        ];
+        assert_eq!(
+            project_labels(Path::new("/work/omen"), &projects),
+            ["omen", "app", "omen-2", "app-2"]
+        );
+        assert_eq!(project_labels(Path::new("/"), &[]), ["unknown"]);
+    }
 
     #[test]
     fn file_in_project_removes_only_the_project_label() {

@@ -135,11 +135,15 @@ fn outline(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
     use crate::analyzers::outline::{outline_file, Analyzer as OutlineAnalyzer, OutlineResult};
 
     let path = server.requested_path(arguments)?;
-    let result = if let Some(file) = arguments.string("file") {
+    let mut result = if let Some(file) = arguments.string("file") {
         // A relative file path starts at `path`, not at the server root.
         let file = server.resolve_confined_path("file", Path::new(file), Some(&path))?;
         OutlineResult {
             files: vec![outline_file(&file)?],
+        }
+    } else if path.is_file() {
+        OutlineResult {
+            files: vec![outline_file(&path)?],
         }
     } else {
         let file_set = FileSet::from_path(&path, &server.config)?;
@@ -152,6 +156,18 @@ fn outline(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
         }
         OutlineAnalyzer.analyze(&analysis)?
     };
+    // The analyzer gives absolute paths. The other tools give and accept
+    // paths from `path`, thus give the same form here.
+    let base = if path.is_dir() {
+        path.as_path()
+    } else {
+        path.parent().unwrap_or(&path)
+    };
+    for file in &mut result.files {
+        if let Ok(relative) = Path::new(&file.file).strip_prefix(base) {
+            file.file = relative.to_string_lossy().replace('\\', "/");
+        }
+    }
     Ok(ToolOutput::data(serde_json::to_value(&result)?))
 }
 
