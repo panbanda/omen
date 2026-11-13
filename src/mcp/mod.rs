@@ -651,6 +651,26 @@ mod tests {
     }
 
     #[test]
+    fn a_symbol_name_with_a_spelling_error_gets_the_nearest_names() {
+        let (server, dir) = create_test_server();
+        std::fs::write(
+            dir.path().join("known.rs"),
+            "fn known_symbol() {}\nfn other() {}\n",
+        )
+        .unwrap();
+        for tool in ["get_symbol", "task_context"] {
+            let body = error_of(&server, tool, json!({"name": "known.rs:known_symbl"}));
+            assert_eq!(body["error"]["code"], "not_found", "{tool}");
+            assert_eq!(
+                body["error"]["suggestions"],
+                json!(["known_symbol"]),
+                "{tool}"
+            );
+            assert_eq!(body["error"]["next"], "Use a name from `suggestions`.");
+        }
+    }
+
+    #[test]
     fn impact_of_an_unknown_symbol_is_a_not_found_error() {
         let (server, dir) = create_test_server();
         std::fs::write(dir.path().join("known.rs"), "fn known_symbol() {}\n").unwrap();

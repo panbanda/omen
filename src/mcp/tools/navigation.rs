@@ -4,10 +4,12 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
+use super::validate::nearest;
 use super::{
     Arguments, HandlerResult, Pagination, Param, ParamDefault, ToolData, ToolOutput, ToolSpec,
     COMPACT, MAX_COUNT, PATH,
 };
+use crate::analyzers::repomap::CallGraphIndex;
 use crate::core::{AnalysisContext, Analyzer, FileSet};
 use crate::git::GitRepo;
 use crate::mcp::envelope::{ItemCount, Truncation};
@@ -155,7 +157,7 @@ fn absolute_files(scope_path: &Path, file_set: &FileSet) -> Vec<PathBuf> {
 }
 
 fn get_symbol(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
-    use crate::symbol::{report_from_index, suggest_symbols, SymbolOptions};
+    use crate::symbol::{report_from_index, SymbolOptions};
 
     let scope = server.scope(arguments)?;
     let name = arguments.string("name").unwrap_or_default();
@@ -191,9 +193,42 @@ fn get_symbol(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
         Err(_) => Err(symbol_not_found(
             "name",
             name,
-            suggest_symbols(&scope.path, &files, name)?,
+            symbol_suggestions(index, name),
         )),
     }
+}
+
+/// The largest number of names that contain the query, or that the query
+/// contains, in one error.
+const MAX_SUBSTRING_SUGGESTIONS: usize = 10;
+
+/// The symbol names that are near `query`, in a stable sequence.
+///
+/// The first rule is the rule of the `symbol` command: a name that contains
+/// the query, or that the query contains. When no name agrees, the second
+/// rule gives the names with a small edit distance to the bare name.
+fn symbol_suggestions(index: &CallGraphIndex, query: &str) -> Vec<String> {
+    let lowercase_query = query.to_lowercase();
+    let mut suggestions: Vec<String> = index
+        .by_name
+        .keys()
+        .filter(|candidate| {
+            let candidate = candidate.to_lowercase();
+            candidate.contains(&lowercase_query) || lowercase_query.contains(candidate.as_str())
+        })
+        .cloned()
+        .collect();
+    suggestions.sort();
+    suggestions.truncate(MAX_SUBSTRING_SUGGESTIONS);
+    if !suggestions.is_empty() {
+        return suggestions;
+    }
+    let bare_name = query.rsplit(':').next().unwrap_or(query);
+    let names: Vec<&str> = index.by_name.keys().map(String::as_str).collect();
+    nearest(bare_name, &names)
+        .into_iter()
+        .map(str::to_string)
+        .collect()
 }
 
 /// The error for a symbol name that agrees with no definition.
@@ -296,7 +331,7 @@ fn task_context(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult 
         return Err(symbol_not_found(
             "name",
             name,
-            crate::symbol::suggest_symbols(&scope.path, &files, name)?,
+            symbol_suggestions(&snapshot.index, name),
         ));
     }
     let truncated = omitted_lists(&result);
