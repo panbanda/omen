@@ -107,6 +107,13 @@ fn resolve_churn_window(
         .map_err(omen::core::Error::config)
 }
 
+/// The days of a `--since` value. Text that is not a time window is an error,
+/// not all the history.
+fn since_flag_days(since: &str) -> omen::core::Result<u32> {
+    omen::git::since_to_days(since)
+        .map_err(|error| omen::core::Error::InvalidArgument(format!("--since: {error}")))
+}
+
 fn resolve_repo_path(cli: &Cli) -> omen::core::Result<(PathBuf, Option<PathBuf>)> {
     let path_str = cli.path.to_string_lossy();
 
@@ -329,11 +336,12 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             // otherwise an explicit `--since all` would fall through to
             // `--days`/config instead of meaning "no limit".
             let days = if let Some(ref since) = args.since {
-                omen::git::parse_since_to_days(since).unwrap_or(u32::MAX)
+                since_flag_days(since)?
             } else if let Some(days) = args.days {
                 days
             } else {
-                omen::git::parse_since_to_days(&config.churn.since).unwrap_or(u32::MAX)
+                omen::git::since_to_days(&config.churn.since)
+                    .map_err(|error| omen::core::Error::config(format!("churn.since: {error}")))?
             };
             run_churn_analyzer(path, &config, format, days, &args.common)?;
         }
@@ -343,8 +351,8 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             if let Some(ref provider) = args.provider {
                 config.feature_flags.providers = vec![provider.clone()];
             }
-            if args.stale_days > 0 {
-                config.feature_flags.stale_days = args.stale_days;
+            if let Some(stale_days) = args.stale_days {
+                config.feature_flags.stale_days = stale_days;
             }
             run_analyzer::<omen::analyzers::flags::Analyzer>(
                 path,
@@ -1172,6 +1180,7 @@ fn run_report(
 
     match subcommand {
         ReportSubcommand::Generate(args) => {
+            let since_days = since_flag_days(&args.since)?;
             std::fs::create_dir_all(&args.data)?;
 
             let file_set = FileSet::from_path(path, config)?;
@@ -1285,9 +1294,7 @@ fn run_report(
             // Group A: File-parsing analyzers (CPU-bound, share tree-sitter work)
             // Group B: Git-heavy analyzers (I/O-bound, overlap with CPU work)
             // Group C: Mixed analyzers (benefit from warm OS caches)
-            let churn_days = args
-                .days
-                .unwrap_or_else(|| omen::git::parse_since_to_days(&args.since).unwrap_or(u32::MAX));
+            let churn_days = args.days.unwrap_or(since_days);
 
             std::thread::scope(|s| {
                 // Group A: file-based analyzers
@@ -1403,8 +1410,12 @@ fn run_report(
                     bar.set_message("trend...");
                 }
                 let samples = args.samples.or_else(|| {
-                    let days =
-                        omen::git::parse_since_to_days(&args.since).unwrap_or(365 * 50) as f64;
+                    // All the history has no number of days. Use 50 years.
+                    let days = if since_days == u32::MAX {
+                        (365 * 50) as f64
+                    } else {
+                        since_days as f64
+                    };
                     Some(omen::score::default_sample_count(days))
                 });
                 match omen::score::analyze_trend(
@@ -1572,7 +1583,16 @@ fn run_search(
 ) -> omen::core::Result<()> {
     use omen::semantic::{SearchConfig, SemanticSearch};
 
-    let search_config = SearchConfig::default();
+    // The search applies the threshold of its configuration before the
+    // `--min-score` filter. Thus give it the same value, or a `--min-score`
+    // below the default has no effect.
+    let search_config = match &subcommand {
+        SearchSubcommand::Query(args) => SearchConfig {
+            min_score: args.min_score,
+            ..SearchConfig::default()
+        },
+        SearchSubcommand::Index(_) => SearchConfig::default(),
+    };
     let search = SemanticSearch::new(&search_config, path)?;
 
     match subcommand {
@@ -1982,7 +2002,7 @@ fn run_outline(
     args: &OutlineArgs,
     format: Format,
 ) -> omen::core::Result<()> {
-    use omen::analyzers::outline::{outline_file, Analyzer as OutlineAnalyzer, OutlineResult};
+    use omen::analyzers::outline::{outline_file_in, Analyzer as OutlineAnalyzer, OutlineResult};
 
     let result = if let Some(ref file_path) = args.file {
         // Single-file mode: resolve relative paths against the repo root (-p),
@@ -1993,7 +2013,9 @@ fn run_outline(
         } else {
             file_path.clone()
         };
-        let file_outline = outline_file(&resolved)?;
+        // Give the path from the repository root, as the outline of a
+        // repository does.
+        let file_outline = outline_file_in(path, &resolved)?;
         OutlineResult {
             files: vec![file_outline],
         }

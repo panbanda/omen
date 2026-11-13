@@ -140,18 +140,18 @@ pub(super) static OUTLINE: ToolSpec = ToolSpec {
 };
 
 fn outline(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
-    use crate::analyzers::outline::{outline_file, Analyzer as OutlineAnalyzer, OutlineResult};
+    use crate::analyzers::outline::{outline_file_in, Analyzer as OutlineAnalyzer, OutlineResult};
 
     let path = server.requested_path(arguments)?;
     let mut result = if let Some(file) = arguments.string("file") {
         // A relative file path starts at `path`, not at the server root.
         let file = server.resolve_confined_path("file", Path::new(file), Some(&path))?;
         OutlineResult {
-            files: vec![outline_file(&file)?],
+            files: vec![outline_file_in(&path, &file)?],
         }
     } else if path.is_file() {
         OutlineResult {
-            files: vec![outline_file(&path)?],
+            files: vec![outline_file_in(&path, &path)?],
         }
     } else {
         let file_set = FileSet::from_path(&path, &server.config)?;

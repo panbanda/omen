@@ -284,6 +284,24 @@ pub fn parse_since_to_days(since: &str) -> Option<u32> {
     parse_since_duration(since).map(|d| (d.as_secs() / 86400) as u32)
 }
 
+/// Gives the number of days of a time window such as `30d`, `6m`, `1y`, or
+/// `all`. `u32::MAX` is the value for all the history.
+///
+/// [`parse_since_to_days`] gives `None` for `all` and also for text that is
+/// not a window. A caller that reads `None` as all the history thus accepts
+/// each spelling error. This function gives an error for such text.
+pub fn since_to_days(since: &str) -> std::result::Result<u32, String> {
+    if is_since_all(since) {
+        return Ok(u32::MAX);
+    }
+    match parse_since_to_days(since) {
+        Some(days) if days > 0 => Ok(days),
+        _ => Err(format!(
+            "{since:?} is not a time window. Use a duration such as 30d, 3m, or 1y, or use \"all\"."
+        )),
+    }
+}
+
 /// Parse "since" duration strings like "30 days ago", "1 week", "6m", "1y".
 pub fn parse_since_duration(since: &str) -> Option<std::time::Duration> {
     let since = since.trim().to_lowercase();
@@ -1213,6 +1231,31 @@ mod tests {
         // Test invalid
         assert_eq!(parse_since_to_days("invalid"), None);
         assert_eq!(parse_since_to_days(""), None);
+    }
+
+    #[test]
+    fn since_to_days_gives_the_days_of_a_duration_and_the_maximum_for_all() {
+        assert_eq!(since_to_days("30d"), Ok(30));
+        assert_eq!(since_to_days("6m"), Ok(180));
+        assert_eq!(since_to_days("1y"), Ok(365));
+        assert_eq!(since_to_days("all"), Ok(u32::MAX));
+        assert_eq!(since_to_days(" Forever "), Ok(u32::MAX));
+    }
+
+    #[test]
+    fn since_to_days_rejects_text_that_is_not_a_window() {
+        let invalid = ["nonsense", "", "6", "m", "-3d", "0d", "2024-01-01"];
+        let accepted: Vec<&str> = invalid
+            .into_iter()
+            .filter(|text| since_to_days(text).is_ok())
+            .collect();
+        assert_eq!(accepted, Vec::<&str>::new());
+    }
+
+    #[test]
+    fn since_to_days_error_names_the_value() {
+        let error = since_to_days("nonsense").expect_err("not a window");
+        assert!(error.contains("\"nonsense\""), "{error}");
     }
 
     #[test]

@@ -97,6 +97,39 @@ pub fn outline_file(path: &Path) -> Result<FileOutline> {
     outline_source(&file)
 }
 
+/// Outlines one file and gives its path in relation to `root`.
+///
+/// The function makes the two paths canonical before it compares them. A
+/// comparison of the text of two paths is not correct for a relative root,
+/// for a symbolic link, and for a path with `..`.
+///
+/// A file in `root` gets its path from `root`, with forward slashes. A file
+/// out of `root` gets its canonical absolute path. The CLI permits such a
+/// file, because the user of the CLI can read each file without omen. The
+/// MCP server rejects such a file before this function, unless the server
+/// runs with `--allow-external-paths`.
+///
+/// When `root` is a file, its directory is the root.
+pub fn outline_file_in(root: &Path, path: &Path) -> Result<FileOutline> {
+    let file = path
+        .canonicalize()
+        .map_err(|_| crate::core::Error::FileNotFound {
+            path: path.to_path_buf(),
+        })?;
+    let root = root.canonicalize()?;
+    let root = if root.is_file() {
+        root.parent().unwrap_or(&root).to_path_buf()
+    } else {
+        root
+    };
+    let mut outline = outline_file(&file)?;
+    outline.file = match file.strip_prefix(&root) {
+        Ok(relative) => relative.to_string_lossy().replace('\\', "/"),
+        Err(_) => file.to_string_lossy().into_owned(),
+    };
+    Ok(outline)
+}
+
 fn outline_source(file: &SourceFile) -> Result<FileOutline> {
     let parser = Parser::new();
     let result = parser.parse_source(file)?;

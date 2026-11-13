@@ -130,6 +130,9 @@ impl Config {
                 )));
             }
         }
+        // Text that is not a window must not become all the history.
+        crate::git::since_to_days(&self.churn.since)
+            .map_err(|error| crate::core::Error::Config(format!("churn.since: {error}")))?;
         Ok(())
     }
 
@@ -599,6 +602,18 @@ mod tests {
         assert_eq!(config.stale_days, 0);
         assert!(config.providers.is_empty());
         assert!(config.custom_providers.is_empty());
+    }
+
+    #[test]
+    fn test_an_invalid_churn_window_is_rejected_at_load() {
+        let mut config = Config::default();
+        config.churn.since = "all".to_string();
+        assert!(config.validate().is_ok());
+
+        config.churn.since = "nonsense".to_string();
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("churn.since"), "got {error}");
+        assert!(error.contains("\"nonsense\""), "got {error}");
     }
 
     #[test]

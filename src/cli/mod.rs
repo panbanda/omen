@@ -386,9 +386,12 @@ pub struct FlagsArgs {
     #[arg(long)]
     pub provider: Option<String>,
 
-    /// Days threshold for staleness
-    #[arg(long, default_value = "90")]
-    pub stale_days: u32,
+    /// The age in days after which a flag is stale. The default is
+    /// `feature_flags.stale_days` in the configuration, or 14.
+    // The flag has no clap default. A default here has priority over the
+    // configuration, and the configured value then has no effect.
+    #[arg(long)]
+    pub stale_days: Option<u32>,
 }
 
 /// Score command with subcommands.
@@ -1311,10 +1314,19 @@ mod tests {
     }
 
     #[test]
+    fn test_flags_stale_days_has_no_default() {
+        let cli = parse(&["omen", "flags"]);
+        let Command::Flags(args) = cli.command else {
+            panic!("Expected Flags command");
+        };
+        assert_eq!(args.stale_days, None);
+    }
+
+    #[test]
     fn test_flags_stale_days() {
         let cli = parse(&["omen", "flags", "--stale-days", "60"]);
         if let Command::Flags(args) = cli.command {
-            assert_eq!(args.stale_days, 60);
+            assert_eq!(args.stale_days, Some(60));
         }
     }
 
