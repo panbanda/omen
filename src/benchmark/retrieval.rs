@@ -246,6 +246,149 @@ pub fn worst_case_order(scored: Vec<(f32, Location)>, expected: &[Location]) -> 
     ranked
 }
 
+/// The rank of the best acceptable symbol of one query, in the worst-case
+/// order. The id is `<language>/<query id>`. `None` means that the results
+/// have no acceptable symbol.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RankEntry {
+    pub id: String,
+    pub rank: Option<usize>,
+}
+
+/// The ranks of the queries that have an expected symbol, in the order of the
+/// ids.
+pub fn rank_baseline(outcomes: &[Outcome]) -> Vec<RankEntry> {
+    let ranks: BTreeMap<String, Option<usize>> = outcomes
+        .iter()
+        .filter(|outcome| !outcome.is_negative())
+        .map(|outcome| {
+            (
+                format!("{}/{}", outcome.language, outcome.id),
+                outcome.first_rank(),
+            )
+        })
+        .collect();
+    ranks
+        .into_iter()
+        .map(|(id, rank)| RankEntry { id, rank })
+        .collect()
+}
+
+/// Compare two ranks. A smaller rank is better, and a rank is better than no
+/// rank.
+fn compare_ranks(current: Option<usize>, baseline: Option<usize>) -> std::cmp::Ordering {
+    let worst = usize::MAX;
+    baseline.unwrap_or(worst).cmp(&current.unwrap_or(worst))
+}
+
+fn rank_text(rank: Option<usize>) -> String {
+    rank.map_or_else(|| "no rank".to_string(), |rank| format!("rank {rank}"))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RankViolation {
+    /// The rank is worse than the baseline.
+    Worse {
+        id: String,
+        baseline: Option<usize>,
+        current: Option<usize>,
+    },
+    /// The rank is better than the baseline; write the baseline again.
+    Better {
+        id: String,
+        baseline: Option<usize>,
+        current: Option<usize>,
+    },
+    /// A query has no baseline entry.
+    Missing { id: String },
+    /// The baseline has an entry for a query that does not exist.
+    Stale { id: String },
+    /// Baseline ids must be strictly ascending.
+    Unsorted { id: String },
+}
+
+impl std::fmt::Display for RankViolation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Worse {
+                id,
+                baseline,
+                current,
+            } => write!(
+                f,
+                "WORSE {id}: {}, the baseline has {}",
+                rank_text(*current),
+                rank_text(*baseline)
+            ),
+            Self::Better {
+                id,
+                baseline,
+                current,
+            } => write!(
+                f,
+                "BETTER {id}: {}, the baseline has {}; write the baseline again",
+                rank_text(*current),
+                rank_text(*baseline)
+            ),
+            Self::Missing { id } => write!(f, "MISSING {id}: the baseline has no entry"),
+            Self::Stale { id } => write!(f, "STALE {id}: no such query"),
+            Self::Unsorted { id } => {
+                write!(f, "ORDER {id}: baseline ids must be strictly ascending")
+            }
+        }
+    }
+}
+
+/// Enforce the rank baseline in both directions, as `check_ledger` does for
+/// the ledger. The hit assertions see only rank 1 and rank 10. This check sees
+/// each change of rank.
+pub fn check_ranks(outcomes: &[Outcome], baseline: &[RankEntry]) -> Vec<RankViolation> {
+    let mut violations = Vec::new();
+    for pair in baseline.windows(2) {
+        if pair[0].id >= pair[1].id {
+            violations.push(RankViolation::Unsorted {
+                id: pair[1].id.clone(),
+            });
+        }
+    }
+    let recorded: BTreeMap<&str, Option<usize>> = baseline
+        .iter()
+        .map(|entry| (entry.id.as_str(), entry.rank))
+        .collect();
+    let current = rank_baseline(outcomes);
+    for entry in &current {
+        let Some(&baseline) = recorded.get(entry.id.as_str()) else {
+            violations.push(RankViolation::Missing {
+                id: entry.id.clone(),
+            });
+            continue;
+        };
+        match compare_ranks(entry.rank, baseline) {
+            std::cmp::Ordering::Less => violations.push(RankViolation::Worse {
+                id: entry.id.clone(),
+                baseline,
+                current: entry.rank,
+            }),
+            std::cmp::Ordering::Greater => violations.push(RankViolation::Better {
+                id: entry.id.clone(),
+                baseline,
+                current: entry.rank,
+            }),
+            std::cmp::Ordering::Equal => {}
+        }
+    }
+    let produced: BTreeSet<&str> = current.iter().map(|entry| entry.id.as_str()).collect();
+    for entry in baseline {
+        if !produced.contains(entry.id.as_str()) {
+            violations.push(RankViolation::Stale {
+                id: entry.id.clone(),
+            });
+        }
+    }
+    violations
+}
+
 fn assertion_id(language: &str, query: &str, check: &str) -> String {
     format!("{language}/{query}/{check}")
 }
@@ -875,6 +1018,126 @@ mod tests {
         assert!(
             text.lines().next().unwrap().contains("mrr (all results)"),
             "{text}"
+        );
+    }
+    fn rank(id: &str, rank: Option<usize>) -> RankEntry {
+        RankEntry {
+            id: id.to_string(),
+            rank,
+        }
+    }
+
+    #[test]
+    fn rank_baseline_has_each_positive_query_in_id_order() {
+        let outcomes = [
+            outcome("rust", "second", &["b"], &["a", "b"]),
+            outcome("go", "absent", &["z"], &["a"]),
+            outcome("rust", "negative", &[], &["a"]),
+        ];
+
+        assert_eq!(
+            rank_baseline(&outcomes),
+            [rank("go/absent", None), rank("rust/second", Some(2))]
+        );
+    }
+
+    #[test]
+    fn an_equal_rank_is_no_violation() {
+        let outcomes = [
+            outcome("rust", "found", &["b"], &["a", "b"]),
+            outcome("rust", "absent", &["z"], &["a"]),
+        ];
+        let baseline = [rank("rust/absent", None), rank("rust/found", Some(2))];
+
+        assert_eq!(check_ranks(&outcomes, &baseline), []);
+    }
+
+    #[test]
+    fn a_rank_inside_the_first_ten_that_gets_worse_is_a_violation() {
+        // `hit@10` passes for rank 2 and for rank 9, so only this check sees it.
+        let ranked: Vec<String> = (0..9).map(|index| format!("r{index}")).collect();
+        let ranked: Vec<&str> = ranked.iter().map(String::as_str).collect();
+        let outcomes = [outcome("rust", "q", &["r8"], &ranked)];
+
+        let violations = check_ranks(&outcomes, &[rank("rust/q", Some(2))]);
+
+        assert_eq!(
+            violations,
+            [RankViolation::Worse {
+                id: "rust/q".to_string(),
+                baseline: Some(2),
+                current: Some(9)
+            }]
+        );
+        assert_eq!(
+            violations[0].to_string(),
+            "WORSE rust/q: rank 9, the baseline has rank 2"
+        );
+    }
+
+    #[test]
+    fn a_lost_symbol_is_worse_than_each_rank() {
+        let outcomes = [outcome("rust", "q", &["z"], &["a"])];
+
+        let violations = check_ranks(&outcomes, &[rank("rust/q", Some(40))]);
+
+        assert!(matches!(
+            violations[0],
+            RankViolation::Worse { current: None, .. }
+        ));
+    }
+
+    #[test]
+    fn a_better_rank_needs_a_new_baseline() {
+        let found = [outcome("rust", "q", &["a"], &["a"])];
+
+        let from_rank = check_ranks(&found, &[rank("rust/q", Some(3))]);
+        let from_absent = check_ranks(&found, &[rank("rust/q", None)]);
+
+        assert!(matches!(from_rank[0], RankViolation::Better { .. }));
+        assert!(matches!(
+            from_absent[0],
+            RankViolation::Better { baseline: None, .. }
+        ));
+        assert_eq!(
+            from_absent[0].to_string(),
+            "BETTER rust/q: rank 1, the baseline has no rank; write the baseline again"
+        );
+    }
+
+    #[test]
+    fn the_baseline_must_agree_with_the_queries() {
+        let outcomes = [outcome("rust", "new", &["a"], &["a"])];
+        let baseline = [rank("rust/z", Some(1)), rank("rust/gone", Some(1))];
+
+        let violations = check_ranks(&outcomes, &baseline);
+
+        assert!(violations.contains(&RankViolation::Unsorted {
+            id: "rust/gone".to_string()
+        }));
+        assert!(violations.contains(&RankViolation::Missing {
+            id: "rust/new".to_string()
+        }));
+        assert!(violations.contains(&RankViolation::Stale {
+            id: "rust/z".to_string()
+        }));
+    }
+
+    #[test]
+    fn a_negative_query_has_no_rank_entry() {
+        let outcomes = [outcome("rust", "x", &[], &["a"])];
+
+        assert_eq!(check_ranks(&outcomes, &[]), []);
+    }
+
+    #[test]
+    fn a_rank_entry_is_null_in_json_when_there_is_no_rank() {
+        let text = serde_json::to_string(&rank("rust/q", None)).unwrap();
+
+        assert_eq!(text, r#"{"id":"rust/q","rank":null}"#);
+        assert_eq!(
+            serde_json::from_str::<RankEntry>(&text).unwrap(),
+            rank("rust/q", None)
         );
     }
 }

@@ -6,7 +6,10 @@
 //! give an acceptable symbol. The test fails if a failure is not in the list,
 //! or if a listed query is now correct.
 //!
-//! To write the list again from the current results, run:
+//! `ranks.json` holds the rank of the best acceptable symbol of each query.
+//! The test fails if a rank is worse or better than the recorded rank.
+//!
+//! To write the two files again from the current results, run:
 //!
 //! ```sh
 //! OMEN_TRUTH_BLESS=1 cargo test --test retrieval
@@ -18,9 +21,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use omen::benchmark::retrieval::{
-    assertion_ids, assertions, expected_locations, metrics_by_language,
-    metrics_by_language_and_type, metrics_by_type, render_table, validate, worst_case_order,
-    Corpus, Outcome,
+    assertion_ids, assertions, check_ranks, expected_locations, metrics_by_language,
+    metrics_by_language_and_type, metrics_by_type, rank_baseline, render_table, validate,
+    worst_case_order, Corpus, Outcome, RankEntry,
 };
 use omen::benchmark::truth::{bless, check_ledger, ledger_growth, Labels, LedgerEntry, Location};
 use omen::config::Config;
@@ -28,6 +31,7 @@ use omen::semantic::{SearchConfig, SemanticSearch};
 
 const CORPUS_FILE: &str = "corpus.json";
 const LEDGER_FILE: &str = "expected_failures.json";
+const RANKS_FILE: &str = "ranks.json";
 const BLESS_TRACKING: &str = "phase-4-search";
 
 fn retrieval_root() -> PathBuf {
@@ -50,6 +54,14 @@ fn load_ledger(root: &Path) -> Vec<LedgerEntry> {
         Ok(text) => serde_json::from_str(&text).expect("the ledger must be valid JSON"),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(error) => panic!("{LEDGER_FILE}: {error}"),
+    }
+}
+
+fn load_ranks(root: &Path) -> Vec<RankEntry> {
+    match std::fs::read_to_string(root.join(RANKS_FILE)) {
+        Ok(text) => serde_json::from_str(&text).expect("the rank baseline must be valid JSON"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => panic!("{RANKS_FILE}: {error}"),
     }
 }
 
@@ -154,6 +166,10 @@ fn search_results_agree_with_the_labels_or_the_ledger() {
         let mut text = serde_json::to_string_pretty(&blessed).unwrap();
         text.push('\n');
         std::fs::write(root.join(LEDGER_FILE), text).unwrap();
+
+        let mut text = serde_json::to_string_pretty(&rank_baseline(&outcomes)).unwrap();
+        text.push('\n');
+        std::fs::write(root.join(RANKS_FILE), text).unwrap();
     }
 
     let by_language = metrics_by_language(&outcomes);
@@ -189,11 +205,16 @@ fn search_results_agree_with_the_labels_or_the_ledger() {
     );
 
     let violations = check_ledger(&assertions, &load_ledger(&root));
-    let report: Vec<String> = violations.iter().map(ToString::to_string).collect();
+    let mut report: Vec<String> = violations.iter().map(ToString::to_string).collect();
+    // The ledger sees a change only at rank 1 and at rank 10. The rank
+    // baseline sees each change of rank.
+    let rank_violations = check_ranks(&outcomes, &load_ranks(&root));
+    report.extend(rank_violations.iter().map(ToString::to_string));
     assert!(
-        violations.is_empty(),
-        "{} ledger violations:\n{}",
+        report.is_empty(),
+        "{} ledger violations and {} rank violations:\n{}",
         violations.len(),
+        rank_violations.len(),
         report.join("\n")
     );
 }
