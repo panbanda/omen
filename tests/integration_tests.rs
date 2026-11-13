@@ -3245,3 +3245,41 @@ fn test_smells_of_equal_severity_have_one_order() {
         );
     }
 }
+
+#[test]
+fn test_cycles_have_one_order_in_graph_smells_and_the_report() {
+    let repository = write_two_cycles_fixture();
+    for _ in 0..3 {
+        assert_eq!(json_report(&repository, "graph")["cycles"], two_cycles());
+    }
+    assert_eq!(
+        cyclic_smell_members(&json_report(&repository, "smells")),
+        two_cycles()
+    );
+
+    let data = TempDir::new().unwrap();
+    omen()
+        .args(["-p", repository.path().to_str().unwrap()])
+        .args(["report", "generate", "--skip", "trend"])
+        .args(["--data", data.path().to_str().unwrap()])
+        .assert()
+        .success();
+    let read = |name: &str| -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(data.path().join(name)).unwrap()).unwrap()
+    };
+    assert_eq!(read("graph.json")["cycles"], two_cycles());
+    assert_eq!(cyclic_smell_members(&read("smells.json")), two_cycles());
+}
+
+#[test]
+fn test_graph_keeps_the_node_order_with_cycles() {
+    let repository = write_two_cycles_fixture();
+    let nodes: Vec<String> = json_report(&repository, "graph")["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|node| node["file"].as_str().unwrap().to_string())
+        .collect();
+    // Each node has the same PageRank, so the file name gives the order.
+    assert_eq!(nodes, ["a.ts", "b.ts", "c.ts", "d.ts"]);
+}

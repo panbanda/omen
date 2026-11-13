@@ -399,13 +399,23 @@ impl Analyzer {
     fn detect_cycles(&self, graph: &DiGraph<String, ()>) -> Vec<Vec<String>> {
         let sccs = tarjan_scc(graph);
 
-        sccs.into_iter()
+        // A cycle is a set of files, so the traversal order has no meaning. The
+        // members of each cycle and the list of cycles are in alphabetical order.
+        let mut cycles: Vec<Vec<String>> = sccs
+            .into_iter()
             .filter(|scc| {
                 // Only include SCCs with multiple nodes or self-loops
                 scc.len() > 1 || (scc.len() == 1 && graph.contains_edge(scc[0], scc[0]))
             })
-            .map(|scc| scc.into_iter().map(|idx| graph[idx].clone()).collect())
-            .collect()
+            .map(|scc| {
+                let mut members: Vec<String> =
+                    scc.into_iter().map(|idx| graph[idx].clone()).collect();
+                members.sort();
+                members
+            })
+            .collect();
+        cycles.sort();
+        cycles
     }
 
     /// Generate Mermaid diagram.
