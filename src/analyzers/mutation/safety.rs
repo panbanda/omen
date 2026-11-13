@@ -316,10 +316,27 @@ fn kill_group(group: u32) {
     }
 }
 
+/// Tell if the group has a process.
+///
+/// A process that ended, and that its parent did not reap, is a process of
+/// the group. Thus a group exists until its last process is reaped. The rule
+/// is the same on Linux and on macOS, but the two systems report it in
+/// different ways:
+///
+/// - Linux gives success for signal 0 when the group has only such
+///   processes.
+/// - macOS does not count such processes as targets of a signal. It gives
+///   `EPERM` when the group has only such processes, and `ESRCH` when the
+///   group does not exist.
+///
+/// `EPERM` also means that the group has a process to which the caller
+/// cannot send a signal. Such a group exists. Only `ESRCH` means that the
+/// group has no process.
 #[cfg(unix)]
 fn group_exists(group: u32) -> bool {
     // SAFETY: signal 0 does only the existence check.
-    unsafe { libc::killpg(group as libc::pid_t, 0) == 0 }
+    let result = unsafe { libc::killpg(group as libc::pid_t, 0) };
+    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 #[cfg(unix)]
@@ -1041,16 +1058,17 @@ mod tests {
         Arc::new(parking_lot::Mutex::new(std::collections::HashSet::new()))
     }
 
-    /// Starts a group leader that stays alive, and registers it in `registry`.
+    /// Starts a `sleep` that is the only process of a new group, and registers
+    /// the group in `registry`.
     #[cfg(unix)]
-    fn spawn_sleeper(registry: &ProcessGroups) -> (std::process::Child, ProcessGroup) {
+    fn spawn_leader(registry: &ProcessGroups) -> (std::process::Child, ProcessGroup) {
         let not_interrupted = std::sync::atomic::AtomicBool::new(false);
         let (child, group) = ProcessGroup::spawn_with(
             registry,
             &not_interrupted,
             || {
-                let mut command = std::process::Command::new("sh");
-                command.args(["-c", "sleep 30 & wait"]);
+                let mut command = std::process::Command::new("sleep");
+                command.arg("30");
                 std::os::unix::process::CommandExt::process_group(&mut command, 0);
                 command.spawn()
             },
@@ -1060,21 +1078,93 @@ mod tests {
         (child, group.unwrap())
     }
 
+    /// Starts a registered group with two processes: the leader and one more
+    /// member.
+    ///
+    /// Both processes are children of the test, not a parent and its
+    /// descendant. Thus the test reaps each process, and no orphan stays in
+    /// the group. An orphan is reaped by the init process, and in a container
+    /// that init process possibly does not reap.
+    #[cfg(unix)]
+    fn spawn_group_of_two(
+        registry: &ProcessGroups,
+    ) -> (std::process::Child, std::process::Child, ProcessGroup) {
+        let (leader, group) = spawn_leader(registry);
+        let mut command = std::process::Command::new("sleep");
+        command.arg("30");
+        std::os::unix::process::CommandExt::process_group(&mut command, leader.id() as i32);
+        let member = command.spawn().unwrap();
+        (leader, member, group)
+    }
+
+    /// Reaps each child in a different thread, and gives the exit statuses.
+    #[cfg(unix)]
+    fn reap_in_background(
+        children: Vec<std::process::Child>,
+    ) -> std::thread::JoinHandle<Vec<std::process::ExitStatus>> {
+        std::thread::spawn(move || {
+            children
+                .into_iter()
+                .map(|mut child| child.wait().unwrap())
+                .collect()
+        })
+    }
+
+    #[cfg(unix)]
+    fn successes(statuses: &[std::process::ExitStatus]) -> usize {
+        statuses.iter().filter(|status| status.success()).count()
+    }
+
+    /// Waits until the process ended, and does not reap it. The process is
+    /// then a zombie until its parent calls `wait`.
+    #[cfg(unix)]
+    fn wait_for_end_without_reap(child: &std::process::Child) {
+        // SAFETY: `waitid` writes only to `info`. `WNOWAIT` keeps the process
+        // in the state in which a later `wait` can reap it.
+        let result = unsafe {
+            let mut info: libc::siginfo_t = std::mem::zeroed();
+            libc::waitid(
+                libc::P_PID,
+                child.id() as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        };
+        assert_eq!(result, 0, "{}", std::io::Error::last_os_error());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_group_with_a_leader_that_ended_and_is_not_reaped_exists() {
+        let registry = local_registry();
+        let (mut leader, group) = spawn_leader(&registry);
+
+        group.kill();
+        wait_for_end_without_reap(&leader);
+        let exists_before_the_reap = group.exists();
+        leader.wait().unwrap();
+
+        assert!(exists_before_the_reap);
+        assert!(!group.exists());
+    }
+
     #[cfg(unix)]
     #[test]
     fn test_process_group_stays_registered_until_it_exits() {
         let registry = local_registry();
-        let (mut child, mut group) = spawn_sleeper(&registry);
-        let id = child.id();
+        let (mut leader, mut member, mut group) = spawn_group_of_two(&registry);
+        let id = leader.id();
         assert!(registry.lock().contains(&id));
 
-        // The leader is not reaped, so the group has a process during the
-        // wait. This is the interval in which an interrupt must see the group.
+        // The leader ended and is not reaped, so the group has a process. This
+        // is the interval in which an interrupt must see the group.
         group.kill();
+        wait_for_end_without_reap(&leader);
         assert!(group.exists());
         assert!(registry.lock().contains(&id), "the kill removed the group");
 
-        child.wait().unwrap();
+        assert!(!leader.wait().unwrap().success());
+        assert!(!member.wait().unwrap().success());
         group.wait_for_exit();
         assert!(!group.exists());
         assert!(registry.lock().contains(&id), "the wait removed the group");
@@ -1087,9 +1177,9 @@ mod tests {
     #[test]
     fn test_interrupt_path_kills_and_waits_for_a_registered_group() {
         let registry = local_registry();
-        let (mut child, group) = spawn_sleeper(&registry);
-        let id = child.id();
-        let reaper = std::thread::spawn(move || child.wait().unwrap());
+        let (leader, member, group) = spawn_group_of_two(&registry);
+        let id = leader.id();
+        let reaper = reap_in_background(vec![leader, member]);
 
         terminate_registered_process_groups(&registry);
 
@@ -1097,16 +1187,16 @@ mod tests {
         // the file restore that follows it.
         assert!(!group.exists());
         assert!(registry.lock().contains(&id));
-        assert!(!reaper.join().unwrap().success());
+        assert_eq!(successes(&reaper.join().unwrap()), 0);
     }
 
     #[cfg(unix)]
     #[test]
     fn test_process_group_drop_kills_waits_and_removes_after_a_panic() {
         let registry = local_registry();
-        let (mut child, group) = spawn_sleeper(&registry);
-        let id = child.id();
-        let reaper = std::thread::spawn(move || child.wait().unwrap());
+        let (leader, member, group) = spawn_group_of_two(&registry);
+        let id = leader.id();
+        let reaper = reap_in_background(vec![leader, member]);
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
             let _group = group;
@@ -1116,7 +1206,7 @@ mod tests {
         assert!(result.is_err());
         assert!(!group_exists(id));
         assert!(!registry.lock().contains(&id));
-        assert!(!reaper.join().unwrap().success());
+        assert_eq!(successes(&reaper.join().unwrap()), 0);
     }
 
     #[cfg(unix)]
@@ -1152,30 +1242,36 @@ mod tests {
             let registry = Arc::clone(&registry);
             std::thread::spawn(move || {
                 let not_interrupted = std::sync::atomic::AtomicBool::new(false);
-                ProcessGroup::spawn_with(
+                let (mut child, group) = ProcessGroup::spawn_with(
                     &registry,
                     &not_interrupted,
                     || {
+                        // This closure runs below the registry lock. Thus the
+                        // interrupt path, which starts after this message,
+                        // cannot read the registry before the registration.
                         sender.send(()).unwrap();
-                        // Give the interrupt path time to try the lock.
-                        std::thread::sleep(Duration::from_millis(100));
-                        let mut command = std::process::Command::new("sh");
-                        command.args(["-c", "sleep 30 & wait"]);
+                        let mut command = std::process::Command::new("sleep");
+                        command.arg("30");
                         std::os::unix::process::CommandExt::process_group(&mut command, 0);
                         command.spawn()
                     },
                     |child| Some(child.id()),
                 )
-                .unwrap()
+                .unwrap();
+                // The interrupt path waits until the group has no process, so
+                // this thread must reap the leader during that wait.
+                (child.wait().unwrap(), group.unwrap())
             })
         };
 
         receiver.recv().unwrap();
         terminate_registered_process_groups(&registry);
+        let id = *registry.lock().iter().next().unwrap();
+        let exists_after_the_termination = group_exists(id);
 
-        let (mut child, group) = spawner.join().unwrap();
-        let group = group.unwrap();
-        assert!(!child.wait().unwrap().success());
+        let (status, group) = spawner.join().unwrap();
+        assert!(!status.success());
+        assert!(!exists_after_the_termination);
         assert!(!group.exists());
     }
 
