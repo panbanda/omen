@@ -352,6 +352,113 @@ pub fn restore_active_mutations() {
     restore_registered_mutations(&ACTIVE_MUTATIONS, &INTERRUPTED);
 }
 
+/// The exit status of a mutation run that got an interrupt.
+pub const INTERRUPT_EXIT_CODE: i32 = 130;
+
+/// True while a mutation run can have a mutated file or a test command.
+///
+/// The interrupt watcher and the run loop make the decision about an
+/// interrupt below this lock, and the thread that sees the interrupt stops
+/// the process while it holds the lock. Thus only one of the two threads
+/// makes the decision, and the result does not depend on which thread is
+/// faster.
+static RUN_IS_ACTIVE: parking_lot::Mutex<bool> = parking_lot::Mutex::new(false);
+
+/// Stops the test commands and restores each mutated file.
+fn stop_and_restore(
+    active_mutations: &parking_lot::Mutex<HashMap<PathBuf, Vec<u8>>>,
+    interrupted: &std::sync::atomic::AtomicBool,
+    stop_test_commands: impl FnOnce(),
+) {
+    // The test commands do not get the interrupt, because each has its own
+    // process group. Stop them first: a command that runs can write a file
+    // after the restore.
+    stop_test_commands();
+    restore_registered_mutations(active_mutations, interrupted);
+}
+
+/// The decision of the interrupt watcher. It gives the exit status when an
+/// interrupt came during a run. After the run loop concluded the run, an
+/// interrupt has no effect here.
+fn watcher_decision(
+    run_is_active: &bool,
+    active_mutations: &parking_lot::Mutex<HashMap<PathBuf, Vec<u8>>>,
+    interrupted: &std::sync::atomic::AtomicBool,
+    stop_test_commands: impl FnOnce(),
+) -> Option<i32> {
+    if !*run_is_active || !interrupted.load(Ordering::SeqCst) {
+        return None;
+    }
+    stop_and_restore(active_mutations, interrupted, stop_test_commands);
+    Some(INTERRUPT_EXIT_CODE)
+}
+
+/// The decision of the run loop when it has no more mutants. It gives the
+/// exit status when an interrupt came at a time before this call: before the
+/// first test command, during a test command, or between two mutants. The
+/// results are then not complete, because the loop starts no test command
+/// after an interrupt.
+///
+/// If no interrupt came, the run is complete and this function ends it. An
+/// interrupt after that moment does not change the exit status: the report
+/// is complete and no file is mutated.
+fn run_loop_decision(
+    run_is_active: &mut bool,
+    active_mutations: &parking_lot::Mutex<HashMap<PathBuf, Vec<u8>>>,
+    interrupted: &std::sync::atomic::AtomicBool,
+    stop_test_commands: impl FnOnce(),
+) -> Option<i32> {
+    if interrupted.load(Ordering::SeqCst) {
+        stop_and_restore(active_mutations, interrupted, stop_test_commands);
+        return Some(INTERRUPT_EXIT_CODE);
+    }
+    *run_is_active = false;
+    None
+}
+
+fn stop_active_test_commands() {
+    #[cfg(unix)]
+    terminate_active_process_groups();
+}
+
+/// Tell the interrupt watcher that a mutation run starts.
+///
+/// `conclude_run` gives the interrupt its default effect again. Thus each run
+/// registers the handler again, or an interrupt during a second run in one
+/// process stops the process with a mutated file.
+pub fn begin_run() -> Result<()> {
+    #[cfg(unix)]
+    register_interrupt_handler().map_err(Error::analysis)?;
+    *RUN_IS_ACTIVE.lock() = true;
+    Ok(())
+}
+
+/// End a mutation run after its last mutant.
+///
+/// If an interrupt came during the run, this function restores each file and
+/// stops the process with the status 130. It does not return, thus the
+/// caller cannot make a report from results that are not complete. If no
+/// interrupt came, the run is complete, and a later interrupt has the
+/// default effect of the operating system.
+pub fn conclude_run() {
+    let mut run_is_active = RUN_IS_ACTIVE.lock();
+    if let Some(code) = run_loop_decision(
+        &mut run_is_active,
+        &ACTIVE_MUTATIONS,
+        &INTERRUPTED,
+        stop_active_test_commands,
+    ) {
+        std::process::exit(code);
+    }
+    // No file is mutated now. Give the interrupt its default effect again,
+    // or the user cannot stop the process while it writes the report.
+    #[cfg(unix)]
+    // SAFETY: `signal` with `SIG_DFL` only changes the signal disposition.
+    unsafe {
+        libc::signal(libc::SIGINT, libc::SIG_DFL);
+    }
+}
+
 pub fn install_signal_handler() -> Result<()> {
     SIGNAL_HANDLER
         .get_or_init(|| {
@@ -359,13 +466,18 @@ pub fn install_signal_handler() -> Result<()> {
             std::thread::Builder::new()
                 .name("omen-mutation-signal".to_string())
                 .spawn(|| loop {
-                    if INTERRUPTED.load(Ordering::SeqCst) {
-                        // The test commands do not get the interrupt, because each
-                        // has its own process group.
-                        #[cfg(unix)]
-                        terminate_active_process_groups();
-                        restore_active_mutations();
-                        std::process::exit(130);
+                    {
+                        let run_is_active = RUN_IS_ACTIVE.lock();
+                        if let Some(code) = watcher_decision(
+                            &run_is_active,
+                            &ACTIVE_MUTATIONS,
+                            &INTERRUPTED,
+                            stop_active_test_commands,
+                        ) {
+                            // The lock stays held: the run loop must not
+                            // continue while the process stops.
+                            std::process::exit(code);
+                        }
                     }
                     std::thread::park_timeout(Duration::from_millis(20));
                 })
@@ -439,6 +551,115 @@ pub fn has_uncommitted_changes(path: impl AsRef<Path>) -> bool {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    fn local_mutations() -> parking_lot::Mutex<HashMap<PathBuf, Vec<u8>>> {
+        parking_lot::Mutex::new(HashMap::new())
+    }
+
+    fn flag(value: bool) -> std::sync::atomic::AtomicBool {
+        std::sync::atomic::AtomicBool::new(value)
+    }
+
+    /// Writes a mutated file and registers its original content.
+    fn mutated_file(
+        directory: &TempDir,
+        mutations: &parking_lot::Mutex<HashMap<PathBuf, Vec<u8>>>,
+    ) -> PathBuf {
+        let path = directory.path().join("lib.rs");
+        fs::write(&path, "mutated").unwrap();
+        mutations.lock().insert(path.clone(), b"original".to_vec());
+        path
+    }
+
+    #[test]
+    fn test_run_loop_without_an_interrupt_concludes_the_run() {
+        let mut run_is_active = true;
+        let stopped = std::cell::Cell::new(false);
+
+        let code = run_loop_decision(&mut run_is_active, &local_mutations(), &flag(false), || {
+            stopped.set(true)
+        });
+
+        assert_eq!(code, None);
+        assert!(!run_is_active);
+        assert!(!stopped.get());
+    }
+
+    #[test]
+    fn test_run_loop_with_an_interrupt_before_the_first_test_command_exits_130() {
+        // No file is mutated and no test command runs.
+        let mut run_is_active = true;
+
+        let code = run_loop_decision(&mut run_is_active, &local_mutations(), &flag(true), || {});
+
+        assert_eq!(code, Some(INTERRUPT_EXIT_CODE));
+        assert!(run_is_active);
+    }
+
+    #[test]
+    fn test_run_loop_with_an_interrupt_during_a_test_command_restores_the_file() {
+        let directory = TempDir::new().unwrap();
+        let mutations = local_mutations();
+        let path = mutated_file(&directory, &mutations);
+        let stopped = std::cell::Cell::new(false);
+        let mut run_is_active = true;
+
+        let code = run_loop_decision(&mut run_is_active, &mutations, &flag(true), || {
+            stopped.set(true)
+        });
+
+        assert_eq!(code, Some(INTERRUPT_EXIT_CODE));
+        assert!(stopped.get());
+        assert_eq!(fs::read_to_string(path).unwrap(), "original");
+    }
+
+    #[test]
+    fn test_run_loop_with_an_interrupt_between_two_mutants_exits_130() {
+        // The guard of the last mutant restored its file, and the loop starts
+        // no test command after an interrupt. Thus the loop gets to its end.
+        let interrupted = flag(true);
+        let mut run_is_active = true;
+
+        let code = run_loop_decision(&mut run_is_active, &local_mutations(), &interrupted, || {});
+
+        assert_eq!(code, Some(INTERRUPT_EXIT_CODE));
+    }
+
+    #[test]
+    fn test_watcher_with_an_interrupt_during_a_run_restores_the_file() {
+        let directory = TempDir::new().unwrap();
+        let mutations = local_mutations();
+        let path = mutated_file(&directory, &mutations);
+
+        let code = watcher_decision(&true, &mutations, &flag(true), || {});
+
+        assert_eq!(code, Some(INTERRUPT_EXIT_CODE));
+        assert_eq!(fs::read_to_string(path).unwrap(), "original");
+    }
+
+    #[test]
+    fn test_watcher_without_an_interrupt_does_nothing() {
+        assert_eq!(
+            watcher_decision(&true, &local_mutations(), &flag(false), || {}),
+            None
+        );
+    }
+
+    #[test]
+    fn test_an_interrupt_after_the_run_concluded_does_not_change_the_exit_status() {
+        // The run loop saw no interrupt, thus the results are complete. The
+        // report follows, and the exit status is the status of the report.
+        let interrupted = flag(false);
+        let mut run_is_active = true;
+        run_loop_decision(&mut run_is_active, &local_mutations(), &interrupted, || {});
+
+        interrupted.store(true, Ordering::SeqCst);
+
+        assert_eq!(
+            watcher_decision(&run_is_active, &local_mutations(), &interrupted, || {}),
+            None
+        );
+    }
 
     #[cfg(unix)]
     fn local_registry() -> ProcessGroups {

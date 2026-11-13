@@ -353,6 +353,7 @@ impl AnalyzerTrait for Analyzer {
         }
 
         install_signal_handler()?;
+        safety::begin_run()?;
 
         let start = Instant::now();
 
@@ -477,8 +478,13 @@ impl AnalyzerTrait for Analyzer {
                     runtime.block_on(executor.execute_mutants(&mutants_to_execute, &sources))
                 })
                 .join()
-        })
-        .map_err(|_| Error::analysis("Mutation executor thread panicked"))??;
+        });
+        // After an interrupt the executor starts no test command, and the
+        // mutants that it did not run look like build errors. This call does
+        // not return in that case, thus no report comes from such results.
+        safety::conclude_run();
+        let executed_results = executed_results
+            .map_err(|_| Error::analysis("Mutation executor thread panicked"))??;
 
         for result in executed_results {
             if let Some(file_result) = file_results.get_mut(&result.mutant.file_path) {
