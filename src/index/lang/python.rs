@@ -7,6 +7,13 @@ use crate::index::extract::{
 };
 use crate::index::model::{Exported, Span, SymbolKind};
 
+use crate::index::model::{ImportBinding, ImportKind};
+
+const IMPORT_STATEMENT: &str = "import_statement";
+const IMPORT_FROM_STATEMENT: &str = "import_from_statement";
+const ALIASED_IMPORT: &str = "aliased_import";
+const WILDCARD_IMPORT: &str = "wildcard_import";
+
 pub struct Python;
 
 const FUNCTION_DEFINITION: &str = "function_definition";
@@ -81,6 +88,76 @@ fn public_names(module: Node<'_>, context: &Context<'_, '_>) -> PublicNames {
 }
 
 impl LanguageSpec for Python {
+    fn import_kinds(&self) -> Vec<&'static str> {
+        vec![IMPORT_STATEMENT, IMPORT_FROM_STATEMENT]
+    }
+
+    fn import_hook_kinds(&self) -> Vec<&'static str> {
+        vec![ALIASED_IMPORT, WILDCARD_IMPORT]
+    }
+
+    /// `import a.b` binds the name `a`. `import a.b as c` binds `c` to the
+    /// module `a.b`. `from a import b` binds one name of the module `a`.
+    fn imports(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<ImportBinding>) {
+        // The name in the module, and the alias if the import has one.
+        let parts = |name: Node<'_>| -> (String, Option<String>) {
+            if name.kind() != ALIASED_IMPORT {
+                return (context.text(name), None);
+            }
+            (
+                name.child_by_field_name("name")
+                    .map(|name| context.text(name))
+                    .unwrap_or_default(),
+                name.child_by_field_name("alias")
+                    .map(|alias| context.text(alias)),
+            )
+        };
+        let mut cursor = node.walk();
+        let names: Vec<Node<'_>> = node.children_by_field_name("name", &mut cursor).collect();
+        if node.kind() == IMPORT_STATEMENT {
+            for name in names {
+                let (module, alias) = parts(name);
+                let (imported, local) = match alias {
+                    Some(alias) => (module.clone(), alias),
+                    None => {
+                        let top = module.split('.').next().unwrap_or("").to_string();
+                        (top.clone(), top)
+                    }
+                };
+                out.push(context.import(
+                    node,
+                    module,
+                    ImportKind::Module,
+                    Some(imported),
+                    Some(local),
+                ));
+            }
+            return;
+        }
+        let Some(module) = node.child_by_field_name("module_name") else {
+            return;
+        };
+        let module: String = context.text(module).split_whitespace().collect();
+        let mut cursor = node.walk();
+        if node
+            .children(&mut cursor)
+            .any(|child| child.kind() == WILDCARD_IMPORT)
+        {
+            out.push(context.import(node, module.clone(), ImportKind::Wildcard, None, None));
+        }
+        for name in names {
+            let (imported, alias) = parts(name);
+            let local = alias.unwrap_or_else(|| imported.clone());
+            out.push(context.import(
+                node,
+                module.clone(),
+                ImportKind::Named,
+                Some(imported),
+                Some(local),
+            ));
+        }
+    }
+
     fn definitions(&self) -> Vec<DefinitionRule> {
         DEFINITIONS.to_vec()
     }
@@ -265,6 +342,69 @@ mod tests {
                 "Function area - 4-5 unknown",
                 "Function _private - 7-8 not_exported",
             ]
+        );
+    }
+
+    const IMPORT_FILES: &[(&str, &str)] = &[
+        ("app/__init__.py", "from .shapes import describe\nfrom . import util\n"),
+        (
+            "app/main.py",
+            "import math\nimport app.other as alt\nimport app.util, os\nfrom app import describe\nfrom app.other import *\nfrom app.shapes import (Circle, describe as tell)\nfrom app import util\nfrom app.missing import gone\nfrom ..outside import far\n",
+        ),
+        ("app/other.py", "def only_here():\n    pass\n"),
+        (
+            "app/shapes.py",
+            "from .util import twice\nfrom . import other\nfrom .. import top\n\nclass Circle:\n    pass\n\ndef describe():\n    pass\n",
+        ),
+        ("app/util.py", "def twice():\n    pass\n"),
+        ("top.py", "x = 1\n"),
+    ];
+
+    #[test]
+    fn test_absolute_imports() {
+        use crate::index::imports::testing::rows;
+        assert_eq!(
+            rows(IMPORT_FILES, "app/main.py"),
+            [
+                "1 Module math math->math external",
+                "2 Module app.other app.other->alt app/other.py",
+                "3 Module app.util app->app app/util.py",
+                "3 Module os os->os external",
+                "4 Named app describe->describe app/__init__.py [app/shapes.py#describe]",
+                "5 Wildcard app.other -->- app/other.py",
+                "6 Named app.shapes Circle->Circle app/shapes.py [app/shapes.py#Circle]",
+                "6 Named app.shapes describe->tell app/shapes.py [app/shapes.py#describe]",
+                "7 Named app util->util app/util.py",
+                "8 Named app.missing gone->gone external",
+                "9 Named ..outside far->far unresolved",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_relative_imports() {
+        use crate::index::imports::testing::rows;
+        assert_eq!(
+            rows(IMPORT_FILES, "app/shapes.py"),
+            [
+                "1 Named .util twice->twice app/util.py [app/util.py#twice]",
+                "2 Named . other->other app/other.py",
+                "3 Named .. top->top top.py",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_two_modules_with_the_same_dotted_name_are_ambiguous() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            ("one/pkg/mod.py", ""),
+            ("two/pkg/mod.py", ""),
+            ("main.py", "import pkg.mod\n"),
+        ];
+        assert_eq!(
+            rows(&files, "main.py"),
+            ["1 Module pkg.mod pkg->pkg ambiguous(one/pkg/mod.py,two/pkg/mod.py)"]
         );
     }
 }
