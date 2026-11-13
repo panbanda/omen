@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use super::truth::{Assertion, Labels, LedgerEntry, Location};
-use crate::semantic::tokenize::tokenize;
+use crate::semantic::tokenize::{lowercase, tokenize};
 
 pub const CORPUS_VERSION: u32 = 1;
 
@@ -67,12 +67,27 @@ pub struct Corpus {
     pub retired: Vec<Retired>,
 }
 
+/// A removed query. It keeps the type, the text, and the expected labels of
+/// the query, so that the same query cannot come back with a new id.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Retired {
     /// `<language>/<query id>`.
     pub id: String,
+    #[serde(rename = "type")]
+    pub query_type: QueryType,
+    pub query: String,
+    pub expected: Vec<String>,
     pub reason: String,
+}
+
+/// The retrieval fixtures of one revision. `labels` has the labels of each
+/// case, with the `case` value as the key.
+#[derive(Debug, Clone, Copy)]
+pub struct Revision<'a> {
+    pub corpus: &'a Corpus,
+    pub labels: &'a BTreeMap<String, Labels>,
+    pub ledger: &'a [LedgerEntry],
 }
 
 /// The queries for one truth fixture case. The source files of the case are
@@ -268,6 +283,7 @@ pub fn validate(corpus: &Corpus, labels: &BTreeMap<String, Labels>) -> Vec<Strin
             problems.push(format!("retired {id}: the id occurs more than one time"));
         }
     }
+    problems.extend(returned_queries(corpus, labels));
     problems
 }
 
@@ -461,15 +477,16 @@ pub fn check_ranks(outcomes: &[Outcome], baseline: &[RankEntry]) -> Vec<RankViol
     violations
 }
 
-/// The queries of a corpus, with `<language>/<query id>` as the key.
-fn queries_by_key(corpus: &Corpus) -> BTreeMap<String, &Query> {
+/// The queries of a corpus, each with its case, with `<language>/<query id>`
+/// as the key.
+fn queries_by_key(corpus: &Corpus) -> BTreeMap<String, (&Case, &Query)> {
     corpus
         .cases
         .iter()
         .flat_map(|case| {
             case.queries
                 .iter()
-                .map(move |query| (format!("{}/{}", case.language, query.id), query))
+                .map(move |query| (format!("{}/{}", case.language, query.id), (case, query)))
         })
         .collect()
 }
@@ -481,19 +498,94 @@ fn query_key(assertion_id: &str) -> &str {
         .map_or(assertion_id, |(key, _)| key)
 }
 
-/// Tell if a query has a different type, text, or set of expected labels.
-fn is_changed(base: &Query, current: &Query) -> bool {
-    let labels = |query: &Query| -> BTreeSet<String> { query.expected.iter().cloned().collect() };
-    base.query_type != current.query_type
-        || base.query != current.query
-        || labels(base) != labels(current)
+fn label_set(expected: &[String]) -> BTreeSet<&str> {
+    expected.iter().map(String::as_str).collect()
 }
 
-fn retired_ids(corpus: &Corpus) -> BTreeSet<&str> {
+/// The location of each expected label. `None` means that the labels do not
+/// have the label.
+fn definitions<'a>(
+    expected: &'a [String],
+    labels: Option<&Labels>,
+) -> BTreeMap<&'a str, Option<Location>> {
+    expected
+        .iter()
+        .map(|label| {
+            let location = labels
+                .and_then(|labels| labels.symbols.iter().find(|symbol| &symbol.label == label))
+                .map(|symbol| Location {
+                    file: symbol.file.clone(),
+                    name: symbol.name.clone(),
+                    start_line: symbol.start_line,
+                });
+            (label.as_str(), location)
+        })
+        .collect()
+}
+
+/// The text form for the comparison with a retired query. Case, white space,
+/// and the Unicode form do not change the tokens, so they do not make a new
+/// query. Punctuation stays, because two code sketches can differ only in an
+/// operator.
+fn comparable_text(text: &str) -> String {
+    lowercase(text)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Tell if a live query is a retired query again. The expected symbols are
+/// the same if the label ids are the same, or if the labels give the same
+/// locations.
+fn is_retired_query(query: &Query, retired: &Retired, labels: Option<&Labels>) -> bool {
+    let locations = |expected: &[String]| -> Option<BTreeSet<Location>> {
+        definitions(expected, labels).into_values().collect()
+    };
+    let same_symbols = label_set(&query.expected) == label_set(&retired.expected)
+        || locations(&query.expected)
+            .is_some_and(|found| !found.is_empty() && Some(found) == locations(&retired.expected));
+    query.query_type == retired.query_type
+        && comparable_text(&query.query) == comparable_text(&retired.query)
+        && same_symbols
+}
+
+/// Find the live queries that are the same as a retired query.
+fn returned_queries(corpus: &Corpus, labels: &BTreeMap<String, Labels>) -> Vec<String> {
+    let mut problems = Vec::new();
+    for (key, (case, query)) in queries_by_key(corpus) {
+        let prefix = format!("{}/", case.language);
+        let case_labels = labels.get(&case.case);
+        for retired in &corpus.retired {
+            if retired.id.starts_with(&prefix) && is_retired_query(query, retired, case_labels) {
+                problems.push(format!(
+                    "{key}: the query is the same as the retired query `{}`",
+                    retired.id
+                ));
+            }
+        }
+    }
+    problems
+}
+
+/// Tell if a query has a different type, text, or set of expected labels.
+fn is_changed(base: &Query, current: &Query) -> bool {
+    base.query_type != current.query_type
+        || base.query != current.query
+        || label_set(&base.expected) != label_set(&current.expected)
+}
+
+/// Tell if a retired entry records a query exactly.
+fn records(retired: &Retired, query: &Query) -> bool {
+    retired.query_type == query.query_type
+        && retired.query == query.query
+        && label_set(&retired.expected) == label_set(&query.expected)
+}
+
+fn retired_by_id(corpus: &Corpus) -> BTreeMap<&str, &Retired> {
     corpus
         .retired
         .iter()
-        .map(|retired| retired.id.as_str())
+        .map(|retired| (retired.id.as_str(), retired))
         .collect()
 }
 
@@ -507,20 +599,20 @@ fn retired_ids(corpus: &Corpus) -> BTreeSet<&str> {
 /// - A query of the base corpus must keep its type, its text, and its
 ///   expected labels. A change can remove a failure from the ledger, or make
 ///   the metrics better, while the engine is the same.
+/// - Each expected label of a query of the base corpus must keep its file,
+///   name, and start line. Otherwise the label id stays, but it is a
+///   different symbol. A label that no base query uses can change.
 /// - A query of the base corpus that is not in the corpus must be in
-///   `retired`. Without this rule, a new id for a query starts a new ledger
-///   and rank history.
-/// - A retired id of the base corpus must stay retired, so it is not used
-///   again.
-pub fn ledger_growth(
-    base: &Corpus,
-    base_ledger: &[LedgerEntry],
-    corpus: &Corpus,
-    ledger: &[LedgerEntry],
-) -> Vec<String> {
+///   `retired`, with its type, text, and expected labels. Without this rule, a
+///   new id for a query starts a new ledger and rank history.
+/// - A retired entry of the base corpus must stay, with no change, so the id
+///   is not used again.
+pub fn ledger_growth(base_revision: &Revision, revision: &Revision) -> Vec<String> {
+    let (base, base_ledger) = (base_revision.corpus, base_revision.ledger);
+    let (corpus, ledger) = (revision.corpus, revision.ledger);
     let base_queries = queries_by_key(base);
     let queries = queries_by_key(corpus);
-    let retired = retired_ids(corpus);
+    let retired = retired_by_id(corpus);
     let before: BTreeSet<&str> = base_ledger.iter().map(|entry| entry.id.as_str()).collect();
 
     let mut problems = BTreeSet::new();
@@ -533,27 +625,60 @@ pub fn ledger_growth(
             ));
         }
     }
-    for (key, base_query) in &base_queries {
-        match queries.get(key) {
-            Some(query) if is_changed(base_query, query) => {
+    for (key, (base_case, base_query)) in &base_queries {
+        match (queries.get(key), retired.get(key.as_str())) {
+            (Some((_, query)), _) if is_changed(base_query, query) => {
                 problems.insert(format!(
                     "{key}: a query of the base corpus must not change; retire its id and add a new query"
                 ));
             }
-            Some(_) => {}
-            None if retired.contains(key.as_str()) => {}
-            None => {
+            (Some((case, _)), _) => {
+                let before = definitions(
+                    &base_query.expected,
+                    base_revision.labels.get(&base_case.case),
+                );
+                let after = definitions(&base_query.expected, revision.labels.get(&case.case));
+                if let Some(label) = before
+                    .iter()
+                    .find(|(label, location)| after.get(*label) != Some(*location))
+                    .map(|(label, _)| label)
+                {
+                    problems.insert(format!(
+                        "{key}: the definition of the expected label `{label}` changed; retire the query id and add a new query"
+                    ));
+                }
+            }
+            (None, Some(entry)) if !records(entry, base_query) => {
+                problems.insert(format!(
+                    "{key}: the retired entry must have the type, the text, and the expected labels of the base query"
+                ));
+            }
+            (None, Some(_)) => {}
+            (None, None) => {
                 problems.insert(format!(
                     "{key}: the query of the base corpus was removed; add its id to `retired` with a reason"
                 ));
             }
         }
     }
-    for key in retired_ids(base) {
-        if !retired.contains(key) {
-            problems.insert(format!(
-                "{key}: the id is retired on the base branch and must stay retired"
-            ));
+    for base_entry in &base.retired {
+        let key = &base_entry.id;
+        match retired.get(key.as_str()) {
+            None => {
+                problems.insert(format!(
+                    "{key}: the id is retired on the base branch and must stay retired"
+                ));
+            }
+            Some(entry)
+                if entry.query_type != base_entry.query_type
+                    || entry.query != base_entry.query
+                    || label_set(&entry.expected) != label_set(&base_entry.expected) =>
+            {
+                problems.insert(format!(
+                    "{key}: the retired entry of the base branch must not change"
+                ));
+            }
+            Some(_) => {}
         }
     }
     problems.into_iter().collect()
@@ -1349,7 +1474,7 @@ mod tests {
             "id": "fresh", "type": "identifier", "query": "helper", "expected": ["helper"]
         }));
 
-        let grown = ledger_growth(&base, &[], &current, &[entry("rust/fresh/hit@1")]);
+        let grown = growth(&base, &[], &current, &[entry("rust/fresh/hit@1")]);
 
         assert_eq!(grown, Vec::<String>::new());
     }
@@ -1358,7 +1483,7 @@ mod tests {
     fn a_ledger_entry_for_a_query_that_passed_on_the_base_is_growth() {
         let base = corpus(Vec::new());
 
-        let grown = ledger_growth(&base, &[], &base, &[entry("rust/i0/hit@1")]);
+        let grown = growth(&base, &[], &base, &[entry("rust/i0/hit@1")]);
 
         assert_eq!(
             grown,
@@ -1371,10 +1496,7 @@ mod tests {
         let base = corpus(Vec::new());
         let ledger = [entry("rust/i0/hit@1")];
 
-        assert_eq!(
-            ledger_growth(&base, &ledger, &base, &ledger),
-            Vec::<String>::new()
-        );
+        assert_eq!(growth(&base, &ledger, &base, &ledger), Vec::<String>::new());
     }
 
     const CHANGED: &str =
@@ -1387,7 +1509,7 @@ mod tests {
             "id": "i0", "type": "code_sketch", "query": "give support", "expected": ["helper"]
         }));
 
-        let grown = ledger_growth(&base, &[], &current, &[entry("rust/i0/hit@10")]);
+        let grown = growth(&base, &[], &current, &[entry("rust/i0/hit@10")]);
 
         assert_eq!(
             grown,
@@ -1406,7 +1528,7 @@ mod tests {
             "id": "i0", "type": "identifier", "query": "give support", "expected": []
         }));
 
-        let grown = ledger_growth(&base, &[], &current, &[entry("rust/i0/empty")]);
+        let grown = growth(&base, &[], &current, &[entry("rust/i0/empty")]);
 
         assert!(grown.contains(&CHANGED.to_string()), "{grown:?}");
         assert!(grown[0].starts_with("rust/i0/empty: the query is in the base corpus"));
@@ -1428,34 +1550,109 @@ mod tests {
             for change in &changes {
                 let current = corpus_with(change.clone());
 
-                let grown = ledger_growth(&base, &base_ledger, &current, &[]);
+                let grown = growth(&base, &base_ledger, &current, &[]);
 
                 assert_eq!(grown, [CHANGED], "{change}");
             }
         }
     }
 
+    /// Compare two revisions that have the same labels.
+    fn growth(
+        base: &Corpus,
+        base_ledger: &[LedgerEntry],
+        corpus: &Corpus,
+        ledger: &[LedgerEntry],
+    ) -> Vec<String> {
+        let labels = case_labels();
+        ledger_growth(
+            &Revision {
+                corpus: base,
+                labels: &labels,
+                ledger: base_ledger,
+            },
+            &Revision {
+                corpus,
+                labels: &labels,
+                ledger,
+            },
+        )
+    }
+
+    fn retired(id: &str, query_type: QueryType, query: &str, expected: &[&str]) -> Retired {
+        Retired {
+            id: id.to_string(),
+            query_type,
+            query: query.to_string(),
+            expected: expected.iter().map(ToString::to_string).collect(),
+            reason: "the label was wrong".to_string(),
+        }
+    }
+
+    /// The retired entry for the query `i0` of the test corpus.
+    fn retired_i0() -> Retired {
+        retired(
+            "rust/i0",
+            QueryType::Identifier,
+            "give support",
+            &["helper"],
+        )
+    }
+
+    /// A retired query whose text no query of the test corpus has.
+    fn retired_old() -> Retired {
+        retired(
+            "rust/old",
+            QueryType::Identifier,
+            "call the helper",
+            &["helper"],
+        )
+    }
+
+    fn without_i0() -> Corpus {
+        let mut removed = corpus(Vec::new());
+        removed.cases[0].queries.retain(|query| query.id != "i0");
+        removed
+    }
+
     #[test]
     fn a_removed_query_must_be_retired() {
         let base = corpus(Vec::new());
         let base_ledger = [entry("rust/i0/hit@1")];
-        let mut removed = corpus(Vec::new());
-        removed.cases[0].queries.retain(|query| query.id != "i0");
+        let mut removed = without_i0();
 
-        let grown = ledger_growth(&base, &base_ledger, &removed, &[]);
+        let grown = growth(&base, &base_ledger, &removed, &[]);
 
         assert_eq!(
             grown,
             ["rust/i0: the query of the base corpus was removed; add its id to `retired` with a reason"]
         );
 
-        removed.retired.push(Retired {
-            id: "rust/i0".to_string(),
-            reason: "the label was wrong".to_string(),
-        });
+        removed.retired.push(retired_i0());
         assert_eq!(
-            ledger_growth(&base, &base_ledger, &removed, &[]),
+            growth(&base, &base_ledger, &removed, &[]),
             Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn a_retired_entry_must_copy_the_base_query() {
+        // A retired entry with a different text does not record the query
+        // that was removed, so the check for a query used again fails.
+        let base = corpus(Vec::new());
+        let mut removed = without_i0();
+        removed.retired.push(retired(
+            "rust/i0",
+            QueryType::Identifier,
+            "other text",
+            &["helper"],
+        ));
+
+        let grown = growth(&base, &[], &removed, &[]);
+
+        assert_eq!(
+            grown,
+            ["rust/i0: the retired entry must have the type, the text, and the expected labels of the base query"]
         );
     }
 
@@ -1467,51 +1664,165 @@ mod tests {
         let mut renamed = corpus(Vec::new());
         renamed.cases[0].queries[0].id = "i0-new".to_string();
 
-        let grown = ledger_growth(&base, &[entry("rust/i0/hit@1")], &renamed, &[]);
+        let grown = growth(&base, &[entry("rust/i0/hit@1")], &renamed, &[]);
 
         assert_eq!(grown.len(), 1, "{grown:?}");
         assert!(grown[0].starts_with("rust/i0: the query of the base corpus was removed"));
     }
 
     #[test]
-    fn a_retired_id_must_stay_retired() {
+    fn a_retired_id_must_stay_retired_and_unchanged() {
         let mut base = corpus(Vec::new());
-        base.retired.push(Retired {
-            id: "rust/old".to_string(),
-            reason: "the label was wrong".to_string(),
-        });
-        let current = corpus(vec![serde_json::json!({
+        base.retired.push(retired(
+            "rust/old",
+            QueryType::Identifier,
+            "old text",
+            &["helper"],
+        ));
+        let reused = corpus(vec![serde_json::json!({
             "id": "old", "type": "identifier", "query": "give support", "expected": ["helper"]
         })]);
-
-        let grown = ledger_growth(&base, &[], &current, &[]);
+        let mut edited = corpus(Vec::new());
+        edited.retired.push(retired(
+            "rust/old",
+            QueryType::Identifier,
+            "new text",
+            &["helper"],
+        ));
 
         assert_eq!(
-            grown,
+            growth(&base, &[], &reused, &[]),
             ["rust/old: the id is retired on the base branch and must stay retired"]
         );
+        assert_eq!(
+            growth(&base, &[], &edited, &[]),
+            ["rust/old: the retired entry of the base branch must not change"]
+        );
+    }
+
+    #[test]
+    fn a_retired_query_must_not_come_back_with_a_new_id() {
+        // The text comparison ignores case, white space, and the Unicode form,
+        // because the tokenizer gives the same tokens for these changes. It
+        // keeps punctuation, because two code sketches can differ only in an
+        // operator.
+        let mut returned = corpus(vec![
+            serde_json::json!({"id": "same", "type": "identifier",
+                "query": "  Call   THE helper ", "expected": ["helper"]}),
+            serde_json::json!({"id": "other-type", "type": "code_sketch",
+                "query": "call the helper", "expected": ["helper"]}),
+            serde_json::json!({"id": "other-text", "type": "identifier",
+                "query": "call the helper!", "expected": ["helper"]}),
+        ]);
+        returned.retired.push(retired_old());
+
+        let problems = validate(&returned, &case_labels());
+
+        assert_eq!(
+            problems,
+            ["rust/same: the query is the same as the retired query `rust/old`"]
+        );
+    }
+
+    #[test]
+    fn a_retired_query_with_a_label_for_the_same_symbol_is_the_same() {
+        // A new label id for the symbol of a retired label does not make a new
+        // query.
+        let mut labels = labels();
+        let mut alias = labels.symbols[0].clone();
+        alias.label = "helper_again".to_string();
+        labels.symbols.push(alias);
+        let labels = BTreeMap::from([("rust/basics".to_string(), labels)]);
+        let mut returned = corpus(vec![
+            serde_json::json!({"id": "alias", "type": "identifier",
+            "query": "call the helper", "expected": ["helper_again"]}),
+        ]);
+        returned.retired.push(retired_old());
+
+        let problems = validate(&returned, &labels);
+
+        assert_eq!(
+            problems,
+            ["rust/alias: the query is the same as the retired query `rust/old`"]
+        );
+    }
+
+    #[test]
+    fn a_changed_label_definition_is_a_changed_query() {
+        // The label id stays, but it points to a different symbol.
+        let corpus = corpus(Vec::new());
+        let base_labels = case_labels();
+        let mut moved = labels();
+        moved.symbols[0].start_line = 30;
+        let mut renamed = labels();
+        renamed.symbols[0].name = "assist".to_string();
+        let mut other_file = labels();
+        other_file.symbols[0].file = "c.rs".to_string();
+
+        for changed in [moved, renamed, other_file] {
+            let labels = BTreeMap::from([("rust/basics".to_string(), changed)]);
+
+            let grown = ledger_growth(
+                &Revision {
+                    corpus: &corpus,
+                    labels: &base_labels,
+                    ledger: &[],
+                },
+                &Revision {
+                    corpus: &corpus,
+                    labels: &labels,
+                    ledger: &[],
+                },
+            );
+
+            // Each query of the test corpus with an expected symbol uses `helper`.
+            assert_eq!(grown.len(), 12, "{grown:?}");
+            assert_eq!(
+                grown[0],
+                "rust/c0: the definition of the expected label `helper` changed; retire the query id and add a new query"
+            );
+        }
+    }
+
+    #[test]
+    fn a_change_of_a_label_that_no_base_query_uses_is_not_growth() {
+        let corpus = corpus(Vec::new());
+        let base_labels = case_labels();
+        let mut changed = labels();
+        changed.symbols[1].start_line = 40;
+        let labels = BTreeMap::from([("rust/basics".to_string(), changed)]);
+
+        let grown = ledger_growth(
+            &Revision {
+                corpus: &corpus,
+                labels: &base_labels,
+                ledger: &[],
+            },
+            &Revision {
+                corpus: &corpus,
+                labels: &labels,
+                ledger: &[],
+            },
+        );
+
+        assert_eq!(grown, Vec::<String>::new());
     }
 
     #[test]
     fn validation_rejects_a_bad_retired_entry() {
         let mut broken = corpus(Vec::new());
+        let mut blank = retired("rust", QueryType::Identifier, "a", &[]);
+        blank.reason = " ".to_string();
         broken.retired = vec![
-            Retired {
-                id: "rust/i0".to_string(),
-                reason: "used".to_string(),
-            },
-            Retired {
-                id: "rust".to_string(),
-                reason: " ".to_string(),
-            },
-            Retired {
-                id: "rust/gone".to_string(),
-                reason: "a".to_string(),
-            },
-            Retired {
-                id: "rust/gone".to_string(),
-                reason: "b".to_string(),
-            },
+            retired(
+                "rust/i0",
+                QueryType::Identifier,
+                "give support",
+                &["helper"],
+            ),
+            blank,
+            retired("rust/gone", QueryType::Identifier, "a", &[]),
+            retired("rust/gone", QueryType::Identifier, "b", &[]),
         ];
 
         let problems = validate(&broken, &case_labels()).join("\n");
@@ -1536,10 +1847,12 @@ mod tests {
         assert!(corpus.retired.is_empty());
         let with_retired: Corpus = serde_json::from_value(serde_json::json!({
             "version": 1, "split": "development", "oracle": "x", "cases": [],
-            "retired": [{"id": "rust/old", "reason": "the label was wrong"}]
+            "retired": [{"id": "rust/old", "type": "identifier", "query": "old text",
+                "expected": ["helper"], "reason": "the label was wrong"}]
         }))
         .unwrap();
         assert_eq!(with_retired.retired[0].id, "rust/old");
+        assert_eq!(with_retired.retired[0].query, "old text");
     }
 
     #[test]
@@ -1553,7 +1866,7 @@ mod tests {
         let ledger = [entry("rust/i0/hit@1")];
 
         assert_eq!(
-            ledger_growth(&base, &ledger, &current, &ledger),
+            growth(&base, &ledger, &current, &ledger),
             Vec::<String>::new()
         );
     }

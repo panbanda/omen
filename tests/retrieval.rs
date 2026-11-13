@@ -17,9 +17,12 @@
 //!
 //! Then examine the diff. A new entry is permitted only for a new query.
 //!
-//! A query of the base branch must not change. To correct a query, move its
-//! id to `retired` in the corpus with a reason, and add a new query with a
-//! new id.
+//! A query of the base branch must not change, and each label that it expects
+//! must keep its file, name, and start line in `labels.json`. Thus a change of
+//! a truth fixture that moves a symbol needs new queries. To correct a query,
+//! move it to `retired` in the corpus, with its type, text, expected labels,
+//! and a reason. Then add a new query with a new id. A query that is the same
+//! as a retired query is not a new query.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -27,7 +30,7 @@ use std::path::{Path, PathBuf};
 use omen::benchmark::retrieval::{
     assertions, check_ranks, expected_locations, ledger_growth, metrics_by_language_and_type,
     rank_baseline, rank_growth, render_table, validate, worst_case_order, Corpus, Outcome,
-    RankEntry,
+    RankEntry, Revision,
 };
 use omen::benchmark::truth::{bless, check_ledger, Labels, LedgerEntry, Location};
 use omen::config::Config;
@@ -71,11 +74,17 @@ fn load_ranks(root: &Path) -> Vec<RankEntry> {
 
 /// The labels of each case of the corpus, with the `case` value as the key.
 fn load_labels(corpus: &Corpus) -> BTreeMap<String, Labels> {
+    load_labels_from(&truth_root(), corpus)
+}
+
+/// The labels of each case of the corpus below the truth fixture directory
+/// `truth`.
+fn load_labels_from(truth: &Path, corpus: &Corpus) -> BTreeMap<String, Labels> {
     corpus
         .cases
         .iter()
         .map(|case| {
-            let path = truth_root().join(&case.case).join("labels.json");
+            let path = truth.join(&case.case).join("labels.json");
             let text = std::fs::read_to_string(&path)
                 .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
             let labels = serde_json::from_str(&text)
@@ -215,8 +224,10 @@ fn search_results_have_one_order() {
 
 /// The ledger must not get an entry for a query of the base branch, a query
 /// of the base branch must not change or go without a `retired` entry, and a
-/// rank must not get worse. CI runs this test with `OMEN_RETRIEVAL_BASE_DIR` set to
-/// `tests/fixtures/retrieval` of the base branch.
+/// rank must not get worse. A label that a base query uses must keep its
+/// definition. CI runs this test with `OMEN_RETRIEVAL_BASE_DIR` set to
+/// `tests/fixtures/retrieval` of the base branch. CI also extracts
+/// `tests/fixtures/truth` of the base branch, next to it, for the base labels.
 #[test]
 #[ignore = "needs OMEN_RETRIEVAL_BASE_DIR"]
 fn ledger_never_grows() {
@@ -229,11 +240,22 @@ fn ledger_never_grows() {
     }
     let root = retrieval_root();
     let base_corpus = load_corpus(&base);
+    let base_labels = load_labels_from(&base.join("../truth"), &base_corpus);
+    let base_ledger = load_ledger(&base);
+    let corpus = load_corpus(&root);
+    let labels = load_labels(&corpus);
+    let ledger = load_ledger(&root);
     let mut grown = ledger_growth(
-        &base_corpus,
-        &load_ledger(&base),
-        &load_corpus(&root),
-        &load_ledger(&root),
+        &Revision {
+            corpus: &base_corpus,
+            labels: &base_labels,
+            ledger: &base_ledger,
+        },
+        &Revision {
+            corpus: &corpus,
+            labels: &labels,
+            ledger: &ledger,
+        },
     );
     grown.extend(rank_growth(
         &base_corpus,
