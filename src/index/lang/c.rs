@@ -10,6 +10,25 @@ use crate::index::model::{ImportBinding, ImportKind, ImportTarget};
 pub(crate) const PREPROC_INCLUDE: &str = "preproc_include";
 pub(crate) const SYSTEM_LIB_STRING: &str = "system_lib_string";
 
+use crate::index::calls::{CallSyntax, LocalName};
+
+pub(crate) const PARAMETER_DECLARATION: &str = "parameter_declaration";
+const INIT_DECLARATOR: &str = "init_declarator";
+
+pub(crate) const CALL_SYNTAX: CallSyntax = CallSyntax {
+    calls: &[("call_expression", "function", "arguments")],
+    constructions: &[],
+    members: &[("field_expression", "argument", "field")],
+    paths: &[],
+    names: &[IDENTIFIER],
+    self_words: &[],
+    super_words: &[],
+    locals: &[],
+    parameters: &[],
+    return_type_field: "type",
+    literals: &[("number_literal", "number")],
+};
+
 pub struct C;
 
 pub(crate) const FUNCTION_DEFINITION: &str = "function_definition";
@@ -207,6 +226,22 @@ pub(crate) fn exported(draft: &Draft<'_>, context: &Context<'_, '_>) -> Exported
 }
 
 impl LanguageSpec for C {
+    fn call_syntax(&self) -> CallSyntax {
+        CALL_SYNTAX
+    }
+
+    fn local_kinds(&self) -> Vec<&'static str> {
+        vec![DECLARATION, PARAMETER_DECLARATION]
+    }
+
+    fn call_hook_kinds(&self) -> Vec<&'static str> {
+        vec![PARAMETER_DECLARATION, INIT_DECLARATOR]
+    }
+
+    fn locals(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
+        declared_names(node, context, out);
+    }
+
     fn import_kinds(&self) -> Vec<&'static str> {
         vec![PREPROC_INCLUDE]
     }
@@ -267,6 +302,44 @@ pub(crate) fn include_binding(
         binding.target_file = ImportTarget::External;
     }
     out.push(binding);
+}
+
+/// Adds the names that a declaration or a parameter declares. The name is in
+/// a chain of declarators, and the type is on the declaration.
+///
+/// A declaration of a function outside a function body is a prototype. It
+/// is not a local name.
+pub(crate) fn declared_names(node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
+    let type_name = node
+        .child_by_field_name("type")
+        .map(|type_name| context.text(type_name));
+    let mut cursor = node.walk();
+    for declarator in node.children_by_field_name("declarator", &mut cursor) {
+        let (mut current, value) = match declarator.kind() {
+            INIT_DECLARATOR => (
+                declarator.child_by_field_name("declarator"),
+                declarator.child_by_field_name("value"),
+            ),
+            _ => (Some(declarator), None),
+        };
+        let mut function = false;
+        while let Some(inner) = current.filter(|inner| inner.kind() != IDENTIFIER) {
+            function |= inner.kind() == FUNCTION_DECLARATOR;
+            current = inner_declarator(inner);
+        }
+        let Some(name) = current else {
+            continue;
+        };
+        if function && !context.in_function() && node.kind() == DECLARATION {
+            continue;
+        }
+        out.push(LocalName {
+            name: context.text(name),
+            type_name: type_name.clone(),
+            value_start: value.map(|value| value.start_byte()),
+            is_parameter: node.kind() != DECLARATION,
+        });
+    }
 }
 
 #[cfg(test)]
@@ -382,6 +455,49 @@ mod tests {
         assert_eq!(
             rows(&files, "sub/util.c"),
             ["1 Load util.h -->- sub/util.h"]
+        );
+    }
+
+    const CALL_FILES: &[(&str, &str)] = &[
+        (
+            "main.c",
+            "#include <string.h>\n\n#include \"other.h\"\n#include \"sub/util.h\"\n\n#define SQUARE(x) ((x) * (x))\n\nstruct Table {\n    int (*insert)(int);\n};\n\nstatic int tag(void) {\n    return 1;\n}\n\nstatic int forward(void);\n\nstatic int apply(int (*f)(int)) {\n    return f(1) + forward();\n}\n\nint run(void) {\n    return helper() + only_here() + tag() + apply(twice) + hidden() + missing();\n}\n\nint dynamic(struct Table table) {\n    int (*pick)(int) = twice;\n    return pick(1) + table.insert(1) + (int)strlen(\"x\") + SQUARE(2);\n}\n\nstatic int forward(void) {\n    return 2;\n}\n",
+        ),
+        ("other.h", "int only_here(void);\nint insert(int value);\n"),
+        (
+            "other.c",
+            "#include \"other.h\"\n\nstatic int tag(void) {\n    return 2;\n}\n\nstatic int hidden(void) {\n    return 0;\n}\n\nint only_here(void) {\n    return tag();\n}\n\nint insert(int value) {\n    return value;\n}\n",
+        ),
+        ("sub/util.h", "int helper(void);\nint twice(int value);\n"),
+        (
+            "sub/util.c",
+            "#include \"util.h\"\n\nint helper(void) {\n    return 1;\n}\n\nint twice(int value) {\n    return value * 2;\n}\n",
+        ),
+    ];
+
+    #[test]
+    fn test_calls_bind_to_definitions() {
+        use crate::index::resolve::testing::rows;
+        assert_eq!(
+            rows(CALL_FILES, "main.c"),
+            [
+                "19 apply>f Unresolved - []",
+                "19 apply>forward UniqueCandidate SameFile [main.c#forward~2]",
+                "23 run>helper UniqueCandidate ImportedModule [sub/util.c#helper]",
+                "23 run>only_here UniqueCandidate ImportedModule [other.c#only_here]",
+                "23 run>tag UniqueCandidate SameFile [main.c#tag]",
+                "23 run>apply UniqueCandidate SameFile [main.c#apply]",
+                "23 run>hidden Unresolved - []",
+                "23 run>missing Unresolved - []",
+                "28 dynamic>pick Unresolved - []",
+                "28 dynamic>table.insert Unresolved - []",
+                "28 dynamic>strlen Unresolved - []",
+                "28 dynamic>SQUARE Unresolved - []",
+            ]
+        );
+        assert_eq!(
+            rows(CALL_FILES, "other.c"),
+            ["12 only_here>tag UniqueCandidate SameFile [other.c#tag]"]
         );
     }
 }

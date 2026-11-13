@@ -822,7 +822,12 @@ impl<'a> Resolver<'a> {
         let anywhere: Vec<Id> = self
             .named(name, file)
             .filter(|id| {
+                // A definition that its file does not export is not a
+                // candidate for a call from a different file.
+                let visible = id.0 == file
+                    || self.symbol(*id).exported != super::model::Exported::NotExported;
                 callable(id)
+                    && visible
                     && self.symbol(*id).container.is_none()
                     && self.facts(*id).parent.is_none()
             })
