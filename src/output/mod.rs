@@ -231,8 +231,8 @@ fn truncate_object_arrays_budget(
     }
 }
 
-/// Format a JSON value with optional truncation applied for JSON formats.
-/// For non-JSON formats, truncation is not applied.
+/// Format a JSON value. `top` and `offset` apply to the JSON, Markdown, and text
+/// formats. SARIF keeps each finding.
 /// `top`: max items per array (None = unlimited). `offset`: skip first N items (None = 0).
 /// When only `offset` is set, truncation is applied with top=0 (unlimited after offset).
 pub fn format_with_limits<W: Write>(
@@ -242,7 +242,7 @@ pub fn format_with_limits<W: Write>(
     offset: Option<usize>,
     writer: &mut W,
 ) -> Result<()> {
-    if matches!(format, Format::Json | Format::JsonCompact) && (top.is_some() || offset.is_some()) {
+    if !matches!(format, Format::Sarif) && (top.is_some() || offset.is_some()) {
         let limit = top.unwrap_or(0); // 0 means unlimited
         let off = offset.unwrap_or(0);
         truncate_lists(&mut value, limit, off);
@@ -917,15 +917,38 @@ mod tests {
     }
 
     #[test]
-    fn test_format_with_limits_non_json_passes_through() {
-        // Non-JSON format (Markdown) should not apply truncation.
-        let value = json!({"items": [1, 2, 3, 4, 5]});
+    fn test_format_with_limits_applies_top_and_offset_to_markdown_and_text() {
+        for format in [Format::Markdown, Format::Text] {
+            let value = json!({"files": [
+                {"file": "alpha.rs"},
+                {"file": "beta.rs"},
+                {"file": "gamma.rs"},
+                {"file": "delta.rs"}
+            ]});
+            let mut buf = Vec::new();
+            format_with_limits(value, format, Some(2), Some(1), &mut buf).unwrap();
+            let output = String::from_utf8(buf).unwrap();
+
+            assert!(!output.contains("alpha.rs"), "{format:?}: {output}");
+            assert!(output.contains("beta.rs"), "{format:?}: {output}");
+            assert!(output.contains("gamma.rs"), "{format:?}: {output}");
+            assert!(!output.contains("delta.rs"), "{format:?}: {output}");
+        }
+    }
+
+    #[test]
+    fn test_format_with_limits_keeps_each_sarif_finding() {
+        // A SARIF consumer needs the full finding list, so `--top` does not apply.
+        let value = json!({"items": [
+            {"file": "alpha.rs", "line": 1, "text": "first"},
+            {"file": "beta.rs", "line": 2, "text": "second"}
+        ]});
         let mut buf = Vec::new();
-        format_with_limits(value, Format::Markdown, Some(2), None, &mut buf).unwrap();
+        format_with_limits(value, Format::Sarif, Some(1), None, &mut buf).unwrap();
         let output = String::from_utf8(buf).unwrap();
-        // Markdown output should contain all 5 items (no truncation).
-        assert!(output.contains("1"), "markdown should contain item 1");
-        assert!(output.contains("5"), "markdown should contain item 5");
+
+        assert!(output.contains("alpha.rs"));
+        assert!(output.contains("beta.rs"));
     }
 
     #[test]
