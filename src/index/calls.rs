@@ -430,6 +430,7 @@ pub fn element_type(text: &str) -> Option<&str> {
         "IEnumerable",
         "Iterable",
         "Collection",
+        "Set",
         "Vec",
         "VecDeque",
         "vector",

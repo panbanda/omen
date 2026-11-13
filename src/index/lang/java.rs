@@ -17,6 +17,7 @@ use crate::index::calls::{CallSyntax, LocalName};
 
 const LOCAL_VARIABLE_DECLARATION: &str = "local_variable_declaration";
 const FIELD_DECLARATION: &str = "field_declaration";
+const ENHANCED_FOR_STATEMENT: &str = "enhanced_for_statement";
 
 /// A method call has its object and its name in the call node. Thus the call
 /// node is also the callee expression.
@@ -111,6 +112,13 @@ const DEFINITIONS: &[DefinitionRule] = &[
         NameRule::Field("name"),
     ),
     DefinitionRule::new(LAMBDA_EXPRESSION, SymbolKind::Function, NameRule::Hook),
+    // Each declarator of a field declaration is one field. `refine` rejects a
+    // declarator of a local variable.
+    DefinitionRule::new(
+        VARIABLE_DECLARATOR,
+        SymbolKind::Field,
+        NameRule::Field("name"),
+    ),
 ];
 
 fn modifiers(node: Node<'_>) -> Option<Node<'_>> {
@@ -160,17 +168,41 @@ impl LanguageSpec for Java {
 
     fn local_kinds(&self) -> Vec<&'static str> {
         let mut kinds = self.call_syntax().local_kinds();
-        kinds.extend([LOCAL_VARIABLE_DECLARATION, FIELD_DECLARATION]);
+        kinds.extend([
+            LOCAL_VARIABLE_DECLARATION,
+            FIELD_DECLARATION,
+            ENHANCED_FOR_STATEMENT,
+        ]);
         kinds
     }
 
     fn call_hook_kinds(&self) -> Vec<&'static str> {
-        vec![LOCAL_VARIABLE_DECLARATION, FIELD_DECLARATION]
+        vec![
+            LOCAL_VARIABLE_DECLARATION,
+            FIELD_DECLARATION,
+            ENHANCED_FOR_STATEMENT,
+        ]
     }
 
     /// The type of a variable is on the declaration, and each declarator has
     /// a name and a value. A field is a local name of its class.
     fn locals(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
+        if node.kind() == ENHANCED_FOR_STATEMENT {
+            // `for (Type name : values)` binds an element of the values. With
+            // `var`, the declared type of the values gives the type.
+            let field = |field| node.child_by_field_name(field);
+            if let (Some(name), Some(values)) = (field("name"), field("value")) {
+                out.push(LocalName {
+                    name: context.text(name),
+                    type_name: field("type").map(|declared| context.text(declared)),
+                    value_start: Some(values.start_byte()),
+                    is_parameter: false,
+                    element: true,
+                    result_index: None,
+                });
+            }
+            return;
+        }
         if ![LOCAL_VARIABLE_DECLARATION, FIELD_DECLARATION].contains(&node.kind()) {
             self.call_syntax().locals(node, context, out);
             return;
@@ -276,6 +308,27 @@ impl LanguageSpec for Java {
 
     fn refine<'tree>(&self, draft: &mut Draft<'tree>, context: &Context<'_, 'tree>) -> bool {
         let node = draft.node;
+        if draft.kind == SymbolKind::Field {
+            let declaration = context
+                .parent(node)
+                .filter(|parent| parent.kind() == FIELD_DECLARATION);
+            let Some(declaration) = declaration else {
+                return false;
+            };
+            // A field whose value is a lambda is a function.
+            let is_lambda = node
+                .child_by_field_name("value")
+                .is_some_and(|value| value.kind() == LAMBDA_EXPRESSION);
+            if is_lambda {
+                return false;
+            }
+            draft.return_type = declaration
+                .child_by_field_name("type")
+                .map(|declared| context.text(declared));
+            let start = start_after_annotations(declaration).unwrap_or(declaration);
+            draft.span = Span::between(&start, &declaration);
+            return true;
+        }
         if node.kind() == LAMBDA_EXPRESSION {
             draft.span = Span::between(&draft.name_node, &node);
             return true;
@@ -307,6 +360,8 @@ impl LanguageSpec for Java {
                 .node
                 .parent()
                 .and_then(|declarator| declarator.parent())
+        } else if draft.kind == SymbolKind::Field {
+            context.parent(draft.node)
         } else {
             Some(draft.node)
         };
@@ -509,7 +564,7 @@ mod tests {
                 "27 Main.measure>Util.helper UniqueCandidate QualifiedPath [shop/util/Util.java#Util.helper]",
                 "32 Main.shadow>helper UniqueCandidate ImportedName [shop/util/Util.java#Util.helper]",
                 "36 Main.tally>counter.next UniqueCandidate ReceiverDeclaredType [Main.java#Main.Counter.next]",
-                "36 Main.tally>(..).next Ambiguous NameOnly [Main.java#Main.Counter.next]",
+                "36 Main.tally>(..).next UniqueCandidate ReceiverDeclaredType [Main.java#Main.Counter.next]",
                 "36 Main.tally>Math.max Unresolved - []",
                 "36 Main.tally>missing Unresolved - []",
             ]
@@ -527,6 +582,65 @@ mod tests {
                 "26 Ring.Ring>super.super UniqueCandidate EnclosingType [shop/shapes/Circle.java#Circle.Circle]",
                 "30 Ring.name>super.name UniqueCandidate EnclosingType [shop/shapes/Circle.java#Circle.name]",
                 "30 Ring.name>edge UniqueCandidate EnclosingType [shop/shapes/Circle.java#Circle.edge]",
+            ]
+        );
+    }
+
+    const FIELD_SOURCE: &str = "import java.util.Collection;\nimport java.util.List;\nimport java.util.Set;\n\nclass Item {\n    String name() {\n        return \"\";\n    }\n\n    Item getOut() {\n        return this;\n    }\n}\n\npublic class Node {\n    private Node parent;\n    public Item item, spare;\n    private final List<Item> items = null;\n    private Collection<Item> more;\n    private Set<Item> set;\n    private Item[] array;\n    private Object loose;\n    Runnable task = () -> {};\n\n    String run(List<Item> given) {\n        parent.item.name();\n        this.parent.item.name();\n        this.spare.getOut().name();\n        parent.getOut();\n        for (Item each : items) {\n            each.name();\n        }\n        for (var each : more) {\n            each.name();\n        }\n        for (var each : this.set) {\n            each.name();\n        }\n        for (var each : array) {\n            each.name();\n        }\n        for (var each : given) {\n            each.name();\n        }\n        items.name();\n        this.items.name();\n        loose.name();\n        this.missing.name();\n        parent.missing.name();\n        return \"\";\n    }\n}\n";
+
+    #[test]
+    fn test_fields_have_the_declared_type() {
+        use crate::index::extract::testing::fields;
+        assert_eq!(
+            fields(Language::Java, FIELD_SOURCE),
+            [
+                "Field parent Node 16-16 not_exported",
+                "Field item Node 17-17 exported",
+                "Field spare Node 17-17 exported",
+                "Field items Node 18-18 not_exported",
+                "Field more Node 19-19 not_exported",
+                "Field set Node 20-20 not_exported",
+                "Field array Node 21-21 not_exported",
+                "Field loose Node 22-22 not_exported",
+            ]
+        );
+        // A field whose value is a lambda stays a function, and a field does
+        // not change a key.
+        let keys = keys(Language::Java, FIELD_SOURCE);
+        assert!(keys.contains(&"file#Node.task".to_string()), "{keys:?}");
+        assert!(!keys.iter().any(|key| key.contains('~')), "{keys:?}");
+    }
+
+    #[test]
+    fn test_field_chains_and_loop_variables_give_the_receiver_type() {
+        use crate::index::resolve::testing::rows;
+        let found: Vec<String> = rows(&[("Node.java", FIELD_SOURCE)], "Node.java")
+            .into_iter()
+            .filter(|row| row.contains("name ") || row.contains(".getOut "))
+            .collect();
+        let name = "UniqueCandidate ReceiverDeclaredType [Node.java#Item.name]";
+        assert_eq!(
+            found,
+            [
+                format!("26 Node.run>parent.item::name {name}"),
+                format!("27 Node.run>(..).name {name}"),
+                format!("28 Node.run>(..).name {name}"),
+                "28 Node.run>(..).getOut UniqueCandidate ReceiverDeclaredType [Node.java#Item.getOut]"
+                    .to_string(),
+                // `Node` has no `getOut`. The declared type gives no method.
+                "29 Node.run>parent.getOut Unresolved - []".to_string(),
+                format!("31 Node.run>each.name {name}"),
+                format!("34 Node.run>each.name {name}"),
+                format!("37 Node.run>each.name {name}"),
+                format!("40 Node.run>each.name {name}"),
+                format!("43 Node.run>each.name {name}"),
+                // A collection is not an element.
+                "45 Node.run>items.name Unresolved - []".to_string(),
+                "46 Node.run>(..).name Unresolved - []".to_string(),
+                "47 Node.run>loose.name Unresolved - []".to_string(),
+                // A hop without a declared type gives candidates and no edge.
+                "48 Node.run>(..).name Ambiguous NameOnly [Node.java#Item.name]".to_string(),
+                "49 Node.run>parent.missing::name Ambiguous NameOnly [Node.java#Item.name]".to_string(),
             ]
         );
     }
