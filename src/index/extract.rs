@@ -153,6 +153,23 @@ pub struct ReferenceFacts {
     pub tried: bool,
 }
 
+/// Makes a field that an assignment or a parameter in a method declares a
+/// member of the nearest type. `false` means that no type contains the node.
+pub fn field_of_type(draft: &mut Draft<'_>, context: &Context<'_, '_>) -> bool {
+    let Some(owner) = context
+        .scopes
+        .iter()
+        .rev()
+        .find(|scope| scope.role == ScopeRole::Type)
+    else {
+        return false;
+    };
+    draft.kind = SymbolKind::Field;
+    draft.container = Some(owner.name.clone());
+    draft.container_path = owner.path.clone();
+    true
+}
+
 /// The names of a chain of member accesses: `a.b.c` gives `a`, `b`, `c`.
 /// `None` means that the text is a different expression.
 pub fn name_path(text: &str) -> Option<Vec<String>> {
@@ -871,16 +888,26 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         .iter()
         .map(|(draft, _)| position_of(draft.owner))
         .collect();
-    let mut ordinals: BTreeMap<(Vec<String>, String), usize> = BTreeMap::new();
+    // The fields get their ordinals after the other symbols. Thus a field
+    // does not change the key of a method with the same name.
+    let mut counts: BTreeMap<(&[String], &str), usize> = BTreeMap::new();
+    let mut ordinals = vec![0; found.len()];
+    for fields in [false, true] {
+        for (position, (draft, _)) in found.iter().enumerate() {
+            if (draft.kind == SymbolKind::Field) == fields {
+                let count = counts
+                    .entry((draft.container_path.as_slice(), draft.name.as_str()))
+                    .or_insert(0);
+                *count += 1;
+                ordinals[position] = *count;
+            }
+        }
+    }
     let mut symbols = Vec::with_capacity(found.len());
     let mut link_facts = Vec::with_capacity(found.len());
-    for ((draft, exported), parent) in found.into_iter().zip(parents) {
-        let ordinal = ordinals
-            .entry((draft.container_path.clone(), draft.name.clone()))
-            .or_insert(0);
-        *ordinal += 1;
+    for (((draft, exported), parent), ordinal) in found.into_iter().zip(parents).zip(ordinals) {
         symbols.push(Symbol {
-            key: symbol_key(file, &draft.container_path, &draft.name, *ordinal),
+            key: symbol_key(file, &draft.container_path, &draft.name, ordinal),
             signature: signature(&draft, &parsed.source),
             doc: doc(draft.node, spec.comment_kinds(), &parsed.source),
             name: draft.name,

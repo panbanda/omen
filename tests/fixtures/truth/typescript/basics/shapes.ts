@@ -71,3 +71,25 @@ export function describe(): string {
 function hidden(): Unit {
   return Unit.Metre;
 }
+
+class Pair {
+  private lead: Circle;
+  private rest: Circle[];
+
+  constructor(lead: Circle) {
+    this.lead = lead;
+    this.rest = [];
+  }
+
+  leadArea(): number {
+    return this.lead.area();
+  }
+
+  restArea(): number {
+    let total = 0;
+    for (const member of this.rest) {
+      total += member.area();
+    }
+    return total;
+  }
+}

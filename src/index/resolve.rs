@@ -1703,6 +1703,30 @@ mod tests {
     }
 
     #[test]
+    fn test_field_receiver_typescript() {
+        let source = "class Item {\n  name(): string {\n    return \"\";\n  }\n}\n\ninterface Holder {\n  item: Item;\n}\n\nclass Cart {\n  private lead: Item;\n  private items: Item[];\n  private more: Array<Item>;\n  private maybe?: Item;\n  private opt: Item | undefined;\n  handler = (): number => 1;\n\n  constructor(private holder: Holder, plain: Holder) {}\n\n  run(h: Holder): void {\n    this.lead.name();\n    for (const item of this.items) {\n      item.name();\n    }\n    for (const other of this.more) {\n      other.name();\n    }\n    this.maybe.name();\n    this.opt.name();\n    h.item.name();\n    this.holder.item.name();\n    this.items.name();\n    this.plain.name();\n  }\n}\n";
+        let found = "UniqueCandidate ReceiverDeclaredType [a.ts#Item.name]";
+        assert_eq!(
+            rows_of(&[("a.ts", source)], "a.ts", "name"),
+            [
+                format!("22 {found}"),
+                format!("24 {found}"),
+                format!("27 {found}"),
+                format!("29 {found}"),
+                format!("30 {found}"),
+                format!("31 {found}"),
+                format!("32 {found}"),
+                "33 Unresolved - []".to_string(),
+                "34 Ambiguous NameOnly [a.ts#Item.name]".to_string(),
+            ]
+        );
+        // A field does not change the key of a function with the same name.
+        let keys = crate::index::extract::testing::keys(crate::core::Language::TypeScript, source);
+        assert!(keys.contains(&"file#Cart.handler".to_string()), "{keys:?}");
+        assert!(!keys.iter().any(|key| key.contains('~')), "{keys:?}");
+    }
+
+    #[test]
     fn test_field_receiver_rust() {
         let source = "pub struct Item;\n\nimpl Item {\n    pub fn name(&self) -> u32 {\n        1\n    }\n}\n\npub struct Cart {\n    lead: Item,\n    items: Vec<Item>,\n    boxed: Option<Item>,\n}\n\nimpl Cart {\n    fn find(&self) -> (Item, u32) {\n        (Item, 1)\n    }\n\n    fn load(&self) -> Result<Item, String> {\n        Ok(Item)\n    }\n\n    fn run(&self) -> Result<u32, String> {\n        self.lead.name();\n        for item in &self.items {\n            item.name();\n        }\n        let (found, _) = self.find();\n        found.name();\n        let loaded = self.load()?;\n        loaded.name();\n        let kept = self.load();\n        kept.name();\n        self.boxed.name();\n        self.items.name();\n        Ok(1)\n    }\n}\n";
         assert_eq!(

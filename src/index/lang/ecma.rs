@@ -3,7 +3,9 @@
 use tree_sitter::Node;
 
 use crate::core::Language;
-use crate::index::extract::{Context, DefinitionRule, Draft, LanguageSpec, NameRule, ScopeRole};
+use crate::index::extract::{
+    field_of_type, Context, DefinitionRule, Draft, LanguageSpec, NameRule, ScopeRole,
+};
 use crate::index::model::{Exported, Span, SymbolKind};
 use crate::parser::function_binding_name;
 
@@ -154,7 +156,22 @@ const TYPESCRIPT_DEFINITIONS: &[DefinitionRule] = &[
         SymbolKind::Module,
         NameRule::Field("name"),
     ),
+    DefinitionRule::new(
+        PUBLIC_FIELD_DEFINITION,
+        SymbolKind::Field,
+        NameRule::Field("name"),
+    ),
+    DefinitionRule::new(
+        "property_signature",
+        SymbolKind::Field,
+        NameRule::Field("name"),
+    ),
+    // `constructor(private name: Type)` declares a field of the class.
+    DefinitionRule::new(REQUIRED_PARAMETER, SymbolKind::Field, NameRule::Hook),
 ];
+
+const REQUIRED_PARAMETER: &str = "required_parameter";
+const FOR_IN_STATEMENT: &str = "for_in_statement";
 
 const COMMON_HOOK_KINDS: &[&str] = &[
     VARIABLE_DECLARATOR,
@@ -444,16 +461,36 @@ impl LanguageSpec for Ecma {
 
     fn local_kinds(&self) -> Vec<&'static str> {
         let mut kinds = self.call_syntax().local_kinds();
-        kinds.push(FORMAL_PARAMETERS);
+        kinds.extend([FORMAL_PARAMETERS, FOR_IN_STATEMENT]);
         kinds
     }
 
     fn call_hook_kinds(&self) -> Vec<&'static str> {
-        vec![FORMAL_PARAMETERS]
+        vec![FORMAL_PARAMETERS, FOR_IN_STATEMENT]
     }
 
     /// A JavaScript parameter is a name directly in the parameter list.
+    /// `for (const name of values)` binds an element of the values.
     fn locals(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
+        if node.kind() == FOR_IN_STATEMENT {
+            let of = node
+                .child_by_field_name("operator")
+                .is_some_and(|operator| operator.kind() == "of");
+            let name = node
+                .child_by_field_name("left")
+                .filter(|name| of && name.kind() == IDENTIFIER);
+            if let (Some(name), Some(values)) = (name, node.child_by_field_name("right")) {
+                out.push(LocalName {
+                    name: context.text(name),
+                    type_name: None,
+                    value_start: Some(values.start_byte()),
+                    is_parameter: false,
+                    element: true,
+                    result_index: None,
+                });
+            }
+            return;
+        }
         if node.kind() != FORMAL_PARAMETERS {
             self.call_syntax().locals(node, context, out);
             return;
@@ -675,6 +712,14 @@ impl LanguageSpec for Ecma {
             METHOD_DEFINITION | METHOD_SIGNATURE | ABSTRACT_METHOD_SIGNATURE => {
                 static_name(node.child_by_field_name("name")?)
             }
+            REQUIRED_PARAMETER => {
+                let mut cursor = node.walk();
+                let declares = node
+                    .children(&mut cursor)
+                    .any(|child| [ACCESSIBILITY_MODIFIER, "readonly"].contains(&child.kind()));
+                node.child_by_field_name("pattern")
+                    .filter(|name| declares && name.kind() == IDENTIFIER)
+            }
             CLASS_EXPRESSION => binding(node)
                 .and_then(|binding| binding.name)
                 .or_else(|| node.child_by_field_name("name")),
@@ -693,6 +738,15 @@ impl LanguageSpec for Ecma {
     fn refine<'tree>(&self, draft: &mut Draft<'tree>, context: &Context<'_, 'tree>) -> bool {
         let node = draft.node;
         let kind = node.kind();
+        if draft.kind == SymbolKind::Field {
+            return match kind {
+                REQUIRED_PARAMETER => field_of_type(draft, context),
+                // A field whose value is a function is a method.
+                _ => !node.child_by_field_name("value").is_some_and(|value| {
+                    [ARROW_FUNCTION, FUNCTION_EXPRESSION].contains(&value.kind())
+                }),
+            };
+        }
         draft.default_export = node.parent().is_some_and(|parent| {
             parent.kind() == EXPORT_STATEMENT && context.text(parent).starts_with("export default")
         });
