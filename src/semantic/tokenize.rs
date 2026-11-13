@@ -19,8 +19,8 @@
 //! is not ASCII. First the tokenizer changes the text to Unicode normalization
 //! form NFKC. Thus a precomposed and a decomposed accent, a ligature such as
 //! `ﬁ`, and full-width letters give the same tokens as the usual form. A
-//! combining mark that stays after normalization continues an identifier, and
-//! has the class of the character before it.
+//! combining mark that stays after normalization continues an identifier. The
+//! case and digit rules do not see a mark, so a mark is never at a boundary.
 //!
 //! The tokenizer changes each character to lowercase without regard to its
 //! neighbours. Thus a token does not depend on the text around it, and each
@@ -36,7 +36,7 @@ use unicode_normalization::UnicodeNormalization;
 
 /// Change this value when the tokens for some input change. An index that an
 /// older version made is then not valid.
-pub const TOKENIZER_VERSION: u32 = 2;
+pub const TOKENIZER_VERSION: u32 = 3;
 
 /// The lowercase form that the tokenizer uses: the NFKC form of the text, with
 /// each character changed independently of its neighbours.
@@ -102,20 +102,20 @@ fn case_and_digit_parts(segment: &str) -> Vec<String> {
     use CharacterClass::{Digit, Lowercase, Uppercase};
 
     let characters: Vec<char> = segment.chars().collect();
-    let mut classes: Vec<CharacterClass> = Vec::with_capacity(characters.len());
-    for &character in &characters {
-        let class = match classes.last() {
-            Some(&previous) if is_combining_mark(character) => previous,
-            _ => class_of(character),
-        };
-        classes.push(class);
-    }
+    // The rules see only the characters that are not combining marks. A mark
+    // stays with the character before it, so a boundary is never before a mark.
+    let bases: Vec<(usize, CharacterClass)> = characters
+        .iter()
+        .enumerate()
+        .filter(|&(index, &character)| index == 0 || !is_combining_mark(character))
+        .map(|(index, &character)| (index, class_of(character)))
+        .collect();
     let mut parts = Vec::new();
     let mut start = 0;
-    for index in 1..characters.len() {
-        let previous = classes[index - 1];
-        let current = classes[index];
-        let next = classes.get(index + 1).copied();
+    for position in 1..bases.len() {
+        let previous = bases[position - 1].1;
+        let (index, current) = bases[position];
+        let next = bases.get(position + 1).map(|&(_, class)| class);
         let boundary = (previous == Digit) != (current == Digit)
             || (previous == Lowercase && current == Uppercase)
             // The last capital of an acronym starts the next word.
@@ -256,8 +256,34 @@ mod tests {
     }
 
     #[test]
+    fn a_combining_mark_is_transparent_to_the_case_rules() {
+        // Each pair gives the same division with and without the mark.
+        let cases: &[(&str, &[&str])] = &[
+            ("A\u{331}b", &["a\u{331}b"]),
+            (
+                "HTTPS\u{331}erver",
+                &["http", "s\u{331}erver", "https\u{331}erver"],
+            ),
+            (
+                "HTTP\u{331}Server",
+                &["http\u{331}", "server", "http\u{331}server"],
+            ),
+            (
+                "twiceX\u{331}ocal",
+                &["twice", "x\u{331}ocal", "twicex\u{331}ocal"],
+            ),
+            ("x\u{331}Y", &["x\u{331}", "y", "x\u{331}y"]),
+            ("a1\u{331}b", &["a", "1\u{331}", "b", "a1\u{331}b"]),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(&tokenize(input), expected, "input: {input:?}");
+        }
+    }
+
+    #[test]
     fn the_version_is_set() {
-        assert_eq!(TOKENIZER_VERSION, 2);
+        assert_eq!(TOKENIZER_VERSION, 3);
     }
 
     proptest! {
