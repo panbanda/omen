@@ -36,11 +36,11 @@ pub struct Cli {
     pub jobs: Option<usize>,
 
     /// Git ref (branch, tag, SHA) for remote repositories
-    #[arg(long = "ref")]
+    #[arg(long = "ref", global = true)]
     pub git_ref: Option<String>,
 
     /// Shallow clone (depth=1); disables git history analyzers
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub shallow: bool,
 
     #[command(subcommand)]
@@ -1570,6 +1570,16 @@ mod tests {
     fn test_git_ref_flag() {
         let cli = parse(&["omen", "--ref", "v1.0.0", "complexity"]);
         assert_eq!(cli.git_ref, Some("v1.0.0".to_string()));
+    }
+
+    #[test]
+    fn test_ref_and_shallow_parse_after_the_subcommand() {
+        let cli = parse(&["omen", "complexity", "--ref", "v1.0.0", "--shallow"]);
+        assert_eq!(cli.git_ref, Some("v1.0.0".to_string()));
+        assert!(cli.shallow);
+
+        let cli = parse(&["omen", "score", "trend", "--ref", "main"]);
+        assert_eq!(cli.git_ref, Some("main".to_string()));
     }
 
     #[test]
