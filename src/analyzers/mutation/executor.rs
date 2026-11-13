@@ -455,7 +455,15 @@ async fn run_tests_async(config: &ExecutorConfig) -> MutantStatus {
             Ok(spawned) => spawned,
             Err(_) => return MutantStatus::BuildError,
         };
-    #[cfg(not(unix))]
+    // `_tree` stops the descendants of the test command when it drops, at
+    // the end of this function: before the caller restores the file.
+    #[cfg(windows)]
+    let (mut child, _tree) =
+        match super::safety::ProcessTree::spawn(|| cmd.spawn(), |child| child.id()) {
+            Ok(spawned) => spawned,
+            Err(_) => return MutantStatus::BuildError,
+        };
+    #[cfg(not(any(unix, windows)))]
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(_) => return MutantStatus::BuildError,
@@ -513,7 +521,13 @@ fn execute_with_timeout(cmd: &mut Command, timeout: Duration) -> ExecutionResult
             Ok(spawned) => spawned,
             Err(_) => return ExecutionResult::Error,
         };
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    let (mut child, _tree) =
+        match super::safety::ProcessTree::spawn(|| cmd.spawn(), |child| Some(child.id())) {
+            Ok(spawned) => spawned,
+            Err(_) => return ExecutionResult::Error,
+        };
+    #[cfg(not(any(unix, windows)))]
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(_) => return ExecutionResult::Error,
