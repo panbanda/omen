@@ -74,9 +74,7 @@ const KNOWN_UNKNOWN_KINDS: &[&str] = &[
 
 /// The node kinds of the symbol extraction of the shared index.
 fn index_tables(language: Language) -> Vec<(&'static str, Vec<&'static str>)> {
-    let Some(spec) = language_spec(language) else {
-        return Vec::new();
-    };
+    let spec = language_spec(language);
     vec![
         (
             "index_definition",
@@ -177,9 +175,7 @@ fn each_table_kind_is_a_kind_of_the_grammar() {
 fn each_name_field_of_the_index_is_a_field_of_the_grammar() {
     let mut unknown = BTreeSet::new();
     for language in LANGUAGES {
-        let Some(spec) = language_spec(language) else {
-            continue;
-        };
+        let spec = language_spec(language);
         let grammar = get_tree_sitter_language(language).unwrap();
         for rule in spec.definitions() {
             if let NameRule::Field(field) = rule.name {

@@ -25,9 +25,9 @@ use omen::benchmark::truth::{
     ObservedCall, ObservedImport, ObservedSymbol,
 };
 use omen::core::Language;
-use omen::index::extract::{extract_symbols, language_spec, link_files, FileSymbols};
+use omen::index::extract::{extract_symbols, link_files, FileSymbols};
 use omen::index::model::{Exported, Symbol, SymbolKind};
-use omen::parser::{extract_classes, extract_imports, ImportKind, Parser};
+use omen::parser::{extract_imports, ImportKind, Parser};
 
 const LABELS_FILE: &str = "labels.json";
 const LEDGER_FILE: &str = "expected_failures.json";
@@ -157,17 +157,10 @@ fn observed_symbol(file: &str, symbol: Symbol) -> Option<ObservedSymbol> {
     })
 }
 
-/// The shared index supplies the symbols of these files.
-fn in_shared_index(file: &str) -> bool {
-    Language::detect(Path::new(file)).is_some_and(|language| language_spec(language).is_some())
-}
-
 /// Convert the facts that omen reports for one case into the label model.
 ///
-/// The symbols come from the shared index. Until each language has a
-/// specification there, the other languages use the functions of the `symbol`,
-/// `impact`, `repomap`, and `outline` commands. The calls and the imports use
-/// those functions and the functions of the `graph` command.
+/// The symbols come from the shared index. The calls and the imports use the
+/// same functions as the `symbol`, `impact`, `repomap`, and `graph` commands.
 ///
 /// If omen does not report a fact, the adapter gives `None`. It does not
 /// calculate a value that omen does not report.
@@ -175,24 +168,6 @@ fn observe(dir: &Path) -> Observed {
     let mut files = Vec::new();
     source_files(dir, &mut files);
     let index = build_index(dir, &files).expect("build_index");
-
-    let mut symbols: Vec<ObservedSymbol> = index
-        .symbols
-        .iter()
-        .filter(|symbol| !in_shared_index(&symbol.file))
-        .map(|symbol| ObservedSymbol {
-            location: Location {
-                file: symbol.file.replace('\\', "/"),
-                name: symbol.name.clone(),
-                start_line: symbol.line,
-            },
-            // The index gives the kind `function` to each symbol.
-            kind: Some(Kind::Function),
-            container: symbol.owner.clone(),
-            end_line: symbol.end_line,
-            exported: Some(symbol.is_exported),
-        })
-        .collect();
 
     let names: BTreeMap<(&str, u32, &str), &str> = index
         .symbols
@@ -242,30 +217,11 @@ fn observe(dir: &Path) -> Observed {
     for path in &files {
         let file = relative(dir, path);
         let parsed = Parser::new().parse_file(path).expect("parse");
-        let classes = if language_spec(parsed.language).is_some() {
-            Vec::new()
-        } else {
-            extract_classes(&parsed)
-        };
         index_files.push(FileSymbols {
             symbols: extract_symbols(&parsed, &file),
             file: file.clone(),
             language: parsed.language,
         });
-        for class in classes {
-            symbols.push(ObservedSymbol {
-                location: Location {
-                    file: file.clone(),
-                    name: class.name,
-                    start_line: class.start_line,
-                },
-                // The parser does not report which type-like kind this is.
-                kind: None,
-                container: None,
-                end_line: class.end_line,
-                exported: Some(class.is_exported),
-            });
-        }
         for import in extract_imports(&parsed) {
             if import.kind != ImportKind::Use {
                 continue;
@@ -289,6 +245,7 @@ fn observe(dir: &Path) -> Observed {
     }
 
     link_files(&mut index_files);
+    let mut symbols = Vec::new();
     for index_file in index_files {
         let file = index_file.file;
         symbols.extend(

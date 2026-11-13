@@ -1,5 +1,6 @@
 //! The specification of each language for the symbol extraction.
 
+pub mod bash;
 pub mod c;
 pub mod cpp;
 pub mod csharp;

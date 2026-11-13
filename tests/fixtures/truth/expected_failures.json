@@ -80,11 +80,6 @@
     "tracking": "phase-2-shared-index"
   },
   {
-    "id": "bash/basics/symbols/inner/container",
-    "reason": "expected Some(\"outer\"), got None",
-    "tracking": "phase-2-shared-index"
-  },
-  {
     "id": "c/basics/calls/shadowing/no_false_edge",
     "reason": "false edge to sub/util.c:helper:3",
     "tracking": "phase-2-shared-index"

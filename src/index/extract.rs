@@ -172,20 +172,20 @@ pub trait LanguageSpec: Sync {
 }
 
 /// Gives the specification of a language.
-pub fn language_spec(language: Language) -> Option<&'static dyn LanguageSpec> {
+pub fn language_spec(language: Language) -> &'static dyn LanguageSpec {
     match language {
-        Language::Go => Some(&lang::go::Go),
-        Language::Rust => Some(&lang::rust::Rust),
-        Language::Python => Some(&lang::python::Python),
-        Language::JavaScript | Language::Jsx => Some(&lang::ecma::JAVASCRIPT),
-        Language::TypeScript | Language::Tsx => Some(&lang::ecma::TYPESCRIPT),
-        Language::Java => Some(&lang::java::Java),
-        Language::CSharp => Some(&lang::csharp::CSharp),
-        Language::C => Some(&lang::c::C),
-        Language::Cpp => Some(&lang::cpp::Cpp),
-        Language::Ruby => Some(&lang::ruby::Ruby),
-        Language::Php => Some(&lang::php::Php),
-        _ => None,
+        Language::Go => &lang::go::Go,
+        Language::Rust => &lang::rust::Rust,
+        Language::Python => &lang::python::Python,
+        Language::JavaScript | Language::Jsx => &lang::ecma::JAVASCRIPT,
+        Language::TypeScript | Language::Tsx => &lang::ecma::TYPESCRIPT,
+        Language::Java => &lang::java::Java,
+        Language::CSharp => &lang::csharp::CSharp,
+        Language::C => &lang::c::C,
+        Language::Cpp => &lang::cpp::Cpp,
+        Language::Ruby => &lang::ruby::Ruby,
+        Language::Php => &lang::php::Php,
+        Language::Bash => &lang::bash::Bash,
     }
 }
 
@@ -397,9 +397,7 @@ pub fn link_files(files: &mut [FileSymbols]) {
         }
     }
     for language in languages {
-        let Some(spec) = language_spec(language) else {
-            continue;
-        };
+        let spec = language_spec(language);
         let mut symbols: Vec<&mut Symbol> = files
             .iter_mut()
             .filter(|file| file.language == language)
@@ -411,12 +409,9 @@ pub fn link_files(files: &mut [FileSymbols]) {
 
 /// Extracts the symbols of one file in source order.
 ///
-/// `file` is the path that the keys use. If the language has no
-/// specification, the result is empty.
+/// `file` is the path that the keys use.
 pub fn extract_symbols(parsed: &ParseResult, file: &str) -> Vec<Symbol> {
-    let Some(spec) = language_spec(parsed.language) else {
-        return Vec::new();
-    };
+    let spec = language_spec(parsed.language);
     let mut extractor = Extractor {
         spec,
         rules: spec
