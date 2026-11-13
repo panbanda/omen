@@ -193,6 +193,8 @@ impl LanguageSpec for CSharp {
                 type_name: type_name.clone(),
                 value_start: value.map(|value| value.start_byte()),
                 is_parameter: false,
+                element: false,
+                result_index: None,
             });
         }
     }

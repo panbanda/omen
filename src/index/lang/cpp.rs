@@ -318,6 +318,8 @@ impl LanguageSpec for Cpp {
             type_name: Some(context.text(target)),
             value_start: None,
             is_parameter: false,
+            element: false,
+            result_index: None,
         };
         match node.kind() {
             NAMESPACE_ALIAS_DEFINITION => {

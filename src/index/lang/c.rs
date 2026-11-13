@@ -338,6 +338,8 @@ pub(crate) fn declared_names(node: Node<'_>, context: &Context<'_, '_>, out: &mu
             type_name: type_name.clone(),
             value_start: value.map(|value| value.start_byte()),
             is_parameter: node.kind() != DECLARATION,
+            element: false,
+            result_index: None,
         });
     }
 }

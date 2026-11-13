@@ -12,8 +12,8 @@ use std::sync::{Arc, OnceLock};
 use parking_lot::RwLock;
 use rayon::prelude::*;
 
-use super::calls::{split_type, Argument};
-use super::extract::{FileSymbols, LinkFacts, Local};
+use super::calls::{element_type, one_result, required_type, split_type, Argument};
+use super::extract::{name_path, FileSymbols, LinkFacts, Local};
 use super::model::{
     ImportBinding, ImportKind, ImportTarget, Receiver, Reference, ReferenceKind, Resolution,
     ResolutionBasis as Basis, ResolutionStatus as Status, Symbol, SymbolKind,
@@ -104,6 +104,9 @@ impl Outcome {
         }
     }
 }
+
+/// The words that name the object of a method.
+const SELF_WORDS: &[&str] = &["self", "this", "$this"];
 
 fn is_callable(symbol: &Symbol) -> bool {
     matches!(
@@ -642,31 +645,153 @@ impl<'a> Resolver<'a> {
     /// The types of the value of a local name. `None` means that the syntax
     /// does not give a type.
     fn local_types(&self, local: &Local, file: usize, depth: usize) -> Option<Vec<Id>> {
+        let element = local.name.element;
         if let Some(type_name) = &local.name.type_name {
-            let (qualifier, name) = split_type(type_name);
+            let (_, name) = split_type(type_name);
             if !name.is_empty() && !["var", "auto", "let", "_"].contains(&name.as_str()) {
-                return Some(self.types(&name, qualifier.as_deref(), file));
+                return Some(self.types_of_text(type_name, file, element));
             }
         }
+        if depth > 4 {
+            return None;
+        }
         let start = local.name.value_start?;
-        let position = *self.references_at(file, start).first()?;
-        self.result_types(file, position, depth)
+        if let Some(position) = self.references_at(file, start).first() {
+            let index = local.name.result_index;
+            return self.result_types_of(file, *position, depth, element, index);
+        }
+        let path = local.value_path.as_ref()?;
+        let chain = self.chain(file, local.owner);
+        self.path_types(file, &chain, path, element, depth + 1)
+    }
+
+    /// The types that the text of a declared type names in `file`. A slice,
+    /// an array, or a list gives the type of its elements when `element` is
+    /// set, and no type when it is not set.
+    fn types_of_text(&self, text: &str, file: usize, element: bool) -> Vec<Id> {
+        let text = required_type(text);
+        let text = match (element_type(text), element) {
+            (Some(inner), true) if element_type(inner).is_none() => required_type(inner),
+            (None, false) => text,
+            _ => return Vec::new(),
+        };
+        let (qualifier, name) = split_type(text);
+        if name.is_empty() {
+            return Vec::new();
+        }
+        self.types(&name, qualifier.as_deref(), file)
+    }
+
+    /// The text of the declared type of the field `name` of a type, and the
+    /// file that has the text. The search goes to the parent types when the
+    /// type has no such field.
+    fn field_text(
+        &self,
+        owner: Id,
+        name: &str,
+        seen: &mut BTreeSet<Id>,
+    ) -> Option<(&'a str, usize)> {
+        if !seen.insert(owner) {
+            return None;
+        }
+        let type_name = self.symbol(owner).name.as_str();
+        let fields: Vec<Id> = self
+            .named(name, owner.0)
+            .filter(|id| {
+                let field = self.symbol(*id);
+                field.kind == SymbolKind::Field
+                    && field.container.as_deref() == Some(type_name)
+                    && if id.0 == owner.0 {
+                        self.facts(*id).parent == Some(owner.1)
+                    } else {
+                        self.types(type_name, None, id.0) == [owner]
+                    }
+            })
+            .collect();
+        match fields.as_slice() {
+            [only] => return Some((self.facts(*only).return_type.as_deref()?, only.0)),
+            [] => {}
+            _ => return None,
+        }
+        let inherited: Vec<(&'a str, usize)> = self
+            .parents(owner)
+            .into_iter()
+            .filter_map(|parent| self.field_text(parent, name, seen))
+            .collect();
+        match inherited.as_slice() {
+            [only] => Some(*only),
+            _ => None,
+        }
+    }
+
+    /// The types of a chain of member accesses: a local name or the object
+    /// of the method, and then one field for each next name. `None` means
+    /// that one name of the chain has no declared type.
+    fn path_types(
+        &self,
+        file: usize,
+        chain: &[Id],
+        path: &[String],
+        element: bool,
+        depth: usize,
+    ) -> Option<Vec<Id>> {
+        if depth > 4 {
+            return None;
+        }
+        let (root, fields) = path.split_first()?;
+        let mut owners: Vec<Id> = if SELF_WORDS.contains(&root.as_str()) {
+            self.enclosing_type(chain).into_iter().collect()
+        } else {
+            let local = self.local(chain, file, root)?;
+            if fields.is_empty() && element {
+                let declared = local.name.type_name.as_deref()?;
+                return Some(self.types_of_text(declared, file, true));
+            }
+            self.local_types(local, file, depth + 1)?
+        };
+        for (position, field) in fields.iter().enumerate() {
+            let [owner] = owners.as_slice() else {
+                return None;
+            };
+            let (text, text_file) = self.field_text(*owner, field, &mut BTreeSet::new())?;
+            let last = position + 1 == fields.len();
+            owners = self.types_of_text(text, text_file, element && last);
+        }
+        Some(owners)
     }
 
     /// The types of the value that a call gives. `None` means that the syntax
     /// does not give a type: the call has no one callee, or the callee has no
     /// declared result type.
     fn result_types(&self, file: usize, position: usize, depth: usize) -> Option<Vec<Id>> {
+        self.result_types_of(file, position, depth, false, None)
+    }
+
+    /// The types of one result of a call, or of the elements of that result.
+    /// `index` selects one result of a call that gives two or more results.
+    fn result_types_of(
+        &self,
+        file: usize,
+        position: usize,
+        depth: usize,
+        element: bool,
+        index: Option<usize>,
+    ) -> Option<Vec<Id>> {
         let facts = &self.files[file];
         let reference = &facts.references[position];
+        let whole = !element && index.is_none();
         if reference.kind == ReferenceKind::Construct {
+            if !whole {
+                return None;
+            }
             return Some(self.types(&reference.name, reference.qualifier.as_deref(), file));
         }
         if depth > 4 {
             return None;
         }
         // Ruby `self.class` gives the class of the object.
-        if self.family(file) == Family::Ruby
+        if whole
+            && self.family(file) == Family::Ruby
             && reference.name == "class"
             && reference.receiver == Some(Receiver::SelfValue)
         {
@@ -685,17 +810,23 @@ impl<'a> Resolver<'a> {
             let container = symbol.container.as_deref()?;
             Some(self.types(container, None, callee.0))
         };
-        if symbol.kind == SymbolKind::Constructor {
-            return own_type();
+        if symbol.kind == SymbolKind::Constructor || is_container(symbol) {
+            if !whole {
+                return None;
+            }
+            return if is_container(symbol) {
+                Some(vec![*callee])
+            } else {
+                own_type()
+            };
         }
-        if is_container(symbol) {
-            return Some(vec![*callee]);
-        }
-        let (qualifier, name) = split_type(self.facts(*callee).return_type.as_deref()?);
+        let declared = self.facts(*callee).return_type.as_deref()?;
+        let declared = one_result(declared, index)?;
+        let (_, name) = split_type(declared);
         if ["Self", "self", "static"].contains(&name.as_str()) {
-            return own_type();
+            return if element { None } else { own_type() };
         }
-        Some(self.types(&name, qualifier.as_deref(), callee.0))
+        Some(self.types_of_text(declared, callee.0, element))
     }
 
     fn on_types(
@@ -1407,7 +1538,16 @@ impl<'a> Resolver<'a> {
                         .copied()
                         .find(|other| facts.reference_facts[*other].end_byte == end)
                 });
-                match call.and_then(|call| self.result_types(file, call, depth + 1)) {
+                // A receiver that is a chain of names has the declared type
+                // of its last field.
+                let types = match call {
+                    Some(call) => self.result_types(file, call, depth + 1),
+                    None => facts.reference_facts[position]
+                        .receiver_path
+                        .as_ref()
+                        .and_then(|path| self.path_types(file, &chain, path, false, depth + 1)),
+                };
+                match types {
                     Some(types) => {
                         self.on_types(&types, name, arity, Basis::ReceiverDeclaredType, file)
                     }
@@ -1415,7 +1555,33 @@ impl<'a> Resolver<'a> {
                 }
             }
             None => match &reference.qualifier {
-                Some(qualifier) => self.with_qualifier(file, reference, qualifier),
+                Some(qualifier) => {
+                    // A chain of names that starts at a local name or at the
+                    // object is a value, not a path of a module.
+                    let path = name_path(qualifier).filter(|path| {
+                        path.len() > 1
+                            && (SELF_WORDS.contains(&path[0].as_str())
+                                || self.local(&chain, file, &path[0]).is_some())
+                    });
+                    match path {
+                        Some(path) => {
+                            match self.path_types(file, &chain, &path, false, depth + 1) {
+                                Some(types) => self.on_types(
+                                    &types,
+                                    name,
+                                    arity,
+                                    Basis::ReceiverDeclaredType,
+                                    file,
+                                ),
+                                None => Outcome::offered(
+                                    Basis::NameOnly,
+                                    self.methods_by_name(name, file),
+                                ),
+                            }
+                        }
+                        None => self.with_qualifier(file, reference, qualifier),
+                    }
+                }
                 None => {
                     let start = facts.reference_facts[position].start_byte;
                     self.bare(file, reference, &chain, start)

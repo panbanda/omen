@@ -39,3 +39,29 @@ func Describe() string {
 func hidden() int {
 	return 7
 }
+
+type Group struct {
+	lead    *Circle
+	members []*Circle
+}
+
+func (g *Group) Split() (*Circle, []*Circle, error) {
+	return g.lead, g.members, nil
+}
+
+func (g *Group) Lead() float64 {
+	return g.lead.Area()
+}
+
+func (g *Group) Sum() float64 {
+	total := 0.0
+	for _, member := range g.members {
+		total += member.Area()
+	}
+	return total
+}
+
+func (g *Group) First() float64 {
+	first, _, _ := g.Split()
+	return first.Area()
+}

@@ -65,6 +65,12 @@ const DEFINITIONS: &[DefinitionRule] = &[
     DefinitionRule::new(TYPE_SPEC, SymbolKind::TypeAlias, NameRule::Field("name")),
     DefinitionRule::new("type_alias", SymbolKind::TypeAlias, NameRule::Field("name")),
     DefinitionRule::new(FUNCTION_LITERAL, SymbolKind::Function, NameRule::Hook),
+    // A declaration with two or more names gives the first name only.
+    DefinitionRule::new(
+        "field_declaration",
+        SymbolKind::Field,
+        NameRule::Field("name"),
+    ),
 ];
 
 impl LanguageSpec for Go {
@@ -99,6 +105,8 @@ impl LanguageSpec for Go {
                     type_name: None,
                     value_start: Some(values.start_byte()),
                     is_parameter: false,
+                    element: true,
+                    result_index: None,
                 });
             }
             return;
@@ -106,6 +114,12 @@ impl LanguageSpec for Go {
         if node.kind() != SHORT_VAR_DECLARATION {
             let first = out.len();
             self.call_syntax().locals(node, context, out);
+            // `name ...Type` is a slice of the type.
+            if node.kind() == "variadic_parameter_declaration" {
+                for local in &mut out[first..] {
+                    local.type_name = local.type_name.take().map(|name| format!("...{name}"));
+                }
+            }
             // `var name = Type{...}` has the type of the literal.
             let literal = node
                 .child_by_field_name("value")
@@ -131,11 +145,17 @@ impl LanguageSpec for Go {
             }
             let paired = left.named_child_count() == right.named_child_count();
             let value = paired.then(|| right.named_child(position as u32)).flatten();
+            // `a, b := f()` gives each name one result of the call.
+            let call = (!paired && right.named_child_count() == 1)
+                .then(|| right.named_child(0))
+                .flatten();
             out.push(LocalName {
                 name: context.text(name),
                 type_name: value.and_then(|value| literal_type(value, context)),
-                value_start: value.map(|value| value.start_byte()),
+                value_start: value.or(call).map(|value| value.start_byte()),
                 is_parameter: false,
+                element: false,
+                result_index: call.map(|_| position),
             });
         }
     }
@@ -599,7 +619,57 @@ mod tests {
                 "13 run>child.Name UniqueCandidate ReceiverDeclaredType [main.go#Command.Name]",
                 "15 run>rootCmd.Commands UniqueCandidate ReceiverDeclaredType [main.go#Command.Commands]",
                 "16 run>index.Name Unresolved - []",
-                "19 run>given.Name Ambiguous NameOnly [main.go#Command.Name]",
+                "19 run>given.Name UniqueCandidate ReceiverDeclaredType [main.go#Command.Name]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_variadic_parameter_is_a_slice() {
+        use crate::index::resolve::testing::rows;
+        let source = "package shop\n\ntype Item struct{}\n\nfunc (i *Item) Name() string {\n\treturn \"\"\n}\n\nfunc add(items ...*Item) {\n\tfor _, item := range items {\n\t\titem.Name()\n\t}\n\titems.Name()\n}\n";
+        assert_eq!(
+            rows(&[("a.go", source)], "a.go"),
+            [
+                "11 add>item.Name UniqueCandidate ReceiverDeclaredType [a.go#Item.Name]",
+                "13 add>items.Name Unresolved - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_fields_and_results_give_the_type_of_a_receiver() {
+        use crate::index::resolve::testing::rows;
+        let source = "package shop\n\ntype Item struct {\n\tname string\n}\n\nfunc (i *Item) Name() string {\n\treturn i.name\n}\n\ntype Cart struct {\n\tparent *Cart\n\tfirst  Item\n\titems  []*Item\n\tcount  int\n}\n\nfunc (c *Cart) Root() *Cart {\n\treturn c\n}\n\nfunc (c *Cart) Find(name string) (*Item, []string, error) {\n\treturn nil, nil, nil\n}\n\nfunc (c *Cart) Run() {\n\tc.parent.Root()\n\tc.parent.parent.Root()\n\tc.first.Name()\n\tfor _, item := range c.items {\n\t\titem.Name()\n\t}\n\tfound, _, err := c.Find(\"a\")\n\tfound.Name()\n\terr.Error()\n\tc.items.Name()\n\tc.count.Name()\n\tc.missing.Name()\n\tlocal := c.parent\n\tlocal.Root()\n}\n";
+        let files = [("a.go", source)];
+        assert_eq!(
+            rows(&files, "a.go"),
+            [
+                "27 Cart.Run>c.parent::Root UniqueCandidate ReceiverDeclaredType [a.go#Cart.Root]",
+                "28 Cart.Run>c.parent.parent::Root UniqueCandidate ReceiverDeclaredType [a.go#Cart.Root]",
+                "29 Cart.Run>c.first::Name UniqueCandidate ReceiverDeclaredType [a.go#Item.Name]",
+                "31 Cart.Run>item.Name UniqueCandidate ReceiverDeclaredType [a.go#Item.Name]",
+                "33 Cart.Run>c.Find UniqueCandidate ReceiverDeclaredType [a.go#Cart.Find]",
+                "34 Cart.Run>found.Name UniqueCandidate ReceiverDeclaredType [a.go#Item.Name]",
+                "35 Cart.Run>err.Error Unresolved - []",
+                "36 Cart.Run>c.items::Name Unresolved - []",
+                "37 Cart.Run>c.count::Name Unresolved - []",
+                "38 Cart.Run>c.missing::Name Ambiguous NameOnly [a.go#Item.Name]",
+                "40 Cart.Run>local.Root UniqueCandidate ReceiverDeclaredType [a.go#Cart.Root]",
+            ]
+        );
+        let fields: Vec<String> = crate::index::extract::testing::fields(Language::Go, source)
+            .into_iter()
+            .filter(|row| row.starts_with("Field"))
+            .collect();
+        assert_eq!(
+            fields,
+            [
+                "Field name Item 4-4 not_exported",
+                "Field parent Cart 12-12 not_exported",
+                "Field first Cart 13-13 not_exported",
+                "Field items Cart 14-14 not_exported",
+                "Field count Cart 15-15 not_exported",
             ]
         );
     }

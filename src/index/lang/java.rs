@@ -190,6 +190,8 @@ impl LanguageSpec for Java {
                     .child_by_field_name("value")
                     .map(|value| value.start_byte()),
                 is_parameter: false,
+                element: false,
+                result_index: None,
             });
         }
     }

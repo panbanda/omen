@@ -146,6 +146,45 @@ pub struct ReferenceFacts {
     /// The byte range of the receiver expression. When the receiver is a
     /// call, the call with this range gives the type of the receiver.
     pub receiver: Option<(usize, usize)>,
+    /// The names of the receiver expression when it is a chain of member
+    /// accesses with two or more names, as `c.parent` is.
+    pub receiver_path: Option<Vec<String>>,
+}
+
+/// The names of a chain of member accesses: `a.b.c` gives `a`, `b`, `c`.
+/// `None` means that the text is a different expression.
+pub fn name_path(text: &str) -> Option<Vec<String>> {
+    let text = text.trim().replace("?.", ".").replace("->", ".");
+    let is_name = |name: &str| {
+        let mut characters = name.chars();
+        characters
+            .next()
+            .is_some_and(|first| first.is_alphabetic() || "_$@".contains(first))
+            && characters.all(|character| character.is_alphanumeric() || character == '_')
+    };
+    let names: Vec<&str> = text.split('.').collect();
+    names
+        .iter()
+        .all(|name| is_name(name))
+        .then(|| names.into_iter().map(str::to_string).collect())
+}
+
+/// The names of the chain of member accesses that starts at the byte `start`
+/// and is the full value of a statement. A call, an operator, or an index
+/// after the chain gives `None`.
+fn value_path(source: &[u8], start: usize) -> Option<Vec<String>> {
+    let rest = source.get(start..)?;
+    let length = rest
+        .iter()
+        .position(|byte| !(byte.is_ascii_alphanumeric() || b"_$@.".contains(byte)))
+        .unwrap_or(rest.len());
+    let after = rest[length..]
+        .iter()
+        .find(|byte| !matches!(byte, b' ' | b'\t'));
+    if !after.is_none_or(|byte| b"\n\r;,){}".contains(byte)) {
+        return None;
+    }
+    name_path(std::str::from_utf8(&rest[..length]).ok()?)
 }
 
 /// The declared types of the parameters in a parameter list, without white
@@ -171,6 +210,8 @@ pub struct Local {
     pub name: LocalName,
     /// The position in `FileSymbols::symbols` of the function that binds the name.
     pub owner: Option<usize>,
+    /// The names of the first value when it is a chain of member accesses.
+    pub value_path: Option<Vec<String>>,
 }
 
 /// One symbol and its link facts.
@@ -561,6 +602,12 @@ impl<'tree> Extractor<'_, 'tree> {
         if !self.spec.refine(&mut draft, &context) || draft.name.is_empty() {
             return None;
         }
+        // The declared type of a field is in the place of a result type.
+        if draft.kind == SymbolKind::Field && draft.return_type.is_none() {
+            draft.return_type = node
+                .child_by_field_name("type")
+                .map(|declared| context.text(declared));
+        }
         let exported = self.spec.exported(&draft, &context);
         Some((draft, exported))
     }
@@ -614,11 +661,19 @@ impl<'tree> Extractor<'_, 'tree> {
             }
         }
         let definition = rule.and_then(|rule| self.draft(node, &rule));
-        if definition.is_none() && rule.is_some_and(|rule| rule.name == NameRule::Hook) {
+        let function_value =
+            rule.is_some_and(|rule| rule.name == NameRule::Hook && rule.kind != SymbolKind::Field);
+        if definition.is_none() && function_value {
             self.closure_depths.push(depth);
         }
         let owner = definition.as_ref().map(|_| node.id());
         let scope = match definition {
+            // A field opens no scope. A function value in the first value of
+            // a field is in the scope of the type.
+            Some((draft, exported)) if draft.kind == SymbolKind::Field => {
+                self.found.push((draft, exported));
+                None
+            }
             Some((draft, exported)) => {
                 let mut path = draft.container_path.clone();
                 path.push(draft.name.clone());
@@ -803,6 +858,9 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         .locals
         .into_iter()
         .map(|(name, owner)| Local {
+            value_path: name
+                .value_start
+                .and_then(|start| value_path(&parsed.source, start)),
             name,
             owner: position_of(owner),
         })
@@ -880,6 +938,11 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             owner,
             arguments: call.arguments,
             receiver,
+            receiver_path: receiver
+                .and_then(|(start, end)| parsed.source.get(start..end))
+                .and_then(|text| std::str::from_utf8(text).ok())
+                .and_then(name_path)
+                .filter(|path| path.len() > 1),
         });
     }
     FileSymbols {
@@ -982,7 +1045,19 @@ pub(crate) mod testing {
         let parsed = Parser::new()
             .parse(source.as_bytes(), language, Path::new(file))
             .unwrap();
-        extract_symbols(&parsed, file)
+        let mut symbols = extract_symbols(&parsed, file);
+        symbols.retain(|symbol| symbol.kind != SymbolKind::Field);
+        symbols
+    }
+
+    /// The rows of the fields. The other helpers give the symbols that are not fields.
+    pub(crate) fn fields(language: Language, source: &str) -> Vec<String> {
+        let parsed = Parser::new()
+            .parse(source.as_bytes(), language, Path::new("file"))
+            .unwrap();
+        let mut symbols = extract_symbols(&parsed, "file");
+        symbols.retain(|symbol| symbol.kind == SymbolKind::Field);
+        format_rows(&symbols)
     }
 
     pub(crate) fn symbols(language: Language, source: &str) -> Vec<Symbol> {
@@ -1011,7 +1086,11 @@ pub(crate) mod testing {
         link_files(&mut files);
         files
             .into_iter()
-            .map(|file| (file.file, format_rows(&file.symbols)))
+            .map(|mut file| {
+                file.symbols
+                    .retain(|symbol| symbol.kind != SymbolKind::Field);
+                (file.file, format_rows(&file.symbols))
+            })
             .collect()
     }
 

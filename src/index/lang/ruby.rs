@@ -280,6 +280,8 @@ impl LanguageSpec for Ruby {
                     type_name: None,
                     value_start: None,
                     is_parameter: true,
+                    element: false,
+                    result_index: None,
                 });
             }
         }

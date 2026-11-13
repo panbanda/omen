@@ -296,6 +296,8 @@ impl CallSyntax {
                     type_name: type_name.clone(),
                     value_start,
                     is_parameter,
+                    element: false,
+                    result_index: None,
                 });
             }
         }
@@ -364,6 +366,146 @@ pub struct LocalName {
     /// The start byte of the expression that gives the first value.
     pub value_start: Option<usize>,
     pub is_parameter: bool,
+    /// The name is one element of the value, as a loop variable is.
+    pub element: bool,
+    /// The position of the name in a list of names that take the results of
+    /// one call, as `a, b := f()` has.
+    pub result_index: Option<usize>,
+}
+
+/// The type without the marks that make a value optional: a `:` before a
+/// type annotation, PHP `?T`, C# `T?`, and a union with `null`, `undefined`,
+/// or `None`.
+pub fn required_type(text: &str) -> &str {
+    let text = text.trim().trim_start_matches(':').trim();
+    let text = text.strip_prefix('?').unwrap_or(text);
+    let text = text.strip_suffix('?').unwrap_or(text);
+    let mut parts = text
+        .split('|')
+        .map(str::trim)
+        .filter(|part| !["null", "undefined", "None"].contains(part));
+    match (parts.next(), parts.next()) {
+        (Some(only), None) => only,
+        _ => text,
+    }
+}
+
+/// Splits a list at each comma that is not in brackets.
+fn split_list(list: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut depth, mut start) = (0usize, 0usize);
+    for (position, character) in list.char_indices() {
+        match character {
+            '(' | '[' | '{' | '<' => depth += 1,
+            ')' | ']' | '}' | '>' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(list[start..position].trim());
+                start = position + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(list[start..].trim());
+    parts
+}
+
+/// The element type of a slice, an array, or a list: Go `[]T` and `[4]T`,
+/// Rust `[T]` and `Vec<T>`, `T[]`, and the list types of the standard
+/// libraries. `None` for a different type.
+pub fn element_type(text: &str) -> Option<&str> {
+    const LISTS: &[&str] = &[
+        "Array",
+        "ReadonlyArray",
+        "List",
+        "ArrayList",
+        "LinkedList",
+        "IList",
+        "IReadOnlyList",
+        "IEnumerable",
+        "Iterable",
+        "Collection",
+        "Vec",
+        "VecDeque",
+        "vector",
+        "std::vector",
+        "list",
+        "Sequence",
+    ];
+    let text = text.trim();
+    if let Some(variadic) = text.strip_prefix("...") {
+        return Some(variadic.trim());
+    }
+    // A Rust reference can have a lifetime and `mut` before the slice.
+    let mut bare = text.trim_start_matches('&').trim_start();
+    if bare.starts_with('\'') {
+        bare = bare
+            .split_once(' ')
+            .map_or(bare, |(_, rest)| rest.trim_start());
+    }
+    let bare = bare.strip_prefix("mut ").map_or(bare, str::trim_start);
+    if let Some(inside) = bare.strip_prefix('[') {
+        let mut depth = 1usize;
+        let close = inside.char_indices().find_map(|(position, character)| {
+            match character {
+                '[' => depth += 1,
+                ']' => depth -= 1,
+                _ => {}
+            }
+            (depth == 0).then_some(position)
+        })?;
+        let after = inside[close + 1..].trim();
+        return if after.is_empty() {
+            inside[..close].split(';').next().map(str::trim)
+        } else {
+            Some(after)
+        };
+    }
+    if let Some(items) = text.strip_suffix("[]") {
+        return Some(items.trim());
+    }
+    for (open, close) in [('<', '>'), ('[', ']')] {
+        let Some((name, arguments)) = text.split_once(open) else {
+            continue;
+        };
+        if !LISTS.contains(&name.trim()) {
+            continue;
+        }
+        let arguments = arguments.trim().strip_suffix(close)?;
+        return match split_list(arguments).as_slice() {
+            [only] => Some(*only),
+            _ => None,
+        };
+    }
+    None
+}
+
+/// One result of a declared result. A list in parentheses has two or more
+/// results, and `index` selects one of them. Without an index, such a list
+/// gives `None`. A Go result can have a name before its type.
+pub fn one_result(text: &str, index: Option<usize>) -> Option<&str> {
+    let text = text.trim();
+    let list = text
+        .strip_prefix('(')
+        .and_then(|rest| rest.strip_suffix(')'));
+    let Some(list) = list else {
+        return index.is_none().then_some(text);
+    };
+    let parts = split_list(list);
+    let part = match (index, parts.as_slice()) {
+        (Some(index), parts) => *parts.get(index)?,
+        (None, [only]) => *only,
+        (None, _) => return None,
+    };
+    let is_name = |name: &str| {
+        name.chars()
+            .all(|character| character.is_alphanumeric() || character == '_')
+    };
+    match part.split_once(' ') {
+        Some((name, declared)) if is_name(name) && !declared.trim().is_empty() => {
+            Some(declared.trim())
+        }
+        _ => Some(part),
+    }
 }
 
 /// Splits the text of a type into its qualifier and its name. The function

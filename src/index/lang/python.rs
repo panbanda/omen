@@ -157,6 +157,8 @@ impl LanguageSpec for Python {
                     type_name: type_name.map(|type_name| context.text(type_name)),
                     value_start: None,
                     is_parameter: true,
+                    element: false,
+                    result_index: None,
                 });
             }
         }
