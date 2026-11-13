@@ -290,7 +290,9 @@ fn ledger_never_grows() {
         std::env::var_os("OMEN_QUALITY_BASE_DIR").expect("set OMEN_QUALITY_BASE_DIR"),
     );
     if !base.join(LEDGER_FILE).is_file() {
-        // The base branch did not make these checks. Thus each entry is new.
+        // The base branch has no ledger, thus it did not make these checks and
+        // this test cannot know which of them the base branch passed. The pull
+        // request that adds the ledger must show the paired benchmark result.
         return;
     }
     let mut base_ids = BTreeSet::new();

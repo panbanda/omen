@@ -52,7 +52,8 @@ fails in these conditions:
 
 - A fact is incorrect and the ledger does not list it.
 - The ledger lists a fact that is now correct. Remove the entry.
-- The ledger lists a fact that has no label.
+- The ledger lists a fact that the test does not check. An entry for a fact
+  without a label is correct only when `closed_world` makes that fact a failure.
 
 To write the ledger again from the current results, run this command:
 

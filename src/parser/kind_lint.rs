@@ -26,6 +26,26 @@ const LANGUAGES: [Language; 14] = [
     Language::Bash,
 ];
 
+/// A new `Language` variant does not compile here until `LANGUAGES` has it.
+fn listed(language: Language) -> bool {
+    match language {
+        Language::Go
+        | Language::Rust
+        | Language::Python
+        | Language::TypeScript
+        | Language::JavaScript
+        | Language::Tsx
+        | Language::Jsx
+        | Language::Java
+        | Language::C
+        | Language::Cpp
+        | Language::CSharp
+        | Language::Ruby
+        | Language::Php
+        | Language::Bash => LANGUAGES.contains(&language),
+    }
+}
+
 /// Kinds that the grammars do not have, as `table/language/kind`. Remove an
 /// entry in the change that corrects the table. Do not add an entry.
 const KNOWN_UNKNOWN_KINDS: &[&str] = &[
@@ -94,6 +114,7 @@ fn tables(language: Language) -> Vec<(&'static str, Vec<&'static str>)> {
 fn unknown_kinds() -> BTreeSet<String> {
     let mut unknown = BTreeSet::new();
     for language in LANGUAGES {
+        assert!(listed(language));
         let grammar = get_tree_sitter_language(language).unwrap();
         for (table, kinds) in tables(language) {
             for kind in kinds {
