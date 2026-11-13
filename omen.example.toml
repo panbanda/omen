@@ -92,6 +92,16 @@ churn_days = 30
 # Fail CI if score is below this threshold (optional)
 # fail_under = 70.0
 
+# Gate mode of each gated command: "off", "warn", or "error".
+# "off" gives the report only. "warn" also writes a warning to stderr.
+# "error" also exits with status 2 on a violation.
+# The `--gate` flag overrides the value.
+[gate]
+complexity = "off"
+score = "off"
+stubs = "off"
+mutation = "off"
+
 # Feature flag detection
 [feature_flags]
 # Days before a flag is considered stale
