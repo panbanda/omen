@@ -1572,7 +1572,16 @@ fn run_search(
 ) -> omen::core::Result<()> {
     use omen::semantic::{SearchConfig, SemanticSearch};
 
-    let search_config = SearchConfig::default();
+    // The search applies the threshold of its configuration before the
+    // `--min-score` filter. Thus give it the same value, or a `--min-score`
+    // below the default has no effect.
+    let search_config = match &subcommand {
+        SearchSubcommand::Query(args) => SearchConfig {
+            min_score: args.min_score,
+            ..SearchConfig::default()
+        },
+        SearchSubcommand::Index(_) => SearchConfig::default(),
+    };
     let search = SemanticSearch::new(&search_config, path)?;
 
     match subcommand {
@@ -1993,7 +2002,12 @@ fn run_outline(
         } else {
             file_path.clone()
         };
-        let file_outline = outline_file(&resolved)?;
+        let mut file_outline = outline_file(&resolved)?;
+        // Give the path from the repository root, as the outline of a
+        // repository does.
+        if let Ok(relative) = Path::new(&file_outline.file).strip_prefix(path) {
+            file_outline.file = relative.to_string_lossy().replace('\\', "/");
+        }
         OutlineResult {
             files: vec![file_outline],
         }
