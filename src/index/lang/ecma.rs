@@ -7,6 +7,21 @@ use crate::index::extract::{Context, DefinitionRule, Draft, LanguageSpec, NameRu
 use crate::index::model::{Exported, Span, SymbolKind};
 use crate::parser::function_binding_name;
 
+use crate::index::model::{ImportBinding, ImportKind};
+
+const IMPORT_STATEMENT: &str = "import_statement";
+const IMPORT_CLAUSE: &str = "import_clause";
+const NAMESPACE_IMPORT: &str = "namespace_import";
+const NAMED_IMPORTS: &str = "named_imports";
+const IMPORT_SPECIFIER: &str = "import_specifier";
+const NAMESPACE_EXPORT: &str = "namespace_export";
+const CALL_EXPRESSION: &str = "call_expression";
+const OBJECT_PATTERN: &str = "object_pattern";
+const SHORTHAND_PATTERN: &str = "shorthand_property_identifier_pattern";
+const PAIR_PATTERN: &str = "pair_pattern";
+const STRING: &str = "string";
+const IMPORT_REQUIRE_CLAUSE: &str = "import_require_clause";
+
 pub struct Ecma {
     typescript: bool,
 }
@@ -391,6 +406,177 @@ impl Ecma {
 }
 
 impl LanguageSpec for Ecma {
+    fn import_kinds(&self) -> Vec<&'static str> {
+        vec![IMPORT_STATEMENT, EXPORT_STATEMENT, CALL_EXPRESSION]
+    }
+
+    fn import_hook_kinds(&self) -> Vec<&'static str> {
+        let mut kinds = vec![
+            IMPORT_CLAUSE,
+            NAMESPACE_IMPORT,
+            NAMED_IMPORTS,
+            IMPORT_SPECIFIER,
+            NAMESPACE_EXPORT,
+            OBJECT_PATTERN,
+            SHORTHAND_PATTERN,
+            PAIR_PATTERN,
+            STRING,
+        ];
+        if self.typescript {
+            kinds.push(IMPORT_REQUIRE_CLAUSE);
+        }
+        kinds
+    }
+
+    /// The imported name `default` is the default export, and `*` is the module.
+    /// `require('path')` with a literal path is an import. An `export` statement
+    /// with a source is a re-export.
+    fn imports(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<ImportBinding>) {
+        let text = |node: Node<'_>| context.text(node);
+        let literal = |string: Node<'_>| {
+            text(string)
+                .trim_matches(|quote| quote == '\'' || quote == '"' || quote == '`')
+                .to_string()
+        };
+        // The name and the alias of an import specifier or an export specifier.
+        let specifier = |specifier: Node<'_>| -> Option<(String, String)> {
+            let name = text(specifier.child_by_field_name("name")?);
+            let alias = specifier.child_by_field_name("alias").map(text);
+            Some((name.clone(), alias.unwrap_or(name)))
+        };
+        let module = |local: Node<'_>, path: &str, kind: ImportKind| {
+            context.import(node, path, kind, Some("*".to_string()), Some(text(local)))
+        };
+        match node.kind() {
+            IMPORT_STATEMENT => {
+                let Some(source) = node.child_by_field_name("source") else {
+                    // `import name = require('path')`
+                    if let Some(clause) = child_of_kind(node, IMPORT_REQUIRE_CLAUSE) {
+                        if let (Some(local), Some(source)) =
+                            (clause.named_child(0), clause.child_by_field_name("source"))
+                        {
+                            out.push(module(local, &literal(source), ImportKind::Module));
+                        }
+                    }
+                    return;
+                };
+                let path = literal(source);
+                let Some(clause) = child_of_kind(node, IMPORT_CLAUSE) else {
+                    out.push(context.import(node, path, ImportKind::Load, None, None));
+                    return;
+                };
+                let mut cursor = clause.walk();
+                for part in clause.named_children(&mut cursor) {
+                    match part.kind() {
+                        IDENTIFIER => out.push(context.import(
+                            node,
+                            path.as_str(),
+                            ImportKind::Named,
+                            Some("default".to_string()),
+                            Some(text(part)),
+                        )),
+                        NAMESPACE_IMPORT => {
+                            if let Some(local) = part.named_child(0) {
+                                out.push(module(local, &path, ImportKind::Module));
+                            }
+                        }
+                        NAMED_IMPORTS => {
+                            let mut cursor = part.walk();
+                            for (name, local) in
+                                part.named_children(&mut cursor).filter_map(specifier)
+                            {
+                                out.push(context.import(
+                                    node,
+                                    path.as_str(),
+                                    ImportKind::Named,
+                                    Some(name),
+                                    Some(local),
+                                ));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            EXPORT_STATEMENT => {
+                let Some(source) = node.child_by_field_name("source") else {
+                    return;
+                };
+                let path = literal(source);
+                if let Some(clause) = child_of_kind(node, EXPORT_CLAUSE) {
+                    let mut cursor = clause.walk();
+                    for (name, local) in clause.named_children(&mut cursor).filter_map(specifier) {
+                        out.push(context.import(
+                            node,
+                            path.as_str(),
+                            ImportKind::ReExportNamed,
+                            Some(name),
+                            Some(local),
+                        ));
+                    }
+                } else if let Some(local) =
+                    child_of_kind(node, NAMESPACE_EXPORT).and_then(|export| export.named_child(0))
+                {
+                    out.push(module(local, &path, ImportKind::ReExportNamed));
+                } else {
+                    out.push(context.import(node, path, ImportKind::ReExportWildcard, None, None));
+                }
+            }
+            CALL_EXPRESSION => {
+                let is_require = node
+                    .child_by_field_name("function")
+                    .is_some_and(|function| {
+                        function.kind() == IDENTIFIER && text(function) == "require"
+                    });
+                let argument = node
+                    .child_by_field_name("arguments")
+                    .filter(|arguments| arguments.named_child_count() == 1)
+                    .and_then(|arguments| arguments.named_child(0))
+                    .filter(|argument| argument.kind() == STRING);
+                let (true, Some(argument)) = (is_require, argument) else {
+                    return;
+                };
+                let path = literal(argument);
+                let pattern = node
+                    .parent()
+                    .filter(|parent| {
+                        parent.kind() == VARIABLE_DECLARATOR && has_field(*parent, "value", node)
+                    })
+                    .and_then(|declarator| declarator.child_by_field_name("name"));
+                match pattern {
+                    Some(local) if local.kind() == IDENTIFIER => {
+                        out.push(module(local, &path, ImportKind::Module));
+                    }
+                    Some(pattern) if pattern.kind() == OBJECT_PATTERN => {
+                        let mut cursor = pattern.walk();
+                        for member in pattern.named_children(&mut cursor) {
+                            let names = match member.kind() {
+                                SHORTHAND_PATTERN => Some((text(member), text(member))),
+                                PAIR_PATTERN => member
+                                    .child_by_field_name("key")
+                                    .zip(member.child_by_field_name("value"))
+                                    .filter(|(_, value)| value.kind() == IDENTIFIER)
+                                    .map(|(key, value)| (text(key), text(value))),
+                                _ => None,
+                            };
+                            if let Some((name, local)) = names {
+                                out.push(context.import(
+                                    node,
+                                    path.as_str(),
+                                    ImportKind::Named,
+                                    Some(name),
+                                    Some(local),
+                                ));
+                            }
+                        }
+                    }
+                    _ => out.push(context.import(node, path, ImportKind::Load, None, None)),
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn definitions(&self) -> Vec<DefinitionRule> {
         let mut definitions = COMMON_DEFINITIONS.to_vec();
         if self.typescript {
@@ -531,6 +717,14 @@ impl LanguageSpec for Ecma {
             },
         }
     }
+}
+
+fn child_of_kind<'tree>(parent: Node<'tree>, kind: &str) -> Option<Node<'tree>> {
+    let mut cursor = parent.walk();
+    let found = parent
+        .children(&mut cursor)
+        .find(|child| child.kind() == kind);
+    found
 }
 
 #[cfg(test)]
@@ -703,5 +897,86 @@ mod tests {
             ]
         );
         assert_eq!(rows(Language::Tsx, source), rows(Language::Jsx, source));
+    }
+
+    #[test]
+    fn test_typescript_imports() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            (
+                "src/main.ts",
+                "import { basename } from 'node:path';\nimport * as os from 'node:os';\nimport type { Shape } from './shapes';\nimport { twice as double, helper } from './util';\nimport fallback, { triple } from './util';\nimport './side';\nimport { onlyHere, triple as three } from './barrel';\nimport { deep } from './lib';\nimport old = require('./util');\nimport { gone } from './missing';\nimport { out } from '../../outside';\nimport { js } from './compiled.js';\n",
+            ),
+            ("src/barrel.ts", "export { triple } from './util';\nexport * from './other';\nexport * as tools from './util';\nexport { triple as local };\n"),
+            ("src/other.ts", "export function onlyHere(): number {\n  return 3;\n}\nexport * from './barrel';\n"),
+            ("src/util.ts", "export function twice() {}\nexport function helper() {}\nexport const triple = () => 3;\nexport default function fallback() {}\n"),
+            ("src/shapes.ts", "export interface Shape {}\n"),
+            ("src/side.ts", ""),
+            ("src/lib/index.ts", "export function deep() {}\n"),
+            ("src/compiled.ts", "export function js() {}\n"),
+        ];
+        assert_eq!(
+            rows(&files, "src/main.ts"),
+            [
+                "1 Named node:path basename->basename external",
+                "2 Module node:os *->os external",
+                "3 Named ./shapes Shape->Shape src/shapes.ts [src/shapes.ts#Shape]",
+                "4 Named ./util twice->double src/util.ts [src/util.ts#twice]",
+                "4 Named ./util helper->helper src/util.ts [src/util.ts#helper]",
+                "5 Named ./util default->fallback src/util.ts",
+                "5 Named ./util triple->triple src/util.ts [src/util.ts#triple]",
+                "6 Load ./side -->- src/side.ts",
+                "7 Named ./barrel onlyHere->onlyHere src/barrel.ts [src/other.ts#onlyHere]",
+                "7 Named ./barrel triple->three src/barrel.ts [src/util.ts#triple]",
+                "8 Named ./lib deep->deep src/lib/index.ts [src/lib/index.ts#deep]",
+                "9 Module ./util *->old src/util.ts",
+                "10 Named ./missing gone->gone unresolved",
+                "11 Named ../../outside out->out unresolved",
+                "12 Named ./compiled.js js->js src/compiled.ts [src/compiled.ts#js]",
+            ]
+        );
+        assert_eq!(
+            rows(&files, "src/barrel.ts"),
+            [
+                "1 ReExportNamed ./util triple->triple src/util.ts [src/util.ts#triple]",
+                "2 ReExportWildcard ./other -->- src/other.ts",
+                "3 ReExportNamed ./util *->tools src/util.ts",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_javascript_require_and_extensions() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            (
+                "legacy.cjs",
+                "const { basename, join: glue } = require('node:path');\nconst other = require('./other.js');\nrequire('./side');\nconst name = require(dynamic);\nconst part = require('./other.js').part;\n",
+            ),
+            ("main.js", "import legacy from './legacy.cjs';\nimport { a } from './both';\nimport App from './components';\n"),
+            ("other.js", "export function part() {}\n"),
+            ("side.js", ""),
+            ("both.js", ""),
+            ("both.jsx", ""),
+            ("components.jsx", "export default function App() {}\n"),
+        ];
+        assert_eq!(
+            rows(&files, "legacy.cjs"),
+            [
+                "1 Named node:path basename->basename external",
+                "1 Named node:path join->glue external",
+                "2 Module ./other.js *->other other.js",
+                "3 Load ./side -->- side.js",
+                "5 Load ./other.js -->- other.js",
+            ]
+        );
+        assert_eq!(
+            rows(&files, "main.js"),
+            [
+                "1 Named ./legacy.cjs default->legacy legacy.cjs",
+                "2 Named ./both a->a ambiguous(both.js,both.jsx)",
+                "3 Named ./components default->App components.jsx",
+            ]
+        );
     }
 }
