@@ -194,7 +194,7 @@ These changes apply to the CLI and to the MCP server.
 | `coupled_classes` of `cohesion` | The sequence was different in each run. | Sorted by name. |
 | `groups` and `clones` of `clones`, and each `group_id` | The sequence and the identifiers were different in each run. | The sequence of the first fragment of each group. |
 | `entropy` of `changes` | The last digit was different in some runs. | The same in each run. |
-| `file` of `outline --file` | An absolute path. | The path from the repository root, as without `--file`. |
+| `file` of `outline --file` | An absolute path. | The path from the repository root, as without `--file`. Omen makes the two paths canonical before it compares them. A file out of the repository has its canonical absolute path. |
 | `search query --min-score` below 0.3 | No effect, because 0.3 always applied. | The value applies. |
 
 ### A time window that is not valid

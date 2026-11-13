@@ -2002,7 +2002,7 @@ fn run_outline(
     args: &OutlineArgs,
     format: Format,
 ) -> omen::core::Result<()> {
-    use omen::analyzers::outline::{outline_file, Analyzer as OutlineAnalyzer, OutlineResult};
+    use omen::analyzers::outline::{outline_file_in, Analyzer as OutlineAnalyzer, OutlineResult};
 
     let result = if let Some(ref file_path) = args.file {
         // Single-file mode: resolve relative paths against the repo root (-p),
@@ -2013,12 +2013,9 @@ fn run_outline(
         } else {
             file_path.clone()
         };
-        let mut file_outline = outline_file(&resolved)?;
         // Give the path from the repository root, as the outline of a
         // repository does.
-        if let Ok(relative) = Path::new(&file_outline.file).strip_prefix(path) {
-            file_outline.file = relative.to_string_lossy().replace('\\', "/");
-        }
+        let file_outline = outline_file_in(path, &resolved)?;
         OutlineResult {
             files: vec![file_outline],
         }
