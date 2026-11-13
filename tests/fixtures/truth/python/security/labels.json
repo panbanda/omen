@@ -69,9 +69,9 @@
     {"label": "tls_verification_disabled.same_name_symbol", "category": "tls_verification_disabled", "scenario": "same_name_symbol", "file": "decoys.py", "line": 16, "flagged": false},
     {"label": "tls_verification_disabled.in_test", "category": "tls_verification_disabled", "scenario": "in_test", "file": "tests/test_sinks.py", "line": 15, "in_test": true},
 
-    {"label": "hardcoded_credential.real_call", "category": "hardcoded_credential", "scenario": "real_call", "file": "sinks.py", "line": 78, "basis": "builtin"},
-    {"label": "hardcoded_credential.safe_variant", "category": "hardcoded_credential", "scenario": "safe_variant", "file": "sinks.py", "line": 79, "flagged": false},
-    {"label": "hardcoded_credential.name_in_comment", "category": "hardcoded_credential", "scenario": "name_in_comment", "file": "sinks.py", "line": 80, "flagged": false},
+    {"label": "hardcoded_credential.real_call", "category": "hardcoded_credential", "scenario": "real_call", "file": "sinks.py", "line": 79, "basis": "builtin"},
+    {"label": "hardcoded_credential.safe_variant", "category": "hardcoded_credential", "scenario": "safe_variant", "file": "sinks.py", "line": 80, "flagged": false},
+    {"label": "hardcoded_credential.name_in_comment", "category": "hardcoded_credential", "scenario": "name_in_comment", "file": "sinks.py", "line": 81, "flagged": false},
     {"label": "hardcoded_credential.in_test", "category": "hardcoded_credential", "scenario": "in_test", "file": "tests/test_sinks.py", "line": 16, "basis": "builtin", "in_test": true}
   ]
 }

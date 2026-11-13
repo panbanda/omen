@@ -20,7 +20,8 @@ use std::path::{Path, PathBuf};
 use omen::benchmark::truth::{
     bless, check_ledger, compare, coverage_gaps, label_assertion_ids, ledger_growth,
     render_sink_table, render_table, summarize, summarize_sinks, Assertion, ImportedName, Kind,
-    Labels, LedgerEntry, Location, Observed, ObservedCall, ObservedImport, ObservedSymbol,
+    Labels, LedgerEntry, Location, Observed, ObservedCall, ObservedImport, ObservedSink,
+    ObservedSymbol,
 };
 use omen::core::Language;
 use omen::index::extract::{extract_file, link_files, FileSymbols};
@@ -30,6 +31,7 @@ use omen::index::model::{
     SymbolKind,
 };
 use omen::index::resolve::resolve_references;
+use omen::index::security::find_sinks;
 use omen::parser::Parser;
 
 const LABELS_FILE: &str = "labels.json";
@@ -267,6 +269,21 @@ fn observed_calls(files: &[FileSymbols]) -> Vec<ObservedCall> {
     calls
 }
 
+/// The sinks of the security matcher. A label names the line on which a sink starts.
+fn observed_sinks(trees: &[omen::parser::ParseResult], files: &[FileSymbols]) -> Vec<ObservedSink> {
+    find_sinks(trees, files)
+        .into_iter()
+        .map(|sink| ObservedSink {
+            file: sink.file,
+            line: sink.range.start_line,
+            category: sink.category.name().to_string(),
+            basis: sink.basis.name().to_string(),
+            in_test: sink.flags.in_test,
+            constant_argument: sink.flags.constant_argument,
+        })
+        .collect()
+}
+
 /// Convert the facts that omen reports for one case into the label model.
 ///
 /// The symbols, the imports, and the calls come from the shared index.
@@ -278,10 +295,12 @@ fn observe(dir: &Path) -> Observed {
     source_files(dir, &mut files);
     let mut imports = Vec::new();
     let mut index_files = Vec::new();
+    let mut trees = Vec::new();
     for path in &files {
         let file = relative(dir, path);
         let parsed = Parser::new().parse_file(path).expect("parse");
         index_files.push(extract_file(&parsed, &file));
+        trees.push(parsed);
     }
 
     link_files(&mut index_files);
@@ -290,6 +309,7 @@ fn observe(dir: &Path) -> Observed {
     resolve_imports(&mut index_files, &manifests);
     resolve_references(&mut index_files);
     let calls = observed_calls(&index_files);
+    let sinks = observed_sinks(&trees, &index_files);
     let mut symbols = Vec::new();
     for index_file in index_files {
         imports.extend(observed_imports(&index_file.imports));
@@ -306,8 +326,7 @@ fn observe(dir: &Path) -> Observed {
         symbols,
         calls,
         imports,
-        // The sink matcher does not exist yet. Omen reports no sink.
-        sinks: Vec::new(),
+        sinks,
     }
 }
 
