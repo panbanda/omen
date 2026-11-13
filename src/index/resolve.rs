@@ -395,8 +395,29 @@ impl<'a> Resolver<'a> {
             .collect()
     }
 
-    /// The constructors of a type. A type without a constructor is its own constructor.
+    /// The constructors of a type or of its nearest parent type that has one.
+    /// A type without a constructor is its own constructor.
     fn constructors(&self, owner: Id, arity: usize) -> Vec<Id> {
+        let mut seen = BTreeSet::new();
+        let mut level = vec![owner];
+        while !level.is_empty() {
+            let found: Vec<Id> = level
+                .iter()
+                .flat_map(|owner| self.own_constructors(*owner, arity))
+                .collect();
+            if !found.is_empty() {
+                return found;
+            }
+            level = level
+                .iter()
+                .flat_map(|owner| self.parents(*owner))
+                .filter(|parent| seen.insert(*parent))
+                .collect();
+        }
+        vec![owner]
+    }
+
+    fn own_constructors(&self, owner: Id, arity: usize) -> Vec<Id> {
         let type_symbol = self.symbol(owner);
         let found: Vec<Id> = (0..self.files[owner.0].symbols.len())
             .map(|position| (owner.0, position))
@@ -410,12 +431,7 @@ impl<'a> Resolver<'a> {
                     && member.container.as_deref() == Some(type_symbol.name.as_str())
             })
             .collect();
-        let found = self.preferred(found, arity);
-        if found.is_empty() {
-            vec![owner]
-        } else {
-            found
-        }
+        self.preferred(found, arity)
     }
 
     /// The definitions that contain a definition, from the nearest one.
@@ -682,7 +698,10 @@ impl<'a> Resolver<'a> {
         let name = reference.name.as_str();
         let arity = reference.arity;
         let family = self.family(file);
-        let callable = |id: &Id| is_callable(self.symbol(*id));
+        let callable = |id: &Id| {
+            let symbol = self.symbol(*id);
+            is_callable(symbol) || (family == Family::Python && is_container(symbol))
+        };
         // Java cannot call a local variable with the syntax of a function call.
         if family != Family::Java {
             let lexical: Vec<Id> = self
@@ -831,6 +850,26 @@ impl<'a> Resolver<'a> {
     }
 
     fn resolve(&self, file: usize, position: usize, depth: usize) -> Outcome {
+        let mut outcome = self.resolve_by_rules(file, position, depth);
+        // A Python call of a class makes an object. It runs the constructor.
+        if self.family(file) == Family::Python {
+            let arity = self.files[file].references[position].arity;
+            outcome.candidates = outcome
+                .candidates
+                .iter()
+                .flat_map(|id| {
+                    if is_container(self.symbol(*id)) {
+                        self.constructors(*id, arity)
+                    } else {
+                        vec![*id]
+                    }
+                })
+                .collect();
+        }
+        outcome
+    }
+
+    fn resolve_by_rules(&self, file: usize, position: usize, depth: usize) -> Outcome {
         let facts = &self.files[file];
         let reference = &facts.references[position];
         let chain = self.chain(file, facts.reference_facts[position].owner);
@@ -843,7 +882,7 @@ impl<'a> Resolver<'a> {
                 .flat_map(|owner| self.constructors(*owner, arity))
                 .collect();
             return Outcome::of(Basis::QualifiedPath, found)
-                .unwrap_or_else(|| Outcome::none(Status::External));
+                .unwrap_or_else(|| Outcome::none(Status::Unresolved));
         }
         match &reference.receiver {
             Some(Receiver::SelfValue) => {

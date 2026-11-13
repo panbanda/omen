@@ -14,6 +14,29 @@ const IMPORT_FROM_STATEMENT: &str = "import_from_statement";
 const ALIASED_IMPORT: &str = "aliased_import";
 const WILDCARD_IMPORT: &str = "wildcard_import";
 
+use crate::index::calls::{Call, CallSyntax, LocalName};
+
+const PARAMETERS: &str = "parameters";
+const LAMBDA_PARAMETERS: &str = "lambda_parameters";
+const TYPED_PARAMETER: &str = "typed_parameter";
+
+/// A call of `super()` is the parent type. `cls` is the type in a class method.
+const CALL_SYNTAX: CallSyntax = CallSyntax {
+    calls: &[("call", "function", "arguments")],
+    constructions: &[],
+    members: &[("attribute", "object", "attribute")],
+    paths: &[],
+    names: &[IDENTIFIER],
+    self_words: &["self", "cls"],
+    super_words: &["super"],
+    locals: &[(ASSIGNMENT, "left", "type", "right")],
+    parameters: &[
+        ("default_parameter", "name", ""),
+        ("typed_default_parameter", "name", "type"),
+    ],
+    return_type_field: "return_type",
+};
+
 pub struct Python;
 
 const FUNCTION_DEFINITION: &str = "function_definition";
@@ -88,6 +111,56 @@ fn public_names(module: Node<'_>, context: &Context<'_, '_>) -> PublicNames {
 }
 
 impl LanguageSpec for Python {
+    fn call_syntax(&self) -> CallSyntax {
+        CALL_SYNTAX
+    }
+
+    /// `super()` gives the parent object. It does not call a definition.
+    fn call<'tree>(&self, node: Node<'tree>, context: &Context<'_, 'tree>) -> Option<Call<'tree>> {
+        let call = self.call_syntax().call(node, context)?;
+        (context.text(call.callee.name_node) != "super").then_some(call)
+    }
+
+    fn local_kinds(&self) -> Vec<&'static str> {
+        let mut kinds = self.call_syntax().local_kinds();
+        kinds.extend([PARAMETERS, LAMBDA_PARAMETERS]);
+        kinds
+    }
+
+    fn call_hook_kinds(&self) -> Vec<&'static str> {
+        vec![PARAMETERS, LAMBDA_PARAMETERS, TYPED_PARAMETER]
+    }
+
+    /// A parameter without a default value is a name or a typed name directly
+    /// in the parameter list. It has no node with a `name` field.
+    fn locals(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
+        if ![PARAMETERS, LAMBDA_PARAMETERS].contains(&node.kind()) {
+            self.call_syntax().locals(node, context, out);
+            return;
+        }
+        let mut cursor = node.walk();
+        for parameter in node.named_children(&mut cursor) {
+            let (name, type_name) = match parameter.kind() {
+                IDENTIFIER => (Some(parameter), None),
+                TYPED_PARAMETER => (
+                    parameter
+                        .named_child(0)
+                        .filter(|name| name.kind() == IDENTIFIER),
+                    parameter.child_by_field_name("type"),
+                ),
+                _ => (None, None),
+            };
+            if let Some(name) = name {
+                out.push(LocalName {
+                    name: context.text(name),
+                    type_name: type_name.map(|type_name| context.text(type_name)),
+                    value_start: None,
+                    is_parameter: true,
+                });
+            }
+        }
+    }
+
     fn import_kinds(&self) -> Vec<&'static str> {
         vec![IMPORT_STATEMENT, IMPORT_FROM_STATEMENT]
     }
@@ -427,6 +500,66 @@ mod tests {
                 "1 Module ns ns->ns package(ns/a.py,ns/b.py)",
                 "2 Module twice twice->twice ambiguous(one/twice/a.py,two/twice/b.py)",
                 "3 Named . ns->local unresolved",
+            ]
+        );
+    }
+
+    const CALL_FILES: &[(&str, &str)] = &[
+        ("app/__init__.py", "from .shapes import describe\n"),
+        (
+            "app/main.py",
+            "import math\n\nimport app.other as alt\nimport app.util\nfrom app import describe\nfrom app.other import *\nfrom app.shapes import Circle, Square\nfrom app.util import twice as double\n\n\ndef local():\n    return 4\n\n\ndef run():\n    def inner():\n        return 5\n\n    total = local() + double(2) + inner() + only_here()\n    circle = Circle(1.0)\n    circle.area()\n    add = lambda n: n + 1\n    return total + add(len([]))\n\n\ndef measure(size: Square, shape, count=1):\n    return size.area() + size.label() + shape.area() + count()\n\n\ndef external():\n    seen = []\n    seen.insert(0, math.floor(2.5))\n    return app.util.twice(2) + alt.helper() + describe()\n\n\ndef main():\n    return Square.from_side(2.0) + Circle.missing() + gone()\n",
+        ),
+        ("app/other.py", "def helper():\n    return 2\n\n\ndef only_here():\n    return 3\n\n\ndef insert():\n    pass\n"),
+        (
+            "app/shapes.py",
+            "from .util import twice\n\n\nclass Shape:\n    def __init__(self, name):\n        self.name = name\n\n    def area(self):\n        raise NotImplementedError\n\n    def label(self):\n        return self.name\n\n\nclass Circle(Shape):\n    def __init__(self, radius):\n        super().__init__(\"circle\")\n\n    def area(self):\n        return self._scaled() + twice(1)\n\n    def _scaled(self):\n        return Circle(1.0)\n\n\nclass Square(Shape):\n    def area(self):\n        return 1\n\n    @classmethod\n    def from_side(cls, side):\n        return cls(side)\n\n\ndef describe():\n    return Square()\n",
+        ),
+        ("app/util.py", "def twice(value):\n    return value * 2\n"),
+    ];
+
+    #[test]
+    fn test_calls_with_names_and_imports() {
+        use crate::index::resolve::testing::rows;
+        assert_eq!(
+            rows(CALL_FILES, "app/main.py"),
+            [
+                "19 run>local UniqueCandidate SameFile [app/main.py#local]",
+                "19 run>double UniqueCandidate ImportedAlias [app/util.py#twice]",
+                "19 run>inner UniqueCandidate LexicalScope [app/main.py#run.inner]",
+                "19 run>only_here UniqueCandidate ImportedModule [app/other.py#only_here]",
+                "20 run>Circle UniqueCandidate ImportedName [app/shapes.py#Circle.__init__]",
+                "21 run>circle.area UniqueCandidate ReceiverDeclaredType [app/shapes.py#Circle.area]",
+                "23 run>add UniqueCandidate LexicalScope [app/main.py#run.add]",
+                "23 run>len Unresolved - []",
+                "27 measure>size.area UniqueCandidate ReceiverDeclaredType [app/shapes.py#Square.area]",
+                "27 measure>size.label UniqueCandidate ReceiverDeclaredType [app/shapes.py#Shape.label]",
+                "27 measure>shape.area Ambiguous NameOnly [app/shapes.py#Circle.area, app/shapes.py#Shape.area, app/shapes.py#Square.area]",
+                "27 measure>count Unresolved - []",
+                "32 external>seen.insert Unresolved - []",
+                "32 external>math.floor External - []",
+                "33 external>app.util::twice UniqueCandidate QualifiedPath [app/util.py#twice]",
+                "33 external>alt.helper UniqueCandidate ImportedModule [app/other.py#helper]",
+                "33 external>describe UniqueCandidate ImportedName [app/shapes.py#describe]",
+                "37 main>Square.from_side UniqueCandidate QualifiedPath [app/shapes.py#Square.from_side]",
+                "37 main>Circle.missing Unresolved - []",
+                "37 main>gone Unresolved - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_calls_in_classes() {
+        use crate::index::resolve::testing::rows;
+        assert_eq!(
+            rows(CALL_FILES, "app/shapes.py"),
+            [
+                "17 Circle.__init__>super.__init__ UniqueCandidate EnclosingType [app/shapes.py#Shape.__init__]",
+                "20 Circle.area>self._scaled UniqueCandidate EnclosingType [app/shapes.py#Circle._scaled]",
+                "20 Circle.area>twice UniqueCandidate ImportedName [app/util.py#twice]",
+                "23 Circle._scaled>Circle UniqueCandidate SameFile [app/shapes.py#Circle.__init__]",
+                "32 Square.from_side>cls Unresolved - []",
+                "36 describe>Square UniqueCandidate SameFile [app/shapes.py#Shape.__init__]",
             ]
         );
     }
