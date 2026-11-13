@@ -299,6 +299,8 @@ fn build_analysis(
     for (_, fm) in file_metrics.iter_mut() {
         // Populate unique authors
         fm.unique_authors = fm.author_counts.keys().cloned().collect();
+        // The sequence of the map keys is different in each run.
+        fm.unique_authors.sort();
 
         // Calculate churn score
         calculate_churn_score(fm, max_commits, max_changes);

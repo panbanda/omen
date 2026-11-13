@@ -3285,6 +3285,164 @@ fn test_graph_keeps_the_node_order_with_cycles() {
     assert_eq!(nodes, ["a.ts", "b.ts", "c.ts", "d.ts"]);
 }
 
+// ---------------------------------------------------------------------------
+// A time window that is not valid is an error, not all the history
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_churn_rejects_an_invalid_since_flag() {
+    omen()
+        .args([
+            "-p",
+            fixtures_dir(),
+            "-f",
+            "json",
+            "churn",
+            "--since",
+            "nonsense",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--since"))
+        .stderr(predicate::str::contains("\"nonsense\""));
+}
+
+#[test]
+fn test_report_generate_rejects_an_invalid_since_flag() {
+    let data = TempDir::new().unwrap();
+    omen()
+        .args([
+            "-p",
+            fixtures_dir(),
+            "report",
+            "generate",
+            "--since",
+            "nonsense",
+            "--data",
+        ])
+        .arg(data.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--since"))
+        .stderr(predicate::str::contains("\"nonsense\""));
+}
+
+#[test]
+fn test_an_invalid_configured_churn_window_is_rejected() {
+    let directory = TempDir::new().unwrap();
+    std::fs::write(directory.path().join("main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(
+        directory.path().join("omen.toml"),
+        "[churn]\nsince = \"nonsense\"\n",
+    )
+    .unwrap();
+    assert_rejects_the_configured_window(directory.path(), "churn");
+    // The check applies when omen loads the configuration, thus a command
+    // that does not read the window also rejects it.
+    assert_rejects_the_configured_window(directory.path(), "complexity");
+}
+
+fn assert_rejects_the_configured_window(repository: &std::path::Path, command: &str) {
+    omen()
+        .arg("-p")
+        .arg(repository)
+        .args(["-f", "json", command])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("churn.since"))
+        .stderr(predicate::str::contains("\"nonsense\""));
+}
+
+// ---------------------------------------------------------------------------
+// The path that `outline --file` gives
+// ---------------------------------------------------------------------------
+
+/// Makes `<temporary>/repo/main.rs` and `<temporary>/outside.rs`.
+fn outline_path_fixture() -> TempDir {
+    let directory = TempDir::new().unwrap();
+    let repository = directory.path().join("repo");
+    std::fs::create_dir(&repository).unwrap();
+    std::fs::write(repository.join("main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(directory.path().join("outside.rs"), "fn outside() {}\n").unwrap();
+    directory
+}
+
+/// Runs `outline --file` in `current_directory` and gives the `file` of the result.
+fn outlined_file(current_directory: &std::path::Path, path: &str, file: &str) -> String {
+    let output = omen()
+        .current_dir(current_directory)
+        .args(["-p", path, "-f", "json", "outline", "--file", file])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    value["files"][0]["file"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn test_outline_file_is_relative_to_a_relative_repository_path() {
+    let directory = outline_path_fixture();
+    let root = directory.path().canonicalize().unwrap();
+    let absolute = root.join("repo").join("main.rs");
+    let absolute = absolute.to_str().unwrap();
+
+    assert_eq!(outlined_file(&root, "repo", absolute), "main.rs");
+    assert_eq!(outlined_file(&root, "./repo/../repo", "main.rs"), "main.rs");
+    assert_eq!(
+        outlined_file(&root.join("repo"), ".", "./main.rs"),
+        "main.rs"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_outline_file_is_relative_through_a_symbolic_link() {
+    let directory = outline_path_fixture();
+    let root = directory.path().canonicalize().unwrap();
+    std::os::unix::fs::symlink(root.join("repo"), root.join("link")).unwrap();
+    let real = root.join("repo").join("main.rs");
+    let through_link = root.join("link").join("main.rs");
+
+    assert_eq!(
+        outlined_file(&root, "link", real.to_str().unwrap()),
+        "main.rs"
+    );
+    assert_eq!(
+        outlined_file(&root, "repo", through_link.to_str().unwrap()),
+        "main.rs"
+    );
+}
+
+#[test]
+fn test_outline_file_out_of_the_repository_is_its_canonical_absolute_path() {
+    let directory = outline_path_fixture();
+    let root = directory.path().canonicalize().unwrap();
+    let outside = root.join("outside.rs");
+    let expected = outside.to_str().unwrap();
+
+    assert_eq!(outlined_file(&root, "repo", "../outside.rs"), expected);
+    let spelled = root.join("repo").join("..").join("outside.rs");
+    assert_eq!(
+        outlined_file(&root, "repo", spelled.to_str().unwrap()),
+        expected
+    );
+}
+
+#[test]
+fn test_outline_file_that_does_not_exist_is_an_error() {
+    let directory = outline_path_fixture();
+    omen()
+        .current_dir(directory.path())
+        .args(["-p", "repo", "-f", "json", "outline", "--file", "absent.rs"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("absent.rs"));
+}
+
 /// Makes a git repository with one source file that has mutants.
 #[cfg(unix)]
 #[cfg(feature = "mutation")]

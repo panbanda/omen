@@ -664,8 +664,13 @@ fn calculate_entropy(lines_per_file: &HashMap<String, i32>) -> f64 {
         return 0.0;
     }
 
+    // A sum of floating-point numbers depends on the sequence of its terms,
+    // and the sequence of the map is different in each run.
+    let mut line_counts: Vec<i32> = lines_per_file.values().copied().collect();
+    line_counts.sort_unstable();
+
     let mut entropy = 0.0;
-    for &lines in lines_per_file.values() {
+    for lines in line_counts {
         if lines > 0 {
             let p = lines as f64 / total as f64;
             entropy -= p * p.log2();

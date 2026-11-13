@@ -1103,18 +1103,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_tests_async_timeout_kills_child() {
-        // Spawn a process that writes a marker file, then sleeps forever.
-        // After timeout, verify the function returned Timeout (meaning
-        // child.kill() was called -- if it weren't, the future would hang).
-        let temp_dir = TempDir::new().unwrap();
-        let marker = temp_dir.path().join("started.txt");
-        let cmd = format!("touch {} && sleep 60", marker.display());
-        let config = ExecutorConfig::with_command(cmd).timeout(1);
+        // The command runs for much longer than the timeout. If the function
+        // did not stop the command, the function would wait for 60 seconds
+        // and give a different status.
+        //
+        // The test does not make sure that the command wrote a file before
+        // the timeout: the start time of a process depends on the load.
+        let config = ExecutorConfig::with_command("sleep 60").timeout(1);
+        let started = Instant::now();
         let status = run_tests_async(&config).await;
-        assert_eq!(status, MutantStatus::Timeout);
 
-        // The process started (marker exists) but was killed by the timeout handler
-        assert!(marker.exists(), "child process should have started");
+        assert_eq!(status, MutantStatus::Timeout);
+        assert!(started.elapsed() < Duration::from_secs(30));
     }
 
     #[tokio::test]
