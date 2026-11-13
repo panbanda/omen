@@ -18,6 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use super::truth::{Assertion, Labels, LedgerEntry, Location};
+use crate::semantic::tokenize::tokenize;
 
 pub const CORPUS_VERSION: u32 = 1;
 
@@ -112,6 +113,24 @@ impl Outcome {
     }
 }
 
+/// Find the first word of a query that is also a word of the name of an
+/// expected symbol. The tokenizer gives the words of the two texts.
+///
+/// A natural language query must describe a symbol in words that are not in
+/// its name. If it has a word of the name, it is an identifier query.
+fn word_of_a_symbol_name<'a>(query: &Query, labels: &'a Labels) -> Option<(String, &'a str)> {
+    let words = tokenize(&query.query);
+    labels
+        .symbols
+        .iter()
+        .filter(|symbol| query.expected.contains(&symbol.label))
+        .find_map(|symbol| {
+            let name_words = tokenize(&symbol.name);
+            let word = words.iter().find(|word| name_words.contains(word))?;
+            Some((word.clone(), symbol.name.as_str()))
+        })
+}
+
 /// Find the problems of a corpus. `labels` has the labels of each case, with
 /// the `case` value as the key.
 pub fn validate(corpus: &Corpus, labels: &BTreeMap<String, Labels>) -> Vec<String> {
@@ -172,6 +191,13 @@ pub fn validate(corpus: &Corpus, labels: &BTreeMap<String, Labels>) -> Vec<Strin
                 if !expected.insert(label) {
                     problems.push(format!(
                         "{language}/{id}: `{label}` occurs more than one time"
+                    ));
+                }
+            }
+            if query.query_type == QueryType::NaturalLanguage {
+                if let Some((word, name)) = word_of_a_symbol_name(query, case_labels) {
+                    problems.push(format!(
+                        "{language}/{id}: the natural language query has the word `{word}` of the symbol name `{name}`"
                     ));
                 }
             }
@@ -733,7 +759,7 @@ mod tests {
             .map(|index| {
                 serde_json::json!({
                     "id": format!("{prefix}{index}"), "type": query_type,
-                    "query": "helper", "expected": ["helper"]
+                    "query": "give support", "expected": ["helper"]
                 })
             })
             .collect()
@@ -1412,5 +1438,45 @@ mod tests {
         let grown = rank_growth(&base, &[rank("rust/i0", Some(4))], &[rank("rust/i0", None)]);
 
         assert_eq!(grown, ["rust/i0: no rank, the base branch has rank 4"]);
+    }
+    #[test]
+    fn a_natural_language_query_must_not_have_a_word_of_the_symbol_name() {
+        let named: Labels = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "language": "rust",
+            "split": "development",
+            "oracle": "author-reviewed, not executed",
+            "closed_world": false,
+            "symbols": [
+                {"label": "helper", "category": "free_function", "file": "a.rs", "name": "helper",
+                 "kind": "function", "container": null, "start_line": 3, "end_line": 4, "exported": true},
+                {"label": "other", "category": "free_function", "file": "b.rs", "name": "twiceLocal",
+                 "kind": "function", "container": null, "start_line": 9, "end_line": 9, "exported": true}
+            ]
+        }))
+        .unwrap();
+        let labels = BTreeMap::from([("rust/basics".to_string(), named)]);
+        let leaking = corpus(vec![
+            serde_json::json!({"id": "whole", "type": "natural_language",
+                "query": "call the Helper function", "expected": ["helper"]}),
+            serde_json::json!({"id": "part", "type": "natural_language",
+                "query": "a local value two times", "expected": ["helper", "other"]}),
+            serde_json::json!({"id": "clean", "type": "natural_language",
+                "query": "give support to the caller", "expected": ["helper", "other"]}),
+            serde_json::json!({"id": "identifier", "type": "identifier",
+                "query": "helper", "expected": ["helper"]}),
+            serde_json::json!({"id": "sketch", "type": "code_sketch",
+                "query": "fn helper()", "expected": ["helper"]}),
+        ]);
+
+        let problems = validate(&leaking, &labels);
+
+        assert_eq!(
+            problems,
+            [
+                "rust/whole: the natural language query has the word `helper` of the symbol name `helper`",
+                "rust/part: the natural language query has the word `local` of the symbol name `twiceLocal`",
+            ]
+        );
     }
 }

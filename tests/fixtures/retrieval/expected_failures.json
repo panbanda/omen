@@ -110,6 +110,16 @@
     "tracking": "phase-4-search"
   },
   {
+    "id": "c/n-circle-area/hit@1",
+    "reason": "expected one of shapes.c:circle_area:8, shapes.h:circle_area:19 in the first 1, got no result",
+    "tracking": "phase-4-search"
+  },
+  {
+    "id": "c/n-circle-area/hit@10",
+    "reason": "expected one of shapes.c:circle_area:8, shapes.h:circle_area:19 in the first 10, got no result",
+    "tracking": "phase-4-search"
+  },
+  {
     "id": "c/n-string-length/hit@1",
     "reason": "expected one of main.c:external:54 in the first 1, got no result",
     "tracking": "phase-4-search"
@@ -680,6 +690,16 @@
     "tracking": "phase-4-search"
   },
   {
+    "id": "php/n-capital-label/hit@1",
+    "reason": "expected one of shapes.php:label:81, shapes.php:label:29 in the first 1, got no result",
+    "tracking": "phase-4-search"
+  },
+  {
+    "id": "php/n-capital-label/hit@10",
+    "reason": "expected one of shapes.php:label:81, shapes.php:label:29 in the first 10, got no result",
+    "tracking": "phase-4-search"
+  },
+  {
     "id": "php/n-circle-area/hit@1",
     "reason": "expected one of shapes.php:area:71 in the first 1, got main.php:construct:54",
     "tracking": "phase-4-search"
@@ -825,6 +845,16 @@
     "tracking": "phase-4-search"
   },
   {
+    "id": "ruby/n-capital-label/hit@1",
+    "reason": "expected one of shapes.rb:label:48 in the first 1, got no result",
+    "tracking": "phase-4-search"
+  },
+  {
+    "id": "ruby/n-capital-label/hit@10",
+    "reason": "expected one of shapes.rb:label:48 in the first 10, got no result",
+    "tracking": "phase-4-search"
+  },
+  {
     "id": "ruby/n-circle-area/hit@1",
     "reason": "expected one of shapes.rb:area:40 in the first 1, got main.rb:construct:37",
     "tracking": "phase-4-search"
@@ -922,6 +952,16 @@
   {
     "id": "rust/i-scaled/hit@10",
     "reason": "expected one of shapes.rs:scaled:31 in the first 10, got no result",
+    "tracking": "phase-4-search"
+  },
+  {
+    "id": "rust/n-circle-area/hit@1",
+    "reason": "expected one of shapes.rs:area:27, shapes.rs:area:47 in the first 1, got no result",
+    "tracking": "phase-4-search"
+  },
+  {
+    "id": "rust/n-circle-area/hit@10",
+    "reason": "expected one of shapes.rs:area:27, shapes.rs:area:47 in the first 10, got no result",
     "tracking": "phase-4-search"
   },
   {

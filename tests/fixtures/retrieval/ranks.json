@@ -141,7 +141,7 @@
   },
   {
     "id": "c/n-circle-area",
-    "rank": 1
+    "rank": null
   },
   {
     "id": "c/n-string-length",
@@ -737,7 +737,7 @@
   },
   {
     "id": "php/n-capital-label",
-    "rank": 1
+    "rank": null
   },
   {
     "id": "php/n-circle-area",
@@ -909,7 +909,7 @@
   },
   {
     "id": "ruby/n-capital-label",
-    "rank": 1
+    "rank": null
   },
   {
     "id": "ruby/n-circle-area",
@@ -985,7 +985,7 @@
   },
   {
     "id": "rust/n-circle-area",
-    "rank": 1
+    "rank": null
   },
   {
     "id": "rust/n-count-map",
