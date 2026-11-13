@@ -12,6 +12,12 @@
   "prConcurrentLimit": 3,
   "prHourlyLimit": 2,
   "minimumReleaseAge": "3 days",
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": [
+      "before 5am on monday"
+    ]
+  },
   "packageRules": [
     {
       "description": "Group all tree-sitter packages",
