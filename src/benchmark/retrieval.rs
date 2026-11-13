@@ -27,9 +27,6 @@ pub const MINIMUM_QUERIES_OF_EACH_TYPE: usize = 4;
 /// The smallest number of queries for one language.
 pub const MINIMUM_QUERIES: usize = 12;
 
-/// The number of results that the driver must request for each query.
-pub const RESULT_LIMIT: usize = 10;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QueryType {
@@ -325,8 +322,9 @@ pub struct Metrics {
     pub recall_at_1: Option<f64>,
     pub recall_at_5: Option<f64>,
     pub recall_at_10: Option<f64>,
-    /// The mean of `1 / rank` of the first acceptable symbol. A query with no
-    /// acceptable symbol in its results adds 0.
+    /// The mean of `1 / rank` of the first acceptable symbol in the complete
+    /// result list. It has no cut at ten results. A query with no acceptable
+    /// symbol in its results adds 0.
     pub mrr: Option<f64>,
 }
 
@@ -425,12 +423,12 @@ pub fn render_table<'a>(
     rows: impl IntoIterator<Item = (String, &'a Metrics)>,
 ) -> String {
     let mut out = format!(
-        "{heading:<28} {:>7} {:>8} {:>8} {:>8} {:>9} {:>7}\n",
-        "queries", "negative", "recall@1", "recall@5", "recall@10", "mrr"
+        "{heading:<28} {:>7} {:>8} {:>8} {:>8} {:>9} {:>17}\n",
+        "queries", "negative", "recall@1", "recall@5", "recall@10", "mrr (all results)"
     );
     for (name, metrics) in rows {
         out.push_str(&format!(
-            "{name:<28} {:>7} {:>8} {:>8} {:>8} {:>9} {:>7}\n",
+            "{name:<28} {:>7} {:>8} {:>8} {:>8} {:>9} {:>17}\n",
             metrics.queries,
             metrics.negative_queries,
             cell(metrics.recall_at_1),
@@ -844,5 +842,39 @@ mod tests {
 
         assert_eq!(ranked, [location("wanted"), location("other")]);
         assert!(worst_case_order(Vec::new(), &[]).is_empty());
+    }
+    #[test]
+    fn a_tie_of_eleven_results_puts_the_acceptable_symbol_after_the_tenth() {
+        // The driver must give the complete list. If it cuts the list at ten
+        // before this order, the acceptable symbol can be in the ten by chance.
+        let scored: Vec<(f32, Location)> = (0..11)
+            .map(|index| (0.5, location(&format!("r{index:02}"))))
+            .collect();
+        let expected = [location("r03")];
+
+        let found = Outcome {
+            ranked: worst_case_order(scored, &expected),
+            ..outcome("rust", "q", &["r03"], &[])
+        };
+
+        assert_eq!(found.first_rank(), Some(11));
+        let checks = assertions(std::slice::from_ref(&found));
+        assert!(!checks[1].passed, "hit@10 must fail");
+        assert_eq!(metrics(&[found]).mrr, Some(1.0 / 11.0));
+    }
+
+    #[test]
+    fn the_table_says_that_the_mrr_uses_all_results() {
+        let table = metrics_by_type(&[]);
+
+        let text = render_table(
+            "query type",
+            table.iter().map(|(name, metrics)| (name.clone(), metrics)),
+        );
+
+        assert!(
+            text.lines().next().unwrap().contains("mrr (all results)"),
+            "{text}"
+        );
     }
 }

@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use omen::benchmark::retrieval::{
     assertion_ids, assertions, expected_locations, metrics_by_language,
     metrics_by_language_and_type, metrics_by_type, render_table, validate, worst_case_order,
-    Corpus, Outcome, RESULT_LIMIT,
+    Corpus, Outcome,
 };
 use omen::benchmark::truth::{bless, check_ledger, ledger_growth, Labels, LedgerEntry, Location};
 use omen::config::Config;
@@ -85,7 +85,9 @@ fn run_engine(corpus: &Corpus, labels: &BTreeMap<String, Labels>) -> Vec<Outcome
         search.index(&Config::default()).unwrap();
 
         for query in &case.queries {
-            let output = search.search(&query.query, Some(RESULT_LIMIT)).unwrap();
+            // The complete list, with the default minimum score of the engine.
+            // The cut at a rank occurs after the worst-case order.
+            let output = search.search(&query.query, Some(usize::MAX)).unwrap();
             let expected = expected_locations(query, &labels[&case.case]);
             // The engine has no rule for results of equal score, and their
             // order changes between runs. The worst-case order makes the gate
