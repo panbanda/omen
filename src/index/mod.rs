@@ -4,5 +4,6 @@
 
 pub mod extract;
 pub mod graph;
+pub mod imports;
 pub mod lang;
 pub mod model;

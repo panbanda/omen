@@ -25,8 +25,11 @@ use omen::benchmark::truth::{
     ObservedCall, ObservedImport, ObservedSymbol,
 };
 use omen::core::Language;
-use omen::index::extract::{extract_file, link_files};
-use omen::index::model::{Exported, Symbol, SymbolKind};
+use omen::index::extract::{extract_file, language_spec, link_files};
+use omen::index::imports::{go_module_path, resolve_imports};
+use omen::index::model::{
+    Exported, ImportBinding, ImportKind as IndexImportKind, ImportTarget, Symbol, SymbolKind,
+};
 use omen::parser::{extract_imports, ImportKind, Parser};
 
 const LABELS_FILE: &str = "labels.json";
@@ -157,10 +160,70 @@ fn observed_symbol(file: &str, symbol: Symbol) -> Option<ObservedSymbol> {
     })
 }
 
+/// The shared index supplies the imports of these languages. The other
+/// languages use the functions of the `graph` command until they have import
+/// extraction in the index.
+fn in_import_index(language: Language) -> bool {
+    !language_spec(language).import_kinds().is_empty()
+}
+
+/// The module path of each `go.mod` file below `dir`, by the directory of the file.
+fn go_modules(root: &Path, dir: &Path) -> BTreeMap<String, String> {
+    let mut modules = BTreeMap::new();
+    for path in sorted_entries(dir) {
+        if path.is_dir() {
+            modules.extend(go_modules(root, &path));
+        } else if path.file_name().is_some_and(|name| name == "go.mod") {
+            let text = std::fs::read_to_string(&path).unwrap();
+            if let Some(module) = go_module_path(&text) {
+                modules.insert(relative(root, dir), module);
+            }
+        }
+    }
+    modules
+}
+
+/// A label describes one import statement and one path. Thus the adapter
+/// puts the bindings with the same line and the same path in one import.
+fn observed_imports(bindings: &[ImportBinding]) -> Vec<ObservedImport> {
+    let mut imports: Vec<ObservedImport> = Vec::new();
+    for binding in bindings {
+        // A Rust `mod name;` declares a module. The labels have no category for it.
+        if binding.kind == IndexImportKind::ModuleDeclaration {
+            continue;
+        }
+        let line = binding.range.start_line;
+        let position = imports
+            .iter()
+            .position(|import| import.line == line && import.path == binding.module_path);
+        let position = position.unwrap_or_else(|| {
+            imports.push(ObservedImport {
+                file: binding.file.clone(),
+                line,
+                path: binding.module_path.clone(),
+                names: Vec::new(),
+                resolved_files: match &binding.target_file {
+                    ImportTarget::Resolved(file) => vec![file.clone()],
+                    ImportTarget::Ambiguous(files) => files.clone(),
+                    ImportTarget::External | ImportTarget::Unresolved => Vec::new(),
+                },
+            });
+            imports.len() - 1
+        });
+        if let Some(name) = &binding.imported_name {
+            imports[position].names.push(ImportedName {
+                name: name.clone(),
+                alias: binding.local_name.clone().filter(|local| local != name),
+            });
+        }
+    }
+    imports
+}
+
 /// Convert the facts that omen reports for one case into the label model.
 ///
-/// The symbols come from the shared index. The calls and the imports use the
-/// same functions as the `symbol`, `impact`, `repomap`, and `graph` commands.
+/// The symbols and the imports come from the shared index. The calls use the
+/// same functions as the `symbol`, `impact`, and `repomap` commands.
 ///
 /// If omen does not report a fact, the adapter gives `None`. It does not
 /// calculate a value that omen does not report.
@@ -218,6 +281,9 @@ fn observe(dir: &Path) -> Observed {
         let file = relative(dir, path);
         let parsed = Parser::new().parse_file(path).expect("parse");
         index_files.push(extract_file(&parsed, &file));
+        if in_import_index(parsed.language) {
+            continue;
+        }
         for import in extract_imports(&parsed) {
             if import.kind != ImportKind::Use {
                 continue;
@@ -241,8 +307,10 @@ fn observe(dir: &Path) -> Observed {
     }
 
     link_files(&mut index_files);
+    resolve_imports(&mut index_files, &go_modules(dir, dir));
     let mut symbols = Vec::new();
     for index_file in index_files {
+        imports.extend(observed_imports(&index_file.imports));
         let file = index_file.file;
         symbols.extend(
             index_file

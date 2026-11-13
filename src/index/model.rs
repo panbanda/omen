@@ -99,6 +99,54 @@ pub struct Symbol {
     pub scip_symbol: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportKind {
+    /// The import binds a module, a package, or a namespace to one name.
+    Module,
+    /// The import binds one name of a module.
+    Named,
+    /// The import makes all names of a module available without a qualifier.
+    Wildcard,
+    /// The import loads a file and binds no name, as `#include` and `source` do.
+    Load,
+    /// The statement declares a module that is in a different file, as Rust `mod name;` does.
+    ModuleDeclaration,
+    /// The statement exports one name of a different module.
+    ReExportNamed,
+    /// The statement exports all names of a different module.
+    ReExportWildcard,
+}
+
+/// The file to which an import refers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportTarget {
+    Resolved(String),
+    /// More than one file is a candidate. The list is in path order.
+    Ambiguous(Vec<String>),
+    /// The module is not a part of the repository.
+    External,
+    /// The module can be a part of the repository, but the index did not find its file.
+    Unresolved,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImportBinding {
+    pub file: String,
+    pub range: Span,
+    /// The path in the source, without quotation marks.
+    pub module_path: String,
+    pub kind: ImportKind,
+    /// The name in the module. `*` is the module itself and `default` is the default export.
+    pub imported_name: Option<String>,
+    /// The name that the import binds in this file.
+    pub local_name: Option<String>,
+    pub target_file: ImportTarget,
+    /// The key of the symbol to which a named import refers.
+    pub target_symbol: Option<String>,
+}
+
 /// Renders the key of a symbol.
 ///
 /// `ordinal` is the position of the symbol among the symbols of one file that

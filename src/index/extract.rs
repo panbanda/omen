@@ -9,7 +9,9 @@ use std::collections::{BTreeMap, HashMap};
 use tree_sitter::Node;
 
 use super::lang;
-use super::model::{symbol_key, Exported, Span, Symbol, SymbolKind};
+use super::model::{
+    symbol_key, Exported, ImportBinding, ImportKind, ImportTarget, Span, Symbol, SymbolKind,
+};
 use crate::core::Language;
 use crate::parser::ParseResult;
 
@@ -139,6 +141,27 @@ impl<'tree> Context<'_, 'tree> {
             .unwrap_or_default()
     }
 
+    /// Makes an import binding that has no target. `statement` gives the range.
+    pub fn import(
+        &self,
+        statement: Node<'_>,
+        module_path: impl Into<String>,
+        kind: ImportKind,
+        imported_name: Option<String>,
+        local_name: Option<String>,
+    ) -> ImportBinding {
+        ImportBinding {
+            file: self.file.to_string(),
+            range: Span::of(&statement),
+            module_path: module_path.into(),
+            kind,
+            imported_name,
+            local_name,
+            target_file: ImportTarget::Unresolved,
+            target_symbol: None,
+        }
+    }
+
     pub fn in_function(&self) -> bool {
         self.scopes
             .iter()
@@ -181,6 +204,24 @@ pub trait LanguageSpec: Sync {
         _node: Node<'tree>,
         _context: &Context<'_, 'tree>,
     ) -> Option<Scope<'tree>> {
+        None
+    }
+
+    /// Each node kind for which the walk calls `imports`.
+    fn import_kinds(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
+
+    /// Adds the import bindings of one node to `out`.
+    fn imports(&self, _node: Node<'_>, _context: &Context<'_, '_>, _out: &mut Vec<ImportBinding>) {}
+
+    /// Each node kind for which the walk calls `module_name`.
+    fn module_kinds(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
+
+    /// The package or the namespace that a node declares for the file.
+    fn module_name(&self, _node: Node<'_>, _context: &Context<'_, '_>) -> Option<String> {
         None
     }
 
@@ -282,6 +323,10 @@ struct Extractor<'a, 'tree> {
     scopes: Vec<Scope<'tree>>,
     scope_depths: Vec<usize>,
     found: Vec<(Draft<'tree>, Exported)>,
+    import_kinds: Vec<&'static str>,
+    module_kinds: Vec<&'static str>,
+    imports: Vec<ImportBinding>,
+    modules: Vec<String>,
 }
 
 impl<'tree> Extractor<'_, 'tree> {
@@ -332,6 +377,21 @@ impl<'tree> Extractor<'_, 'tree> {
         // A keyword token can have the same kind string as a named node, for example `class`.
         if !node.is_named() {
             return;
+        }
+        let imports = self.import_kinds.contains(&node.kind());
+        let module = self.module_kinds.contains(&node.kind());
+        if imports || module {
+            let context = Context {
+                file: self.file,
+                source: self.source,
+                scopes: &self.scopes,
+            };
+            if imports {
+                self.spec.imports(node, &context, &mut self.imports);
+            }
+            if module {
+                self.modules.extend(self.spec.module_name(node, &context));
+            }
         }
         let rule = self.rules.get(node.kind()).copied();
         let definition = rule.and_then(|rule| self.draft(node, &rule));
@@ -404,6 +464,10 @@ pub struct FileSymbols {
     pub symbols: Vec<Symbol>,
     /// One entry for each symbol, in the order of `symbols`.
     pub link_facts: Vec<LinkFacts>,
+    /// The import bindings in source order. `resolve_imports` gives the targets.
+    pub imports: Vec<ImportBinding>,
+    /// The packages or the namespaces that the file declares.
+    pub modules: Vec<String>,
 }
 
 /// Completes the facts that need the symbols of a different file.
@@ -467,9 +531,15 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         scopes: Vec::new(),
         scope_depths: Vec::new(),
         found: Vec::new(),
+        import_kinds: spec.import_kinds(),
+        module_kinds: spec.module_kinds(),
+        imports: Vec::new(),
+        modules: Vec::new(),
     };
     extractor.walk(parsed.root_node());
 
+    let imports = extractor.imports;
+    let modules = extractor.modules;
     let mut found = extractor.found;
     found.sort_by_key(|(draft, _)| (draft.span.start_byte, draft.span.end_byte));
     let mut ordinals: BTreeMap<(Vec<String>, String), usize> = BTreeMap::new();
@@ -505,6 +575,8 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         language: parsed.language,
         symbols,
         link_facts,
+        imports,
+        modules,
     }
 }
 

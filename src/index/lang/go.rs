@@ -7,6 +7,12 @@ use crate::index::extract::{
 };
 use crate::index::model::{Exported, Span, SymbolKind};
 
+use crate::index::model::{ImportBinding, ImportKind};
+
+const IMPORT_SPEC: &str = "import_spec";
+const BLANK_IDENTIFIER: &str = "blank_identifier";
+const DOT: &str = "dot";
+
 pub struct Go;
 
 const FUNCTION_LITERAL: &str = "func_literal";
@@ -38,6 +44,35 @@ const DEFINITIONS: &[DefinitionRule] = &[
 ];
 
 impl LanguageSpec for Go {
+    fn import_kinds(&self) -> Vec<&'static str> {
+        vec![IMPORT_SPEC, BLANK_IDENTIFIER, DOT]
+    }
+
+    /// One binding for each import specification. The path has no quotation marks.
+    fn imports(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<ImportBinding>) {
+        if node.kind() != IMPORT_SPEC {
+            return;
+        }
+        let Some(path) = node.child_by_field_name("path") else {
+            return;
+        };
+        let path = context.text(path);
+        let path = path.trim_matches(|quote| quote == '"' || quote == '`');
+        let package = path.rsplit('/').next().unwrap_or(path).to_string();
+        let name = node.child_by_field_name("name");
+        let (kind, imported, local) = match name.map(|name| name.kind()) {
+            Some(BLANK_IDENTIFIER) => (ImportKind::Load, None, None),
+            Some(DOT) => (ImportKind::Wildcard, None, None),
+            Some(_) => (
+                ImportKind::Module,
+                Some(package),
+                name.map(|name| context.text(name)),
+            ),
+            None => (ImportKind::Module, Some(package.clone()), Some(package)),
+        };
+        out.push(context.import(node, path, kind, imported, local));
+    }
+
     fn definitions(&self) -> Vec<DefinitionRule> {
         DEFINITIONS.to_vec()
     }
@@ -242,5 +277,41 @@ mod tests {
         assert_eq!(symbols[0].name_range.start_column, 5);
         assert!(symbols[0].body_range.is_some());
         assert_eq!(symbols[0].scip_symbol, None);
+    }
+
+    #[test]
+    fn test_imports() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            ("go.mod", "module example.com/shop\n\ngo 1.21\n"),
+            (
+                "main.go",
+                "package main\n\nimport \"math\"\n\nimport (\n\t_ \"embed\"\n\t. \"example.com/shop/other\"\n\t\"example.com/shop/shapes\"\n\ttools \"example.com/shop/util\"\n\t\"example.com/shop/missing\"\n\t\"example.com/shop\"\n)\n",
+            ),
+            ("other/other.go", "package other\n"),
+            ("shapes/shapes.go", "package shapes\n"),
+            ("shapes/more.go", "package shapes\n"),
+            ("util/util.go", "package util\n"),
+            ("util/deep/deep.go", "package deep\n"),
+        ];
+        assert_eq!(
+            rows(&files, "main.go"),
+            [
+                "3 Module math math->math external",
+                "6 Load embed -->- external",
+                "7 Wildcard example.com/shop/other -->- other/other.go",
+                "8 Module example.com/shop/shapes shapes->shapes ambiguous(shapes/more.go,shapes/shapes.go)",
+                "9 Module example.com/shop/util util->tools util/util.go",
+                "10 Module example.com/shop/missing missing->missing unresolved",
+                "11 Module example.com/shop shop->shop main.go",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_import_without_a_go_mod_file_is_unresolved() {
+        use crate::index::imports::testing::rows;
+        let files = [("main.go", "package main\n\nimport \"a/b\"\n")];
+        assert_eq!(rows(&files, "main.go"), ["3 Module a/b b->b unresolved"]);
     }
 }
