@@ -200,13 +200,24 @@ struct Rows<'a> {
 }
 
 impl Rows<'_> {
+    /// The note between the last row and the tail. In a code fence the note
+    /// is a line of the fenced text.
+    fn note_in_section(&self, count: usize) -> String {
+        let note = (self.note)(count);
+        if self.tail.starts_with("```") {
+            format!("# {}\n", note.trim().trim_matches('_'))
+        } else {
+            note
+        }
+    }
+
     fn fit(&self, budget: usize) -> String {
         let total = self.rows.len();
         let whole = self.head.len() + self.rows.iter().map(String::len).sum::<usize>();
         if whole + self.tail.len() <= budget {
             return format!("{}{}{}", self.head, self.rows.concat(), self.tail);
         }
-        let reserve = (self.note)(total).len() + self.tail.len();
+        let reserve = self.note_in_section(total).len() + self.tail.len();
         let mut used = self.head.len() + reserve;
         let mut kept = 0;
         for row in &self.rows {
@@ -218,8 +229,8 @@ impl Rows<'_> {
         }
         if kept == 0 {
             let line = (self.note)(total);
-            return if line.trim_start().len() <= budget {
-                line.trim_start().to_string()
+            return if line.len() <= budget {
+                line
             } else {
                 String::new()
             };
@@ -228,7 +239,7 @@ impl Rows<'_> {
             "{}{}{}{}",
             self.head,
             self.rows[..kept].concat(),
-            (self.note)(total - kept),
+            self.note_in_section(total - kept),
             self.tail
         )
     }
@@ -327,9 +338,7 @@ fn signatures_section(changes: &ChangeSet, budget: usize) -> String {
         head: "\n### Signature changes\n\n```diff\n".to_string(),
         rows,
         tail: "```\n",
-        note: Box::new(move |count| {
-            format!("# {count} signature changes omitted. Run `{command}` for the full list.\n")
-        }),
+        note: Box::new(move |count| omitted(count, "signature changes", &command)),
     }
     .fit(budget)
 }
@@ -766,6 +775,23 @@ mod tests {
     }
 
     #[test]
+    fn test_omission_note_is_a_paragraph() {
+        for max_bytes in (1200..6000).step_by(250) {
+            let options = CommentOptions {
+                max_bytes,
+                ..CommentOptions::default()
+            };
+            let text = render(&large(), &options, &[]);
+            let lines: Vec<&str> = text.lines().collect();
+            for (index, line) in lines.iter().enumerate() {
+                if line.starts_with('_') && line.ends_with('_') {
+                    assert!(lines[index - 1].is_empty(), "{max_bytes}: {line}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_budget_keeps_every_section_that_has_rows() {
         let options = CommentOptions {
             max_bytes: 6000,
@@ -793,7 +819,7 @@ mod tests {
 
     #[test]
     fn test_default_budget_is_under_the_limit_of_github() {
-        assert!(DEFAULT_MAX_BYTES < 65536);
+        const { assert!(DEFAULT_MAX_BYTES < 65536) };
         assert!(default_render(&large()).len() <= DEFAULT_MAX_BYTES);
     }
 

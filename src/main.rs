@@ -295,13 +295,17 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             run_stubs(path, &config, args, format)?;
         }
         Command::Diff(args) => {
-            run_diff_analyzer(
-                path,
-                args.target.as_deref(),
-                format,
-                args.pagination.top,
-                args.pagination.offset,
-            )?;
+            if matches!(format, Format::Markdown) {
+                run_diff_comment(path, &config, args)?;
+            } else {
+                run_diff_analyzer(
+                    path,
+                    args.target.as_deref(),
+                    format,
+                    args.pagination.top,
+                    args.pagination.offset,
+                )?;
+            }
         }
         Command::Changes(args) => {
             run_changes_analyzer(path, &config, format, args)?;
@@ -944,6 +948,25 @@ fn run_diff_analyzer(
     let result = analyzer.analyze_diff(path, target)?;
     let value = serde_json::to_value(&result)?;
     format_with_limits(value, format, top, offset, &mut stdout())?;
+    Ok(())
+}
+
+/// Writes the pull-request comment. `--top` and `--offset` do not apply: the
+/// byte budget cuts the sections.
+fn run_diff_comment(
+    path: &Path,
+    config: &Config,
+    args: &omen::cli::DiffArgs,
+) -> omen::core::Result<()> {
+    use std::io::Write;
+
+    let changes = omen::changeset::build::compute(path, args.target.as_deref(), config)?;
+    let options = omen::changeset::markdown::CommentOptions {
+        max_bytes: args.max_bytes,
+        max_nodes: args.max_nodes,
+    };
+    let text = omen::changeset::markdown::render(&changes, &options, &[]);
+    stdout().write_all(text.as_bytes())?;
     Ok(())
 }
 

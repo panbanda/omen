@@ -4,6 +4,7 @@
 //! Omen builds the shared index at the base and at the head, and compares
 //! the two indexes by symbol key.
 
+pub mod build;
 pub mod graph;
 pub mod markdown;
 pub mod mermaid;

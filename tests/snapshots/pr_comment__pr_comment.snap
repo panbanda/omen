@@ -1,0 +1,106 @@
+---
+source: tests/pr_comment.rs
+expression: text
+---
+<!-- omen:diff -->
+## Omen diff
+
+Base `7537d9d` (merge base with `main`), head `e0a576e`.
+
+| Measure | Value |
+| --- | --- |
+| Files changed | 2 (+22 -7 lines) |
+| Symbols | +3 added, -1 removed, ~3 changed |
+| Callers affected | 0 |
+| Cyclomatic complexity of the changed symbols | 4 -> 9 (+5) |
+| New stubs | 1 |
+| New debt comments | 1 |
+| Hotspots touched | 1 |
+
+### Changed symbols
+
+| Change | Symbol | Location | Complexity | Direct / transitive callers | Tests | Weakest edge |
+| --- | --- | --- | --- | --- | --- | --- |
+| ~ changed | `describe` | `src/report.rs:3` | CC 1 -> 1, CG 0 -> 0 | 0 / 0 | 0 | none |
+| + added | `solid` | `src/report.rs:11` | CC none -> 1, CG none -> 0 | 0 / 0 | 0 | none |
+| ~ changed | `area` | `src/shapes.rs:1` | CC 1 -> 4, CG 0 -> 3 | 3 / 4 | 1 | imported_name |
+| - removed | `legacy` | `src/shapes.rs:9` | CC 1 -> none, CG 0 -> none | 1 / 1 | 0 | imported_name |
+| + added | `volume` | `src/shapes.rs:16` | CC none -> 1, CG none -> 0 | 1 / 1 | 0 | imported_name |
+| + added | `unfinished` | `src/shapes.rs:20` | CC none -> 1, CG none -> 0 | 0 / 0 | 0 | none |
+| ~ changed | `tests.test_area` | `src/shapes.rs:29` | CC 1 -> 1, CG 0 -> 0 | 0 / 0 | 0 | none |
+
+### Signature changes
+
+```diff
+@@ src/shapes.rs#area @@
+- pub fn area(width: u32, height: u32) -> u32
++ pub fn area(width: u32, height: u32, scale: u32) -> u32
+```
+
+### Call graph
+
+Legend: `+` added, `-` removed, `~` changed, no sign for context. A dashed line is a removed call.
+
+```mermaid
+flowchart LR
+  subgraph c0["src"]
+    n0["~ describe"]
+    n1["+ solid"]
+    n2["~ area"]
+    n3["- legacy"]
+    n4["~ tests.test_area"]
+    n5["+ unfinished"]
+    n6["+ volume"]
+  end
+  n0 --> n2
+  n0 -.-> n3
+  n1 --> n6
+  n4 --> n2
+  n6 --> n2
+  classDef added fill:#dafbe1,stroke:#1a7f37,color:#1f2328
+  classDef removed fill:#ffebe9,stroke:#cf222e,color:#1f2328
+  classDef changed fill:#fff8c5,stroke:#9a6700,color:#1f2328
+  classDef unchanged fill:#f6f8fa,stroke:#8c959f,color:#1f2328
+  class n1,n5,n6 added
+  class n3 removed
+  class n0,n2,n4 changed
+  linkStyle 2,4 stroke:#1a7f37,stroke-width:2px
+  linkStyle 1 stroke:#cf222e,stroke-width:2px
+```
+
+<details>
+<summary>Changed files (2)</summary>
+
+| Change | File | Lines | Changed symbols | Max cyclomatic | Hotspot |
+| --- | --- | --- | --- | --- | --- |
+| ~ changed | `src/report.rs` | +6 -2 | 2 | 1 | low |
+| ~ changed | `src/shapes.rs` | +16 -5 | 5 | 4 | high |
+
+</details>
+
+<details>
+<summary>New stubs and debt comments (2)</summary>
+
+- debt comment: `src/shapes.rs:15` `// TODO: replace this estimate`
+- stub: `src/shapes.rs:21` `todo!()`
+
+</details>
+
+<details>
+<summary>Callers of the changed symbols (3)</summary>
+
+- `area` is called by `describe` at `src/report.rs:4`, `tests.test_area` at `src/shapes.rs:30` (test), `volume` at `src/shapes.rs:17`.
+- `legacy` is called by `describe` at `src/report.rs:4`.
+- `volume` is called by `solid` at `src/report.rs:12`.
+
+</details>
+
+<details>
+<summary>Owners of the changed files (2)</summary>
+
+| File | Authors |
+| --- | --- |
+| `src/report.rs` | ada, grace |
+| `src/shapes.rs` | ada, grace |
+
+</details>
