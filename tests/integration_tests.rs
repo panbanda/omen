@@ -1,3 +1,4 @@
+#[cfg(feature = "mutation")]
 use assert_cmd::cargo::CommandCargoExt;
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -521,6 +522,7 @@ fn test_changed_since_rejects_option_like_ref() {
         .stderr(predicate::str::contains("must not start with '-'"));
 }
 
+#[cfg(feature = "mutation")]
 #[test]
 fn test_mutation_refuses_dirty_targets_unless_allowed() {
     let temp = TempDir::new().unwrap();
@@ -560,6 +562,7 @@ fn test_mutation_refuses_dirty_targets_unless_allowed() {
 }
 
 #[cfg(unix)]
+#[cfg(feature = "mutation")]
 #[test]
 fn test_mutation_sigint_restores_active_source_file() {
     let temp = TempDir::new().unwrap();
@@ -1467,6 +1470,7 @@ fn test_score_default_gate_off_exits_zero_on_violation() {
         .success();
 }
 
+#[cfg(feature = "mutation")]
 /// `--dry-run` only generates mutants (no test execution), so the mutation
 /// score is always 0.0 (0 killed / 0 scored) -- reliably below the default
 /// `--min-score` of 0.8. This lets the gate be exercised deterministically
@@ -1481,6 +1485,7 @@ fn write_mutation_gate_fixture() -> TempDir {
     temp
 }
 
+#[cfg(feature = "mutation")]
 #[test]
 fn test_mutation_gate_error_exits_two_and_emits_report_before_failing() {
     // Regression guard: a naive gate implementation can return Err from
@@ -1524,6 +1529,7 @@ fn test_mutation_gate_error_exits_two_and_emits_report_before_failing() {
     );
 }
 
+#[cfg(feature = "mutation")]
 #[test]
 fn test_mutation_gate_warn_exits_zero_on_dry_run() {
     let temp = write_mutation_gate_fixture();
@@ -1542,6 +1548,7 @@ fn test_mutation_gate_warn_exits_zero_on_dry_run() {
         .stderr(predicate::str::contains("Gate mode 'warn'"));
 }
 
+#[cfg(feature = "mutation")]
 #[test]
 fn test_mutation_gate_off_default_exits_zero_on_dry_run() {
     let temp = write_mutation_gate_fixture();
@@ -1586,6 +1593,7 @@ fn test_diff_top_offset_flags_parse_and_run() {
     }
 }
 
+#[cfg(feature = "mutation")]
 #[test]
 fn test_mutation_top_offset_flags_parse_and_run() {
     let temp = write_mutation_gate_fixture();
@@ -1610,6 +1618,7 @@ fn test_mutation_top_offset_flags_parse_and_run() {
 // Filtering: mutation routed through filtered_file_set (glob/exclude/changed-since)
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "mutation")]
 #[test]
 fn test_mutation_glob_and_exclude_still_work() {
     let temp = TempDir::new().unwrap();
@@ -2032,6 +2041,7 @@ fn test_search_query_offset_skips_results() {
     assert_eq!(names(&["--offset", "1"]), all[1..]);
 }
 
+#[cfg(feature = "mutation")]
 #[test]
 fn test_mutation_output_writes_the_report_file() {
     let temp = write_mutation_gate_fixture();
@@ -2391,6 +2401,7 @@ fn test_top_lists_the_same_items_in_json_and_markdown() {
     assert_eq!(listed(&repository, "markdown", &arguments, &names), json);
 }
 
+#[cfg(feature = "mutation")]
 #[test]
 fn test_mutation_top_lists_the_same_files_in_json_and_markdown() {
     let repository = TempDir::new().unwrap();
@@ -2515,6 +2526,7 @@ fn repository_roots(repository: &TempDir) -> Vec<String> {
     vec![canonical, plain]
 }
 
+#[cfg(feature = "mutation")]
 #[test]
 fn test_mutation_gives_the_same_mutants_from_each_working_directory() {
     let repository = write_path_fixture();
@@ -2533,6 +2545,7 @@ fn test_mutation_gives_the_same_mutants_from_each_working_directory() {
     assert_eq!(inside, outside);
 }
 
+#[cfg(feature = "mutation")]
 #[test]
 fn test_mutation_runs_and_records_in_the_repository_from_another_directory() {
     let repository = write_path_fixture();
@@ -2616,6 +2629,7 @@ fn test_each_repository_command_gives_the_same_output_from_each_working_director
         &["impact", "target"],
         &["symbol", "target"],
         &["search", "query", "target", "--min-score", "0"],
+        #[cfg(feature = "mutation")]
         &["mutation", "--dry-run"],
     ];
 
