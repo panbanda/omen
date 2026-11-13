@@ -2908,6 +2908,7 @@ dependencies = [
  "tree-sitter-ruby",
  "tree-sitter-rust",
  "tree-sitter-typescript",
+ "unicode-normalization",
  "xxhash-rust",
 ]
 

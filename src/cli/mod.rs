@@ -891,6 +891,7 @@ mod tests {
         };
     }
 
+    #[cfg(feature = "mutation")]
     /// Extract MutationArgs from a parsed CLI, panicking if the command is wrong.
     fn parse_mutation_args(args: &[&str]) -> MutationArgs {
         let cli = parse(args);
@@ -900,6 +901,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "mutation")]
     /// Extract MutationCommand from a parsed CLI, panicking if the command is wrong.
     fn parse_mutation_command(args: &[&str]) -> Box<MutationCommand> {
         let cli = parse(args);
@@ -1186,6 +1188,7 @@ mod tests {
         assert_parses_to!(&["omen", "context"], Command::Context(_));
     }
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_command_mutation() {
         assert_parses_to!(&["omen", "mutation"], Command::Mutation(_));
@@ -1277,6 +1280,7 @@ mod tests {
         assert_parses_to!(&["omen", "ctx"], Command::Context(_));
     }
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_alias_mut_for_mutation() {
         assert_parses_to!(&["omen", "mut"], Command::Mutation(_));
@@ -1754,6 +1758,7 @@ mod tests {
 
     // Mutation command tests
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_mutation_defaults() {
         let args = parse_mutation_args(&["omen", "mutation"]);
@@ -1769,17 +1774,20 @@ mod tests {
         assert!(!args.allow_dirty);
     }
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_mutation_allow_dirty() {
         assert!(parse_mutation_args(&["omen", "mutation", "--allow-dirty"]).allow_dirty);
     }
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_mutation_test_command() {
         let args = parse_mutation_args(&["omen", "mutation", "--test-command", "cargo test"]);
         assert_eq!(args.test_command, Some("cargo test".to_string()));
     }
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_mutation_timeout() {
         assert_eq!(
@@ -1788,6 +1796,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_mutation_operators() {
         assert_eq!(
@@ -1796,51 +1805,60 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_mutation_min_score() {
         let args = parse_mutation_args(&["omen", "mutation", "--min-score", "0.9"]);
         assert!((args.min_score - 0.9).abs() < 0.001);
     }
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_mutation_dry_run() {
         assert!(parse_mutation_args(&["omen", "mutation", "--dry-run"]).dry_run);
     }
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_mutation_coverage() {
         let args = parse_mutation_args(&["omen", "mutation", "--coverage", "coverage.json"]);
         assert_eq!(args.coverage, Some(PathBuf::from("coverage.json")));
     }
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_mutation_incremental() {
         assert!(parse_mutation_args(&["omen", "mutation", "--incremental"]).incremental);
     }
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_mutation_skip_equivalent() {
         assert!(parse_mutation_args(&["omen", "mutation", "--skip-equivalent"]).skip_equivalent);
     }
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_mutation_mode_all() {
         let args = parse_mutation_args(&["omen", "mutation", "--mode", "all"]);
         assert!(matches!(args.mode, MutationMode::All));
     }
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_mutation_mode_fast() {
         let args = parse_mutation_args(&["omen", "mutation", "--mode", "fast"]);
         assert!(matches!(args.mode, MutationMode::Fast));
     }
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_mutation_mode_thorough() {
         let args = parse_mutation_args(&["omen", "mutation", "--mode", "thorough"]);
         assert!(matches!(args.mode, MutationMode::Thorough));
     }
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_mutation_combined_options() {
         let args = parse_mutation_args(&[
@@ -1861,12 +1879,14 @@ mod tests {
 
     // Mutation train subcommand tests
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_command_mutation_train() {
         let cmd = parse_mutation_command(&["omen", "mutation", "train"]);
         assert!(matches!(cmd.subcommand, Some(MutationSubcommand::Train(_))));
     }
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_mutation_train_with_model_path() {
         let cmd =
@@ -1878,6 +1898,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_mutation_train_with_history_path() {
         let cmd =
@@ -1889,6 +1910,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_mutation_record_flag() {
         assert!(parse_mutation_args(&["omen", "mutation", "--record"]).record);
@@ -2205,6 +2227,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_mutation_top_offset() {
         let args = parse_mutation_args(&["omen", "mutation", "--top", "4", "--offset", "2"]);
@@ -2312,24 +2335,28 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_mutation_gate_defaults_to_none() {
         let args = parse_mutation_args(&["omen", "mutation"]);
         assert_eq!(args.gate.mode, None);
     }
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_mutation_gate_error_parses() {
         let args = parse_mutation_args(&["omen", "mutation", "--gate", "error"]);
         assert_eq!(args.gate.mode, Some(GateMode::Error));
     }
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_mutation_gate_warn_parses() {
         let args = parse_mutation_args(&["omen", "mutation", "--gate", "warn"]);
         assert_eq!(args.gate.mode, Some(GateMode::Warn));
     }
 
+    #[cfg(feature = "mutation")]
     #[test]
     fn test_mutation_gate_off_parses_explicitly() {
         let args = parse_mutation_args(&["omen", "mutation", "--gate", "off"]);
@@ -2368,7 +2395,13 @@ mod tests {
 
     #[test]
     fn test_all_gated_commands_take_the_same_gate_flag() {
-        for command in ["complexity", "score", "stubs", "mutation"] {
+        for command in [
+            "complexity",
+            "score",
+            "stubs",
+            #[cfg(feature = "mutation")]
+            "mutation",
+        ] {
             for mode in ["off", "warn", "error"] {
                 assert!(
                     Cli::try_parse_from(["omen", command, "--gate", mode]).is_ok(),
@@ -2406,11 +2439,14 @@ mod tests {
         assert_eq!(cli.path, PathBuf::from("/tmp"));
         assert!(matches!(cli.format, OutputFormat::Json));
 
-        let cli = parse(&["omen", "mutation", "train", "--path", "/tmp"]);
-        assert_eq!(cli.path, PathBuf::from("/tmp"));
+        #[cfg(feature = "mutation")]
+        {
+            let cli = parse(&["omen", "mutation", "train", "--path", "/tmp"]);
+            assert_eq!(cli.path, PathBuf::from("/tmp"));
 
-        let cli = parse(&["omen", "mutation", "--jobs", "8"]);
-        assert_eq!(cli.jobs, Some(8));
+            let cli = parse(&["omen", "mutation", "--jobs", "8"]);
+            assert_eq!(cli.jobs, Some(8));
+        }
 
         // `-p` is the repository path on each command. It is not the port.
         let cli = parse(&["omen", "report", "serve", "-p", "/tmp", "--port", "3000"]);
@@ -2455,8 +2491,11 @@ mod tests {
             panic!("Expected Eval command");
         }
 
-        let args = parse_mutation_args(&["omen", "mutation", "--output", "mutation.json"]);
-        assert_eq!(args.output.output, Some(PathBuf::from("mutation.json")));
+        #[cfg(feature = "mutation")]
+        {
+            let args = parse_mutation_args(&["omen", "mutation", "--output", "mutation.json"]);
+            assert_eq!(args.output.output, Some(PathBuf::from("mutation.json")));
+        }
     }
 
     #[test]

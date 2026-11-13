@@ -4,6 +4,7 @@
 //! never executes fixture or project code, makes no network requests, and calls
 //! no models.
 
+pub mod retrieval;
 pub mod truth;
 
 use std::collections::BTreeSet;
