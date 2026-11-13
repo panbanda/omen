@@ -10,6 +10,36 @@ use crate::index::model::{ImportBinding, ImportKind, ImportTarget};
 const STRING: &str = "string";
 const STRING_CONTENT: &str = "string_content";
 
+use crate::index::calls::{Call, CallSyntax, Callee, LocalName};
+use crate::index::model::{Receiver, ReferenceKind};
+
+const SUPER: &str = "super";
+const OPERATOR_ASSIGNMENT: &str = "operator_assignment";
+const CONSTANT: &str = "constant";
+const PARAMETER_LISTS: &[&str] = &["method_parameters", "block_parameters", "lambda_parameters"];
+const NAMED_PARAMETERS: &[&str] = &[
+    "optional_parameter",
+    "keyword_parameter",
+    "splat_parameter",
+    "hash_splat_parameter",
+    "block_parameter",
+];
+
+/// A call has its receiver and its method name in the call node.
+const CALL_SYNTAX: CallSyntax = CallSyntax {
+    calls: &[(CALL, "", "arguments")],
+    constructions: &[],
+    members: &[(CALL, "receiver", "method")],
+    paths: &[(SCOPE_RESOLUTION, "scope", "name")],
+    names: &[IDENTIFIER, CONSTANT],
+    self_words: &["self"],
+    super_words: &[SUPER],
+    locals: &[(ASSIGNMENT, "left", "", "right")],
+    parameters: &[],
+    return_type_field: "",
+    literals: &[],
+};
+
 pub struct Ruby;
 
 const METHOD: &str = "method";
@@ -120,6 +150,116 @@ fn is_public_method(definition: Node<'_>, name: &str, context: &Context<'_, '_>)
 }
 
 impl LanguageSpec for Ruby {
+    fn call_syntax(&self) -> CallSyntax {
+        CALL_SYNTAX
+    }
+
+    fn call_kinds(&self) -> Vec<&'static str> {
+        let mut kinds = self.call_syntax().call_kinds();
+        kinds.extend([IDENTIFIER, SUPER]);
+        kinds
+    }
+
+    fn local_kinds(&self) -> Vec<&'static str> {
+        let mut kinds = self.call_syntax().local_kinds();
+        kinds.extend(PARAMETER_LISTS);
+        kinds
+    }
+
+    fn call_hook_kinds(&self) -> Vec<&'static str> {
+        [
+            PARAMETER_LISTS,
+            NAMED_PARAMETERS,
+            &[SUPER, OPERATOR_ASSIGNMENT],
+        ]
+        .concat()
+    }
+
+    /// A name without parentheses and without arguments can be a call. The
+    /// walk gives each such name as a call, and the resolver gives no edge
+    /// when the method binds the name. `super` calls the method of the parent
+    /// class with the same name.
+    fn call<'tree>(&self, node: Node<'tree>, context: &Context<'_, 'tree>) -> Option<Call<'tree>> {
+        let parent_call = |word: Node<'tree>| Call {
+            callee: Callee {
+                name_node: word,
+                receiver: Some(Receiver::Super),
+                qualifier: None,
+            },
+            kind: ReferenceKind::Call,
+            arguments: Vec::new(),
+        };
+        let parent = node.parent();
+        let field_of_parent =
+            |field: &str| parent.and_then(|parent| parent.child_by_field_name(field)) == Some(node);
+        match node.kind() {
+            CALL => {
+                let method = node.child_by_field_name("method")?;
+                if method.kind() != SUPER {
+                    return self.call_syntax().call(node, context);
+                }
+                let mut call = parent_call(method);
+                call.arguments = self.call_syntax().call(node, context)?.arguments;
+                Some(call)
+            }
+            SUPER => (!field_of_parent("method")).then(|| parent_call(node)),
+            _ => {
+                let parent_kind = parent.map_or("", |parent| parent.kind());
+                let binds = match parent_kind {
+                    CALL => field_of_parent("method") || field_of_parent("receiver"),
+                    ASSIGNMENT | OPERATOR_ASSIGNMENT => field_of_parent("left"),
+                    _ => field_of_parent("name"),
+                };
+                let parameter = parent.is_some_and(|parent| {
+                    PARAMETER_LISTS.contains(&parent.kind())
+                        || NAMED_PARAMETERS.contains(&parent.kind())
+                });
+                (!binds && !parameter).then_some(Call {
+                    callee: Callee {
+                        name_node: node,
+                        receiver: None,
+                        qualifier: None,
+                    },
+                    kind: ReferenceKind::Call,
+                    arguments: Vec::new(),
+                })
+            }
+        }
+    }
+
+    /// The parameters of a method, a block, or a lambda are local names.
+    fn locals(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
+        if !PARAMETER_LISTS.contains(&node.kind()) {
+            let before = out.len();
+            self.call_syntax().locals(node, context, out);
+            // `Alias = Name` gives a second name to a class or a module.
+            let named = node
+                .child_by_field_name("right")
+                .filter(|right| right.kind() == CONSTANT);
+            if let (Some(named), Some(local)) = (named, out.get_mut(before)) {
+                local.type_name = Some(context.text(named));
+                local.value_start = None;
+            }
+            return;
+        }
+        let mut cursor = node.walk();
+        for parameter in node.named_children(&mut cursor) {
+            let name = match parameter.kind() {
+                IDENTIFIER => Some(parameter),
+                kind if NAMED_PARAMETERS.contains(&kind) => parameter.child_by_field_name("name"),
+                _ => None,
+            };
+            if let Some(name) = name {
+                out.push(LocalName {
+                    name: context.text(name),
+                    type_name: None,
+                    value_start: None,
+                    is_parameter: true,
+                });
+            }
+        }
+    }
+
     fn import_kinds(&self) -> Vec<&'static str> {
         vec![CALL]
     }
@@ -427,5 +567,68 @@ mod tests {
         assert!(ruby_require_paths("spec.require_paths = [base, 'lib']\n").is_empty());
         assert!(ruby_require_paths("spec.require_paths = paths\n").is_empty());
         assert!(ruby_require_paths("spec.require_paths = [\"#{root}/lib\"]\n").is_empty());
+    }
+
+    const CALL_FILES: &[(&str, &str)] = &[
+        (
+            "main.rb",
+            "require_relative 'shapes'\nrequire_relative 'other'\n\ndef local\n  4\nend\n\ndef bare\n  local() + local + helper\nend\n\ndef outer\n  def inner\n    5\n  end\n  inner()\nend\n\ndef closure(shape)\n  add = ->(n) { n + local }\n  circle = Circle.new(1.0)\n  list = []\n  list.push(1)\n  add.call(2) + circle.area + shape.area + add + Util.twice(2) + Circle.unit + Set.new\nend\n",
+        ),
+        ("other.rb", "def helper\n  2\nend\n\ndef push(value)\n  value\nend\n"),
+        (
+            "shapes.rb",
+            "module Util\n  def self.twice(value)\n    value * 2\n  end\nend\n\nmodule Describable\n  def describe\n    \"shape #{area}\"\n  end\nend\n\nclass Shape\n  include Describable\n\n  def initialize(name)\n    @name = name\n  end\n\n  def area\n    0.0\n  end\n\n  def label\n    @name\n  end\nend\n\nclass Circle < Shape\n  def self.unit\n    build(1.0)\n  end\n\n  def self.build(radius)\n    new(radius)\n  end\n\n  def initialize(radius)\n    super('circle')\n    @radius = radius\n  end\n\n  def area\n    self.scaled(3.14) + radius\n  end\n\n  def label\n    super.upcase\n  end\n\n  def radius\n    @radius\n  end\n\n  def scaled(factor)\n    factor\n  end\nend\n",
+        ),
+    ];
+
+    #[test]
+    fn test_calls_with_and_without_parentheses() {
+        use crate::index::resolve::testing::rows;
+        assert_eq!(
+            rows(CALL_FILES, "main.rb"),
+            [
+                "1 ->require_relative Unresolved - []",
+                "2 ->require_relative Unresolved - []",
+                "9 bare>local UniqueCandidate SameFile [main.rb#local]",
+                "9 bare>local UniqueCandidate SameFile [main.rb#local]",
+                "9 bare>helper UniqueCandidate ImportedModule [other.rb#helper]",
+                "16 outer>inner UniqueCandidate LexicalScope [main.rb#outer.inner]",
+                "20 closure.add>n Unresolved - []",
+                "20 closure.add>local UniqueCandidate SameFile [main.rb#local]",
+                "21 closure>Circle.new UniqueCandidate QualifiedPath [shapes.rb#Circle.initialize]",
+                "23 closure>list.push Unresolved - []",
+                "24 closure>add.call UniqueCandidate LexicalScope [main.rb#closure.add]",
+                "24 closure>circle.area UniqueCandidate ReceiverDeclaredType [shapes.rb#Circle.area]",
+                "24 closure>shape.area Ambiguous NameOnly [shapes.rb#Circle.area, shapes.rb#Shape.area]",
+                "24 closure>add Unresolved - []",
+                "24 closure>Util.twice UniqueCandidate QualifiedPath [shapes.rb#Util.twice]",
+                "24 closure>Circle.unit UniqueCandidate QualifiedPath [shapes.rb#Circle.unit]",
+                "24 closure>Set.new Unresolved - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_calls_in_classes_and_modules() {
+        use crate::index::resolve::testing::rows;
+        assert_eq!(
+            rows(CALL_FILES, "shapes.rb"),
+            [
+                "3 Util.twice>value Unresolved - []",
+                "9 Describable.describe>area Ambiguous NameOnly [shapes.rb#Circle.area, shapes.rb#Shape.area]",
+                "14 Shape>include Unresolved - []",
+                "17 Shape.initialize>name Unresolved - []",
+                "31 Circle.unit>build UniqueCandidate EnclosingType [shapes.rb#Circle.build]",
+                "35 Circle.build>new UniqueCandidate EnclosingType [shapes.rb#Circle.initialize]",
+                "35 Circle.build>radius Unresolved - []",
+                "39 Circle.initialize>super.super UniqueCandidate EnclosingType [shapes.rb#Shape.initialize]",
+                "40 Circle.initialize>radius Unresolved - []",
+                "44 Circle.area>self.scaled UniqueCandidate EnclosingType [shapes.rb#Circle.scaled]",
+                "44 Circle.area>radius UniqueCandidate EnclosingType [shapes.rb#Circle.radius]",
+                "48 Circle.label>super.upcase Unresolved - []",
+                "48 Circle.label>super.super UniqueCandidate EnclosingType [shapes.rb#Shape.label]",
+                "56 Circle.scaled>factor Unresolved - []",
+            ]
+        );
     }
 }

@@ -543,6 +543,11 @@ impl<'a> Resolver<'a> {
         basis: Basis,
         file: usize,
     ) -> Outcome {
+        // Ruby `Type.new` makes an object. It runs `initialize`.
+        if let ([only], Family::Ruby, "new") = (types, self.family(file), name) {
+            return Outcome::of(basis, self.constructors(*only, arity))
+                .unwrap_or_else(|| Outcome::none(Status::Unresolved));
+        }
         if types.is_empty() {
             return Outcome::none(Status::Unresolved);
         }
@@ -742,6 +747,24 @@ impl<'a> Resolver<'a> {
             is_callable(symbol)
                 || (matches!(family, Family::Python | Family::C) && is_container(symbol))
         };
+        if family == Family::Ruby {
+            // A Ruby name without parentheses is a value when the method
+            // binds the name. A function value needs `.call`.
+            let bound = self.files[file].locals.iter().any(|local| {
+                local.name.name == name
+                    && local
+                        .owner
+                        .is_some_and(|owner| chain.contains(&(file, owner)))
+            });
+            if bound {
+                return Outcome::none(Status::Unresolved);
+            }
+            // `new` in a class method makes an object of the class.
+            if let Some(owner) = self.enclosing_type(chain).filter(|_| name == "new") {
+                return Outcome::of(Basis::EnclosingType, self.constructors(owner, arity))
+                    .unwrap_or_else(|| Outcome::none(Status::Unresolved));
+            }
+        }
         // Java cannot call a local variable with the syntax of a function call.
         if family != Family::Java {
             let lexical: Vec<Id> = self
@@ -869,8 +892,15 @@ impl<'a> Resolver<'a> {
                     && self.facts(*id).parent.is_none()
             })
             .collect();
-        Outcome::of(Basis::NameOnly, self.definitions(anywhere, file, arity))
-            .unwrap_or_else(|| Outcome::none(Status::Unresolved))
+        Outcome::of(Basis::NameOnly, self.definitions(anywhere, file, arity)).unwrap_or_else(|| {
+            // A Ruby method calls a method of its object without `self`. A
+            // module that other types include does not tell which type.
+            if family == Family::Ruby && self.enclosing_type(chain).is_some() {
+                Outcome::offered(Basis::NameOnly, self.methods_by_name(name, file))
+            } else {
+                Outcome::none(Status::Unresolved)
+            }
+        })
     }
 
     /// Replaces declarations by the definitions that they declare. A call
