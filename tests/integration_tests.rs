@@ -3081,3 +3081,54 @@ fn test_top_lists_the_same_items_in_json_and_markdown_for_each_command() {
     }
     assert!(differences.is_empty(), "{}", differences.join("\n"));
 }
+
+// ---------------------------------------------------------------------------
+// A test command cannot change a source file after the mutation run
+// ---------------------------------------------------------------------------
+
+/// Runs `mutation` with a test command that starts a late writer, and gives
+/// the content of the source file after the writer had time to run.
+#[cfg(unix)]
+#[cfg(feature = "mutation")]
+fn source_after_late_writer(test_command: &str, writer_delay: std::time::Duration) -> String {
+    let repository = TempDir::new().unwrap();
+    std::fs::create_dir(repository.path().join("src")).unwrap();
+    let source = repository.path().join("src/lib.rs");
+    std::fs::write(&source, LATE_WRITER_SOURCE).unwrap();
+
+    omen()
+        .args(["-p", repository.path().to_str().unwrap(), "mutation"])
+        .args(["--allow-dirty", "--operators", "CRR", "--timeout", "1"])
+        .args(["--test-command", test_command])
+        .assert()
+        .success();
+
+    std::thread::sleep(writer_delay);
+    std::fs::read_to_string(source).unwrap()
+}
+
+#[cfg(unix)]
+#[cfg(feature = "mutation")]
+const LATE_WRITER_SOURCE: &str = "pub fn value() -> i32 { 1 }\n";
+
+#[cfg(unix)]
+#[cfg(feature = "mutation")]
+#[test]
+fn test_mutation_timeout_stops_each_process_of_the_test_command() {
+    let source = source_after_late_writer(
+        "(sleep 2; printf corrupt > src/lib.rs) & wait",
+        std::time::Duration::from_millis(2500),
+    );
+    assert_eq!(source, LATE_WRITER_SOURCE);
+}
+
+#[cfg(unix)]
+#[cfg(feature = "mutation")]
+#[test]
+fn test_mutation_stops_a_writer_that_the_test_command_leaves() {
+    let source = source_after_late_writer(
+        "(sleep 1; printf corrupt > src/lib.rs) > /dev/null 2>&1 & exit 0",
+        std::time::Duration::from_millis(1500),
+    );
+    assert_eq!(source, LATE_WRITER_SOURCE);
+}

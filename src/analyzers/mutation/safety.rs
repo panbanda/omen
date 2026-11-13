@@ -203,6 +203,62 @@ fn restore_registered_mutations(
     }
 }
 
+/// The process groups of the test commands that run now. The interrupt
+/// watcher stops them before it restores the files.
+#[cfg(unix)]
+static ACTIVE_PROCESS_GROUPS: LazyLock<parking_lot::Mutex<std::collections::HashSet<u32>>> =
+    LazyLock::new(|| parking_lot::Mutex::new(std::collections::HashSet::new()));
+
+/// Record the process group of a test command. The group id is the id of the
+/// process that `process_group(0)` started.
+#[cfg(unix)]
+pub fn register_process_group(group: u32) {
+    ACTIVE_PROCESS_GROUPS.lock().insert(group);
+}
+
+/// Send SIGKILL to each process of a group. A descendant of the test command
+/// can write a source file after the command stops, so the caller must do this
+/// before it restores the file.
+#[cfg(unix)]
+pub fn kill_process_group(group: u32) {
+    // SAFETY: `killpg` has no memory effect. A group that has no process gives
+    // an error, which is not important here.
+    unsafe {
+        libc::killpg(group as libc::pid_t, libc::SIGKILL);
+    }
+    ACTIVE_PROCESS_GROUPS.lock().remove(&group);
+}
+
+/// Tell if a group has a process.
+#[cfg(unix)]
+pub fn process_group_exists(group: u32) -> bool {
+    // SAFETY: signal 0 does only the existence check.
+    unsafe { libc::killpg(group as libc::pid_t, 0) == 0 }
+}
+
+/// The longest time to wait for a killed group. SIGKILL cannot be caught, so
+/// the usual time is a few milliseconds.
+#[cfg(unix)]
+pub const PROCESS_GROUP_EXIT_LIMIT: Duration = Duration::from_secs(5);
+
+/// Kill a group and wait until it has no process.
+#[cfg(unix)]
+pub fn terminate_process_group(group: u32) {
+    kill_process_group(group);
+    let start = std::time::Instant::now();
+    while process_group_exists(group) && start.elapsed() < PROCESS_GROUP_EXIT_LIMIT {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[cfg(unix)]
+fn terminate_active_process_groups() {
+    let groups: Vec<u32> = ACTIVE_PROCESS_GROUPS.lock().iter().copied().collect();
+    for group in groups {
+        terminate_process_group(group);
+    }
+}
+
 pub fn restore_active_mutations() {
     restore_registered_mutations(&ACTIVE_MUTATIONS, &INTERRUPTED);
 }
@@ -215,6 +271,10 @@ pub fn install_signal_handler() -> Result<()> {
                 .name("omen-mutation-signal".to_string())
                 .spawn(|| loop {
                     if INTERRUPTED.load(Ordering::SeqCst) {
+                        // The test commands do not get the interrupt, because each
+                        // has its own process group.
+                        #[cfg(unix)]
+                        terminate_active_process_groups();
                         restore_active_mutations();
                         std::process::exit(130);
                     }

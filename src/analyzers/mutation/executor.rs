@@ -222,6 +222,9 @@ impl MutantExecutor {
             cmd.current_dir(dir);
         }
 
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+
         cmd.stdout(Stdio::null());
         cmd.stderr(Stdio::null());
 
@@ -441,6 +444,8 @@ async fn run_tests_async(config: &ExecutorConfig) -> MutantStatus {
 
     cmd.stdout(Stdio::null());
     cmd.stderr(Stdio::null());
+    #[cfg(unix)]
+    cmd.process_group(0);
 
     let timeout_duration = Duration::from_secs(config.timeout_secs);
 
@@ -448,8 +453,14 @@ async fn run_tests_async(config: &ExecutorConfig) -> MutantStatus {
         Ok(c) => c,
         Err(_) => return MutantStatus::BuildError,
     };
+    #[cfg(unix)]
+    let group = child.id();
+    #[cfg(unix)]
+    if let Some(group) = group {
+        super::safety::register_process_group(group);
+    }
 
-    match timeout(timeout_duration, child.wait()).await {
+    let status = match timeout(timeout_duration, child.wait()).await {
         Ok(Ok(status)) => {
             if status.success() {
                 MutantStatus::Survived
@@ -459,14 +470,37 @@ async fn run_tests_async(config: &ExecutorConfig) -> MutantStatus {
         }
         Ok(Err(_)) => MutantStatus::BuildError,
         Err(_) => {
-            // Timeout: kill the child process to prevent zombies
+            // Kill the group before the wait call, while the leader still
+            // holds the group id.
+            #[cfg(unix)]
+            if let Some(group) = group {
+                super::safety::kill_process_group(group);
+            }
             let _ = child.kill().await;
             MutantStatus::Timeout
         }
+    };
+
+    // A descendant of the test command can write a source file later. Stop
+    // each process of the group before the caller restores the file.
+    #[cfg(unix)]
+    if let Some(group) = group {
+        super::safety::kill_process_group(group);
+        let start = Instant::now();
+        while super::safety::process_group_exists(group)
+            && start.elapsed() < super::safety::PROCESS_GROUP_EXIT_LIMIT
+        {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
     }
+    status
 }
 
 /// Execute a command with a timeout.
+///
+/// On Unix, the command must be the leader of its own process group. This
+/// function stops each process of the group before it returns, also the
+/// processes that the command left in the background.
 fn execute_with_timeout(cmd: &mut Command, timeout: Duration) -> ExecutionResult {
     let start = Instant::now();
 
@@ -474,27 +508,36 @@ fn execute_with_timeout(cmd: &mut Command, timeout: Duration) -> ExecutionResult
         Ok(c) => c,
         Err(_) => return ExecutionResult::Error,
     };
+    #[cfg(unix)]
+    super::safety::register_process_group(child.id());
 
-    loop {
+    let result = loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                if status.success() {
-                    return ExecutionResult::Success;
+                break if status.success() {
+                    ExecutionResult::Success
                 } else {
-                    return ExecutionResult::Failed;
-                }
+                    ExecutionResult::Failed
+                };
             }
             Ok(None) => {
                 if start.elapsed() > timeout {
+                    // Kill the group before the wait call, while the leader
+                    // still holds the group id.
+                    #[cfg(unix)]
+                    super::safety::kill_process_group(child.id());
                     let _ = child.kill();
                     let _ = child.wait();
-                    return ExecutionResult::Timeout;
+                    break ExecutionResult::Timeout;
                 }
                 std::thread::sleep(Duration::from_millis(10));
             }
-            Err(_) => return ExecutionResult::Error,
+            Err(_) => break ExecutionResult::Error,
         }
-    }
+    };
+    #[cfg(unix)]
+    super::safety::terminate_process_group(child.id());
+    result
 }
 
 /// Detect the appropriate test command for a project.
