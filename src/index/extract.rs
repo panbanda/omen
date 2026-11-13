@@ -110,6 +110,9 @@ pub struct Draft<'tree> {
     pub trait_implementation: bool,
     /// The definition is the default export of its module.
     pub default_export: bool,
+    /// The definition is a function value that a variable holds, in a
+    /// language where a variable and a function do not share names.
+    pub function_value: bool,
 }
 
 /// Facts that only `link_files` and the resolver use. They are not a part of
@@ -127,6 +130,7 @@ pub struct LinkFacts {
     pub return_type: Option<String>,
     pub trait_implementation: bool,
     pub default_export: bool,
+    pub function_value: bool,
 }
 
 /// Facts of a reference that only the resolver uses.
@@ -478,6 +482,7 @@ impl<'tree> Extractor<'_, 'tree> {
                 .map(|result| context.text(result)),
             trait_implementation: false,
             default_export: false,
+            function_value: false,
         };
         if draft.kind == SymbolKind::Module {
             draft.role = ScopeRole::Module;
@@ -752,6 +757,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
             return_type: draft.return_type,
             trait_implementation: draft.trait_implementation,
             default_export: draft.default_export,
+            function_value: draft.function_value,
         });
     }
     let mut calls = extractor.calls;

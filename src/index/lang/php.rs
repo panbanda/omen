@@ -297,6 +297,7 @@ impl LanguageSpec for Php {
     fn refine<'tree>(&self, draft: &mut Draft<'tree>, context: &Context<'_, 'tree>) -> bool {
         let node = draft.node;
         if is_closure(node) {
+            draft.function_value = true;
             if let Some(variable) = closure_variable(node) {
                 draft.span = Span::between(&variable, &node);
             }

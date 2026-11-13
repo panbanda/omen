@@ -471,4 +471,36 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn test_call_in_a_function_literal_without_a_name_is_via_closure() {
+        use crate::index::imports::testing::index;
+        let files = [(
+            "main.go",
+            "package main\n\nfunc local() int { return 4 }\n\nfunc run() int {\n\tdirect := local()\n\tapply(func() int { return local() })\n\tnamed := func() int { return local() }\n\treturn direct + named()\n}\n",
+        )];
+        let facts = index(&files);
+        let flags: Vec<(u32, &str, Option<&str>, bool)> = facts[0]
+            .references
+            .iter()
+            .map(|reference| {
+                (
+                    reference.name_range.start_line,
+                    reference.name.as_str(),
+                    reference.enclosing.as_deref(),
+                    reference.via_closure,
+                )
+            })
+            .collect();
+        assert_eq!(
+            flags,
+            [
+                (6, "local", Some("main.go#run"), false),
+                (7, "apply", Some("main.go#run"), false),
+                (7, "local", Some("main.go#run"), true),
+                (8, "local", Some("main.go#run.named"), false),
+                (9, "named", Some("main.go#run"), false),
+            ]
+        );
+    }
 }

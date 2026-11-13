@@ -764,9 +764,8 @@ impl<'a> Resolver<'a> {
                 || (matches!(family, Family::Python | Family::C) && is_container(symbol))
         };
         // A PHP variable and a PHP function do not share names. `$name()`
-        // calls the function value that the local name holds. The range of
-        // a function value starts at its variable.
-        let php_value = |id: &Id| self.symbol(*id).signature.starts_with('$');
+        // calls the function value that the local name holds.
+        let php_value = |id: &Id| self.facts(*id).function_value;
         if let (Family::Php, Some(variable)) = (family, name.strip_prefix('$')) {
             let held: Vec<Id> = self
                 .named(variable, file)
