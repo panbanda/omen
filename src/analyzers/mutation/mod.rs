@@ -353,7 +353,9 @@ impl AnalyzerTrait for Analyzer {
         }
 
         install_signal_handler()?;
-        safety::begin_run()?;
+        // The drop of this value ends the run. Thus each return below, also a
+        // return with an error, makes the decision about an interrupt.
+        let run = safety::begin_run()?;
 
         let start = Instant::now();
 
@@ -482,7 +484,7 @@ impl AnalyzerTrait for Analyzer {
         // After an interrupt the executor starts no test command, and the
         // mutants that it did not run look like build errors. This call does
         // not return in that case, thus no report comes from such results.
-        safety::conclude_run();
+        run.conclude();
         let executed_results = executed_results
             .map_err(|_| Error::analysis("Mutation executor thread panicked"))??;
 
@@ -838,6 +840,26 @@ mod tests {
             .allow_dirty(true)
             .analyze(&ctx)
             .is_ok());
+    }
+
+    /// A run that stops with an error before its first mutant must end: the
+    /// interrupt watcher must not stay active for a run that does not exist.
+    #[cfg(unix)]
+    #[test]
+    fn test_run_that_stops_with_an_error_ends_the_run() {
+        let _serial = safety::PROCESS_GATE_TESTS.lock();
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("test.rs"), "fn value() -> i32 { 1 }\n").unwrap();
+        let files = FileSet::from_path_default(temp.path()).unwrap();
+        let config = crate::config::Config::default();
+        let ctx = AnalysisContext::new(&files, &config, Some(temp.path()));
+
+        // The directory has no project file, thus omen finds no test command.
+        let result = Analyzer::new().allow_dirty(true).analyze(&ctx);
+
+        assert!(result.is_err());
+        assert_eq!(safety::active_runs_of_the_process(), 0);
+        assert_eq!(safety::sigint_disposition(), libc::SIG_DFL);
     }
 
     #[test]
