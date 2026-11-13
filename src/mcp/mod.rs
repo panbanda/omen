@@ -2469,6 +2469,13 @@ mod tests {
         let envelope: Value =
             serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
         assert!(envelope["result"]["symbols"].as_array().unwrap().len() <= 1);
+        // The envelope tells that `max_symbols` cut the list.
+        assert_eq!(
+            envelope["truncated"],
+            json!([{"path": "/symbols", "total": 3, "returned": 1}])
+        );
+        let whole = envelope_of(&server, "repomap", json!({"max_symbols": 3, "limit": 0}));
+        assert_eq!(whole["truncated"], json!([]));
     }
 
     #[test]

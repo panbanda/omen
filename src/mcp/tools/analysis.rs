@@ -255,10 +255,27 @@ pub(super) static REPOMAP: ToolSpec = ToolSpec {
     paginated: Pagination::Field("symbols"),
     handler: |server, arguments| {
         let max_symbols = arguments.count("max_symbols").unwrap_or(0);
-        server.analyze(
-            arguments,
-            crate::analyzers::repomap::Analyzer::new().with_max_symbols(max_symbols),
-        )
+        let analyzer = |limit| crate::analyzers::repomap::Analyzer::new().with_max_symbols(limit);
+        let output = server.analyze(arguments, analyzer(max_symbols))?;
+        let ToolOutput::Data(mut data) = output else {
+            return Ok(output);
+        };
+        let returned = data.result["symbols"].as_array().map_or(0, Vec::len);
+        // A full list tells that the limit can have cut symbols. A second run
+        // without the limit gives the total.
+        if max_symbols > 0 && returned == max_symbols {
+            if let ToolOutput::Data(all) = server.analyze(arguments, analyzer(0))? {
+                let total = all.result["symbols"].as_array().map_or(0, Vec::len);
+                if total > returned {
+                    data.truncated.push(crate::mcp::envelope::Truncation {
+                        path: "/symbols".to_string(),
+                        total,
+                        returned,
+                    });
+                }
+            }
+        }
+        Ok(ToolOutput::Data(data))
     },
 };
 
