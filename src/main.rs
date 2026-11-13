@@ -670,7 +670,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             run_context(path, &config, args, format)?;
         }
         Command::Report(cmd) => {
-            run_report(path, &config, &cmd.subcommand)?;
+            run_report(path, &config, &cmd.subcommand, local_ref(&cli))?;
         }
         Command::Search(ref cmd) => {
             run_search(path, &config, cmd.subcommand.clone(), format)?;
@@ -1209,6 +1209,7 @@ fn run_report(
     path: &PathBuf,
     config: &Config,
     subcommand: &ReportSubcommand,
+    git_ref: Option<&str>,
 ) -> omen::core::Result<()> {
     use serde_json::{json, Value};
 
@@ -1247,6 +1248,14 @@ fn run_report(
             });
             let metadata_path = args.data.join("metadata.json");
             std::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata)?)?;
+
+            if let Some(reference) = git_ref {
+                let changes = omen::changeset::build::compute(path, Some(reference), config)?;
+                std::fs::write(
+                    args.data.join("diff.json"),
+                    serde_json::to_string_pretty(&changes)?,
+                )?;
+            }
 
             let skip_list: Vec<&str> = args
                 .skip

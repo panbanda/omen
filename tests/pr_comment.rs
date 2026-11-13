@@ -317,6 +317,66 @@ fn test_cli_max_bytes_limits_the_comment() {
 }
 
 #[test]
+fn test_report_generate_with_ref_writes_the_changes_and_render_shows_them() {
+    let directory = repository();
+    let data = TempDir::new().expect("data directory");
+    let skip = "complexity,satd,stubs,deadcode,churn,clones,defect,changes,tdg,graph,hotspot,\
+                temporal,ownership,cohesion,repomap,smells,flags,score,trend";
+    let generate = std::process::Command::new(env!("CARGO_BIN_EXE_omen"))
+        .arg("-p")
+        .arg(directory.path())
+        .args([
+            "--ref", "main", "report", "generate", "--skip", skip, "--data",
+        ])
+        .arg(data.path())
+        .current_dir(directory.path())
+        .output()
+        .expect("omen starts");
+    assert!(
+        generate.status.success(),
+        "{}",
+        String::from_utf8_lossy(&generate.stderr)
+    );
+    let stored = std::fs::read_to_string(data.path().join("diff.json")).expect("diff.json");
+    let changes: ChangeSet = serde_json::from_str(&stored).expect("change set");
+    assert_eq!(changes.target, "main");
+
+    let output = data.path().join("report.html");
+    let render = std::process::Command::new(env!("CARGO_BIN_EXE_omen"))
+        .args(["report", "render", "--data"])
+        .arg(data.path())
+        .arg("--output")
+        .arg(&output)
+        .output()
+        .expect("omen starts");
+    assert!(
+        render.status.success(),
+        "{}",
+        String::from_utf8_lossy(&render.stderr)
+    );
+    let html = std::fs::read_to_string(output).expect("report");
+    assert!(html.contains("Changes since"));
+}
+
+#[test]
+fn test_report_generate_without_ref_writes_no_changes() {
+    let directory = repository();
+    let data = TempDir::new().expect("data directory");
+    let skip = "complexity,satd,stubs,deadcode,churn,clones,defect,changes,tdg,graph,hotspot,\
+                temporal,ownership,cohesion,repomap,smells,flags,score,trend";
+    let generate = std::process::Command::new(env!("CARGO_BIN_EXE_omen"))
+        .arg("-p")
+        .arg(directory.path())
+        .args(["report", "generate", "--skip", skip, "--data"])
+        .arg(data.path())
+        .current_dir(directory.path())
+        .output()
+        .expect("omen starts");
+    assert!(generate.status.success());
+    assert!(!data.path().join("diff.json").exists());
+}
+
+#[test]
 fn test_cli_json_keeps_the_risk_shape() {
     let directory = repository();
     let value = fixture::cli_json(directory.path(), &["diff", "-t", "main"]);

@@ -64,6 +64,7 @@ src/
   benchmark/     - Paired quality benchmark comparing two omen binaries
   eval/          - Fail-closed scoring of paired coding-agent outcome records
   semantic/      - TF-IDF indexing, search, cache, and multi-repo support
+  changeset/     - Changed symbols and calls between two commits, pull-request comment
   context.rs     - Agent-oriented repository context
   symbol.rs      - Symbol lookup and relationship reports
   git/           - Git operations (log, blame, diff)
@@ -111,7 +112,7 @@ Top-level commands (flat structure):
 - `clones` - Code clone detection
 - `defect` - Defect probability prediction
 - `changes` - Commit-level change risk (JIT)
-- `diff` - Branch diff risk analysis
+- `diff` - Branch diff risk analysis. With `-f markdown` it writes the pull-request comment: it starts with `<!-- omen:diff -->`, and `--max-bytes` (default 60000, 0 = no limit) and `--max-nodes` (default 30) limit it. `report generate --ref REF` adds the "Changes since" view to the HTML report.
 - `tdg` - Technical Debt Gradient
 - `graph` - Dependency graph
 - `hotspot` - High churn + complexity files

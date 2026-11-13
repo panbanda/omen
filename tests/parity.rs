@@ -614,6 +614,8 @@ const TABLE_ENCODING: &str =
     "The table encoding is only for MCP results. The CLI flag `--compact` has a different meaning.";
 const FILE_FILTER: &str = "The tools have no file filter. They read each file below `path`.";
 const GATE: &str = "A tool gives data and does not apply a gate.";
+const PULL_REQUEST_COMMENT: &str =
+    "Only the Markdown comment of the CLI uses the flag. A tool gives JSON and does not write a comment.";
 const SINCE: &str = "The tool accepts the window only as `days`.";
 const PROCESS: &str = "The flag controls the CLI process, not the analysis.";
 
@@ -642,6 +644,8 @@ const CLI_ONLY: &[((&str, &str), &str)] = &[
     (("*", "glob"), FILE_FILTER),
     (("*", "exclude"), FILE_FILTER),
     (("*", "changed_since"), FILE_FILTER),
+    (("diff", "max_bytes"), PULL_REQUEST_COMMENT),
+    (("diff", "max_nodes"), PULL_REQUEST_COMMENT),
     (("complexity", "gate"), GATE),
     (("complexity", "max_cyclomatic"), GATE),
     (("complexity", "max_cognitive"), GATE),
