@@ -1,0 +1,46 @@
+---
+source: tests/output_shape.rs
+expression: body
+---
+{
+  "error": {
+    "code": "missing_argument",
+    "expected": "a string",
+    "message": "The argument `symbol` is necessary.",
+    "next": "Send the call again with `symbol`.",
+    "param": "symbol",
+    "received": null,
+    "suggestions": []
+  },
+  "errors": [
+    {
+      "code": "missing_argument",
+      "expected": "a string",
+      "message": "The argument `symbol` is necessary.",
+      "next": "Send the call again with `symbol`.",
+      "param": "symbol",
+      "received": null,
+      "suggestions": []
+    },
+    {
+      "code": "invalid_argument",
+      "expected": "an integer from 0 to 4294967295",
+      "message": "The value of `depth` is not correct.",
+      "next": "Send the call again with a correct value for `depth`.",
+      "param": "depth",
+      "received": "2",
+      "suggestions": []
+    },
+    {
+      "code": "unknown_argument",
+      "expected": "one of: symbol, depth, direction, path, compact, limit, offset",
+      "message": "The tool `impact` has no argument `symbl`.",
+      "next": "Use a name from `suggestions`.",
+      "param": "symbl",
+      "received": null,
+      "suggestions": [
+        "symbol"
+      ]
+    }
+  ]
+}

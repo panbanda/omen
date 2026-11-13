@@ -1,0 +1,18 @@
+---
+source: tests/output_shape.rs
+expression: body
+---
+{
+  "error": {
+    "code": "invalid_argument",
+    "expected": "one of: callers, callees, both",
+    "message": "The value of `direction` is not correct.",
+    "next": "Send the call again with a correct value for `direction`.",
+    "param": "direction",
+    "received": "caller",
+    "suggestions": [
+      "callers",
+      "callees"
+    ]
+  }
+}

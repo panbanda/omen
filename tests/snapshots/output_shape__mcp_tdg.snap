@@ -9,6 +9,8 @@ expression: "shape(&response, &dynamic_key_objects)"
     "content": [
       {
         "text": {
+          "has_more": "bool",
+          "next_offset": "null",
           "offset": "number",
           "result": {
             "average_grade": "string",
@@ -50,7 +52,8 @@ expression: "shape(&response, &dynamic_key_objects)"
           },
           "returned": "number",
           "tool": "string",
-          "total_items": "number"
+          "total_items": "number",
+          "truncated": []
         },
         "type": "string"
       }

@@ -849,10 +849,15 @@ Omen includes a Model Context Protocol (MCP) server that exposes all analyzers a
 - `score` - Composite health score (0-100)
 - `semantic_search` - Natural language code search
 - `get_symbol` - Source, signature, location, relationships, and complexity for one symbol
+- `task_context` - Bounded context for one definition, with a byte budget
 - `impact` - Transitive caller/callee blast-radius analysis
 - `semantic_search_hyde` - HyDE-style search (query with a hypothetical code snippet)
 
-Each tool honors the parameters advertised in its MCP input schema. Every tool also accepts `limit` (default 50) and `offset` (default 0). JSON responses are serialized compactly and wrapped in an envelope containing `tool`, `total_items`, `returned`, `offset`, and `result` (plus `git_skipped_reason` when applicable). Some tools can return agent-facing Markdown when their advertised `format` parameter allows it.
+The server validates the arguments of each call against the input schema of the tool. An unknown argument, a value of the wrong type, a value out of its bounds, and a value that is not in its enum are errors. The server does not replace an incorrect value with a default.
+
+Each tool gives compact JSON in the same envelope: `tool`, `total_items`, `returned`, `offset`, `has_more`, `next_offset`, `truncated`, and `result`. `git_skipped_reason` is present when an analyzer ran without git data. Each tool accepts `limit` (default 50) and `offset` (default 0), but not `task_context`, which has a byte budget. When `has_more` is `true`, send the same call with `offset` set to `next_offset`. `context` with `format: "markdown"` gives text without an envelope.
+
+A failure of a tool is a result with `isError: true` and a structured `error` object with a `code`, such as `invalid_argument`, `not_found`, or `ambiguous`. See [docs/MCP_CONTEXT.md](docs/MCP_CONTEXT.md) for the full contract.
 
 **Why it matters:** LLMs work best when they have access to structured tools rather than parsing unstructured output. MCP provides a standard interface for Claude Desktop and other compatible assistants, while pagination keeps large results within context budgets.
 

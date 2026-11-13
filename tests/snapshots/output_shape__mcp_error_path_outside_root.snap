@@ -1,0 +1,15 @@
+---
+source: tests/output_shape.rs
+expression: body
+---
+{
+  "error": {
+    "code": "path_outside_root",
+    "expected": "a path in '<root>'",
+    "message": "The path '/' is not in the MCP root '<root>'.",
+    "next": "Give a path in the MCP root, or start the server with `--allow-external-paths`.",
+    "param": "path",
+    "received": "/",
+    "suggestions": []
+  }
+}

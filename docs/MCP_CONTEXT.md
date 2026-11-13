@@ -5,15 +5,105 @@
 1. Call `context` once for repository orientation. Cache only for the same repository revision.
 2. Use `repomap` for ranked symbol/location discovery, or `impact` for candidate graph traversal.
 3. Call `get_symbol` with `include_source: false` to inspect relationships and resolution evidence.
-4. Fetch source only for the selected definition. Use `file:name` and `start_line` from an ambiguity choice.
+4. Get the source only for the selected definition. Use the `name` and the `start_line` of one suggestion of an `ambiguous` error.
 
-An ambiguous `get_symbol` query now returns `found: true`, `ambiguous: true`,
-`choices`, and a navigation hint. It does **not** return an arbitrarily selected
-definition's source, callers, or callees. Choices contain qualified name, exact
-start line, and signature. `start_line` is a positive u32 and is matched exactly,
-not as a containing source range. A nonexistent line returns `found: false`.
-File and line identify a definition within the current checkout, not across edits.
-The CLI's existing first-match behavior is unchanged for compatibility.
+When a name agrees with more than one definition, `get_symbol` and
+`task_context` give an error with the code `ambiguous`. They do not select a
+definition. `error.suggestions` holds one object for each choice, with the
+qualified `name` and the `start_line`. For `get_symbol`, each object also has
+the `signature`. `start_line` is an integer from 1 to 4294967295. It must be
+equal to the line on which the definition starts. When no definition starts on
+that line, the tool gives an error with the code `not_found`. The file and the
+line identify a definition in the current checkout, not after an edit.
+
+## Arguments, errors, and the envelope
+
+One `ToolSpec` in `src/mcp/tools/` is the source of each tool. The schema in
+`tools/list`, the validation of arguments, and the list of tool names come from
+these specifications.
+
+### Arguments
+
+The server validates the arguments of each call before it runs the tool. Each
+input schema has `additionalProperties: false`. The server does not replace an
+incorrect value with a default. One call reports all its problems.
+
+| Code | Cause |
+|---|---|
+| `missing_argument` | A required argument is absent. |
+| `invalid_argument` | A value has the wrong type, is out of its bounds, or is not in its enum. A `null` value is also invalid. |
+| `unknown_argument` | The tool has no argument with that name. `suggestions` holds the nearest valid names. |
+
+### Errors
+
+A JSON-RPC error object is only for a protocol fault:
+
+- A request that is not valid JSON (`-32700`).
+- An unknown method (`-32601`).
+- An unknown tool, or a `tools/call` request without a tool name (`-32602`).
+
+Each other failure is a tool result with `isError: true`. The text of the
+result and its `structuredContent` hold the same JSON:
+
+```json
+{
+  "error": {
+    "code": "invalid_argument",
+    "message": "The value of `direction` is not correct.",
+    "param": "direction",
+    "expected": "one of: callers, callees, both",
+    "received": "caller",
+    "suggestions": ["callers", "callees"],
+    "next": "Send the call again with a correct value for `direction`."
+  }
+}
+```
+
+Each key of `error` is always present. A key without a value is `null`, and
+`suggestions` without a value is an empty array. When one call has more than
+one problem, `errors` holds all of them and `error` is the first.
+
+The other codes are:
+
+| Code | Cause |
+|---|---|
+| `not_found` | A path does not exist, or no definition agrees with a symbol name. For a symbol, `suggestions` holds near names. |
+| `ambiguous` | A symbol name agrees with more than one definition. `suggestions` holds the choices. |
+| `path_outside_root` | A path is not in the MCP root. Start the server with `--allow-external-paths` to permit such a path. |
+| `git_unavailable` | The tool needs git data that git cannot give. |
+| `internal` | All other failures of the server or of an analyzer. |
+
+### Envelope
+
+Each tool gives its result in the same envelope:
+
+| Key | Value |
+|---|---|
+| `tool` | The tool name. |
+| `total_items` | The number of items in the primary list before pagination, or `null` when the result has no list. |
+| `returned` | The number of items in the primary list of this result. |
+| `offset` | The offset that the call gave. |
+| `has_more` | `true` when a next page exists. |
+| `next_offset` | The `offset` of the next page, or `null` when `has_more` is `false`. |
+| `truncated` | One `{path, total, returned}` object for each list in `result` that does not hold all its items. |
+| `result` | The data of the tool. |
+| `git_skipped_reason` | Present only when an analyzer ran without git data. |
+
+`path` in `truncated` is a JSON pointer from `result`. The segment `*` means
+each element of an array, such as `/files/*/functions`.
+
+`limit` has the default 50, and the value 0 removes the limit. `score` cuts
+each of its lists with the same `limit` and `offset`. Thus its `next_offset` is
+`offset` plus `limit`.
+
+`task_context` has no `limit` and no `offset`, because `max_bytes` controls its
+size. Its `total_items` and `returned` count the symbols, its `has_more` is
+always `false`, and `truncated` shows the lists that the byte budget cut.
+
+`context` with `format: "markdown"` gives text without an envelope.
+
+`initialize` gives an `instructions` string that tells an agent which tool to
+call first, and how to use the pagination and the errors.
 
 ## Lossless compact tables
 
