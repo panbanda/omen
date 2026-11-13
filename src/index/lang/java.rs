@@ -5,6 +5,14 @@ use tree_sitter::Node;
 use crate::index::extract::{Context, DefinitionRule, Draft, LanguageSpec, NameRule, ScopeRole};
 use crate::index::model::{Exported, Span, SymbolKind};
 
+use crate::index::model::{ImportBinding, ImportKind};
+
+const IMPORT_DECLARATION: &str = "import_declaration";
+const PACKAGE_DECLARATION: &str = "package_declaration";
+const SCOPED_IDENTIFIER: &str = "scoped_identifier";
+const IDENTIFIER: &str = "identifier";
+const ASTERISK: &str = "asterisk";
+
 pub struct Java;
 
 const LAMBDA_EXPRESSION: &str = "lambda_expression";
@@ -104,6 +112,46 @@ fn collect_type_names(node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<S
 }
 
 impl LanguageSpec for Java {
+    fn import_kinds(&self) -> Vec<&'static str> {
+        vec![IMPORT_DECLARATION]
+    }
+
+    fn import_hook_kinds(&self) -> Vec<&'static str> {
+        vec![SCOPED_IDENTIFIER, IDENTIFIER, ASTERISK]
+    }
+
+    /// An import of one type or one static member binds its last name. An
+    /// on-demand import is a wildcard, and its path has no `.*`.
+    fn imports(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<ImportBinding>) {
+        let Some(path) = qualified_name(node, context) else {
+            return;
+        };
+        let mut cursor = node.walk();
+        let on_demand = node
+            .children(&mut cursor)
+            .any(|child| child.kind() == ASTERISK);
+        if on_demand {
+            out.push(context.import(node, path, ImportKind::Wildcard, None, None));
+        } else {
+            let name = path.rsplit('.').next().unwrap_or(&path).to_string();
+            out.push(context.import(
+                node,
+                path,
+                ImportKind::Named,
+                Some(name.clone()),
+                Some(name),
+            ));
+        }
+    }
+
+    fn module_kinds(&self) -> Vec<&'static str> {
+        vec![PACKAGE_DECLARATION]
+    }
+
+    fn module_name(&self, node: Node<'_>, context: &Context<'_, '_>) -> Option<String> {
+        qualified_name(node, context)
+    }
+
     fn definitions(&self) -> Vec<DefinitionRule> {
         DEFINITIONS.to_vec()
     }
@@ -200,6 +248,15 @@ impl LanguageSpec for Java {
     }
 }
 
+/// The dotted name in a package declaration or an import declaration.
+fn qualified_name(declaration: Node<'_>, context: &Context<'_, '_>) -> Option<String> {
+    let mut cursor = declaration.walk();
+    let name = declaration
+        .named_children(&mut cursor)
+        .find(|child| [SCOPED_IDENTIFIER, IDENTIFIER].contains(&child.kind()))?;
+    Some(context.text(name).split_whitespace().collect())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::core::Language;
@@ -274,6 +331,50 @@ mod tests {
                 "Function add run 4-4 not_exported",
                 "Method run run 7-7 not_exported",
             ]
+        );
+    }
+
+    #[test]
+    fn test_imports() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            (
+                "Main.java",
+                "import java.util.List;\nimport java.util.function.*;\nimport shop.shapes.*;\nimport shop.shapes.Circle;\nimport static shop.util.Util.helper;\nimport static shop.util.Util.*;\nimport shop.shapes.Missing;\nimport shop.util.*;\n\npublic class Main {}\n",
+            ),
+            ("shop/shapes/Circle.java", "package shop.shapes;\n\npublic class Circle {}\n"),
+            ("shop/shapes/Shape.java", "package shop.shapes;\n\npublic interface Shape {}\n"),
+            (
+                "shop/util/Util.java",
+                "package shop.util;\n\npublic class Util {\n    public static int helper() { return 1; }\n}\n",
+            ),
+        ];
+        assert_eq!(
+            rows(&files, "Main.java"),
+            [
+                "1 Named java.util.List List->List external",
+                "2 Wildcard java.util.function -->- external",
+                "3 Wildcard shop.shapes -->- ambiguous(shop/shapes/Circle.java,shop/shapes/Shape.java)",
+                "4 Named shop.shapes.Circle Circle->Circle shop/shapes/Circle.java [shop/shapes/Circle.java#Circle]",
+                "5 Named shop.util.Util.helper helper->helper shop/util/Util.java",
+                "6 Wildcard shop.util.Util -->- shop/util/Util.java",
+                "7 Named shop.shapes.Missing Missing->Missing unresolved",
+                "8 Wildcard shop.util -->- shop/util/Util.java",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_two_files_that_declare_one_type_are_ambiguous() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            ("Main.java", "import shop.Circle;\n\nclass Main {}\n"),
+            ("a/Circle.java", "package shop;\n\nclass Circle {}\n"),
+            ("b/Circle.java", "package shop;\n\nclass Circle {}\n"),
+        ];
+        assert_eq!(
+            rows(&files, "Main.java"),
+            ["1 Named shop.Circle Circle->Circle ambiguous(a/Circle.java,b/Circle.java)"]
         );
     }
 }
