@@ -210,6 +210,14 @@ pub fn validate(corpus: &Corpus, labels: &BTreeMap<String, Labels>) -> Vec<Strin
                 }
             }
             if query.query_type == QueryType::NaturalLanguage {
+                // The tokenizer normalizes Unicode forms, but it does not find a
+                // letter of a different script that looks the same. ASCII text
+                // closes that gap for the name check.
+                if !query.query.is_ascii() {
+                    problems.push(format!(
+                        "{language}/{id}: the natural language query must have only ASCII characters"
+                    ));
+                }
                 if let Some((word, name)) = word_of_a_symbol_name(query, case_labels) {
                     problems.push(format!(
                         "{language}/{id}: the natural language query has the word `{word}` of the symbol name `{name}`"
@@ -1579,6 +1587,40 @@ mod tests {
 
         assert_eq!(grown, ["rust/i0: no rank, the base branch has rank 4"]);
     }
+    #[test]
+    fn a_natural_language_query_must_be_ascii() {
+        // Normalization does not find a letter of a different script that
+        // looks the same, such as the Cyrillic `е` in `hеlper`.
+        let corpus = corpus(vec![
+            serde_json::json!({"id": "cyrillic", "type": "natural_language",
+                "query": "call the h\u{435}lper", "expected": ["helper"]}),
+            serde_json::json!({"id": "sketch", "type": "code_sketch",
+                "query": "fn größe()", "expected": ["helper"]}),
+        ]);
+
+        let problems = validate(&corpus, &case_labels());
+
+        assert_eq!(
+            problems,
+            ["rust/cyrillic: the natural language query must have only ASCII characters"]
+        );
+    }
+
+    #[test]
+    fn a_name_word_in_a_different_unicode_form_is_a_leak() {
+        let corpus = corpus(vec![
+            serde_json::json!({"id": "wide", "type": "natural_language",
+            "query": "the \u{ff48}\u{ff45}\u{ff4c}\u{ff50}\u{ff45}\u{ff52} code", "expected": ["helper"]}),
+        ]);
+
+        let problems = validate(&corpus, &case_labels()).join("\n");
+
+        assert!(
+            problems.contains("rust/wide: the natural language query has the word `helper`"),
+            "{problems}"
+        );
+    }
+
     #[test]
     fn a_natural_language_query_must_not_have_a_word_of_the_symbol_name() {
         let named: Labels = serde_json::from_value(serde_json::json!({

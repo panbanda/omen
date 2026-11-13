@@ -16,26 +16,41 @@
 //! no stemming and there are no stop words.
 //!
 //! The letter classes are the Unicode classes, so the rules apply to text that
-//! is not ASCII. The tokenizer changes each character to lowercase without
-//! regard to its neighbours. Thus a token does not depend on the text around
-//! it, and each token is a part of [`lowercase`] of the input.
+//! is not ASCII. First the tokenizer changes the text to Unicode normalization
+//! form NFKC. Thus a precomposed and a decomposed accent, a ligature such as
+//! `ﬁ`, and full-width letters give the same tokens as the usual form. A
+//! combining mark that stays after normalization continues an identifier, and
+//! has the class of the character before it.
+//!
+//! The tokenizer changes each character to lowercase without regard to its
+//! neighbours. Thus a token does not depend on the text around it, and each
+//! token is a part of [`lowercase`] of the input.
+//!
+//! Limits: this is not full Unicode case folding. For example, `ß` and `ss`
+//! give different tokens, and so do `ς` and `σ`. Normalization does not join
+//! letters of different scripts that look the same, such as the Latin `e` and
+//! the Cyrillic `е`.
+
+use unicode_normalization::char::is_combining_mark;
+use unicode_normalization::UnicodeNormalization;
 
 /// Change this value when the tokens for some input change. An index that an
 /// older version made is then not valid.
-pub const TOKENIZER_VERSION: u32 = 1;
+pub const TOKENIZER_VERSION: u32 = 2;
 
-/// The lowercase form that the tokenizer uses: each character changes
-/// independently of its neighbours.
+/// The lowercase form that the tokenizer uses: the NFKC form of the text, with
+/// each character changed independently of its neighbours.
 pub fn lowercase(text: &str) -> String {
-    text.chars().flat_map(char::to_lowercase).collect()
+    text.nfkc().flat_map(char::to_lowercase).collect()
 }
 
 /// Divide text into tokens.
 pub fn tokenize(text: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut identifier = String::new();
-    for character in text.chars() {
-        if character.is_alphanumeric() || character == '_' {
+    for character in text.nfkc() {
+        let continues = !identifier.is_empty() && is_combining_mark(character);
+        if character.is_alphanumeric() || character == '_' || continues {
             identifier.push(character);
         } else {
             push_identifier_tokens(&identifier, &mut tokens);
@@ -55,7 +70,8 @@ fn push_identifier_tokens(identifier: &str, tokens: &mut Vec<String>) {
     let has_more_than_one_part = parts.len() > 1;
     tokens.extend(parts);
     if has_more_than_one_part {
-        tokens.push(lowercase(identifier));
+        let characters: Vec<char> = identifier.chars().collect();
+        tokens.push(lowercase_of(&characters));
     }
 }
 
@@ -86,12 +102,20 @@ fn case_and_digit_parts(segment: &str) -> Vec<String> {
     use CharacterClass::{Digit, Lowercase, Uppercase};
 
     let characters: Vec<char> = segment.chars().collect();
+    let mut classes: Vec<CharacterClass> = Vec::with_capacity(characters.len());
+    for &character in &characters {
+        let class = match classes.last() {
+            Some(&previous) if is_combining_mark(character) => previous,
+            _ => class_of(character),
+        };
+        classes.push(class);
+    }
     let mut parts = Vec::new();
     let mut start = 0;
     for index in 1..characters.len() {
-        let previous = class_of(characters[index - 1]);
-        let current = class_of(characters[index]);
-        let next = characters.get(index + 1).copied().map(class_of);
+        let previous = classes[index - 1];
+        let current = classes[index];
+        let next = classes.get(index + 1).copied();
         let boundary = (previous == Digit) != (current == Digit)
             || (previous == Lowercase && current == Uppercase)
             // The last capital of an acronym starts the next word.
@@ -203,8 +227,37 @@ mod tests {
     }
 
     #[test]
+    fn equivalent_forms_of_a_text_give_equal_tokens() {
+        // Precomposed and decomposed accents, a compatibility ligature, and
+        // full-width letters.
+        let cases: &[(&str, &str)] = &[
+            ("café", "cafe\u{301}"),
+            ("naïve_café", "nai\u{308}ve_cafe\u{301}"),
+            ("größeÄndern", "gro\u{308}ßeA\u{308}ndern"),
+            ("file", "\u{fb01}le"),
+            ("helper", "\u{ff48}\u{ff45}\u{ff4c}\u{ff50}\u{ff45}\u{ff52}"),
+        ];
+
+        for (plain, other) in cases {
+            assert_eq!(tokenize(plain), tokenize(other), "input: {other:?}");
+        }
+    }
+
+    #[test]
+    fn a_combining_mark_continues_an_identifier() {
+        // U+0331 has no precomposed form with `x`, so it stays a mark.
+        assert_eq!(tokenize("ax\u{331}b"), ["ax\u{331}b"]);
+        assert_eq!(
+            tokenize("twiceLx\u{331}cal"),
+            ["twice", "lx\u{331}cal", "twicelx\u{331}cal"]
+        );
+        // A mark without an identifier before it is not a token.
+        assert_eq!(tokenize(" \u{331}"), Vec::<String>::new());
+    }
+
+    #[test]
     fn the_version_is_set() {
-        assert_eq!(TOKENIZER_VERSION, 1);
+        assert_eq!(TOKENIZER_VERSION, 2);
     }
 
     proptest! {
