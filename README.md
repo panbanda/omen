@@ -610,6 +610,8 @@ fail_under = 70.0
 score = "error"
 ```
 
+A gated command writes its normal report to stdout in each gate mode. The gate writes the violations to stderr. `warn` exits with status 0, and `error` exits with status 2.
+
 Run `omen score` to see your current scores, then set thresholds slightly below those values. Gradually increase them over time.
 
 **Enforcing on commit with [Lefthook](https://github.com/evilmartians/lefthook):**

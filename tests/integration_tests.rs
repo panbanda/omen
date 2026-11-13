@@ -393,7 +393,8 @@ fn test_threshold_violation_exits_two_and_emits_json() {
         ])
         .assert()
         .code(2)
-        .stdout(predicate::str::contains("\"violations\""));
+        .stdout(predicate::str::contains("\"overall_score\""))
+        .stderr(predicate::str::contains("is below minimum"));
 }
 
 #[test]
@@ -1435,7 +1436,8 @@ fn test_score_gate_error_exits_two_and_emits_json() {
         ])
         .assert()
         .code(2)
-        .stdout(predicate::str::contains("\"violations\""));
+        .stdout(predicate::str::contains("\"overall_score\""))
+        .stderr(predicate::str::contains("is below minimum"));
 }
 
 #[test]
@@ -2746,4 +2748,126 @@ fn test_all_applies_top_to_each_section_as_the_single_command_does() {
     let markdown = all_output(&["-f", "markdown", "all", "--top", "1"]);
     let full = all_output(&["-f", "markdown", "all"]);
     assert!(markdown.len() < full.len());
+}
+
+// ---------------------------------------------------------------------------
+// A gate does not change the report on stdout
+// ---------------------------------------------------------------------------
+
+/// One gated command with a fixture that has a violation.
+struct GateCase {
+    command: &'static str,
+    arguments: &'static [&'static str],
+    /// The configuration that makes the fixture a violation.
+    thresholds: &'static str,
+    source: &'static str,
+}
+
+const GATE_CASES: &[GateCase] = &[
+    GateCase {
+        command: "complexity",
+        arguments: &["complexity"],
+        thresholds: "[complexity]\ncyclomatic_error = 1\n",
+        source:
+            "pub fn branchy(a: bool, b: bool) -> u32 { if a { 1 } else if b { 2 } else { 3 } }\n",
+    },
+    GateCase {
+        command: "score",
+        arguments: &["score"],
+        thresholds: "[score]\nfail_under = 100.0\n",
+        source:
+            "// TODO: remove this\npub fn later(a: bool) -> u32 { if a { todo!() } else { 1 } }\n",
+    },
+    GateCase {
+        command: "stubs",
+        arguments: &["stubs"],
+        thresholds: "",
+        source: "pub fn later() -> u32 { todo!() }\n",
+    },
+    #[cfg(feature = "mutation")]
+    GateCase {
+        command: "mutation",
+        arguments: &["mutation", "--dry-run"],
+        thresholds: "",
+        source: "pub fn is_positive(x: i32) -> bool { x > 0 }\n",
+    },
+];
+
+/// Removes the one value of a report that changes between two runs.
+fn without_duration(stdout: &[u8]) -> String {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .filter(|line| !line.contains("duration_ms") && !line.contains("Duration"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn test_gate_keeps_the_report_and_writes_the_violation_to_stderr() {
+    for case in GATE_CASES {
+        let repository = TempDir::new().unwrap();
+        std::fs::write(repository.path().join("lib.rs"), case.source).unwrap();
+        let configuration = TempDir::new().unwrap();
+        let write_configuration = |name: &str, gate: &str| -> String {
+            let file = configuration.path().join(name);
+            std::fs::write(&file, format!("{}{gate}", case.thresholds)).unwrap();
+            file.to_str().unwrap().to_string()
+        };
+        let plain = write_configuration("plain.toml", "");
+        let run = |format: &str, config: &str, extra: &[&str]| {
+            omen()
+                .args(["-p", repository.path().to_str().unwrap()])
+                .args(["-f", format, "-c", config])
+                .args(case.arguments)
+                .args(extra)
+                .output()
+                .expect("command runs")
+        };
+
+        for format in ["json", "markdown", "text"] {
+            let off = run(format, &plain, &[]);
+            assert_eq!(off.status.code(), Some(0), "{} off", case.command);
+            let report = without_duration(&off.stdout);
+            assert!(
+                !report.is_empty(),
+                "{} {format} has no report",
+                case.command
+            );
+
+            for (mode, status) in [("warn", 0), ("error", 2)] {
+                let from_config = write_configuration(
+                    &format!("{mode}.toml"),
+                    &format!("\n[gate]\n{} = \"{mode}\"\n", case.command),
+                );
+                for (source, output) in [
+                    ("flag", run(format, &plain, &["--gate", mode])),
+                    ("configuration", run(format, &from_config, &[])),
+                ] {
+                    let label = format!("{} {format} {mode} from the {source}", case.command);
+                    assert_eq!(output.status.code(), Some(status), "{label}");
+                    assert_eq!(without_duration(&output.stdout), report, "{label}");
+                    assert!(
+                        output.stderr.len() > off.stderr.len(),
+                        "{label}: stderr has no violation"
+                    );
+                }
+            }
+
+            let off_flag = run(
+                format,
+                &write_configuration(
+                    "error.toml",
+                    &format!("\n[gate]\n{} = \"error\"\n", case.command),
+                ),
+                &["--gate", "off"],
+            );
+            assert_eq!(
+                off_flag.status.code(),
+                Some(0),
+                "{} --gate off",
+                case.command
+            );
+            assert_eq!(without_duration(&off_flag.stdout), report);
+        }
+    }
 }

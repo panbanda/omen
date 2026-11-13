@@ -57,6 +57,15 @@ apply to it, also on `search query`.
 On `outline`, `--top` and `--offset` page the `files` list in each format. On
 `symbol`, the two flags page each list, for example `callers` and `callees`.
 
+### Output of a gated command
+
+`complexity`, `score`, `stubs`, and `mutation` write the normal report to stdout
+for each gate mode. The gate writes the violations to stderr. `warn` exits with
+status 0, and `error` exits with status 2. Before 5.0, a gate on `complexity`
+or `score` replaced the report: stdout had a `violations` JSON document, or
+nothing for the other formats. Read the violations from stderr, or calculate
+them from the report.
+
 ### Output of `all`
 
 `all` obeys `-f`. Before 5.0, it wrote JSON for each format, also for the
