@@ -25,7 +25,7 @@ use omen::benchmark::truth::{
     ObservedCall, ObservedImport, ObservedSymbol,
 };
 use omen::core::Language;
-use omen::index::extract::{extract_symbols, link_files, FileSymbols};
+use omen::index::extract::{extract_file, link_files};
 use omen::index::model::{Exported, Symbol, SymbolKind};
 use omen::parser::{extract_imports, ImportKind, Parser};
 
@@ -217,11 +217,7 @@ fn observe(dir: &Path) -> Observed {
     for path in &files {
         let file = relative(dir, path);
         let parsed = Parser::new().parse_file(path).expect("parse");
-        index_files.push(FileSymbols {
-            symbols: extract_symbols(&parsed, &file),
-            file: file.clone(),
-            language: parsed.language,
-        });
+        index_files.push(extract_file(&parsed, &file));
         for import in extract_imports(&parsed) {
             if import.kind != ImportKind::Use {
                 continue;

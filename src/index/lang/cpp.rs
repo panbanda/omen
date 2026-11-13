@@ -4,9 +4,9 @@ use tree_sitter::Node;
 
 use super::c;
 use crate::index::extract::{
-    Context, DefinitionRule, Draft, LanguageSpec, NameRule, Scope, ScopeRole,
+    Context, DefinitionRule, Draft, LanguageSpec, Linked, NameRule, Scope, ScopeRole,
 };
-use crate::index::model::{Exported, Span, Symbol, SymbolKind};
+use crate::index::model::{Exported, Span, SymbolKind};
 
 pub struct Cpp;
 
@@ -24,6 +24,11 @@ const ACCESS_SPECIFIER: &str = "access_specifier";
 const FRIEND_DECLARATION: &str = "friend_declaration";
 const BASE_CLASS_CLAUSE: &str = "base_class_clause";
 const FIELD_DECLARATION_LIST: &str = "field_declaration_list";
+const PARAMETER_KINDS: &[&str] = &[
+    "parameter_declaration",
+    "optional_parameter_declaration",
+    "variadic_parameter_declaration",
+];
 
 const DEFINITIONS: &[DefinitionRule] = &[
     DefinitionRule::new(CLASS_SPECIFIER, SymbolKind::Class, NameRule::Field("name")),
@@ -132,19 +137,90 @@ fn collect_base_names(node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<S
     }
 }
 
-/// The last name of `a::b`.
-fn last_segment(qualified: &str) -> &str {
-    qualified.rsplit("::").next().unwrap_or(qualified)
+/// The kind of the scope that the name of a definition gives.
+enum Owner {
+    Missing,
+    /// The index does not give one answer.
+    NotOne,
+    Type,
+    Namespace,
 }
 
-/// Gives the visibility that all the declarations agree on.
-fn declared_visibility(name: &str, declarations: &[&Exported]) -> Exported {
-    match declarations.split_first() {
-        None => Exported::Unknown(format!("the index has no declaration of `{name}`")),
-        Some((first, rest)) if rest.iter().all(|other| other == first) => (*first).clone(),
-        Some(_) => Exported::Unknown(format!(
-            "the declarations of `{name}` do not have the same visibility"
-        )),
+/// Finds the scope that has this full path. Many files can open one
+/// namespace, but a type has one definition.
+fn owner(symbols: &[Linked<'_>], scope_path: &[String]) -> Owner {
+    let Some((name, container_path)) = scope_path.split_last() else {
+        return Owner::Missing;
+    };
+    let mut types = 0;
+    let mut namespaces = 0;
+    for candidate in symbols {
+        if candidate.symbol.name != *name || candidate.facts.container_path != container_path {
+            continue;
+        }
+        match candidate.symbol.kind {
+            SymbolKind::Class | SymbolKind::Struct => types += 1,
+            SymbolKind::Module => namespaces += 1,
+            _ => {}
+        }
+    }
+    match (types, namespaces) {
+        (0, 0) => Owner::Missing,
+        (1, 0) => Owner::Type,
+        (0, _) => Owner::Namespace,
+        _ => Owner::NotOne,
+    }
+}
+
+/// Finds the kind and the visibility on which the declarations of the
+/// definition at `position` agree. The error is the start of a reason.
+fn declaration(
+    symbols: &[Linked<'_>],
+    position: usize,
+    in_namespace: bool,
+) -> Result<(SymbolKind, Exported), &'static str> {
+    let definition = &symbols[position];
+    let mut found: Option<(SymbolKind, &Exported)> = None;
+    for (other, candidate) in symbols.iter().enumerate() {
+        let callable = matches!(
+            candidate.symbol.kind,
+            SymbolKind::Function | SymbolKind::Method | SymbolKind::Constructor
+        );
+        if other == position
+            || !callable
+            || candidate.symbol.receiver_type.is_some()
+            || candidate.symbol.name != definition.symbol.name
+            || candidate.facts.container_path != definition.facts.container_path
+            || candidate.facts.parameter_count != definition.facts.parameter_count
+        {
+            continue;
+        }
+        let fact = (candidate.symbol.kind, &candidate.symbol.exported);
+        match found {
+            None => found = Some(fact),
+            Some(first) if first == fact => {}
+            Some(_) => return Err("the declarations do not agree for"),
+        }
+    }
+    let Some((kind, exported)) = found else {
+        return Err("the index has no declaration of");
+    };
+    if (kind == SymbolKind::Function) != in_namespace {
+        return Err("the declaration has an unexpected kind for");
+    }
+    Ok((kind, exported.clone()))
+}
+
+/// The number of parameters that a parameter list declares. `(void)` declares none.
+fn parameter_count(parameters: Node<'_>, context: &Context<'_, '_>) -> usize {
+    let mut cursor = parameters.walk();
+    let declared: Vec<Node<'_>> = parameters
+        .named_children(&mut cursor)
+        .filter(|child| PARAMETER_KINDS.contains(&child.kind()))
+        .collect();
+    match declared.as_slice() {
+        [only] if context.text(*only) == "void" => 0,
+        _ => declared.len(),
     }
 }
 
@@ -171,6 +247,7 @@ impl LanguageSpec for Cpp {
             BASE_CLASS_CLAUSE,
             FIELD_DECLARATION_LIST,
         ]);
+        kinds.extend_from_slice(PARAMETER_KINDS);
         kinds
     }
 
@@ -216,6 +293,18 @@ impl LanguageSpec for Cpp {
             // `class Name;` refers to a class. It does not define the class.
             CLASS_SPECIFIER if draft.body.is_none() => return false,
             LAMBDA_EXPRESSION => draft.span = Span::between(&draft.name_node, &node),
+            // `namespace a::b` defines `b` in the scope `a`.
+            NAMESPACE_DEFINITION => {
+                let mut names: Vec<String> = draft
+                    .name
+                    .split("::")
+                    .map(|name| name.trim().to_string())
+                    .collect();
+                if let Some(last) = names.pop() {
+                    draft.name = last;
+                    draft.container_path.extend(names);
+                }
+            }
             _ => {}
         }
         if draft.kind.is_type() {
@@ -229,6 +318,11 @@ impl LanguageSpec for Cpp {
         if !is_function(node) {
             return true;
         }
+        draft.parameter_count = draft
+            .name_node
+            .parent()
+            .and_then(|declarator| declarator.child_by_field_name("parameters"))
+            .map(|parameters| parameter_count(parameters, context));
         if draft.name_node.kind() == QUALIFIED_IDENTIFIER {
             // The definition is not in the body of its class or its namespace.
             // The kind is `Method` until `link` finds that the scope is a namespace.
@@ -314,51 +408,46 @@ impl LanguageSpec for Cpp {
     /// A definition such as `int Scope::name() {}` does not tell if `Scope` is
     /// a class or a namespace, and it does not have the access of the member.
     /// The declaration in a different file gives these facts.
-    fn link(&self, symbols: &mut [&mut Symbol]) {
+    ///
+    /// A declaration agrees with a definition when the full scope path, the
+    /// name, and the number of parameters are the same. If the index does not
+    /// give one answer, the definition keeps its kind and its unknown visibility.
+    fn link(&self, symbols: &mut [Linked<'_>]) {
         let mut updates = Vec::new();
-        for (position, symbol) in symbols.iter().enumerate() {
-            let Some(qualifier) = &symbol.receiver_type else {
-                continue;
-            };
-            if !matches!(symbol.exported, Exported::Unknown(_)) {
+        for (position, definition) in symbols.iter().enumerate() {
+            let symbol = &definition.symbol;
+            if symbol.receiver_type.is_none() || !matches!(symbol.exported, Exported::Unknown(_)) {
                 continue;
             }
-            let owner = last_segment(qualifier);
-            let owner_has_kind = |kinds: &[SymbolKind]| {
-                symbols.iter().any(|candidate| {
-                    kinds.contains(&candidate.kind) && last_segment(&candidate.name) == owner
-                })
+            let scope_path = &definition.facts.container_path;
+            let name = format!("{}::{}", scope_path.join("::"), symbol.name);
+            let outcome = match owner(symbols, scope_path) {
+                Owner::Missing => Err(format!(
+                    "the index has no scope `{}`",
+                    scope_path.join("::")
+                )),
+                Owner::NotOne => Err(format!(
+                    "more than one definition has the name `{}`",
+                    scope_path.join("::")
+                )),
+                Owner::Type => declaration(symbols, position, false)
+                    .map_err(|problem| format!("{problem} `{name}`")),
+                Owner::Namespace => declaration(symbols, position, true)
+                    .map_err(|problem| format!("{problem} `{name}`")),
             };
-            let is_type = owner_has_kind(&[SymbolKind::Class, SymbolKind::Struct]);
-            let is_namespace = owner_has_kind(&[SymbolKind::Module]);
-            if is_type == is_namespace {
-                continue;
-            }
-            let declarations: Vec<&Exported> = symbols
-                .iter()
-                .enumerate()
-                .filter(|(other, candidate)| {
-                    *other != position
-                        && candidate.receiver_type.is_none()
-                        && candidate.container.as_deref() == Some(owner)
-                        && candidate.name == symbol.name
-                        && (candidate.kind == SymbolKind::Function) == is_namespace
-                })
-                .map(|(_, candidate)| &candidate.exported)
-                .collect();
-            let name = format!("{qualifier}::{}", symbol.name);
-            updates.push((
-                position,
-                is_namespace,
-                declared_visibility(&name, &declarations),
-            ));
+            updates.push((position, outcome));
         }
-        for (position, is_namespace, exported) in updates {
-            let symbol = &mut symbols[position];
-            symbol.exported = exported;
-            if is_namespace {
-                symbol.kind = SymbolKind::Function;
-                symbol.receiver_type = None;
+        for (position, outcome) in updates {
+            let symbol = &mut *symbols[position].symbol;
+            match outcome {
+                Ok((kind, exported)) => {
+                    symbol.kind = kind;
+                    symbol.exported = exported;
+                    if kind == SymbolKind::Function {
+                        symbol.receiver_type = None;
+                    }
+                }
+                Err(reason) => symbol.exported = Exported::Unknown(reason),
             }
         }
     }
@@ -367,7 +456,7 @@ impl LanguageSpec for Cpp {
 #[cfg(test)]
 mod tests {
     use crate::core::Language;
-    use crate::index::extract::testing::{keys, linked_rows, rows, rows_in, symbols};
+    use crate::index::extract::testing::{keys, linked_files, rows, rows_in, symbols};
 
     #[test]
     fn test_free_functions_and_linkage() {
@@ -474,52 +563,127 @@ mod tests {
         assert_eq!(symbols[3].key, "file#a.b.deep");
     }
 
+    const CIRCLE_HEADER: &str = "class Circle {\npublic:\n    explicit Circle(double radius);\n    double area() const;\nprivate:\n    double area(double factor) const;\nprotected:\n    double scaled(double factor) const;\n};\n";
+    const CIRCLE_SOURCE: &str = "Circle::Circle(double radius) {\n}\ndouble Circle::area() const {\n    return 1;\n}\ndouble Circle::area(double factor) const {\n    return 2;\n}\ndouble Circle::scaled(double factor) const {\n    return 3;\n}\n";
+
     #[test]
-    fn test_link_gives_the_access_of_the_class_declaration() {
-        let header = "class Circle {\npublic:\n    explicit Circle(double radius);\n    double area() const;\n    double area(double factor) const;\nprotected:\n    double scaled(double factor) const;\n};\n";
-        let source = "Circle::Circle(double radius) {\n}\ndouble Circle::area() const {\n    return 1;\n}\ndouble Circle::area(double factor) const {\n    return 2;\n}\ndouble Circle::scaled(double factor) const {\n    return 3;\n}\n";
-        let rows = linked_rows(&[
-            (Language::Cpp, "shapes.hpp", header),
-            (Language::Cpp, "shapes.cpp", source),
+    fn test_link_gives_the_access_of_the_declaration_with_the_same_parameter_count() {
+        let files = linked_files(&[
+            (Language::Cpp, "shapes.hpp", CIRCLE_HEADER),
+            (Language::Cpp, "shapes.cpp", CIRCLE_SOURCE),
         ]);
         assert_eq!(
-            rows[5..],
+            files["shapes.cpp"],
             [
                 "Constructor Circle Circle 1-2 exported",
                 "Method area Circle 3-5 exported",
-                "Method area Circle 6-8 exported",
+                "Method area Circle 6-8 not_exported",
                 "Method scaled Circle 9-11 not_exported",
             ]
         );
     }
 
     #[test]
+    fn test_link_does_not_depend_on_the_file_order() {
+        let header = (Language::Cpp, "shapes.hpp", CIRCLE_HEADER);
+        let source = (Language::Cpp, "shapes.cpp", CIRCLE_SOURCE);
+        let namespace = (
+            Language::Cpp,
+            "util.hpp",
+            "namespace util {\nint helper();\n}\n",
+        );
+        let function = (
+            Language::Cpp,
+            "util.cpp",
+            "int util::helper() {\n    return 1;\n}\n",
+        );
+        let ordered = linked_files(&[header, source, namespace, function]);
+        assert_eq!(
+            linked_files(&[function, namespace, source, header]),
+            ordered
+        );
+        assert_eq!(
+            linked_files(&[source, function, header, namespace]),
+            ordered
+        );
+        assert_eq!(ordered["util.cpp"], ["Function helper util 1-3 exported"]);
+    }
+
+    #[test]
     fn test_link_makes_a_namespace_member_a_function() {
         let header = "namespace util {\nint helper();\nstatic int quiet();\n}\nclass Util {\npublic:\n    static int helper();\n};\n";
-        let source = "int util::helper() {\n    return 1;\n}\nint util::quiet() {\n    return 2;\n}\nint Util::helper() {\n    return 5;\n}\nint missing::helper() {\n    return 6;\n}\n";
-        let rows = linked_rows(&[
+        let source = "int util::helper() {\n    return 1;\n}\nint util::quiet() {\n    return 2;\n}\nint Util::helper() {\n    return 5;\n}\nint missing::helper() {\n    return 6;\n}\nint util::absent() {\n    return 7;\n}\n";
+        let files = linked_files(&[
             (Language::Cpp, "util.hpp", header),
             (Language::Cpp, "util.cpp", source),
         ]);
         assert_eq!(
-            rows[5..],
+            files["util.cpp"],
             [
                 "Function helper util 1-3 exported",
                 "Function quiet util 4-6 not_exported",
                 "Method helper Util 7-9 exported",
                 "Method helper missing 10-12 unknown",
+                "Method absent util 13-15 unknown",
             ]
         );
     }
 
     #[test]
-    fn test_link_keeps_unknown_when_the_declarations_do_not_agree() {
-        let header = "class Circle {\npublic:\n    double area() const;\nprivate:\n    double area(double factor) const;\n};\n";
-        let source = "double Circle::area() const {\n    return 1;\n}\n";
-        let rows = linked_rows(&[
+    fn test_link_uses_the_full_scope_path() {
+        let header = "namespace a {\nclass B {\npublic:\n    void run();\n};\n}\nnamespace c {\nclass B {\n    void run();\n};\n}\nnamespace d::e {\nint deep();\n}\n";
+        let source = "void a::B::run() {\n}\nvoid c::B::run() {\n}\nvoid B::run() {\n}\nnamespace a {\nvoid B::run() {\n}\n}\nint d::e::deep() {\n    return 1;\n}\n";
+        let files = linked_files(&[
+            (Language::Cpp, "b.hpp", header),
+            (Language::Cpp, "b.cpp", source),
+        ]);
+        assert_eq!(
+            files["b.cpp"],
+            [
+                "Method run B 1-2 exported",
+                "Method run B 3-4 not_exported",
+                "Method run B 5-6 unknown",
+                "Module a - 7-10 exported",
+                "Method run B 8-9 exported",
+                "Function deep e 11-13 exported",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_link_abstains_when_declarations_with_the_same_parameter_count_do_not_agree() {
+        let header = "class Circle {\npublic:\n    double area(int factor) const;\nprivate:\n    double area(double factor) const;\n};\n";
+        let source = "double Circle::area(double factor) const {\n    return 1;\n}\n";
+        let files = linked_files(&[
             (Language::Cpp, "shapes.hpp", header),
             (Language::Cpp, "shapes.cpp", source),
         ]);
-        assert_eq!(rows[3..], ["Method area Circle 1-3 unknown"]);
+        assert_eq!(files["shapes.cpp"], ["Method area Circle 1-3 unknown"]);
+    }
+
+    #[test]
+    fn test_link_abstains_when_two_types_have_the_same_qualified_name() {
+        let first = "class Circle {\npublic:\n    double area() const;\n};\n";
+        let second = "class Circle {\npublic:\n    double area() const;\n};\n";
+        let source = "double Circle::area() const {\n    return 1;\n}\n";
+        let files = linked_files(&[
+            (Language::Cpp, "one.hpp", first),
+            (Language::Cpp, "two.hpp", second),
+            (Language::Cpp, "shapes.cpp", source),
+        ]);
+        assert_eq!(files["shapes.cpp"], ["Method area Circle 1-3 unknown"]);
+    }
+
+    #[test]
+    fn test_link_abstains_when_a_type_and_a_namespace_have_the_same_qualified_name() {
+        let namespace = "namespace shape {\nint area();\n}\n";
+        let class = "class shape {\npublic:\n    int area();\n};\n";
+        let source = "int shape::area() {\n    return 1;\n}\n";
+        let files = linked_files(&[
+            (Language::Cpp, "namespace.hpp", namespace),
+            (Language::Cpp, "class.hpp", class),
+            (Language::Cpp, "shape.cpp", source),
+        ]);
+        assert_eq!(files["shape.cpp"], ["Method area shape 1-3 unknown"]);
     }
 }

@@ -91,6 +91,24 @@ pub struct Draft<'tree> {
     pub body: Option<Node<'tree>>,
     /// The role of the scope that this definition opens for its children.
     pub role: ScopeRole,
+    /// The number of declared parameters, if the language links definitions
+    /// to declarations.
+    pub parameter_count: Option<usize>,
+}
+
+/// Facts that only `link_files` uses. They are not a part of the symbol model.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LinkFacts {
+    /// The names of the scopes that contain the symbol. A qualifier in the
+    /// name of a definition is a part of this path.
+    pub container_path: Vec<String>,
+    pub parameter_count: Option<usize>,
+}
+
+/// One symbol and its link facts.
+pub struct Linked<'a> {
+    pub symbol: &'a mut Symbol,
+    pub facts: &'a LinkFacts,
 }
 
 pub struct Context<'a, 'tree> {
@@ -167,8 +185,9 @@ pub trait LanguageSpec: Sync {
     }
 
     /// Completes the facts that the syntax of one file does not give.
-    /// `symbols` has the symbols of each file of this language, in file order.
-    fn link(&self, _symbols: &mut [&mut Symbol]) {}
+    /// `symbols` has the symbols of each file of this language. The result
+    /// must not depend on the order of `symbols`.
+    fn link(&self, _symbols: &mut [Linked<'_>]) {}
 }
 
 /// Gives the specification of a language.
@@ -295,6 +314,7 @@ impl<'tree> Extractor<'_, 'tree> {
             span: Span::of(&node),
             body: node.child_by_field_name("body"),
             role: ScopeRole::Function,
+            parameter_count: None,
         };
         if draft.kind == SymbolKind::Module {
             draft.role = ScopeRole::Module;
@@ -382,28 +402,45 @@ pub struct FileSymbols {
     pub file: String,
     pub language: Language,
     pub symbols: Vec<Symbol>,
+    /// One entry for each symbol, in the order of `symbols`.
+    pub link_facts: Vec<LinkFacts>,
 }
 
 /// Completes the facts that need the symbols of a different file.
 ///
-/// Give all the files of the index in one call, in a constant order. For
-/// example, a C++ definition `int Scope::name() {}` gets its kind and its
-/// visibility from the declaration in a header.
+/// Give all the files of the index in one call. For example, a C++ definition
+/// `int Scope::name() {}` gets its kind and its visibility from the
+/// declaration in a header. The result does not depend on the order of `files`.
+///
+/// This function is the only step of the symbol extraction that reads more
+/// than one file. When the module map of the shared index exists (migration
+/// step 4), the module map must own this step.
 pub fn link_files(files: &mut [FileSymbols]) {
+    let mut sorted: Vec<&mut FileSymbols> = files.iter_mut().collect();
+    sorted.sort_by(|left, right| left.file.cmp(&right.file));
     let mut languages: Vec<Language> = Vec::new();
-    for file in files.iter() {
+    for file in &sorted {
         if !languages.contains(&file.language) {
             languages.push(file.language);
         }
     }
     for language in languages {
-        let spec = language_spec(language);
-        let mut symbols: Vec<&mut Symbol> = files
+        let mut symbols: Vec<Linked<'_>> = sorted
             .iter_mut()
             .filter(|file| file.language == language)
-            .flat_map(|file| file.symbols.iter_mut())
+            .flat_map(|file| {
+                let FileSymbols {
+                    symbols,
+                    link_facts,
+                    ..
+                } = &mut **file;
+                symbols
+                    .iter_mut()
+                    .zip(link_facts.iter())
+                    .map(|(symbol, facts)| Linked { symbol, facts })
+            })
             .collect();
-        spec.link(&mut symbols);
+        language_spec(language).link(&mut symbols);
     }
 }
 
@@ -411,6 +448,12 @@ pub fn link_files(files: &mut [FileSymbols]) {
 ///
 /// `file` is the path that the keys use.
 pub fn extract_symbols(parsed: &ParseResult, file: &str) -> Vec<Symbol> {
+    extract_file(parsed, file).symbols
+}
+
+/// Extracts the symbols of one file in source order, with the facts that
+/// `link_files` uses.
+pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
     let spec = language_spec(parsed.language);
     let mut extractor = Extractor {
         spec,
@@ -430,30 +473,39 @@ pub fn extract_symbols(parsed: &ParseResult, file: &str) -> Vec<Symbol> {
     let mut found = extractor.found;
     found.sort_by_key(|(draft, _)| (draft.span.start_byte, draft.span.end_byte));
     let mut ordinals: BTreeMap<(Vec<String>, String), usize> = BTreeMap::new();
-    found
-        .into_iter()
-        .map(|(draft, exported)| {
-            let ordinal = ordinals
-                .entry((draft.container_path.clone(), draft.name.clone()))
-                .or_insert(0);
-            *ordinal += 1;
-            Symbol {
-                key: symbol_key(file, &draft.container_path, &draft.name, *ordinal),
-                signature: signature(&draft, &parsed.source),
-                doc: doc(draft.node, spec.comment_kinds(), &parsed.source),
-                name: draft.name,
-                kind: draft.kind,
-                container: draft.container,
-                receiver_type: draft.receiver_type,
-                supertypes: draft.supertypes,
-                range: draft.span,
-                name_range: Span::of(&draft.name_node),
-                body_range: draft.body.as_ref().map(Span::of),
-                exported,
-                scip_symbol: None,
-            }
-        })
-        .collect()
+    let mut symbols = Vec::with_capacity(found.len());
+    let mut link_facts = Vec::with_capacity(found.len());
+    for (draft, exported) in found {
+        let ordinal = ordinals
+            .entry((draft.container_path.clone(), draft.name.clone()))
+            .or_insert(0);
+        *ordinal += 1;
+        symbols.push(Symbol {
+            key: symbol_key(file, &draft.container_path, &draft.name, *ordinal),
+            signature: signature(&draft, &parsed.source),
+            doc: doc(draft.node, spec.comment_kinds(), &parsed.source),
+            name: draft.name,
+            kind: draft.kind,
+            container: draft.container,
+            receiver_type: draft.receiver_type,
+            supertypes: draft.supertypes,
+            range: draft.span,
+            name_range: Span::of(&draft.name_node),
+            body_range: draft.body.as_ref().map(Span::of),
+            exported,
+            scip_symbol: None,
+        });
+        link_facts.push(LinkFacts {
+            container_path: draft.container_path,
+            parameter_count: draft.parameter_count,
+        });
+    }
+    FileSymbols {
+        file: file.to_string(),
+        language: parsed.language,
+        symbols,
+        link_facts,
+    }
 }
 
 #[cfg(test)]
@@ -482,20 +534,21 @@ pub(crate) mod testing {
         rows_in(language, "file", source)
     }
 
-    /// The rows of several files after `link_files`, in the order of the files.
-    pub(crate) fn linked_rows(files: &[(Language, &str, &str)]) -> Vec<String> {
+    /// The rows of each file after `link_files`.
+    pub(crate) fn linked_files(files: &[(Language, &str, &str)]) -> BTreeMap<String, Vec<String>> {
         let mut files: Vec<FileSymbols> = files
             .iter()
-            .map(|(language, file, source)| FileSymbols {
-                file: file.to_string(),
-                language: *language,
-                symbols: symbols_in(*language, file, source),
+            .map(|(language, file, source)| {
+                let parsed = Parser::new()
+                    .parse(source.as_bytes(), *language, Path::new(file))
+                    .unwrap();
+                extract_file(&parsed, file)
             })
             .collect();
         link_files(&mut files);
         files
-            .iter()
-            .flat_map(|file| format_rows(&file.symbols))
+            .into_iter()
+            .map(|file| (file.file, format_rows(&file.symbols)))
             .collect()
     }
 
