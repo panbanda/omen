@@ -192,11 +192,11 @@ impl Analyzer {
             });
         }
 
-        // Sort by PageRank descending
+        // The node list comes from a `HashMap`. The path makes the order total.
         nodes.sort_by(|a, b| {
             b.pagerank
-                .partial_cmp(&a.pagerank)
-                .unwrap_or(std::cmp::Ordering::Equal)
+                .total_cmp(&a.pagerank)
+                .then_with(|| a.path.cmp(&b.path))
         });
 
         // Build edges list
@@ -714,6 +714,23 @@ mod tests {
         // The known real cycle (a.ts <-> b.ts) is the only one either should
         // find; the self-import and the barrel re-export must not add any.
         assert_eq!(graph_analysis.cycles.len(), 1);
+    }
+
+    #[test]
+    fn test_nodes_with_equal_scores_are_in_path_order() {
+        let names: Vec<String> = (0..24)
+            .map(|number| format!("file_{number:02}.py"))
+            .collect();
+        let files: Vec<(&str, &str)> = names.iter().map(|name| (name.as_str(), "")).collect();
+
+        let analysis = analyze_fixture(&files);
+
+        let paths: Vec<&str> = analysis
+            .nodes
+            .iter()
+            .map(|node| node.path.as_str())
+            .collect();
+        assert_eq!(paths, names);
     }
 
     #[test]
