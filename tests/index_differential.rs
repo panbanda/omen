@@ -213,3 +213,42 @@ fn call_edges_of_the_two_indexes() {
         std::fs::write(out, report).expect("write the report");
     }
 }
+
+/// Builds one index and prints the wall time. Run one process for each
+/// measurement, with `OMEN_DIFFERENTIAL_INDEX=old` or `new`, and read the peak
+/// memory of the process from the operating system.
+#[test]
+#[ignore = "needs OMEN_DIFFERENTIAL_ROOT and OMEN_DIFFERENTIAL_INDEX"]
+fn cost_of_one_index() {
+    let root = PathBuf::from(
+        std::env::var_os("OMEN_DIFFERENTIAL_ROOT").expect("set OMEN_DIFFERENTIAL_ROOT"),
+    );
+    let which = std::env::var("OMEN_DIFFERENTIAL_INDEX").expect("set OMEN_DIFFERENTIAL_INDEX");
+    let file_set = FileSet::from_path_default(&root).expect("file set");
+    let files: Vec<PathBuf> = file_set.iter().map(|path| root.join(path)).collect();
+    let start = std::time::Instant::now();
+    let edges = match which.as_str() {
+        "old" => {
+            let index = build_index(&root, &files).expect("build_index");
+            index
+                .call_resolutions
+                .iter()
+                .filter(|resolution| resolution.status == OldStatus::UniqueCandidate)
+                .count()
+        }
+        "new" => {
+            let index = CodeIndex::from_files(&root, &files);
+            index
+                .files
+                .iter()
+                .flat_map(|file| &file.references)
+                .filter(|reference| {
+                    reference.resolution.status == ResolutionStatus::UniqueCandidate
+                })
+                .count()
+        }
+        other => panic!("OMEN_DIFFERENTIAL_INDEX must be `old` or `new`, not {other}"),
+    };
+    println!("elapsed_ms: {}", start.elapsed().as_millis());
+    println!("edges: {edges}");
+}
