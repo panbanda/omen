@@ -118,6 +118,15 @@ impl ExecutorConfig {
         self
     }
 
+    /// The file that a mutant changes. A relative mutant path is relative to
+    /// the working directory of the test command, which is the repository root.
+    pub fn mutant_file(&self, mutant: &Mutant) -> std::path::PathBuf {
+        match &self.working_dir {
+            Some(root) => root.join(&mutant.file_path),
+            None => mutant.file_path.clone(),
+        }
+    }
+
     /// Set the working directory.
     pub fn working_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
         self.working_dir = Some(dir.into());
@@ -175,7 +184,7 @@ impl MutantExecutor {
         let start = Instant::now();
 
         // Create guard to ensure file is restored
-        let mut guard = MutationGuard::new(&mutant.file_path)?;
+        let mut guard = MutationGuard::new(self.config.mutant_file(mutant))?;
 
         // Apply the mutation
         let mutated_content = mutant.apply(source);
@@ -212,6 +221,9 @@ impl MutantExecutor {
         if let Some(dir) = &self.config.working_dir {
             cmd.current_dir(dir);
         }
+
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
 
         cmd.stdout(Stdio::null());
         cmd.stderr(Stdio::null());
@@ -390,7 +402,7 @@ async fn execute_mutant_async(
     let start = Instant::now();
 
     // Create guard to ensure file is restored
-    let guard = match MutationGuard::new(&mutant.file_path) {
+    let guard = match MutationGuard::new(config.mutant_file(mutant)) {
         Ok(g) => g,
         Err(_) => {
             return MutationResult::new(mutant.clone(), MutantStatus::BuildError, 0);
@@ -432,15 +444,24 @@ async fn run_tests_async(config: &ExecutorConfig) -> MutantStatus {
 
     cmd.stdout(Stdio::null());
     cmd.stderr(Stdio::null());
+    #[cfg(unix)]
+    cmd.process_group(0);
 
     let timeout_duration = Duration::from_secs(config.timeout_secs);
 
+    #[cfg(unix)]
+    let (mut child, mut group) =
+        match super::safety::ProcessGroup::spawn(|| cmd.spawn(), |child| child.id()) {
+            Ok(spawned) => spawned,
+            Err(_) => return MutantStatus::BuildError,
+        };
+    #[cfg(not(unix))]
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(_) => return MutantStatus::BuildError,
     };
 
-    match timeout(timeout_duration, child.wait()).await {
+    let status = match timeout(timeout_duration, child.wait()).await {
         Ok(Ok(status)) => {
             if status.success() {
                 MutantStatus::Survived
@@ -450,42 +471,89 @@ async fn run_tests_async(config: &ExecutorConfig) -> MutantStatus {
         }
         Ok(Err(_)) => MutantStatus::BuildError,
         Err(_) => {
-            // Timeout: kill the child process to prevent zombies
+            // Kill the group before the wait call, while the leader still
+            // holds the group id.
+            #[cfg(unix)]
+            if let Some(group) = &group {
+                group.kill();
+            }
             let _ = child.kill().await;
             MutantStatus::Timeout
         }
+    };
+
+    // A descendant of the test command can write a source file later. Stop
+    // each process of the group before the caller restores the file. The
+    // group stays registered during the wait. The drop removes it.
+    #[cfg(unix)]
+    if let Some(group) = group.as_mut() {
+        group.kill();
+        let start = Instant::now();
+        while group.exists() && start.elapsed() < super::safety::PROCESS_GROUP_EXIT_LIMIT {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        group.confirm_exit();
     }
+    #[cfg(unix)]
+    drop(group);
+    status
 }
 
 /// Execute a command with a timeout.
+///
+/// On Unix, the command must be the leader of its own process group. This
+/// function stops each process of the group before it returns, also the
+/// processes that the command left in the background.
 fn execute_with_timeout(cmd: &mut Command, timeout: Duration) -> ExecutionResult {
     let start = Instant::now();
 
+    #[cfg(unix)]
+    let (mut child, mut group) =
+        match super::safety::ProcessGroup::spawn(|| cmd.spawn(), |child| Some(child.id())) {
+            Ok(spawned) => spawned,
+            Err(_) => return ExecutionResult::Error,
+        };
+    #[cfg(not(unix))]
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(_) => return ExecutionResult::Error,
     };
 
-    loop {
+    let result = loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                if status.success() {
-                    return ExecutionResult::Success;
+                break if status.success() {
+                    ExecutionResult::Success
                 } else {
-                    return ExecutionResult::Failed;
-                }
+                    ExecutionResult::Failed
+                };
             }
             Ok(None) => {
                 if start.elapsed() > timeout {
+                    // Kill the group before the wait call, while the leader
+                    // still holds the group id.
+                    #[cfg(unix)]
+                    if let Some(group) = &group {
+                        group.kill();
+                    }
                     let _ = child.kill();
                     let _ = child.wait();
-                    return ExecutionResult::Timeout;
+                    break ExecutionResult::Timeout;
                 }
                 std::thread::sleep(Duration::from_millis(10));
             }
-            Err(_) => return ExecutionResult::Error,
+            Err(_) => break ExecutionResult::Error,
         }
+    };
+    // The group stays registered during the wait. The drop removes it.
+    #[cfg(unix)]
+    if let Some(group) = group.as_mut() {
+        group.kill();
+        group.wait_for_exit();
     }
+    #[cfg(unix)]
+    drop(group);
+    result
 }
 
 /// Detect the appropriate test command for a project.

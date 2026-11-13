@@ -160,15 +160,20 @@ impl Analyzer {
             },
         );
         let betweenness = self.calculate_betweenness(&graph);
-        let cycles: Vec<Vec<String>> = cyclic_components(&graph)
+        // A cycle is a set of files, thus the order of the traversal has no
+        // meaning. The members of each cycle and the cycles are in sorted order.
+        let mut cycles: Vec<Vec<String>> = cyclic_components(&graph)
             .into_iter()
             .map(|component| {
-                component
+                let mut members: Vec<String> = component
                     .into_iter()
                     .map(|idx| graph[idx].clone())
-                    .collect()
+                    .collect();
+                members.sort();
+                members
             })
             .collect();
+        cycles.sort();
 
         // Build nodes with metrics
         let mut nodes: Vec<Node> = Vec::new();
@@ -200,7 +205,7 @@ impl Analyzer {
         });
 
         // Build edges list
-        let edges: Vec<Edge> = graph
+        let mut edges: Vec<Edge> = graph
             .edge_references()
             .map(|e| {
                 let from = &graph[e.source()];
@@ -211,6 +216,7 @@ impl Analyzer {
                 }
             })
             .collect();
+        edges.sort_by(|a, b| a.from.cmp(&b.from).then_with(|| a.to.cmp(&b.to)));
 
         // Calculate summary
         let total_nodes = nodes.len();

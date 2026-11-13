@@ -57,6 +57,38 @@ apply to it, also on `search query`.
 On `outline`, `--top` and `--offset` page the `files` list in each format. On
 `symbol`, the two flags page each list, for example `callers` and `callees`.
 
+### `--top` on `graph`
+
+On `graph`, `--top` and `--offset` page the `nodes` list in each format. An
+edge stays only if its two nodes stay. `nodes_omitted` and `edges_omitted` give
+the counts. Before 5.0, the two flags cut the members of each cycle, and they
+did nothing if the graph had no cycle.
+
+### Output of a gated command
+
+`complexity`, `score`, `stubs`, and `mutation` write the normal report to stdout
+for each gate mode. The gate writes the violations to stderr. `warn` exits with
+status 0, and `error` exits with status 2. Before 5.0, a gate on `complexity`
+or `score` replaced the report: stdout had a `violations` JSON document, or
+nothing for the other formats. Read the violations from stderr, or calculate
+them from the report.
+
+### Output of `all`
+
+`all` obeys `-f`. Before 5.0, it wrote JSON for each format, also for the
+default format. The default format is Markdown, so `omen all` now writes
+Markdown. Use `omen -f json all` to get JSON.
+
+`--top` and `--offset` apply to each analyzer section of `all`. Before 5.0, the
+two flags cut the list of analyzers.
+
+### Path options of `mutation`
+
+A relative path that you give on the command line is relative to the working
+directory. This applies to `--model`, `--history`, and `--output`. A default
+path is relative to the repository at `-p`. The defaults are
+`.omen/mutation-model.json` and `.omen/mutation-history.jsonl`.
+
 ### Output keys
 
 | Removed | Replacement |

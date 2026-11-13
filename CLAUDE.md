@@ -134,7 +134,7 @@ Top-level commands (flat structure):
 - `search` - Semantic symbol search (`index` and `query`)
 - `mcp` - Start MCP server
 
-**Global options**: `-p/--path`, `-f/--format`, `-c/--config`, `-v/--verbose`, `-j/--jobs`, `--ref`, `--shallow`, and `--compact` are clap global flags, so each can appear before or after a subcommand. `-p` is always the repository path. The `complexity`, `score`, `stubs`, and `mutation` commands take `--gate off|warn|error`; if the flag is absent, the `[gate]` table of the configuration gives the mode. `--output` is the file that receives the report on `report render`, `eval`, and `mutation`. With `--compact`, with `-f json` it emits minified single-line JSON and is ignored for other formats.
+**Global options**: `-p/--path`, `-f/--format`, `-c/--config`, `-v/--verbose`, `-j/--jobs`, `--compact`, `--ref`, and `--shallow` are clap global flags. Put them before or after the subcommand. `-p` is always the repository path. The `complexity`, `score`, `stubs`, and `mutation` commands take `--gate off|warn|error`; if the flag is absent, the `[gate]` table of the configuration gives the mode. A gated command writes its report to stdout first and the gate result to stderr. `--output` is the file that receives the report on `report render`, `eval`, and `mutation`. With `--compact`, with `-f json` it emits minified single-line JSON and is ignored for other formats.
 
 **Pagination flags** (most analyzers): `--top N` (limit to N results), `--offset N` (skip first N results). Combine for pagination.
 

@@ -201,6 +201,16 @@ impl McpServer {
         };
         let received = json!(requested.to_string_lossy());
         let canonical = candidate.canonicalize().map_err(|error| {
+            // Only the search call that made a label can change it back into
+            // a path. Thus tell the caller which fields of the result to use.
+            let has_label = requested
+                .to_str()
+                .is_some_and(|text| text.starts_with('[') && text.contains("] "));
+            let next = if has_label {
+                "For a search result with a `[label] `, give `project` as `path` and `project_file` as the file."
+            } else {
+                "Give a path that exists."
+            };
             ToolError::new(
                 ErrorCode::NotFound,
                 format!(
@@ -210,7 +220,7 @@ impl McpServer {
             )
             .with_param(param)
             .with_received(&received)
-            .with_next("Give a path that exists.")
+            .with_next(next)
         })?;
         if self.allow_external_paths {
             return Ok(canonical);
@@ -347,6 +357,17 @@ impl McpServer {
 
     fn scope(&self, arguments: &Arguments<'_>) -> std::result::Result<Scope, ToolError> {
         let path = self.requested_path(arguments)?;
+        // A file set that starts at a file holds one empty relative path,
+        // and no analyzer can read it. Start at the directory of the file.
+        if let (true, Some(directory), Some(name)) =
+            (path.is_file(), path.parent(), path.file_name())
+        {
+            let file_set = FileSet::from_files(directory.to_path_buf(), vec![PathBuf::from(name)]);
+            return Ok(Scope {
+                path: directory.to_path_buf(),
+                file_set,
+            });
+        }
         let file_set = FileSet::from_path(&path, &self.config)?;
         Ok(Scope { path, file_set })
     }
@@ -582,7 +603,8 @@ mod tests {
         let omitted = envelope["result"]["omitted"]["symbols"].as_u64().unwrap() as usize;
         assert!(omitted > 0, "the budget must cut the symbols: {envelope}");
         assert_eq!(envelope["returned"], symbols);
-        assert_eq!(envelope["total_items"], symbols + omitted);
+        // The count is after the cut of the tool. `truncated` has the total before it.
+        assert_eq!(envelope["total_items"], symbols);
         assert_eq!(envelope["has_more"], false);
         let truncated = envelope["truncated"].as_array().unwrap();
         assert!(truncated.contains(
@@ -595,6 +617,523 @@ mod tests {
         let mut sorted = paths.clone();
         sorted.sort_unstable();
         assert_eq!(paths, sorted);
+    }
+
+    #[test]
+    fn task_context_reports_the_syntax_facts_that_its_byte_budget_removed() {
+        let (server, dir) = create_test_server();
+        write_call_chain(dir.path(), 60);
+        let envelope = envelope_of(
+            &server,
+            "task_context",
+            json!({"name": "target", "max_bytes": 2048}),
+        );
+        assert!(envelope["result"]["syntax_facts"].is_null(), "{envelope}");
+        assert_eq!(envelope["result"]["omitted"]["syntax_facts"], 1);
+        assert!(envelope["truncated"]
+            .as_array()
+            .unwrap()
+            .contains(&json!({"path": "/syntax_facts", "total": 1, "returned": 0})));
+
+        let complete = envelope_of(
+            &server,
+            "task_context",
+            json!({"name": "target", "max_bytes": 1048576}),
+        );
+        assert!(complete["result"]["syntax_facts"].is_object());
+        assert_eq!(complete["truncated"], json!([]));
+    }
+
+    #[test]
+    fn get_symbol_reports_the_source_lines_that_it_cut() {
+        let (server, dir) = create_test_server();
+        std::fs::write(
+            dir.path().join("long.rs"),
+            "fn long_function() -> u32 {\n    let a = 1;\n    let b = 2;\n    a + b\n}\n",
+        )
+        .unwrap();
+        let cut = envelope_of(
+            &server,
+            "get_symbol",
+            json!({"name": "long_function", "max_source_lines": 2}),
+        );
+        assert_eq!(cut["result"]["source_truncated"], true);
+        assert_eq!(
+            cut["truncated"],
+            json!([{"path": "/source", "total": 5, "returned": 2}])
+        );
+        let complete = envelope_of(&server, "get_symbol", json!({"name": "long_function"}));
+        assert_eq!(complete["truncated"], json!([]));
+    }
+
+    #[test]
+    fn context_reports_the_lists_that_its_token_budget_cut() {
+        let (server, dir) = create_test_server();
+        for directory in 0..12 {
+            let path = dir.path().join(format!("module_{directory}"));
+            std::fs::create_dir(&path).unwrap();
+            write_call_chain(&path, 4);
+        }
+        let lists = ["entry_points", "hints", "risks", "top_symbols", "tree"];
+        let lengths = |envelope: &Value| -> Vec<usize> {
+            lists
+                .iter()
+                .map(|list| envelope["result"][*list].as_array().unwrap().len())
+                .collect()
+        };
+        let arguments =
+            |max_tokens: u64| json!({"max_symbols": 40, "max_tokens": max_tokens, "limit": 0});
+        let complete = envelope_of(&server, "context", arguments(1_000_000));
+        assert_eq!(complete["truncated"], json!([]));
+        let cut = envelope_of(&server, "context", arguments(300));
+        let expected: Vec<Value> = lists
+            .iter()
+            .zip(lengths(&complete).into_iter().zip(lengths(&cut)))
+            .filter(|(_, (total, returned))| returned < total)
+            .map(|(list, (total, returned))| {
+                json!({"path": format!("/{list}"), "total": total, "returned": returned})
+            })
+            .collect();
+        assert!(!expected.is_empty(), "the budget must cut a list: {cut}");
+        assert_eq!(cut["truncated"], json!(expected));
+        // The counts describe the list after the budget. `truncated` has the total before it.
+        assert_eq!(
+            cut["total_items"],
+            cut["result"]["top_symbols"].as_array().unwrap().len()
+        );
+    }
+
+    /// Writes two functions that agree with the query `parse config`. The
+    /// function with the higher complexity agrees better.
+    fn write_search_fixture(directory: &Path) {
+        std::fs::write(
+            directory.join("parse.rs"),
+            "pub fn first_reader(parse: u32, config: u32) -> u32 {\n    if parse > config { if parse > 2 { if config > 3 { if parse > 4 { return config; } return parse; } return config; } return parse; }\n    0\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.join("simple.rs"),
+            "pub fn second_reader(parse: u32, config: u32) -> u32 {\n    let width = 1;\n    let height = 2;\n    let depth = 3;\n    let colour = 4;\n    parse + config + width + height + depth + colour\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.join("other.rs"),
+            "pub fn unrelated_helper() -> u32 {\n    7\n}\n",
+        )
+        .unwrap();
+    }
+
+    fn search_tools() -> [(&'static str, &'static str); 2] {
+        [
+            ("semantic_search", "query"),
+            ("semantic_search_hyde", "hypothetical_document"),
+        ]
+    }
+
+    fn search_results(server: &McpServer, tool: &str, arguments: Value) -> Value {
+        envelope_of(server, tool, arguments)
+    }
+
+    fn with_arguments(mut base: Value, extra: Value) -> Value {
+        base.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        base
+    }
+
+    fn symbol_names(envelope: &Value) -> Vec<&str> {
+        envelope["result"]["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|result| result["symbol_name"].as_str().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn search_applies_max_complexity_before_top_k_on_each_path() {
+        let (server, dir) = create_test_server();
+        write_search_fixture(dir.path());
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        for (tool, text) in search_tools() {
+            let base = json!({text: "parse config", "min_score": 0.0});
+            let ranked = search_results(&server, tool, base.clone());
+            let results = ranked["result"]["results"].as_array().unwrap();
+            assert_eq!(results[0]["symbol_name"], "first_reader");
+            assert_eq!(results[1]["symbol_name"], "second_reader");
+            let complex = results[0]["cyclomatic_complexity"].as_u64().unwrap();
+            let simple = results[1]["cyclomatic_complexity"].as_u64().unwrap();
+            assert!(simple < complex, "the fixture needs two complexities");
+
+            let filter = json!({"top_k": 1, "max_complexity": simple});
+            for (path, extra) in [
+                ("root", json!({})),
+                ("files", json!({"files": ["parse.rs", "simple.rs"]})),
+                ("projects", json!({"include_projects": ["sub"]})),
+            ] {
+                let arguments = with_arguments(with_arguments(base.clone(), filter.clone()), extra);
+                let found = search_results(&server, tool, arguments);
+                assert_eq!(
+                    symbol_names(&found),
+                    ["second_reader"],
+                    "{tool} on the {path} path"
+                );
+                assert_eq!(found["total_items"], 1, "{tool} on the {path} path");
+                assert_eq!(found["returned"], 1);
+                assert_eq!(found["has_more"], false);
+            }
+        }
+    }
+
+    #[test]
+    fn search_applies_min_score_when_files_are_given() {
+        let (server, dir) = create_test_server();
+        write_search_fixture(dir.path());
+        for (tool, text) in search_tools() {
+            let base =
+                json!({text: "parse config", "files": ["parse.rs", "simple.rs", "other.rs"]});
+            let all = search_results(
+                &server,
+                tool,
+                with_arguments(base.clone(), json!({"min_score": 0.0})),
+            );
+            let scores: Vec<f64> = all["result"]["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|result| result["score"].as_f64().unwrap())
+                .collect();
+            assert!(scores.len() >= 2, "{tool}: {all}");
+            let threshold = (scores[0] + scores[1]) / 2.0;
+            let found = search_results(
+                &server,
+                tool,
+                with_arguments(base.clone(), json!({"min_score": threshold})),
+            );
+            assert_eq!(symbol_names(&found), ["first_reader"], "{tool}");
+
+            let default = search_results(&server, tool, base);
+            for result in default["result"]["results"].as_array().unwrap() {
+                assert!(result["score"].as_f64().unwrap() >= 0.3, "{tool}: {result}");
+            }
+        }
+    }
+
+    #[test]
+    fn search_applies_files_together_with_include_projects() {
+        let (server, dir) = create_test_server();
+        write_search_fixture(dir.path());
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        for (tool, text) in search_tools() {
+            let base = json!({text: "parse config", "min_score": 0.0, "files": ["simple.rs"]});
+            let only_files = search_results(&server, tool, base.clone());
+            assert_eq!(symbol_names(&only_files), ["second_reader"]);
+
+            let empty = search_results(
+                &server,
+                tool,
+                with_arguments(base.clone(), json!({"include_projects": []})),
+            );
+            assert_eq!(empty["result"], only_files["result"], "{tool}");
+
+            let both = search_results(
+                &server,
+                tool,
+                with_arguments(base, json!({"include_projects": ["sub"]})),
+            );
+            assert_eq!(symbol_names(&both), ["second_reader"], "{tool}");
+        }
+    }
+
+    #[test]
+    fn search_reports_the_results_that_top_k_cut() {
+        let (server, dir) = create_test_server();
+        write_search_fixture(dir.path());
+        let all = search_results(
+            &server,
+            "semantic_search",
+            json!({"query": "parse config", "min_score": 0.0, "top_k": 100}),
+        );
+        let total = all["result"]["results"].as_array().unwrap().len();
+        assert!(total >= 2);
+        assert_eq!(all["truncated"], json!([]));
+        let cut = search_results(
+            &server,
+            "semantic_search",
+            json!({"query": "parse config", "min_score": 0.0, "top_k": 1}),
+        );
+        assert_eq!(cut["returned"], 1);
+        assert_eq!(cut["total_items"], 1);
+        assert_eq!(cut["has_more"], false);
+        assert_eq!(
+            cut["truncated"],
+            json!([{"path": "/results", "total": total, "returned": 1}])
+        );
+    }
+
+    /// Makes the project `sub` in the root, with its own search index.
+    fn write_indexed_project(root: &Path) {
+        let project = root.join("sub");
+        std::fs::create_dir(&project).unwrap();
+        write_search_fixture(&project);
+        let search = crate::semantic::SemanticSearch::new(
+            &crate::semantic::SearchConfig::default(),
+            &project,
+        )
+        .unwrap();
+        search.index(&Config::default()).unwrap();
+    }
+
+    fn result_files(envelope: &Value) -> Vec<&str> {
+        envelope["result"]["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|result| result["file"].as_str().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn search_accepts_in_files_the_file_of_a_result_from_an_included_project() {
+        let (server, dir) = create_test_server();
+        write_search_fixture(dir.path());
+        write_indexed_project(dir.path());
+        for (tool, text) in search_tools() {
+            let base = json!({
+                text: "parse config", "min_score": 0.0, "top_k": 100,
+                "include_projects": ["sub"]
+            });
+            let all = search_results(&server, tool, base.clone());
+            let files = result_files(&all);
+            assert!(files.contains(&"[sub] simple.rs"), "{tool}: {files:?}");
+            assert!(files.len() > 2);
+
+            // The labelled form selects the file of one project.
+            let labelled = search_results(
+                &server,
+                tool,
+                with_arguments(base.clone(), json!({"files": ["[sub] simple.rs"]})),
+            );
+            assert_eq!(result_files(&labelled), ["[sub] simple.rs"], "{tool}");
+
+            // Each file that the tool gives is a valid value of `files`.
+            for file in &files {
+                let again = search_results(
+                    &server,
+                    tool,
+                    with_arguments(base.clone(), json!({"files": [file]})),
+                );
+                let found = result_files(&again);
+                assert!(!found.is_empty(), "{tool}: {file}");
+                assert!(found.iter().all(|found| found == file), "{tool}: {file}");
+            }
+
+            // The plain form selects the path in each project.
+            let plain = search_results(
+                &server,
+                tool,
+                with_arguments(base.clone(), json!({"files": ["simple.rs"]})),
+            );
+            let mut found = result_files(&plain);
+            found.sort_unstable();
+            let root_file = files
+                .iter()
+                .find(|file| file.ends_with("] simple.rs") && **file != "[sub] simple.rs")
+                .expect("the file of the root project");
+            let mut expected = ["[sub] simple.rs", root_file];
+            expected.sort_unstable();
+            assert_eq!(found, expected, "{tool}");
+        }
+    }
+
+    #[test]
+    fn the_other_tools_accept_the_project_and_the_file_of_a_labelled_search_result() {
+        let (server, dir) = create_test_server();
+        write_search_fixture(dir.path());
+        write_indexed_project(dir.path());
+        let search = search_results(
+            &server,
+            "semantic_search",
+            json!({
+                "query": "parse config", "min_score": 0.0, "top_k": 100,
+                "include_projects": ["sub"]
+            }),
+        );
+        let results = search["result"]["results"].as_array().unwrap();
+        let projects: std::collections::BTreeSet<&str> = results
+            .iter()
+            .map(|result| result["project"].as_str().expect("project"))
+            .collect();
+        assert_eq!(projects.into_iter().collect::<Vec<_>>(), [".", "sub"]);
+
+        for result in results {
+            let project = result["project"].as_str().unwrap();
+            let file = result["project_file"].as_str().expect("project_file");
+            let labelled = result["file"].as_str().unwrap();
+            assert!(labelled.ends_with(&format!("] {file}")), "{labelled}");
+
+            let outline = envelope_of(&server, "outline", json!({"path": project, "file": file}));
+            assert_eq!(outline["result"]["files"][0]["file"], file);
+
+            let name = format!("{file}:{}", result["symbol_name"].as_str().unwrap());
+            let symbol = envelope_of(
+                &server,
+                "get_symbol",
+                json!({"path": project, "name": name, "start_line": result["start_line"]}),
+            );
+            assert_eq!(symbol["result"]["qualified_name"], name);
+            assert_eq!(symbol["result"]["file"], file);
+
+            let complexity = envelope_of(
+                &server,
+                "complexity",
+                json!({"path": format!("{project}/{file}")}),
+            );
+            assert!(
+                complexity["total_items"].as_u64().unwrap() > 0,
+                "{labelled}"
+            );
+        }
+
+        // A result of a search in one project has no label, thus it has no
+        // project fields.
+        let single = search_results(
+            &server,
+            "semantic_search",
+            json!({"query": "parse config", "min_score": 0.0}),
+        );
+        let first = &single["result"]["results"][0];
+        assert!(first.get("project").is_none());
+        assert!(first.get("project_file").is_none());
+    }
+
+    #[test]
+    fn search_rejects_a_file_label_that_is_not_an_included_project() {
+        let (server, dir) = create_test_server();
+        write_search_fixture(dir.path());
+        write_indexed_project(dir.path());
+        let root_label = dir
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        for (tool, text) in search_tools() {
+            let body = error_of(
+                &server,
+                tool,
+                json!({
+                    text: "parse config", "include_projects": ["sub"],
+                    "files": ["simple.rs", "[sob] simple.rs"]
+                }),
+            );
+            assert_eq!(body["error"]["code"], "invalid_argument", "{tool}");
+            assert_eq!(body["error"]["param"], "files");
+            assert_eq!(body["error"]["received"], "[sob] simple.rs");
+            assert_eq!(body["error"]["suggestions"], json!([root_label, "sub"]));
+        }
+    }
+
+    #[test]
+    fn search_without_included_projects_reads_a_bracket_as_a_part_of_the_path() {
+        let (server, dir) = create_test_server();
+        std::fs::create_dir(dir.path().join("[id] page")).unwrap();
+        write_search_fixture(&dir.path().join("[id] page"));
+        let found = search_results(
+            &server,
+            "semantic_search",
+            json!({"query": "parse config", "min_score": 0.0, "files": ["[id] page/simple.rs"]}),
+        );
+        assert_eq!(result_files(&found), ["[id] page/simple.rs"]);
+    }
+
+    #[test]
+    fn a_tool_accepts_the_identifiers_that_the_other_tools_give() {
+        let (server, dir) = create_test_server();
+        let source = dir.path().join("src");
+        std::fs::create_dir(&source).unwrap();
+        write_call_chain(&source, 2);
+        write_search_fixture(&source);
+        let ok = |tool: &str, arguments: Value| envelope_of(&server, tool, arguments);
+
+        // `outline` file -> `outline`, `complexity`, `context`, `get_symbol`.
+        let outline = ok("outline", json!({}));
+        let file = outline["result"]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["file"].as_str().unwrap().ends_with("chain.rs"))
+            .expect("chain.rs in the outline");
+        let file_path = file["file"].as_str().unwrap();
+        assert_eq!(file_path, "src/chain.rs");
+        let by_path = ok("outline", json!({"path": file_path}));
+        assert_eq!(by_path["result"]["files"][0]["file"], "chain.rs");
+        let one = ok("outline", json!({"file": file_path}));
+        assert_eq!(one["result"]["files"][0]["file"], file_path);
+        let complexity = ok("complexity", json!({"path": file_path}));
+        assert_eq!(complexity["total_items"], 3);
+        ok("context", json!({"path": file_path}));
+        let function = file["functions"][0]["name"].as_str().unwrap();
+        let qualified = format!("{file_path}:{function}");
+        let symbol = ok("get_symbol", json!({"name": qualified}));
+        assert_eq!(symbol["result"]["file"], file_path);
+
+        // `get_symbol` identifier -> `get_symbol`, `impact`, `task_context`.
+        let identifier = symbol["result"]["qualified_name"].as_str().unwrap();
+        assert_eq!(identifier, qualified);
+        for (tool, param) in [
+            ("get_symbol", "name"),
+            ("impact", "symbol"),
+            ("task_context", "name"),
+        ] {
+            ok(tool, json!({param: identifier}));
+        }
+
+        // Caller of `get_symbol`, symbol of `impact`, `repomap`, and
+        // `task_context` -> `get_symbol`.
+        let target = ok("get_symbol", json!({"name": "target"}));
+        let caller = target["result"]["callers"][0]["qualified_name"]
+            .as_str()
+            .unwrap();
+        let impact = ok("impact", json!({"symbol": "target"}));
+        let affected = impact["result"]["callers"][0]["symbols"][0]["qualified_name"]
+            .as_str()
+            .unwrap();
+        let ranked = ok("repomap", json!({}));
+        let ranked = ranked["result"]["symbols"][0]["qualified_name"]
+            .as_str()
+            .unwrap();
+        let context = ok("task_context", json!({"name": "target"}));
+        let related = context["result"]["symbols"][1]["location"]["qualified_name"]
+            .as_str()
+            .unwrap();
+        for identifier in [caller, affected, ranked, related] {
+            let found = ok("get_symbol", json!({"name": identifier}));
+            assert_eq!(found["result"]["qualified_name"], identifier);
+        }
+        let affected_file = impact["result"]["files_affected"][0].as_str().unwrap();
+        ok("outline", json!({"file": affected_file}));
+
+        // Search result -> `files` of the search, `outline`, `get_symbol`.
+        let search = ok(
+            "semantic_search",
+            json!({"query": "parse config", "min_score": 0.0}),
+        );
+        let result = &search["result"]["results"][0];
+        let result_file = result["file"].as_str().unwrap();
+        let again = ok(
+            "semantic_search",
+            json!({"query": "parse config", "min_score": 0.0, "files": [result_file]}),
+        );
+        assert!(result_files(&again).iter().all(|file| *file == result_file));
+        assert!(!result_files(&again).is_empty());
+        ok("outline", json!({"file": result_file}));
+        let name = format!("{result_file}:{}", result["symbol_name"].as_str().unwrap());
+        let found = ok(
+            "get_symbol",
+            json!({"name": name, "start_line": result["start_line"]}),
+        );
+        assert_eq!(found["result"]["qualified_name"], name);
     }
 
     #[test]
@@ -861,6 +1400,21 @@ mod tests {
         assert_eq!(body["error"]["code"], "not_found");
         assert_eq!(body["error"]["param"], "path");
         assert_eq!(body["error"]["received"], "no/such/directory");
+        assert_eq!(body["error"]["next"], "Give a path that exists.");
+    }
+
+    #[test]
+    fn a_labelled_search_file_as_a_path_gives_the_fields_to_use() {
+        let (server, _dir) = create_test_server();
+        for (tool, param) in [("outline", "file"), ("complexity", "path")] {
+            let body = error_of(&server, tool, json!({param: "[sub] simple.rs"}));
+            assert_eq!(body["error"]["code"], "not_found", "{tool}");
+            assert_eq!(body["error"]["param"], param);
+            assert_eq!(
+                body["error"]["next"],
+                "For a search result with a `[label] `, give `project` as `path` and `project_file` as the file."
+            );
+        }
     }
 
     #[test]

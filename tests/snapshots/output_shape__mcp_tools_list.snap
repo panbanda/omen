@@ -708,7 +708,7 @@ expression: "responses[0]"
           "additionalProperties": false,
           "properties": {
             "files": {
-              "description": "The files in which to search. The default is all files.",
+              "description": "The files in which to search, as paths from the root of their project. The default is all files. With `include_projects`, a path applies to each project, and a path with a `[label] ` before it, as in the `file` of a result, applies to that project.",
               "items": {
                 "type": "string"
               },
@@ -754,7 +754,7 @@ expression: "responses[0]"
             },
             "top_k": {
               "default": 10,
-              "description": "The maximum number of results.",
+              "description": "The maximum number of results. It applies after the other filters.",
               "maximum": 4294967295,
               "minimum": 1,
               "type": "integer"
@@ -934,7 +934,7 @@ expression: "responses[0]"
           "additionalProperties": false,
           "properties": {
             "files": {
-              "description": "The files in which to search. The default is all files.",
+              "description": "The files in which to search, as paths from the root of their project. The default is all files. With `include_projects`, a path applies to each project, and a path with a `[label] ` before it, as in the `file` of a result, applies to that project.",
               "items": {
                 "type": "string"
               },
@@ -984,7 +984,7 @@ expression: "responses[0]"
             },
             "top_k": {
               "default": 10,
-              "description": "The maximum number of results.",
+              "description": "The maximum number of results. It applies after the other filters.",
               "maximum": 4294967295,
               "minimum": 1,
               "type": "integer"
