@@ -85,7 +85,7 @@ fn index_tables(language: Language) -> Vec<(&'static str, Vec<&'static str>)> {
                 .map(|rule| rule.node_kind)
                 .collect(),
         ),
-        ("index_hook", spec.hook_kinds().to_vec()),
+        ("index_hook", spec.hook_kinds()),
         ("index_comment", spec.comment_kinds().to_vec()),
     ]
 }

@@ -133,8 +133,8 @@ pub trait LanguageSpec: Sync {
 
     /// Each node kind that a hook method of this specification compares with.
     /// The grammar lint examines these kinds.
-    fn hook_kinds(&self) -> &'static [&'static str] {
-        &[]
+    fn hook_kinds(&self) -> Vec<&'static str> {
+        Vec::new()
     }
 
     fn comment_kinds(&self) -> &'static [&'static str];
@@ -173,6 +173,8 @@ pub fn language_spec(language: Language) -> Option<&'static dyn LanguageSpec> {
         Language::Go => Some(&lang::go::Go),
         Language::Rust => Some(&lang::rust::Rust),
         Language::Python => Some(&lang::python::Python),
+        Language::JavaScript | Language::Jsx => Some(&lang::ecma::JAVASCRIPT),
+        Language::TypeScript | Language::Tsx => Some(&lang::ecma::TYPESCRIPT),
         _ => None,
     }
 }
@@ -295,6 +297,10 @@ impl<'tree> Extractor<'_, 'tree> {
     }
 
     fn enter(&mut self, node: Node<'tree>, depth: usize) {
+        // A keyword token can have the same kind string as a named node, for example `class`.
+        if !node.is_named() {
+            return;
+        }
         let scope = match self.rules.get(node.kind()).copied() {
             Some(rule) => self.draft(node, &rule).map(|(draft, exported)| {
                 let mut path = draft.container_path.clone();

@@ -97,8 +97,8 @@ impl LanguageSpec for Rust {
         DEFINITIONS.to_vec()
     }
 
-    fn hook_kinds(&self) -> &'static [&'static str] {
-        &[
+    fn hook_kinds(&self) -> Vec<&'static str> {
+        vec![
             IMPL_ITEM,
             LET_DECLARATION,
             IDENTIFIER,

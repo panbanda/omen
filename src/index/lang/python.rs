@@ -85,8 +85,8 @@ impl LanguageSpec for Python {
         DEFINITIONS.to_vec()
     }
 
-    fn hook_kinds(&self) -> &'static [&'static str] {
-        &[
+    fn hook_kinds(&self) -> Vec<&'static str> {
+        vec![
             AUGMENTED_ASSIGNMENT,
             EXPRESSION_STATEMENT,
             IDENTIFIER,

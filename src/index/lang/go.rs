@@ -42,8 +42,8 @@ impl LanguageSpec for Go {
         DEFINITIONS.to_vec()
     }
 
-    fn hook_kinds(&self) -> &'static [&'static str] {
-        &[
+    fn hook_kinds(&self) -> Vec<&'static str> {
+        vec![
             STRUCT_TYPE,
             INTERFACE_TYPE,
             EXPRESSION_LIST,
