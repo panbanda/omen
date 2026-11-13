@@ -177,6 +177,7 @@ pub fn language_spec(language: Language) -> Option<&'static dyn LanguageSpec> {
         Language::TypeScript | Language::Tsx => Some(&lang::ecma::TYPESCRIPT),
         Language::Java => Some(&lang::java::Java),
         Language::CSharp => Some(&lang::csharp::CSharp),
+        Language::C => Some(&lang::c::C),
         _ => None,
     }
 }
@@ -210,11 +211,13 @@ fn collapse_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// The text of the symbol range before the body. Without a body, the text is
+/// the first line of the range.
 fn signature(draft: &Draft<'_>, source: &[u8]) -> String {
-    let start = draft.node.start_byte();
+    let start = draft.span.start_byte;
     let end = match draft.body {
         Some(body) if body.start_byte() > start => body.start_byte(),
-        _ => draft.node.end_byte(),
+        _ => draft.span.end_byte,
     };
     let text = String::from_utf8_lossy(&source[start..end]);
     match draft.body {
@@ -423,16 +426,28 @@ pub(crate) mod testing {
     use super::*;
     use crate::parser::Parser;
 
-    pub(crate) fn symbols(language: Language, source: &str) -> Vec<Symbol> {
+    pub(crate) fn symbols_in(language: Language, file: &str, source: &str) -> Vec<Symbol> {
         let parsed = Parser::new()
-            .parse(source.as_bytes(), language, Path::new("file"))
+            .parse(source.as_bytes(), language, Path::new(file))
             .unwrap();
-        extract_symbols(&parsed, "file")
+        extract_symbols(&parsed, file)
+    }
+
+    pub(crate) fn symbols(language: Language, source: &str) -> Vec<Symbol> {
+        symbols_in(language, "file", source)
+    }
+
+    pub(crate) fn rows_in(language: Language, file: &str, source: &str) -> Vec<String> {
+        format_rows(&symbols_in(language, file, source))
+    }
+
+    pub(crate) fn rows(language: Language, source: &str) -> Vec<String> {
+        rows_in(language, "file", source)
     }
 
     /// One line for each symbol: `kind name container start-end exported`.
-    pub(crate) fn rows(language: Language, source: &str) -> Vec<String> {
-        symbols(language, source)
+    pub(crate) fn format_rows(symbols: &[Symbol]) -> Vec<String> {
+        symbols
             .iter()
             .map(|symbol| {
                 let exported = match &symbol.exported {

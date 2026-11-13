@@ -1,0 +1,314 @@
+//! C symbols, and the declarator rules that C++ shares.
+
+use tree_sitter::Node;
+
+use crate::index::extract::{Context, DefinitionRule, Draft, LanguageSpec, NameRule};
+use crate::index::model::{Exported, Span, SymbolKind};
+
+pub struct C;
+
+pub(crate) const FUNCTION_DEFINITION: &str = "function_definition";
+pub(crate) const FUNCTION_DECLARATOR: &str = "function_declarator";
+pub(crate) const DECLARATION: &str = "declaration";
+pub(crate) const FIELD_DECLARATION: &str = "field_declaration";
+pub(crate) const TYPE_DEFINITION: &str = "type_definition";
+pub(crate) const STRUCT_SPECIFIER: &str = "struct_specifier";
+pub(crate) const UNION_SPECIFIER: &str = "union_specifier";
+pub(crate) const ENUM_SPECIFIER: &str = "enum_specifier";
+pub(crate) const POINTER_DECLARATOR: &str = "pointer_declarator";
+pub(crate) const PARENTHESIZED_DECLARATOR: &str = "parenthesized_declarator";
+pub(crate) const ARRAY_DECLARATOR: &str = "array_declarator";
+pub(crate) const ATTRIBUTED_DECLARATOR: &str = "attributed_declarator";
+/// Only the C++ grammar has this kind.
+pub(crate) const REFERENCE_DECLARATOR: &str = "reference_declarator";
+pub(crate) const STORAGE_CLASS_SPECIFIER: &str = "storage_class_specifier";
+pub(crate) const IDENTIFIER: &str = "identifier";
+pub(crate) const TYPE_IDENTIFIER: &str = "type_identifier";
+
+pub(crate) const DEFINITIONS: &[DefinitionRule] = &[
+    DefinitionRule::function(FUNCTION_DEFINITION, NameRule::Hook),
+    DefinitionRule::function(FUNCTION_DECLARATOR, NameRule::Hook),
+    DefinitionRule::new(
+        STRUCT_SPECIFIER,
+        SymbolKind::Struct,
+        NameRule::Field("name"),
+    ),
+    DefinitionRule::new(UNION_SPECIFIER, SymbolKind::Struct, NameRule::Field("name")),
+    DefinitionRule::new(ENUM_SPECIFIER, SymbolKind::Enum, NameRule::Field("name")),
+    DefinitionRule::new(TYPE_DEFINITION, SymbolKind::TypeAlias, NameRule::Hook),
+];
+
+pub(crate) const HOOK_KINDS: &[&str] = &[
+    DECLARATION,
+    FIELD_DECLARATION,
+    POINTER_DECLARATOR,
+    PARENTHESIZED_DECLARATOR,
+    ARRAY_DECLARATOR,
+    ATTRIBUTED_DECLARATOR,
+    STORAGE_CLASS_SPECIFIER,
+    IDENTIFIER,
+    TYPE_IDENTIFIER,
+];
+
+/// A declarator that contains one declarator and adds no name.
+const WRAPPER_DECLARATORS: &[&str] = &[
+    POINTER_DECLARATOR,
+    PARENTHESIZED_DECLARATOR,
+    ARRAY_DECLARATOR,
+    ATTRIBUTED_DECLARATOR,
+    REFERENCE_DECLARATOR,
+];
+
+fn inner_declarator(declarator: Node<'_>) -> Option<Node<'_>> {
+    declarator
+        .child_by_field_name("declarator")
+        .or_else(|| declarator.named_child(0))
+}
+
+/// Finds the name of the function that a declarator declares.
+///
+/// `int (*table)(int)` declares a pointer, not a function, and gives `None`.
+/// `int (*get(void))(int)` declares the function `get`.
+pub(crate) fn function_name<'tree>(
+    declarator: Node<'tree>,
+    name_kinds: &[&str],
+) -> Option<Node<'tree>> {
+    match declarator.kind() {
+        FUNCTION_DECLARATOR => {
+            let inner = declarator.child_by_field_name("declarator")?;
+            if name_kinds.contains(&inner.kind()) {
+                Some(inner)
+            } else {
+                function_name(inner, name_kinds)
+            }
+        }
+        kind if WRAPPER_DECLARATORS.contains(&kind) => {
+            function_name(inner_declarator(declarator)?, name_kinds)
+        }
+        _ => None,
+    }
+}
+
+/// The declaration that a function declarator belongs to, when the declarator
+/// declares a function and does not define it.
+pub(crate) fn prototype_holder(declarator: Node<'_>) -> Option<Node<'_>> {
+    let mut current = declarator.parent()?;
+    while WRAPPER_DECLARATORS.contains(&current.kind()) || current.kind() == FUNCTION_DECLARATOR {
+        current = current.parent()?;
+    }
+    [DECLARATION, FIELD_DECLARATION]
+        .contains(&current.kind())
+        .then_some(current)
+}
+
+/// The name of the first declarator of a `typedef`.
+pub(crate) fn typedef_name(definition: Node<'_>) -> Option<Node<'_>> {
+    let mut declarator = definition.child_by_field_name("declarator")?;
+    while declarator.kind() != TYPE_IDENTIFIER {
+        let wrapper = WRAPPER_DECLARATORS.contains(&declarator.kind())
+            || declarator.kind() == FUNCTION_DECLARATOR;
+        if !wrapper {
+            return None;
+        }
+        declarator = inner_declarator(declarator)?;
+    }
+    Some(declarator)
+}
+
+pub(crate) fn has_storage_class(node: Node<'_>, keyword: &str, context: &Context<'_, '_>) -> bool {
+    let mut cursor = node.walk();
+    let found = node
+        .children(&mut cursor)
+        .any(|child| child.kind() == STORAGE_CLASS_SPECIFIER && context.text(child) == keyword);
+    found
+}
+
+/// A header declares the interface of a translation unit.
+pub(crate) fn is_header(file: &str) -> bool {
+    let extension = file.rsplit('.').next().unwrap_or("");
+    ["h", "hh", "hpp", "hxx", "h++"].contains(&extension)
+}
+
+/// The name of a function definition, a function prototype, or a `typedef`.
+/// The result is `None` for a function declarator that is a part of a
+/// definition, a parameter, or a pointer.
+pub(crate) fn name_node<'tree>(
+    node: Node<'tree>,
+    name_kinds: &[&str],
+    context: &Context<'_, 'tree>,
+) -> Option<Node<'tree>> {
+    match node.kind() {
+        FUNCTION_DEFINITION => function_name(node.child_by_field_name("declarator")?, name_kinds),
+        FUNCTION_DECLARATOR => {
+            prototype_holder(node)?;
+            // In a function body, the grammar reads `Type name(argument);` as a
+            // prototype, but it is usually a variable with a constructor call.
+            if context.in_function() {
+                return None;
+            }
+            node.child_by_field_name("declarator")
+                .filter(|inner| name_kinds.contains(&inner.kind()))
+        }
+        TYPE_DEFINITION => typedef_name(node),
+        _ => None,
+    }
+}
+
+/// The node that has the storage class and the range of a function symbol.
+pub(crate) fn function_holder(node: Node<'_>) -> Node<'_> {
+    if node.kind() == FUNCTION_DECLARATOR {
+        prototype_holder(node).unwrap_or(node)
+    } else {
+        node
+    }
+}
+
+/// Corrects the draft of a C or C++ symbol. If the result is `false`, the node
+/// is not a definition.
+pub(crate) fn refine(draft: &mut Draft<'_>) -> bool {
+    match draft.node.kind() {
+        // `struct Name` without a body refers to a type. It does not define the type.
+        STRUCT_SPECIFIER | UNION_SPECIFIER | ENUM_SPECIFIER => draft.body.is_some(),
+        FUNCTION_DECLARATOR => {
+            draft.span = Span::of(&function_holder(draft.node));
+            true
+        }
+        _ => true,
+    }
+}
+
+fn exported_if(condition: bool) -> Exported {
+    if condition {
+        Exported::Exported
+    } else {
+        Exported::NotExported
+    }
+}
+
+/// A function has external linkage unless it is `static`. A type is a part of
+/// the interface only when a header defines it.
+pub(crate) fn exported(draft: &Draft<'_>, context: &Context<'_, '_>) -> Exported {
+    if context.in_function() {
+        return Exported::NotExported;
+    }
+    match draft.node.kind() {
+        FUNCTION_DEFINITION | FUNCTION_DECLARATOR => exported_if(!has_storage_class(
+            function_holder(draft.node),
+            "static",
+            context,
+        )),
+        _ => exported_if(is_header(context.file)),
+    }
+}
+
+impl LanguageSpec for C {
+    fn definitions(&self) -> Vec<DefinitionRule> {
+        DEFINITIONS.to_vec()
+    }
+
+    fn hook_kinds(&self) -> Vec<&'static str> {
+        HOOK_KINDS.to_vec()
+    }
+
+    fn comment_kinds(&self) -> &'static [&'static str] {
+        &["comment"]
+    }
+
+    fn name_node<'tree>(
+        &self,
+        node: Node<'tree>,
+        context: &Context<'_, 'tree>,
+    ) -> Option<Node<'tree>> {
+        name_node(node, &[IDENTIFIER], context)
+    }
+
+    fn refine<'tree>(&self, draft: &mut Draft<'tree>, _context: &Context<'_, 'tree>) -> bool {
+        refine(draft)
+    }
+
+    fn exported(&self, draft: &Draft<'_>, context: &Context<'_, '_>) -> Exported {
+        exported(draft, context)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::core::Language;
+    use crate::index::extract::testing::{rows, rows_in};
+
+    #[test]
+    fn test_function_definitions() {
+        let source = "static int tag(void) {\n    return 1;\n}\n\nint main(void) {\n    return 0;\n}\n\nconst char *describe(void) {\n    return \"\";\n}\n\nextern int shared(void) { return 1; }\n";
+        assert_eq!(
+            rows(Language::C, source),
+            [
+                "Function tag - 1-3 not_exported",
+                "Function main - 5-7 exported",
+                "Function describe - 9-11 exported",
+                "Function shared - 13-13 exported",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_prototypes_are_symbols() {
+        let source = "double circle_area(const struct Circle *circle);\nconst char *describe(void);\nstatic int tag(void);\nint first(void), second(int value);\nint (*get(void))(int);\n";
+        assert_eq!(
+            rows(Language::C, source),
+            [
+                "Function circle_area - 1-1 exported",
+                "Function describe - 2-2 exported",
+                "Function tag - 3-3 not_exported",
+                "Function first - 4-4 exported",
+                "Function second - 4-4 exported",
+                "Function get - 5-5 exported",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_function_pointers_and_parameters_are_not_functions() {
+        let source = "int (*handler)(int);\nstruct Table {\n    int (*insert)(int);\n};\nint apply(int f(int), int (*g)(int)) {\n    int local(int);\n    return f(1) + g(2);\n}\n";
+        assert_eq!(
+            rows(Language::C, source),
+            [
+                "Struct Table - 2-4 not_exported",
+                "Function apply - 5-8 exported",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_types_are_exported_only_from_a_header() {
+        let source = "struct Circle {\n    double radius;\n};\nenum Unit {\n    METRE\n};\nunion Bits {\n    int a;\n};\ntypedef double Scale;\ntypedef struct {\n    int x;\n} Point;\ntypedef int (*Handler)(int);\nstruct Circle;\nstruct Circle *make(void);\n";
+        let expected = |exported: &str| {
+            vec![
+                format!("Struct Circle - 1-3 {exported}"),
+                format!("Enum Unit - 4-6 {exported}"),
+                format!("Struct Bits - 7-9 {exported}"),
+                format!("TypeAlias Scale - 10-10 {exported}"),
+                format!("TypeAlias Point - 11-13 {exported}"),
+                format!("TypeAlias Handler - 14-14 {exported}"),
+                "Function make - 16-16 exported".to_string(),
+            ]
+        };
+        assert_eq!(
+            rows_in(Language::C, "shapes.h", source),
+            expected("exported")
+        );
+        assert_eq!(
+            rows_in(Language::C, "shapes.c", source),
+            expected("not_exported")
+        );
+    }
+
+    #[test]
+    fn test_definitions_in_a_header_guard() {
+        let source =
+            "#ifndef A_H\n#define A_H\n#define SQUARE(x) ((x) * (x))\nint helper(void);\n#endif\n";
+        assert_eq!(
+            rows_in(Language::C, "a.h", source),
+            ["Function helper - 4-4 exported"]
+        );
+    }
+}
