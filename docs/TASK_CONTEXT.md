@@ -18,8 +18,9 @@ budget covers the JSON `result`, not the RPC wrapper or tokenizer cost. This
 tool has no `limit` and no `offset`, and it rejects them as unknown arguments.
 
 The tool gives the same envelope as each other tool. `total_items` and
-`returned` count the symbols. `has_more` is always `false`. `truncated` shows
-each list that the byte budget cut, with the counts from `omitted`. See
+`returned` are the number of symbols in the result, after the byte budget.
+`has_more` is always `false`. `truncated` shows each list that the byte budget
+cut. The `total` of an entry is the size before the cut, from `omitted`. See
 `docs/MCP_CONTEXT.md` for the envelope and the error contract.
 
 ## Incremental work and freshness

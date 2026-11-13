@@ -12,7 +12,7 @@ use super::{
 use crate::analyzers::repomap::CallGraphIndex;
 use crate::core::{AnalysisContext, Analyzer, FileSet};
 use crate::git::GitRepo;
-use crate::mcp::envelope::{ItemCount, Truncation};
+use crate::mcp::envelope::Truncation;
 use crate::mcp::error::{ErrorCode, ToolError};
 use crate::mcp::McpServer;
 
@@ -403,14 +403,10 @@ fn task_context(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult 
         ));
     }
     let truncated = omitted_lists(&result);
-    let returned = result["symbols"].as_array().map_or(0, Vec::len);
-    let omitted = result["omitted"]["symbols"].as_u64().unwrap_or(0) as usize;
+    let symbols = result["symbols"].as_array().map_or(0, Vec::len);
     Ok(ToolOutput::Data(ToolData {
         truncated,
-        items: Some(ItemCount {
-            total: returned + omitted,
-            returned,
-        }),
+        item_count: Some(symbols),
         ..ToolData::new(result)
     }))
 }

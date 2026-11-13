@@ -85,7 +85,7 @@ Each tool gives its result in the same envelope:
 | Key | Value |
 |---|---|
 | `tool` | The tool name. |
-| `total_items` | The number of items in the primary list before pagination, or `null` when the result has no list. |
+| `total_items` | The size of the primary list before `limit` and `offset`, and after the cuts of the tool. `null` when the result has no list. |
 | `returned` | The number of items in the primary list of this result. |
 | `offset` | The offset that the call gave. |
 | `has_more` | `true` when a next page exists. |
@@ -106,8 +106,9 @@ each element of an array, such as `/files/*/functions`.
 - `semantic_search` and `semantic_search_hyde`: `/results` when `top_k` cut the
   results that the filters accepted.
 
-`total_items` and `returned` count the list after such a cut. The entry in
-`truncated` gives the total before the cut.
+One rule applies to each tool. `total_items` is the size of the primary list
+before `limit` and `offset`, and after the cuts of the tool. Each cut of a tool
+has an entry in `truncated` with the total before the cut.
 
 These limits do not appear in `truncated`, because the server does not know
 the total without them: `max_symbols` and `max_risks` of `context`,
@@ -147,8 +148,9 @@ the overall score are complete on each page.
 `offset` then apply to the symbols in the text.
 
 `task_context` has no `limit` and no `offset`, because `max_bytes` controls its
-size. Its `total_items` and `returned` count the symbols, its `has_more` is
-always `false`, and `truncated` shows the lists that the byte budget cut.
+size. Its `total_items` and `returned` are the number of symbols in the result,
+after the byte budget. Its `has_more` is always `false`. `truncated` shows the
+lists that the byte budget cut, with the totals before the cut.
 
 `initialize` gives an `instructions` string that tells an agent which tool to
 call first, and how to use the pagination and the errors.

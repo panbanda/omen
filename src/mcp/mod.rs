@@ -593,7 +593,8 @@ mod tests {
         let omitted = envelope["result"]["omitted"]["symbols"].as_u64().unwrap() as usize;
         assert!(omitted > 0, "the budget must cut the symbols: {envelope}");
         assert_eq!(envelope["returned"], symbols);
-        assert_eq!(envelope["total_items"], symbols + omitted);
+        // The count is after the cut of the tool. `truncated` has the total before it.
+        assert_eq!(envelope["total_items"], symbols);
         assert_eq!(envelope["has_more"], false);
         let truncated = envelope["truncated"].as_array().unwrap();
         assert!(truncated.contains(
