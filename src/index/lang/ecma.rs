@@ -1155,4 +1155,46 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn test_namespace_that_a_module_exports_again() {
+        use crate::index::resolve::testing::rows;
+        let files = [
+            ("core/index.ts", "export * as util from \"./util.js\";\n"),
+            ("core/util.ts", "export function normalizeParams(): number {\n  return 1;\n}\n"),
+            (
+                "main.ts",
+                "import { util } from \"./core/index.js\";\nimport { util as tools } from \"./core/index.js\";\n\nfunction run(): number {\n  return util.normalizeParams() + tools.normalizeParams() + util.missing();\n}\n",
+            ),
+        ];
+        assert_eq!(
+            rows(&files, "main.ts"),
+            [
+                "5 run>util.normalizeParams UniqueCandidate ImportedModule [core/util.ts#normalizeParams]",
+                "5 run>tools.normalizeParams UniqueCandidate ImportedModule [core/util.ts#normalizeParams]",
+                "5 run>util.missing Unresolved - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_package_of_the_repository_is_not_external() {
+        use crate::index::resolve::testing::rows;
+        let files = [
+            ("packages/shop/package.json", "{\n  \"name\": \"shop\"\n}\n"),
+            ("packages/shop/src/index.ts", "export function open(): number {\n  return 1;\n}\n"),
+            (
+                "packages/bench/run.ts",
+                "import * as shop from \"shop\";\nimport { core } from \"shop/core\";\nimport { other } from \"shopping\";\n\nfunction run(): number {\n  return shop.open() + core() + other();\n}\n",
+            ),
+        ];
+        assert_eq!(
+            rows(&files, "packages/bench/run.ts"),
+            [
+                "6 run>shop.open Unresolved - []",
+                "6 run>core Unresolved - []",
+                "6 run>other External - []",
+            ]
+        );
+    }
 }

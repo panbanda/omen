@@ -704,7 +704,7 @@ mod tests {
                 "39 external>seen.insert Unresolved - []",
                 "40 external>describe UniqueCandidate ImportedName [shapes.rs#describe]",
                 "41 external>util::helper UniqueCandidate QualifiedPath [util.rs#helper]",
-                "41 external>crate::util::helper Unresolved - []",
+                "41 external>crate::util::helper UniqueCandidate QualifiedPath [util.rs#helper]",
             ]
         );
     }
@@ -839,7 +839,7 @@ mod tests {
             [
                 "6 check>helper UniqueCandidate ImportedName [src/util.rs#helper]",
                 "7 check>keys UniqueCandidate ImportedName [src/util.rs#testing.keys]",
-                "8 check>shop::other::thing Unresolved - []",
+                "8 check>shop::other::thing UniqueCandidate QualifiedPath [src/other.rs#thing]",
             ]
         );
     }

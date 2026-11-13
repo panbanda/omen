@@ -27,6 +27,8 @@ pub struct Manifests {
     pub ruby_load_roots: BTreeSet<String>,
     /// The library name of each `Cargo.toml` file, by the directory of the file.
     pub rust_crates: BTreeMap<String, String>,
+    /// The `name` of each `package.json` file of the repository.
+    pub node_packages: BTreeSet<String>,
 }
 
 impl Default for Manifests {
@@ -36,16 +38,23 @@ impl Default for Manifests {
             go_modules: BTreeMap::new(),
             ruby_load_roots: [String::new(), "lib".to_string()].into(),
             rust_crates: BTreeMap::new(),
+            node_packages: BTreeSet::new(),
         }
     }
 }
 
 impl Manifests {
-    /// Reads a `go.mod` file or a `.gemspec` file. `path` is relative to the
-    /// root of the repository. A different file has no effect.
+    /// Reads a `go.mod`, `.gemspec`, `Cargo.toml`, or `package.json` file.
+    /// `path` is relative to the root of the repository. A different file has
+    /// no effect.
     pub fn add(&mut self, path: &str, text: &str) {
         let here = directory(path);
-        if file_name(path) == "go.mod" {
+        if file_name(path) == "package.json" {
+            let name = serde_json::from_str::<serde_json::Value>(text)
+                .ok()
+                .and_then(|package| Some(package.get("name")?.as_str()?.to_string()));
+            self.node_packages.extend(name);
+        } else if file_name(path) == "go.mod" {
             self.go_modules
                 .extend(go_module_path(text).map(|module| (here.to_string(), module)));
         } else if path.ends_with(".gemspec") {
@@ -339,7 +348,17 @@ impl Repository<'_> {
         const EXTENSIONS: &[&str] = &["ts", "tsx", "d.ts", "js", "jsx", "mjs", "cjs"];
         let path = binding.module_path.as_str();
         if !path.starts_with('.') {
-            return ImportTarget::External;
+            // A package of the repository is not external. The `exports` of
+            // its `package.json` select the file, and no rule reads them.
+            let own_package = self.manifests.node_packages.iter().any(|name| {
+                path.strip_prefix(name.as_str())
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+            });
+            return if own_package {
+                ImportTarget::Unresolved
+            } else {
+                ImportTarget::External
+            };
         }
         let Some(base) = join(directory(&binding.file), path) else {
             return ImportTarget::Unresolved;
@@ -442,17 +461,39 @@ impl Repository<'_> {
     }
 
     fn rust(&self, binding: &ImportBinding) -> ImportTarget {
-        let mut segments = binding.module_path.split("::").peekable();
-        let mut module = binding.file.clone();
+        match self.rust_walk(&binding.file, &binding.module_path) {
+            None => ImportTarget::Unresolved,
+            Some((module, true, _)) => ImportTarget::Resolved(module),
+            Some(_) if binding.kind == ImportKind::ModuleDeclaration => ImportTarget::Unresolved,
+            Some(_) => ImportTarget::External,
+        }
+    }
+
+    /// The file of the module that the Rust path `path` names in `file`.
+    /// The path must name a module with each segment.
+    fn rust_module(&self, file: &str, path: &str) -> Option<String> {
+        match self.rust_walk(file, path) {
+            Some((module, true, true)) => Some(module),
+            _ => None,
+        }
+    }
+
+    /// Goes from the module of `file` along the segments of `path`. The
+    /// result is the last module file, a flag that tells if a segment named a
+    /// module, and a flag that tells if each segment named a module. `None`
+    /// means that the path names a crate root or a parent that has no file.
+    fn rust_walk(&self, file: &str, path: &str) -> Option<(String, bool, bool)> {
+        let mut segments = path.split("::").peekable();
+        let mut module = file.to_string();
         let mut moved = false;
         match segments.peek().copied() {
-            Some("crate") => match self.rust_root(&binding.file) {
+            Some("crate") => match self.rust_root(file) {
                 Some(root) => {
                     module = root;
                     moved = true;
                     segments.next();
                 }
-                None => return ImportTarget::Unresolved,
+                None => return None,
             },
             Some("self") => {
                 moved = true;
@@ -479,27 +520,25 @@ impl Repository<'_> {
         while segments.peek() == Some(&"super") {
             match self.rust_parent(&module) {
                 Some(parent) => module = parent,
-                None => return ImportTarget::Unresolved,
+                None => return None,
             }
             moved = true;
             segments.next();
         }
+        let mut complete = true;
         for segment in segments {
             match self.rust_child(&Self::rust_children(&module), segment) {
                 Some(child) => {
                     module = child;
                     moved = true;
                 }
-                None => break,
+                None => {
+                    complete = false;
+                    break;
+                }
             }
         }
-        if moved {
-            ImportTarget::Resolved(module)
-        } else if binding.kind == ImportKind::ModuleDeclaration {
-            ImportTarget::Unresolved
-        } else {
-            ImportTarget::External
-        }
+        Some((module, moved, complete))
     }
 
     /// Resolves a qualified name of a language that declares a package or a
@@ -716,6 +755,52 @@ fn inline_module_symbol(facts: &FileSymbols, name: &str) -> Option<String> {
     found.next().is_none().then(|| first.key.clone())
 }
 
+/// Gives a Go import without an alias the name that the package clause of
+/// its target declares. The last segment of the import path is the name only
+/// by convention.
+fn go_package_names(files: &mut [FileSymbols]) {
+    let declared: BTreeMap<&str, &str> = files
+        .iter()
+        .filter(|file| file.language == Language::Go && !file.file.ends_with("_test.go"))
+        .filter_map(|file| Some((file.file.as_str(), file.modules.first()?.as_str())))
+        // No file can import a `main` package.
+        .filter(|(_, package)| *package != "main")
+        .collect();
+    let names: Vec<Vec<Option<String>>> = files
+        .iter()
+        .map(|file| {
+            file.imports
+                .iter()
+                .map(|binding| {
+                    let targets: &[String] = match &binding.target_file {
+                        ImportTarget::Resolved(target) => std::slice::from_ref(target),
+                        ImportTarget::Package(targets) => targets,
+                        _ => &[],
+                    };
+                    let default_name = binding.kind == ImportKind::Module
+                        && binding.local_name == binding.imported_name;
+                    let packages: BTreeSet<&str> = targets
+                        .iter()
+                        .filter(|_| file.language == Language::Go && default_name)
+                        .filter_map(|target| declared.get(target.as_str()).copied())
+                        .collect();
+                    match packages.into_iter().collect::<Vec<&str>>().as_slice() {
+                        [only] => Some(only.to_string()),
+                        _ => None,
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    for (file, names) in files.iter_mut().zip(names) {
+        for (binding, name) in file.imports.iter_mut().zip(names) {
+            if name.is_some() {
+                binding.local_name = name;
+            }
+        }
+    }
+}
+
 /// Gives each import binding its target file and its target symbol.
 ///
 /// The result does not depend on the order of `files`.
@@ -751,6 +836,34 @@ pub fn resolve_imports(files: &mut [FileSymbols], manifests: &Manifests) {
             })
             .collect()
     };
+    let path_targets: Vec<BTreeMap<String, String>> = {
+        let repository = Repository {
+            files,
+            paths: files.iter().map(|file| file.file.as_str()).collect(),
+            manifests,
+        };
+        files
+            .iter()
+            .map(|file| {
+                let qualifiers: BTreeSet<&str> = file
+                    .references
+                    .iter()
+                    .filter(|_| file.language == Language::Rust)
+                    .filter_map(|reference| reference.qualifier.as_deref())
+                    .collect();
+                qualifiers
+                    .into_iter()
+                    .filter_map(|qualifier| {
+                        let module = repository.rust_module(&file.file, qualifier)?;
+                        Some((qualifier.to_string(), module))
+                    })
+                    .collect()
+            })
+            .collect()
+    };
+    for (file, targets) in files.iter_mut().zip(path_targets) {
+        file.path_targets = targets;
+    }
     // The symbol search reads the targets of all files. Thus the targets come first.
     for symbols in [false, true] {
         let results = resolve(files, symbols);
@@ -761,6 +874,7 @@ pub fn resolve_imports(files: &mut [FileSymbols], manifests: &Manifests) {
             }
         }
     }
+    go_package_names(files);
 }
 
 #[cfg(test)]
@@ -776,7 +890,9 @@ pub(crate) mod testing {
         let mut manifests = Manifests::default();
         let mut facts = Vec::new();
         for (file, source) in files {
-            if ["go.mod", "Cargo.toml"].contains(&file_name(file)) || file.ends_with(".gemspec") {
+            if ["go.mod", "Cargo.toml", "package.json"].contains(&file_name(file))
+                || file.ends_with(".gemspec")
+            {
                 manifests.add(file, source);
                 continue;
             }

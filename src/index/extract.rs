@@ -139,9 +139,13 @@ pub struct ReferenceFacts {
     /// The start byte of the call expression. A local name whose first value
     /// starts at this byte has the result of the call.
     pub start_byte: usize,
+    pub end_byte: usize,
     /// The position in `FileSymbols::symbols` of the enclosing definition.
     pub owner: Option<usize>,
     pub arguments: Vec<Argument>,
+    /// The byte range of the receiver expression. When the receiver is a
+    /// call, the call with this range gives the type of the receiver.
+    pub receiver: Option<(usize, usize)>,
 }
 
 /// The declared types of the parameters in a parameter list, without white
@@ -413,6 +417,16 @@ fn doc(node: Node<'_>, comment_kinds: &[&str], source: &[u8]) -> Option<String> 
     Some(lines.join("\n"))
 }
 
+/// A call with its byte range, its owner, its closure flag, and the byte
+/// range of its receiver.
+type RawCall<'tree> = (
+    Call<'tree>,
+    std::ops::Range<usize>,
+    Option<usize>,
+    bool,
+    Option<(usize, usize)>,
+);
+
 struct Extractor<'a, 'tree> {
     spec: &'a dyn LanguageSpec,
     rules: HashMap<&'static str, DefinitionRule>,
@@ -433,7 +447,7 @@ struct Extractor<'a, 'tree> {
     local_kinds: Vec<&'static str>,
     return_type_field: &'static str,
     /// Each call with its start byte, its owner, and its closure flag.
-    calls: Vec<(Call<'tree>, usize, Option<usize>, bool)>,
+    calls: Vec<RawCall<'tree>>,
     locals: Vec<(LocalName, Option<usize>)>,
 }
 
@@ -527,8 +541,9 @@ impl<'tree> Extractor<'_, 'tree> {
             let owner = self.owner();
             if let Some(call) = call.then(|| self.spec.call(node, &context)).flatten() {
                 let via_closure = !self.closure_depths.is_empty();
+                let receiver = self.spec.call_syntax().receiver_range(node);
                 self.calls
-                    .push((call, node.start_byte(), owner, via_closure));
+                    .push((call, node.byte_range(), owner, via_closure, receiver));
             }
             if local {
                 let mut names = Vec::new();
@@ -627,6 +642,9 @@ pub struct FileSymbols {
     pub reference_facts: Vec<ReferenceFacts>,
     /// The parameters and the local variables of each function.
     pub locals: Vec<Local>,
+    /// The module file that each qualifier of a call names, by the text of
+    /// the qualifier. `resolve_imports` gives the entries.
+    pub path_targets: BTreeMap<String, String>,
 }
 
 /// Completes the facts that need the symbols of a different file.
@@ -761,10 +779,11 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         });
     }
     let mut calls = extractor.calls;
-    calls.sort_by_key(|(_, start_byte, _, _)| *start_byte);
+    calls.sort_by_key(|(_, range, _, _, _)| range.start);
     let mut references = Vec::with_capacity(calls.len());
     let mut reference_facts = Vec::with_capacity(calls.len());
-    for (call, start_byte, owner, via_closure) in calls {
+    for (call, range, owner, via_closure, receiver) in calls {
+        let (start_byte, end_byte) = (range.start, range.end);
         let owner = position_of(owner);
         let text = String::from_utf8_lossy(&parsed.source[call.callee.name_node.byte_range()]);
         let name = match call.kind {
@@ -790,8 +809,10 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         });
         reference_facts.push(ReferenceFacts {
             start_byte,
+            end_byte,
             owner,
             arguments: call.arguments,
+            receiver,
         });
     }
     FileSymbols {
@@ -804,6 +825,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         references,
         reference_facts,
         locals,
+        path_targets: BTreeMap::new(),
     }
 }
 

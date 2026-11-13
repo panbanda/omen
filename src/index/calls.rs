@@ -155,7 +155,14 @@ impl CallSyntax {
             });
         }
         if let Some((_, qualifier, name)) = self.paths.iter().find(|rule| rule.0 == kind) {
-            let name_node = callee.child_by_field_name(name)?;
+            let mut name_node = callee.child_by_field_name(name)?;
+            // A C++ path nests to the right: `a::b::c` is `a` and the path `b::c`.
+            let mut inner = Vec::new();
+            while name_node.kind() == kind {
+                let scope = name_node.child_by_field_name(qualifier)?;
+                inner.push(context.text(scope));
+                name_node = name_node.child_by_field_name(name)?;
+            }
             let (receiver, qualifier) = match callee.child_by_field_name(qualifier) {
                 Some(qualifier) => match self.before_name(qualifier, context) {
                     (Some(Receiver::Name(name)), _) => (None, Some(name)),
@@ -166,6 +173,10 @@ impl CallSyntax {
                     other => other,
                 },
                 None => (None, None),
+            };
+            let qualifier = match qualifier {
+                Some(first) if !inner.is_empty() => Some(format!("{first}::{}", inner.join("::"))),
+                other => other,
             };
             return Some(Callee {
                 name_node,
@@ -185,6 +196,19 @@ impl CallSyntax {
             receiver: None,
             qualifier: None,
         })
+    }
+
+    /// The byte range of the receiver expression of a call node.
+    pub fn receiver_range(&self, node: Node<'_>) -> Option<(usize, usize)> {
+        let (_, callee, _) = self.calls.iter().find(|rule| rule.0 == node.kind())?;
+        let callee = if callee.is_empty() {
+            node
+        } else {
+            node.child_by_field_name(callee)?
+        };
+        let (_, receiver, _) = self.members.iter().find(|rule| rule.0 == callee.kind())?;
+        let receiver = callee.child_by_field_name(receiver)?;
+        Some((receiver.start_byte(), receiver.end_byte()))
     }
 
     /// Describes a call node or a construction node.
@@ -349,6 +373,12 @@ pub fn split_type(text: &str) -> (Option<String>, String) {
     const KEYWORDS: &[&str] = &[
         "const", "mut", "dyn", "struct", "class", "enum", "final", "impl",
     ];
+    // A Go slice or array type `[]T` has the element type `T` after the brackets.
+    let text = text.trim_start();
+    let text = match text.strip_prefix('[') {
+        Some(rest) => rest.split_once(']').map_or(text, |(_, element)| element),
+        None => text,
+    };
     let text = text.split(['<', '[', '(']).next().unwrap_or(text);
     let words: Vec<&str> = text
         .split(|character: char| character.is_whitespace() || "*&?!".contains(character))
@@ -389,7 +419,8 @@ mod tests {
         assert_eq!(split("std::vector<int>"), "std|vector");
         assert_eq!(split("\\Shop\\Shapes\\Circle"), "Shop\\Shapes|Circle");
         assert_eq!(split("?Circle"), "|Circle");
-        assert_eq!(split("[]int"), "|");
+        assert_eq!(split("[]int"), "|int");
+        assert_eq!(split("[]*Command"), "|Command");
     }
 
     #[test]

@@ -98,6 +98,31 @@ fn bare_call_name(call: Node<'_>, context: &Context<'_, '_>) -> Option<String> {
         .map(|method| context.text(method))
 }
 
+/// The modules that `include` and `prepend` in the body of a class or a
+/// module add. The object gets the methods of these modules.
+fn mixins(definition: Node<'_>, context: &Context<'_, '_>) -> Vec<String> {
+    let body = definition.child_by_field_name("body").unwrap_or(definition);
+    let mut cursor = body.walk();
+    let mut found = Vec::new();
+    for statement in body.named_children(&mut cursor) {
+        let is_mixin = bare_call_name(statement, context)
+            .is_some_and(|name| ["include", "prepend"].contains(&name.as_str()));
+        let Some(arguments) = statement
+            .child_by_field_name("arguments")
+            .filter(|_| is_mixin)
+        else {
+            continue;
+        };
+        let mut inner = arguments.walk();
+        for argument in arguments.named_children(&mut inner) {
+            if [CONSTANT, SCOPE_RESOLUTION].contains(&argument.kind()) {
+                found.push(context.text(argument));
+            }
+        }
+    }
+    found
+}
+
 /// Tells if a method in the body of a class or a module is public.
 ///
 /// A modifier without arguments, such as `private`, changes the methods after
@@ -367,6 +392,7 @@ impl LanguageSpec for Ruby {
                         draft.supertypes.push(context.text(name));
                     }
                 }
+                draft.supertypes.extend(mixins(node, context));
             }
             _ => {}
         }
@@ -651,6 +677,75 @@ mod tests {
                 "6 main>list.size Unresolved - []",
                 "6 main>list Unresolved - []",
             ]
+        );
+    }
+
+    #[test]
+    fn test_method_of_the_object_that_a_call_gives() {
+        use crate::index::resolve::testing::rows;
+        let files = [(
+            "builder.rb",
+            "class Builder\n  def self.app\n    self.new.to_app\n  end\n\n  def self.other\n    Builder.new.to_app.size\n  end\n\n  def to_app\n    1\n  end\nend\n",
+        )];
+        assert_eq!(
+            rows(&files, "builder.rb"),
+            [
+                "3 Builder.app>(..).to_app UniqueCandidate ReceiverDeclaredType [builder.rb#Builder.to_app]",
+                "3 Builder.app>self.new UniqueCandidate EnclosingType [builder.rb#Builder]",
+                "7 Builder.other>(..).size Unresolved - []",
+                "7 Builder.other>(..).to_app UniqueCandidate ReceiverDeclaredType [builder.rb#Builder.to_app]",
+                "7 Builder.other>Builder.new UniqueCandidate QualifiedPath [builder.rb#Builder]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_module_method_calls_a_method_of_the_including_class() {
+        use crate::index::resolve::testing::rows;
+        let files = [(
+            "request.rb",
+            "class Request\n  module Env\n    def get_header(name)\n    end\n  end\n\n  module Helpers\n    def body\n      get_header('input')\n      missing('input')\n    end\n  end\n\n  include Env\n  include Helpers\nend\n\nmodule Shared\n  def label\n    title()\n  end\nend\n\nclass Book\n  include Shared\n  def title\n  end\nend\n\nclass Film\n  include Shared\n  def title\n  end\nend\n",
+        )];
+        assert_eq!(
+            rows(&files, "request.rb"),
+            [
+                "9 Request.Helpers.body>get_header UniqueCandidate EnclosingType [request.rb#Request.Env.get_header]",
+                "10 Request.Helpers.body>missing Unresolved - []",
+                "14 Request>include Unresolved - []",
+                "15 Request>include Unresolved - []",
+                "20 Shared.label>title Ambiguous NameOnly [request.rb#Book.title, request.rb#Film.title]",
+                "25 Book>include Unresolved - []",
+                "31 Film>include Unresolved - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_mixin_class_of_the_object_and_qualified_class() {
+        use crate::index::resolve::testing::rows;
+        let files = [(
+            "rack.rb",
+            "module Rack\n  module Helpers\n    def get_header(name)\n      name\n    end\n  end\n\n  class Request\n    include Helpers\n  end\n\n  module Auth\n    class Request\n      def provided?\n        true\n      end\n    end\n  end\n\n  class Builder\n    def generate\n      self.class.new.to_app\n    end\n\n    def to_app\n      request = Rack::Request.new\n      request.get_header('a')\n      auth = Auth::Request.new\n      auth.provided?\n    end\n  end\nend\n",
+        )];
+        assert_eq!(
+            rows(&files, "rack.rb"),
+            [
+                "4 Rack.Helpers.get_header>name Unresolved - []",
+                "9 Rack.Request>include Unresolved - []",
+                "22 Rack.Builder.generate>(..).to_app UniqueCandidate ReceiverDeclaredType [rack.rb#Rack.Builder.to_app]",
+                "22 Rack.Builder.generate>(..).new UniqueCandidate ReceiverDeclaredType [rack.rb#Rack.Builder]",
+                "22 Rack.Builder.generate>self.class Unresolved - []",
+                "26 Rack.Builder.to_app>Rack::Request::new UniqueCandidate QualifiedPath [rack.rb#Rack.Request]",
+                "27 Rack.Builder.to_app>request.get_header UniqueCandidate ReceiverDeclaredType [rack.rb#Rack.Helpers.get_header]",
+                "27 Rack.Builder.to_app>request Unresolved - []",
+                "28 Rack.Builder.to_app>Auth::Request::new UniqueCandidate QualifiedPath [rack.rb#Rack.Auth.Request]",
+                "29 Rack.Builder.to_app>auth.provided? UniqueCandidate ReceiverDeclaredType [rack.rb#Rack.Auth.Request.provided?]",
+                "29 Rack.Builder.to_app>auth Unresolved - []",
+            ]
+        );
+        assert_eq!(
+            symbols(Language::Ruby, files[0].1)[3].supertypes,
+            ["Helpers"]
         );
     }
 }

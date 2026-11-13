@@ -6,7 +6,8 @@
 //! name. A qualifier or a receiver that fails does not continue to the rules
 //! for a bare name.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::OnceLock;
 
 use super::calls::{split_type, Argument};
 use super::extract::{FileSymbols, LinkFacts, Local};
@@ -126,6 +127,8 @@ struct Resolver<'a> {
     files: &'a [FileSymbols],
     by_name: HashMap<&'a str, Vec<Id>>,
     by_file: HashMap<&'a str, usize>,
+    /// For each Ruby type, the types that have it as a direct parent type.
+    ruby_children: OnceLock<BTreeMap<Id, Vec<Id>>>,
 }
 
 impl<'a> Resolver<'a> {
@@ -145,6 +148,7 @@ impl<'a> Resolver<'a> {
             files,
             by_name,
             by_file,
+            ruby_children: OnceLock::new(),
         }
     }
 
@@ -298,6 +302,32 @@ impl<'a> Resolver<'a> {
     /// The types that a name can refer to in `file`. The first rule that
     /// finds a type gives the result.
     fn types(&self, name: &str, qualifier: Option<&str>, file: usize) -> Vec<Id> {
+        let mut found = self.types_by_name(name, qualifier, file);
+        // More than one type can have the name. The qualifier selects the
+        // types whose containers have the names of the qualifier, or whose
+        // file declares the package that the qualifier names.
+        if let Some(path) = qualifier.map(segments).filter(|_| found.len() > 1) {
+            let within = |id: &Id| {
+                let containers: Vec<&str> = self
+                    .facts(*id)
+                    .container_path
+                    .iter()
+                    .flat_map(|container| segments(container))
+                    .collect();
+                let declared = self.files[id.0]
+                    .modules
+                    .iter()
+                    .any(|module| segments(module) == path);
+                declared || containers.ends_with(&path)
+            };
+            if found.iter().any(within) {
+                found.retain(within);
+            }
+        }
+        found
+    }
+
+    fn types_by_name(&self, name: &str, qualifier: Option<&str>, file: usize) -> Vec<Id> {
         let is_type = |id: &Id| is_container(self.symbol(*id));
         let in_files = |files: &[usize]| -> Vec<Id> {
             self.named(name, file)
@@ -527,17 +557,32 @@ impl<'a> Resolver<'a> {
             }
         }
         let start = local.name.value_start?;
-        let facts = &self.files[file];
-        let position = facts
+        let position = self.files[file]
             .reference_facts
             .iter()
             .position(|reference| reference.start_byte == start)?;
+        self.result_types(file, position, depth)
+    }
+
+    /// The types of the value that a call gives. `None` means that the syntax
+    /// does not give a type: the call has no one callee, or the callee has no
+    /// declared result type.
+    fn result_types(&self, file: usize, position: usize, depth: usize) -> Option<Vec<Id>> {
+        let facts = &self.files[file];
         let reference = &facts.references[position];
         if reference.kind == ReferenceKind::Construct {
             return Some(self.types(&reference.name, reference.qualifier.as_deref(), file));
         }
         if depth > 4 {
             return None;
+        }
+        // Ruby `self.class` gives the class of the object.
+        if self.family(file) == Family::Ruby
+            && reference.name == "class"
+            && reference.receiver == Some(Receiver::SelfValue)
+        {
+            let chain = self.chain(file, facts.reference_facts[position].owner);
+            return Some(self.enclosing_type(&chain).into_iter().collect());
         }
         let outcome = self.resolve(file, position, depth + 1);
         let [callee] = outcome.candidates.as_slice() else {
@@ -717,6 +762,27 @@ impl<'a> Resolver<'a> {
             if module || self.target_files(binding).is_empty() {
                 return self.imported(binding, name);
             }
+            // The imported name can be a namespace that the module exports
+            // again, as `export * as name from "./file"` gives.
+            let imported = binding.imported_name.as_deref();
+            let spaces: Vec<usize> = self
+                .target_files(binding)
+                .into_iter()
+                .flat_map(|target| &self.files[target].imports)
+                .filter(|inner| {
+                    inner.local_name.as_deref() == imported
+                        && inner.imported_name.as_deref() == Some("*")
+                })
+                .flat_map(|inner| self.target_files(inner))
+                .collect();
+            if !spaces.is_empty() {
+                let found: Vec<Id> = spaces
+                    .iter()
+                    .flat_map(|space| self.exported_name(*space, name, &mut BTreeSet::new()))
+                    .collect();
+                return Outcome::of(Basis::ImportedModule, self.preferred(found, arity))
+                    .unwrap_or_else(|| Outcome::none(Status::Unresolved));
+            }
         }
         let types = self.types(x, None, file);
         if types.is_empty() {
@@ -763,6 +829,17 @@ impl<'a> Resolver<'a> {
             if !types.is_empty() {
                 return self.on_types(&types, name, reference.arity, Basis::QualifiedPath, file);
             }
+        }
+        if let Some(target) = facts.path_targets.get(qualifier) {
+            let found: Vec<Id> = self
+                .by_file
+                .get(target.as_str())
+                .into_iter()
+                .flat_map(|target| self.exported_name(*target, name, &mut BTreeSet::new()))
+                .filter(|id| is_callable(self.symbol(*id)) || is_container(self.symbol(*id)))
+                .collect();
+            return Outcome::of(Basis::QualifiedPath, self.preferred(found, reference.arity))
+                .unwrap_or_else(|| Outcome::none(Status::Unresolved));
         }
         let modules: Vec<usize> = (0..self.files.len())
             .filter(|other| {
@@ -976,12 +1053,60 @@ impl<'a> Resolver<'a> {
         Outcome::of(Basis::NameOnly, self.definitions(anywhere, file, arity)).unwrap_or_else(|| {
             // A Ruby method calls a method of its object without `self`. A
             // module that other types include does not tell which type.
-            if family == Family::Ruby && self.enclosing_type(chain).is_some() {
-                Outcome::offered(Basis::NameOnly, self.methods_by_name(name, file))
-            } else {
-                Outcome::none(Status::Unresolved)
+            let owner = self
+                .enclosing_type(chain)
+                .filter(|_| family == Family::Ruby);
+            let Some(owner) = owner else {
+                return Outcome::none(Status::Unresolved);
+            };
+            // The object is an object of a type that includes the module, or
+            // of a subtype of such a type. One method for all these types is
+            // the callee.
+            let found: BTreeSet<Id> = self
+                .including_types(owner)
+                .into_iter()
+                .flat_map(|includer| self.members(includer, name, arity, &mut BTreeSet::new()))
+                .collect();
+            match found.into_iter().collect::<Vec<Id>>().as_slice() {
+                [only] => Outcome::of(Basis::EnclosingType, vec![*only])
+                    .unwrap_or_else(|| Outcome::none(Status::Unresolved)),
+                _ => Outcome::offered(Basis::NameOnly, self.methods_by_name(name, file)),
             }
         })
+    }
+
+    /// The types that include the Ruby module `module`, and their subtypes.
+    fn including_types(&self, module: Id) -> BTreeSet<Id> {
+        let mut found = BTreeSet::new();
+        if self.symbol(module).kind != SymbolKind::Module {
+            return found;
+        }
+        let children = self.ruby_children.get_or_init(|| {
+            let mut children: BTreeMap<Id, Vec<Id>> = BTreeMap::new();
+            for (file, facts) in self.files.iter().enumerate() {
+                if self.family(file) != Family::Ruby {
+                    continue;
+                }
+                for (position, symbol) in facts.symbols.iter().enumerate() {
+                    if symbol.supertypes.is_empty() {
+                        continue;
+                    }
+                    for parent in self.parents((file, position)) {
+                        children.entry(parent).or_default().push((file, position));
+                    }
+                }
+            }
+            children
+        });
+        let mut pending = vec![module];
+        while let Some(parent) = pending.pop() {
+            for child in children.get(&parent).into_iter().flatten() {
+                if found.insert(*child) {
+                    pending.push(*child);
+                }
+            }
+        }
+        found
     }
 
     /// Replaces declarations by the definitions that they declare. A call
@@ -1128,6 +1253,11 @@ impl<'a> Resolver<'a> {
                 let Some(owner) = self.enclosing_type(&chain) else {
                     return Outcome::none(Status::Unresolved);
                 };
+                // Ruby `self.new` in a class method makes an object of the class.
+                if self.family(file) == Family::Ruby && name == "new" {
+                    return Outcome::of(Basis::EnclosingType, self.constructors(owner, arity))
+                        .unwrap_or_else(|| Outcome::none(Status::Unresolved));
+                }
                 let members = self.members(owner, name, arity, &mut BTreeSet::new());
                 Outcome::of(Basis::EnclosingType, members).unwrap_or_else(|| {
                     Outcome::offered(Basis::NameOnly, self.methods_by_name(name, file))
@@ -1171,7 +1301,22 @@ impl<'a> Resolver<'a> {
             Some(Receiver::Name(receiver)) => {
                 self.with_receiver(file, reference, &chain, receiver, depth)
             }
-            Some(Receiver::Expression) => Outcome::none(Status::Unresolved),
+            Some(Receiver::Expression) => {
+                // A receiver that is a call has the type of the result of that call.
+                let receiver = facts.reference_facts[position].receiver;
+                let call = receiver.and_then(|(start, end)| {
+                    facts
+                        .reference_facts
+                        .iter()
+                        .position(|other| other.start_byte == start && other.end_byte == end)
+                });
+                match call.and_then(|call| self.result_types(file, call, depth + 1)) {
+                    Some(types) => {
+                        self.on_types(&types, name, arity, Basis::ReceiverDeclaredType, file)
+                    }
+                    None => Outcome::offered(Basis::NameOnly, self.methods_by_name(name, file)),
+                }
+            }
             None => match &reference.qualifier {
                 Some(qualifier) => self.with_qualifier(file, reference, qualifier),
                 None => {
@@ -1222,6 +1367,159 @@ pub fn resolve_references(files: &mut [FileSymbols]) {
         for (reference, resolution) in file.references.iter_mut().zip(resolutions) {
             reference.resolution = resolution;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testing::rows;
+
+    #[test]
+    fn test_qualified_path_rust() {
+        let files = [
+            ("Cargo.toml", "[package]\nname = \"shop\"\n"),
+            ("src/lib.rs", "pub mod other;\npub mod deep;\npub mod caller;\n"),
+            ("src/other.rs", "pub fn thing() {}\n\npub struct Cart;\n\nimpl Cart {\n    pub fn open() {}\n}\n"),
+            ("src/deep/mod.rs", "pub mod inner;\n\npub fn thing() {}\n"),
+            ("src/deep/inner.rs", "pub fn leaf() {\n    super::thing();\n    super::super::other::thing();\n}\n\npub mod nested {\n    pub fn twig() {}\n}\n"),
+            (
+                "src/caller.rs",
+                "fn run() {\n    crate::other::thing();\n    crate::deep::inner::leaf();\n    crate::deep::inner::nested::twig();\n    crate::other::Cart::open();\n    crate::other::missing();\n    crate::other::Gone::open();\n    serde::other::thing();\n}\n",
+            ),
+            ("tests/it.rs", "fn check() {\n    shop::other::thing();\n    shop::deep::inner::leaf();\n}\n"),
+        ];
+        assert_eq!(
+            rows(&files, "src/caller.rs"),
+            [
+                "2 run>crate::other::thing UniqueCandidate QualifiedPath [src/other.rs#thing]",
+                "3 run>crate::deep::inner::leaf UniqueCandidate QualifiedPath [src/deep/inner.rs#leaf]",
+                "4 run>crate::deep::inner::nested::twig UniqueCandidate QualifiedPath [src/deep/inner.rs#nested.twig]",
+                "5 run>crate::other::Cart::open UniqueCandidate QualifiedPath [src/other.rs#Cart.open]",
+                "6 run>crate::other::missing Unresolved - []",
+                "7 run>crate::other::Gone::open Unresolved - []",
+                "8 run>serde::other::thing Unresolved - []",
+            ]
+        );
+        assert_eq!(
+            rows(&files, "tests/it.rs"),
+            [
+                "2 check>shop::other::thing UniqueCandidate QualifiedPath [src/other.rs#thing]",
+                "3 check>shop::deep::inner::leaf UniqueCandidate QualifiedPath [src/deep/inner.rs#leaf]",
+            ]
+        );
+        assert_eq!(
+            rows(&files, "src/deep/inner.rs"),
+            [
+                "2 leaf>super::thing UniqueCandidate QualifiedPath [src/deep/mod.rs#thing]",
+                "3 leaf>super::super::other::thing UniqueCandidate QualifiedPath [src/other.rs#thing]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_qualified_path_java() {
+        let files = [
+            ("a/Tool.java", "package shop.a;\n\npublic class Tool {\n    public static int run() {\n        return 1;\n    }\n}\n"),
+            ("b/Tool.java", "package shop.b;\n\npublic class Tool {\n    public static int run() {\n        return 2;\n    }\n}\n"),
+            ("c/Main.java", "package shop.c;\n\npublic class Main {\n    int go() {\n        return shop.b.Tool.run() + shop.gone.Tool.run();\n    }\n}\n"),
+        ];
+        assert_eq!(
+            rows(&files, "c/Main.java"),
+            [
+                "5 Main.go>shop.b.Tool::run UniqueCandidate QualifiedPath [b/Tool.java#Tool.run]",
+                "5 Main.go>shop.gone.Tool::run Ambiguous NameOnly [a/Tool.java#Tool.run, b/Tool.java#Tool.run]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_qualified_path_csharp() {
+        let files = [
+            ("a/Tool.cs", "namespace Shop.A\n{\n    public static class Tool\n    {\n        public static int Run() { return 1; }\n    }\n}\n"),
+            ("b/Tool.cs", "namespace Shop.B\n{\n    public static class Tool\n    {\n        public static int Run() { return 2; }\n    }\n}\n"),
+            ("c/Main.cs", "namespace Shop.C\n{\n    public class Main\n    {\n        int Go() { return Shop.B.Tool.Run() + Shop.Gone.Tool.Run(); }\n    }\n}\n"),
+        ];
+        assert_eq!(
+            rows(&files, "c/Main.cs"),
+            [
+                "5 Shop.C.Main.Go>Shop.B.Tool::Run UniqueCandidate QualifiedPath [b/Tool.cs#Shop.B.Tool.Run]",
+                "5 Shop.C.Main.Go>Shop.Gone.Tool::Run Ambiguous NameOnly [a/Tool.cs#Shop.A.Tool.Run, b/Tool.cs#Shop.B.Tool.Run]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_qualified_path_php() {
+        let files = [
+            ("a/tool.php", "<?php\nnamespace Shop\\A;\n\nfunction run() { return 1; }\n"),
+            ("b/tool.php", "<?php\nnamespace Shop\\B;\n\nfunction run() { return 2; }\n"),
+            ("c/main.php", "<?php\nnamespace Shop\\C;\n\nfunction go() {\n    return \\Shop\\B\\run() + \\Shop\\Gone\\run();\n}\n"),
+        ];
+        assert_eq!(
+            rows(&files, "c/main.php"),
+            [
+                "5 go>\\Shop\\B::run UniqueCandidate QualifiedPath [b/tool.php#run]",
+                "5 go>\\Shop\\Gone::run Unresolved - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_qualified_path_cpp() {
+        let files = [
+            ("a.cpp", "namespace shop {\nnamespace a {\nint run() { return 1; }\n}\n}\n"),
+            ("a.hpp", "namespace shop {\nnamespace a {\nint run();\n}\n}\n"),
+            ("b.cpp", "namespace shop {\nnamespace b {\nint run() { return 2; }\n}\n}\n"),
+            ("b.hpp", "namespace shop {\nnamespace b {\nint run();\n}\n}\n"),
+            (
+                "main.cpp",
+                "#include \"a.hpp\"\n#include \"b.hpp\"\n\nint go() {\n    return shop::b::run() + shop::gone::run();\n}\n",
+            ),
+        ];
+        assert_eq!(
+            rows(&files, "main.cpp"),
+            [
+                "5 go>shop::b::run UniqueCandidate QualifiedPath [b.cpp#shop.b.run]",
+                "5 go>shop::gone::run Unresolved - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_qualified_path_python() {
+        let files = [
+            ("pkg/__init__.py", ""),
+            ("pkg/a.py", "def run():\n    return 1\n"),
+            ("pkg/b.py", "def run():\n    return 2\n"),
+            (
+                "main.py",
+                "import pkg.b\n\ndef go():\n    return pkg.b.run() + pkg.gone.run()\n",
+            ),
+        ];
+        assert_eq!(
+            rows(&files, "main.py"),
+            [
+                "4 go>pkg.b::run UniqueCandidate QualifiedPath [pkg/b.py#run]",
+                "4 go>pkg.gone::run Unresolved - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_qualified_path_go() {
+        let files = [
+            ("go.mod", "module example.com/shop\n"),
+            ("a/tool.go", "package tool\n\nfunc Run() int { return 1 }\n"),
+            ("b/tool.go", "package tool\n\nfunc Run() int { return 2 }\n"),
+            ("main.go", "package main\n\nimport \"example.com/shop/b\"\n\nfunc run() int {\n\treturn tool.Run() + gone.Run()\n}\n"),
+        ];
+        assert_eq!(
+            rows(&files, "main.go"),
+            [
+                "6 run>tool.Run UniqueCandidate ImportedModule [b/tool.go#Run]",
+                "6 run>gone.Run Unresolved - []",
+            ]
+        );
     }
 }
 

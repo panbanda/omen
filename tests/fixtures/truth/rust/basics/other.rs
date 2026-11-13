@@ -19,3 +19,7 @@ mod checks {
         only_here()
     }
 }
+
+pub fn qualified() -> u32 {
+    crate::util::helper() + super::util::twice(1)
+}

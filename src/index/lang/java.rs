@@ -507,7 +507,7 @@ mod tests {
                 "27 Main.measure>Util.helper UniqueCandidate QualifiedPath [shop/util/Util.java#Util.helper]",
                 "32 Main.shadow>helper UniqueCandidate ImportedName [shop/util/Util.java#Util.helper]",
                 "36 Main.tally>counter.next UniqueCandidate ReceiverDeclaredType [Main.java#Main.Counter.next]",
-                "36 Main.tally>(..).next Unresolved - []",
+                "36 Main.tally>(..).next Ambiguous NameOnly [Main.java#Main.Counter.next]",
                 "36 Main.tally>Math.max Unresolved - []",
                 "36 Main.tally>missing Unresolved - []",
             ]

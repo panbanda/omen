@@ -10,10 +10,15 @@ use crate::index::model::{Exported, Span, SymbolKind};
 use crate::index::model::{ImportBinding, ImportKind};
 
 const IMPORT_SPEC: &str = "import_spec";
+const PACKAGE_CLAUSE: &str = "package_clause";
 const BLANK_IDENTIFIER: &str = "blank_identifier";
 const DOT: &str = "dot";
 
 use crate::index::calls::{CallSyntax, LocalName};
+
+const RANGE_CLAUSE: &str = "range_clause";
+const COMPOSITE_LITERAL: &str = "composite_literal";
+const UNARY_EXPRESSION: &str = "unary_expression";
 
 const CALL_SYNTAX: CallSyntax = CallSyntax {
     calls: &[("call_expression", "function", "arguments")],
@@ -63,20 +68,52 @@ const DEFINITIONS: &[DefinitionRule] = &[
 ];
 
 impl LanguageSpec for Go {
+    fn call_hook_kinds(&self) -> Vec<&'static str> {
+        vec![COMPOSITE_LITERAL, UNARY_EXPRESSION, RANGE_CLAUSE]
+    }
+
     fn call_syntax(&self) -> CallSyntax {
         CALL_SYNTAX
     }
 
     fn local_kinds(&self) -> Vec<&'static str> {
         let mut kinds = self.call_syntax().local_kinds();
-        kinds.push(SHORT_VAR_DECLARATION);
+        kinds.extend([SHORT_VAR_DECLARATION, RANGE_CLAUSE]);
         kinds
     }
 
     /// `a, b := x, y` binds each name on the left to the value at the same position.
     fn locals(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
+        if node.kind() == RANGE_CLAUSE {
+            // `for _, element := range values` binds the second name to an
+            // element. A slice has no methods, thus the type of the values
+            // without `[]` is the type of the element.
+            let element = node
+                .child_by_field_name("left")
+                .filter(|left| left.named_child_count() == 2)
+                .and_then(|left| left.named_child(1))
+                .filter(|element| element.kind() == IDENTIFIER);
+            if let (Some(element), Some(values)) = (element, node.child_by_field_name("right")) {
+                out.push(LocalName {
+                    name: context.text(element),
+                    type_name: None,
+                    value_start: Some(values.start_byte()),
+                    is_parameter: false,
+                });
+            }
+            return;
+        }
         if node.kind() != SHORT_VAR_DECLARATION {
+            let first = out.len();
             self.call_syntax().locals(node, context, out);
+            // `var name = Type{...}` has the type of the literal.
+            let literal = node
+                .child_by_field_name("value")
+                .and_then(|values| values.named_child(0))
+                .and_then(|value| literal_type(value, context));
+            if let (Some(literal), Some(local)) = (literal, out.get_mut(first)) {
+                local.type_name.get_or_insert(literal);
+            }
             return;
         }
         let (Some(left), Some(right)) = (
@@ -96,7 +133,7 @@ impl LanguageSpec for Go {
             let value = paired.then(|| right.named_child(position as u32)).flatten();
             out.push(LocalName {
                 name: context.text(name),
-                type_name: None,
+                type_name: value.and_then(|value| literal_type(value, context)),
                 value_start: value.map(|value| value.start_byte()),
                 is_parameter: false,
             });
@@ -105,6 +142,16 @@ impl LanguageSpec for Go {
 
     fn import_kinds(&self) -> Vec<&'static str> {
         vec![IMPORT_SPEC]
+    }
+
+    fn module_kinds(&self) -> Vec<&'static str> {
+        vec![PACKAGE_CLAUSE]
+    }
+
+    /// The name in the package clause. A caller uses this name, which can be
+    /// different from the last segment of the import path.
+    fn module_name(&self, node: Node<'_>, context: &Context<'_, '_>) -> Option<String> {
+        node.named_child(0).map(|name| context.text(name))
     }
 
     fn import_hook_kinds(&self) -> Vec<&'static str> {
@@ -220,6 +267,18 @@ impl LanguageSpec for Go {
             Exported::NotExported
         }
     }
+}
+
+/// The type that a composite literal names: `Type{...}` or `&Type{...}`.
+fn literal_type(value: Node<'_>, context: &Context<'_, '_>) -> Option<String> {
+    let literal = match value.kind() {
+        UNARY_EXPRESSION => value.child_by_field_name("operand")?,
+        _ => value,
+    };
+    (literal.kind() == COMPOSITE_LITERAL)
+        .then(|| literal.child_by_field_name("type"))
+        .flatten()
+        .map(|type_name| context.text(type_name))
 }
 
 #[cfg(test)]
@@ -500,6 +559,47 @@ mod tests {
                 (7, "local", Some("main.go#run"), true),
                 (8, "local", Some("main.go#run.named"), false),
                 (9, "named", Some("main.go#run"), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_receiver_types_from_composite_literals_and_call_results() {
+        use crate::index::resolve::testing::rows;
+        let files = [(
+            "main.go",
+            "package main\n\ntype FlagSet struct{}\n\nfunc (f *FlagSet) Lookup(name string) int { return 1 }\n\ntype Command struct{}\n\nfunc (c *Command) AddCommand(child *Command) {}\n\nfunc (c *Command) Flags() *FlagSet { return &FlagSet{} }\n\nfunc (c *Command) Root() *Command { return c }\n\nfunc run(unknown Other) {\n\troot := &Command{}\n\tchild := Command{}\n\troot.AddCommand(&child)\n\tchild.Flags().Lookup(\"x\")\n\troot.Root().Root().Flags()\n\tunknown.Make().Flags()\n}\n",
+        )];
+        assert_eq!(
+            rows(&files, "main.go"),
+            [
+                "18 run>root.AddCommand UniqueCandidate ReceiverDeclaredType [main.go#Command.AddCommand]",
+                "19 run>(..).Lookup UniqueCandidate ReceiverDeclaredType [main.go#FlagSet.Lookup]",
+                "19 run>child.Flags UniqueCandidate ReceiverDeclaredType [main.go#Command.Flags]",
+                "20 run>(..).Flags UniqueCandidate ReceiverDeclaredType [main.go#Command.Flags]",
+                "20 run>(..).Root UniqueCandidate ReceiverDeclaredType [main.go#Command.Root]",
+                "20 run>root.Root UniqueCandidate ReceiverDeclaredType [main.go#Command.Root]",
+                "21 run>(..).Flags Ambiguous NameOnly [main.go#Command.Flags]",
+                "21 run>unknown.Make Unresolved - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_receiver_types_from_a_range_and_a_package_variable() {
+        use crate::index::resolve::testing::rows;
+        let files = [(
+            "main.go",
+            "package main\n\ntype Command struct{}\n\nfunc (c *Command) Name() string { return \"\" }\n\nfunc (c *Command) Commands() []*Command { return nil }\n\nvar rootCmd = &Command{}\n\nfunc run(list []*Command) {\n\tfor _, child := range rootCmd.Commands() {\n\t\tchild.Name()\n\t}\n\tfor index := range rootCmd.Commands() {\n\t\tindex.Name()\n\t}\n\tfor _, given := range list {\n\t\tgiven.Name()\n\t}\n}\n",
+        )];
+        assert_eq!(
+            rows(&files, "main.go"),
+            [
+                "12 run>rootCmd.Commands UniqueCandidate ReceiverDeclaredType [main.go#Command.Commands]",
+                "13 run>child.Name UniqueCandidate ReceiverDeclaredType [main.go#Command.Name]",
+                "15 run>rootCmd.Commands UniqueCandidate ReceiverDeclaredType [main.go#Command.Commands]",
+                "16 run>index.Name Unresolved - []",
+                "19 run>given.Name Ambiguous NameOnly [main.go#Command.Name]",
             ]
         );
     }
