@@ -703,7 +703,6 @@ impl<'a> Resolver<'a> {
             _ => qualifier,
         };
         let path = segments(qualifier);
-        let joined = |separator: &str| path.join(separator);
         let facts = &self.files[file];
         let binding = facts.imports.iter().find(|binding| {
             binding.local_name.as_deref() == Some(qualifier)
@@ -711,6 +710,18 @@ impl<'a> Resolver<'a> {
                 || (path.len() == 1 && binding.local_name.as_deref() == Some(path[0]))
         });
         if let Some(binding) = binding {
+            // The import can name a type, for example with an alias. Then
+            // the call is a call of a member of that type.
+            let imported = binding.imported_name.as_deref().unwrap_or(qualifier);
+            let aliased: Vec<Id> = self
+                .target_files(binding)
+                .into_iter()
+                .flat_map(|target| self.exported_name(target, imported, &mut BTreeSet::new()))
+                .filter(|id| is_container(self.symbol(*id)))
+                .collect();
+            if !aliased.is_empty() {
+                return self.on_types(&aliased, name, reference.arity, Basis::QualifiedPath, file);
+            }
             let mut outcome = self.imported(binding, name);
             if outcome.status != Status::Unresolved || self.target_files(binding).is_empty() {
                 outcome.basis = outcome.basis.map(|_| Basis::QualifiedPath);
@@ -718,7 +729,7 @@ impl<'a> Resolver<'a> {
             }
         }
         if let Some(last) = path.last() {
-            let before = (path.len() > 1).then(|| joined("."));
+            let before = (path.len() > 1).then(|| path[..path.len() - 1].join("."));
             let types = self.types(last, before.as_deref(), file);
             if !types.is_empty() {
                 return self.on_types(&types, name, reference.arity, Basis::QualifiedPath, file);
@@ -747,6 +758,25 @@ impl<'a> Resolver<'a> {
             is_callable(symbol)
                 || (matches!(family, Family::Python | Family::C) && is_container(symbol))
         };
+        // A PHP variable and a PHP function do not share names. `$name()`
+        // calls the function value that the local name holds. The range of
+        // a function value starts at its variable.
+        let php_value = |id: &Id| self.symbol(*id).signature.starts_with('$');
+        if let (Family::Php, Some(variable)) = (family, name.strip_prefix('$')) {
+            let held: Vec<Id> = self
+                .named(variable, file)
+                .filter(|id| {
+                    id.0 == file
+                        && php_value(id)
+                        && self
+                            .facts(*id)
+                            .parent
+                            .is_some_and(|parent| chain.contains(&(file, parent)))
+                })
+                .collect();
+            return Outcome::of(Basis::LexicalScope, held)
+                .unwrap_or_else(|| Outcome::none(Status::Unresolved));
+        }
         if family == Family::Ruby {
             // A Ruby name without parentheses is a value when the method
             // binds the name. A function value needs `.call`.
@@ -772,6 +802,7 @@ impl<'a> Resolver<'a> {
                 .filter(|id| {
                     id.0 == file
                         && callable(id)
+                        && !(family == Family::Php && php_value(id))
                         && self.facts(*id).parent.is_some_and(|parent| {
                             chain.contains(&(file, parent))
                                 && !is_container(self.symbol((file, parent)))
@@ -1028,7 +1059,12 @@ impl<'a> Resolver<'a> {
         let name = reference.name.as_str();
         let arity = reference.arity;
         if reference.kind == ReferenceKind::Construct {
-            let types = self.types(name, reference.qualifier.as_deref(), file);
+            // PHP `new self` and `new static` make an object of the enclosing class.
+            let types = if ["self", "static"].contains(&name) {
+                self.enclosing_type(&chain).into_iter().collect()
+            } else {
+                self.types(name, reference.qualifier.as_deref(), file)
+            };
             let found: Vec<Id> = types
                 .iter()
                 .flat_map(|owner| self.constructors(*owner, arity))

@@ -24,6 +24,41 @@ const PARENTHESIZED_EXPRESSION: &str = "parenthesized_expression";
 const STRING_LITERALS: &[&str] = &["string", "encapsed_string"];
 const STRING_CONTENT: &str = "string_content";
 
+use crate::index::calls::{Argument, Call, CallSyntax, Callee};
+use crate::index::model::ReferenceKind;
+
+const FUNCTION_CALL_EXPRESSION: &str = "function_call_expression";
+const OBJECT_CREATION_EXPRESSION: &str = "object_creation_expression";
+const ARGUMENTS: &str = "arguments";
+
+/// A method call and a static call have the object or the scope in the call
+/// node. `self` and `static` are the class itself, and `parent` is its parent.
+const CALL_SYNTAX: CallSyntax = CallSyntax {
+    calls: &[
+        (FUNCTION_CALL_EXPRESSION, "function", "arguments"),
+        ("member_call_expression", "", "arguments"),
+        ("nullsafe_member_call_expression", "", "arguments"),
+        ("scoped_call_expression", "", "arguments"),
+    ],
+    constructions: &[],
+    members: &[
+        ("member_call_expression", "object", "name"),
+        ("nullsafe_member_call_expression", "object", "name"),
+    ],
+    paths: &[("scoped_call_expression", "scope", "name")],
+    names: &[NAME, VARIABLE_NAME],
+    self_words: &["$this", "self", "static"],
+    super_words: &["parent"],
+    locals: &[(ASSIGNMENT_EXPRESSION, "left", "", "right")],
+    parameters: &[
+        ("simple_parameter", "name", "type"),
+        ("property_promotion_parameter", "name", "type"),
+        ("variadic_parameter", "name", "type"),
+    ],
+    return_type_field: "return_type",
+    literals: &[],
+};
+
 pub struct Php;
 
 const METHOD_DECLARATION: &str = "method_declaration";
@@ -91,6 +126,63 @@ fn closure_variable(closure: Node<'_>) -> Option<Node<'_>> {
 }
 
 impl LanguageSpec for Php {
+    fn call_syntax(&self) -> CallSyntax {
+        CALL_SYNTAX
+    }
+
+    fn call_kinds(&self) -> Vec<&'static str> {
+        let mut kinds = self.call_syntax().call_kinds();
+        kinds.push(OBJECT_CREATION_EXPRESSION);
+        kinds
+    }
+
+    fn call_hook_kinds(&self) -> Vec<&'static str> {
+        vec![OBJECT_CREATION_EXPRESSION, ARGUMENTS]
+    }
+
+    /// `new Type(...)` has the type as a child without a field name. A call
+    /// of a qualified name, as `A\b()`, has the namespace as its qualifier.
+    fn call<'tree>(&self, node: Node<'tree>, context: &Context<'_, 'tree>) -> Option<Call<'tree>> {
+        let count = |arguments: Option<Node<'_>>| {
+            vec![Argument::Other; arguments.map_or(0, |arguments| arguments.named_child_count())]
+        };
+        if node.kind() == OBJECT_CREATION_EXPRESSION {
+            let mut cursor = node.walk();
+            let children: Vec<Node<'tree>> = node.named_children(&mut cursor).collect();
+            let type_node = children.iter().find(|child| child.kind() != ARGUMENTS)?;
+            let arguments = children.iter().find(|child| child.kind() == ARGUMENTS);
+            return Some(Call {
+                callee: Callee {
+                    name_node: *type_node,
+                    receiver: None,
+                    qualifier: None,
+                },
+                kind: ReferenceKind::Construct,
+                arguments: count(arguments.copied()),
+            });
+        }
+        let function = node
+            .child_by_field_name("function")
+            .filter(|function| function.kind() == QUALIFIED_NAME);
+        let (FUNCTION_CALL_EXPRESSION, Some(function)) = (node.kind(), function) else {
+            return self.call_syntax().call(node, context);
+        };
+        let name = function.named_child(function.named_child_count().saturating_sub(1) as u32)?;
+        let text = context.text(function);
+        let qualifier = text
+            .rsplit_once('\\')
+            .map(|(qualifier, _)| qualifier.to_string());
+        Some(Call {
+            callee: Callee {
+                name_node: name,
+                receiver: None,
+                qualifier: qualifier.filter(|qualifier| !qualifier.is_empty()),
+            },
+            kind: ReferenceKind::Call,
+            arguments: count(node.child_by_field_name("arguments")),
+        })
+    }
+
     fn import_kinds(&self) -> Vec<&'static str> {
         [&[NAMESPACE_USE_DECLARATION][..], LOAD_EXPRESSIONS].concat()
     }
@@ -472,6 +564,77 @@ mod tests {
                 "2 Named Shop\\Shapes Shapes->Shapes package(a.php,b.php)",
                 "3 Named Shop\\Shapes\\Circle Circle->Circle ambiguous(a.php,b.php)",
                 "4 Named Shop\\Shapes\\Square Square->Square a.php [a.php#Square]",
+            ]
+        );
+    }
+
+    const CALL_FILES: &[(&str, &str)] = &[
+        (
+            "main.php",
+            "<?php\nnamespace Shop;\n\nuse Shop\\Other;\nuse Shop\\Shapes\\Circle;\nuse Shop\\Shapes\\Shape;\nuse Shop\\Util\\Helpers as Tools;\nuse function Shop\\Util\\helper;\n\nfunction local(): int\n{\n    return 4;\n}\n\nfunction run(): int\n{\n    function inner(): int\n    {\n        return 5;\n    }\n    $add = function (int $n): int {\n        return $n + local();\n    };\n    return local() + helper() + Other\\only_here() + \\Shop\\Other\\only_here() + inner() + $add(2) + add(2) + Tools::helper();\n}\n\nfunction measure(Circle $size, Shape $shape, $duck, callable $callback): float\n{\n    $circle = new Circle(1.0);\n    $stack = new \\SplStack();\n    $stack->push(1);\n    return $size->area() + $shape->area() + $duck->area() + $circle->area() + Circle::unit() + $callback() + strtoupper('a');\n}\n",
+        ),
+        ("other.php", "<?php\nnamespace Shop\\Other;\n\nfunction only_here(): int\n{\n    return 3;\n}\n\nfunction push(): void\n{\n}\n"),
+        (
+            "shapes.php",
+            "<?php\nnamespace Shop\\Shapes;\n\nuse function Shop\\Util\\helper;\n\ninterface Shape\n{\n    public function area(): float;\n}\n\ntrait Describes\n{\n    public function describe(): string\n    {\n        return 'shape ' . $this->area();\n    }\n}\n\nabstract class Base implements Shape\n{\n    use Describes;\n\n    public function __construct(protected string $name)\n    {\n    }\n\n    public function label(): string\n    {\n        return $this->name;\n    }\n}\n\nclass Circle extends Base\n{\n    public function __construct(private float $radius)\n    {\n        parent::__construct('circle');\n    }\n\n    public static function unit(): self\n    {\n        return self::build(1.0) ?? static::build(2.0);\n    }\n\n    private static function build(float $radius): self\n    {\n        return new self($radius);\n    }\n\n    public function area(): float\n    {\n        return $this->scaled(3.14) + helper();\n    }\n\n    public function label(): string\n    {\n        return strtoupper(parent::label());\n    }\n\n    private function scaled(float $factor): float\n    {\n        return $factor;\n    }\n}\n",
+        ),
+        ("util.php", "<?php\nnamespace Shop\\Util;\n\nfunction helper(): int\n{\n    return 1;\n}\n\nfinal class Helpers\n{\n    public static function helper(): int\n    {\n        return 5;\n    }\n}\n"),
+    ];
+
+    #[test]
+    fn test_function_calls() {
+        use crate::index::resolve::testing::rows;
+        assert_eq!(
+            rows(CALL_FILES, "main.php")[..9],
+            [
+                "22 run.add>local UniqueCandidate SameFile [main.php#local]",
+                "24 run>local UniqueCandidate SameFile [main.php#local]",
+                "24 run>helper UniqueCandidate ImportedName [util.php#helper]",
+                "24 run>Other::only_here UniqueCandidate QualifiedPath [other.php#only_here]",
+                "24 run>\\Shop\\Other::only_here UniqueCandidate QualifiedPath [other.php#only_here]",
+                "24 run>inner UniqueCandidate LexicalScope [main.php#run.inner]",
+                "24 run>$add UniqueCandidate LexicalScope [main.php#run.add]",
+                "24 run>add Unresolved - []",
+                "24 run>Tools::helper UniqueCandidate QualifiedPath [util.php#Helpers.helper]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_calls_with_receivers() {
+        use crate::index::resolve::testing::rows;
+        assert_eq!(
+            rows(CALL_FILES, "main.php")[9..],
+            [
+                "29 measure>Circle UniqueCandidate QualifiedPath [shapes.php#Circle.__construct]",
+                "30 measure>SplStack Unresolved - []",
+                "31 measure>$stack.push Unresolved - []",
+                "32 measure>$size.area UniqueCandidate ReceiverDeclaredType [shapes.php#Circle.area]",
+                "32 measure>$shape.area Ambiguous NameOnly [shapes.php#Circle.area, shapes.php#Shape.area]",
+                "32 measure>$duck.area Ambiguous NameOnly [shapes.php#Circle.area, shapes.php#Shape.area]",
+                "32 measure>$circle.area UniqueCandidate ReceiverDeclaredType [shapes.php#Circle.area]",
+                "32 measure>Circle::unit UniqueCandidate QualifiedPath [shapes.php#Circle.unit]",
+                "32 measure>$callback Unresolved - []",
+                "32 measure>strtoupper Unresolved - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_calls_in_classes() {
+        use crate::index::resolve::testing::rows;
+        assert_eq!(
+            rows(CALL_FILES, "shapes.php"),
+            [
+                "15 Describes.describe>self.area Ambiguous NameOnly [shapes.php#Circle.area, shapes.php#Shape.area]",
+                "37 Circle.__construct>super.__construct UniqueCandidate EnclosingType [shapes.php#Base.__construct]",
+                "42 Circle.unit>self.build UniqueCandidate EnclosingType [shapes.php#Circle.build]",
+                "42 Circle.unit>self.build UniqueCandidate EnclosingType [shapes.php#Circle.build]",
+                "47 Circle.build>self UniqueCandidate QualifiedPath [shapes.php#Circle.__construct]",
+                "52 Circle.area>self.scaled UniqueCandidate EnclosingType [shapes.php#Circle.scaled]",
+                "52 Circle.area>helper UniqueCandidate ImportedName [util.php#helper]",
+                "57 Circle.label>strtoupper Unresolved - []",
+                "57 Circle.label>super.label UniqueCandidate EnclosingType [shapes.php#Base.label]",
             ]
         );
     }
