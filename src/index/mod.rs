@@ -2,6 +2,7 @@
 //!
 //! The analyzers use this module for the facts and the graph algorithms that they share.
 
+pub mod build;
 pub mod calls;
 pub mod extract;
 pub mod graph;
