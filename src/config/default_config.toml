@@ -40,6 +40,14 @@ churn_days = 30
 [score]
 # fail_under = 80
 
+# Gate mode of each gated command: "off", "warn", or "error".
+# The `--gate` flag overrides the value.
+[gate]
+complexity = "off"
+score = "off"
+stubs = "off"
+mutation = "off"
+
 [feature_flags]
 stale_days = 90
 # Built-in providers to enable. If empty, no built-in detection runs.

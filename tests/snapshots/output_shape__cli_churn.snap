@@ -12,11 +12,10 @@ expression: "shape(&output, case.dynamic_key_objects)"
       "commits": "number",
       "days_active": "number",
       "deletions": "number",
+      "file": "string",
       "first_commit": "string",
       "last_commit": "string",
-      "path": "string",
       "relative_churn": "number",
-      "relative_path": "string",
       "total_loc": "number",
       "unique_authors": [
         "string"

@@ -167,7 +167,7 @@ impl GitHubReporter {
             for file in poor_files {
                 output.push_str(&format!(
                     "  {} - {:.1}% ({}/{} killed)\n",
-                    file.path,
+                    file.file,
                     file.score * 100.0,
                     file.killed,
                     file.mutants.len()
@@ -341,7 +341,7 @@ mod tests {
         Analysis {
             files: vec![
                 FileResult {
-                    path: "src/main.rs".to_string(),
+                    file: "src/main.rs".to_string(),
                     mutants: vec![
                         MutationResult::new(
                             Mutant::new(
@@ -382,7 +382,7 @@ mod tests {
                     score: 0.5,
                 },
                 FileResult {
-                    path: "src/lib.rs".to_string(),
+                    file: "src/lib.rs".to_string(),
                     mutants: vec![MutationResult::new(
                         Mutant::new(
                             "3",

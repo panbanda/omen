@@ -386,7 +386,8 @@ fn test_threshold_violation_exits_two_and_emits_json() {
             "-f",
             "json",
             "score",
-            "--check",
+            "--gate",
+            "error",
             "--fail-under",
             "99",
         ])
@@ -501,7 +502,7 @@ fn test_changed_since_filters_analyzer_files() {
     let files = parsed["files"].as_array().unwrap();
 
     assert_eq!(files.len(), 1, "expected only changed file: {stdout}");
-    assert!(files[0]["path"].as_str().unwrap().ends_with("src/b.rs"));
+    assert!(files[0]["file"].as_str().unwrap().ends_with("src/b.rs"));
     assert!(!stdout.contains("src/a.rs"));
 }
 
@@ -867,7 +868,7 @@ fn test_glob_filter() {
         "expected filtered output to include files"
     );
     for file in files {
-        let path = file["path"].as_str().expect("file path should be a string");
+        let path = file["file"].as_str().expect("file path should be a string");
         assert!(
             path.ends_with(".py"),
             "expected only Python files in filtered output, got {path}"
@@ -901,7 +902,7 @@ fn test_exclude_filter() {
         "expected output to include non-Python files"
     );
     for file in files {
-        let path = file["path"].as_str().expect("file path should be a string");
+        let path = file["file"].as_str().expect("file path should be a string");
         assert!(
             !path.ends_with(".py"),
             "expected Python files to be excluded, got {path}"
@@ -948,7 +949,8 @@ fn test_complexity_check_excludes_nested_test_directory() {
             "-p",
             temp.path().to_str().unwrap(),
             "complexity",
-            "--check",
+            "--gate",
+            "error",
             "-e",
             "packages/alpha/test/**",
         ])
@@ -970,7 +972,13 @@ fn test_complexity_check_honors_config_excludes() {
     .unwrap();
 
     omen()
-        .args(["-p", temp.path().to_str().unwrap(), "complexity", "--check"])
+        .args([
+            "-p",
+            temp.path().to_str().unwrap(),
+            "complexity",
+            "--gate",
+            "error",
+        ])
         .assert()
         .failure()
         .stderr(predicate::str::contains(
@@ -1161,7 +1169,7 @@ fn test_complexity_glob_and_exclude_combined() {
 
     // All files should be Rust (glob filters to .rs; exclude .go has no effect since glob already limits to .rs)
     for file in files {
-        let path = file["path"].as_str().expect("file path should be a string");
+        let path = file["file"].as_str().expect("file path should be a string");
         assert!(
             path.ends_with(".rs"),
             "combined glob+exclude should only include Rust files, got: {path}"
@@ -1244,7 +1252,8 @@ fn test_complexity_check_with_glob_filter() {
             "-p",
             tmp.path().to_str().unwrap(),
             "complexity",
-            "--check",
+            "--gate",
+            "error",
             "-g",
             "*.rs",
         ])
@@ -1356,13 +1365,12 @@ fn test_all_three_formats_succeed() {
 }
 
 // ---------------------------------------------------------------------------
-// Gate/check: --gate off|warn|error, --check deprecated alias, exit codes
+// Gate: --gate off|warn|error, exit codes
 // ---------------------------------------------------------------------------
 //
 // Convention under test: off = report only (exit 0); warn = report + one-line
 // stderr summary (exit 0); error = report; on violation return
-// Error::ThresholdViolation, which main() maps to exit code 2. --check is a
-// deprecated alias for --gate error; --gate wins if both are given.
+// Error::ThresholdViolation, which main() maps to exit code 2.
 
 #[test]
 fn test_complexity_gate_error_exits_two_on_violation() {
@@ -1412,37 +1420,6 @@ fn test_complexity_gate_off_default_exits_zero_on_violation() {
 }
 
 #[test]
-fn test_complexity_check_alias_still_exits_two() {
-    let temp = TempDir::new().unwrap();
-    write_complexity_exclude_fixture(&temp);
-
-    omen()
-        .args(["-p", temp.path().to_str().unwrap(), "complexity", "--check"])
-        .assert()
-        .code(2);
-}
-
-#[test]
-fn test_complexity_gate_off_wins_over_check_exits_zero() {
-    // Regression: `--check --gate off` must resolve to Off (exit 0), not
-    // silently escalate to Error just because `--check` alone would.
-    let temp = TempDir::new().unwrap();
-    write_complexity_exclude_fixture(&temp);
-
-    omen()
-        .args([
-            "-p",
-            temp.path().to_str().unwrap(),
-            "complexity",
-            "--check",
-            "--gate",
-            "off",
-        ])
-        .assert()
-        .success();
-}
-
-#[test]
 fn test_score_gate_error_exits_two_and_emits_json() {
     omen()
         .args([
@@ -1479,41 +1456,8 @@ fn test_score_gate_warn_exits_zero() {
 }
 
 #[test]
-fn test_score_check_alias_still_exits_two() {
-    omen()
-        .args([
-            "-p",
-            fixtures_dir(),
-            "score",
-            "--check",
-            "--fail-under",
-            "99",
-        ])
-        .assert()
-        .code(2);
-}
-
-#[test]
-fn test_score_gate_off_wins_over_check_exits_zero() {
-    // Regression: `--check --gate off` must resolve to Off (exit 0).
-    omen()
-        .args([
-            "-p",
-            fixtures_dir(),
-            "score",
-            "--check",
-            "--gate",
-            "off",
-            "--fail-under",
-            "99",
-        ])
-        .assert()
-        .success();
-}
-
-#[test]
 fn test_score_default_gate_off_exits_zero_on_violation() {
-    // No --gate and no --check: default GateMode::Off must report only and
+    // No --gate: default GateMode::Off must report only and
     // exit 0, even though the score is well below --fail-under.
     omen()
         .args(["-p", fixtures_dir(), "score", "--fail-under", "99"])
@@ -1602,41 +1546,6 @@ fn test_mutation_gate_off_default_exits_zero_on_dry_run() {
 
     omen()
         .args(["-p", temp.path().to_str().unwrap(), "mutation", "--dry-run"])
-        .assert()
-        .success();
-}
-
-#[test]
-fn test_mutation_check_alias_still_exits_two_on_dry_run() {
-    let temp = write_mutation_gate_fixture();
-
-    omen()
-        .args([
-            "-p",
-            temp.path().to_str().unwrap(),
-            "mutation",
-            "--dry-run",
-            "--check",
-        ])
-        .assert()
-        .code(2);
-}
-
-#[test]
-fn test_mutation_gate_off_wins_over_check_exits_zero() {
-    // Regression: `--check --gate off` must resolve to Off (exit 0).
-    let temp = write_mutation_gate_fixture();
-
-    omen()
-        .args([
-            "-p",
-            temp.path().to_str().unwrap(),
-            "mutation",
-            "--dry-run",
-            "--check",
-            "--gate",
-            "off",
-        ])
         .assert()
         .success();
 }
@@ -1957,4 +1866,543 @@ fn test_benchmark_rejects_non_finite_timeout() {
         .assert()
         .code(1)
         .stderr(predicate::str::contains("timeout"));
+}
+
+// ---------------------------------------------------------------------------
+// Output schema: command names as keys, one `file` field
+// ---------------------------------------------------------------------------
+
+fn collect_keys(value: &serde_json::Value, keys: &mut std::collections::BTreeSet<String>) {
+    match value {
+        serde_json::Value::Object(entries) => {
+            for (key, entry) in entries {
+                keys.insert(key.clone());
+                collect_keys(entry, keys);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_keys(item, keys);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn test_all_payload_names_the_clones_analyzer_by_its_command() {
+    let output = omen()
+        .args(["-p", fixtures_dir(), "all"])
+        .output()
+        .expect("command runs");
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let names: Vec<&str> = parsed["analyzers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|entry| entry["analyzer"].as_str())
+        .collect();
+
+    assert!(names.contains(&"clones"), "{names:?}");
+    assert!(!names.contains(&"duplicates"), "{names:?}");
+}
+
+#[test]
+fn test_file_records_use_only_the_file_key() {
+    for command in [
+        "complexity",
+        "churn",
+        "cohesion",
+        "ownership",
+        "graph",
+        "defect",
+        "tdg",
+    ] {
+        let output = omen()
+            .args(["-p", ".", "-f", "json", command, "--glob", "src/cli/**"])
+            .output()
+            .expect("command runs");
+        assert!(output.status.success(), "{command} failed");
+        let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let mut keys = std::collections::BTreeSet::new();
+        collect_keys(&parsed, &mut keys);
+
+        assert!(
+            keys.contains("file"),
+            "{command} has no `file` key: {keys:?}"
+        );
+        for removed in ["path", "file_path", "relative_path"] {
+            assert!(!keys.contains(removed), "{command} still has `{removed}`");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// One CLI shape: gate from configuration, global flags, pagination, --output
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_gate_mode_comes_from_configuration_and_the_flag_wins() {
+    let temp = TempDir::new().unwrap();
+    write_complexity_exclude_fixture(&temp);
+    std::fs::write(
+        temp.path().join("omen.toml"),
+        "[complexity]\ncyclomatic_error = 3\n\n[gate]\ncomplexity = \"error\"\n",
+    )
+    .unwrap();
+    let path = temp.path().to_str().unwrap();
+
+    omen().args(["-p", path, "complexity"]).assert().code(2);
+    omen()
+        .args(["-p", path, "complexity", "--gate", "off"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_stubs_gate_mode_comes_from_configuration() {
+    let temp = TempDir::new().unwrap();
+    std::fs::write(
+        temp.path().join("lib.rs"),
+        "pub fn later() -> u32 { todo!() }\n",
+    )
+    .unwrap();
+    std::fs::write(temp.path().join("omen.toml"), "[gate]\nstubs = \"error\"\n").unwrap();
+
+    omen()
+        .args(["-p", temp.path().to_str().unwrap(), "stubs"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn test_global_flags_work_after_the_subcommand() {
+    let output = omen()
+        .args(["complexity", "-p", fixtures_dir(), "-f", "json", "-j", "2"])
+        .output()
+        .expect("command runs");
+
+    assert!(output.status.success());
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(parsed["files"].is_array());
+}
+
+#[test]
+fn test_search_query_offset_skips_results() {
+    let temp = TempDir::new().unwrap();
+    std::fs::write(
+        temp.path().join("lib.rs"),
+        concat!(
+            "pub fn alpha() { parse(); }\npub fn beta() { parse(); parse(); }\n",
+            "pub fn gamma() { parse(); parse(); parse(); }\n",
+            "pub fn render_one() {}\npub fn render_two() {}\npub fn write_one() {}\n",
+            "pub fn write_two() {}\npub fn load_one() {}\n",
+        ),
+    )
+    .unwrap();
+    let path = temp.path().to_str().unwrap();
+    omen()
+        .args(["-p", path, "search", "index"])
+        .assert()
+        .success();
+
+    let names = |extra: &[&str]| -> Vec<String> {
+        let output = omen()
+            .args(["-p", path, "-f", "json", "search", "query", "parse"])
+            .args(["--min-score", "0"])
+            .args(extra)
+            .output()
+            .expect("command runs");
+        assert!(output.status.success());
+        let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        parsed["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|result| result["symbol_name"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    let all = names(&[]);
+    assert!(all.len() >= 2, "{all:?}");
+    assert_eq!(names(&["--top", "1"]), all[..1]);
+    assert_eq!(names(&["--top", "1", "--offset", "1"]), all[1..2]);
+    assert_eq!(names(&["--offset", "1"]), all[1..]);
+}
+
+#[test]
+fn test_mutation_output_writes_the_report_file() {
+    let temp = write_mutation_gate_fixture();
+    let report = temp.path().join("mutation.json");
+
+    omen()
+        .args(["-p", temp.path().to_str().unwrap(), "mutation", "--dry-run"])
+        .args(["--output", report.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&report).expect("report written")).unwrap();
+    assert!(written.get("summary").is_some());
+}
+
+#[test]
+fn test_report_generate_names_artifacts_by_command() {
+    let source = TempDir::new().unwrap();
+    std::fs::write(source.path().join("lib.rs"), "pub fn one() -> u32 { 1 }\n").unwrap();
+    let data = TempDir::new().unwrap();
+
+    omen()
+        .args([
+            "-p",
+            source.path().to_str().unwrap(),
+            "report",
+            "generate",
+            "--skip",
+            "trend",
+            "--data",
+            data.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    for present in ["clones.json", "hotspot.json"] {
+        assert!(data.path().join(present).exists(), "{present} is absent");
+    }
+    for absent in ["duplicates.json", "hotspots.json"] {
+        assert!(!data.path().join(absent).exists(), "{absent} is present");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Review fixes: repository path check, gate scope, pagination by format
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_absent_repository_path_gives_one_error_on_each_command() {
+    for command in [
+        vec!["complexity"],
+        vec!["score"],
+        vec!["churn"],
+        vec!["search", "query", "helper"],
+        vec!["all"],
+        vec!["outline"],
+        vec!["context"],
+    ] {
+        omen()
+            .args(&command)
+            .args(["-p", "/no/such/directory"])
+            .timeout(std::time::Duration::from_secs(30))
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains(
+                "The repository path `/no/such/directory` is not a directory.",
+            ));
+    }
+}
+
+#[test]
+fn test_repository_path_that_is_a_file_is_an_error() {
+    let temp = TempDir::new().unwrap();
+    let file = temp.path().join("lib.rs");
+    std::fs::write(&file, "fn one() {}\n").unwrap();
+
+    omen()
+        .args(["-p", file.to_str().unwrap(), "complexity"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("is not a directory"));
+}
+
+#[test]
+fn test_score_trend_short_p_names_the_period_flag() {
+    omen()
+        .args(["score", "trend", "-p", "monthly"])
+        .timeout(std::time::Duration::from_secs(30))
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "The repository path `monthly` is not a directory.",
+        ))
+        .stderr(predicate::str::contains("--period"));
+}
+
+#[test]
+fn test_report_serve_short_p_names_the_port_flag() {
+    omen()
+        .args(["report", "serve", "-p", "3000"])
+        .timeout(std::time::Duration::from_secs(30))
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "The repository path `3000` is not a directory.",
+        ))
+        .stderr(predicate::str::contains("--port"));
+}
+
+fn write_committed_repository() -> TempDir {
+    let temp = TempDir::new().unwrap();
+    std::fs::write(temp.path().join("lib.rs"), "pub fn one() -> u32 { 1 }\n").unwrap();
+    for arguments in [
+        vec!["init"],
+        vec!["config", "user.email", "test@example.com"],
+        vec!["config", "user.name", "Test User"],
+        vec!["add", "."],
+        vec!["commit", "-m", "initial"],
+    ] {
+        assert!(std::process::Command::new("git")
+            .args(&arguments)
+            .current_dir(temp.path())
+            .output()
+            .unwrap()
+            .status
+            .success());
+    }
+    temp
+}
+
+#[test]
+fn test_configured_score_gate_does_not_replace_score_trend() {
+    let temp = write_committed_repository();
+    let config = temp.path().join("gate.toml");
+    std::fs::write(
+        &config,
+        "[score]\nfail_under = 100.0\n\n[gate]\nscore = \"error\"\n",
+    )
+    .unwrap();
+    let path = temp.path().to_str().unwrap();
+    let config = config.to_str().unwrap();
+
+    let output = omen()
+        .args(["-p", path, "-c", config, "-f", "json", "score", "trend"])
+        .args(["--since", "1y"])
+        .output()
+        .expect("command runs");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(parsed.get("points").is_some(), "{parsed:#?}");
+    assert!(parsed.get("violations").is_none(), "{parsed:#?}");
+}
+
+#[test]
+fn test_score_trend_refuses_the_gate_flag() {
+    omen()
+        .args(["-p", ".", "score", "--gate", "error", "trend"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("`score trend` has no gate"));
+}
+
+fn write_search_fixture() -> TempDir {
+    let temp = TempDir::new().unwrap();
+    std::fs::write(
+        temp.path().join("lib.rs"),
+        concat!(
+            "pub fn alpha() { parse(); }\npub fn beta() { parse(); parse(); }\n",
+            "pub fn gamma() { parse(); parse(); parse(); }\n",
+            "pub fn render_one() {}\npub fn render_two() {}\npub fn write_one() {}\n",
+            "pub fn write_two() {}\npub fn load_one() {}\n",
+        ),
+    )
+    .unwrap();
+    omen()
+        .args(["-p", temp.path().to_str().unwrap(), "search", "index"])
+        .assert()
+        .success();
+    temp
+}
+
+#[test]
+fn test_search_query_sarif_keeps_each_finding() {
+    let temp = write_search_fixture();
+    let results = |extra: &[&str]| -> usize {
+        let output = omen()
+            .args(["-p", temp.path().to_str().unwrap(), "-f", "sarif"])
+            .args(["search", "query", "parse", "--min-score", "0"])
+            .args(extra)
+            .output()
+            .expect("command runs");
+        assert!(output.status.success());
+        let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        parsed["runs"][0]["results"].as_array().unwrap().len()
+    };
+
+    let all = results(&["--top", "0"]);
+    assert!(all >= 2, "{all}");
+    assert_eq!(results(&["--top", "1"]), all);
+    assert_eq!(results(&["--offset", "1"]), all);
+}
+
+#[test]
+fn test_outline_markdown_applies_top_and_offset() {
+    let temp = TempDir::new().unwrap();
+    for name in ["alpha.rs", "beta.rs", "gamma.rs"] {
+        std::fs::write(temp.path().join(name), "pub fn one() {}\n").unwrap();
+    }
+    for format in ["markdown", "text"] {
+        let output = omen()
+            .args(["-p", temp.path().to_str().unwrap(), "-f", format])
+            .args(["outline", "--top", "1", "--offset", "1"])
+            .output()
+            .expect("command runs");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(!stdout.contains("alpha.rs"), "{format}: {stdout}");
+        assert!(stdout.contains("beta.rs"), "{format}: {stdout}");
+        assert!(!stdout.contains("gamma.rs"), "{format}: {stdout}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Second review: path check scope, one meaning of --top in each format
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_commands_without_a_repository_ignore_the_repository_path() {
+    omen()
+        .args(["-p", "/no/such/path", "mcp", "manifest"])
+        .assert()
+        .success();
+
+    let dir = TempDir::new().expect("temp dir");
+    let (registration, runs, _) = write_eval_fixture(&dir, 30);
+    omen()
+        .args(["-p", "/no/such/path", "-f", "json", "eval"])
+        .args(["--registration", &registration])
+        .args(["--runs", &runs])
+        .assert()
+        .success();
+
+    omen()
+        .args(["-p", "/no/such/path", "benchmark"])
+        .args(["--baseline", "/nonexistent/baseline"])
+        .args(["--candidate", "/nonexistent/candidate"])
+        .args(["--baseline-label", "a", "--candidate-label", "b"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("repository path").not());
+}
+
+/// The candidates that the output of `omen` contains for one format. The command
+/// runs in the repository, because `mutation` reads its files from there.
+fn listed<'a>(
+    repository: &TempDir,
+    format: &str,
+    arguments: &[&str],
+    candidates: &[&'a str],
+) -> Vec<&'a str> {
+    let output = omen()
+        .current_dir(repository.path())
+        .args(["-p", ".", "-f", format])
+        .args(arguments)
+        .output()
+        .expect("command runs");
+    assert!(
+        output.status.success(),
+        "{arguments:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    candidates
+        .iter()
+        .copied()
+        .filter(|candidate| stdout.contains(candidate))
+        .collect()
+}
+
+#[test]
+fn test_outline_top_pages_the_files_list_in_each_format() {
+    let temp = TempDir::new().unwrap();
+    for name in ["alpha.rs", "beta.rs", "gamma.rs"] {
+        std::fs::write(temp.path().join(name), "pub fn one() {}\n").unwrap();
+    }
+    let files = ["alpha.rs", "beta.rs", "gamma.rs"];
+
+    for format in ["json", "markdown", "text"] {
+        assert_eq!(
+            listed(&temp, format, &["outline", "--top", "1"], &files),
+            ["alpha.rs"],
+            "{format}"
+        );
+        assert_eq!(
+            listed(
+                &temp,
+                format,
+                &["outline", "--top", "1", "--offset", "1"],
+                &files
+            ),
+            ["beta.rs"],
+            "{format}"
+        );
+    }
+
+    let output = omen()
+        .args(["-p", temp.path().to_str().unwrap(), "-f", "json"])
+        .args(["outline", "--top", "1"])
+        .output()
+        .expect("command runs");
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(parsed["files"].as_array().unwrap().len(), 1);
+    assert_eq!(parsed["files_omitted"], 2);
+}
+
+fn write_callers_fixture() -> TempDir {
+    let temp = TempDir::new().unwrap();
+    std::fs::write(
+        temp.path().join("lib.rs"),
+        concat!(
+            "pub fn target() -> u32 { 1 }\n",
+            "pub fn first_caller() -> u32 { target() }\n",
+            "pub fn second_caller() -> u32 { target() }\n",
+            "pub fn third_caller() -> u32 { target() }\n",
+        ),
+    )
+    .unwrap();
+    temp
+}
+
+#[test]
+fn test_top_lists_the_same_items_in_json_and_markdown() {
+    let callers = ["first_caller", "second_caller", "third_caller"];
+    let repository = write_callers_fixture();
+    for arguments in [
+        vec!["symbol", "target", "--no-source", "--top", "1"],
+        vec!["impact", "target", "--top", "1"],
+    ] {
+        let json = listed(&repository, "json", &arguments, &callers);
+        assert_eq!(json.len(), 1, "{arguments:?}: {json:?}");
+        assert_eq!(
+            listed(&repository, "markdown", &arguments, &callers),
+            json,
+            "{arguments:?}"
+        );
+    }
+
+    let repository = write_search_fixture();
+    let names = ["alpha", "beta", "gamma"];
+    let arguments = ["search", "query", "parse", "--min-score", "0", "--top", "1"];
+    let json = listed(&repository, "json", &arguments, &names);
+    assert_eq!(json.len(), 1, "{json:?}");
+    assert_eq!(listed(&repository, "markdown", &arguments, &names), json);
+}
+
+#[test]
+fn test_mutation_top_lists_the_same_files_in_json_and_markdown() {
+    let repository = TempDir::new().unwrap();
+    for name in ["one.rs", "two.rs"] {
+        std::fs::write(
+            repository.path().join(name),
+            "pub fn is_positive(x: i32) -> bool { x > 0 }\n",
+        )
+        .unwrap();
+    }
+    let files = ["one.rs", "two.rs"];
+    let arguments = ["mutation", "--test-command", "true", "--top", "1"];
+
+    let json = listed(&repository, "json", &arguments, &files);
+    assert_eq!(json.len(), 1, "{json:?}");
+    assert_eq!(listed(&repository, "markdown", &arguments, &files), json);
 }

@@ -341,7 +341,7 @@ fn extract_rust_classes(path: &Path, source: &[u8], tree: &tree_sitter::Tree) ->
         let violations = build_violations(wmc, cbo, lcom);
 
         classes.push(ClassMetrics {
-            path: path.to_string_lossy().to_string(),
+            file: path.to_string_lossy().to_string(),
             class_name: struct_name.clone(),
             parent_class: None,
             language: lang.to_string(),
@@ -468,7 +468,7 @@ fn extract_go_classes(path: &Path, source: &[u8], tree: &tree_sitter::Tree) -> V
         let violations = build_violations(wmc, cbo, lcom);
 
         classes.push(ClassMetrics {
-            path: path.to_string_lossy().to_string(),
+            file: path.to_string_lossy().to_string(),
             class_name: struct_name.clone(),
             parent_class: None,
             language: lang.to_string(),
@@ -748,7 +748,7 @@ fn extract_class_metrics(
     let violations = build_violations(wmc, cbo, lcom);
 
     Some(ClassMetrics {
-        path: path.to_string_lossy().to_string(),
+        file: path.to_string_lossy().to_string(),
         class_name: name,
         parent_class,
         language: lang.to_string(),
@@ -1538,7 +1538,7 @@ fn calculate_summary(classes: &[ClassMetrics]) -> Summary {
     let mut violation_count = 0usize;
 
     for cls in classes {
-        files.insert(&cls.path);
+        files.insert(&cls.file);
         total_wmc += cls.wmc;
         total_cbo += cls.cbo;
         total_rfc += cls.rfc;
@@ -1606,7 +1606,7 @@ impl Analysis {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClassMetrics {
     /// File path.
-    pub path: String,
+    pub file: String,
     /// Class name.
     pub class_name: String,
     /// Parent class name (for inheritance tracking).
@@ -1820,7 +1820,7 @@ mod tests {
     fn test_summary_with_classes() {
         let classes = vec![
             ClassMetrics {
-                path: "a.java".to_string(),
+                file: "a.java".to_string(),
                 class_name: "Foo".to_string(),
                 parent_class: None,
                 language: "Java".to_string(),
@@ -1841,7 +1841,7 @@ mod tests {
                 violations: vec![],
             },
             ClassMetrics {
-                path: "b.java".to_string(),
+                file: "b.java".to_string(),
                 class_name: "Bar".to_string(),
                 parent_class: None,
                 language: "Java".to_string(),
@@ -1877,7 +1877,7 @@ mod tests {
     #[test]
     fn test_class_metrics_fields() {
         let metrics = ClassMetrics {
-            path: "Test.java".to_string(),
+            file: "Test.java".to_string(),
             class_name: "Test".to_string(),
             parent_class: Some("BaseTest".to_string()),
             language: "Java".to_string(),
@@ -1914,7 +1914,7 @@ mod tests {
                     lcom: 1,
                     wmc: 5,
                     cbo: 2,
-                    path: String::new(),
+                    file: String::new(),
                     language: String::new(),
                     start_line: 0,
                     end_line: 0,
@@ -1935,7 +1935,7 @@ mod tests {
                     lcom: 5,
                     wmc: 50,
                     cbo: 10,
-                    path: String::new(),
+                    file: String::new(),
                     language: String::new(),
                     start_line: 0,
                     end_line: 0,
@@ -1983,7 +1983,7 @@ mod tests {
     fn test_wmc_threshold_at_24() {
         // Verify WMC > 24 is flagged as complex
         let metrics = ClassMetrics {
-            path: "Test.java".to_string(),
+            file: "Test.java".to_string(),
             class_name: "ComplexClass".to_string(),
             parent_class: None,
             language: "Java".to_string(),

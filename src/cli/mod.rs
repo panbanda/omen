@@ -4,17 +4,19 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
+pub use crate::config::GateMode;
+
 /// Omen - Code analysis CLI for technical debt and complexity metrics.
 #[derive(Parser)]
 #[command(name = "omen")]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
     /// Path to the repository to analyze
-    #[arg(short, long, default_value = ".")]
+    #[arg(short, long, global = true, default_value = ".")]
     pub path: PathBuf,
 
     /// Output format
-    #[arg(short, long, value_enum, default_value = "markdown")]
+    #[arg(short, long, global = true, value_enum, default_value = "markdown")]
     pub format: OutputFormat,
 
     /// Compact JSON output (single line, no indentation; ignored for non-JSON formats)
@@ -22,15 +24,15 @@ pub struct Cli {
     pub compact: bool,
 
     /// Configuration file path
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     pub config: Option<PathBuf>,
 
     /// Enable verbose output
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     pub verbose: bool,
 
     /// Number of parallel workers (default: number of CPUs)
-    #[arg(short = 'j', long)]
+    #[arg(short = 'j', long, global = true)]
     pub jobs: Option<usize>,
 
     /// Git ref (branch, tag, SHA) for remote repositories
@@ -89,11 +91,6 @@ pub enum Command {
     Graph(AnalyzerArgs),
 
     /// Find complexity/churn hotspots
-    // CLI-layer alias note: the canonical command name is `hotspot` (singular);
-    // the report data contract (`.omen/data/hotspots.json`, the `report validate`
-    // file list, and the MCP tool-name mapping in src/mcp/mod.rs) still uses the
-    // plural `hotspots`. `hotspots` is accepted here as a visible alias so both
-    // spellings work from the CLI without touching the JSON/report contract.
     #[command(alias = "hs", visible_alias = "hotspots")]
     Hotspot(HotspotArgs),
 
@@ -163,6 +160,34 @@ pub enum Command {
     Symbol(SymbolArgs),
 }
 
+/// The `--top` and `--offset` flags of each command that gives a list.
+#[derive(Clone, Args)]
+pub struct PaginationArgs {
+    /// Limit output to the top N results (0 = unlimited)
+    #[arg(short = 'n', long)]
+    pub top: Option<usize>,
+
+    /// Skip the first N results (use with --top for pagination)
+    #[arg(long)]
+    pub offset: Option<usize>,
+}
+
+/// The `--gate` flag of each gated command.
+#[derive(Args)]
+pub struct GateArgs {
+    /// Gate mode (default: the `[gate]` value in the configuration, or `off`)
+    #[arg(id = "gate", long = "gate", value_enum, value_name = "MODE")]
+    pub mode: Option<GateMode>,
+}
+
+/// The `--output` flag of each command that can write its report to a file.
+#[derive(Args)]
+pub struct OutputArgs {
+    /// Write the report to this file
+    #[arg(short, long, value_name = "FILE")]
+    pub output: Option<PathBuf>,
+}
+
 #[derive(Args)]
 pub struct AnalyzerArgs {
     /// Filter by file glob pattern
@@ -177,13 +202,8 @@ pub struct AnalyzerArgs {
     #[arg(long)]
     pub changed_since: Option<String>,
 
-    /// Limit output to the top N results (0 = unlimited)
-    #[arg(short = 'n', long)]
-    pub top: Option<usize>,
-
-    /// Skip the first N results (use with --top for pagination)
-    #[arg(long)]
-    pub offset: Option<usize>,
+    #[command(flatten)]
+    pub pagination: PaginationArgs,
 }
 
 #[derive(Args)]
@@ -213,18 +233,10 @@ pub struct DiffArgs {
     #[arg(short, long)]
     pub target: Option<String>,
 
-    // `diff` analyzes a git diff, not a filtered file set, so it only takes
-    // pagination flags (not the full `AnalyzerArgs`, which would also add
-    // `--glob`/`--exclude`/`--changed-since` -- flags that would parse but
-    // silently do nothing, since diff has no file-set filtering to apply
-    // them to).
-    /// Limit output to the top N results (0 = unlimited)
-    #[arg(short = 'n', long)]
-    pub top: Option<usize>,
-
-    /// Skip the first N results (use with --top for pagination)
-    #[arg(long)]
-    pub offset: Option<usize>,
+    // `diff` has no file set to filter, so it takes only the pagination flags
+    // and not the full `AnalyzerArgs`.
+    #[command(flatten)]
+    pub pagination: PaginationArgs,
 }
 
 #[derive(Args)]
@@ -232,17 +244,8 @@ pub struct ComplexityArgs {
     #[command(flatten)]
     pub common: AnalyzerArgs,
 
-    /// Check mode: fail if any function exceeds thresholds.
-    /// DEPRECATED(remove-in: 5.0): use `--gate error` instead.
-    #[arg(long)]
-    pub check: bool,
-
-    /// Gate mode: 'off' just reports, 'warn' reports and warns on stderr (exit 0),
-    /// 'error' reports and exits 2 if thresholds are exceeded (default: off). If
-    /// both --check and --gate are given, --gate always wins, including an
-    /// explicit `--gate off`.
-    #[arg(long, value_enum)]
-    pub gate: Option<GateMode>,
+    #[command(flatten)]
+    pub gate: GateArgs,
 
     /// Maximum cyclomatic complexity (default: from config or 20)
     #[arg(long)]
@@ -258,21 +261,12 @@ pub struct StubsArgs {
     #[command(flatten)]
     pub common: AnalyzerArgs,
 
-    /// Gate mode: 'off' just reports, 'warn' reports and warns on stderr (exit 0),
-    /// 'error' reports and exits 2 if any stub at or above --gate-severity is found
-    #[arg(long, value_enum, default_value = "off")]
-    pub gate: GateMode,
+    #[command(flatten)]
+    pub gate: GateArgs,
 
     /// Minimum severity that counts toward the gate (warn/error)
     #[arg(long, value_enum, default_value = "low")]
     pub gate_severity: GateSeverity,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub enum GateMode {
-    Off,
-    Warn,
-    Error,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -416,17 +410,8 @@ pub enum ScoreSubcommand {
 
 #[derive(Args)]
 pub struct ScoreArgs {
-    /// Check mode: fail if score is below threshold.
-    /// DEPRECATED(remove-in: 5.0): use `--gate error` instead.
-    #[arg(long)]
-    pub check: bool,
-
-    /// Gate mode: 'off' just reports, 'warn' reports and warns on stderr (exit 0),
-    /// 'error' reports and exits 2 if score is below --fail-under (default: off).
-    /// If both --check and --gate are given, --gate always wins, including an
-    /// explicit `--gate off`.
-    #[arg(long, value_enum)]
-    pub gate: Option<GateMode>,
+    #[command(flatten)]
+    pub gate: GateArgs,
 
     /// Minimum score to pass (default: from config)
     #[arg(long)]
@@ -440,7 +425,7 @@ pub struct ScoreTrendArgs {
     pub since: String,
 
     /// Aggregation period
-    #[arg(short, long, value_enum, default_value = "weekly")]
+    #[arg(long, value_enum, default_value = "weekly")]
     pub period: TrendPeriod,
 
     /// Number of samples (evenly spaced over the time range; overrides --period)
@@ -505,7 +490,7 @@ pub enum ReportSubcommand {
     /// Validate data files against schemas
     Validate(ReportValidateArgs),
 
-    /// Combine data + insights into self-contained HTML
+    /// Combine data and insights into one HTML file (default: `.omen/report.html`)
     Render(ReportRenderArgs),
 
     /// Serve HTML with live re-render on request
@@ -514,9 +499,9 @@ pub enum ReportSubcommand {
 
 #[derive(Args)]
 pub struct ReportGenerateArgs {
-    /// Output directory for JSON files
+    /// Data directory that receives the JSON files
     #[arg(short, long, default_value = ".omen/data")]
-    pub output: PathBuf,
+    pub data: PathBuf,
 
     /// Skip specific analyzers (comma-separated)
     #[arg(long)]
@@ -552,9 +537,9 @@ pub struct ReportRenderArgs {
     #[arg(short, long, default_value = ".omen/data")]
     pub data: PathBuf,
 
-    /// Output HTML file
-    #[arg(short, long, default_value = ".omen/report.html")]
-    pub output: PathBuf,
+    // The default file is `.omen/report.html`.
+    #[command(flatten)]
+    pub output: OutputArgs,
 
     /// Insights file (optional)
     #[arg(long)]
@@ -568,7 +553,7 @@ pub struct ReportServeArgs {
     pub data: PathBuf,
 
     /// Port to serve on
-    #[arg(short, long, default_value = "8080")]
+    #[arg(long, default_value = "8080")]
     pub port: u16,
 
     /// Host to bind to
@@ -604,17 +589,9 @@ pub struct SearchQueryArgs {
     /// Natural language query
     pub query: String,
 
-    /// Maximum number of results.
-    /// DEPRECATED(remove-in: 5.0): `-k`/`--top-k` are aliases for `-n`/`--top`;
-    /// use `-n`/`--top`.
-    #[arg(
-        short = 'n',
-        long = "top",
-        alias = "top-k",
-        short_alias = 'k',
-        default_value = "10"
-    )]
-    pub top_k: usize,
+    // An absent `--top` gives 10 results.
+    #[command(flatten)]
+    pub pagination: PaginationArgs,
 
     /// Minimum similarity score (0.0-1.0)
     #[arg(long, default_value = "0.3")]
@@ -647,17 +624,8 @@ pub struct MutationArgs {
     #[arg(long, default_value = "CRR,ROR,AOR")]
     pub operators: String,
 
-    /// Check mode: fail if mutation score below threshold.
-    /// DEPRECATED(remove-in: 5.0): use `--gate error` instead.
-    #[arg(long)]
-    pub check: bool,
-
-    /// Gate mode: 'off' just reports, 'warn' reports and warns on stderr (exit 0),
-    /// 'error' reports and exits 2 if mutation score is below --min-score (default:
-    /// off). If both --check and --gate are given, --gate always wins, including
-    /// an explicit `--gate off`.
-    #[arg(long, value_enum)]
-    pub gate: Option<GateMode>,
+    #[command(flatten)]
+    pub gate: GateArgs,
 
     /// Minimum mutation score (0.0-1.0)
     #[arg(long, default_value = "0.8")]
@@ -666,10 +634,6 @@ pub struct MutationArgs {
     /// Generate mutants only, don't execute tests
     #[arg(long)]
     pub dry_run: bool,
-
-    /// Number of parallel workers (0 = num_cpus)
-    #[arg(long, default_value = "0")]
-    pub jobs: usize,
 
     /// Path to coverage JSON file
     #[arg(long)]
@@ -687,9 +651,8 @@ pub struct MutationArgs {
     #[arg(long, value_enum, default_value = "all")]
     pub mode: MutationMode,
 
-    /// Write surviving mutants to file
-    #[arg(long)]
-    pub output_survivors: Option<PathBuf>,
+    #[command(flatten)]
+    pub output: OutputArgs,
 
     /// Record results to history file for model training
     #[arg(long)]
@@ -827,9 +790,8 @@ pub struct EvalArgs {
     #[arg(long)]
     pub runs: PathBuf,
 
-    /// Also write the full report as pretty JSON to this path
-    #[arg(long)]
-    pub output: Option<PathBuf>,
+    #[command(flatten)]
+    pub output: OutputArgs,
 }
 
 /// Arguments for the symbol command.
@@ -855,10 +817,6 @@ pub struct SymbolArgs {
 #[derive(Args)]
 #[cfg(feature = "mutation")]
 pub struct MutationTrainArgs {
-    /// Path to analyze (default: current directory)
-    #[arg(short, long, default_value = ".")]
-    pub path: PathBuf,
-
     /// Path to history file (default: .omen/mutation-history.jsonl)
     #[arg(long)]
     pub history: Option<PathBuf>,
@@ -1041,12 +999,6 @@ mod tests {
     }
 
     #[test]
-    fn test_stubs_gate_defaults_to_off() {
-        let args = parse_stubs_args(&["omen", "stubs"]);
-        assert!(matches!(args.gate, GateMode::Off));
-    }
-
-    #[test]
     fn test_stubs_gate_severity_defaults_to_low() {
         let args = parse_stubs_args(&["omen", "stubs"]);
         assert!(matches!(args.gate_severity, GateSeverity::Low));
@@ -1055,13 +1007,13 @@ mod tests {
     #[test]
     fn test_stubs_gate_error_parses() {
         let args = parse_stubs_args(&["omen", "stubs", "--gate", "error"]);
-        assert!(matches!(args.gate, GateMode::Error));
+        assert_eq!(args.gate.mode, Some(GateMode::Error));
     }
 
     #[test]
     fn test_stubs_gate_warn_parses() {
         let args = parse_stubs_args(&["omen", "stubs", "--gate", "warn"]);
-        assert!(matches!(args.gate, GateMode::Warn));
+        assert_eq!(args.gate.mode, Some(GateMode::Warn));
     }
 
     #[test]
@@ -1450,9 +1402,9 @@ mod tests {
     #[test]
     fn test_report_generate_output() {
         if let ReportSubcommand::Generate(args) =
-            parse_report_subcommand(&["omen", "report", "generate", "-o", "/tmp/data"])
+            parse_report_subcommand(&["omen", "report", "generate", "-d", "/tmp/data"])
         {
-            assert_eq!(args.output, PathBuf::from("/tmp/data"));
+            assert_eq!(args.data, PathBuf::from("/tmp/data"));
         }
     }
 
@@ -1479,14 +1431,14 @@ mod tests {
         if let ReportSubcommand::Render(args) =
             parse_report_subcommand(&["omen", "report", "render", "-o", "/tmp/report.html"])
         {
-            assert_eq!(args.output, PathBuf::from("/tmp/report.html"));
+            assert_eq!(args.output.output, Some(PathBuf::from("/tmp/report.html")));
         }
     }
 
     #[test]
     fn test_report_serve_port() {
         if let ReportSubcommand::Serve(args) =
-            parse_report_subcommand(&["omen", "report", "serve", "-p", "3000"])
+            parse_report_subcommand(&["omen", "report", "serve", "--port", "3000"])
         {
             assert_eq!(args.port, 3000);
         }
@@ -1595,28 +1547,9 @@ mod tests {
     }
 
     #[test]
-    fn test_score_check_flag() {
-        let cli = parse(&["omen", "score", "--check"]);
-        if let Command::Score(cmd) = cli.command {
-            assert!(cmd.args.check);
-        } else {
-            panic!("expected Score command");
-        }
-    }
-
-    #[test]
-    fn test_score_check_default_false() {
-        let cli = parse(&["omen", "score"]);
-        if let Command::Score(cmd) = cli.command {
-            assert!(!cmd.args.check);
-        }
-    }
-
-    #[test]
     fn test_score_fail_under() {
-        let cli = parse(&["omen", "score", "--check", "--fail-under", "80"]);
+        let cli = parse(&["omen", "score", "--gate", "error", "--fail-under", "80"]);
         if let Command::Score(cmd) = cli.command {
-            assert!(cmd.args.check);
             assert_eq!(cmd.args.fail_under, Some(80.0));
         } else {
             panic!("expected Score command");
@@ -1625,7 +1558,7 @@ mod tests {
 
     #[test]
     fn test_score_fail_under_default_none() {
-        let cli = parse(&["omen", "score", "--check"]);
+        let cli = parse(&["omen", "score", "--gate", "error"]);
         if let Command::Score(cmd) = cli.command {
             assert!(cmd.args.fail_under.is_none());
         }
@@ -1673,15 +1606,6 @@ mod tests {
     }
 
     #[test]
-    fn test_search_query_top_k() {
-        if let SearchSubcommand::Query(args) =
-            parse_search_subcommand(&["omen", "search", "query", "test", "-k", "20"])
-        {
-            assert_eq!(args.top_k, 20);
-        }
-    }
-
-    #[test]
     fn test_search_query_min_score() {
         if let SearchSubcommand::Query(args) =
             parse_search_subcommand(&["omen", "search", "query", "test", "--min-score", "0.5"])
@@ -1724,23 +1648,28 @@ mod tests {
     // Complexity command tests
 
     #[test]
-    fn test_complexity_check_flag() {
-        assert!(parse_complexity_args(&["omen", "complexity", "--check"]).check);
-    }
-
-    #[test]
     fn test_complexity_max_cyclomatic() {
-        let args =
-            parse_complexity_args(&["omen", "complexity", "--check", "--max-cyclomatic", "15"]);
-        assert!(args.check);
+        let args = parse_complexity_args(&[
+            "omen",
+            "complexity",
+            "--gate",
+            "error",
+            "--max-cyclomatic",
+            "15",
+        ]);
         assert_eq!(args.max_cyclomatic, Some(15));
     }
 
     #[test]
     fn test_complexity_max_cognitive() {
-        let args =
-            parse_complexity_args(&["omen", "complexity", "--check", "--max-cognitive", "20"]);
-        assert!(args.check);
+        let args = parse_complexity_args(&[
+            "omen",
+            "complexity",
+            "--gate",
+            "error",
+            "--max-cognitive",
+            "20",
+        ]);
         assert_eq!(args.max_cognitive, Some(20));
     }
 
@@ -1749,20 +1678,15 @@ mod tests {
         let args = parse_complexity_args(&[
             "omen",
             "complexity",
-            "--check",
+            "--gate",
+            "error",
             "--max-cyclomatic",
             "15",
             "--max-cognitive",
             "15",
         ]);
-        assert!(args.check);
         assert_eq!(args.max_cyclomatic, Some(15));
         assert_eq!(args.max_cognitive, Some(15));
-    }
-
-    #[test]
-    fn test_complexity_check_default_false() {
-        assert!(!parse_complexity_args(&["omen", "complexity"]).check);
     }
 
     #[test]
@@ -1788,15 +1712,13 @@ mod tests {
         let args = parse_mutation_args(&["omen", "mutation"]);
         assert_eq!(args.timeout, 30);
         assert_eq!(args.operators, "CRR,ROR,AOR");
-        assert!(!args.check);
         assert!((args.min_score - 0.8).abs() < 0.001);
         assert!(!args.dry_run);
-        assert_eq!(args.jobs, 0);
         assert!(args.coverage.is_none());
         assert!(!args.incremental);
         assert!(!args.skip_equivalent);
         assert!(matches!(args.mode, MutationMode::All));
-        assert!(args.output_survivors.is_none());
+        assert!(args.output.output.is_none());
         assert!(!args.allow_dirty);
     }
 
@@ -1828,11 +1750,6 @@ mod tests {
     }
 
     #[test]
-    fn test_mutation_check_mode() {
-        assert!(parse_mutation_args(&["omen", "mutation", "--check"]).check);
-    }
-
-    #[test]
     fn test_mutation_min_score() {
         let args = parse_mutation_args(&["omen", "mutation", "--min-score", "0.9"]);
         assert!((args.min_score - 0.9).abs() < 0.001);
@@ -1841,14 +1758,6 @@ mod tests {
     #[test]
     fn test_mutation_dry_run() {
         assert!(parse_mutation_args(&["omen", "mutation", "--dry-run"]).dry_run);
-    }
-
-    #[test]
-    fn test_mutation_jobs() {
-        assert_eq!(
-            parse_mutation_args(&["omen", "mutation", "--jobs", "4"]).jobs,
-            4
-        );
     }
 
     #[test]
@@ -1886,29 +1795,19 @@ mod tests {
     }
 
     #[test]
-    fn test_mutation_output_survivors() {
-        let args =
-            parse_mutation_args(&["omen", "mutation", "--output-survivors", "survivors.json"]);
-        assert_eq!(args.output_survivors, Some(PathBuf::from("survivors.json")));
-    }
-
-    #[test]
     fn test_mutation_combined_options() {
         let args = parse_mutation_args(&[
             "omen",
             "mutation",
-            "--check",
+            "--gate",
+            "error",
             "--mode",
             "fast",
-            "--jobs",
-            "8",
             "--skip-equivalent",
             "--min-score",
             "0.7",
         ]);
-        assert!(args.check);
         assert!(matches!(args.mode, MutationMode::Fast));
-        assert_eq!(args.jobs, 8);
         assert!(args.skip_equivalent);
         assert!((args.min_score - 0.7).abs() < 0.001);
     }
@@ -2020,19 +1919,19 @@ mod tests {
     #[test]
     fn test_analyzer_args_top() {
         let args = parse_complexity_args(&["omen", "complexity", "--top", "10"]);
-        assert_eq!(args.common.top, Some(10));
+        assert_eq!(args.common.pagination.top, Some(10));
     }
 
     #[test]
     fn test_analyzer_args_top_default_none() {
         let args = parse_complexity_args(&["omen", "complexity"]);
-        assert_eq!(args.common.top, None);
+        assert_eq!(args.common.pagination.top, None);
     }
 
     #[test]
     fn test_analyzer_args_offset() {
         let args = parse_complexity_args(&["omen", "complexity", "--top", "10", "--offset", "5"]);
-        assert_eq!(args.common.offset, Some(5));
+        assert_eq!(args.common.pagination.offset, Some(5));
     }
 
     // Outline command tests
@@ -2212,21 +2111,21 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Pagination: --top/-n/--offset, --top-k alias
+    // Pagination: --top/-n/--offset
     // -----------------------------------------------------------------
 
     #[test]
     fn test_analyzer_args_top_short_n() {
         let args = parse_complexity_args(&["omen", "complexity", "-n", "5"]);
-        assert_eq!(args.common.top, Some(5));
+        assert_eq!(args.common.pagination.top, Some(5));
     }
 
     #[test]
     fn test_diff_top_offset() {
         let cli = parse(&["omen", "diff", "--top", "3", "--offset", "1"]);
         if let Command::Diff(args) = cli.command {
-            assert_eq!(args.top, Some(3));
-            assert_eq!(args.offset, Some(1));
+            assert_eq!(args.pagination.top, Some(3));
+            assert_eq!(args.pagination.offset, Some(1));
         } else {
             panic!("Expected Diff command");
         }
@@ -2236,7 +2135,7 @@ mod tests {
     fn test_diff_top_short_n() {
         let cli = parse(&["omen", "diff", "-n", "3"]);
         if let Command::Diff(args) = cli.command {
-            assert_eq!(args.top, Some(3));
+            assert_eq!(args.pagination.top, Some(3));
         } else {
             panic!("Expected Diff command");
         }
@@ -2262,8 +2161,8 @@ mod tests {
     #[test]
     fn test_mutation_top_offset() {
         let args = parse_mutation_args(&["omen", "mutation", "--top", "4", "--offset", "2"]);
-        assert_eq!(args.common.top, Some(4));
-        assert_eq!(args.common.offset, Some(2));
+        assert_eq!(args.common.pagination.top, Some(4));
+        assert_eq!(args.common.pagination.offset, Some(2));
     }
 
     #[test]
@@ -2272,7 +2171,7 @@ mod tests {
         if let SearchSubcommand::Query(args) =
             parse_search_subcommand(&["omen", "search", "query", "test", "--top", "15"])
         {
-            assert_eq!(args.top_k, 15);
+            assert_eq!(args.pagination.top, Some(15));
         } else {
             panic!("Expected Query subcommand");
         }
@@ -2285,38 +2184,14 @@ mod tests {
         if let SearchSubcommand::Query(args) =
             parse_search_subcommand(&["omen", "search", "query", "test", "-n", "15"])
         {
-            assert_eq!(args.top_k, 15);
-        } else {
-            panic!("Expected Query subcommand");
-        }
-    }
-
-    #[test]
-    fn test_search_query_top_short_k_deprecated_alias_still_parses() {
-        // -k is a deprecated short alias for -n/--top; must keep working.
-        if let SearchSubcommand::Query(args) =
-            parse_search_subcommand(&["omen", "search", "query", "test", "-k", "18"])
-        {
-            assert_eq!(args.top_k, 18);
-        } else {
-            panic!("Expected Query subcommand");
-        }
-    }
-
-    #[test]
-    fn test_search_query_top_k_alias_still_parses() {
-        // --top-k is a deprecated hidden alias for --top; must keep working.
-        if let SearchSubcommand::Query(args) =
-            parse_search_subcommand(&["omen", "search", "query", "test", "--top-k", "25"])
-        {
-            assert_eq!(args.top_k, 25);
+            assert_eq!(args.pagination.top, Some(15));
         } else {
             panic!("Expected Query subcommand");
         }
     }
 
     // -----------------------------------------------------------------
-    // Gate/check: --gate off|warn|error, --check deprecated alias
+    // Gate: --gate off|warn|error
     // -----------------------------------------------------------------
 
     #[test]
@@ -2324,32 +2199,25 @@ mod tests {
         // Unset (not `Some(GateMode::Off)`) so `resolve_gate_mode` can tell
         // "no --gate at all" apart from an explicit `--gate off`.
         let args = parse_complexity_args(&["omen", "complexity"]);
-        assert_eq!(args.gate, None);
+        assert_eq!(args.gate.mode, None);
     }
 
     #[test]
     fn test_complexity_gate_error_parses() {
         let args = parse_complexity_args(&["omen", "complexity", "--gate", "error"]);
-        assert_eq!(args.gate, Some(GateMode::Error));
+        assert_eq!(args.gate.mode, Some(GateMode::Error));
     }
 
     #[test]
     fn test_complexity_gate_warn_parses() {
         let args = parse_complexity_args(&["omen", "complexity", "--gate", "warn"]);
-        assert_eq!(args.gate, Some(GateMode::Warn));
+        assert_eq!(args.gate.mode, Some(GateMode::Warn));
     }
 
     #[test]
     fn test_complexity_gate_off_parses_explicitly() {
         let args = parse_complexity_args(&["omen", "complexity", "--gate", "off"]);
-        assert_eq!(args.gate, Some(GateMode::Off));
-    }
-
-    #[test]
-    fn test_complexity_check_still_parses_deprecated() {
-        let args = parse_complexity_args(&["omen", "complexity", "--check"]);
-        assert!(args.check);
-        assert_eq!(args.gate, None);
+        assert_eq!(args.gate.mode, Some(GateMode::Off));
     }
 
     #[test]
@@ -2361,7 +2229,7 @@ mod tests {
     fn test_score_gate_defaults_to_none() {
         let cli = parse(&["omen", "score"]);
         if let Command::Score(cmd) = cli.command {
-            assert_eq!(cmd.args.gate, None);
+            assert_eq!(cmd.args.gate.mode, None);
         } else {
             panic!("expected Score command");
         }
@@ -2371,7 +2239,7 @@ mod tests {
     fn test_score_gate_error_parses() {
         let cli = parse(&["omen", "score", "--gate", "error"]);
         if let Command::Score(cmd) = cli.command {
-            assert_eq!(cmd.args.gate, Some(GateMode::Error));
+            assert_eq!(cmd.args.gate.mode, Some(GateMode::Error));
         } else {
             panic!("expected Score command");
         }
@@ -2381,7 +2249,7 @@ mod tests {
     fn test_score_gate_warn_parses() {
         let cli = parse(&["omen", "score", "--gate", "warn"]);
         if let Command::Score(cmd) = cli.command {
-            assert_eq!(cmd.args.gate, Some(GateMode::Warn));
+            assert_eq!(cmd.args.gate.mode, Some(GateMode::Warn));
         } else {
             panic!("expected Score command");
         }
@@ -2391,7 +2259,7 @@ mod tests {
     fn test_score_gate_off_parses_explicitly() {
         let cli = parse(&["omen", "score", "--gate", "off"]);
         if let Command::Score(cmd) = cli.command {
-            assert_eq!(cmd.args.gate, Some(GateMode::Off));
+            assert_eq!(cmd.args.gate.mode, Some(GateMode::Off));
         } else {
             panic!("expected Score command");
         }
@@ -2400,59 +2268,172 @@ mod tests {
     #[test]
     fn test_mutation_gate_defaults_to_none() {
         let args = parse_mutation_args(&["omen", "mutation"]);
-        assert_eq!(args.gate, None);
+        assert_eq!(args.gate.mode, None);
     }
 
     #[test]
     fn test_mutation_gate_error_parses() {
         let args = parse_mutation_args(&["omen", "mutation", "--gate", "error"]);
-        assert_eq!(args.gate, Some(GateMode::Error));
+        assert_eq!(args.gate.mode, Some(GateMode::Error));
     }
 
     #[test]
     fn test_mutation_gate_warn_parses() {
         let args = parse_mutation_args(&["omen", "mutation", "--gate", "warn"]);
-        assert_eq!(args.gate, Some(GateMode::Warn));
+        assert_eq!(args.gate.mode, Some(GateMode::Warn));
     }
 
     #[test]
     fn test_mutation_gate_off_parses_explicitly() {
         let args = parse_mutation_args(&["omen", "mutation", "--gate", "off"]);
-        assert_eq!(args.gate, Some(GateMode::Off));
+        assert_eq!(args.gate.mode, Some(GateMode::Off));
     }
 
     #[test]
-    fn test_mutation_check_still_parses_deprecated() {
-        let args = parse_mutation_args(&["omen", "mutation", "--check"]);
-        assert!(args.check);
-        assert_eq!(args.gate, None);
-    }
-
-    #[test]
-    fn test_complexity_gate_off_and_check_both_parse() {
-        // Regression: `--check --gate off` must parse cleanly and preserve
-        // both values so `resolve_gate_mode` can let --gate off win.
-        let args = parse_complexity_args(&["omen", "complexity", "--check", "--gate", "off"]);
-        assert!(args.check);
-        assert_eq!(args.gate, Some(GateMode::Off));
-    }
-
-    #[test]
-    fn test_score_gate_off_and_check_both_parse() {
-        let cli = parse(&["omen", "score", "--check", "--gate", "off"]);
-        if let Command::Score(cmd) = cli.command {
-            assert!(cmd.args.check);
-            assert_eq!(cmd.args.gate, Some(GateMode::Off));
-        } else {
-            panic!("expected Score command");
+    fn test_check_flag_is_rejected() {
+        for command in ["complexity", "score", "mutation"] {
+            assert!(
+                Cli::try_parse_from(["omen", command, "--check"]).is_err(),
+                "`{command} --check` must not parse"
+            );
         }
     }
 
     #[test]
-    fn test_mutation_gate_off_and_check_both_parse() {
-        let args = parse_mutation_args(&["omen", "mutation", "--check", "--gate", "off"]);
-        assert!(args.check);
-        assert_eq!(args.gate, Some(GateMode::Off));
+    fn test_search_query_rejects_top_k_flags() {
+        for flag in ["-k", "--top-k"] {
+            assert!(
+                Cli::try_parse_from(["omen", "search", "query", "test", flag, "5"]).is_err(),
+                "`search query {flag}` must not parse"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // One CLI shape: gate, pagination, global flags, --output
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn test_stubs_gate_is_absent_by_default() {
+        // An absent flag lets the configuration supply the gate mode.
+        assert_eq!(parse_stubs_args(&["omen", "stubs"]).gate.mode, None);
+    }
+
+    #[test]
+    fn test_all_gated_commands_take_the_same_gate_flag() {
+        for command in ["complexity", "score", "stubs", "mutation"] {
+            for mode in ["off", "warn", "error"] {
+                assert!(
+                    Cli::try_parse_from(["omen", command, "--gate", mode]).is_ok(),
+                    "`{command} --gate {mode}` must parse"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_global_flags_parse_after_the_subcommand() {
+        let cli = parse(&[
+            "omen",
+            "complexity",
+            "-p",
+            "/tmp",
+            "-f",
+            "json",
+            "-c",
+            "config.toml",
+            "-v",
+            "-j",
+            "4",
+        ]);
+        assert_eq!(cli.path, PathBuf::from("/tmp"));
+        assert!(matches!(cli.format, OutputFormat::Json));
+        assert_eq!(cli.config, Some(PathBuf::from("config.toml")));
+        assert!(cli.verbose);
+        assert_eq!(cli.jobs, Some(4));
+    }
+
+    #[test]
+    fn test_global_flags_parse_after_a_nested_subcommand() {
+        let cli = parse(&["omen", "score", "trend", "-p", "/tmp", "--format", "json"]);
+        assert_eq!(cli.path, PathBuf::from("/tmp"));
+        assert!(matches!(cli.format, OutputFormat::Json));
+
+        let cli = parse(&["omen", "mutation", "train", "--path", "/tmp"]);
+        assert_eq!(cli.path, PathBuf::from("/tmp"));
+
+        let cli = parse(&["omen", "mutation", "--jobs", "8"]);
+        assert_eq!(cli.jobs, Some(8));
+
+        // `-p` is the repository path on each command. It is not the port.
+        let cli = parse(&["omen", "report", "serve", "-p", "/tmp", "--port", "3000"]);
+        assert_eq!(cli.path, PathBuf::from("/tmp"));
+    }
+
+    #[test]
+    fn test_search_query_uses_the_shared_pagination_flags() {
+        if let SearchSubcommand::Query(args) = parse_search_subcommand(&[
+            "omen", "search", "query", "test", "--top", "5", "--offset", "2",
+        ]) {
+            assert_eq!(args.pagination.top, Some(5));
+            assert_eq!(args.pagination.offset, Some(2));
+        } else {
+            panic!("Expected Query subcommand");
+        }
+    }
+
+    #[test]
+    fn test_output_flag_is_one_optional_file_on_each_command() {
+        if let ReportSubcommand::Render(args) =
+            parse_report_subcommand(&["omen", "report", "render", "-o", "/tmp/report.html"])
+        {
+            assert_eq!(args.output.output, Some(PathBuf::from("/tmp/report.html")));
+        } else {
+            panic!("Expected Render subcommand");
+        }
+
+        let cli = parse(&[
+            "omen",
+            "eval",
+            "--registration",
+            "plan.json",
+            "--runs",
+            "runs.json",
+            "-o",
+            "result.json",
+        ]);
+        if let Command::Eval(args) = cli.command {
+            assert_eq!(args.output.output, Some(PathBuf::from("result.json")));
+        } else {
+            panic!("Expected Eval command");
+        }
+
+        let args = parse_mutation_args(&["omen", "mutation", "--output", "mutation.json"]);
+        assert_eq!(args.output.output, Some(PathBuf::from("mutation.json")));
+    }
+
+    #[test]
+    fn test_report_generate_takes_the_data_directory() {
+        if let ReportSubcommand::Generate(args) =
+            parse_report_subcommand(&["omen", "report", "generate", "-d", "/tmp/data"])
+        {
+            assert_eq!(args.data, PathBuf::from("/tmp/data"));
+        } else {
+            panic!("Expected Generate subcommand");
+        }
+    }
+
+    #[test]
+    fn test_replaced_flags_are_rejected() {
+        for args in [
+            vec!["omen", "report", "generate", "--output", "/tmp/data"],
+            vec!["omen", "mutation", "--output-survivors", "survivors.json"],
+        ] {
+            assert!(
+                Cli::try_parse_from(&args).is_err(),
+                "expected {args:?} to be rejected"
+            );
+        }
     }
 
     // -----------------------------------------------------------------

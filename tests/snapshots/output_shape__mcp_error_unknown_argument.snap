@@ -1,0 +1,17 @@
+---
+source: tests/output_shape.rs
+expression: body
+---
+{
+  "error": {
+    "code": "unknown_argument",
+    "expected": "one of: path, limit, offset",
+    "message": "The tool `complexity` has no argument `pth`.",
+    "next": "Use a name from `suggestions`.",
+    "param": "pth",
+    "received": null,
+    "suggestions": [
+      "path"
+    ]
+  }
+}

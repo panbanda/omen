@@ -109,8 +109,7 @@ impl AnalyzerTrait for Analyzer {
             let Some(relative_path) = allowed.get(repo_path) else {
                 return false;
             };
-            metrics.relative_path.clone_from(relative_path);
-            metrics.path = format!("./{relative_path}");
+            metrics.file.clone_from(relative_path);
             true
         });
 
@@ -141,8 +140,7 @@ fn commits_to_file_metrics(commits: &[crate::git::Commit]) -> HashMap<String, Fi
             let fm = file_metrics
                 .entry(path_str.clone())
                 .or_insert_with(|| FileMetrics {
-                    path: format!("./{path_str}"),
-                    relative_path: path_str.clone(),
+                    file: path_str.clone(),
                     commits: 0,
                     unique_authors: Vec::new(),
                     author_counts: HashMap::new(),
@@ -230,8 +228,7 @@ fn parse_git_log_numstat(output: &[u8]) -> Result<HashMap<String, FileMetrics>> 
         let fm = file_metrics
             .entry(relative_path.to_string())
             .or_insert_with(|| FileMetrics {
-                path: format!("./{relative_path}"),
-                relative_path: relative_path.to_string(),
+                file: relative_path.to_string(),
                 commits: 0,
                 unique_authors: Vec::new(),
                 author_counts: HashMap::new(),
@@ -388,7 +385,7 @@ fn calculate_relative_churn(fm: &mut FileMetrics, repo_root: &str, _now: DateTim
     }
 
     // Read file LOC
-    let file_path = Path::new(repo_root).join(&fm.relative_path);
+    let file_path = Path::new(repo_root).join(&fm.file);
     if let Ok(content) = std::fs::read_to_string(&file_path) {
         fm.total_loc = content.lines().count() as u32;
     }
@@ -443,7 +440,7 @@ fn identify_hotspot_and_stable(summary: &mut Summary, files: &[FileMetrics]) {
     let candidate_count = 10.min(files.len());
     for file in files.iter().take(candidate_count) {
         if file.churn_score > HOTSPOT_THRESHOLD {
-            summary.hotspot_files.push(file.path.clone());
+            summary.hotspot_files.push(file.file.clone());
         }
     }
 
@@ -451,7 +448,7 @@ fn identify_hotspot_and_stable(summary: &mut Summary, files: &[FileMetrics]) {
     let start_idx = files.len().saturating_sub(10);
     for file in files.iter().skip(start_idx).rev() {
         if file.churn_score < STABLE_THRESHOLD && file.commits > 0 {
-            summary.stable_files.push(file.path.clone());
+            summary.stable_files.push(file.file.clone());
         }
     }
 }
@@ -459,8 +456,8 @@ fn identify_hotspot_and_stable(summary: &mut Summary, files: &[FileMetrics]) {
 /// Churn metrics for a single file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileMetrics {
-    pub path: String,
-    pub relative_path: String,
+    /// File path relative to the repository root.
+    pub file: String,
     pub commits: u32,
     pub unique_authors: Vec<String>,
     #[serde(skip)]
@@ -570,8 +567,7 @@ mod tests {
         let result = Analyzer::new().with_days(u32::MAX).analyze(&ctx).unwrap();
 
         assert_eq!(result.files.len(), 1);
-        assert_eq!(result.files[0].relative_path, "report.rs");
-        assert_eq!(result.files[0].path, "./report.rs");
+        assert_eq!(result.files[0].file, "report.rs");
     }
 
     #[test]
@@ -590,8 +586,7 @@ mod tests {
     #[test]
     fn test_churn_score_calculation() {
         let mut fm = FileMetrics {
-            path: "./test.go".to_string(),
-            relative_path: "test.go".to_string(),
+            file: "test.go".to_string(),
             commits: 10,
             unique_authors: vec![],
             author_counts: HashMap::new(),
@@ -652,8 +647,7 @@ mod tests {
         churn_score: f64,
     ) -> FileMetrics {
         FileMetrics {
-            path: format!("./{path}"),
-            relative_path: path.to_string(),
+            file: path.to_string(),
             commits,
             unique_authors: vec![],
             author_counts: HashMap::new(),
@@ -745,7 +739,7 @@ mod tests {
         assert!(analysis.files[1].churn_score >= analysis.files[2].churn_score);
 
         // The highest-churn file should be first
-        assert_eq!(analysis.files[0].relative_path, "hot.rs");
+        assert_eq!(analysis.files[0].file, "hot.rs");
 
         // Percentiles should be computed (p50 and p95 set)
         // With 3 files sorted ascending, p50 index = (50*3)/100 = 1
@@ -820,8 +814,8 @@ mod tests {
 
         // Hotspot threshold is > 0.5, so a.rs and b.rs qualify
         assert_eq!(summary.hotspot_files.len(), 2);
-        assert!(summary.hotspot_files.contains(&"./a.rs".to_string()));
-        assert!(summary.hotspot_files.contains(&"./b.rs".to_string()));
+        assert!(summary.hotspot_files.contains(&"a.rs".to_string()));
+        assert!(summary.hotspot_files.contains(&"b.rs".to_string()));
     }
 
     #[test]
@@ -840,8 +834,8 @@ mod tests {
 
         // c.rs and d.rs are below 0.1 and have commits > 0
         assert_eq!(summary.stable_files.len(), 2);
-        assert!(summary.stable_files.contains(&"./c.rs".to_string()));
-        assert!(summary.stable_files.contains(&"./d.rs".to_string()));
+        assert!(summary.stable_files.contains(&"c.rs".to_string()));
+        assert!(summary.stable_files.contains(&"d.rs".to_string()));
     }
 
     #[test]
@@ -856,7 +850,7 @@ mod tests {
         identify_hotspot_and_stable(&mut summary, &files);
 
         assert_eq!(summary.stable_files.len(), 1);
-        assert!(summary.stable_files.contains(&"./b.rs".to_string()));
+        assert!(summary.stable_files.contains(&"b.rs".to_string()));
     }
 
     // --- calculate_relative_churn edge cases ---

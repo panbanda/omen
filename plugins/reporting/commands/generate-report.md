@@ -5,7 +5,7 @@ Generate a complete HTML health report with LLM-generated insights.
 ## Workflow
 
 1. Check for `omen.toml` or `.omen/omen.toml`. If missing, run `omen-development:setup-config` first.
-2. Generate data: `omen report generate -o ./omen-report-$(date +%Y-%m-%d)/`
+2. Generate data: `omen report generate -d ./omen-report-$(date +%Y-%m-%d)/`
 3. Create insights dir: `mkdir -p <output-dir>/insights`
 4. Spawn analyst agents in parallel (Step 3)
 5. Wait for all to complete, then spawn summary agent (Step 4)
@@ -18,7 +18,7 @@ Use the Task tool to spawn all 13 agents simultaneously. Each agent reads its da
 
 ---
 
-**Use the hotspot-analyst agent** to analyze `<dir>/hotspots.json` and write `<dir>/insights/hotspots.json`:
+**Use the hotspot-analyst agent** to analyze `<dir>/hotspot.json` and write `<dir>/insights/hotspots.json`:
 ```json
 {"section_insight": "string", "item_annotations": [{"file": "path", "comment": "string", "verified": false, "evidence": "string"}]}
 ```
@@ -39,7 +39,7 @@ Use the Task tool to spawn all 13 agents simultaneously. Each agent reads its da
 
 ---
 
-**Use the duplicates-analyst agent** to analyze `<dir>/duplicates.json` and write `<dir>/insights/duplication.json`:
+**Use the duplicates-analyst agent** to analyze `<dir>/clones.json` and write `<dir>/insights/duplication.json`:
 ```json
 {"section_insight": "string"}
 ```

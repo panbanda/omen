@@ -39,6 +39,8 @@ pub struct Config {
     pub exclude_built_assets: bool,
     /// Changes/JIT analyzer configuration.
     pub changes: ChangesConfig,
+    /// Gate modes of the gated commands.
+    pub gate: GateConfig,
 }
 
 impl Default for Config {
@@ -56,6 +58,7 @@ impl Default for Config {
             temporal: TemporalConfig::default(),
             exclude_built_assets: true,
             changes: ChangesConfig::default(),
+            gate: GateConfig::default(),
         }
     }
 }
@@ -300,6 +303,33 @@ impl Default for ChangesConfig {
     fn default() -> Self {
         Self { days: 30 }
     }
+}
+
+/// What a gated command does when it finds a violation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum GateMode {
+    /// Give the report only
+    #[default]
+    Off,
+    /// Give the report and write a warning to stderr
+    Warn,
+    /// Give the report and exit with status 2
+    Error,
+}
+
+/// The gate mode of each gated command. The `--gate` flag overrides it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct GateConfig {
+    /// Gate mode of `complexity`.
+    pub complexity: GateMode,
+    /// Gate mode of `score`.
+    pub score: GateMode,
+    /// Gate mode of `stubs`.
+    pub stubs: GateMode,
+    /// Gate mode of `mutation`.
+    pub mutation: GateMode,
 }
 
 /// Output format.

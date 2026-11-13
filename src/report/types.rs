@@ -75,7 +75,7 @@ pub struct ComplexitySummary {
     pub avg_cognitive: f64,
 }
 
-/// HotspotsData represents the hotspots.json structure.
+/// HotspotsData represents the `hotspot.json` structure.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HotspotsData {
     #[serde(default, alias = "hotspots")]
@@ -103,7 +103,7 @@ pub struct HotspotSummary {
 /// HotspotItem represents a single hotspot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HotspotItem {
-    #[serde(alias = "file")]
+    #[serde(rename(deserialize = "file"))]
     pub path: String,
     #[serde(alias = "score")]
     pub hotspot_score: f64,
@@ -166,7 +166,6 @@ pub struct ChurnSummary {
 /// ChurnFile represents a single file's churn data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChurnFile {
-    #[serde(alias = "relative_path")]
     pub file: String,
     #[serde(alias = "commit_count")]
     pub commits: i32,
@@ -217,6 +216,7 @@ pub struct TopContributor {
 /// OwnershipFile represents a single file's ownership.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OwnershipFile {
+    #[serde(rename(deserialize = "file"))]
     pub path: String,
 }
 
@@ -227,7 +227,7 @@ pub struct OwnerInfo {
     pub files_owned: usize,
 }
 
-/// DuplicatesData represents the duplicates.json structure.
+/// DuplicatesData represents the `clones.json` structure.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DuplicatesData {
     #[serde(default)]
@@ -289,9 +289,7 @@ pub struct TrendPoint {
 /// ComponentTrendStats contains trend statistics for a component.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ComponentTrendStats {
-    #[serde(rename = "Slope")]
     pub slope: f64,
-    #[serde(rename = "Correlation")]
     pub correlation: f64,
 }
 
@@ -305,6 +303,7 @@ pub struct CohesionData {
 /// CohesionClass represents a single class's CK metrics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CohesionClass {
+    #[serde(rename(deserialize = "file"))]
     pub path: String,
     pub class_name: String,
     pub language: String,
@@ -584,6 +583,7 @@ pub struct GraphData {
 /// A node in the dependency graph.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphNode {
+    #[serde(rename(deserialize = "file"))]
     pub path: String,
     #[serde(default)]
     pub pagerank: f64,
@@ -639,7 +639,7 @@ pub struct TdgData {
 /// Per-file TDG score.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TdgFile {
-    #[serde(default)]
+    #[serde(default, rename(deserialize = "file"))]
     pub file_path: String,
     #[serde(default)]
     pub total: f32,
@@ -1044,9 +1044,21 @@ mod tests {
     }
 
     #[test]
+    fn test_component_trend_stats_use_snake_case_keys() {
+        let stats = ComponentTrendStats {
+            slope: 0.5,
+            correlation: 0.9,
+        };
+        assert_eq!(
+            serde_json::to_value(stats).unwrap(),
+            serde_json::json!({ "slope": 0.5, "correlation": 0.9 })
+        );
+    }
+
+    #[test]
     fn test_churn_file_aliases() {
         let json = r#"{
-            "relative_path": "src/main.rs",
+            "file": "src/main.rs",
             "commit_count": 42,
             "churn_score": 0.5
         }"#;
@@ -1199,7 +1211,7 @@ mod tests {
         let json = r#"{
             "nodes": [
                 {
-                    "path": "src/main.rs",
+                    "file": "src/main.rs",
                     "pagerank": 0.15,
                     "betweenness": 0.5,
                     "in_degree": 3,
@@ -1227,7 +1239,7 @@ mod tests {
         let json = r#"{
             "files": [
                 {
-                    "file_path": "src/main.rs",
+                    "file": "src/main.rs",
                     "total": 72.5,
                     "grade": "B",
                     "structural_complexity": 15.0,

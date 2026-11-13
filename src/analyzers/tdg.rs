@@ -155,7 +155,7 @@ impl Analyzer {
         let mut score = Score::new();
         score.language = language;
         score.confidence = language.confidence();
-        score.file_path = file_path.to_string();
+        score.file = file_path.to_string();
 
         // Analyze each component
         score.structural_complexity = self.analyze_structural_complexity(source, &mut penalties);
@@ -895,7 +895,7 @@ pub struct Score {
     pub confidence: f32,
     pub language: Language,
     #[serde(skip_serializing_if = "String::is_empty")]
-    pub file_path: String,
+    pub file: String,
     pub critical_defects_count: i32,
     pub has_critical_defects: bool,
 
@@ -928,7 +928,7 @@ impl Score {
             grade: Grade::APlus,
             confidence: 1.0,
             language: Language::Unknown,
-            file_path: String::new(),
+            file: String::new(),
             critical_defects_count: 0,
             has_critical_defects: false,
             penalties_applied: Vec::new(),
@@ -1486,7 +1486,7 @@ fn risky() {
         assert_eq!(result.total_files, 1);
 
         let score = &result.files[0];
-        assert_eq!(score.file_path, "lib.rs");
+        assert_eq!(score.file, "lib.rs");
 
         // Hotspot was 0.8 risk => hotspot_score = weight * (1 - 0.8) = 10 * 0.2 = 2.0
         assert!(

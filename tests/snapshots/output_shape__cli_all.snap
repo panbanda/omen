@@ -90,11 +90,10 @@ expression: "shape(&output, case.dynamic_key_objects)"
           "commits": "number",
           "days_active": "number",
           "deletions": "number",
+          "file": "string",
           "first_commit": "string",
           "last_commit": "string",
-          "path": "string",
           "relative_churn": "number",
-          "relative_path": "string",
           "total_loc": "number",
           "unique_authors": [
             "string"
@@ -125,158 +124,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
         "variance_churn_score": "number"
       }
     },
-    "cohesion": {
-      "classes": [
-        {
-          "cbo": "number",
-          "class_name": "string",
-          "coupled_classes": [
-            "string"
-          ],
-          "dit": "number",
-          "end_line": "number",
-          "fields": [
-            "string"
-          ],
-          "language": "string",
-          "lcom": "number",
-          "loc": "number",
-          "methods": [
-            "string"
-          ],
-          "noc": "number",
-          "nof": "number",
-          "nom": "number",
-          "path": "string",
-          "rfc": "number",
-          "start_line": "number",
-          "violations": [
-            "string"
-          ],
-          "wmc": "number"
-        }
-      ],
-      "generated_at": "string",
-      "summary": {
-        "avg_cbo": "number",
-        "avg_lcom": "number",
-        "avg_rfc": "number",
-        "avg_wmc": "number",
-        "low_cohesion_count": "number",
-        "max_cbo": "number",
-        "max_dit": "number",
-        "max_lcom": "number",
-        "max_rfc": "number",
-        "max_wmc": "number",
-        "total_classes": "number",
-        "total_files": "number",
-        "violation_count": "number"
-      }
-    },
-    "complexity": {
-      "files": [
-        {
-          "avg_cognitive": "number",
-          "avg_cyclomatic": "number",
-          "functions": [
-            {
-              "end_line": "number",
-              "metrics": {
-                "cognitive": "number",
-                "cyclomatic": "number",
-                "lines": "number",
-                "max_nesting": "number"
-              },
-              "name": "string",
-              "start_line": "number"
-            }
-          ],
-          "language": "string",
-          "path": "string",
-          "total_cognitive": "number",
-          "total_cyclomatic": "number"
-        }
-      ],
-      "summary": {
-        "avg_cognitive": "number",
-        "avg_cyclomatic": "number",
-        "max_cognitive": "number",
-        "max_cyclomatic": "number",
-        "p50_cognitive": "number",
-        "p50_cyclomatic": "number",
-        "p90_cognitive": "number",
-        "p90_cyclomatic": "number",
-        "p95_cognitive": "number",
-        "p95_cyclomatic": "number",
-        "total_files": "number",
-        "total_functions": "number"
-      }
-    },
-    "deadcode": {
-      "items": [
-        {
-          "confidence": "number",
-          "end_line": "number",
-          "file": "string",
-          "kind": "string",
-          "line": "number",
-          "name": "string",
-          "reason": "string",
-          "visibility": "string"
-        }
-      ],
-      "summary": {
-        "by_kind": {
-          "<key>": "number"
-        },
-        "reachable_count": "number",
-        "total_definitions": "number",
-        "total_items": "number"
-      }
-    },
-    "defect": {
-      "churn_window": {
-        "anchor_date": "string",
-        "commits_matched": "number",
-        "days": "number",
-        "history_complete": "bool"
-      },
-      "files": [
-        {
-          "confidence": "number",
-          "contributing_factors": {
-            "churn": "number",
-            "complexity": "number",
-            "coupling": "number",
-            "duplication": "number",
-            "ownership": "number"
-          },
-          "file_path": "string",
-          "probability": "number",
-          "recommendations": [
-            "string"
-          ],
-          "risk_level": "string"
-        }
-      ],
-      "summary": {
-        "avg_probability": "number",
-        "high_risk_count": "number",
-        "low_risk_count": "number",
-        "medium_risk_count": "number",
-        "p50_probability": "number",
-        "p95_probability": "number",
-        "total_files": "number"
-      },
-      "weights": {
-        "churn": "number",
-        "complexity": "number",
-        "coupling": "number",
-        "duplication": "number",
-        "ownership": "number"
-      }
-    },
-    "duplicates": {
+    "clones": {
       "clones": [
         {
           "clone_type": "string",
@@ -339,6 +187,157 @@ expression: "shape(&output, case.dynamic_key_objects)"
       "threshold": "number",
       "total_files_scanned": "number"
     },
+    "cohesion": {
+      "classes": [
+        {
+          "cbo": "number",
+          "class_name": "string",
+          "coupled_classes": [
+            "string"
+          ],
+          "dit": "number",
+          "end_line": "number",
+          "fields": [
+            "string"
+          ],
+          "file": "string",
+          "language": "string",
+          "lcom": "number",
+          "loc": "number",
+          "methods": [
+            "string"
+          ],
+          "noc": "number",
+          "nof": "number",
+          "nom": "number",
+          "rfc": "number",
+          "start_line": "number",
+          "violations": [
+            "string"
+          ],
+          "wmc": "number"
+        }
+      ],
+      "generated_at": "string",
+      "summary": {
+        "avg_cbo": "number",
+        "avg_lcom": "number",
+        "avg_rfc": "number",
+        "avg_wmc": "number",
+        "low_cohesion_count": "number",
+        "max_cbo": "number",
+        "max_dit": "number",
+        "max_lcom": "number",
+        "max_rfc": "number",
+        "max_wmc": "number",
+        "total_classes": "number",
+        "total_files": "number",
+        "violation_count": "number"
+      }
+    },
+    "complexity": {
+      "files": [
+        {
+          "avg_cognitive": "number",
+          "avg_cyclomatic": "number",
+          "file": "string",
+          "functions": [
+            {
+              "end_line": "number",
+              "metrics": {
+                "cognitive": "number",
+                "cyclomatic": "number",
+                "lines": "number",
+                "max_nesting": "number"
+              },
+              "name": "string",
+              "start_line": "number"
+            }
+          ],
+          "language": "string",
+          "total_cognitive": "number",
+          "total_cyclomatic": "number"
+        }
+      ],
+      "summary": {
+        "avg_cognitive": "number",
+        "avg_cyclomatic": "number",
+        "max_cognitive": "number",
+        "max_cyclomatic": "number",
+        "p50_cognitive": "number",
+        "p50_cyclomatic": "number",
+        "p90_cognitive": "number",
+        "p90_cyclomatic": "number",
+        "p95_cognitive": "number",
+        "p95_cyclomatic": "number",
+        "total_files": "number",
+        "total_functions": "number"
+      }
+    },
+    "deadcode": {
+      "items": [
+        {
+          "confidence": "number",
+          "end_line": "number",
+          "file": "string",
+          "kind": "string",
+          "line": "number",
+          "name": "string",
+          "reason": "string",
+          "visibility": "string"
+        }
+      ],
+      "summary": {
+        "by_kind": {
+          "<key>": "number"
+        },
+        "reachable_count": "number",
+        "total_definitions": "number",
+        "total_items": "number"
+      }
+    },
+    "defect": {
+      "churn_window": {
+        "anchor_date": "string",
+        "commits_matched": "number",
+        "days": "number",
+        "history_complete": "bool"
+      },
+      "files": [
+        {
+          "confidence": "number",
+          "contributing_factors": {
+            "churn": "number",
+            "complexity": "number",
+            "coupling": "number",
+            "duplication": "number",
+            "ownership": "number"
+          },
+          "file": "string",
+          "probability": "number",
+          "recommendations": [
+            "string"
+          ],
+          "risk_level": "string"
+        }
+      ],
+      "summary": {
+        "avg_probability": "number",
+        "high_risk_count": "number",
+        "low_risk_count": "number",
+        "medium_risk_count": "number",
+        "p50_probability": "number",
+        "p95_probability": "number",
+        "total_files": "number"
+      },
+      "weights": {
+        "churn": "number",
+        "complexity": "number",
+        "coupling": "number",
+        "duplication": "number",
+        "ownership": "number"
+      }
+    },
     "flags": {
       "flags": [],
       "generated_at": "string",
@@ -364,11 +363,11 @@ expression: "shape(&output, case.dynamic_key_objects)"
       "nodes": [
         {
           "betweenness": "number",
+          "file": "string",
           "in_degree": "number",
           "instability": "number",
           "out_degree": "number",
-          "pagerank": "number",
-          "path": "string"
+          "pagerank": "number"
         }
       ],
       "summary": {
@@ -414,9 +413,9 @@ expression: "shape(&output, case.dynamic_key_objects)"
               "percentage": "number"
             }
           ],
+          "file": "string",
           "is_silo": "bool",
           "ownership_percent": "number",
-          "path": "string",
           "primary_owner": "string",
           "risk_level": "string",
           "total_lines": "number"
@@ -616,7 +615,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
           "doc_coverage": "number",
           "duplication_ratio": "number",
           "entropy_score": "number",
-          "file_path": "string",
+          "file": "string",
           "grade": "string",
           "has_critical_defects": "bool",
           "hotspot_score": "number",

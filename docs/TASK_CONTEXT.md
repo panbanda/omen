@@ -2,8 +2,11 @@
 
 Call `task_context` with `name` (prefer `file:name`), optional exact `start_line`,
 `depth` (0–4, default 2), `max_bytes` (1024–1048576, default 12000), and optional
-`include_history` (default false). Ambiguity returns choices without selecting a
-definition. Free-text task/diff interpretation is not implemented yet.
+`include_history` (default false). When the name agrees with more than one
+definition, the tool gives an `ambiguous` error and does not select a definition.
+`error.suggestions` holds the `name` and the `start_line` of each choice. When
+the name agrees with no definition, the tool gives a `not_found` error.
+Free-text task/diff interpretation is not implemented yet.
 
 The response combines a seed-first candidate call neighborhood, signatures and
 locations, seed call-resolution evidence, test/framework convention hints,
@@ -11,8 +14,13 @@ bounded AST identifier occurrences, parse-error counts, and a content fingerprin
 Optional 30-day co-change hints are separate from semantic edges. History absence
 is explicit. Omission counters disclose budget trimming; the seed is never silently
 discarded. A budget too small for required metadata returns an error. The byte
-budget covers the JSON `result`, not the RPC wrapper or tokenizer cost. Generic
-`limit`/`offset` pagination is not advertised for this tool.
+budget covers the JSON `result`, not the RPC wrapper or tokenizer cost. This
+tool has no `limit` and no `offset`, and it rejects them as unknown arguments.
+
+The tool gives the same envelope as each other tool. `total_items` and
+`returned` count the symbols. `has_more` is always `false`. `truncated` shows
+each list that the byte budget cut, with the counts from `omitted`. See
+`docs/MCP_CONTEXT.md` for the envelope and the error contract.
 
 ## Incremental work and freshness
 

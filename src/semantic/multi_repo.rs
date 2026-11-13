@@ -179,11 +179,7 @@ mod tests {
         assert_eq!(result.results.len(), 2);
         assert_eq!(result.total_symbols, 2);
         // Both repos should be represented
-        let paths: Vec<&str> = result
-            .results
-            .iter()
-            .map(|r| r.file_path.as_str())
-            .collect();
+        let paths: Vec<&str> = result.results.iter().map(|r| r.file.as_str()).collect();
         assert!(paths
             .iter()
             .any(|p| p.contains(temp1.path().file_name().unwrap().to_str().unwrap())));
@@ -231,11 +227,7 @@ mod tests {
 
         let result =
             multi_repo_search(&[repo1.as_path(), repo2.as_path()], "func", 10, 0.0).unwrap();
-        let paths: Vec<&str> = result
-            .results
-            .iter()
-            .map(|r| r.file_path.as_str())
-            .collect();
+        let paths: Vec<&str> = result.results.iter().map(|r| r.file.as_str()).collect();
         // Second repo should get disambiguated label "app-2"
         assert!(paths.iter().any(|p| p.starts_with("[app]")));
         assert!(paths.iter().any(|p| p.starts_with("[app-2]")));

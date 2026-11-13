@@ -378,7 +378,7 @@ fn summarize_risks(ctx: &AnalysisContext<'_>, limit: usize) -> Vec<RiskSummary> 
             .files
             .into_iter()
             .flat_map(|file| {
-                let path = file.path;
+                let path = file.file;
                 file.functions
                     .into_iter()
                     .map(move |function| (path.clone(), function))

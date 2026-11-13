@@ -9,6 +9,8 @@ expression: "shape(&response, &dynamic_key_objects)"
     "content": [
       {
         "text": {
+          "has_more": "bool",
+          "next_offset": "null",
           "offset": "number",
           "result": {
             "query": "string",
@@ -17,7 +19,7 @@ expression: "shape(&response, &dynamic_key_objects)"
                 "cognitive_complexity": "number",
                 "cyclomatic_complexity": "number",
                 "end_line": "number",
-                "file_path": "string",
+                "file": "string",
                 "score": "number",
                 "signature": "string",
                 "start_line": "number",
@@ -29,7 +31,8 @@ expression: "shape(&response, &dynamic_key_objects)"
           },
           "returned": "number",
           "tool": "string",
-          "total_items": "number"
+          "total_items": "number",
+          "truncated": []
         },
         "type": "string"
       }
