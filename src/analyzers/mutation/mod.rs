@@ -332,7 +332,7 @@ impl AnalyzerTrait for Analyzer {
             let dirty_files: Vec<_> = ctx
                 .files
                 .iter()
-                .map(|file| ctx.root.join(file))
+                .map(|file| ctx.files.root().join(file))
                 .filter(|file| has_uncommitted_changes(file))
                 .collect();
             if !dirty_files.is_empty() {
@@ -832,6 +832,37 @@ mod tests {
             .allow_dirty(true)
             .analyze(&ctx)
             .is_ok());
+    }
+
+    #[test]
+    fn test_dirty_check_reads_the_file_that_the_run_mutates() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("test.rs");
+        std::fs::write(&file, "fn value() -> i32 { 1 }\n").unwrap();
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "test@example.com"],
+            vec!["config", "user.name", "Test User"],
+            vec!["add", "."],
+            vec!["commit", "-m", "initial"],
+        ] {
+            assert!(std::process::Command::new("git")
+                .args(args)
+                .current_dir(temp.path())
+                .output()
+                .unwrap()
+                .status
+                .success());
+        }
+        std::fs::write(&file, "fn value() -> i32 { 2 }\n").unwrap();
+        let files = FileSet::from_path_default(temp.path()).unwrap();
+        let config = crate::config::Config::default();
+        // The context root is a different directory. The run mutates the
+        // files of the file set, so the check must read them there.
+        let other = tempfile::tempdir().unwrap();
+        let ctx = AnalysisContext::new(&files, &config, Some(other.path()));
+
+        assert!(Analyzer::new().dry_run(true).analyze(&ctx).is_err());
     }
 
     #[test]
