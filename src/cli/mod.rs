@@ -36,11 +36,11 @@ pub struct Cli {
     pub jobs: Option<usize>,
 
     /// Git ref (branch, tag, SHA) for remote repositories
-    #[arg(long = "ref")]
+    #[arg(long = "ref", global = true)]
     pub git_ref: Option<String>,
 
     /// Shallow clone (depth=1); disables git history analyzers
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub shallow: bool,
 
     #[command(subcommand)]
@@ -658,7 +658,8 @@ pub struct MutationArgs {
     #[arg(long)]
     pub record: bool,
 
-    /// Path to ML model file (default: .omen/mutation-model.json)
+    /// Model file. A relative path is relative to the working directory.
+    /// The default is `.omen/mutation-model.json` in the repository.
     #[arg(long)]
     pub model: Option<PathBuf>,
 
@@ -817,11 +818,13 @@ pub struct SymbolArgs {
 #[derive(Args)]
 #[cfg(feature = "mutation")]
 pub struct MutationTrainArgs {
-    /// Path to history file (default: .omen/mutation-history.jsonl)
+    /// History file. A relative path is relative to the working directory.
+    /// The default is `.omen/mutation-history.jsonl` in the repository.
     #[arg(long)]
     pub history: Option<PathBuf>,
 
-    /// Path to output model file (default: .omen/mutation-model.json)
+    /// Model file to write. A relative path is relative to the working directory.
+    /// The default is `.omen/mutation-model.json` in the repository.
     #[arg(long)]
     pub model: Option<PathBuf>,
 }
@@ -1570,6 +1573,16 @@ mod tests {
     fn test_git_ref_flag() {
         let cli = parse(&["omen", "--ref", "v1.0.0", "complexity"]);
         assert_eq!(cli.git_ref, Some("v1.0.0".to_string()));
+    }
+
+    #[test]
+    fn test_ref_and_shallow_parse_after_the_subcommand() {
+        let cli = parse(&["omen", "complexity", "--ref", "v1.0.0", "--shallow"]);
+        assert_eq!(cli.git_ref, Some("v1.0.0".to_string()));
+        assert!(cli.shallow);
+
+        let cli = parse(&["omen", "score", "trend", "--ref", "main"]);
+        assert_eq!(cli.git_ref, Some("main".to_string()));
     }
 
     #[test]

@@ -12,7 +12,7 @@ use super::{
 use crate::analyzers::repomap::CallGraphIndex;
 use crate::core::{AnalysisContext, Analyzer, FileSet};
 use crate::git::GitRepo;
-use crate::mcp::envelope::{ItemCount, Truncation};
+use crate::mcp::envelope::Truncation;
 use crate::mcp::error::{ErrorCode, ToolError};
 use crate::mcp::McpServer;
 
@@ -72,7 +72,18 @@ fn context(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
         Some(max_symbols),
         arguments.count("max_risks"),
     )?;
+    let before_budget = context_list_lengths(&context);
     crate::context::apply_token_budget(&mut context, max_tokens);
+    let truncated: Vec<Truncation> = before_budget
+        .into_iter()
+        .zip(context_list_lengths(&context))
+        .filter(|((_, total), (_, returned))| returned < total)
+        .map(|((path, total), (_, returned))| Truncation {
+            path: path.to_string(),
+            total,
+            returned,
+        })
+        .collect();
 
     if arguments.string("format") == Some("markdown") {
         // The text has no envelope, thus apply the page to the symbols here.
@@ -86,7 +97,22 @@ fn context(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
         }
         return Ok(ToolOutput::Text(context.render_markdown()));
     }
-    Ok(ToolOutput::data(serde_json::to_value(&context)?))
+    Ok(ToolOutput::Data(ToolData {
+        truncated,
+        ..ToolData::new(serde_json::to_value(&context)?)
+    }))
+}
+
+/// The lists that the token budget of `context` can cut, with their lengths,
+/// in the sequence of their paths.
+fn context_list_lengths(context: &crate::context::Context) -> [(&'static str, usize); 5] {
+    [
+        ("/entry_points", context.entry_points.len()),
+        ("/hints", context.hints.len()),
+        ("/risks", context.risks.len()),
+        ("/top_symbols", context.top_symbols.len()),
+        ("/tree", context.tree.len()),
+    ]
 }
 
 pub(super) static OUTLINE: ToolSpec = ToolSpec {
@@ -109,11 +135,15 @@ fn outline(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
     use crate::analyzers::outline::{outline_file, Analyzer as OutlineAnalyzer, OutlineResult};
 
     let path = server.requested_path(arguments)?;
-    let result = if let Some(file) = arguments.string("file") {
+    let mut result = if let Some(file) = arguments.string("file") {
         // A relative file path starts at `path`, not at the server root.
         let file = server.resolve_confined_path("file", Path::new(file), Some(&path))?;
         OutlineResult {
             files: vec![outline_file(&file)?],
+        }
+    } else if path.is_file() {
+        OutlineResult {
+            files: vec![outline_file(&path)?],
         }
     } else {
         let file_set = FileSet::from_path(&path, &server.config)?;
@@ -126,6 +156,18 @@ fn outline(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
         }
         OutlineAnalyzer.analyze(&analysis)?
     };
+    // The analyzer gives absolute paths. The other tools give and accept
+    // paths from `path`, thus give the same form here.
+    let base = if path.is_dir() {
+        path.as_path()
+    } else {
+        path.parent().unwrap_or(&path)
+    };
+    for file in &mut result.files {
+        if let Ok(relative) = Path::new(&file.file).strip_prefix(base) {
+            file.file = relative.to_string_lossy().replace('\\', "/");
+        }
+    }
     Ok(ToolOutput::data(serde_json::to_value(&result)?))
 }
 
@@ -199,7 +241,23 @@ fn get_symbol(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
         return Err(symbol_ambiguous("get_symbol", name, choices));
     }
     match report_from_index(&scope.path, index, name, &options, start_line) {
-        Ok(report) => Ok(ToolOutput::data(serde_json::to_value(&report)?)),
+        Ok(report) => {
+            let mut truncated = Vec::new();
+            if report.source_truncated {
+                truncated.push(Truncation {
+                    path: "/source".to_string(),
+                    total: (report.end_line.saturating_sub(report.start_line) + 1) as usize,
+                    returned: report
+                        .source
+                        .as_deref()
+                        .map_or(0, |source| source.lines().count()),
+                });
+            }
+            Ok(ToolOutput::Data(ToolData {
+                truncated,
+                ..ToolData::new(serde_json::to_value(&report)?)
+            }))
+        }
         Err(_) => Err(symbol_not_found(
             "name",
             name,
@@ -345,20 +403,16 @@ fn task_context(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult 
         ));
     }
     let truncated = omitted_lists(&result);
-    let returned = result["symbols"].as_array().map_or(0, Vec::len);
-    let omitted = result["omitted"]["symbols"].as_u64().unwrap_or(0) as usize;
+    let symbols = result["symbols"].as_array().map_or(0, Vec::len);
     Ok(ToolOutput::Data(ToolData {
         truncated,
-        items: Some(ItemCount {
-            total: returned + omitted,
-            returned,
-        }),
+        item_count: Some(symbols),
         ..ToolData::new(result)
     }))
 }
 
-/// The lists that the byte budget of `task_context` cut, in the sequence of
-/// their paths. The counts come from the `omitted` object of the result.
+/// The lists and the objects that the byte budget of `task_context` cut, in
+/// the sequence of their paths. The counts come from the `omitted` object of the result.
 fn omitted_lists(result: &Value) -> Vec<Truncation> {
     let entry = |path: &str, list: &Value, omitted: &Value| {
         let returned = list.as_array().map_or(0, Vec::len);
@@ -383,6 +437,8 @@ fn omitted_lists(result: &Value) -> Vec<Truncation> {
             &omitted["history_hints"],
         ),
         entry("/symbols", &result["symbols"], &omitted["symbols"]),
+        // The budget can remove the full object. Its count is then 1 of 1.
+        entry("/syntax_facts", &Value::Null, &omitted["syntax_facts"]),
         entry(
             "/syntax_facts/uses",
             &syntax_facts["uses"],

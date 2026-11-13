@@ -177,15 +177,16 @@ impl Analyzer {
             });
         }
 
-        // Sort by PageRank descending
+        // Sort by PageRank descending. The file name gives equal ranks one order.
         nodes.sort_by(|a, b| {
             b.pagerank
                 .partial_cmp(&a.pagerank)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.file.cmp(&b.file))
         });
 
         // Build edges list
-        let edges: Vec<Edge> = graph
+        let mut edges: Vec<Edge> = graph
             .edge_references()
             .map(|e| {
                 let from = &graph[e.source()];
@@ -196,6 +197,7 @@ impl Analyzer {
                 }
             })
             .collect();
+        edges.sort_by(|a, b| a.from.cmp(&b.from).then_with(|| a.to.cmp(&b.to)));
 
         // Calculate summary
         let total_nodes = nodes.len();
@@ -397,13 +399,23 @@ impl Analyzer {
     fn detect_cycles(&self, graph: &DiGraph<String, ()>) -> Vec<Vec<String>> {
         let sccs = tarjan_scc(graph);
 
-        sccs.into_iter()
+        // A cycle is a set of files, so the traversal order has no meaning. The
+        // members of each cycle and the list of cycles are in alphabetical order.
+        let mut cycles: Vec<Vec<String>> = sccs
+            .into_iter()
             .filter(|scc| {
                 // Only include SCCs with multiple nodes or self-loops
                 scc.len() > 1 || (scc.len() == 1 && graph.contains_edge(scc[0], scc[0]))
             })
-            .map(|scc| scc.into_iter().map(|idx| graph[idx].clone()).collect())
-            .collect()
+            .map(|scc| {
+                let mut members: Vec<String> =
+                    scc.into_iter().map(|idx| graph[idx].clone()).collect();
+                members.sort();
+                members
+            })
+            .collect();
+        cycles.sort();
+        cycles
     }
 
     /// Generate Mermaid diagram.

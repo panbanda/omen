@@ -273,7 +273,9 @@ impl Analyzer {
             .files()
             .par_iter()
             .filter_map(|path| {
-                let result = generator.generate_for_file(path).ok()?;
+                let result = generator
+                    .generate_for_repository_file(ctx.files.root(), path)
+                    .ok()?;
                 let current = counter.fetch_add(1, Ordering::Relaxed) + 1;
                 ctx.report_progress(current, total_files);
                 Some(result)
@@ -306,7 +308,8 @@ impl Analyzer {
             ));
         }
 
-        let files: Vec<FileResult> = file_results.into_values().collect();
+        let mut files: Vec<FileResult> = file_results.into_values().collect();
+        files.sort_by(|left, right| left.file.cmp(&right.file));
         let summary = build_summary(&files, duration.as_millis() as u64);
 
         Ok(Analysis { files, summary })
@@ -329,7 +332,7 @@ impl AnalyzerTrait for Analyzer {
             let dirty_files: Vec<_> = ctx
                 .files
                 .iter()
-                .map(|file| ctx.root.join(file))
+                .map(|file| ctx.files.root().join(file))
                 .filter(|file| has_uncommitted_changes(file))
                 .collect();
             if !dirty_files.is_empty() {
@@ -396,7 +399,7 @@ impl AnalyzerTrait for Analyzer {
         let mut mutants_to_execute = Vec::new();
 
         for path in ctx.files.files() {
-            let mutants = match generator.generate_for_file(path) {
+            let mutants = match generator.generate_for_repository_file(project_root, path) {
                 Ok(m) => m,
                 Err(_) => continue,
             };
@@ -406,7 +409,7 @@ impl AnalyzerTrait for Analyzer {
             }
 
             // Read the original source
-            let source = match fs::read(path) {
+            let source = match fs::read(project_root.join(path)) {
                 Ok(s) => s,
                 Err(_) => continue,
             };
@@ -829,6 +832,37 @@ mod tests {
             .allow_dirty(true)
             .analyze(&ctx)
             .is_ok());
+    }
+
+    #[test]
+    fn test_dirty_check_reads_the_file_that_the_run_mutates() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("test.rs");
+        std::fs::write(&file, "fn value() -> i32 { 1 }\n").unwrap();
+        for args in [
+            vec!["init"],
+            vec!["config", "user.email", "test@example.com"],
+            vec!["config", "user.name", "Test User"],
+            vec!["add", "."],
+            vec!["commit", "-m", "initial"],
+        ] {
+            assert!(std::process::Command::new("git")
+                .args(args)
+                .current_dir(temp.path())
+                .output()
+                .unwrap()
+                .status
+                .success());
+        }
+        std::fs::write(&file, "fn value() -> i32 { 2 }\n").unwrap();
+        let files = FileSet::from_path_default(temp.path()).unwrap();
+        let config = crate::config::Config::default();
+        // The context root is a different directory. The run mutates the
+        // files of the file set, so the check must read them there.
+        let other = tempfile::tempdir().unwrap();
+        let ctx = AnalysisContext::new(&files, &config, Some(other.path()));
+
+        assert!(Analyzer::new().dry_run(true).analyze(&ctx).is_err());
     }
 
     #[test]

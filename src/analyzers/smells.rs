@@ -154,8 +154,10 @@ impl Analyzer {
         for scc in sccs {
             let is_cycle = scc.len() > 1 || (scc.len() == 1 && graph.contains_edge(scc[0], scc[0]));
             if is_cycle {
-                let component_names: Vec<String> =
+                // The traversal gives the members in no useful order.
+                let mut component_names: Vec<String> =
                     scc.iter().map(|&idx| graph[idx].clone()).collect();
+                component_names.sort();
 
                 smells.push(Smell {
                     smell_type: SmellType::CyclicDependency,
@@ -178,6 +180,9 @@ impl Analyzer {
         }
 
         // 2. Detect hub-like dependencies
+        // The graph gives its nodes in no fixed order.
+        components.sort_by(|left, right| left.id.cmp(&right.id));
+
         for cm in &components {
             if cm.is_hub && !cm.is_central_connector {
                 smells.push(Smell {
@@ -280,8 +285,16 @@ impl Analyzer {
             }
         }
 
-        // Sort smells by severity (critical first)
-        smells.sort_by(|a, b| b.severity.weight().cmp(&a.severity.weight()));
+        // Sort smells by severity (critical first). The other keys give smells
+        // of equal severity one order.
+        smells.sort_by(|a, b| {
+            b.severity
+                .weight()
+                .cmp(&a.severity.weight())
+                .then_with(|| a.smell_type.cmp(&b.smell_type))
+                .then_with(|| a.components.cmp(&b.components))
+                .then_with(|| a.description.cmp(&b.description))
+        });
 
         // Calculate summary
         let summary = calculate_summary(&smells, &components);
@@ -397,7 +410,7 @@ pub struct SmellMetrics {
 }
 
 /// Type of architectural smell. omen:ignore
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum SmellType {
     CyclicDependency,
     UnstableDependency,

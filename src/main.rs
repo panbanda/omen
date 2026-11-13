@@ -275,17 +275,14 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             }
         }
         Command::Complexity(args) => {
+            let result = run_analyzer::<omen::analyzers::complexity::Analyzer>(
+                path,
+                &config,
+                format,
+                Some(&args.common),
+            )?;
             let gate = resolve_gate_mode(args.gate.mode, config.gate.complexity);
-            if gate != GateMode::Off {
-                run_complexity_check(path, &config, args, format, gate)?;
-            } else {
-                run_analyzer::<omen::analyzers::complexity::Analyzer>(
-                    path,
-                    &config,
-                    format,
-                    Some(&args.common),
-                )?;
-            }
+            apply_complexity_gate(&result, &config, args, gate)?;
         }
         Command::Stubs(args) => {
             run_stubs(path, &config, args, format)?;
@@ -368,9 +365,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             } else {
                 resolve_gate_mode(cmd.args.gate.mode, config.gate.score)
             };
-            if gate != GateMode::Off {
-                run_score_check(path, &config, &cmd.args, format, gate)?;
-            } else {
+            {
                 match &cmd.subcommand {
                     Some(ScoreSubcommand::Trend(args)) => {
                         // Score trend analysis
@@ -448,13 +443,14 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                         }
                     }
                     None => {
-                        run_analyzer_instance(
+                        let result = run_analyzer_instance(
                             path,
                             &config,
                             format,
                             None,
                             omen::score::Analyzer::from_config(&config),
                         )?;
+                        apply_score_gate(&result, &config, &cmd.args, gate)?;
                     }
                 }
             }
@@ -624,23 +620,39 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             };
             results.push(score);
 
-            let combined = json!({ "analyzers": results });
-            // `all` is machine-first: always emit JSON unless the caller
-            // explicitly requested compact JSON, in which case honour that.
-            // Markdown/Text/Sarif are not meaningful for the combined payload.
-            // This matches the existing integration test expectation that
-            // `omen all` (no -f flag) emits valid JSON.
-            let all_format = match format {
-                Format::JsonCompact => Format::JsonCompact,
-                _ => Format::Json,
+            // `--top` and `--offset` apply to each section as they apply to the
+            // single command. SARIF keeps each finding.
+            let top = args.pagination.top.unwrap_or(0);
+            let offset = args.pagination.offset.unwrap_or(0);
+            if !matches!(format, Format::Sarif) {
+                for entry in &mut results {
+                    if let Some(result) = entry.get_mut("result") {
+                        omen::output::truncate_lists(result, top, offset);
+                    }
+                }
+            }
+
+            let combined = match format {
+                Format::Json | Format::JsonCompact | Format::Sarif => {
+                    json!({ "analyzers": results })
+                }
+                // One object with a key for each analyzer gives one section for
+                // each analyzer.
+                Format::Markdown | Format::Text => Value::Object(
+                    results
+                        .into_iter()
+                        .filter_map(|mut entry| {
+                            let name = entry.get("analyzer")?.as_str()?.to_string();
+                            let section = match entry.get_mut("result") {
+                                Some(result) => result.take(),
+                                None => json!({ "error": entry.get("error") }),
+                            };
+                            Some((name, section))
+                        })
+                        .collect(),
+                ),
             };
-            format_with_limits(
-                combined,
-                all_format,
-                args.pagination.top,
-                args.pagination.offset,
-                &mut stdout(),
-            )?;
+            format_with_limits(combined, format, None, None, &mut stdout())?;
         }
         Command::Context(args) => {
             run_context(path, &config, args, format)?;
@@ -704,6 +716,7 @@ fn dispatch_analyzer(
     config: &Config,
     format: Format,
 ) -> omen::core::Result<()> {
+    // Each arm gives a different result type. The caller needs none of them.
     match command {
         Command::Satd(args) => run_analyzer_instance(
             path,
@@ -711,7 +724,8 @@ fn dispatch_analyzer(
             format,
             Some(args),
             omen::analyzers::satd::Analyzer::new().with_custom_markers(&config.satd.custom_markers),
-        ),
+        )
+        .map(drop),
         Command::Clones(args) => run_analyzer_instance(
             path,
             config,
@@ -721,7 +735,8 @@ fn dispatch_analyzer(
                 .with_min_tokens(config.duplicates.min_tokens)
                 .with_similarity_threshold(config.duplicates.min_similarity)
                 .with_exclude_tests(!args.include_tests && config.duplicates.exclude_tests),
-        ),
+        )
+        .map(drop),
         Command::Defect(args) => {
             let window = resolve_churn_window(&args.window, config.defect.churn_days)?;
             run_analyzer_instance(
@@ -731,12 +746,15 @@ fn dispatch_analyzer(
                 Some(&args.common),
                 omen::analyzers::defect::Analyzer::new().with_churn_days(window),
             )
+            .map(drop)
         }
         Command::Tdg(args) => {
             run_analyzer::<omen::analyzers::tdg::Analyzer>(path, config, format, Some(args))
+                .map(drop)
         }
         Command::Graph(args) => {
             run_analyzer::<omen::analyzers::graph::Analyzer>(path, config, format, Some(args))
+                .map(drop)
         }
         Command::Hotspot(args) => {
             let window = resolve_churn_window(&args.window, config.hotspot.days)?;
@@ -747,21 +765,27 @@ fn dispatch_analyzer(
                 Some(&args.common),
                 omen::analyzers::hotspot::Analyzer::new().with_days(window),
             )
+            .map(drop)
         }
         Command::Temporal(args) => {
             run_analyzer::<omen::analyzers::temporal::Analyzer>(path, config, format, Some(args))
+                .map(drop)
         }
         Command::Ownership(args) => {
             run_analyzer::<omen::analyzers::ownership::Analyzer>(path, config, format, Some(args))
+                .map(drop)
         }
         Command::Cohesion(args) => {
             run_analyzer::<omen::analyzers::cohesion::Analyzer>(path, config, format, Some(args))
+                .map(drop)
         }
         Command::Repomap(args) => {
             run_analyzer::<omen::analyzers::repomap::Analyzer>(path, config, format, Some(args))
+                .map(drop)
         }
         Command::Smells(args) => {
             run_analyzer::<omen::analyzers::smells::Analyzer>(path, config, format, Some(args))
+                .map(drop)
         }
         _ => unreachable!("dispatch_analyzer called with non-dispatched command"),
     }
@@ -829,7 +853,7 @@ fn run_analyzer<A: Analyzer + Default>(
     config: &Config,
     format: Format,
     args: Option<&AnalyzerArgs>,
-) -> omen::core::Result<()> {
+) -> omen::core::Result<A::Output> {
     run_analyzer_instance(path, config, format, args, A::default())
 }
 
@@ -839,7 +863,7 @@ fn run_analyzer_instance<A: Analyzer>(
     format: Format,
     args: Option<&AnalyzerArgs>,
     analyzer: A,
-) -> omen::core::Result<()> {
+) -> omen::core::Result<A::Output> {
     let file_set = filtered_file_set(path, config, args)?;
 
     // Show analysis progress
@@ -887,7 +911,7 @@ fn run_analyzer_instance<A: Analyzer>(
     let offset = args.and_then(|a| a.pagination.offset);
     let value = serde_json::to_value(&result)?;
     format_with_limits(value, format, top, offset, &mut stdout())?;
-    Ok(())
+    Ok(result)
 }
 
 fn run_diff_analyzer(
@@ -926,18 +950,18 @@ fn run_changes_analyzer(
     Ok(())
 }
 
-fn run_complexity_check(
-    path: &PathBuf,
+/// Apply the gate of `complexity` to a result. The caller wrote the report to
+/// stdout before this call. The verdict goes to stderr, so stdout stays one
+/// document in each format.
+fn apply_complexity_gate(
+    result: &omen::analyzers::complexity::Analysis,
     config: &Config,
     args: &ComplexityArgs,
-    format: Format,
     gate: GateMode,
 ) -> omen::core::Result<()> {
-    let file_set = filtered_file_set(path, config, Some(&args.common))?;
-    let ctx = build_context(path, &file_set, config);
-
-    let analyzer = omen::analyzers::complexity::Analyzer::default();
-    let result = analyzer.analyze(&ctx)?;
+    if gate == GateMode::Off {
+        return Ok(());
+    }
 
     let max_cyclomatic = args
         .max_cyclomatic
@@ -955,18 +979,6 @@ fn run_complexity_check(
             Ok(())
         }
         Err(violations) => {
-            if matches!(format, Format::Json | Format::JsonCompact) {
-                format.format(
-                    &serde_json::json!({
-                        "violations": violations,
-                        "thresholds": {
-                            "max_cyclomatic": max_cyclomatic,
-                            "max_cognitive": max_cognitive
-                        }
-                    }),
-                    &mut stdout(),
-                )?;
-            }
             eprintln!(
                 "Complexity threshold exceeded in {} function(s):\n",
                 violations.len()
@@ -1069,19 +1081,17 @@ fn run_stubs(
     )
 }
 
-fn run_score_check(
-    path: &PathBuf,
+/// Apply the gate of `score` to a result. The caller wrote the report to
+/// stdout before this call. The verdict goes to stderr.
+fn apply_score_gate(
+    result: &omen::score::Analysis,
     config: &Config,
     args: &ScoreArgs,
-    format: Format,
     gate: GateMode,
 ) -> omen::core::Result<()> {
-    let file_set = FileSet::from_path(path, config)?;
-    let ctx = build_context(path, &file_set, config);
-
-    let analyzer =
-        omen::score::Analyzer::default().with_defect_churn_days(config.defect.churn_days);
-    let result = analyzer.analyze(&ctx)?;
+    if gate == GateMode::Off {
+        return Ok(());
+    }
 
     let min_score = args
         .fail_under
@@ -1095,20 +1105,9 @@ fn run_score_check(
             );
             Ok(())
         }
-        Err(e) => {
-            if matches!(format, Format::Json | Format::JsonCompact) {
-                format.format(
-                    &serde_json::json!({
-                        "violations": [{
-                            "kind": "score_below_threshold",
-                            "score": result.overall_score,
-                            "minimum": min_score
-                        }]
-                    }),
-                    &mut stdout(),
-                )?;
-            }
-            gate_dispatch(gate, e)
+        Err(violation) => {
+            eprintln!("{violation}");
+            gate_dispatch(gate, violation)
         }
     }
 }
@@ -1822,7 +1821,10 @@ fn run_mutation(
                 println!("## By Operator\n");
                 println!("| Operator | Total | Killed | Survived |");
                 println!("|----------|-------|--------|----------|");
-                for (op, stats) in &result.summary.by_operator {
+                // `by_operator` is a hash map, so it has no fixed order.
+                let mut by_operator: Vec<_> = result.summary.by_operator.iter().collect();
+                by_operator.sort_by_key(|(operator, _)| *operator);
+                for (op, stats) in by_operator {
                     println!(
                         "| {} | {} | {} | {} |",
                         op, stats.total, stats.killed, stats.survived
@@ -1934,7 +1936,8 @@ fn run_mutation(
             Ok(mut f) => {
                 let mut count = 0;
                 for file_result in &result.files {
-                    let source = std::fs::read_to_string(&file_result.file).unwrap_or_default();
+                    let source =
+                        std::fs::read_to_string(path.join(&file_result.file)).unwrap_or_default();
 
                     for mutation_result in &file_result.mutants {
                         let was_killed = match mutation_result.status {

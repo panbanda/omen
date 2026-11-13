@@ -85,7 +85,7 @@ Each tool gives its result in the same envelope:
 | Key | Value |
 |---|---|
 | `tool` | The tool name. |
-| `total_items` | The number of items in the primary list before pagination, or `null` when the result has no list. |
+| `total_items` | The size of the primary list before `limit` and `offset`, and after the cuts of the tool. `null` when the result has no list. |
 | `returned` | The number of items in the primary list of this result. |
 | `offset` | The offset that the call gave. |
 | `has_more` | `true` when a next page exists. |
@@ -96,6 +96,62 @@ Each tool gives its result in the same envelope:
 
 `path` in `truncated` is a JSON pointer from `result`. The segment `*` means
 each element of an array, such as `/files/*/functions`.
+
+`truncated` also shows the data that a tool cut before the pagination:
+
+- `task_context`: each list that `max_bytes` cut, and `/syntax_facts` with the
+  total 1 when the budget removed that object.
+- `get_symbol`: `/source`, in lines, when `max_source_lines` cut the source.
+- `context`: each list that `max_tokens` cut.
+- `semantic_search` and `semantic_search_hyde`: `/results` when `top_k` cut the
+  results that the filters accepted.
+
+One rule applies to each tool. `total_items` is the size of the primary list
+before `limit` and `offset`, and after the cuts of the tool. Each cut of a tool
+has an entry in `truncated` with the total before the cut.
+
+These limits do not appear in `truncated`, because the server does not know
+the total without them: `max_symbols` and `max_risks` of `context`,
+`max_symbols` of `repomap`, and `depth` of `impact` and `task_context`.
+
+The search tools apply `min_score`, `files`, and `max_complexity` first, and
+then `top_k`. An empty `include_projects` is the same as no `include_projects`.
+With `include_projects`, the `file` of each result has a `[label] ` before the
+path. `files` then accepts two forms. A path applies to each project. A path
+with a `[label] ` before it, as a result gives it, applies to that project
+only. A label that is not the label of a project of the search is an
+`invalid_argument` error, with the valid labels in `suggestions`.
+
+### Identifiers go from one tool to a different tool
+
+A tool accepts each identifier and each path that a different tool gives:
+
+- A `qualified_name` (`file:name`) is a valid `name` of `get_symbol` and
+  `task_context`, and a valid `symbol` of `impact`.
+- A `file` without a `[label] ` is a valid `file` of `outline`, a valid `path`
+  of each tool, and the file part of a `file:name`.
+- The `file` of a search result is a valid entry of `files`, with or without a
+  `[label] `.
+
+Each path is from the `path` argument, which has the MCP root as its default.
+`outline` gives paths in this form also. When `path` is a file, a tool reads
+that one file.
+
+A `file` with a `[label] ` is valid only in `files` of a search with the same
+`include_projects`. A label is the name of a project directory, with a number
+when two projects have one name. Thus only that search call can change the
+label back into a path, and the other tools do not accept it. Each result with
+a label has two more fields for the other tools:
+
+| Field | Value | Use |
+|---|---|---|
+| `project` | The path of the project. It is `.` for the MCP root, a path from the MCP root for a project in it, and an absolute path for a project out of it. | The `path` argument. |
+| `project_file` | The `file` without the `[label] `. | The `file` of `outline`, or the file part of a `file:name`, with `project` as `path`. |
+
+For example, the result `{"file": "[sub] simple.rs", "project": "sub",
+"project_file": "simple.rs"}` goes to `outline` as `{"path": "sub", "file":
+"simple.rs"}`. The path confinement of the server applies to `project` as to
+each other path.
 
 `limit` has the default 50, and the value 0 removes the limit. When `has_more`
 is `true`, send the same call with `offset` set to `next_offset`. The pages
@@ -109,8 +165,9 @@ the overall score are complete on each page.
 `offset` then apply to the symbols in the text.
 
 `task_context` has no `limit` and no `offset`, because `max_bytes` controls its
-size. Its `total_items` and `returned` count the symbols, its `has_more` is
-always `false`, and `truncated` shows the lists that the byte budget cut.
+size. Its `total_items` and `returned` are the number of symbols in the result,
+after the byte budget. Its `has_more` is always `false`. `truncated` shows the
+lists that the byte budget cut, with the totals before the cut.
 
 `initialize` gives an `instructions` string that tells an agent which tool to
 call first, and how to use the pagination and the errors.

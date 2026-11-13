@@ -27,13 +27,6 @@ pub(super) struct Truncation {
     pub returned: usize,
 }
 
-/// The number of items that a tool without pagination has and gives.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct ItemCount {
-    pub total: usize,
-    pub returned: usize,
-}
-
 /// Applies the page to the result and puts the result in the envelope.
 pub(super) fn build(
     tool: &str,
@@ -44,11 +37,24 @@ pub(super) fn build(
 ) -> Value {
     let mut result = data.result;
     let mut paging = paginate(pagination, &mut result, page);
-    if let Some(items) = data.items {
-        paging.total = Some(items.total);
-        paging.returned = Some(items.returned);
+    // A tool without pagination gives all the items that it has after its
+    // own cuts. Thus the two counts are equal.
+    if let Some(item_count) = data.item_count {
+        paging.total = Some(item_count);
+        paging.returned = Some(item_count);
     }
-    paging.truncated.extend(data.truncated);
+    for entry in data.truncated {
+        // When the tool and the pagination cut the same list, one entry
+        // gives the total before the two cuts.
+        match paging
+            .truncated
+            .iter_mut()
+            .find(|existing| existing.path == entry.path)
+        {
+            Some(existing) => existing.total = existing.total.max(entry.total),
+            None => paging.truncated.push(entry),
+        }
+    }
 
     let mut envelope = json!({
         "tool": tool,
@@ -672,10 +678,7 @@ mod tests {
     #[test]
     fn a_tool_without_pagination_gives_its_own_counts_and_truncations() {
         let data = ToolData {
-            items: Some(ItemCount {
-                total: 9,
-                returned: 2,
-            }),
+            item_count: Some(2),
             truncated: vec![Truncation {
                 path: "/symbols".to_string(),
                 total: 9,
@@ -684,7 +687,7 @@ mod tests {
             ..ToolData::new(json!({"symbols": [1, 2]}))
         };
         let envelope = build("task_context", Pagination::None, data, page(0, 0), false);
-        assert_eq!(envelope["total_items"], 9);
+        assert_eq!(envelope["total_items"], 2);
         assert_eq!(envelope["returned"], 2);
         assert_eq!(envelope["offset"], 0);
         assert_eq!(envelope["has_more"], false);
@@ -694,6 +697,25 @@ mod tests {
             json!([{"path": "/symbols", "total": 9, "returned": 2}])
         );
         assert_eq!(envelope["result"]["symbols"], json!([1, 2]));
+    }
+
+    #[test]
+    fn a_list_that_the_tool_and_the_pagination_cut_has_one_entry() {
+        let data = ToolData {
+            truncated: vec![Truncation {
+                path: "/items".to_string(),
+                total: 9,
+                returned: 4,
+            }],
+            ..ToolData::new(json!({"items": [1, 2, 3, 4]}))
+        };
+        let envelope = build("search", ITEMS, data, page(2, 0), false);
+        assert_eq!(
+            envelope["truncated"],
+            json!([{"path": "/items", "total": 9, "returned": 2}])
+        );
+        assert_eq!(envelope["total_items"], 4);
+        assert_eq!(envelope["next_offset"], 2);
     }
 
     #[test]

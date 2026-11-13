@@ -30,6 +30,14 @@ impl MutantGenerator {
         Ok(self.generate_from_parse_result(&result))
     }
 
+    /// Generate mutants for a file of a repository. `path` is relative to
+    /// `root`. Each mutant keeps the relative path, so the mutant list does
+    /// not change with the working directory.
+    pub fn generate_for_repository_file(&self, root: &Path, path: &Path) -> Result<Vec<Mutant>> {
+        let file = crate::core::SourceFile::load(root.join(path))?;
+        self.generate_for_content(&file.content, file.language, path)
+    }
+
     /// Generate mutants for source content.
     pub fn generate_for_content(
         &self,

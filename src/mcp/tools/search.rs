@@ -1,15 +1,26 @@
 //! The tools that search the semantic index.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use super::{
-    Arguments, HandlerResult, Pagination, Param, ParamDefault, ToolOutput, ToolSpec, MAX_COUNT,
-};
-use crate::mcp::McpServer;
-use crate::semantic::{SearchConfig, SearchFilters, SearchOutput, SemanticSearch};
+use serde_json::Value;
 
-const TOP_K: Param = Param::integer("top_k", 1, MAX_COUNT, "The maximum number of results.")
-    .with_default(ParamDefault::Integer(10));
+use super::{
+    Arguments, HandlerResult, Pagination, Param, ParamDefault, ToolData, ToolOutput, ToolSpec,
+    MAX_COUNT,
+};
+use crate::mcp::envelope::Truncation;
+use crate::mcp::error::{ErrorCode, ToolError};
+use crate::mcp::McpServer;
+use crate::semantic::{SearchConfig, SearchOutput, SemanticSearch};
+
+const TOP_K: Param = Param::integer(
+    "top_k",
+    1,
+    MAX_COUNT,
+    "The maximum number of results. It applies after the other filters.",
+)
+.with_default(ParamDefault::Integer(10));
 
 const MIN_SCORE: Param = Param::number(
     "min_score",
@@ -21,7 +32,9 @@ const MIN_SCORE: Param = Param::number(
 
 const FILES: Param = Param::string_array(
     "files",
-    "The files in which to search. The default is all files.",
+    "The files in which to search, as paths from the root of their project. \
+     The default is all files. With `include_projects`, a path applies to each project, \
+     and a path with a `[label] ` before it, as in the `file` of a result, applies to that project.",
 );
 
 const MAX_COMPLEXITY: Param = Param::integer(
@@ -96,21 +109,18 @@ fn search(
     let min_score = arguments.number("min_score").unwrap_or(0.3) as f32;
     let max_complexity = arguments.count_u32("max_complexity");
     let files = arguments.strings("files");
-    let include_projects: Option<Vec<PathBuf>> = arguments
+    let include_projects: Vec<PathBuf> = arguments
         .strings("include_projects")
-        .map(|projects| {
-            projects
-                .into_iter()
-                .map(|project| {
-                    server.resolve_confined_path(
-                        "include_projects",
-                        Path::new(project),
-                        Some(&server.root_path),
-                    )
-                })
-                .collect::<Result<Vec<_>, _>>()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|project| {
+            server.resolve_confined_path(
+                "include_projects",
+                Path::new(project),
+                Some(&server.root_path),
+            )
         })
-        .transpose()?;
+        .collect::<Result<Vec<_>, _>>()?;
 
     let search_config = SearchConfig {
         min_score,
@@ -119,33 +129,194 @@ fn search(
     let search = SemanticSearch::new(&search_config, &server.root_path)?;
     search.index(&server.config)?;
 
-    let mut output = if let Some(projects) = &include_projects {
+    // Get all the results in rank sequence. The filters must apply before
+    // `top_k`, or a result that a filter removes takes the place of a result
+    // that the filters accept.
+    let all = Some(usize::MAX);
+    let mut output = if !include_projects.is_empty() {
         let mut all_projects: Vec<&Path> = vec![&server.root_path];
-        all_projects.extend(projects.iter().map(PathBuf::as_path));
-        let found =
-            crate::semantic::multi_repo::multi_repo_search(&all_projects, text, top_k, min_score)?;
+        all_projects.extend(include_projects.iter().map(PathBuf::as_path));
+        let found = crate::semantic::multi_repo::multi_repo_search(
+            &all_projects,
+            text,
+            usize::MAX,
+            min_score,
+        )?;
         SearchOutput::new(text.to_string(), found.total_symbols, found.results)
     } else if let Some(files) = &files {
-        search.search_in_files(text, files, Some(top_k))?
-    } else if max_complexity.is_some() {
-        let filters = SearchFilters {
-            min_score,
-            max_complexity,
-        };
-        search.search_filtered(text, Some(top_k), &filters)?
+        search.search_in_files(text, files, all)?
     } else {
-        search.search(text, Some(top_k))?
+        search.search(text, all)?
     };
 
-    // Not each search path applies the filter, thus apply it here also.
-    if let Some(maximum) = max_complexity {
-        output.results.retain(|result| {
-            result
-                .cyclomatic_complexity
-                .is_none_or(|complexity| complexity <= maximum)
-        });
+    let labelled = !include_projects.is_empty();
+    if let (true, Some(files)) = (labelled, &files) {
+        let labels = project_labels(&server.root_path, &include_projects);
+        for file in files {
+            if let Some(label) = file_label(file) {
+                if !labels.iter().any(|known| known == label) {
+                    return Err(unknown_project_label(file, label, labels));
+                }
+            }
+        }
     }
+    output.results.retain(|result| {
+        // A plain path in `files` applies to each project. A path with a
+        // `[project] ` label is equal to the `file` of a result.
+        let in_files = |files: &Vec<&str>| {
+            files.contains(&result.file.as_str())
+                || (labelled && files.contains(&file_in_project(&result.file)))
+        };
+        result.score >= min_score
+            && files.as_ref().is_none_or(in_files)
+            && max_complexity.is_none_or(|maximum| {
+                result
+                    .cyclomatic_complexity
+                    .is_none_or(|complexity| complexity <= maximum)
+            })
+    });
+    let accepted = output.results.len();
+    output.results.truncate(top_k);
     output.query = shown_query.to_string();
 
-    Ok(ToolOutput::data(serde_json::to_value(&output)?))
+    let truncated = if output.results.len() < accepted {
+        vec![Truncation {
+            path: "/results".to_string(),
+            total: accepted,
+            returned: output.results.len(),
+        }]
+    } else {
+        Vec::new()
+    };
+    let mut result = serde_json::to_value(&output)?;
+    if labelled {
+        add_project_fields(&mut result, &server.root_path, &include_projects);
+    }
+    Ok(ToolOutput::Data(ToolData {
+        truncated,
+        ..ToolData::new(result)
+    }))
+}
+
+/// Adds `project` and `project_file` to each result of a search in more than
+/// one project.
+///
+/// A label is the name of a directory, with a number when two projects have
+/// one name. Only the `include_projects` of the same call can change a label
+/// back into a path. Thus the other tools cannot read the labelled `file`.
+/// They can read these two fields: `project` is a valid `path`, and
+/// `project_file` is a valid `file` in that `path`.
+fn add_project_fields(result: &mut Value, root: &Path, include_projects: &[PathBuf]) {
+    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let labels = project_labels(root, include_projects);
+    let paths: Vec<String> = std::iter::once(canonical_root.as_path())
+        .chain(include_projects.iter().map(PathBuf::as_path))
+        .map(|project| match project.strip_prefix(&canonical_root) {
+            Ok(relative) if relative.as_os_str().is_empty() => ".".to_string(),
+            Ok(relative) => relative.to_string_lossy().replace('\\', "/"),
+            Err(_) => project.to_string_lossy().into_owned(),
+        })
+        .collect();
+    let results = result["results"].as_array_mut().into_iter().flatten();
+    for entry in results {
+        let Some(file) = entry["file"].as_str() else {
+            continue;
+        };
+        let project = file_label(file)
+            .and_then(|label| labels.iter().position(|known| known == label))
+            .map(|index| paths[index].clone());
+        if let Some(project) = project {
+            let project_file = file_in_project(file).to_string();
+            entry["project"] = Value::String(project);
+            entry["project_file"] = Value::String(project_file);
+        }
+    }
+}
+
+/// The path of a result without the `[project] ` label that a search in
+/// more than one project puts before it.
+fn file_in_project(file: &str) -> &str {
+    file.strip_prefix('[')
+        .and_then(|labelled| labelled.split_once("] "))
+        .map_or(file, |(_, path)| path)
+}
+
+/// The project label of a file in the `[project] path` form.
+fn file_label(file: &str) -> Option<&str> {
+    file.strip_prefix('[')
+        .and_then(|labelled| labelled.split_once("] "))
+        .map(|(label, _)| label)
+}
+
+/// The label of each project of a search, in the sequence of the projects.
+///
+/// `multi_repo_search` makes the same labels: the name of the directory, with
+/// a number after the second and each subsequent use of one name. A test
+/// compares these labels with the labels in the results.
+fn project_labels(root: &Path, include_projects: &[PathBuf]) -> Vec<String> {
+    let mut uses: BTreeMap<String, usize> = BTreeMap::new();
+    std::iter::once(root)
+        .chain(include_projects.iter().map(PathBuf::as_path))
+        .map(|project| {
+            let name = project
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let count = uses.entry(name.clone()).or_insert(0);
+            *count += 1;
+            if *count > 1 {
+                format!("{name}-{count}")
+            } else {
+                name
+            }
+        })
+        .collect()
+}
+
+fn unknown_project_label(file: &str, label: &str, labels: Vec<String>) -> ToolError {
+    ToolError::new(
+        ErrorCode::InvalidArgument,
+        format!("The label `{label}` in `files` is not the label of a project of this search."),
+    )
+    .with_param("files")
+    .with_expected("a path, or a path with the `[label] ` of a project of this search")
+    .with_received(&serde_json::json!(file))
+    .with_suggestions(labels)
+    .with_next("Use a label from `suggestions`, or remove the label to search in each project.")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use super::{file_in_project, file_label, project_labels};
+
+    #[test]
+    fn file_label_gives_the_label_of_a_labelled_path_only() {
+        assert_eq!(file_label("[omen] src/main.rs"), Some("omen"));
+        assert_eq!(file_label("src/main.rs"), None);
+        assert_eq!(file_label("[id]/page.tsx"), None);
+    }
+
+    #[test]
+    fn project_labels_number_a_name_that_more_than_one_project_has() {
+        let projects = [
+            PathBuf::from("/work/app"),
+            PathBuf::from("/other/omen"),
+            PathBuf::from("/third/app"),
+        ];
+        assert_eq!(
+            project_labels(Path::new("/work/omen"), &projects),
+            ["omen", "app", "omen-2", "app-2"]
+        );
+        assert_eq!(project_labels(Path::new("/"), &[]), ["unknown"]);
+    }
+
+    #[test]
+    fn file_in_project_removes_only_the_project_label() {
+        assert_eq!(file_in_project("[omen] src/main.rs"), "src/main.rs");
+        assert_eq!(file_in_project("src/main.rs"), "src/main.rs");
+        assert_eq!(file_in_project("[id]/page.tsx"), "[id]/page.tsx");
+    }
 }

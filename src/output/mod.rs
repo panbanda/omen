@@ -161,35 +161,55 @@ fn truncate_nested_primary(value: &mut Value, top: usize, offset: usize) -> Opti
             .min(if top == 0 { usize::MAX } else { top });
         return Some(total.saturating_sub(offset).saturating_sub(returned));
     }
-    if let Some(cycles) = map.get_mut("cycles").and_then(Value::as_array_mut) {
-        if cycles.iter().all(Value::is_array) {
-            let total: usize = cycles
-                .iter()
-                .filter_map(Value::as_array)
-                .map(Vec::len)
-                .sum();
-            let mut remaining_top = if top == 0 { usize::MAX } else { top };
-            let mut remaining_offset = offset;
-            for cycle in cycles {
-                let items = cycle.as_array_mut()?;
-                let skip = remaining_offset.min(items.len());
-                items.drain(0..skip);
-                remaining_offset -= skip;
-                if remaining_offset > 0 {
-                    items.clear();
-                } else {
-                    items.truncate(remaining_top);
-                    remaining_top -= items.len();
-                }
-            }
-            let returned =
-                total
-                    .saturating_sub(offset)
-                    .min(if top == 0 { usize::MAX } else { top });
-            return Some(total.saturating_sub(offset).saturating_sub(returned));
-        }
+    if map.contains_key("nodes") && map.contains_key("edges") {
+        return Some(truncate_graph(map, top, offset));
     }
     None
+}
+
+/// Page the `nodes` list of a `graph` report. An edge stays only if the two
+/// nodes that it connects stay. `cycles` does not change.
+fn truncate_graph(map: &mut serde_json::Map<String, Value>, top: usize, offset: usize) -> usize {
+    let Some(nodes) = map.get_mut("nodes").and_then(Value::as_array_mut) else {
+        return 0;
+    };
+    let skip = offset.min(nodes.len());
+    nodes.drain(0..skip);
+    let nodes_omitted = if top > 0 && nodes.len() > top {
+        let omitted = nodes.len() - top;
+        nodes.truncate(top);
+        omitted
+    } else {
+        0
+    };
+    let kept: std::collections::HashSet<String> = nodes
+        .iter()
+        .filter_map(|node| node.get("file")?.as_str())
+        .map(str::to_string)
+        .collect();
+
+    let mut edges_omitted = 0;
+    if let Some(edges) = map.get_mut("edges").and_then(Value::as_array_mut) {
+        let total = edges.len();
+        edges.retain(|edge| {
+            ["from", "to"].iter().all(|end| {
+                edge.get(*end)
+                    .and_then(Value::as_str)
+                    .is_some_and(|file| kept.contains(file))
+            })
+        });
+        edges_omitted = total - edges.len();
+    }
+
+    for (key, omitted) in [
+        ("nodes_omitted", nodes_omitted),
+        ("edges_omitted", edges_omitted),
+    ] {
+        if omitted > 0 {
+            map.insert(key.to_string(), Value::Number(omitted.into()));
+        }
+    }
+    nodes_omitted
 }
 
 fn truncate_object_arrays(
