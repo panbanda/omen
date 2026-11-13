@@ -18,7 +18,7 @@ mod tools;
 /// Reference decoder for the `omen.tables.v1` compact encoding.
 pub use compact::decode;
 
-use error::ToolError;
+use error::{ErrorCode, ToolError};
 use tools::{Arguments, HandlerResult, ToolData, ToolOutput};
 
 const MAX_STDIO_LINE_SIZE: usize = 10 * 1024 * 1024;
@@ -178,29 +178,45 @@ impl McpServer {
         } else {
             relative_to.unwrap_or(&self.root_path).join(requested)
         };
+        let received = json!(requested.to_string_lossy());
         let canonical = candidate.canonicalize().map_err(|error| {
-            ToolError::internal(format!(
-                "Failed to resolve `{param}` '{}': {error}",
-                candidate.display()
-            ))
+            ToolError::new(
+                ErrorCode::NotFound,
+                format!(
+                    "The server cannot find the path '{}': {error}",
+                    candidate.display()
+                ),
+            )
+            .with_param(param)
+            .with_received(&received)
+            .with_next("Give a path that exists.")
         })?;
         if self.allow_external_paths {
             return Ok(canonical);
         }
         let root = self.root_path.canonicalize().map_err(|error| {
             ToolError::internal(format!(
-                "Failed to resolve MCP root '{}': {error}",
+                "The server cannot find the MCP root '{}': {error}",
                 self.root_path.display()
             ))
         })?;
         if canonical.starts_with(&root) {
             Ok(canonical)
         } else {
-            Err(ToolError::internal(format!(
-                "Path '{}' is outside the MCP root '{}'",
-                canonical.display(),
-                root.display()
-            )))
+            Err(ToolError::new(
+                ErrorCode::PathOutsideRoot,
+                format!(
+                    "The path '{}' is not in the MCP root '{}'.",
+                    canonical.display(),
+                    root.display()
+                ),
+            )
+            .with_param(param)
+            .with_expected(format!("a path in '{}'", root.display()))
+            .with_received(&received)
+            .with_next(
+                "Give a path in the MCP root, or start the server with `--allow-external-paths`.",
+            ))
         }
     }
 
@@ -437,14 +453,109 @@ mod tests {
             serde_json::from_str::<Value>(response["content"][0]["text"].as_str().unwrap()).unwrap()
         };
         let ambiguous = call(json!({}));
-        assert_eq!(ambiguous["result"]["ambiguous"], true);
-        assert_eq!(ambiguous["result"]["choices"].as_array().unwrap().len(), 2);
-        assert!(ambiguous["result"].get("source").is_none());
-        assert!(ambiguous["result"].get("callees").is_none());
+        assert_eq!(ambiguous["error"]["code"], "ambiguous");
+        assert_eq!(ambiguous["error"]["param"], "name");
+        assert_eq!(
+            ambiguous["error"]["suggestions"],
+            json!([
+                {"name": "same.rb:helper", "start_line": 2, "signature": "def helper"},
+                {"name": "same.rb:helper", "start_line": 7, "signature": "def helper"}
+            ])
+        );
+        assert!(ambiguous.get("result").is_none());
         let selected = call(json!({"start_line": 7}));
         assert_eq!(selected["result"]["start_line"], 7);
         assert!(selected["result"]["source"].as_str().unwrap().contains('2'));
-        assert_eq!(call(json!({"start_line": 99}))["result"]["found"], false);
+        assert_eq!(
+            call(json!({"start_line": 99}))["error"]["code"],
+            "not_found"
+        );
+    }
+
+    #[test]
+    fn task_context_gives_ambiguous_and_not_found_errors() {
+        let (server, dir) = create_test_server();
+        std::fs::write(
+            dir.path().join("same.rb"),
+            "class A\n  def helper\n    1\n  end\nend\nclass B\n  def helper\n    2\n  end\nend\n",
+        )
+        .unwrap();
+        let ambiguous = error_of(&server, "task_context", json!({"name": "same.rb:helper"}));
+        assert_eq!(ambiguous["error"]["code"], "ambiguous");
+        assert_eq!(
+            ambiguous["error"]["suggestions"],
+            json!([
+                {"name": "same.rb:helper", "start_line": 2},
+                {"name": "same.rb:helper", "start_line": 7}
+            ])
+        );
+        let selected = call(
+            &server,
+            "task_context",
+            json!({"name": "same.rb:helper", "start_line": 7}),
+        );
+        assert!(selected.get("isError").is_none(), "{selected}");
+
+        let absent = error_of(&server, "task_context", json!({"name": "helpe"}));
+        assert_eq!(absent["error"]["code"], "not_found");
+        assert_eq!(absent["error"]["param"], "name");
+        assert_eq!(absent["error"]["received"], "helpe");
+        assert_eq!(absent["error"]["suggestions"], json!(["helper"]));
+    }
+
+    #[test]
+    fn impact_of_an_unknown_symbol_is_a_not_found_error() {
+        let (server, dir) = create_test_server();
+        std::fs::write(dir.path().join("known.rs"), "fn known_symbol() {}\n").unwrap();
+        let body = error_of(&server, "impact", json!({"symbol": "known"}));
+        assert_eq!(body["error"]["code"], "not_found");
+        assert_eq!(body["error"]["param"], "symbol");
+        assert_eq!(body["error"]["suggestions"], json!(["known_symbol"]));
+    }
+
+    #[test]
+    fn a_path_that_does_not_exist_is_a_not_found_error() {
+        let (server, _dir) = create_test_server();
+        let body = error_of(&server, "complexity", json!({"path": "no/such/directory"}));
+        assert_eq!(body["error"]["code"], "not_found");
+        assert_eq!(body["error"]["param"], "path");
+        assert_eq!(body["error"]["received"], "no/such/directory");
+    }
+
+    #[test]
+    fn a_path_outside_the_root_is_a_path_outside_root_error() {
+        let (server, root) = create_test_server();
+        let outside = TempDir::new().unwrap();
+        std::fs::write(outside.path().join("secret.rs"), "fn secret() {}\n").unwrap();
+
+        let body = error_of(&server, "complexity", json!({"path": outside.path()}));
+        assert_eq!(body["error"]["code"], "path_outside_root");
+        assert_eq!(body["error"]["param"], "path");
+
+        let file = outside.path().join("secret.rs");
+        let body = error_of(&server, "outline", json!({"file": file}));
+        assert_eq!(body["error"]["code"], "path_outside_root");
+        assert_eq!(body["error"]["param"], "file");
+
+        let body = error_of(
+            &server,
+            "semantic_search",
+            json!({"query": "secret", "include_projects": [outside.path()]}),
+        );
+        assert_eq!(body["error"]["code"], "path_outside_root");
+        assert_eq!(body["error"]["param"], "include_projects");
+        assert!(root.path().exists());
+    }
+
+    #[test]
+    fn a_git_tool_outside_a_repository_is_a_git_unavailable_error() {
+        let (server, dir) = create_test_server();
+        std::fs::write(dir.path().join("a.rs"), "fn a() {}\n").unwrap();
+        for tool in ["hotspot", "ownership", "defect"] {
+            let body = error_of(&server, tool, json!({}));
+            assert_eq!(body["error"]["code"], "git_unavailable", "{tool}: {body}");
+            assert!(body["error"]["next"].is_string());
+        }
     }
 
     #[test]
@@ -1887,13 +1998,11 @@ mod tests {
                 "arguments": {"name": "known", "path": temp_dir.path()}
             })))
             .unwrap();
-        let envelope: Value =
-            serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(envelope["result"]["found"], false);
-        assert!(envelope["result"]["suggestions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|suggestion| suggestion == "known_symbol"));
+        assert_eq!(response["isError"], true);
+        let error = &response["structuredContent"]["error"];
+        assert_eq!(error["code"], "not_found");
+        assert_eq!(error["param"], "name");
+        assert_eq!(error["received"], "known");
+        assert_eq!(error["suggestions"], json!(["known_symbol"]));
     }
 }

@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use serde_json::json;
+use serde_json::{json, Value};
 
 use super::{
     Arguments, HandlerResult, Pagination, Param, ParamDefault, ToolOutput, ToolSpec, COMPACT,
@@ -10,6 +10,7 @@ use super::{
 };
 use crate::core::{AnalysisContext, Analyzer, FileSet};
 use crate::git::GitRepo;
+use crate::mcp::error::{ErrorCode, ToolError};
 use crate::mcp::McpServer;
 
 const START_LINE: Param = Param::integer(
@@ -182,20 +183,52 @@ fn get_symbol(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
                 })
             })
             .collect();
-        return Ok(ToolOutput::data(json!({
-            "name": name, "found": true, "ambiguous": true, "choices": choices,
-            "hint": "Call get_symbol with a choice's name and start_line. No definition selected."
-        })));
+        return Err(symbol_ambiguous("get_symbol", name, choices));
     }
-    let result = match report_from_index(&scope.path, index, name, &options, start_line) {
-        Ok(report) => serde_json::to_value(&report)?,
-        Err(_) => json!({
-            "name": name,
-            "found": false,
-            "suggestions": suggest_symbols(&scope.path, &files, name)?
-        }),
+    match report_from_index(&scope.path, index, name, &options, start_line) {
+        Ok(report) => Ok(ToolOutput::data(serde_json::to_value(&report)?)),
+        Err(_) => Err(symbol_not_found(
+            "name",
+            name,
+            suggest_symbols(&scope.path, &files, name)?,
+        )),
+    }
+}
+
+/// The error for a symbol name that agrees with no definition.
+fn symbol_not_found(param: &'static str, name: &str, suggestions: Vec<String>) -> ToolError {
+    let next = if suggestions.is_empty() {
+        "Find the symbol with `outline` or `semantic_search`."
+    } else {
+        "Use a name from `suggestions`."
     };
-    Ok(ToolOutput::data(result))
+    ToolError::new(
+        ErrorCode::NotFound,
+        format!("No definition agrees with the symbol `{name}`."),
+    )
+    .with_param(param)
+    .with_received(&json!(name))
+    .with_suggestions(suggestions)
+    .with_next(next)
+}
+
+/// The error for a symbol name that agrees with more than one definition.
+/// Each choice has a `name` and a `start_line` that select one definition.
+fn symbol_ambiguous(tool: &str, name: &str, choices: Vec<Value>) -> ToolError {
+    ToolError::new(
+        ErrorCode::Ambiguous,
+        format!(
+            "{} definitions agree with the symbol `{name}`. The tool did not select one.",
+            choices.len()
+        ),
+    )
+    .with_param("name")
+    .with_expected("a name and a start line that select one definition")
+    .with_received(&json!(name))
+    .with_suggestions(choices)
+    .with_next(format!(
+        "Call `{tool}` again with the `name` and the `start_line` of one suggestion."
+    ))
 }
 
 pub(super) static TASK_CONTEXT: ToolSpec = ToolSpec {
@@ -249,6 +282,22 @@ fn task_context(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult 
     let files = absolute_files(&scope.path, &scope.file_set);
     let snapshot = server.load_index(&scope.path, &files)?;
     let result = crate::task_context::build(&snapshot, &scope.path, name, &options)?;
+    if result["ambiguous"] == true {
+        let choices: Vec<Value> = result["choices"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|choice| json!({"name": choice["qualified_name"], "start_line": choice["line"]}))
+            .collect();
+        return Err(symbol_ambiguous("task_context", name, choices));
+    }
+    if result["found"] == false {
+        return Err(symbol_not_found(
+            "name",
+            name,
+            crate::symbol::suggest_symbols(&scope.path, &files, name)?,
+        ));
+    }
     Ok(ToolOutput::data(result))
 }
 
@@ -296,5 +345,8 @@ fn impact(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
     };
     let files = absolute_files(&scope.path, &scope.file_set);
     let report = analyze(&scope.path, &files, symbol, depth, direction)?;
+    if report.resolved.is_empty() {
+        return Err(symbol_not_found("symbol", symbol, report.suggestions));
+    }
     Ok(ToolOutput::data(serde_json::to_value(&report)?))
 }

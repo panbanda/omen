@@ -12,6 +12,14 @@ pub(super) enum ErrorCode {
     MissingArgument,
     InvalidArgument,
     UnknownArgument,
+    /// A path or a symbol does not exist.
+    NotFound,
+    /// A name agrees with more than one definition.
+    Ambiguous,
+    PathOutsideRoot,
+    /// The tool needs git data, and git cannot give the data.
+    GitUnavailable,
+    /// All other failures of the server or of an analyzer.
     Internal,
 }
 
@@ -21,6 +29,10 @@ impl ErrorCode {
             Self::MissingArgument => "missing_argument",
             Self::InvalidArgument => "invalid_argument",
             Self::UnknownArgument => "unknown_argument",
+            Self::NotFound => "not_found",
+            Self::Ambiguous => "ambiguous",
+            Self::PathOutsideRoot => "path_outside_root",
+            Self::GitUnavailable => "git_unavailable",
             Self::Internal => "internal",
         }
     }
@@ -162,7 +174,24 @@ impl From<serde_json::Error> for ToolError {
 
 impl From<crate::core::Error> for ToolError {
     fn from(error: crate::core::Error) -> Self {
-        Self::internal(error.to_string())
+        use crate::core::Error;
+
+        let text = error.to_string();
+        match error {
+            Error::Git(_) => Self::new(
+                ErrorCode::GitUnavailable,
+                format!("The tool cannot get the git data. {text}"),
+            )
+            .with_next("Make sure that the path is in a git repository and that each ref exists."),
+            Error::FileNotFound { path } => Self::new(ErrorCode::NotFound, text)
+                .with_received(&json!(path.to_string_lossy()))
+                .with_next("Give a path that exists."),
+            Error::Io(io) if io.kind() == std::io::ErrorKind::NotFound => {
+                Self::new(ErrorCode::NotFound, text).with_next("Give a path that exists.")
+            }
+            Error::InvalidArgument(_) => Self::new(ErrorCode::InvalidArgument, text),
+            _ => Self::internal(text),
+        }
     }
 }
 
@@ -176,6 +205,10 @@ mod tests {
             ErrorCode::MissingArgument,
             ErrorCode::InvalidArgument,
             ErrorCode::UnknownArgument,
+            ErrorCode::NotFound,
+            ErrorCode::Ambiguous,
+            ErrorCode::PathOutsideRoot,
+            ErrorCode::GitUnavailable,
             ErrorCode::Internal,
         ]
         .into_iter()
@@ -187,9 +220,52 @@ mod tests {
                 "missing_argument",
                 "invalid_argument",
                 "unknown_argument",
+                "not_found",
+                "ambiguous",
+                "path_outside_root",
+                "git_unavailable",
                 "internal"
             ]
         );
+    }
+
+    #[test]
+    fn each_core_error_gets_the_code_of_its_class() {
+        use crate::core::Error;
+
+        let code = |error: Error| ToolError::from(error).code;
+        assert_eq!(
+            code(Error::git("not a repository")),
+            ErrorCode::GitUnavailable
+        );
+        assert_eq!(
+            code(Error::FileNotFound {
+                path: "a.rs".into()
+            }),
+            ErrorCode::NotFound
+        );
+        assert_eq!(
+            code(Error::Io(std::io::Error::from(
+                std::io::ErrorKind::NotFound
+            ))),
+            ErrorCode::NotFound
+        );
+        assert_eq!(
+            code(Error::Io(std::io::Error::other("disk"))),
+            ErrorCode::Internal
+        );
+        assert_eq!(
+            code(Error::InvalidArgument("depth".to_string())),
+            ErrorCode::InvalidArgument
+        );
+        assert_eq!(code(Error::Config("bad".to_string())), ErrorCode::Internal);
+    }
+
+    #[test]
+    fn a_git_error_keeps_the_detail_and_gives_the_next_step() {
+        let error = ToolError::from(crate::core::Error::git("hotspot needs history"));
+        assert!(error.message.contains("hotspot needs history"));
+        assert!(error.next.is_some());
     }
 
     #[test]
