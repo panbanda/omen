@@ -273,7 +273,9 @@ impl Analyzer {
             .files()
             .par_iter()
             .filter_map(|path| {
-                let result = generator.generate_for_file(path).ok()?;
+                let result = generator
+                    .generate_for_repository_file(ctx.files.root(), path)
+                    .ok()?;
                 let current = counter.fetch_add(1, Ordering::Relaxed) + 1;
                 ctx.report_progress(current, total_files);
                 Some(result)
@@ -306,7 +308,8 @@ impl Analyzer {
             ));
         }
 
-        let files: Vec<FileResult> = file_results.into_values().collect();
+        let mut files: Vec<FileResult> = file_results.into_values().collect();
+        files.sort_by(|left, right| left.file.cmp(&right.file));
         let summary = build_summary(&files, duration.as_millis() as u64);
 
         Ok(Analysis { files, summary })
@@ -396,7 +399,7 @@ impl AnalyzerTrait for Analyzer {
         let mut mutants_to_execute = Vec::new();
 
         for path in ctx.files.files() {
-            let mutants = match generator.generate_for_file(path) {
+            let mutants = match generator.generate_for_repository_file(project_root, path) {
                 Ok(m) => m,
                 Err(_) => continue,
             };
@@ -406,7 +409,7 @@ impl AnalyzerTrait for Analyzer {
             }
 
             // Read the original source
-            let source = match fs::read(path) {
+            let source = match fs::read(project_root.join(path)) {
                 Ok(s) => s,
                 Err(_) => continue,
             };

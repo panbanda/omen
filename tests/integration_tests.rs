@@ -2406,3 +2406,280 @@ fn test_mutation_top_lists_the_same_files_in_json_and_markdown() {
     assert_eq!(json.len(), 1, "{json:?}");
     assert_eq!(listed(&repository, "markdown", &arguments, &files), json);
 }
+
+// ---------------------------------------------------------------------------
+// The working directory does not change the output
+// ---------------------------------------------------------------------------
+
+/// A committed repository with calls, a class, and a stub.
+fn write_path_fixture() -> TempDir {
+    let temp = TempDir::new().unwrap();
+    std::fs::create_dir_all(temp.path().join("src")).unwrap();
+    std::fs::write(
+        temp.path().join("src/lib.rs"),
+        concat!(
+            "pub struct Counter { count: u32 }\n",
+            "impl Counter {\n",
+            "    pub fn bump(&mut self) -> u32 { self.count += 1; self.count }\n",
+            "}\n",
+            "pub fn target(x: i32) -> bool { x > 0 }\n",
+            "pub fn first_caller() -> bool { target(1) }\n",
+            "// TODO: remove this function\n",
+            "pub fn later() -> u32 { todo!() }\n",
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        temp.path().join("src/other.rs"),
+        "pub fn second_caller(y: i32) -> bool { if y > 2 { true } else { y + 1 > 0 } }\n",
+    )
+    .unwrap();
+    for arguments in [
+        vec!["init"],
+        vec!["config", "user.email", "test@example.com"],
+        vec!["config", "user.name", "Test User"],
+        vec!["add", "."],
+        vec!["commit", "-m", "initial"],
+    ] {
+        assert!(std::process::Command::new("git")
+            .args(&arguments)
+            .current_dir(temp.path())
+            .output()
+            .unwrap()
+            .status
+            .success());
+    }
+    temp
+}
+
+/// Removes the values that change between two runs, and makes each path
+/// relative to the repository.
+fn normalise(value: &mut serde_json::Value, roots: &[String]) {
+    match value {
+        serde_json::Value::Object(entries) => {
+            // `repository_root` of `churn` repeats the `-p` value.
+            for key in ["generated_at", "duration_ms", "repository_root"] {
+                entries.remove(key);
+            }
+            for entry in entries.values_mut() {
+                normalise(entry, roots);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                normalise(item, roots);
+            }
+        }
+        serde_json::Value::String(text) => {
+            for root in roots {
+                *text = text.replace(&format!("{root}/"), "");
+            }
+            if let Some(stripped) = text.strip_prefix("./") {
+                *text = stripped.to_string();
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Runs one command in `working_directory` and gives its status and its
+/// normalised JSON output.
+fn run_normalised(
+    working_directory: &std::path::Path,
+    path: &str,
+    arguments: &[&str],
+    roots: &[String],
+) -> (Option<i32>, serde_json::Value) {
+    let output = omen()
+        .current_dir(working_directory)
+        .args(["-p", path, "-f", "json"])
+        .args(arguments)
+        .output()
+        .expect("command runs");
+    let mut parsed = serde_json::from_slice(&output.stdout).unwrap_or(serde_json::Value::Null);
+    normalise(&mut parsed, roots);
+    (output.status.code(), parsed)
+}
+
+fn repository_roots(repository: &TempDir) -> Vec<String> {
+    let plain = repository.path().to_str().unwrap().to_string();
+    let canonical = repository
+        .path()
+        .canonicalize()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    vec![canonical, plain]
+}
+
+#[test]
+fn test_mutation_gives_the_same_mutants_from_each_working_directory() {
+    let repository = write_path_fixture();
+    let elsewhere = TempDir::new().unwrap();
+    let roots = repository_roots(&repository);
+    let path = repository.path().to_str().unwrap();
+
+    let inside = run_normalised(repository.path(), ".", &["mutation", "--dry-run"], &roots);
+    let outside = run_normalised(elsewhere.path(), path, &["mutation", "--dry-run"], &roots);
+
+    assert!(
+        inside.1["summary"]["total_mutants"].as_u64().unwrap() > 0,
+        "{:#?}",
+        inside.1
+    );
+    assert_eq!(inside, outside);
+}
+
+#[test]
+fn test_mutation_runs_and_records_in_the_repository_from_another_directory() {
+    let repository = write_path_fixture();
+    let elsewhere = TempDir::new().unwrap();
+    let marker = "working-directory-marker";
+
+    let output = omen()
+        .current_dir(elsewhere.path())
+        .args(["-p", repository.path().to_str().unwrap(), "-f", "json"])
+        .args(["mutation", "--record", "--test-command"])
+        .arg(format!("touch {marker}"))
+        .output()
+        .expect("command runs");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+
+    assert!(
+        parsed["summary"]["survived"].as_u64().unwrap() > 0,
+        "{parsed:#?}"
+    );
+    assert!(repository.path().join(marker).exists());
+    assert!(!elsewhere.path().join(marker).exists());
+    let history =
+        std::fs::read_to_string(repository.path().join(".omen/mutation-history.jsonl")).unwrap();
+    assert!(history.contains("source_context"));
+    assert!(
+        history.contains("x > 0"),
+        "the record has no source context"
+    );
+    assert!(!elsewhere.path().join(".omen").exists());
+    // The run restores each file.
+    assert!(std::process::Command::new("git")
+        .args(["diff", "--quiet", "--", "src"])
+        .current_dir(repository.path())
+        .status()
+        .unwrap()
+        .success());
+}
+
+#[test]
+fn test_each_repository_command_gives_the_same_output_from_each_working_directory() {
+    let repository = write_path_fixture();
+    let elsewhere = TempDir::new().unwrap();
+    let roots = repository_roots(&repository);
+    let path = repository.path().to_str().unwrap();
+    // `search query` reads the index that `search index` writes.
+    omen()
+        .args(["-p", path, "search", "index"])
+        .assert()
+        .success();
+
+    let commands: &[&[&str]] = &[
+        &["complexity"],
+        &["satd"],
+        &["stubs"],
+        &["deadcode"],
+        &["churn"],
+        &["clones"],
+        &["defect"],
+        &["changes"],
+        &["diff"],
+        &["tdg"],
+        &["graph"],
+        &["hotspot"],
+        &["temporal"],
+        &["ownership"],
+        &["cohesion"],
+        &["repomap"],
+        &["smells"],
+        &["flags"],
+        &["score"],
+        &["score", "trend"],
+        &["all"],
+        &["context"],
+        &["outline"],
+        &["outline", "--file", "src/lib.rs"],
+        &["impact", "target"],
+        &["symbol", "target"],
+        &["search", "query", "target", "--min-score", "0"],
+        &["mutation", "--dry-run"],
+    ];
+
+    let mut differences = Vec::new();
+    for arguments in commands {
+        let inside = run_normalised(repository.path(), ".", arguments, &roots);
+        let outside = run_normalised(elsewhere.path(), path, arguments, &roots);
+        if inside != outside {
+            differences.push(format!(
+                "{arguments:?}\n  inside:  {} {}\n  outside: {} {}",
+                inside.0.unwrap_or(-1),
+                inside.1,
+                outside.0.unwrap_or(-1),
+                outside.1
+            ));
+        }
+    }
+    assert!(differences.is_empty(), "{}", differences.join("\n"));
+}
+
+#[test]
+fn test_report_generate_gives_the_same_artifacts_from_each_working_directory() {
+    let repository = write_path_fixture();
+    let elsewhere = TempDir::new().unwrap();
+    let roots = repository_roots(&repository);
+    let inside_data = TempDir::new().unwrap();
+    let outside_data = TempDir::new().unwrap();
+
+    for (working_directory, path, data) in [
+        (repository.path(), ".", &inside_data),
+        (
+            elsewhere.path(),
+            repository.path().to_str().unwrap(),
+            &outside_data,
+        ),
+    ] {
+        omen()
+            .current_dir(working_directory)
+            .args(["-p", path, "report", "generate", "--skip", "trend"])
+            .args(["--data", data.path().to_str().unwrap()])
+            .assert()
+            .success();
+    }
+
+    let mut names: Vec<_> = std::fs::read_dir(inside_data.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    names.sort();
+    let mut differences = Vec::new();
+    for name in names {
+        // `metadata.json` records the `-p` value and the time.
+        if name == "metadata.json" {
+            continue;
+        }
+        let read = |data: &TempDir| -> serde_json::Value {
+            let mut parsed = std::fs::read_to_string(data.path().join(&name))
+                .ok()
+                .and_then(|text| serde_json::from_str(&text).ok())
+                .unwrap_or(serde_json::Value::Null);
+            normalise(&mut parsed, &roots);
+            parsed
+        };
+        if read(&inside_data) != read(&outside_data) {
+            differences.push(name.to_string_lossy().into_owned());
+        }
+    }
+    assert!(differences.is_empty(), "{differences:?}");
+}

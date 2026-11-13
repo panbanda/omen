@@ -118,6 +118,15 @@ impl ExecutorConfig {
         self
     }
 
+    /// The file that a mutant changes. A relative mutant path is relative to
+    /// the working directory of the test command, which is the repository root.
+    pub fn mutant_file(&self, mutant: &Mutant) -> std::path::PathBuf {
+        match &self.working_dir {
+            Some(root) => root.join(&mutant.file_path),
+            None => mutant.file_path.clone(),
+        }
+    }
+
     /// Set the working directory.
     pub fn working_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
         self.working_dir = Some(dir.into());
@@ -175,7 +184,7 @@ impl MutantExecutor {
         let start = Instant::now();
 
         // Create guard to ensure file is restored
-        let mut guard = MutationGuard::new(&mutant.file_path)?;
+        let mut guard = MutationGuard::new(self.config.mutant_file(mutant))?;
 
         // Apply the mutation
         let mutated_content = mutant.apply(source);
@@ -390,7 +399,7 @@ async fn execute_mutant_async(
     let start = Instant::now();
 
     // Create guard to ensure file is restored
-    let guard = match MutationGuard::new(&mutant.file_path) {
+    let guard = match MutationGuard::new(config.mutant_file(mutant)) {
         Ok(g) => g,
         Err(_) => {
             return MutationResult::new(mutant.clone(), MutantStatus::BuildError, 0);

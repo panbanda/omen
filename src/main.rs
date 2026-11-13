@@ -1934,7 +1934,8 @@ fn run_mutation(
             Ok(mut f) => {
                 let mut count = 0;
                 for file_result in &result.files {
-                    let source = std::fs::read_to_string(&file_result.file).unwrap_or_default();
+                    let source =
+                        std::fs::read_to_string(path.join(&file_result.file)).unwrap_or_default();
 
                     for mutation_result in &file_result.mutants {
                         let was_killed = match mutation_result.status {

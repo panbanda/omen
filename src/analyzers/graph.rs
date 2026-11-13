@@ -177,15 +177,16 @@ impl Analyzer {
             });
         }
 
-        // Sort by PageRank descending
+        // Sort by PageRank descending. The file name gives equal ranks one order.
         nodes.sort_by(|a, b| {
             b.pagerank
                 .partial_cmp(&a.pagerank)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.file.cmp(&b.file))
         });
 
         // Build edges list
-        let edges: Vec<Edge> = graph
+        let mut edges: Vec<Edge> = graph
             .edge_references()
             .map(|e| {
                 let from = &graph[e.source()];
@@ -196,6 +197,7 @@ impl Analyzer {
                 }
             })
             .collect();
+        edges.sort_by(|a, b| a.from.cmp(&b.from).then_with(|| a.to.cmp(&b.to)));
 
         // Calculate summary
         let total_nodes = nodes.len();

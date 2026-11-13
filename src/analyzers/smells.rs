@@ -178,6 +178,9 @@ impl Analyzer {
         }
 
         // 2. Detect hub-like dependencies
+        // The graph gives its nodes in no fixed order.
+        components.sort_by(|left, right| left.id.cmp(&right.id));
+
         for cm in &components {
             if cm.is_hub && !cm.is_central_connector {
                 smells.push(Smell {
