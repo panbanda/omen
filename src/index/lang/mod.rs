@@ -7,4 +7,5 @@ pub mod ecma;
 pub mod go;
 pub mod java;
 pub mod python;
+pub mod ruby;
 pub mod rust;

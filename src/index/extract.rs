@@ -183,6 +183,7 @@ pub fn language_spec(language: Language) -> Option<&'static dyn LanguageSpec> {
         Language::CSharp => Some(&lang::csharp::CSharp),
         Language::C => Some(&lang::c::C),
         Language::Cpp => Some(&lang::cpp::Cpp),
+        Language::Ruby => Some(&lang::ruby::Ruby),
         _ => None,
     }
 }
