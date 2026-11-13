@@ -376,8 +376,56 @@ mod tests {
                 "5 Load ../top -->- top.rb",
                 "6 Load ../../outside -->- unresolved",
                 "9 Load missing -->- unresolved",
-                "10 Load shapes -->- external",
+                "10 Load shapes -->- unresolved",
             ]
         );
+    }
+
+    #[test]
+    fn test_require_looks_in_the_load_roots() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            (
+                "bin/run.rb",
+                "require 'shop'\nrequire 'shop/cart'\nrequire 'twice'\nrequire 'hidden'\nrequire 'set'\nrequire 'gem_part.rb'\nrequire 'ext_part'\n",
+            ),
+            ("lib/shop.rb", ""),
+            ("lib/shop/cart.rb", ""),
+            ("twice.rb", ""),
+            ("lib/twice.rb", ""),
+            ("deep/dir/hidden.rb", ""),
+            ("gems/tool/tool.gemspec", "Gem::Specification.new do |spec|\n  spec.name = 'tool'\nend\n"),
+            ("gems/tool/lib/gem_part.rb", ""),
+            (
+                "gems/ext/ext.gemspec",
+                "Gem::Specification.new do |spec|\n  spec.require_paths = [\"src\", 'more']\nend\n",
+            ),
+            ("gems/ext/src/ext_part.rb", ""),
+        ];
+        assert_eq!(
+            rows(&files, "bin/run.rb"),
+            [
+                "1 Load shop -->- lib/shop.rb",
+                "2 Load shop/cart -->- lib/shop/cart.rb",
+                "3 Load twice -->- ambiguous(lib/twice.rb,twice.rb)",
+                "4 Load hidden -->- unresolved",
+                "5 Load set -->- external",
+                "6 Load gem_part.rb -->- gems/tool/lib/gem_part.rb",
+                "7 Load ext_part -->- gems/ext/src/ext_part.rb",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_require_paths_that_are_not_literals_give_no_load_root() {
+        use crate::index::imports::ruby_require_paths;
+        assert_eq!(ruby_require_paths("spec.name = 'a'\n"), ["lib"]);
+        assert_eq!(
+            ruby_require_paths("spec.require_paths = ['lib', \"ext\"]\n"),
+            ["lib", "ext"]
+        );
+        assert!(ruby_require_paths("spec.require_paths = [base, 'lib']\n").is_empty());
+        assert!(ruby_require_paths("spec.require_paths = paths\n").is_empty());
+        assert!(ruby_require_paths("spec.require_paths = [\"#{root}/lib\"]\n").is_empty());
     }
 }

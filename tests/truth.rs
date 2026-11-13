@@ -25,7 +25,7 @@ use omen::benchmark::truth::{
 };
 use omen::core::Language;
 use omen::index::extract::{extract_file, link_files};
-use omen::index::imports::{go_module_path, resolve_imports};
+use omen::index::imports::{resolve_imports, Manifests};
 use omen::index::model::{
     Exported, ImportBinding, ImportKind as IndexImportKind, ImportTarget, Symbol, SymbolKind,
 };
@@ -159,20 +159,17 @@ fn observed_symbol(file: &str, symbol: Symbol) -> Option<ObservedSymbol> {
     })
 }
 
-/// The module path of each `go.mod` file below `dir`, by the directory of the file.
-fn go_modules(root: &Path, dir: &Path) -> BTreeMap<String, String> {
-    let mut modules = BTreeMap::new();
+/// Reads each `go.mod` file and each `.gemspec` file below `dir`.
+fn read_manifests(root: &Path, dir: &Path, manifests: &mut Manifests) {
     for path in sorted_entries(dir) {
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
         if path.is_dir() {
-            modules.extend(go_modules(root, &path));
-        } else if path.file_name().is_some_and(|name| name == "go.mod") {
+            read_manifests(root, &path, manifests);
+        } else if name == "go.mod" || name.ends_with(".gemspec") {
             let text = std::fs::read_to_string(&path).unwrap();
-            if let Some(module) = go_module_path(&text) {
-                modules.insert(relative(root, dir), module);
-            }
+            manifests.add(&relative(root, &path), &text);
         }
     }
-    modules
 }
 
 /// A label describes one import statement and one path. Thus the adapter
@@ -275,7 +272,9 @@ fn observe(dir: &Path) -> Observed {
     }
 
     link_files(&mut index_files);
-    resolve_imports(&mut index_files, &go_modules(dir, dir));
+    let mut manifests = Manifests::default();
+    read_manifests(dir, dir, &mut manifests);
+    resolve_imports(&mut index_files, &manifests);
     let mut symbols = Vec::new();
     for index_file in index_files {
         imports.extend(observed_imports(&index_file.imports));

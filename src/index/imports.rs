@@ -15,8 +15,71 @@ use crate::core::Language;
 struct Repository<'a> {
     files: &'a [FileSymbols],
     paths: BTreeSet<&'a str>,
+    manifests: &'a Manifests,
+}
+
+/// The facts from the files of a repository that are not source files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Manifests {
     /// The module path of each `go.mod` file, by the directory of the file.
-    go_modules: &'a BTreeMap<String, String>,
+    pub go_modules: BTreeMap<String, String>,
+    /// The directories in which Ruby `require` looks for a file.
+    pub ruby_load_roots: BTreeSet<String>,
+}
+
+impl Default for Manifests {
+    /// Ruby projects put library files in `lib`, and tools add the root.
+    fn default() -> Self {
+        Self {
+            go_modules: BTreeMap::new(),
+            ruby_load_roots: [String::new(), "lib".to_string()].into(),
+        }
+    }
+}
+
+impl Manifests {
+    /// Reads a `go.mod` file or a `.gemspec` file. `path` is relative to the
+    /// root of the repository. A different file has no effect.
+    pub fn add(&mut self, path: &str, text: &str) {
+        let here = directory(path);
+        if file_name(path) == "go.mod" {
+            self.go_modules
+                .extend(go_module_path(text).map(|module| (here.to_string(), module)));
+        } else if path.ends_with(".gemspec") {
+            for root in ruby_require_paths(text) {
+                self.ruby_load_roots.extend(join(here, &root));
+            }
+        }
+    }
+}
+
+/// The `require_paths` of a gem specification. Without the assignment, the
+/// value is `lib`. If the value is not a list of string literals, the result is empty.
+pub fn ruby_require_paths(gemspec: &str) -> Vec<String> {
+    let Some((_, after)) = gemspec.split_once("require_paths") else {
+        return vec!["lib".to_string()];
+    };
+    let literal = after
+        .trim_start()
+        .strip_prefix('=')
+        .map(str::trim_start)
+        .and_then(|value| value.strip_prefix('['))
+        .and_then(|list| list.split_once(']'));
+    let Some((list, _)) = literal else {
+        return Vec::new();
+    };
+    let mut paths = Vec::new();
+    for item in list.split(',') {
+        let item = item.trim();
+        let quoted = ['"', '\'']
+            .iter()
+            .find_map(|quote| item.strip_prefix(*quote)?.strip_suffix(*quote));
+        match quoted {
+            Some(path) if !path.contains(['#', '"', '\'']) => paths.push(path.to_string()),
+            _ => return Vec::new(),
+        }
+    }
+    paths
 }
 
 /// The module path that a `go.mod` file declares.
@@ -106,6 +169,7 @@ impl Repository<'_> {
     fn go(&self, binding: &ImportBinding) -> ImportTarget {
         let here = directory(&binding.file);
         let own = self
+            .manifests
             .go_modules
             .iter()
             .filter(|(root, _)| {
@@ -135,6 +199,7 @@ impl Repository<'_> {
             )
         };
         let matches: Vec<(&String, BTreeSet<String>)> = self
+            .manifests
             .go_modules
             .iter()
             .filter_map(|(root, name)| Some((root, package(root, name)?)))
@@ -452,11 +517,30 @@ impl Repository<'_> {
     }
 
     fn ruby(&self, binding: &ImportBinding) -> ImportTarget {
-        // The extraction marks `require` as external. Only `require_relative` has a known directory.
-        if binding.target_file == ImportTarget::External {
-            return ImportTarget::External;
-        }
         let path = binding.module_path.as_str();
+        // The extraction marks `require` as external. Its directory is not in
+        // the syntax, thus only a file in a load root is a certain target.
+        if binding.target_file == ImportTarget::External {
+            let file = if path.ends_with(".rb") {
+                path.to_string()
+            } else {
+                format!("{path}.rb")
+            };
+            let in_roots: BTreeSet<String> = self
+                .manifests
+                .ruby_load_roots
+                .iter()
+                .filter_map(|root| self.existing(join(root, &file)))
+                .collect();
+            let anywhere = join("", &file)
+                .map(|file| self.with_suffix(&file, &[Language::Ruby]))
+                .unwrap_or_default();
+            return match (in_roots.is_empty(), anywhere.is_empty()) {
+                (false, _) => target_of(in_roots, ImportTarget::Unresolved),
+                (true, false) => ImportTarget::Unresolved,
+                (true, true) => ImportTarget::External,
+            };
+        }
         let exact = self.existing(join(directory(&binding.file), path));
         let source = self.existing(join(directory(&binding.file), &format!("{path}.rb")));
         target_of(
@@ -554,16 +638,15 @@ impl Repository<'_> {
 
 /// Gives each import binding its target file and its target symbol.
 ///
-/// `go_modules` has the module path of each `go.mod` file, by the directory
-/// of that file. The result does not depend on the order of `files`.
-pub fn resolve_imports(files: &mut [FileSymbols], go_modules: &BTreeMap<String, String>) {
+/// The result does not depend on the order of `files`.
+pub fn resolve_imports(files: &mut [FileSymbols], manifests: &Manifests) {
     let resolve = |files: &[FileSymbols],
                    symbols: bool|
      -> Vec<Vec<(ImportTarget, Option<String>)>> {
         let repository = Repository {
             files,
             paths: files.iter().map(|file| file.file.as_str()).collect(),
-            go_modules,
+            manifests,
         };
         files
             .iter()
@@ -610,13 +693,11 @@ pub(crate) mod testing {
 
     /// Extracts and resolves the files. Each tuple is a path and a source.
     pub(crate) fn index(files: &[(&str, &str)]) -> Vec<FileSymbols> {
-        let mut go_modules = BTreeMap::new();
+        let mut manifests = Manifests::default();
         let mut facts = Vec::new();
         for (file, source) in files {
-            if file_name(file) == "go.mod" {
-                go_modules.extend(
-                    go_module_path(source).map(|module| (directory(file).to_string(), module)),
-                );
+            if file_name(file) == "go.mod" || file.ends_with(".gemspec") {
+                manifests.add(file, source);
                 continue;
             }
             let language = Language::detect(Path::new(file)).unwrap();
@@ -627,7 +708,7 @@ pub(crate) mod testing {
         }
         facts.sort_by(|left, right| left.file.cmp(&right.file));
         link_files(&mut facts);
-        resolve_imports(&mut facts, &go_modules);
+        resolve_imports(&mut facts, &manifests);
         facts
     }
 
