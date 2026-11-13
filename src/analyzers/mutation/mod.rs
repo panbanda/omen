@@ -289,7 +289,7 @@ impl Analyzer {
             let entry = file_results
                 .entry(mutant.file_path.clone())
                 .or_insert_with(|| FileResult {
-                    path: mutant.file_path.to_string_lossy().to_string(),
+                    file: mutant.file_path.to_string_lossy().to_string(),
                     mutants: Vec::new(),
                     killed: 0,
                     survived: 0,
@@ -412,7 +412,7 @@ impl AnalyzerTrait for Analyzer {
             };
 
             let mut file_result = FileResult {
-                path: path.to_string_lossy().to_string(),
+                file: path.to_string_lossy().to_string(),
                 mutants: Vec::new(),
                 killed: 0,
                 survived: 0,
@@ -505,7 +505,7 @@ impl AnalyzerTrait for Analyzer {
                 file_result.score = file_result.killed as f64 / total_scored as f64;
             }
         }
-        file_results.sort_by(|left, right| left.path.cmp(&right.path));
+        file_results.sort_by(|left, right| left.file.cmp(&right.file));
 
         let duration = start.elapsed();
         let summary = build_summary(&file_results, duration.as_millis() as u64);
@@ -549,7 +549,7 @@ pub struct Analysis {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileResult {
     /// File path.
-    pub path: String,
+    pub file: String,
     /// Individual mutant results.
     pub mutants: Vec<MutationResult>,
     /// Number of killed mutants.
@@ -686,7 +686,7 @@ mod tests {
     #[test]
     fn test_build_summary() {
         let files = vec![FileResult {
-            path: "a.rs".to_string(),
+            file: "a.rs".to_string(),
             mutants: vec![
                 MutationResult::new(
                     Mutant::new("1", "a.rs", "CRR", 1, 1, "1", "0", "desc", (0, 1)),
@@ -728,7 +728,7 @@ mod tests {
     #[test]
     fn test_build_summary_all_killed() {
         let files = vec![FileResult {
-            path: "a.rs".to_string(),
+            file: "a.rs".to_string(),
             mutants: vec![MutationResult::new(
                 Mutant::new("1", "a.rs", "CRR", 1, 1, "1", "0", "desc", (0, 1)),
                 MutantStatus::Killed,
@@ -749,7 +749,7 @@ mod tests {
     #[test]
     fn test_summary_by_operator() {
         let files = vec![FileResult {
-            path: "a.rs".to_string(),
+            file: "a.rs".to_string(),
             mutants: vec![
                 MutationResult::new(
                     Mutant::new("1", "a.rs", "CRR", 1, 1, "1", "0", "desc", (0, 1)),

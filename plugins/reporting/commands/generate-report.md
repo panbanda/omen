@@ -18,7 +18,7 @@ Use the Task tool to spawn all 13 agents simultaneously. Each agent reads its da
 
 ---
 
-**Use the hotspot-analyst agent** to analyze `<dir>/hotspots.json` and write `<dir>/insights/hotspots.json`:
+**Use the hotspot-analyst agent** to analyze `<dir>/hotspot.json` and write `<dir>/insights/hotspots.json`:
 ```json
 {"section_insight": "string", "item_annotations": [{"file": "path", "comment": "string", "verified": false, "evidence": "string"}]}
 ```
@@ -39,7 +39,7 @@ Use the Task tool to spawn all 13 agents simultaneously. Each agent reads its da
 
 ---
 
-**Use the duplicates-analyst agent** to analyze `<dir>/duplicates.json` and write `<dir>/insights/duplication.json`:
+**Use the duplicates-analyst agent** to analyze `<dir>/clones.json` and write `<dir>/insights/duplication.json`:
 ```json
 {"section_insight": "string"}
 ```

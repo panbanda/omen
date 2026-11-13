@@ -22,9 +22,9 @@ expression: "shape(&response, &dynamic_key_objects)"
                     "percentage": "number"
                   }
                 ],
+                "file": "string",
                 "is_silo": "bool",
                 "ownership_percent": "number",
-                "path": "string",
                 "primary_owner": "string",
                 "risk_level": "string",
                 "total_lines": "number"

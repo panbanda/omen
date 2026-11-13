@@ -89,11 +89,6 @@ pub enum Command {
     Graph(AnalyzerArgs),
 
     /// Find complexity/churn hotspots
-    // CLI-layer alias note: the canonical command name is `hotspot` (singular);
-    // the report data contract (`.omen/data/hotspots.json`, the `report validate`
-    // file list, and the MCP tool-name mapping in src/mcp/mod.rs) still uses the
-    // plural `hotspots`. `hotspots` is accepted here as a visible alias so both
-    // spellings work from the CLI without touching the JSON/report contract.
     #[command(alias = "hs", visible_alias = "hotspots")]
     Hotspot(HotspotArgs),
 

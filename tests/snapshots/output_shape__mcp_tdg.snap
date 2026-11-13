@@ -22,7 +22,7 @@ expression: "shape(&response, &dynamic_key_objects)"
                 "doc_coverage": "number",
                 "duplication_ratio": "number",
                 "entropy_score": "number",
-                "file_path": "string",
+                "file": "string",
                 "grade": "string",
                 "has_critical_defects": "bool",
                 "hotspot_score": "number",

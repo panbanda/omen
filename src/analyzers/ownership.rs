@@ -180,7 +180,7 @@ impl Analyzer {
         let risk_level = classify_risk(concentration, sorted_contributors.len());
 
         Ok(Some(FileOwnership {
-            path: file.to_string_lossy().to_string(),
+            file: file.to_string_lossy().to_string(),
             primary_owner,
             ownership_percent,
             concentration,
@@ -405,7 +405,7 @@ pub struct Analysis {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileOwnership {
     /// File path.
-    pub path: String,
+    pub file: String,
     /// Primary owner (highest contributor).
     pub primary_owner: String,
     /// Ownership percentage of primary owner (0-100).
@@ -625,7 +625,7 @@ mod tests {
 
     fn make_file(path: &str, owner: &str) -> FileOwnership {
         FileOwnership {
-            path: path.to_string(),
+            file: path.to_string(),
             primary_owner: owner.to_string(),
             ownership_percent: 100.0,
             concentration: 1.0,
@@ -683,7 +683,7 @@ mod tests {
     fn test_summary_with_files() {
         let files = vec![
             FileOwnership {
-                path: "a.rs".to_string(),
+                file: "a.rs".to_string(),
                 primary_owner: "Alice".to_string(),
                 ownership_percent: 80.0,
                 concentration: 0.8,
@@ -706,7 +706,7 @@ mod tests {
                 risk_level: RiskLevel::High,
             },
             FileOwnership {
-                path: "b.rs".to_string(),
+                file: "b.rs".to_string(),
                 primary_owner: "Carol".to_string(),
                 ownership_percent: 100.0,
                 concentration: 1.0,
@@ -745,7 +745,7 @@ mod tests {
     #[test]
     fn test_file_ownership_serialization() {
         let ownership = FileOwnership {
-            path: "test.rs".to_string(),
+            file: "test.rs".to_string(),
             primary_owner: "Alice".to_string(),
             ownership_percent: 75.0,
             concentration: 0.75,
@@ -761,7 +761,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&ownership).unwrap();
-        assert!(json.contains("\"path\":\"test.rs\""));
+        assert!(json.contains("\"file\":\"test.rs\""));
         assert!(json.contains("\"concentration\":0.75"));
         assert!(json.contains("\"risk_level\":\"Medium\""));
     }

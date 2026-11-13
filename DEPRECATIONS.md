@@ -19,9 +19,7 @@ placed in a doc comment or code comment at each site.
 No entries.
 
 Note: `--days` (churn) is a **kept** alias for `--since`, not scheduled for
-removal, so it carries no marker. The report artifact names `duplicates.json`
-and `hotspots.json` and the `all`-payload key `duplicates` are part of the
-output schema change; see the `TODO(output-schema)` comments in `src/main.rs`.
+removal, so it carries no marker.
 
 ## Removed in 5.0
 
@@ -34,3 +32,31 @@ Use the replacement.
 |---|---|
 | `--check` (`complexity`, `score`, `mutation`) | `--gate error` |
 | `--top-k` / `-k` (`search query`) | `--top` / `-n` |
+
+### Output keys
+
+| Removed | Replacement |
+|---|---|
+| `all`: analyzer name `duplicates` | `clones` |
+| `complexity`: `files[].path` | `files[].file` |
+| `churn`: `files[].path` and `files[].relative_path` | `files[].file` |
+| `cohesion`: `classes[].path` | `classes[].file` |
+| `ownership`: `files[].path` | `files[].file` |
+| `graph`: `nodes[].path` | `nodes[].file` |
+| `defect`: `files[].file_path` | `files[].file` |
+| `tdg`: `files[].file_path` | `files[].file` |
+| `search query`: `results[].file_path` | `results[].file` |
+| `mutation`: `files[].path` | `files[].file` |
+
+The `file` value of `churn` is relative to the repository root and has no `./`
+prefix. The `hotspot_files` and `stable_files` lists of the `churn` summary
+use the same form. The MCP tools give the same keys as the commands.
+
+### Report artifacts
+
+| Removed | Replacement |
+|---|---|
+| `duplicates.json` (`report generate`) | `clones.json` |
+| `hotspots.json` (`report generate`) | `hotspot.json` |
+| `--skip duplicates` (`report generate`) | `--skip clones` |
+| `--skip hotspots` (`report generate`) | `--skip hotspot` |

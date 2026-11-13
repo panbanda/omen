@@ -27,7 +27,7 @@ expression: "shape(&response, &dynamic_key_objects)"
                   "duplication": "number",
                   "ownership": "number"
                 },
-                "file_path": "string",
+                "file": "string",
                 "probability": "number",
                 "recommendations": [
                   "string"

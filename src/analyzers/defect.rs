@@ -167,7 +167,7 @@ impl Analyzer {
         let mut collect = |analysis: &complexity::Analysis| {
             for file_result in &analysis.files {
                 data.insert(
-                    file_result.path.clone(),
+                    file_result.file.clone(),
                     (file_result.total_cyclomatic, file_result.total_cognitive),
                 );
             }
@@ -247,7 +247,7 @@ impl Analyzer {
             // Collect all nodes
             let mut nodes: HashSet<String> = HashSet::new();
             for node in &analysis.nodes {
-                nodes.insert(node.path.clone());
+                nodes.insert(node.file.clone());
             }
 
             // Calculate coupling for each node
@@ -591,7 +591,7 @@ impl AnalyzerTrait for Analyzer {
                 let recommendations = self.generate_recommendations(&metrics, prob);
 
                 FileScore {
-                    file_path: file_str.to_string(),
+                    file: file_str.to_string(),
                     probability: prob,
                     confidence,
                     risk_level: risk,
@@ -679,7 +679,7 @@ pub struct Analysis {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileScore {
-    pub file_path: String,
+    pub file: String,
     pub probability: f32,
     pub confidence: f32,
     pub risk_level: RiskLevel,
@@ -1109,7 +1109,7 @@ mod tests {
         let scored = analysis
             .files
             .iter()
-            .find(|f| f.file_path.ends_with("a.py"))
+            .find(|f| f.file.ends_with("a.py"))
             .expect("a.py should be scored");
         let churn = scored
             .contributing_factors

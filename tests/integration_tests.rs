@@ -502,7 +502,7 @@ fn test_changed_since_filters_analyzer_files() {
     let files = parsed["files"].as_array().unwrap();
 
     assert_eq!(files.len(), 1, "expected only changed file: {stdout}");
-    assert!(files[0]["path"].as_str().unwrap().ends_with("src/b.rs"));
+    assert!(files[0]["file"].as_str().unwrap().ends_with("src/b.rs"));
     assert!(!stdout.contains("src/a.rs"));
 }
 
@@ -868,7 +868,7 @@ fn test_glob_filter() {
         "expected filtered output to include files"
     );
     for file in files {
-        let path = file["path"].as_str().expect("file path should be a string");
+        let path = file["file"].as_str().expect("file path should be a string");
         assert!(
             path.ends_with(".py"),
             "expected only Python files in filtered output, got {path}"
@@ -902,7 +902,7 @@ fn test_exclude_filter() {
         "expected output to include non-Python files"
     );
     for file in files {
-        let path = file["path"].as_str().expect("file path should be a string");
+        let path = file["file"].as_str().expect("file path should be a string");
         assert!(
             !path.ends_with(".py"),
             "expected Python files to be excluded, got {path}"
@@ -1169,7 +1169,7 @@ fn test_complexity_glob_and_exclude_combined() {
 
     // All files should be Rust (glob filters to .rs; exclude .go has no effect since glob already limits to .rs)
     for file in files {
-        let path = file["path"].as_str().expect("file path should be a string");
+        let path = file["file"].as_str().expect("file path should be a string");
         assert!(
             path.ends_with(".rs"),
             "combined glob+exclude should only include Rust files, got: {path}"
@@ -1866,4 +1866,101 @@ fn test_benchmark_rejects_non_finite_timeout() {
         .assert()
         .code(1)
         .stderr(predicate::str::contains("timeout"));
+}
+
+// ---------------------------------------------------------------------------
+// Output schema: command names as keys, one `file` field
+// ---------------------------------------------------------------------------
+
+fn collect_keys(value: &serde_json::Value, keys: &mut std::collections::BTreeSet<String>) {
+    match value {
+        serde_json::Value::Object(entries) => {
+            for (key, entry) in entries {
+                keys.insert(key.clone());
+                collect_keys(entry, keys);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_keys(item, keys);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn test_all_payload_names_the_clones_analyzer_by_its_command() {
+    let output = omen()
+        .args(["-p", fixtures_dir(), "all"])
+        .output()
+        .expect("command runs");
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let names: Vec<&str> = parsed["analyzers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|entry| entry["analyzer"].as_str())
+        .collect();
+
+    assert!(names.contains(&"clones"), "{names:?}");
+    assert!(!names.contains(&"duplicates"), "{names:?}");
+}
+
+#[test]
+fn test_file_records_use_only_the_file_key() {
+    for command in [
+        "complexity",
+        "churn",
+        "cohesion",
+        "ownership",
+        "graph",
+        "defect",
+        "tdg",
+    ] {
+        let output = omen()
+            .args(["-p", ".", "-f", "json", command, "--glob", "src/cli/**"])
+            .output()
+            .expect("command runs");
+        assert!(output.status.success(), "{command} failed");
+        let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let mut keys = std::collections::BTreeSet::new();
+        collect_keys(&parsed, &mut keys);
+
+        assert!(
+            keys.contains("file"),
+            "{command} has no `file` key: {keys:?}"
+        );
+        for removed in ["path", "file_path", "relative_path"] {
+            assert!(!keys.contains(removed), "{command} still has `{removed}`");
+        }
+    }
+}
+
+#[test]
+fn test_report_generate_names_artifacts_by_command() {
+    let source = TempDir::new().unwrap();
+    std::fs::write(source.path().join("lib.rs"), "pub fn one() -> u32 { 1 }\n").unwrap();
+    let data = TempDir::new().unwrap();
+
+    omen()
+        .args([
+            "-p",
+            source.path().to_str().unwrap(),
+            "report",
+            "generate",
+            "--skip",
+            "trend",
+            "-o",
+            data.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    for present in ["clones.json", "hotspot.json"] {
+        assert!(data.path().join(present).exists(), "{present} is absent");
+    }
+    for absent in ["duplicates.json", "hotspots.json"] {
+        assert!(!data.path().join(absent).exists(), "{absent} is present");
+    }
 }

@@ -438,18 +438,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                         run_and_collect!(&ctx, omen::analyzers::repomap::Analyzer, "repomap"),
                         run_and_collect!(&ctx, omen::analyzers::smells::Analyzer, "smells"),
                         run_and_collect!(&ctx, omen::analyzers::flags::Analyzer, "flags"),
-                        // TODO(output-schema): the CLI-canonical command name for this
-                        // analyzer is `clones` (see Command::Clones in src/cli/mod.rs),
-                        // but this `all` payload entry -- and the module name, the
-                        // report artifact `duplicates.json`, and `report validate`'s
-                        // file list below -- all still say `duplicates`. Renaming the
-                        // "analyzer" value here is a JSON output-shape change (breaks
-                        // any consumer filtering `analyzer == "duplicates"`), so it is
-                        // intentionally deferred to the separate output-schema task
-                        // rather than done here. The CLI layer already accepts both
-                        // `clones` and `duplicates` as command names (see
-                        // `visible_alias = "duplicates"` on Command::Clones).
-                        run_and_collect!(&ctx, omen::analyzers::duplicates::Analyzer, "duplicates"),
+                        run_and_collect!(&ctx, omen::analyzers::duplicates::Analyzer, "clones"),
                     ]
                 });
 
@@ -490,7 +479,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             if let Some(complexity) = collected_result(&results, "complexity") {
                 defect_analyzer = defect_analyzer.with_precomputed_complexity(complexity);
             }
-            if let Some(duplicates) = collected_result(&results, "duplicates") {
+            if let Some(duplicates) = collected_result(&results, "clones") {
                 defect_analyzer = defect_analyzer.with_precomputed_duplicates(duplicates);
             }
             if let Some(graph) = collected_result(&results, "graph") {
@@ -506,7 +495,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             let complexity = collected_result(&results, "complexity");
             let satd = collected_result(&results, "satd");
             let stubs = collected_result(&results, "stubs");
-            let duplicates = collected_result(&results, "duplicates");
+            let duplicates = collected_result(&results, "clones");
             let cohesion = collected_result(&results, "cohesion");
             let tdg = collected_result(&results, "tdg");
             let graph = collected_result(&results, "graph");
@@ -1111,23 +1100,20 @@ fn run_report(
                 .map(|s| s.split(',').collect())
                 .unwrap_or_default();
 
-            // Count total analyzers to run
-            // NOTE: "duplicates"/"hotspots" here are report artifact names, not CLI
-            // command names ("clones"/"hotspot" respectively) -- see the TODO(output-
-            // schema) note near the `all` command's analyzer collection above for why
-            // the mismatch isn't resolved here.
+            // Each name is a command name. It is also the artifact file stem and the
+            // `--skip` value.
             let analyzer_names = [
                 "complexity",
                 "satd",
                 "stubs",
                 "deadcode",
                 "churn",
-                "duplicates",
+                "clones",
                 "defect",
                 "changes",
                 "tdg",
                 "graph",
-                "hotspots",
+                "hotspot",
                 "temporal",
                 "ownership",
                 "cohesion",
@@ -1209,8 +1195,8 @@ fn run_report(
                     );
                     run_analyzer!(
                         omen::analyzers::duplicates::Analyzer::default(),
-                        "duplicates",
-                        "duplicates"
+                        "clones",
+                        "clones"
                     );
                     run_analyzer!(
                         omen::analyzers::cohesion::Analyzer::default(),
@@ -1272,8 +1258,8 @@ fn run_report(
                     );
                     run_analyzer!(
                         omen::analyzers::hotspot::Analyzer::from_config(config),
-                        "hotspots",
-                        "hotspots"
+                        "hotspot",
+                        "hotspot"
                     );
                     run_analyzer!(omen::analyzers::tdg::Analyzer::default(), "tdg", "tdg");
                 });
@@ -1354,12 +1340,12 @@ fn run_report(
                 "stubs",
                 "deadcode",
                 "churn",
-                "duplicates",
+                "clones",
                 "defect",
                 "changes",
                 "tdg",
                 "graph",
-                "hotspots", // Go uses plural
+                "hotspot",
                 "temporal",
                 "ownership",
                 "cohesion",
@@ -1555,7 +1541,7 @@ fn run_search(
                         );
                         println!(
                             "   {}:{}-{}",
-                            result.file_path, result.start_line, result.end_line
+                            result.file, result.start_line, result.end_line
                         );
                         println!("   {}", result.signature);
                         println!();
@@ -1722,7 +1708,7 @@ fn run_mutation(
                 let top = args.common.top.unwrap_or(0); // 0 = unlimited
                 let limit = if top == 0 { usize::MAX } else { top };
                 for file in result.files.iter().skip(offset).take(limit) {
-                    println!("### {} (score: {:.1}%)\n", file.path, file.score * 100.0);
+                    println!("### {} (score: {:.1}%)\n", file.file, file.score * 100.0);
                     if file.skipped > 0 {
                         println!(
                             "- Killed: {}, Survived: {}, Skipped: {}, Timeout: {}, Error: {}\n",
@@ -1814,7 +1800,7 @@ fn run_mutation(
             Ok(mut f) => {
                 let mut count = 0;
                 for file_result in &result.files {
-                    let source = std::fs::read_to_string(&file_result.path).unwrap_or_default();
+                    let source = std::fs::read_to_string(&file_result.file).unwrap_or_default();
 
                     for mutation_result in &file_result.mutants {
                         let was_killed = match mutation_result.status {

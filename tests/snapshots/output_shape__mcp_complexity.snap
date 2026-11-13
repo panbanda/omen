@@ -15,6 +15,7 @@ expression: "shape(&response, &dynamic_key_objects)"
               {
                 "avg_cognitive": "number",
                 "avg_cyclomatic": "number",
+                "file": "string",
                 "functions": [
                   {
                     "end_line": "number",
@@ -29,7 +30,6 @@ expression: "shape(&response, &dynamic_key_objects)"
                   }
                 ],
                 "language": "string",
-                "path": "string",
                 "total_cognitive": "number",
                 "total_cyclomatic": "number"
               }

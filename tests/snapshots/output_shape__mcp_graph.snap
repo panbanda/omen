@@ -25,11 +25,11 @@ expression: "shape(&response, &dynamic_key_objects)"
             "nodes": [
               {
                 "betweenness": "number",
+                "file": "string",
                 "in_degree": "number",
                 "instability": "number",
                 "out_degree": "number",
-                "pagerank": "number",
-                "path": "string"
+                "pagerank": "number"
               }
             ],
             "summary": {
