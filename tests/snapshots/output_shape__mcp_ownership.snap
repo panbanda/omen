@@ -9,6 +9,8 @@ expression: "shape(&response, &dynamic_key_objects)"
     "content": [
       {
         "text": {
+          "has_more": "bool",
+          "next_offset": "null",
           "offset": "number",
           "result": {
             "files": [
@@ -22,9 +24,9 @@ expression: "shape(&response, &dynamic_key_objects)"
                     "percentage": "number"
                   }
                 ],
+                "file": "string",
                 "is_silo": "bool",
                 "ownership_percent": "number",
-                "path": "string",
                 "primary_owner": "string",
                 "risk_level": "string",
                 "total_lines": "number"
@@ -48,7 +50,8 @@ expression: "shape(&response, &dynamic_key_objects)"
           },
           "returned": "number",
           "tool": "string",
-          "total_items": "number"
+          "total_items": "number",
+          "truncated": []
         },
         "type": "string"
       }

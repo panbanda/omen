@@ -168,7 +168,7 @@ impl Analyzer {
             };
 
             nodes.push(Node {
-                path: path.clone(),
+                file: path.clone(),
                 pagerank: *pagerank.get(&idx).unwrap_or(&0.0),
                 betweenness: *betweenness.get(&idx).unwrap_or(&0.0),
                 in_degree: in_deg,
@@ -414,12 +414,12 @@ impl Analyzer {
         let mut node_ids: HashMap<&str, String> = HashMap::new();
         for (i, node) in analysis.nodes.iter().enumerate() {
             let id = format!("n{i}");
-            node_ids.insert(&node.path, id.clone());
+            node_ids.insert(&node.file, id.clone());
 
             // Format label with metrics
             let label = format!(
                 "{}\\nPR:{:.3} In:{} Out:{}",
-                sanitize_mermaid_label(&node.path),
+                sanitize_mermaid_label(&node.file),
                 node.pagerank,
                 node.in_degree,
                 node.out_degree
@@ -467,11 +467,11 @@ impl Analyzer {
         let mut node_ids: HashMap<&str, String> = HashMap::new();
         for (i, node) in analysis.nodes.iter().enumerate() {
             let id = format!("n{i}");
-            node_ids.insert(&node.path, id.clone());
+            node_ids.insert(&node.file, id.clone());
 
             let label = format!(
                 "{}\\nPageRank: {:.3}\\nIn: {} Out: {}",
-                node.path.replace('"', "\\\""),
+                node.file.replace('"', "\\\""),
                 node.pagerank,
                 node.in_degree,
                 node.out_degree
@@ -528,7 +528,7 @@ pub struct Analysis {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
-    pub path: String,
+    pub file: String,
     pub pagerank: f64,
     pub betweenness: f64,
     pub in_degree: usize,
@@ -725,7 +725,7 @@ mod tests {
         let graph_degrees: HashMap<&str, (usize, usize)> = graph_analysis
             .nodes
             .iter()
-            .map(|n| (n.path.as_str(), (n.in_degree, n.out_degree)))
+            .map(|n| (n.file.as_str(), (n.in_degree, n.out_degree)))
             .collect();
         for component in &smells_analysis.components {
             let (expected_in, expected_out) = graph_degrees
@@ -933,7 +933,7 @@ mod tests {
         let analysis = Analysis {
             nodes: vec![
                 Node {
-                    path: "src/main.rs".to_string(),
+                    file: "src/main.rs".to_string(),
                     pagerank: 0.5,
                     betweenness: 0.2,
                     in_degree: 2,
@@ -941,7 +941,7 @@ mod tests {
                     instability: 0.333,
                 },
                 Node {
-                    path: "src/lib.rs".to_string(),
+                    file: "src/lib.rs".to_string(),
                     pagerank: 0.5,
                     betweenness: 0.0,
                     in_degree: 1,
@@ -970,7 +970,7 @@ mod tests {
         let analysis = Analysis {
             nodes: vec![
                 Node {
-                    path: "a.rs".to_string(),
+                    file: "a.rs".to_string(),
                     pagerank: 0.33,
                     betweenness: 0.0,
                     in_degree: 1,
@@ -978,7 +978,7 @@ mod tests {
                     instability: 0.5,
                 },
                 Node {
-                    path: "b.rs".to_string(),
+                    file: "b.rs".to_string(),
                     pagerank: 0.33,
                     betweenness: 0.0,
                     in_degree: 1,
@@ -1011,7 +1011,7 @@ mod tests {
         let analyzer = Analyzer::new();
         let analysis = Analysis {
             nodes: vec![Node {
-                path: "main.rs".to_string(),
+                file: "main.rs".to_string(),
                 pagerank: 1.0,
                 betweenness: 0.0,
                 in_degree: 0,
@@ -1054,14 +1054,14 @@ mod tests {
     #[test]
     fn test_node_fields() {
         let node = Node {
-            path: "test.rs".to_string(),
+            file: "test.rs".to_string(),
             pagerank: 0.42,
             betweenness: 0.15,
             in_degree: 3,
             out_degree: 2,
             instability: 0.4,
         };
-        assert_eq!(node.path, "test.rs");
+        assert_eq!(node.file, "test.rs");
         assert!((node.pagerank - 0.42).abs() < 0.001);
         assert!((node.betweenness - 0.15).abs() < 0.001);
         assert_eq!(node.in_degree, 3);

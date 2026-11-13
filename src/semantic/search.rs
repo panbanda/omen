@@ -13,7 +13,7 @@ use super::tfidf::{DocMeta, TfidfEngine};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
     /// File path relative to repository root.
-    pub file_path: String,
+    pub file: String,
     /// Symbol name.
     pub symbol_name: String,
     /// Symbol type (function, class, etc.).
@@ -132,7 +132,7 @@ impl<'a> SearchEngine<'a> {
 
 fn to_search_result((meta, score): (DocMeta, f32)) -> SearchResult {
     SearchResult {
-        file_path: meta.file_path,
+        file: meta.file_path,
         symbol_name: meta.symbol_name,
         symbol_type: meta.symbol_type,
         signature: meta.signature,
@@ -209,7 +209,7 @@ mod tests {
     #[test]
     fn test_search_result_serialization() {
         let result = SearchResult {
-            file_path: "src/main.rs".to_string(),
+            file: "src/main.rs".to_string(),
             symbol_name: "main".to_string(),
             symbol_type: "function".to_string(),
             signature: "fn main()".to_string(),
@@ -234,7 +234,7 @@ mod tests {
             query: "test query".to_string(),
             total_symbols: 100,
             results: vec![SearchResult {
-                file_path: "src/main.rs".to_string(),
+                file: "src/main.rs".to_string(),
                 symbol_name: "test".to_string(),
                 symbol_type: "function".to_string(),
                 signature: "fn test()".to_string(),
@@ -342,7 +342,7 @@ mod tests {
         let engine = SearchEngine::new(&cache);
         let results = engine.search_in_files("parse", &["src/a.rs"], 10).unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].file_path, "src/a.rs");
+        assert_eq!(results[0].file, "src/a.rs");
     }
 
     #[test]

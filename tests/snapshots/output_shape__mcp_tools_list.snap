@@ -8,15 +8,18 @@ expression: "responses[0]"
   "result": {
     "tools": [
       {
-        "description": "Use first. Returns top-N PageRank-ranked symbols, risks, language breakdown, directory tree, entry points, and navigation hints. Expensive on large repos; run once and cache.",
+        "description": "Use this tool first. It gives the top symbols by PageRank, the risks, the languages, the directory tree, and the entry points of the repository. The tool is slow on a large repository, thus call it one time.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "compact": {
-              "description": "Opt-in lossless tables. table_paths are JSON pointers into result; zip each table's columns with its rows to restore records. Falls back to normal JSON if larger.",
+              "default": false,
+              "description": "If true, the server writes each list of flat records as a table. `table_paths` gives a JSON pointer to each table in `result`. Join the `columns` of a table with each of its `rows` to get the records. The server keeps the usual JSON when the table is not smaller.",
               "type": "boolean"
             },
             "format": {
-              "description": "Output format: 'markdown' returns compact agent-facing text directly (default: json)",
+              "default": "json",
+              "description": "The output format. With `markdown`, the result is text without an envelope. `limit` and `offset` then apply to the symbols in the text.",
               "enum": [
                 "json",
                 "markdown"
@@ -24,27 +27,40 @@ expression: "responses[0]"
               "type": "string"
             },
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "max_risks": {
-              "description": "Maximum risks to include",
+              "description": "The maximum number of risks.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "max_symbols": {
-              "description": "Maximum symbols to include",
+              "description": "The maximum number of symbols. The default comes from `max_tokens`.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "max_tokens": {
-              "description": "Token budget; response is trimmed to fit (default: 8000)",
+              "default": 8000,
+              "description": "The token budget. The tool removes content until the result is in the budget.",
+              "maximum": 4294967295,
+              "minimum": 1,
               "type": "integer"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "path": {
-              "description": "File or directory path",
+              "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
             }
           },
@@ -53,23 +69,30 @@ expression: "responses[0]"
         "name": "context"
       },
       {
-        "description": "Token-cheapest file map. Returns imports, classes with methods, and top-level functions for one file or all repo files. Use before reading full source.",
+        "description": "Gives the imports, the classes with their methods, and the top-level functions of one file or of each file. Use it before you read a full source file, because the result is small.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "file": {
-              "description": "Single file to outline (optional; omit for whole repo)",
+              "description": "The one file to outline. The default is each file below `path`.",
               "type": "string"
             },
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "path": {
-              "description": "Repository or directory path",
+              "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
             }
           },
@@ -78,19 +101,26 @@ expression: "responses[0]"
         "name": "outline"
       },
       {
-        "description": "Returns cyclomatic and cognitive complexity per function. Fast.",
+        "description": "Gives the cyclomatic complexity and the cognitive complexity of each function. The limit applies to the functions.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "path": {
-              "description": "File or directory path",
+              "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
             }
           },
@@ -99,19 +129,26 @@ expression: "responses[0]"
         "name": "complexity"
       },
       {
-        "description": "Detects TODO/FIXME/HACK debt comments. Fast.",
+        "description": "Finds debt comments such as TODO, FIXME, and HACK.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "path": {
-              "description": "File or directory path",
+              "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
             }
           },
@@ -120,19 +157,26 @@ expression: "responses[0]"
         "name": "satd"
       },
       {
-        "description": "Use when you suspect unused symbols. Finds dead/unreachable code.",
+        "description": "Finds symbols that no code uses.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "path": {
-              "description": "File or directory path",
+              "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
             }
           },
@@ -141,19 +185,26 @@ expression: "responses[0]"
         "name": "deadcode"
       },
       {
-        "description": "Use to find unfinished work. Detects incomplete/placeholder implementations: todo!()/NotImplementedError-style idioms, elision comments ('...rest of implementation'), and empty-but-implementable function bodies. Read-only; does not gate.",
+        "description": "Finds implementations that are not complete. Examples are a `todo!()` call, a comment that replaces code, and an empty function body. This tool does not apply a gate.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "path": {
-              "description": "File or directory path",
+              "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
             }
           },
@@ -162,23 +213,33 @@ expression: "responses[0]"
         "name": "stubs"
       },
       {
-        "description": "Use to find frequently changed files. Analyzes code churn from git history.",
+        "description": "Finds the files that change most frequently in the git history.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "days": {
-              "description": "Number of days to analyze",
+              "default": 30,
+              "description": "The number of days of git history to read.",
+              "maximum": 36500,
+              "minimum": 1,
               "type": "integer"
             },
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "path": {
-              "description": "File or directory path",
+              "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
             }
           },
@@ -187,27 +248,40 @@ expression: "responses[0]"
         "name": "churn"
       },
       {
-        "description": "Use when looking for duplication or copy-paste debt. Detects code clones via MinHash+LSH.",
+        "description": "Finds code clones with MinHash and LSH.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "min_tokens": {
-              "description": "Minimum tokens for detection",
+              "default": 50,
+              "description": "The minimum number of tokens in a clone.",
+              "maximum": 4294967295,
+              "minimum": 1,
               "type": "integer"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "path": {
-              "description": "File or directory path",
+              "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
             },
             "similarity": {
-              "description": "Similarity threshold (0-1)",
+              "default": 0.7,
+              "description": "The minimum similarity of two fragments.",
+              "maximum": 1.0,
+              "minimum": 0.0,
               "type": "number"
             }
           },
@@ -216,23 +290,32 @@ expression: "responses[0]"
         "name": "clones"
       },
       {
-        "description": "Use to identify high-risk files. Predicts defect-prone files using PMAT metrics.",
+        "description": "Gives the defect probability of each file from PMAT metrics.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "days": {
-              "description": "Number of days to analyze",
+              "description": "The number of days of git history to read. The default is `defect.churn_days` in the configuration.",
+              "maximum": 36500,
+              "minimum": 1,
               "type": "integer"
             },
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "path": {
-              "description": "File or directory path",
+              "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
             }
           },
@@ -241,16 +324,27 @@ expression: "responses[0]"
         "name": "defect"
       },
       {
-        "description": "Use to assess recent commit risk. Analyzes recent changes with JIT risk analysis.",
+        "description": "Gives the risk of each recent commit. The tool uses just-in-time risk analysis.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
+            },
+            "path": {
+              "description": "The file or directory to analyze. The default is the repository root.",
+              "type": "string"
             }
           },
           "type": "object"
@@ -258,24 +352,35 @@ expression: "responses[0]"
         "name": "changes"
       },
       {
-        "description": "Use to review branch or PR risk. Analyzes diff between commits; auto-detects target branch.",
+        "description": "Gives the risk of the changes on the current branch in relation to a target ref. If you give no ref, the tool finds the default branch.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "base": {
-              "description": "Base commit/branch",
+              "description": "The target ref, such as a branch or a commit.",
               "type": "string"
             },
             "head": {
-              "description": "Head commit/branch",
+              "description": "The target ref when `base` is absent. The tool always compares the current branch, thus it ignores `head` when you give `base`.",
               "type": "string"
             },
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
+            },
+            "path": {
+              "description": "The file or directory to analyze. The default is the repository root.",
+              "type": "string"
             }
           },
           "type": "object"
@@ -283,19 +388,26 @@ expression: "responses[0]"
         "name": "diff"
       },
       {
-        "description": "Use to understand technical debt accumulation. Generates Technical Debt Gradient with critical defect detection.",
+        "description": "Gives the Technical Debt Gradient of each file and finds critical defects.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "path": {
-              "description": "File or directory path",
+              "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
             }
           },
@@ -304,19 +416,26 @@ expression: "responses[0]"
         "name": "tdg"
       },
       {
-        "description": "Use to visualize module dependencies. Generates Mermaid dependency graph.",
+        "description": "Gives the dependency graph of the modules, with a Mermaid diagram. The limit applies to the members of the cycles.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "path": {
-              "description": "File or directory path",
+              "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
             }
           },
@@ -325,23 +444,32 @@ expression: "responses[0]"
         "name": "graph"
       },
       {
-        "description": "Use to find the riskiest files. Combines high churn + high complexity.",
+        "description": "Finds the files that have high churn and high complexity.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "days": {
-              "description": "Number of days for churn",
+              "description": "The number of days of git history to read. The default is `hotspot.days` in the configuration.",
+              "maximum": 36500,
+              "minimum": 1,
               "type": "integer"
             },
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "path": {
-              "description": "File or directory path",
+              "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
             }
           },
@@ -350,23 +478,33 @@ expression: "responses[0]"
         "name": "hotspot"
       },
       {
-        "description": "Use to find files that always change together. Detects temporal coupling from git history.",
+        "description": "Finds the files that change together in the git history.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "days": {
-              "description": "Number of days to analyze",
+              "default": 30,
+              "description": "The number of days of git history to read.",
+              "maximum": 36500,
+              "minimum": 1,
               "type": "integer"
             },
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "path": {
-              "description": "File or directory path",
+              "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
             }
           },
@@ -375,19 +513,26 @@ expression: "responses[0]"
         "name": "temporal"
       },
       {
-        "description": "Use to assess bus factor and knowledge silos. Analyzes code ownership from git blame.",
+        "description": "Gives the owners of each file and the bus factor. The tool uses git blame.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "path": {
-              "description": "File or directory path",
+              "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
             }
           },
@@ -396,19 +541,26 @@ expression: "responses[0]"
         "name": "ownership"
       },
       {
-        "description": "Use for OO design quality assessment. Calculates CK metrics: WMC, CBO, RFC, LCOM4, DIT, NOC.",
+        "description": "Gives the CK metrics of each class: WMC, CBO, RFC, LCOM4, DIT, and NOC.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "path": {
-              "description": "File or directory path",
+              "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
             }
           },
@@ -417,27 +569,38 @@ expression: "responses[0]"
         "name": "cohesion"
       },
       {
-        "description": "Returns PageRank-ranked symbol call graph. Use for understanding code structure.",
+        "description": "Gives the symbols of the repository in PageRank sequence, with their call graph.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "compact": {
-              "description": "Opt-in lossless tables. table_paths are JSON pointers into result; zip each table's columns with its rows to restore records. Falls back to normal JSON if larger.",
+              "default": false,
+              "description": "If true, the server writes each list of flat records as a table. `table_paths` gives a JSON pointer to each table in `result`. Join the `columns` of a table with each of its `rows` to get the records. The server keeps the usual JSON when the table is not smaller.",
               "type": "boolean"
             },
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "max_symbols": {
-              "description": "Maximum symbols to include",
+              "default": 0,
+              "description": "The maximum number of symbols that the analyzer keeps. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "path": {
-              "description": "File or directory path",
+              "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
             }
           },
@@ -446,19 +609,26 @@ expression: "responses[0]"
         "name": "repomap"
       },
       {
-        "description": "Use to find architectural anti-patterns. Detects cycles and smells via Tarjan SCC.",
+        "description": "Finds architectural smells such as dependency cycles. The tool uses Tarjan SCC.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "path": {
-              "description": "File or directory path",
+              "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
             }
           },
@@ -467,27 +637,36 @@ expression: "responses[0]"
         "name": "smells"
       },
       {
-        "description": "Use to audit feature flags. Finds stale and active feature flags across providers.",
+        "description": "Finds feature flags and identifies the stale flags.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "path": {
-              "description": "File or directory path",
+              "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
             },
             "provider": {
-              "description": "Flag provider (launchdarkly, split, etc.)",
+              "description": "The flag provider to find, such as `launchdarkly` or `unleash`. The default is `feature_flags.providers` in the configuration.",
               "type": "string"
             },
             "stale_days": {
-              "description": "Days threshold for staleness",
+              "description": "The age in days after which a flag is stale. When the configuration has the value 0, the server uses 14. The default is `feature_flags.stale_days` in the configuration.",
+              "maximum": 36500,
+              "minimum": 0,
               "type": "integer"
             }
           },
@@ -496,19 +675,26 @@ expression: "responses[0]"
         "name": "flags"
       },
       {
-        "description": "Use for an overall health summary. Calculates composite repository health score.",
+        "description": "Gives the health score of the repository and the score of each component.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "path": {
-              "description": "File or directory path",
+              "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
             }
           },
@@ -517,39 +703,60 @@ expression: "responses[0]"
         "name": "score"
       },
       {
-        "description": "Semantic symbol search via TF-IDF. Use when you know what you're looking for conceptually.",
+        "description": "Finds the symbols that agree best with a query in natural language. The tool uses TF-IDF.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "files": {
-              "description": "Comma-separated file paths to search within",
-              "type": "string"
+              "description": "The files in which to search. The default is all files.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
             },
             "include_projects": {
-              "description": "Comma-separated paths to additional project roots for cross-repo search",
-              "type": "string"
+              "description": "The roots of more projects in which to search.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
             },
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "max_complexity": {
-              "description": "Exclude symbols with cyclomatic complexity above this value",
+              "description": "The maximum cyclomatic complexity of a result. The tool removes symbols above this value.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "min_score": {
-              "description": "Minimum similarity score 0-1 (default: 0.3)",
+              "default": 0.3,
+              "description": "The minimum similarity score of a result.",
+              "maximum": 1.0,
+              "minimum": 0.0,
               "type": "number"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "query": {
-              "description": "Natural language search query",
+              "description": "The query in natural language.",
               "type": "string"
             },
             "top_k": {
-              "description": "Maximum number of results (default: 10)",
+              "default": 10,
+              "description": "The maximum number of results.",
+              "maximum": 4294967295,
+              "minimum": 1,
               "type": "integer"
             }
           },
@@ -561,39 +768,52 @@ expression: "responses[0]"
         "name": "semantic_search"
       },
       {
-        "description": "Symbol source, location, complexity and name-based callers/callees. call_resolutions exposes unique, ambiguous and unresolved candidates. Edges are not compiler-proven; ambiguous and unknown calls are excluded from the graph.",
+        "description": "Gives the source, the location, the complexity, the callers, and the callees of one symbol. `call_resolutions` shows the unique, ambiguous, and unresolved candidates of each call. The edges come from names, and a compiler does not prove them. The graph does not include ambiguous and unresolved calls.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "compact": {
-              "description": "Opt-in lossless tables. table_paths are JSON pointers into result; zip each table's columns with its rows to restore records. Falls back to normal JSON if larger.",
+              "default": false,
+              "description": "If true, the server writes each list of flat records as a table. `table_paths` gives a JSON pointer to each table in `result`. Join the `columns` of a table with each of its `rows` to get the records. The server keeps the usual JSON when the table is not smaller.",
               "type": "boolean"
             },
             "include_source": {
-              "description": "Whether to include source code (default: true)",
+              "default": true,
+              "description": "If true, the result includes the source code.",
               "type": "boolean"
             },
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "max_source_lines": {
-              "description": "Maximum source lines to return (default: 200)",
+              "default": 200,
+              "description": "The maximum number of source lines in the result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "name": {
-              "description": "Symbol name to look up (bare name or qualified file:name)",
+              "description": "The symbol name. Use a bare name or the qualified form `file:name`.",
               "type": "string"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "path": {
-              "description": "Repository root path",
+              "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
             },
             "start_line": {
-              "description": "Exact definition start line; combine with file:name to select same-file duplicates. Ambiguous queries return choices without source or graph attribution.",
+              "description": "The line on which the definition starts. Use it to select one of two definitions with the same name.",
+              "maximum": 4294967295,
               "minimum": 1,
               "type": "integer"
             }
@@ -606,35 +826,40 @@ expression: "responses[0]"
         "name": "get_symbol"
       },
       {
-        "description": "Bounded context for one exact definition: candidate callers/callees, test/role convention hints, syntax uses, uncertainty, content fingerprint. Not exhaustive impact or compiler/data-flow proof. Uses a session-local content-validated index.",
+        "description": "Gives bounded context for one definition: candidate callers and callees, test and role hints, syntax uses, and a content fingerprint. The result is not a full impact analysis and not a compiler proof. `max_bytes` controls the size, thus this tool has no `limit` and no `offset`.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "depth": {
-              "description": "Graph radius, default 2",
+              "default": 2,
+              "description": "The radius of the call graph around the definition.",
               "maximum": 4,
               "minimum": 0,
               "type": "integer"
             },
             "include_history": {
-              "description": "30-day co-change hints, default false; not semantic dependencies",
+              "default": false,
+              "description": "If true, the result includes files that changed together with this file in the last 30 days. These hints are not semantic dependencies.",
               "type": "boolean"
             },
             "max_bytes": {
-              "description": "Hard result UTF-8 byte budget, not envelope/tokens; default 12000",
+              "default": 12000,
+              "description": "The maximum size of `result` in UTF-8 bytes. The envelope is not in this budget.",
               "maximum": 1048576,
               "minimum": 1024,
               "type": "integer"
             },
             "name": {
-              "description": "Symbol name, preferably file:name",
+              "description": "The symbol name. The qualified form `file:name` is best.",
               "type": "string"
             },
             "path": {
-              "description": "Repository root",
+              "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
             },
             "start_line": {
-              "description": "Exact definition start line",
+              "description": "The line on which the definition starts. Use it to select one of two definitions with the same name.",
+              "maximum": 4294967295,
               "minimum": 1,
               "type": "integer"
             }
@@ -647,19 +872,25 @@ expression: "responses[0]"
         "name": "task_context"
       },
       {
-        "description": "Explore possible blast radius using name-based call edges and BFS. Includes input-wide resolution_summary. Ambiguous and unresolved calls are excluded, so this is not an exhaustive safety check for edits.",
+        "description": "Gives the possible blast radius of a symbol: its callers and callees to a given depth. The edges come from names. The tool does not include ambiguous and unresolved calls, thus the result is not a full safety check. The limit applies to the symbols of all levels.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "compact": {
-              "description": "Opt-in lossless tables. table_paths are JSON pointers into result; zip each table's columns with its rows to restore records. Falls back to normal JSON if larger.",
+              "default": false,
+              "description": "If true, the server writes each list of flat records as a table. `table_paths` gives a JSON pointer to each table in `result`. Join the `columns` of a table with each of its `rows` to get the records. The server keeps the usual JSON when the table is not smaller.",
               "type": "boolean"
             },
             "depth": {
-              "description": "BFS depth for traversal (default: 2)",
+              "default": 2,
+              "description": "The maximum depth of the traversal.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "direction": {
-              "description": "Direction of traversal (default: both)",
+              "default": "both",
+              "description": "The direction of the traversal.",
               "enum": [
                 "callers",
                 "callees",
@@ -668,19 +899,25 @@ expression: "responses[0]"
               "type": "string"
             },
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "path": {
-              "description": "Repository root path",
+              "description": "The file or directory to analyze. The default is the repository root.",
               "type": "string"
             },
             "symbol": {
-              "description": "Symbol name to analyze (bare name or qualified file:name)",
+              "description": "The symbol name. Use a bare name or the qualified form `file:name`.",
               "type": "string"
             }
           },
@@ -692,43 +929,64 @@ expression: "responses[0]"
         "name": "impact"
       },
       {
-        "description": "Search using hypothetical code. Write a code snippet resembling what you want to find. This is matched against the index, producing better results than keyword queries.",
+        "description": "Finds the symbols that are most like a code snippet that you write. Write a snippet that looks like the code that you want to find.",
         "inputSchema": {
+          "additionalProperties": false,
           "properties": {
             "files": {
-              "description": "Comma-separated file paths to search within",
-              "type": "string"
+              "description": "The files in which to search. The default is all files.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
             },
             "hypothetical_document": {
-              "description": "A code snippet resembling the code you want to find",
+              "description": "A code snippet that looks like the code that you want to find.",
               "type": "string"
             },
             "include_projects": {
-              "description": "Comma-separated paths to additional project roots for cross-repo search",
-              "type": "string"
+              "description": "The roots of more projects in which to search.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
             },
             "limit": {
-              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "default": 50,
+              "description": "The maximum number of items in the result. The value 0 removes the limit.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "max_complexity": {
-              "description": "Exclude symbols with cyclomatic complexity above this value",
+              "description": "The maximum cyclomatic complexity of a result. The tool removes symbols above this value.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "min_score": {
-              "description": "Minimum similarity score 0-1 (default: 0.3)",
+              "default": 0.3,
+              "description": "The minimum similarity score of a result.",
+              "maximum": 1.0,
+              "minimum": 0.0,
               "type": "number"
             },
             "offset": {
-              "description": "Item offset for pagination (default: 0)",
+              "default": 0,
+              "description": "The number of items to skip. Use `next_offset` from the last result.",
+              "maximum": 4294967295,
+              "minimum": 0,
               "type": "integer"
             },
             "query": {
-              "description": "Original query for display purposes",
+              "description": "The text that the result shows as its query. The default is the snippet.",
               "type": "string"
             },
             "top_k": {
-              "description": "Maximum number of results (default: 10)",
+              "default": 10,
+              "description": "The maximum number of results.",
+              "maximum": 4294967295,
+              "minimum": 1,
               "type": "integer"
             }
           },

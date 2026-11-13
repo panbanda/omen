@@ -15,6 +15,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
       "fields": [
         "string"
       ],
+      "file": "string",
       "language": "string",
       "lcom": "number",
       "loc": "number",
@@ -24,7 +25,6 @@ expression: "shape(&output, case.dynamic_key_objects)"
       "noc": "number",
       "nof": "number",
       "nom": "number",
-      "path": "string",
       "rfc": "number",
       "start_line": "number",
       "violations": [

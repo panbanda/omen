@@ -30,23 +30,27 @@ fn logging_filter(verbose: bool, rust_log: Option<&str>) -> EnvFilter {
     EnvFilter::new(directive)
 }
 
-/// Resolve the effective gate mode from the canonical `--gate` flag and the
-/// deprecated boolean `--check` flag, shared by `complexity`, `score`, and
-/// `mutation` (`stubs` only ever had `--gate`, so it calls `gate_dispatch`
-/// directly). `gate` is `Option<GateMode>` -- not defaulted in clap -- so an
-/// explicitly passed `--gate off` can be told apart from "no --gate at all";
-/// `--gate` (any value, including `off`) always wins over `--check`. A bare
-/// `--check` with no `--gate` maps to `Error`, preserving every pre-existing
-/// `--check` invocation.
-fn resolve_gate_mode(gate: Option<GateMode>, check: bool) -> GateMode {
-    gate.unwrap_or(if check {
-        GateMode::Error
-    } else {
-        GateMode::Off
-    })
+/// Resolve the gate mode of a gated command. The `--gate` flag overrides the
+/// `[gate]` value in the configuration.
+fn resolve_gate_mode(flag: Option<GateMode>, configured: GateMode) -> GateMode {
+    flag.unwrap_or(configured)
 }
 
-/// Shared gate/check verdict dispatch used by `complexity`, `score`,
+/// The number of results that `search query` gives if `--top` is absent.
+const DEFAULT_SEARCH_RESULTS: usize = 10;
+
+/// Write the report as pretty JSON to the `--output` file, if the flag is present.
+fn write_report_file(
+    output: &omen::cli::OutputArgs,
+    report: &serde_json::Value,
+) -> omen::core::Result<()> {
+    if let Some(path) = &output.output {
+        std::fs::write(path, format!("{}\n", serde_json::to_string_pretty(report)?))?;
+    }
+    Ok(())
+}
+
+/// Shared gate verdict dispatch used by `complexity`, `score`,
 /// `mutation`, and `stubs`. Callers detect the threshold violation themselves
 /// (each analyzer's report shape differs) and hand the resulting
 /// `Error::ThresholdViolation` to this function only when a violation
@@ -125,8 +129,78 @@ fn resolve_repo_path(cli: &Cli) -> omen::core::Result<(PathBuf, Option<PathBuf>)
         }
 
         Ok((cloned_path.clone(), Some(cloned_path)))
-    } else {
+    } else if cli.path.is_dir() || !reads_repository(&cli.command) {
         Ok((cli.path.clone(), None))
+    } else {
+        Err(omen::core::Error::InvalidArgument(absent_path_message(cli)))
+    }
+}
+
+/// Tells if a command reads the repository at `-p`. A command that does not
+/// read it ignores the value. The `match` has no wildcard arm, so a new
+/// command needs a decision here.
+fn reads_repository(command: &Command) -> bool {
+    match command {
+        Command::Mcp(command) => match command.subcommand {
+            Some(McpSubcommand::Manifest) => false,
+            None => true,
+        },
+        Command::Report(command) => match command.subcommand {
+            // `serve` uses the repository path to find the report file.
+            ReportSubcommand::Generate(_) | ReportSubcommand::Serve(_) => true,
+            ReportSubcommand::Validate(_) | ReportSubcommand::Render(_) => false,
+        },
+        Command::Benchmark(_) | Command::Eval(_) => false,
+        #[cfg(feature = "mutation")]
+        Command::Mutation(_) => true,
+        Command::Complexity(_)
+        | Command::Satd(_)
+        | Command::Stubs(_)
+        | Command::Deadcode(_)
+        | Command::Churn(_)
+        | Command::Clones(_)
+        | Command::Defect(_)
+        | Command::Changes(_)
+        | Command::Diff(_)
+        | Command::Tdg(_)
+        | Command::Graph(_)
+        | Command::Hotspot(_)
+        | Command::Temporal(_)
+        | Command::Ownership(_)
+        | Command::Cohesion(_)
+        | Command::Repomap(_)
+        | Command::Smells(_)
+        | Command::Flags(_)
+        | Command::Score(_)
+        | Command::All(_)
+        | Command::Context(_)
+        | Command::Search(_)
+        | Command::Outline(_)
+        | Command::Impact(_)
+        | Command::Symbol(_) => true,
+    }
+}
+
+/// The message for a `-p` value that is not a directory. Before 5.0, `-p` was
+/// the period of `score trend` and the port of `report serve`, so the message
+/// names the flag that has that meaning now.
+fn absent_path_message(cli: &Cli) -> String {
+    let message = format!(
+        "The repository path `{}` is not a directory.",
+        cli.path.display()
+    );
+    let replacement = match &cli.command {
+        Command::Score(command) if command.subcommand.is_some() => Some(("--period", "period")),
+        Command::Report(command) if matches!(command.subcommand, ReportSubcommand::Serve(_)) => {
+            Some(("--port", "port"))
+        }
+        _ => None,
+    };
+    match replacement {
+        Some((flag, meaning)) => {
+            format!("{message} `-p` sets the repository path. Use `{flag}` to set the {meaning}.")
+        }
+        None => message,
     }
 }
 
@@ -201,7 +275,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             }
         }
         Command::Complexity(args) => {
-            let gate = resolve_gate_mode(args.gate, args.check);
+            let gate = resolve_gate_mode(args.gate.mode, config.gate.complexity);
             if gate != GateMode::Off {
                 run_complexity_check(path, &config, args, format, gate)?;
             } else {
@@ -217,7 +291,13 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             run_stubs(path, &config, args, format)?;
         }
         Command::Diff(args) => {
-            run_diff_analyzer(path, args.target.as_deref(), format, args.top, args.offset)?;
+            run_diff_analyzer(
+                path,
+                args.target.as_deref(),
+                format,
+                args.pagination.top,
+                args.pagination.offset,
+            )?;
         }
         Command::Changes(args) => {
             run_changes_analyzer(path, &config, format, args)?;
@@ -277,7 +357,17 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             )?;
         }
         Command::Score(cmd) => {
-            let gate = resolve_gate_mode(cmd.args.gate, cmd.args.check);
+            // The gate belongs to the bare `score` command. A subcommand has no gate.
+            let gate = if cmd.subcommand.is_some() {
+                if cmd.args.gate.mode.is_some() {
+                    return Err(omen::core::Error::InvalidArgument(
+                        "`score trend` has no gate. Remove the `--gate` flag.".to_string(),
+                    ));
+                }
+                GateMode::Off
+            } else {
+                resolve_gate_mode(cmd.args.gate.mode, config.gate.score)
+            };
             if gate != GateMode::Off {
                 run_score_check(path, &config, &cmd.args, format, gate)?;
             } else {
@@ -448,18 +538,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                         run_and_collect!(&ctx, omen::analyzers::repomap::Analyzer, "repomap"),
                         run_and_collect!(&ctx, omen::analyzers::smells::Analyzer, "smells"),
                         run_and_collect!(&ctx, omen::analyzers::flags::Analyzer, "flags"),
-                        // TODO(output-schema): the CLI-canonical command name for this
-                        // analyzer is `clones` (see Command::Clones in src/cli/mod.rs),
-                        // but this `all` payload entry -- and the module name, the
-                        // report artifact `duplicates.json`, and `report validate`'s
-                        // file list below -- all still say `duplicates`. Renaming the
-                        // "analyzer" value here is a JSON output-shape change (breaks
-                        // any consumer filtering `analyzer == "duplicates"`), so it is
-                        // intentionally deferred to the separate output-schema task
-                        // rather than done here. The CLI layer already accepts both
-                        // `clones` and `duplicates` as command names (see
-                        // `visible_alias = "duplicates"` on Command::Clones).
-                        run_and_collect!(&ctx, omen::analyzers::duplicates::Analyzer, "duplicates"),
+                        run_and_collect!(&ctx, omen::analyzers::duplicates::Analyzer, "clones"),
                     ]
                 });
 
@@ -500,7 +579,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             if let Some(complexity) = collected_result(&results, "complexity") {
                 defect_analyzer = defect_analyzer.with_precomputed_complexity(complexity);
             }
-            if let Some(duplicates) = collected_result(&results, "duplicates") {
+            if let Some(duplicates) = collected_result(&results, "clones") {
                 defect_analyzer = defect_analyzer.with_precomputed_duplicates(duplicates);
             }
             if let Some(graph) = collected_result(&results, "graph") {
@@ -516,7 +595,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             let complexity = collected_result(&results, "complexity");
             let satd = collected_result(&results, "satd");
             let stubs = collected_result(&results, "stubs");
-            let duplicates = collected_result(&results, "duplicates");
+            let duplicates = collected_result(&results, "clones");
             let cohesion = collected_result(&results, "cohesion");
             let tdg = collected_result(&results, "tdg");
             let graph = collected_result(&results, "graph");
@@ -555,7 +634,13 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 Format::JsonCompact => Format::JsonCompact,
                 _ => Format::Json,
             };
-            format_with_limits(combined, all_format, args.top, args.offset, &mut stdout())?;
+            format_with_limits(
+                combined,
+                all_format,
+                args.pagination.top,
+                args.pagination.offset,
+                &mut stdout(),
+            )?;
         }
         Command::Context(args) => {
             run_context(path, &config, args, format)?;
@@ -569,7 +654,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         #[cfg(feature = "mutation")]
         Command::Mutation(ref cmd) => match &cmd.subcommand {
             Some(MutationSubcommand::Train(args)) => {
-                run_mutation_train(&args.path, args)?;
+                run_mutation_train(path, args)?;
             }
             None => {
                 run_mutation(path, &config, &cmd.args, format)?;
@@ -797,9 +882,9 @@ fn run_analyzer_instance<A: Analyzer>(
     }
 
     let top = args
-        .and_then(|a| a.top)
+        .and_then(|a| a.pagination.top)
         .or_else(|| (analyzer_name == "hotspot").then_some(config.hotspot.top));
-    let offset = args.and_then(|a| a.offset);
+    let offset = args.and_then(|a| a.pagination.offset);
     let value = serde_json::to_value(&result)?;
     format_with_limits(value, format, top, offset, &mut stdout())?;
     Ok(())
@@ -831,7 +916,13 @@ fn run_changes_analyzer(
     let analyzer = omen::analyzers::changes::Analyzer::new().with_days(config.changes.days);
     let result = analyzer.analyze(&ctx)?;
     let value = serde_json::to_value(&result)?;
-    format_with_limits(value, format, args.top, args.offset, &mut stdout())?;
+    format_with_limits(
+        value,
+        format,
+        args.pagination.top,
+        args.pagination.offset,
+        &mut stdout(),
+    )?;
     Ok(())
 }
 
@@ -909,7 +1000,7 @@ fn run_complexity_check(
 /// The JSON/markdown/text report is always emitted to stdout before the gate
 /// is evaluated, so `-f json --gate error` still gives callers the full
 /// finding list on stdout; the gate verdict goes to stderr, matching how
-/// `complexity --check` behaves.
+/// `complexity --gate` behaves.
 fn run_stubs(
     path: &PathBuf,
     config: &Config,
@@ -926,12 +1017,13 @@ fn run_stubs(
     format_with_limits(
         value,
         format,
-        args.common.top,
-        args.common.offset,
+        args.common.pagination.top,
+        args.common.pagination.offset,
         &mut stdout(),
     )?;
 
-    if args.gate == GateMode::Off {
+    let gate = resolve_gate_mode(args.gate.mode, config.gate.stubs);
+    if gate == GateMode::Off {
         return Ok(());
     }
 
@@ -965,7 +1057,7 @@ fn run_stubs(
     }
 
     gate_dispatch(
-        args.gate,
+        gate,
         omen::core::Error::threshold_violation(
             format!(
                 "{} stub(s) at or above severity '{}'",
@@ -1036,8 +1128,8 @@ fn run_churn_analyzer(
     format_with_limits(
         value,
         format,
-        args.top.or(Some(config.churn.top)),
-        args.offset,
+        args.pagination.top.or(Some(config.churn.top)),
+        args.pagination.offset,
         &mut stdout(),
     )?;
     Ok(())
@@ -1081,8 +1173,7 @@ fn run_report(
 
     match subcommand {
         ReportSubcommand::Generate(args) => {
-            // Create output directory
-            std::fs::create_dir_all(&args.output)?;
+            std::fs::create_dir_all(&args.data)?;
 
             let file_set = FileSet::from_path(path, config)?;
             let git_root = omen::git::GitRepo::open(path)
@@ -1112,7 +1203,7 @@ fn run_report(
                 "omen_version": env!("CARGO_PKG_VERSION"),
                 "paths": [path.display().to_string()]
             });
-            let metadata_path = args.output.join("metadata.json");
+            let metadata_path = args.data.join("metadata.json");
             std::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata)?)?;
 
             let skip_list: Vec<&str> = args
@@ -1121,23 +1212,20 @@ fn run_report(
                 .map(|s| s.split(',').collect())
                 .unwrap_or_default();
 
-            // Count total analyzers to run
-            // NOTE: "duplicates"/"hotspots" here are report artifact names, not CLI
-            // command names ("clones"/"hotspot" respectively) -- see the TODO(output-
-            // schema) note near the `all` command's analyzer collection above for why
-            // the mismatch isn't resolved here.
+            // Each name is a command name. It is also the artifact file stem and the
+            // `--skip` value.
             let analyzer_names = [
                 "complexity",
                 "satd",
                 "stubs",
                 "deadcode",
                 "churn",
-                "duplicates",
+                "clones",
                 "defect",
                 "changes",
                 "tdg",
                 "graph",
-                "hotspots",
+                "hotspot",
                 "temporal",
                 "ownership",
                 "cohesion",
@@ -1168,7 +1256,7 @@ fn run_report(
             };
 
             let completed = std::sync::atomic::AtomicU64::new(0);
-            let output_dir = &args.output;
+            let output_dir = &args.data;
 
             // Helper: run an analyzer and save its JSON output
             macro_rules! run_analyzer {
@@ -1219,8 +1307,8 @@ fn run_report(
                     );
                     run_analyzer!(
                         omen::analyzers::duplicates::Analyzer::default(),
-                        "duplicates",
-                        "duplicates"
+                        "clones",
+                        "clones"
                     );
                     run_analyzer!(
                         omen::analyzers::cohesion::Analyzer::default(),
@@ -1282,8 +1370,8 @@ fn run_report(
                     );
                     run_analyzer!(
                         omen::analyzers::hotspot::Analyzer::from_config(config),
-                        "hotspots",
-                        "hotspots"
+                        "hotspot",
+                        "hotspot"
                     );
                     run_analyzer!(omen::analyzers::tdg::Analyzer::default(), "tdg", "tdg");
                 });
@@ -1364,12 +1452,12 @@ fn run_report(
                 "stubs",
                 "deadcode",
                 "churn",
-                "duplicates",
+                "clones",
                 "defect",
                 "changes",
                 "tdg",
                 "graph",
-                "hotspots", // Go uses plural
+                "hotspot",
                 "temporal",
                 "ownership",
                 "cohesion",
@@ -1418,11 +1506,16 @@ fn run_report(
             use omen::report::Renderer;
 
             let renderer = Renderer::new()?;
-            renderer.render_to_file(&args.data, &args.output)?;
-            eprintln!("Report rendered to: {}", args.output.display());
+            let output = args
+                .output
+                .output
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(".omen/report.html"));
+            renderer.render_to_file(&args.data, &output)?;
+            eprintln!("Report rendered to: {}", output.display());
             eprintln!(
                 "Compressed:         {}",
-                Renderer::gz_path(&args.output).display()
+                Renderer::gz_path(&output).display()
             );
         }
         ReportSubcommand::Serve(args) => {
@@ -1510,6 +1603,19 @@ fn run_search(
         SearchSubcommand::Query(args) => {
             let file_filter: Option<Vec<&str>> =
                 args.files.as_ref().map(|f| f.split(',').collect());
+            // SARIF keeps each finding, so `--top` and `--offset` do not apply to it.
+            let (offset, limit) = if matches!(format, Format::Sarif) {
+                (0, usize::MAX)
+            } else {
+                let limit = match args.pagination.top {
+                    Some(0) => usize::MAX,
+                    Some(top) => top,
+                    None => DEFAULT_SEARCH_RESULTS,
+                };
+                (args.pagination.offset.unwrap_or(0), limit)
+            };
+            // The search must return the skipped results too.
+            let fetch = limit.saturating_add(offset);
 
             let output = if let Some(ref include) = args.include_project {
                 // Multi-repo search: combine current project with additional projects
@@ -1525,14 +1631,14 @@ fn run_search(
                 let mr = omen::semantic::multi_repo::multi_repo_search(
                     &all_projects,
                     &args.query,
-                    args.top_k,
+                    fetch,
                     args.min_score,
                 )?;
                 omen::semantic::SearchOutput::new(args.query.clone(), mr.total_symbols, mr.results)
             } else if let Some(files) = file_filter {
-                search.search_in_files(&args.query, &files, Some(args.top_k))?
+                search.search_in_files(&args.query, &files, Some(fetch))?
             } else {
-                search.search(&args.query, Some(args.top_k))?
+                search.search(&args.query, Some(fetch))?
             };
 
             // Filter by min_score
@@ -1540,6 +1646,8 @@ fn run_search(
                 .results
                 .into_iter()
                 .filter(|r| r.score >= args.min_score)
+                .skip(offset)
+                .take(limit)
                 .collect();
 
             let output = omen::semantic::SearchOutput::new(
@@ -1565,7 +1673,7 @@ fn run_search(
                         );
                         println!(
                             "   {}:{}-{}",
-                            result.file_path, result.start_line, result.end_line
+                            result.file, result.start_line, result.end_line
                         );
                         println!("   {}", result.signature);
                         println!();
@@ -1639,7 +1747,7 @@ fn run_mutation(
         .map(|s| s.trim().to_uppercase())
         .collect();
 
-    // Build analyzer. Note: the gate/--check threshold is intentionally
+    // Build analyzer. Note: the gate threshold is intentionally
     // *not* wired through `mutation::Analyzer::min_score` here (that would
     // make `analyze()` itself return `Err` before the report is written to
     // stdout, unlike every other gated command). Instead the CLI evaluates
@@ -1678,6 +1786,8 @@ fn run_mutation(
         s.finish_and_clear();
     }
 
+    write_report_file(&args.output, &serde_json::to_value(&result)?)?;
+
     // Output results
     match format {
         Format::Json | Format::JsonCompact => {
@@ -1685,8 +1795,8 @@ fn run_mutation(
             format_with_limits(
                 value,
                 format,
-                args.common.top,
-                args.common.offset,
+                args.common.pagination.top,
+                args.common.pagination.offset,
                 &mut stdout(),
             )?;
         }
@@ -1728,11 +1838,11 @@ fn run_mutation(
                 // markdown --top N` doesn't dump every file while JSON does
                 // not. Summary totals above are computed from the full
                 // `result`, not this paginated slice.
-                let offset = args.common.offset.unwrap_or(0);
-                let top = args.common.top.unwrap_or(0); // 0 = unlimited
+                let offset = args.common.pagination.offset.unwrap_or(0);
+                let top = args.common.pagination.top.unwrap_or(0); // 0 = unlimited
                 let limit = if top == 0 { usize::MAX } else { top };
                 for file in result.files.iter().skip(offset).take(limit) {
-                    println!("### {} (score: {:.1}%)\n", file.path, file.score * 100.0);
+                    println!("### {} (score: {:.1}%)\n", file.file, file.score * 100.0);
                     if file.skipped > 0 {
                         println!(
                             "- Killed: {}, Survived: {}, Skipped: {}, Timeout: {}, Error: {}\n",
@@ -1781,19 +1891,15 @@ fn run_mutation(
             format_with_limits(
                 value,
                 format,
-                args.common.top,
-                args.common.offset,
+                args.common.pagination.top,
+                args.common.pagination.offset,
                 &mut stdout(),
             )?;
         }
     }
 
-    // Gate/check: fail if the mutation score is below --min-score. Uses the
-    // same shared `resolve_gate_mode`/`gate_dispatch` helpers as complexity,
-    // score, and stubs, so `--gate error` (and the deprecated `--check`
-    // alias) consistently exits 2 via `Error::ThresholdViolation` rather than
-    // the generic `Error::Analysis` this used to return.
-    let gate = resolve_gate_mode(args.gate, args.check);
+    // The gate fails if the mutation score is below `--min-score`.
+    let gate = resolve_gate_mode(args.gate.mode, config.gate.mutation);
     if gate != GateMode::Off && result.summary.mutation_score < args.min_score {
         let message = format!(
             "Mutation score {:.1}% is below minimum threshold {:.1}%",
@@ -1828,7 +1934,7 @@ fn run_mutation(
             Ok(mut f) => {
                 let mut count = 0;
                 for file_result in &result.files {
-                    let source = std::fs::read_to_string(&file_result.path).unwrap_or_default();
+                    let source = std::fs::read_to_string(&file_result.file).unwrap_or_default();
 
                     for mutation_result in &file_result.mutants {
                         let was_killed = match mutation_result.status {
@@ -1896,19 +2002,32 @@ fn run_outline(
         analyzer.analyze(&ctx)?
     };
 
+    // `--top` and `--offset` page the `files` list in each format. The shared
+    // rule for nested lists pages `files[].functions`, so it does not apply.
+    // SARIF keeps each finding.
+    let mut result = result;
+    let mut omitted = 0;
+    if !matches!(format, Format::Sarif) {
+        let offset = args.common.pagination.offset.unwrap_or(0);
+        let limit = match args.common.pagination.top {
+            Some(0) | None => usize::MAX,
+            Some(top) => top,
+        };
+        let after_offset = result.files.len().saturating_sub(offset);
+        result.files = result.files.into_iter().skip(offset).take(limit).collect();
+        omitted = after_offset - result.files.len();
+    }
+
     match format {
         Format::Markdown | Format::Text => {
             print!("{}", result.to_markdown());
         }
         _ => {
-            let value = serde_json::to_value(&result)?;
-            omen::output::format_with_limits(
-                value,
-                format,
-                args.common.top,
-                args.common.offset,
-                &mut std::io::stdout(),
-            )?;
+            let mut value = serde_json::to_value(&result)?;
+            if omitted > 0 {
+                value["files_omitted"] = omitted.into();
+            }
+            format_with_limits(value, format, None, None, &mut stdout())?;
         }
     }
     Ok(())
@@ -1937,8 +2056,8 @@ fn run_impact(
     format_with_limits(
         value,
         format,
-        args.common.top,
-        args.common.offset,
+        args.common.pagination.top,
+        args.common.pagination.offset,
         &mut std::io::stdout(),
     )?;
     Ok(())
@@ -1965,8 +2084,8 @@ fn run_symbol(
     format_with_limits(
         value,
         format,
-        args.common.top,
-        args.common.offset,
+        args.common.pagination.top,
+        args.common.pagination.offset,
         &mut std::io::stdout(),
     )?;
     Ok(())
@@ -2018,9 +2137,7 @@ fn run_eval(args: &EvalArgs, format: Format) -> omen::core::Result<()> {
     let report = omen::eval::score(&registration, runs)?;
     let value = serde_json::to_value(&report)?;
 
-    if let Some(path) = &args.output {
-        std::fs::write(path, format!("{}\n", serde_json::to_string_pretty(&value)?))?;
-    }
+    write_report_file(&args.output, &value)?;
     format_with_limits(value, format, None, None, &mut stdout())?;
 
     if !report.reported_outcome_gate {
@@ -2126,51 +2243,25 @@ mod tests {
     }
 
     #[test]
-    fn resolve_gate_mode_no_gate_no_check_is_off() {
-        assert_eq!(resolve_gate_mode(None, false), GateMode::Off);
+    fn resolve_gate_mode_uses_the_configuration_without_a_flag() {
+        assert_eq!(resolve_gate_mode(None, GateMode::Off), GateMode::Off);
+        assert_eq!(resolve_gate_mode(None, GateMode::Error), GateMode::Error);
     }
 
     #[test]
-    fn resolve_gate_mode_explicit_gate_used_when_check_false() {
-        assert_eq!(resolve_gate_mode(Some(GateMode::Off), false), GateMode::Off);
+    fn resolve_gate_mode_flag_overrides_the_configuration() {
         assert_eq!(
-            resolve_gate_mode(Some(GateMode::Warn), false),
+            resolve_gate_mode(Some(GateMode::Off), GateMode::Error),
+            GateMode::Off
+        );
+        assert_eq!(
+            resolve_gate_mode(Some(GateMode::Warn), GateMode::Off),
             GateMode::Warn
         );
         assert_eq!(
-            resolve_gate_mode(Some(GateMode::Error), false),
+            resolve_gate_mode(Some(GateMode::Error), GateMode::Off),
             GateMode::Error
         );
-    }
-
-    #[test]
-    fn resolve_gate_mode_bare_check_maps_to_error() {
-        // --check with no --gate at all: preserves every pre-existing --check
-        // invocation, which must still exit 2 on violation.
-        assert_eq!(resolve_gate_mode(None, true), GateMode::Error);
-    }
-
-    #[test]
-    fn resolve_gate_mode_explicit_gate_wins_over_check() {
-        // --gate warn --check: --gate must win, not silently escalate to error.
-        assert_eq!(
-            resolve_gate_mode(Some(GateMode::Warn), true),
-            GateMode::Warn
-        );
-        assert_eq!(
-            resolve_gate_mode(Some(GateMode::Error), true),
-            GateMode::Error
-        );
-    }
-
-    #[test]
-    fn resolve_gate_mode_explicit_gate_off_wins_over_check() {
-        // Regression: `--check --gate off` must resolve to Off, not silently
-        // escalate to Error just because the bare-check branch also produces
-        // Error. Before the fix, `gate: GateMode` (non-Option, defaulting to
-        // Off) made an explicit `--gate off` indistinguishable from "no
-        // --gate at all", so this case incorrectly resolved to Error.
-        assert_eq!(resolve_gate_mode(Some(GateMode::Off), true), GateMode::Off);
     }
 
     #[test]

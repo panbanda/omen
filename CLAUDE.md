@@ -96,7 +96,7 @@ files.par_iter()
 
 **Configuration**: Automatic discovery loads TOML from `omen.toml` and `.omen/omen.toml`. An explicit `--config` path supports TOML, YAML, or JSON. Environment variables with the `OMEN_` prefix override file values. Config types use `#[serde(deny_unknown_fields)]`, so unknown keys are errors. See `omen.example.toml` for a representative configuration.
 
-**MCP server**: JSON-RPC server in `mcp/` module exposing all analyzers as tools for LLM integration. Tool names are bare analyzer names (e.g., `complexity`, `satd`, `stubs`, `temporal`, `outline`, `impact`, `get_symbol`) -- no prefix. All tools support `limit`/`offset` envelope pagination (default limit: 50). `McpServer::tool_names()` is the single source of truth; the manifest reads from it. The `stubs` tool is read-only and does not expose the CLI's `--gate` option.
+**MCP server**: The `mcp/` module is a JSON-RPC server that gives each analyzer to an LLM as a tool. A tool name is the bare analyzer name, without a prefix. One `ToolSpec` in `src/mcp/tools/` describes each tool: its name, description, parameters, pagination target, and handler. The server makes the `tools/list` schema, the validation of arguments, and `McpServer::tool_names()` from these specifications. The manifest reads `tool_names()`. To add or change a tool or a parameter, change its `ToolSpec` only. The `stubs` tool is read-only and does not have the `--gate` option of the CLI.
 
 **`--since` flag**: `score trend --since` defaults to `"all"`; `report generate --since` defaults to `"1y"`. The value `"all"` is handled by `is_since_all()` in `src/git/log.rs`, which causes `parse_since_to_days()` to return `None` (no time limit). Duration values like `3m`, `6m`, and `1y` still work.
 
@@ -134,13 +134,19 @@ Top-level commands (flat structure):
 - `search` - Semantic symbol search (`index` and `query`)
 - `mcp` - Start MCP server
 
-**Global options**: `-p/--path`, `-f/--format`, `-c/--config`, `-v/--verbose`, `-j/--jobs`, `--ref`, and `--shallow`. `--compact` is a clap global flag, so it may appear before or after a subcommand; with `-f json` it emits minified single-line JSON and is ignored for other formats.
+**Global options**: `-p/--path`, `-f/--format`, `-c/--config`, `-v/--verbose`, `-j/--jobs`, `--ref`, `--shallow`, and `--compact` are clap global flags, so each can appear before or after a subcommand. `-p` is always the repository path. The `complexity`, `score`, `stubs`, and `mutation` commands take `--gate off|warn|error`; if the flag is absent, the `[gate]` table of the configuration gives the mode. `--output` is the file that receives the report on `report render`, `eval`, and `mutation`. With `--compact`, with `-f json` it emits minified single-line JSON and is ignored for other formats.
 
 **Pagination flags** (most analyzers): `--top N` (limit to N results), `--offset N` (skip first N results). Combine for pagination.
 
 **Special safety flags**: `deadcode --cargo-check` executes `cargo check`, including build scripts, and is for trusted repositories only. Mutation testing refuses dirty working trees unless `mutation --allow-dirty` is supplied. MCP transport is stdio-only; `mcp --allow-external-paths` permits tool paths outside the configured repository root.
 
-**MCP server**: `McpServer::tool_names()` defines the complete tool list: `context`, `outline`, `complexity`, `satd`, `deadcode`, `churn`, `clones`, `defect`, `changes`, `diff`, `tdg`, `graph`, `hotspot`, `temporal`, `ownership`, `cohesion`, `repomap`, `smells`, `flags`, `score`, `semantic_search`, `get_symbol`, `impact`, and `semantic_search_hyde`. Every tool honors its advertised input schema and supports `limit`/`offset` envelope pagination (default limit: 50). JSON tool output is compact.
+**MCP tool list**: `context`, `outline`, `complexity`, `satd`, `deadcode`, `stubs`, `churn`, `clones`, `defect`, `changes`, `diff`, `tdg`, `graph`, `hotspot`, `temporal`, `ownership`, `cohesion`, `repomap`, `smells`, `flags`, `score`, `semantic_search`, `get_symbol`, `task_context`, `impact`, `semantic_search_hyde`. A test compares this line with `McpServer::tool_names()`.
+
+**MCP contract** (see `docs/MCP_CONTEXT.md`):
+
+- Validation: the server validates each call against the tool specification. Each input schema has `additionalProperties: false`. A missing, invalid, or unknown argument is an error (`missing_argument`, `invalid_argument`, `unknown_argument`). The server does not replace an incorrect value with a default. One call reports all its problems.
+- Errors: a JSON-RPC error object is only for a protocol fault (parse error, unknown method, unknown tool). Each other failure is a tool result with `isError: true` and `{"error": {"code", "message", "param", "expected", "received", "suggestions", "next"}}`. The other codes are `not_found`, `ambiguous`, `path_outside_root`, `git_unavailable`, and `internal`.
+- Envelope: each tool gives `tool`, `total_items`, `returned`, `offset`, `has_more`, `next_offset`, `truncated`, and `result`. Each tool has `limit` (default 50) and `offset`, but not `task_context`, which has a byte budget. The JSON is compact.
 
 ### Report System
 

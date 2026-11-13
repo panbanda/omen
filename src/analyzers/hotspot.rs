@@ -201,9 +201,9 @@ impl Analyzer {
                 .iter()
                 .map(|result| FileComplexity {
                     path: result
-                        .path
+                        .file
                         .strip_prefix("./")
-                        .unwrap_or(&result.path)
+                        .unwrap_or(&result.file)
                         .to_string(),
                     total_cyclomatic: result.total_cyclomatic,
                     avg_cyclomatic: result.avg_cyclomatic,
@@ -442,7 +442,7 @@ mod tests {
     fn test_with_precomputed_complexity() {
         let analysis = complexity::Analysis {
             files: vec![complexity::FileResult {
-                path: "./src/lib.rs".to_string(),
+                file: "./src/lib.rs".to_string(),
                 language: "rust".to_string(),
                 functions: Vec::new(),
                 total_cyclomatic: 3,

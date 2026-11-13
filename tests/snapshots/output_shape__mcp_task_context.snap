@@ -9,6 +9,9 @@ expression: "shape(&response, &dynamic_key_objects)"
     "content": [
       {
         "text": {
+          "has_more": "bool",
+          "next_offset": "null",
+          "offset": "number",
           "result": {
             "ambiguous": "bool",
             "cache": {
@@ -87,7 +90,10 @@ expression: "shape(&response, &dynamic_key_objects)"
               ]
             }
           },
-          "tool": "string"
+          "returned": "number",
+          "tool": "string",
+          "total_items": "number",
+          "truncated": []
         },
         "type": "string"
       }

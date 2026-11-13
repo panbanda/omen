@@ -1,0 +1,15 @@
+---
+source: tests/output_shape.rs
+expression: body
+---
+{
+  "error": {
+    "code": "missing_argument",
+    "expected": "a string",
+    "message": "The argument `symbol` is necessary.",
+    "next": "Send the call again with `symbol`.",
+    "param": "symbol",
+    "received": null,
+    "suggestions": []
+  }
+}

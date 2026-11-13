@@ -148,7 +148,7 @@ impl AnalyzerTrait for Analyzer {
                 ctx.report_progress(current, total_files);
 
                 if let Some(result) = result.as_mut() {
-                    result.path = path.to_string_lossy().to_string();
+                    result.file = path.to_string_lossy().to_string();
                 }
                 result
             })
@@ -217,7 +217,7 @@ impl Analysis {
                     })
                     .map(|func| Violation {
                         name: func.name.clone(),
-                        file: file.path.clone(),
+                        file: file.file.clone(),
                         line: func.start_line,
                         cyclomatic: func.metrics.cyclomatic,
                         cognitive: func.metrics.cognitive,
@@ -237,7 +237,7 @@ impl Analysis {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileResult {
     /// File path.
-    pub path: String,
+    pub file: String,
     /// Detected language.
     pub language: String,
     /// Per-function results.
@@ -311,7 +311,7 @@ pub struct AnalysisSummary {
 fn analyze_parse_result(result: &ParseResult) -> FileResult {
     let functions = parser::extract_functions(result);
     let mut file_result = FileResult {
-        path: result.path.to_string_lossy().to_string(),
+        file: result.path.to_string_lossy().to_string(),
         language: result.language.to_string(),
         functions: Vec::with_capacity(functions.len()),
         total_cyclomatic: 0,
@@ -790,7 +790,7 @@ mod tests {
     fn test_check_thresholds_passes_when_under() {
         let analysis = Analysis {
             files: vec![FileResult {
-                path: "test.rs".to_string(),
+                file: "test.rs".to_string(),
                 language: "rust".to_string(),
                 functions: vec![FunctionResult {
                     name: "simple_fn".to_string(),
@@ -819,7 +819,7 @@ mod tests {
     fn test_check_thresholds_fails_when_cyclomatic_exceeded() {
         let analysis = Analysis {
             files: vec![FileResult {
-                path: "test.rs".to_string(),
+                file: "test.rs".to_string(),
                 language: "rust".to_string(),
                 functions: vec![FunctionResult {
                     name: "complex_fn".to_string(),
@@ -852,7 +852,7 @@ mod tests {
     fn test_check_thresholds_fails_when_cognitive_exceeded() {
         let analysis = Analysis {
             files: vec![FileResult {
-                path: "test.rs".to_string(),
+                file: "test.rs".to_string(),
                 language: "rust".to_string(),
                 functions: vec![FunctionResult {
                     name: "nested_fn".to_string(),
@@ -884,7 +884,7 @@ mod tests {
     fn test_check_thresholds_multiple_violations() {
         let analysis = Analysis {
             files: vec![FileResult {
-                path: "test.rs".to_string(),
+                file: "test.rs".to_string(),
                 language: "rust".to_string(),
                 functions: vec![
                     FunctionResult {

@@ -438,7 +438,7 @@ pub fn compute_from_data_dir(data_dir: &std::path::Path, file_count: usize) -> R
     let complexity = load(data_dir, "complexity.json");
     let satd = load(data_dir, "satd.json");
     let stubs = load(data_dir, "stubs.json");
-    let duplicates = load(data_dir, "duplicates.json");
+    let duplicates = load(data_dir, "clones.json");
     let cohesion = load(data_dir, "cohesion.json");
     let tdg = load(data_dir, "tdg.json");
     let graph = load(data_dir, "graph.json");
@@ -1643,7 +1643,7 @@ mod tests {
         let uniform = crate::analyzers::graph::Analysis {
             nodes: (0..100)
                 .map(|i| crate::analyzers::graph::Node {
-                    path: format!("file{i}.rs"),
+                    file: format!("file{i}.rs"),
                     pagerank: 0.01,
                     betweenness: 0.01,
                     in_degree: 1,
@@ -1664,7 +1664,7 @@ mod tests {
             nodes: {
                 let mut nodes: Vec<_> = (0..100)
                     .map(|i| crate::analyzers::graph::Node {
-                        path: format!("file{i}.rs"),
+                        file: format!("file{i}.rs"),
                         pagerank: 0.01,
                         betweenness: 0.01,
                         in_degree: 0,
@@ -1702,7 +1702,7 @@ mod tests {
             nodes: {
                 let mut nodes: Vec<_> = (0..4835)
                     .map(|i| crate::analyzers::graph::Node {
-                        path: format!("file{i}.rs"),
+                        file: format!("file{i}.rs"),
                         pagerank: 0.0002,
                         betweenness: 0.0,
                         in_degree: 0,
