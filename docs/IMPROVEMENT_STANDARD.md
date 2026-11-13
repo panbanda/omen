@@ -25,7 +25,7 @@ Missing edges must never be interpreted as proof that a change is safe.
 | Reliability | Errors, timeouts, malformed output, determinism | Zero failures; never drop failed observations |
 | Real repositories | Pinned revisions, reviewed expected relationships | Report partial labels as partial, never whole-repository accuracy |
 | Code editing | Held-out fixes, independent project tests, compile success, wrong edits | Paired runs with identical model snapshot and tool/token budgets |
-| Retrieval | Recall@k and MRR on independently labeled questions | Separate from call accuracy |
+| Retrieval | Hit@k (an acceptable answer in the first k) and MRR on independently labeled questions, per language and query type | Separate from call accuracy |
 | Resources | Cold/warm p50/p95, peak RSS, output bytes, actual tokens and cost | Pre-register margins; bytes are not tokens |
 | Impact and identity | Overloads, scopes, transitive dependencies, revision changes | Separate labeled tests |
 

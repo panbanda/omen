@@ -4,14 +4,16 @@
 //! This module is pure. It reads no file and runs no search. `tests/retrieval.rs`
 //! loads the corpus, runs the engine, and calls this module.
 //!
-//! A query lists one or more acceptable symbols. A query has a hit at `k` if
-//! one of these symbols is in the first `k` results. `recall@k` is the fraction
-//! of the queries that have a hit at `k`. A query that expects no result is a
-//! negative query. It has no recall and no reciprocal rank, so the metrics do
-//! not include it.
+//! A query lists one or more acceptable symbols. Each of them is a correct
+//! answer, and the engine must find one of them, not all of them. A query has a
+//! hit at `k` if one of these symbols is in the first `k` results. `hit@k` is
+//! the fraction of the queries that have a hit at `k`. It is not recall: the
+//! harness does not count the acceptable symbols that the engine finds. A
+//! query that expects no result is a negative query. It has no hit and no
+//! reciprocal rank, so the metrics do not include it.
 //!
-//! The metrics are for each language and for each query type. This module does
-//! not give one number for all queries.
+//! The metrics are for each pair of a language and a query type. This module
+//! does not give a number that pools languages or query types.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -648,9 +650,9 @@ pub struct Metrics {
     pub queries: usize,
     /// The number of negative queries. The other values do not include them.
     pub negative_queries: usize,
-    pub recall_at_1: Option<f64>,
-    pub recall_at_5: Option<f64>,
-    pub recall_at_10: Option<f64>,
+    pub hit_at_1: Option<f64>,
+    pub hit_at_5: Option<f64>,
+    pub hit_at_10: Option<f64>,
     /// The mean of `1 / rank` of the first acceptable symbol in the complete
     /// result list. It has no cut at ten results. A query with no acceptable
     /// symbol in its results adds 0.
@@ -683,45 +685,16 @@ pub fn metrics<'a>(outcomes: impl IntoIterator<Item = &'a Outcome>) -> Metrics {
     Metrics {
         queries,
         negative_queries,
-        recall_at_1: mean(hits[0] as f64),
-        recall_at_5: mean(hits[1] as f64),
-        recall_at_10: mean(hits[2] as f64),
+        hit_at_1: mean(hits[0] as f64),
+        hit_at_5: mean(hits[1] as f64),
+        hit_at_10: mean(hits[2] as f64),
         mrr: mean(reciprocal_ranks),
     }
 }
 
-/// The metrics for each language.
-pub fn metrics_by_language(outcomes: &[Outcome]) -> BTreeMap<String, Metrics> {
-    let languages: BTreeSet<&str> = outcomes
-        .iter()
-        .map(|outcome| outcome.language.as_str())
-        .collect();
-    languages
-        .into_iter()
-        .map(|language| {
-            let group = outcomes
-                .iter()
-                .filter(|outcome| outcome.language == language);
-            (language.to_string(), metrics(group))
-        })
-        .collect()
-}
-
-/// The metrics for each query type. Each type has an entry, also a type that
-/// has no query.
-pub fn metrics_by_type(outcomes: &[Outcome]) -> BTreeMap<String, Metrics> {
-    QueryType::ALL
-        .into_iter()
-        .map(|query_type| {
-            let group = outcomes
-                .iter()
-                .filter(|outcome| outcome.query_type == query_type);
-            (query_type.as_str().to_string(), metrics(group))
-        })
-        .collect()
-}
-
-/// The metrics for each language and query type.
+/// The metrics for each language and query type. Each language of the
+/// outcomes has a row for each query type, also a type that has no query. No
+/// row pools two languages or two query types.
 pub fn metrics_by_language_and_type(outcomes: &[Outcome]) -> BTreeMap<(String, String), Metrics> {
     let languages: BTreeSet<&str> = outcomes
         .iter()
@@ -746,23 +719,27 @@ fn cell(value: Option<f64>) -> String {
     value.map_or_else(|| "null".to_string(), |value| format!("{value:.3}"))
 }
 
-/// Text table with one row for each group.
-pub fn render_table<'a>(
-    heading: &str,
-    rows: impl IntoIterator<Item = (String, &'a Metrics)>,
-) -> String {
+/// Text table with one row for each language and query type.
+pub fn render_table(table: &BTreeMap<(String, String), Metrics>) -> String {
     let mut out = format!(
-        "{heading:<28} {:>7} {:>8} {:>8} {:>8} {:>9} {:>17}\n",
-        "queries", "negative", "recall@1", "recall@5", "recall@10", "mrr (all results)"
+        "{:<10} {:<16} {:>7} {:>8} {:>8} {:>8} {:>9} {:>17}\n",
+        "language",
+        "query type",
+        "queries",
+        "negative",
+        "hit@1",
+        "hit@5",
+        "hit@10",
+        "mrr (all results)"
     );
-    for (name, metrics) in rows {
+    for ((language, query_type), metrics) in table {
         out.push_str(&format!(
-            "{name:<28} {:>7} {:>8} {:>8} {:>8} {:>9} {:>17}\n",
+            "{language:<10} {query_type:<16} {:>7} {:>8} {:>8} {:>8} {:>9} {:>17}\n",
             metrics.queries,
             metrics.negative_queries,
-            cell(metrics.recall_at_1),
-            cell(metrics.recall_at_5),
-            cell(metrics.recall_at_10),
+            cell(metrics.hit_at_1),
+            cell(metrics.hit_at_5),
+            cell(metrics.hit_at_10),
             cell(metrics.mrr),
         ));
     }
@@ -878,9 +855,9 @@ mod tests {
         let result = metrics(&outcomes);
 
         assert_eq!(result.queries, 4);
-        assert_eq!(result.recall_at_1, Some(0.25));
-        assert_eq!(result.recall_at_5, Some(0.5));
-        assert_eq!(result.recall_at_10, Some(0.75));
+        assert_eq!(result.hit_at_1, Some(0.25));
+        assert_eq!(result.hit_at_5, Some(0.5));
+        assert_eq!(result.hit_at_10, Some(0.75));
         assert_eq!(result.mrr, Some((1.0 + 1.0 / 5.0 + 1.0 / 10.0) / 4.0));
     }
 
@@ -890,54 +867,54 @@ mod tests {
 
         assert_eq!(result.queries, 0);
         assert_eq!(result.negative_queries, 1);
-        assert_eq!(result.recall_at_1, None);
-        assert_eq!(result.recall_at_5, None);
-        assert_eq!(result.recall_at_10, None);
+        assert_eq!(result.hit_at_1, None);
+        assert_eq!(result.hit_at_5, None);
+        assert_eq!(result.hit_at_10, None);
         assert_eq!(result.mrr, None);
         let json = serde_json::to_value(result).unwrap();
-        assert!(json["recall_at_10"].is_null());
+        assert!(json["hit_at_10"].is_null());
         assert!(json["mrr"].is_null());
     }
 
     #[test]
-    fn a_negative_query_does_not_change_the_recall() {
+    fn a_negative_query_does_not_change_the_hit_rate() {
         let with_negative = metrics(&[
             outcome("rust", "q", &["a"], &["a"]),
             outcome("rust", "x", &[], &["a"]),
         ]);
 
-        assert_eq!(with_negative.recall_at_1, Some(1.0));
+        assert_eq!(with_negative.hit_at_1, Some(1.0));
         assert_eq!(with_negative.mrr, Some(1.0));
         assert_eq!(with_negative.negative_queries, 1);
     }
 
-    #[test]
-    fn metrics_are_separate_for_each_language() {
-        let outcomes = [
-            outcome("go", "q", &["a"], &["a"]),
-            outcome("rust", "q", &["a"], &["b"]),
-        ];
-
-        let table = metrics_by_language(&outcomes);
-
-        assert_eq!(table.len(), 2);
-        assert_eq!(table["go"].recall_at_1, Some(1.0));
-        assert_eq!(table["rust"].recall_at_1, Some(0.0));
+    fn pair(language: &str, query_type: QueryType) -> (String, String) {
+        (language.to_string(), query_type.as_str().to_string())
     }
 
     #[test]
-    fn metrics_are_separate_for_each_query_type() {
+    fn metrics_are_separate_for_each_language_and_each_query_type() {
+        // No cell pools two languages or two query types.
         let outcomes = [
-            typed(QueryType::Identifier, &["a"], &["a"]),
+            outcome("go", "q", &["a"], &["a"]),
+            outcome("rust", "q", &["a"], &["b"]),
             typed(QueryType::CodeSketch, &["a"], &["b", "a"]),
         ];
 
-        let table = metrics_by_type(&outcomes);
+        let table = metrics_by_language_and_type(&outcomes);
 
-        assert_eq!(table["identifier"].mrr, Some(1.0));
-        assert_eq!(table["code_sketch"].mrr, Some(0.5));
-        assert_eq!(table["natural_language"].queries, 0);
-        assert_eq!(table["natural_language"].mrr, None);
+        assert_eq!(table.len(), 6);
+        assert_eq!(
+            table[&pair("go", QueryType::Identifier)].hit_at_1,
+            Some(1.0)
+        );
+        assert_eq!(
+            table[&pair("rust", QueryType::Identifier)].hit_at_1,
+            Some(0.0)
+        );
+        assert_eq!(table[&pair("rust", QueryType::CodeSketch)].mrr, Some(0.5));
+        assert_eq!(table[&pair("go", QueryType::CodeSketch)].queries, 0);
+        assert_eq!(table[&pair("go", QueryType::CodeSketch)].mrr, None);
     }
 
     #[test]
@@ -946,7 +923,7 @@ mod tests {
 
         assert_eq!(table.len(), 3);
         let key = ("rust".to_string(), "identifier".to_string());
-        assert_eq!(table[&key].recall_at_1, Some(1.0));
+        assert_eq!(table[&key].hit_at_1, Some(1.0));
     }
 
     #[test]
@@ -1109,21 +1086,19 @@ mod tests {
 
     #[test]
     fn the_table_shows_null_for_an_undefined_value() {
-        let table = metrics_by_type(&[typed(QueryType::Identifier, &["a"], &["b", "a"])]);
+        let table =
+            metrics_by_language_and_type(&[typed(QueryType::Identifier, &["a"], &["b", "a"])]);
 
-        let text = render_table(
-            "query type",
-            table.iter().map(|(name, metrics)| (name.clone(), metrics)),
-        );
+        let text = render_table(&table);
 
         let identifier = text
             .lines()
-            .find(|line| line.starts_with("identifier"))
+            .find(|line| line.starts_with("rust") && line.contains("identifier"))
             .unwrap();
         assert!(identifier.contains("0.500"), "{text}");
         let natural = text
             .lines()
-            .find(|line| line.starts_with("natural_language"))
+            .find(|line| line.contains("natural_language"))
             .unwrap();
         assert!(natural.contains("null"), "{text}");
     }
@@ -1194,18 +1169,31 @@ mod tests {
 
     #[test]
     fn the_table_says_that_the_mrr_uses_all_results() {
-        let table = metrics_by_type(&[]);
-
-        let text = render_table(
-            "query type",
-            table.iter().map(|(name, metrics)| (name.clone(), metrics)),
-        );
+        let text = render_table(&BTreeMap::new());
 
         assert!(
             text.lines().next().unwrap().contains("mrr (all results)"),
             "{text}"
         );
     }
+    #[test]
+    fn the_table_names_the_hit_rate_and_not_recall() {
+        // One acceptable symbol of four in the first result is a hit. The
+        // value is a hit rate, so the name must not be recall.
+        let found = metrics(&[outcome("rust", "q", &["a", "b", "c", "d"], &["a"])]);
+        let table = BTreeMap::from([(("rust".to_string(), "identifier".to_string()), found)]);
+
+        let text = render_table(&table);
+
+        let heading = text.lines().next().unwrap();
+        assert!(heading.contains("hit@1"), "{text}");
+        assert!(!text.contains("recall"), "{text}");
+        let json = serde_json::to_value(found).unwrap();
+        assert_eq!(json["hit_at_1"], 1.0);
+        let keys: Vec<&String> = json.as_object().unwrap().keys().collect();
+        assert!(!keys.iter().any(|key| key.contains("recall")), "{json}");
+    }
+
     fn rank(id: &str, rank: Option<usize>) -> RankEntry {
         RankEntry {
             id: id.to_string(),

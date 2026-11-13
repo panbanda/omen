@@ -25,9 +25,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use omen::benchmark::retrieval::{
-    assertions, check_ranks, expected_locations, ledger_growth, metrics_by_language,
-    metrics_by_language_and_type, metrics_by_type, rank_baseline, rank_growth, render_table,
-    validate, worst_case_order, Corpus, Outcome, RankEntry,
+    assertions, check_ranks, expected_locations, ledger_growth, metrics_by_language_and_type,
+    rank_baseline, rank_growth, render_table, validate, worst_case_order, Corpus, Outcome,
+    RankEntry,
 };
 use omen::benchmark::truth::{bless, check_ledger, Labels, LedgerEntry, Location};
 use omen::config::Config;
@@ -176,37 +176,7 @@ fn search_results_agree_with_the_labels_or_the_ledger() {
         std::fs::write(root.join(RANKS_FILE), text).unwrap();
     }
 
-    let by_language = metrics_by_language(&outcomes);
-    let by_type = metrics_by_type(&outcomes);
-    let by_pair = metrics_by_language_and_type(&outcomes);
-    println!(
-        "{}",
-        render_table(
-            "language",
-            by_language
-                .iter()
-                .map(|(name, metrics)| (name.clone(), metrics))
-        )
-    );
-    println!(
-        "{}",
-        render_table(
-            "query type",
-            by_type
-                .iter()
-                .map(|(name, metrics)| (name.clone(), metrics))
-        )
-    );
-    println!(
-        "{}",
-        render_table(
-            "language and query type",
-            by_pair.iter().map(|((language, query_type), metrics)| (
-                format!("{language} {query_type}"),
-                metrics
-            ))
-        )
-    );
+    println!("{}", render_table(&metrics_by_language_and_type(&outcomes)));
 
     let violations = check_ledger(&assertions, &load_ledger(&root));
     let mut report: Vec<String> = violations.iter().map(ToString::to_string).collect();
