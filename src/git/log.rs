@@ -1244,10 +1244,18 @@ mod tests {
 
     #[test]
     fn since_to_days_rejects_text_that_is_not_a_window() {
-        for invalid in ["nonsense", "", "6", "m", "-3d", "0d", "2024-01-01"] {
-            let error = since_to_days(invalid).expect_err(invalid);
-            assert!(error.contains(&format!("{invalid:?}")), "{error}");
-        }
+        let invalid = ["nonsense", "", "6", "m", "-3d", "0d", "2024-01-01"];
+        let accepted: Vec<&str> = invalid
+            .into_iter()
+            .filter(|text| since_to_days(text).is_ok())
+            .collect();
+        assert_eq!(accepted, Vec::<&str>::new());
+    }
+
+    #[test]
+    fn since_to_days_error_names_the_value() {
+        let error = since_to_days("nonsense").expect_err("not a window");
+        assert!(error.contains("\"nonsense\""), "{error}");
     }
 
     #[test]

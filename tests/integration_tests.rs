@@ -3335,16 +3335,21 @@ fn test_an_invalid_configured_churn_window_is_rejected() {
         "[churn]\nsince = \"nonsense\"\n",
     )
     .unwrap();
-    for command in ["churn", "complexity"] {
-        omen()
-            .arg("-p")
-            .arg(directory.path())
-            .args(["-f", "json", command])
-            .assert()
-            .failure()
-            .stderr(predicate::str::contains("churn.since"))
-            .stderr(predicate::str::contains("\"nonsense\""));
-    }
+    assert_rejects_the_configured_window(directory.path(), "churn");
+    // The check applies when omen loads the configuration, thus a command
+    // that does not read the window also rejects it.
+    assert_rejects_the_configured_window(directory.path(), "complexity");
+}
+
+fn assert_rejects_the_configured_window(repository: &std::path::Path, command: &str) {
+    omen()
+        .arg("-p")
+        .arg(repository)
+        .args(["-f", "json", command])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("churn.since"))
+        .stderr(predicate::str::contains("\"nonsense\""));
 }
 
 // ---------------------------------------------------------------------------

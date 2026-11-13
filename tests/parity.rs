@@ -268,15 +268,20 @@ fn each_tool_is_a_mirror_or_has_a_reason() {
     let with_list: BTreeSet<&str> = PRIMARY_LISTS.iter().map(|(tool, _)| *tool).collect();
     let mirrored: BTreeSet<&str> = MIRRORS.iter().map(|mirror| mirror.tool).collect();
     assert_eq!(with_list, mirrored, "each mirror has a primary list");
-    for exemption in EXEMPTIONS {
-        assert!(
-            exemption.tool == "*" || tools.contains(exemption.tool),
-            "{}",
-            exemption.tool
-        );
-        assert!(exemption.path.starts_with('/'), "{}", exemption.path);
-        assert!(!exemption.reason.is_empty(), "{}", exemption.path);
-    }
+    assert_eq!(incorrect_exemptions(&tools), Vec::<&str>::new());
+}
+
+/// The paths of the exemptions that name no tool, have no pointer, or have no
+/// reason.
+fn incorrect_exemptions(tools: &BTreeSet<&str>) -> Vec<&'static str> {
+    EXEMPTIONS
+        .iter()
+        .filter(|exemption| {
+            let known_tool = exemption.tool == "*" || tools.contains(exemption.tool);
+            !known_tool || !exemption.path.starts_with('/') || exemption.reason.is_empty()
+        })
+        .map(|exemption| exemption.path)
+        .collect()
 }
 
 fn merged(base: &str, extra: &str) -> Value {
@@ -625,7 +630,18 @@ fn command_path(mirror: &Mirror) -> &'static [&'static str] {
 
 #[test]
 fn each_parameter_and_each_flag_has_a_decision() {
-    let parameters = tool_parameters();
+    let problems = decision_problems(&tool_parameters());
+    assert!(
+        problems.is_empty(),
+        "{} problems:\n{}",
+        problems.len(),
+        problems.join("\n")
+    );
+}
+
+/// The parameters and the flags that are in no table, and the table entries
+/// that are out of date or have no reason.
+fn decision_problems(parameters: &[(String, Vec<String>)]) -> Vec<String> {
     let mut problems = Vec::new();
 
     for mirror in MIRRORS {
@@ -704,16 +720,12 @@ fn each_parameter_and_each_flag_has_a_decision() {
             ));
         }
     }
-    for (_, reason) in MCP_ONLY.iter().chain(CLI_ONLY) {
-        assert!(!reason.is_empty());
+    for ((name, entry), reason) in MCP_ONLY.iter().chain(CLI_ONLY) {
+        if reason.is_empty() {
+            problems.push(format!("`{name}` `{entry}` has no reason"));
+        }
     }
-
-    assert!(
-        problems.is_empty(),
-        "{} problems:\n{}",
-        problems.len(),
-        problems.join("\n")
-    );
+    problems
 }
 
 /// Runs `flags` on the two sides and gives the number of stale flags of each.
@@ -798,29 +810,39 @@ const KNOWN_DIFFERENCES: &[KnownDifference] = &[KnownDifference {
 #[test]
 fn each_known_difference_continues_to_exist() {
     let directory = fixture_repository();
-    let repository = directory.path();
+    let problems = known_difference_problems(directory.path());
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+/// The known differences that do not exist now, or that have no reason.
+fn known_difference_problems(repository: &Path) -> Vec<String> {
+    let mut problems = Vec::new();
     for difference in KNOWN_DIFFERENCES {
-        assert!(!difference.reason.is_empty());
+        if difference.reason.is_empty() {
+            problems.push(format!("{}: the entry has no reason", difference.tool));
+        }
         let cli = cli_json(repository, difference.command);
-        assert!(
-            cli.get("error").is_none() && cli["name"].is_string(),
-            "{}: the command gives a result: {cli}",
-            difference.tool
-        );
+        if cli.get("error").is_some() || !cli["name"].is_string() {
+            problems.push(format!(
+                "{}: the command gives no result now: {cli}",
+                difference.tool
+            ));
+        }
         let arguments: Value = serde_json::from_str(difference.arguments).expect("arguments");
         let request = json!({
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": {"name": difference.tool, "arguments": arguments}
         });
         let response = &mcp_responses(repository, &[request])[0];
-        assert_eq!(
-            response["result"]["structuredContent"]["error"]["code"],
-            json!(difference.tool_error),
-            "{}: {}",
-            difference.tool,
-            difference.reason
-        );
+        let code = &response["result"]["structuredContent"]["error"]["code"];
+        if *code != json!(difference.tool_error) {
+            problems.push(format!(
+                "{}: the tool gives the code {code}, not `{}`. {}",
+                difference.tool, difference.tool_error, difference.reason
+            ));
+        }
     }
+    problems
 }
 
 /// One configuration key that a tool reads when its argument is absent.
@@ -1012,7 +1034,12 @@ fn each_configuration_key_changes_the_result_of_its_tool() {
     let directory = fixture_repository();
     let repository = directory.path();
     add_configuration_files(repository);
+    let problems = keys_without_effect(repository);
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
 
+/// The keys for which the result is the same with the key and without it.
+fn keys_without_effect(repository: &Path) -> Vec<String> {
     let mut problems = Vec::new();
     for key in CONFIGURED_KEYS {
         let without = probe_value(repository, key, key.base);
@@ -1024,7 +1051,7 @@ fn each_configuration_key_changes_the_result_of_its_tool() {
             ));
         }
     }
-    assert!(problems.is_empty(), "{}", problems.join("\n"));
+    problems
 }
 
 #[test]
@@ -1049,12 +1076,25 @@ fn each_configuration_key_of_the_tools_has_a_discriminating_case() {
     assert_eq!(covered, expected);
 
     // Each key that a schema names is in the table.
+    let named = keys_in_the_schemas();
+    assert!(!named.is_empty());
+    let absent: Vec<&String> = named
+        .iter()
+        .filter(|key| !covered.contains(key.as_str()))
+        .collect();
+    assert_eq!(absent, Vec::<&String>::new());
+}
+
+/// The configuration keys that the descriptions in `tools/list` name.
+fn keys_in_the_schemas() -> BTreeSet<String> {
     let directory = tempfile::TempDir::new().expect("temporary directory");
     let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
     let response = &mcp_responses(directory.path(), &[request])[0];
-    let schema = response.to_string();
-    for part in schema.split("The default is `").skip(1) {
-        let named = part.split('`').next().expect("key");
-        assert!(covered.contains(named), "the schema names `{named}`");
-    }
+    response
+        .to_string()
+        .split("The default is `")
+        .skip(1)
+        .filter_map(|part| part.split('`').next())
+        .map(str::to_string)
+        .collect()
 }
