@@ -11,3 +11,4 @@ pub mod imports;
 pub mod lang;
 pub mod model;
 pub mod resolve;
+pub mod view;

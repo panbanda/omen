@@ -18,7 +18,13 @@ expression: "shape(&output, case.dynamic_key_objects)"
   "callers": [
     {
       "depth": "number",
-      "symbols": []
+      "symbols": [
+        {
+          "file": "string",
+          "line": "number",
+          "qualified_name": "string"
+        }
+      ]
     }
   ],
   "files_affected": [
@@ -26,6 +32,7 @@ expression: "shape(&output, case.dynamic_key_objects)"
   ],
   "resolution_summary": {
     "ambiguous": "number",
+    "external": "number",
     "unique_candidate": "number",
     "unresolved": "number"
   },

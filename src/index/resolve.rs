@@ -935,8 +935,14 @@ impl<'a> Resolver<'a> {
         let members = self.members(types[0], name, arity, &mut BTreeSet::new());
         // A member without a body in each candidate is abstract. A subtype
         // gives the definition, and the syntax does not tell which subtype.
+        // Ruby, Python, and Bash have no declaration without a definition: a
+        // method with an empty body, as `def name; end`, is a definition.
+        let declares = !matches!(
+            self.family(types[0].0),
+            Family::Ruby | Family::Python | Family::Bash
+        );
         let is_abstract = |id: &Id| self.symbol(*id).body_range.is_none();
-        if !members.is_empty() && members.iter().all(is_abstract) {
+        if declares && !members.is_empty() && members.iter().all(is_abstract) {
             return Outcome::offered(Basis::NameOnly, self.methods_by_name(name, file));
         }
         Outcome::of(basis, members).unwrap_or_else(|| Outcome::none(Status::Unresolved))

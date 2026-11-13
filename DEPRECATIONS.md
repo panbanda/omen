@@ -123,6 +123,20 @@ use the same form. The MCP tools give the same keys as the commands.
 These changes have no compatibility shim. Each row gives the old behaviour, the
 new behaviour, and the necessary change in a client.
 
+### Symbol identifiers of `symbol` and `impact`
+
+The commands `symbol` and `impact`, and the MCP tools `get_symbol` and
+`impact`, read the shared index. The other commands do not.
+
+| Area | Before 5.0 | From 5.0 | Change in a client |
+|---|---|---|---|
+| `qualified_name` in the output | `file:name`. Two definitions with one name in one file had the same identifier. | The key of the symbol: `file#Container.name`, with `~2` for a second definition of the name in one container. | Do not parse the identifier. Give it back as it is. The four tools accept the two forms as input, and the other tools accept the new form. |
+| `start_line` | The first line of the node, which could be an annotation. | The line of the declaration, after annotations, attributes, and decorators. | Use `start_line` with the name to select a definition. |
+| `call_resolutions` of `symbol` and `get_symbol` | One entry for each called name. `basis` was always a string. | One entry for each call site, with its `line`. `basis` is `null` when no rule applied. `status` can be `external`. | Read `line`. Accept `null` for `basis`. |
+| `resolution_summary` of `impact` | `unique_candidate`, `ambiguous`, `unresolved`. | Also `external`. | None, unless the client rejects unknown keys. |
+| A call to a name without an import, in a language that needs one | An edge to the one definition with that name in the repository. | No edge. | None. |
+| `truncated` of the MCP tool `impact` | Always empty. | `/callers` and `/callees` have the number of definitions without the `depth` limit and the number in the result. | Read `truncated` to know that `depth` cut the result. |
+
 ### MCP server
 
 `docs/MCP_CONTEXT.md` has the full contract for arguments, errors, and the

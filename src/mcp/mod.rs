@@ -92,6 +92,8 @@ pub struct McpServer {
     root_path: PathBuf,
     allow_external_paths: bool,
     index_cache: std::sync::Mutex<crate::task_context::cache::IndexCache>,
+    /// The view of the shared index for `get_symbol` and `impact`.
+    view_cache: std::sync::Mutex<crate::index::view::ViewCache>,
 }
 
 impl McpServer {
@@ -109,6 +111,7 @@ impl McpServer {
             root_path,
             allow_external_paths,
             index_cache: std::sync::Mutex::new(crate::task_context::cache::IndexCache::default()),
+            view_cache: std::sync::Mutex::new(crate::index::view::ViewCache::default()),
         }
     }
 
@@ -409,6 +412,18 @@ impl McpServer {
             .map_err(|_| ToolError::internal("The lock of the index cache is poisoned."))?;
         Ok(cache.load(root, files)?)
     }
+
+    fn load_view(
+        &self,
+        root: &Path,
+        files: &[PathBuf],
+    ) -> std::result::Result<std::sync::Arc<crate::index::view::CallView>, ToolError> {
+        let mut cache = self
+            .view_cache
+            .lock()
+            .map_err(|_| ToolError::internal("The lock of the view cache is poisoned."))?;
+        Ok(cache.load(root, files)?)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -494,8 +509,8 @@ mod tests {
         assert_eq!(
             ambiguous["error"]["suggestions"],
             json!([
-                {"name": "same.rb:helper", "start_line": 2, "signature": "def helper"},
-                {"name": "same.rb:helper", "start_line": 7, "signature": "def helper"}
+                {"name": "same.rb#A.helper", "start_line": 2, "signature": "def helper"},
+                {"name": "same.rb#B.helper", "start_line": 7, "signature": "def helper"}
             ])
         );
         assert!(ambiguous.get("result").is_none());
@@ -981,7 +996,7 @@ mod tests {
                 "get_symbol",
                 json!({"path": project, "name": name, "start_line": result["start_line"]}),
             );
-            assert_eq!(symbol["result"]["qualified_name"], name);
+            assert_eq!(symbol["result"]["name"], result["symbol_name"]);
             assert_eq!(symbol["result"]["file"], file);
 
             let complexity = envelope_of(
@@ -1080,7 +1095,8 @@ mod tests {
 
         // `get_symbol` identifier -> `get_symbol`, `impact`, `task_context`.
         let identifier = symbol["result"]["qualified_name"].as_str().unwrap();
-        assert_eq!(identifier, qualified);
+        // The identifier is the key of the symbol in the shared index.
+        assert_eq!(identifier, format!("{file_path}#{function}"));
         for (tool, param) in [
             ("get_symbol", "name"),
             ("impact", "symbol"),
@@ -1107,9 +1123,19 @@ mod tests {
         let related = context["result"]["symbols"][1]["location"]["qualified_name"]
             .as_str()
             .unwrap();
+        // An identifier has the form `file:name` or the form of a key,
+        // `file#Container.name`. The two forms name one definition.
+        let identity = |identifier: &str| -> String {
+            let (file, path) = identifier
+                .split_once('#')
+                .or_else(|| identifier.rsplit_once(':'))
+                .unwrap();
+            format!("{file}:{}", path.rsplit('.').next().unwrap())
+        };
         for identifier in [caller, affected, ranked, related] {
             let found = ok("get_symbol", json!({"name": identifier}));
-            assert_eq!(found["result"]["qualified_name"], identifier);
+            let found = found["result"]["qualified_name"].as_str().unwrap();
+            assert_eq!(identity(found), identity(identifier));
         }
         let affected_file = impact["result"]["files_affected"][0].as_str().unwrap();
         ok("outline", json!({"file": affected_file}));
@@ -1133,7 +1159,8 @@ mod tests {
             "get_symbol",
             json!({"name": name, "start_line": result["start_line"]}),
         );
-        assert_eq!(found["result"]["qualified_name"], name);
+        let found = found["result"]["qualified_name"].as_str().unwrap();
+        assert_eq!(identity(found), name);
     }
 
     #[test]
@@ -1391,6 +1418,33 @@ mod tests {
         assert_eq!(body["error"]["code"], "not_found");
         assert_eq!(body["error"]["param"], "symbol");
         assert_eq!(body["error"]["suggestions"], json!(["known_symbol"]));
+    }
+
+    #[test]
+    fn impact_tells_that_the_depth_cut_the_callers() {
+        let (server, dir) = create_test_server();
+        std::fs::write(
+            dir.path().join("chain.py"),
+            "def top():\n    return middle()\n\n\ndef middle():\n    return leaf()\n\n\ndef leaf():\n    return 1\n",
+        )
+        .unwrap();
+        let cut = envelope_of(
+            &server,
+            "impact",
+            json!({"symbol": "leaf", "depth": 1, "direction": "callers"}),
+        );
+        assert_eq!(cut["result"]["total_callers"], 1);
+        assert_eq!(
+            cut["truncated"],
+            json!([{"path": "/callers", "total": 2, "returned": 1}])
+        );
+        let whole = envelope_of(
+            &server,
+            "impact",
+            json!({"symbol": "leaf", "depth": 4, "direction": "callers"}),
+        );
+        assert_eq!(whole["result"]["total_callers"], 2);
+        assert_eq!(whole["truncated"], json!([]));
     }
 
     #[test]

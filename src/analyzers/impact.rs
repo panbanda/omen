@@ -9,8 +9,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::analyzers::repomap::build_index;
 use crate::core::Result;
+use crate::index::build::CodeIndex;
+use crate::index::view::CallView;
 
 /// A single symbol reference in an impact report.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -32,7 +33,7 @@ pub struct ImpactLevel {
 pub struct ImpactReport {
     /// Evidence counts across all input files, not just the traversed subgraph.
     #[serde(default)]
-    pub resolution_summary: crate::analyzers::repomap::ResolutionSummary,
+    pub resolution_summary: crate::index::view::ResolutionSummary,
     /// The query symbol name.
     pub symbol: String,
     /// Qualified names of all resolved root symbols.
@@ -65,8 +66,17 @@ pub fn analyze(
     depth: usize,
     direction: Direction,
 ) -> Result<ImpactReport> {
-    let index = build_index(root, files)?;
+    let index = CallView::from_index(&CodeIndex::from_files(root, files));
+    Ok(analyze_view(&index, symbol, depth, direction))
+}
 
+/// Run the impact analysis on a view of the shared index.
+pub fn analyze_view(
+    index: &CallView,
+    symbol: &str,
+    depth: usize,
+    direction: Direction,
+) -> ImpactReport {
     let root_indices = index.resolve(symbol);
 
     // Unknown symbol path
@@ -83,7 +93,7 @@ pub fn analyze(
             .collect();
         suggestions.sort();
         suggestions.truncate(10);
-        return Ok(ImpactReport {
+        return ImpactReport {
             resolution_summary: index.resolution_summary(),
             symbol: symbol.to_string(),
             resolved: vec![],
@@ -93,7 +103,7 @@ pub fn analyze(
             total_callers: 0,
             total_callees: 0,
             suggestions,
-        });
+        };
     }
 
     let resolved: Vec<String> = root_indices
@@ -161,7 +171,7 @@ pub fn analyze(
     let mut files_affected: Vec<String> = files_set.into_iter().collect();
     files_affected.sort();
 
-    Ok(ImpactReport {
+    ImpactReport {
         resolution_summary: index.resolution_summary(),
         symbol: symbol.to_string(),
         resolved,
@@ -171,7 +181,7 @@ pub fn analyze(
         total_callers,
         total_callees,
         suggestions: vec![],
-    })
+    }
 }
 
 #[cfg(test)]
@@ -182,14 +192,18 @@ mod tests {
 
     fn rust_chain() -> TempDir {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("a.rs"), "fn a() { b(); }\n").unwrap();
-        fs::write(dir.path().join("b.rs"), "fn b() { c(); }\n").unwrap();
-        fs::write(dir.path().join("c.rs"), "fn c() {}\n").unwrap();
+        fs::write(
+            dir.path().join("main.rs"),
+            "mod b;\nmod c;\nfn a() { b::b(); }\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("b.rs"), "pub fn b() { crate::c::c(); }\n").unwrap();
+        fs::write(dir.path().join("c.rs"), "pub fn c() {}\n").unwrap();
         dir
     }
 
     fn all_files(dir: &TempDir) -> Vec<PathBuf> {
-        vec!["a.rs", "b.rs", "c.rs"]
+        vec!["main.rs", "b.rs", "c.rs"]
             .into_iter()
             .map(|f| dir.path().join(f))
             .collect()
@@ -207,12 +221,12 @@ mod tests {
         assert_eq!(report.callers[0].symbols.len(), 1);
         assert!(report.callers[0].symbols[0]
             .qualified_name
-            .contains("b.rs:b"));
+            .contains("b.rs#b"));
         assert_eq!(report.callers[1].depth, 2);
         assert_eq!(report.callers[1].symbols.len(), 1);
         assert!(report.callers[1].symbols[0]
             .qualified_name
-            .contains("a.rs:a"));
+            .contains("main.rs#a"));
         // callees should be empty for Callers direction
         assert!(report.callees.is_empty());
     }
@@ -266,9 +280,9 @@ mod tests {
     #[test]
     fn test_cycle_safety() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("a.rs"), "fn a() { b(); }\n").unwrap();
-        fs::write(dir.path().join("b.rs"), "fn b() { a(); }\n").unwrap();
-        let files = vec![dir.path().join("a.rs"), dir.path().join("b.rs")];
+        fs::write(dir.path().join("main.rs"), "mod b;\nfn a() { b::b(); }\n").unwrap();
+        fs::write(dir.path().join("b.rs"), "pub fn b() { crate::a(); }\n").unwrap();
+        let files = vec![dir.path().join("main.rs"), dir.path().join("b.rs")];
         // Should not hang or panic
         let report = analyze(dir.path(), &files, "a", 5, Direction::Both).unwrap();
         assert!(!report.resolved.is_empty());
@@ -330,7 +344,9 @@ mod tests {
             .map(|s| s.qualified_name.as_str())
             .collect();
         assert!(
-            callers_all.iter().any(|q| q.contains(":a")),
+            callers_all
+                .iter()
+                .any(|q| q.rsplit(['#', '.']).next() == Some("a")),
             "expected a to be a caller of b in {a_file}/{b_file}, got: {callers_all:?}"
         );
     }
@@ -338,7 +354,13 @@ mod tests {
     #[test]
     fn test_multi_lang_rust() {
         let dir = TempDir::new().unwrap();
-        run_multi_lang_test(&dir, "a.rs", "fn a() { b(); }\n", "b.rs", "fn b() {}\n");
+        run_multi_lang_test(
+            &dir,
+            "main.rs",
+            "mod b;\nfn a() { b::b(); }\n",
+            "b.rs",
+            "pub fn b() {}\n",
+        );
     }
 
     #[test]
@@ -347,9 +369,9 @@ mod tests {
         run_multi_lang_test(
             &dir,
             "a.ts",
-            "function a() { b(); }\n",
+            "import { b } from './b';\nfunction a() { b(); }\n",
             "b.ts",
-            "function b() {}\n",
+            "export function b() {}\n",
         );
     }
 
@@ -383,9 +405,9 @@ mod tests {
         run_multi_lang_test(
             &dir,
             "a.js",
-            "function a() { b(); }\n",
+            "import { b } from './b';\nfunction a() { b(); }\n",
             "b.js",
-            "function b() {}\n",
+            "export function b() {}\n",
         );
     }
 
@@ -395,9 +417,9 @@ mod tests {
         run_multi_lang_test(
             &dir,
             "a.tsx",
-            "function a() { b(); }\n",
+            "import { b } from './b';\nfunction a() { b(); }\n",
             "b.tsx",
-            "function b() {}\n",
+            "export function b() {}\n",
         );
     }
 
@@ -459,7 +481,13 @@ mod tests {
         let dir = TempDir::new().unwrap();
         // Use explicit parens so tree-sitter parses the invocation as a `call`
         // node rather than a bare identifier.
-        run_multi_lang_test(&dir, "a.rb", "def a\n  b()\nend\n", "b.rb", "def b\nend\n");
+        run_multi_lang_test(
+            &dir,
+            "a.rb",
+            "require_relative 'b'\ndef a\n  b()\nend\n",
+            "b.rb",
+            "def b\nend\n",
+        );
     }
 
     /// PHP `function_call_expression` uses a `name` child (PHP-grammar-specific).

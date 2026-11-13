@@ -1,5 +1,6 @@
 //! The tools that an agent uses to find and read code.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
@@ -9,7 +10,6 @@ use super::{
     Arguments, HandlerResult, Pagination, Param, ParamDefault, ToolData, ToolOutput, ToolSpec,
     COMPACT, MAX_COUNT, PATH,
 };
-use crate::analyzers::repomap::CallGraphIndex;
 use crate::core::{AnalysisContext, Analyzer, FileSet};
 use crate::git::GitRepo;
 use crate::mcp::envelope::Truncation;
@@ -220,8 +220,8 @@ fn get_symbol(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
     let start_line = arguments.count_u32("start_line");
     let files = absolute_files(&scope.path, &scope.file_set);
 
-    let snapshot = server.load_index(&scope.path, &files)?;
-    let index = &snapshot.index;
+    let index = server.load_view(&scope.path, &files)?;
+    let index = index.as_ref();
     let matches: Vec<usize> = index
         .resolve(name)
         .into_iter()
@@ -261,7 +261,7 @@ fn get_symbol(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
         Err(_) => Err(symbol_not_found(
             "name",
             name,
-            symbol_suggestions(index, name),
+            symbol_suggestions(&index.by_name, name),
         )),
     }
 }
@@ -275,10 +275,9 @@ const MAX_SUBSTRING_SUGGESTIONS: usize = 10;
 /// The first rule is the rule of the `symbol` command: a name that contains
 /// the query, or that the query contains. When no name agrees, the second
 /// rule gives the names with a small edit distance to the bare name.
-fn symbol_suggestions(index: &CallGraphIndex, query: &str) -> Vec<String> {
+fn symbol_suggestions(by_name: &HashMap<String, Vec<usize>>, query: &str) -> Vec<String> {
     let lowercase_query = query.to_lowercase();
-    let mut suggestions: Vec<String> = index
-        .by_name
+    let mut suggestions: Vec<String> = by_name
         .keys()
         .filter(|candidate| {
             let candidate = candidate.to_lowercase();
@@ -292,7 +291,7 @@ fn symbol_suggestions(index: &CallGraphIndex, query: &str) -> Vec<String> {
         return suggestions;
     }
     let bare_name = query.rsplit(':').next().unwrap_or(query);
-    let names: Vec<&str> = index.by_name.keys().map(String::as_str).collect();
+    let names: Vec<&str> = by_name.keys().map(String::as_str).collect();
     nearest(bare_name, &names)
         .into_iter()
         .map(str::to_string)
@@ -399,7 +398,7 @@ fn task_context(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult 
         return Err(symbol_not_found(
             "name",
             name,
-            symbol_suggestions(&snapshot.index, name),
+            symbol_suggestions(&snapshot.index.by_name, name),
         ));
     }
     let truncated = omitted_lists(&result);
@@ -482,7 +481,7 @@ pub(super) static IMPACT: ToolSpec = ToolSpec {
 };
 
 fn impact(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
-    use crate::analyzers::impact::{analyze, Direction};
+    use crate::analyzers::impact::{analyze_view, Direction};
 
     let scope = server.scope(arguments)?;
     let symbol = arguments.string("symbol").unwrap_or_default();
@@ -493,9 +492,29 @@ fn impact(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
         _ => Direction::Both,
     };
     let files = absolute_files(&scope.path, &scope.file_set);
-    let report = analyze(&scope.path, &files, symbol, depth, direction)?;
+    let view = server.load_view(&scope.path, &files)?;
+    let report = analyze_view(&view, symbol, depth, direction);
     if report.resolved.is_empty() {
         return Err(symbol_not_found("symbol", symbol, report.suggestions));
     }
-    Ok(ToolOutput::data(serde_json::to_value(&report)?))
+    // The traversal stops at `depth`. The totals without a limit tell if
+    // the limit cut callers or callees.
+    let all = analyze_view(&view, symbol, usize::MAX, direction);
+    let mut truncated = Vec::new();
+    for (path, total, returned) in [
+        ("/callers", all.total_callers, report.total_callers),
+        ("/callees", all.total_callees, report.total_callees),
+    ] {
+        if total > returned {
+            truncated.push(Truncation {
+                path: path.to_string(),
+                total,
+                returned,
+            });
+        }
+    }
+    Ok(ToolOutput::Data(ToolData {
+        truncated,
+        ..ToolData::new(serde_json::to_value(&report)?)
+    }))
 }

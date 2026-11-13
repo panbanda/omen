@@ -126,8 +126,10 @@ only. A label that is not the label of a project of the search is an
 
 A tool accepts each identifier and each path that a different tool gives:
 
-- A `qualified_name` (`file:name`) is a valid `name` of `get_symbol` and
-  `task_context`, and a valid `symbol` of `impact`.
+- A `qualified_name` is a valid `name` of `get_symbol` and `task_context`, and
+  a valid `symbol` of `impact`. `get_symbol` and `impact` give the key of the
+  symbol, `file#Container.name`. The other tools give `file:name`. Each of
+  these tools accepts the two forms. Do not parse the identifier.
 - A `file` without a `[label] ` is a valid `file` of `outline`, a valid `path`
   of each tool, and the file part of a `file:name`.
 - The `file` of a search result is a valid entry of `files`, with or without a

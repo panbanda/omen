@@ -202,6 +202,27 @@ pub fn is_safe_fixture_path(name: &str) -> bool {
             .all(|part| matches!(part, std::path::Component::Normal(_)))
 }
 
+/// The identity of a callee for the comparison with a label: its file and
+/// its name, as `file:name`. A symbol id has one of two formats, `file:name`
+/// and `file#Container.name`. The two formats give the same identity, thus one
+/// corpus can compare a binary of each format.
+fn callee_identity(entry: &Value) -> Option<String> {
+    let qualified = entry.get("qualified_name")?.as_str()?;
+    let (key_file, name) = match qualified.split_once('#') {
+        Some((file, path)) => {
+            // `~2` after the name is the ordinal of a second definition.
+            let path = path.split('~').next()?;
+            (file, path.rsplit('.').next()?)
+        }
+        None => qualified.rsplit_once(':')?,
+    };
+    let file = entry
+        .get("file")
+        .and_then(Value::as_str)
+        .unwrap_or(key_file);
+    Some(format!("{file}:{name}"))
+}
+
 /// Run one binary against one prepared case root, retaining any failure.
 fn observe(binary: &Path, root: &Path, query: &str, timeout: Duration) -> Observation {
     let started = Instant::now();
@@ -217,11 +238,8 @@ fn observe(binary: &Path, root: &Path, query: &str, timeout: Duration) -> Observ
             .ok_or_else(|| "missing callees array".to_string())?;
         let mut predicted = BTreeSet::new();
         for entry in callees {
-            let name = entry
-                .get("qualified_name")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "invalid callee".to_string())?;
-            predicted.insert(name.to_string());
+            let name = callee_identity(entry).ok_or_else(|| "invalid callee".to_string())?;
+            predicted.insert(name);
         }
         Ok((
             stdout.len(),
@@ -594,6 +612,18 @@ pub fn run(options: &Options) -> Result<Report> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn callee_identity_is_the_same_for_the_two_id_formats() {
+        let old =
+            serde_json::json!({"qualified_name": "lib/a.rb:run", "file": "lib/a.rb", "line": 3});
+        let new = serde_json::json!({"qualified_name": "lib/a.rb#Shop.Cart.run~2", "file": "lib/a.rb", "line": 3});
+        let bare = serde_json::json!({"qualified_name": "lib/a.rb#run"});
+        assert_eq!(callee_identity(&old).as_deref(), Some("lib/a.rb:run"));
+        assert_eq!(callee_identity(&new).as_deref(), Some("lib/a.rb:run"));
+        assert_eq!(callee_identity(&bare).as_deref(), Some("lib/a.rb:run"));
+        assert_eq!(callee_identity(&serde_json::json!({"file": "a"})), None);
+    }
 
     fn observation(error: Option<&str>, sha: Option<&str>) -> Observation {
         Observation {

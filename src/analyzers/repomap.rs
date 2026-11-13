@@ -135,7 +135,6 @@ pub struct CallGraphIndex {
     pub by_name: HashMap<String, Vec<usize>>,
     pub(crate) node_indices: HashMap<usize, NodeIndex>,
     pub call_resolutions: Vec<CallResolution>,
-    pub(crate) call_resolution_ranges: Vec<std::ops::Range<usize>>,
 }
 
 impl CallGraphIndex {
@@ -144,6 +143,20 @@ impl CallGraphIndex {
     /// Qualified queries preserve same-file duplicates; bare queries return all
     /// matches. Results are ordered by file, name, and source position.
     pub fn resolve(&self, name: &str) -> Vec<usize> {
+        // A key of the shared index, `file#Container.name`, names a file and
+        // a name. The tools of the shared index give this form.
+        if let Some((file, path)) = name.split_once('#') {
+            let path = path.split('~').next().unwrap_or(path);
+            let bare = path.rsplit('.').next().unwrap_or(path);
+            return self
+                .by_name
+                .get(bare)
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|&idx| self.symbols[idx].file == file)
+                .collect();
+        }
         if let Some((file, bare)) = name.rsplit_once(':') {
             return self
                 .by_name
@@ -386,11 +399,9 @@ pub(crate) fn build_index_with_parser(
     }
 
     let mut call_resolutions = Vec::new();
-    let mut call_resolution_ranges = Vec::with_capacity(symbols.len());
     // Only unambiguous name candidates become edges. Preserve uncertainty.
     for (caller_idx, symbol) in symbols.iter().enumerate() {
         let caller_node = node_indices[&caller_idx];
-        let start = call_resolutions.len();
 
         for call in &symbol.calls {
             let (receiver, bare_call) = call
@@ -517,7 +528,6 @@ pub(crate) fn build_index_with_parser(
                     .collect(),
             });
         }
-        call_resolution_ranges.push(start..call_resolutions.len());
     }
 
     Ok(CallGraphIndex {
@@ -527,7 +537,6 @@ pub(crate) fn build_index_with_parser(
         by_name,
         node_indices,
         call_resolutions,
-        call_resolution_ranges,
     })
 }
 

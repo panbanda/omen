@@ -2042,11 +2042,12 @@ fn run_impact(
     args: &ImpactArgs,
     format: Format,
 ) -> omen::core::Result<()> {
-    use omen::analyzers::impact::{analyze, Direction};
+    use omen::analyzers::impact::{analyze_view, Direction};
     use omen::cli::ImpactDirection;
 
     let file_set = filtered_file_set(path, config, Some(&args.common))?;
-    let files: Vec<PathBuf> = file_set.iter().map(|p| path.join(p)).collect();
+    let ctx = omen::core::AnalysisContext::new(&file_set, config, Some(path));
+    let view = omen::index::view::CallView::from_index(&*ctx.code_index()?);
 
     let direction = match args.direction {
         ImpactDirection::Callers => Direction::Callers,
@@ -2054,7 +2055,7 @@ fn run_impact(
         ImpactDirection::Both => Direction::Both,
     };
 
-    let report = analyze(path, &files, &args.symbol, args.depth, direction)?;
+    let report = analyze_view(&view, &args.symbol, args.depth, direction);
     let value = serde_json::to_value(&report)?;
     format_with_limits(
         value,
@@ -2072,17 +2073,18 @@ fn run_symbol(
     args: &SymbolArgs,
     format: Format,
 ) -> omen::core::Result<()> {
-    use omen::symbol::{get_symbol, SymbolOptions};
+    use omen::symbol::{report_from_index, SymbolOptions};
 
     let file_set = filtered_file_set(path, config, Some(&args.common))?;
-    let files: Vec<PathBuf> = file_set.iter().map(|p| path.join(p)).collect();
+    let ctx = omen::core::AnalysisContext::new(&file_set, config, Some(path));
+    let view = omen::index::view::CallView::from_index(&*ctx.code_index()?);
 
     let opts = SymbolOptions {
         include_source: !args.no_source,
         max_source_lines: args.max_source_lines,
     };
 
-    let report = get_symbol(path, &files, &args.name, &opts)?;
+    let report = report_from_index(path, &view, &args.name, &opts, None)?;
     let value = serde_json::to_value(&report)?;
     format_with_limits(
         value,
