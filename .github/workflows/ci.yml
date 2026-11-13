@@ -42,6 +42,27 @@ jobs:
       - name: Build release
         run: cargo build --release
 
+  # No job runs the tests on Windows, and no release has a Windows target. This
+  # job makes sure that the code behind `cfg(windows)` compiles.
+  check-windows:
+    name: Check (windows-latest)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      - name: Check the build
+        run: cargo check --all-features --all-targets
+
   # `cargo test` in the test job runs the ground-truth gate. This job adds the
   # check that needs the base branch: a pull request must not add a fact to the
   # expected-failure ledger, unless the same pull request adds its label.

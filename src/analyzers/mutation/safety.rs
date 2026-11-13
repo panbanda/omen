@@ -352,21 +352,189 @@ pub fn restore_active_mutations() {
     restore_registered_mutations(&ACTIVE_MUTATIONS, &INTERRUPTED);
 }
 
+/// The exit status of a mutation run that got an interrupt.
+pub const INTERRUPT_EXIT_CODE: i32 = 130;
+
+/// The parts of the process that the interrupt gate controls. The tests
+/// replace them, thus they can make each sequence of events occur.
+trait GateEnvironment {
+    /// The flag that the interrupt handler sets.
+    fn interrupted(&self) -> &std::sync::atomic::AtomicBool;
+    /// Give the interrupt to the handler of omen.
+    fn arm(&self) -> std::result::Result<(), String>;
+    /// Give the interrupt its default effect again.
+    fn disarm(&self);
+    /// Stop each test command, and then restore each mutated file.
+    fn stop_and_restore(&self);
+    /// Stop the process. In the process, this function does not return.
+    fn exit(&self, code: i32);
+}
+
+/// The single place that makes a decision about an interrupt.
+///
+/// The interrupt watcher and each run loop make their decision below one
+/// lock, and the thread that sees the interrupt stops the process while it
+/// holds the lock. Thus only one thread makes the decision, and the result
+/// does not depend on which thread is faster.
+///
+/// The lock holds the number of mutation runs that are active in the process.
+/// One process can have more than one run at the same time. The handler of
+/// omen stays registered while the number is above zero.
+struct InterruptGate {
+    active_runs: parking_lot::Mutex<usize>,
+}
+
+impl InterruptGate {
+    const fn new() -> Self {
+        Self {
+            active_runs: parking_lot::Mutex::new(0),
+        }
+    }
+
+    /// Start a run. The first run registers the handler.
+    ///
+    /// An interrupt that came while no run was active is not for a run. The
+    /// first run thus clears the flag, or it stops immediately.
+    fn begin(&self, environment: &impl GateEnvironment) -> std::result::Result<(), String> {
+        let mut active_runs = self.active_runs.lock();
+        if *active_runs == 0 {
+            environment.interrupted().store(false, Ordering::SeqCst);
+            environment.arm()?;
+        }
+        *active_runs += 1;
+        Ok(())
+    }
+
+    /// The decision of a run loop when it stops: after its last mutant, or
+    /// when it returns an error.
+    ///
+    /// If an interrupt came at a time before this call, the function stops
+    /// the test commands, restores each file, and stops the process. This
+    /// applies to an interrupt before the first test command, during a test
+    /// command, and between two mutants. The results are then not complete,
+    /// because a run starts no test command after an interrupt.
+    ///
+    /// If no interrupt came, the run ends. The last run that ends gives the
+    /// interrupt its default effect again. An interrupt after that moment
+    /// does not change the exit status of the report.
+    fn conclude(&self, environment: &impl GateEnvironment) {
+        let mut active_runs = self.active_runs.lock();
+        if environment.interrupted().load(Ordering::SeqCst) {
+            environment.stop_and_restore();
+            // The lock stays held: no other thread makes a decision while
+            // the process stops.
+            environment.exit(INTERRUPT_EXIT_CODE);
+            return;
+        }
+        *active_runs = active_runs.saturating_sub(1);
+        if *active_runs == 0 {
+            environment.disarm();
+        }
+    }
+
+    /// The decision of the interrupt watcher. An interrupt has an effect only
+    /// while a run is active.
+    fn watcher_step(&self, environment: &impl GateEnvironment) {
+        let active_runs = self.active_runs.lock();
+        if *active_runs > 0 && environment.interrupted().load(Ordering::SeqCst) {
+            environment.stop_and_restore();
+            // The lock stays held: no run loop continues while the process
+            // stops.
+            environment.exit(INTERRUPT_EXIT_CODE);
+        }
+    }
+
+    #[cfg(test)]
+    fn active_runs(&self) -> usize {
+        *self.active_runs.lock()
+    }
+}
+
+static INTERRUPT_GATE: InterruptGate = InterruptGate::new();
+
+/// The gate environment of the process.
+struct ProcessEnvironment;
+
+impl GateEnvironment for ProcessEnvironment {
+    fn interrupted(&self) -> &std::sync::atomic::AtomicBool {
+        &INTERRUPTED
+    }
+
+    fn arm(&self) -> std::result::Result<(), String> {
+        register_interrupt_handler()
+    }
+
+    fn disarm(&self) {
+        remove_interrupt_handler();
+    }
+
+    fn stop_and_restore(&self) {
+        // The test commands do not get the interrupt, because each has its
+        // own process group. Stop them first: a command that runs can write
+        // a file after the restore.
+        stop_active_test_commands();
+        restore_active_mutations();
+    }
+
+    fn exit(&self, code: i32) {
+        std::process::exit(code);
+    }
+}
+
+fn stop_active_test_commands() {
+    #[cfg(unix)]
+    terminate_active_process_groups();
+    #[cfg(windows)]
+    terminate_active_process_trees();
+}
+
+/// One active mutation run.
+///
+/// The drop ends the run, thus each return from the run loop makes the
+/// decision about an interrupt: the usual end, an error, and a panic.
+#[must_use = "the run ends when this value drops"]
+pub struct ActiveRun {
+    concluded: bool,
+}
+
+impl ActiveRun {
+    /// End the run after its last mutant.
+    ///
+    /// If an interrupt came during the run, this function restores each file
+    /// and stops the process with the status 130. It does not return, thus
+    /// the caller cannot make a report from results that are not complete.
+    pub fn conclude(mut self) {
+        self.concluded = true;
+        INTERRUPT_GATE.conclude(&ProcessEnvironment);
+    }
+}
+
+impl Drop for ActiveRun {
+    fn drop(&mut self) {
+        if !self.concluded {
+            INTERRUPT_GATE.conclude(&ProcessEnvironment);
+        }
+    }
+}
+
+/// Start a mutation run. The interrupt watcher protects the files of the run
+/// until the returned value drops.
+pub fn begin_run() -> Result<ActiveRun> {
+    INTERRUPT_GATE
+        .begin(&ProcessEnvironment)
+        .map_err(Error::analysis)?;
+    Ok(ActiveRun { concluded: false })
+}
+
+/// Start the thread that reads the interrupt flag. `begin_run` registers the
+/// handler that sets the flag.
 pub fn install_signal_handler() -> Result<()> {
     SIGNAL_HANDLER
         .get_or_init(|| {
-            register_interrupt_handler()?;
             std::thread::Builder::new()
                 .name("omen-mutation-signal".to_string())
                 .spawn(|| loop {
-                    if INTERRUPTED.load(Ordering::SeqCst) {
-                        // The test commands do not get the interrupt, because each
-                        // has its own process group.
-                        #[cfg(unix)]
-                        terminate_active_process_groups();
-                        restore_active_mutations();
-                        std::process::exit(130);
-                    }
+                    INTERRUPT_GATE.watcher_step(&ProcessEnvironment);
                     std::thread::park_timeout(Duration::from_millis(20));
                 })
                 .map(|_| ())
@@ -374,6 +542,155 @@ pub fn install_signal_handler() -> Result<()> {
         })
         .clone()
         .map_err(Error::analysis)
+}
+
+#[cfg(unix)]
+fn remove_interrupt_handler() {
+    // SAFETY: `signal` with `SIG_DFL` only changes the signal disposition.
+    unsafe {
+        libc::signal(libc::SIGINT, libc::SIG_DFL);
+    }
+}
+
+#[cfg(windows)]
+fn remove_interrupt_handler() {
+    #[link(name = "Kernel32")]
+    unsafe extern "system" {
+        fn SetConsoleCtrlHandler(handler: extern "system" fn(u32) -> i32, add: i32) -> i32;
+    }
+
+    // SAFETY: the call removes the handler that `register_interrupt_handler`
+    // added. An error means that the handler was not present.
+    unsafe {
+        SetConsoleCtrlHandler(mark_interrupted_windows, 0);
+    }
+}
+
+/// The process identifiers of the test commands that run now, on Windows.
+#[cfg(windows)]
+static ACTIVE_PROCESS_TREES: LazyLock<parking_lot::Mutex<std::collections::HashSet<u32>>> =
+    LazyLock::new(|| parking_lot::Mutex::new(std::collections::HashSet::new()));
+
+/// One test command and its descendants, on Windows.
+///
+/// The interrupt watcher must stop the test commands before it restores the
+/// files, as on Unix. The drop stops the processes that the command left.
+///
+/// No build of this project compiles or tests this code: the CI and the
+/// releases have no Windows target.
+#[cfg(windows)]
+pub struct ProcessTree {
+    id: u32,
+}
+
+#[cfg(windows)]
+impl ProcessTree {
+    /// Start a test command and register it. The start and the registration
+    /// occur below one lock, which the interrupt watcher also takes. After an
+    /// interrupt, this function starts no process.
+    pub fn spawn<C>(
+        spawn: impl FnOnce() -> std::io::Result<C>,
+        id: impl FnOnce(&C) -> Option<u32>,
+    ) -> std::io::Result<(C, Option<Self>)> {
+        let mut trees = ACTIVE_PROCESS_TREES.lock();
+        if INTERRUPTED.load(Ordering::SeqCst) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "the mutation run got an interrupt",
+            ));
+        }
+        let child = spawn()?;
+        let tree = id(&child).map(|id| {
+            trees.insert(id);
+            Self { id }
+        });
+        Ok((child, tree))
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ProcessTree {
+    fn drop(&mut self) {
+        kill_process_tree(self.id);
+        ACTIVE_PROCESS_TREES.lock().remove(&self.id);
+    }
+}
+
+/// The longest time to wait for a stopped test command, on Windows.
+#[cfg(windows)]
+const PROCESS_EXIT_LIMIT_MILLISECONDS: u32 = 5000;
+
+/// Stop a process and each of its descendants.
+///
+/// `taskkill` returns after it sent the stop request to each process of the
+/// tree. It does not wait for the processes to end. Thus this function then
+/// waits for the test command itself, for a maximum of
+/// `PROCESS_EXIT_LIMIT_MILLISECONDS`. It does not wait for the descendants:
+/// a descendant can run for a short time after this function returns.
+#[cfg(windows)]
+fn kill_process_tree(id: u32) {
+    let _ = std::process::Command::new("taskkill")
+        .args(["/PID", &id.to_string(), "/T", "/F"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    wait_for_process_exit(id);
+}
+
+/// Wait until the process with this identifier ends, for a limited time.
+///
+/// The executor holds the child handle of each registered test command,
+/// thus the operating system does not give the identifier to a different
+/// process during the wait.
+#[cfg(windows)]
+fn wait_for_process_exit(id: u32) {
+    #[link(name = "Kernel32")]
+    unsafe extern "system" {
+        fn OpenProcess(access: u32, inherit_handle: i32, id: u32) -> *mut std::ffi::c_void;
+        fn WaitForSingleObject(handle: *mut std::ffi::c_void, milliseconds: u32) -> u32;
+        fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+    }
+    // The access right to wait for a process.
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+
+    // SAFETY: the handle is used only for the wait and is closed here. A
+    // null handle means that the process does not exist now.
+    unsafe {
+        let handle = OpenProcess(SYNCHRONIZE, 0, id);
+        if !handle.is_null() {
+            WaitForSingleObject(handle, PROCESS_EXIT_LIMIT_MILLISECONDS);
+            CloseHandle(handle);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn terminate_active_process_trees() {
+    let trees: Vec<u32> = ACTIVE_PROCESS_TREES.lock().iter().copied().collect();
+    for id in trees {
+        kill_process_tree(id);
+    }
+}
+
+/// The tests that use the gate and the signal disposition of the process.
+/// They must not run at the same time.
+#[cfg(all(test, unix))]
+pub(crate) static PROCESS_GATE_TESTS: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+/// The handler of SIGINT that the operating system has now.
+#[cfg(all(test, unix))]
+pub(crate) fn sigint_disposition() -> libc::sighandler_t {
+    // SAFETY: a null new action makes `sigaction` only read the action.
+    unsafe {
+        let mut current: libc::sigaction = std::mem::zeroed();
+        libc::sigaction(libc::SIGINT, std::ptr::null(), &mut current);
+        current.sa_sigaction
+    }
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn active_runs_of_the_process() -> usize {
+    INTERRUPT_GATE.active_runs()
 }
 
 /// Write content to a file atomically.
@@ -439,6 +756,285 @@ pub fn has_uncommitted_changes(path: impl AsRef<Path>) -> bool {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// A gate environment that records each call. `exit` can wait, as a
+    /// process that stops does not continue.
+    struct FakeEnvironment {
+        interrupted: std::sync::atomic::AtomicBool,
+        arm_calls: std::sync::atomic::AtomicUsize,
+        arm_fails: bool,
+        disarm_calls: std::sync::atomic::AtomicUsize,
+        restore_calls: std::sync::atomic::AtomicUsize,
+        exits: std::sync::mpsc::Sender<i32>,
+        exit_codes: parking_lot::Mutex<std::sync::mpsc::Receiver<i32>>,
+        /// `exit` waits for a message on this channel when it is present.
+        stay_stopped: Option<parking_lot::Mutex<std::sync::mpsc::Receiver<()>>>,
+    }
+
+    impl FakeEnvironment {
+        fn new(interrupted: bool) -> Self {
+            let (exits, exit_codes) = std::sync::mpsc::channel();
+            Self {
+                interrupted: std::sync::atomic::AtomicBool::new(interrupted),
+                arm_calls: std::sync::atomic::AtomicUsize::new(0),
+                arm_fails: false,
+                disarm_calls: std::sync::atomic::AtomicUsize::new(0),
+                restore_calls: std::sync::atomic::AtomicUsize::new(0),
+                exits,
+                exit_codes: parking_lot::Mutex::new(exit_codes),
+                stay_stopped: None,
+            }
+        }
+
+        /// An environment whose `exit` waits until the returned sender drops
+        /// or sends a message.
+        fn that_stays_stopped(interrupted: bool) -> (Self, std::sync::mpsc::Sender<()>) {
+            let (release, stay_stopped) = std::sync::mpsc::channel();
+            let mut environment = Self::new(interrupted);
+            environment.stay_stopped = Some(parking_lot::Mutex::new(stay_stopped));
+            (environment, release)
+        }
+
+        fn calls(&self, counter: &std::sync::atomic::AtomicUsize) -> usize {
+            counter.load(Ordering::SeqCst)
+        }
+
+        /// The exit codes that `exit` got until now.
+        fn exit_codes(&self) -> Vec<i32> {
+            self.exit_codes.lock().try_iter().collect()
+        }
+
+        /// Waits for the next call of `exit`. A decision that does not come
+        /// makes the test fail, not hang.
+        fn wait_for_exit(&self) -> Option<i32> {
+            self.exit_codes
+                .lock()
+                .recv_timeout(Duration::from_secs(10))
+                .ok()
+        }
+    }
+
+    impl GateEnvironment for FakeEnvironment {
+        fn interrupted(&self) -> &std::sync::atomic::AtomicBool {
+            &self.interrupted
+        }
+
+        fn arm(&self) -> std::result::Result<(), String> {
+            self.arm_calls.fetch_add(1, Ordering::SeqCst);
+            if self.arm_fails {
+                Err("no handler".to_string())
+            } else {
+                Ok(())
+            }
+        }
+
+        fn disarm(&self) {
+            self.disarm_calls.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn stop_and_restore(&self) {
+            self.restore_calls.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn exit(&self, code: i32) {
+            let _ = self.exits.send(code);
+            if let Some(stay_stopped) = &self.stay_stopped {
+                let _ = stay_stopped.lock().recv();
+            }
+        }
+    }
+
+    #[test]
+    fn test_first_run_registers_the_handler_and_the_last_run_removes_it() {
+        let gate = InterruptGate::new();
+        let environment = FakeEnvironment::new(false);
+
+        gate.begin(&environment).unwrap();
+        gate.begin(&environment).unwrap();
+        assert_eq!(gate.active_runs(), 2);
+        assert_eq!(environment.calls(&environment.arm_calls), 1);
+
+        gate.conclude(&environment);
+        assert_eq!(gate.active_runs(), 1);
+        assert_eq!(environment.calls(&environment.disarm_calls), 0);
+
+        gate.conclude(&environment);
+        assert_eq!(gate.active_runs(), 0);
+        assert_eq!(environment.calls(&environment.disarm_calls), 1);
+        assert_eq!(environment.exit_codes(), Vec::<i32>::new());
+    }
+
+    #[test]
+    fn test_an_interrupt_after_one_of_two_runs_concluded_protects_the_other_run() {
+        let gate = InterruptGate::new();
+        let environment = FakeEnvironment::new(false);
+        gate.begin(&environment).unwrap();
+        gate.begin(&environment).unwrap();
+        gate.conclude(&environment);
+
+        environment.interrupted.store(true, Ordering::SeqCst);
+        gate.watcher_step(&environment);
+
+        assert_eq!(environment.calls(&environment.restore_calls), 1);
+        assert_eq!(environment.exit_codes(), [INTERRUPT_EXIT_CODE]);
+    }
+
+    #[test]
+    fn test_first_run_clears_an_interrupt_that_came_while_no_run_was_active() {
+        let gate = InterruptGate::new();
+        let environment = FakeEnvironment::new(true);
+
+        gate.begin(&environment).unwrap();
+        gate.watcher_step(&environment);
+
+        assert!(!environment.interrupted.load(Ordering::SeqCst));
+        assert_eq!(environment.exit_codes(), Vec::<i32>::new());
+    }
+
+    #[test]
+    fn test_second_run_keeps_an_interrupt_that_came_during_the_first_run() {
+        let gate = InterruptGate::new();
+        let environment = FakeEnvironment::new(false);
+        gate.begin(&environment).unwrap();
+        environment.interrupted.store(true, Ordering::SeqCst);
+
+        gate.begin(&environment).unwrap();
+
+        assert!(environment.interrupted.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_run_that_cannot_register_the_handler_does_not_start() {
+        let gate = InterruptGate::new();
+        let mut environment = FakeEnvironment::new(false);
+        environment.arm_fails = true;
+
+        assert!(gate.begin(&environment).is_err());
+        assert_eq!(gate.active_runs(), 0);
+    }
+
+    #[test]
+    fn test_run_loop_without_an_interrupt_concludes_the_run() {
+        let gate = InterruptGate::new();
+        let environment = FakeEnvironment::new(false);
+        gate.begin(&environment).unwrap();
+
+        gate.conclude(&environment);
+
+        assert_eq!(gate.active_runs(), 0);
+        assert_eq!(environment.calls(&environment.restore_calls), 0);
+        assert_eq!(environment.exit_codes(), Vec::<i32>::new());
+    }
+
+    /// The same decision applies to an interrupt before the first test
+    /// command, during a test command, and between two mutants: the run loop
+    /// starts no test command after an interrupt, thus it comes to this call.
+    #[test]
+    fn test_run_loop_with_an_interrupt_restores_and_exits_130() {
+        let gate = InterruptGate::new();
+        let environment = FakeEnvironment::new(false);
+        gate.begin(&environment).unwrap();
+        environment.interrupted.store(true, Ordering::SeqCst);
+
+        gate.conclude(&environment);
+
+        assert_eq!(environment.calls(&environment.restore_calls), 1);
+        assert_eq!(environment.exit_codes(), [INTERRUPT_EXIT_CODE]);
+        assert_eq!(gate.active_runs(), 1);
+    }
+
+    #[test]
+    fn test_watcher_without_an_interrupt_does_nothing() {
+        let gate = InterruptGate::new();
+        let environment = FakeEnvironment::new(false);
+        gate.begin(&environment).unwrap();
+
+        gate.watcher_step(&environment);
+
+        assert_eq!(environment.calls(&environment.restore_calls), 0);
+        assert_eq!(environment.exit_codes(), Vec::<i32>::new());
+    }
+
+    /// The run loop saw no interrupt, thus the results are complete. The
+    /// report follows, and the exit status is the status of the report.
+    #[test]
+    fn test_an_interrupt_after_the_last_run_concluded_has_no_effect() {
+        let gate = InterruptGate::new();
+        let environment = FakeEnvironment::new(false);
+        gate.begin(&environment).unwrap();
+        gate.conclude(&environment);
+
+        environment.interrupted.store(true, Ordering::SeqCst);
+        gate.watcher_step(&environment);
+
+        assert_eq!(environment.calls(&environment.restore_calls), 0);
+        assert_eq!(environment.exit_codes(), Vec::<i32>::new());
+    }
+
+    /// The sequence that gave the exit status 0: the run loop comes to its
+    /// end before the watcher reads the flag. The run loop must make the
+    /// decision itself, and the watcher must not make a second decision.
+    #[test]
+    fn test_run_loop_that_is_first_makes_the_decision_and_holds_the_watcher() {
+        let gate = InterruptGate::new();
+        let (environment, release) = FakeEnvironment::that_stays_stopped(false);
+        gate.begin(&environment).unwrap();
+        environment.interrupted.store(true, Ordering::SeqCst);
+
+        std::thread::scope(|scope| {
+            scope.spawn(|| gate.conclude(&environment));
+            let decision = environment.wait_for_exit();
+            // The run loop holds the gate while the process stops.
+            let watcher_can_decide = gate.active_runs.try_lock().is_some();
+            drop(release);
+
+            assert_eq!(decision, Some(INTERRUPT_EXIT_CODE));
+            assert!(!watcher_can_decide);
+        });
+        assert_eq!(environment.calls(&environment.restore_calls), 1);
+    }
+
+    /// The mirror sequence: the watcher reads the flag first. The run loop
+    /// must not continue to its report while the process stops.
+    #[test]
+    fn test_watcher_that_is_first_makes_the_decision_and_holds_the_run_loop() {
+        let gate = InterruptGate::new();
+        let (environment, release) = FakeEnvironment::that_stays_stopped(false);
+        gate.begin(&environment).unwrap();
+        environment.interrupted.store(true, Ordering::SeqCst);
+
+        std::thread::scope(|scope| {
+            scope.spawn(|| gate.watcher_step(&environment));
+            let decision = environment.wait_for_exit();
+            // The watcher holds the gate while the process stops.
+            let run_loop_can_continue = gate.active_runs.try_lock().is_some();
+            drop(release);
+
+            assert_eq!(decision, Some(INTERRUPT_EXIT_CODE));
+            assert!(!run_loop_can_continue);
+        });
+        assert_eq!(environment.calls(&environment.restore_calls), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_run_registers_the_handler_and_its_end_gives_the_default_action() {
+        let _serial = PROCESS_GATE_TESTS.lock();
+
+        let run = begin_run().unwrap();
+        let during_the_run = sigint_disposition();
+        let second = begin_run().unwrap();
+        run.conclude();
+        let after_one_of_two_runs = sigint_disposition();
+        drop(second);
+        let after_the_last_run = sigint_disposition();
+
+        let handler = mark_interrupted as *const () as libc::sighandler_t;
+        assert_eq!(during_the_run, handler);
+        assert_eq!(after_one_of_two_runs, handler);
+        assert_eq!(after_the_last_run, libc::SIG_DFL);
+        assert_eq!(active_runs_of_the_process(), 0);
+    }
 
     #[cfg(unix)]
     fn local_registry() -> ProcessGroups {

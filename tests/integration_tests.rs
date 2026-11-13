@@ -1,4 +1,5 @@
-#[cfg(feature = "mutation")]
+// Only the SIGINT test uses this trait, and that test is for Unix.
+#[cfg(all(unix, feature = "mutation"))]
 use assert_cmd::cargo::CommandCargoExt;
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -3282,4 +3283,61 @@ fn test_graph_keeps_the_node_order_with_cycles() {
         .collect();
     // Each node has the same PageRank, so the file name gives the order.
     assert_eq!(nodes, ["a.ts", "b.ts", "c.ts", "d.ts"]);
+}
+
+/// Makes a git repository with one source file that has mutants.
+#[cfg(unix)]
+#[cfg(feature = "mutation")]
+fn mutation_repository(original: &str) -> TempDir {
+    let temp = TempDir::new().unwrap();
+    std::fs::write(temp.path().join("lib.rs"), original).unwrap();
+    let git = |arguments: &[&str]| {
+        std::process::Command::new("git")
+            .args(arguments)
+            .current_dir(temp.path())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    };
+    assert!(git(&["init"]));
+    assert!(git(&["config", "user.email", "test@example.com"]));
+    assert!(git(&["config", "user.name", "Test User"]));
+    assert!(git(&["add", "."]));
+    assert!(git(&["commit", "-m", "initial"]));
+    temp
+}
+
+/// The test command sends the interrupt to omen and then stops immediately.
+/// Thus the run loop continues before the interrupt watcher reads the flag:
+/// the loop gets to its end while the interrupt is pending. Before the run
+/// loop made the decision itself, omen then gave the exit status 0 and a
+/// report in which the mutants that it did not run looked like results.
+#[cfg(unix)]
+#[cfg(feature = "mutation")]
+#[test]
+fn test_mutation_interrupt_at_the_end_of_a_test_command_exits_130() {
+    let original = "pub fn value() -> i32 { 1 }\n";
+    let temp = mutation_repository(original);
+
+    let output = omen()
+        .current_dir(temp.path())
+        .args([
+            "-p",
+            temp.path().to_str().unwrap(),
+            "-f",
+            "json",
+            "mutation",
+        ])
+        .args(["--test-command", "kill -INT $PPID"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(130));
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("lib.rs")).unwrap(),
+        original
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
 }
