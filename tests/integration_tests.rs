@@ -3169,13 +3169,79 @@ fn test_mutation_path_options_follow_one_rule_from_another_directory() {
 
     // A relative path on the command line is in the working directory.
     std::fs::copy(&default_history, elsewhere.path().join("history.jsonl")).unwrap();
-    run(&["train", "--history", "history.jsonl", "--model", "model.json"]);
+    run(&[
+        "train",
+        "--history",
+        "history.jsonl",
+        "--model",
+        "model.json",
+    ]);
     assert!(elsewhere.path().join("model.json").exists());
     assert!(!repository.path().join("model.json").exists());
 
-    let stderr = run(&["--dry-run", "--skip-predicted", "0.9", "--model", "model.json"]);
+    let stderr = run(&[
+        "--dry-run",
+        "--skip-predicted",
+        "0.9",
+        "--model",
+        "model.json",
+    ]);
     assert!(!stderr.contains("No trained model found"), "{stderr}");
     run(&["--dry-run", "--output", "report.json"]);
     assert!(elsewhere.path().join("report.json").exists());
     assert!(!repository.path().join("report.json").exists());
+}
+
+// ---------------------------------------------------------------------------
+// Cycles and smells have one order
+// ---------------------------------------------------------------------------
+
+/// Two independent cycles: `a` and `b`, and `c` and `d`.
+fn write_two_cycles_fixture() -> TempDir {
+    let temp = TempDir::new().unwrap();
+    for (name, other) in [("a", "b"), ("b", "a"), ("c", "d"), ("d", "c")] {
+        std::fs::write(
+            temp.path().join(format!("{name}.ts")),
+            format!(
+                "import {{ {other} }} from './{other}';\nexport function {name}() {{ return {other}; }}\n"
+            ),
+        )
+        .unwrap();
+    }
+    temp
+}
+
+fn two_cycles() -> serde_json::Value {
+    serde_json::json!([["a.ts", "b.ts"], ["c.ts", "d.ts"]])
+}
+
+fn cyclic_smell_members(smells: &serde_json::Value) -> serde_json::Value {
+    smells["smells"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|smell| smell["smell_type"] == "CyclicDependency")
+        .map(|smell| smell["components"].clone())
+        .collect()
+}
+
+fn json_report(repository: &TempDir, command: &str) -> serde_json::Value {
+    let output = omen()
+        .args(["-p", repository.path().to_str().unwrap()])
+        .args(["-f", "json", command])
+        .output()
+        .expect("command runs");
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+
+#[test]
+fn test_smells_of_equal_severity_have_one_order() {
+    let repository = write_two_cycles_fixture();
+    // The order came from the graph traversal, so one run is not proof.
+    for _ in 0..3 {
+        assert_eq!(
+            cyclic_smell_members(&json_report(&repository, "smells")),
+            two_cycles()
+        );
+    }
 }
