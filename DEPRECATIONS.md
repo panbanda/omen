@@ -57,6 +57,15 @@ apply to it, also on `search query`.
 On `outline`, `--top` and `--offset` page the `files` list in each format. On
 `symbol`, the two flags page each list, for example `callers` and `callees`.
 
+### Output of `all`
+
+`all` obeys `-f`. Before 5.0, it wrote JSON for each format, also for the
+default format. The default format is Markdown, so `omen all` now writes
+Markdown. Use `omen -f json all` to get JSON.
+
+`--top` and `--offset` apply to each analyzer section of `all`. Before 5.0, the
+two flags cut the list of analyzers.
+
 ### Output keys
 
 | Removed | Replacement |

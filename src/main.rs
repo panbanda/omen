@@ -624,23 +624,39 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             };
             results.push(score);
 
-            let combined = json!({ "analyzers": results });
-            // `all` is machine-first: always emit JSON unless the caller
-            // explicitly requested compact JSON, in which case honour that.
-            // Markdown/Text/Sarif are not meaningful for the combined payload.
-            // This matches the existing integration test expectation that
-            // `omen all` (no -f flag) emits valid JSON.
-            let all_format = match format {
-                Format::JsonCompact => Format::JsonCompact,
-                _ => Format::Json,
+            // `--top` and `--offset` apply to each section as they apply to the
+            // single command. SARIF keeps each finding.
+            let top = args.pagination.top.unwrap_or(0);
+            let offset = args.pagination.offset.unwrap_or(0);
+            if !matches!(format, Format::Sarif) {
+                for entry in &mut results {
+                    if let Some(result) = entry.get_mut("result") {
+                        omen::output::truncate_lists(result, top, offset);
+                    }
+                }
+            }
+
+            let combined = match format {
+                Format::Json | Format::JsonCompact | Format::Sarif => {
+                    json!({ "analyzers": results })
+                }
+                // One object with a key for each analyzer gives one section for
+                // each analyzer.
+                Format::Markdown | Format::Text => Value::Object(
+                    results
+                        .into_iter()
+                        .filter_map(|mut entry| {
+                            let name = entry.get("analyzer")?.as_str()?.to_string();
+                            let section = match entry.get_mut("result") {
+                                Some(result) => result.take(),
+                                None => json!({ "error": entry.get("error") }),
+                            };
+                            Some((name, section))
+                        })
+                        .collect(),
+                ),
             };
-            format_with_limits(
-                combined,
-                all_format,
-                args.pagination.top,
-                args.pagination.offset,
-                &mut stdout(),
-            )?;
+            format_with_limits(combined, format, None, None, &mut stdout())?;
         }
         Command::Context(args) => {
             run_context(path, &config, args, format)?;

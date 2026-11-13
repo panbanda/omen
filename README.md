@@ -922,8 +922,9 @@ cargo build --release
 ## Quick Start
 
 ```bash
-# Run all analyzers
+# Run all analyzers (Markdown by default; use -f json for JSON)
 omen all
+omen -f json all
 
 # Check out the analyzers
 omen --help

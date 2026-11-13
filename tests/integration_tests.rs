@@ -407,7 +407,7 @@ fn test_operational_failure_exits_one() {
 #[test]
 fn test_all_analyzers_no_panic() {
     omen()
-        .args(["-p", fixtures_dir(), "all"])
+        .args(["-p", fixtures_dir(), "-f", "json", "all"])
         .assert()
         .success()
         .stdout(predicate::str::contains("analyzers"));
@@ -1328,7 +1328,7 @@ fn test_score_grade_is_valid() {
 #[test]
 fn test_all_json_has_analyzers_array() {
     let output = omen()
-        .args(["-p", fixtures_dir(), "all"])
+        .args(["-p", fixtures_dir(), "-f", "json", "all"])
         .output()
         .expect("command runs");
 
@@ -1892,7 +1892,7 @@ fn collect_keys(value: &serde_json::Value, keys: &mut std::collections::BTreeSet
 #[test]
 fn test_all_payload_names_the_clones_analyzer_by_its_command() {
     let output = omen()
-        .args(["-p", fixtures_dir(), "all"])
+        .args(["-p", fixtures_dir(), "-f", "json", "all"])
         .output()
         .expect("command runs");
     let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -2682,4 +2682,68 @@ fn test_report_generate_gives_the_same_artifacts_from_each_working_directory() {
         }
     }
     assert!(differences.is_empty(), "{differences:?}");
+}
+
+// ---------------------------------------------------------------------------
+// `all` obeys the output format
+// ---------------------------------------------------------------------------
+
+fn all_output(arguments: &[&str]) -> String {
+    let output = omen()
+        .args(["-p", fixtures_dir()])
+        .args(arguments)
+        .output()
+        .expect("command runs");
+    assert!(output.status.success(), "{arguments:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+fn test_all_gives_markdown_and_text_through_the_shared_formats() {
+    for format in ["markdown", "text"] {
+        let stdout = all_output(&["-f", format, "all"]);
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&stdout).is_err(),
+            "`all -f {format}` gave JSON"
+        );
+        for section in ["Complexity", "Satd", "Clones", "Score"] {
+            assert!(
+                stdout.contains(section),
+                "{format} has no {section} section"
+            );
+        }
+    }
+    assert!(all_output(&["-f", "markdown", "all"]).contains("# Complexity"));
+    // Markdown is the default format of each command.
+    assert!(all_output(&["all"]).contains("# Complexity"));
+}
+
+#[test]
+fn test_all_gives_sarif() {
+    let parsed: serde_json::Value =
+        serde_json::from_str(&all_output(&["-f", "sarif", "all"])).unwrap();
+    assert_eq!(parsed["version"], "2.1.0");
+    assert!(!parsed["runs"][0]["results"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn test_all_applies_top_to_each_section_as_the_single_command_does() {
+    let all: serde_json::Value =
+        serde_json::from_str(&all_output(&["-f", "json", "all", "--top", "1"])).unwrap();
+    let sections = all["analyzers"].as_array().unwrap();
+    assert_eq!(sections.len(), 18, "`--top` must not remove a section");
+
+    for command in ["satd", "stubs", "complexity"] {
+        let single: serde_json::Value =
+            serde_json::from_str(&all_output(&["-f", "json", command, "--top", "1"])).unwrap();
+        let section = sections
+            .iter()
+            .find(|entry| entry["analyzer"] == command)
+            .unwrap();
+        assert_eq!(section["result"], single, "{command}");
+    }
+
+    let markdown = all_output(&["-f", "markdown", "all", "--top", "1"]);
+    let full = all_output(&["-f", "markdown", "all"]);
+    assert!(markdown.len() < full.len());
 }
