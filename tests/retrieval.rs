@@ -21,8 +21,9 @@
 //! must keep its file, name, and start line in `labels.json`. Thus a change of
 //! a truth fixture that moves a symbol needs new queries. To correct a query,
 //! move it to `retired` in the corpus, with its type, text, expected labels,
-//! and a reason. Then add a new query with a new id. A query that is the same
-//! as a retired query is not a new query.
+//! their locations in the base labels, and a reason. Then add a new query with
+//! a new id. A query that has the text and the expected locations of a retired
+//! query is not a new query.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};

@@ -67,8 +67,9 @@ pub struct Corpus {
     pub retired: Vec<Retired>,
 }
 
-/// A removed query. It keeps the type, the text, and the expected labels of
-/// the query, so that the same query cannot come back with a new id.
+/// A removed query. It keeps the type, the text, the expected labels, and
+/// their locations at the time of retirement, so that the same query cannot
+/// come back with a new id.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Retired {
@@ -78,7 +79,29 @@ pub struct Retired {
     pub query_type: QueryType,
     pub query: String,
     pub expected: Vec<String>,
+    /// The locations of the expected labels in the labels of the base
+    /// revision. A label can move or go away later, so the comparison with a
+    /// live query uses these locations, not the label ids.
+    pub locations: Vec<RetiredLocation>,
     pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RetiredLocation {
+    pub file: String,
+    pub name: String,
+    pub start_line: u32,
+}
+
+impl From<Location> for RetiredLocation {
+    fn from(location: Location) -> Self {
+        Self {
+            file: location.file,
+            name: location.name,
+            start_line: location.start_line,
+        }
+    }
 }
 
 /// The retrieval fixtures of one revision. `labels` has the labels of each
@@ -534,19 +557,27 @@ fn comparable_text(text: &str) -> String {
         .join(" ")
 }
 
+/// The locations of the expected labels. `None` means that a label is not in
+/// the labels.
+fn resolved_locations(
+    expected: &[String],
+    labels: Option<&Labels>,
+) -> Option<BTreeSet<RetiredLocation>> {
+    definitions(expected, labels)
+        .into_values()
+        .map(|location| location.map(RetiredLocation::from))
+        .collect()
+}
+
 /// Tell if a live query is a retired query again. The expected symbols are
-/// the same if the label ids are the same, or if the labels give the same
-/// locations.
+/// the same if the current labels of the live query give the locations that
+/// the retired entry recorded. The label ids are not compared, because a
+/// label can move or get a new id.
 fn is_retired_query(query: &Query, retired: &Retired, labels: Option<&Labels>) -> bool {
-    let locations = |expected: &[String]| -> Option<BTreeSet<Location>> {
-        definitions(expected, labels).into_values().collect()
-    };
-    let same_symbols = label_set(&query.expected) == label_set(&retired.expected)
-        || locations(&query.expected)
-            .is_some_and(|found| !found.is_empty() && Some(found) == locations(&retired.expected));
+    let recorded: BTreeSet<RetiredLocation> = retired.locations.iter().cloned().collect();
     query.query_type == retired.query_type
         && comparable_text(&query.query) == comparable_text(&retired.query)
-        && same_symbols
+        && resolved_locations(&query.expected, labels) == Some(recorded)
 }
 
 /// Find the live queries that are the same as a retired query.
@@ -574,11 +605,14 @@ fn is_changed(base: &Query, current: &Query) -> bool {
         || label_set(&base.expected) != label_set(&current.expected)
 }
 
-/// Tell if a retired entry records a query exactly.
-fn records(retired: &Retired, query: &Query) -> bool {
+/// Tell if a retired entry records a query exactly, with the locations that
+/// `labels` give for its expected labels.
+fn records(retired: &Retired, query: &Query, labels: Option<&Labels>) -> bool {
+    let recorded: BTreeSet<RetiredLocation> = retired.locations.iter().cloned().collect();
     retired.query_type == query.query_type
         && retired.query == query.query
         && label_set(&retired.expected) == label_set(&query.expected)
+        && resolved_locations(&query.expected, labels) == Some(recorded)
 }
 
 fn retired_by_id(corpus: &Corpus) -> BTreeMap<&str, &Retired> {
@@ -648,9 +682,11 @@ pub fn ledger_growth(base_revision: &Revision, revision: &Revision) -> Vec<Strin
                     ));
                 }
             }
-            (None, Some(entry)) if !records(entry, base_query) => {
+            (None, Some(entry))
+                if !records(entry, base_query, base_revision.labels.get(&base_case.case)) =>
+            {
                 problems.insert(format!(
-                    "{key}: the retired entry must have the type, the text, and the expected labels of the base query"
+                    "{key}: the retired entry must have the type, the text, the expected labels, and the base locations of the base query"
                 ));
             }
             (None, Some(_)) => {}
@@ -672,7 +708,8 @@ pub fn ledger_growth(base_revision: &Revision, revision: &Revision) -> Vec<Strin
             Some(entry)
                 if entry.query_type != base_entry.query_type
                     || entry.query != base_entry.query
-                    || label_set(&entry.expected) != label_set(&base_entry.expected) =>
+                    || label_set(&entry.expected) != label_set(&base_entry.expected)
+                    || entry.locations != base_entry.locations =>
             {
                 problems.insert(format!(
                     "{key}: the retired entry of the base branch must not change"
@@ -1579,14 +1616,57 @@ mod tests {
         )
     }
 
+    /// A retired entry with the locations that the test labels give.
     fn retired(id: &str, query_type: QueryType, query: &str, expected: &[&str]) -> Retired {
+        let expected: Vec<String> = expected.iter().map(ToString::to_string).collect();
+        let labels = labels();
+        let locations = definitions(&expected, Some(&labels))
+            .into_values()
+            .flatten()
+            .map(RetiredLocation::from)
+            .collect();
         Retired {
             id: id.to_string(),
             query_type,
             query: query.to_string(),
-            expected: expected.iter().map(ToString::to_string).collect(),
+            expected,
+            locations,
             reason: "the label was wrong".to_string(),
         }
+    }
+
+    #[test]
+    fn a_retired_query_is_found_after_its_label_is_removed() {
+        // The retired label `gone` is not in the labels now. A new label for
+        // the same symbol does not make a new query.
+        let mut old = retired_old();
+        old.expected = vec!["gone".to_string()];
+        let mut returned = corpus(vec![serde_json::json!({"id": "back", "type": "identifier",
+            "query": "call the helper", "expected": ["helper"]})]);
+        returned.retired.push(old);
+
+        let problems = validate(&returned, &case_labels());
+
+        assert_eq!(
+            problems,
+            ["rust/back: the query is the same as the retired query `rust/old`"]
+        );
+    }
+
+    #[test]
+    fn a_replacement_for_a_moved_label_is_a_new_query() {
+        // The label `helper` moved after the retirement. The replacement has
+        // the same text and label id, but it expects a different location.
+        let mut moved = labels();
+        moved.symbols[0].start_line = 30;
+        let labels = BTreeMap::from([("rust/basics".to_string(), moved)]);
+        let mut replaced = corpus(vec![
+            serde_json::json!({"id": "replacement", "type": "identifier",
+            "query": "call the helper", "expected": ["helper"]}),
+        ]);
+        replaced.retired.push(retired_old());
+
+        assert_eq!(validate(&replaced, &labels), Vec::<String>::new());
     }
 
     /// The retired entry for the query `i0` of the test corpus.
@@ -1652,7 +1732,7 @@ mod tests {
 
         assert_eq!(
             grown,
-            ["rust/i0: the retired entry must have the type, the text, and the expected labels of the base query"]
+            ["rust/i0: the retired entry must have the type, the text, the expected labels, and the base locations of the base query"]
         );
     }
 
@@ -1848,7 +1928,8 @@ mod tests {
         let with_retired: Corpus = serde_json::from_value(serde_json::json!({
             "version": 1, "split": "development", "oracle": "x", "cases": [],
             "retired": [{"id": "rust/old", "type": "identifier", "query": "old text",
-                "expected": ["helper"], "reason": "the label was wrong"}]
+                "expected": ["helper"], "locations": [{"file": "a.rs", "name": "helper", "start_line": 3}],
+                "reason": "the label was wrong"}]
         }))
         .unwrap();
         assert_eq!(with_retired.retired[0].id, "rust/old");
