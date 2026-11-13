@@ -263,6 +263,19 @@ impl<'a> Resolver<'a> {
         if !found.is_empty() {
             return found;
         }
+        // A name in a module in the file, as a Rust `mod testing { ... }` has it.
+        let in_module: Vec<Id> = self
+            .named(name, file)
+            .filter(|id| {
+                id.0 == file
+                    && self.facts(*id).parent.is_some_and(|parent| {
+                        self.symbol((file, parent)).kind == SymbolKind::Module
+                    })
+            })
+            .collect();
+        if let [only] = in_module.as_slice() {
+            return vec![*only];
+        }
         let python = self.family(file) == Family::Python;
         let mut found = Vec::new();
         for binding in &self.files[file].imports {
@@ -356,10 +369,12 @@ impl<'a> Resolver<'a> {
                 let member = self.symbol(*id);
                 is_callable(member)
                     && member.container.as_deref() == Some(type_symbol.name.as_str())
+                    // Two types can have one name. A member in a different
+                    // file belongs to this type only when that file gives
+                    // this type for the name.
                     && (namespace
                         || id.0 == owner.0
-                        || member.receiver_type.is_some()
-                        || self.same_package(id.0, owner.0))
+                        || self.types(&type_symbol.name, None, id.0) == [owner])
             })
             .collect();
         found = self.preferred(found, arity);
@@ -383,9 +398,18 @@ impl<'a> Resolver<'a> {
         };
         keep(&mut found, &|id| !self.facts(*id).trait_implementation);
         keep(&mut found, &|id| self.symbol(*id).body_range.is_some());
-        keep(&mut found, &|id| {
-            self.facts(*id).parameter_count == Some(arity)
+        // Only a language with overloads selects by the number of arguments.
+        let overloads = found.first().is_some_and(|id| {
+            matches!(
+                self.family(id.0),
+                Family::Java | Family::CSharp | Family::C | Family::Ecma
+            )
         });
+        if overloads {
+            keep(&mut found, &|id| {
+                self.facts(*id).parameter_count == Some(arity)
+            });
+        }
         found
     }
 
@@ -754,8 +778,11 @@ impl<'a> Resolver<'a> {
             .unwrap_or_else(|| Outcome::none(Status::Unresolved))
     }
 
-    fn bare(&self, file: usize, reference: &Reference, chain: &[Id]) -> Outcome {
+    /// Resolves a call of a bare name. `start` is the start byte of the call.
+    fn bare(&self, file: usize, reference: &Reference, chain: &[Id], start: usize) -> Outcome {
         let name = reference.name.as_str();
+        // A local name is not in scope in its own first value or before it.
+        let in_scope = |local: &Local| !local.name.value_start.is_some_and(|value| value >= start);
         let arity = reference.arity;
         let family = self.family(file);
         let callable = |id: &Id| {
@@ -786,6 +813,7 @@ impl<'a> Resolver<'a> {
             // binds the name. A function value needs `.call`.
             let bound = self.files[file].locals.iter().any(|local| {
                 local.name.name == name
+                    && in_scope(local)
                     && local
                         .owner
                         .is_some_and(|owner| chain.contains(&(file, owner)))
@@ -808,17 +836,31 @@ impl<'a> Resolver<'a> {
                         && callable(id)
                         && !(family == Family::Php && php_value(id))
                         && self.facts(*id).parent.is_some_and(|parent| {
+                            // A function of an enclosing function or module
+                            // is in scope. A method of an enclosing type is not.
+                            let scope = self.symbol((file, parent));
                             chain.contains(&(file, parent))
-                                && !is_container(self.symbol((file, parent)))
+                                && (!is_container(scope) || scope.kind == SymbolKind::Module)
                         })
                 })
                 .collect();
-            if let Some(outcome) = Outcome::of(Basis::LexicalScope, self.preferred(lexical, arity))
-            {
+            // A later definition of a name in one function hides an earlier
+            // one. The call binds to the last definition before the call.
+            let mut lexical = self.preferred(lexical, arity);
+            let last_before = lexical
+                .iter()
+                .filter(|id| self.symbol(**id).range.start_byte <= start)
+                .max_by_key(|id| self.symbol(**id).range.start_byte)
+                .copied();
+            if let (true, Some(last)) = (lexical.len() > 1, last_before) {
+                lexical = vec![last];
+            }
+            if let Some(outcome) = Outcome::of(Basis::LexicalScope, lexical) {
                 return outcome;
             }
             let value = self.files[file].locals.iter().any(|local| {
                 local.name.name == name
+                    && in_scope(local)
                     && local
                         .owner
                         .is_some_and(|owner| chain.contains(&(file, owner)))
@@ -1132,7 +1174,10 @@ impl<'a> Resolver<'a> {
             Some(Receiver::Expression) => Outcome::none(Status::Unresolved),
             None => match &reference.qualifier {
                 Some(qualifier) => self.with_qualifier(file, reference, qualifier),
-                None => self.bare(file, reference, &chain),
+                None => {
+                    let start = facts.reference_facts[position].start_byte;
+                    self.bare(file, reference, &chain, start)
+                }
             },
         }
     }

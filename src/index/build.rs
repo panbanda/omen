@@ -44,7 +44,7 @@ fn read_manifests(
     }
     let mut manifests = Manifests::default();
     for directory in directories {
-        let mut candidates = vec![directory.join("go.mod")];
+        let mut candidates = vec![directory.join("go.mod"), directory.join("Cargo.toml")];
         if let Ok(entries) = std::fs::read_dir(&directory) {
             let mut specifications: Vec<PathBuf> = entries
                 .filter_map(|entry| entry.ok().map(|entry| entry.path()))

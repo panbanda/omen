@@ -206,7 +206,7 @@ impl LanguageSpec for Ruby {
             _ => {
                 let parent_kind = parent.map_or("", |parent| parent.kind());
                 let binds = match parent_kind {
-                    CALL => field_of_parent("method") || field_of_parent("receiver"),
+                    CALL => field_of_parent("method"),
                     ASSIGNMENT | OPERATOR_ASSIGNMENT => field_of_parent("left"),
                     _ => field_of_parent("name"),
                 };
@@ -597,9 +597,13 @@ mod tests {
                 "20 closure.add>local UniqueCandidate SameFile [main.rb#local]",
                 "21 closure>Circle.new UniqueCandidate QualifiedPath [shapes.rb#Circle.initialize]",
                 "23 closure>list.push Unresolved - []",
+                "23 closure>list Unresolved - []",
                 "24 closure>add.call UniqueCandidate LexicalScope [main.rb#closure.add]",
+                "24 closure>add Unresolved - []",
                 "24 closure>circle.area UniqueCandidate ReceiverDeclaredType [shapes.rb#Circle.area]",
+                "24 closure>circle Unresolved - []",
                 "24 closure>shape.area Ambiguous NameOnly [shapes.rb#Circle.area, shapes.rb#Shape.area]",
+                "24 closure>shape Unresolved - []",
                 "24 closure>add Unresolved - []",
                 "24 closure>Util.twice UniqueCandidate QualifiedPath [shapes.rb#Util.twice]",
                 "24 closure>Circle.unit UniqueCandidate QualifiedPath [shapes.rb#Circle.unit]",
@@ -628,6 +632,24 @@ mod tests {
                 "48 Circle.label>super.upcase Unresolved - []",
                 "48 Circle.label>super.super UniqueCandidate EnclosingType [shapes.rb#Shape.label]",
                 "56 Circle.scaled>factor Unresolved - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_receiver_without_parentheses_can_be_a_call() {
+        use crate::index::resolve::testing::rows;
+        let files = [(
+            "main.rb",
+            "def callback\n  [1]\nend\n\ndef main(list)\n  callback.sum + list.size\nend\n",
+        )];
+        assert_eq!(
+            rows(&files, "main.rb"),
+            [
+                "6 main>callback.sum Unresolved - []",
+                "6 main>callback UniqueCandidate SameFile [main.rb#callback]",
+                "6 main>list.size Unresolved - []",
+                "6 main>list Unresolved - []",
             ]
         );
     }

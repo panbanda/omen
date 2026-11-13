@@ -196,8 +196,34 @@ impl LanguageSpec for Rust {
         let exported = node
             .children(&mut cursor)
             .any(|child| child.kind() == VISIBILITY_MODIFIER);
+        let first = out.len();
         if let Some(argument) = node.child_by_field_name("argument") {
             use_tree(node, argument, "", exported, context, out);
+        }
+        // In a module in the file, `super` is a module of the same file.
+        // Thus the path of such a `use` is given from the file: one `self`
+        // replaces one `super` for each module that contains the `use`.
+        let depth = context
+            .scopes
+            .iter()
+            .filter(|scope| scope.kind == Some(SymbolKind::Module))
+            .count();
+        for binding in &mut out[first..] {
+            let mut path = binding.module_path.as_str();
+            let mut removed = 0;
+            while removed < depth {
+                match path
+                    .strip_prefix("super::")
+                    .or_else(|| path.strip_prefix("super"))
+                {
+                    Some(rest) if rest.is_empty() || path.starts_with("super::") => path = rest,
+                    _ => break,
+                }
+                removed += 1;
+            }
+            if removed > 0 {
+                binding.module_path = joined("self", path);
+            }
         }
     }
 
@@ -709,6 +735,155 @@ mod tests {
             [
                 "6 main>local UniqueCandidate SameFile [main.rs#local]",
                 "7 main>local UniqueCandidate SameFile [main.rs#local]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_call_of_a_function_in_the_enclosing_module() {
+        use crate::index::resolve::testing::rows;
+        let files = [
+            (
+                "a.rs",
+                "pub fn build() {}\n\nmod tests {\n    fn build() {}\n\n    fn helper() {}\n\n    fn check() {\n        build();\n        helper();\n    }\n}\n",
+            ),
+            ("b.rs", "pub fn helper() {}\n"),
+        ];
+        assert_eq!(
+            rows(&files, "a.rs"),
+            [
+                "9 tests.check>build UniqueCandidate LexicalScope [a.rs#tests.build]",
+                "10 tests.check>helper UniqueCandidate LexicalScope [a.rs#tests.helper]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_two_types_with_one_name_keep_their_own_methods() {
+        use crate::index::resolve::testing::rows;
+        let files = [
+            (
+                "graph.rs",
+                "pub struct Analyzer;\n\nimpl Analyzer {\n    fn analyze_files(&self, context: u32) {}\n}\n",
+            ),
+            (
+                "repomap.rs",
+                "pub struct Analyzer;\n\nimpl Analyzer {\n    pub fn analyze_repo(&self) {\n        self.analyze_files(1, 2);\n        self.only_in_graph();\n    }\n\n    fn analyze_files(&self, root: u32, files: u32) {}\n}\n",
+            ),
+            (
+                "other.rs",
+                "use crate::graph::Analyzer;\n\nimpl Analyzer {\n    fn only_in_graph(&self) {}\n}\n\nfn run(analyzer: Analyzer) {\n    analyzer.analyze_files(1);\n}\n",
+            ),
+            ("main.rs", "mod graph;\nmod other;\nmod repomap;\n"),
+        ];
+        assert_eq!(
+            rows(&files, "repomap.rs"),
+            [
+                "5 Analyzer.analyze_repo>self.analyze_files UniqueCandidate EnclosingType [repomap.rs#Analyzer.analyze_files]",
+                "6 Analyzer.analyze_repo>self.only_in_graph Ambiguous NameOnly [other.rs#Analyzer.only_in_graph]",
+            ]
+        );
+        assert_eq!(
+            rows(&files, "other.rs"),
+            ["8 run>analyzer.analyze_files UniqueCandidate ReceiverDeclaredType [graph.rs#Analyzer.analyze_files]"]
+        );
+    }
+
+    const CRATE_FILES: &[(&str, &str)] = &[
+        ("Cargo.toml", "[package]\nname = \"shop-cli\"\n\n[lib]\nname = \"shop\"\n"),
+        ("src/lib.rs", "pub mod other;\npub mod util;\n"),
+        ("src/main.rs", "mod cli;\n\nuse shop::util::helper;\n\nfn main() {\n    helper();\n}\n"),
+        ("src/cli.rs", "use crate::missing::thing;\n"),
+        ("src/other.rs", "pub fn thing() {}\n"),
+        (
+            "src/util.rs",
+            "use crate::other::thing;\n\npub fn helper() {\n    thing();\n}\n\npub mod testing {\n    pub fn keys() {}\n}\n",
+        ),
+        (
+            "tests/it.rs",
+            "use shop::util::helper;\nuse shop::util::testing::keys;\nuse serde::Serialize;\n\nfn check() {\n    helper();\n    keys();\n    shop::other::thing();\n}\n",
+        ),
+    ];
+
+    #[test]
+    fn test_library_name_of_the_package_is_the_crate_root() {
+        use crate::index::imports::testing::rows;
+        assert_eq!(
+            rows(CRATE_FILES, "tests/it.rs"),
+            [
+                "1 Named shop::util::helper helper->helper src/util.rs [src/util.rs#helper]",
+                "2 Named shop::util::testing::keys keys->keys src/util.rs [src/util.rs#testing.keys]",
+                "3 Named serde::Serialize Serialize->Serialize external",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_root_that_declares_the_module_is_the_crate_root() {
+        use crate::index::imports::testing::rows;
+        assert_eq!(
+            rows(CRATE_FILES, "src/util.rs"),
+            ["1 Named crate::other::thing thing->thing src/other.rs [src/other.rs#thing]"]
+        );
+        assert_eq!(
+            rows(CRATE_FILES, "src/cli.rs"),
+            ["1 Named crate::missing::thing thing->thing src/main.rs"]
+        );
+    }
+
+    #[test]
+    fn test_calls_through_the_library_name() {
+        use crate::index::resolve::testing::rows;
+        assert_eq!(
+            rows(CRATE_FILES, "tests/it.rs"),
+            [
+                "6 check>helper UniqueCandidate ImportedName [src/util.rs#helper]",
+                "7 check>keys UniqueCandidate ImportedName [src/util.rs#testing.keys]",
+                "8 check>shop::other::thing Unresolved - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_local_name_is_not_in_scope_in_its_own_first_value() {
+        use crate::index::resolve::testing::rows;
+        let files = [(
+            "a.rs",
+            "fn helper() -> u32 {\n    1\n}\n\nfn run() -> u32 {\n    let before = helper();\n    let helper = helper();\n    let call = |x: u32| x;\n    let first = call(1);\n    let call = |x: u32| x + 1;\n    before + helper + first + call(2)\n}\n",
+        )];
+        assert_eq!(
+            rows(&files, "a.rs"),
+            [
+                "6 run>helper UniqueCandidate SameFile [a.rs#helper]",
+                "7 run>helper UniqueCandidate SameFile [a.rs#helper]",
+                "9 run>call UniqueCandidate LexicalScope [a.rs#run.call]",
+                "11 run>call UniqueCandidate LexicalScope [a.rs#run.call~2]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_use_in_an_inline_module_is_relative_to_that_module() {
+        let files = [
+            ("main.rs", "mod a;\n"),
+            ("a/mod.rs", "pub mod schema;\n\npub fn find() {}\n"),
+            (
+                "a/schema.rs",
+                "pub fn local() {}\n\nmod tests {\n    use super::super::find;\n    use super::*;\n\n    fn check() {\n        find();\n        local();\n    }\n}\n",
+            ),
+        ];
+        assert_eq!(
+            crate::index::imports::testing::rows(&files, "a/schema.rs"),
+            [
+                "4 Named self::super::find find->find a/mod.rs [a/mod.rs#find]",
+                "5 Wildcard self -->- a/schema.rs",
+            ]
+        );
+        assert_eq!(
+            crate::index::resolve::testing::rows(&files, "a/schema.rs"),
+            [
+                "8 tests.check>find UniqueCandidate ImportedName [a/mod.rs#find]",
+                "9 tests.check>local UniqueCandidate SameFile [a/schema.rs#local]",
             ]
         );
     }

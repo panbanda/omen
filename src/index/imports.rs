@@ -25,6 +25,8 @@ pub struct Manifests {
     pub go_modules: BTreeMap<String, String>,
     /// The directories in which Ruby `require` looks for a file.
     pub ruby_load_roots: BTreeSet<String>,
+    /// The library name of each `Cargo.toml` file, by the directory of the file.
+    pub rust_crates: BTreeMap<String, String>,
 }
 
 impl Default for Manifests {
@@ -33,6 +35,7 @@ impl Default for Manifests {
         Self {
             go_modules: BTreeMap::new(),
             ruby_load_roots: [String::new(), "lib".to_string()].into(),
+            rust_crates: BTreeMap::new(),
         }
     }
 }
@@ -49,8 +52,36 @@ impl Manifests {
             for root in ruby_require_paths(text) {
                 self.ruby_load_roots.extend(join(here, &root));
             }
+        } else if file_name(path) == "Cargo.toml" {
+            self.rust_crates
+                .extend(rust_library_name(text).map(|name| (here.to_string(), name)));
         }
     }
+}
+
+/// The name with which Rust source refers to the library of a `Cargo.toml`
+/// file: the `name` of `[lib]`, or the `name` of `[package]` with `_` for `-`.
+pub fn rust_library_name(cargo_toml: &str) -> Option<String> {
+    let mut section = "";
+    let mut package = None;
+    let mut library = None;
+    for line in cargo_toml.lines().map(str::trim) {
+        if line.starts_with('[') {
+            section = line;
+            continue;
+        }
+        let name = line
+            .strip_prefix("name")
+            .map(str::trim_start)
+            .and_then(|rest| rest.strip_prefix('='))
+            .map(|value| value.trim().trim_matches('"').to_string());
+        match (section, name) {
+            ("[package]", Some(name)) => package = Some(name.replace('-', "_")),
+            ("[lib]", Some(name)) => library = Some(name),
+            _ => {}
+        }
+    }
+    library.or(package)
 }
 
 /// The `require_paths` of a gem specification. Without the assignment, the
@@ -361,8 +392,8 @@ impl Repository<'_> {
     fn rust_parent(&self, file: &str) -> Option<String> {
         let here = directory(file);
         let stem = file_name(file).trim_end_matches(".rs");
-        // The module whose child modules are in `children`.
-        let owner = |children: &str| -> Option<String> {
+        // The module that declares the child module `child` in `children`.
+        let owner = |children: &str, child: &str| -> Option<String> {
             let mut found: Vec<String> = ["main.rs", "lib.rs", "mod.rs"]
                 .iter()
                 .filter_map(|root| self.existing(join(children, root)))
@@ -372,13 +403,26 @@ impl Repository<'_> {
             } else if !children.is_empty() {
                 found.extend(self.existing(Some(format!("{children}.rs"))));
             }
+            // A directory can have `lib.rs` and `main.rs`. The root that has
+            // `mod child;` is the parent.
+            if found.len() > 1 {
+                found.retain(|candidate| {
+                    self.files.iter().any(|facts| {
+                        facts.file == *candidate
+                            && facts.imports.iter().any(|binding| {
+                                binding.kind == ImportKind::ModuleDeclaration
+                                    && binding.local_name.as_deref() == Some(child)
+                            })
+                    })
+                });
+            }
             (found.len() == 1).then(|| found.remove(0))
         };
         match stem {
             "main" | "lib" => None,
             "mod" if here.is_empty() => None,
-            "mod" => owner(directory(here)),
-            _ => owner(here),
+            "mod" => owner(directory(here), file_name(here)),
+            _ => owner(here, stem),
         }
     }
 
@@ -414,7 +458,23 @@ impl Repository<'_> {
                 moved = true;
                 segments.next();
             }
-            _ => {}
+            // The name of a library of the repository, as a test or a
+            // binary of the package uses it.
+            Some(first) => {
+                let roots: Vec<String> = self
+                    .manifests
+                    .rust_crates
+                    .iter()
+                    .filter(|(_, name)| name.as_str() == first)
+                    .filter_map(|(root, _)| self.existing(join(root, "src/lib.rs")))
+                    .collect();
+                if let [root] = roots.as_slice() {
+                    module = root.clone();
+                    moved = true;
+                    segments.next();
+                }
+            }
+            None => {}
         }
         while segments.peek() == Some(&"super") {
             match self.rust_parent(&module) {
@@ -612,6 +672,9 @@ impl Repository<'_> {
         if let Some(first) = defined.next() {
             return defined.next().is_none().then(|| first.key.clone());
         }
+        if let Some(key) = inline_module_symbol(facts, name) {
+            return Some(key);
+        }
         // Each import of a Python module is a name of that module.
         let python = facts.language == Language::Python;
         let mut found = BTreeSet::new();
@@ -634,6 +697,23 @@ impl Repository<'_> {
             .then(|| found.into_iter().next())
             .flatten()
     }
+}
+
+/// The one symbol `name` of a file that is in a module in the file, as a
+/// Rust `mod tests { ... }` has it.
+fn inline_module_symbol(facts: &FileSymbols, name: &str) -> Option<String> {
+    let in_module = |symbol: &&crate::index::model::Symbol| {
+        symbol.name == name
+            && symbol.container.as_ref().is_some_and(|container| {
+                facts.symbols.iter().any(|module| {
+                    module.kind == crate::index::model::SymbolKind::Module
+                        && module.name == *container
+                })
+            })
+    };
+    let mut found = facts.symbols.iter().filter(in_module);
+    let first = found.next()?;
+    found.next().is_none().then(|| first.key.clone())
 }
 
 /// Gives each import binding its target file and its target symbol.
@@ -696,7 +776,7 @@ pub(crate) mod testing {
         let mut manifests = Manifests::default();
         let mut facts = Vec::new();
         for (file, source) in files {
-            if file_name(file) == "go.mod" || file.ends_with(".gemspec") {
+            if ["go.mod", "Cargo.toml"].contains(&file_name(file)) || file.ends_with(".gemspec") {
                 manifests.add(file, source);
                 continue;
             }
