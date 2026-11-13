@@ -8,6 +8,8 @@ use crate::index::extract::{
 };
 use crate::index::model::{Exported, Span, SymbolKind};
 
+use crate::index::model::ImportBinding;
+
 pub struct Cpp;
 
 const CLASS_SPECIFIER: &str = "class_specifier";
@@ -225,6 +227,19 @@ fn parameter_count(parameters: Node<'_>, context: &Context<'_, '_>) -> usize {
 }
 
 impl LanguageSpec for Cpp {
+    fn import_kinds(&self) -> Vec<&'static str> {
+        vec![c::PREPROC_INCLUDE]
+    }
+
+    fn import_hook_kinds(&self) -> Vec<&'static str> {
+        vec![c::SYSTEM_LIB_STRING]
+    }
+
+    /// `using namespace` and a namespace alias are not imports of a file.
+    fn imports(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<ImportBinding>) {
+        c::include_binding(node, context, out);
+    }
+
     fn definitions(&self) -> Vec<DefinitionRule> {
         let mut definitions = c::DEFINITIONS.to_vec();
         definitions.extend_from_slice(DEFINITIONS);
@@ -685,5 +700,33 @@ mod tests {
             (Language::Cpp, "shape.cpp", source),
         ]);
         assert_eq!(files["shape.cpp"], ["Method area shape 1-3 unknown"]);
+    }
+
+    #[test]
+    fn test_includes() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            (
+                "main.cpp",
+                "#include <vector>\n#include \"shapes.hpp\"\n#include \"sub/util.hpp\"\n#include \"plain.h\"\nusing namespace other;\nnamespace tools = util;\n",
+            ),
+            ("shapes.hpp", ""),
+            ("sub/util.hpp", ""),
+            ("sub/util.cpp", "#include \"util.hpp\"\n"),
+            ("include/plain.h", ""),
+        ];
+        assert_eq!(
+            rows(&files, "main.cpp"),
+            [
+                "1 Load vector -->- external",
+                "2 Load shapes.hpp -->- shapes.hpp",
+                "3 Load sub/util.hpp -->- sub/util.hpp",
+                "4 Load plain.h -->- include/plain.h",
+            ]
+        );
+        assert_eq!(
+            rows(&files, "sub/util.cpp"),
+            ["1 Load util.hpp -->- sub/util.hpp"]
+        );
     }
 }
