@@ -16,6 +16,10 @@
 //! ```
 //!
 //! Then examine the diff. A new entry is permitted only for a new query.
+//!
+//! A query of the base branch must not change. To correct a query, move its
+//! id to `retired` in the corpus with a reason, and add a new query with a
+//! new id.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -240,8 +244,8 @@ fn search_results_have_one_order() {
 }
 
 /// The ledger must not get an entry for a query of the base branch, a query
-/// that failed on the base branch must not change, and a rank must not get
-/// worse. CI runs this test with `OMEN_RETRIEVAL_BASE_DIR` set to
+/// of the base branch must not change or go without a `retired` entry, and a
+/// rank must not get worse. CI runs this test with `OMEN_RETRIEVAL_BASE_DIR` set to
 /// `tests/fixtures/retrieval` of the base branch.
 #[test]
 #[ignore = "needs OMEN_RETRIEVAL_BASE_DIR"]
@@ -255,8 +259,6 @@ fn ledger_never_grows() {
     }
     let root = retrieval_root();
     let base_corpus = load_corpus(&base);
-    // The comparison uses the query id. A changed query keeps its id, so a new
-    // assertion id for it does not make its ledger entry a new entry.
     let mut grown = ledger_growth(
         &base_corpus,
         &load_ledger(&base),
