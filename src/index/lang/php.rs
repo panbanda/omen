@@ -3,7 +3,7 @@
 use tree_sitter::Node;
 
 use crate::index::extract::{
-    Context, DefinitionRule, Draft, LanguageSpec, NameRule, Scope, ScopeRole,
+    field_of_type, Context, DefinitionRule, Draft, LanguageSpec, NameRule, Scope, ScopeRole,
 };
 use crate::index::model::{Exported, Span, SymbolKind};
 
@@ -73,6 +73,11 @@ const VISIBILITY_MODIFIER: &str = "visibility_modifier";
 const NAMESPACE_DEFINITION: &str = "namespace_definition";
 const BASE_CLAUSE: &str = "base_clause";
 const CLASS_INTERFACE_CLAUSE: &str = "class_interface_clause";
+const PROPERTY_DECLARATION: &str = "property_declaration";
+const PROPERTY_ELEMENT: &str = "property_element";
+const PROPERTY_PROMOTION_PARAMETER: &str = "property_promotion_parameter";
+const MEMBER_ACCESS_EXPRESSION: &str = "member_access_expression";
+const DECLARATION_LIST: &str = "declaration_list";
 
 const DEFINITIONS: &[DefinitionRule] = &[
     DefinitionRule::new(
@@ -107,6 +112,16 @@ const DEFINITIONS: &[DefinitionRule] = &[
     ),
     DefinitionRule::new(ANONYMOUS_FUNCTION, SymbolKind::Function, NameRule::Hook),
     DefinitionRule::new(ARROW_FUNCTION, SymbolKind::Function, NameRule::Hook),
+    // A property with a declared type.
+    DefinitionRule::new(PROPERTY_ELEMENT, SymbolKind::Field, NameRule::Hook),
+    // `__construct(private Type $name)` declares a property of the class.
+    DefinitionRule::new(
+        PROPERTY_PROMOTION_PARAMETER,
+        SymbolKind::Field,
+        NameRule::Hook,
+    ),
+    // `$this->name = value` gives a type to a property that has no declared type.
+    DefinitionRule::new(ASSIGNMENT_EXPRESSION, SymbolKind::Field, NameRule::Hook),
 ];
 
 fn is_closure(node: Node<'_>) -> bool {
@@ -124,6 +139,71 @@ fn closure_variable(closure: Node<'_>) -> Option<Node<'_>> {
     assignment
         .child_by_field_name("left")
         .filter(|left| left.kind() == VARIABLE_NAME)
+}
+
+/// The name of a variable without its `$`.
+fn bare_name(variable: Node<'_>) -> Option<Node<'_>> {
+    let mut cursor = variable.walk();
+    let name = variable
+        .named_children(&mut cursor)
+        .find(|child| child.kind() == NAME);
+    name
+}
+
+/// The property name in `$this->name = value`.
+fn assigned_property<'tree>(
+    assignment: Node<'tree>,
+    context: &Context<'_, 'tree>,
+) -> Option<Node<'tree>> {
+    let left = assignment
+        .child_by_field_name("left")
+        .filter(|left| left.kind() == MEMBER_ACCESS_EXPRESSION)?;
+    let object = left.child_by_field_name("object")?;
+    if context.text(object) != "$this" {
+        return None;
+    }
+    left.child_by_field_name("name")
+        .filter(|name| name.kind() == NAME)
+}
+
+/// Tells if the body of a class declares the property `name` with a type, as
+/// a property declaration or as a promoted parameter of the constructor.
+fn declares_typed_property(class: Node<'_>, name: &str, context: &Context<'_, '_>) -> bool {
+    let Some(body) = class.child_by_field_name("body") else {
+        return false;
+    };
+    let has_name = |holder: Node<'_>| {
+        holder
+            .child_by_field_name("name")
+            .and_then(bare_name)
+            .is_some_and(|found| context.text(found) == name)
+    };
+    let mut cursor = body.walk();
+    for member in body.named_children(&mut cursor) {
+        let typed = member.child_by_field_name("type").is_some();
+        let mut cursor = member.walk();
+        match member.kind() {
+            PROPERTY_DECLARATION if typed => {
+                if member.named_children(&mut cursor).any(has_name) {
+                    return true;
+                }
+            }
+            METHOD_DECLARATION => {
+                let Some(parameters) = member.child_by_field_name("parameters") else {
+                    continue;
+                };
+                let mut cursor = parameters.walk();
+                let promoted = parameters.named_children(&mut cursor).any(|parameter| {
+                    parameter.kind() == PROPERTY_PROMOTION_PARAMETER && has_name(parameter)
+                });
+                if promoted {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 impl LanguageSpec for Php {
@@ -273,6 +353,9 @@ impl LanguageSpec for Php {
             NAMESPACE_DEFINITION,
             BASE_CLAUSE,
             CLASS_INTERFACE_CLAUSE,
+            PROPERTY_DECLARATION,
+            MEMBER_ACCESS_EXPRESSION,
+            DECLARATION_LIST,
         ]
     }
 
@@ -285,18 +368,74 @@ impl LanguageSpec for Php {
     fn name_node<'tree>(
         &self,
         node: Node<'tree>,
-        _context: &Context<'_, 'tree>,
+        context: &Context<'_, 'tree>,
     ) -> Option<Node<'tree>> {
+        match node.kind() {
+            PROPERTY_ELEMENT | PROPERTY_PROMOTION_PARAMETER => {
+                return node.child_by_field_name("name").and_then(bare_name);
+            }
+            ASSIGNMENT_EXPRESSION => return assigned_property(node, context),
+            _ => {}
+        }
         let variable = closure_variable(node)?;
-        let mut cursor = variable.walk();
-        let name = variable
-            .named_children(&mut cursor)
-            .find(|child| child.kind() == NAME);
-        name
+        bare_name(variable)
     }
 
     fn refine<'tree>(&self, draft: &mut Draft<'tree>, context: &Context<'_, 'tree>) -> bool {
         let node = draft.node;
+        match node.kind() {
+            PROPERTY_ELEMENT => {
+                let declaration = context
+                    .parent(node)
+                    .filter(|parent| parent.kind() == PROPERTY_DECLARATION);
+                let Some(declaration) = declaration else {
+                    return false;
+                };
+                // A property without a declared type is not a field here. An
+                // assignment to it can give the type.
+                let Some(declared) = declaration.child_by_field_name("type") else {
+                    return false;
+                };
+                draft.return_type = Some(context.text(declared));
+                let mut cursor = declaration.walk();
+                let start = declaration
+                    .children(&mut cursor)
+                    .find(|child| child.kind() != ATTRIBUTE_LIST)
+                    .unwrap_or(declaration);
+                draft.span = Span::between(&start, &declaration);
+                return true;
+            }
+            PROPERTY_PROMOTION_PARAMETER => return field_of_type(draft, context),
+            ASSIGNMENT_EXPRESSION => {
+                let class = context
+                    .scopes
+                    .iter()
+                    .rev()
+                    .find(|scope| scope.role == ScopeRole::Type)
+                    .map(|scope| scope.node);
+                let declared =
+                    class.is_some_and(|class| declares_typed_property(class, &draft.name, context));
+                if declared || !field_of_type(draft, context) {
+                    return false;
+                }
+                // Only a call of a constructor gives a type, as for a local
+                // name. A different value gives a field without a type. Then
+                // two assignments do not agree, and the property has no type.
+                draft.return_type = node
+                    .child_by_field_name("right")
+                    .filter(|value| value.kind() == OBJECT_CREATION_EXPRESSION)
+                    .and_then(|value| {
+                        let mut cursor = value.walk();
+                        let created = value
+                            .named_children(&mut cursor)
+                            .find(|child| [NAME, QUALIFIED_NAME].contains(&child.kind()));
+                        created
+                    })
+                    .map(|created| context.text(created));
+                return true;
+            }
+            _ => {}
+        }
         if is_closure(node) {
             draft.function_value = true;
             if let Some(variable) = closure_variable(node) {
@@ -339,7 +478,20 @@ impl LanguageSpec for Php {
         if is_closure(node) {
             return Exported::NotExported;
         }
-        if node.kind() != METHOD_DECLARATION {
+        // The visibility of a property is on its declaration. A property that
+        // only an assignment gives has no declaration.
+        let node = match node.kind() {
+            PROPERTY_ELEMENT => context.parent(node).unwrap_or(node),
+            ASSIGNMENT_EXPRESSION => return Exported::NotExported,
+            _ => node,
+        };
+        if ![
+            METHOD_DECLARATION,
+            PROPERTY_DECLARATION,
+            PROPERTY_PROMOTION_PARAMETER,
+        ]
+        .contains(&node.kind())
+        {
             return Exported::Exported;
         }
         let mut cursor = node.walk();
@@ -649,6 +801,115 @@ mod tests {
                 "52 Circle.area>helper UniqueCandidate ImportedName [util.php#helper]",
                 "57 Circle.label>strtoupper Unresolved - []",
                 "57 Circle.label>super.label UniqueCandidate EnclosingType [shapes.php#Base.label]",
+            ]
+        );
+    }
+    const FIELD_SOURCE: &str = r#"<?php
+
+class Item
+{
+    public function name(): string { return ''; }
+    public function getOut(): Item { return $this; }
+}
+
+class Node
+{
+    private Node $parent;
+    public ?Item $item = null, $spare = null;
+    private array $items = [];
+    private $loose;
+    private $made;
+    private $mixed;
+
+    public function __construct(private Item $lead, Item $plain, protected readonly ?Node $next = null)
+    {
+        $this->made = new Item();
+        $this->mixed = new Item();
+        $this->loose = $plain;
+    }
+
+    public function reset(): void
+    {
+        $this->mixed = new Node($this->lead, $this->lead);
+    }
+
+    public function run(Node $other): string
+    {
+        $this->parent->item->name();
+        $this->spare->getOut()->name();
+        $this->lead->name();
+        $this->next->lead->name();
+        $other->parent->item->name();
+        $this->made->name();
+        foreach ($this->items as $each) { $each->name(); }
+        $this->items->name();
+        $this->loose->name();
+        $this->mixed->name();
+        $this->missing->name();
+        $this->plain->name();
+        return '';
+    }
+}
+"#;
+
+    #[test]
+    fn test_typed_properties_and_promoted_parameters_are_fields() {
+        use crate::index::extract::testing::fields;
+        assert_eq!(
+            fields(Language::Php, FIELD_SOURCE),
+            [
+                "Field parent Node 11-11 not_exported",
+                "Field item Node 12-12 exported",
+                "Field spare Node 12-12 exported",
+                "Field items Node 13-13 not_exported",
+                "Field lead Node 18-18 not_exported",
+                "Field next Node 18-18 not_exported",
+                // A property without a declared type gets a field from each
+                // assignment to it.
+                "Field made Node 20-20 not_exported",
+                "Field mixed Node 21-21 not_exported",
+                "Field loose Node 22-22 not_exported",
+                "Field mixed Node 27-27 not_exported",
+            ]
+        );
+        // A field does not change the key of a method.
+        let keys = keys(Language::Php, FIELD_SOURCE);
+        assert!(!keys.iter().any(|key| key.contains('~')), "{keys:?}");
+    }
+
+    #[test]
+    fn test_field_chains_give_the_receiver_type() {
+        use crate::index::resolve::testing::rows;
+        let found: Vec<String> = rows(&[("node.php", FIELD_SOURCE)], "node.php")
+            .into_iter()
+            .filter(|row| row.contains("name ") || row.contains(".getOut "))
+            .map(|row| row.replace("Node.run>", ""))
+            .collect();
+        let name = "UniqueCandidate ReceiverDeclaredType [node.php#Item.name]";
+        let no_type = "Ambiguous NameOnly [node.php#Item.name]";
+        assert_eq!(
+            found,
+            [
+                format!("32 (..).name {name}"),
+                format!("33 (..).name {name}"),
+                "33 (..).getOut UniqueCandidate ReceiverDeclaredType [node.php#Item.getOut]"
+                    .to_string(),
+                format!("34 (..).name {name}"),
+                format!("35 (..).name {name}"),
+                format!("36 (..).name {name}"),
+                // The one assignment to `made` is a call of a constructor.
+                format!("37 (..).name {name}"),
+                // PHP has no declared type for the elements of an array. Thus
+                // a loop variable has no type.
+                "38 $each.name Unresolved - []".to_string(),
+                "39 (..).name Unresolved - []".to_string(),
+                // The value of `loose` is not a call of a constructor.
+                format!("40 (..).name {no_type}"),
+                // Two assignments give `mixed` two different types.
+                format!("41 (..).name {no_type}"),
+                format!("42 (..).name {no_type}"),
+                // A parameter without a visibility keyword is not a property.
+                format!("43 (..).name {no_type}"),
             ]
         );
     }

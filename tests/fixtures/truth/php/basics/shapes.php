@@ -106,3 +106,36 @@ class Square extends Base
         return $this->side * $this->side;
     }
 }
+
+class Pair
+{
+    private Circle $lead;
+    private ?Pair $next = null;
+    private $spare;
+
+    public function __construct(Circle $lead, private Square $corner)
+    {
+        $this->lead = $lead;
+        $this->spare = new Circle(2.0);
+    }
+
+    public function leadArea(): float
+    {
+        return $this->lead->area();
+    }
+
+    public function nextArea(): float
+    {
+        return $this->next->lead->area();
+    }
+
+    public function cornerArea(): float
+    {
+        return $this->corner->area();
+    }
+
+    public function spareArea(): float
+    {
+        return $this->spare->area();
+    }
+}
