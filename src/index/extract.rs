@@ -172,6 +172,7 @@ pub fn language_spec(language: Language) -> Option<&'static dyn LanguageSpec> {
     match language {
         Language::Go => Some(&lang::go::Go),
         Language::Rust => Some(&lang::rust::Rust),
+        Language::Python => Some(&lang::python::Python),
         _ => None,
     }
 }
