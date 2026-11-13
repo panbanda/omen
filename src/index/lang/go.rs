@@ -45,14 +45,15 @@ const DEFINITIONS: &[DefinitionRule] = &[
 
 impl LanguageSpec for Go {
     fn import_kinds(&self) -> Vec<&'static str> {
-        vec![IMPORT_SPEC, BLANK_IDENTIFIER, DOT]
+        vec![IMPORT_SPEC]
+    }
+
+    fn import_hook_kinds(&self) -> Vec<&'static str> {
+        vec![BLANK_IDENTIFIER, DOT]
     }
 
     /// One binding for each import specification. The path has no quotation marks.
     fn imports(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<ImportBinding>) {
-        if node.kind() != IMPORT_SPEC {
-            return;
-        }
         let Some(path) = node.child_by_field_name("path") else {
             return;
         };

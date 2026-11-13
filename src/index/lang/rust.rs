@@ -7,6 +7,15 @@ use crate::index::extract::{
 };
 use crate::index::model::{Exported, Span, SymbolKind};
 
+use crate::index::model::{ImportBinding, ImportKind};
+
+const USE_DECLARATION: &str = "use_declaration";
+const USE_AS_CLAUSE: &str = "use_as_clause";
+const USE_WILDCARD: &str = "use_wildcard";
+const SCOPED_USE_LIST: &str = "scoped_use_list";
+const USE_LIST: &str = "use_list";
+const SELF: &str = "self";
+
 pub struct Rust;
 
 const IMPL_ITEM: &str = "impl_item";
@@ -93,6 +102,42 @@ fn trait_visibility(implementation: Node<'_>, context: &Context<'_, '_>) -> Expo
 }
 
 impl LanguageSpec for Rust {
+    fn import_kinds(&self) -> Vec<&'static str> {
+        vec![USE_DECLARATION, MOD_ITEM]
+    }
+
+    fn import_hook_kinds(&self) -> Vec<&'static str> {
+        vec![USE_AS_CLAUSE, USE_WILDCARD, SCOPED_USE_LIST, USE_LIST, SELF]
+    }
+
+    /// One binding for each leaf of a `use` tree. The path of a binding is the
+    /// full path of the leaf. `mod name;` gives a module declaration.
+    fn imports(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<ImportBinding>) {
+        if node.kind() == MOD_ITEM {
+            if let (None, Some(name)) = (
+                node.child_by_field_name("body"),
+                node.child_by_field_name("name"),
+            ) {
+                let name = context.text(name);
+                out.push(context.import(
+                    node,
+                    name.clone(),
+                    ImportKind::ModuleDeclaration,
+                    None,
+                    Some(name),
+                ));
+            }
+            return;
+        }
+        let mut cursor = node.walk();
+        let exported = node
+            .children(&mut cursor)
+            .any(|child| child.kind() == VISIBILITY_MODIFIER);
+        if let Some(argument) = node.child_by_field_name("argument") {
+            use_tree(node, argument, "", exported, context, out);
+        }
+    }
+
     fn definitions(&self) -> Vec<DefinitionRule> {
         DEFINITIONS.to_vec()
     }
@@ -181,6 +226,98 @@ impl LanguageSpec for Rust {
             exported: Exported::Unknown("an `impl` block has no visibility".to_string()),
             path,
         })
+    }
+}
+
+fn joined(prefix: &str, path: &str) -> String {
+    let path: String = path.split_whitespace().collect();
+    match (prefix.is_empty(), path.is_empty()) {
+        (true, _) => path,
+        (false, true) => prefix.to_string(),
+        (false, false) => format!("{prefix}::{path}"),
+    }
+}
+
+fn last_segment(path: &str) -> String {
+    path.rsplit("::").next().unwrap_or(path).to_string()
+}
+
+/// Adds the bindings of one node of a `use` tree. `prefix` is the path of the lists that contain it.
+fn use_tree(
+    statement: Node<'_>,
+    node: Node<'_>,
+    prefix: &str,
+    exported: bool,
+    context: &Context<'_, '_>,
+    out: &mut Vec<ImportBinding>,
+) {
+    let named = if exported {
+        ImportKind::ReExportNamed
+    } else {
+        ImportKind::Named
+    };
+    match node.kind() {
+        USE_LIST => {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                use_tree(statement, child, prefix, exported, context, out);
+            }
+        }
+        SCOPED_USE_LIST => {
+            let path = node
+                .child_by_field_name("path")
+                .map(|path| context.text(path))
+                .unwrap_or_default();
+            if let Some(list) = node.child_by_field_name("list") {
+                use_tree(
+                    statement,
+                    list,
+                    &joined(prefix, &path),
+                    exported,
+                    context,
+                    out,
+                );
+            }
+        }
+        USE_WILDCARD => {
+            let path = node
+                .named_child(0)
+                .map(|path| context.text(path))
+                .unwrap_or_default();
+            let kind = if exported {
+                ImportKind::ReExportWildcard
+            } else {
+                ImportKind::Wildcard
+            };
+            out.push(context.import(statement, joined(prefix, &path), kind, None, None));
+        }
+        USE_AS_CLAUSE => {
+            let (Some(path), Some(alias)) = (
+                node.child_by_field_name("path"),
+                node.child_by_field_name("alias"),
+            ) else {
+                return;
+            };
+            let path = joined(prefix, &context.text(path));
+            let name = last_segment(&path);
+            out.push(context.import(
+                statement,
+                path,
+                named,
+                Some(name),
+                Some(context.text(alias)),
+            ));
+        }
+        // `use a::{self}` binds the module `a`.
+        SELF if !prefix.is_empty() => {
+            let name = last_segment(prefix);
+            out.push(context.import(statement, prefix, named, Some(name.clone()), Some(name)));
+        }
+        _ => {
+            let path = joined(prefix, &context.text(node));
+            let name = last_segment(&path);
+            out.push(context.import(statement, path, named, Some(name.clone()), Some(name)));
+        }
     }
 }
 
@@ -348,6 +485,83 @@ mod tests {
         assert_eq!(
             rows(Language::Rust, source),
             ["Function abs - 2-2 exported"]
+        );
+    }
+
+    const IMPORT_FILES: &[(&str, &str)] = &[
+        (
+            "src/main.rs",
+            "mod other;\nmod shapes;\nmod util;\nmod missing;\nmod inline {}\n\nuse std::collections::HashMap;\nuse shapes::{Circle, Shape as Form, round::*, self};\nuse util::twice as double;\nuse other::*;\npub(crate) use shapes::describe;\npub use util::*;\nuse crate::shapes::round::Ring;\nuse self::util::helper;\nuse serde;\n",
+        ),
+        ("src/other.rs", "pub fn only_here() {}\n"),
+        (
+            "src/shapes/mod.rs",
+            "pub mod round;\nuse super::util::twice;\nuse super::super::x;\npub struct Circle;\npub fn describe() {}\n",
+        ),
+        (
+            "src/shapes/round.rs",
+            "use super::Circle;\nuse crate::util::helper;\npub struct Ring;\n",
+        ),
+        ("src/util.rs", "pub fn twice() {}\npub fn helper() {}\n"),
+    ];
+
+    #[test]
+    fn test_imports_of_the_crate_root() {
+        use crate::index::imports::testing::rows;
+        assert_eq!(
+            rows(IMPORT_FILES, "src/main.rs"),
+            [
+                "1 ModuleDeclaration other -->other src/other.rs",
+                "2 ModuleDeclaration shapes -->shapes src/shapes/mod.rs",
+                "3 ModuleDeclaration util -->util src/util.rs",
+                "4 ModuleDeclaration missing -->missing unresolved",
+                "7 Named std::collections::HashMap HashMap->HashMap external",
+                "8 Named shapes::Circle Circle->Circle src/shapes/mod.rs [src/shapes/mod.rs#Circle]",
+                "8 Named shapes::Shape Shape->Form src/shapes/mod.rs",
+                "8 Wildcard shapes::round -->- src/shapes/round.rs",
+                "8 Named shapes shapes->shapes src/shapes/mod.rs",
+                "9 Named util::twice twice->double src/util.rs [src/util.rs#twice]",
+                "10 Wildcard other -->- src/other.rs",
+                "11 ReExportNamed shapes::describe describe->describe src/shapes/mod.rs [src/shapes/mod.rs#describe]",
+                "12 ReExportWildcard util -->- src/util.rs",
+                "13 Named crate::shapes::round::Ring Ring->Ring src/shapes/round.rs [src/shapes/round.rs#Ring]",
+                "14 Named self::util::helper helper->helper src/util.rs [src/util.rs#helper]",
+                "15 Named serde serde->serde external",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_imports_of_nested_modules() {
+        use crate::index::imports::testing::rows;
+        assert_eq!(
+            rows(IMPORT_FILES, "src/shapes/mod.rs"),
+            [
+                "1 ModuleDeclaration round -->round src/shapes/round.rs",
+                "2 Named super::util::twice twice->twice src/util.rs [src/util.rs#twice]",
+                "3 Named super::super::x x->x unresolved",
+            ]
+        );
+        assert_eq!(
+            rows(IMPORT_FILES, "src/shapes/round.rs"),
+            [
+                "1 Named super::Circle Circle->Circle src/shapes/mod.rs [src/shapes/mod.rs#Circle]",
+                "2 Named crate::util::helper helper->helper src/util.rs [src/util.rs#helper]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_named_import_follows_a_re_export() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            ("main.rs", "mod a;\nmod b;\nuse a::deep;\n"),
+            ("a.rs", "pub use crate::b::deep;\npub use crate::b::*;\n"),
+            ("b.rs", "pub use crate::a::*;\npub fn deep() {}\n"),
+        ];
+        assert_eq!(
+            rows(&files, "main.rs")[2],
+            "3 Named a::deep deep->deep a.rs [b.rs#deep]"
         );
     }
 }

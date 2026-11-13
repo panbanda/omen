@@ -212,6 +212,11 @@ pub trait LanguageSpec: Sync {
         Vec::new()
     }
 
+    /// Each node kind that `imports` compares with. The grammar lint examines these kinds.
+    fn import_hook_kinds(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
+
     /// Adds the import bindings of one node to `out`.
     fn imports(&self, _node: Node<'_>, _context: &Context<'_, '_>, _out: &mut Vec<ImportBinding>) {}
 

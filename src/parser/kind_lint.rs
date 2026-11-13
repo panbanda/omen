@@ -85,6 +85,7 @@ fn index_tables(language: Language) -> Vec<(&'static str, Vec<&'static str>)> {
         ),
         ("index_hook", spec.hook_kinds()),
         ("index_import", spec.import_kinds()),
+        ("index_import_hook", spec.import_hook_kinds()),
         ("index_module", spec.module_kinds()),
         ("index_comment", spec.comment_kinds().to_vec()),
     ]
