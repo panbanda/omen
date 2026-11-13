@@ -2073,3 +2073,185 @@ fn test_report_generate_names_artifacts_by_command() {
         assert!(!data.path().join(absent).exists(), "{absent} is present");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Review fixes: repository path check, gate scope, pagination by format
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_absent_repository_path_gives_one_error_on_each_command() {
+    for command in [
+        vec!["complexity"],
+        vec!["score"],
+        vec!["churn"],
+        vec!["search", "query", "helper"],
+        vec!["all"],
+        vec!["outline"],
+        vec!["context"],
+    ] {
+        omen()
+            .args(&command)
+            .args(["-p", "/no/such/directory"])
+            .timeout(std::time::Duration::from_secs(30))
+            .assert()
+            .code(1)
+            .stderr(predicate::str::contains(
+                "The repository path `/no/such/directory` is not a directory.",
+            ));
+    }
+}
+
+#[test]
+fn test_repository_path_that_is_a_file_is_an_error() {
+    let temp = TempDir::new().unwrap();
+    let file = temp.path().join("lib.rs");
+    std::fs::write(&file, "fn one() {}\n").unwrap();
+
+    omen()
+        .args(["-p", file.to_str().unwrap(), "complexity"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("is not a directory"));
+}
+
+#[test]
+fn test_score_trend_short_p_names_the_period_flag() {
+    omen()
+        .args(["score", "trend", "-p", "monthly"])
+        .timeout(std::time::Duration::from_secs(30))
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "The repository path `monthly` is not a directory.",
+        ))
+        .stderr(predicate::str::contains("--period"));
+}
+
+#[test]
+fn test_report_serve_short_p_names_the_port_flag() {
+    omen()
+        .args(["report", "serve", "-p", "3000"])
+        .timeout(std::time::Duration::from_secs(30))
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "The repository path `3000` is not a directory.",
+        ))
+        .stderr(predicate::str::contains("--port"));
+}
+
+fn write_committed_repository() -> TempDir {
+    let temp = TempDir::new().unwrap();
+    std::fs::write(temp.path().join("lib.rs"), "pub fn one() -> u32 { 1 }\n").unwrap();
+    for arguments in [
+        vec!["init"],
+        vec!["config", "user.email", "test@example.com"],
+        vec!["config", "user.name", "Test User"],
+        vec!["add", "."],
+        vec!["commit", "-m", "initial"],
+    ] {
+        assert!(std::process::Command::new("git")
+            .args(&arguments)
+            .current_dir(temp.path())
+            .output()
+            .unwrap()
+            .status
+            .success());
+    }
+    temp
+}
+
+#[test]
+fn test_configured_score_gate_does_not_replace_score_trend() {
+    let temp = write_committed_repository();
+    let config = temp.path().join("gate.toml");
+    std::fs::write(
+        &config,
+        "[score]\nfail_under = 100.0\n\n[gate]\nscore = \"error\"\n",
+    )
+    .unwrap();
+    let path = temp.path().to_str().unwrap();
+    let config = config.to_str().unwrap();
+
+    let output = omen()
+        .args(["-p", path, "-c", config, "-f", "json", "score", "trend"])
+        .args(["--since", "1y"])
+        .output()
+        .expect("command runs");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(parsed.get("points").is_some(), "{parsed:#?}");
+    assert!(parsed.get("violations").is_none(), "{parsed:#?}");
+}
+
+#[test]
+fn test_score_trend_refuses_the_gate_flag() {
+    omen()
+        .args(["-p", ".", "score", "--gate", "error", "trend"])
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("`score trend` has no gate"));
+}
+
+fn write_search_fixture() -> TempDir {
+    let temp = TempDir::new().unwrap();
+    std::fs::write(
+        temp.path().join("lib.rs"),
+        concat!(
+            "pub fn alpha() { parse(); }\npub fn beta() { parse(); parse(); }\n",
+            "pub fn gamma() { parse(); parse(); parse(); }\n",
+            "pub fn render_one() {}\npub fn render_two() {}\npub fn write_one() {}\n",
+            "pub fn write_two() {}\npub fn load_one() {}\n",
+        ),
+    )
+    .unwrap();
+    omen()
+        .args(["-p", temp.path().to_str().unwrap(), "search", "index"])
+        .assert()
+        .success();
+    temp
+}
+
+#[test]
+fn test_search_query_sarif_keeps_each_finding() {
+    let temp = write_search_fixture();
+    let results = |extra: &[&str]| -> usize {
+        let output = omen()
+            .args(["-p", temp.path().to_str().unwrap(), "-f", "sarif"])
+            .args(["search", "query", "parse", "--min-score", "0"])
+            .args(extra)
+            .output()
+            .expect("command runs");
+        assert!(output.status.success());
+        let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        parsed["runs"][0]["results"].as_array().unwrap().len()
+    };
+
+    let all = results(&["--top", "0"]);
+    assert!(all >= 2, "{all}");
+    assert_eq!(results(&["--top", "1"]), all);
+    assert_eq!(results(&["--offset", "1"]), all);
+}
+
+#[test]
+fn test_outline_markdown_applies_top_and_offset() {
+    let temp = TempDir::new().unwrap();
+    for name in ["alpha.rs", "beta.rs", "gamma.rs"] {
+        std::fs::write(temp.path().join(name), "pub fn one() {}\n").unwrap();
+    }
+    for format in ["markdown", "text"] {
+        let output = omen()
+            .args(["-p", temp.path().to_str().unwrap(), "-f", format])
+            .args(["outline", "--top", "1", "--offset", "1"])
+            .output()
+            .expect("command runs");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(!stdout.contains("alpha.rs"), "{format}: {stdout}");
+        assert!(stdout.contains("beta.rs"), "{format}: {stdout}");
+        assert!(!stdout.contains("gamma.rs"), "{format}: {stdout}");
+    }
+}

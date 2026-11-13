@@ -43,6 +43,16 @@ The flags `-p`, `-f`, `-c`, `-v`, and `-j` are global. On each command, `-p` is
 the repository path. `stubs --gate` has no default value in the CLI. If the
 flag is absent, the `[gate]` table of the configuration gives the mode.
 
+If the `-p` value is not a directory, each command stops with an error before
+the analysis. Thus `score trend -p monthly` and `report serve -p 3000` fail, and
+the message names `--period` or `--port`.
+
+The gate of `score` applies only to the bare `score` command. `score trend` has
+no gate, and it refuses the `--gate` flag.
+
+The SARIF format keeps each finding. The `--top` and `--offset` flags do not
+apply to it, also on `search query`.
+
 ### Output keys
 
 | Removed | Replacement |

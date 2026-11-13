@@ -129,8 +129,33 @@ fn resolve_repo_path(cli: &Cli) -> omen::core::Result<(PathBuf, Option<PathBuf>)
         }
 
         Ok((cloned_path.clone(), Some(cloned_path)))
-    } else {
+    } else if cli.path.is_dir() {
         Ok((cli.path.clone(), None))
+    } else {
+        Err(omen::core::Error::InvalidArgument(absent_path_message(cli)))
+    }
+}
+
+/// The message for a `-p` value that is not a directory. Before 5.0, `-p` was
+/// the period of `score trend` and the port of `report serve`, so the message
+/// names the flag that has that meaning now.
+fn absent_path_message(cli: &Cli) -> String {
+    let message = format!(
+        "The repository path `{}` is not a directory.",
+        cli.path.display()
+    );
+    let replacement = match &cli.command {
+        Command::Score(command) if command.subcommand.is_some() => Some(("--period", "period")),
+        Command::Report(command) if matches!(command.subcommand, ReportSubcommand::Serve(_)) => {
+            Some(("--port", "port"))
+        }
+        _ => None,
+    };
+    match replacement {
+        Some((flag, meaning)) => {
+            format!("{message} `-p` sets the repository path. Use `{flag}` to set the {meaning}.")
+        }
+        None => message,
     }
 }
 
@@ -287,7 +312,17 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             )?;
         }
         Command::Score(cmd) => {
-            let gate = resolve_gate_mode(cmd.args.gate.mode, config.gate.score);
+            // The gate belongs to the bare `score` command. A subcommand has no gate.
+            let gate = if cmd.subcommand.is_some() {
+                if cmd.args.gate.mode.is_some() {
+                    return Err(omen::core::Error::InvalidArgument(
+                        "`score trend` has no gate. Remove the `--gate` flag.".to_string(),
+                    ));
+                }
+                GateMode::Off
+            } else {
+                resolve_gate_mode(cmd.args.gate.mode, config.gate.score)
+            };
             if gate != GateMode::Off {
                 run_score_check(path, &config, &cmd.args, format, gate)?;
             } else {
@@ -1523,11 +1558,16 @@ fn run_search(
         SearchSubcommand::Query(args) => {
             let file_filter: Option<Vec<&str>> =
                 args.files.as_ref().map(|f| f.split(',').collect());
-            let offset = args.pagination.offset.unwrap_or(0);
-            let limit = match args.pagination.top {
-                Some(0) => usize::MAX,
-                Some(top) => top,
-                None => DEFAULT_SEARCH_RESULTS,
+            // SARIF keeps each finding, so `--top` and `--offset` do not apply to it.
+            let (offset, limit) = if matches!(format, Format::Sarif) {
+                (0, usize::MAX)
+            } else {
+                let limit = match args.pagination.top {
+                    Some(0) => usize::MAX,
+                    Some(top) => top,
+                    None => DEFAULT_SEARCH_RESULTS,
+                };
+                (args.pagination.offset.unwrap_or(0), limit)
             };
             // The search must return the skipped results too.
             let fetch = limit.saturating_add(offset);
@@ -1919,6 +1959,13 @@ fn run_outline(
 
     match format {
         Format::Markdown | Format::Text => {
+            let mut result = result;
+            let offset = args.common.pagination.offset.unwrap_or(0);
+            let limit = match args.common.pagination.top {
+                Some(0) | None => usize::MAX,
+                Some(top) => top,
+            };
+            result.files = result.files.into_iter().skip(offset).take(limit).collect();
             print!("{}", result.to_markdown());
         }
         _ => {
