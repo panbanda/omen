@@ -830,6 +830,81 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
 }
 
 #[cfg(test)]
+mod tests {
+    use super::testing::rows;
+    use crate::core::Language;
+
+    /// The start line of a symbol is the line of its declaration. The lines
+    /// of annotations, attributes, decorators, and comments before the
+    /// declaration are not in the range.
+    #[test]
+    fn test_range_starts_at_the_declaration_in_each_language() {
+        let cases: &[(Language, &str, &[&str])] = &[
+            (
+                Language::Python,
+                "@cache\n@other(1)\ndef run():\n    pass\n\nclass Shop:\n    @staticmethod\n    def open():\n        pass\n",
+                &[
+                    "Function run - 3-4 exported",
+                    "Class Shop - 6-9 exported",
+                    "Method open Shop 8-9 exported",
+                ],
+            ),
+            (
+                Language::Rust,
+                "/// Doc.\n#[test]\n#[ignore]\nfn run() {}\n\n#[derive(Debug)]\npub struct Shop;\n",
+                &["Function run - 4-4 not_exported", "Struct Shop - 7-7 exported"],
+            ),
+            (
+                Language::Java,
+                "@Entity\npublic class Shop {\n    @Override\n    @Deprecated\n    public void run() {\n    }\n}\n",
+                &["Class Shop - 2-7 exported", "Method run Shop 5-6 exported"],
+            ),
+            (
+                Language::CSharp,
+                "[Serializable]\npublic class Shop\n{\n    [Obsolete]\n    [Other(1)]\n    public void Run()\n    {\n    }\n}\n",
+                &["Class Shop - 2-9 exported", "Method Run Shop 6-8 exported"],
+            ),
+            (
+                Language::TypeScript,
+                "@entity\n@other()\nexport class Shop {\n  @log\n  @bound\n  run(): void {}\n}\n",
+                &["Class Shop - 3-7 exported", "Method run Shop 6-6 exported"],
+            ),
+            (
+                Language::Php,
+                "<?php\n#[Route('/a')]\nfunction run() {\n}\n\n#[Entity]\nclass Shop {\n    #[Get]\n    #[Other]\n    public function open() {\n    }\n}\n",
+                &[
+                    "Function run - 3-4 exported",
+                    "Class Shop - 7-12 exported",
+                    "Method open Shop 10-11 exported",
+                ],
+            ),
+            (
+                Language::Cpp,
+                "[[nodiscard]]\nint run() {\n    return 1;\n}\n\ntemplate <typename T>\nT largest(T a, T b) {\n    return a;\n}\n",
+                &["Function run - 2-4 exported", "Function largest - 7-9 exported"],
+            ),
+            (
+                Language::Go,
+                "package shop\n\n// Run runs.\n//go:noinline\nfunc Run() {\n}\n",
+                &["Function Run - 5-6 exported"],
+            ),
+            (
+                Language::Ruby,
+                "# Runs.\nprivate def run\nend\n",
+                &["Function run - 2-3 exported"],
+            ),
+        ];
+        let wrong: Vec<String> = cases
+            .iter()
+            .map(|(language, source, expected)| (language, rows(*language, source), expected))
+            .filter(|(_, found, expected)| found != *expected)
+            .map(|(language, found, _)| format!("{language:?}: {found:?}"))
+            .collect();
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+}
+
+#[cfg(test)]
 pub(crate) mod testing {
     use std::path::Path;
 

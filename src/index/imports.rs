@@ -27,8 +27,71 @@ pub struct Manifests {
     pub ruby_load_roots: BTreeSet<String>,
     /// The library name of each `Cargo.toml` file, by the directory of the file.
     pub rust_crates: BTreeMap<String, String>,
-    /// The `name` of each `package.json` file of the repository.
-    pub node_packages: BTreeSet<String>,
+    /// The packages that the `package.json` files of the repository name.
+    pub node_packages: Vec<NodePackage>,
+}
+
+/// The facts of one `package.json` file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodePackage {
+    pub name: String,
+    /// The directory of the `package.json` file.
+    pub directory: String,
+    /// The files that each entry of `exports` names, by the subpath of the
+    /// entry. `.` is the package itself. An entry can name one file for each
+    /// condition. Without `exports`, `.` has the files of `main`, `module`,
+    /// and `types`.
+    pub exports: BTreeMap<String, BTreeSet<String>>,
+}
+
+/// Adds each string in an `exports` value to `out`. A value is a path or an
+/// object that has one value for each condition.
+fn export_paths(value: &serde_json::Value, out: &mut BTreeSet<String>) {
+    match value {
+        serde_json::Value::String(path) => {
+            out.insert(path.clone());
+        }
+        serde_json::Value::Object(conditions) => {
+            for condition in conditions.values() {
+                export_paths(condition, out);
+            }
+        }
+        serde_json::Value::Array(choices) => {
+            for choice in choices {
+                export_paths(choice, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Reads the name and the exports of a `package.json` file in `directory`.
+pub fn node_package(directory: &str, package_json: &str) -> Option<NodePackage> {
+    let package: serde_json::Value = serde_json::from_str(package_json).ok()?;
+    let name = package.get("name")?.as_str()?.to_string();
+    let mut exports: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    match package.get("exports") {
+        Some(serde_json::Value::Object(entries))
+            if entries.keys().all(|key| key.starts_with('.')) =>
+        {
+            for (subpath, value) in entries {
+                export_paths(value, exports.entry(subpath.clone()).or_default());
+            }
+        }
+        Some(value) => export_paths(value, exports.entry(".".to_string()).or_default()),
+        None => {
+            for field in ["main", "module", "types"] {
+                if let Some(value) = package.get(field) {
+                    export_paths(value, exports.entry(".".to_string()).or_default());
+                }
+            }
+        }
+    }
+    Some(NodePackage {
+        name,
+        directory: directory.to_string(),
+        exports,
+    })
 }
 
 impl Default for Manifests {
@@ -38,7 +101,7 @@ impl Default for Manifests {
             go_modules: BTreeMap::new(),
             ruby_load_roots: [String::new(), "lib".to_string()].into(),
             rust_crates: BTreeMap::new(),
-            node_packages: BTreeSet::new(),
+            node_packages: Vec::new(),
         }
     }
 }
@@ -50,10 +113,10 @@ impl Manifests {
     pub fn add(&mut self, path: &str, text: &str) {
         let here = directory(path);
         if file_name(path) == "package.json" {
-            let name = serde_json::from_str::<serde_json::Value>(text)
-                .ok()
-                .and_then(|package| Some(package.get("name")?.as_str()?.to_string()));
-            self.node_packages.extend(name);
+            self.node_packages.extend(node_package(here, text));
+            self.node_packages.sort_by(|left, right| {
+                (&left.directory, &left.name).cmp(&(&right.directory, &right.name))
+            });
         } else if file_name(path) == "go.mod" {
             self.go_modules
                 .extend(go_module_path(text).map(|module| (here.to_string(), module)));
@@ -349,13 +412,24 @@ impl Repository<'_> {
         let path = binding.module_path.as_str();
         if !path.starts_with('.') {
             // A package of the repository is not external. The `exports` of
-            // its `package.json` select the file, and no rule reads them.
-            let own_package = self.manifests.node_packages.iter().any(|name| {
-                path.strip_prefix(name.as_str())
-                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
-            });
+            // its `package.json` name the file. An entry can name a source
+            // file and its build outputs. The files that are in the
+            // repository are the candidates.
+            let mut own_package = false;
+            let mut found = BTreeSet::new();
+            for package in &self.manifests.node_packages {
+                let subpath = match path.strip_prefix(package.name.as_str()) {
+                    Some("") => ".".to_string(),
+                    Some(rest) if rest.starts_with('/') => format!(".{rest}"),
+                    _ => continue,
+                };
+                own_package = true;
+                for file in package.exports.get(&subpath).into_iter().flatten() {
+                    found.extend(self.existing(join(&package.directory, file)));
+                }
+            }
             return if own_package {
-                ImportTarget::Unresolved
+                target_of(found, ImportTarget::Unresolved)
             } else {
                 ImportTarget::External
             };

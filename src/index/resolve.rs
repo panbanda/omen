@@ -708,10 +708,10 @@ impl<'a> Resolver<'a> {
             id.0 == file
                 && is_callable(self.symbol(*id))
                 && self.symbol(*id).container.is_some()
-                && self
-                    .facts(*id)
-                    .parent
-                    .is_some_and(|parent| chain.contains(&(file, parent)))
+                // A member of a type with the name is not the value of a local name.
+                && self.facts(*id).parent.is_some_and(|parent| {
+                    chain.contains(&(file, parent)) && !is_container(self.symbol((file, parent)))
+                })
         });
         if let Some(closure) = closure {
             return Outcome::of(Basis::LexicalScope, vec![closure])
@@ -1050,7 +1050,14 @@ impl<'a> Resolver<'a> {
                     && self.facts(*id).parent.is_none()
             })
             .collect();
-        Outcome::of(Basis::NameOnly, self.definitions(anywhere, file, arity)).unwrap_or_else(|| {
+        let anywhere = self.definitions(anywhere, file, arity);
+        // A Ruby file calls a top-level method of a file that it loads. A
+        // method with the name in a different file can be a method of an
+        // object, thus the name is not sufficient for an edge.
+        if family == Family::Ruby && !anywhere.is_empty() {
+            return Outcome::offered(Basis::NameOnly, anywhere);
+        }
+        Outcome::of(Basis::NameOnly, anywhere).unwrap_or_else(|| {
             // A Ruby method calls a method of its object without `self`. A
             // module that other types include does not tell which type.
             let owner = self

@@ -62,6 +62,7 @@ const CALL_SYNTAX: CallSyntax = CallSyntax {
 pub struct Php;
 
 const METHOD_DECLARATION: &str = "method_declaration";
+const ATTRIBUTE_LIST: &str = "attribute_list";
 const ANONYMOUS_FUNCTION: &str = "anonymous_function";
 const ARROW_FUNCTION: &str = "arrow_function";
 const ASSIGNMENT_EXPRESSION: &str = "assignment_expression";
@@ -305,6 +306,14 @@ impl LanguageSpec for Php {
         }
         if node.kind() == METHOD_DECLARATION && draft.name == "__construct" {
             draft.kind = SymbolKind::Constructor;
+        }
+        // The range of a declaration does not include its attributes.
+        let mut cursor = node.walk();
+        let start = node
+            .children(&mut cursor)
+            .find(|child| child.kind() != ATTRIBUTE_LIST);
+        if let Some(start) = start {
+            draft.span = Span::between(&start, &node);
         }
         if draft.kind.is_type() {
             let mut cursor = node.walk();

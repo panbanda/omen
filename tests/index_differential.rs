@@ -9,7 +9,7 @@
 //!     cargo test --release --test index_differential -- --ignored --nocapture
 //! ```
 //!
-//! With `OMEN_DIFFERENTIAL_OUT=/path/to/file`, the test writes each difference
+//! With `OMEN_DIFFERENTIAL_OUT=/path/to/file`, the test writes each row
 //! to that file. The test prints the counts and the first differences of each
 //! class in sorted order. It fails only when it cannot read the repository.
 //!
@@ -198,12 +198,11 @@ fn call_edges_of_the_two_indexes() {
     }
     let mut report = String::new();
     for (class, lines) in &classes {
-        if *class == "same" {
-            continue;
-        }
-        println!("== {class}: the first {SHOWN} of {}", lines.len());
-        for line in lines.iter().take(SHOWN) {
-            println!("{line}");
+        if *class != "same" {
+            println!("== {class}: the first {SHOWN} of {}", lines.len());
+            for line in lines.iter().take(SHOWN) {
+                println!("{line}");
+            }
         }
         for line in lines {
             report.push_str(&format!("{class}\t{line}\n"));

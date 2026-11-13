@@ -1178,22 +1178,47 @@ mod tests {
     }
 
     #[test]
+    fn test_member_with_the_name_of_a_local_variable_is_not_the_receiver() {
+        use crate::index::resolve::testing::rows;
+        let files = [(
+            "shop.ts",
+            "class Shop {\n  get items(): number {\n    return 1;\n  }\n\n  static create(): number {\n    const items = new Map<string, number>();\n    items.set(\"a\", 1);\n    return items.size;\n  }\n}\n",
+        )];
+        assert_eq!(
+            rows(&files, "shop.ts"),
+            [
+                "7 Shop.create>Map Unresolved - []",
+                "8 Shop.create>items.set Unresolved - []",
+            ]
+        );
+    }
+
+    #[test]
     fn test_package_of_the_repository_is_not_external() {
         use crate::index::resolve::testing::rows;
         let files = [
-            ("packages/shop/package.json", "{\n  \"name\": \"shop\"\n}\n"),
+            (
+                "packages/shop/package.json",
+                "{\n  \"name\": \"shop\",\n  \"exports\": {\n    \".\": { \"source\": \"./src/index.ts\", \"import\": \"./index.js\" },\n    \"./core\": \"./src/core.ts\",\n    \"./both\": { \"a\": \"./src/index.ts\", \"b\": \"./src/core.ts\" }\n  }\n}\n",
+            ),
             ("packages/shop/src/index.ts", "export function open(): number {\n  return 1;\n}\n"),
+            ("packages/shop/src/core.ts", "export function core(): number {\n  return 2;\n}\n"),
+            ("packages/plain/package.json", "{ \"name\": \"plain\", \"main\": \"lib.js\" }\n"),
+            ("packages/plain/lib.js", "export function plain() {\n  return 3;\n}\n"),
             (
                 "packages/bench/run.ts",
-                "import * as shop from \"shop\";\nimport { core } from \"shop/core\";\nimport { other } from \"shopping\";\n\nfunction run(): number {\n  return shop.open() + core() + other();\n}\n",
+                "import * as shop from \"shop\";\nimport { core } from \"shop/core\";\nimport { gone } from \"shop/gone\";\nimport { core as both } from \"shop/both\";\nimport { plain } from \"plain\";\nimport { other } from \"shopping\";\n\nfunction run(): number {\n  return shop.open() + core() + gone() + both() + plain() + other();\n}\n",
             ),
         ];
         assert_eq!(
             rows(&files, "packages/bench/run.ts"),
             [
-                "6 run>shop.open Unresolved - []",
-                "6 run>core Unresolved - []",
-                "6 run>other External - []",
+                "9 run>shop.open UniqueCandidate ImportedModule [packages/shop/src/index.ts#open]",
+                "9 run>core UniqueCandidate ImportedName [packages/shop/src/core.ts#core]",
+                "9 run>gone Unresolved - []",
+                "9 run>both Ambiguous - []",
+                "9 run>plain UniqueCandidate ImportedName [packages/plain/lib.js#plain]",
+                "9 run>other External - []",
             ]
         );
     }

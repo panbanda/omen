@@ -89,6 +89,10 @@ pub struct Symbol {
     /// The type to which a method belongs when the method is not in the body of that type.
     pub receiver_type: Option<String>,
     pub supertypes: Vec<String>,
+    /// The declaration, from its first modifier or keyword to its end. The
+    /// annotations, attributes, decorators, and comments before the
+    /// declaration are not in the range. `range.start_line` is the one start
+    /// line of the symbol for each consumer.
     pub range: Span,
     pub name_range: Span,
     pub body_range: Option<Span>,

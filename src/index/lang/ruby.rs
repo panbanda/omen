@@ -700,6 +700,28 @@ mod tests {
     }
 
     #[test]
+    fn test_method_of_a_file_that_the_caller_does_not_load_is_not_an_edge() {
+        use crate::index::resolve::testing::rows;
+        let files = [
+            (
+                "lib/handler.rb",
+                "require_relative 'tools'\n\nclass Handler\n  attr_reader :realm\n\n  def challenge\n    realm() + loaded()\n  end\nend\n",
+            ),
+            ("lib/tools.rb", "def loaded\n  1\nend\n"),
+            ("test/spec_handler.rb", "def realm\n  'test'\nend\n"),
+        ];
+        assert_eq!(
+            rows(&files, "lib/handler.rb"),
+            [
+                "1 ->require_relative Unresolved - []",
+                "4 Handler>attr_reader Unresolved - []",
+                "7 Handler.challenge>realm Ambiguous NameOnly [test/spec_handler.rb#realm]",
+                "7 Handler.challenge>loaded UniqueCandidate ImportedModule [lib/tools.rb#loaded]",
+            ]
+        );
+    }
+
+    #[test]
     fn test_module_method_calls_a_method_of_the_including_class() {
         use crate::index::resolve::testing::rows;
         let files = [(

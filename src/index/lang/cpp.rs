@@ -35,6 +35,7 @@ pub struct Cpp;
 
 const CLASS_SPECIFIER: &str = "class_specifier";
 const NAMESPACE_DEFINITION: &str = "namespace_definition";
+const ATTRIBUTE_DECLARATION: &str = "attribute_declaration";
 const LAMBDA_EXPRESSION: &str = "lambda_expression";
 const INIT_DECLARATOR: &str = "init_declarator";
 const QUALIFIED_IDENTIFIER: &str = "qualified_identifier";
@@ -413,6 +414,19 @@ impl LanguageSpec for Cpp {
             return false;
         }
         let node = draft.node;
+        // The range of a declaration does not include its attributes.
+        if node
+            .child(0)
+            .is_some_and(|first| first.kind() == ATTRIBUTE_DECLARATION)
+        {
+            let mut cursor = node.walk();
+            let start = node
+                .children(&mut cursor)
+                .find(|child| child.kind() != ATTRIBUTE_DECLARATION);
+            if let Some(start) = start {
+                draft.span = Span::between(&start, &node);
+            }
+        }
         match node.kind() {
             // `class Name;` refers to a class. It does not define the class.
             CLASS_SPECIFIER if draft.body.is_none() => return false,
