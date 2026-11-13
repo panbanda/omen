@@ -612,10 +612,13 @@ impl Analyzer {
             })
             .collect();
 
+        // The file breaks a tie. Without it, the sequence of equal severities
+        // comes from a hash map and is different in each run.
         hotspots.sort_by(|a, b| {
             b.severity
                 .partial_cmp(&a.severity)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.file.cmp(&b.file))
         });
 
         if hotspots.len() > 10 {

@@ -265,6 +265,9 @@ fn each_tool_is_a_mirror_or_has_a_reason() {
         .collect();
     let tools: BTreeSet<&str> = omen::mcp::McpServer::tool_names().iter().copied().collect();
     assert_eq!(covered, tools);
+    let with_list: BTreeSet<&str> = PRIMARY_LISTS.iter().map(|(tool, _)| *tool).collect();
+    let mirrored: BTreeSet<&str> = MIRRORS.iter().map(|mirror| mirror.tool).collect();
+    assert_eq!(with_list, mirrored, "each mirror has a primary list");
     for exemption in EXEMPTIONS {
         assert!(
             exemption.tool == "*" || tools.contains(exemption.tool),
@@ -343,8 +346,73 @@ fn compare_all(repository: &Path, label: &str) -> Vec<String> {
         let mut places = Vec::new();
         differences("", &cli, &mcp, &mut places);
         found.extend(places.into_iter().map(|place| format!("{name}: {place}")));
+        // Two empty lists are equal, but they compare nothing.
+        if name.ends_with("no arguments") {
+            if let Some(problem) = empty_list_problem(label, mirror.tool, &cli, &mcp) {
+                found.push(format!("{name}: {problem}"));
+            }
+        }
     }
     found
+}
+
+/// The primary list of each mirrored tool, as a JSON pointer in the result.
+const PRIMARY_LISTS: &[(&str, &str)] = &[
+    ("context", "/top_symbols"),
+    ("outline", "/files"),
+    ("complexity", "/files"),
+    ("satd", "/items"),
+    ("deadcode", "/items"),
+    ("stubs", "/stubs"),
+    ("churn", "/files"),
+    ("clones", "/clones"),
+    ("defect", "/files"),
+    ("changes", "/commits"),
+    ("diff", "/recommendations"),
+    ("tdg", "/files"),
+    ("graph", "/nodes"),
+    ("hotspot", "/hotspots"),
+    ("temporal", "/couplings"),
+    ("ownership", "/files"),
+    ("cohesion", "/classes"),
+    ("repomap", "/symbols"),
+    ("smells", "/smells"),
+    ("flags", "/flags"),
+    ("score", "/components"),
+    ("semantic_search", "/results"),
+    ("get_symbol", "/callees"),
+    ("impact", "/callers"),
+];
+
+/// The tools whose primary list is permitted to be empty on the fixture,
+/// each with the configuration label and the reason.
+const ALLOWED_EMPTY: &[((&str, &str), &str)] = &[(
+    ("defaults", "flags"),
+    "No flag provider is on by default. The configuration test and the option of `flags` give items.",
+)];
+
+/// Gives a problem when the primary list of the tool is empty on the two
+/// sides and the table does not permit that.
+fn empty_list_problem(label: &str, tool: &str, cli: &Value, mcp: &Value) -> Option<String> {
+    let (_, pointer) = PRIMARY_LISTS.iter().find(|(name, _)| *name == tool)?;
+    let is_empty = |value: &Value| match value.pointer(pointer) {
+        Some(Value::Array(items)) => items.is_empty(),
+        Some(Value::Object(entries)) => entries.is_empty(),
+        _ => true,
+    };
+    let allowed = ALLOWED_EMPTY
+        .iter()
+        .any(|((allowed_label, allowed_tool), _)| *allowed_label == label && *allowed_tool == tool);
+    match (is_empty(cli) && is_empty(mcp), allowed) {
+        (true, false) => Some(format!(
+            "the list `{pointer}` is empty on the two sides. Make the fixture give items, \
+             or add the tool to ALLOWED_EMPTY with a reason"
+        )),
+        (false, true) => Some(format!(
+            "the list `{pointer}` has items, thus remove the tool from ALLOWED_EMPTY"
+        )),
+        _ => None,
+    }
 }
 
 fn assert_no_differences(found: Vec<String>) {
@@ -752,5 +820,241 @@ fn each_known_difference_continues_to_exist() {
             difference.tool,
             difference.reason
         );
+    }
+}
+
+/// One configuration key that a tool reads when its argument is absent.
+struct ConfiguredKey {
+    key: &'static str,
+    /// The configuration without the key. Some tools need other keys.
+    base: &'static str,
+    /// The lines that set the key. They follow `base`.
+    configured: &'static str,
+    tool: &'static str,
+    command: &'static [&'static str],
+    /// A JSON pointer in the result. The value at the pointer must be
+    /// different with the key and without it.
+    probe: &'static str,
+}
+
+const UNLEASH: &str = "[feature_flags]\nproviders = [\"unleash\"]\n";
+
+/// Each key has a value that changes the result on the fixture. The history
+/// of the fixture has 21 days, and the last commit is the anchor of a window.
+const CONFIGURED_KEYS: &[ConfiguredKey] = &[
+    ConfiguredKey {
+        key: "churn.since",
+        base: "",
+        configured: "[churn]\nsince = \"3d\"\n",
+        tool: "churn",
+        command: &["churn"],
+        probe: "/files",
+    },
+    ConfiguredKey {
+        key: "duplicates.min_similarity",
+        base: "",
+        configured: "[duplicates]\nmin_similarity = 0.7\n",
+        tool: "clones",
+        command: &["clones"],
+        probe: "/clones",
+    },
+    ConfiguredKey {
+        key: "duplicates.min_tokens",
+        base: "",
+        configured: "[duplicates]\nmin_tokens = 10\n",
+        tool: "clones",
+        command: &["clones"],
+        probe: "/clones",
+    },
+    ConfiguredKey {
+        key: "duplicates.exclude_tests",
+        base: "",
+        configured: "[duplicates]\nexclude_tests = false\n",
+        tool: "clones",
+        command: &["clones"],
+        probe: "/clones",
+    },
+    ConfiguredKey {
+        key: "defect.churn_days",
+        base: "",
+        configured: "[defect]\nchurn_days = 3\n",
+        tool: "defect",
+        command: &["defect"],
+        probe: "/files",
+    },
+    ConfiguredKey {
+        key: "hotspot.days",
+        base: "",
+        configured: "[hotspot]\ndays = 3\n",
+        tool: "hotspot",
+        command: &["hotspot"],
+        probe: "/hotspots",
+    },
+    ConfiguredKey {
+        key: "changes.days",
+        base: "",
+        configured: "[changes]\ndays = 3\n",
+        tool: "changes",
+        command: &["changes"],
+        probe: "/commits",
+    },
+    ConfiguredKey {
+        key: "satd.custom_markers",
+        base: "",
+        configured: "[satd]\ncustom_markers = [\"REVISIT\"]\n",
+        tool: "satd",
+        command: &["satd"],
+        probe: "/items",
+    },
+    ConfiguredKey {
+        key: "feature_flags.providers",
+        base: "",
+        configured: UNLEASH,
+        tool: "flags",
+        command: &["flags"],
+        probe: "/flags",
+    },
+    ConfiguredKey {
+        key: "feature_flags.stale_days",
+        base: UNLEASH,
+        configured: "stale_days = 36500\n",
+        tool: "flags",
+        command: &["flags"],
+        probe: "/summary/stale_flags",
+    },
+];
+
+/// A function that is almost a clone of `sum_first` in the fixture. Its
+/// similarity is approximately 0.75: below the default threshold 0.9, and
+/// above the configured threshold 0.7.
+const NEAR_CLONE_SOURCE: &str = r#"pub fn sum_near(values: &[u32]) -> u32 {
+    let mut total = 0;
+    let mut count = 0;
+    for value in values {
+        if *value > 10 {
+            total += value * 2;
+            count += 1;
+        } else if *value > 5 {
+            total += value + 3;
+            count += 2;
+        } else {
+            total += 1;
+        }
+    }
+    if count > 4 {
+        total / count
+    } else {
+        let scaled = total.saturating_add(count);
+        scaled.saturating_sub(1)
+    }
+}
+"#;
+
+/// A marker that only `satd.custom_markers` can find.
+const MARKED_SOURCE: &str = "// REVISIT: make this faster\npub fn marked() -> u32 {\n    1\n}\n";
+
+/// Adds the files that the configuration keys need to the fixture.
+fn add_configuration_files(repository: &Path) {
+    std::fs::write(repository.join("near.rs"), NEAR_CLONE_SOURCE).expect("write near clone");
+    std::fs::write(repository.join("marked.rs"), MARKED_SOURCE).expect("write marked file");
+    // A clone in test code: only `exclude_tests = false` reads it.
+    let tests = repository.join("tests");
+    std::fs::create_dir(&tests).expect("tests directory");
+    let clone_in_tests = format!(
+        "{NEAR_CLONE_SOURCE}\n{}",
+        NEAR_CLONE_SOURCE.replace("sum_near", "sum_near_again")
+    );
+    std::fs::write(tests.join("sums.rs"), clone_in_tests).expect("write test clone");
+}
+
+/// Runs the command and the tool, makes sure that they agree, and gives the
+/// value at the probe.
+fn probe_value(repository: &Path, key: &ConfiguredKey, configuration: &str) -> Value {
+    std::fs::write(repository.join("omen.toml"), configuration).expect("write configuration");
+    let mut command: Vec<&str> = key.command.to_vec();
+    command.extend(["--top", "0"]);
+    let cli = without_exemptions(key.tool, cli_json(repository, &command));
+    let request = json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": key.tool, "arguments": {"limit": 0}}
+    });
+    let response = &mcp_responses(repository, &[request])[0];
+    assert_ne!(
+        response["result"]["isError"],
+        json!(true),
+        "{}: {response}",
+        key.key
+    );
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .expect("text");
+    let envelope: Value = serde_json::from_str(text).expect("JSON envelope");
+    let mcp = without_exemptions(key.tool, envelope["result"].clone());
+
+    let mut places = Vec::new();
+    differences("", &cli, &mcp, &mut places);
+    assert!(
+        places.is_empty(),
+        "{} with the configuration {configuration:?}: the CLI and the MCP tool are different:\n{}",
+        key.key,
+        places.join("\n")
+    );
+    cli.pointer(key.probe)
+        .unwrap_or_else(|| panic!("{}: the result has no `{}`", key.key, key.probe))
+        .clone()
+}
+
+/// The test above passes when a handler does not read its key and the two
+/// values of the key give the same result. This test makes sure that each
+/// key changes the result, on the CLI and on the MCP server.
+#[test]
+fn each_configuration_key_changes_the_result_of_its_tool() {
+    let directory = fixture_repository();
+    let repository = directory.path();
+    add_configuration_files(repository);
+
+    let mut problems = Vec::new();
+    for key in CONFIGURED_KEYS {
+        let without = probe_value(repository, key, key.base);
+        let with = probe_value(repository, key, &format!("{}{}", key.base, key.configured));
+        if without == with {
+            problems.push(format!(
+                "{}: `{}` of `{}` is the same with the key and without it: {with}",
+                key.key, key.probe, key.tool
+            ));
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}
+
+#[test]
+fn each_configuration_key_of_the_tools_has_a_discriminating_case() {
+    // The keys that a tool specification names, and the keys that a handler
+    // reads without a parameter.
+    let expected: BTreeSet<&str> = [
+        "churn.since",
+        "duplicates.min_tokens",
+        "duplicates.min_similarity",
+        "duplicates.exclude_tests",
+        "defect.churn_days",
+        "hotspot.days",
+        "changes.days",
+        "satd.custom_markers",
+        "feature_flags.providers",
+        "feature_flags.stale_days",
+    ]
+    .into_iter()
+    .collect();
+    let covered: BTreeSet<&str> = CONFIGURED_KEYS.iter().map(|key| key.key).collect();
+    assert_eq!(covered, expected);
+
+    // Each key that a schema names is in the table.
+    let directory = tempfile::TempDir::new().expect("temporary directory");
+    let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
+    let response = &mcp_responses(directory.path(), &[request])[0];
+    let schema = response.to_string();
+    for part in schema.split("The default is `").skip(1) {
+        let named = part.split('`').next().expect("key");
+        assert!(covered.contains(named), "the schema names `{named}`");
     }
 }
