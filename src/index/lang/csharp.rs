@@ -7,6 +7,12 @@ use crate::index::extract::{
 };
 use crate::index::model::{Exported, Span, SymbolKind};
 
+use crate::index::model::{ImportBinding, ImportKind};
+
+const USING_DIRECTIVE: &str = "using_directive";
+const FILE_SCOPED_NAMESPACE_DECLARATION: &str = "file_scoped_namespace_declaration";
+const STATIC_KEYWORD: &str = "static";
+
 pub struct CSharp;
 
 const LAMBDA_EXPRESSION: &str = "lambda_expression";
@@ -88,6 +94,52 @@ fn has_modifier(node: Node<'_>, keywords: &[&str], context: &Context<'_, '_>) ->
 }
 
 impl LanguageSpec for CSharp {
+    fn import_kinds(&self) -> Vec<&'static str> {
+        vec![USING_DIRECTIVE]
+    }
+
+    fn import_hook_kinds(&self) -> Vec<&'static str> {
+        vec![STATIC_KEYWORD]
+    }
+
+    /// `using A.B;` and `using static A.B;` make names available without a
+    /// qualifier, thus they are wildcards. `using C = A.B;` binds one name.
+    fn imports(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<ImportBinding>) {
+        let alias = node.child_by_field_name("name");
+        let mut cursor = node.walk();
+        let path = node
+            .named_children(&mut cursor)
+            .find(|child| Some(*child) != alias);
+        let Some(path) = path else {
+            return;
+        };
+        let path: String = context.text(path).split_whitespace().collect();
+        match alias {
+            Some(alias) => {
+                let name = path.rsplit('.').next().unwrap_or(&path).to_string();
+                out.push(context.import(
+                    node,
+                    path,
+                    ImportKind::Named,
+                    Some(name),
+                    Some(context.text(alias)),
+                ));
+            }
+            None => out.push(context.import(node, path, ImportKind::Wildcard, None, None)),
+        }
+    }
+
+    fn module_kinds(&self) -> Vec<&'static str> {
+        vec![NAMESPACE_DECLARATION, FILE_SCOPED_NAMESPACE_DECLARATION]
+    }
+
+    /// The full name of a namespace includes the namespaces that contain it.
+    fn module_name(&self, node: Node<'_>, context: &Context<'_, '_>) -> Option<String> {
+        let mut parts = context.path();
+        parts.push(context.text(node.child_by_field_name("name")?));
+        Some(parts.join("."))
+    }
+
     fn definitions(&self) -> Vec<DefinitionRule> {
         DEFINITIONS.to_vec()
     }
@@ -310,6 +362,37 @@ mod tests {
                 "file#Shop.Util.Helpers",
                 "file#Shop.Util.Helpers.Twice",
                 "file#Shop.Util.Helpers.Twice~2"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_imports() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            (
+                "Program.cs",
+                "global using System.Collections.Generic;\nusing System;\nusing Shop.Shapes;\nusing Tools = Shop.Util.Helpers;\nusing static Shop.Other.Others;\nusing Shop.Util;\nusing Shop.Util.Deep;\nusing Gone = Shop.Util.Missing;\n\nnamespace Shop;\n\npublic class Program {}\n",
+            ),
+            ("Shapes/Shapes.cs", "namespace Shop.Shapes;\n\npublic class Circle {}\n"),
+            ("Shapes/More.cs", "namespace Shop.Shapes;\n\npublic class Square {}\n"),
+            ("Other/Others.cs", "namespace Shop.Other;\n\npublic static class Others {}\n"),
+            (
+                "Util/Helpers.cs",
+                "namespace Shop.Util\n{\n    public static class Helpers {}\n\n    namespace Deep\n    {\n        public class Inner {}\n    }\n}\n",
+            ),
+        ];
+        assert_eq!(
+            rows(&files, "Program.cs"),
+            [
+                "1 Wildcard System.Collections.Generic -->- external",
+                "2 Wildcard System -->- external",
+                "3 Wildcard Shop.Shapes -->- ambiguous(Shapes/More.cs,Shapes/Shapes.cs)",
+                "4 Named Shop.Util.Helpers Helpers->Tools Util/Helpers.cs [Util/Helpers.cs#Shop.Util.Helpers]",
+                "5 Wildcard Shop.Other.Others -->- Other/Others.cs",
+                "6 Wildcard Shop.Util -->- Util/Helpers.cs",
+                "7 Wildcard Shop.Util.Deep -->- Util/Helpers.cs",
+                "8 Named Shop.Util.Missing Missing->Gone unresolved",
             ]
         );
     }
