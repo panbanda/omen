@@ -30,23 +30,13 @@ fn logging_filter(verbose: bool, rust_log: Option<&str>) -> EnvFilter {
     EnvFilter::new(directive)
 }
 
-/// Resolve the effective gate mode from the canonical `--gate` flag and the
-/// deprecated boolean `--check` flag, shared by `complexity`, `score`, and
-/// `mutation` (`stubs` only ever had `--gate`, so it calls `gate_dispatch`
-/// directly). `gate` is `Option<GateMode>` -- not defaulted in clap -- so an
-/// explicitly passed `--gate off` can be told apart from "no --gate at all";
-/// `--gate` (any value, including `off`) always wins over `--check`. A bare
-/// `--check` with no `--gate` maps to `Error`, preserving every pre-existing
-/// `--check` invocation.
-fn resolve_gate_mode(gate: Option<GateMode>, check: bool) -> GateMode {
-    gate.unwrap_or(if check {
-        GateMode::Error
-    } else {
-        GateMode::Off
-    })
+/// Resolve the `--gate` flag of `complexity`, `score`, and `mutation`. The
+/// gate is off if the flag is absent.
+fn resolve_gate_mode(gate: Option<GateMode>) -> GateMode {
+    gate.unwrap_or(GateMode::Off)
 }
 
-/// Shared gate/check verdict dispatch used by `complexity`, `score`,
+/// Shared gate verdict dispatch used by `complexity`, `score`,
 /// `mutation`, and `stubs`. Callers detect the threshold violation themselves
 /// (each analyzer's report shape differs) and hand the resulting
 /// `Error::ThresholdViolation` to this function only when a violation
@@ -201,7 +191,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             }
         }
         Command::Complexity(args) => {
-            let gate = resolve_gate_mode(args.gate, args.check);
+            let gate = resolve_gate_mode(args.gate);
             if gate != GateMode::Off {
                 run_complexity_check(path, &config, args, format, gate)?;
             } else {
@@ -277,7 +267,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             )?;
         }
         Command::Score(cmd) => {
-            let gate = resolve_gate_mode(cmd.args.gate, cmd.args.check);
+            let gate = resolve_gate_mode(cmd.args.gate);
             if gate != GateMode::Off {
                 run_score_check(path, &config, &cmd.args, format, gate)?;
             } else {
@@ -909,7 +899,7 @@ fn run_complexity_check(
 /// The JSON/markdown/text report is always emitted to stdout before the gate
 /// is evaluated, so `-f json --gate error` still gives callers the full
 /// finding list on stdout; the gate verdict goes to stderr, matching how
-/// `complexity --check` behaves.
+/// `complexity --gate` behaves.
 fn run_stubs(
     path: &PathBuf,
     config: &Config,
@@ -1639,7 +1629,7 @@ fn run_mutation(
         .map(|s| s.trim().to_uppercase())
         .collect();
 
-    // Build analyzer. Note: the gate/--check threshold is intentionally
+    // Build analyzer. Note: the gate threshold is intentionally
     // *not* wired through `mutation::Analyzer::min_score` here (that would
     // make `analyze()` itself return `Err` before the report is written to
     // stdout, unlike every other gated command). Instead the CLI evaluates
@@ -1788,12 +1778,8 @@ fn run_mutation(
         }
     }
 
-    // Gate/check: fail if the mutation score is below --min-score. Uses the
-    // same shared `resolve_gate_mode`/`gate_dispatch` helpers as complexity,
-    // score, and stubs, so `--gate error` (and the deprecated `--check`
-    // alias) consistently exits 2 via `Error::ThresholdViolation` rather than
-    // the generic `Error::Analysis` this used to return.
-    let gate = resolve_gate_mode(args.gate, args.check);
+    // The gate fails if the mutation score is below `--min-score`.
+    let gate = resolve_gate_mode(args.gate);
     if gate != GateMode::Off && result.summary.mutation_score < args.min_score {
         let message = format!(
             "Mutation score {:.1}% is below minimum threshold {:.1}%",
@@ -2126,51 +2112,15 @@ mod tests {
     }
 
     #[test]
-    fn resolve_gate_mode_no_gate_no_check_is_off() {
-        assert_eq!(resolve_gate_mode(None, false), GateMode::Off);
+    fn resolve_gate_mode_no_gate_is_off() {
+        assert_eq!(resolve_gate_mode(None), GateMode::Off);
     }
 
     #[test]
-    fn resolve_gate_mode_explicit_gate_used_when_check_false() {
-        assert_eq!(resolve_gate_mode(Some(GateMode::Off), false), GateMode::Off);
-        assert_eq!(
-            resolve_gate_mode(Some(GateMode::Warn), false),
-            GateMode::Warn
-        );
-        assert_eq!(
-            resolve_gate_mode(Some(GateMode::Error), false),
-            GateMode::Error
-        );
-    }
-
-    #[test]
-    fn resolve_gate_mode_bare_check_maps_to_error() {
-        // --check with no --gate at all: preserves every pre-existing --check
-        // invocation, which must still exit 2 on violation.
-        assert_eq!(resolve_gate_mode(None, true), GateMode::Error);
-    }
-
-    #[test]
-    fn resolve_gate_mode_explicit_gate_wins_over_check() {
-        // --gate warn --check: --gate must win, not silently escalate to error.
-        assert_eq!(
-            resolve_gate_mode(Some(GateMode::Warn), true),
-            GateMode::Warn
-        );
-        assert_eq!(
-            resolve_gate_mode(Some(GateMode::Error), true),
-            GateMode::Error
-        );
-    }
-
-    #[test]
-    fn resolve_gate_mode_explicit_gate_off_wins_over_check() {
-        // Regression: `--check --gate off` must resolve to Off, not silently
-        // escalate to Error just because the bare-check branch also produces
-        // Error. Before the fix, `gate: GateMode` (non-Option, defaulting to
-        // Off) made an explicit `--gate off` indistinguishable from "no
-        // --gate at all", so this case incorrectly resolved to Error.
-        assert_eq!(resolve_gate_mode(Some(GateMode::Off), true), GateMode::Off);
+    fn resolve_gate_mode_uses_explicit_gate() {
+        assert_eq!(resolve_gate_mode(Some(GateMode::Off)), GateMode::Off);
+        assert_eq!(resolve_gate_mode(Some(GateMode::Warn)), GateMode::Warn);
+        assert_eq!(resolve_gate_mode(Some(GateMode::Error)), GateMode::Error);
     }
 
     #[test]

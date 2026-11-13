@@ -232,15 +232,8 @@ pub struct ComplexityArgs {
     #[command(flatten)]
     pub common: AnalyzerArgs,
 
-    /// Check mode: fail if any function exceeds thresholds.
-    /// DEPRECATED(remove-in: 5.0): use `--gate error` instead.
-    #[arg(long)]
-    pub check: bool,
-
-    /// Gate mode: 'off' just reports, 'warn' reports and warns on stderr (exit 0),
-    /// 'error' reports and exits 2 if thresholds are exceeded (default: off). If
-    /// both --check and --gate are given, --gate always wins, including an
-    /// explicit `--gate off`.
+    /// Gate mode. `off` only gives the report. `warn` also writes a warning to stderr.
+    /// `error` also exits with status 2 if a function is above a threshold.
     #[arg(long, value_enum)]
     pub gate: Option<GateMode>,
 
@@ -416,15 +409,8 @@ pub enum ScoreSubcommand {
 
 #[derive(Args)]
 pub struct ScoreArgs {
-    /// Check mode: fail if score is below threshold.
-    /// DEPRECATED(remove-in: 5.0): use `--gate error` instead.
-    #[arg(long)]
-    pub check: bool,
-
-    /// Gate mode: 'off' just reports, 'warn' reports and warns on stderr (exit 0),
-    /// 'error' reports and exits 2 if score is below --fail-under (default: off).
-    /// If both --check and --gate are given, --gate always wins, including an
-    /// explicit `--gate off`.
+    /// Gate mode. `off` only gives the report. `warn` also writes a warning to stderr.
+    /// `error` also exits with status 2 if the score is below `--fail-under`.
     #[arg(long, value_enum)]
     pub gate: Option<GateMode>,
 
@@ -604,16 +590,8 @@ pub struct SearchQueryArgs {
     /// Natural language query
     pub query: String,
 
-    /// Maximum number of results.
-    /// DEPRECATED(remove-in: 5.0): `-k`/`--top-k` are aliases for `-n`/`--top`;
-    /// use `-n`/`--top`.
-    #[arg(
-        short = 'n',
-        long = "top",
-        alias = "top-k",
-        short_alias = 'k',
-        default_value = "10"
-    )]
+    /// Maximum number of results
+    #[arg(short = 'n', long = "top", default_value = "10")]
     pub top_k: usize,
 
     /// Minimum similarity score (0.0-1.0)
@@ -647,15 +625,8 @@ pub struct MutationArgs {
     #[arg(long, default_value = "CRR,ROR,AOR")]
     pub operators: String,
 
-    /// Check mode: fail if mutation score below threshold.
-    /// DEPRECATED(remove-in: 5.0): use `--gate error` instead.
-    #[arg(long)]
-    pub check: bool,
-
-    /// Gate mode: 'off' just reports, 'warn' reports and warns on stderr (exit 0),
-    /// 'error' reports and exits 2 if mutation score is below --min-score (default:
-    /// off). If both --check and --gate are given, --gate always wins, including
-    /// an explicit `--gate off`.
+    /// Gate mode. `off` only gives the report. `warn` also writes a warning to stderr.
+    /// `error` also exits with status 2 if the mutation score is below `--min-score`.
     #[arg(long, value_enum)]
     pub gate: Option<GateMode>,
 
@@ -1595,28 +1566,9 @@ mod tests {
     }
 
     #[test]
-    fn test_score_check_flag() {
-        let cli = parse(&["omen", "score", "--check"]);
-        if let Command::Score(cmd) = cli.command {
-            assert!(cmd.args.check);
-        } else {
-            panic!("expected Score command");
-        }
-    }
-
-    #[test]
-    fn test_score_check_default_false() {
-        let cli = parse(&["omen", "score"]);
-        if let Command::Score(cmd) = cli.command {
-            assert!(!cmd.args.check);
-        }
-    }
-
-    #[test]
     fn test_score_fail_under() {
-        let cli = parse(&["omen", "score", "--check", "--fail-under", "80"]);
+        let cli = parse(&["omen", "score", "--gate", "error", "--fail-under", "80"]);
         if let Command::Score(cmd) = cli.command {
-            assert!(cmd.args.check);
             assert_eq!(cmd.args.fail_under, Some(80.0));
         } else {
             panic!("expected Score command");
@@ -1625,7 +1577,7 @@ mod tests {
 
     #[test]
     fn test_score_fail_under_default_none() {
-        let cli = parse(&["omen", "score", "--check"]);
+        let cli = parse(&["omen", "score", "--gate", "error"]);
         if let Command::Score(cmd) = cli.command {
             assert!(cmd.args.fail_under.is_none());
         }
@@ -1673,15 +1625,6 @@ mod tests {
     }
 
     #[test]
-    fn test_search_query_top_k() {
-        if let SearchSubcommand::Query(args) =
-            parse_search_subcommand(&["omen", "search", "query", "test", "-k", "20"])
-        {
-            assert_eq!(args.top_k, 20);
-        }
-    }
-
-    #[test]
     fn test_search_query_min_score() {
         if let SearchSubcommand::Query(args) =
             parse_search_subcommand(&["omen", "search", "query", "test", "--min-score", "0.5"])
@@ -1724,23 +1667,28 @@ mod tests {
     // Complexity command tests
 
     #[test]
-    fn test_complexity_check_flag() {
-        assert!(parse_complexity_args(&["omen", "complexity", "--check"]).check);
-    }
-
-    #[test]
     fn test_complexity_max_cyclomatic() {
-        let args =
-            parse_complexity_args(&["omen", "complexity", "--check", "--max-cyclomatic", "15"]);
-        assert!(args.check);
+        let args = parse_complexity_args(&[
+            "omen",
+            "complexity",
+            "--gate",
+            "error",
+            "--max-cyclomatic",
+            "15",
+        ]);
         assert_eq!(args.max_cyclomatic, Some(15));
     }
 
     #[test]
     fn test_complexity_max_cognitive() {
-        let args =
-            parse_complexity_args(&["omen", "complexity", "--check", "--max-cognitive", "20"]);
-        assert!(args.check);
+        let args = parse_complexity_args(&[
+            "omen",
+            "complexity",
+            "--gate",
+            "error",
+            "--max-cognitive",
+            "20",
+        ]);
         assert_eq!(args.max_cognitive, Some(20));
     }
 
@@ -1749,20 +1697,15 @@ mod tests {
         let args = parse_complexity_args(&[
             "omen",
             "complexity",
-            "--check",
+            "--gate",
+            "error",
             "--max-cyclomatic",
             "15",
             "--max-cognitive",
             "15",
         ]);
-        assert!(args.check);
         assert_eq!(args.max_cyclomatic, Some(15));
         assert_eq!(args.max_cognitive, Some(15));
-    }
-
-    #[test]
-    fn test_complexity_check_default_false() {
-        assert!(!parse_complexity_args(&["omen", "complexity"]).check);
     }
 
     #[test]
@@ -1788,7 +1731,6 @@ mod tests {
         let args = parse_mutation_args(&["omen", "mutation"]);
         assert_eq!(args.timeout, 30);
         assert_eq!(args.operators, "CRR,ROR,AOR");
-        assert!(!args.check);
         assert!((args.min_score - 0.8).abs() < 0.001);
         assert!(!args.dry_run);
         assert_eq!(args.jobs, 0);
@@ -1825,11 +1767,6 @@ mod tests {
             parse_mutation_args(&["omen", "mutation", "--operators", "CRR,ROR"]).operators,
             "CRR,ROR"
         );
-    }
-
-    #[test]
-    fn test_mutation_check_mode() {
-        assert!(parse_mutation_args(&["omen", "mutation", "--check"]).check);
     }
 
     #[test]
@@ -1897,7 +1834,8 @@ mod tests {
         let args = parse_mutation_args(&[
             "omen",
             "mutation",
-            "--check",
+            "--gate",
+            "error",
             "--mode",
             "fast",
             "--jobs",
@@ -1906,7 +1844,6 @@ mod tests {
             "--min-score",
             "0.7",
         ]);
-        assert!(args.check);
         assert!(matches!(args.mode, MutationMode::Fast));
         assert_eq!(args.jobs, 8);
         assert!(args.skip_equivalent);
@@ -2212,7 +2149,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Pagination: --top/-n/--offset, --top-k alias
+    // Pagination: --top/-n/--offset
     // -----------------------------------------------------------------
 
     #[test]
@@ -2291,32 +2228,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_search_query_top_short_k_deprecated_alias_still_parses() {
-        // -k is a deprecated short alias for -n/--top; must keep working.
-        if let SearchSubcommand::Query(args) =
-            parse_search_subcommand(&["omen", "search", "query", "test", "-k", "18"])
-        {
-            assert_eq!(args.top_k, 18);
-        } else {
-            panic!("Expected Query subcommand");
-        }
-    }
-
-    #[test]
-    fn test_search_query_top_k_alias_still_parses() {
-        // --top-k is a deprecated hidden alias for --top; must keep working.
-        if let SearchSubcommand::Query(args) =
-            parse_search_subcommand(&["omen", "search", "query", "test", "--top-k", "25"])
-        {
-            assert_eq!(args.top_k, 25);
-        } else {
-            panic!("Expected Query subcommand");
-        }
-    }
-
     // -----------------------------------------------------------------
-    // Gate/check: --gate off|warn|error, --check deprecated alias
+    // Gate: --gate off|warn|error
     // -----------------------------------------------------------------
 
     #[test]
@@ -2343,13 +2256,6 @@ mod tests {
     fn test_complexity_gate_off_parses_explicitly() {
         let args = parse_complexity_args(&["omen", "complexity", "--gate", "off"]);
         assert_eq!(args.gate, Some(GateMode::Off));
-    }
-
-    #[test]
-    fn test_complexity_check_still_parses_deprecated() {
-        let args = parse_complexity_args(&["omen", "complexity", "--check"]);
-        assert!(args.check);
-        assert_eq!(args.gate, None);
     }
 
     #[test]
@@ -2422,37 +2328,23 @@ mod tests {
     }
 
     #[test]
-    fn test_mutation_check_still_parses_deprecated() {
-        let args = parse_mutation_args(&["omen", "mutation", "--check"]);
-        assert!(args.check);
-        assert_eq!(args.gate, None);
-    }
-
-    #[test]
-    fn test_complexity_gate_off_and_check_both_parse() {
-        // Regression: `--check --gate off` must parse cleanly and preserve
-        // both values so `resolve_gate_mode` can let --gate off win.
-        let args = parse_complexity_args(&["omen", "complexity", "--check", "--gate", "off"]);
-        assert!(args.check);
-        assert_eq!(args.gate, Some(GateMode::Off));
-    }
-
-    #[test]
-    fn test_score_gate_off_and_check_both_parse() {
-        let cli = parse(&["omen", "score", "--check", "--gate", "off"]);
-        if let Command::Score(cmd) = cli.command {
-            assert!(cmd.args.check);
-            assert_eq!(cmd.args.gate, Some(GateMode::Off));
-        } else {
-            panic!("expected Score command");
+    fn test_check_flag_is_rejected() {
+        for command in ["complexity", "score", "mutation"] {
+            assert!(
+                Cli::try_parse_from(["omen", command, "--check"]).is_err(),
+                "`{command} --check` must not parse"
+            );
         }
     }
 
     #[test]
-    fn test_mutation_gate_off_and_check_both_parse() {
-        let args = parse_mutation_args(&["omen", "mutation", "--check", "--gate", "off"]);
-        assert!(args.check);
-        assert_eq!(args.gate, Some(GateMode::Off));
+    fn test_search_query_rejects_top_k_flags() {
+        for flag in ["-k", "--top-k"] {
+            assert!(
+                Cli::try_parse_from(["omen", "search", "query", "test", flag, "5"]).is_err(),
+                "`search query {flag}` must not parse"
+            );
+        }
     }
 
     // -----------------------------------------------------------------

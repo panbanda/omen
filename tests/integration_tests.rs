@@ -386,7 +386,8 @@ fn test_threshold_violation_exits_two_and_emits_json() {
             "-f",
             "json",
             "score",
-            "--check",
+            "--gate",
+            "error",
             "--fail-under",
             "99",
         ])
@@ -948,7 +949,8 @@ fn test_complexity_check_excludes_nested_test_directory() {
             "-p",
             temp.path().to_str().unwrap(),
             "complexity",
-            "--check",
+            "--gate",
+            "error",
             "-e",
             "packages/alpha/test/**",
         ])
@@ -970,7 +972,13 @@ fn test_complexity_check_honors_config_excludes() {
     .unwrap();
 
     omen()
-        .args(["-p", temp.path().to_str().unwrap(), "complexity", "--check"])
+        .args([
+            "-p",
+            temp.path().to_str().unwrap(),
+            "complexity",
+            "--gate",
+            "error",
+        ])
         .assert()
         .failure()
         .stderr(predicate::str::contains(
@@ -1244,7 +1252,8 @@ fn test_complexity_check_with_glob_filter() {
             "-p",
             tmp.path().to_str().unwrap(),
             "complexity",
-            "--check",
+            "--gate",
+            "error",
             "-g",
             "*.rs",
         ])
@@ -1356,13 +1365,12 @@ fn test_all_three_formats_succeed() {
 }
 
 // ---------------------------------------------------------------------------
-// Gate/check: --gate off|warn|error, --check deprecated alias, exit codes
+// Gate: --gate off|warn|error, exit codes
 // ---------------------------------------------------------------------------
 //
 // Convention under test: off = report only (exit 0); warn = report + one-line
 // stderr summary (exit 0); error = report; on violation return
-// Error::ThresholdViolation, which main() maps to exit code 2. --check is a
-// deprecated alias for --gate error; --gate wins if both are given.
+// Error::ThresholdViolation, which main() maps to exit code 2.
 
 #[test]
 fn test_complexity_gate_error_exits_two_on_violation() {
@@ -1412,37 +1420,6 @@ fn test_complexity_gate_off_default_exits_zero_on_violation() {
 }
 
 #[test]
-fn test_complexity_check_alias_still_exits_two() {
-    let temp = TempDir::new().unwrap();
-    write_complexity_exclude_fixture(&temp);
-
-    omen()
-        .args(["-p", temp.path().to_str().unwrap(), "complexity", "--check"])
-        .assert()
-        .code(2);
-}
-
-#[test]
-fn test_complexity_gate_off_wins_over_check_exits_zero() {
-    // Regression: `--check --gate off` must resolve to Off (exit 0), not
-    // silently escalate to Error just because `--check` alone would.
-    let temp = TempDir::new().unwrap();
-    write_complexity_exclude_fixture(&temp);
-
-    omen()
-        .args([
-            "-p",
-            temp.path().to_str().unwrap(),
-            "complexity",
-            "--check",
-            "--gate",
-            "off",
-        ])
-        .assert()
-        .success();
-}
-
-#[test]
 fn test_score_gate_error_exits_two_and_emits_json() {
     omen()
         .args([
@@ -1479,41 +1456,8 @@ fn test_score_gate_warn_exits_zero() {
 }
 
 #[test]
-fn test_score_check_alias_still_exits_two() {
-    omen()
-        .args([
-            "-p",
-            fixtures_dir(),
-            "score",
-            "--check",
-            "--fail-under",
-            "99",
-        ])
-        .assert()
-        .code(2);
-}
-
-#[test]
-fn test_score_gate_off_wins_over_check_exits_zero() {
-    // Regression: `--check --gate off` must resolve to Off (exit 0).
-    omen()
-        .args([
-            "-p",
-            fixtures_dir(),
-            "score",
-            "--check",
-            "--gate",
-            "off",
-            "--fail-under",
-            "99",
-        ])
-        .assert()
-        .success();
-}
-
-#[test]
 fn test_score_default_gate_off_exits_zero_on_violation() {
-    // No --gate and no --check: default GateMode::Off must report only and
+    // No --gate: default GateMode::Off must report only and
     // exit 0, even though the score is well below --fail-under.
     omen()
         .args(["-p", fixtures_dir(), "score", "--fail-under", "99"])
@@ -1602,41 +1546,6 @@ fn test_mutation_gate_off_default_exits_zero_on_dry_run() {
 
     omen()
         .args(["-p", temp.path().to_str().unwrap(), "mutation", "--dry-run"])
-        .assert()
-        .success();
-}
-
-#[test]
-fn test_mutation_check_alias_still_exits_two_on_dry_run() {
-    let temp = write_mutation_gate_fixture();
-
-    omen()
-        .args([
-            "-p",
-            temp.path().to_str().unwrap(),
-            "mutation",
-            "--dry-run",
-            "--check",
-        ])
-        .assert()
-        .code(2);
-}
-
-#[test]
-fn test_mutation_gate_off_wins_over_check_exits_zero() {
-    // Regression: `--check --gate off` must resolve to Off (exit 0).
-    let temp = write_mutation_gate_fixture();
-
-    omen()
-        .args([
-            "-p",
-            temp.path().to_str().unwrap(),
-            "mutation",
-            "--dry-run",
-            "--check",
-            "--gate",
-            "off",
-        ])
         .assert()
         .success();
 }

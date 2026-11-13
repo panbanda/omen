@@ -14,21 +14,23 @@ rg "DEPRECATED(remove-in: 5.0)"
 The marker format is `DEPRECATED(remove-in: <version>): <what to use instead>`,
 placed in a doc comment or code comment at each site.
 
-## Remove in 5.0
+## Scheduled for removal
+
+No entries.
+
+Note: `--days` (churn) is a **kept** alias for `--since`, not scheduled for
+removal, so it carries no marker. The report artifact names `duplicates.json`
+and `hotspots.json` and the `all`-payload key `duplicates` are part of the
+output schema change; see the `TODO(output-schema)` comments in `src/main.rs`.
+
+## Removed in 5.0
+
+Omen 5.0 removed each item in this section. There is no alias and no shim.
+Use the replacement.
 
 ### CLI flags
 
-| Deprecated | Replacement | Sites |
-|---|---|---|
-| `--check` (complexity, score, mutation) | `--gate error` | `src/cli/mod.rs` (the three `pub check` fields), `resolve_gate_mode` in `src/main.rs` maps a bare `--check` to `--gate error` |
-| `--top-k` / `-k` (search query) | `--top` / `-n` | `src/cli/mod.rs` (`top_k` field, `alias = "top-k"`) |
-
-Note: `--days` (churn) is a **kept** alias for `--since`, not scheduled for
-removal, so it carries no marker. `all`-payload key `duplicates` and report
-artifact names `duplicates.json` / `hotspots.json` are deferred to the output
-schema change (they are part of the JSON contract); see `TODO(output-schema)`
-comments in `src/main.rs`.
-
-<!-- Future work (output-schema standardization) will add entries here for the
-     duplicated path fields (`path`/`file_path` emitted alongside canonical
-     `file`), `AnalysisSummary` alias, etc., using the same marker convention. -->
+| Removed | Replacement |
+|---|---|
+| `--check` (`complexity`, `score`, `mutation`) | `--gate error` |
+| `--top-k` / `-k` (`search query`) | `--top` / `-n` |
