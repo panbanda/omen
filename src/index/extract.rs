@@ -184,9 +184,20 @@ pub struct Context<'a, 'tree> {
     pub file: &'a str,
     pub source: &'a [u8],
     pub scopes: &'a [Scope<'tree>],
+    /// The ID of the node at which the walk is, and the parent of that node.
+    pub current: Option<(usize, Option<Node<'tree>>)>,
 }
 
 impl<'tree> Context<'_, 'tree> {
+    /// The parent of `node`. The walk knows the parent of its current node.
+    /// For a different node, the tree searches from the root, which is slow.
+    pub fn parent(&self, node: Node<'tree>) -> Option<Node<'tree>> {
+        match self.current {
+            Some((current, parent)) if current == node.id() => parent,
+            _ => node.parent(),
+        }
+    }
+
     pub fn text(&self, node: Node<'_>) -> String {
         node.utf8_text(self.source).unwrap_or("").to_string()
     }
@@ -263,6 +274,11 @@ pub trait LanguageSpec: Sync {
     }
 
     fn exported(&self, draft: &Draft<'_>, context: &Context<'_, '_>) -> Exported;
+
+    /// Each node kind for which the walk calls `scope`.
+    fn scope_kinds(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
 
     /// Gives the scope that a node opens when the node is not a definition.
     fn scope<'tree>(
@@ -445,13 +461,51 @@ struct Extractor<'a, 'tree> {
     closure_depths: Vec<usize>,
     call_kinds: Vec<&'static str>,
     local_kinds: Vec<&'static str>,
+    /// One entry for each kind ID that the walk found.
+    facts_of_kinds: Vec<Option<KindFacts>>,
+    /// The nodes that contain the current node, from the root.
+    ancestors: Vec<Node<'tree>>,
     return_type_field: &'static str,
     /// Each call with its start byte, its owner, and its closure flag.
     calls: Vec<RawCall<'tree>>,
     locals: Vec<(LocalName, Option<usize>)>,
 }
 
+/// What the walk does for the nodes of one kind.
+#[derive(Clone, Copy)]
+struct KindFacts {
+    imports: bool,
+    module: bool,
+    call: bool,
+    local: bool,
+    scope: bool,
+    rule: Option<DefinitionRule>,
+}
+
 impl<'tree> Extractor<'_, 'tree> {
+    /// The facts of the kind of `node`. The kind ID is the key, because the
+    /// text of a kind needs a string comparison for each rule and each node.
+    fn kind_facts(&mut self, node: Node<'tree>) -> KindFacts {
+        let id = usize::from(node.kind_id());
+        if self.facts_of_kinds.len() <= id {
+            self.facts_of_kinds.resize(id + 1, None);
+        }
+        if let Some(facts) = self.facts_of_kinds[id] {
+            return facts;
+        }
+        let kind = node.kind();
+        let facts = KindFacts {
+            imports: self.import_kinds.contains(&kind),
+            module: self.module_kinds.contains(&kind),
+            call: self.call_kinds.contains(&kind),
+            local: self.local_kinds.contains(&kind),
+            scope: self.spec.scope_kinds().contains(&kind),
+            rule: self.rules.get(kind).copied(),
+        };
+        self.facts_of_kinds[id] = Some(facts);
+        facts
+    }
+
     /// The node ID of the nearest definition that contains the current node.
     fn owner(&self) -> Option<usize> {
         self.scope_owners.iter().rev().flatten().next().copied()
@@ -462,6 +516,7 @@ impl<'tree> Extractor<'_, 'tree> {
             file: self.file,
             source: self.source,
             scopes: &self.scopes,
+            current: Some((node.id(), self.ancestors.last().copied())),
         };
         let name_node = match rule.name {
             NameRule::Field(field) => node.child_by_field_name(field),
@@ -515,13 +570,20 @@ impl<'tree> Extractor<'_, 'tree> {
         if !node.is_named() {
             return;
         }
-        let imports = self.import_kinds.contains(&node.kind());
-        let module = self.module_kinds.contains(&node.kind());
+        let KindFacts {
+            imports,
+            module,
+            call,
+            local,
+            scope: opens_scope,
+            rule,
+        } = self.kind_facts(node);
         if imports || module {
             let context = Context {
                 file: self.file,
                 source: self.source,
                 scopes: &self.scopes,
+                current: Some((node.id(), self.ancestors.last().copied())),
             };
             if imports {
                 self.spec.imports(node, &context, &mut self.imports);
@@ -530,13 +592,12 @@ impl<'tree> Extractor<'_, 'tree> {
                 self.modules.extend(self.spec.module_name(node, &context));
             }
         }
-        let call = self.call_kinds.contains(&node.kind());
-        let local = self.local_kinds.contains(&node.kind());
         if call || local {
             let context = Context {
                 file: self.file,
                 source: self.source,
                 scopes: &self.scopes,
+                current: Some((node.id(), self.ancestors.last().copied())),
             };
             let owner = self.owner();
             if let Some(call) = call.then(|| self.spec.call(node, &context)).flatten() {
@@ -552,7 +613,6 @@ impl<'tree> Extractor<'_, 'tree> {
                     .extend(names.into_iter().map(|name| (name, owner)));
             }
         }
-        let rule = self.rules.get(node.kind()).copied();
         let definition = rule.and_then(|rule| self.draft(node, &rule));
         if definition.is_none() && rule.is_some_and(|rule| rule.name == NameRule::Hook) {
             self.closure_depths.push(depth);
@@ -573,12 +633,14 @@ impl<'tree> Extractor<'_, 'tree> {
                 self.found.push((draft, exported));
                 Some(scope)
             }
+            None if !opens_scope => None,
             None => self.spec.scope(
                 node,
                 &Context {
                     file: self.file,
                     source: self.source,
                     scopes: &self.scopes,
+                    current: Some((node.id(), self.ancestors.last().copied())),
                 },
             ),
         };
@@ -605,8 +667,10 @@ impl<'tree> Extractor<'_, 'tree> {
         let mut cursor = root.walk();
         let mut depth = 0;
         loop {
-            self.enter(cursor.node(), depth);
+            let node = cursor.node();
+            self.enter(node, depth);
             if cursor.goto_first_child() {
+                self.ancestors.push(node);
                 depth += 1;
                 continue;
             }
@@ -618,6 +682,7 @@ impl<'tree> Extractor<'_, 'tree> {
                 if !cursor.goto_parent() {
                     return;
                 }
+                self.ancestors.pop();
                 depth -= 1;
             }
         }
@@ -716,6 +781,8 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         closure_depths: Vec::new(),
         call_kinds: spec.call_kinds(),
         local_kinds: spec.local_kinds(),
+        facts_of_kinds: Vec::new(),
+        ancestors: Vec::new(),
         return_type_field: spec.call_syntax().return_type_field,
         calls: Vec::new(),
         locals: Vec::new(),

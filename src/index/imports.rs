@@ -561,14 +561,11 @@ impl Repository<'_> {
         let mut module = file.to_string();
         let mut moved = false;
         match segments.peek().copied() {
-            Some("crate") => match self.rust_root(file) {
-                Some(root) => {
-                    module = root;
-                    moved = true;
-                    segments.next();
-                }
-                None => return None,
-            },
+            Some("crate") => {
+                module = self.rust_root(file)?;
+                moved = true;
+                segments.next();
+            }
             Some("self") => {
                 moved = true;
                 segments.next();
@@ -592,10 +589,7 @@ impl Repository<'_> {
             None => {}
         }
         while segments.peek() == Some(&"super") {
-            match self.rust_parent(&module) {
-                Some(parent) => module = parent,
-                None => return None,
-            }
+            module = self.rust_parent(&module)?;
             moved = true;
             segments.next();
         }

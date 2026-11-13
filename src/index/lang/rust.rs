@@ -142,9 +142,18 @@ impl LanguageSpec for Rust {
         if node.kind() != IDENTIFIER {
             return self.call_syntax().call(node, context);
         }
-        node.parent().filter(|parent| parent.kind() == TOKEN_TREE)?;
+        // The source text answers for most names without a search in the tree.
+        let after = context.source.get(node.end_byte()..).unwrap_or_default();
+        let next = after.iter().find(|byte| !byte.is_ascii_whitespace());
+        if next != Some(&b'(') {
+            return None;
+        }
+        context
+            .parent(node)
+            .filter(|parent| parent.kind() == TOKEN_TREE)?;
         let arguments = node.next_sibling()?;
-        if arguments.kind() != TOKEN_TREE || !context.text(arguments).starts_with('(') {
+        let opens = context.source.get(arguments.start_byte()) == Some(&b'(');
+        if arguments.kind() != TOKEN_TREE || !opens {
             return None;
         }
         let qualified = node
@@ -252,10 +261,10 @@ impl LanguageSpec for Rust {
     fn name_node<'tree>(
         &self,
         node: Node<'tree>,
-        _context: &Context<'_, 'tree>,
+        context: &Context<'_, 'tree>,
     ) -> Option<Node<'tree>> {
-        let declaration = node
-            .parent()
+        let declaration = context
+            .parent(node)
             .filter(|parent| parent.kind() == LET_DECLARATION)?;
         if declaration.child_by_field_name("value") != Some(node) {
             return None;
@@ -295,6 +304,10 @@ impl LanguageSpec for Rust {
             }
             _ => visibility(draft.node, context),
         }
+    }
+
+    fn scope_kinds(&self) -> Vec<&'static str> {
+        vec![IMPL_ITEM]
     }
 
     fn scope<'tree>(

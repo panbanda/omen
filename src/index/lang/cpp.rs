@@ -530,6 +530,10 @@ impl LanguageSpec for Cpp {
 
     /// A namespace without a name gives internal linkage to its members. It is
     /// not a symbol and not a container.
+    fn scope_kinds(&self) -> Vec<&'static str> {
+        vec![NAMESPACE_DEFINITION]
+    }
+
     fn scope<'tree>(
         &self,
         node: Node<'tree>,

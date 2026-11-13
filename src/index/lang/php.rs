@@ -358,6 +358,10 @@ impl LanguageSpec for Php {
     }
 
     /// A namespace with a body is a part of the key. It is not a symbol.
+    fn scope_kinds(&self) -> Vec<&'static str> {
+        vec![NAMESPACE_DEFINITION]
+    }
+
     fn scope<'tree>(
         &self,
         node: Node<'tree>,

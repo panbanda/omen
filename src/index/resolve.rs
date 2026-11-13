@@ -7,7 +7,10 @@
 //! for a bare name.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
+
+use parking_lot::RwLock;
+use rayon::prelude::*;
 
 use super::calls::{split_type, Argument};
 use super::extract::{FileSymbols, LinkFacts, Local};
@@ -127,9 +130,21 @@ struct Resolver<'a> {
     files: &'a [FileSymbols],
     by_name: HashMap<&'a str, Vec<Id>>,
     by_file: HashMap<&'a str, usize>,
+    /// For each file, the positions of the local names by name, in source order.
+    locals_by_name: Vec<HashMap<&'a str, Vec<usize>>>,
+    /// For each file, the positions of the references by start byte, in source order.
+    references_by_start: Vec<HashMap<usize, Vec<usize>>>,
     /// For each Ruby type, the types that have it as a direct parent type.
     ruby_children: OnceLock<BTreeMap<Id, Vec<Id>>>,
+    /// The results of `types`, `package_files`, and `visible_files`. The
+    /// resolution of one call asks for the same facts many times.
+    types_cache: RwLock<HashMap<TypeQuery, Vec<Id>>>,
+    package_cache: RwLock<HashMap<usize, Arc<Vec<usize>>>>,
+    visible_cache: RwLock<HashMap<usize, Arc<Vec<usize>>>>,
 }
+
+/// The file, the name, and the qualifier of one type lookup.
+type TypeQuery = (usize, String, Option<String>);
 
 impl<'a> Resolver<'a> {
     fn new(files: &'a [FileSymbols]) -> Self {
@@ -144,11 +159,42 @@ impl<'a> Resolver<'a> {
                     .push((file, position));
             }
         }
+        let locals_by_name = files
+            .iter()
+            .map(|facts| {
+                let mut positions: HashMap<&str, Vec<usize>> = HashMap::new();
+                for (position, local) in facts.locals.iter().enumerate() {
+                    positions
+                        .entry(local.name.name.as_str())
+                        .or_default()
+                        .push(position);
+                }
+                positions
+            })
+            .collect();
+        let references_by_start = files
+            .iter()
+            .map(|facts| {
+                let mut positions: HashMap<usize, Vec<usize>> = HashMap::new();
+                for (position, reference) in facts.reference_facts.iter().enumerate() {
+                    positions
+                        .entry(reference.start_byte)
+                        .or_default()
+                        .push(position);
+                }
+                positions
+            })
+            .collect();
         Self {
             files,
             by_name,
             by_file,
+            locals_by_name,
+            references_by_start,
             ruby_children: OnceLock::new(),
+            types_cache: RwLock::new(HashMap::new()),
+            package_cache: RwLock::new(HashMap::new()),
+            visible_cache: RwLock::new(HashMap::new()),
         }
     }
 
@@ -202,7 +248,30 @@ impl<'a> Resolver<'a> {
 
     /// The files that `file` loads or imports with a wildcard, and the files
     /// that those files load.
-    fn visible_files(&self, file: usize) -> Vec<usize> {
+    fn visible_files(&self, file: usize) -> Arc<Vec<usize>> {
+        if let Some(found) = self.visible_cache.read().get(&file) {
+            return Arc::clone(found);
+        }
+        let found = Arc::new(self.files_through_loads(file));
+        self.visible_cache.write().insert(file, Arc::clone(&found));
+        found
+    }
+
+    /// The files of the same package as `file`, with `file`.
+    fn package_files(&self, file: usize) -> Arc<Vec<usize>> {
+        if let Some(found) = self.package_cache.read().get(&file) {
+            return Arc::clone(found);
+        }
+        let found: Arc<Vec<usize>> = Arc::new(
+            (0..self.files.len())
+                .filter(|other| self.same_package(file, *other))
+                .collect(),
+        );
+        self.package_cache.write().insert(file, Arc::clone(&found));
+        found
+    }
+
+    fn files_through_loads(&self, file: usize) -> Vec<usize> {
         let mut seen = BTreeSet::from([file]);
         let mut queue = vec![file];
         let mut first = true;
@@ -302,6 +371,16 @@ impl<'a> Resolver<'a> {
     /// The types that a name can refer to in `file`. The first rule that
     /// finds a type gives the result.
     fn types(&self, name: &str, qualifier: Option<&str>, file: usize) -> Vec<Id> {
+        let query = (file, name.to_string(), qualifier.map(str::to_string));
+        if let Some(found) = self.types_cache.read().get(&query) {
+            return found.clone();
+        }
+        let found = self.types_of_query(name, qualifier, file);
+        self.types_cache.write().insert(query, found.clone());
+        found
+    }
+
+    fn types_of_query(&self, name: &str, qualifier: Option<&str>, file: usize) -> Vec<Id> {
         let mut found = self.types_by_name(name, qualifier, file);
         // More than one type can have the name. The qualifier selects the
         // types whose containers have the names of the qualifier, or whose
@@ -371,10 +450,7 @@ impl<'a> Resolver<'a> {
         if !found.is_empty() {
             return found;
         }
-        let package: Vec<usize> = (0..self.files.len())
-            .filter(|other| self.same_package(file, *other))
-            .collect();
-        let found = in_files(&package);
+        let found = in_files(&self.package_files(file));
         if !found.is_empty() {
             return found;
         }
@@ -525,13 +601,29 @@ impl<'a> Resolver<'a> {
         None
     }
 
+    /// The local names `name` of `file`, in source order.
+    fn locals_named(&self, file: usize, name: &str) -> impl Iterator<Item = &'a Local> + '_ {
+        let locals = &self.files[file].locals;
+        self.locals_by_name[file]
+            .get(name)
+            .into_iter()
+            .flatten()
+            .map(move |position| &locals[*position])
+    }
+
+    /// The references of `file` that start at the byte `start`, in source order.
+    fn references_at(&self, file: usize, start: usize) -> &[usize] {
+        self.references_by_start[file]
+            .get(&start)
+            .map_or(&[], Vec::as_slice)
+    }
+
     fn local(&self, chain: &[Id], file: usize, name: &str) -> Option<&'a Local> {
         let owners = chain.iter().map(|id| Some(id.1)).chain([None]);
         for owner in owners {
-            let found = self.files[file]
-                .locals
-                .iter()
-                .find(|local| local.owner == owner && local.name.name == name);
+            let found = self
+                .locals_named(file, name)
+                .find(|local| local.owner == owner);
             if found.is_some() {
                 return found;
             }
@@ -557,10 +649,7 @@ impl<'a> Resolver<'a> {
             }
         }
         let start = local.name.value_start?;
-        let position = self.files[file]
-            .reference_facts
-            .iter()
-            .position(|reference| reference.start_byte == start)?;
+        let position = *self.references_at(file, start).first()?;
         self.result_types(file, position, depth)
     }
 
@@ -888,9 +977,8 @@ impl<'a> Resolver<'a> {
         if family == Family::Ruby {
             // A Ruby name without parentheses is a value when the method
             // binds the name. A function value needs `.call`.
-            let bound = self.files[file].locals.iter().any(|local| {
-                local.name.name == name
-                    && in_scope(local)
+            let bound = self.locals_named(file, name).any(|local| {
+                in_scope(local)
                     && local
                         .owner
                         .is_some_and(|owner| chain.contains(&(file, owner)))
@@ -935,9 +1023,8 @@ impl<'a> Resolver<'a> {
             if let Some(outcome) = Outcome::of(Basis::LexicalScope, lexical) {
                 return outcome;
             }
-            let value = self.files[file].locals.iter().any(|local| {
-                local.name.name == name
-                    && in_scope(local)
+            let value = self.locals_named(file, name).any(|local| {
+                in_scope(local)
                     && local
                         .owner
                         .is_some_and(|owner| chain.contains(&(file, owner)))
@@ -988,8 +1075,11 @@ impl<'a> Resolver<'a> {
             let imported = binding.imported_name.as_deref().unwrap_or(name);
             return self.imported(binding, imported);
         }
-        let package: Vec<usize> = (0..self.files.len())
-            .filter(|other| *other != file && self.same_package(file, *other))
+        let package: Vec<usize> = self
+            .package_files(file)
+            .iter()
+            .copied()
+            .filter(|other| *other != file)
             .collect();
         let found: Vec<Id> = self
             .top_level(name, &package)
@@ -1312,10 +1402,10 @@ impl<'a> Resolver<'a> {
                 // A receiver that is a call has the type of the result of that call.
                 let receiver = facts.reference_facts[position].receiver;
                 let call = receiver.and_then(|(start, end)| {
-                    facts
-                        .reference_facts
+                    self.references_at(file, start)
                         .iter()
-                        .position(|other| other.start_byte == start && other.end_byte == end)
+                        .copied()
+                        .find(|other| facts.reference_facts[*other].end_byte == end)
                 });
                 match call.and_then(|call| self.result_types(file, call, depth + 1)) {
                     Some(types) => {
@@ -1343,6 +1433,7 @@ pub fn resolve_references(files: &mut [FileSymbols]) {
     let resolutions: Vec<Vec<Resolution>> = {
         let resolver = Resolver::new(files);
         (0..files.len())
+            .into_par_iter()
             .map(|file| {
                 (0..files[file].references.len())
                     .map(|position| {
