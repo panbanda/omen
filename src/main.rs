@@ -343,8 +343,8 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             if let Some(ref provider) = args.provider {
                 config.feature_flags.providers = vec![provider.clone()];
             }
-            if args.stale_days > 0 {
-                config.feature_flags.stale_days = args.stale_days;
+            if let Some(stale_days) = args.stale_days {
+                config.feature_flags.stale_days = stale_days;
             }
             run_analyzer::<omen::analyzers::flags::Analyzer>(
                 path,

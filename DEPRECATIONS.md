@@ -163,9 +163,25 @@ tools used a fixed value and did not read the configuration.
 | `clones` | `similarity` | 0.7 | `duplicates.min_similarity` of the configuration. The built-in default is 0.9. | Send `similarity: 0.7` to keep the old threshold. |
 | `clones` | `min_tokens` | 50 | `duplicates.min_tokens` of the configuration. The built-in default is 50. | None, unless the configuration sets the value. |
 | `clones` | Test code | Not read. | `duplicates.exclude_tests` of the configuration applies. The new `include_tests` argument reads test code. | None, unless the configuration sets `exclude_tests = false`. |
-| `flags` | `stale_days` | `feature_flags.stale_days` of the configuration, or 14. | 90, which is the default of `--stale-days`. The value 0 selects the configured value. | Send `stale_days` to get a different age. |
 | `changes` | Days of history | 30 | `changes.days` of the configuration. The built-in default is 30. | None, unless the configuration sets the value. |
 | `satd` | Custom markers | Not read. | `satd.custom_markers` of the configuration applies. | None, unless the configuration sets markers. |
+
+### Default of `flags --stale-days`
+
+`--stale-days` had the built-in default 90. That default had priority over
+`[feature_flags] stale_days`, thus the configured value had no effect unless
+the command got `--stale-days 0`.
+
+| | Before 5.0 | From 5.0 |
+|---|---|---|
+| `flags` without `--stale-days` | 90 days. The configuration had no effect. | `[feature_flags] stale_days`. When that value is absent or 0, the age is 14 days. |
+| `flags --stale-days 0` | The configured value, or 14 days. | 14 days. |
+
+To keep the old result, give `--stale-days 90`, or set `stale_days = 90` in
+`[feature_flags]`. The MCP tool `flags` did not change: its `stale_days`
+argument has the same rule as the flag.
+
+No other flag has a built-in default that hides a configuration key.
 
 ### Stable order and paths in the output
 

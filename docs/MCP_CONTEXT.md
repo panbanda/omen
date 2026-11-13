@@ -48,7 +48,7 @@ takes: the value in the configuration, or the built-in default.
 | `defect` | `days` | `defect.churn_days` (30) |
 | `hotspot` | `days` | `hotspot.days` (90) |
 | `flags` | `provider` | `feature_flags.providers` |
-| `flags` | `stale_days` | 90, the default of `--stale-days`; 0 selects `feature_flags.stale_days` |
+| `flags` | `stale_days` | `feature_flags.stale_days`; when that value is 0, the age is 14 days |
 
 `changes` reads `changes.days`, and `satd` reads `satd.custom_markers`. They
 have no parameter for these values.

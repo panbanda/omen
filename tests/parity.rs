@@ -647,3 +647,110 @@ fn each_parameter_and_each_flag_has_a_decision() {
         problems.join("\n")
     );
 }
+
+/// Runs `flags` on the two sides and gives the number of stale flags of each.
+fn stale_flags(repository: &Path, flags: &[&str], arguments: Value) -> (u64, u64) {
+    let mut command = vec!["flags"];
+    command.extend(flags);
+    let cli = cli_json(repository, &command);
+    let request = json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "flags", "arguments": arguments}
+    });
+    let response = &mcp_responses(repository, &[request])[0];
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .expect("text");
+    let envelope: Value = serde_json::from_str(text).expect("JSON envelope");
+    assert_eq!(cli["summary"]["total_flags"], json!(1), "CLI: {cli}");
+    assert_eq!(
+        envelope["result"]["summary"]["total_flags"],
+        json!(1),
+        "MCP: {envelope}"
+    );
+    (
+        cli["summary"]["stale_flags"].as_u64().expect("CLI count"),
+        envelope["result"]["summary"]["stale_flags"]
+            .as_u64()
+            .expect("MCP count"),
+    )
+}
+
+/// The flag of the fixture is from 2024. With an age limit of 100 years it is
+/// not stale, and with each smaller limit in this test it is stale.
+#[test]
+fn stale_days_comes_from_the_flag_then_the_configuration_then_the_default() {
+    let directory = fixture_repository();
+    let repository = directory.path();
+    let unleash = "[feature_flags]\nproviders = [\"unleash\"]\n";
+
+    // No flag and no configured age: the built-in default of 14 days.
+    std::fs::write(repository.join("omen.toml"), unleash).expect("write configuration");
+    assert_eq!(stale_flags(repository, &[], json!({})), (1, 1));
+
+    // No flag: the configured age applies.
+    let configured = format!("{unleash}stale_days = 36500\n");
+    std::fs::write(repository.join("omen.toml"), configured).expect("write configuration");
+    assert_eq!(stale_flags(repository, &[], json!({})), (0, 0));
+
+    // The flag has priority over the configured age.
+    assert_eq!(
+        stale_flags(
+            repository,
+            &["--stale-days", "30"],
+            json!({"stale_days": 30})
+        ),
+        (1, 1)
+    );
+}
+
+/// A call for which the two sides give different answers by design. The test
+/// makes sure that the difference continues to exist, thus a person removes
+/// the entry when one side changes.
+struct KnownDifference {
+    tool: &'static str,
+    command: &'static [&'static str],
+    arguments: &'static str,
+    /// The `error.code` that the tool gives. The command gives a result.
+    tool_error: &'static str,
+    reason: &'static str,
+}
+
+const KNOWN_DIFFERENCES: &[KnownDifference] = &[KnownDifference {
+    tool: "get_symbol",
+    // The fixture has `helper` in `util.rs` and in `other.rs`.
+    command: &["symbol", "helper"],
+    arguments: r#"{"name": "helper"}"#,
+    tool_error: "ambiguous",
+    reason: "The `symbol` command selects the first definition of an ambiguous name. \
+             The tool gives an `ambiguous` error. The 5.0 plan changes the command later: \
+             it will give the choices and a non-zero exit status.",
+}];
+
+#[test]
+fn each_known_difference_continues_to_exist() {
+    let directory = fixture_repository();
+    let repository = directory.path();
+    for difference in KNOWN_DIFFERENCES {
+        assert!(!difference.reason.is_empty());
+        let cli = cli_json(repository, difference.command);
+        assert!(
+            cli.get("error").is_none() && cli["name"].is_string(),
+            "{}: the command gives a result: {cli}",
+            difference.tool
+        );
+        let arguments: Value = serde_json::from_str(difference.arguments).expect("arguments");
+        let request = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": difference.tool, "arguments": arguments}
+        });
+        let response = &mcp_responses(repository, &[request])[0];
+        assert_eq!(
+            response["result"]["structuredContent"]["error"]["code"],
+            json!(difference.tool_error),
+            "{}: {}",
+            difference.tool,
+            difference.reason
+        );
+    }
+}

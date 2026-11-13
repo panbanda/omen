@@ -504,6 +504,7 @@ mod tests {
                 ("defect", "days", "defect.churn_days"),
                 ("hotspot", "days", "hotspot.days"),
                 ("flags", "provider", "feature_flags.providers"),
+                ("flags", "stale_days", "feature_flags.stale_days"),
             ]
         );
     }

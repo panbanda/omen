@@ -317,9 +317,9 @@ pub(super) static FLAGS: ToolSpec = ToolSpec {
             0,
             MAX_DAYS,
             "The age in days after which a flag is stale. \
-             The value 0 selects `feature_flags.stale_days` of the configuration.",
+             The value 0 selects the built-in age of 14 days.",
         )
-        .with_default(ParamDefault::Integer(90)),
+        .with_default(ParamDefault::Configuration("feature_flags.stale_days")),
     ],
     paginated: Pagination::Field("flags"),
     handler: flags,
@@ -334,10 +334,9 @@ fn flags(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
     if !providers.is_empty() {
         config.feature_flags.providers = providers;
     }
-    // The same rule as the `flags` command: the default is 90, and only the
-    // value 0 lets the configured value apply.
-    let stale_days = arguments.count_u32("stale_days").unwrap_or(90);
-    if stale_days > 0 {
+    // The same rule as the `flags` command: the argument, then the
+    // configured value. The analyzer uses 14 days when the value is 0.
+    if let Some(stale_days) = arguments.count_u32("stale_days") {
         config.feature_flags.stale_days = stale_days;
     }
     server.analyze_with_config(
