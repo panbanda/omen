@@ -10,6 +10,27 @@ use crate::index::model::{Exported, Span, SymbolKind};
 
 use crate::index::model::ImportBinding;
 
+use crate::index::calls::{Argument, Call, CallSyntax, Callee, LocalName};
+use crate::index::model::ReferenceKind;
+
+const NAMESPACE_ALIAS_DEFINITION: &str = "namespace_alias_definition";
+const USING_DECLARATION: &str = "using_declaration";
+const OPTIONAL_PARAMETER_DECLARATION: &str = "optional_parameter_declaration";
+const ARGUMENT_LIST: &str = "argument_list";
+const INITIALIZER_LIST: &str = "initializer_list";
+
+/// `Type{...}` is a construction. A field access with `.` or `->` gives a
+/// member, and `scope::name` gives a path.
+const CALL_SYNTAX: CallSyntax = CallSyntax {
+    constructions: &[
+        ("new_expression", "type", "arguments"),
+        ("compound_literal_expression", "type", "value"),
+    ],
+    paths: &[(QUALIFIED_IDENTIFIER, "scope", "name")],
+    self_words: &["this"],
+    ..c::CALL_SYNTAX
+};
+
 pub struct Cpp;
 
 const CLASS_SPECIFIER: &str = "class_specifier";
@@ -227,6 +248,94 @@ fn parameter_count(parameters: Node<'_>, context: &Context<'_, '_>) -> usize {
 }
 
 impl LanguageSpec for Cpp {
+    fn call_syntax(&self) -> CallSyntax {
+        CALL_SYNTAX
+    }
+
+    fn call_kinds(&self) -> Vec<&'static str> {
+        let mut kinds = self.call_syntax().call_kinds();
+        kinds.push(c::DECLARATION);
+        kinds
+    }
+
+    fn local_kinds(&self) -> Vec<&'static str> {
+        vec![
+            c::DECLARATION,
+            c::PARAMETER_DECLARATION,
+            OPTIONAL_PARAMETER_DECLARATION,
+            NAMESPACE_ALIAS_DEFINITION,
+            USING_DECLARATION,
+        ]
+    }
+
+    fn call_hook_kinds(&self) -> Vec<&'static str> {
+        vec![
+            NAMESPACE_ALIAS_DEFINITION,
+            USING_DECLARATION,
+            OPTIONAL_PARAMETER_DECLARATION,
+            ARGUMENT_LIST,
+            INITIALIZER_LIST,
+        ]
+    }
+
+    /// `Type name(arguments);` and `Type name{arguments};` in a function body
+    /// make an object, thus they call a constructor of the type.
+    fn call<'tree>(&self, node: Node<'tree>, context: &Context<'_, 'tree>) -> Option<Call<'tree>> {
+        if node.kind() != c::DECLARATION {
+            return self.call_syntax().call(node, context);
+        }
+        if !context.in_function() {
+            return None;
+        }
+        let type_node = node.child_by_field_name("type").filter(|type_node| {
+            [c::TYPE_IDENTIFIER, QUALIFIED_IDENTIFIER].contains(&type_node.kind())
+        })?;
+        let declarator = node.child_by_field_name("declarator")?;
+        let arguments = match declarator.kind() {
+            c::FUNCTION_DECLARATOR => declarator.child_by_field_name("parameters")?,
+            INIT_DECLARATOR => declarator
+                .child_by_field_name("value")
+                .filter(|value| [ARGUMENT_LIST, INITIALIZER_LIST].contains(&value.kind()))?,
+            _ => return None,
+        };
+        Some(Call {
+            callee: Callee {
+                name_node: type_node,
+                receiver: None,
+                qualifier: None,
+            },
+            kind: ReferenceKind::Construct,
+            arguments: vec![Argument::Other; arguments.named_child_count()],
+        })
+    }
+
+    /// A namespace alias is a local name with the namespace as its type.
+    /// `using namespace name;` is the local name `*` with that namespace as its type.
+    fn locals(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
+        let namespace = |name: String, target: Node<'_>| LocalName {
+            name,
+            type_name: Some(context.text(target)),
+            value_start: None,
+            is_parameter: false,
+        };
+        match node.kind() {
+            NAMESPACE_ALIAS_DEFINITION => {
+                let alias = node.child_by_field_name("name");
+                let target = node.named_child(node.named_child_count().saturating_sub(1) as u32);
+                if let (Some(alias), Some(target)) = (alias, target) {
+                    out.push(namespace(context.text(alias), target));
+                }
+            }
+            USING_DECLARATION => {
+                let directive = context.text(node).starts_with("using namespace");
+                if let (true, Some(target)) = (directive, node.named_child(0)) {
+                    out.push(namespace("*".to_string(), target));
+                }
+            }
+            _ => c::declared_names(node, context, out),
+        }
+    }
+
     fn import_kinds(&self) -> Vec<&'static str> {
         vec![c::PREPROC_INCLUDE]
     }
@@ -338,6 +447,11 @@ impl LanguageSpec for Cpp {
             .parent()
             .and_then(|declarator| declarator.child_by_field_name("parameters"))
             .map(|parameters| parameter_count(parameters, context));
+        draft.parameter_types = draft
+            .name_node
+            .parent()
+            .and_then(|declarator| declarator.child_by_field_name("parameters"))
+            .map(|parameters| crate::index::extract::parameter_types(parameters, context.source));
         if draft.name_node.kind() == QUALIFIED_IDENTIFIER {
             // The definition is not in the body of its class or its namespace.
             // The kind is `Method` until `link` finds that the scope is a namespace.
@@ -727,6 +841,83 @@ mod tests {
         assert_eq!(
             rows(&files, "sub/util.cpp"),
             ["1 Load util.hpp -->- sub/util.hpp"]
+        );
+    }
+
+    const CALL_FILES: &[(&str, &str)] = &[
+        (
+            "main.cpp",
+            "#include <vector>\n\n#include \"other.hpp\"\n#include \"shapes.hpp\"\n\nusing namespace other;\nnamespace tools = util;\n\nnamespace {\n\nint local() {\n    return 4;\n}\n\n}  // namespace\n\nint run() {\n    int total = local() + util::helper() + only_here() + tools::helper();\n    auto circle = Circle(1.0);\n    total += static_cast<int>(circle.area());\n    auto add = [](int n) { return n + 1; };\n    return total + add(1) + util::twice(2) + util::twice(2, 3) + Util::helper();\n}\n\ndouble measure(const Circle& size, const Circle* pointer, const Shape* shape) {\n    return size.area() + pointer->area(2.0) + shape->area();\n}\n\ndouble made() {\n    Circle braces = Circle{2.0};\n    Circle* heap = new Circle(1.0);\n    Circle declared(1.0);\n    std::vector<int> seen;\n    seen.push_back(1);\n    return braces.radius() + heap->radius() + declared.radius() + std::sqrt(4.0) + describe();\n}\n",
+        ),
+        (
+            "other.hpp",
+            "namespace other {\n\nint only_here();\nint push_back(int value);\n\n}  // namespace other\n\nnamespace util {\n\nint helper();\nint twice(int value);\nint twice(int value, int times);\n\n}  // namespace util\n\nclass Util {\npublic:\n    static int helper() {\n        return 5;\n    }\n};\n",
+        ),
+        (
+            "other.cpp",
+            "#include \"other.hpp\"\n\nnamespace other {\n\nint only_here() {\n    return 3;\n}\n\nint push_back(int value) {\n    return value;\n}\n\n}  // namespace other\n\nint util::helper() {\n    return 1;\n}\n\nint util::twice(int value) {\n    return value * 2;\n}\n\nint util::twice(int value, int times) {\n    return value * times;\n}\n",
+        ),
+        (
+            "shapes.hpp",
+            "#include <string>\n\nclass Shape {\npublic:\n    virtual double area() const = 0;\n};\n\nclass Circle : public Shape {\npublic:\n    explicit Circle(double radius);\n    double area() const override;\n    double area(double factor) const;\n    double radius() const {\n        return radius_;\n    }\n\nprotected:\n    double scaled(double factor) const;\n\nprivate:\n    double radius_;\n};\n\nstd::string describe();\n",
+        ),
+        (
+            "shapes.cpp",
+            "#include \"shapes.hpp\"\n\nCircle::Circle(double radius) : radius_(radius) {\n}\n\ndouble Circle::area() const {\n    return this->scaled(3.14);\n}\n\ndouble Circle::area(double factor) const {\n    return scaled(factor);\n}\n\ndouble Circle::scaled(double factor) const {\n    return factor;\n}\n\nstd::string describe() {\n    return \"shape\";\n}\n",
+        ),
+    ];
+
+    #[test]
+    fn test_calls_with_namespaces_and_constructions() {
+        use crate::index::resolve::testing::rows;
+        assert_eq!(
+            rows(CALL_FILES, "main.cpp")[..11],
+            [
+                "18 run>local UniqueCandidate SameFile [main.cpp#local]",
+                "18 run>util::helper UniqueCandidate QualifiedPath [other.cpp#util.helper]",
+                "18 run>only_here UniqueCandidate ImportedModule [other.cpp#other.only_here]",
+                "18 run>tools::helper UniqueCandidate QualifiedPath [other.cpp#util.helper]",
+                "19 run>Circle UniqueCandidate ImportedModule [shapes.cpp#Circle.Circle]",
+                "20 run>circle.area UniqueCandidate ReceiverDeclaredType [shapes.cpp#Circle.area]",
+                "22 run>add UniqueCandidate LexicalScope [main.cpp#run.add]",
+                "22 run>util::twice UniqueCandidate QualifiedPath [other.cpp#util.twice]",
+                "22 run>util::twice UniqueCandidate QualifiedPath [other.cpp#util.twice~2]",
+                "22 run>Util::helper UniqueCandidate QualifiedPath [other.hpp#Util.helper]",
+                "26 measure>size.area UniqueCandidate ReceiverDeclaredType [shapes.cpp#Circle.area]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_calls_with_declared_types() {
+        use crate::index::resolve::testing::rows;
+        assert_eq!(
+            rows(CALL_FILES, "main.cpp")[11..],
+            [
+                "26 measure>pointer.area UniqueCandidate ReceiverDeclaredType [shapes.cpp#Circle.area~2]",
+                "26 measure>shape.area Ambiguous NameOnly [shapes.cpp#Circle.area, shapes.cpp#Circle.area~2, shapes.hpp#Circle.area, shapes.hpp#Circle.area~2, shapes.hpp#Shape.area]",
+                "30 made>Circle UniqueCandidate QualifiedPath [shapes.cpp#Circle.Circle]",
+                "31 made>Circle UniqueCandidate QualifiedPath [shapes.cpp#Circle.Circle]",
+                "32 made>Circle UniqueCandidate QualifiedPath [shapes.cpp#Circle.Circle]",
+                "34 made>seen.push_back Unresolved - []",
+                "35 made>braces.radius UniqueCandidate ReceiverDeclaredType [shapes.hpp#Circle.radius]",
+                "35 made>heap.radius UniqueCandidate ReceiverDeclaredType [shapes.hpp#Circle.radius]",
+                "35 made>declared.radius UniqueCandidate ReceiverDeclaredType [shapes.hpp#Circle.radius]",
+                "35 made>std::sqrt Unresolved - []",
+                "35 made>describe UniqueCandidate ImportedModule [shapes.cpp#describe]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_calls_with_this() {
+        use crate::index::resolve::testing::rows;
+        assert_eq!(
+            rows(CALL_FILES, "shapes.cpp"),
+            [
+                "7 Circle.area>self.scaled UniqueCandidate EnclosingType [shapes.cpp#Circle.scaled]",
+                "11 Circle.area~2>scaled UniqueCandidate EnclosingType [shapes.cpp#Circle.scaled]",
+            ]
         );
     }
 }

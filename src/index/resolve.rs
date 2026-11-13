@@ -556,7 +556,27 @@ impl<'a> Resolver<'a> {
             return Outcome::offered(Basis::NameOnly, self.methods_by_name(name, file));
         }
         let members = self.members(types[0], name, arity, &mut BTreeSet::new());
+        // A member without a body in each candidate is abstract. A subtype
+        // gives the definition, and the syntax does not tell which subtype.
+        let is_abstract = |id: &Id| self.symbol(*id).body_range.is_none();
+        if !members.is_empty() && members.iter().all(is_abstract) {
+            return Outcome::offered(Basis::NameOnly, self.methods_by_name(name, file));
+        }
         Outcome::of(basis, members).unwrap_or_else(|| Outcome::none(Status::Unresolved))
+    }
+
+    /// The namespace for which a C++ `namespace alias = target;` gives a name.
+    /// The extraction records the alias as a local name with the target as its type.
+    fn namespace_alias(&self, file: usize, alias: &str) -> Option<&'a str> {
+        self.files[file]
+            .locals
+            .iter()
+            .find(|local| {
+                local.owner.is_none()
+                    && local.name.name == alias
+                    && local.name.value_start.is_none()
+            })
+            .and_then(|local| local.name.type_name.as_deref())
     }
 
     fn imported(&self, binding: &ImportBinding, name: &str) -> Outcome {
@@ -673,6 +693,10 @@ impl<'a> Resolver<'a> {
 
     fn with_qualifier(&self, file: usize, reference: &Reference, qualifier: &str) -> Outcome {
         let name = reference.name.as_str();
+        let qualifier = match self.family(file) {
+            Family::C => self.namespace_alias(file, qualifier).unwrap_or(qualifier),
+            _ => qualifier,
+        };
         let path = segments(qualifier);
         let joined = |separator: &str| path.join(separator);
         let facts = &self.files[file];
@@ -715,7 +739,8 @@ impl<'a> Resolver<'a> {
         let family = self.family(file);
         let callable = |id: &Id| {
             let symbol = self.symbol(*id);
-            is_callable(symbol) || (family == Family::Python && is_container(symbol))
+            is_callable(symbol)
+                || (matches!(family, Family::Python | Family::C) && is_container(symbol))
         };
         // Java cannot call a local variable with the syntax of a function call.
         if family != Family::Java {
@@ -791,6 +816,18 @@ impl<'a> Resolver<'a> {
             .filter(callable)
             .collect();
         if let Some(outcome) = Outcome::of(Basis::SamePackage, self.preferred(found, arity)) {
+            return outcome;
+        }
+        // A C++ `using namespace name;` is a local name `*` with the namespace as its type.
+        let used: Vec<Id> = self.files[file]
+            .locals
+            .iter()
+            .filter(|local| local.name.name == "*")
+            .filter_map(|local| local.name.type_name.as_deref())
+            .flat_map(|namespace| self.types(namespace, None, file))
+            .flat_map(|namespace| self.members(namespace, name, arity, &mut BTreeSet::new()))
+            .collect();
+        if let Some(outcome) = Outcome::of(Basis::ImportedModule, used) {
             return outcome;
         }
         let visible = self.visible_files(file);
@@ -936,8 +973,8 @@ impl<'a> Resolver<'a> {
                 };
             }
         }
-        // A Python call of a class makes an object. It runs the constructor.
-        if self.family(file) == Family::Python {
+        // A Python or C++ call of a class makes an object. It runs the constructor.
+        if matches!(self.family(file), Family::Python | Family::C) {
             let arity = self.files[file].references[position].arity;
             outcome.candidates = outcome
                 .candidates
