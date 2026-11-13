@@ -616,8 +616,17 @@ impl Drop for ProcessTree {
     }
 }
 
-/// Stop a process and each of its descendants. `taskkill` returns after it
-/// sent the stop request to each process.
+/// The longest time to wait for a stopped test command, on Windows.
+#[cfg(windows)]
+const PROCESS_EXIT_LIMIT_MILLISECONDS: u32 = 5000;
+
+/// Stop a process and each of its descendants.
+///
+/// `taskkill` returns after it sent the stop request to each process of the
+/// tree. It does not wait for the processes to end. Thus this function then
+/// waits for the test command itself, for a maximum of
+/// `PROCESS_EXIT_LIMIT_MILLISECONDS`. It does not wait for the descendants:
+/// a descendant can run for a short time after this function returns.
 #[cfg(windows)]
 fn kill_process_tree(id: u32) {
     let _ = std::process::Command::new("taskkill")
@@ -625,6 +634,34 @@ fn kill_process_tree(id: u32) {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status();
+    wait_for_process_exit(id);
+}
+
+/// Wait until the process with this identifier ends, for a limited time.
+///
+/// The executor holds the child handle of each registered test command,
+/// thus the operating system does not give the identifier to a different
+/// process during the wait.
+#[cfg(windows)]
+fn wait_for_process_exit(id: u32) {
+    #[link(name = "Kernel32")]
+    unsafe extern "system" {
+        fn OpenProcess(access: u32, inherit_handle: i32, id: u32) -> *mut std::ffi::c_void;
+        fn WaitForSingleObject(handle: *mut std::ffi::c_void, milliseconds: u32) -> u32;
+        fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+    }
+    // The access right to wait for a process.
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+
+    // SAFETY: the handle is used only for the wait and is closed here. A
+    // null handle means that the process does not exist now.
+    unsafe {
+        let handle = OpenProcess(SYNCHRONIZE, 0, id);
+        if !handle.is_null() {
+            WaitForSingleObject(handle, PROCESS_EXIT_LIMIT_MILLISECONDS);
+            CloseHandle(handle);
+        }
+    }
 }
 
 #[cfg(windows)]
