@@ -1,4 +1,5 @@
-#[cfg(feature = "mutation")]
+// Only the SIGINT test uses this trait, and that test is for Unix.
+#[cfg(all(unix, feature = "mutation"))]
 use assert_cmd::cargo::CommandCargoExt;
 use assert_cmd::Command;
 use predicates::prelude::*;

@@ -688,7 +688,7 @@ pub(crate) fn sigint_disposition() -> libc::sighandler_t {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn active_runs_of_the_process() -> usize {
     INTERRUPT_GATE.active_runs()
 }
