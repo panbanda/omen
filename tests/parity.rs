@@ -10,6 +10,7 @@ mod fixture;
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use clap::CommandFactory;
 use fixture::{cli_json, fixture_repository, mcp_responses, omen};
 use serde_json::{json, Value};
 
@@ -367,4 +368,282 @@ fn cli_and_mcp_give_the_same_result_with_a_configuration_file() {
     let directory = fixture_repository();
     std::fs::write(directory.path().join("omen.toml"), CONFIGURATION).expect("write configuration");
     assert_no_differences(compare_all(directory.path(), "configuration"));
+}
+
+/// One tool parameter and the CLI flag that has the same effect. The flag is
+/// the identifier of the clap argument.
+const PARAMETER_FLAGS: &[((&str, &str), &str)] = &[
+    (("context", "max_tokens"), "max_tokens"),
+    (("outline", "file"), "file"),
+    (("churn", "days"), "days"),
+    (("clones", "include_tests"), "include_tests"),
+    (("defect", "days"), "days"),
+    (("diff", "base"), "target"),
+    (("hotspot", "days"), "days"),
+    (("flags", "provider"), "provider"),
+    (("flags", "stale_days"), "stale_days"),
+    (("semantic_search", "query"), "query"),
+    (("semantic_search", "top_k"), "top"),
+    (("semantic_search", "min_score"), "min_score"),
+    (("semantic_search", "files"), "files"),
+    (("semantic_search", "include_projects"), "include_project"),
+    (("get_symbol", "name"), "name"),
+    // The flag is the opposite of the parameter.
+    (("get_symbol", "include_source"), "no_source"),
+    (("get_symbol", "max_source_lines"), "max_source_lines"),
+    (("impact", "symbol"), "symbol"),
+    (("impact", "depth"), "depth"),
+    (("impact", "direction"), "direction"),
+];
+
+/// The parameters that each paged tool has, with the flag of the command.
+const COMMON_PARAMETER_FLAGS: &[(&str, &str)] =
+    &[("path", "path"), ("limit", "top"), ("offset", "offset")];
+
+/// The tool parameters that have no CLI flag, each with the reason.
+const MCP_ONLY: &[((&str, &str), &str)] = &[
+    (("context", "max_symbols"), NO_FLAG_FIXED_VALUE),
+    (("context", "max_risks"), NO_FLAG_FIXED_VALUE),
+    (
+        ("context", "format"),
+        "The CLI uses the global `--format` flag.",
+    ),
+    (("context", "compact"), TABLE_ENCODING),
+    (
+        ("context", "limit"),
+        "The `context` command has no `--top` flag.",
+    ),
+    (
+        ("context", "offset"),
+        "The `context` command has no `--offset` flag.",
+    ),
+    (("clones", "min_tokens"), CONFIGURATION_ONLY),
+    (("clones", "similarity"), CONFIGURATION_ONLY),
+    (
+        ("diff", "head"),
+        "An alias of `base` that the tool keeps for old clients.",
+    ),
+    (("temporal", "days"), NO_FLAG_FIXED_VALUE),
+    (("repomap", "max_symbols"), NO_FLAG_FIXED_VALUE),
+    (("repomap", "compact"), TABLE_ENCODING),
+    (
+        ("score", "limit"),
+        "The `score` command has no `--top` flag.",
+    ),
+    (
+        ("score", "offset"),
+        "The `score` command has no `--offset` flag.",
+    ),
+    (
+        ("semantic_search", "max_complexity"),
+        "The `search query` command has no complexity filter.",
+    ),
+    (
+        ("get_symbol", "start_line"),
+        "The `symbol` command selects the first definition and has no line selector.",
+    ),
+    (("get_symbol", "compact"), TABLE_ENCODING),
+    (("impact", "compact"), TABLE_ENCODING),
+];
+
+const NO_FLAG_FIXED_VALUE: &str =
+    "The command has no flag for this value. It uses the default of the tool.";
+const CONFIGURATION_ONLY: &str =
+    "The command reads this value only from the configuration, which is the default of the tool.";
+const TABLE_ENCODING: &str =
+    "The table encoding is only for MCP results. The CLI flag `--compact` has a different meaning.";
+const FILE_FILTER: &str = "The tools have no file filter. They read each file below `path`.";
+const GATE: &str = "A tool gives data and does not apply a gate.";
+const SINCE: &str = "The tool accepts the window only as `days`.";
+const PROCESS: &str = "The flag controls the CLI process, not the analysis.";
+
+/// The CLI flags that have no tool parameter, each with the reason. The
+/// command `*` is each mirrored command.
+const CLI_ONLY: &[((&str, &str), &str)] = &[
+    (
+        ("*", "format"),
+        "A tool always gives JSON. `context` has its own `format` parameter.",
+    ),
+    (("*", "compact"), "A tool always gives JSON on one line."),
+    (
+        ("*", "config"),
+        "The server reads the configuration one time, when it starts.",
+    ),
+    (("*", "verbose"), PROCESS),
+    (("*", "jobs"), PROCESS),
+    (
+        ("*", "git_ref"),
+        "The server analyzes the working tree only.",
+    ),
+    (
+        ("*", "shallow"),
+        "The flag applies to a clone of a remote repository, which the server does not make.",
+    ),
+    (("*", "glob"), FILE_FILTER),
+    (("*", "exclude"), FILE_FILTER),
+    (("*", "changed_since"), FILE_FILTER),
+    (("complexity", "gate"), GATE),
+    (("complexity", "max_cyclomatic"), GATE),
+    (("complexity", "max_cognitive"), GATE),
+    (("stubs", "gate"), GATE),
+    (("stubs", "gate_severity"), GATE),
+    (("score", "gate"), GATE),
+    (("score", "fail_under"), GATE),
+    (
+        ("deadcode", "cargo_check"),
+        "The flag runs build scripts, thus the server does not offer it.",
+    ),
+    (
+        ("search query", "path"),
+        "The search tools read the index of the MCP root and have no `path` parameter.",
+    ),
+    (("churn", "since"), SINCE),
+    (("defect", "since"), SINCE),
+    (("hotspot", "since"), SINCE),
+];
+
+/// The identifiers of the arguments of a command, with the global arguments.
+fn flags_of(path: &[&str]) -> BTreeSet<String> {
+    let root = omen::cli::Cli::command();
+    let mut command = &root;
+    let mut flags: BTreeSet<String> = root
+        .get_arguments()
+        .filter(|argument| argument.is_global_set())
+        .map(|argument| argument.get_id().to_string())
+        .collect();
+    for name in path {
+        command = command
+            .find_subcommand(name)
+            .unwrap_or_else(|| panic!("the CLI has no command {path:?}"));
+    }
+    flags.extend(
+        command
+            .get_arguments()
+            .map(|argument| argument.get_id().to_string()),
+    );
+    flags
+}
+
+/// The parameters of each tool, read from `tools/list`.
+fn tool_parameters() -> Vec<(String, Vec<String>)> {
+    let directory = tempfile::TempDir::new().expect("temporary directory");
+    let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
+    let responses = mcp_responses(directory.path(), &[request]);
+    responses[0]["result"]["tools"]
+        .as_array()
+        .expect("tools")
+        .iter()
+        .map(|tool| {
+            let name = tool["name"].as_str().expect("name").to_string();
+            let parameters = tool["inputSchema"]["properties"]
+                .as_object()
+                .expect("properties")
+                .keys()
+                .cloned()
+                .collect();
+            (name, parameters)
+        })
+        .collect()
+}
+
+/// The command path of a mirror: the words before the positional arguments.
+fn command_path(mirror: &Mirror) -> &'static [&'static str] {
+    match mirror.command {
+        ["search", "query", ..] => &["search", "query"],
+        [command, ..] => std::slice::from_ref(command),
+        [] => &[],
+    }
+}
+
+#[test]
+fn each_parameter_and_each_flag_has_a_decision() {
+    let parameters = tool_parameters();
+    let mut problems = Vec::new();
+
+    for mirror in MIRRORS {
+        let path = command_path(mirror);
+        let command = path.join(" ");
+        let flags = flags_of(path);
+        let (_, tool_parameters) = parameters
+            .iter()
+            .find(|(name, _)| name == mirror.tool)
+            .expect("tool in tools/list");
+
+        let mut used_flags = BTreeSet::new();
+        for parameter in tool_parameters {
+            let key = (mirror.tool, parameter.as_str());
+            let mcp_only = MCP_ONLY.iter().any(|(entry, _)| *entry == key);
+            let flag = PARAMETER_FLAGS
+                .iter()
+                .find(|(entry, _)| *entry == key)
+                .map(|(_, flag)| *flag)
+                .or_else(|| {
+                    COMMON_PARAMETER_FLAGS
+                        .iter()
+                        .find(|(common, _)| common == parameter)
+                        .map(|(_, flag)| *flag)
+                        .filter(|_| !mcp_only)
+                });
+            match (flag, mcp_only) {
+                (Some(_), true) => problems.push(format!(
+                    "{}.{parameter} is in PARAMETER_FLAGS and in MCP_ONLY",
+                    mirror.tool
+                )),
+                (Some(flag), false) if !flags.contains(flag) => problems.push(format!(
+                    "{}.{parameter}: the command `{command}` has no flag `{flag}`",
+                    mirror.tool
+                )),
+                (Some(flag), false) => {
+                    used_flags.insert(flag.to_string());
+                }
+                (None, true) => {}
+                (None, false) => problems.push(format!(
+                    "{}.{parameter}: add it to PARAMETER_FLAGS or to MCP_ONLY",
+                    mirror.tool
+                )),
+            }
+        }
+
+        for flag in flags.difference(&used_flags) {
+            let cli_only = CLI_ONLY.iter().any(|((entry_command, entry_flag), _)| {
+                (*entry_command == "*" || *entry_command == command) && entry_flag == flag
+            });
+            if !cli_only {
+                problems.push(format!(
+                    "`{command}` --{flag}: add it to PARAMETER_FLAGS or to CLI_ONLY"
+                ));
+            }
+        }
+    }
+
+    // An entry that names no parameter or no flag is out of date.
+    for ((tool, parameter), _) in PARAMETER_FLAGS.iter().chain(MCP_ONLY) {
+        let known = parameters
+            .iter()
+            .any(|(name, list)| name == tool && list.iter().any(|entry| entry == parameter));
+        if !known {
+            problems.push(format!("the tool `{tool}` has no parameter `{parameter}`"));
+        }
+    }
+    for ((command, flag), _) in CLI_ONLY {
+        let known = MIRRORS.iter().any(|mirror| {
+            let path = command_path(mirror);
+            (*command == "*" || *command == path.join(" ")) && flags_of(path).contains(*flag)
+        });
+        if !known {
+            problems.push(format!(
+                "no mirrored command `{command}` has the flag `{flag}`"
+            ));
+        }
+    }
+    for (_, reason) in MCP_ONLY.iter().chain(CLI_ONLY) {
+        assert!(!reason.is_empty());
+    }
+
+    assert!(
+        problems.is_empty(),
+        "{} problems:\n{}",
+        problems.len(),
+        problems.join("\n")
+    );
 }
