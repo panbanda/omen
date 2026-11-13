@@ -98,7 +98,7 @@ bstr = "1.11"
 libc = "0.2"
 
 # Semantic search (TF-IDF based, no model download required)
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.42", features = ["bundled"] }
 
 # Scratch directories for the paired quality benchmark
 tempfile = "3.14"
