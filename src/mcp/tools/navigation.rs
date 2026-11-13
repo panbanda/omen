@@ -5,11 +5,12 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use super::{
-    Arguments, HandlerResult, Pagination, Param, ParamDefault, ToolOutput, ToolSpec, COMPACT,
-    MAX_COUNT, PATH,
+    Arguments, HandlerResult, Pagination, Param, ParamDefault, ToolData, ToolOutput, ToolSpec,
+    COMPACT, MAX_COUNT, PATH,
 };
 use crate::core::{AnalysisContext, Analyzer, FileSet};
 use crate::git::GitRepo;
+use crate::mcp::envelope::{ItemCount, Truncation};
 use crate::mcp::error::{ErrorCode, ToolError};
 use crate::mcp::McpServer;
 
@@ -298,7 +299,54 @@ fn task_context(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult 
             crate::symbol::suggest_symbols(&scope.path, &files, name)?,
         ));
     }
-    Ok(ToolOutput::data(result))
+    let truncated = omitted_lists(&result);
+    let returned = result["symbols"].as_array().map_or(0, Vec::len);
+    let omitted = result["omitted"]["symbols"].as_u64().unwrap_or(0) as usize;
+    Ok(ToolOutput::Data(ToolData {
+        truncated,
+        items: Some(ItemCount {
+            total: returned + omitted,
+            returned,
+        }),
+        ..ToolData::new(result)
+    }))
+}
+
+/// The lists that the byte budget of `task_context` cut, in the sequence of
+/// their paths. The counts come from the `omitted` object of the result.
+fn omitted_lists(result: &Value) -> Vec<Truncation> {
+    let entry = |path: &str, list: &Value, omitted: &Value| {
+        let returned = list.as_array().map_or(0, Vec::len);
+        let omitted = omitted.as_u64().unwrap_or(0) as usize;
+        (omitted > 0).then(|| Truncation {
+            path: path.to_string(),
+            total: returned + omitted,
+            returned,
+        })
+    };
+    let omitted = &result["omitted"];
+    let syntax_facts = &result["syntax_facts"];
+    [
+        entry(
+            "/call_evidence",
+            &result["call_evidence"],
+            &omitted["call_evidence"],
+        ),
+        entry(
+            "/history_hints",
+            &result["history_hints"],
+            &omitted["history_hints"],
+        ),
+        entry("/symbols", &result["symbols"], &omitted["symbols"]),
+        entry(
+            "/syntax_facts/uses",
+            &syntax_facts["uses"],
+            &syntax_facts["omitted_uses"],
+        ),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 pub(super) static IMPACT: ToolSpec = ToolSpec {

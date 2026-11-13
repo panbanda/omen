@@ -23,6 +23,27 @@ use tools::{Arguments, HandlerResult, ToolData, ToolOutput};
 
 const MAX_STDIO_LINE_SIZE: usize = 10 * 1024 * 1024;
 
+/// The text that `initialize` gives to an agent. Keep it below 1200 characters.
+const INSTRUCTIONS: &str = "\
+Omen analyzes the source code of this repository.
+
+Sequence:
+1. Call `context` one time for the top symbols and the risks, or `outline` for the structure of a file.
+2. Before you edit a symbol, call `get_symbol` to read its source, its callers, and its callees.
+3. Before you change a signature, call `impact` to find the callers that the change can break.
+4. Use `semantic_search` when you do not know the name of a symbol.
+
+Pagination: `limit` has the default 50, and the value 0 removes the limit. \
+When `has_more` is true, send the same call with `offset` set to `next_offset`. \
+`truncated` lists each list in `result` that is not complete.
+
+Errors: a result with `isError` true holds `error.code`, `error.param`, `error.expected`, \
+and `error.suggestions`. Do what `error.next` tells you. \
+The server does not replace an incorrect argument with a default. \
+When the code is `ambiguous`, send the call again with the `name` and the `start_line` of one suggestion.
+
+The call graph comes from names. A compiler does not prove it.";
+
 fn discard_until_newline(reader: &mut impl BufRead) -> std::io::Result<()> {
     loop {
         let buffer = reader.fill_buf()?;
@@ -258,7 +279,8 @@ impl McpServer {
             "serverInfo": {
                 "name": "omen",
                 "version": env!("CARGO_PKG_VERSION")
-            }
+            },
+            "instructions": INSTRUCTIONS
         }))
     }
 
@@ -307,14 +329,7 @@ impl McpServer {
                 };
                 let compact = spec.parameter("compact").is_some()
                     && arguments.boolean("compact").unwrap_or(false);
-                let envelope = envelope::build(
-                    spec.name,
-                    spec.paginated,
-                    data.result,
-                    page,
-                    data.git_skipped_reason.as_deref(),
-                    compact,
-                );
+                let envelope = envelope::build(spec.name, spec.paginated, data, page, compact);
                 text_result(envelope.to_string())
             }
             Err(error) => error.to_result(),
@@ -357,8 +372,8 @@ impl McpServer {
         }
         let result = analyzer.analyze(&context)?;
         Ok(ToolOutput::Data(ToolData {
-            result: serde_json::to_value(result)?,
             git_skipped_reason,
+            ..ToolData::new(serde_json::to_value(result)?)
         }))
     }
 
@@ -501,6 +516,138 @@ mod tests {
         assert_eq!(absent["error"]["param"], "name");
         assert_eq!(absent["error"]["received"], "helpe");
         assert_eq!(absent["error"]["suggestions"], json!(["helper"]));
+    }
+
+    /// Calls a tool and gives the envelope of a result without an error.
+    fn envelope_of(server: &McpServer, tool: &str, arguments: Value) -> Value {
+        let result = call(server, tool, arguments);
+        assert!(result.get("isError").is_none(), "{result}");
+        serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap()
+    }
+
+    const ENVELOPE_KEYS: [&str; 8] = [
+        "has_more",
+        "next_offset",
+        "offset",
+        "result",
+        "returned",
+        "tool",
+        "total_items",
+        "truncated",
+    ];
+
+    fn write_call_chain(directory: &Path, callers: usize) {
+        let mut source = String::from("pub fn target() -> u32 {\n    1\n}\n");
+        for caller in 0..callers {
+            source.push_str(&format!(
+                "pub fn caller_with_a_long_name_{caller}() -> u32 {{\n    target()\n}}\n"
+            ));
+        }
+        std::fs::write(directory.join("chain.rs"), source).unwrap();
+    }
+
+    #[test]
+    fn task_context_gives_the_same_envelope_as_the_other_tools() {
+        let (server, dir) = create_test_server();
+        write_call_chain(dir.path(), 3);
+        let task_context = envelope_of(&server, "task_context", json!({"name": "target"}));
+        let complexity = envelope_of(&server, "complexity", json!({}));
+        let keys = |envelope: &Value| -> Vec<String> {
+            envelope.as_object().unwrap().keys().cloned().collect()
+        };
+        assert_eq!(keys(&task_context), ENVELOPE_KEYS);
+        // The test directory is not a git repository.
+        let mut complexity_keys = keys(&complexity);
+        complexity_keys.retain(|key| key != "git_skipped_reason");
+        assert_eq!(complexity_keys, ENVELOPE_KEYS);
+        assert_eq!(task_context["tool"], "task_context");
+        assert_eq!(task_context["offset"], 0);
+        assert_eq!(task_context["total_items"], 4);
+        assert_eq!(task_context["returned"], 4);
+        assert_eq!(task_context["has_more"], false);
+        assert!(task_context["next_offset"].is_null());
+        assert_eq!(task_context["truncated"], json!([]));
+    }
+
+    #[test]
+    fn task_context_reports_the_lists_that_its_byte_budget_cut() {
+        let (server, dir) = create_test_server();
+        write_call_chain(dir.path(), 60);
+        let envelope = envelope_of(
+            &server,
+            "task_context",
+            json!({"name": "target", "max_bytes": 2048}),
+        );
+        let symbols = envelope["result"]["symbols"].as_array().unwrap().len();
+        let omitted = envelope["result"]["omitted"]["symbols"].as_u64().unwrap() as usize;
+        assert!(omitted > 0, "the budget must cut the symbols: {envelope}");
+        assert_eq!(envelope["returned"], symbols);
+        assert_eq!(envelope["total_items"], symbols + omitted);
+        assert_eq!(envelope["has_more"], false);
+        let truncated = envelope["truncated"].as_array().unwrap();
+        assert!(truncated.contains(
+            &json!({"path": "/symbols", "total": symbols + omitted, "returned": symbols})
+        ));
+        let paths: Vec<&str> = truncated
+            .iter()
+            .map(|entry| entry["path"].as_str().unwrap())
+            .collect();
+        let mut sorted = paths.clone();
+        sorted.sort_unstable();
+        assert_eq!(paths, sorted);
+    }
+
+    #[test]
+    fn a_cut_page_gives_the_offset_of_the_next_page() {
+        let (server, dir) = create_test_server();
+        write_call_chain(dir.path(), 5);
+        let first = envelope_of(&server, "complexity", json!({"limit": 4}));
+        assert_eq!(first["total_items"], 6);
+        assert_eq!(first["returned"], 4);
+        assert_eq!(first["has_more"], true);
+        assert_eq!(first["next_offset"], 4);
+        assert_eq!(
+            first["truncated"],
+            json!([{"path": "/files/*/functions", "total": 6, "returned": 4}])
+        );
+        let second = envelope_of(&server, "complexity", json!({"limit": 4, "offset": 4}));
+        assert_eq!(second["returned"], 2);
+        assert_eq!(second["has_more"], false);
+        assert!(second["next_offset"].is_null());
+    }
+
+    #[test]
+    fn initialize_gives_instructions_for_an_agent() {
+        let (server, _dir) = create_test_server();
+        let result = server.handle_initialize().unwrap();
+        let instructions = result["instructions"].as_str().expect("instructions");
+        assert!(
+            instructions.len() < 1200,
+            "{} characters",
+            instructions.len()
+        );
+        for necessary in [
+            "`context`",
+            "`outline`",
+            "`get_symbol`",
+            "`impact`",
+            "`limit`",
+            "`next_offset`",
+            "`has_more`",
+            "`truncated`",
+            "`error.code`",
+        ] {
+            assert!(instructions.contains(necessary), "{necessary}");
+        }
+        for name in instructions
+            .split('`')
+            .skip(1)
+            .step_by(2)
+            .filter(|name| McpServer::tool_names().contains(name))
+        {
+            assert!(tools::find(name).is_some());
+        }
+        assert!(!instructions.contains('\''), "no contractions");
     }
 
     #[test]
