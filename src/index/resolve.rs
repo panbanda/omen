@@ -106,7 +106,7 @@ impl Outcome {
 }
 
 /// The words that name the object of a method.
-const SELF_WORDS: &[&str] = &["self", "this", "$this"];
+const SELF_WORDS: &[&str] = &["self", "this", "$this", "cls"];
 
 fn is_callable(symbol: &Symbol) -> bool {
     matches!(
@@ -214,6 +214,15 @@ impl<'a> Resolver<'a> {
     }
 
     /// The symbols with this name in the language family of `file`.
+    /// The symbols with this name in one file. The symbols of a name are in
+    /// the order of the files, thus a binary search finds the file.
+    fn named_in(&self, name: &str, file: usize) -> impl Iterator<Item = Id> + '_ {
+        let all = self.by_name.get(name).map_or(&[][..], Vec::as_slice);
+        let start = all.partition_point(|id| id.0 < file);
+        let end = all.partition_point(|id| id.0 <= file);
+        all[start..end].iter().copied()
+    }
+
     fn named(&self, name: &str, file: usize) -> impl Iterator<Item = Id> + '_ {
         let family = self.family(file);
         self.by_name
@@ -341,7 +350,7 @@ impl<'a> Resolver<'a> {
         }
         // A name in a module in the file, as a Rust `mod testing { ... }` has it.
         let in_module: Vec<Id> = self
-            .named(name, file)
+            .named_in(name, file)
             .filter(|id| {
                 id.0 == file
                     && self.facts(*id).parent.is_some_and(|parent| {
@@ -955,7 +964,7 @@ impl<'a> Resolver<'a> {
         let name = reference.name.as_str();
         let arity = reference.arity;
         // A function value that a local name holds.
-        let closure = self.named(x, file).find(|id| {
+        let closure = self.named_in(x, file).find(|id| {
             id.0 == file
                 && is_callable(self.symbol(*id))
                 && self.symbol(*id).container.is_some()
@@ -980,7 +989,7 @@ impl<'a> Resolver<'a> {
         if let Some(local) = local {
             // The members of an object literal have the name of the variable in their key.
             let literal: Vec<Id> = self
-                .named(name, file)
+                .named_in(name, file)
                 .filter(|id| {
                     id.0 == file
                         && self.symbol(*id).container.is_none()
@@ -1129,7 +1138,7 @@ impl<'a> Resolver<'a> {
         let php_value = |id: &Id| self.facts(*id).function_value;
         if let (Family::Php, Some(variable)) = (family, name.strip_prefix('$')) {
             let held: Vec<Id> = self
-                .named(variable, file)
+                .named_in(variable, file)
                 .filter(|id| {
                     id.0 == file
                         && php_value(id)
@@ -1163,7 +1172,7 @@ impl<'a> Resolver<'a> {
         // Java cannot call a local variable with the syntax of a function call.
         if family != Family::Java {
             let lexical: Vec<Id> = self
-                .named(name, file)
+                .named_in(name, file)
                 .filter(|id| {
                     id.0 == file
                         && callable(id)
@@ -1724,6 +1733,47 @@ mod tests {
         let keys = crate::index::extract::testing::keys(crate::core::Language::TypeScript, source);
         assert!(keys.contains(&"file#Cart.handler".to_string()), "{keys:?}");
         assert!(!keys.iter().any(|key| key.contains('~')), "{keys:?}");
+    }
+
+    #[test]
+    fn test_python_stub_is_the_module_when_no_source_file_exists() {
+        let files = [
+            ("pkg/__init__.py", ""),
+            ("pkg/_native.pyi", "def fast() -> int: ...\n"),
+            ("pkg/both.py", "def slow():\n    return 1\n"),
+            ("pkg/both.pyi", "def slow() -> int: ...\n"),
+            (
+                "main.py",
+                "from pkg._native import fast\nfrom pkg.both import slow\n\ndef run():\n    return fast() + slow()\n",
+            ),
+        ];
+        assert_eq!(
+            rows(&files, "main.py"),
+            [
+                "5 run>fast UniqueCandidate ImportedName [pkg/_native.pyi#fast]",
+                "5 run>slow UniqueCandidate ImportedName [pkg/both.py#slow]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_field_receiver_python() {
+        let source = "class Item:\n    def name(self):\n        return \"\"\n\n\nclass Cart:\n    lead: Item\n    items: list[Item]\n    maybe: Optional[Item]\n    quoted: \"Item\"\n\n    def __init__(self):\n        self.made = Item()\n        self.typed: Item = build()\n        self.other = build()\n        self.count = 0\n\n    def run(self):\n        self.lead.name()\n        self.made.name()\n        self.typed.name()\n        self.other.name()\n        self.maybe.name()\n        self.quoted.name()\n        for item in self.items:\n            item.name()\n        self.items.name()\n        self.count.name()\n";
+        let found = "UniqueCandidate ReceiverDeclaredType [a.py#Item.name]";
+        assert_eq!(
+            rows_of(&[("a.py", source)], "a.py", "name"),
+            [
+                format!("19 {found}"),
+                format!("20 {found}"),
+                format!("21 {found}"),
+                "22 Unresolved - []".to_string(),
+                format!("23 {found}"),
+                format!("24 {found}"),
+                format!("26 {found}"),
+                "27 Unresolved - []".to_string(),
+                "28 Ambiguous NameOnly [a.py#Item.name]".to_string(),
+            ]
+        );
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! match one import path give [`ImportTarget::Ambiguous`]. The files of one
 //! package give [`ImportTarget::Package`], which is a certain target.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::extract::FileSymbols;
 use super::model::{ImportBinding, ImportKind, ImportTarget};
@@ -16,6 +16,68 @@ struct Repository<'a> {
     files: &'a [FileSymbols],
     paths: BTreeSet<&'a str>,
     manifests: &'a Manifests,
+    /// The position of each file, by its path.
+    by_path: HashMap<&'a str, usize>,
+    /// The files whose path is the key or ends with `/` and the key.
+    by_suffix: HashMap<&'a str, Vec<usize>>,
+    /// The files whose directory is the key or ends with `/` and the key.
+    by_directory_suffix: HashMap<&'a str, Vec<usize>>,
+    /// The files that declare the package or the namespace of the key.
+    by_module: HashMap<&'a str, Vec<usize>>,
+}
+
+/// The text and each part of the text that starts after a `/`.
+fn suffixes(path: &str) -> impl Iterator<Item = &str> {
+    std::iter::once(path).chain(
+        path.match_indices('/')
+            .map(move |(position, _)| &path[position + 1..]),
+    )
+}
+
+impl<'a> Repository<'a> {
+    /// A repository can have many thousands of files and imports. The maps
+    /// let each import find its files without a search through all files.
+    fn new(files: &'a [FileSymbols], manifests: &'a Manifests) -> Self {
+        let mut by_path = HashMap::new();
+        let mut by_suffix: HashMap<&str, Vec<usize>> = HashMap::new();
+        let mut by_directory_suffix: HashMap<&str, Vec<usize>> = HashMap::new();
+        let mut by_module: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (position, file) in files.iter().enumerate() {
+            by_path.insert(file.file.as_str(), position);
+            for suffix in suffixes(&file.file) {
+                by_suffix.entry(suffix).or_default().push(position);
+            }
+            for suffix in suffixes(directory(&file.file)) {
+                by_directory_suffix
+                    .entry(suffix)
+                    .or_default()
+                    .push(position);
+            }
+            for module in &file.modules {
+                by_module.entry(module.as_str()).or_default().push(position);
+            }
+        }
+        Self {
+            files,
+            paths: files.iter().map(|file| file.file.as_str()).collect(),
+            manifests,
+            by_path,
+            by_suffix,
+            by_directory_suffix,
+            by_module,
+        }
+    }
+
+    /// The files in the directories whose path is `suffix` or ends with
+    /// `/suffix`, in path order.
+    fn in_directories(&self, suffix: &str) -> impl Iterator<Item = &'a FileSymbols> + '_ {
+        let files = self.files;
+        self.by_directory_suffix
+            .get(suffix)
+            .into_iter()
+            .flatten()
+            .map(move |position| &files[*position])
+    }
 }
 
 /// The facts from the files of a repository that are not source files.
@@ -260,11 +322,12 @@ impl Repository<'_> {
 
     /// The files whose path is `suffix` or ends with `/suffix`.
     fn with_suffix(&self, suffix: &str, languages: &[Language]) -> BTreeSet<String> {
-        let nested = format!("/{suffix}");
-        self.files
-            .iter()
+        self.by_suffix
+            .get(suffix)
+            .into_iter()
+            .flatten()
+            .map(|position| &self.files[*position])
             .filter(|file| languages.contains(&file.language))
-            .filter(|file| file.file == suffix || file.file.ends_with(&nested))
             .map(|file| file.file.clone())
             .collect()
     }
@@ -291,8 +354,7 @@ impl Repository<'_> {
                 join(root, path.strip_prefix(&format!("{name}/"))?)?
             };
             Some(
-                self.files
-                    .iter()
+                self.in_directories(&directory_of_package)
                     .filter(|file| {
                         file.language == Language::Go
                             && directory(&file.file) == directory_of_package
@@ -328,18 +390,19 @@ impl Repository<'_> {
     /// names. A directory without `__init__.py` is a namespace package.
     fn python_directories(&self, base: Option<&str>, segments: &[&str]) -> Vec<BTreeSet<String>> {
         let module = segments.join("/");
-        let nested = format!("/{module}");
+        let exact = base.map(|base| join(base, &module));
+        let suffix = match &exact {
+            Some(Some(path)) => path.as_str(),
+            Some(None) => return Vec::new(),
+            None => module.as_str(),
+        };
         let mut directories: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
         for file in self
-            .files
-            .iter()
+            .in_directories(suffix)
             .filter(|file| file.language == Language::Python)
         {
             let here = directory(&file.file);
-            let named = match base {
-                Some(base) => join(base, &module).as_deref() == Some(here),
-                None => here == module || here.ends_with(&nested),
-            };
+            let named = exact.is_none() || here == suffix;
             if named && !module.is_empty() {
                 directories
                     .entry(here)
@@ -359,14 +422,25 @@ impl Repository<'_> {
         } else {
             vec![format!("{module}.py"), format!("{module}/__init__.py")]
         };
-        let mut found = BTreeSet::new();
-        for form in forms {
-            match base {
-                Some(base) => found.extend(self.existing(join(base, &form))),
-                None => found.extend(self.with_suffix(&form, &[Language::Python])),
+        let files = |stub: &str| {
+            let mut found = BTreeSet::new();
+            for form in &forms {
+                let form = format!("{form}{stub}");
+                match base {
+                    Some(base) => found.extend(self.existing(join(base, &form))),
+                    None => found.extend(self.with_suffix(&form, &[Language::Python])),
+                }
             }
+            found
+        };
+        // A stub file `name.pyi` is the module when no source file exists,
+        // as it is for an extension module.
+        let found = files("");
+        if found.is_empty() {
+            files("i")
+        } else {
+            found
         }
-        found
     }
 
     fn python(&self, binding: &ImportBinding) -> ImportTarget {
@@ -632,9 +706,12 @@ impl Repository<'_> {
         for length in (1..=segments.len()).rev() {
             let namespace = segments[..length].join(separator);
             let members: Vec<&FileSymbols> = self
-                .files
-                .iter()
-                .filter(|file| file.language == language && file.modules.contains(&namespace))
+                .by_module
+                .get(namespace.as_str())
+                .into_iter()
+                .flatten()
+                .map(|position| &self.files[*position])
+                .filter(|file| file.language == language)
                 .collect();
             if members.is_empty() {
                 continue;
@@ -771,7 +848,7 @@ impl Repository<'_> {
         if !visited.insert((file.to_string(), name.to_string())) {
             return None;
         }
-        let facts = self.files.iter().find(|facts| facts.file == file)?;
+        let facts = &self.files[*self.by_path.get(file)?];
         let mut defined = facts
             .symbols
             .iter()
@@ -876,11 +953,7 @@ pub fn resolve_imports(files: &mut [FileSymbols], manifests: &Manifests) {
     let resolve = |files: &[FileSymbols],
                    symbols: bool|
      -> Vec<Vec<(ImportTarget, Option<String>)>> {
-        let repository = Repository {
-            files,
-            paths: files.iter().map(|file| file.file.as_str()).collect(),
-            manifests,
-        };
+        let repository = Repository::new(files, manifests);
         files
             .iter()
             .map(|file| {
@@ -905,11 +978,7 @@ pub fn resolve_imports(files: &mut [FileSymbols], manifests: &Manifests) {
             .collect()
     };
     let path_targets: Vec<BTreeMap<String, String>> = {
-        let repository = Repository {
-            files,
-            paths: files.iter().map(|file| file.file.as_str()).collect(),
-            manifests,
-        };
+        let repository = Repository::new(files, manifests);
         files
             .iter()
             .map(|file| {

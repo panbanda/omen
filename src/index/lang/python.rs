@@ -3,7 +3,8 @@
 use tree_sitter::Node;
 
 use crate::index::extract::{
-    find_descendant, Context, DefinitionRule, Draft, LanguageSpec, NameRule, ScopeRole,
+    field_of_type, find_descendant, Context, DefinitionRule, Draft, LanguageSpec, NameRule,
+    ScopeRole,
 };
 use crate::index::model::{Exported, Span, SymbolKind};
 
@@ -63,6 +64,56 @@ const DEFINITIONS: &[DefinitionRule] = &[
 ];
 
 /// The names that a literal `__all__` lists.
+const ATTRIBUTE: &str = "attribute";
+const CALL: &str = "call";
+const FOR_STATEMENT: &str = "for_statement";
+
+/// `Name: TypeAlias = ...` is the type alias syntax before Python 3.12.
+fn is_type_alias(assignment: Node<'_>, context: &Context<'_, '_>) -> bool {
+    assignment
+        .child_by_field_name("type")
+        .map(|annotation| context.text(annotation))
+        .is_some_and(|annotation| annotation == "TypeAlias" || annotation.ends_with(".TypeAlias"))
+}
+
+/// The name of the field that an assignment declares, and the text of its
+/// type: `name: Type` in the body of a class, `self.name: Type = value`, and
+/// `self.name = Type(...)`. A different value gives no type.
+fn declared_field<'tree>(
+    assignment: Node<'tree>,
+    context: &Context<'_, 'tree>,
+) -> Option<(Node<'tree>, String)> {
+    let left = assignment.child_by_field_name("left")?;
+    let annotation = assignment
+        .child_by_field_name("type")
+        .map(|annotation| context.text(annotation));
+    let in_class_body = context
+        .scopes
+        .last()
+        .is_some_and(|scope| scope.role == ScopeRole::Type);
+    match left.kind() {
+        IDENTIFIER if in_class_body => Some((left, annotation?)),
+        ATTRIBUTE => {
+            let object = left.child_by_field_name("object")?;
+            if object.kind() != IDENTIFIER || context.text(object) != "self" {
+                return None;
+            }
+            let name = left.child_by_field_name("attribute")?;
+            let constructed = || {
+                let function = assignment
+                    .child_by_field_name("right")
+                    .filter(|value| value.kind() == CALL)?
+                    .child_by_field_name("function")?;
+                [IDENTIFIER, ATTRIBUTE]
+                    .contains(&function.kind())
+                    .then(|| context.text(function))
+            };
+            Some((name, annotation.or_else(constructed)?))
+        }
+        _ => None,
+    }
+}
+
 enum PublicNames {
     /// The module does not assign `__all__`.
     NotDeclared,
@@ -124,17 +175,39 @@ impl LanguageSpec for Python {
 
     fn local_kinds(&self) -> Vec<&'static str> {
         let mut kinds = self.call_syntax().local_kinds();
-        kinds.extend([PARAMETERS, LAMBDA_PARAMETERS]);
+        kinds.extend([PARAMETERS, LAMBDA_PARAMETERS, FOR_STATEMENT]);
         kinds
     }
 
     fn call_hook_kinds(&self) -> Vec<&'static str> {
-        vec![PARAMETERS, LAMBDA_PARAMETERS, TYPED_PARAMETER]
+        vec![
+            PARAMETERS,
+            LAMBDA_PARAMETERS,
+            TYPED_PARAMETER,
+            FOR_STATEMENT,
+        ]
     }
 
     /// A parameter without a default value is a name or a typed name directly
     /// in the parameter list. It has no node with a `name` field.
     fn locals(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
+        // `for name in values` binds an element of the values.
+        if node.kind() == FOR_STATEMENT {
+            let name = node
+                .child_by_field_name("left")
+                .filter(|name| name.kind() == IDENTIFIER);
+            if let (Some(name), Some(values)) = (name, node.child_by_field_name("right")) {
+                out.push(LocalName {
+                    name: context.text(name),
+                    type_name: None,
+                    value_start: Some(values.start_byte()),
+                    is_parameter: false,
+                    element: true,
+                    result_index: None,
+                });
+            }
+            return;
+        }
         if ![PARAMETERS, LAMBDA_PARAMETERS].contains(&node.kind()) {
             self.call_syntax().locals(node, context, out);
             return;
@@ -240,6 +313,8 @@ impl LanguageSpec for Python {
 
     fn hook_kinds(&self) -> Vec<&'static str> {
         vec![
+            ATTRIBUTE,
+            CALL,
             AUGMENTED_ASSIGNMENT,
             EXPRESSION_STATEMENT,
             IDENTIFIER,
@@ -273,9 +348,8 @@ impl LanguageSpec for Python {
             }
             // `Name: TypeAlias = ...` is the type alias syntax before Python 3.12.
             ASSIGNMENT => {
-                let annotation = context.text(node.child_by_field_name("type")?);
-                if annotation != "TypeAlias" && !annotation.ends_with(".TypeAlias") {
-                    return None;
+                if !is_type_alias(node, context) {
+                    return declared_field(node, context).map(|(name, _)| name);
                 }
                 node.child_by_field_name("left")
                     .filter(|left| left.kind() == IDENTIFIER)
@@ -305,6 +379,13 @@ impl LanguageSpec for Python {
                 }
             }
             LAMBDA => draft.span = Span::between(&draft.name_node, &draft.node),
+            ASSIGNMENT if !is_type_alias(draft.node, context) => {
+                let Some((_, declared)) = declared_field(draft.node, context) else {
+                    return false;
+                };
+                draft.return_type = Some(declared);
+                return field_of_type(draft, context);
+            }
             _ => {}
         }
         true

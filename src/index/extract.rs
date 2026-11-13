@@ -200,7 +200,7 @@ fn value_path(source: &[u8], start: usize) -> Option<Vec<String>> {
     let after = rest[length..]
         .iter()
         .find(|byte| !matches!(byte, b' ' | b'\t'));
-    if !after.is_none_or(|byte| b"\n\r;,){}".contains(byte)) {
+    if !after.is_none_or(|byte| b"\n\r;,){}:".contains(byte)) {
         return None;
     }
     name_path(std::str::from_utf8(&rest[..length]).ok()?)

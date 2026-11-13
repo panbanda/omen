@@ -9,6 +9,11 @@
 //!     cargo test --release --test index_differential -- --ignored --nocapture
 //! ```
 //!
+//! With `OMEN_DIFFERENTIAL_LANGUAGE=Python`, the test reads only the files of
+//! that language. The value is the name that `Language::display_name` gives.
+//! A repository can have build output in a different language that is much
+//! larger than its source.
+//!
 //! With `OMEN_DIFFERENTIAL_OUT=/path/to/file`, the test writes each row
 //! to that file. The test prints the counts and the first differences of each
 //! class in sorted order. It fails only when it cannot read the repository.
@@ -24,7 +29,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use omen::analyzers::repomap::{build_index, ResolutionStatus as OldStatus};
-use omen::core::FileSet;
+use omen::core::{FileSet, Language};
 use omen::index::build::CodeIndex;
 use omen::index::model::ResolutionStatus;
 
@@ -34,6 +39,25 @@ type Place = (String, u32, String);
 type Row = (Place, String);
 
 const SHOWN: usize = 25;
+
+/// The files of the repository, or only the files of the language that
+/// `OMEN_DIFFERENTIAL_LANGUAGE` names.
+fn source_files(root: &Path) -> Vec<PathBuf> {
+    let file_set = FileSet::from_path_default(root).expect("file set");
+    let language = std::env::var("OMEN_DIFFERENTIAL_LANGUAGE")
+        .ok()
+        .filter(|language| !language.is_empty());
+    file_set
+        .iter()
+        .filter(|path| {
+            language.as_deref().is_none_or(|language| {
+                Language::detect(path)
+                    .is_some_and(|found| found.display_name().eq_ignore_ascii_case(language))
+            })
+        })
+        .map(|path| root.join(path))
+        .collect()
+}
 
 /// The name of a call without a receiver or a path.
 fn bare_name(call: &str) -> String {
@@ -158,8 +182,7 @@ fn call_edges_of_the_two_indexes() {
     let root = PathBuf::from(
         std::env::var_os("OMEN_DIFFERENTIAL_ROOT").expect("set OMEN_DIFFERENTIAL_ROOT"),
     );
-    let file_set = FileSet::from_path_default(&root).expect("file set");
-    let files: Vec<PathBuf> = file_set.iter().map(|path| root.join(path)).collect();
+    let files = source_files(&root);
     let old = old_edges(&root, &files);
     let index = CodeIndex::from_files(&root, &files);
     let (new, outcomes) = new_edges(&index);
@@ -223,9 +246,9 @@ fn cost_of_one_index() {
         std::env::var_os("OMEN_DIFFERENTIAL_ROOT").expect("set OMEN_DIFFERENTIAL_ROOT"),
     );
     let which = std::env::var("OMEN_DIFFERENTIAL_INDEX").expect("set OMEN_DIFFERENTIAL_INDEX");
-    let file_set = FileSet::from_path_default(&root).expect("file set");
-    let files: Vec<PathBuf> = file_set.iter().map(|path| root.join(path)).collect();
+    let files = source_files(&root);
     let start = std::time::Instant::now();
+    println!("files: {}", files.len());
     let edges = match which.as_str() {
         "old" => {
             let index = build_index(&root, &files).expect("build_index");

@@ -378,6 +378,12 @@ pub struct LocalName {
 /// or `None`.
 pub fn required_type(text: &str) -> &str {
     let text = text.trim().trim_start_matches(':').trim();
+    // A Python type can be in a string, and `Optional[T]` is `T` or `None`.
+    let text = text.trim_matches(|quote| quote == '"' || quote == '\'');
+    let text = ["Optional[", "typing.Optional["]
+        .iter()
+        .find_map(|prefix| text.strip_prefix(prefix)?.strip_suffix(']'))
+        .unwrap_or(text);
     let text = text.strip_prefix('?').unwrap_or(text);
     let text = text.strip_suffix('?').unwrap_or(text);
     let mut parts = text
