@@ -498,6 +498,9 @@ mod tests {
         assert_eq!(
             found,
             [
+                ("churn", "days", "churn.since"),
+                ("clones", "min_tokens", "duplicates.min_tokens"),
+                ("clones", "similarity", "duplicates.min_similarity"),
                 ("defect", "days", "defect.churn_days"),
                 ("hotspot", "days", "hotspot.days"),
                 ("flags", "provider", "feature_flags.providers"),

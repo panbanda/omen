@@ -358,7 +358,7 @@ fn extract_rust_classes(path: &Path, source: &[u8], tree: &tree_sitter::Tree) ->
             nof,
             methods: methods.iter().map(|m| m.name.clone()).collect(),
             fields,
-            coupled_classes: all_coupled.into_iter().collect(),
+            coupled_classes: sorted(all_coupled),
             violations,
         });
     }
@@ -485,7 +485,7 @@ fn extract_go_classes(path: &Path, source: &[u8], tree: &tree_sitter::Tree) -> V
             nof,
             methods: methods.iter().map(|m| m.name.clone()).collect(),
             fields,
-            coupled_classes: all_coupled.into_iter().collect(),
+            coupled_classes: sorted(all_coupled),
             violations,
         });
     }
@@ -1335,7 +1335,15 @@ fn extract_coupled_classes(node: &tree_sitter::Node, source: &[u8], lang: Langua
 
     let mut cursor = node.walk();
     extract_types_recursive(&mut cursor, source, &type_node_types, lang, &mut coupled);
-    coupled.into_iter().collect()
+    sorted(coupled)
+}
+
+/// Gives the names in a stable sequence. The sequence of a `HashSet` is
+/// different in each run.
+fn sorted(names: HashSet<String>) -> Vec<String> {
+    let mut names: Vec<String> = names.into_iter().collect();
+    names.sort();
+    names
 }
 
 /// Recursively extracts type references.

@@ -283,6 +283,15 @@ impl AnalyzerTrait for Analyzer {
                 item.file = relative.to_string_lossy().to_string();
             }
         }
+        // The definitions come from a map, and its sequence is different in
+        // each run.
+        items.sort_by(|a, b| {
+            (a.file.as_str(), a.line, a.name.as_str()).cmp(&(
+                b.file.as_str(),
+                b.line,
+                b.name.as_str(),
+            ))
+        });
         let analysis = Analysis {
             items,
             summary: AnalysisSummary {

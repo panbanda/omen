@@ -150,3 +150,58 @@ These bounds are new:
 - `min_tokens` of `clones`, `top_k` of the search tools, and `max_tokens` of
   `context`: 1 or more.
 - `similarity` of `clones` and `min_score` of the search tools: 0 to 1.
+
+#### Defaults that are now the same as the CLI
+
+A tool argument that is absent takes the value that the related CLI command
+takes: the value in the configuration, or the built-in default. Before, some
+tools used a fixed value and did not read the configuration.
+
+| Tool | Setting | Before 5.0 | From 5.0 | Change in a client |
+|---|---|---|---|---|
+| `churn` | `days` | 30 | `churn.since` of the configuration. The built-in default is `6m`, which is 180 days. | Send `days: 30` to keep the old window. |
+| `clones` | `similarity` | 0.7 | `duplicates.min_similarity` of the configuration. The built-in default is 0.9. | Send `similarity: 0.7` to keep the old threshold. |
+| `clones` | `min_tokens` | 50 | `duplicates.min_tokens` of the configuration. The built-in default is 50. | None, unless the configuration sets the value. |
+| `clones` | Test code | Not read. | `duplicates.exclude_tests` of the configuration applies. The new `include_tests` argument reads test code. | None, unless the configuration sets `exclude_tests = false`. |
+| `changes` | Days of history | 30 | `changes.days` of the configuration. The built-in default is 30. | None, unless the configuration sets the value. |
+| `satd` | Custom markers | Not read. | `satd.custom_markers` of the configuration applies. | None, unless the configuration sets markers. |
+
+### Default of `flags --stale-days`
+
+`--stale-days` had the built-in default 90. That default had priority over
+`[feature_flags] stale_days`, thus the configured value had no effect unless
+the command got `--stale-days 0`.
+
+| | Before 5.0 | From 5.0 |
+|---|---|---|
+| `flags` without `--stale-days` | 90 days. The configuration had no effect. | `[feature_flags] stale_days`. When that value is absent or 0, the age is 14 days. |
+| `flags --stale-days 0` | The configured value, or 14 days. | 14 days. |
+
+To keep the old result, give `--stale-days 90`, or set `stale_days = 90` in
+`[feature_flags]`. The MCP tool `flags` did not change: its `stale_days`
+argument has the same rule as the flag.
+
+No other flag has a built-in default that hides a configuration key.
+
+### Stable order and paths in the output
+
+These changes apply to the CLI and to the MCP server.
+
+| Output | Before 5.0 | From 5.0 |
+|---|---|---|
+| `items` of `deadcode` | The sequence was different in each run. | Sorted by file, line, and name. |
+| `unique_authors` of `churn` | The sequence was different in each run. | Sorted by name. |
+| `coupled_classes` of `cohesion` | The sequence was different in each run. | Sorted by name. |
+| `groups` and `clones` of `clones`, and each `group_id` | The sequence and the identifiers were different in each run. | The sequence of the first fragment of each group. |
+| `entropy` of `changes` | The last digit was different in some runs. | The same in each run. |
+| `file` of `outline --file` | An absolute path. | The path from the repository root, as without `--file`. Omen makes the two paths canonical before it compares them. A file out of the repository has its canonical absolute path. |
+| `search query --min-score` below 0.3 | No effect, because 0.3 always applied. | The value applies. |
+
+### A time window that is not valid
+
+`churn --since`, `report generate --since`, and `[churn] since` read text that
+is not a time window, such as `nonsense`, as all the history. Such text is now
+an error that names the flag or the key and the value. A valid window is a
+duration such as `30d`, `3m`, or `1y`, or the word `all`. The configuration
+check applies when omen loads the configuration, thus each command and the MCP
+server reject a configuration with an incorrect `churn.since`.

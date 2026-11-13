@@ -520,7 +520,13 @@ impl Analyzer {
         let mut groups = Vec::new();
         let mut group_id = 0u64;
 
-        for member_indices in group_map.values() {
+        // The sequence of the map is different in each run. Each list has its
+        // members in ascending sequence, thus the first member gives a stable
+        // sequence of the groups and of their identifiers.
+        let mut member_lists: Vec<&Vec<usize>> = group_map.values().collect();
+        member_lists.sort_by_key(|members| members.first().copied());
+
+        for member_indices in member_lists {
             if member_indices.len() < self.config.min_group_size {
                 continue;
             }
@@ -606,10 +612,13 @@ impl Analyzer {
             })
             .collect();
 
+        // The file breaks a tie. Without it, the sequence of equal severities
+        // comes from a hash map and is different in each run.
         hotspots.sort_by(|a, b| {
             b.severity
                 .partial_cmp(&a.severity)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.file.cmp(&b.file))
         });
 
         if hotspots.len() > 10 {

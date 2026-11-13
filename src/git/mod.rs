@@ -13,7 +13,8 @@ use crate::core::{Error, Result};
 
 pub use blame::BlameInfo;
 pub use log::{
-    is_since_all, parse_since_to_days, ChangeType, Commit, CommitStats, FileChange, FileChurnEntry,
+    is_since_all, parse_since_to_days, since_to_days, ChangeType, Commit, CommitStats, FileChange,
+    FileChurnEntry,
 };
 pub use remote::{clone_remote, is_remote_repo, CloneOptions};
 
