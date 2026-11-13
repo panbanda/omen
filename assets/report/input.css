@@ -44,6 +44,12 @@
   --chart-3: 262 52% 55%;
   --chart-4: 38 92% 50%;
   --chart-5: 0 84.2% 60.2%;
+
+  /* The four states of a change. The pull-request comment uses the same hues. */
+  --diff-added: 137 66% 30%;
+  --diff-removed: 355 72% 47%;
+  --diff-changed: 40 100% 30%;
+  --diff-unchanged: 211 9% 58%;
 }
 
 [data-theme="dark"] {
@@ -79,6 +85,11 @@
   --chart-3: 262 60% 66%;
   --chart-4: 38 92% 55%;
   --chart-5: 0 72% 58%;
+
+  --diff-added: 137 55% 55%;
+  --diff-removed: 355 80% 66%;
+  --diff-changed: 40 90% 55%;
+  --diff-unchanged: 211 10% 65%;
 }
 
 @theme inline {
@@ -335,6 +346,34 @@
   .nav-dot.good { background-color: hsl(var(--success)); }
   .nav-dot.warning { background-color: hsl(var(--warning)); }
   .nav-dot.danger { background-color: hsl(var(--danger)); }
+
+  /* Changes since --ref: one legend and one set of state colours. */
+  .diff-added { --diff-color: var(--diff-added); }
+  .diff-removed { --diff-color: var(--diff-removed); }
+  .diff-changed { --diff-color: var(--diff-changed); }
+  .diff-unchanged { --diff-color: var(--diff-unchanged); }
+  .diff-legend {
+    @apply flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground;
+  }
+  .diff-legend-item {
+    @apply inline-flex items-center gap-1.5;
+  }
+  .diff-swatch {
+    @apply inline-block h-3 w-3 rounded-sm;
+    background-color: hsl(var(--diff-color) / 0.2);
+    border: 1px solid hsl(var(--diff-color));
+  }
+  .diff-label {
+    @apply font-semibold tabular-nums;
+    color: hsl(var(--diff-color));
+  }
+  .diff-dashed {
+    @apply inline-block w-5 border-t-2 border-dashed;
+    border-color: hsl(var(--diff-removed));
+  }
+  .delta-up { color: hsl(var(--danger)); }
+  .delta-down { color: hsl(var(--success)); }
+  .delta-flat { @apply text-muted-foreground; }
 
   .report-header {
     @apply flex flex-col gap-5 border-b pb-6 sm:flex-row sm:items-start sm:justify-between;

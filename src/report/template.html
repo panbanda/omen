@@ -115,6 +115,12 @@
                 Incomplete Code
             </a>
             {% endif %}
+            {% if Changes %}
+            <a href="#changes" class="nav-link">
+                <span class="nav-dot {% if Changes.summary.cyclomatic_after > Changes.summary.cyclomatic_before %}warning{% else %}good{% endif %}"></span>
+                Changes
+            </a>
+            {% endif %}
         </div>
 
         <div class="nav-section">
@@ -939,6 +945,93 @@
         </section>
         {% endif %}
 
+        <!-- Changes since --ref -->
+        {% if Changes %}
+        <section id="changes" class="card report-section">
+            <div class="section-header">
+                <h2 class="section-title">Changes since <code>{{ Changes.target }}</code></h2>
+                <p class="section-description">The base <code>{{ Changes.base }}</code> and the head <code>{{ Changes.head }}</code>, compared by symbol key</p>
+            </div>
+
+            <div id="changes-legend" class="diff-legend">
+                <span class="diff-legend-item diff-added"><span class="diff-swatch"></span><span class="diff-label">+</span> added</span>
+                <span class="diff-legend-item diff-removed"><span class="diff-swatch"></span><span class="diff-label">-</span> removed</span>
+                <span class="diff-legend-item diff-changed"><span class="diff-swatch"></span><span class="diff-label">~</span> changed</span>
+                <span class="diff-legend-item diff-unchanged"><span class="diff-swatch"></span> unchanged, for context</span>
+                <span class="diff-legend-item"><span class="diff-dashed"></span> removed call</span>
+            </div>
+
+            <div class="metric-grid">
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Changes.summary.files_changed }}</div>
+                    <div class="metric-label">Files changed (+{{ Changes.summary.lines_added }} -{{ Changes.summary.lines_deleted }})</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-value"><span class="diff-added diff-label">+{{ Changes.summary.symbols_added }}</span> <span class="diff-removed diff-label">-{{ Changes.summary.symbols_removed }}</span> <span class="diff-changed diff-label">~{{ Changes.summary.symbols_changed }}</span></div>
+                    <div class="metric-label">Symbols</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Changes.summary.callers_affected }}</div>
+                    <div class="metric-label">Callers affected</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-value {% if Changes.summary.cyclomatic_after > Changes.summary.cyclomatic_before %}delta-up{% elif Changes.summary.cyclomatic_after < Changes.summary.cyclomatic_before %}delta-down{% endif %}">{{ Changes.summary.cyclomatic_before }} &rarr; {{ Changes.summary.cyclomatic_after }}</div>
+                    <div class="metric-label">Cyclomatic complexity of the changed symbols</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Changes.summary.new_stubs }}</div>
+                    <div class="metric-label">New stubs</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Changes.summary.new_satd }}</div>
+                    <div class="metric-label">New debt comments</div>
+                </div>
+                <div class="metric-tile">
+                    <div class="metric-value">{{ Changes.summary.hotspots_touched }}</div>
+                    <div class="metric-label">Hotspots touched</div>
+                </div>
+            </div>
+
+            {% if ChangesGraphJson and ChangesGraphJson.nodes %}
+            <div style="margin-top: 1.5rem;">
+                <div id="changesGraph" style="width:100%;height:420px"></div>
+                <script>window.__td_changes_graph={{ ChangesGraphJson | tojson }};</script>
+            </div>
+            {% endif %}
+
+            {% if ChangesRows %}
+            <div class="table-wrap" style="margin-top: 1.5rem;">
+                <table class="report-table" id="changes-table" data-numeric-columns="3,4,5,6">
+                    <thead>
+                        <tr>
+                            <th>Change</th>
+                            <th>Symbol</th>
+                            <th>Location</th>
+                            <th class="num">Before</th>
+                            <th class="num">After</th>
+                            <th class="num">Delta</th>
+                            <th class="num">Callers</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in ChangesRows %}
+                        <tr>
+                            <td><span class="diff-label diff-{{ row.state }}">{{ row.prefix }} {{ row.state }}</span></td>
+                            <td><code>{{ row.symbol }}</code></td>
+                            <td><code>{{ row.location | truncate_path(60) }}</code></td>
+                            <td class="num">{% if row.before is none %}none{% else %}{{ row.before }}{% endif %}</td>
+                            <td class="num">{% if row.after is none %}none{% else %}{{ row.after }}{% endif %}</td>
+                            <td class="num {{ row.delta_class }}">{{ row.delta_text }}</td>
+                            <td class="num">{{ row.direct_callers }} / {{ row.transitive_callers }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+        </section>
+        {% endif %}
+
         <!-- Trends -->
         {% if Trend %}
         <section id="trends" class="card report-section">
@@ -1520,6 +1613,10 @@
                 yellow: chartToken(styles, '--chart-4'),
                 red: chartToken(styles, '--chart-5'),
                 gray: chartToken(styles, '--muted-foreground'),
+                diffAdded: chartToken(styles, '--diff-added'),
+                diffRemoved: chartToken(styles, '--diff-removed'),
+                diffChanged: chartToken(styles, '--diff-changed'),
+                diffUnchanged: chartToken(styles, '--diff-unchanged'),
                 bg: chartToken(styles, '--background'),
                 border: chartToken(styles, '--border'),
                 text: chartToken(styles, '--muted-foreground'),
@@ -1585,6 +1682,61 @@
                 }]
             });
         });
+
+        // --- Changes since --ref: the same graph as the comment for a pull request ---
+        {% if ChangesGraphJson and ChangesGraphJson.nodes %}
+        registerChart(function() {
+            const el = document.getElementById('changesGraph');
+            const view = window.__td_changes_graph;
+            if (!el || !view) return;
+            const chart = initChart(el);
+            const colors = {
+                added: palette.diffAdded,
+                removed: palette.diffRemoved,
+                changed: palette.diffChanged,
+                unchanged: palette.diffUnchanged
+            };
+            const prefixes = { added: '+ ', removed: '- ', changed: '~ ', unchanged: '' };
+            const components = Array.from(new Set(view.nodes.map(function(node) { return node.component; }))).sort();
+            chart.setOption({
+                tooltip: {
+                    formatter: function(params) {
+                        return params.dataType === 'node' ? params.data.name : '';
+                    }
+                },
+                legend: { show: false },
+                series: [{
+                    type: 'graph',
+                    layout: 'force',
+                    roam: true,
+                    draggable: true,
+                    force: { repulsion: 220, edgeLength: 90 },
+                    edgeSymbol: ['none', 'arrow'],
+                    edgeSymbolSize: 6,
+                    label: { show: true, position: 'right', color: palette.textPrimary, fontSize: 11 },
+                    categories: components.map(function(name) { return { name: name }; }),
+                    data: view.nodes.map(function(node) {
+                        const color = colors[node.state];
+                        return {
+                            id: node.id,
+                            name: prefixes[node.state] + node.label,
+                            category: components.indexOf(node.component),
+                            symbolSize: node.more ? 14 : 20,
+                            itemStyle: { color: alphaColor(color, 0.25), borderColor: color, borderWidth: 2 }
+                        };
+                    }),
+                    links: view.edges.map(function(edge) {
+                        const color = edge.state === 'removed' ? colors.removed : (edge.state === 'added' ? colors.added : colors.unchanged);
+                        return {
+                            source: edge.from,
+                            target: edge.to,
+                            lineStyle: { color: color, width: 2, type: edge.state === 'removed' ? 'dashed' : 'solid' }
+                        };
+                    })
+                }]
+            });
+        });
+        {% endif %}
 
         // --- 8. Hotspot Scatter ---
         {% if Hotspots and Hotspots.files %}

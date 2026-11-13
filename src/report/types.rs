@@ -890,9 +890,69 @@ pub struct TdgInsight {
 // Render Data (combined structure for template)
 // ============================================================================
 
+/// The data of `diff.json`: the changes between `--ref` and `HEAD`. The
+/// pull-request comment of `omen diff -f markdown` uses the same type.
+pub use crate::changeset::model::ChangeSet as ChangesData;
+
+/// One row of the before and after table of the changes view.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChangesRow {
+    pub state: String,
+    pub prefix: String,
+    pub symbol: String,
+    pub location: String,
+    pub before: Option<u32>,
+    pub after: Option<u32>,
+    pub delta: Option<i64>,
+    /// The delta with its sign, for example `+3`. Empty when a side has no complexity.
+    pub delta_text: String,
+    /// `delta-up`, `delta-down`, or `delta-flat`.
+    pub delta_class: String,
+    pub direct_callers: usize,
+    pub transitive_callers: usize,
+}
+
+impl ChangesRow {
+    /// The rows in the order of the symbols of the change set.
+    pub fn rows(changes: &ChangesData) -> Vec<Self> {
+        changes
+            .symbols
+            .iter()
+            .map(|symbol| {
+                let before = symbol.complexity_before.map(|c| c.cyclomatic);
+                let after = symbol.complexity_after.map(|c| c.cyclomatic);
+                let delta = after.zip(before).map(|(a, b)| i64::from(a) - i64::from(b));
+                let delta_class = match delta {
+                    Some(d) if d > 0 => "delta-up",
+                    Some(d) if d < 0 => "delta-down",
+                    _ => "delta-flat",
+                };
+                Self {
+                    state: symbol.state.name().to_string(),
+                    prefix: symbol.state.prefix().to_string(),
+                    symbol: symbol
+                        .key
+                        .split_once('#')
+                        .map_or(symbol.key.as_str(), |(_, name)| name)
+                        .to_string(),
+                    location: format!("{}:{}", symbol.file, symbol.line),
+                    before,
+                    after,
+                    delta,
+                    delta_text: delta.map(|d| format!("{d:+}")).unwrap_or_default(),
+                    delta_class: delta_class.to_string(),
+                    direct_callers: symbol.direct_callers.len(),
+                    transitive_callers: symbol.transitive_callers,
+                }
+            })
+            .collect()
+    }
+}
+
 /// RenderData contains all data needed to render the report.
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct RenderData {
+    pub changes: Option<ChangesData>,
     pub metadata: Metadata,
     pub score: ScoreData,
     pub score_class: String,

@@ -2,6 +2,8 @@
 
 use std::collections::BTreeSet;
 
+use serde::Serialize;
+
 use super::model::{ChangeGraph, ChangeState, GraphEdge, GraphNode};
 
 /// The nodes of one component after the cap.
@@ -68,6 +70,54 @@ pub fn cap(graph: &ChangeGraph, max_nodes: usize) -> CappedGraph<'_> {
         .collect();
     edges.sort_by(|left, right| (&left.from, &left.to).cmp(&(&right.from, &right.to)));
     CappedGraph { components, edges }
+}
+
+/// A node of the view. A node with `more` stands for the nodes that the cap
+/// of its component left out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ViewNode {
+    pub id: String,
+    pub label: String,
+    pub component: String,
+    pub state: ChangeState,
+    pub more: bool,
+}
+
+/// The capped graph in the form that the HTML report draws.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GraphView {
+    pub nodes: Vec<ViewNode>,
+    pub edges: Vec<GraphEdge>,
+}
+
+/// The same nodes and edges as the Mermaid diagram has for the same cap.
+pub fn view(graph: &ChangeGraph, max_nodes: usize) -> GraphView {
+    let capped = cap(graph, max_nodes);
+    let mut nodes = Vec::new();
+    for component in &capped.components {
+        for node in &component.nodes {
+            nodes.push(ViewNode {
+                id: node.key.clone(),
+                label: node.label.clone(),
+                component: component.name.to_string(),
+                state: node.state,
+                more: false,
+            });
+        }
+        if component.omitted > 0 {
+            nodes.push(ViewNode {
+                id: format!("more:{}", component.name),
+                label: format!("+{} more", component.omitted),
+                component: component.name.to_string(),
+                state: ChangeState::Unchanged,
+                more: true,
+            });
+        }
+    }
+    GraphView {
+        nodes,
+        edges: capped.edges.into_iter().cloned().collect(),
+    }
 }
 
 #[cfg(test)]
@@ -152,6 +202,21 @@ mod tests {
         assert!(capped.components.iter().all(|c| c.nodes.is_empty()));
         let omitted: Vec<usize> = capped.components.iter().map(|c| c.omitted).collect();
         assert_eq!(omitted, [2, 2]);
+    }
+
+    #[test]
+    fn test_view_gives_one_more_node_for_each_component_that_lost_nodes() {
+        let graph = sample();
+        let view = view(&graph, 3);
+        let more: Vec<(&str, &str)> = view
+            .nodes
+            .iter()
+            .filter(|node| node.more)
+            .map(|node| (node.id.as_str(), node.label.as_str()))
+            .collect();
+        assert_eq!(more, [("more:b", "+1 more")]);
+        assert_eq!(view.nodes.len(), 4);
+        assert_eq!(view.edges.len(), 1);
     }
 
     #[test]
