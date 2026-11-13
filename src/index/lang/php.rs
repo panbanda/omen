@@ -7,6 +7,23 @@ use crate::index::extract::{
 };
 use crate::index::model::{Exported, Span, SymbolKind};
 
+use crate::index::model::{ImportBinding, ImportKind, ImportTarget};
+
+const NAMESPACE_USE_DECLARATION: &str = "namespace_use_declaration";
+const NAMESPACE_USE_CLAUSE: &str = "namespace_use_clause";
+const NAMESPACE_USE_GROUP: &str = "namespace_use_group";
+const NAMESPACE_NAME: &str = "namespace_name";
+const LOAD_EXPRESSIONS: &[&str] = &[
+    "require_expression",
+    "require_once_expression",
+    "include_expression",
+    "include_once_expression",
+];
+const BINARY_EXPRESSION: &str = "binary_expression";
+const PARENTHESIZED_EXPRESSION: &str = "parenthesized_expression";
+const STRING_LITERALS: &[&str] = &["string", "encapsed_string"];
+const STRING_CONTENT: &str = "string_content";
+
 pub struct Php;
 
 const METHOD_DECLARATION: &str = "method_declaration";
@@ -74,6 +91,81 @@ fn closure_variable(closure: Node<'_>) -> Option<Node<'_>> {
 }
 
 impl LanguageSpec for Php {
+    fn import_kinds(&self) -> Vec<&'static str> {
+        [&[NAMESPACE_USE_DECLARATION][..], LOAD_EXPRESSIONS].concat()
+    }
+
+    fn import_hook_kinds(&self) -> Vec<&'static str> {
+        let mut kinds = vec![
+            NAMESPACE_USE_CLAUSE,
+            NAMESPACE_USE_GROUP,
+            NAMESPACE_NAME,
+            BINARY_EXPRESSION,
+            PARENTHESIZED_EXPRESSION,
+            STRING_CONTENT,
+        ];
+        kinds.extend_from_slice(STRING_LITERALS);
+        kinds
+    }
+
+    /// One binding for each clause of a `use` declaration. The path of a
+    /// grouped clause is the prefix of the group. `require` and `include`
+    /// give a binding only when the path ends with a string literal.
+    fn imports(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<ImportBinding>) {
+        if node.kind() != NAMESPACE_USE_DECLARATION {
+            out.extend(load_binding(node, context));
+            return;
+        }
+        let mut cursor = node.walk();
+        let prefix = node
+            .children(&mut cursor)
+            .find(|child| child.kind() == NAMESPACE_NAME)
+            .map(|prefix| context.text(prefix));
+        let clauses = node.child_by_field_name("body").unwrap_or(node);
+        let mut cursor = clauses.walk();
+        for clause in clauses.children(&mut cursor) {
+            if clause.kind() != NAMESPACE_USE_CLAUSE {
+                continue;
+            }
+            let alias = clause.child_by_field_name("alias");
+            let mut cursor = clause.walk();
+            let path = clause
+                .named_children(&mut cursor)
+                .find(|child| Some(*child) != alias);
+            let Some(path) = path else {
+                continue;
+            };
+            let path = context.text(path);
+            let path = path.trim_start_matches('\\');
+            let (qualifier, name) = match path.rsplit_once('\\') {
+                Some((qualifier, name)) => (Some(qualifier), name),
+                None => (None, path),
+            };
+            let module = match (&prefix, qualifier) {
+                (Some(prefix), Some(qualifier)) => format!("{prefix}\\{qualifier}"),
+                (Some(prefix), None) => prefix.clone(),
+                (None, _) => path.to_string(),
+            };
+            let local = alias.map_or_else(|| name.to_string(), |alias| context.text(alias));
+            out.push(context.import(
+                node,
+                module,
+                ImportKind::Named,
+                Some(name.to_string()),
+                Some(local),
+            ));
+        }
+    }
+
+    fn module_kinds(&self) -> Vec<&'static str> {
+        vec![NAMESPACE_DEFINITION]
+    }
+
+    fn module_name(&self, node: Node<'_>, context: &Context<'_, '_>) -> Option<String> {
+        node.child_by_field_name("name")
+            .map(|name| context.text(name))
+    }
+
     fn definitions(&self) -> Vec<DefinitionRule> {
         DEFINITIONS.to_vec()
     }
@@ -187,6 +279,49 @@ impl LanguageSpec for Php {
     }
 }
 
+/// The text of a string literal that has no interpolation.
+fn literal(string: Node<'_>, context: &Context<'_, '_>) -> Option<String> {
+    if !STRING_LITERALS.contains(&string.kind()) {
+        return None;
+    }
+    match string.named_child_count() {
+        0 => Some(String::new()),
+        1 => string
+            .named_child(0)
+            .filter(|content| content.kind() == STRING_CONTENT)
+            .map(|content| context.text(content)),
+        _ => None,
+    }
+}
+
+/// The binding of a `require` or an `include` expression.
+///
+/// A literal path and `__DIR__ . 'literal'` are relative to the file. With a
+/// different prefix, the binding starts as external, and the module map then
+/// looks only for a unique file that ends with the literal.
+fn load_binding(node: Node<'_>, context: &Context<'_, '_>) -> Option<ImportBinding> {
+    let mut argument = node.named_child(0)?;
+    while argument.kind() == PARENTHESIZED_EXPRESSION {
+        argument = argument.named_child(0)?;
+    }
+    let (path, relative_to_file) = if argument.kind() == BINARY_EXPRESSION {
+        let left = context.text(argument.child_by_field_name("left")?);
+        let left: String = left.split_whitespace().collect();
+        let path = literal(argument.child_by_field_name("right")?, context)?;
+        (
+            path,
+            ["__DIR__", "dirname(__FILE__)"].contains(&left.as_str()),
+        )
+    } else {
+        (literal(argument, context)?, true)
+    };
+    let mut binding = context.import(node, path, ImportKind::Load, None, None);
+    if !relative_to_file {
+        binding.target_file = ImportTarget::External;
+    }
+    Some(binding)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::core::Language;
@@ -249,6 +384,67 @@ mod tests {
                 "file#Shop\\Util.helper",
                 "file#Shop\\Util.Helpers",
                 "file#Shop\\Util.Helpers.helper"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_use_declarations() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            (
+                "main.php",
+                "<?php\nnamespace Shop;\n\nuse ArrayObject;\nuse Shop\\Other;\nuse Shop\\Shapes\\Circle;\nuse Shop\\Shapes\\{Shape, Square as Box, Sub\\Deep};\nuse Shop\\Util\\Helpers as Tools;\nuse function Shop\\Util\\helper;\nuse Shop\\Shapes\\Missing, \\Shop\\Util\\Helpers;\n",
+            ),
+            ("other.php", "<?php\nnamespace Shop\\Other;\n\nfunction only_here() {}\n"),
+            (
+                "shapes.php",
+                "<?php\nnamespace Shop\\Shapes;\n\ninterface Shape {}\nclass Circle {}\nclass Square {}\n",
+            ),
+            ("deep.php", "<?php\nnamespace Shop\\Shapes\\Sub;\n\nclass Deep {}\n"),
+            (
+                "util.php",
+                "<?php\nnamespace Shop\\Util;\n\nfunction helper() {}\nfinal class Helpers {}\n",
+            ),
+        ];
+        assert_eq!(
+            rows(&files, "main.php"),
+            [
+                "4 Named ArrayObject ArrayObject->ArrayObject external",
+                "5 Named Shop\\Other Other->Other other.php",
+                "6 Named Shop\\Shapes\\Circle Circle->Circle shapes.php [shapes.php#Circle]",
+                "7 Named Shop\\Shapes Shape->Shape shapes.php [shapes.php#Shape]",
+                "7 Named Shop\\Shapes Square->Box shapes.php [shapes.php#Square]",
+                "7 Named Shop\\Shapes\\Sub Deep->Deep deep.php [deep.php#Deep]",
+                "8 Named Shop\\Util\\Helpers Helpers->Tools util.php [util.php#Helpers]",
+                "9 Named Shop\\Util\\helper helper->helper util.php [util.php#helper]",
+                "10 Named Shop\\Shapes\\Missing Missing->Missing unresolved",
+                "10 Named Shop\\Util\\Helpers Helpers->Helpers util.php [util.php#Helpers]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_require_and_include() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            (
+                "app/main.php",
+                "<?php\nrequire_once __DIR__ . '/shapes.php';\ninclude 'util.php';\nrequire(\"lib/x.php\");\nrequire $base . '/lib/x.php';\ninclude_once $base . '/gone.php';\nrequire $name;\nrequire \"$dir/y.php\";\nrequire __DIR__ . '/missing.php';\n",
+            ),
+            ("app/shapes.php", "<?php\n"),
+            ("app/util.php", "<?php\n"),
+            ("app/lib/x.php", "<?php\n"),
+        ];
+        assert_eq!(
+            rows(&files, "app/main.php"),
+            [
+                "2 Load /shapes.php -->- app/shapes.php",
+                "3 Load util.php -->- app/util.php",
+                "4 Load lib/x.php -->- app/lib/x.php",
+                "5 Load /lib/x.php -->- app/lib/x.php",
+                "6 Load /gone.php -->- external",
+                "9 Load /missing.php -->- unresolved",
             ]
         );
     }
