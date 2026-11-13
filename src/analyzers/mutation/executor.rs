@@ -449,16 +449,17 @@ async fn run_tests_async(config: &ExecutorConfig) -> MutantStatus {
 
     let timeout_duration = Duration::from_secs(config.timeout_secs);
 
+    #[cfg(unix)]
+    let (mut child, mut group) =
+        match super::safety::ProcessGroup::spawn(|| cmd.spawn(), |child| child.id()) {
+            Ok(spawned) => spawned,
+            Err(_) => return MutantStatus::BuildError,
+        };
+    #[cfg(not(unix))]
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(_) => return MutantStatus::BuildError,
     };
-    #[cfg(unix)]
-    let group = child.id();
-    #[cfg(unix)]
-    if let Some(group) = group {
-        super::safety::register_process_group(group);
-    }
 
     let status = match timeout(timeout_duration, child.wait()).await {
         Ok(Ok(status)) => {
@@ -473,8 +474,8 @@ async fn run_tests_async(config: &ExecutorConfig) -> MutantStatus {
             // Kill the group before the wait call, while the leader still
             // holds the group id.
             #[cfg(unix)]
-            if let Some(group) = group {
-                super::safety::kill_process_group(group);
+            if let Some(group) = &group {
+                group.kill();
             }
             let _ = child.kill().await;
             MutantStatus::Timeout
@@ -482,17 +483,19 @@ async fn run_tests_async(config: &ExecutorConfig) -> MutantStatus {
     };
 
     // A descendant of the test command can write a source file later. Stop
-    // each process of the group before the caller restores the file.
+    // each process of the group before the caller restores the file. The
+    // group stays registered during the wait. The drop removes it.
     #[cfg(unix)]
-    if let Some(group) = group {
-        super::safety::kill_process_group(group);
+    if let Some(group) = group.as_mut() {
+        group.kill();
         let start = Instant::now();
-        while super::safety::process_group_exists(group)
-            && start.elapsed() < super::safety::PROCESS_GROUP_EXIT_LIMIT
-        {
+        while group.exists() && start.elapsed() < super::safety::PROCESS_GROUP_EXIT_LIMIT {
             tokio::time::sleep(Duration::from_millis(2)).await;
         }
+        group.confirm_exit();
     }
+    #[cfg(unix)]
+    drop(group);
     status
 }
 
@@ -504,12 +507,17 @@ async fn run_tests_async(config: &ExecutorConfig) -> MutantStatus {
 fn execute_with_timeout(cmd: &mut Command, timeout: Duration) -> ExecutionResult {
     let start = Instant::now();
 
+    #[cfg(unix)]
+    let (mut child, mut group) =
+        match super::safety::ProcessGroup::spawn(|| cmd.spawn(), |child| Some(child.id())) {
+            Ok(spawned) => spawned,
+            Err(_) => return ExecutionResult::Error,
+        };
+    #[cfg(not(unix))]
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(_) => return ExecutionResult::Error,
     };
-    #[cfg(unix)]
-    super::safety::register_process_group(child.id());
 
     let result = loop {
         match child.try_wait() {
@@ -525,7 +533,9 @@ fn execute_with_timeout(cmd: &mut Command, timeout: Duration) -> ExecutionResult
                     // Kill the group before the wait call, while the leader
                     // still holds the group id.
                     #[cfg(unix)]
-                    super::safety::kill_process_group(child.id());
+                    if let Some(group) = &group {
+                        group.kill();
+                    }
                     let _ = child.kill();
                     let _ = child.wait();
                     break ExecutionResult::Timeout;
@@ -535,8 +545,14 @@ fn execute_with_timeout(cmd: &mut Command, timeout: Duration) -> ExecutionResult
             Err(_) => break ExecutionResult::Error,
         }
     };
+    // The group stays registered during the wait. The drop removes it.
     #[cfg(unix)]
-    super::safety::terminate_process_group(child.id());
+    if let Some(group) = group.as_mut() {
+        group.kill();
+        group.wait_for_exit();
+    }
+    #[cfg(unix)]
+    drop(group);
     result
 }
 

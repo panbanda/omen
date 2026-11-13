@@ -203,60 +203,149 @@ fn restore_registered_mutations(
     }
 }
 
+#[cfg(unix)]
+type ProcessGroups = Arc<parking_lot::Mutex<std::collections::HashSet<u32>>>;
+
 /// The process groups of the test commands that run now. The interrupt
 /// watcher stops them before it restores the files.
 #[cfg(unix)]
-static ACTIVE_PROCESS_GROUPS: LazyLock<parking_lot::Mutex<std::collections::HashSet<u32>>> =
-    LazyLock::new(|| parking_lot::Mutex::new(std::collections::HashSet::new()));
-
-/// Record the process group of a test command. The group id is the id of the
-/// process that `process_group(0)` started.
-#[cfg(unix)]
-pub fn register_process_group(group: u32) {
-    ACTIVE_PROCESS_GROUPS.lock().insert(group);
-}
-
-/// Send SIGKILL to each process of a group. A descendant of the test command
-/// can write a source file after the command stops, so the caller must do this
-/// before it restores the file.
-#[cfg(unix)]
-pub fn kill_process_group(group: u32) {
-    // SAFETY: `killpg` has no memory effect. A group that has no process gives
-    // an error, which is not important here.
-    unsafe {
-        libc::killpg(group as libc::pid_t, libc::SIGKILL);
-    }
-    ACTIVE_PROCESS_GROUPS.lock().remove(&group);
-}
-
-/// Tell if a group has a process.
-#[cfg(unix)]
-pub fn process_group_exists(group: u32) -> bool {
-    // SAFETY: signal 0 does only the existence check.
-    unsafe { libc::killpg(group as libc::pid_t, 0) == 0 }
-}
+static ACTIVE_PROCESS_GROUPS: LazyLock<ProcessGroups> =
+    LazyLock::new(|| Arc::new(parking_lot::Mutex::new(std::collections::HashSet::new())));
 
 /// The longest time to wait for a killed group. SIGKILL cannot be caught, so
 /// the usual time is a few milliseconds.
 #[cfg(unix)]
 pub const PROCESS_GROUP_EXIT_LIMIT: Duration = Duration::from_secs(5);
 
-/// Kill a group and wait until it has no process.
+/// The process group of one test command.
+///
+/// A descendant of the test command can write a source file after the command
+/// stops. Thus the group stays in the registry until it has no process: the
+/// interrupt watcher must be able to kill it at each moment before that. Only
+/// `drop` removes the registration, and `drop` first kills the group and waits
+/// for it. This order also holds if the owner panics.
 #[cfg(unix)]
-pub fn terminate_process_group(group: u32) {
-    kill_process_group(group);
+pub struct ProcessGroup {
+    group: u32,
+    registry: ProcessGroups,
+    exited: bool,
+}
+
+#[cfg(unix)]
+impl ProcessGroup {
+    /// Start the leader of a new process group and register the group.
+    ///
+    /// `spawn` must start a process that `process_group(0)` made a group
+    /// leader. `id` gives the process id, which is also the group id.
+    ///
+    /// The start and the registration occur below one lock. The interrupt
+    /// watcher takes the same lock, so it cannot run between the two steps and
+    /// miss the group. After an interrupt, this function starts no process.
+    pub fn spawn<C>(
+        spawn: impl FnOnce() -> std::io::Result<C>,
+        id: impl FnOnce(&C) -> Option<u32>,
+    ) -> std::io::Result<(C, Option<Self>)> {
+        Self::spawn_with(&ACTIVE_PROCESS_GROUPS, &INTERRUPTED, spawn, id)
+    }
+
+    fn spawn_with<C>(
+        registry: &ProcessGroups,
+        interrupted: &std::sync::atomic::AtomicBool,
+        spawn: impl FnOnce() -> std::io::Result<C>,
+        id: impl FnOnce(&C) -> Option<u32>,
+    ) -> std::io::Result<(C, Option<Self>)> {
+        let mut groups = registry.lock();
+        if interrupted.load(Ordering::SeqCst) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "the mutation run got an interrupt",
+            ));
+        }
+        let child = spawn()?;
+        let group = id(&child).map(|group| {
+            groups.insert(group);
+            Self {
+                group,
+                registry: Arc::clone(registry),
+                exited: false,
+            }
+        });
+        Ok((child, group))
+    }
+
+    /// Send SIGKILL to each process of the group. The group stays registered.
+    pub fn kill(&self) {
+        kill_group(self.group);
+    }
+
+    /// Tell if the group has a process.
+    pub fn exists(&self) -> bool {
+        group_exists(self.group)
+    }
+
+    /// Record that the group has no process. If it has one, do nothing.
+    pub fn confirm_exit(&mut self) {
+        self.exited = !self.exists();
+    }
+
+    /// Wait until the group has no process, for a maximum of
+    /// `PROCESS_GROUP_EXIT_LIMIT`.
+    pub fn wait_for_exit(&mut self) {
+        wait_for_group_exit(self.group);
+        self.confirm_exit();
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ProcessGroup {
+    fn drop(&mut self) {
+        if !self.exited {
+            self.kill();
+            wait_for_group_exit(self.group);
+        }
+        self.registry.lock().remove(&self.group);
+    }
+}
+
+#[cfg(unix)]
+fn kill_group(group: u32) {
+    // SAFETY: `killpg` has no memory effect. A group that has no process gives
+    // an error, which is not important here.
+    unsafe {
+        libc::killpg(group as libc::pid_t, libc::SIGKILL);
+    }
+}
+
+#[cfg(unix)]
+fn group_exists(group: u32) -> bool {
+    // SAFETY: signal 0 does only the existence check.
+    unsafe { libc::killpg(group as libc::pid_t, 0) == 0 }
+}
+
+#[cfg(unix)]
+fn wait_for_group_exit(group: u32) {
     let start = std::time::Instant::now();
-    while process_group_exists(group) && start.elapsed() < PROCESS_GROUP_EXIT_LIMIT {
+    while group_exists(group) && start.elapsed() < PROCESS_GROUP_EXIT_LIMIT {
         std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// Kill each registered group and wait for it. The owner of each group
+/// removes the registration, so a group stays visible here until it exits.
+#[cfg(unix)]
+fn terminate_registered_process_groups(registry: &ProcessGroups) {
+    let groups: Vec<u32> = registry.lock().iter().copied().collect();
+    for group in &groups {
+        kill_group(*group);
+    }
+    for group in groups {
+        wait_for_group_exit(group);
     }
 }
 
 #[cfg(unix)]
 fn terminate_active_process_groups() {
-    let groups: Vec<u32> = ACTIVE_PROCESS_GROUPS.lock().iter().copied().collect();
-    for group in groups {
-        terminate_process_group(group);
-    }
+    terminate_registered_process_groups(&ACTIVE_PROCESS_GROUPS);
 }
 
 pub fn restore_active_mutations() {
@@ -350,6 +439,149 @@ pub fn has_uncommitted_changes(path: impl AsRef<Path>) -> bool {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[cfg(unix)]
+    fn local_registry() -> ProcessGroups {
+        Arc::new(parking_lot::Mutex::new(std::collections::HashSet::new()))
+    }
+
+    /// Starts a group leader that stays alive, and registers it in `registry`.
+    #[cfg(unix)]
+    fn spawn_sleeper(registry: &ProcessGroups) -> (std::process::Child, ProcessGroup) {
+        let not_interrupted = std::sync::atomic::AtomicBool::new(false);
+        let (child, group) = ProcessGroup::spawn_with(
+            registry,
+            &not_interrupted,
+            || {
+                let mut command = std::process::Command::new("sh");
+                command.args(["-c", "sleep 30 & wait"]);
+                std::os::unix::process::CommandExt::process_group(&mut command, 0);
+                command.spawn()
+            },
+            |child| Some(child.id()),
+        )
+        .unwrap();
+        (child, group.unwrap())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_process_group_stays_registered_until_it_exits() {
+        let registry = local_registry();
+        let (mut child, mut group) = spawn_sleeper(&registry);
+        let id = child.id();
+        assert!(registry.lock().contains(&id));
+
+        // The leader is not reaped, so the group has a process during the
+        // wait. This is the interval in which an interrupt must see the group.
+        group.kill();
+        assert!(group.exists());
+        assert!(registry.lock().contains(&id), "the kill removed the group");
+
+        child.wait().unwrap();
+        group.wait_for_exit();
+        assert!(!group.exists());
+        assert!(registry.lock().contains(&id), "the wait removed the group");
+
+        drop(group);
+        assert!(!registry.lock().contains(&id));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_interrupt_path_kills_and_waits_for_a_registered_group() {
+        let registry = local_registry();
+        let (mut child, group) = spawn_sleeper(&registry);
+        let id = child.id();
+        let reaper = std::thread::spawn(move || child.wait().unwrap());
+
+        terminate_registered_process_groups(&registry);
+
+        // The function returned, so each process of the group stopped before
+        // the file restore that follows it.
+        assert!(!group.exists());
+        assert!(registry.lock().contains(&id));
+        assert!(!reaper.join().unwrap().success());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_process_group_drop_kills_waits_and_removes_after_a_panic() {
+        let registry = local_registry();
+        let (mut child, group) = spawn_sleeper(&registry);
+        let id = child.id();
+        let reaper = std::thread::spawn(move || child.wait().unwrap());
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _group = group;
+            panic!("the owner of the group panics");
+        }));
+
+        assert!(result.is_err());
+        assert!(!group_exists(id));
+        assert!(!registry.lock().contains(&id));
+        assert!(!reaper.join().unwrap().success());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_no_test_command_starts_after_an_interrupt() {
+        let registry = local_registry();
+        let interrupted = std::sync::atomic::AtomicBool::new(true);
+        let mut started = false;
+
+        let result = ProcessGroup::spawn_with(
+            &registry,
+            &interrupted,
+            || {
+                started = true;
+                std::process::Command::new("true").spawn()
+            },
+            |child| Some(child.id()),
+        );
+
+        assert!(result.is_err());
+        assert!(!started);
+        assert!(registry.lock().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_interrupt_path_waits_for_a_start_that_is_in_progress() {
+        // The start and the registration occur below the registry lock. The
+        // interrupt path needs the same lock, so it sees the new group.
+        let registry = local_registry();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let spawner = {
+            let registry = Arc::clone(&registry);
+            std::thread::spawn(move || {
+                let not_interrupted = std::sync::atomic::AtomicBool::new(false);
+                ProcessGroup::spawn_with(
+                    &registry,
+                    &not_interrupted,
+                    || {
+                        sender.send(()).unwrap();
+                        // Give the interrupt path time to try the lock.
+                        std::thread::sleep(Duration::from_millis(100));
+                        let mut command = std::process::Command::new("sh");
+                        command.args(["-c", "sleep 30 & wait"]);
+                        std::os::unix::process::CommandExt::process_group(&mut command, 0);
+                        command.spawn()
+                    },
+                    |child| Some(child.id()),
+                )
+                .unwrap()
+            })
+        };
+
+        receiver.recv().unwrap();
+        terminate_registered_process_groups(&registry);
+
+        let (mut child, group) = spawner.join().unwrap();
+        let group = group.unwrap();
+        assert!(!child.wait().unwrap().success());
+        assert!(!group.exists());
+    }
 
     #[test]
     fn test_mutation_guard_new() {
