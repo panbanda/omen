@@ -201,6 +201,16 @@ impl McpServer {
         };
         let received = json!(requested.to_string_lossy());
         let canonical = candidate.canonicalize().map_err(|error| {
+            // Only the search call that made a label can change it back into
+            // a path. Thus tell the caller which fields of the result to use.
+            let has_label = requested
+                .to_str()
+                .is_some_and(|text| text.starts_with('[') && text.contains("] "));
+            let next = if has_label {
+                "For a search result with a `[label] `, give `project` as `path` and `project_file` as the file."
+            } else {
+                "Give a path that exists."
+            };
             ToolError::new(
                 ErrorCode::NotFound,
                 format!(
@@ -210,7 +220,7 @@ impl McpServer {
             )
             .with_param(param)
             .with_received(&received)
-            .with_next("Give a path that exists.")
+            .with_next(next)
         })?;
         if self.allow_external_paths {
             return Ok(canonical);
@@ -937,6 +947,67 @@ mod tests {
     }
 
     #[test]
+    fn the_other_tools_accept_the_project_and_the_file_of_a_labelled_search_result() {
+        let (server, dir) = create_test_server();
+        write_search_fixture(dir.path());
+        write_indexed_project(dir.path());
+        let search = search_results(
+            &server,
+            "semantic_search",
+            json!({
+                "query": "parse config", "min_score": 0.0, "top_k": 100,
+                "include_projects": ["sub"]
+            }),
+        );
+        let results = search["result"]["results"].as_array().unwrap();
+        let projects: std::collections::BTreeSet<&str> = results
+            .iter()
+            .map(|result| result["project"].as_str().expect("project"))
+            .collect();
+        assert_eq!(projects.into_iter().collect::<Vec<_>>(), [".", "sub"]);
+
+        for result in results {
+            let project = result["project"].as_str().unwrap();
+            let file = result["project_file"].as_str().expect("project_file");
+            let labelled = result["file"].as_str().unwrap();
+            assert!(labelled.ends_with(&format!("] {file}")), "{labelled}");
+
+            let outline = envelope_of(&server, "outline", json!({"path": project, "file": file}));
+            assert_eq!(outline["result"]["files"][0]["file"], file);
+
+            let name = format!("{file}:{}", result["symbol_name"].as_str().unwrap());
+            let symbol = envelope_of(
+                &server,
+                "get_symbol",
+                json!({"path": project, "name": name, "start_line": result["start_line"]}),
+            );
+            assert_eq!(symbol["result"]["qualified_name"], name);
+            assert_eq!(symbol["result"]["file"], file);
+
+            let complexity = envelope_of(
+                &server,
+                "complexity",
+                json!({"path": format!("{project}/{file}")}),
+            );
+            assert!(
+                complexity["total_items"].as_u64().unwrap() > 0,
+                "{labelled}"
+            );
+        }
+
+        // A result of a search in one project has no label, thus it has no
+        // project fields.
+        let single = search_results(
+            &server,
+            "semantic_search",
+            json!({"query": "parse config", "min_score": 0.0}),
+        );
+        let first = &single["result"]["results"][0];
+        assert!(first.get("project").is_none());
+        assert!(first.get("project_file").is_none());
+    }
+
+    #[test]
     fn search_rejects_a_file_label_that_is_not_an_included_project() {
         let (server, dir) = create_test_server();
         write_search_fixture(dir.path());
@@ -1329,6 +1400,21 @@ mod tests {
         assert_eq!(body["error"]["code"], "not_found");
         assert_eq!(body["error"]["param"], "path");
         assert_eq!(body["error"]["received"], "no/such/directory");
+        assert_eq!(body["error"]["next"], "Give a path that exists.");
+    }
+
+    #[test]
+    fn a_labelled_search_file_as_a_path_gives_the_fields_to_use() {
+        let (server, _dir) = create_test_server();
+        for (tool, param) in [("outline", "file"), ("complexity", "path")] {
+            let body = error_of(&server, tool, json!({param: "[sub] simple.rs"}));
+            assert_eq!(body["error"]["code"], "not_found", "{tool}");
+            assert_eq!(body["error"]["param"], param);
+            assert_eq!(
+                body["error"]["next"],
+                "For a search result with a `[label] `, give `project` as `path` and `project_file` as the file."
+            );
+        }
     }
 
     #[test]

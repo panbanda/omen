@@ -128,13 +128,30 @@ A tool accepts each identifier and each path that a different tool gives:
 
 - A `qualified_name` (`file:name`) is a valid `name` of `get_symbol` and
   `task_context`, and a valid `symbol` of `impact`.
-- A `file` is a valid `file` of `outline`, a valid `path` of each tool, and the
-  file part of a `file:name`.
-- The `file` of a search result is a valid entry of `files`.
+- A `file` without a `[label] ` is a valid `file` of `outline`, a valid `path`
+  of each tool, and the file part of a `file:name`.
+- The `file` of a search result is a valid entry of `files`, with or without a
+  `[label] `.
 
 Each path is from the `path` argument, which has the MCP root as its default.
 `outline` gives paths in this form also. When `path` is a file, a tool reads
 that one file.
+
+A `file` with a `[label] ` is valid only in `files` of a search with the same
+`include_projects`. A label is the name of a project directory, with a number
+when two projects have one name. Thus only that search call can change the
+label back into a path, and the other tools do not accept it. Each result with
+a label has two more fields for the other tools:
+
+| Field | Value | Use |
+|---|---|---|
+| `project` | The path of the project. It is `.` for the MCP root, a path from the MCP root for a project in it, and an absolute path for a project out of it. | The `path` argument. |
+| `project_file` | The `file` without the `[label] `. | The `file` of `outline`, or the file part of a `file:name`, with `project` as `path`. |
+
+For example, the result `{"file": "[sub] simple.rs", "project": "sub",
+"project_file": "simple.rs"}` goes to `outline` as `{"path": "sub", "file":
+"simple.rs"}`. The path confinement of the server applies to `project` as to
+each other path.
 
 `limit` has the default 50, and the value 0 removes the limit. When `has_more`
 is `true`, send the same call with `offset` set to `next_offset`. The pages

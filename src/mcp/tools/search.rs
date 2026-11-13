@@ -3,6 +3,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use serde_json::Value;
+
 use super::{
     Arguments, HandlerResult, Pagination, Param, ParamDefault, ToolData, ToolOutput, ToolSpec,
     MAX_COUNT,
@@ -186,10 +188,49 @@ fn search(
     } else {
         Vec::new()
     };
+    let mut result = serde_json::to_value(&output)?;
+    if labelled {
+        add_project_fields(&mut result, &server.root_path, &include_projects);
+    }
     Ok(ToolOutput::Data(ToolData {
         truncated,
-        ..ToolData::new(serde_json::to_value(&output)?)
+        ..ToolData::new(result)
     }))
+}
+
+/// Adds `project` and `project_file` to each result of a search in more than
+/// one project.
+///
+/// A label is the name of a directory, with a number when two projects have
+/// one name. Only the `include_projects` of the same call can change a label
+/// back into a path. Thus the other tools cannot read the labelled `file`.
+/// They can read these two fields: `project` is a valid `path`, and
+/// `project_file` is a valid `file` in that `path`.
+fn add_project_fields(result: &mut Value, root: &Path, include_projects: &[PathBuf]) {
+    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let labels = project_labels(root, include_projects);
+    let paths: Vec<String> = std::iter::once(canonical_root.as_path())
+        .chain(include_projects.iter().map(PathBuf::as_path))
+        .map(|project| match project.strip_prefix(&canonical_root) {
+            Ok(relative) if relative.as_os_str().is_empty() => ".".to_string(),
+            Ok(relative) => relative.to_string_lossy().replace('\\', "/"),
+            Err(_) => project.to_string_lossy().into_owned(),
+        })
+        .collect();
+    let results = result["results"].as_array_mut().into_iter().flatten();
+    for entry in results {
+        let Some(file) = entry["file"].as_str() else {
+            continue;
+        };
+        let project = file_label(file)
+            .and_then(|label| labels.iter().position(|known| known == label))
+            .map(|index| paths[index].clone());
+        if let Some(project) = project {
+            let project_file = file_in_project(file).to_string();
+            entry["project"] = Value::String(project);
+            entry["project_file"] = Value::String(project_file);
+        }
+    }
 }
 
 /// The path of a result without the `[project] ` label that a search in
