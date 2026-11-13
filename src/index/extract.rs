@@ -176,6 +176,7 @@ pub fn language_spec(language: Language) -> Option<&'static dyn LanguageSpec> {
         Language::JavaScript | Language::Jsx => Some(&lang::ecma::JAVASCRIPT),
         Language::TypeScript | Language::Tsx => Some(&lang::ecma::TYPESCRIPT),
         Language::Java => Some(&lang::java::Java),
+        Language::CSharp => Some(&lang::csharp::CSharp),
         _ => None,
     }
 }
