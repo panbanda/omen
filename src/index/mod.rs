@@ -6,6 +6,7 @@ pub mod build;
 pub mod calls;
 pub mod extract;
 pub mod graph;
+pub mod headers;
 pub mod imports;
 pub mod lang;
 pub mod model;

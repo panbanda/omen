@@ -10,7 +10,6 @@ use super::extract::{extract_file, link_files, FileSymbols};
 use super::imports::{resolve_imports, Manifests};
 use super::resolve::resolve_references;
 use crate::core::{Language, Result};
-use crate::parser::Parser;
 
 /// The facts of each file, in path order.
 #[derive(Debug, Clone, Default)]
@@ -93,10 +92,11 @@ impl CodeIndex {
             .filter_map(|path| {
                 let language = Language::detect(path)?;
                 let content = read(path).ok()?;
-                let parsed = Parser::new().parse(&content, language, path).ok()?;
+                let parsed = super::headers::parse(path, language, &content)?;
                 Some(extract_file(&parsed, &relative(root, path)))
             })
             .collect();
+        super::headers::reparse_headers_of_cpp_files(root, files, read, &mut facts);
         facts.sort_by(|left, right| left.file.cmp(&right.file));
         facts.dedup_by(|later, earlier| later.file == earlier.file);
         link_files(&mut facts);
