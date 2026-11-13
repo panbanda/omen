@@ -2,6 +2,9 @@
 
 pub mod queries;
 
+#[cfg(test)]
+mod kind_lint;
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Range;

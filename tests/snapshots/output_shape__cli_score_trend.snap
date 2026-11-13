@@ -1,0 +1,59 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&output, case.dynamic_key_objects)"
+---
+{
+  "component_trends": {
+    "cohesion": {
+      "Correlation": "number",
+      "Slope": "number"
+    },
+    "complexity": {
+      "Correlation": "number",
+      "Slope": "number"
+    },
+    "coupling": {
+      "Correlation": "number",
+      "Slope": "number"
+    },
+    "duplication": {
+      "Correlation": "number",
+      "Slope": "number"
+    },
+    "satd": {
+      "Correlation": "number",
+      "Slope": "number"
+    },
+    "smells": {
+      "Correlation": "number",
+      "Slope": "number"
+    },
+    "tdg": {
+      "Correlation": "number",
+      "Slope": "number"
+    }
+  },
+  "end_score": "number",
+  "intercept": "number",
+  "points": [
+    {
+      "components": {
+        "cohesion": "number",
+        "complexity": "number",
+        "coupling": "number",
+        "duplication": "number",
+        "satd": "number",
+        "smells": "number",
+        "tdg": "number"
+      },
+      "date": "string",
+      "notable_commits": [
+        "string"
+      ],
+      "score": "number"
+    }
+  ],
+  "r_squared": "number",
+  "slope": "number",
+  "start_score": "number"
+}

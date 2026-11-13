@@ -1,0 +1,96 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&response, &dynamic_key_objects)"
+---
+{
+  "id": "number",
+  "jsonrpc": "string",
+  "result": {
+    "content": [
+      {
+        "text": {
+          "result": {
+            "ambiguous": "bool",
+            "cache": {
+              "graph_rebuilt": "bool",
+              "parsed_files": "number",
+              "reused_files": "number"
+            },
+            "call_evidence": [
+              {
+                "basis": "string",
+                "call": "string",
+                "caller": {
+                  "end_line": "number",
+                  "file": "string",
+                  "line": "number",
+                  "qualified_name": "string"
+                },
+                "candidates": [
+                  {
+                    "end_line": "number",
+                    "file": "string",
+                    "line": "number",
+                    "qualified_name": "string"
+                  }
+                ],
+                "status": "string"
+              }
+            ],
+            "caveat": "string",
+            "diagnostics": {
+              "files_with_parse_errors": "number"
+            },
+            "found": "bool",
+            "history_hints": [],
+            "history_status": "string",
+            "limits": {
+              "depth": "number",
+              "max_result_bytes": "number"
+            },
+            "omitted": {
+              "call_evidence": "number",
+              "history_hints": "number",
+              "symbols": "number",
+              "syntax_facts": "number"
+            },
+            "seed": {
+              "end_line": "number",
+              "file": "string",
+              "line": "number",
+              "qualified_name": "string"
+            },
+            "snapshot": "string",
+            "symbols": [
+              {
+                "depth": "number",
+                "location": {
+                  "end_line": "number",
+                  "file": "string",
+                  "line": "number",
+                  "qualified_name": "string"
+                },
+                "relation": "string",
+                "role_hints": [],
+                "signature": "string"
+              }
+            ],
+            "syntax_facts": {
+              "basis": "string",
+              "omitted_uses": "number",
+              "uses": [
+                {
+                  "access": "string",
+                  "line": "number",
+                  "name": "string"
+                }
+              ]
+            }
+          },
+          "tool": "string"
+        },
+        "type": "string"
+      }
+    ]
+  }
+}

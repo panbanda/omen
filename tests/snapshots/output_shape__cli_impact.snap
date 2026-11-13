@@ -1,0 +1,39 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&output, case.dynamic_key_objects)"
+---
+{
+  "callees": [
+    {
+      "depth": "number",
+      "symbols": [
+        {
+          "file": "string",
+          "line": "number",
+          "qualified_name": "string"
+        }
+      ]
+    }
+  ],
+  "callers": [
+    {
+      "depth": "number",
+      "symbols": []
+    }
+  ],
+  "files_affected": [
+    "string"
+  ],
+  "resolution_summary": {
+    "ambiguous": "number",
+    "unique_candidate": "number",
+    "unresolved": "number"
+  },
+  "resolved": [
+    "string"
+  ],
+  "suggestions": [],
+  "symbol": "string",
+  "total_callees": "number",
+  "total_callers": "number"
+}

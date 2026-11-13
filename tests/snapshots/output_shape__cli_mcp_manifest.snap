@@ -1,0 +1,13 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&output, case.dynamic_key_objects)"
+---
+{
+  "$schema": "string",
+  "description": "string",
+  "name": "string",
+  "tools": [
+    "string"
+  ],
+  "version": "string"
+}

@@ -1,0 +1,51 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&output, case.dynamic_key_objects)"
+---
+{
+  "components": {
+    "cohesion": {
+      "details": "string",
+      "score": "number",
+      "weight": "number"
+    },
+    "complexity": {
+      "details": "string",
+      "score": "number",
+      "weight": "number"
+    },
+    "coupling": {
+      "details": "string",
+      "score": "number",
+      "weight": "number"
+    },
+    "duplication": {
+      "details": "string",
+      "score": "number",
+      "weight": "number"
+    },
+    "satd": {
+      "details": "string",
+      "score": "number",
+      "weight": "number"
+    },
+    "smells": {
+      "details": "string",
+      "score": "number",
+      "weight": "number"
+    },
+    "tdg": {
+      "details": "string",
+      "score": "number",
+      "weight": "number"
+    }
+  },
+  "grade": "string",
+  "overall_score": "number",
+  "skipped_components": [],
+  "summary": {
+    "analyzers_run": "number",
+    "critical_issues": "number",
+    "files_analyzed": "number"
+  }
+}

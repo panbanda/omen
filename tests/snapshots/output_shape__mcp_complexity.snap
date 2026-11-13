@@ -1,0 +1,60 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&response, &dynamic_key_objects)"
+---
+{
+  "id": "number",
+  "jsonrpc": "string",
+  "result": {
+    "content": [
+      {
+        "text": {
+          "offset": "number",
+          "result": {
+            "files": [
+              {
+                "avg_cognitive": "number",
+                "avg_cyclomatic": "number",
+                "functions": [
+                  {
+                    "end_line": "number",
+                    "metrics": {
+                      "cognitive": "number",
+                      "cyclomatic": "number",
+                      "lines": "number",
+                      "max_nesting": "number"
+                    },
+                    "name": "string",
+                    "start_line": "number"
+                  }
+                ],
+                "language": "string",
+                "path": "string",
+                "total_cognitive": "number",
+                "total_cyclomatic": "number"
+              }
+            ],
+            "summary": {
+              "avg_cognitive": "number",
+              "avg_cyclomatic": "number",
+              "max_cognitive": "number",
+              "max_cyclomatic": "number",
+              "p50_cognitive": "number",
+              "p50_cyclomatic": "number",
+              "p90_cognitive": "number",
+              "p90_cyclomatic": "number",
+              "p95_cognitive": "number",
+              "p95_cyclomatic": "number",
+              "total_files": "number",
+              "total_functions": "number"
+            }
+          },
+          "returned": "number",
+          "tool": "string",
+          "total_items": "number"
+        },
+        "type": "string"
+      }
+    ]
+  }
+}

@@ -41,5 +41,6 @@ claim is justified by these results. Every gain below has a narrower scope.
 5. Run paired coding tasks and independently verify patches/test logs. Apply
    `AGENT_EVALUATION.md`; never present synthetic scorer fixtures as model wins.
 
-Implementation PR stack: #508 → #509 → #510, all merged to main. This
-evaluation PR is independent against main.
+Implementation PR stack: #508 → #509 → #510. Only #508 reached main directly;
+#509 and #510 were merged into their stacked parent branches and were landed on
+main later, together with the ground-truth fixtures under `tests/fixtures/truth/`.

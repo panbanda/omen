@@ -1,0 +1,31 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&output, case.dynamic_key_objects)"
+---
+{
+  "by_category": {
+    "<key>": "number"
+  },
+  "stubs": [
+    {
+      "categories": [
+        "string"
+      ],
+      "category": "string",
+      "file": "string",
+      "language": "string",
+      "line": "number",
+      "lines": [
+        "number"
+      ],
+      "severity": "string",
+      "snippet": "string"
+    }
+  ],
+  "summary": {
+    "high_severity": "number",
+    "low_severity": "number",
+    "medium_severity": "number",
+    "total_stubs": "number"
+  }
+}

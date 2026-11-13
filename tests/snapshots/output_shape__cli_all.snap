@@ -1,0 +1,668 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&output, case.dynamic_key_objects)"
+---
+{
+  "analyzers": {
+    "changes": {
+      "commits": [
+        {
+          "author": "string",
+          "commit_hash": "string",
+          "contributing_factors": {
+            "entropy": "number",
+            "experience": "number",
+            "file_churn": "number",
+            "file_complexity": "number",
+            "fix": "number",
+            "lines_added": "number",
+            "lines_deleted": "number",
+            "num_developers": "number",
+            "num_files": "number",
+            "ownership_diffusion": "number",
+            "unique_changes": "number"
+          },
+          "file_risk": {
+            "max_churn": "number",
+            "max_complexity": "number",
+            "ownership_diffusion": "number"
+          },
+          "files_modified": [
+            "string"
+          ],
+          "message": "string",
+          "recommendations": [
+            "string"
+          ],
+          "risk_level": "string",
+          "risk_score": "number",
+          "timestamp": "string"
+        }
+      ],
+      "generated_at": "string",
+      "normalization": {
+        "max_author_experience": "number",
+        "max_entropy": "number",
+        "max_file_churn": "number",
+        "max_file_complexity": "number",
+        "max_lines_added": "number",
+        "max_lines_deleted": "number",
+        "max_num_developers": "number",
+        "max_num_files": "number",
+        "max_unique_changes": "number"
+      },
+      "period_days": "number",
+      "risk_thresholds": {
+        "high_threshold": "number",
+        "medium_threshold": "number"
+      },
+      "summary": {
+        "avg_risk_score": "number",
+        "bug_fix_count": "number",
+        "high_risk_count": "number",
+        "low_risk_count": "number",
+        "medium_risk_count": "number",
+        "p50_risk_score": "number",
+        "p95_risk_score": "number",
+        "total_commits": "number"
+      },
+      "weights": {
+        "entropy": "number",
+        "exp": "number",
+        "file_churn": "number",
+        "file_complexity": "number",
+        "fix": "number",
+        "la": "number",
+        "ld": "number",
+        "ndev": "number",
+        "nf": "number",
+        "nuc": "number",
+        "ownership_diffusion": "number"
+      }
+    },
+    "churn": {
+      "files": [
+        {
+          "additions": "number",
+          "change_frequency": "number",
+          "churn_rate": "number",
+          "churn_score": "number",
+          "commits": "number",
+          "days_active": "number",
+          "deletions": "number",
+          "first_commit": "string",
+          "last_commit": "string",
+          "path": "string",
+          "relative_churn": "number",
+          "relative_path": "string",
+          "total_loc": "number",
+          "unique_authors": [
+            "string"
+          ]
+        }
+      ],
+      "generated_at": "string",
+      "period_days": "number",
+      "repository_root": "string",
+      "summary": {
+        "author_contributions": {
+          "<key>": "number"
+        },
+        "avg_commits_per_file": "number",
+        "hotspot_files": [
+          "string"
+        ],
+        "max_churn_score": "number",
+        "mean_churn_score": "number",
+        "p50_churn_score": "number",
+        "p95_churn_score": "number",
+        "stable_files": [],
+        "stddev_churn_score": "number",
+        "total_additions": "number",
+        "total_deletions": "number",
+        "total_file_changes": "number",
+        "total_files_changed": "number",
+        "variance_churn_score": "number"
+      }
+    },
+    "cohesion": {
+      "classes": [
+        {
+          "cbo": "number",
+          "class_name": "string",
+          "coupled_classes": [
+            "string"
+          ],
+          "dit": "number",
+          "end_line": "number",
+          "fields": [
+            "string"
+          ],
+          "language": "string",
+          "lcom": "number",
+          "loc": "number",
+          "methods": [
+            "string"
+          ],
+          "noc": "number",
+          "nof": "number",
+          "nom": "number",
+          "path": "string",
+          "rfc": "number",
+          "start_line": "number",
+          "violations": [
+            "string"
+          ],
+          "wmc": "number"
+        }
+      ],
+      "generated_at": "string",
+      "summary": {
+        "avg_cbo": "number",
+        "avg_lcom": "number",
+        "avg_rfc": "number",
+        "avg_wmc": "number",
+        "low_cohesion_count": "number",
+        "max_cbo": "number",
+        "max_dit": "number",
+        "max_lcom": "number",
+        "max_rfc": "number",
+        "max_wmc": "number",
+        "total_classes": "number",
+        "total_files": "number",
+        "violation_count": "number"
+      }
+    },
+    "complexity": {
+      "files": [
+        {
+          "avg_cognitive": "number",
+          "avg_cyclomatic": "number",
+          "functions": [
+            {
+              "end_line": "number",
+              "metrics": {
+                "cognitive": "number",
+                "cyclomatic": "number",
+                "lines": "number",
+                "max_nesting": "number"
+              },
+              "name": "string",
+              "start_line": "number"
+            }
+          ],
+          "language": "string",
+          "path": "string",
+          "total_cognitive": "number",
+          "total_cyclomatic": "number"
+        }
+      ],
+      "summary": {
+        "avg_cognitive": "number",
+        "avg_cyclomatic": "number",
+        "max_cognitive": "number",
+        "max_cyclomatic": "number",
+        "p50_cognitive": "number",
+        "p50_cyclomatic": "number",
+        "p90_cognitive": "number",
+        "p90_cyclomatic": "number",
+        "p95_cognitive": "number",
+        "p95_cyclomatic": "number",
+        "total_files": "number",
+        "total_functions": "number"
+      }
+    },
+    "deadcode": {
+      "items": [
+        {
+          "confidence": "number",
+          "end_line": "number",
+          "file": "string",
+          "kind": "string",
+          "line": "number",
+          "name": "string",
+          "reason": "string",
+          "visibility": "string"
+        }
+      ],
+      "summary": {
+        "by_kind": {
+          "<key>": "number"
+        },
+        "reachable_count": "number",
+        "total_definitions": "number",
+        "total_items": "number"
+      }
+    },
+    "defect": {
+      "churn_window": {
+        "anchor_date": "string",
+        "commits_matched": "number",
+        "days": "number",
+        "history_complete": "bool"
+      },
+      "files": [
+        {
+          "confidence": "number",
+          "contributing_factors": {
+            "churn": "number",
+            "complexity": "number",
+            "coupling": "number",
+            "duplication": "number",
+            "ownership": "number"
+          },
+          "file_path": "string",
+          "probability": "number",
+          "recommendations": [
+            "string"
+          ],
+          "risk_level": "string"
+        }
+      ],
+      "summary": {
+        "avg_probability": "number",
+        "high_risk_count": "number",
+        "low_risk_count": "number",
+        "medium_risk_count": "number",
+        "p50_probability": "number",
+        "p95_probability": "number",
+        "total_files": "number"
+      },
+      "weights": {
+        "churn": "number",
+        "complexity": "number",
+        "coupling": "number",
+        "duplication": "number",
+        "ownership": "number"
+      }
+    },
+    "duplicates": {
+      "clones": [
+        {
+          "clone_type": "string",
+          "end_line_a": "number",
+          "end_line_b": "number",
+          "file_a": "string",
+          "file_b": "string",
+          "group_id": "number",
+          "lines_a": "number",
+          "lines_b": "number",
+          "similarity": "number",
+          "start_line_a": "number",
+          "start_line_b": "number"
+        }
+      ],
+      "groups": [
+        {
+          "average_similarity": "number",
+          "clone_type": "string",
+          "id": "number",
+          "instances": [
+            {
+              "end_line": "number",
+              "file": "string",
+              "lines": "number",
+              "normalized_hash": "number",
+              "similarity": "number",
+              "start_line": "number"
+            }
+          ],
+          "total_lines": "number",
+          "total_tokens": "number"
+        }
+      ],
+      "min_lines": "number",
+      "summary": {
+        "avg_similarity": "number",
+        "duplicated_lines": "number",
+        "duplication_ratio": "number",
+        "file_occurrences": {
+          "extra.rs": "number"
+        },
+        "hotspots": [
+          {
+            "clone_group_count": "number",
+            "duplicate_lines": "number",
+            "file": "string",
+            "severity": "number"
+          }
+        ],
+        "p50_similarity": "number",
+        "p95_similarity": "number",
+        "total_clones": "number",
+        "total_groups": "number",
+        "total_lines": "number",
+        "type1_count": "number",
+        "type2_count": "number",
+        "type3_count": "number"
+      },
+      "threshold": "number",
+      "total_files_scanned": "number"
+    },
+    "flags": {
+      "flags": [],
+      "generated_at": "string",
+      "stale_count": "number",
+      "summary": {
+        "by_provider": {},
+        "stale_flags": "number",
+        "total_flags": "number"
+      }
+    },
+    "graph": {
+      "cycles": [
+        [
+          "string"
+        ]
+      ],
+      "edges": [
+        {
+          "from": "string",
+          "to": "string"
+        }
+      ],
+      "nodes": [
+        {
+          "betweenness": "number",
+          "in_degree": "number",
+          "instability": "number",
+          "out_degree": "number",
+          "pagerank": "number",
+          "path": "string"
+        }
+      ],
+      "summary": {
+        "avg_degree": "number",
+        "cycle_count": "number",
+        "total_edges": "number",
+        "total_nodes": "number"
+      }
+    },
+    "hotspot": {
+      "churn_window": {
+        "anchor_date": "string",
+        "commits_matched": "number",
+        "days": "number",
+        "history_complete": "bool"
+      },
+      "hotspots": [
+        {
+          "avg_complexity": "number",
+          "churn_percentile": "number",
+          "commits": "number",
+          "complexity_percentile": "number",
+          "file": "string",
+          "score": "number",
+          "severity": "string"
+        }
+      ],
+      "summary": {
+        "critical_count": "number",
+        "high_count": "number",
+        "total_hotspots": "number"
+      }
+    },
+    "ownership": {
+      "files": [
+        {
+          "concentration": "number",
+          "contributors": [
+            {
+              "email": "string",
+              "lines_owned": "number",
+              "name": "string",
+              "percentage": "number"
+            }
+          ],
+          "is_silo": "bool",
+          "ownership_percent": "number",
+          "path": "string",
+          "primary_owner": "string",
+          "risk_level": "string",
+          "total_lines": "number"
+        }
+      ],
+      "generated_at": "string",
+      "summary": {
+        "avg_contributors": "number",
+        "bus_factor": "number",
+        "high_risk_count": "number",
+        "max_concentration": "number",
+        "silo_count": "number",
+        "top_contributors": [
+          {
+            "files_owned": "number",
+            "name": "string"
+          }
+        ],
+        "total_files": "number"
+      }
+    },
+    "repomap": {
+      "generated_at": "string",
+      "summary": {
+        "avg_connections": "number",
+        "avg_pagerank": "number",
+        "max_pagerank": "number",
+        "total_files": "number",
+        "total_symbols": "number"
+      },
+      "symbols": [
+        {
+          "file": "string",
+          "in_degree": "number",
+          "kind": "string",
+          "line": "number",
+          "name": "string",
+          "out_degree": "number",
+          "pagerank": "number",
+          "qualified_name": "string",
+          "signature": "string"
+        }
+      ]
+    },
+    "satd": {
+      "by_category": {
+        "<key>": "number"
+      },
+      "density": "number",
+      "items": [
+        {
+          "category": "string",
+          "file": "string",
+          "line": "number",
+          "marker": "string",
+          "severity": "string",
+          "text": "string"
+        }
+      ],
+      "summary": {
+        "density": "number",
+        "total_items": "number",
+        "weighted_count": "number"
+      }
+    },
+    "score": {
+      "components": {
+        "cohesion": {
+          "details": "string",
+          "score": "number",
+          "weight": "number"
+        },
+        "complexity": {
+          "details": "string",
+          "score": "number",
+          "weight": "number"
+        },
+        "coupling": {
+          "details": "string",
+          "score": "number",
+          "weight": "number"
+        },
+        "duplication": {
+          "details": "string",
+          "score": "number",
+          "weight": "number"
+        },
+        "satd": {
+          "details": "string",
+          "score": "number",
+          "weight": "number"
+        },
+        "smells": {
+          "details": "string",
+          "score": "number",
+          "weight": "number"
+        },
+        "tdg": {
+          "details": "string",
+          "score": "number",
+          "weight": "number"
+        }
+      },
+      "grade": "string",
+      "overall_score": "number",
+      "skipped_components": [],
+      "summary": {
+        "analyzers_run": "number",
+        "critical_issues": "number",
+        "files_analyzed": "number"
+      }
+    },
+    "smells": {
+      "components": [
+        {
+          "fan_in": "number",
+          "fan_out": "number",
+          "id": "string",
+          "instability": "number",
+          "is_central_connector": "bool",
+          "is_hub": "bool",
+          "name": "string"
+        }
+      ],
+      "generated_at": "string",
+      "smells": [
+        {
+          "components": [
+            "string"
+          ],
+          "description": "string",
+          "metrics": {
+            "cycle_length": "number"
+          },
+          "severity": "string",
+          "smell_type": "string",
+          "suggestion": "string"
+        }
+      ],
+      "summary": {
+        "average_instability": "number",
+        "central_connector_count": "number",
+        "critical_count": "number",
+        "cyclic_count": "number",
+        "high_count": "number",
+        "hub_count": "number",
+        "medium_count": "number",
+        "total_components": "number",
+        "total_smells": "number",
+        "unstable_count": "number"
+      },
+      "thresholds": {
+        "central_connector_fan_in_threshold": "number",
+        "central_connector_fan_out_threshold": "number",
+        "hub_threshold": "number",
+        "instability_difference": "number",
+        "stable_threshold": "number",
+        "unstable_threshold": "number"
+      }
+    },
+    "stubs": {
+      "by_category": {
+        "<key>": "number"
+      },
+      "stubs": [
+        {
+          "categories": [
+            "string"
+          ],
+          "category": "string",
+          "file": "string",
+          "language": "string",
+          "line": "number",
+          "lines": [
+            "number"
+          ],
+          "severity": "string",
+          "snippet": "string"
+        }
+      ],
+      "summary": {
+        "high_severity": "number",
+        "low_severity": "number",
+        "medium_severity": "number",
+        "total_stubs": "number"
+      }
+    },
+    "tdg": {
+      "average_grade": "string",
+      "average_score": "number",
+      "files": [
+        {
+          "confidence": "number",
+          "consistency_score": "number",
+          "coupling_score": "number",
+          "critical_defects_count": "number",
+          "doc_coverage": "number",
+          "duplication_ratio": "number",
+          "entropy_score": "number",
+          "file_path": "string",
+          "grade": "string",
+          "has_critical_defects": "bool",
+          "hotspot_score": "number",
+          "language": "string",
+          "penalties_applied?": [
+            {
+              "amount": "number",
+              "issue": "string",
+              "source_metric": "string"
+            }
+          ],
+          "semantic_complexity": "number",
+          "structural_complexity": "number",
+          "temporal_coupling_score": "number",
+          "total": "number"
+        }
+      ],
+      "grade_distribution": {
+        "<key>": "number"
+      },
+      "language_distribution": {
+        "<key>": "number"
+      },
+      "total_files": "number"
+    },
+    "temporal": {
+      "couplings": [
+        {
+          "cochange_count": "number",
+          "commits_a": "number",
+          "commits_b": "number",
+          "coupling_strength": "number",
+          "file_a": "string",
+          "file_b": "string"
+        }
+      ],
+      "generated_at": "string",
+      "min_cochanges": "number",
+      "period_days": "number",
+      "summary": {
+        "avg_coupling_strength": "number",
+        "max_coupling_strength": "number",
+        "strong_couplings": "number",
+        "total_couplings": "number",
+        "total_files_analyzed": "number"
+      }
+    }
+  }
+}

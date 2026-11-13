@@ -1,0 +1,80 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&output, case.dynamic_key_objects)"
+---
+{
+  "commits": [
+    {
+      "author": "string",
+      "commit_hash": "string",
+      "contributing_factors": {
+        "entropy": "number",
+        "experience": "number",
+        "file_churn": "number",
+        "file_complexity": "number",
+        "fix": "number",
+        "lines_added": "number",
+        "lines_deleted": "number",
+        "num_developers": "number",
+        "num_files": "number",
+        "ownership_diffusion": "number",
+        "unique_changes": "number"
+      },
+      "file_risk": {
+        "max_churn": "number",
+        "max_complexity": "number",
+        "ownership_diffusion": "number"
+      },
+      "files_modified": [
+        "string"
+      ],
+      "message": "string",
+      "recommendations": [
+        "string"
+      ],
+      "risk_level": "string",
+      "risk_score": "number",
+      "timestamp": "string"
+    }
+  ],
+  "generated_at": "string",
+  "normalization": {
+    "max_author_experience": "number",
+    "max_entropy": "number",
+    "max_file_churn": "number",
+    "max_file_complexity": "number",
+    "max_lines_added": "number",
+    "max_lines_deleted": "number",
+    "max_num_developers": "number",
+    "max_num_files": "number",
+    "max_unique_changes": "number"
+  },
+  "period_days": "number",
+  "risk_thresholds": {
+    "high_threshold": "number",
+    "medium_threshold": "number"
+  },
+  "summary": {
+    "avg_risk_score": "number",
+    "bug_fix_count": "number",
+    "high_risk_count": "number",
+    "low_risk_count": "number",
+    "medium_risk_count": "number",
+    "p50_risk_score": "number",
+    "p95_risk_score": "number",
+    "total_commits": "number"
+  },
+  "weights": {
+    "entropy": "number",
+    "exp": "number",
+    "file_churn": "number",
+    "file_complexity": "number",
+    "fix": "number",
+    "la": "number",
+    "ld": "number",
+    "ndev": "number",
+    "nf": "number",
+    "nuc": "number",
+    "ownership_diffusion": "number"
+  }
+}

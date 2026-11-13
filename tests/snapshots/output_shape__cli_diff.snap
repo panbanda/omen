@@ -1,0 +1,34 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&output, case.dynamic_key_objects)"
+---
+{
+  "commits": "number",
+  "factors": {
+    "commits": "number",
+    "entropy": "number",
+    "file_churn": "number",
+    "file_complexity": "number",
+    "lines_added": "number",
+    "lines_deleted": "number",
+    "num_files": "number",
+    "ownership_diffusion": "number"
+  },
+  "file_risk": {
+    "max_churn": "number",
+    "max_complexity": "number",
+    "ownership_diffusion": "number"
+  },
+  "files_modified": "number",
+  "generated_at": "string",
+  "level": "string",
+  "lines_added": "number",
+  "lines_deleted": "number",
+  "merge_base": "string",
+  "recommendations": [
+    "string"
+  ],
+  "score": "number",
+  "source_branch": "string",
+  "target_branch": "string"
+}

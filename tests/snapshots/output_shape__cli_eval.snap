@@ -1,0 +1,38 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&output, case.dynamic_key_objects)"
+---
+{
+  "adequate_held_out_sample": "bool",
+  "cases": [
+    {
+      "baseline_success": "number",
+      "candidate_success": "number",
+      "candidate_unrelated_edits": "number",
+      "case_id": "string"
+    }
+  ],
+  "caveat": "string",
+  "outcomes_independently_verified": "bool",
+  "pairs": "number",
+  "per_language_success_delta": {
+    "<key>": "number"
+  },
+  "registration_sha256": "string",
+  "reported_outcome_gate": "bool",
+  "repositories": "number",
+  "repository_weighted_intervals": {
+    "cost_ratio": [
+      "number"
+    ],
+    "elapsed_ratio": [
+      "number"
+    ],
+    "success_delta": [
+      "number"
+    ],
+    "token_ratio": [
+      "number"
+    ]
+  }
+}

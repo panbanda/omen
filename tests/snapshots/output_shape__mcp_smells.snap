@@ -1,0 +1,69 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&response, &dynamic_key_objects)"
+---
+{
+  "id": "number",
+  "jsonrpc": "string",
+  "result": {
+    "content": [
+      {
+        "text": {
+          "offset": "number",
+          "result": {
+            "components": [
+              {
+                "fan_in": "number",
+                "fan_out": "number",
+                "id": "string",
+                "instability": "number",
+                "is_central_connector": "bool",
+                "is_hub": "bool",
+                "name": "string"
+              }
+            ],
+            "generated_at": "string",
+            "smells": [
+              {
+                "components": [
+                  "string"
+                ],
+                "description": "string",
+                "metrics": {
+                  "cycle_length": "number"
+                },
+                "severity": "string",
+                "smell_type": "string",
+                "suggestion": "string"
+              }
+            ],
+            "summary": {
+              "average_instability": "number",
+              "central_connector_count": "number",
+              "critical_count": "number",
+              "cyclic_count": "number",
+              "high_count": "number",
+              "hub_count": "number",
+              "medium_count": "number",
+              "total_components": "number",
+              "total_smells": "number",
+              "unstable_count": "number"
+            },
+            "thresholds": {
+              "central_connector_fan_in_threshold": "number",
+              "central_connector_fan_out_threshold": "number",
+              "hub_threshold": "number",
+              "instability_difference": "number",
+              "stable_threshold": "number",
+              "unstable_threshold": "number"
+            }
+          },
+          "returned": "number",
+          "tool": "string",
+          "total_items": "number"
+        },
+        "type": "string"
+      }
+    ]
+  }
+}

@@ -1,0 +1,33 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&output, case.dynamic_key_objects)"
+---
+{
+  "cycles": [
+    [
+      "string"
+    ]
+  ],
+  "edges": [
+    {
+      "from": "string",
+      "to": "string"
+    }
+  ],
+  "nodes": [
+    {
+      "betweenness": "number",
+      "in_degree": "number",
+      "instability": "number",
+      "out_degree": "number",
+      "pagerank": "number",
+      "path": "string"
+    }
+  ],
+  "summary": {
+    "avg_degree": "number",
+    "cycle_count": "number",
+    "total_edges": "number",
+    "total_nodes": "number"
+  }
+}

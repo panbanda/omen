@@ -1,0 +1,62 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&response, &dynamic_key_objects)"
+---
+{
+  "id": "number",
+  "jsonrpc": "string",
+  "result": {
+    "content": [
+      {
+        "text": {
+          "offset": "number",
+          "result": {
+            "files": [
+              {
+                "classes": [
+                  {
+                    "end_line": "number",
+                    "fields": [
+                      "string"
+                    ],
+                    "is_exported": "bool",
+                    "methods": [
+                      {
+                        "end_line": "number",
+                        "is_exported": "bool",
+                        "name": "string",
+                        "signature": "string",
+                        "start_line": "number"
+                      }
+                    ],
+                    "name": "string",
+                    "start_line": "number"
+                  }
+                ],
+                "file": "string",
+                "functions": [
+                  {
+                    "end_line": "number",
+                    "is_exported": "bool",
+                    "name": "string",
+                    "signature": "string",
+                    "start_line": "number"
+                  }
+                ],
+                "imports": [
+                  "string"
+                ],
+                "language": "string",
+                "loc": "number"
+              }
+            ]
+          },
+          "returned": "number",
+          "tool": "string",
+          "total_items": "number"
+        },
+        "type": "string"
+      }
+    ]
+  }
+}

@@ -1,0 +1,744 @@
+---
+source: tests/output_shape.rs
+expression: "responses[0]"
+---
+{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "result": {
+    "tools": [
+      {
+        "description": "Use first. Returns top-N PageRank-ranked symbols, risks, language breakdown, directory tree, entry points, and navigation hints. Expensive on large repos; run once and cache.",
+        "inputSchema": {
+          "properties": {
+            "compact": {
+              "description": "Opt-in lossless tables. table_paths are JSON pointers into result; zip each table's columns with its rows to restore records. Falls back to normal JSON if larger.",
+              "type": "boolean"
+            },
+            "format": {
+              "description": "Output format: 'markdown' returns compact agent-facing text directly (default: json)",
+              "enum": [
+                "json",
+                "markdown"
+              ],
+              "type": "string"
+            },
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "max_risks": {
+              "description": "Maximum risks to include",
+              "type": "integer"
+            },
+            "max_symbols": {
+              "description": "Maximum symbols to include",
+              "type": "integer"
+            },
+            "max_tokens": {
+              "description": "Token budget; response is trimmed to fit (default: 8000)",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            },
+            "path": {
+              "description": "File or directory path",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "context"
+      },
+      {
+        "description": "Token-cheapest file map. Returns imports, classes with methods, and top-level functions for one file or all repo files. Use before reading full source.",
+        "inputSchema": {
+          "properties": {
+            "file": {
+              "description": "Single file to outline (optional; omit for whole repo)",
+              "type": "string"
+            },
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            },
+            "path": {
+              "description": "Repository or directory path",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "outline"
+      },
+      {
+        "description": "Returns cyclomatic and cognitive complexity per function. Fast.",
+        "inputSchema": {
+          "properties": {
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            },
+            "path": {
+              "description": "File or directory path",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "complexity"
+      },
+      {
+        "description": "Detects TODO/FIXME/HACK debt comments. Fast.",
+        "inputSchema": {
+          "properties": {
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            },
+            "path": {
+              "description": "File or directory path",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "satd"
+      },
+      {
+        "description": "Use when you suspect unused symbols. Finds dead/unreachable code.",
+        "inputSchema": {
+          "properties": {
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            },
+            "path": {
+              "description": "File or directory path",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "deadcode"
+      },
+      {
+        "description": "Use to find unfinished work. Detects incomplete/placeholder implementations: todo!()/NotImplementedError-style idioms, elision comments ('...rest of implementation'), and empty-but-implementable function bodies. Read-only; does not gate.",
+        "inputSchema": {
+          "properties": {
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            },
+            "path": {
+              "description": "File or directory path",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "stubs"
+      },
+      {
+        "description": "Use to find frequently changed files. Analyzes code churn from git history.",
+        "inputSchema": {
+          "properties": {
+            "days": {
+              "description": "Number of days to analyze",
+              "type": "integer"
+            },
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            },
+            "path": {
+              "description": "File or directory path",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "churn"
+      },
+      {
+        "description": "Use when looking for duplication or copy-paste debt. Detects code clones via MinHash+LSH.",
+        "inputSchema": {
+          "properties": {
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "min_tokens": {
+              "description": "Minimum tokens for detection",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            },
+            "path": {
+              "description": "File or directory path",
+              "type": "string"
+            },
+            "similarity": {
+              "description": "Similarity threshold (0-1)",
+              "type": "number"
+            }
+          },
+          "type": "object"
+        },
+        "name": "clones"
+      },
+      {
+        "description": "Use to identify high-risk files. Predicts defect-prone files using PMAT metrics.",
+        "inputSchema": {
+          "properties": {
+            "days": {
+              "description": "Number of days to analyze",
+              "type": "integer"
+            },
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            },
+            "path": {
+              "description": "File or directory path",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "defect"
+      },
+      {
+        "description": "Use to assess recent commit risk. Analyzes recent changes with JIT risk analysis.",
+        "inputSchema": {
+          "properties": {
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "name": "changes"
+      },
+      {
+        "description": "Use to review branch or PR risk. Analyzes diff between commits; auto-detects target branch.",
+        "inputSchema": {
+          "properties": {
+            "base": {
+              "description": "Base commit/branch",
+              "type": "string"
+            },
+            "head": {
+              "description": "Head commit/branch",
+              "type": "string"
+            },
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "name": "diff"
+      },
+      {
+        "description": "Use to understand technical debt accumulation. Generates Technical Debt Gradient with critical defect detection.",
+        "inputSchema": {
+          "properties": {
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            },
+            "path": {
+              "description": "File or directory path",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "tdg"
+      },
+      {
+        "description": "Use to visualize module dependencies. Generates Mermaid dependency graph.",
+        "inputSchema": {
+          "properties": {
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            },
+            "path": {
+              "description": "File or directory path",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "graph"
+      },
+      {
+        "description": "Use to find the riskiest files. Combines high churn + high complexity.",
+        "inputSchema": {
+          "properties": {
+            "days": {
+              "description": "Number of days for churn",
+              "type": "integer"
+            },
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            },
+            "path": {
+              "description": "File or directory path",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "hotspot"
+      },
+      {
+        "description": "Use to find files that always change together. Detects temporal coupling from git history.",
+        "inputSchema": {
+          "properties": {
+            "days": {
+              "description": "Number of days to analyze",
+              "type": "integer"
+            },
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            },
+            "path": {
+              "description": "File or directory path",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "temporal"
+      },
+      {
+        "description": "Use to assess bus factor and knowledge silos. Analyzes code ownership from git blame.",
+        "inputSchema": {
+          "properties": {
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            },
+            "path": {
+              "description": "File or directory path",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "ownership"
+      },
+      {
+        "description": "Use for OO design quality assessment. Calculates CK metrics: WMC, CBO, RFC, LCOM4, DIT, NOC.",
+        "inputSchema": {
+          "properties": {
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            },
+            "path": {
+              "description": "File or directory path",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "cohesion"
+      },
+      {
+        "description": "Returns PageRank-ranked symbol call graph. Use for understanding code structure.",
+        "inputSchema": {
+          "properties": {
+            "compact": {
+              "description": "Opt-in lossless tables. table_paths are JSON pointers into result; zip each table's columns with its rows to restore records. Falls back to normal JSON if larger.",
+              "type": "boolean"
+            },
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "max_symbols": {
+              "description": "Maximum symbols to include",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            },
+            "path": {
+              "description": "File or directory path",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "repomap"
+      },
+      {
+        "description": "Use to find architectural anti-patterns. Detects cycles and smells via Tarjan SCC.",
+        "inputSchema": {
+          "properties": {
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            },
+            "path": {
+              "description": "File or directory path",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "smells"
+      },
+      {
+        "description": "Use to audit feature flags. Finds stale and active feature flags across providers.",
+        "inputSchema": {
+          "properties": {
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            },
+            "path": {
+              "description": "File or directory path",
+              "type": "string"
+            },
+            "provider": {
+              "description": "Flag provider (launchdarkly, split, etc.)",
+              "type": "string"
+            },
+            "stale_days": {
+              "description": "Days threshold for staleness",
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "name": "flags"
+      },
+      {
+        "description": "Use for an overall health summary. Calculates composite repository health score.",
+        "inputSchema": {
+          "properties": {
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            },
+            "path": {
+              "description": "File or directory path",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "score"
+      },
+      {
+        "description": "Semantic symbol search via TF-IDF. Use when you know what you're looking for conceptually.",
+        "inputSchema": {
+          "properties": {
+            "files": {
+              "description": "Comma-separated file paths to search within",
+              "type": "string"
+            },
+            "include_projects": {
+              "description": "Comma-separated paths to additional project roots for cross-repo search",
+              "type": "string"
+            },
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "max_complexity": {
+              "description": "Exclude symbols with cyclomatic complexity above this value",
+              "type": "integer"
+            },
+            "min_score": {
+              "description": "Minimum similarity score 0-1 (default: 0.3)",
+              "type": "number"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            },
+            "query": {
+              "description": "Natural language search query",
+              "type": "string"
+            },
+            "top_k": {
+              "description": "Maximum number of results (default: 10)",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "type": "object"
+        },
+        "name": "semantic_search"
+      },
+      {
+        "description": "Symbol source, location, complexity and name-based callers/callees. call_resolutions exposes unique, ambiguous and unresolved candidates. Edges are not compiler-proven; ambiguous and unknown calls are excluded from the graph.",
+        "inputSchema": {
+          "properties": {
+            "compact": {
+              "description": "Opt-in lossless tables. table_paths are JSON pointers into result; zip each table's columns with its rows to restore records. Falls back to normal JSON if larger.",
+              "type": "boolean"
+            },
+            "include_source": {
+              "description": "Whether to include source code (default: true)",
+              "type": "boolean"
+            },
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "max_source_lines": {
+              "description": "Maximum source lines to return (default: 200)",
+              "type": "integer"
+            },
+            "name": {
+              "description": "Symbol name to look up (bare name or qualified file:name)",
+              "type": "string"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            },
+            "path": {
+              "description": "Repository root path",
+              "type": "string"
+            },
+            "start_line": {
+              "description": "Exact definition start line; combine with file:name to select same-file duplicates. Ambiguous queries return choices without source or graph attribution.",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        "name": "get_symbol"
+      },
+      {
+        "description": "Bounded context for one exact definition: candidate callers/callees, test/role convention hints, syntax uses, uncertainty, content fingerprint. Not exhaustive impact or compiler/data-flow proof. Uses a session-local content-validated index.",
+        "inputSchema": {
+          "properties": {
+            "depth": {
+              "description": "Graph radius, default 2",
+              "maximum": 4,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "include_history": {
+              "description": "30-day co-change hints, default false; not semantic dependencies",
+              "type": "boolean"
+            },
+            "max_bytes": {
+              "description": "Hard result UTF-8 byte budget, not envelope/tokens; default 12000",
+              "maximum": 1048576,
+              "minimum": 1024,
+              "type": "integer"
+            },
+            "name": {
+              "description": "Symbol name, preferably file:name",
+              "type": "string"
+            },
+            "path": {
+              "description": "Repository root",
+              "type": "string"
+            },
+            "start_line": {
+              "description": "Exact definition start line",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        "name": "task_context"
+      },
+      {
+        "description": "Explore possible blast radius using name-based call edges and BFS. Includes input-wide resolution_summary. Ambiguous and unresolved calls are excluded, so this is not an exhaustive safety check for edits.",
+        "inputSchema": {
+          "properties": {
+            "compact": {
+              "description": "Opt-in lossless tables. table_paths are JSON pointers into result; zip each table's columns with its rows to restore records. Falls back to normal JSON if larger.",
+              "type": "boolean"
+            },
+            "depth": {
+              "description": "BFS depth for traversal (default: 2)",
+              "type": "integer"
+            },
+            "direction": {
+              "description": "Direction of traversal (default: both)",
+              "enum": [
+                "callers",
+                "callees",
+                "both"
+              ],
+              "type": "string"
+            },
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            },
+            "path": {
+              "description": "Repository root path",
+              "type": "string"
+            },
+            "symbol": {
+              "description": "Symbol name to analyze (bare name or qualified file:name)",
+              "type": "string"
+            }
+          },
+          "required": [
+            "symbol"
+          ],
+          "type": "object"
+        },
+        "name": "impact"
+      },
+      {
+        "description": "Search using hypothetical code. Write a code snippet resembling what you want to find. This is matched against the index, producing better results than keyword queries.",
+        "inputSchema": {
+          "properties": {
+            "files": {
+              "description": "Comma-separated file paths to search within",
+              "type": "string"
+            },
+            "hypothetical_document": {
+              "description": "A code snippet resembling the code you want to find",
+              "type": "string"
+            },
+            "include_projects": {
+              "description": "Comma-separated paths to additional project roots for cross-repo search",
+              "type": "string"
+            },
+            "limit": {
+              "description": "Max items to return (default: 50, 0 = unlimited)",
+              "type": "integer"
+            },
+            "max_complexity": {
+              "description": "Exclude symbols with cyclomatic complexity above this value",
+              "type": "integer"
+            },
+            "min_score": {
+              "description": "Minimum similarity score 0-1 (default: 0.3)",
+              "type": "number"
+            },
+            "offset": {
+              "description": "Item offset for pagination (default: 0)",
+              "type": "integer"
+            },
+            "query": {
+              "description": "Original query for display purposes",
+              "type": "string"
+            },
+            "top_k": {
+              "description": "Maximum number of results (default: 10)",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "hypothetical_document"
+          ],
+          "type": "object"
+        },
+        "name": "semantic_search_hyde"
+      }
+    ]
+  }
+}

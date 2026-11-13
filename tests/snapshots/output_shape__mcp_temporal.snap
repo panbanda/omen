@@ -1,0 +1,43 @@
+---
+source: tests/output_shape.rs
+expression: "shape(&response, &dynamic_key_objects)"
+---
+{
+  "id": "number",
+  "jsonrpc": "string",
+  "result": {
+    "content": [
+      {
+        "text": {
+          "offset": "number",
+          "result": {
+            "couplings": [
+              {
+                "cochange_count": "number",
+                "commits_a": "number",
+                "commits_b": "number",
+                "coupling_strength": "number",
+                "file_a": "string",
+                "file_b": "string"
+              }
+            ],
+            "generated_at": "string",
+            "min_cochanges": "number",
+            "period_days": "number",
+            "summary": {
+              "avg_coupling_strength": "number",
+              "max_coupling_strength": "number",
+              "strong_couplings": "number",
+              "total_couplings": "number",
+              "total_files_analyzed": "number"
+            }
+          },
+          "returned": "number",
+          "tool": "string",
+          "total_items": "number"
+        },
+        "type": "string"
+      }
+    ]
+  }
+}
