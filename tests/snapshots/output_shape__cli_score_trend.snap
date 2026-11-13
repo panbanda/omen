@@ -5,32 +5,32 @@ expression: "shape(&output, case.dynamic_key_objects)"
 {
   "component_trends": {
     "cohesion": {
-      "Correlation": "number",
-      "Slope": "number"
+      "correlation": "number",
+      "slope": "number"
     },
     "complexity": {
-      "Correlation": "number",
-      "Slope": "number"
+      "correlation": "number",
+      "slope": "number"
     },
     "coupling": {
-      "Correlation": "number",
-      "Slope": "number"
+      "correlation": "number",
+      "slope": "number"
     },
     "duplication": {
-      "Correlation": "number",
-      "Slope": "number"
+      "correlation": "number",
+      "slope": "number"
     },
     "satd": {
-      "Correlation": "number",
-      "Slope": "number"
+      "correlation": "number",
+      "slope": "number"
     },
     "smells": {
-      "Correlation": "number",
-      "Slope": "number"
+      "correlation": "number",
+      "slope": "number"
     },
     "tdg": {
-      "Correlation": "number",
-      "Slope": "number"
+      "correlation": "number",
+      "slope": "number"
     }
   },
   "end_score": "number",

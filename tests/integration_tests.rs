@@ -1937,6 +1937,115 @@ fn test_file_records_use_only_the_file_key() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// One CLI shape: gate from configuration, global flags, pagination, --output
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_gate_mode_comes_from_configuration_and_the_flag_wins() {
+    let temp = TempDir::new().unwrap();
+    write_complexity_exclude_fixture(&temp);
+    std::fs::write(
+        temp.path().join("omen.toml"),
+        "[complexity]\ncyclomatic_error = 3\n\n[gate]\ncomplexity = \"error\"\n",
+    )
+    .unwrap();
+    let path = temp.path().to_str().unwrap();
+
+    omen().args(["-p", path, "complexity"]).assert().code(2);
+    omen()
+        .args(["-p", path, "complexity", "--gate", "off"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_stubs_gate_mode_comes_from_configuration() {
+    let temp = TempDir::new().unwrap();
+    std::fs::write(
+        temp.path().join("lib.rs"),
+        "pub fn later() -> u32 { todo!() }\n",
+    )
+    .unwrap();
+    std::fs::write(temp.path().join("omen.toml"), "[gate]\nstubs = \"error\"\n").unwrap();
+
+    omen()
+        .args(["-p", temp.path().to_str().unwrap(), "stubs"])
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn test_global_flags_work_after_the_subcommand() {
+    let output = omen()
+        .args(["complexity", "-p", fixtures_dir(), "-f", "json", "-j", "2"])
+        .output()
+        .expect("command runs");
+
+    assert!(output.status.success());
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(parsed["files"].is_array());
+}
+
+#[test]
+fn test_search_query_offset_skips_results() {
+    let temp = TempDir::new().unwrap();
+    std::fs::write(
+        temp.path().join("lib.rs"),
+        concat!(
+            "pub fn alpha() { parse(); }\npub fn beta() { parse(); parse(); }\n",
+            "pub fn gamma() { parse(); parse(); parse(); }\n",
+            "pub fn render_one() {}\npub fn render_two() {}\npub fn write_one() {}\n",
+            "pub fn write_two() {}\npub fn load_one() {}\n",
+        ),
+    )
+    .unwrap();
+    let path = temp.path().to_str().unwrap();
+    omen()
+        .args(["-p", path, "search", "index"])
+        .assert()
+        .success();
+
+    let names = |extra: &[&str]| -> Vec<String> {
+        let output = omen()
+            .args(["-p", path, "-f", "json", "search", "query", "parse"])
+            .args(["--min-score", "0"])
+            .args(extra)
+            .output()
+            .expect("command runs");
+        assert!(output.status.success());
+        let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        parsed["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|result| result["symbol_name"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    let all = names(&[]);
+    assert!(all.len() >= 2, "{all:?}");
+    assert_eq!(names(&["--top", "1"]), all[..1]);
+    assert_eq!(names(&["--top", "1", "--offset", "1"]), all[1..2]);
+    assert_eq!(names(&["--offset", "1"]), all[1..]);
+}
+
+#[test]
+fn test_mutation_output_writes_the_report_file() {
+    let temp = write_mutation_gate_fixture();
+    let report = temp.path().join("mutation.json");
+
+    omen()
+        .args(["-p", temp.path().to_str().unwrap(), "mutation", "--dry-run"])
+        .args(["--output", report.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&report).expect("report written")).unwrap();
+    assert!(written.get("summary").is_some());
+}
+
 #[test]
 fn test_report_generate_names_artifacts_by_command() {
     let source = TempDir::new().unwrap();
@@ -1951,7 +2060,7 @@ fn test_report_generate_names_artifacts_by_command() {
             "generate",
             "--skip",
             "trend",
-            "-o",
+            "--data",
             data.path().to_str().unwrap(),
         ])
         .assert()

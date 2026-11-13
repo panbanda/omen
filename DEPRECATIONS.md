@@ -32,6 +32,16 @@ Use the replacement.
 |---|---|
 | `--check` (`complexity`, `score`, `mutation`) | `--gate error` |
 | `--top-k` / `-k` (`search query`) | `--top` / `-n` |
+| `--output` (`report generate`) | `--data` / `-d` |
+| `--output-survivors` (`mutation`) | `--output` / `-o`, which writes the full JSON report |
+| `--jobs` of `mutation` | the global `--jobs` / `-j` |
+| `--path` / `-p` of `mutation train` | the global `--path` / `-p` |
+| `-p` as the short form of `--period` (`score trend`) | `--period` |
+| `-p` as the short form of `--port` (`report serve`) | `--port` |
+
+The flags `-p`, `-f`, `-c`, `-v`, and `-j` are global. On each command, `-p` is
+the repository path. `stubs --gate` has no default value in the CLI. If the
+flag is absent, the `[gate]` table of the configuration gives the mode.
 
 ### Output keys
 
@@ -47,6 +57,8 @@ Use the replacement.
 | `tdg`: `files[].file_path` | `files[].file` |
 | `search query`: `results[].file_path` | `results[].file` |
 | `mutation`: `files[].path` | `files[].file` |
+| `score trend`: `component_trends.<name>.Slope` | `component_trends.<name>.slope` |
+| `score trend`: `component_trends.<name>.Correlation` | `component_trends.<name>.correlation` |
 
 The `file` value of `churn` is relative to the repository root and has no `./`
 prefix. The `hotspot_files` and `stable_files` lists of the `churn` summary

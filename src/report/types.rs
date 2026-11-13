@@ -289,9 +289,7 @@ pub struct TrendPoint {
 /// ComponentTrendStats contains trend statistics for a component.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ComponentTrendStats {
-    #[serde(rename = "Slope")]
     pub slope: f64,
-    #[serde(rename = "Correlation")]
     pub correlation: f64,
 }
 
@@ -1043,6 +1041,18 @@ mod tests {
         let metadata: Metadata = serde_json::from_str(json).unwrap();
         assert_eq!(metadata.repository, "test/repo");
         assert_eq!(metadata.since, "6m");
+    }
+
+    #[test]
+    fn test_component_trend_stats_use_snake_case_keys() {
+        let stats = ComponentTrendStats {
+            slope: 0.5,
+            correlation: 0.9,
+        };
+        assert_eq!(
+            serde_json::to_value(stats).unwrap(),
+            serde_json::json!({ "slope": 0.5, "correlation": 0.9 })
+        );
     }
 
     #[test]
