@@ -27,7 +27,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 
-use petgraph::algo::tarjan_scc;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
@@ -38,6 +37,7 @@ use crate::analyzers::import_resolver::{
     build_dependency_graph, extract_resolved_imports, ImportIndex,
 };
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
+use crate::index::graph::{cyclic_components, pagerank, PageRankOptions};
 use crate::parser::{extract_imports, ImportKind, Parser};
 
 /// Graph analyzer configuration.
@@ -151,9 +151,24 @@ impl Analyzer {
             build_dependency_graph(&file_imports, self.config.include_external);
 
         // Calculate metrics
-        let pagerank = self.calculate_pagerank(&graph);
+        let scores = pagerank(
+            &graph,
+            &PageRankOptions {
+                damping: self.config.damping,
+                max_iterations: self.config.max_iterations,
+                tolerance: self.config.tolerance,
+            },
+        );
         let betweenness = self.calculate_betweenness(&graph);
-        let cycles = self.detect_cycles(&graph);
+        let cycles: Vec<Vec<String>> = cyclic_components(&graph)
+            .into_iter()
+            .map(|component| {
+                component
+                    .into_iter()
+                    .map(|idx| graph[idx].clone())
+                    .collect()
+            })
+            .collect();
 
         // Build nodes with metrics
         let mut nodes: Vec<Node> = Vec::new();
@@ -169,7 +184,7 @@ impl Analyzer {
 
             nodes.push(Node {
                 path: path.clone(),
-                pagerank: *pagerank.get(&idx).unwrap_or(&0.0),
+                pagerank: scores[idx.index()],
                 betweenness: *betweenness.get(&idx).unwrap_or(&0.0),
                 in_degree: in_deg,
                 out_degree: out_deg,
@@ -217,57 +232,6 @@ impl Analyzer {
                 cycle_count: 0, // Will be set from cycles.len()
             },
         })
-    }
-
-    /// Calculate PageRank scores using power iteration.
-    fn calculate_pagerank(&self, graph: &DiGraph<String, ()>) -> HashMap<NodeIndex, f64> {
-        let n = graph.node_count();
-        if n == 0 {
-            return HashMap::new();
-        }
-
-        let d = self.config.damping;
-        let initial_rank = 1.0 / n as f64;
-        let mut rank = vec![initial_rank; n];
-        let mut new_rank = vec![0.0; n];
-        let out_degrees: Vec<usize> = graph
-            .node_indices()
-            .map(|node| graph.edges_directed(node, Direction::Outgoing).count())
-            .collect();
-
-        for _ in 0..self.config.max_iterations {
-            let mut diff = 0.0;
-
-            for node in graph.node_indices() {
-                let incoming: f64 = graph
-                    .edges_directed(node, Direction::Incoming)
-                    .map(|e| {
-                        let source = e.source();
-                        let out_deg = out_degrees[source.index()];
-                        if out_deg > 0 {
-                            rank[source.index()] / out_deg as f64
-                        } else {
-                            0.0
-                        }
-                    })
-                    .sum();
-
-                let new_score = (1.0 - d) / n as f64 + d * incoming;
-                diff += (new_score - rank[node.index()]).abs();
-                new_rank[node.index()] = new_score;
-            }
-
-            std::mem::swap(&mut rank, &mut new_rank);
-
-            if diff < self.config.tolerance {
-                break;
-            }
-        }
-
-        graph
-            .node_indices()
-            .map(|node| (node, rank[node.index()]))
-            .collect()
     }
 
     /// Calculate betweenness centrality using Brandes' algorithm with parallel BFS.
@@ -391,19 +355,6 @@ impl Analyzer {
         }
 
         betweenness
-    }
-
-    /// Detect cycles using Tarjan's strongly connected components.
-    fn detect_cycles(&self, graph: &DiGraph<String, ()>) -> Vec<Vec<String>> {
-        let sccs = tarjan_scc(graph);
-
-        sccs.into_iter()
-            .filter(|scc| {
-                // Only include SCCs with multiple nodes or self-loops
-                scc.len() > 1 || (scc.len() == 1 && graph.contains_edge(scc[0], scc[0]))
-            })
-            .map(|scc| scc.into_iter().map(|idx| graph[idx].clone()).collect())
-            .collect()
     }
 
     /// Generate Mermaid diagram.
@@ -780,62 +731,6 @@ mod tests {
     }
 
     #[test]
-    fn test_pagerank_empty_graph() {
-        let analyzer = Analyzer::new();
-        let graph: DiGraph<String, ()> = DiGraph::new();
-        let ranks = analyzer.calculate_pagerank(&graph);
-        assert!(ranks.is_empty());
-    }
-
-    #[test]
-    fn test_pagerank_single_node() {
-        let analyzer = Analyzer::new();
-        let mut graph: DiGraph<String, ()> = DiGraph::new();
-        graph.add_node("a.rs".to_string());
-        let ranks = analyzer.calculate_pagerank(&graph);
-        assert_eq!(ranks.len(), 1);
-        // Single node with no incoming edges converges to (1-d)/n = 0.15
-        for &rank in ranks.values() {
-            assert!((rank - 0.15).abs() < 0.001);
-        }
-    }
-
-    #[test]
-    fn test_pagerank_two_nodes_with_edge() {
-        let analyzer = Analyzer::new();
-        let mut graph: DiGraph<String, ()> = DiGraph::new();
-        let a = graph.add_node("a.rs".to_string());
-        let b = graph.add_node("b.rs".to_string());
-        graph.add_edge(a, b, ());
-
-        let ranks = analyzer.calculate_pagerank(&graph);
-        assert_eq!(ranks.len(), 2);
-
-        // Node b should have higher PageRank (receives link from a)
-        let rank_a = ranks[&a];
-        let rank_b = ranks[&b];
-        assert!(rank_b > rank_a, "Node b should have higher PageRank");
-    }
-
-    #[test]
-    fn test_pagerank_pins_asymmetric_fixture_scores() {
-        let analyzer = Analyzer::new();
-        let mut graph: DiGraph<String, ()> = DiGraph::new();
-        let a = graph.add_node("a.rs".to_string());
-        let b = graph.add_node("b.rs".to_string());
-        let c = graph.add_node("c.rs".to_string());
-        graph.add_edge(a, b, ());
-        graph.add_edge(a, c, ());
-        graph.add_edge(b, c, ());
-
-        let ranks = analyzer.calculate_pagerank(&graph);
-
-        assert!((ranks[&a] - 0.05).abs() < 1e-12);
-        assert!((ranks[&b] - 0.07125).abs() < 1e-12);
-        assert!((ranks[&c] - 0.1318125).abs() < 1e-12);
-    }
-
-    #[test]
     fn test_betweenness_empty() {
         let analyzer = Analyzer::new();
         let graph: DiGraph<String, ()> = DiGraph::new();
@@ -859,46 +754,6 @@ mod tests {
             betweenness[&b] > 0.0,
             "Central node should have positive betweenness"
         );
-    }
-
-    #[test]
-    fn test_cycle_detection_no_cycle() {
-        let analyzer = Analyzer::new();
-        let mut graph: DiGraph<String, ()> = DiGraph::new();
-        let a = graph.add_node("a.rs".to_string());
-        let b = graph.add_node("b.rs".to_string());
-        graph.add_edge(a, b, ());
-
-        let cycles = analyzer.detect_cycles(&graph);
-        assert!(cycles.is_empty());
-    }
-
-    #[test]
-    fn test_cycle_detection_with_cycle() {
-        let analyzer = Analyzer::new();
-        let mut graph: DiGraph<String, ()> = DiGraph::new();
-        let a = graph.add_node("a.rs".to_string());
-        let b = graph.add_node("b.rs".to_string());
-        let c = graph.add_node("c.rs".to_string());
-        graph.add_edge(a, b, ());
-        graph.add_edge(b, c, ());
-        graph.add_edge(c, a, ());
-
-        let cycles = analyzer.detect_cycles(&graph);
-        assert_eq!(cycles.len(), 1);
-        assert_eq!(cycles[0].len(), 3);
-    }
-
-    #[test]
-    fn test_cycle_detection_self_loop() {
-        let analyzer = Analyzer::new();
-        let mut graph: DiGraph<String, ()> = DiGraph::new();
-        let a = graph.add_node("a.rs".to_string());
-        graph.add_edge(a, a, ());
-
-        let cycles = analyzer.detect_cycles(&graph);
-        assert_eq!(cycles.len(), 1);
-        assert_eq!(cycles[0].len(), 1);
     }
 
     #[test]
