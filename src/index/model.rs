@@ -151,6 +151,88 @@ pub struct ImportBinding {
     pub target_symbol: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReferenceKind {
+    Call,
+    /// A call that makes an object of a type, as `new T()` does.
+    Construct,
+}
+
+/// The expression on which a call selects its callee.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Receiver {
+    /// `self`, `this`, or `$this`.
+    SelfValue,
+    /// `super`, `base`, or `parent`.
+    Super,
+    /// One name, for example a variable, a type, or a module.
+    Name(String),
+    /// An expression that is not one name.
+    Expression,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolutionStatus {
+    /// An external index gave the definition. The tree-sitter index does not use this status.
+    Resolved,
+    /// The rules found one definition.
+    UniqueCandidate,
+    /// The rules found more than one definition, or the receiver has no known type.
+    Ambiguous,
+    /// The rules found no definition, or a local value has the name.
+    Unresolved,
+    /// The name refers to a definition that is not in the repository.
+    External,
+}
+
+/// The rule that gave the candidates of a resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResolutionBasis {
+    Scip,
+    LexicalScope,
+    SameFile,
+    ImportedName,
+    ImportedAlias,
+    ImportedModule,
+    EnclosingType,
+    ReceiverDeclaredType,
+    QualifiedPath,
+    SamePackage,
+    NameOnly,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Resolution {
+    pub status: ResolutionStatus,
+    /// `None` when no rule applied.
+    pub basis: Option<ResolutionBasis>,
+    /// The keys of the candidate symbols, in key order. An edge exists only
+    /// for the status `Resolved` or `UniqueCandidate`.
+    pub candidates: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reference {
+    pub file: String,
+    pub name_range: Span,
+    pub name: String,
+    pub kind: ReferenceKind,
+    /// The key of the nearest definition that contains the reference. A call
+    /// in a callback thus has the function that contains the callback.
+    pub enclosing: Option<String>,
+    /// The reference is in a function value that has no name.
+    pub via_closure: bool,
+    pub receiver: Option<Receiver>,
+    /// The path before the name, for example `a::b` in `a::b::run()`.
+    pub qualifier: Option<String>,
+    pub arity: usize,
+    pub resolution: Resolution,
+}
+
 /// Renders the key of a symbol.
 ///
 /// `ordinal` is the position of the symbol among the symbols of one file that

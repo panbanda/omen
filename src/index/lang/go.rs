@@ -13,6 +13,24 @@ const IMPORT_SPEC: &str = "import_spec";
 const BLANK_IDENTIFIER: &str = "blank_identifier";
 const DOT: &str = "dot";
 
+use crate::index::calls::{CallSyntax, LocalName};
+
+const CALL_SYNTAX: CallSyntax = CallSyntax {
+    calls: &[("call_expression", "function", "arguments")],
+    constructions: &[],
+    members: &[("selector_expression", "operand", "field")],
+    paths: &[],
+    names: &[IDENTIFIER],
+    self_words: &[],
+    super_words: &[],
+    locals: &[(VAR_SPEC, "name", "type", "value")],
+    parameters: &[
+        ("parameter_declaration", "name", "type"),
+        ("variadic_parameter_declaration", "name", "type"),
+    ],
+    return_type_field: "result",
+};
+
 pub struct Go;
 
 const FUNCTION_LITERAL: &str = "func_literal";
@@ -44,6 +62,46 @@ const DEFINITIONS: &[DefinitionRule] = &[
 ];
 
 impl LanguageSpec for Go {
+    fn call_syntax(&self) -> CallSyntax {
+        CALL_SYNTAX
+    }
+
+    fn local_kinds(&self) -> Vec<&'static str> {
+        let mut kinds = self.call_syntax().local_kinds();
+        kinds.push(SHORT_VAR_DECLARATION);
+        kinds
+    }
+
+    /// `a, b := x, y` binds each name on the left to the value at the same position.
+    fn locals(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
+        if node.kind() != SHORT_VAR_DECLARATION {
+            self.call_syntax().locals(node, context, out);
+            return;
+        }
+        let (Some(left), Some(right)) = (
+            node.child_by_field_name("left"),
+            node.child_by_field_name("right"),
+        ) else {
+            return;
+        };
+        for position in 0..left.named_child_count() {
+            let Some(name) = left.named_child(position as u32) else {
+                continue;
+            };
+            if name.kind() != IDENTIFIER {
+                continue;
+            }
+            let paired = left.named_child_count() == right.named_child_count();
+            let value = paired.then(|| right.named_child(position as u32)).flatten();
+            out.push(LocalName {
+                name: context.text(name),
+                type_name: None,
+                value_start: value.map(|value| value.start_byte()),
+                is_parameter: false,
+            });
+        }
+    }
+
     fn import_kinds(&self) -> Vec<&'static str> {
         vec![IMPORT_SPEC]
     }
@@ -340,6 +398,75 @@ mod tests {
                 "4 Module example.com/lib/pkg pkg->pkg ambiguous(one/pkg/a.go,two/pkg/b.go)",
                 "5 Module example.com/solo/x x->x third/x/x.go",
                 "6 Module example.com/app/inner inner->inner package(app/inner/a.go,app/inner/b.go)",
+            ]
+        );
+    }
+
+    const CALL_FILES: &[(&str, &str)] = &[
+        ("go.mod", "module example.com/shop\n"),
+        (
+            "main.go",
+            "package main\n\nimport (\n\t\"strings\"\n\n\t. \"example.com/shop/other\"\n\t\"example.com/shop/shapes\"\n\ttools \"example.com/shop/util\"\n)\n\nfunc local() int { return 4 }\n\nfunc run() int {\n\ttotal := local() + tools.Helper() + OnlyHere()\n\tcircle := shapes.NewCircle(1)\n\t_ = circle.Area()\n\tnumbers := apply(func(n int) int { return local() })\n\tadd := func(n int) int { return n + 1 }\n\treturn total + add(len(numbers))\n}\n\nfunc apply(f func(int) int) int {\n\treturn f(1)\n}\n\nfunc measure(size shapes.Square, shape shapes.Shape) float64 {\n\treturn size.Area() + shape.Area()\n}\n\nfunc shadow() int {\n\tHelper := func() int { return 9 }\n\treturn Helper()\n}\n\nfunc external(unknown Thing) string {\n\tvar b strings.Builder\n\tb.WriteString(\"x\")\n\tunknown.Area()\n\treturn strings.ToUpper(b.String()) + tools.Missing()\n}\n",
+        ),
+        (
+            "other/other.go",
+            "package other\n\nfunc Helper() int { return 2 }\n\nfunc OnlyHere() int { return 3 }\n\nfunc WriteString() {}\n",
+        ),
+        (
+            "shapes/shapes.go",
+            "package shapes\n\ntype Shape interface {\n\tArea() float64\n}\n\ntype Circle struct{}\n\ntype Square struct{}\n\nfunc NewCircle(radius float64) *Circle {\n\treturn &Circle{}\n}\n\nfunc (c *Circle) Area() float64 {\n\treturn c.scaled(1) + hidden()\n}\n\nfunc (c *Circle) scaled(factor float64) float64 {\n\treturn factor\n}\n\nfunc (s Square) Area() float64 {\n\treturn 1\n}\n",
+        ),
+        ("shapes/more.go", "package shapes\n\nfunc hidden() float64 { return 7 }\n"),
+        ("util/util.go", "package util\n\nfunc Helper() int { return 1 }\n"),
+        ("tools.py", "def local():\n    pass\n"),
+    ];
+
+    #[test]
+    fn test_calls_with_names_and_imports() {
+        use crate::index::resolve::testing::rows;
+        assert_eq!(
+            rows(CALL_FILES, "main.go")[..9],
+            [
+                "14 run>local UniqueCandidate SameFile [main.go#local]",
+                "14 run>tools.Helper UniqueCandidate ImportedModule [util/util.go#Helper]",
+                "14 run>OnlyHere UniqueCandidate ImportedModule [other/other.go#OnlyHere]",
+                "15 run>shapes.NewCircle UniqueCandidate ImportedModule [shapes/shapes.go#NewCircle]",
+                "16 run>circle.Area UniqueCandidate ReceiverDeclaredType [shapes/shapes.go#Circle.Area]",
+                "17 run>apply UniqueCandidate SameFile [main.go#apply]",
+                "17 run>local UniqueCandidate SameFile [main.go#local]",
+                "19 run>add UniqueCandidate LexicalScope [main.go#run.add]",
+                "19 run>len Unresolved - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_calls_that_do_not_give_an_edge() {
+        use crate::index::resolve::testing::rows;
+        assert_eq!(
+            rows(CALL_FILES, "main.go")[9..],
+            [
+                "23 apply>f Unresolved - []",
+                "27 measure>size.Area UniqueCandidate ReceiverDeclaredType [shapes/shapes.go#Square.Area]",
+                "27 measure>shape.Area Ambiguous NameOnly [shapes/shapes.go#Circle.Area, shapes/shapes.go#Shape.Area, shapes/shapes.go#Square.Area]",
+                "32 shadow>Helper UniqueCandidate LexicalScope [main.go#shadow.Helper]",
+                "37 external>b.WriteString Unresolved - []",
+                "38 external>unknown.Area Unresolved - []",
+                "39 external>strings.ToUpper External - []",
+                "39 external>b.String Unresolved - []",
+                "39 external>tools.Missing Unresolved - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_calls_in_methods() {
+        use crate::index::resolve::testing::rows;
+        assert_eq!(
+            rows(CALL_FILES, "shapes/shapes.go"),
+            [
+                "16 Circle.Area>c.scaled UniqueCandidate ReceiverDeclaredType [shapes/shapes.go#Circle.scaled]",
+                "16 Circle.Area>hidden UniqueCandidate SamePackage [shapes/more.go#hidden]",
             ]
         );
     }

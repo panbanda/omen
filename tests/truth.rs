@@ -17,18 +17,20 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use omen::analyzers::repomap::{build_index, ResolutionStatus};
+use omen::analyzers::repomap::{build_index, ResolutionStatus as OldStatus};
 use omen::benchmark::truth::{
     bless, check_ledger, compare, coverage_gaps, label_assertion_ids, ledger_growth, render_table,
     summarize, Assertion, ImportedName, Kind, Labels, LedgerEntry, Location, Observed,
     ObservedCall, ObservedImport, ObservedSymbol,
 };
 use omen::core::Language;
-use omen::index::extract::{extract_file, link_files};
+use omen::index::extract::{extract_file, language_spec, link_files, FileSymbols};
 use omen::index::imports::{resolve_imports, Manifests};
 use omen::index::model::{
-    Exported, ImportBinding, ImportKind as IndexImportKind, ImportTarget, Symbol, SymbolKind,
+    Exported, ImportBinding, ImportKind as IndexImportKind, ImportTarget, ResolutionStatus, Symbol,
+    SymbolKind,
 };
+use omen::index::resolve::resolve_references;
 use omen::parser::Parser;
 
 const LABELS_FILE: &str = "labels.json";
@@ -209,10 +211,62 @@ fn observed_imports(bindings: &[ImportBinding]) -> Vec<ObservedImport> {
     imports
 }
 
+/// The shared index supplies the calls of the files of these languages. The
+/// other languages use the functions of the `symbol`, `impact`, and `repomap`
+/// commands until they have a call table in the index.
+fn in_call_index(file: &str) -> bool {
+    Language::detect(Path::new(file))
+        .is_some_and(|language| !language_spec(language).call_kinds().is_empty())
+}
+
+/// The calls of the shared index. A call without an enclosing definition has
+/// no caller, and the labels do not describe it. An edge exists only for one
+/// candidate that the rules selected.
+fn observed_calls(files: &[FileSymbols]) -> Vec<ObservedCall> {
+    let locations: BTreeMap<&str, Location> = files
+        .iter()
+        .flat_map(|file| {
+            file.symbols.iter().map(|symbol| {
+                let location = Location {
+                    file: file.file.clone(),
+                    name: symbol.name.clone(),
+                    start_line: symbol.range.start_line,
+                };
+                (symbol.key.as_str(), location)
+            })
+        })
+        .collect();
+    let mut calls = Vec::new();
+    for reference in files.iter().flat_map(|file| &file.references) {
+        let Some(caller) = reference.enclosing.as_deref() else {
+            continue;
+        };
+        if !in_call_index(&reference.file) {
+            continue;
+        }
+        let candidates: Vec<Location> = reference
+            .resolution
+            .candidates
+            .iter()
+            .map(|key| locations[key.as_str()].clone())
+            .collect();
+        let edge = matches!(
+            reference.resolution.status,
+            ResolutionStatus::Resolved | ResolutionStatus::UniqueCandidate
+        );
+        calls.push(ObservedCall {
+            caller: locations[caller].clone(),
+            call: reference.name.clone(),
+            edges: if edge { candidates.clone() } else { Vec::new() },
+            candidates,
+        });
+    }
+    calls
+}
+
 /// Convert the facts that omen reports for one case into the label model.
 ///
-/// The symbols and the imports come from the shared index. The calls use the
-/// same functions as the `symbol`, `impact`, and `repomap` commands.
+/// The symbols, the imports, and the calls come from the shared index.
 ///
 /// If omen does not report a fact, the adapter gives `None`. It does not
 /// calculate a value that omen does not report.
@@ -245,15 +299,16 @@ fn observe(dir: &Path) -> Observed {
             .to_string(),
         start_line: location.line,
     };
-    let calls = index
+    let mut calls: Vec<ObservedCall> = index
         .call_resolutions
         .iter()
+        .filter(|resolution| !in_call_index(&resolution.caller.file))
         .map(|resolution| {
             let candidates: Vec<Location> = resolution.candidates.iter().map(locate).collect();
             ObservedCall {
                 caller: locate(&resolution.caller),
                 call: resolution.call.clone(),
-                edges: if resolution.status == ResolutionStatus::UniqueCandidate {
+                edges: if resolution.status == OldStatus::UniqueCandidate {
                     candidates.clone()
                 } else {
                     Vec::new()
@@ -275,6 +330,8 @@ fn observe(dir: &Path) -> Observed {
     let mut manifests = Manifests::default();
     read_manifests(dir, dir, &mut manifests);
     resolve_imports(&mut index_files, &manifests);
+    resolve_references(&mut index_files);
+    calls.extend(observed_calls(&index_files));
     let mut symbols = Vec::new();
     for index_file in index_files {
         imports.extend(observed_imports(&index_file.imports));

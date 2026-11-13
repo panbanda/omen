@@ -8,9 +8,11 @@ use std::collections::{BTreeMap, HashMap};
 
 use tree_sitter::Node;
 
+use super::calls::{split_type, Call, CallSyntax, LocalName};
 use super::lang;
 use super::model::{
-    symbol_key, Exported, ImportBinding, ImportKind, ImportTarget, Span, Symbol, SymbolKind,
+    symbol_key, Exported, ImportBinding, ImportKind, ImportTarget, Reference, ReferenceKind,
+    Resolution, ResolutionStatus, Span, Symbol, SymbolKind,
 };
 use crate::core::Language;
 use crate::parser::ParseResult;
@@ -96,15 +98,49 @@ pub struct Draft<'tree> {
     /// The number of declared parameters, if the language links definitions
     /// to declarations.
     pub parameter_count: Option<usize>,
+    /// The node ID of the nearest definition that contains this definition.
+    pub owner: Option<usize>,
+    /// The declared type of the result, as the source has it.
+    pub return_type: Option<String>,
+    /// The definition implements a member of a trait or an interface in a
+    /// block that is not the body of its type, as a Rust `impl Trait for Type` does.
+    pub trait_implementation: bool,
+    /// The definition is the default export of its module.
+    pub default_export: bool,
 }
 
-/// Facts that only `link_files` uses. They are not a part of the symbol model.
+/// Facts that only `link_files` and the resolver use. They are not a part of
+/// the symbol model.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LinkFacts {
     /// The names of the scopes that contain the symbol. A qualifier in the
     /// name of a definition is a part of this path.
     pub container_path: Vec<String>,
     pub parameter_count: Option<usize>,
+    /// The position in `FileSymbols::symbols` of the nearest definition that
+    /// contains the symbol.
+    pub parent: Option<usize>,
+    pub return_type: Option<String>,
+    pub trait_implementation: bool,
+    pub default_export: bool,
+}
+
+/// Facts of a reference that only the resolver uses.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReferenceFacts {
+    /// The start byte of the call expression. A local name whose first value
+    /// starts at this byte has the result of the call.
+    pub start_byte: usize,
+    /// The position in `FileSymbols::symbols` of the enclosing definition.
+    pub owner: Option<usize>,
+}
+
+/// A local name and the definition that binds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Local {
+    pub name: LocalName,
+    /// The position in `FileSymbols::symbols` of the function that binds the name.
+    pub owner: Option<usize>,
 }
 
 /// One symbol and its link facts.
@@ -234,6 +270,37 @@ pub trait LanguageSpec: Sync {
     /// `symbols` has the symbols of each file of this language. The result
     /// must not depend on the order of `symbols`.
     fn link(&self, _symbols: &mut [Linked<'_>]) {}
+
+    /// The table that tells how the language writes calls and local names.
+    fn call_syntax(&self) -> CallSyntax {
+        CallSyntax::default()
+    }
+
+    /// Each node kind for which the walk calls `call`.
+    fn call_kinds(&self) -> Vec<&'static str> {
+        self.call_syntax().call_kinds()
+    }
+
+    /// Describes the call at a node. The default reads the table.
+    fn call<'tree>(&self, node: Node<'tree>, context: &Context<'_, 'tree>) -> Option<Call<'tree>> {
+        self.call_syntax().call(node, context)
+    }
+
+    /// Each node kind for which the walk calls `locals`.
+    fn local_kinds(&self) -> Vec<&'static str> {
+        self.call_syntax().local_kinds()
+    }
+
+    /// Adds the local names that a node binds. The default reads the table.
+    fn locals(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
+        self.call_syntax().locals(node, context, out);
+    }
+
+    /// Each node kind that `call` or `locals` compares with, and that is not
+    /// in the table. The grammar lint examines these kinds.
+    fn call_hook_kinds(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
 }
 
 /// Gives the specification of a language.
@@ -332,9 +399,24 @@ struct Extractor<'a, 'tree> {
     module_kinds: Vec<&'static str>,
     imports: Vec<ImportBinding>,
     modules: Vec<String>,
+    /// For each scope, the node ID of the definition that opened it.
+    scope_owners: Vec<Option<usize>>,
+    /// The depths of the function values that have no name and contain the current node.
+    closure_depths: Vec<usize>,
+    call_kinds: Vec<&'static str>,
+    local_kinds: Vec<&'static str>,
+    return_type_field: &'static str,
+    /// Each call with its start byte, its owner, and its closure flag.
+    calls: Vec<(Call<'tree>, usize, Option<usize>, bool)>,
+    locals: Vec<(LocalName, Option<usize>)>,
 }
 
 impl<'tree> Extractor<'_, 'tree> {
+    /// The node ID of the nearest definition that contains the current node.
+    fn owner(&self) -> Option<usize> {
+        self.scope_owners.iter().rev().flatten().next().copied()
+    }
+
     fn draft(&self, node: Node<'tree>, rule: &DefinitionRule) -> Option<(Draft<'tree>, Exported)> {
         let context = Context {
             file: self.file,
@@ -365,6 +447,13 @@ impl<'tree> Extractor<'_, 'tree> {
             body: node.child_by_field_name("body"),
             role: ScopeRole::Function,
             parameter_count: None,
+            owner: self.owner(),
+            return_type: (!self.return_type_field.is_empty())
+                .then(|| node.child_by_field_name(self.return_type_field))
+                .flatten()
+                .map(|result| context.text(result)),
+            trait_implementation: false,
+            default_export: false,
         };
         if draft.kind == SymbolKind::Module {
             draft.role = ScopeRole::Module;
@@ -398,8 +487,33 @@ impl<'tree> Extractor<'_, 'tree> {
                 self.modules.extend(self.spec.module_name(node, &context));
             }
         }
+        let call = self.call_kinds.contains(&node.kind());
+        let local = self.local_kinds.contains(&node.kind());
+        if call || local {
+            let context = Context {
+                file: self.file,
+                source: self.source,
+                scopes: &self.scopes,
+            };
+            let owner = self.owner();
+            if let Some(call) = call.then(|| self.spec.call(node, &context)).flatten() {
+                let via_closure = !self.closure_depths.is_empty();
+                self.calls
+                    .push((call, node.start_byte(), owner, via_closure));
+            }
+            if local {
+                let mut names = Vec::new();
+                self.spec.locals(node, &context, &mut names);
+                self.locals
+                    .extend(names.into_iter().map(|name| (name, owner)));
+            }
+        }
         let rule = self.rules.get(node.kind()).copied();
         let definition = rule.and_then(|rule| self.draft(node, &rule));
+        if definition.is_none() && rule.is_some_and(|rule| rule.name == NameRule::Hook) {
+            self.closure_depths.push(depth);
+        }
+        let owner = definition.as_ref().map(|_| node.id());
         let scope = match definition {
             Some((draft, exported)) => {
                 let mut path = draft.container_path.clone();
@@ -427,6 +541,7 @@ impl<'tree> Extractor<'_, 'tree> {
         if let Some(scope) = scope {
             self.scopes.push(scope);
             self.scope_depths.push(depth);
+            self.scope_owners.push(owner);
         }
     }
 
@@ -434,6 +549,10 @@ impl<'tree> Extractor<'_, 'tree> {
         if self.scope_depths.last() == Some(&depth) {
             self.scope_depths.pop();
             self.scopes.pop();
+            self.scope_owners.pop();
+        }
+        if self.closure_depths.last() == Some(&depth) {
+            self.closure_depths.pop();
         }
     }
 
@@ -473,6 +592,12 @@ pub struct FileSymbols {
     pub imports: Vec<ImportBinding>,
     /// The packages or the namespaces that the file declares.
     pub modules: Vec<String>,
+    /// The call sites in source order. `resolve_references` gives the resolutions.
+    pub references: Vec<Reference>,
+    /// One entry for each reference, in the order of `references`.
+    pub reference_facts: Vec<ReferenceFacts>,
+    /// The parameters and the local variables of each function.
+    pub locals: Vec<Local>,
 }
 
 /// Completes the facts that need the symbols of a different file.
@@ -540,6 +665,13 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         module_kinds: spec.module_kinds(),
         imports: Vec::new(),
         modules: Vec::new(),
+        scope_owners: Vec::new(),
+        closure_depths: Vec::new(),
+        call_kinds: spec.call_kinds(),
+        local_kinds: spec.local_kinds(),
+        return_type_field: spec.call_syntax().return_type_field,
+        calls: Vec::new(),
+        locals: Vec::new(),
     };
     extractor.walk(parsed.root_node());
 
@@ -547,10 +679,28 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
     let modules = extractor.modules;
     let mut found = extractor.found;
     found.sort_by_key(|(draft, _)| (draft.span.start_byte, draft.span.end_byte));
+    let positions: HashMap<usize, usize> = found
+        .iter()
+        .enumerate()
+        .map(|(position, (draft, _))| (draft.node.id(), position))
+        .collect();
+    let position_of = |owner: Option<usize>| owner.and_then(|id| positions.get(&id).copied());
+    let locals: Vec<Local> = extractor
+        .locals
+        .into_iter()
+        .map(|(name, owner)| Local {
+            name,
+            owner: position_of(owner),
+        })
+        .collect();
+    let parents: Vec<Option<usize>> = found
+        .iter()
+        .map(|(draft, _)| position_of(draft.owner))
+        .collect();
     let mut ordinals: BTreeMap<(Vec<String>, String), usize> = BTreeMap::new();
     let mut symbols = Vec::with_capacity(found.len());
     let mut link_facts = Vec::with_capacity(found.len());
-    for (draft, exported) in found {
+    for ((draft, exported), parent) in found.into_iter().zip(parents) {
         let ordinal = ordinals
             .entry((draft.container_path.clone(), draft.name.clone()))
             .or_insert(0);
@@ -573,7 +723,40 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         link_facts.push(LinkFacts {
             container_path: draft.container_path,
             parameter_count: draft.parameter_count,
+            parent,
+            return_type: draft.return_type,
+            trait_implementation: draft.trait_implementation,
+            default_export: draft.default_export,
         });
+    }
+    let mut calls = extractor.calls;
+    calls.sort_by_key(|(_, start_byte, _, _)| *start_byte);
+    let mut references = Vec::with_capacity(calls.len());
+    let mut reference_facts = Vec::with_capacity(calls.len());
+    for (call, start_byte, owner, via_closure) in calls {
+        let owner = position_of(owner);
+        let text = String::from_utf8_lossy(&parsed.source[call.callee.name_node.byte_range()]);
+        let name = match call.kind {
+            ReferenceKind::Construct => split_type(&text).1,
+            ReferenceKind::Call => text.to_string(),
+        };
+        references.push(Reference {
+            file: file.to_string(),
+            name_range: Span::of(&call.callee.name_node),
+            name,
+            kind: call.kind,
+            enclosing: owner.map(|owner: usize| symbols[owner].key.clone()),
+            via_closure,
+            receiver: call.callee.receiver,
+            qualifier: call.callee.qualifier,
+            arity: call.arity,
+            resolution: Resolution {
+                status: ResolutionStatus::Unresolved,
+                basis: None,
+                candidates: Vec::new(),
+            },
+        });
+        reference_facts.push(ReferenceFacts { start_byte, owner });
     }
     FileSymbols {
         file: file.to_string(),
@@ -582,6 +765,9 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         link_facts,
         imports,
         modules,
+        references,
+        reference_facts,
+        locals,
     }
 }
 

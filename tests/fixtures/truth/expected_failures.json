@@ -245,46 +245,6 @@
     "tracking": "phase-2-shared-index"
   },
   {
-    "id": "go/basics/calls/alias/no_missed_edge",
-    "reason": "no edge to util/util.go:Helper:3",
-    "tracking": "phase-2-shared-index"
-  },
-  {
-    "id": "go/basics/calls/bound_closure/no_missed_edge",
-    "reason": "no edge to main.go:add:22",
-    "tracking": "phase-2-shared-index"
-  },
-  {
-    "id": "go/basics/calls/callback/no_missed_edge",
-    "reason": "no edge to main.go:twiceLocal:34",
-    "tracking": "phase-2-shared-index"
-  },
-  {
-    "id": "go/basics/calls/declared_receiver/no_missed_edge",
-    "reason": "no edge to shapes/shapes.go:Area:31",
-    "tracking": "phase-2-shared-index"
-  },
-  {
-    "id": "go/basics/calls/inferred_receiver/no_missed_edge",
-    "reason": "no edge to shapes/shapes.go:Area:23",
-    "tracking": "phase-2-shared-index"
-  },
-  {
-    "id": "go/basics/calls/interface_dispatch/candidates",
-    "reason": "not offered: shapes/shapes.go:Area:6",
-    "tracking": "phase-2-shared-index"
-  },
-  {
-    "id": "go/basics/calls/shadowing/no_missed_edge",
-    "reason": "no edge to main.go:Helper:43",
-    "tracking": "phase-2-shared-index"
-  },
-  {
-    "id": "go/basics/calls/std_method/no_false_edge",
-    "reason": "false edge to other/other.go:WriteString:11",
-    "tracking": "phase-2-shared-index"
-  },
-  {
     "id": "java/basics/calls/bound_closure/no_missed_edge",
     "reason": "no edge to Main.java:add:31",
     "tracking": "phase-2-shared-index"
