@@ -126,13 +126,13 @@ fn link_style(out: &mut String, indexes: &[usize], style: &str) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::super::graph::fixtures::{edge, node};
     use super::*;
     use std::collections::BTreeSet;
 
     /// A parser for the documented subset. It panics on a line outside the subset.
-    fn check_subset(text: &str) {
+    pub(crate) fn check_subset(text: &str) {
         let mut lines = text.lines();
         assert_eq!(lines.next(), Some("flowchart LR"));
         let mut ids = BTreeSet::new();
