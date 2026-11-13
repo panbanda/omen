@@ -165,6 +165,10 @@ pub trait LanguageSpec: Sync {
     ) -> Option<Scope<'tree>> {
         None
     }
+
+    /// Completes the facts that the syntax of one file does not give.
+    /// `symbols` has the symbols of each file of this language, in file order.
+    fn link(&self, _symbols: &mut [&mut Symbol]) {}
 }
 
 /// Gives the specification of a language.
@@ -178,6 +182,7 @@ pub fn language_spec(language: Language) -> Option<&'static dyn LanguageSpec> {
         Language::Java => Some(&lang::java::Java),
         Language::CSharp => Some(&lang::csharp::CSharp),
         Language::C => Some(&lang::c::C),
+        Language::Cpp => Some(&lang::cpp::Cpp),
         _ => None,
     }
 }
@@ -306,8 +311,10 @@ impl<'tree> Extractor<'_, 'tree> {
         if !node.is_named() {
             return;
         }
-        let scope = match self.rules.get(node.kind()).copied() {
-            Some(rule) => self.draft(node, &rule).map(|(draft, exported)| {
+        let rule = self.rules.get(node.kind()).copied();
+        let definition = rule.and_then(|rule| self.draft(node, &rule));
+        let scope = match definition {
+            Some((draft, exported)) => {
                 let mut path = draft.container_path.clone();
                 path.push(draft.name.clone());
                 let scope = Scope {
@@ -319,8 +326,8 @@ impl<'tree> Extractor<'_, 'tree> {
                     path,
                 };
                 self.found.push((draft, exported));
-                scope
-            }),
+                Some(scope)
+            }
             None => self.spec.scope(
                 node,
                 &Context {
@@ -364,6 +371,39 @@ impl<'tree> Extractor<'_, 'tree> {
                 depth -= 1;
             }
         }
+    }
+}
+
+/// The symbols of one file.
+#[derive(Debug, Clone)]
+pub struct FileSymbols {
+    pub file: String,
+    pub language: Language,
+    pub symbols: Vec<Symbol>,
+}
+
+/// Completes the facts that need the symbols of a different file.
+///
+/// Give all the files of the index in one call, in a constant order. For
+/// example, a C++ definition `int Scope::name() {}` gets its kind and its
+/// visibility from the declaration in a header.
+pub fn link_files(files: &mut [FileSymbols]) {
+    let mut languages: Vec<Language> = Vec::new();
+    for file in files.iter() {
+        if !languages.contains(&file.language) {
+            languages.push(file.language);
+        }
+    }
+    for language in languages {
+        let Some(spec) = language_spec(language) else {
+            continue;
+        };
+        let mut symbols: Vec<&mut Symbol> = files
+            .iter_mut()
+            .filter(|file| file.language == language)
+            .flat_map(|file| file.symbols.iter_mut())
+            .collect();
+        spec.link(&mut symbols);
     }
 }
 
@@ -443,6 +483,23 @@ pub(crate) mod testing {
 
     pub(crate) fn rows(language: Language, source: &str) -> Vec<String> {
         rows_in(language, "file", source)
+    }
+
+    /// The rows of several files after `link_files`, in the order of the files.
+    pub(crate) fn linked_rows(files: &[(Language, &str, &str)]) -> Vec<String> {
+        let mut files: Vec<FileSymbols> = files
+            .iter()
+            .map(|(language, file, source)| FileSymbols {
+                file: file.to_string(),
+                language: *language,
+                symbols: symbols_in(*language, file, source),
+            })
+            .collect();
+        link_files(&mut files);
+        files
+            .iter()
+            .flat_map(|file| format_rows(&file.symbols))
+            .collect()
     }
 
     /// One line for each symbol: `kind name container start-end exported`.

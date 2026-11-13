@@ -25,7 +25,7 @@ use omen::benchmark::truth::{
     ObservedCall, ObservedImport, ObservedSymbol,
 };
 use omen::core::Language;
-use omen::index::extract::{extract_symbols, language_spec};
+use omen::index::extract::{extract_symbols, language_spec, link_files, FileSymbols};
 use omen::index::model::{Exported, Symbol, SymbolKind};
 use omen::parser::{extract_classes, extract_imports, ImportKind, Parser};
 
@@ -238,6 +238,7 @@ fn observe(dir: &Path) -> Observed {
 
     let import_index = ImportIndex::new(&files, dir);
     let mut imports = Vec::new();
+    let mut index_files = Vec::new();
     for path in &files {
         let file = relative(dir, path);
         let parsed = Parser::new().parse_file(path).expect("parse");
@@ -246,11 +247,11 @@ fn observe(dir: &Path) -> Observed {
         } else {
             extract_classes(&parsed)
         };
-        symbols.extend(
-            extract_symbols(&parsed, &file)
-                .into_iter()
-                .filter_map(|symbol| observed_symbol(&file, symbol)),
-        );
+        index_files.push(FileSymbols {
+            symbols: extract_symbols(&parsed, &file),
+            file: file.clone(),
+            language: parsed.language,
+        });
         for class in classes {
             symbols.push(ObservedSymbol {
                 location: Location {
@@ -285,6 +286,17 @@ fn observe(dir: &Path) -> Observed {
                 path: import.path,
             });
         }
+    }
+
+    link_files(&mut index_files);
+    for index_file in index_files {
+        let file = index_file.file;
+        symbols.extend(
+            index_file
+                .symbols
+                .into_iter()
+                .filter_map(|symbol| observed_symbol(&file, symbol)),
+        );
     }
 
     Observed {
