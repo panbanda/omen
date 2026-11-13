@@ -25,6 +25,8 @@ use omen::benchmark::truth::{
     ObservedCall, ObservedImport, ObservedSymbol,
 };
 use omen::core::Language;
+use omen::index::extract::{extract_symbols, language_spec};
+use omen::index::model::{Exported, Symbol, SymbolKind};
 use omen::parser::{extract_classes, extract_imports, ImportKind, Parser};
 
 const LABELS_FILE: &str = "labels.json";
@@ -120,11 +122,55 @@ fn relative(root: &Path, path: &Path) -> String {
         .replace('\\', "/")
 }
 
+/// The label model has no kind for a field, a constant, a variable, or a macro.
+fn label_kind(kind: SymbolKind) -> Option<Kind> {
+    match kind {
+        SymbolKind::Function => Some(Kind::Function),
+        SymbolKind::Method => Some(Kind::Method),
+        SymbolKind::Constructor => Some(Kind::Constructor),
+        SymbolKind::Class => Some(Kind::Class),
+        SymbolKind::Struct => Some(Kind::Struct),
+        SymbolKind::Interface => Some(Kind::Interface),
+        SymbolKind::Trait => Some(Kind::Trait),
+        SymbolKind::Enum => Some(Kind::Enum),
+        SymbolKind::Module => Some(Kind::Module),
+        SymbolKind::TypeAlias => Some(Kind::TypeAlias),
+        SymbolKind::Field | SymbolKind::Constant | SymbolKind::Variable | SymbolKind::Macro => None,
+    }
+}
+
+fn observed_symbol(file: &str, symbol: Symbol) -> Option<ObservedSymbol> {
+    Some(ObservedSymbol {
+        kind: Some(label_kind(symbol.kind)?),
+        location: Location {
+            file: file.to_string(),
+            name: symbol.name,
+            start_line: symbol.range.start_line,
+        },
+        container: symbol.container,
+        end_line: symbol.range.end_line,
+        exported: match symbol.exported {
+            Exported::Exported => Some(true),
+            Exported::NotExported => Some(false),
+            Exported::Unknown(_) => None,
+        },
+    })
+}
+
+/// The shared index supplies the symbols of these files.
+fn in_shared_index(file: &str) -> bool {
+    Language::detect(Path::new(file)).is_some_and(|language| language_spec(language).is_some())
+}
+
 /// Convert the facts that omen reports for one case into the label model.
 ///
-/// This adapter uses the same functions as the `symbol`, `impact`, `repomap`,
-/// `outline`, and `graph` commands. If omen does not report a fact, the adapter
-/// gives `None`. It does not calculate a value that omen does not report.
+/// The symbols come from the shared index. Until each language has a
+/// specification there, the other languages use the functions of the `symbol`,
+/// `impact`, `repomap`, and `outline` commands. The calls and the imports use
+/// those functions and the functions of the `graph` command.
+///
+/// If omen does not report a fact, the adapter gives `None`. It does not
+/// calculate a value that omen does not report.
 fn observe(dir: &Path) -> Observed {
     let mut files = Vec::new();
     source_files(dir, &mut files);
@@ -133,6 +179,7 @@ fn observe(dir: &Path) -> Observed {
     let mut symbols: Vec<ObservedSymbol> = index
         .symbols
         .iter()
+        .filter(|symbol| !in_shared_index(&symbol.file))
         .map(|symbol| ObservedSymbol {
             location: Location {
                 file: symbol.file.replace('\\', "/"),
@@ -194,7 +241,17 @@ fn observe(dir: &Path) -> Observed {
     for path in &files {
         let file = relative(dir, path);
         let parsed = Parser::new().parse_file(path).expect("parse");
-        for class in extract_classes(&parsed) {
+        let classes = if language_spec(parsed.language).is_some() {
+            Vec::new()
+        } else {
+            extract_classes(&parsed)
+        };
+        symbols.extend(
+            extract_symbols(&parsed, &file)
+                .into_iter()
+                .filter_map(|symbol| observed_symbol(&file, symbol)),
+        );
+        for class in classes {
             symbols.push(ObservedSymbol {
                 location: Location {
                     file: file.clone(),
