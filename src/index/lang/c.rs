@@ -5,6 +5,11 @@ use tree_sitter::Node;
 use crate::index::extract::{Context, DefinitionRule, Draft, LanguageSpec, NameRule};
 use crate::index::model::{Exported, Span, SymbolKind};
 
+use crate::index::model::{ImportBinding, ImportKind, ImportTarget};
+
+pub(crate) const PREPROC_INCLUDE: &str = "preproc_include";
+pub(crate) const SYSTEM_LIB_STRING: &str = "system_lib_string";
+
 pub struct C;
 
 pub(crate) const FUNCTION_DEFINITION: &str = "function_definition";
@@ -202,6 +207,18 @@ pub(crate) fn exported(draft: &Draft<'_>, context: &Context<'_, '_>) -> Exported
 }
 
 impl LanguageSpec for C {
+    fn import_kinds(&self) -> Vec<&'static str> {
+        vec![PREPROC_INCLUDE]
+    }
+
+    fn import_hook_kinds(&self) -> Vec<&'static str> {
+        vec![SYSTEM_LIB_STRING]
+    }
+
+    fn imports(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<ImportBinding>) {
+        include_binding(node, context, out);
+    }
+
     fn definitions(&self) -> Vec<DefinitionRule> {
         DEFINITIONS.to_vec()
     }
@@ -229,6 +246,27 @@ impl LanguageSpec for C {
     fn exported(&self, draft: &Draft<'_>, context: &Context<'_, '_>) -> Exported {
         exported(draft, context)
     }
+}
+
+/// One binding for an `#include`. The path has no quotation marks and no
+/// angle brackets. An include with angle brackets starts as external, and the
+/// module map then looks only for a unique file that ends with the path.
+pub(crate) fn include_binding(
+    node: Node<'_>,
+    context: &Context<'_, '_>,
+    out: &mut Vec<ImportBinding>,
+) {
+    let Some(path) = node.child_by_field_name("path") else {
+        return;
+    };
+    let text = context.text(path);
+    let system = path.kind() == SYSTEM_LIB_STRING;
+    let text = text.trim_matches(|mark| mark == '"' || mark == '<' || mark == '>');
+    let mut binding = context.import(node, text, ImportKind::Load, None, None);
+    if system {
+        binding.target_file = ImportTarget::External;
+    }
+    out.push(binding);
 }
 
 #[cfg(test)]
@@ -309,6 +347,41 @@ mod tests {
         assert_eq!(
             rows_in(Language::C, "a.h", source),
             ["Function helper - 4-4 exported"]
+        );
+    }
+
+    #[test]
+    fn test_includes() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            (
+                "main.c",
+                "#include <stdio.h>\n#include \"other.h\"\n#include \"sub/util.h\"\n#include \"deep.h\"\n#include \"twice.h\"\n#include \"nothing.h\"\n#include <sub/util.h>\n#include \"../outside.h\"\n",
+            ),
+            ("other.h", ""),
+            ("util.h", ""),
+            ("sub/util.h", ""),
+            ("sub/util.c", "#include \"util.h\"\n"),
+            ("x/deep.h", ""),
+            ("a/twice.h", ""),
+            ("b/twice.h", ""),
+        ];
+        assert_eq!(
+            rows(&files, "main.c"),
+            [
+                "1 Load stdio.h -->- external",
+                "2 Load other.h -->- other.h",
+                "3 Load sub/util.h -->- sub/util.h",
+                "4 Load deep.h -->- x/deep.h",
+                "5 Load twice.h -->- ambiguous(a/twice.h,b/twice.h)",
+                "6 Load nothing.h -->- unresolved",
+                "7 Load sub/util.h -->- sub/util.h",
+                "8 Load ../outside.h -->- unresolved",
+            ]
+        );
+        assert_eq!(
+            rows(&files, "sub/util.c"),
+            ["1 Load util.h -->- sub/util.h"]
         );
     }
 }
