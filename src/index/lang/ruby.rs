@@ -5,6 +5,11 @@ use tree_sitter::Node;
 use crate::index::extract::{Context, DefinitionRule, Draft, LanguageSpec, NameRule, ScopeRole};
 use crate::index::model::{Exported, Span, SymbolKind};
 
+use crate::index::model::{ImportBinding, ImportKind, ImportTarget};
+
+const STRING: &str = "string";
+const STRING_CONTENT: &str = "string_content";
+
 pub struct Ruby;
 
 const METHOD: &str = "method";
@@ -115,6 +120,41 @@ fn is_public_method(definition: Node<'_>, name: &str, context: &Context<'_, '_>)
 }
 
 impl LanguageSpec for Ruby {
+    fn import_kinds(&self) -> Vec<&'static str> {
+        vec![CALL]
+    }
+
+    fn import_hook_kinds(&self) -> Vec<&'static str> {
+        vec![STRING, STRING_CONTENT]
+    }
+
+    /// Only `require` and `require_relative` with a literal path are imports.
+    /// `include` and a superclass are not imports of a file. The directory of
+    /// `require` is not in the syntax, thus that binding is external.
+    fn imports(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<ImportBinding>) {
+        let Some(method) = bare_call_name(node, context) else {
+            return;
+        };
+        if !["require", "require_relative"].contains(&method.as_str()) {
+            return;
+        }
+        let path = node
+            .child_by_field_name("arguments")
+            .filter(|arguments| arguments.named_child_count() == 1)
+            .and_then(|arguments| arguments.named_child(0))
+            .filter(|string| string.kind() == STRING && string.named_child_count() == 1)
+            .and_then(|string| string.named_child(0))
+            .filter(|content| content.kind() == STRING_CONTENT);
+        let Some(path) = path else {
+            return;
+        };
+        let mut binding = context.import(node, context.text(path), ImportKind::Load, None, None);
+        if method == "require" {
+            binding.target_file = ImportTarget::External;
+        }
+        out.push(binding);
+    }
+
     fn definitions(&self) -> Vec<DefinitionRule> {
         DEFINITIONS.to_vec()
     }
@@ -310,6 +350,33 @@ mod tests {
                 "Module Util - 1-11 exported",
                 "Method helper Util 2-4 exported",
                 "Method twice Util 8-10 exported",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_imports() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            (
+                "app/main.rb",
+                "require 'set'\nrequire_relative 'shapes'\nrequire('json')\nrequire_relative 'lib/x.rb'\nrequire_relative '../top'\nrequire_relative '../../outside'\nrequire_relative \"a/#{name}\"\nloader.require 'x'\nrequire_relative 'missing'\nrequire 'shapes'\n\nclass Circle < Shape\n  include Describable\nend\n",
+            ),
+            ("app/shapes.rb", ""),
+            ("app/lib/x.rb", ""),
+            ("top.rb", ""),
+        ];
+        assert_eq!(
+            rows(&files, "app/main.rb"),
+            [
+                "1 Load set -->- external",
+                "2 Load shapes -->- app/shapes.rb",
+                "3 Load json -->- external",
+                "4 Load lib/x.rb -->- app/lib/x.rb",
+                "5 Load ../top -->- top.rb",
+                "6 Load ../../outside -->- unresolved",
+                "9 Load missing -->- unresolved",
+                "10 Load shapes -->- external",
             ]
         );
     }

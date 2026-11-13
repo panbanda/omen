@@ -1235,21 +1235,6 @@
     "tracking": "phase-2-shared-index"
   },
   {
-    "id": "ruby/basics/imports/unlabelled:shapes.rb:10:Describable/absent",
-    "reason": "extracted but not a labelled import",
-    "tracking": "phase-2-shared-index"
-  },
-  {
-    "id": "ruby/basics/imports/unlabelled:shapes.rb:25:Shape/absent",
-    "reason": "extracted but not a labelled import",
-    "tracking": "phase-2-shared-index"
-  },
-  {
-    "id": "ruby/basics/imports/unlabelled:shapes.rb:65:Shape/absent",
-    "reason": "extracted but not a labelled import",
-    "tracking": "phase-2-shared-index"
-  },
-  {
     "id": "rust/basics/calls/associated/candidates",
     "reason": "not offered: shapes.rs:new:23",
     "tracking": "phase-2-shared-index"
