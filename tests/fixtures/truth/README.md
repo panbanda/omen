@@ -61,6 +61,8 @@ To write the ledger again from the current results, run this command:
 OMEN_TRUTH_BLESS=1 cargo test --test truth
 ```
 
-Examine the diff before you commit it. A new entry is permitted only for a new
-label. The `ledger_never_grows` test in CI enforces this rule against the base
-branch.
+This command writes each current failure. Thus it can add entries, not only
+remove them: a change that makes an old label fail gets a new entry, and the
+test then passes. Examine the diff before you commit it. A new entry is
+permitted only for a new label. The command does not enforce this rule. The
+`ledger_never_grows` test in CI enforces it against the base branch.
