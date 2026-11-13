@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use super::truth::{Assertion, Labels, Location};
+use super::truth::{Assertion, Labels, LedgerEntry, Location};
 
 pub const CORPUS_VERSION: u32 = 1;
 
@@ -387,6 +387,105 @@ pub fn check_ranks(outcomes: &[Outcome], baseline: &[RankEntry]) -> Vec<RankViol
         }
     }
     violations
+}
+
+/// The queries of a corpus, with `<language>/<query id>` as the key.
+fn queries_by_key(corpus: &Corpus) -> BTreeMap<String, &Query> {
+    corpus
+        .cases
+        .iter()
+        .flat_map(|case| {
+            case.queries
+                .iter()
+                .map(move |query| (format!("{}/{}", case.language, query.id), query))
+        })
+        .collect()
+}
+
+/// The `<language>/<query id>` part of an assertion id.
+fn query_key(assertion_id: &str) -> &str {
+    assertion_id
+        .rsplit_once('/')
+        .map_or(assertion_id, |(key, _)| key)
+}
+
+/// Tell if a query has a different type or a different set of expected labels.
+fn is_changed(base: &Query, current: &Query) -> bool {
+    let labels = |query: &Query| -> BTreeSet<String> { query.expected.iter().cloned().collect() };
+    base.query_type != current.query_type || labels(base) != labels(current)
+}
+
+/// Find the changes that make the ledger grow, or that hide a failure, since
+/// the base revision. The comparison uses the query id, not the assertion id.
+///
+/// - A new ledger entry is permitted only if the base corpus does not have the
+///   query. An entry for a query of the base corpus is not permitted, also if
+///   the query changed and the entry has a new assertion id.
+/// - A query of the base corpus that has a base ledger entry must keep its
+///   type and its expected labels. A change there can remove a failure from
+///   the ledger while the engine is the same.
+pub fn ledger_growth(
+    base: &Corpus,
+    base_ledger: &[LedgerEntry],
+    corpus: &Corpus,
+    ledger: &[LedgerEntry],
+) -> Vec<String> {
+    let base_queries = queries_by_key(base);
+    let queries = queries_by_key(corpus);
+    let before: BTreeSet<&str> = base_ledger.iter().map(|entry| entry.id.as_str()).collect();
+    let changed = |key: &str| match (base_queries.get(key), queries.get(key)) {
+        (Some(base), Some(current)) => is_changed(base, current),
+        _ => false,
+    };
+
+    let mut problems = BTreeSet::new();
+    for entry in ledger {
+        let key = query_key(&entry.id);
+        if before.contains(entry.id.as_str()) || !base_queries.contains_key(key) {
+            continue;
+        }
+        let cause = if changed(key) {
+            "the query is in the base corpus with a different type or different expected labels"
+        } else {
+            "the assertion passed on the base branch"
+        };
+        problems.insert(format!("{}: {cause}", entry.id));
+    }
+    for entry in base_ledger {
+        let key = query_key(&entry.id);
+        if changed(key) {
+            problems.insert(format!(
+                "{key}: the query failed on the base branch, so its type and its expected labels must not change"
+            ));
+        }
+    }
+    problems.into_iter().collect()
+}
+
+/// Find the ranks that are worse than on the base revision, for the queries
+/// that the base corpus has. A query that the base corpus does not have is new,
+/// and each rank is permitted for it.
+pub fn rank_growth(base: &Corpus, base_ranks: &[RankEntry], ranks: &[RankEntry]) -> Vec<String> {
+    let base_queries = queries_by_key(base);
+    let before: BTreeMap<&str, Option<usize>> = base_ranks
+        .iter()
+        .map(|entry| (entry.id.as_str(), entry.rank))
+        .collect();
+    ranks
+        .iter()
+        .filter(|entry| base_queries.contains_key(&entry.id))
+        .filter_map(|entry| {
+            let baseline = *before.get(entry.id.as_str())?;
+            (compare_ranks(entry.rank, baseline) == std::cmp::Ordering::Less).then(|| {
+                format!(
+                    "{}: {}, the base branch has {}",
+                    entry.id,
+                    rank_text(entry.rank),
+                    rank_text(baseline)
+                )
+            })
+        })
+        .collect()
 }
 
 fn assertion_id(language: &str, query: &str, check: &str) -> String {
@@ -1139,5 +1238,179 @@ mod tests {
             serde_json::from_str::<RankEntry>(&text).unwrap(),
             rank("rust/q", None)
         );
+    }
+    fn entry(id: &str) -> LedgerEntry {
+        LedgerEntry {
+            id: id.to_string(),
+            reason: "reason".to_string(),
+            tracking: "tracking".to_string(),
+        }
+    }
+
+    /// The complete corpus with one query replaced or added.
+    fn corpus_with(query: serde_json::Value) -> Corpus {
+        let mut changed = corpus(Vec::new());
+        let query: Query = serde_json::from_value(query).unwrap();
+        let queries = &mut changed.cases[0].queries;
+        match queries.iter_mut().find(|existing| existing.id == query.id) {
+            Some(existing) => *existing = query,
+            None => queries.push(query),
+        }
+        changed
+    }
+
+    #[test]
+    fn a_ledger_entry_for_a_new_query_is_permitted() {
+        let base = corpus(Vec::new());
+        let current = corpus_with(serde_json::json!({
+            "id": "fresh", "type": "identifier", "query": "helper", "expected": ["helper"]
+        }));
+
+        let grown = ledger_growth(&base, &[], &current, &[entry("rust/fresh/hit@1")]);
+
+        assert_eq!(grown, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_ledger_entry_for_a_query_that_passed_on_the_base_is_growth() {
+        let base = corpus(Vec::new());
+
+        let grown = ledger_growth(&base, &[], &base, &[entry("rust/i0/hit@1")]);
+
+        assert_eq!(
+            grown,
+            ["rust/i0/hit@1: the assertion passed on the base branch"]
+        );
+    }
+
+    #[test]
+    fn an_entry_that_the_base_ledger_has_is_not_growth() {
+        let base = corpus(Vec::new());
+        let ledger = [entry("rust/i0/hit@1")];
+
+        assert_eq!(
+            ledger_growth(&base, &ledger, &base, &ledger),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn a_changed_query_type_does_not_permit_a_new_entry() {
+        let base = corpus(Vec::new());
+        let current = corpus_with(serde_json::json!({
+            "id": "i0", "type": "code_sketch", "query": "helper", "expected": ["helper"]
+        }));
+
+        let grown = ledger_growth(&base, &[], &current, &[entry("rust/i0/hit@10")]);
+
+        assert_eq!(grown.len(), 1, "{grown:?}");
+        assert!(grown[0].starts_with("rust/i0/hit@10: the query is in the base corpus"));
+    }
+
+    #[test]
+    fn a_positive_query_that_becomes_negative_does_not_permit_a_new_entry() {
+        // The assertion id `empty` is new, but the query id is not.
+        let base = corpus(Vec::new());
+        let current = corpus_with(serde_json::json!({
+            "id": "i0", "type": "identifier", "query": "helper", "expected": []
+        }));
+
+        let grown = ledger_growth(&base, &[], &current, &[entry("rust/i0/empty")]);
+
+        assert_eq!(grown.len(), 1, "{grown:?}");
+        assert!(grown[0].starts_with("rust/i0/empty: the query is in the base corpus"));
+    }
+
+    #[test]
+    fn changed_expected_labels_do_not_permit_a_new_entry() {
+        let base = corpus(Vec::new());
+        let current = corpus_with(serde_json::json!({
+            "id": "i0", "type": "identifier", "query": "helper", "expected": ["other"]
+        }));
+
+        let grown = ledger_growth(&base, &[], &current, &[entry("rust/i0/hit@1")]);
+
+        assert_eq!(grown.len(), 1, "{grown:?}");
+        assert!(grown[0].contains("different expected labels"));
+    }
+
+    #[test]
+    fn a_query_that_failed_on_the_base_must_not_change() {
+        // The engine is the same, but the change removes the failure from the
+        // ledger. No new entry shows it.
+        let base = corpus(Vec::new());
+        let base_ledger = [entry("rust/i0/hit@1"), entry("rust/i0/hit@10")];
+        let weaker_labels = corpus_with(serde_json::json!({
+            "id": "i0", "type": "identifier", "query": "helper", "expected": ["helper", "other"]
+        }));
+        let now_negative = corpus_with(serde_json::json!({
+            "id": "i0", "type": "identifier", "query": "helper", "expected": []
+        }));
+
+        for current in [weaker_labels, now_negative] {
+            let grown = ledger_growth(&base, &base_ledger, &current, &[]);
+
+            assert_eq!(grown.len(), 1, "{grown:?}");
+            assert!(grown[0].starts_with("rust/i0: the query failed on the base branch"));
+        }
+    }
+
+    #[test]
+    fn a_query_that_passed_on_the_base_can_change() {
+        let base = corpus(Vec::new());
+        let current = corpus_with(serde_json::json!({
+            "id": "i0", "type": "identifier", "query": "helper", "expected": ["helper", "other"]
+        }));
+
+        assert_eq!(
+            ledger_growth(&base, &[], &current, &[]),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn the_order_of_the_expected_labels_is_not_a_change() {
+        let base = corpus_with(serde_json::json!({
+            "id": "i0", "type": "identifier", "query": "helper", "expected": ["helper", "other"]
+        }));
+        let current = corpus_with(serde_json::json!({
+            "id": "i0", "type": "identifier", "query": "helper", "expected": ["other", "helper"]
+        }));
+        let ledger = [entry("rust/i0/hit@1")];
+
+        assert_eq!(
+            ledger_growth(&base, &ledger, &current, &ledger),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn a_rank_that_is_worse_than_on_the_base_is_growth() {
+        let base = corpus(Vec::new());
+        let base_ranks = [
+            rank("rust/i0", Some(2)),
+            rank("rust/i1", Some(3)),
+            rank("rust/i2", None),
+        ];
+        let ranks = [
+            rank("rust/fresh", None),
+            rank("rust/i0", Some(9)),
+            rank("rust/i1", Some(1)),
+            rank("rust/i2", None),
+            rank("rust/i3", Some(7)),
+        ];
+
+        let grown = rank_growth(&base, &base_ranks, &ranks);
+
+        assert_eq!(grown, ["rust/i0: rank 9, the base branch has rank 2"]);
+    }
+
+    #[test]
+    fn a_lost_symbol_is_rank_growth() {
+        let base = corpus(Vec::new());
+
+        let grown = rank_growth(&base, &[rank("rust/i0", Some(4))], &[rank("rust/i0", None)]);
+
+        assert_eq!(grown, ["rust/i0: no rank, the base branch has rank 4"]);
     }
 }

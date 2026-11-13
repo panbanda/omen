@@ -21,11 +21,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use omen::benchmark::retrieval::{
-    assertion_ids, assertions, check_ranks, expected_locations, metrics_by_language,
-    metrics_by_language_and_type, metrics_by_type, rank_baseline, render_table, validate,
-    worst_case_order, Corpus, Outcome, RankEntry,
+    assertions, check_ranks, expected_locations, ledger_growth, metrics_by_language,
+    metrics_by_language_and_type, metrics_by_type, rank_baseline, rank_growth, render_table,
+    validate, worst_case_order, Corpus, Outcome, RankEntry,
 };
-use omen::benchmark::truth::{bless, check_ledger, ledger_growth, Labels, LedgerEntry, Location};
+use omen::benchmark::truth::{bless, check_ledger, Labels, LedgerEntry, Location};
 use omen::config::Config;
 use omen::semantic::{SearchConfig, SemanticSearch};
 
@@ -239,8 +239,9 @@ fn search_results_have_one_order() {
     assert!(different.is_empty(), "{}", different.join("\n"));
 }
 
-/// The ledger must not get an entry for a query that passed on the base
-/// branch. CI runs this test with `OMEN_RETRIEVAL_BASE_DIR` set to
+/// The ledger must not get an entry for a query of the base branch, a query
+/// that failed on the base branch must not change, and a rank must not get
+/// worse. CI runs this test with `OMEN_RETRIEVAL_BASE_DIR` set to
 /// `tests/fixtures/retrieval` of the base branch.
 #[test]
 #[ignore = "needs OMEN_RETRIEVAL_BASE_DIR"]
@@ -252,16 +253,24 @@ fn ledger_never_grows() {
         // The base branch does not have the corpus. Thus each entry is new.
         return;
     }
-    let base_ids = assertion_ids(&load_corpus(&base));
-    let grown = ledger_growth(
-        &base_ids,
-        &BTreeSet::new(),
+    let root = retrieval_root();
+    let base_corpus = load_corpus(&base);
+    // The comparison uses the query id. A changed query keeps its id, so a new
+    // assertion id for it does not make its ledger entry a new entry.
+    let mut grown = ledger_growth(
+        &base_corpus,
         &load_ledger(&base),
-        &load_ledger(&retrieval_root()),
+        &load_corpus(&root),
+        &load_ledger(&root),
     );
+    grown.extend(rank_growth(
+        &base_corpus,
+        &load_ranks(&base),
+        &load_ranks(&root),
+    ));
     assert!(
         grown.is_empty(),
-        "these queries passed on the base branch and are now in the ledger:\n{}",
+        "these queries are worse than on the base branch, or hide a failure:\n{}",
         grown.join("\n")
     );
 }
