@@ -618,7 +618,16 @@ impl<'a> Resolver<'a> {
             return Outcome::of(Basis::LexicalScope, vec![closure])
                 .unwrap_or_else(|| Outcome::none(Status::Unresolved));
         }
-        if let Some(local) = self.local(chain, file, x) {
+        let binding = self.files[file]
+            .imports
+            .iter()
+            .find(|binding| binding.local_name.as_deref() == Some(x));
+        // `const a = require('b')` is an import and a local name of the file.
+        // The import gives the files.
+        let local = self
+            .local(chain, file, x)
+            .filter(|local| binding.is_none() || local.owner.is_some());
+        if let Some(local) = local {
             // The members of an object literal have the name of the variable in their key.
             let literal: Vec<Id> = self
                 .named(name, file)
@@ -638,13 +647,19 @@ impl<'a> Resolver<'a> {
                 None => Outcome::offered(Basis::NameOnly, self.methods_by_name(name, file)),
             };
         }
-        let binding = self.files[file]
-            .imports
-            .iter()
-            .find(|binding| binding.local_name.as_deref() == Some(x));
         if let Some(binding) = binding {
-            let module =
-                binding.kind == ImportKind::Module || binding.imported_name.as_deref() == Some("*");
+            // A default import of a module without a default export is the
+            // object of the module, as a CommonJS module gives it.
+            let object = binding.imported_name.as_deref() == Some("default")
+                && !self.target_files(binding).iter().any(|target| {
+                    self.files[*target]
+                        .link_facts
+                        .iter()
+                        .any(|facts| facts.default_export)
+                });
+            let module = object
+                || binding.kind == ImportKind::Module
+                || binding.imported_name.as_deref() == Some("*");
             if module || self.target_files(binding).is_empty() {
                 return self.imported(binding, name);
             }
@@ -904,6 +919,12 @@ impl<'a> Resolver<'a> {
                     match method {
                         Some(method) if method.kind == SymbolKind::Constructor => parents
                             .iter()
+                            .filter(|parent| {
+                                !matches!(
+                                    self.symbol(**parent).kind,
+                                    SymbolKind::Interface | SymbolKind::Trait
+                                )
+                            })
                             .flat_map(|parent| self.constructors(*parent, arity))
                             .collect(),
                         Some(method) => parents

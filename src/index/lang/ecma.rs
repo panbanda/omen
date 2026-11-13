@@ -22,6 +22,33 @@ const PAIR_PATTERN: &str = "pair_pattern";
 const STRING: &str = "string";
 const IMPORT_REQUIRE_CLAUSE: &str = "import_require_clause";
 
+use crate::index::calls::{CallSyntax, LocalName};
+
+const FORMAL_PARAMETERS: &str = "formal_parameters";
+
+const JAVASCRIPT_CALLS: CallSyntax = CallSyntax {
+    calls: &[(CALL_EXPRESSION, "function", "arguments")],
+    constructions: &[("new_expression", "constructor", "arguments")],
+    members: &[(MEMBER_EXPRESSION, "object", "property")],
+    paths: &[],
+    names: &[IDENTIFIER],
+    self_words: &["this"],
+    super_words: &["super"],
+    locals: &[(VARIABLE_DECLARATOR, "name", "", "value")],
+    parameters: &[],
+    return_type_field: "",
+};
+
+const TYPESCRIPT_CALLS: CallSyntax = CallSyntax {
+    locals: &[(VARIABLE_DECLARATOR, "name", "type", "value")],
+    parameters: &[
+        ("required_parameter", "pattern", "type"),
+        ("optional_parameter", "pattern", "type"),
+    ],
+    return_type_field: "return_type",
+    ..JAVASCRIPT_CALLS
+};
+
 pub struct Ecma {
     typescript: bool,
 }
@@ -406,6 +433,43 @@ impl Ecma {
 }
 
 impl LanguageSpec for Ecma {
+    fn call_syntax(&self) -> CallSyntax {
+        if self.typescript {
+            TYPESCRIPT_CALLS
+        } else {
+            JAVASCRIPT_CALLS
+        }
+    }
+
+    fn local_kinds(&self) -> Vec<&'static str> {
+        let mut kinds = self.call_syntax().local_kinds();
+        kinds.push(FORMAL_PARAMETERS);
+        kinds
+    }
+
+    fn call_hook_kinds(&self) -> Vec<&'static str> {
+        vec![FORMAL_PARAMETERS]
+    }
+
+    /// A JavaScript parameter is a name directly in the parameter list.
+    fn locals(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
+        if node.kind() != FORMAL_PARAMETERS {
+            self.call_syntax().locals(node, context, out);
+            return;
+        }
+        let mut cursor = node.walk();
+        for parameter in node.named_children(&mut cursor) {
+            if parameter.kind() == IDENTIFIER {
+                out.push(LocalName {
+                    name: context.text(parameter),
+                    type_name: None,
+                    value_start: None,
+                    is_parameter: true,
+                });
+            }
+        }
+    }
+
     fn import_kinds(&self) -> Vec<&'static str> {
         vec![IMPORT_STATEMENT, EXPORT_STATEMENT, CALL_EXPRESSION]
     }
@@ -626,6 +690,21 @@ impl LanguageSpec for Ecma {
     fn refine<'tree>(&self, draft: &mut Draft<'tree>, context: &Context<'_, 'tree>) -> bool {
         let node = draft.node;
         let kind = node.kind();
+        draft.default_export = node.parent().is_some_and(|parent| {
+            parent.kind() == EXPORT_STATEMENT && context.text(parent).starts_with("export default")
+        });
+        // A member of an object literal has the name of the variable in its key.
+        let member = binding(node).map_or(node, |binding| binding.holder);
+        let variable = member
+            .parent()
+            .filter(|object| object.kind() == OBJECT)
+            .and_then(|object| object.parent())
+            .filter(|holder| holder.kind() == VARIABLE_DECLARATOR)
+            .and_then(|holder| holder.child_by_field_name("name"))
+            .filter(|name| name.kind() == IDENTIFIER);
+        if let Some(variable) = variable {
+            draft.container_path.push(context.text(variable));
+        }
         if FUNCTION_VALUE_KINDS.contains(&kind) || kind == CLASS_EXPRESSION {
             if let Some(binding) = binding(node) {
                 draft.span = Span::between(&binding.start, &node);
@@ -976,6 +1055,102 @@ mod tests {
                 "1 Named ./legacy.cjs default->legacy legacy.cjs",
                 "2 Named ./both a->a ambiguous(both.js,both.jsx)",
                 "3 Named ./components default->App components.jsx",
+            ]
+        );
+    }
+
+    const CALL_FILES: &[(&str, &str)] = &[
+        (
+            "main.ts",
+            "import { basename } from 'node:path';\nimport { Circle, Square, describe } from './shapes';\nimport type { Shape } from './shapes';\nimport { twice as double } from './util';\nimport fallback from './util';\nimport * as other from './other';\nimport { onlyHere } from './barrel';\n\nconst registry = {\n  bump(): number {\n    return 1;\n  },\n  reset: (): number => 0,\n};\n\nfunction local(): number {\n  return 4;\n}\n\nfunction run(): number {\n  function inner(): number {\n    return 5;\n  }\n  const add = (n: number): number => n + 1;\n  const total = local() + double(2) + inner() + onlyHere() + fallback();\n  const circle = new Circle(1);\n  circle.area();\n  const numbers = [1, 2].map((n) => local());\n  return total + add(numbers.length);\n}\n\nfunction measure(size: Square, shape: Shape, callback: () => number): number {\n  return size.area() + shape.area() + callback();\n}\n\nfunction external(): number {\n  const seen = new Map<string, number>();\n  seen.set('a', 1);\n  const made = new Square();\n  return parseInt('4', 10) + basename('a').length + other.helper() + Circle.unit().radius;\n}\n\nfunction main(): void {\n  describe();\n  registry.bump() + registry.reset() + registry.gone();\n}\n",
+        ),
+        ("barrel.ts", "export * from './other';\n"),
+        ("other.ts", "export function helper(): number {\n  return 2;\n}\n\nexport function onlyHere(): number {\n  return 3;\n}\n\nexport function set(): void {}\n"),
+        (
+            "shapes.ts",
+            "export interface Shape {\n  area(): number;\n}\n\nexport abstract class Base {\n  constructor(name: string) {}\n\n  describe(): string {\n    return '';\n  }\n}\n\nexport class Circle extends Base implements Shape {\n  radius = 1;\n\n  constructor(radius: number) {\n    super('circle');\n  }\n\n  area(): number {\n    return this.#scaled(3);\n  }\n\n  #scaled(factor: number): number {\n    return factor;\n  }\n\n  override describe(): string {\n    return super.describe() + '!';\n  }\n\n  static unit(): Circle {\n    return new Circle(1);\n  }\n}\n\nexport class Square implements Shape {\n  area(): number {\n    return this.doubled();\n  }\n\n  private doubled(): number {\n    return 2;\n  }\n}\n\nexport function describe(): string {\n  return 'shapes';\n}\n",
+        ),
+        ("util.ts", "export function twice(value: number): number {\n  return value * 2;\n}\n\nexport default function fallback(): number {\n  return 7;\n}\n"),
+    ];
+
+    #[test]
+    fn test_typescript_calls() {
+        use crate::index::resolve::testing::rows;
+        assert_eq!(
+            rows(CALL_FILES, "main.ts"),
+            [
+                "25 run>local UniqueCandidate SameFile [main.ts#local]",
+                "25 run>double UniqueCandidate ImportedAlias [util.ts#twice]",
+                "25 run>inner UniqueCandidate LexicalScope [main.ts#run.inner]",
+                "25 run>onlyHere UniqueCandidate ImportedName [other.ts#onlyHere]",
+                "25 run>fallback UniqueCandidate ImportedAlias [util.ts#fallback]",
+                "26 run>Circle UniqueCandidate QualifiedPath [shapes.ts#Circle.constructor]",
+                "27 run>circle.area UniqueCandidate ReceiverDeclaredType [shapes.ts#Circle.area]",
+                "28 run>(..).map Unresolved - []",
+                "28 run>local UniqueCandidate SameFile [main.ts#local]",
+                "29 run>add UniqueCandidate LexicalScope [main.ts#run.add]",
+                "33 measure>size.area UniqueCandidate ReceiverDeclaredType [shapes.ts#Square.area]",
+                "33 measure>shape.area Ambiguous NameOnly [shapes.ts#Circle.area, shapes.ts#Shape.area, shapes.ts#Square.area]",
+                "33 measure>callback Unresolved - []",
+                "37 external>Map Unresolved - []",
+                "38 external>seen.set Unresolved - []",
+                "39 external>Square UniqueCandidate QualifiedPath [shapes.ts#Square]",
+                "40 external>parseInt Unresolved - []",
+                "40 external>basename External - []",
+                "40 external>other.helper UniqueCandidate ImportedModule [other.ts#helper]",
+                "40 external>Circle.unit UniqueCandidate QualifiedPath [shapes.ts#Circle.unit]",
+                "44 main>describe UniqueCandidate ImportedName [shapes.ts#describe]",
+                "45 main>registry.bump UniqueCandidate LexicalScope [main.ts#registry.bump]",
+                "45 main>registry.reset UniqueCandidate LexicalScope [main.ts#registry.reset]",
+                "45 main>registry.gone Unresolved - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_calls_in_classes() {
+        use crate::index::resolve::testing::rows;
+        assert_eq!(
+            rows(CALL_FILES, "shapes.ts"),
+            [
+                "17 Circle.constructor>super.super UniqueCandidate EnclosingType [shapes.ts#Base.constructor]",
+                "21 Circle.area>self.#scaled UniqueCandidate EnclosingType [shapes.ts#Circle.#scaled]",
+                "29 Circle.describe>super.describe UniqueCandidate EnclosingType [shapes.ts#Base.describe]",
+                "33 Circle.unit>Circle UniqueCandidate QualifiedPath [shapes.ts#Circle.constructor]",
+                "39 Square.area>self.doubled UniqueCandidate EnclosingType [shapes.ts#Square.doubled]",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_javascript_calls() {
+        use crate::index::resolve::testing::rows;
+        let files = [
+            (
+                "main.js",
+                "import legacy from './legacy.cjs';\n\nfunction dynamic(shape) {\n  return shape.area() + legacy.legacyName() + shape();\n}\n",
+            ),
+            (
+                "legacy.cjs",
+                "const { basename } = require('node:path');\nconst other = require('./other.js');\n\nfunction legacyName() {\n  return basename('a') + other.onlyHere();\n}\n\nmodule.exports = { legacyName };\n",
+            ),
+            ("other.js", "export function onlyHere() {\n  return 3;\n}\n\nexport class Circle {\n  area() {\n    return 1;\n  }\n}\n"),
+        ];
+        assert_eq!(
+            rows(&files, "main.js"),
+            [
+                "4 dynamic>shape.area Ambiguous NameOnly [other.js#Circle.area]",
+                "4 dynamic>legacy.legacyName UniqueCandidate ImportedAlias [legacy.cjs#legacyName]",
+                "4 dynamic>shape Unresolved - []",
+            ]
+        );
+        assert_eq!(
+            rows(&files, "legacy.cjs"),
+            [
+                "1 ->require Unresolved - []",
+                "2 ->require Unresolved - []",
+                "5 legacyName>basename External - []",
+                "5 legacyName>other.onlyHere UniqueCandidate ImportedModule [other.js#onlyHere]",
             ]
         );
     }
