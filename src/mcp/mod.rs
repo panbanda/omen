@@ -11,9 +11,15 @@ use crate::core::{AnalysisContext, Analyzer, FileSet, Result};
 use crate::git::GitRepo;
 
 mod compact;
+mod envelope;
+mod error;
+mod tools;
 
 /// Reference decoder for the `omen.tables.v1` compact encoding.
 pub use compact::decode;
+
+use error::ToolError;
+use tools::{Arguments, HandlerResult, ToolData, ToolOutput};
 
 const MAX_STDIO_LINE_SIZE: usize = 10 * 1024 * 1024;
 
@@ -49,259 +55,14 @@ fn write_parse_error(writer: &mut impl Write, detail: &str) -> Result<()> {
     Ok(())
 }
 
-struct ToolDef {
-    name: &'static str,
-    description: &'static str,
-    properties: Vec<(&'static str, serde_json::Value)>,
-    required: &'static [&'static str],
+fn text_result(text: String) -> Value {
+    json!({"content": [{"type": "text", "text": text}]})
 }
 
-fn u32_arg(arguments: &Value, name: &str, default: u32) -> u32 {
-    arguments
-        .get(name)
-        .and_then(Value::as_u64)
-        .and_then(|value| u32::try_from(value).ok())
-        .unwrap_or(default)
-}
-
-fn usize_arg(arguments: &Value, name: &str, default: usize) -> usize {
-    arguments
-        .get(name)
-        .and_then(Value::as_u64)
-        .and_then(|value| usize::try_from(value).ok())
-        .unwrap_or(default)
-}
-
-fn f64_arg(arguments: &Value, name: &str, default: f64) -> f64 {
-    arguments
-        .get(name)
-        .and_then(Value::as_f64)
-        .unwrap_or(default)
-}
-
-fn tool_error_response(error: &str) -> Value {
-    json!({
-        "content": [{"type": "text", "text": error}],
-        "isError": true
-    })
-}
-
-impl ToolDef {
-    fn to_json(&self) -> serde_json::Value {
-        let mut props = serde_json::Map::new();
-        for (k, v) in &self.properties {
-            props.insert(k.to_string(), v.clone());
-        }
-        if matches!(self.name, "context" | "repomap" | "get_symbol" | "impact") {
-            props.insert("compact".to_string(), json!({
-                "type": "boolean",
-                "description": "Opt-in lossless tables. table_paths are JSON pointers into result; zip each table's columns with its rows to restore records. Falls back to normal JSON if larger."
-            }));
-        }
-        // Shared pagination params on every tool
-        props.insert(
-            "limit".to_string(),
-            json!({
-                "type": "integer",
-                "description": "Max items to return (default: 50, 0 = unlimited)"
-            }),
-        );
-        props.insert(
-            "offset".to_string(),
-            json!({
-                "type": "integer",
-                "description": "Item offset for pagination (default: 0)"
-            }),
-        );
-        if self.name == "task_context" {
-            props.remove("limit");
-            props.remove("offset");
-        }
-        let mut schema = json!({
-            "type": "object",
-            "properties": props
-        });
-        if !self.required.is_empty() {
-            schema["required"] = json!(self.required);
-        }
-        json!({
-            "name": self.name,
-            "description": self.description,
-            "inputSchema": schema
-        })
-    }
-}
-
-/// Count total items across all top-level arrays in the value.
-/// Returns `None` only if there are no arrays at all.
-fn count_items(value: &serde_json::Value) -> Option<usize> {
-    match value {
-        serde_json::Value::Array(arr) => Some(arr.len()),
-        serde_json::Value::Object(map) => {
-            let mut total = 0usize;
-            let mut found_any = false;
-            for v in map.values() {
-                if let Some(arr) = v.as_array() {
-                    total += arr.len();
-                    found_any = true;
-                }
-            }
-            if found_any {
-                Some(total)
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
-}
-
-fn primary_count(tool_name: &str, value: &Value) -> Option<usize> {
-    match tool_name {
-        "complexity" => value.get("files")?.as_array().map(|files| {
-            files
-                .iter()
-                .filter_map(|file| file.get("functions")?.as_array())
-                .map(Vec::len)
-                .sum()
-        }),
-        "impact" => Some(
-            ["callers", "callees"]
-                .iter()
-                .filter_map(|name| value.get(*name)?.as_array())
-                .flatten()
-                .filter_map(|level| level.get("symbols")?.as_array())
-                .map(Vec::len)
-                .sum(),
-        ),
-        "graph" => value.get("cycles")?.as_array().map(|cycles| {
-            cycles
-                .iter()
-                .filter_map(Value::as_array)
-                .map(Vec::len)
-                .sum()
-        }),
-        tool => primary_field(tool)
-            .and_then(|field| value.get(field))
-            .and_then(Value::as_array)
-            .map(Vec::len)
-            .or_else(|| count_items(value)),
-    }
-}
-
-fn primary_field(tool_name: &str) -> Option<&'static str> {
-    match tool_name {
-        "context" => Some("top_symbols"),
-        "outline" => Some("files"),
-        "satd" | "deadcode" => Some("items"),
-        "stubs" => Some("stubs"),
-        "churn" | "defect" | "tdg" | "ownership" => Some("files"),
-        "clones" => Some("clones"),
-        "changes" => Some("commits"),
-        "diff" => Some("recommendations"),
-        "hotspot" => Some("hotspots"),
-        "temporal" => Some("couplings"),
-        "cohesion" => Some("classes"),
-        "repomap" => Some("symbols"),
-        "smells" => Some("smells"),
-        "flags" => Some("flags"),
-        "semantic_search" | "semantic_search_hyde" => Some("results"),
-        "get_symbol" => Some("callers"),
-        _ => None,
-    }
-}
-
-fn truncate_primary(tool_name: &str, value: &mut Value, limit: usize, offset: usize) {
-    match tool_name {
-        "complexity" => truncate_nested(value, &["files", "functions"], limit, offset),
-        "impact" => {
-            let mut remaining_offset = offset;
-            let mut remaining_limit = if limit == 0 { usize::MAX } else { limit };
-            for name in ["callers", "callees"] {
-                truncate_nested_budget(
-                    value,
-                    &[name, "symbols"],
-                    &mut remaining_limit,
-                    &mut remaining_offset,
-                );
-            }
-        }
-        "graph" => truncate_array_children(value, "cycles", limit, offset),
-        tool if primary_field(tool).is_some() => {
-            if let Some(field) = primary_field(tool) {
-                truncate_field(value, field, limit, offset);
-            }
-        }
-        _ => {
-            crate::output::truncate_lists(value, limit, offset);
-        }
-    }
-}
-
-fn truncate_field(value: &mut Value, field: &str, limit: usize, offset: usize) {
-    let Some(items) = value.get_mut(field).and_then(Value::as_array_mut) else {
-        return;
-    };
-    let skip = offset.min(items.len());
-    items.drain(0..skip);
-    if limit > 0 {
-        items.truncate(limit);
-    }
-}
-
-fn truncate_nested(value: &mut Value, path: &[&str], limit: usize, offset: usize) {
-    let mut remaining_limit = if limit == 0 { usize::MAX } else { limit };
-    let mut remaining_offset = offset;
-    truncate_nested_budget(value, path, &mut remaining_limit, &mut remaining_offset);
-}
-
-fn truncate_nested_budget(
-    value: &mut Value,
-    path: &[&str],
-    remaining_limit: &mut usize,
-    remaining_offset: &mut usize,
-) {
-    let Some(parents) = value.get_mut(path[0]).and_then(Value::as_array_mut) else {
-        return;
-    };
-    for parent in parents {
-        let Some(items) = parent.get_mut(path[1]).and_then(Value::as_array_mut) else {
-            continue;
-        };
-        let skip = (*remaining_offset).min(items.len());
-        items.drain(0..skip);
-        *remaining_offset -= skip;
-        if *remaining_offset > 0 {
-            items.clear();
-            continue;
-        }
-        if items.len() > *remaining_limit {
-            items.truncate(*remaining_limit);
-        }
-        *remaining_limit -= items.len();
-    }
-}
-
-fn truncate_array_children(value: &mut Value, field: &str, limit: usize, offset: usize) {
-    let Some(children) = value.get_mut(field).and_then(Value::as_array_mut) else {
-        return;
-    };
-    let mut remaining_limit = if limit == 0 { usize::MAX } else { limit };
-    let mut remaining_offset = offset;
-    for child in children {
-        let Some(items) = child.as_array_mut() else {
-            continue;
-        };
-        let skip = remaining_offset.min(items.len());
-        items.drain(0..skip);
-        remaining_offset -= skip;
-        if remaining_offset > 0 {
-            items.clear();
-        } else {
-            items.truncate(remaining_limit);
-            remaining_limit -= items.len();
-        }
-    }
+/// The path and the files that one tool call analyzes.
+struct Scope {
+    path: PathBuf,
+    file_set: FileSet,
 }
 
 /// MCP Server for LLM tool integration.
@@ -404,36 +165,42 @@ impl McpServer {
         Ok(())
     }
 
+    /// Makes `requested` absolute and makes sure that it is in the MCP root.
+    /// `param` is the name of the argument that gave the path.
     fn resolve_confined_path(
         &self,
+        param: &'static str,
         requested: &Path,
         relative_to: Option<&Path>,
-    ) -> std::result::Result<PathBuf, String> {
+    ) -> std::result::Result<PathBuf, ToolError> {
         let candidate = if requested.is_absolute() {
             requested.to_path_buf()
         } else {
             relative_to.unwrap_or(&self.root_path).join(requested)
         };
-        let canonical = candidate
-            .canonicalize()
-            .map_err(|e| format!("Failed to resolve path '{}': {e}", candidate.display()))?;
+        let canonical = candidate.canonicalize().map_err(|error| {
+            ToolError::internal(format!(
+                "Failed to resolve `{param}` '{}': {error}",
+                candidate.display()
+            ))
+        })?;
         if self.allow_external_paths {
             return Ok(canonical);
         }
-        let root = self.root_path.canonicalize().map_err(|e| {
-            format!(
-                "Failed to resolve MCP root '{}': {e}",
+        let root = self.root_path.canonicalize().map_err(|error| {
+            ToolError::internal(format!(
+                "Failed to resolve MCP root '{}': {error}",
                 self.root_path.display()
-            )
+            ))
         })?;
         if canonical.starts_with(&root) {
             Ok(canonical)
         } else {
-            Err(format!(
+            Err(ToolError::internal(format!(
                 "Path '{}' is outside the MCP root '{}'",
                 canonical.display(),
                 root.display()
-            ))
+            )))
         }
     }
 
@@ -479,331 +246,20 @@ impl McpServer {
         }))
     }
 
-    fn tool_response(
-        &self,
-        tool_name: &str,
-        mut value: serde_json::Value,
-        args: &serde_json::Value,
-        git_skipped_reason: Option<&str>,
-    ) -> std::result::Result<serde_json::Value, String> {
-        let limit = args["limit"].as_u64().unwrap_or(50) as usize;
-        let offset = args["offset"].as_u64().unwrap_or(0) as usize;
-
-        let total_items = primary_count(tool_name, &value);
-        truncate_primary(tool_name, &mut value, limit, offset);
-        let returned = primary_count(tool_name, &value);
-
-        let mut envelope = json!({
-            "tool": tool_name,
-            "total_items": total_items,
-            "returned": returned,
-            "offset": offset,
-            "result": value
-        });
-        if let Some(reason) = git_skipped_reason {
-            envelope["git_skipped_reason"] = json!(reason);
-        }
-        if args["compact"].as_bool().unwrap_or(false) {
-            envelope = compact::encode(envelope);
-        }
-
-        Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": serde_json::to_string(&envelope).unwrap_or_default()
-            }]
-        }))
-    }
-
     fn handle_tools_list(&self) -> std::result::Result<Value, String> {
-        let tools: Vec<serde_json::Value> = vec![
-            ToolDef {
-                name: "context",
-                description: "Use first. Returns top-N PageRank-ranked symbols, risks, language breakdown, directory tree, entry points, and navigation hints. Expensive on large repos; run once and cache.",
-                properties: vec![
-                    ("path", json!({"type": "string", "description": "File or directory path"})),
-                    ("max_symbols", json!({"type": "integer", "description": "Maximum symbols to include"})),
-                    ("max_risks", json!({"type": "integer", "description": "Maximum risks to include"})),
-                    ("max_tokens", json!({"type": "integer", "description": "Token budget; response is trimmed to fit (default: 8000)"})),
-                    ("format", json!({"type": "string", "enum": ["json", "markdown"], "description": "Output format: 'markdown' returns compact agent-facing text directly (default: json)"})),
-                ],
-                required: &[],
-            },
-            ToolDef {
-                name: "outline",
-                description: "Token-cheapest file map. Returns imports, classes with methods, and top-level functions for one file or all repo files. Use before reading full source.",
-                properties: vec![
-                    ("path", json!({"type": "string", "description": "Repository or directory path"})),
-                    ("file", json!({"type": "string", "description": "Single file to outline (optional; omit for whole repo)"})),
-                ],
-                required: &[],
-            },
-            ToolDef {
-                name: "complexity",
-                description: "Returns cyclomatic and cognitive complexity per function. Fast.",
-                properties: vec![
-                    ("path", json!({"type": "string", "description": "File or directory path"})),
-                ],
-                required: &[],
-            },
-            ToolDef {
-                name: "satd",
-                description: "Detects TODO/FIXME/HACK debt comments. Fast.",
-                properties: vec![
-                    ("path", json!({"type": "string", "description": "File or directory path"})),
-                ],
-                required: &[],
-            },
-            ToolDef {
-                name: "deadcode",
-                description: "Use when you suspect unused symbols. Finds dead/unreachable code.",
-                properties: vec![
-                    ("path", json!({"type": "string", "description": "File or directory path"})),
-                ],
-                required: &[],
-            },
-            ToolDef {
-                name: "stubs",
-                description: "Use to find unfinished work. Detects incomplete/placeholder implementations: todo!()/NotImplementedError-style idioms, elision comments ('...rest of implementation'), and empty-but-implementable function bodies. Read-only; does not gate.",
-                properties: vec![
-                    ("path", json!({"type": "string", "description": "File or directory path"})),
-                ],
-                required: &[],
-            },
-            ToolDef {
-                name: "churn",
-                description: "Use to find frequently changed files. Analyzes code churn from git history.",
-                properties: vec![
-                    ("path", json!({"type": "string", "description": "File or directory path"})),
-                    ("days", json!({"type": "integer", "description": "Number of days to analyze"})),
-                ],
-                required: &[],
-            },
-            ToolDef {
-                name: "clones",
-                description: "Use when looking for duplication or copy-paste debt. Detects code clones via MinHash+LSH.",
-                properties: vec![
-                    ("path", json!({"type": "string", "description": "File or directory path"})),
-                    ("min_tokens", json!({"type": "integer", "description": "Minimum tokens for detection"})),
-                    ("similarity", json!({"type": "number", "description": "Similarity threshold (0-1)"})),
-                ],
-                required: &[],
-            },
-            ToolDef {
-                name: "defect",
-                description: "Use to identify high-risk files. Predicts defect-prone files using PMAT metrics.",
-                properties: vec![
-                    ("path", json!({"type": "string", "description": "File or directory path"})),
-                    ("days", json!({"type": "integer", "description": "Number of days to analyze"})),
-                ],
-                required: &[],
-            },
-            ToolDef {
-                name: "changes",
-                description: "Use to assess recent commit risk. Analyzes recent changes with JIT risk analysis.",
-                properties: vec![
-                ],
-                required: &[],
-            },
-            ToolDef {
-                name: "diff",
-                description: "Use to review branch or PR risk. Analyzes diff between commits; auto-detects target branch.",
-                properties: vec![
-                    ("base", json!({"type": "string", "description": "Base commit/branch"})),
-                    ("head", json!({"type": "string", "description": "Head commit/branch"})),
-                ],
-                required: &[],
-            },
-            ToolDef {
-                name: "tdg",
-                description: "Use to understand technical debt accumulation. Generates Technical Debt Gradient with critical defect detection.",
-                properties: vec![
-                    ("path", json!({"type": "string", "description": "File or directory path"})),
-                ],
-                required: &[],
-            },
-            ToolDef {
-                name: "graph",
-                description: "Use to visualize module dependencies. Generates Mermaid dependency graph.",
-                properties: vec![
-                    ("path", json!({"type": "string", "description": "File or directory path"})),
-                ],
-                required: &[],
-            },
-            ToolDef {
-                name: "hotspot",
-                description: "Use to find the riskiest files. Combines high churn + high complexity.",
-                properties: vec![
-                    ("path", json!({"type": "string", "description": "File or directory path"})),
-                    ("days", json!({"type": "integer", "description": "Number of days for churn"})),
-                ],
-                required: &[],
-            },
-            ToolDef {
-                name: "temporal",
-                description: "Use to find files that always change together. Detects temporal coupling from git history.",
-                properties: vec![
-                    ("path", json!({"type": "string", "description": "File or directory path"})),
-                    ("days", json!({"type": "integer", "description": "Number of days to analyze"})),
-                ],
-                required: &[],
-            },
-            ToolDef {
-                name: "ownership",
-                description: "Use to assess bus factor and knowledge silos. Analyzes code ownership from git blame.",
-                properties: vec![
-                    ("path", json!({"type": "string", "description": "File or directory path"})),
-                ],
-                required: &[],
-            },
-            ToolDef {
-                name: "cohesion",
-                description: "Use for OO design quality assessment. Calculates CK metrics: WMC, CBO, RFC, LCOM4, DIT, NOC.",
-                properties: vec![
-                    ("path", json!({"type": "string", "description": "File or directory path"})),
-                ],
-                required: &[],
-            },
-            ToolDef {
-                name: "repomap",
-                description: "Returns PageRank-ranked symbol call graph. Use for understanding code structure.",
-                properties: vec![
-                    ("path", json!({"type": "string", "description": "File or directory path"})),
-                    ("max_symbols", json!({"type": "integer", "description": "Maximum symbols to include"})),
-                ],
-                required: &[],
-            },
-            ToolDef {
-                name: "smells",
-                description: "Use to find architectural anti-patterns. Detects cycles and smells via Tarjan SCC.",
-                properties: vec![
-                    ("path", json!({"type": "string", "description": "File or directory path"})),
-                ],
-                required: &[],
-            },
-            ToolDef {
-                name: "flags",
-                description: "Use to audit feature flags. Finds stale and active feature flags across providers.",
-                properties: vec![
-                    ("path", json!({"type": "string", "description": "File or directory path"})),
-                    ("provider", json!({"type": "string", "description": "Flag provider (launchdarkly, split, etc.)"})),
-                    ("stale_days", json!({"type": "integer", "description": "Days threshold for staleness"})),
-                ],
-                required: &[],
-            },
-            ToolDef {
-                name: "score",
-                description: "Use for an overall health summary. Calculates composite repository health score.",
-                properties: vec![
-                    ("path", json!({"type": "string", "description": "File or directory path"})),
-                ],
-                required: &[],
-            },
-            ToolDef {
-                name: "semantic_search",
-                description: "Semantic symbol search via TF-IDF. Use when you know what you're looking for conceptually.",
-                properties: vec![
-                    ("query", json!({"type": "string", "description": "Natural language search query"})),
-                    ("top_k", json!({"type": "integer", "description": "Maximum number of results (default: 10)"})),
-                    ("min_score", json!({"type": "number", "description": "Minimum similarity score 0-1 (default: 0.3)"})),
-                    ("files", json!({"type": "string", "description": "Comma-separated file paths to search within"})),
-                    ("max_complexity", json!({"type": "integer", "description": "Exclude symbols with cyclomatic complexity above this value"})),
-                    ("include_projects", json!({"type": "string", "description": "Comma-separated paths to additional project roots for cross-repo search"})),
-                ],
-                required: &["query"],
-            },
-            ToolDef {
-                name: "get_symbol",
-                description: "Symbol source, location, complexity and name-based callers/callees. call_resolutions exposes unique, ambiguous and unresolved candidates. Edges are not compiler-proven; ambiguous and unknown calls are excluded from the graph.",
-                properties: vec![
-                    ("name", json!({"type": "string", "description": "Symbol name to look up (bare name or qualified file:name)"})),
-                    ("include_source", json!({"type": "boolean", "description": "Whether to include source code (default: true)"})),
-                    ("start_line", json!({"type": "integer", "minimum": 1, "description": "Exact definition start line; combine with file:name to select same-file duplicates. Ambiguous queries return choices without source or graph attribution."})),
-                    ("max_source_lines", json!({"type": "integer", "description": "Maximum source lines to return (default: 200)"})),
-                    ("path", json!({"type": "string", "description": "Repository root path"})),
-                ],
-                required: &["name"],
-            },
-            ToolDef {
-                name: "task_context",
-                description: "Bounded context for one exact definition: candidate callers/callees, test/role convention hints, syntax uses, uncertainty, content fingerprint. Not exhaustive impact or compiler/data-flow proof. Uses a session-local content-validated index.",
-                properties: vec![
-                    ("name", json!({"type":"string", "description":"Symbol name, preferably file:name"})),
-                    ("start_line", json!({"type":"integer", "minimum":1, "description":"Exact definition start line"})),
-                    ("depth", json!({"type":"integer", "minimum":0, "maximum":4, "description":"Graph radius, default 2"})),
-                    ("max_bytes", json!({"type":"integer", "minimum":1024, "maximum":1048576, "description":"Hard result UTF-8 byte budget, not envelope/tokens; default 12000"})),
-                    ("include_history", json!({"type":"boolean", "description":"30-day co-change hints, default false; not semantic dependencies"})),
-                    ("path", json!({"type":"string", "description":"Repository root"})),
-                ],
-                required: &["name"],
-            },
-            ToolDef {
-                name: "impact",
-                description: "Explore possible blast radius using name-based call edges and BFS. Includes input-wide resolution_summary. Ambiguous and unresolved calls are excluded, so this is not an exhaustive safety check for edits.",
-                properties: vec![
-                    ("symbol", json!({"type": "string", "description": "Symbol name to analyze (bare name or qualified file:name)"})),
-                    ("depth", json!({"type": "integer", "description": "BFS depth for traversal (default: 2)"})),
-                    ("direction", json!({"type": "string", "enum": ["callers", "callees", "both"], "description": "Direction of traversal (default: both)"})),
-                    ("path", json!({"type": "string", "description": "Repository root path"})),
-                ],
-                required: &["symbol"],
-            },
-            ToolDef {
-                name: "semantic_search_hyde",
-                description: "Search using hypothetical code. Write a code snippet resembling what you want to find. This is matched against the index, producing better results than keyword queries.",
-                properties: vec![
-                    ("hypothetical_document", json!({"type": "string", "description": "A code snippet resembling the code you want to find"})),
-                    ("query", json!({"type": "string", "description": "Original query for display purposes"})),
-                    ("top_k", json!({"type": "integer", "description": "Maximum number of results (default: 10)"})),
-                    ("min_score", json!({"type": "number", "description": "Minimum similarity score 0-1 (default: 0.3)"})),
-                    ("files", json!({"type": "string", "description": "Comma-separated file paths to search within"})),
-                    ("max_complexity", json!({"type": "integer", "description": "Exclude symbols with cyclomatic complexity above this value"})),
-                    ("include_projects", json!({"type": "string", "description": "Comma-separated paths to additional project roots for cross-repo search"})),
-                ],
-                required: &["hypothetical_document"],
-            },
-        ]
-        .into_iter()
-        .map(|t| t.to_json())
-        .collect();
-
+        let tools: Vec<Value> = tools::all()
+            .iter()
+            .map(|spec| tools::schema::tool_definition(spec))
+            .collect();
         Ok(json!({ "tools": tools }))
     }
 
-    /// Returns the canonical list of MCP tool names.
+    /// The names of all MCP tools, in the sequence of `tools/list`.
     ///
-    /// This is the single source of truth kept adjacent to `handle_tools_list`
-    /// so that the manifest (in `src/main.rs`) can call it and stay in sync.
-    /// A test asserts that these names match the actual `handle_tools_list` output.
+    /// The names come from the tool specifications in `src/mcp/tools/`. The
+    /// manifest in `src/main.rs` reads this list.
     pub fn tool_names() -> &'static [&'static str] {
-        &[
-            "context",
-            "outline",
-            "complexity",
-            "satd",
-            "stubs",
-            "deadcode",
-            "churn",
-            "clones",
-            "defect",
-            "changes",
-            "diff",
-            "tdg",
-            "graph",
-            "hotspot",
-            "temporal",
-            "ownership",
-            "cohesion",
-            "repomap",
-            "smells",
-            "flags",
-            "score",
-            "semantic_search",
-            "get_symbol",
-            "task_context",
-            "impact",
-            "semantic_search_hyde",
-        ]
+        tools::names()
     }
 
     fn handle_tool_call(&self, params: Option<Value>) -> std::result::Result<Value, String> {
@@ -814,708 +270,95 @@ impl McpServer {
             .ok_or("Missing tool name")?;
         let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
 
-        if !Self::tool_names().contains(&tool_name) {
-            return Err(format!("Unknown tool: {tool_name}"));
-        }
-        let required = match tool_name {
-            "semantic_search" => Some(("query", "Missing query parameter")),
-            "semantic_search_hyde" => Some((
-                "hypothetical_document",
-                "Missing hypothetical_document parameter",
-            )),
-            "impact" => Some(("symbol", "Missing symbol parameter")),
-            "get_symbol" | "task_context" => Some(("name", "Missing name parameter")),
-            _ => None,
-        };
-        if let Some((field, message)) = required {
-            if arguments.get(field).and_then(Value::as_str).is_none() {
-                return Err(message.to_string());
+        let spec = tools::find(tool_name).ok_or_else(|| format!("Unknown tool: {tool_name}"))?;
+        for param in spec.parameters().filter(|param| param.required) {
+            if arguments.get(param.name).and_then(Value::as_str).is_none() {
+                return Err(format!("Missing {} parameter", param.name));
             }
         }
 
-        match tool_name {
-            "semantic_search" => {
-                return Ok(self
-                    .handle_semantic_search(&arguments)
-                    .unwrap_or_else(|error| tool_error_response(&error)))
+        let arguments = Arguments::new(spec, &arguments);
+        Ok(match (spec.handler)(self, &arguments) {
+            Ok(ToolOutput::Text(text)) => text_result(text),
+            Ok(ToolOutput::Data(data)) => {
+                let paginated = !matches!(spec.paginated, tools::Pagination::None);
+                let page = envelope::Page {
+                    limit: paginated
+                        .then(|| arguments.count("limit"))
+                        .flatten()
+                        .unwrap_or(0),
+                    offset: paginated
+                        .then(|| arguments.count("offset"))
+                        .flatten()
+                        .unwrap_or(0),
+                };
+                let compact = spec.parameter("compact").is_some()
+                    && arguments.boolean("compact").unwrap_or(false);
+                let envelope = envelope::build(
+                    spec.name,
+                    spec.paginated,
+                    data.result,
+                    page,
+                    data.git_skipped_reason.as_deref(),
+                    compact,
+                );
+                text_result(envelope.to_string())
             }
-            "semantic_search_hyde" => {
-                return Ok(self
-                    .handle_semantic_search_hyde(&arguments)
-                    .unwrap_or_else(|error| tool_error_response(&error)))
-            }
-            _ => {}
-        }
+            Err(error) => error.to_result(),
+        })
+    }
 
-        let requested_path = arguments
-            .get("path")
-            .and_then(|v| v.as_str())
+    /// The path that the `path` argument selects. The default is the MCP root.
+    fn requested_path(&self, arguments: &Arguments<'_>) -> std::result::Result<PathBuf, ToolError> {
+        let requested = arguments
+            .string("path")
             .map(PathBuf::from)
             .unwrap_or_else(|| self.root_path.clone());
-        let path = match self.resolve_confined_path(&requested_path, Some(&self.root_path)) {
-            Ok(path) => path,
-            Err(error) => return Ok(tool_error_response(&error)),
-        };
+        self.resolve_confined_path("path", &requested, Some(&self.root_path))
+    }
 
-        let file_set = match FileSet::from_path(&path, &self.config) {
-            Ok(file_set) => file_set,
-            Err(error) => {
-                return Ok(tool_error_response(&format!(
-                    "Failed to create file set: {error}"
-                )))
-            }
-        };
+    fn scope(&self, arguments: &Arguments<'_>) -> std::result::Result<Scope, ToolError> {
+        let path = self.requested_path(arguments)?;
+        let file_set = FileSet::from_path(&path, &self.config)?;
+        Ok(Scope { path, file_set })
+    }
 
-        // Try to open a git repository at the path
-        let (git_root, git_skipped_reason) = match GitRepo::open(&path) {
-            Ok(repo) => (Some(repo.root().to_path_buf()), None),
+    fn analyze<A: Analyzer>(&self, arguments: &Arguments<'_>, analyzer: A) -> HandlerResult {
+        self.analyze_with_config(arguments, &self.config, analyzer)
+    }
+
+    fn analyze_with_config<A: Analyzer>(
+        &self,
+        arguments: &Arguments<'_>,
+        config: &Config,
+        analyzer: A,
+    ) -> HandlerResult {
+        let scope = self.scope(arguments)?;
+        let (git_root, git_skipped_reason) = match GitRepo::open(&scope.path) {
+            Ok(repository) => (Some(repository.root().to_path_buf()), None),
             Err(error) => (None, Some(error.to_string())),
         };
-
-        let mut effective_config = self.config.clone();
-        if tool_name == "flags" {
-            if let Some(provider) = arguments.get("provider").and_then(Value::as_str) {
-                effective_config.feature_flags.providers = vec![provider.to_string()];
-            }
-            if let Some(days) = arguments.get("stale_days").and_then(Value::as_u64) {
-                effective_config.feature_flags.stale_days = u32::try_from(days).unwrap_or(u32::MAX);
-            }
+        let mut context = AnalysisContext::new(&scope.file_set, config, Some(&scope.path));
+        if let Some(git_root) = &git_root {
+            context = context.with_git_path(git_root);
         }
-        let mut ctx = AnalysisContext::new(&file_set, &effective_config, Some(&path));
-        if let Some(ref git_path) = git_root {
-            ctx = ctx.with_git_path(git_path);
-        }
-
-        let result = match tool_name {
-            "complexity" => self.run_analyzer::<crate::analyzers::complexity::Analyzer>(&ctx),
-            "satd" => self.run_analyzer::<crate::analyzers::satd::Analyzer>(&ctx),
-            "stubs" => self.run_analyzer::<crate::analyzers::stubs::Analyzer>(&ctx),
-            "deadcode" => self.run_analyzer::<crate::analyzers::deadcode::Analyzer>(&ctx),
-            "churn" => self.run_analyzer_instance(
-                &ctx,
-                crate::analyzers::churn::Analyzer::new().with_days(u32_arg(&arguments, "days", 30)),
-            ),
-            "clones" => self.run_analyzer_instance(
-                &ctx,
-                crate::analyzers::duplicates::Analyzer::new()
-                    .with_min_tokens(usize_arg(&arguments, "min_tokens", 50))
-                    .with_similarity_threshold(f64_arg(&arguments, "similarity", 0.70)),
-            ),
-            "defect" => self.run_analyzer_instance(
-                &ctx,
-                crate::analyzers::defect::Analyzer::new().with_churn_days(u32_arg(
-                    &arguments,
-                    "days",
-                    self.config.defect.churn_days,
-                )),
-            ),
-            "changes" => self.run_analyzer::<crate::analyzers::changes::Analyzer>(&ctx),
-            "tdg" => self.run_analyzer::<crate::analyzers::tdg::Analyzer>(&ctx),
-            "graph" => self.run_analyzer::<crate::analyzers::graph::Analyzer>(&ctx),
-            "hotspot" => self.run_analyzer_instance(
-                &ctx,
-                crate::analyzers::hotspot::Analyzer::new().with_days(u32_arg(
-                    &arguments,
-                    "days",
-                    self.config.hotspot.days,
-                )),
-            ),
-            "temporal" => self.run_analyzer_instance(
-                &ctx,
-                crate::analyzers::temporal::Analyzer::new()
-                    .with_days(u32_arg(&arguments, "days", 30)),
-            ),
-            "ownership" => self.run_analyzer::<crate::analyzers::ownership::Analyzer>(&ctx),
-            "cohesion" => self.run_analyzer::<crate::analyzers::cohesion::Analyzer>(&ctx),
-            "repomap" => self.run_analyzer_instance(
-                &ctx,
-                crate::analyzers::repomap::Analyzer::new().with_max_symbols(usize_arg(
-                    &arguments,
-                    "max_symbols",
-                    0,
-                )),
-            ),
-            "smells" => self.run_analyzer::<crate::analyzers::smells::Analyzer>(&ctx),
-            "flags" => {
-                let providers = arguments
-                    .get("provider")
-                    .and_then(Value::as_str)
-                    .map(|value| vec![value.to_string()])
-                    .unwrap_or_default();
-                self.run_analyzer_instance(
-                    &ctx,
-                    crate::analyzers::flags::Analyzer::new()
-                        .with_expected_ttl(u32_arg(&arguments, "stale_days", 14))
-                        .with_providers(providers),
-                )
-            }
-            "score" => {
-                self.run_analyzer_instance(&ctx, crate::score::Analyzer::from_config(&self.config))
-            }
-            "context" => {
-                return Ok(self
-                    .handle_context(&path, &file_set, &arguments)
-                    .unwrap_or_else(|error| tool_error_response(&error)));
-            }
-            "diff" => {
-                return Ok(self
-                    .handle_diff(&path, &arguments)
-                    .unwrap_or_else(|error| tool_error_response(&error)));
-            }
-            "outline" => {
-                return Ok(self
-                    .handle_outline(&path, &arguments)
-                    .unwrap_or_else(|error| tool_error_response(&error)));
-            }
-            "impact" => {
-                return Ok(self
-                    .handle_impact(&path, &file_set, &arguments)
-                    .unwrap_or_else(|error| tool_error_response(&error)));
-            }
-            "get_symbol" => {
-                return Ok(self
-                    .handle_get_symbol(&path, &file_set, &arguments)
-                    .unwrap_or_else(|error| tool_error_response(&error)));
-            }
-            "task_context" => {
-                return Ok(self
-                    .handle_task_context(&path, &file_set, &arguments)
-                    .unwrap_or_else(|error| tool_error_response(&error)));
-            }
-            _ => unreachable!(),
-        };
-
-        let result = match result {
-            Ok(result) => result,
-            Err(error) => return Ok(tool_error_response(&error)),
-        };
-
-        self.tool_response(tool_name, result, &arguments, git_skipped_reason.as_deref())
+        let result = analyzer.analyze(&context)?;
+        Ok(ToolOutput::Data(ToolData {
+            result: serde_json::to_value(result)?,
+            git_skipped_reason,
+        }))
     }
 
-    fn run_analyzer<A: Analyzer + Default>(
-        &self,
-        ctx: &AnalysisContext<'_>,
-    ) -> std::result::Result<Value, String> {
-        self.run_analyzer_instance(ctx, A::default())
-    }
-
-    fn run_analyzer_instance<A: Analyzer>(
-        &self,
-        ctx: &AnalysisContext<'_>,
-        analyzer: A,
-    ) -> std::result::Result<Value, String> {
-        let result = analyzer
-            .analyze(ctx)
-            .map_err(|e| format!("Analysis failed: {}", e))?;
-        serde_json::to_value(result).map_err(|e| format!("Serialization failed: {}", e))
-    }
-
-    fn handle_context(
-        &self,
-        path: &std::path::Path,
-        file_set: &FileSet,
-        arguments: &Value,
-    ) -> std::result::Result<Value, String> {
-        let explicit_max_symbols = arguments
-            .get("max_symbols")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize);
-        let max_risks = arguments
-            .get("max_risks")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize);
-        let max_tokens = arguments
-            .get("max_tokens")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize)
-            .unwrap_or(8000);
-        let max_symbols = explicit_max_symbols
-            .unwrap_or_else(|| crate::context::max_symbols_for_token_budget(max_tokens));
-        let format = arguments
-            .get("format")
-            .and_then(|v| v.as_str())
-            .unwrap_or("json");
-
-        let mut context = crate::context::build_context(
-            path,
-            file_set,
-            &self.config,
-            Some(max_symbols),
-            max_risks,
-        )
-        .map_err(|e| format!("Context failed: {}", e))?;
-
-        // Apply token budget
-        crate::context::apply_token_budget(&mut context, max_tokens);
-
-        if format == "markdown" {
-            // Return markdown text directly (not wrapped in JSON envelope)
-            let md = context.render_markdown();
-            return Ok(json!({
-                "content": [{
-                    "type": "text",
-                    "text": md
-                }]
-            }));
-        }
-
-        let value =
-            serde_json::to_value(&context).map_err(|e| format!("Serialization failed: {}", e))?;
-        self.tool_response("context", value, arguments, None)
-    }
-
-    fn handle_diff(
-        &self,
-        repo_path: &std::path::Path,
-        arguments: &Value,
-    ) -> std::result::Result<Value, String> {
-        let base = arguments.get("base").and_then(|v| v.as_str());
-        let head = arguments.get("head").and_then(|v| v.as_str());
-
-        let analyzer = crate::analyzers::changes::Analyzer::default();
-
-        // analyze_diff takes the repo path and an optional target branch.
-        // When both base and head are given, we pass base as the target so the
-        // diff is computed against it.  The head parameter is not directly
-        // supported by analyze_diff (it always diffs the working tree / current
-        // branch against the target), so we use base as the target reference.
-        let target = base.or(head);
-        let result = analyzer
-            .analyze_diff(repo_path, target)
-            .map_err(|e| format!("Diff analysis failed: {}", e))?;
-
-        let value =
-            serde_json::to_value(&result).map_err(|e| format!("Serialization failed: {}", e))?;
-
-        self.tool_response("diff", value, arguments, None)
-    }
-
-    fn handle_semantic_search(&self, arguments: &Value) -> std::result::Result<Value, String> {
-        use crate::semantic::{SearchConfig, SearchFilters, SemanticSearch};
-
-        let query = arguments
-            .get("query")
-            .and_then(|v| v.as_str())
-            .ok_or("Missing required 'query' parameter")?;
-
-        let top_k = arguments
-            .get("top_k")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize)
-            .unwrap_or(10);
-
-        let min_score = arguments
-            .get("min_score")
-            .and_then(|v| v.as_f64())
-            .map(|v| v as f32)
-            .unwrap_or(0.3);
-
-        let max_complexity = arguments
-            .get("max_complexity")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as u32);
-
-        let files: Option<Vec<&str>> = arguments
-            .get("files")
-            .and_then(|v| v.as_str())
-            .map(|s| s.split(',').collect());
-
-        let include_projects: Option<Vec<std::path::PathBuf>> = arguments
-            .get("include_projects")
-            .and_then(|v| v.as_str())
-            .map(|s| {
-                s.split(',')
-                    .filter(|p| !p.trim().is_empty())
-                    .map(|p| std::path::PathBuf::from(p.trim()))
-                    .collect()
-            })
-            .map(|paths: Vec<PathBuf>| {
-                paths
-                    .into_iter()
-                    .map(|path| self.resolve_confined_path(&path, Some(&self.root_path)))
-                    .collect::<std::result::Result<Vec<_>, _>>()
-            })
-            .transpose()?;
-
-        let search_config = SearchConfig {
-            min_score,
-            ..SearchConfig::default()
-        };
-
-        let search = SemanticSearch::new(&search_config, &self.root_path)
-            .map_err(|e| format!("Failed to initialize semantic search: {}", e))?;
-
-        // Ensure index exists (auto-index if needed)
-        search
-            .index(&self.config)
-            .map_err(|e| format!("Failed to index: {}", e))?;
-
-        let mut output = if let Some(ref extra) = include_projects {
-            let mut all_projects: Vec<&std::path::Path> = vec![&self.root_path];
-            all_projects.extend(extra.iter().map(|p| p.as_path()));
-            let mr = crate::semantic::multi_repo::multi_repo_search(
-                &all_projects,
-                query,
-                top_k,
-                min_score,
-            )
-            .map_err(|e| format!("Multi-repo search failed: {}", e))?;
-            crate::semantic::SearchOutput::new(query.to_string(), mr.total_symbols, mr.results)
-        } else if let Some(file_paths) = files {
-            search
-                .search_in_files(query, &file_paths, Some(top_k))
-                .map_err(|e| format!("Search failed: {}", e))?
-        } else if max_complexity.is_some() {
-            let filters = SearchFilters {
-                min_score,
-                max_complexity,
-            };
-            search
-                .search_filtered(query, Some(top_k), &filters)
-                .map_err(|e| format!("Search failed: {}", e))?
-        } else {
-            search
-                .search(query, Some(top_k))
-                .map_err(|e| format!("Search failed: {}", e))?
-        };
-
-        // Apply max_complexity post-filter (works regardless of search path)
-        if let Some(max) = max_complexity {
-            output
-                .results
-                .retain(|r| r.cyclomatic_complexity.is_none_or(|c| c <= max));
-        }
-
-        let result =
-            serde_json::to_value(&output).map_err(|e| format!("Serialization failed: {}", e))?;
-
-        self.tool_response("semantic_search", result, arguments, None)
-    }
-
-    fn handle_semantic_search_hyde(&self, arguments: &Value) -> std::result::Result<Value, String> {
-        use crate::semantic::{SearchConfig, SearchFilters, SemanticSearch};
-
-        let hypothetical_document = arguments
-            .get("hypothetical_document")
-            .and_then(|v| v.as_str())
-            .ok_or("Missing required 'hypothetical_document' parameter")?;
-
-        let display_query = arguments
-            .get("query")
-            .and_then(|v| v.as_str())
-            .unwrap_or(hypothetical_document);
-
-        let top_k = arguments
-            .get("top_k")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize)
-            .unwrap_or(10);
-
-        let min_score = arguments
-            .get("min_score")
-            .and_then(|v| v.as_f64())
-            .map(|v| v as f32)
-            .unwrap_or(0.3);
-
-        let max_complexity = arguments
-            .get("max_complexity")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as u32);
-
-        let files: Option<Vec<&str>> = arguments
-            .get("files")
-            .and_then(|v| v.as_str())
-            .map(|s| s.split(',').collect());
-
-        let include_projects: Option<Vec<std::path::PathBuf>> = arguments
-            .get("include_projects")
-            .and_then(|v| v.as_str())
-            .map(|s| {
-                s.split(',')
-                    .filter(|p| !p.trim().is_empty())
-                    .map(|p| std::path::PathBuf::from(p.trim()))
-                    .collect()
-            })
-            .map(|paths: Vec<PathBuf>| {
-                paths
-                    .into_iter()
-                    .map(|path| self.resolve_confined_path(&path, Some(&self.root_path)))
-                    .collect::<std::result::Result<Vec<_>, _>>()
-            })
-            .transpose()?;
-
-        let search_config = SearchConfig {
-            min_score,
-            ..SearchConfig::default()
-        };
-
-        let search = SemanticSearch::new(&search_config, &self.root_path)
-            .map_err(|e| format!("Failed to initialize semantic search: {}", e))?;
-
-        search
-            .index(&self.config)
-            .map_err(|e| format!("Failed to index: {}", e))?;
-
-        // Use the hypothetical document as the search query text
-        let mut output = if let Some(ref extra) = include_projects {
-            let mut all_projects: Vec<&std::path::Path> = vec![&self.root_path];
-            all_projects.extend(extra.iter().map(|p| p.as_path()));
-            let mr = crate::semantic::multi_repo::multi_repo_search(
-                &all_projects,
-                hypothetical_document,
-                top_k,
-                min_score,
-            )
-            .map_err(|e| format!("Multi-repo search failed: {}", e))?;
-            crate::semantic::SearchOutput::new(
-                hypothetical_document.to_string(),
-                mr.total_symbols,
-                mr.results,
-            )
-        } else if let Some(file_paths) = files {
-            search
-                .search_in_files(hypothetical_document, &file_paths, Some(top_k))
-                .map_err(|e| format!("Search failed: {}", e))?
-        } else if max_complexity.is_some() {
-            let filters = SearchFilters {
-                min_score,
-                max_complexity,
-            };
-            search
-                .search_filtered(hypothetical_document, Some(top_k), &filters)
-                .map_err(|e| format!("Search failed: {}", e))?
-        } else {
-            search
-                .search(hypothetical_document, Some(top_k))
-                .map_err(|e| format!("Search failed: {}", e))?
-        };
-
-        // Apply max_complexity post-filter (works regardless of search path)
-        if let Some(max) = max_complexity {
-            output
-                .results
-                .retain(|r| r.cyclomatic_complexity.is_none_or(|c| c <= max));
-        }
-
-        // Replace the query in output with the display query
-        output.query = display_query.to_string();
-
-        let result =
-            serde_json::to_value(&output).map_err(|e| format!("Serialization failed: {}", e))?;
-
-        self.tool_response("semantic_search_hyde", result, arguments, None)
-    }
-
-    fn handle_outline(
-        &self,
-        repo_path: &std::path::Path,
-        arguments: &Value,
-    ) -> std::result::Result<Value, String> {
-        use crate::analyzers::outline::{outline_file, Analyzer as OutlineAnalyzer, OutlineResult};
-        use crate::core::Analyzer as AnalyzerTrait;
-
-        let result = if let Some(file_str) = arguments.get("file").and_then(|v| v.as_str()) {
-            // Single-file mode: resolve relative paths against the repo root so
-            // callers can pass repo-relative paths (e.g. "src/main.rs") without
-            // needing to know the absolute path.
-            let raw = std::path::PathBuf::from(file_str);
-            let file_path = self.resolve_confined_path(&raw, Some(repo_path))?;
-            let file_outline =
-                outline_file(&file_path).map_err(|e| format!("Outline failed: {}", e))?;
-            OutlineResult {
-                files: vec![file_outline],
-            }
-        } else {
-            // Repo mode
-            let file_set = FileSet::from_path(repo_path, &self.config)
-                .map_err(|e| format!("Failed to create file set: {}", e))?;
-            let git_root = GitRepo::open(repo_path)
-                .ok()
-                .map(|r| r.root().to_path_buf());
-            let mut ctx = AnalysisContext::new(&file_set, &self.config, Some(repo_path));
-            if let Some(ref git_path) = git_root {
-                ctx = ctx.with_git_path(git_path);
-            }
-            let analyzer = OutlineAnalyzer;
-            analyzer
-                .analyze(&ctx)
-                .map_err(|e| format!("Outline analysis failed: {}", e))?
-        };
-
-        let value =
-            serde_json::to_value(&result).map_err(|e| format!("Serialization failed: {}", e))?;
-
-        self.tool_response("outline", value, arguments, None)
-    }
-
-    fn handle_impact(
-        &self,
-        repo_path: &std::path::Path,
-        file_set: &FileSet,
-        arguments: &Value,
-    ) -> std::result::Result<Value, String> {
-        use crate::analyzers::impact::{analyze, Direction};
-
-        let symbol = arguments
-            .get("symbol")
-            .and_then(|v| v.as_str())
-            .ok_or("Missing required 'symbol' parameter")?;
-
-        let depth = arguments
-            .get("depth")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize)
-            .unwrap_or(2);
-
-        let direction = match arguments
-            .get("direction")
-            .and_then(|v| v.as_str())
-            .unwrap_or("both")
-        {
-            "callers" => Direction::Callers,
-            "callees" => Direction::Callees,
-            _ => Direction::Both,
-        };
-
-        let files: Vec<std::path::PathBuf> = file_set.iter().map(|p| repo_path.join(p)).collect();
-
-        let report = analyze(repo_path, &files, symbol, depth, direction)
-            .map_err(|e| format!("Impact analysis failed: {}", e))?;
-
-        let value =
-            serde_json::to_value(&report).map_err(|e| format!("Serialization failed: {}", e))?;
-
-        self.tool_response("impact", value, arguments, None)
-    }
-
-    fn handle_get_symbol(
-        &self,
-        repo_path: &std::path::Path,
-        file_set: &FileSet,
-        arguments: &Value,
-    ) -> std::result::Result<Value, String> {
-        use crate::symbol::{report_from_index, suggest_symbols, SymbolOptions};
-
-        let name = arguments
-            .get("name")
-            .and_then(|v| v.as_str())
-            .ok_or("Missing required 'name' parameter")?;
-
-        let include_source = arguments
-            .get("include_source")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-
-        let max_source_lines = arguments
-            .get("max_source_lines")
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize)
-            .unwrap_or(200);
-
-        let files: Vec<std::path::PathBuf> = file_set.iter().map(|p| repo_path.join(p)).collect();
-
-        let opts = SymbolOptions {
-            include_source,
-            max_source_lines,
-        };
-
-        let start_line = match arguments.get("start_line") {
-            None => None,
-            Some(value) => Some(
-                value
-                    .as_u64()
-                    .and_then(|n| u32::try_from(n).ok())
-                    .filter(|&n| n > 0)
-                    .ok_or("start_line must be a positive u32")?,
-            ),
-        };
-        let snapshot = self
-            .index_cache
-            .lock()
-            .map_err(|_| "Index cache lock poisoned")?
-            .load(repo_path, &files)
-            .map_err(|e| e.to_string())?;
-        let index = &snapshot.index;
-        let matches: Vec<_> = index
-            .resolve(name)
-            .into_iter()
-            .filter(|&i| start_line.is_none_or(|line| index.symbols[i].line == line))
-            .collect();
-        if matches.len() > 1 {
-            let choices: Vec<_> = matches
-                .into_iter()
-                .map(|i| {
-                    json!({"name": index.symbols[i].qualified_name,
-                        "start_line": index.symbols[i].line,
-                        "signature": index.symbols[i].signature})
-                })
-                .collect();
-            return self.tool_response("get_symbol", json!({"name": name, "found": true, "ambiguous": true,
-                    "choices": choices,
-                    "hint": "Call get_symbol with a choice's name and start_line. No definition selected."}), arguments, None);
-        }
-        let value = match report_from_index(repo_path, index, name, &opts, start_line) {
-            Ok(report) => {
-                serde_json::to_value(&report).map_err(|e| format!("Serialization failed: {e}"))?
-            }
-            Err(_) => json!({
-                "name": name,
-                "found": false,
-                "suggestions": suggest_symbols(repo_path, &files, name)
-                    .map_err(|e| format!("Symbol suggestions failed: {e}"))?
-            }),
-        };
-
-        self.tool_response("get_symbol", value, arguments, None)
-    }
-
-    fn handle_task_context(
+    fn load_index(
         &self,
         root: &Path,
-        files: &FileSet,
-        args: &Value,
-    ) -> std::result::Result<Value, String> {
-        let name = args["name"].as_str().ok_or("Missing name")?;
-        let integer = |key: &str, default: usize| -> std::result::Result<usize, String> {
-            match args.get(key) {
-                None => Ok(default),
-                Some(v) => v
-                    .as_u64()
-                    .and_then(|n| usize::try_from(n).ok())
-                    .ok_or_else(|| format!("Invalid {key}")),
-            }
-        };
-        let start_line = if args.get("start_line").is_some() {
-            Some(
-                u32::try_from(integer("start_line", 0)?)
-                    .ok()
-                    .filter(|n| *n > 0)
-                    .ok_or("Invalid start_line")?,
-            )
-        } else {
-            None
-        };
-        let options = crate::task_context::Options {
-            start_line,
-            depth: integer("depth", 2)?,
-            max_bytes: integer("max_bytes", 12_000)?,
-            include_history: args["include_history"].as_bool().unwrap_or(false),
-        };
-        let paths: Vec<_> = files.iter().map(|path| root.join(path)).collect();
-        let snapshot = self
+        files: &[PathBuf],
+    ) -> std::result::Result<crate::task_context::cache::Snapshot, ToolError> {
+        let mut cache = self
             .index_cache
             .lock()
-            .map_err(|_| "Index cache lock poisoned")?
-            .load(root, &paths)
-            .map_err(|e| e.to_string())?;
-        let value = crate::task_context::build(&snapshot, root, name, &options)
-            .map_err(|e| e.to_string())?;
-        // Generic pagination would break the explicit result budget and its
-        // seed-first neighborhood. This tool owns its own omission contract.
-        Ok(
-            json!({"content":[{"type":"text", "text": json!({"tool":"task_context", "result":value}).to_string()}]}),
-        )
+            .map_err(|_| ToolError::internal("The lock of the index cache is poisoned."))?;
+        Ok(cache.load(root, files)?)
     }
 }
 
@@ -1608,46 +451,6 @@ mod tests {
     }
 
     #[test]
-    fn compact_preserves_pagination_and_default_schema() {
-        let (server, _dir) = create_test_server();
-        let records: Vec<_> = (0..100)
-            .map(|i| {
-                json!({
-                    "qualified_name": format!("module/file.rs:symbol_{i}"),
-                    "file": "module/file.rs", "line": i + 1
-                })
-            })
-            .collect();
-        let value = json!({"symbols": records});
-        let response = server
-            .tool_response(
-                "repomap",
-                value.clone(),
-                &json!({"limit": 30, "offset": 10, "compact": true}),
-                None,
-            )
-            .unwrap();
-        let packed: Value =
-            serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(packed["total_items"], 100);
-        assert_eq!(packed["returned"], 30);
-        assert_eq!(packed["offset"], 10);
-        assert_eq!(packed["table_paths"], json!(["/symbols"]));
-        let table = &packed["result"]["symbols"];
-        let columns = table["columns"].as_array().unwrap();
-        let line_column = columns.iter().position(|v| v == "line").unwrap();
-        assert_eq!(table["rows"][0][line_column], 11);
-        assert_eq!(table["rows"][29][line_column], 40);
-        let normal = server
-            .tool_response("repomap", value, &json!({"limit": 30, "offset": 10}), None)
-            .unwrap();
-        let normal: Value =
-            serde_json::from_str(normal["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert!(normal.get("encoding").is_none());
-        assert!(normal["result"]["symbols"].is_array());
-    }
-
-    #[test]
     fn symbol_line_selector_rejects_invalid_values() {
         let (server, dir) = create_test_server();
         std::fs::write(dir.path().join("main.rs"), "fn helper() {}\n").unwrap();
@@ -1683,9 +486,16 @@ mod tests {
         let (server, _root) = create_test_server();
         let outside = TempDir::new().unwrap();
 
-        let result = server.resolve_confined_path(outside.path(), None);
+        let result = server.resolve_confined_path("path", outside.path(), None);
 
         assert!(result.is_err());
+    }
+
+    /// Calls a tool and gives the MCP tool result.
+    fn call(server: &McpServer, tool: &str, arguments: Value) -> Value {
+        server
+            .handle_tool_call(Some(json!({"name": tool, "arguments": arguments})))
+            .expect("a tool result, not a protocol error")
     }
 
     #[test]
@@ -1696,7 +506,9 @@ mod tests {
             McpServer::new_with_external_paths(root.path().to_path_buf(), Config::default(), true);
 
         assert_eq!(
-            server.resolve_confined_path(outside.path(), None).unwrap(),
+            server
+                .resolve_confined_path("path", outside.path(), None)
+                .unwrap(),
             outside.path().canonicalize().unwrap()
         );
     }
@@ -1706,11 +518,10 @@ mod tests {
         let (server, root) = create_test_server();
         let outside = root.path().parent().unwrap().join("outside.rs");
         std::fs::write(&outside, "fn secret() {}\n").unwrap();
-        let args = json!({"file": "../outside.rs"});
 
-        let result = server.handle_outline(root.path(), &args);
+        let result = call(&server, "outline", json!({"file": "../outside.rs"}));
 
-        assert!(result.is_err());
+        assert_eq!(result["isError"], true);
         std::fs::remove_file(outside).unwrap();
     }
 
@@ -1718,24 +529,28 @@ mod tests {
     fn test_semantic_search_rejects_external_include_project() {
         let (server, _root) = create_test_server();
         let outside = TempDir::new().unwrap();
-        let args = json!({
-            "query": "test",
-            "include_projects": outside.path().to_str().unwrap()
-        });
 
-        assert!(server.handle_semantic_search(&args).is_err());
+        let result = call(
+            &server,
+            "semantic_search",
+            json!({"query": "test", "include_projects": [outside.path()]}),
+        );
+
+        assert_eq!(result["isError"], true);
     }
 
     #[test]
     fn test_semantic_search_hyde_rejects_external_include_project() {
         let (server, _root) = create_test_server();
         let outside = TempDir::new().unwrap();
-        let args = json!({
-            "hypothetical_document": "test",
-            "include_projects": outside.path().to_str().unwrap()
-        });
 
-        assert!(server.handle_semantic_search_hyde(&args).is_err());
+        let result = call(
+            &server,
+            "semantic_search_hyde",
+            json!({"hypothetical_document": "test", "include_projects": [outside.path()]}),
+        );
+
+        assert_eq!(result["isError"], true);
     }
 
     #[test]
@@ -2774,162 +1589,6 @@ mod tests {
         let request_json = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
         let parsed: JsonRpcRequest = serde_json::from_str(request_json).unwrap();
         assert!(parsed.id.is_none(), "A notification must have no id field");
-    }
-
-    #[test]
-    fn test_tool_response_envelope_fields() {
-        let (server, _temp_dir) = create_test_server();
-        let value = json!({"items": [1, 2, 3, 4, 5]});
-        let args = json!({});
-        let resp = server
-            .tool_response("test_tool", value, &args, None)
-            .unwrap();
-        let text = resp["content"][0]["text"].as_str().unwrap();
-        let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
-        assert_eq!(envelope["tool"].as_str().unwrap(), "test_tool");
-        assert!(envelope.get("total_items").is_some());
-        assert!(envelope.get("returned").is_some());
-        assert!(envelope.get("offset").is_some());
-        assert!(envelope.get("result").is_some());
-    }
-
-    #[test]
-    fn test_tool_response_envelope_reports_skipped_git_data() {
-        let (server, _temp_dir) = create_test_server();
-        let resp = server
-            .tool_response(
-                "score",
-                json!({"components": {}}),
-                &json!({}),
-                Some("not a git repository"),
-            )
-            .unwrap();
-        let text = resp["content"][0]["text"].as_str().unwrap();
-        let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
-        assert_eq!(envelope["git_skipped_reason"], "not a git repository");
-    }
-
-    #[test]
-    fn test_tool_response_is_compact() {
-        let (server, _temp_dir) = create_test_server();
-        let value = json!({"items": [1, 2, 3]});
-        let resp = server
-            .tool_response("test", value, &json!({}), None)
-            .unwrap();
-        let text = resp["content"][0]["text"].as_str().unwrap();
-        // Compact: only one line (no internal newlines)
-        assert_eq!(text.trim().lines().count(), 1);
-    }
-
-    #[test]
-    fn test_tool_response_default_limit_50() {
-        let (server, _temp_dir) = create_test_server();
-        let items: Vec<i64> = (0..100).collect();
-        let value = json!({"items": items});
-        let resp = server
-            .tool_response("test", value, &json!({}), None)
-            .unwrap();
-        let text = resp["content"][0]["text"].as_str().unwrap();
-        let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
-        let returned = envelope["returned"].as_u64().unwrap();
-        assert_eq!(returned, 50);
-        assert_eq!(envelope["total_items"].as_u64().unwrap(), 100);
-    }
-
-    #[test]
-    fn test_tool_response_zero_limit_unlimited() {
-        let (server, _temp_dir) = create_test_server();
-        let items: Vec<i64> = (0..100).collect();
-        let value = json!({"items": items});
-        let resp = server
-            .tool_response("test", value, &json!({"limit": 0}), None)
-            .unwrap();
-        let text = resp["content"][0]["text"].as_str().unwrap();
-        let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
-        assert_eq!(envelope["returned"].as_u64().unwrap(), 100);
-    }
-
-    #[test]
-    fn test_tool_response_offset_pagination() {
-        let (server, _temp_dir) = create_test_server();
-        let items: Vec<i64> = (0..20).collect();
-        let value = json!({"items": items});
-        let resp = server
-            .tool_response("test", value, &json!({"limit": 5, "offset": 10}), None)
-            .unwrap();
-        let text = resp["content"][0]["text"].as_str().unwrap();
-        let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
-        // Items 10-14 returned
-        assert_eq!(envelope["returned"].as_u64().unwrap(), 5);
-        assert_eq!(envelope["offset"].as_u64().unwrap(), 10);
-    }
-
-    #[test]
-    fn test_tool_response_multi_array_counts() {
-        // Bug: count_items only counted first array; truncate_lists truncates ALL arrays.
-        // With {"components": [101 items], "smells": [10 items]} and limit=5:
-        //   total_items must be 111 (101+10), returned must be 10 (5+5).
-        let (server, _temp_dir) = create_test_server();
-        let components: Vec<i64> = (0..101).collect();
-        let smells: Vec<i64> = (0..10).collect();
-        let value = json!({"components": components, "smells": smells});
-        let resp = server
-            .tool_response("test", value, &json!({"limit": 5}), None)
-            .unwrap();
-        let text = resp["content"][0]["text"].as_str().unwrap();
-        let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
-        assert_eq!(
-            envelope["total_items"].as_u64().unwrap(),
-            111,
-            "total_items should sum all arrays"
-        );
-        assert_eq!(
-            envelope["returned"].as_u64().unwrap(),
-            10,
-            "returned should be sum of items in all arrays after truncation (5+5)"
-        );
-    }
-
-    #[test]
-    fn test_tool_response_single_array_counts_unchanged() {
-        // Existing semantics: single array of 60 items, limit 50 → total 60, returned 50.
-        let (server, _temp_dir) = create_test_server();
-        let items: Vec<i64> = (0..60).collect();
-        let value = json!({"items": items});
-        let resp = server
-            .tool_response("test", value, &json!({"limit": 50}), None)
-            .unwrap();
-        let text = resp["content"][0]["text"].as_str().unwrap();
-        let envelope: serde_json::Value = serde_json::from_str(text).unwrap();
-        assert_eq!(envelope["total_items"].as_u64().unwrap(), 60);
-        assert_eq!(envelope["returned"].as_u64().unwrap(), 50);
-    }
-
-    #[test]
-    fn test_complexity_pagination_bounds_nested_functions_globally() {
-        let (server, _temp_dir) = create_test_server();
-        let files: Vec<Value> = (0..3)
-            .map(|file| json!({"path": format!("{file}.rs"), "functions": vec![json!({"name": "f"}); 100]}))
-            .collect();
-        let response = server
-            .tool_response(
-                "complexity",
-                json!({"files": files}),
-                &json!({"limit": 50}),
-                None,
-            )
-            .unwrap();
-        let envelope: Value =
-            serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
-        let returned: usize = envelope["result"]["files"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|file| file["functions"].as_array().unwrap().len())
-            .sum();
-        assert_eq!(envelope["total_items"], 300);
-        assert_eq!(envelope["returned"], 50);
-        assert_eq!(returned, 50);
     }
 
     #[test]
