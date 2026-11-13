@@ -2255,3 +2255,154 @@ fn test_outline_markdown_applies_top_and_offset() {
         assert!(!stdout.contains("gamma.rs"), "{format}: {stdout}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Second review: path check scope, one meaning of --top in each format
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_commands_without_a_repository_ignore_the_repository_path() {
+    omen()
+        .args(["-p", "/no/such/path", "mcp", "manifest"])
+        .assert()
+        .success();
+
+    let dir = TempDir::new().expect("temp dir");
+    let (registration, runs, _) = write_eval_fixture(&dir, 30);
+    omen()
+        .args(["-p", "/no/such/path", "-f", "json", "eval"])
+        .args(["--registration", &registration])
+        .args(["--runs", &runs])
+        .assert()
+        .success();
+
+    omen()
+        .args(["-p", "/no/such/path", "benchmark"])
+        .args(["--baseline", "/nonexistent/baseline"])
+        .args(["--candidate", "/nonexistent/candidate"])
+        .args(["--baseline-label", "a", "--candidate-label", "b"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("repository path").not());
+}
+
+/// The candidates that the output of `omen` contains for one format. The command
+/// runs in the repository, because `mutation` reads its files from there.
+fn listed<'a>(
+    repository: &TempDir,
+    format: &str,
+    arguments: &[&str],
+    candidates: &[&'a str],
+) -> Vec<&'a str> {
+    let output = omen()
+        .current_dir(repository.path())
+        .args(["-p", ".", "-f", format])
+        .args(arguments)
+        .output()
+        .expect("command runs");
+    assert!(
+        output.status.success(),
+        "{arguments:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    candidates
+        .iter()
+        .copied()
+        .filter(|candidate| stdout.contains(candidate))
+        .collect()
+}
+
+#[test]
+fn test_outline_top_pages_the_files_list_in_each_format() {
+    let temp = TempDir::new().unwrap();
+    for name in ["alpha.rs", "beta.rs", "gamma.rs"] {
+        std::fs::write(temp.path().join(name), "pub fn one() {}\n").unwrap();
+    }
+    let files = ["alpha.rs", "beta.rs", "gamma.rs"];
+
+    for format in ["json", "markdown", "text"] {
+        assert_eq!(
+            listed(&temp, format, &["outline", "--top", "1"], &files),
+            ["alpha.rs"],
+            "{format}"
+        );
+        assert_eq!(
+            listed(
+                &temp,
+                format,
+                &["outline", "--top", "1", "--offset", "1"],
+                &files
+            ),
+            ["beta.rs"],
+            "{format}"
+        );
+    }
+
+    let output = omen()
+        .args(["-p", temp.path().to_str().unwrap(), "-f", "json"])
+        .args(["outline", "--top", "1"])
+        .output()
+        .expect("command runs");
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(parsed["files"].as_array().unwrap().len(), 1);
+    assert_eq!(parsed["files_omitted"], 2);
+}
+
+fn write_callers_fixture() -> TempDir {
+    let temp = TempDir::new().unwrap();
+    std::fs::write(
+        temp.path().join("lib.rs"),
+        concat!(
+            "pub fn target() -> u32 { 1 }\n",
+            "pub fn first_caller() -> u32 { target() }\n",
+            "pub fn second_caller() -> u32 { target() }\n",
+            "pub fn third_caller() -> u32 { target() }\n",
+        ),
+    )
+    .unwrap();
+    temp
+}
+
+#[test]
+fn test_top_lists_the_same_items_in_json_and_markdown() {
+    let callers = ["first_caller", "second_caller", "third_caller"];
+    let repository = write_callers_fixture();
+    for arguments in [
+        vec!["symbol", "target", "--no-source", "--top", "1"],
+        vec!["impact", "target", "--top", "1"],
+    ] {
+        let json = listed(&repository, "json", &arguments, &callers);
+        assert_eq!(json.len(), 1, "{arguments:?}: {json:?}");
+        assert_eq!(
+            listed(&repository, "markdown", &arguments, &callers),
+            json,
+            "{arguments:?}"
+        );
+    }
+
+    let repository = write_search_fixture();
+    let names = ["alpha", "beta", "gamma"];
+    let arguments = ["search", "query", "parse", "--min-score", "0", "--top", "1"];
+    let json = listed(&repository, "json", &arguments, &names);
+    assert_eq!(json.len(), 1, "{json:?}");
+    assert_eq!(listed(&repository, "markdown", &arguments, &names), json);
+}
+
+#[test]
+fn test_mutation_top_lists_the_same_files_in_json_and_markdown() {
+    let repository = TempDir::new().unwrap();
+    for name in ["one.rs", "two.rs"] {
+        std::fs::write(
+            repository.path().join(name),
+            "pub fn is_positive(x: i32) -> bool { x > 0 }\n",
+        )
+        .unwrap();
+    }
+    let files = ["one.rs", "two.rs"];
+    let arguments = ["mutation", "--test-command", "true", "--top", "1"];
+
+    let json = listed(&repository, "json", &arguments, &files);
+    assert_eq!(json.len(), 1, "{json:?}");
+    assert_eq!(listed(&repository, "markdown", &arguments, &files), json);
+}

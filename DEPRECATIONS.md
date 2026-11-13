@@ -43,8 +43,9 @@ The flags `-p`, `-f`, `-c`, `-v`, and `-j` are global. On each command, `-p` is
 the repository path. `stubs --gate` has no default value in the CLI. If the
 flag is absent, the `[gate]` table of the configuration gives the mode.
 
-If the `-p` value is not a directory, each command stops with an error before
-the analysis. Thus `score trend -p monthly` and `report serve -p 3000` fail, and
+If the `-p` value is not a directory, each command that reads the repository
+stops with an error before the analysis. `mcp manifest`, `eval`, `benchmark`,
+`report validate`, and `report render` do not read the repository. Thus `score trend -p monthly` and `report serve -p 3000` fail, and
 the message names `--period` or `--port`.
 
 The gate of `score` applies only to the bare `score` command. `score trend` has
@@ -52,6 +53,9 @@ no gate, and it refuses the `--gate` flag.
 
 The SARIF format keeps each finding. The `--top` and `--offset` flags do not
 apply to it, also on `search query`.
+
+On `outline`, `--top` and `--offset` page the `files` list in each format. On
+`symbol`, the two flags page each list, for example `callers` and `callees`.
 
 ### Output keys
 

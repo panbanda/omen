@@ -129,10 +129,55 @@ fn resolve_repo_path(cli: &Cli) -> omen::core::Result<(PathBuf, Option<PathBuf>)
         }
 
         Ok((cloned_path.clone(), Some(cloned_path)))
-    } else if cli.path.is_dir() {
+    } else if cli.path.is_dir() || !reads_repository(&cli.command) {
         Ok((cli.path.clone(), None))
     } else {
         Err(omen::core::Error::InvalidArgument(absent_path_message(cli)))
+    }
+}
+
+/// Tells if a command reads the repository at `-p`. A command that does not
+/// read it ignores the value. The `match` has no wildcard arm, so a new
+/// command needs a decision here.
+fn reads_repository(command: &Command) -> bool {
+    match command {
+        Command::Mcp(command) => match command.subcommand {
+            Some(McpSubcommand::Manifest) => false,
+            None => true,
+        },
+        Command::Report(command) => match command.subcommand {
+            // `serve` uses the repository path to find the report file.
+            ReportSubcommand::Generate(_) | ReportSubcommand::Serve(_) => true,
+            ReportSubcommand::Validate(_) | ReportSubcommand::Render(_) => false,
+        },
+        Command::Benchmark(_) | Command::Eval(_) => false,
+        #[cfg(feature = "mutation")]
+        Command::Mutation(_) => true,
+        Command::Complexity(_)
+        | Command::Satd(_)
+        | Command::Stubs(_)
+        | Command::Deadcode(_)
+        | Command::Churn(_)
+        | Command::Clones(_)
+        | Command::Defect(_)
+        | Command::Changes(_)
+        | Command::Diff(_)
+        | Command::Tdg(_)
+        | Command::Graph(_)
+        | Command::Hotspot(_)
+        | Command::Temporal(_)
+        | Command::Ownership(_)
+        | Command::Cohesion(_)
+        | Command::Repomap(_)
+        | Command::Smells(_)
+        | Command::Flags(_)
+        | Command::Score(_)
+        | Command::All(_)
+        | Command::Context(_)
+        | Command::Search(_)
+        | Command::Outline(_)
+        | Command::Impact(_)
+        | Command::Symbol(_) => true,
     }
 }
 
@@ -1957,26 +2002,32 @@ fn run_outline(
         analyzer.analyze(&ctx)?
     };
 
+    // `--top` and `--offset` page the `files` list in each format. The shared
+    // rule for nested lists pages `files[].functions`, so it does not apply.
+    // SARIF keeps each finding.
+    let mut result = result;
+    let mut omitted = 0;
+    if !matches!(format, Format::Sarif) {
+        let offset = args.common.pagination.offset.unwrap_or(0);
+        let limit = match args.common.pagination.top {
+            Some(0) | None => usize::MAX,
+            Some(top) => top,
+        };
+        let after_offset = result.files.len().saturating_sub(offset);
+        result.files = result.files.into_iter().skip(offset).take(limit).collect();
+        omitted = after_offset - result.files.len();
+    }
+
     match format {
         Format::Markdown | Format::Text => {
-            let mut result = result;
-            let offset = args.common.pagination.offset.unwrap_or(0);
-            let limit = match args.common.pagination.top {
-                Some(0) | None => usize::MAX,
-                Some(top) => top,
-            };
-            result.files = result.files.into_iter().skip(offset).take(limit).collect();
             print!("{}", result.to_markdown());
         }
         _ => {
-            let value = serde_json::to_value(&result)?;
-            omen::output::format_with_limits(
-                value,
-                format,
-                args.common.pagination.top,
-                args.common.pagination.offset,
-                &mut std::io::stdout(),
-            )?;
+            let mut value = serde_json::to_value(&result)?;
+            if omitted > 0 {
+                value["files_omitted"] = omitted.into();
+            }
+            format_with_limits(value, format, None, None, &mut stdout())?;
         }
     }
     Ok(())

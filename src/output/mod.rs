@@ -129,7 +129,14 @@ fn truncate_nested_primary(value: &mut Value, top: usize, offset: usize) -> Opti
     {
         return truncate_object_arrays(map.get_mut("files")?, "functions", top, offset);
     }
-    if map.contains_key("callers") && map.contains_key("callees") {
+    // `impact` groups its callers and callees by depth. `symbol` has plain lists
+    // with the same names, which the rule for top-level lists handles.
+    let has_depth_levels = ["callers", "callees"].iter().any(|field| {
+        map.get(*field)
+            .and_then(Value::as_array)
+            .is_some_and(|levels| levels.iter().any(|level| level.get("symbols").is_some()))
+    });
+    if has_depth_levels {
         let total: usize = ["callers", "callees"]
             .iter()
             .filter_map(|field| map.get(*field)?.as_array())
