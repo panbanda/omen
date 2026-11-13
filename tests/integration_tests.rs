@@ -2871,3 +2871,199 @@ fn test_gate_keeps_the_report_and_writes_the_violation_to_stderr() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// `--top` lists the same items in each format
+// ---------------------------------------------------------------------------
+
+fn write_import_chain_fixture() -> TempDir {
+    let temp = TempDir::new().unwrap();
+    for (name, source) in [
+        (
+            "alpha.ts",
+            "import { two } from './beta';\nexport function one() { return two(); }\n",
+        ),
+        (
+            "beta.ts",
+            "import { three } from './gamma';\nexport function two() { return three(); }\n",
+        ),
+        ("gamma.ts", "export function three() { return 3; }\n"),
+        ("delta.ts", "export function four() { return 4; }\n"),
+    ] {
+        std::fs::write(temp.path().join(name), source).unwrap();
+    }
+    temp
+}
+
+#[test]
+fn test_graph_top_pages_the_nodes_in_each_format() {
+    let repository = write_import_chain_fixture();
+    let run = |format: &str, extra: &[&str]| -> String {
+        let output = omen()
+            .args(["-p", repository.path().to_str().unwrap()])
+            .args(["-f", format, "graph"])
+            .args(extra)
+            .output()
+            .expect("command runs");
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap()
+    };
+
+    let full: serde_json::Value = serde_json::from_str(&run("json", &[])).unwrap();
+    let nodes: Vec<String> = full["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|node| node["file"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(nodes.len(), 4, "{full:#?}");
+    assert!(full["cycles"].as_array().unwrap().is_empty());
+    assert_eq!(full["edges"].as_array().unwrap().len(), 2, "{full:#?}");
+
+    let paged: serde_json::Value =
+        serde_json::from_str(&run("json", &["--top", "2", "--offset", "1"])).unwrap();
+    let kept: Vec<&str> = paged["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|node| node["file"].as_str().unwrap())
+        .collect();
+    assert_eq!(kept, [nodes[1].as_str(), nodes[2].as_str()]);
+    assert_eq!(paged["nodes_omitted"], 1);
+    let edges = paged["edges"].as_array().unwrap();
+    assert_eq!(edges.len(), 1, "{paged:#?}");
+    for edge in edges {
+        assert!(kept.contains(&edge["from"].as_str().unwrap()), "{edge}");
+        assert!(kept.contains(&edge["to"].as_str().unwrap()), "{edge}");
+    }
+    assert_eq!(paged["edges_omitted"], 1);
+
+    for format in ["markdown", "text"] {
+        let stdout = run(format, &["--top", "1"]);
+        let listed: Vec<&String> = nodes.iter().filter(|node| stdout.contains(*node)).collect();
+        assert_eq!(listed, [&nodes[0]], "{format}: {stdout}");
+    }
+}
+
+/// Collects the string values of a report. With `key`, it collects only the
+/// values of that key.
+fn collect_strings(
+    value: &serde_json::Value,
+    key: Option<&str>,
+    strings: &mut std::collections::BTreeSet<String>,
+) {
+    match value {
+        serde_json::Value::Object(entries) => {
+            for (name, entry) in entries {
+                match (key, entry) {
+                    (Some(key), serde_json::Value::String(text)) if key == name => {
+                        strings.insert(text.clone());
+                    }
+                    (Some(_), serde_json::Value::String(_)) => {}
+                    _ => collect_strings(entry, key, strings),
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_strings(item, key, strings);
+            }
+        }
+        serde_json::Value::String(text) if key.is_none() => {
+            strings.insert(text.clone());
+        }
+        _ => {}
+    }
+}
+
+/// The words of a Markdown report, without the table and emphasis marks.
+fn markdown_words(markdown: &str) -> std::collections::BTreeSet<String> {
+    markdown
+        .split(|character: char| character.is_whitespace() || character == '|')
+        .map(|word| {
+            word.trim_matches(|character| matches!(character, '*' | '`' | ',' | ':'))
+                .to_string()
+        })
+        .collect()
+}
+
+#[test]
+fn test_top_lists_the_same_items_in_json_and_markdown_for_each_command() {
+    let repository = write_path_fixture();
+    let path = repository.path().to_str().unwrap();
+    omen()
+        .args(["-p", path, "search", "index"])
+        .assert()
+        .success();
+
+    // The second value is the key that names an item. A command with its own
+    // Markdown renderer prints a summary of each item, so the test compares
+    // that key only.
+    let commands: &[(&[&str], Option<&str>)] = &[
+        (&["complexity"], None),
+        (&["satd"], None),
+        (&["stubs"], None),
+        (&["deadcode"], None),
+        (&["churn"], None),
+        (&["clones"], None),
+        (&["defect"], None),
+        (&["changes"], None),
+        (&["tdg"], None),
+        (&["graph"], None),
+        (&["hotspot"], None),
+        (&["temporal"], None),
+        (&["ownership"], None),
+        (&["cohesion"], None),
+        (&["repomap"], None),
+        (&["smells"], None),
+        (&["flags"], None),
+        (&["outline"], Some("file")),
+        (&["impact", "target"], None),
+        (&["symbol", "target", "--no-source"], None),
+        (
+            &["search", "query", "target", "--min-score", "0"],
+            Some("symbol_name"),
+        ),
+        #[cfg(feature = "mutation")]
+        (&["mutation", "--dry-run"], Some("file")),
+    ];
+
+    let run = |format: &str, arguments: &[&str], extra: &[&str]| -> String {
+        let output = omen()
+            .args(["-p", path, "-f", format])
+            .args(arguments)
+            .args(extra)
+            .output()
+            .expect("command runs");
+        assert!(output.status.success(), "{arguments:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+
+    let mut differences = Vec::new();
+    for (arguments, item_key) in commands {
+        // A candidate is a value of the full report that is one word, such as
+        // a file or a symbol name.
+        let full: serde_json::Value = serde_json::from_str(&run("json", arguments, &[])).unwrap();
+        let mut candidates = std::collections::BTreeSet::new();
+        collect_strings(&full, *item_key, &mut candidates);
+        candidates.retain(|text| {
+            text.len() >= 4
+                && !text.contains(|character: char| character.is_whitespace() || character == '|')
+        });
+
+        let paged: serde_json::Value =
+            serde_json::from_str(&run("json", arguments, &["--top", "1"])).unwrap();
+        let mut json_strings = std::collections::BTreeSet::new();
+        collect_strings(&paged, *item_key, &mut json_strings);
+        let words = markdown_words(&run("markdown", arguments, &["--top", "1"]));
+
+        let in_json: Vec<&String> = candidates.intersection(&json_strings).collect();
+        let in_markdown: Vec<&String> = candidates.intersection(&words).collect();
+        if in_json != in_markdown {
+            differences.push(format!(
+                "{arguments:?}\n  json:     {in_json:?}\n  markdown: {in_markdown:?}"
+            ));
+        }
+    }
+    assert!(differences.is_empty(), "{}", differences.join("\n"));
+}

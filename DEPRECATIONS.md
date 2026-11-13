@@ -57,6 +57,13 @@ apply to it, also on `search query`.
 On `outline`, `--top` and `--offset` page the `files` list in each format. On
 `symbol`, the two flags page each list, for example `callers` and `callees`.
 
+### `--top` on `graph`
+
+On `graph`, `--top` and `--offset` page the `nodes` list in each format. An
+edge stays only if its two nodes stay. `nodes_omitted` and `edges_omitted` give
+the counts. Before 5.0, the two flags cut the members of each cycle, and they
+did nothing if the graph had no cycle.
+
 ### Output of a gated command
 
 `complexity`, `score`, `stubs`, and `mutation` write the normal report to stdout
