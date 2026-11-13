@@ -145,6 +145,11 @@ jobs:
       - name: Run clippy
         run: cargo clippy --all-targets --all-features
 
+      # The `mutation` feature is optional. This step makes sure that each
+      # target, also the tests, builds without it.
+      - name: Check the build without default features
+        run: cargo check --no-default-features --all-targets
+
   audit:
     name: Security audit
     runs-on: ubuntu-latest
