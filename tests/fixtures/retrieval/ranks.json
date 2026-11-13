@@ -1,0 +1,1186 @@
+[
+  {
+    "id": "bash/c-arithmetic",
+    "rank": 1
+  },
+  {
+    "id": "bash/c-echo-fancy",
+    "rank": 1
+  },
+  {
+    "id": "bash/c-git-status",
+    "rank": 1
+  },
+  {
+    "id": "bash/c-grep-count",
+    "rank": 1
+  },
+  {
+    "id": "bash/c-indirect-call",
+    "rank": 1
+  },
+  {
+    "id": "bash/c-pipe-cat",
+    "rank": 1
+  },
+  {
+    "id": "bash/c-substitution",
+    "rank": 1
+  },
+  {
+    "id": "bash/i-only-here",
+    "rank": 1
+  },
+  {
+    "id": "bash/i-part-local",
+    "rank": null
+  },
+  {
+    "id": "bash/i-part-receiver",
+    "rank": null
+  },
+  {
+    "id": "bash/i-pick",
+    "rank": 1
+  },
+  {
+    "id": "bash/i-substitute",
+    "rank": 1
+  },
+  {
+    "id": "bash/i-twice",
+    "rank": 1
+  },
+  {
+    "id": "bash/i-twice-local",
+    "rank": 1
+  },
+  {
+    "id": "bash/n-call-command",
+    "rank": null
+  },
+  {
+    "id": "bash/n-capture-output",
+    "rank": null
+  },
+  {
+    "id": "bash/n-count-lines",
+    "rank": null
+  },
+  {
+    "id": "bash/n-double-argument",
+    "rank": null
+  },
+  {
+    "id": "bash/n-pipe",
+    "rank": null
+  },
+  {
+    "id": "bash/n-print-ok",
+    "rank": 1
+  },
+  {
+    "id": "c/c-accumulate",
+    "rank": 1
+  },
+  {
+    "id": "c/c-circle-area-signature",
+    "rank": 1
+  },
+  {
+    "id": "c/c-function-pointer",
+    "rank": 1
+  },
+  {
+    "id": "c/c-side-squared",
+    "rank": 1
+  },
+  {
+    "id": "c/c-table-struct",
+    "rank": null
+  },
+  {
+    "id": "c/c-times-two",
+    "rank": 1
+  },
+  {
+    "id": "c/c-typedef",
+    "rank": null
+  },
+  {
+    "id": "c/i-circle-area",
+    "rank": 1
+  },
+  {
+    "id": "c/i-only-here",
+    "rank": 1
+  },
+  {
+    "id": "c/i-part-area",
+    "rank": null
+  },
+  {
+    "id": "c/i-part-tag",
+    "rank": 1
+  },
+  {
+    "id": "c/i-table",
+    "rank": null
+  },
+  {
+    "id": "c/i-twice",
+    "rank": 1
+  },
+  {
+    "id": "c/i-twice-local",
+    "rank": 1
+  },
+  {
+    "id": "c/n-choose-function",
+    "rank": 1
+  },
+  {
+    "id": "c/n-circle-area",
+    "rank": null
+  },
+  {
+    "id": "c/n-string-length",
+    "rank": null
+  },
+  {
+    "id": "c/n-sum-applied",
+    "rank": null
+  },
+  {
+    "id": "c/n-times-two",
+    "rank": null
+  },
+  {
+    "id": "c/n-units",
+    "rank": null
+  },
+  {
+    "id": "cpp/c-lambda",
+    "rank": 1
+  },
+  {
+    "id": "cpp/c-new-circle",
+    "rank": 1
+  },
+  {
+    "id": "cpp/c-out-of-line",
+    "rank": null
+  },
+  {
+    "id": "cpp/c-push-back",
+    "rank": 1
+  },
+  {
+    "id": "cpp/c-side-squared",
+    "rank": null
+  },
+  {
+    "id": "cpp/c-ternary",
+    "rank": 1
+  },
+  {
+    "id": "cpp/c-value-times",
+    "rank": null
+  },
+  {
+    "id": "cpp/i-largest",
+    "rank": null
+  },
+  {
+    "id": "cpp/i-measure-scaled",
+    "rank": 1
+  },
+  {
+    "id": "cpp/i-only-here",
+    "rank": 1
+  },
+  {
+    "id": "cpp/i-part-overload",
+    "rank": null
+  },
+  {
+    "id": "cpp/i-part-scaled",
+    "rank": null
+  },
+  {
+    "id": "cpp/i-point",
+    "rank": null
+  },
+  {
+    "id": "cpp/i-push-back",
+    "rank": 1
+  },
+  {
+    "id": "cpp/i-twice",
+    "rank": null
+  },
+  {
+    "id": "cpp/n-circle-area",
+    "rank": null
+  },
+  {
+    "id": "cpp/n-coordinates",
+    "rank": null
+  },
+  {
+    "id": "cpp/n-heap",
+    "rank": null
+  },
+  {
+    "id": "cpp/n-larger",
+    "rank": null
+  },
+  {
+    "id": "cpp/n-root-and-size",
+    "rank": null
+  },
+  {
+    "id": "cpp/n-times",
+    "rank": null
+  },
+  {
+    "id": "csharp/c-four-edges",
+    "rank": 1
+  },
+  {
+    "id": "csharp/c-lambda",
+    "rank": 1
+  },
+  {
+    "id": "csharp/c-record",
+    "rank": null
+  },
+  {
+    "id": "csharp/c-side-squared",
+    "rank": 1
+  },
+  {
+    "id": "csharp/c-sqrt",
+    "rank": 1
+  },
+  {
+    "id": "csharp/c-times-two",
+    "rank": 1
+  },
+  {
+    "id": "csharp/c-width-height",
+    "rank": 1
+  },
+  {
+    "id": "csharp/i-ishape",
+    "rank": null
+  },
+  {
+    "id": "csharp/i-norm",
+    "rank": 1
+  },
+  {
+    "id": "csharp/i-only-here",
+    "rank": 1
+  },
+  {
+    "id": "csharp/i-part-local",
+    "rank": 1
+  },
+  {
+    "id": "csharp/i-part-real",
+    "rank": null
+  },
+  {
+    "id": "csharp/i-perimeter",
+    "rank": 1
+  },
+  {
+    "id": "csharp/i-twice",
+    "rank": 1
+  },
+  {
+    "id": "csharp/i-twice-local",
+    "rank": 1
+  },
+  {
+    "id": "csharp/n-around-square",
+    "rank": null
+  },
+  {
+    "id": "csharp/n-circle-area",
+    "rank": null
+  },
+  {
+    "id": "csharp/n-distance",
+    "rank": null
+  },
+  {
+    "id": "csharp/n-increment",
+    "rank": 1
+  },
+  {
+    "id": "csharp/n-twice-radius",
+    "rank": null
+  },
+  {
+    "id": "csharp/n-width-height",
+    "rank": 1
+  },
+  {
+    "id": "go/c-append",
+    "rank": 1
+  },
+  {
+    "id": "go/c-builder",
+    "rank": 1
+  },
+  {
+    "id": "go/c-interface-method",
+    "rank": 1
+  },
+  {
+    "id": "go/c-receiver-method",
+    "rank": null
+  },
+  {
+    "id": "go/c-side-squared",
+    "rank": 1
+  },
+  {
+    "id": "go/c-times-two",
+    "rank": 1
+  },
+  {
+    "id": "go/i-new-circle",
+    "rank": 1
+  },
+  {
+    "id": "go/i-only-here",
+    "rank": 1
+  },
+  {
+    "id": "go/i-part-circle",
+    "rank": 1
+  },
+  {
+    "id": "go/i-part-here",
+    "rank": null
+  },
+  {
+    "id": "go/i-part-local",
+    "rank": 1
+  },
+  {
+    "id": "go/i-twice",
+    "rank": 1
+  },
+  {
+    "id": "go/i-twice-local",
+    "rank": 1
+  },
+  {
+    "id": "go/i-write-string",
+    "rank": 1
+  },
+  {
+    "id": "go/n-circle-area",
+    "rank": null
+  },
+  {
+    "id": "go/n-make-circle",
+    "rank": null
+  },
+  {
+    "id": "go/n-map-slice",
+    "rank": null
+  },
+  {
+    "id": "go/n-text-length",
+    "rank": 1
+  },
+  {
+    "id": "go/n-times-two",
+    "rank": null
+  },
+  {
+    "id": "go/n-upper-case",
+    "rank": null
+  },
+  {
+    "id": "java/c-four-edges",
+    "rank": 1
+  },
+  {
+    "id": "java/c-increment",
+    "rank": 1
+  },
+  {
+    "id": "java/c-lambda",
+    "rank": 1
+  },
+  {
+    "id": "java/c-record",
+    "rank": null
+  },
+  {
+    "id": "java/c-side-squared",
+    "rank": null
+  },
+  {
+    "id": "java/c-sqrt",
+    "rank": 1
+  },
+  {
+    "id": "java/c-times-two",
+    "rank": 1
+  },
+  {
+    "id": "java/i-counter",
+    "rank": null
+  },
+  {
+    "id": "java/i-norm",
+    "rank": 1
+  },
+  {
+    "id": "java/i-only-here",
+    "rank": 1
+  },
+  {
+    "id": "java/i-part-local",
+    "rank": 1
+  },
+  {
+    "id": "java/i-part-real",
+    "rank": null
+  },
+  {
+    "id": "java/i-perimeter",
+    "rank": 1
+  },
+  {
+    "id": "java/i-twice",
+    "rank": 1
+  },
+  {
+    "id": "java/i-twice-local",
+    "rank": 1
+  },
+  {
+    "id": "java/n-around-square",
+    "rank": null
+  },
+  {
+    "id": "java/n-circle-area",
+    "rank": null
+  },
+  {
+    "id": "java/n-distance",
+    "rank": null
+  },
+  {
+    "id": "java/n-increment",
+    "rank": 1
+  },
+  {
+    "id": "java/n-twice-radius",
+    "rank": null
+  },
+  {
+    "id": "java/n-units",
+    "rank": null
+  },
+  {
+    "id": "javascript/c-arrow-constant",
+    "rank": 1
+  },
+  {
+    "id": "javascript/c-class-field",
+    "rank": 1
+  },
+  {
+    "id": "javascript/c-key-length",
+    "rank": 1
+  },
+  {
+    "id": "javascript/c-lambda",
+    "rank": 1
+  },
+  {
+    "id": "javascript/c-map-set",
+    "rank": 1
+  },
+  {
+    "id": "javascript/c-side-squared",
+    "rank": 1
+  },
+  {
+    "id": "javascript/c-times-two",
+    "rank": 1
+  },
+  {
+    "id": "javascript/i-fallback",
+    "rank": 1
+  },
+  {
+    "id": "javascript/i-legacy-name",
+    "rank": 1
+  },
+  {
+    "id": "javascript/i-make-square",
+    "rank": 1
+  },
+  {
+    "id": "javascript/i-only-here",
+    "rank": 1
+  },
+  {
+    "id": "javascript/i-part-local",
+    "rank": 1
+  },
+  {
+    "id": "javascript/i-part-registry",
+    "rank": 1
+  },
+  {
+    "id": "javascript/i-part-square",
+    "rank": null
+  },
+  {
+    "id": "javascript/i-twice",
+    "rank": 1
+  },
+  {
+    "id": "javascript/i-twice-local",
+    "rank": 1
+  },
+  {
+    "id": "javascript/n-add-to-count",
+    "rank": null
+  },
+  {
+    "id": "javascript/n-base-name",
+    "rank": null
+  },
+  {
+    "id": "javascript/n-circle-area",
+    "rank": null
+  },
+  {
+    "id": "javascript/n-key-length",
+    "rank": 1
+  },
+  {
+    "id": "javascript/n-times-three",
+    "rank": null
+  },
+  {
+    "id": "javascript/n-times-two",
+    "rank": null
+  },
+  {
+    "id": "javascript/n-unit-circle",
+    "rank": null
+  },
+  {
+    "id": "jsx/c-click-handler",
+    "rank": 1
+  },
+  {
+    "id": "jsx/c-render-app",
+    "rank": 1
+  },
+  {
+    "id": "jsx/c-set-count",
+    "rank": 1
+  },
+  {
+    "id": "jsx/c-side-squared",
+    "rank": 1
+  },
+  {
+    "id": "jsx/c-span",
+    "rank": 1
+  },
+  {
+    "id": "jsx/c-times-two",
+    "rank": 1
+  },
+  {
+    "id": "jsx/c-use-state",
+    "rank": 1
+  },
+  {
+    "id": "jsx/i-badge",
+    "rank": 1
+  },
+  {
+    "id": "jsx/i-counter",
+    "rank": null
+  },
+  {
+    "id": "jsx/i-handle-click",
+    "rank": 1
+  },
+  {
+    "id": "jsx/i-make-square",
+    "rank": 1
+  },
+  {
+    "id": "jsx/i-only-here",
+    "rank": 1
+  },
+  {
+    "id": "jsx/i-part-click",
+    "rank": null
+  },
+  {
+    "id": "jsx/i-twice",
+    "rank": 1
+  },
+  {
+    "id": "jsx/i-twice-local",
+    "rank": 1
+  },
+  {
+    "id": "jsx/n-add-to-count",
+    "rank": null
+  },
+  {
+    "id": "jsx/n-circle-area",
+    "rank": null
+  },
+  {
+    "id": "jsx/n-click-button",
+    "rank": null
+  },
+  {
+    "id": "jsx/n-label-span",
+    "rank": 1
+  },
+  {
+    "id": "jsx/n-root-component",
+    "rank": null
+  },
+  {
+    "id": "jsx/n-times-three",
+    "rank": null
+  },
+  {
+    "id": "php/c-arrow-function",
+    "rank": 1
+  },
+  {
+    "id": "php/c-enum-case",
+    "rank": null
+  },
+  {
+    "id": "php/c-parent-label",
+    "rank": 1
+  },
+  {
+    "id": "php/c-private-static",
+    "rank": 1
+  },
+  {
+    "id": "php/c-radius-times-two",
+    "rank": 1
+  },
+  {
+    "id": "php/c-side-squared",
+    "rank": 1
+  },
+  {
+    "id": "php/c-stack",
+    "rank": 1
+  },
+  {
+    "id": "php/c-times-two",
+    "rank": 1
+  },
+  {
+    "id": "php/i-describes",
+    "rank": null
+  },
+  {
+    "id": "php/i-diameter",
+    "rank": 1
+  },
+  {
+    "id": "php/i-fully-qualified",
+    "rank": 1
+  },
+  {
+    "id": "php/i-only-here",
+    "rank": 1
+  },
+  {
+    "id": "php/i-part-local",
+    "rank": 1
+  },
+  {
+    "id": "php/i-part-qualified",
+    "rank": 1
+  },
+  {
+    "id": "php/i-twice",
+    "rank": 1
+  },
+  {
+    "id": "php/i-twice-local",
+    "rank": 1
+  },
+  {
+    "id": "php/i-twin",
+    "rank": 1
+  },
+  {
+    "id": "php/n-capital-label",
+    "rank": null
+  },
+  {
+    "id": "php/n-circle-area",
+    "rank": null
+  },
+  {
+    "id": "php/n-count-items",
+    "rank": 1
+  },
+  {
+    "id": "php/n-times-two",
+    "rank": null
+  },
+  {
+    "id": "php/n-twice-radius",
+    "rank": null
+  },
+  {
+    "id": "php/n-unit-circle",
+    "rank": null
+  },
+  {
+    "id": "php/n-units",
+    "rank": null
+  },
+  {
+    "id": "python/c-classmethod",
+    "rank": 1
+  },
+  {
+    "id": "python/c-lambda",
+    "rank": 1
+  },
+  {
+    "id": "python/c-list-insert",
+    "rank": 1
+  },
+  {
+    "id": "python/c-method-signature",
+    "rank": 1
+  },
+  {
+    "id": "python/c-side-squared",
+    "rank": 1
+  },
+  {
+    "id": "python/c-times-two",
+    "rank": 1
+  },
+  {
+    "id": "python/i-circle",
+    "rank": null
+  },
+  {
+    "id": "python/i-from-side",
+    "rank": 1
+  },
+  {
+    "id": "python/i-hidden",
+    "rank": 1
+  },
+  {
+    "id": "python/i-only-here",
+    "rank": 1
+  },
+  {
+    "id": "python/i-part-local",
+    "rank": 1
+  },
+  {
+    "id": "python/i-part-side",
+    "rank": 3
+  },
+  {
+    "id": "python/i-twice",
+    "rank": 1
+  },
+  {
+    "id": "python/n-circle-area",
+    "rank": null
+  },
+  {
+    "id": "python/n-round-down",
+    "rank": null
+  },
+  {
+    "id": "python/n-shape-name",
+    "rank": 1
+  },
+  {
+    "id": "python/n-square-from-length",
+    "rank": null
+  },
+  {
+    "id": "python/n-times-two",
+    "rank": null
+  },
+  {
+    "id": "python/n-unit-circle",
+    "rank": null
+  },
+  {
+    "id": "ruby/c-block",
+    "rank": 1
+  },
+  {
+    "id": "ruby/c-json",
+    "rank": 1
+  },
+  {
+    "id": "ruby/c-lambda",
+    "rank": 1
+  },
+  {
+    "id": "ruby/c-radius-times-two",
+    "rank": 1
+  },
+  {
+    "id": "ruby/c-side-squared",
+    "rank": 1
+  },
+  {
+    "id": "ruby/c-singleton-method",
+    "rank": 1
+  },
+  {
+    "id": "ruby/c-super-upcase",
+    "rank": 1
+  },
+  {
+    "id": "ruby/c-times-two",
+    "rank": 1
+  },
+  {
+    "id": "ruby/i-bare-no-parens",
+    "rank": 1
+  },
+  {
+    "id": "ruby/i-describable",
+    "rank": null
+  },
+  {
+    "id": "ruby/i-diameter",
+    "rank": 1
+  },
+  {
+    "id": "ruby/i-only-here",
+    "rank": 1
+  },
+  {
+    "id": "ruby/i-part-local",
+    "rank": 1
+  },
+  {
+    "id": "ruby/i-part-parens",
+    "rank": null
+  },
+  {
+    "id": "ruby/i-twice",
+    "rank": 1
+  },
+  {
+    "id": "ruby/i-twice-local",
+    "rank": 1
+  },
+  {
+    "id": "ruby/n-add-one-lambda",
+    "rank": null
+  },
+  {
+    "id": "ruby/n-capital-label",
+    "rank": null
+  },
+  {
+    "id": "ruby/n-circle-area",
+    "rank": null
+  },
+  {
+    "id": "ruby/n-set-to-json",
+    "rank": null
+  },
+  {
+    "id": "ruby/n-times-two",
+    "rank": null
+  },
+  {
+    "id": "ruby/n-twice-radius",
+    "rank": null
+  },
+  {
+    "id": "ruby/n-unit-circle",
+    "rank": null
+  },
+  {
+    "id": "rust/c-closure",
+    "rank": 1
+  },
+  {
+    "id": "rust/c-map-insert",
+    "rank": 1
+  },
+  {
+    "id": "rust/c-method-signature",
+    "rank": 1
+  },
+  {
+    "id": "rust/c-side-squared",
+    "rank": null
+  },
+  {
+    "id": "rust/c-struct",
+    "rank": null
+  },
+  {
+    "id": "rust/c-times-two",
+    "rank": 1
+  },
+  {
+    "id": "rust/i-circle",
+    "rank": null
+  },
+  {
+    "id": "rust/i-only-here",
+    "rank": 1
+  },
+  {
+    "id": "rust/i-part-here",
+    "rank": null
+  },
+  {
+    "id": "rust/i-part-local",
+    "rank": 1
+  },
+  {
+    "id": "rust/i-scaled",
+    "rank": null
+  },
+  {
+    "id": "rust/i-twice",
+    "rank": 1
+  },
+  {
+    "id": "rust/i-twice-local",
+    "rank": 1
+  },
+  {
+    "id": "rust/n-circle-area",
+    "rank": null
+  },
+  {
+    "id": "rust/n-count-map",
+    "rank": null
+  },
+  {
+    "id": "rust/n-make-circle",
+    "rank": null
+  },
+  {
+    "id": "rust/n-side-squared",
+    "rank": null
+  },
+  {
+    "id": "rust/n-times-two",
+    "rank": null
+  },
+  {
+    "id": "rust/n-units",
+    "rank": null
+  },
+  {
+    "id": "tsx/c-interface",
+    "rank": null
+  },
+  {
+    "id": "tsx/c-render-app",
+    "rank": 1
+  },
+  {
+    "id": "tsx/c-set-count",
+    "rank": 1
+  },
+  {
+    "id": "tsx/c-side-squared-twice",
+    "rank": 1
+  },
+  {
+    "id": "tsx/c-span",
+    "rank": 1
+  },
+  {
+    "id": "tsx/c-string-call",
+    "rank": 1
+  },
+  {
+    "id": "tsx/c-value-plus-helper",
+    "rank": 1
+  },
+  {
+    "id": "tsx/i-badge-props",
+    "rank": null
+  },
+  {
+    "id": "tsx/i-counter",
+    "rank": null
+  },
+  {
+    "id": "tsx/i-format",
+    "rank": 1
+  },
+  {
+    "id": "tsx/i-handle-click",
+    "rank": 1
+  },
+  {
+    "id": "tsx/i-only-here",
+    "rank": 1
+  },
+  {
+    "id": "tsx/i-part-click",
+    "rank": null
+  },
+  {
+    "id": "tsx/i-part-props",
+    "rank": null
+  },
+  {
+    "id": "tsx/i-twice",
+    "rank": 1
+  },
+  {
+    "id": "tsx/i-twice-local",
+    "rank": 1
+  },
+  {
+    "id": "tsx/n-circle-area",
+    "rank": null
+  },
+  {
+    "id": "tsx/n-click-button",
+    "rank": null
+  },
+  {
+    "id": "tsx/n-component-properties",
+    "rank": null
+  },
+  {
+    "id": "tsx/n-label-span",
+    "rank": 1
+  },
+  {
+    "id": "tsx/n-root-component",
+    "rank": null
+  },
+  {
+    "id": "tsx/n-to-string",
+    "rank": null
+  },
+  {
+    "id": "typescript/c-arrow-constant",
+    "rank": 1
+  },
+  {
+    "id": "typescript/c-interface",
+    "rank": null
+  },
+  {
+    "id": "typescript/c-lambda",
+    "rank": 1
+  },
+  {
+    "id": "typescript/c-map-set",
+    "rank": 1
+  },
+  {
+    "id": "typescript/c-side-squared-twice",
+    "rank": 1
+  },
+  {
+    "id": "typescript/c-string-call",
+    "rank": 1
+  },
+  {
+    "id": "typescript/c-times-two",
+    "rank": 1
+  },
+  {
+    "id": "typescript/i-format",
+    "rank": 1
+  },
+  {
+    "id": "typescript/i-make-square",
+    "rank": 1
+  },
+  {
+    "id": "typescript/i-only-here",
+    "rank": 1
+  },
+  {
+    "id": "typescript/i-part-local",
+    "rank": 1
+  },
+  {
+    "id": "typescript/i-part-registry",
+    "rank": 1
+  },
+  {
+    "id": "typescript/i-twice",
+    "rank": 1
+  },
+  {
+    "id": "typescript/i-twice-local",
+    "rank": 1
+  },
+  {
+    "id": "typescript/i-unit",
+    "rank": 1
+  },
+  {
+    "id": "typescript/n-add-to-count",
+    "rank": null
+  },
+  {
+    "id": "typescript/n-circle-area",
+    "rank": null
+  },
+  {
+    "id": "typescript/n-key-length",
+    "rank": 1
+  },
+  {
+    "id": "typescript/n-times-three",
+    "rank": null
+  },
+  {
+    "id": "typescript/n-to-string",
+    "rank": null
+  },
+  {
+    "id": "typescript/n-twice-squared",
+    "rank": null
+  },
+  {
+    "id": "typescript/n-units",
+    "rank": null
+  }
+]

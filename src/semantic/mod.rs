@@ -19,6 +19,7 @@ pub mod multi_repo;
 pub mod search;
 pub mod sync;
 pub mod tfidf;
+pub mod tokenize;
 
 use std::path::{Path, PathBuf};
 
