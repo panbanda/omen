@@ -196,6 +196,7 @@ These changes apply to the CLI and to the MCP server.
 | `entropy` of `changes` | The last digit was different in some runs. | The same in each run. |
 | `file` of `outline --file` | An absolute path. | The path from the repository root, as without `--file`. Omen makes the two paths canonical before it compares them. A file out of the repository has its canonical absolute path. |
 | `search query --min-score` below 0.3 | No effect, because 0.3 always applied. | The value applies. |
+| Default of `--min-score` and of `min_score` in the search tools | 0.3. A correct result with a lower score was lost, and the score changed when other code was added. | 0. Omen never gives a symbol that has no term of the query. |
 
 ### A time window that is not valid
 

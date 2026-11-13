@@ -58,6 +58,7 @@ pub fn multi_repo_search(
                 symbol_name: sym.symbol_name,
                 symbol_type: sym.symbol_type,
                 signature: sym.signature,
+                definition_line: sym.definition_line,
                 start_line: sym.start_line,
                 end_line: sym.end_line,
                 cyclomatic_complexity: sym.cyclomatic_complexity,
@@ -165,6 +166,7 @@ mod tests {
                     start_line: 1,
                     end_line: 5,
                     chunk_index: 0,
+                    definition_line: 0,
                     total_chunks: 1,
                     content_hash: "h".to_string(),
                     enriched_text: text.to_string(),
@@ -216,6 +218,7 @@ mod tests {
                     start_line: 1,
                     end_line: 5,
                     chunk_index: 0,
+                    definition_line: 0,
                     total_chunks: 1,
                     content_hash: "h".to_string(),
                     enriched_text: text.to_string(),
@@ -225,8 +228,7 @@ mod tests {
                 .unwrap();
         }
 
-        let result =
-            multi_repo_search(&[repo1.as_path(), repo2.as_path()], "func", 10, 0.0).unwrap();
+        let result = multi_repo_search(&[repo1.as_path(), repo2.as_path()], "fn", 10, 0.0).unwrap();
         let paths: Vec<&str> = result.results.iter().map(|r| r.file.as_str()).collect();
         // Second repo should get disambiguated label "app-2"
         assert!(paths.iter().any(|p| p.starts_with("[app]")));

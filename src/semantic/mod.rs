@@ -40,7 +40,7 @@ pub struct SearchConfig {
     pub cache_path: Option<PathBuf>,
     /// Maximum number of results to return
     pub max_results: usize,
-    /// Minimum similarity score (0-1)
+    /// Minimum similarity score (0-1). A symbol that has no term of the query has score 0 and is never a result.
     pub min_score: f32,
 }
 
@@ -49,7 +49,7 @@ impl Default for SearchConfig {
         Self {
             cache_path: None,
             max_results: 20,
-            min_score: 0.3,
+            min_score: 0.0,
         }
     }
 }
@@ -153,7 +153,7 @@ mod tests {
     fn test_search_config_default() {
         let config = SearchConfig::default();
         assert_eq!(config.max_results, 20);
-        assert_eq!(config.min_score, 0.3);
+        assert_eq!(config.min_score, 0.0);
         assert!(config.cache_path.is_none());
     }
 
@@ -198,6 +198,7 @@ mod tests {
                 start_line: 1,
                 end_line: 5,
                 chunk_index: 0,
+                definition_line: 0,
                 total_chunks: 1,
                 content_hash: "h1".to_string(),
                 enriched_text: "[src/a.rs] low_complexity\nfn low_complexity() { return }"
@@ -216,6 +217,7 @@ mod tests {
                 start_line: 1,
                 end_line: 50,
                 chunk_index: 0,
+                definition_line: 0,
                 total_chunks: 1,
                 content_hash: "h2".to_string(),
                 enriched_text: "[src/b.rs] high_complexity\nfn high_complexity() { return }"
@@ -226,7 +228,7 @@ mod tests {
             .unwrap();
 
         // Without filter: both appear
-        let all = search.search("complexity", Some(10)).unwrap();
+        let all = search.search("return", Some(10)).unwrap();
         assert_eq!(all.results.len(), 2);
 
         // With max_complexity=5: only low_complexity
@@ -235,7 +237,7 @@ mod tests {
             max_complexity: Some(5),
         };
         let filtered = search
-            .search_filtered("complexity", Some(10), &filters)
+            .search_filtered("return", Some(10), &filters)
             .unwrap();
         assert_eq!(filtered.results.len(), 1);
         assert_eq!(filtered.results[0].symbol_name, "low_complexity");

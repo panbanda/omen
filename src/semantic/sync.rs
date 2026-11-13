@@ -27,6 +27,7 @@ struct ParsedChunk {
     symbol_type: String,
     parent_name: Option<String>,
     signature: String,
+    definition_line: u32,
     start_line: u32,
     end_line: u32,
     chunk_index: u32,
@@ -187,6 +188,7 @@ impl<'a> SyncManager<'a> {
                 symbol_type: chunk.symbol_type,
                 parent_name: chunk.parent_name,
                 signature: chunk.signature,
+                definition_line: chunk.definition_line,
                 start_line: chunk.start_line,
                 end_line: chunk.end_line,
                 chunk_index: chunk.chunk_index,
@@ -252,8 +254,8 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
         .filter(|func| func.is_bound)
         .collect();
 
-    // Compute complexity per function. Store range so chunks (whose start_line
-    // may differ from the function's) can be matched by containment.
+    // Compute complexity per function. A chunk matches a function by name and
+    // by the first line of the definition.
     let complexity_entries: Vec<(String, u32, u32, u32, u32)> = functions
         .iter()
         .map(|func| {
@@ -276,16 +278,11 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
             let enriched_text = format_chunk_text(chunk);
             let content_hash = hash_string(&enriched_text);
 
-            // Look up complexity from the original function. Match by name
-            // and verify the chunk falls within the function's line range.
-            // Use the tightest (smallest) enclosing range to handle nested
-            // same-name functions correctly.
+            // Look up the complexity of the definition of the chunk.
             let complexity = complexity_entries
                 .iter()
-                .filter(|(name, start, end, _, _)| {
-                    name == &chunk.symbol_name
-                        && chunk.start_line >= *start
-                        && chunk.start_line <= *end
+                .filter(|(name, start, _, _, _)| {
+                    name == &chunk.symbol_name && *start == chunk.definition_line
                 })
                 .min_by_key(|(_, start, end, _, _)| end - start)
                 .map(|(_, _, _, cyc, cog)| (*cyc, *cog));
@@ -296,6 +293,7 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
                 symbol_type: chunk.symbol_type.clone(),
                 parent_name: chunk.parent_name.clone(),
                 signature: chunk.signature.clone(),
+                definition_line: chunk.definition_line,
                 start_line: chunk.start_line,
                 end_line: chunk.end_line,
                 chunk_index: chunk.chunk_index,

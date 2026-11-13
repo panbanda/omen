@@ -190,16 +190,6 @@
     "tracking": "phase-4-search"
   },
   {
-    "id": "cpp/i-largest/hit@1",
-    "reason": "expected one of sub/util.hpp:largest:11 in the first 1, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "cpp/i-largest/hit@10",
-    "reason": "expected one of sub/util.hpp:largest:11 in the first 10, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
     "id": "cpp/i-part-overload/hit@1",
     "reason": "expected one of main.cpp:overload_one:35, main.cpp:overload_two:39 in the first 1, got no result",
     "tracking": "phase-4-search"
@@ -265,11 +255,6 @@
     "tracking": "phase-4-search"
   },
   {
-    "id": "cpp/n-heap/hit@10",
-    "reason": "expected one of main.cpp:heap:72 in the first 10, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
     "id": "cpp/n-larger/hit@1",
     "reason": "expected one of sub/util.hpp:largest:11 in the first 1, got no result",
     "tracking": "phase-4-search"
@@ -282,11 +267,6 @@
   {
     "id": "cpp/n-root-and-size/hit@1",
     "reason": "expected one of main.cpp:external:94 in the first 1, got main.cpp:measure_square:59",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "cpp/n-root-and-size/hit@10",
-    "reason": "expected one of main.cpp:external:94 in the first 10, got main.cpp:measure_square:59",
     "tracking": "phase-4-search"
   },
   {
@@ -335,11 +315,6 @@
     "tracking": "phase-4-search"
   },
   {
-    "id": "csharp/n-around-square/hit@10",
-    "reason": "expected one of Shapes/Shapes.cs:Perimeter:67 in the first 10, got Shapes/Shapes.cs:Square:57",
-    "tracking": "phase-4-search"
-  },
-  {
     "id": "csharp/n-circle-area/hit@1",
     "reason": "expected one of Shapes/Shapes.cs:Area:19 in the first 1, got no result",
     "tracking": "phase-4-search"
@@ -370,16 +345,6 @@
     "tracking": "phase-4-search"
   },
   {
-    "id": "go/c-receiver-method/hit@1",
-    "reason": "expected one of shapes/shapes.go:Area:23 in the first 1, got shapes/shapes.go:scaled:27",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "go/c-receiver-method/hit@10",
-    "reason": "expected one of shapes/shapes.go:Area:23 in the first 10, got shapes/shapes.go:scaled:27",
-    "tracking": "phase-4-search"
-  },
-  {
     "id": "go/i-part-here/hit@1",
     "reason": "expected one of other/other.go:OnlyHere:7 in the first 1, got no result",
     "tracking": "phase-4-search"
@@ -405,21 +370,6 @@
     "tracking": "phase-4-search"
   },
   {
-    "id": "go/n-make-circle/hit@10",
-    "reason": "expected one of shapes/shapes.go:NewCircle:19 in the first 10, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "go/n-map-slice/hit@1",
-    "reason": "expected one of main.go:apply:26 in the first 1, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "go/n-map-slice/hit@10",
-    "reason": "expected one of main.go:apply:26 in the first 10, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
     "id": "go/n-times-two/hit@1",
     "reason": "expected one of util/util.go:Twice:7, main.go:twiceLocal:34 in the first 1, got no result",
     "tracking": "phase-4-search"
@@ -427,16 +377,6 @@
   {
     "id": "go/n-times-two/hit@10",
     "reason": "expected one of util/util.go:Twice:7, main.go:twiceLocal:34 in the first 10, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "go/n-upper-case/hit@1",
-    "reason": "expected one of main.go:external:51 in the first 1, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "go/n-upper-case/hit@10",
-    "reason": "expected one of main.go:external:51 in the first 10, got no result",
     "tracking": "phase-4-search"
   },
   {
@@ -485,11 +425,6 @@
     "tracking": "phase-4-search"
   },
   {
-    "id": "java/n-around-square/hit@10",
-    "reason": "expected one of shop/shapes/Square.java:perimeter:15 in the first 10, got shop/shapes/Square.java:Square:6, shop/shapes/Square.java:edge:19, shop/shapes/Square.java:area:10",
-    "tracking": "phase-4-search"
-  },
-  {
     "id": "java/n-circle-area/hit@1",
     "reason": "expected one of shop/shapes/Circle.java:area:11 in the first 1, got no result",
     "tracking": "phase-4-search"
@@ -500,23 +435,8 @@
     "tracking": "phase-4-search"
   },
   {
-    "id": "java/n-distance/hit@1",
-    "reason": "expected one of shop/shapes/Point.java:norm:4 in the first 1, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "java/n-distance/hit@10",
-    "reason": "expected one of shop/shapes/Point.java:norm:4 in the first 10, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
     "id": "java/n-twice-radius/hit@1",
     "reason": "expected one of shop/shapes/Circle.java:diameter:23 in the first 1, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "java/n-twice-radius/hit@10",
-    "reason": "expected one of shop/shapes/Circle.java:diameter:23 in the first 10, got no result",
     "tracking": "phase-4-search"
   },
   {
@@ -530,33 +450,8 @@
     "tracking": "phase-4-search"
   },
   {
-    "id": "javascript/i-part-square/hit@1",
-    "reason": "expected one of shapes.js:Square:38, main.js:makeSquare:46 in the first 1, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "javascript/i-part-square/hit@10",
-    "reason": "expected one of shapes.js:Square:38, main.js:makeSquare:46 in the first 10, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
     "id": "javascript/n-add-to-count/hit@1",
     "reason": "expected one of main.js:bump:13 in the first 1, got main.js:add:27",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "javascript/n-add-to-count/hit@10",
-    "reason": "expected one of main.js:bump:13 in the first 10, got main.js:add:27",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "javascript/n-base-name/hit@1",
-    "reason": "expected one of main.js:fileName:73, legacy.cjs:legacyName:4 in the first 1, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "javascript/n-base-name/hit@10",
-    "reason": "expected one of main.js:fileName:73, legacy.cjs:legacyName:4 in the first 10, got no result",
     "tracking": "phase-4-search"
   },
   {
@@ -575,11 +470,6 @@
     "tracking": "phase-4-search"
   },
   {
-    "id": "javascript/n-times-three/hit@10",
-    "reason": "expected one of util.js:triple:9 in the first 10, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
     "id": "javascript/n-times-two/hit@1",
     "reason": "expected one of util.js:twice:5, main.js:twiceLocal:38 in the first 1, got no result",
     "tracking": "phase-4-search"
@@ -592,21 +482,6 @@
   {
     "id": "javascript/n-unit-circle/hit@1",
     "reason": "expected one of shapes.js:unit:31 in the first 1, got shapes.js:constructor:14",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "javascript/n-unit-circle/hit@10",
-    "reason": "expected one of shapes.js:unit:31 in the first 10, got shapes.js:constructor:14, shapes.js:grow:35, main.js:unit:50",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "jsx/i-counter/hit@1",
-    "reason": "expected one of components.jsx:Counter:12 in the first 1, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "jsx/i-counter/hit@10",
-    "reason": "expected one of components.jsx:Counter:12 in the first 10, got no result",
     "tracking": "phase-4-search"
   },
   {
@@ -625,11 +500,6 @@
     "tracking": "phase-4-search"
   },
   {
-    "id": "jsx/n-add-to-count/hit@10",
-    "reason": "expected one of main.jsx:bump:13, components.jsx:handleClick:17 in the first 10, got main.jsx:add:27",
-    "tracking": "phase-4-search"
-  },
-  {
     "id": "jsx/n-circle-area/hit@1",
     "reason": "expected one of shapes.js:area:19 in the first 1, got no result",
     "tracking": "phase-4-search"
@@ -637,16 +507,6 @@
   {
     "id": "jsx/n-circle-area/hit@10",
     "reason": "expected one of shapes.js:area:19 in the first 10, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "jsx/n-click-button/hit@1",
-    "reason": "expected one of components.jsx:Counter:12, components.jsx:handleClick:17 in the first 1, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "jsx/n-click-button/hit@10",
-    "reason": "expected one of components.jsx:Counter:12, components.jsx:handleClick:17 in the first 10, got no result",
     "tracking": "phase-4-search"
   },
   {
@@ -662,11 +522,6 @@
   {
     "id": "jsx/n-times-three/hit@1",
     "reason": "expected one of util.js:triple:9 in the first 1, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "jsx/n-times-three/hit@10",
-    "reason": "expected one of util.js:triple:9 in the first 10, got no result",
     "tracking": "phase-4-search"
   },
   {
@@ -725,18 +580,8 @@
     "tracking": "phase-4-search"
   },
   {
-    "id": "php/n-twice-radius/hit@10",
-    "reason": "expected one of shapes.php:diameter:76 in the first 10, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
     "id": "php/n-unit-circle/hit@1",
     "reason": "expected one of shapes.php:unit:56, main.php:qualified:49 in the first 1, got shapes.php:radius:86",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "php/n-unit-circle/hit@10",
-    "reason": "expected one of shapes.php:unit:56, main.php:qualified:49 in the first 10, got shapes.php:radius:86, shapes.php:build:66",
     "tracking": "phase-4-search"
   },
   {
@@ -785,13 +630,13 @@
     "tracking": "phase-4-search"
   },
   {
-    "id": "python/n-square-from-length/hit@1",
-    "reason": "expected one of app/shapes.py:from_side:45 in the first 1, got no result",
+    "id": "python/n-shape-name/hit@1",
+    "reason": "expected one of app/shapes.py:label:16 in the first 1, got app/shapes.py:__init__:10",
     "tracking": "phase-4-search"
   },
   {
-    "id": "python/n-square-from-length/hit@10",
-    "reason": "expected one of app/shapes.py:from_side:45 in the first 10, got no result",
+    "id": "python/n-square-from-length/hit@1",
+    "reason": "expected one of app/shapes.py:from_side:45 in the first 1, got no result",
     "tracking": "phase-4-search"
   },
   {
@@ -807,11 +652,6 @@
   {
     "id": "python/n-unit-circle/hit@1",
     "reason": "expected one of app/shapes.py:unit:32 in the first 1, got app/shapes.py:_scaled:28",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "python/n-unit-circle/hit@10",
-    "reason": "expected one of app/shapes.py:unit:32 in the first 10, got app/shapes.py:_scaled:28",
     "tracking": "phase-4-search"
   },
   {
@@ -865,16 +705,6 @@
     "tracking": "phase-4-search"
   },
   {
-    "id": "ruby/n-set-to-json/hit@1",
-    "reason": "expected one of main.rb:external:75 in the first 1, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "ruby/n-set-to-json/hit@10",
-    "reason": "expected one of main.rb:external:75 in the first 10, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
     "id": "ruby/n-times-two/hit@1",
     "reason": "expected one of util.rb:twice:8, main.rb:twice_local:53 in the first 1, got no result",
     "tracking": "phase-4-search"
@@ -890,28 +720,8 @@
     "tracking": "phase-4-search"
   },
   {
-    "id": "ruby/n-twice-radius/hit@10",
-    "reason": "expected one of shapes.rb:diameter:44 in the first 10, got shapes.rb:radius:54, shapes.rb:scaled:60",
-    "tracking": "phase-4-search"
-  },
-  {
     "id": "ruby/n-unit-circle/hit@1",
     "reason": "expected one of shapes.rb:unit:26, main.rb:factory:42 in the first 1, got shapes.rb:radius:54",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "ruby/n-unit-circle/hit@10",
-    "reason": "expected one of shapes.rb:unit:26, main.rb:factory:42 in the first 10, got shapes.rb:radius:54, shapes.rb:build:30, shapes.rb:scaled:60, shapes.rb:diameter:44",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "rust/c-side-squared/hit@1",
-    "reason": "expected one of shapes.rs:area:41 in the first 1, got shapes.rs:new:37",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "rust/c-side-squared/hit@10",
-    "reason": "expected one of shapes.rs:area:41 in the first 10, got shapes.rs:new:37",
     "tracking": "phase-4-search"
   },
   {
@@ -945,16 +755,6 @@
     "tracking": "phase-4-search"
   },
   {
-    "id": "rust/i-scaled/hit@1",
-    "reason": "expected one of shapes.rs:scaled:31 in the first 1, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "rust/i-scaled/hit@10",
-    "reason": "expected one of shapes.rs:scaled:31 in the first 10, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
     "id": "rust/n-circle-area/hit@1",
     "reason": "expected one of shapes.rs:area:27, shapes.rs:area:47 in the first 1, got no result",
     "tracking": "phase-4-search"
@@ -977,11 +777,6 @@
   {
     "id": "rust/n-make-circle/hit@1",
     "reason": "expected one of shapes.rs:new:23 in the first 1, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "rust/n-make-circle/hit@10",
-    "reason": "expected one of shapes.rs:new:23 in the first 10, got no result",
     "tracking": "phase-4-search"
   },
   {
@@ -1035,16 +830,6 @@
     "tracking": "phase-4-search"
   },
   {
-    "id": "tsx/i-counter/hit@1",
-    "reason": "expected one of components.tsx:Counter:16 in the first 1, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "tsx/i-counter/hit@10",
-    "reason": "expected one of components.tsx:Counter:16 in the first 10, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
     "id": "tsx/i-part-click/hit@1",
     "reason": "expected one of components.tsx:handleClick:21 in the first 1, got no result",
     "tracking": "phase-4-search"
@@ -1075,16 +860,6 @@
     "tracking": "phase-4-search"
   },
   {
-    "id": "tsx/n-click-button/hit@1",
-    "reason": "expected one of components.tsx:Counter:16, components.tsx:handleClick:21 in the first 1, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "tsx/n-click-button/hit@10",
-    "reason": "expected one of components.tsx:Counter:16, components.tsx:handleClick:21 in the first 10, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
     "id": "tsx/n-component-properties/hit@1",
     "reason": "expected one of components.tsx:BadgeProps:4 in the first 1, got components.tsx:Badge:8",
     "tracking": "phase-4-search"
@@ -1110,11 +885,6 @@
     "tracking": "phase-4-search"
   },
   {
-    "id": "tsx/n-to-string/hit@10",
-    "reason": "expected one of util.ts:format:11, util.ts:format:12, util.ts:format:13 in the first 10, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
     "id": "typescript/c-interface/hit@1",
     "reason": "expected one of shapes.ts:Shape:3, shapes.ts:area:4 in the first 1, got main.ts:dynamic:68",
     "tracking": "phase-4-search"
@@ -1127,11 +897,6 @@
   {
     "id": "typescript/n-add-to-count/hit@1",
     "reason": "expected one of main.ts:bump:14 in the first 1, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "typescript/n-add-to-count/hit@10",
-    "reason": "expected one of main.ts:bump:14 in the first 10, got no result",
     "tracking": "phase-4-search"
   },
   {
@@ -1150,18 +915,8 @@
     "tracking": "phase-4-search"
   },
   {
-    "id": "typescript/n-times-three/hit@10",
-    "reason": "expected one of util.ts:triple:9 in the first 10, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
     "id": "typescript/n-to-string/hit@1",
     "reason": "expected one of util.ts:format:11, util.ts:format:12, util.ts:format:13 in the first 1, got no result",
-    "tracking": "phase-4-search"
-  },
-  {
-    "id": "typescript/n-to-string/hit@10",
-    "reason": "expected one of util.ts:format:11, util.ts:format:12, util.ts:format:13 in the first 10, got no result",
     "tracking": "phase-4-search"
   },
   {

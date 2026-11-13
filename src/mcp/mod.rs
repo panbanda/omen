@@ -814,7 +814,7 @@ mod tests {
 
             let default = search_results(&server, tool, base);
             for result in default["result"]["results"].as_array().unwrap() {
-                assert!(result["score"].as_f64().unwrap() >= 0.3, "{tool}: {result}");
+                assert!(result["score"].as_f64().unwrap() > 0.0, "{tool}: {result}");
             }
         }
     }

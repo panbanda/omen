@@ -737,8 +737,8 @@ expression: "responses[0]"
               "type": "integer"
             },
             "min_score": {
-              "default": 0.3,
-              "description": "The minimum similarity score of a result.",
+              "default": 0.0,
+              "description": "The minimum similarity score of a result. A symbol that has no term of the query is never a result.",
               "maximum": 1.0,
               "minimum": 0.0,
               "type": "number"
@@ -967,8 +967,8 @@ expression: "responses[0]"
               "type": "integer"
             },
             "min_score": {
-              "default": 0.3,
-              "description": "The minimum similarity score of a result.",
+              "default": 0.0,
+              "description": "The minimum similarity score of a result. A symbol that has no term of the query is never a result.",
               "maximum": 1.0,
               "minimum": 0.0,
               "type": "number"

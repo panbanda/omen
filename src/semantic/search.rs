@@ -56,6 +56,7 @@ impl<'a> SearchEngine<'a> {
                     symbol_name: sym.symbol_name,
                     symbol_type: sym.symbol_type,
                     signature: sym.signature,
+                    definition_line: sym.definition_line,
                     start_line: sym.start_line,
                     end_line: sym.end_line,
                     cyclomatic_complexity: sym.cyclomatic_complexity,
@@ -153,15 +154,23 @@ pub struct SearchFilters {
     pub max_complexity: Option<u32>,
 }
 
+/// The file, the name, and the first line of a definition.
+type DefinitionKey = (String, String, u32);
+
 /// Collapse multiple chunks of the same symbol into a single result,
-/// keeping the highest score. The key is (file_path, symbol_name).
+/// keeping the highest score. The key is the file, the name, and the first line
+/// of the definition. Two definitions with one name in one file stay separate.
 pub fn deduplicate_chunks(results: Vec<(DocMeta, f32)>) -> Vec<SearchResult> {
-    let mut best: HashMap<(String, String), SearchResult> = HashMap::new();
+    let mut best: HashMap<DefinitionKey, SearchResult> = HashMap::new();
     // Track insertion order to preserve ranking stability
-    let mut order: Vec<(String, String)> = Vec::new();
+    let mut order: Vec<DefinitionKey> = Vec::new();
 
     for (meta, score) in results {
-        let key = (meta.file_path.clone(), meta.symbol_name.clone());
+        let key = (
+            meta.file_path.clone(),
+            meta.symbol_name.clone(),
+            meta.definition_line,
+        );
         match best.get(&key) {
             Some(existing) if existing.score >= score => {}
             _ => {
@@ -261,6 +270,7 @@ mod tests {
             start_line: 1,
             end_line: 5,
             chunk_index: 0,
+            definition_line: 0,
             total_chunks: 1,
             content_hash: hash.to_string(),
             enriched_text: enriched_text.to_string(),
@@ -345,6 +355,38 @@ mod tests {
         assert_eq!(results[0].file, "src/a.rs");
     }
 
+    fn meta_at(definition_line: u32, start_line: u32) -> DocMeta {
+        DocMeta {
+            file_path: "src/lib.rs".to_string(),
+            symbol_name: "area".to_string(),
+            symbol_type: "function".to_string(),
+            signature: "fn area()".to_string(),
+            definition_line,
+            start_line,
+            end_line: start_line + 3,
+            cyclomatic_complexity: None,
+            cognitive_complexity: None,
+        }
+    }
+
+    #[test]
+    fn deduplication_keeps_definitions_with_one_name_in_one_file() {
+        let results = deduplicate_chunks(vec![(meta_at(10, 10), 0.5), (meta_at(20, 20), 0.4)]);
+        let lines: Vec<u32> = results.iter().map(|result| result.start_line).collect();
+        assert_eq!(lines, vec![10, 20]);
+    }
+
+    #[test]
+    fn deduplication_joins_the_chunks_of_one_definition() {
+        let results = deduplicate_chunks(vec![
+            (meta_at(10, 10), 0.4),
+            (meta_at(10, 14), 0.6),
+            (meta_at(20, 20), 0.5),
+        ]);
+        let lines: Vec<u32> = results.iter().map(|result| result.start_line).collect();
+        assert_eq!(lines, vec![14, 20]);
+    }
+
     #[test]
     fn test_deduplicate_chunks() {
         let cache = EmbeddingCache::in_memory().unwrap();
@@ -361,6 +403,7 @@ mod tests {
                     start_line: 1 + i * 10,
                     end_line: 10 + i * 10,
                     chunk_index: i,
+                    definition_line: 0,
                     total_chunks: 2,
                     content_hash: format!("h{i}"),
                     enriched_text: format!(
@@ -409,6 +452,7 @@ mod tests {
                 start_line: 1,
                 end_line: 5,
                 chunk_index: 0,
+                definition_line: 0,
                 total_chunks: 1,
                 content_hash: "h1".to_string(),
                 enriched_text: "[src/a.rs] simple_parse\nfn simple_parse() { parse }".to_string(),
@@ -428,6 +472,7 @@ mod tests {
                 start_line: 1,
                 end_line: 100,
                 chunk_index: 0,
+                definition_line: 0,
                 total_chunks: 1,
                 content_hash: "h2".to_string(),
                 enriched_text: "[src/b.rs] complex_parse\nfn complex_parse() { parse }".to_string(),

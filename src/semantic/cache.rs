@@ -15,9 +15,9 @@ pub struct EmbeddingCache {
 }
 
 const UPSERT_SYMBOL_SQL: &str = r#"
-    INSERT INTO symbols (file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text, cyclomatic_complexity, cognitive_complexity)
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
-    ON CONFLICT(file_path, symbol_name, chunk_index) DO UPDATE SET
+    INSERT INTO symbols (file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text, cyclomatic_complexity, cognitive_complexity, definition_line)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+    ON CONFLICT(file_path, symbol_name, definition_line, chunk_index) DO UPDATE SET
         symbol_type = excluded.symbol_type,
         parent_name = excluded.parent_name,
         signature = excluded.signature,
@@ -56,6 +56,7 @@ fn upsert_symbol_on(conn: &Connection, symbol: &CachedSymbol) -> Result<()> {
                 symbol.enriched_text,
                 symbol.cyclomatic_complexity,
                 symbol.cognitive_complexity,
+                symbol.definition_line,
             ])
         })
         .map_err(|e| Error::analysis(format!("Failed to upsert symbol: {e}")))?;
@@ -116,6 +117,9 @@ pub struct CachedSymbol {
     pub enriched_text: String,
     pub cyclomatic_complexity: Option<u32>,
     pub cognitive_complexity: Option<u32>,
+    /// The first line of the definition. A chunk of a long definition has its own
+    /// `start_line`, so this line is the identity of the definition.
+    pub definition_line: u32,
 }
 
 fn row_to_symbol(row: &rusqlite::Row<'_>) -> rusqlite::Result<CachedSymbol> {
@@ -133,6 +137,7 @@ fn row_to_symbol(row: &rusqlite::Row<'_>) -> rusqlite::Result<CachedSymbol> {
         enriched_text: row.get(10)?,
         cyclomatic_complexity: row.get(11)?,
         cognitive_complexity: row.get(12)?,
+        definition_line: row.get(13)?,
     })
 }
 
@@ -172,6 +177,7 @@ impl EmbeddingCache {
     /// Triggers migration when:
     /// - `embedding` column exists (pre-TF-IDF schema)
     /// - `chunk_index` column is missing (pre-chunking schema)
+    /// - `definition_line` column is missing (a definition had no identity)
     fn migrate_if_needed(&self) -> Result<()> {
         let columns: Vec<String> = self
             .conn
@@ -187,7 +193,8 @@ impl EmbeddingCache {
             && (columns.iter().any(|name| name == "embedding")
                 || !columns.iter().any(|name| name == "chunk_index")
                 || !columns.iter().any(|name| name == "cyclomatic_complexity")
-                || !columns.iter().any(|name| name == "cognitive_complexity"));
+                || !columns.iter().any(|name| name == "cognitive_complexity")
+                || !columns.iter().any(|name| name == "definition_line"));
 
         if needs_migration {
             self.conn
@@ -218,8 +225,9 @@ impl EmbeddingCache {
                     enriched_text TEXT NOT NULL,
                     cyclomatic_complexity INTEGER,
                     cognitive_complexity INTEGER,
+                    definition_line INTEGER NOT NULL,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(file_path, symbol_name, chunk_index)
+                    UNIQUE(file_path, symbol_name, definition_line, chunk_index)
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_symbols_file_path ON symbols(file_path);
@@ -249,20 +257,21 @@ impl EmbeddingCache {
         Ok(CacheTransaction { transaction })
     }
 
-    /// Get a symbol from the cache by file path, symbol name, and chunk index.
+    /// Get a symbol from the cache by file path, symbol name, definition line, and chunk index.
     pub fn get_symbol(
         &self,
         file_path: &str,
         symbol_name: &str,
+        definition_line: u32,
         chunk_index: u32,
     ) -> Result<Option<CachedSymbol>> {
         let result = self
             .conn
             .prepare_cached(
-                "SELECT file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text, cyclomatic_complexity, cognitive_complexity FROM symbols WHERE file_path = ?1 AND symbol_name = ?2 AND chunk_index = ?3",
+                "SELECT file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text, cyclomatic_complexity, cognitive_complexity, definition_line FROM symbols WHERE file_path = ?1 AND symbol_name = ?2 AND definition_line = ?3 AND chunk_index = ?4",
             )
             .and_then(|mut stmt| {
-                stmt.query_row(params![file_path, symbol_name, chunk_index], row_to_symbol)
+                stmt.query_row(params![file_path, symbol_name, definition_line, chunk_index], row_to_symbol)
                     .optional()
             })
             .map_err(|e| Error::analysis(format!("Failed to get symbol: {}", e)))?;
@@ -274,7 +283,7 @@ impl EmbeddingCache {
     pub fn get_all_symbols(&self) -> Result<Vec<CachedSymbol>> {
         let mut stmt = self
             .conn
-            .prepare_cached("SELECT file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text, cyclomatic_complexity, cognitive_complexity FROM symbols")
+            .prepare_cached("SELECT file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text, cyclomatic_complexity, cognitive_complexity, definition_line FROM symbols")
             .map_err(|e| Error::analysis(format!("Failed to prepare query: {}", e)))?;
 
         let symbols = stmt
@@ -290,7 +299,7 @@ impl EmbeddingCache {
     pub fn get_symbols_for_file(&self, file_path: &str) -> Result<Vec<CachedSymbol>> {
         let mut stmt = self
             .conn
-            .prepare_cached("SELECT file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text, cyclomatic_complexity, cognitive_complexity FROM symbols WHERE file_path = ?1")
+            .prepare_cached("SELECT file_path, symbol_name, symbol_type, parent_name, signature, start_line, end_line, chunk_index, total_chunks, content_hash, enriched_text, cyclomatic_complexity, cognitive_complexity, definition_line FROM symbols WHERE file_path = ?1")
             .map_err(|e| Error::analysis(format!("Failed to prepare query: {}", e)))?;
 
         let symbols = stmt
@@ -377,6 +386,7 @@ mod tests {
             start_line: 1,
             end_line: 5,
             chunk_index: 0,
+            definition_line: 0,
             total_chunks: 1,
             content_hash: "abc123".to_string(),
             enriched_text: "[src/main.rs] test_func\nfn test_func() { }".to_string(),
@@ -399,7 +409,7 @@ mod tests {
         cache.upsert_symbol(&symbol).unwrap();
 
         let retrieved = cache
-            .get_symbol(&symbol.file_path, &symbol.symbol_name, 0)
+            .get_symbol(&symbol.file_path, &symbol.symbol_name, 0, 0)
             .unwrap()
             .unwrap();
         assert_eq!(retrieved.file_path, symbol.file_path);
@@ -422,7 +432,7 @@ mod tests {
         cache.upsert_symbol(&symbol).unwrap();
 
         let retrieved = cache
-            .get_symbol(&symbol.file_path, &symbol.symbol_name, 0)
+            .get_symbol(&symbol.file_path, &symbol.symbol_name, 0, 0)
             .unwrap()
             .unwrap();
         assert_eq!(retrieved.content_hash, "new_hash");
@@ -433,7 +443,7 @@ mod tests {
     #[test]
     fn test_get_nonexistent_symbol() {
         let cache = EmbeddingCache::in_memory().unwrap();
-        let result = cache.get_symbol("nonexistent", "func", 0).unwrap();
+        let result = cache.get_symbol("nonexistent", "func", 0, 0).unwrap();
         assert!(result.is_none());
     }
 
@@ -450,6 +460,7 @@ mod tests {
             start_line: 1,
             end_line: 5,
             chunk_index: 0,
+            definition_line: 0,
             total_chunks: 1,
             content_hash: "hash1".to_string(),
             enriched_text: "[src/a.rs] func_a\nfn func_a() {}".to_string(),
@@ -466,6 +477,7 @@ mod tests {
             start_line: 1,
             end_line: 5,
             chunk_index: 0,
+            definition_line: 0,
             total_chunks: 1,
             content_hash: "hash2".to_string(),
             enriched_text: "[src/b.rs] func_b\nfn func_b() {}".to_string(),
@@ -493,6 +505,7 @@ mod tests {
             start_line: 1,
             end_line: 5,
             chunk_index: 0,
+            definition_line: 0,
             total_chunks: 1,
             content_hash: "hash1".to_string(),
             enriched_text: "text1".to_string(),
@@ -509,6 +522,7 @@ mod tests {
             start_line: 10,
             end_line: 15,
             chunk_index: 0,
+            definition_line: 0,
             total_chunks: 1,
             content_hash: "hash2".to_string(),
             enriched_text: "text2".to_string(),
@@ -525,6 +539,7 @@ mod tests {
             start_line: 1,
             end_line: 5,
             chunk_index: 0,
+            definition_line: 0,
             total_chunks: 1,
             content_hash: "hash3".to_string(),
             enriched_text: "text3".to_string(),
@@ -637,6 +652,7 @@ mod tests {
             start_line: 1,
             end_line: 3,
             chunk_index: 0,
+            definition_line: 0,
             total_chunks: 1,
             content_hash: "h".to_string(),
             enriched_text: "text".to_string(),
@@ -688,6 +704,7 @@ mod tests {
             start_line: 5,
             end_line: 10,
             chunk_index: 1,
+            definition_line: 5,
             total_chunks: 3,
             content_hash: "h".to_string(),
             enriched_text: "text".to_string(),
@@ -695,7 +712,7 @@ mod tests {
             cognitive_complexity: None,
         };
         cache.upsert_symbol(&symbol).unwrap();
-        let retrieved = cache.get_symbol("test.rs", "bar", 1).unwrap().unwrap();
+        let retrieved = cache.get_symbol("test.rs", "bar", 5, 1).unwrap().unwrap();
         assert_eq!(retrieved.parent_name.as_deref(), Some("Foo"));
         assert_eq!(retrieved.chunk_index, 1);
         assert_eq!(retrieved.total_chunks, 3);
@@ -716,6 +733,7 @@ mod tests {
                     start_line: 10 + i * 20,
                     end_line: 10 + (i + 1) * 20,
                     chunk_index: i,
+                    definition_line: 0,
                     total_chunks: 3,
                     content_hash: format!("h{i}"),
                     enriched_text: format!("chunk {i}"),
@@ -733,6 +751,66 @@ mod tests {
         // Delete all for the file
         cache.delete_file_symbols("src/lib.rs").unwrap();
         assert_eq!(cache.symbol_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn a_cache_without_definition_lines_is_rebuilt() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE symbols (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_path TEXT NOT NULL,
+                symbol_name TEXT NOT NULL,
+                symbol_type TEXT NOT NULL,
+                parent_name TEXT,
+                signature TEXT NOT NULL,
+                start_line INTEGER NOT NULL,
+                end_line INTEGER NOT NULL,
+                chunk_index INTEGER NOT NULL DEFAULT 0,
+                total_chunks INTEGER NOT NULL DEFAULT 1,
+                content_hash TEXT NOT NULL,
+                enriched_text TEXT NOT NULL,
+                cyclomatic_complexity INTEGER,
+                cognitive_complexity INTEGER,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(file_path, symbol_name, chunk_index)
+            );
+            CREATE TABLE files (
+                file_path TEXT PRIMARY KEY,
+                file_hash TEXT NOT NULL,
+                indexed_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO files (file_path, file_hash) VALUES ('a.rs', 'old');
+        "#,
+        )
+        .unwrap();
+
+        let cache = EmbeddingCache { conn };
+        cache.migrate_if_needed().unwrap();
+        cache.init_schema().unwrap();
+
+        assert!(cache.get_file_hash("a.rs").unwrap().is_none());
+        let mut symbol = CachedSymbol {
+            file_path: "a.rs".to_string(),
+            symbol_name: "area".to_string(),
+            symbol_type: "function".to_string(),
+            parent_name: None,
+            signature: "fn area()".to_string(),
+            start_line: 1,
+            end_line: 3,
+            chunk_index: 0,
+            definition_line: 1,
+            total_chunks: 1,
+            content_hash: "h".to_string(),
+            enriched_text: "text".to_string(),
+            cyclomatic_complexity: None,
+            cognitive_complexity: None,
+        };
+        cache.upsert_symbol(&symbol).unwrap();
+        symbol.definition_line = 9;
+        cache.upsert_symbol(&symbol).unwrap();
+        assert_eq!(cache.symbol_count().unwrap(), 2);
     }
 
     #[test]
@@ -778,6 +856,7 @@ mod tests {
             start_line: 1,
             end_line: 20,
             chunk_index: 0,
+            definition_line: 0,
             total_chunks: 1,
             content_hash: "h".to_string(),
             enriched_text: "text".to_string(),
@@ -786,7 +865,7 @@ mod tests {
         };
         cache.upsert_symbol(&symbol).unwrap();
         let retrieved = cache
-            .get_symbol("test.rs", "complex_fn", 0)
+            .get_symbol("test.rs", "complex_fn", 0, 0)
             .unwrap()
             .unwrap();
         assert_eq!(retrieved.cyclomatic_complexity, Some(8));
@@ -806,6 +885,7 @@ mod tests {
             start_line: 1,
             end_line: 50,
             chunk_index: 0,
+            definition_line: 0,
             total_chunks: 1,
             content_hash: "h".to_string(),
             enriched_text: "text".to_string(),
@@ -815,7 +895,7 @@ mod tests {
         cache.upsert_symbol(&symbol).unwrap();
 
         let retrieved = cache
-            .get_symbol("src/lib.rs", "complex", 0)
+            .get_symbol("src/lib.rs", "complex", 0, 0)
             .unwrap()
             .unwrap();
         assert_eq!(retrieved.cyclomatic_complexity, Some(15));
@@ -831,6 +911,7 @@ mod tests {
             start_line: 60,
             end_line: 65,
             chunk_index: 0,
+            definition_line: 0,
             total_chunks: 1,
             content_hash: "h2".to_string(),
             enriched_text: "text2".to_string(),
@@ -840,7 +921,7 @@ mod tests {
         cache.upsert_symbol(&simple).unwrap();
 
         let retrieved = cache
-            .get_symbol("src/lib.rs", "simple", 0)
+            .get_symbol("src/lib.rs", "simple", 0, 0)
             .unwrap()
             .unwrap();
         assert_eq!(retrieved.cyclomatic_complexity, None);

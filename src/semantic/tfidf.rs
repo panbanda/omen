@@ -14,6 +14,8 @@ pub struct DocMeta {
     pub symbol_name: String,
     pub symbol_type: String,
     pub signature: String,
+    /// The first line of the definition. A sub-chunk has its own `start_line`.
+    pub definition_line: u32,
     pub start_line: u32,
     pub end_line: u32,
     pub cyclomatic_complexity: Option<u32>,
@@ -144,6 +146,7 @@ impl TfidfEngine {
             .map(|(i, doc_vec)| (i, query_vec.dot(doc_vec)))
             .collect();
 
+        scored.retain(|(_, score)| *score > 0.0);
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(top_k);
 
@@ -175,6 +178,7 @@ impl TfidfEngine {
             .map(|(i, doc_vec)| (i, query_vec.dot(doc_vec)))
             .collect();
 
+        scored.retain(|(_, score)| *score > 0.0);
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(top_k);
 
@@ -249,6 +253,7 @@ mod tests {
             symbol_name: name.to_string(),
             symbol_type: "function".to_string(),
             signature: format!("fn {}()", name),
+            definition_line: 1,
             start_line: 1,
             end_line: 5,
             cyclomatic_complexity: None,
@@ -339,7 +344,7 @@ mod tests {
 
     #[test]
     fn test_fit_single_doc() {
-        let docs = vec![("fn parse_file() {}".to_string(), make_meta("parse_file"))];
+        let docs = vec![("parse file".to_string(), make_meta("parse_file"))];
         let engine = TfidfEngine::fit(&docs);
         assert_eq!(engine.doc_vectors.len(), 1);
         assert_eq!(engine.doc_meta.len(), 1);
@@ -387,14 +392,31 @@ mod tests {
     }
 
     #[test]
+    fn a_document_without_a_query_term_is_not_a_result() {
+        let docs = vec![
+            ("alpha beta".to_string(), make_meta("a")),
+            ("gamma delta".to_string(), make_meta("b")),
+        ];
+        let engine = TfidfEngine::fit(&docs);
+        let names: Vec<String> = engine
+            .search("alpha", 10)
+            .into_iter()
+            .map(|(meta, _)| meta.symbol_name)
+            .collect();
+        assert_eq!(names, vec!["a"]);
+        assert!(engine.search("omega", 10).is_empty());
+        assert!(engine.search_in_files("omega", &["test.rs"], 10).is_empty());
+    }
+
+    #[test]
     fn test_search_in_files() {
         let docs = vec![
-            ("fn parse_file() {}".to_string(), {
+            ("parse file".to_string(), {
                 let mut m = make_meta("parse_file");
                 m.file_path = "src/parser.rs".to_string();
                 m
             }),
-            ("fn parse_config() {}".to_string(), {
+            ("parse config".to_string(), {
                 let mut m = make_meta("parse_config");
                 m.file_path = "src/config.rs".to_string();
                 m
