@@ -65,3 +65,7 @@ func (g *Group) First() float64 {
 	first, _, _ := g.Split()
 	return first.Area()
 }
+
+func (g *Group) Head() float64 {
+	return g.members[0].Area()
+}

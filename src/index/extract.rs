@@ -151,6 +151,28 @@ pub struct ReferenceFacts {
     pub receiver_path: Option<Vec<String>>,
     /// `?` follows the call, as Rust `call()?` has. `?.` is not this mark.
     pub tried: bool,
+    /// The receiver is one element of the value that `receiver_path` names,
+    /// as `c.items[i]` is.
+    pub receiver_indexed: bool,
+}
+
+/// The names of the value that an index expression reads: `c.items[i]`
+/// gives `c`, `items`. `None` means that the text is a different expression.
+fn indexed_path(text: &str) -> Option<Vec<String>> {
+    let text = text.trim().strip_suffix(']')?;
+    let mut depth = 1usize;
+    let open = text
+        .char_indices()
+        .rev()
+        .find_map(|(position, character)| {
+            match character {
+                ']' => depth += 1,
+                '[' => depth -= 1,
+                _ => {}
+            }
+            (depth == 0).then_some(position)
+        })?;
+    name_path(&text[..open])
 }
 
 /// Makes a field that an assignment or a parameter in a method declares a
@@ -961,16 +983,18 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
                 superseded: Vec::new(),
             },
         });
+        let receiver_text = receiver
+            .and_then(|(start, end)| parsed.source.get(start..end))
+            .and_then(|text| std::str::from_utf8(text).ok());
         reference_facts.push(ReferenceFacts {
             start_byte,
             end_byte,
             owner,
             arguments: call.arguments,
             receiver,
-            receiver_path: receiver
-                .and_then(|(start, end)| parsed.source.get(start..end))
-                .and_then(|text| std::str::from_utf8(text).ok())
-                .and_then(name_path),
+            receiver_path: receiver_text
+                .and_then(|text| name_path(text).or_else(|| indexed_path(text))),
+            receiver_indexed: receiver_text.is_some_and(|text| indexed_path(text).is_some()),
             tried: parsed.source.get(end_byte) == Some(&b'?')
                 && parsed.source.get(end_byte + 1) != Some(&b'.'),
         });

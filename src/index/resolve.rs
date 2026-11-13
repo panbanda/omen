@@ -108,6 +108,19 @@ impl Outcome {
 /// The words that name the object of a method.
 const SELF_WORDS: &[&str] = &["self", "this", "$this", "cls"];
 
+/// Tells if the text of a type has `|` that is not in brackets.
+fn is_union(text: &str) -> bool {
+    let mut depth = 0usize;
+    text.chars().any(|character| {
+        match character {
+            '(' | '[' | '{' | '<' => depth += 1,
+            ')' | ']' | '}' | '>' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        character == '|' && depth == 0
+    })
+}
+
 fn is_callable(symbol: &Symbol) -> bool {
     matches!(
         symbol.kind,
@@ -683,8 +696,33 @@ impl<'a> Resolver<'a> {
         let text = match (element_type(text), element) {
             (Some(inner), true) if element_type(inner).is_none() => required_type(inner),
             (None, false) => text,
+            // A name can be an alias of a collection type, as Go
+            // `type byName []*Item` is.
+            (None, true) => {
+                let (_, name) = split_type(text);
+                let aliases: Vec<Id> = self
+                    .named(&name, file)
+                    .filter(|id| {
+                        self.symbol(*id).kind == SymbolKind::TypeAlias
+                            && (id.0 == file || self.package_files(file).contains(&id.0))
+                    })
+                    .collect();
+                let [alias] = aliases.as_slice() else {
+                    return Vec::new();
+                };
+                return match self.facts(*alias).return_type.as_deref() {
+                    Some(aliased) if element_type(aliased).is_some() => {
+                        self.types_of_text(aliased, alias.0, true)
+                    }
+                    _ => Vec::new(),
+                };
+            }
             _ => return Vec::new(),
         };
+        // A union of two or more types does not tell which type the value has.
+        if is_union(text) {
+            return Vec::new();
+        }
         let (qualifier, name) = split_type(text);
         if name.is_empty() {
             return Vec::new();
@@ -1588,6 +1626,13 @@ impl<'a> Resolver<'a> {
                 // of its last field.
                 let types = match call {
                     Some(call) => self.result_types(file, call, depth + 1),
+                    // `values[i]` is one element of a declared slice, array,
+                    // or list. A map gives no type.
+                    None if facts.reference_facts[position].receiver_indexed => facts
+                        .reference_facts[position]
+                        .receiver_path
+                        .as_ref()
+                        .and_then(|path| self.path_types(file, &chain, path, true, depth + 1)),
                     None => match facts.reference_facts[position].receiver_path.as_deref() {
                         // C++ `name.reset()` can call a smart pointer, and the
                         // extraction gives no name for the receiver. A member
@@ -1783,6 +1828,62 @@ mod tests {
                 "27 Unresolved - []".to_string(),
                 "28 Ambiguous NameOnly [a.py#Item.name]".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn test_index_of_a_declared_collection_gives_the_element() {
+        let go = "package shop\n\ntype Item struct{}\n\nfunc (i *Item) Name() string { return \"\" }\n\ntype byName []*Item\n\nfunc (c byName) Less(i, j int) bool { return c[i].Name() < c[j].Name() }\n\ntype Cart struct {\n\titems []*Item\n\tnamed map[string]*Item\n}\n\nfunc (c *Cart) Run(list []*Item) {\n\tlist[0].Name()\n\tc.items[1].Name()\n\tc.named[\"a\"].Name()\n}\n";
+        let found = "UniqueCandidate ReceiverDeclaredType [a.go#Item.Name]";
+        assert_eq!(
+            rows_of(&[("a.go", go)], "a.go", "Name"),
+            [
+                format!("9 {found}"),
+                format!("9 {found}"),
+                format!("17 {found}"),
+                format!("18 {found}"),
+                "19 Unresolved - []".to_string(),
+            ]
+        );
+        let typescript = "class Item {\n  name(): string {\n    return \"\";\n  }\n}\n\nfunction run(xs: Item[], m: Map<string, Item>): void {\n  xs[0].name();\n  m[\"a\"].name();\n}\n";
+        assert_eq!(
+            rows_of(&[("a.ts", typescript)], "a.ts", "name"),
+            [
+                "8 UniqueCandidate ReceiverDeclaredType [a.ts#Item.name]",
+                "9 Unresolved - []",
+            ]
+        );
+        let python = "class Item:\n    def name(self):\n        return \"\"\n\n\ndef run(xs: list[Item], d: dict[str, Item]):\n    xs[0].name()\n    d[\"a\"].name()\n";
+        assert_eq!(
+            rows_of(&[("a.py", python)], "a.py", "name"),
+            [
+                "7 UniqueCandidate ReceiverDeclaredType [a.py#Item.name]",
+                "8 Unresolved - []",
+            ]
+        );
+        let rust = "pub struct Item;\n\nimpl Item {\n    pub fn name(&self) -> u32 {\n        1\n    }\n}\n\nfn run(v: Vec<Item>, s: &[Item]) -> u32 {\n    v[0].name() + s[1].name()\n}\n";
+        let found = "UniqueCandidate ReceiverDeclaredType [a.rs#Item.name]";
+        assert_eq!(
+            rows_of(&[("a.rs", rust)], "a.rs", "name"),
+            [format!("10 {found}"), format!("10 {found}")]
+        );
+    }
+
+    #[test]
+    fn test_union_of_two_types_gives_no_edge() {
+        let python = "class Item:\n    def name(self):\n        return \"\"\n\n\nclass Other:\n    pass\n\n\ndef run(\n    one: Item | Other,\n    many: list[\n        Other\n        | Item\n    ],\n    maybe: Item | None,\n):\n    one.name()\n    many[0].name()\n    maybe.name()\n";
+        assert_eq!(
+            rows_of(&[("a.py", python)], "a.py", "name"),
+            [
+                "18 Unresolved - []",
+                "19 Unresolved - []",
+                "20 UniqueCandidate ReceiverDeclaredType [a.py#Item.name]",
+            ]
+        );
+        let typescript = "class Item {\n  name(): string {\n    return \"\";\n  }\n}\n\nclass Other {}\n\nfunction run(one: Item | Other, many: Array<Item | Other>): void {\n  one.name();\n  many[0].name();\n}\n";
+        assert_eq!(
+            rows_of(&[("a.ts", typescript)], "a.ts", "name"),
+            ["10 Unresolved - []", "11 Unresolved - []"]
         );
     }
 

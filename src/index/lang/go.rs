@@ -269,7 +269,8 @@ impl LanguageSpec for Go {
                 match definition.map(|definition| definition.kind()) {
                     Some(STRUCT_TYPE) => draft.kind = SymbolKind::Struct,
                     Some(INTERFACE_TYPE) => draft.kind = SymbolKind::Interface,
-                    _ => {}
+                    // The type that a name is an alias of, for example a slice.
+                    _ => draft.return_type = definition.map(|aliased| context.text(aliased)),
                 }
             }
             FUNCTION_LITERAL => draft.span = Span::between(&draft.name_node, &draft.node),
