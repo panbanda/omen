@@ -82,6 +82,13 @@ Markdown. Use `omen -f json all` to get JSON.
 `--top` and `--offset` apply to each analyzer section of `all`. Before 5.0, the
 two flags cut the list of analyzers.
 
+### Path options of `mutation`
+
+A relative path that you give on the command line is relative to the working
+directory. This applies to `--model`, `--history`, and `--output`. A default
+path is relative to the repository at `-p`. The defaults are
+`.omen/mutation-model.json` and `.omen/mutation-history.jsonl`.
+
 ### Output keys
 
 | Removed | Replacement |

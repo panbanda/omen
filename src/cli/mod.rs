@@ -658,7 +658,8 @@ pub struct MutationArgs {
     #[arg(long)]
     pub record: bool,
 
-    /// Path to ML model file (default: .omen/mutation-model.json)
+    /// Model file. A relative path is relative to the working directory.
+    /// The default is `.omen/mutation-model.json` in the repository.
     #[arg(long)]
     pub model: Option<PathBuf>,
 
@@ -817,11 +818,13 @@ pub struct SymbolArgs {
 #[derive(Args)]
 #[cfg(feature = "mutation")]
 pub struct MutationTrainArgs {
-    /// Path to history file (default: .omen/mutation-history.jsonl)
+    /// History file. A relative path is relative to the working directory.
+    /// The default is `.omen/mutation-history.jsonl` in the repository.
     #[arg(long)]
     pub history: Option<PathBuf>,
 
-    /// Path to output model file (default: .omen/mutation-model.json)
+    /// Model file to write. A relative path is relative to the working directory.
+    /// The default is `.omen/mutation-model.json` in the repository.
     #[arg(long)]
     pub model: Option<PathBuf>,
 }

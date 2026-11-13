@@ -3132,3 +3132,50 @@ fn test_mutation_stops_a_writer_that_the_test_command_leaves() {
     );
     assert_eq!(source, LATE_WRITER_SOURCE);
 }
+
+// ---------------------------------------------------------------------------
+// Mutation path options: the command line is relative to the working
+// directory, and a default is relative to the repository
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "mutation")]
+#[test]
+fn test_mutation_path_options_follow_one_rule_from_another_directory() {
+    let repository = write_path_fixture();
+    let elsewhere = TempDir::new().unwrap();
+    let path = repository.path().to_str().unwrap();
+    let run = |arguments: &[&str]| {
+        let output = omen()
+            .current_dir(elsewhere.path())
+            .args(["-p", path, "-f", "json", "mutation"])
+            .args(arguments)
+            .output()
+            .expect("command runs");
+        assert!(
+            output.status.success(),
+            "{arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stderr).into_owned()
+    };
+
+    // A default path is in the repository.
+    run(&["--record", "--test-command", "true"]);
+    let default_history = repository.path().join(".omen/mutation-history.jsonl");
+    assert!(default_history.exists());
+    run(&["train"]);
+    assert!(repository.path().join(".omen/mutation-model.json").exists());
+    assert!(!elsewhere.path().join(".omen").exists());
+
+    // A relative path on the command line is in the working directory.
+    std::fs::copy(&default_history, elsewhere.path().join("history.jsonl")).unwrap();
+    run(&["train", "--history", "history.jsonl", "--model", "model.json"]);
+    assert!(elsewhere.path().join("model.json").exists());
+    assert!(!repository.path().join("model.json").exists());
+
+    let stderr = run(&["--dry-run", "--skip-predicted", "0.9", "--model", "model.json"]);
+    assert!(!stderr.contains("No trained model found"), "{stderr}");
+    run(&["--dry-run", "--output", "report.json"]);
+    assert!(elsewhere.path().join("report.json").exists());
+    assert!(!repository.path().join("report.json").exists());
+}
