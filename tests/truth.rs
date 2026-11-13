@@ -18,9 +18,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use omen::benchmark::truth::{
-    bless, check_ledger, compare, coverage_gaps, label_assertion_ids, ledger_growth, render_table,
-    summarize, Assertion, ImportedName, Kind, Labels, LedgerEntry, Location, Observed,
-    ObservedCall, ObservedImport, ObservedSymbol,
+    bless, check_ledger, compare, coverage_gaps, label_assertion_ids, ledger_growth,
+    render_sink_table, render_table, summarize, summarize_sinks, Assertion, ImportedName, Kind,
+    Labels, LedgerEntry, Location, Observed, ObservedCall, ObservedImport, ObservedSymbol,
 };
 use omen::core::Language;
 use omen::index::extract::{extract_file, link_files, FileSymbols};
@@ -35,6 +35,7 @@ use omen::parser::Parser;
 const LABELS_FILE: &str = "labels.json";
 const LEDGER_FILE: &str = "expected_failures.json";
 const BLESS_TRACKING: &str = "phase-2-shared-index";
+const SINK_TRACKING: &str = "phase-5-security";
 
 fn truth_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/truth")
@@ -305,6 +306,8 @@ fn observe(dir: &Path) -> Observed {
         symbols,
         calls,
         imports,
+        // The sink matcher does not exist yet. Omen reports no sink.
+        sinks: Vec::new(),
     }
 }
 
@@ -341,6 +344,7 @@ fn reported_facts_agree_with_labels_or_the_ledger() {
         assert!(!cases.is_empty(), "no fixture cases for {language}");
         let assertions = run_cases(&cases);
         println!("{}", render_table(&summarize(&assertions)));
+        println!("{}", render_sink_table(&summarize_sinks(&assertions)));
         for assertion in assertions.iter().filter(|assertion| !assertion.passed) {
             println!("{}\t{}", assertion.id, assertion.detail);
         }
@@ -350,13 +354,19 @@ fn reported_facts_agree_with_labels_or_the_ledger() {
     let assertions = run_cases(&cases);
 
     if std::env::var_os("OMEN_TRUTH_BLESS").is_some() {
-        let blessed = bless(&assertions, &load_ledger(&root), BLESS_TRACKING);
+        let mut blessed = bless(&assertions, &load_ledger(&root), BLESS_TRACKING);
+        for entry in &mut blessed {
+            if entry.id.contains("/sinks/") && entry.tracking == BLESS_TRACKING {
+                entry.tracking = SINK_TRACKING.to_string();
+            }
+        }
         let mut text = serde_json::to_string_pretty(&blessed).unwrap();
         text.push('\n');
         std::fs::write(root.join(LEDGER_FILE), text).unwrap();
     }
 
     println!("{}", render_table(&summarize(&assertions)));
+    println!("{}", render_sink_table(&summarize_sinks(&assertions)));
     let violations = check_ledger(&assertions, &load_ledger(&root));
     let report: Vec<String> = violations.iter().map(ToString::to_string).collect();
     assert!(

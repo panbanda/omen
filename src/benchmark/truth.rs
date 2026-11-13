@@ -57,22 +57,47 @@ pub const IMPORT_CATEGORIES: [&str; 8] = [
     "external",
 ];
 
+/// The sink categories. Each language labels each category in each scenario,
+/// or declares the category or the scenario not applicable.
+pub const SINK_CATEGORIES: [&str; 9] = [
+    "command_execution",
+    "code_evaluation",
+    "unsafe_deserialization",
+    "sql_string_construction",
+    "weak_hash",
+    "weak_cipher",
+    "tls_verification_disabled",
+    "hardcoded_credential",
+    "memory_unsafe",
+];
+pub const SINK_SCENARIOS: [&str; 7] = [
+    "real_call",
+    "aliased_import",
+    "safe_variant",
+    "name_in_string",
+    "name_in_comment",
+    "same_name_symbol",
+    "in_test",
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Dimension {
     Symbols,
     Calls,
     Imports,
+    Sinks,
 }
 
 impl Dimension {
-    pub const ALL: [Self; 3] = [Self::Symbols, Self::Calls, Self::Imports];
+    pub const ALL: [Self; 4] = [Self::Symbols, Self::Calls, Self::Imports, Self::Sinks];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Symbols => "symbols",
             Self::Calls => "calls",
             Self::Imports => "imports",
+            Self::Sinks => "sinks",
         }
     }
 
@@ -81,6 +106,7 @@ impl Dimension {
             Self::Symbols => &SYMBOL_CATEGORIES,
             Self::Calls => &CALL_CATEGORIES,
             Self::Imports => &IMPORT_CATEGORIES,
+            Self::Sinks => &SINK_CATEGORIES,
         }
     }
 }
@@ -117,6 +143,41 @@ pub struct Labels {
     pub calls: Vec<CallLabel>,
     #[serde(default)]
     pub imports: Vec<ImportLabel>,
+    /// When set, a sink that omen reports and that no label names is a failure.
+    #[serde(default)]
+    pub sinks_closed_world: bool,
+    #[serde(default)]
+    pub sinks: Vec<SinkLabel>,
+}
+
+/// One call, member access, or literal that is a sink or must not be one.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SinkLabel {
+    pub label: String,
+    /// One of `SINK_CATEGORIES`.
+    pub category: String,
+    /// One of `SINK_SCENARIOS`.
+    pub scenario: String,
+    pub file: String,
+    /// The line on which the sink starts.
+    pub line: u32,
+    /// `false` means that omen must not report a sink of this category on this line.
+    #[serde(default = "flagged_by_default")]
+    pub flagged: bool,
+    /// The evidence that omen gives, for example `imported_symbol`. Only a reported sink has it.
+    #[serde(default)]
+    pub basis: Option<String>,
+    /// The sink is in test code.
+    #[serde(default)]
+    pub in_test: bool,
+    /// All arguments of the call are literals. Only a label that states it gets the check.
+    #[serde(default)]
+    pub constant_argument: Option<bool>,
+}
+
+fn flagged_by_default() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -201,6 +262,17 @@ pub struct Observed {
     pub symbols: Vec<ObservedSymbol>,
     pub calls: Vec<ObservedCall>,
     pub imports: Vec<ObservedImport>,
+    pub sinks: Vec<ObservedSink>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ObservedSink {
+    pub file: String,
+    pub line: u32,
+    pub category: String,
+    pub basis: String,
+    pub in_test: bool,
+    pub constant_argument: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -345,6 +417,33 @@ fn symbol_locations(case: &str, labels: &Labels) -> Result<BTreeMap<String, Loca
         Dimension::Imports,
         labels.imports.iter().map(|i| i.label.as_str()),
     )?;
+    unique_labels(
+        case,
+        Dimension::Sinks,
+        labels.sinks.iter().map(|s| s.label.as_str()),
+    )?;
+    for sink in &labels.sinks {
+        if !SINK_CATEGORIES.contains(&sink.category.as_str()) {
+            return Err(invalid(format!(
+                "{case}: sink '{}' has the unknown category '{}'",
+                sink.label, sink.category
+            )));
+        }
+        if !SINK_SCENARIOS.contains(&sink.scenario.as_str()) {
+            return Err(invalid(format!(
+                "{case}: sink '{}' has the unknown scenario '{}'",
+                sink.label, sink.scenario
+            )));
+        }
+        if !sink.flagged
+            && (sink.basis.is_some() || sink.in_test || sink.constant_argument.is_some())
+        {
+            return Err(invalid(format!(
+                "{case}: sink '{}' is not flagged, thus it has no basis and no flags",
+                sink.label
+            )));
+        }
+    }
     Ok(labels
         .symbols
         .iter()
@@ -585,6 +684,74 @@ fn compare_imports(case: &str, labels: &Labels, observed: &Observed, out: &mut V
     }
 }
 
+fn compare_sinks(case: &str, labels: &Labels, observed: &Observed, out: &mut Vec<Assertion>) {
+    let mut labelled = BTreeSet::new();
+    for label in &labels.sinks {
+        let key = (label.file.as_str(), label.line, label.category.as_str());
+        labelled.insert(key);
+        let prefix = format!("{case}/sinks/{}", label.label);
+        let found = observed
+            .sinks
+            .iter()
+            .find(|sink| (sink.file.as_str(), sink.line, sink.category.as_str()) == key);
+        if !label.flagged {
+            out.push(assertion(
+                format!("{prefix}/absent"),
+                found.map(|sink| format!("reported with the basis {}", sink.basis)),
+            ));
+            continue;
+        }
+        let check = |name: &str, failure: Option<String>| {
+            assertion(
+                format!("{prefix}/{name}"),
+                match found {
+                    None => Some(format!(
+                        "no {} sink at {}:{}",
+                        label.category, label.file, label.line
+                    )),
+                    Some(_) => failure,
+                },
+            )
+        };
+        let mismatch = |expected: String, actual: String| {
+            (expected != actual).then(|| format!("expected {expected}, got {actual}"))
+        };
+        out.push(check("found", None));
+        if let Some(basis) = &label.basis {
+            out.push(check(
+                "basis",
+                found.and_then(|sink| mismatch(basis.clone(), sink.basis.clone())),
+            ));
+        }
+        out.push(check(
+            "in_test",
+            found.and_then(|sink| mismatch(label.in_test.to_string(), sink.in_test.to_string())),
+        ));
+        if let Some(constant) = label.constant_argument {
+            out.push(check(
+                "constant_argument",
+                found.and_then(|sink| {
+                    mismatch(constant.to_string(), sink.constant_argument.to_string())
+                }),
+            ));
+        }
+    }
+    if labels.sinks_closed_world {
+        let unlabelled: BTreeSet<_> = observed
+            .sinks
+            .iter()
+            .map(|sink| (sink.file.as_str(), sink.line, sink.category.as_str()))
+            .filter(|key| !labelled.contains(key))
+            .collect();
+        for (file, line, category) in unlabelled {
+            out.push(assertion(
+                format!("{case}/sinks/unlabelled:{file}:{line}:{category}/absent"),
+                Some("reported but not a labelled sink".to_string()),
+            ));
+        }
+    }
+}
+
 /// Check every label of one case against what omen reported.
 ///
 /// `case` is `<language>/<case directory>`. Errors mean the labels themselves
@@ -595,6 +762,7 @@ pub fn compare(case: &str, labels: &Labels, observed: &Observed) -> Result<Vec<A
     compare_symbols(case, labels, observed, &mut assertions);
     compare_calls(case, labels, observed, &locations, &mut assertions)?;
     compare_imports(case, labels, observed, &mut assertions);
+    compare_sinks(case, labels, observed, &mut assertions);
     Ok(assertions)
 }
 
@@ -677,36 +845,96 @@ pub fn ledger_growth(
 pub fn coverage_gaps(cases: &[&Labels]) -> Vec<String> {
     let mut gaps = Vec::new();
     for dimension in Dimension::ALL {
-        let mut covered: BTreeSet<&str> = BTreeSet::new();
+        let mut covered: BTreeSet<String> = BTreeSet::new();
         for labels in cases {
             match dimension {
                 Dimension::Symbols => {
-                    covered.extend(labels.symbols.iter().map(|s| s.category.as_str()))
+                    covered.extend(labels.symbols.iter().map(|s| s.category.clone()))
                 }
-                Dimension::Calls => {
-                    covered.extend(labels.calls.iter().map(|c| c.category.as_str()))
-                }
+                Dimension::Calls => covered.extend(labels.calls.iter().map(|c| c.category.clone())),
                 Dimension::Imports => {
-                    covered.extend(labels.imports.iter().map(|i| i.category.as_str()))
+                    covered.extend(labels.imports.iter().map(|i| i.category.clone()))
                 }
+                Dimension::Sinks => covered.extend(
+                    labels
+                        .sinks
+                        .iter()
+                        .map(|sink| format!("{}/{}", sink.category, sink.scenario)),
+                ),
             }
             covered.extend(
                 labels
                     .not_applicable
                     .iter()
                     .filter(|entry| entry.dimension == dimension && !entry.reason.trim().is_empty())
-                    .map(|entry| entry.category.as_str()),
+                    .map(|entry| entry.category.clone()),
             );
         }
-        gaps.extend(
-            dimension
-                .categories()
-                .iter()
-                .filter(|category| !covered.contains(*category))
-                .map(|category| format!("{}/{category}", dimension.as_str())),
-        );
+        if dimension == Dimension::Sinks {
+            // An entry for a whole sink category covers each scenario of the category.
+            for category in SINK_CATEGORIES {
+                for scenario in SINK_SCENARIOS {
+                    let key = format!("{category}/{scenario}");
+                    if !covered.contains(&key) && !covered.contains(category) {
+                        gaps.push(format!("sinks/{key}"));
+                    }
+                }
+            }
+        } else {
+            gaps.extend(
+                dimension
+                    .categories()
+                    .iter()
+                    .filter(|category| !covered.contains(**category))
+                    .map(|category| format!("{}/{category}", dimension.as_str())),
+            );
+        }
     }
     gaps
+}
+
+/// Per-language, per-sink-category counts. Never pooled into one figure.
+pub fn summarize_sinks(assertions: &[Assertion]) -> BTreeMap<(String, String), Tally> {
+    let mut table: BTreeMap<(String, String), Tally> = BTreeMap::new();
+    for assertion in assertions {
+        let Some((head, rest)) = assertion.id.split_once("/sinks/") else {
+            continue;
+        };
+        let language = head.split('/').next().unwrap_or_default();
+        // A label is `<category>.<scenario>`. An unlabelled sink is
+        // `unlabelled:<file>:<line>:<category>`, and a file path can contain `/`.
+        let category = match rest.strip_prefix("unlabelled:") {
+            Some(unlabelled) => unlabelled
+                .trim_end_matches("/absent")
+                .rsplit(':')
+                .next()
+                .unwrap_or_default(),
+            None => rest.split(['.', '/']).next().unwrap_or_default(),
+        };
+        let tally = table
+            .entry((language.to_string(), category.to_string()))
+            .or_default();
+        if assertion.passed {
+            tally.passed += 1;
+        } else {
+            tally.expected_failures += 1;
+        }
+    }
+    table
+}
+
+pub fn render_sink_table(table: &BTreeMap<(String, String), Tally>) -> String {
+    let mut out = format!(
+        "{:<12} {:<26} {:>6} {:>18}\n",
+        "language", "sink category", "pass", "expected failures"
+    );
+    for ((language, category), tally) in table {
+        out.push_str(&format!(
+            "{language:<12} {category:<26} {:>6} {:>18}\n",
+            tally.passed, tally.expected_failures
+        ));
+    }
+    out
 }
 
 /// Per-language, per-dimension counts. Never pooled into one figure.
@@ -855,6 +1083,7 @@ mod tests {
                     candidates: vec![location("a.rs", "area", 5)],
                 },
             ],
+            sinks: vec![],
             imports: vec![ObservedImport {
                 file: "main.rs".to_string(),
                 line: 1,
@@ -1311,5 +1540,210 @@ mod tests {
             }
         );
         assert_eq!(check_ledger(&assertions, &blessed), []);
+    }
+
+    fn sink_labels() -> Labels {
+        serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "language": "python",
+            "split": "development",
+            "oracle": "author-reviewed, not executed",
+            "closed_world": false,
+            "sinks_closed_world": true,
+            "sinks": [
+                {"label": "command_execution.real_call", "category": "command_execution",
+                 "scenario": "real_call", "file": "sinks.py", "line": 4,
+                 "basis": "imported_symbol", "constant_argument": false},
+                {"label": "command_execution.safe_variant", "category": "command_execution",
+                 "scenario": "safe_variant", "file": "sinks.py", "line": 5, "flagged": false},
+                {"label": "command_execution.in_test", "category": "command_execution",
+                 "scenario": "in_test", "file": "tests/test_sinks.py", "line": 3, "in_test": true}
+            ]
+        }))
+        .unwrap()
+    }
+
+    fn sink(file: &str, line: u32, category: &str) -> ObservedSink {
+        ObservedSink {
+            file: file.to_string(),
+            line,
+            category: category.to_string(),
+            basis: "imported_symbol".to_string(),
+            in_test: file.starts_with("tests/"),
+            constant_argument: false,
+        }
+    }
+
+    fn correct_sinks() -> Observed {
+        Observed {
+            sinks: vec![
+                sink("sinks.py", 4, "command_execution"),
+                sink("tests/test_sinks.py", 3, "command_execution"),
+            ],
+            ..Observed::default()
+        }
+    }
+
+    fn sink_failures(observed: &Observed) -> Vec<String> {
+        compare("python/security", &sink_labels(), observed)
+            .unwrap()
+            .into_iter()
+            .filter(|assertion| !assertion.passed)
+            .map(|assertion| assertion.id)
+            .collect()
+    }
+
+    #[test]
+    fn correct_sinks_pass_every_assertion() {
+        let assertions = compare("python/security", &sink_labels(), &correct_sinks()).unwrap();
+        assert_eq!(sink_failures(&correct_sinks()), Vec::<String>::new());
+        // The real call has four checks, the safe variant one, and the test call two.
+        assert_eq!(assertions.len(), 4 + 1 + 2);
+    }
+
+    #[test]
+    fn missing_sink_fails_each_of_its_checks() {
+        let mut observed = correct_sinks();
+        observed.sinks.remove(0);
+        assert_eq!(
+            sink_failures(&observed),
+            [
+                "python/security/sinks/command_execution.real_call/found",
+                "python/security/sinks/command_execution.real_call/basis",
+                "python/security/sinks/command_execution.real_call/in_test",
+                "python/security/sinks/command_execution.real_call/constant_argument",
+            ]
+        );
+    }
+
+    #[test]
+    fn sink_that_must_not_be_reported_fails_when_reported() {
+        let mut observed = correct_sinks();
+        observed
+            .sinks
+            .push(sink("sinks.py", 5, "command_execution"));
+        assert_eq!(
+            sink_failures(&observed),
+            ["python/security/sinks/command_execution.safe_variant/absent"]
+        );
+        let mut other_category = correct_sinks();
+        other_category.sinks.push(sink("sinks.py", 5, "weak_hash"));
+        assert_eq!(
+            sink_failures(&other_category),
+            ["python/security/sinks/unlabelled:sinks.py:5:weak_hash/absent"]
+        );
+    }
+
+    #[test]
+    fn sink_basis_and_flags_are_checked_when_the_label_gives_them() {
+        let mut observed = correct_sinks();
+        observed.sinks[0].basis = "name_only".to_string();
+        observed.sinks[0].in_test = true;
+        observed.sinks[1].in_test = false;
+        observed.sinks[0].constant_argument = true;
+        assert_eq!(
+            sink_failures(&observed),
+            [
+                "python/security/sinks/command_execution.real_call/basis",
+                "python/security/sinks/command_execution.real_call/in_test",
+                "python/security/sinks/command_execution.real_call/constant_argument",
+                "python/security/sinks/command_execution.in_test/in_test",
+            ]
+        );
+    }
+
+    #[test]
+    fn sinks_closed_world_rejects_unlabelled_sinks_only_when_set() {
+        let mut observed = correct_sinks();
+        observed.sinks.push(sink("sinks.py", 9, "weak_hash"));
+        assert_eq!(
+            sink_failures(&observed),
+            ["python/security/sinks/unlabelled:sinks.py:9:weak_hash/absent"]
+        );
+        let mut open = sink_labels();
+        open.sinks_closed_world = false;
+        let failing = compare("python/security", &open, &observed)
+            .unwrap()
+            .iter()
+            .filter(|assertion| !assertion.passed)
+            .count();
+        assert_eq!(failing, 0);
+    }
+
+    #[test]
+    fn malformed_sink_labels_are_errors() {
+        let mut category = sink_labels();
+        category.sinks[0].category = "weak_everything".to_string();
+        assert!(compare("python/security", &category, &correct_sinks()).is_err());
+
+        let mut scenario = sink_labels();
+        scenario.sinks[0].scenario = "somehow".to_string();
+        assert!(compare("python/security", &scenario, &correct_sinks()).is_err());
+
+        let mut duplicate = sink_labels();
+        duplicate.sinks[1].label = duplicate.sinks[0].label.clone();
+        assert!(compare("python/security", &duplicate, &correct_sinks()).is_err());
+
+        let mut unflagged_with_basis = sink_labels();
+        unflagged_with_basis.sinks[1].basis = Some("imported_symbol".to_string());
+        assert!(compare("python/security", &unflagged_with_basis, &correct_sinks()).is_err());
+    }
+
+    #[test]
+    fn sink_coverage_requires_each_category_and_scenario() {
+        let mut one = sink_labels();
+        let gaps = coverage_gaps(&[&one]);
+        assert!(!gaps.contains(&"sinks/command_execution/real_call".to_string()));
+        assert!(gaps.contains(&"sinks/command_execution/aliased_import".to_string()));
+        assert!(gaps.contains(&"sinks/memory_unsafe/real_call".to_string()));
+
+        one.not_applicable = vec![
+            NotApplicable {
+                dimension: Dimension::Sinks,
+                category: "command_execution/aliased_import".to_string(),
+                reason: "no alias syntax".to_string(),
+            },
+            NotApplicable {
+                dimension: Dimension::Sinks,
+                category: "memory_unsafe".to_string(),
+                reason: "memory-safe language".to_string(),
+            },
+            NotApplicable {
+                dimension: Dimension::Sinks,
+                category: "weak_hash".to_string(),
+                reason: " ".to_string(),
+            },
+        ];
+        let gaps = coverage_gaps(&[&one]);
+        assert!(!gaps.contains(&"sinks/command_execution/aliased_import".to_string()));
+        assert!(!gaps.contains(&"sinks/memory_unsafe/real_call".to_string()));
+        assert!(
+            gaps.contains(&"sinks/weak_hash/real_call".to_string()),
+            "blank reason is no exemption"
+        );
+    }
+
+    #[test]
+    fn sink_summary_is_per_language_and_category() {
+        let assertions = [
+            result("python/security/sinks/weak_hash.real_call/found", true),
+            result("python/security/sinks/weak_hash.in_test/found", false),
+            result(
+                "python/security/sinks/unlabelled:a.py:3:weak_hash/absent",
+                false,
+            ),
+            result("python/security/sinks/weak_cipher.real_call/found", true),
+            result("python/security/calls/x/no_missed_edge", false),
+        ];
+        let table = summarize_sinks(&assertions);
+        assert_eq!(
+            table[&("python".to_string(), "weak_hash".to_string())],
+            Tally {
+                passed: 1,
+                expected_failures: 2
+            }
+        );
+        assert_eq!(table.len(), 2);
+        assert!(render_sink_table(&table).contains("weak_cipher"));
     }
 }
