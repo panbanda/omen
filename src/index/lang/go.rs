@@ -301,7 +301,7 @@ mod tests {
                 "3 Module math math->math external",
                 "6 Load embed -->- external",
                 "7 Wildcard example.com/shop/other -->- other/other.go",
-                "8 Module example.com/shop/shapes shapes->shapes ambiguous(shapes/more.go,shapes/shapes.go)",
+                "8 Module example.com/shop/shapes shapes->shapes package(shapes/more.go,shapes/shapes.go)",
                 "9 Module example.com/shop/util util->tools util/util.go",
                 "10 Module example.com/shop/missing missing->missing unresolved",
                 "11 Module example.com/shop shop->shop main.go",
@@ -314,5 +314,33 @@ mod tests {
         use crate::index::imports::testing::rows;
         let files = [("main.go", "package main\n\nimport \"a/b\"\n")];
         assert_eq!(rows(&files, "main.go"), ["3 Module a/b b->b unresolved"]);
+    }
+
+    #[test]
+    fn test_two_modules_with_one_module_path_are_ambiguous() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            ("app/go.mod", "module example.com/app\n"),
+            (
+                "app/main.go",
+                "package main\n\nimport (\n\t\"example.com/lib/pkg\"\n\t\"example.com/solo/x\"\n\t\"example.com/app/inner\"\n)\n",
+            ),
+            ("app/inner/a.go", "package inner\n"),
+            ("app/inner/b.go", "package inner\n"),
+            ("one/go.mod", "module example.com/lib\n"),
+            ("one/pkg/a.go", "package pkg\n"),
+            ("two/go.mod", "module example.com/lib\n"),
+            ("two/pkg/b.go", "package pkg\n"),
+            ("third/go.mod", "module example.com/solo\n"),
+            ("third/x/x.go", "package x\n"),
+        ];
+        assert_eq!(
+            rows(&files, "app/main.go"),
+            [
+                "4 Module example.com/lib/pkg pkg->pkg ambiguous(one/pkg/a.go,two/pkg/b.go)",
+                "5 Module example.com/solo/x x->x third/x/x.go",
+                "6 Module example.com/app/inner inner->inner package(app/inner/a.go,app/inner/b.go)",
+            ]
+        );
     }
 }

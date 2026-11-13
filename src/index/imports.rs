@@ -1,8 +1,9 @@
 //! Import resolution. A module map for each language gives the file to which
 //! an import binding refers.
 //!
-//! No rule selects the first of several candidates. More than one candidate
-//! gives [`ImportTarget::Ambiguous`].
+//! No rule selects the first of several candidates. Two or more modules that
+//! match one import path give [`ImportTarget::Ambiguous`]. The files of one
+//! package give [`ImportTarget::Package`], which is a certain target.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -66,6 +67,26 @@ fn target_of(candidates: BTreeSet<String>, not_found: ImportTarget) -> ImportTar
     }
 }
 
+/// The target for the files of one package. The set must not be empty.
+fn package_of(files: BTreeSet<String>) -> ImportTarget {
+    let mut files: Vec<String> = files.into_iter().collect();
+    if files.len() == 1 {
+        ImportTarget::Resolved(files.remove(0))
+    } else {
+        ImportTarget::Package(files)
+    }
+}
+
+/// The target for a path that can refer to each of these packages.
+fn one_package(mut packages: Vec<BTreeSet<String>>, not_found: ImportTarget) -> ImportTarget {
+    packages.retain(|files| !files.is_empty());
+    match packages.len() {
+        0 => not_found,
+        1 => package_of(packages.remove(0)),
+        _ => ImportTarget::Ambiguous(packages.into_iter().flatten().collect()),
+    }
+}
+
 impl Repository<'_> {
     fn existing(&self, path: Option<String>) -> Option<String> {
         path.filter(|path| self.paths.contains(path.as_str()))
@@ -84,33 +105,81 @@ impl Repository<'_> {
 
     fn go(&self, binding: &ImportBinding) -> ImportTarget {
         let here = directory(&binding.file);
-        let module = self
+        let own = self
             .go_modules
             .iter()
             .filter(|(root, _)| {
                 root.is_empty() || here == root.as_str() || here.starts_with(&format!("{root}/"))
             })
             .max_by_key(|(root, _)| root.len());
-        let Some((root, name)) = module else {
+        let Some((own_root, _)) = own else {
             return ImportTarget::Unresolved;
         };
         let path = &binding.module_path;
-        let package = if path == name {
-            Some(root.clone())
-        } else {
-            path.strip_prefix(&format!("{name}/"))
-                .and_then(|rest| join(root, rest))
+        // The files of the package directory, for a module whose path starts the import path.
+        let package = |root: &String, name: &String| -> Option<BTreeSet<String>> {
+            let directory_of_package = if path == name {
+                root.clone()
+            } else {
+                join(root, path.strip_prefix(&format!("{name}/"))?)?
+            };
+            Some(
+                self.files
+                    .iter()
+                    .filter(|file| {
+                        file.language == Language::Go
+                            && directory(&file.file) == directory_of_package
+                    })
+                    .map(|file| file.file.clone())
+                    .collect(),
+            )
         };
-        let Some(package) = package else {
+        let matches: Vec<(&String, BTreeSet<String>)> = self
+            .go_modules
+            .iter()
+            .filter_map(|(root, name)| Some((root, package(root, name)?)))
+            .collect();
+        if matches.is_empty() {
             return ImportTarget::External;
-        };
-        let files = self
+        }
+        // The module of the importing file wins. If not, two modules of the
+        // repository that declare the same module path are ambiguous.
+        let own_package = matches
+            .iter()
+            .find(|(root, files)| *root == own_root && !files.is_empty());
+        match own_package {
+            Some((_, files)) => package_of(files.clone()),
+            None => one_package(
+                matches.into_iter().map(|(_, files)| files).collect(),
+                ImportTarget::Unresolved,
+            ),
+        }
+    }
+
+    /// The Python files of each directory that the dotted name `segments`
+    /// names. A directory without `__init__.py` is a namespace package.
+    fn python_directories(&self, base: Option<&str>, segments: &[&str]) -> Vec<BTreeSet<String>> {
+        let module = segments.join("/");
+        let nested = format!("/{module}");
+        let mut directories: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+        for file in self
             .files
             .iter()
-            .filter(|file| file.language == Language::Go && directory(&file.file) == package)
-            .map(|file| file.file.clone())
-            .collect();
-        target_of(files, ImportTarget::Unresolved)
+            .filter(|file| file.language == Language::Python)
+        {
+            let here = directory(&file.file);
+            let named = match base {
+                Some(base) => join(base, &module).as_deref() == Some(here),
+                None => here == module || here.ends_with(&nested),
+            };
+            if named && !module.is_empty() {
+                directories
+                    .entry(here)
+                    .or_default()
+                    .insert(file.file.clone());
+            }
+        }
+        directories.into_values().collect()
     }
 
     /// The files of the Python module `segments` below `base`. If `base` is
@@ -160,7 +229,14 @@ impl Repository<'_> {
             }
             segments.pop();
         }
-        target_of(self.python_module(base.as_deref(), &segments), not_found)
+        let module = self.python_module(base.as_deref(), &segments);
+        if !module.is_empty() {
+            return target_of(module, not_found);
+        }
+        one_package(
+            self.python_directories(base.as_deref(), &segments),
+            not_found,
+        )
     }
 
     fn ecma(&self, binding: &ImportBinding) -> ImportTarget {
@@ -332,18 +408,19 @@ impl Repository<'_> {
                 continue;
             }
             in_repository = true;
-            let files: BTreeSet<String> = match segments.get(length) {
-                None => members.iter().map(|file| file.file.clone()).collect(),
-                Some(name) => members
-                    .iter()
-                    .filter(|file| {
-                        file.symbols
-                            .iter()
-                            .any(|symbol| symbol.container.is_none() && symbol.name == *name)
-                    })
-                    .map(|file| file.file.clone())
-                    .collect(),
+            let Some(name) = segments.get(length) else {
+                // The path is the namespace. All its files are one package.
+                return package_of(members.iter().map(|file| file.file.clone()).collect());
             };
+            let files: BTreeSet<String> = members
+                .iter()
+                .filter(|file| {
+                    file.symbols
+                        .iter()
+                        .any(|symbol| symbol.container.is_none() && symbol.name == *name)
+                })
+                .map(|file| file.file.clone())
+                .collect();
             if !files.is_empty() {
                 return target_of(files, ImportTarget::Unresolved);
             }
@@ -565,6 +642,7 @@ pub(crate) mod testing {
             .map(|binding| {
                 let target = match &binding.target_file {
                     ImportTarget::Resolved(path) => path.clone(),
+                    ImportTarget::Package(paths) => format!("package({})", paths.join(",")),
                     ImportTarget::Ambiguous(paths) => format!("ambiguous({})", paths.join(",")),
                     ImportTarget::External => "external".to_string(),
                     ImportTarget::Unresolved => "unresolved".to_string(),

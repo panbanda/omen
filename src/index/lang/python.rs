@@ -407,4 +407,27 @@ mod tests {
             ["1 Module pkg.mod pkg->pkg ambiguous(one/pkg/mod.py,two/pkg/mod.py)"]
         );
     }
+
+    #[test]
+    fn test_namespace_package_is_a_package_and_two_of_them_are_ambiguous() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            ("ns/a.py", ""),
+            ("ns/b.py", ""),
+            (
+                "main.py",
+                "import ns\nimport twice\nfrom . import ns as local\n",
+            ),
+            ("one/twice/a.py", ""),
+            ("two/twice/b.py", ""),
+        ];
+        assert_eq!(
+            rows(&files, "main.py"),
+            [
+                "1 Module ns ns->ns package(ns/a.py,ns/b.py)",
+                "2 Module twice twice->twice ambiguous(one/twice/a.py,two/twice/b.py)",
+                "3 Named . ns->local unresolved",
+            ]
+        );
+    }
 }

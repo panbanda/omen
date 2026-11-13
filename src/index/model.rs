@@ -123,7 +123,11 @@ pub enum ImportKind {
 #[serde(rename_all = "snake_case")]
 pub enum ImportTarget {
     Resolved(String),
-    /// More than one file is a candidate. The list is in path order.
+    /// The files of the one package or namespace that the import names, in
+    /// path order. This target is as certain as `Resolved`.
+    Package(Vec<String>),
+    /// Two or more modules or packages match the import path, and the index
+    /// cannot tell which one the import names. The list is in path order.
     Ambiguous(Vec<String>),
     /// The module is not a part of the repository.
     External,

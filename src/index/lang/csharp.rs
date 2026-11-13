@@ -387,12 +387,33 @@ mod tests {
             [
                 "1 Wildcard System.Collections.Generic -->- external",
                 "2 Wildcard System -->- external",
-                "3 Wildcard Shop.Shapes -->- ambiguous(Shapes/More.cs,Shapes/Shapes.cs)",
+                "3 Wildcard Shop.Shapes -->- package(Shapes/More.cs,Shapes/Shapes.cs)",
                 "4 Named Shop.Util.Helpers Helpers->Tools Util/Helpers.cs [Util/Helpers.cs#Shop.Util.Helpers]",
                 "5 Wildcard Shop.Other.Others -->- Other/Others.cs",
                 "6 Wildcard Shop.Util -->- Util/Helpers.cs",
                 "7 Wildcard Shop.Util.Deep -->- Util/Helpers.cs",
                 "8 Named Shop.Util.Missing Missing->Gone unresolved",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_type_in_two_files_is_ambiguous_and_namespace_is_a_package() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            (
+                "Program.cs",
+                "using Circle = Shop.Shapes.Circle;\nusing Shop.Shapes;\nusing static Shop.Shapes.Circle;\n",
+            ),
+            ("a/Circle.cs", "namespace Shop.Shapes;\n\npublic class Circle {}\n"),
+            ("b/Circle.cs", "namespace Shop.Shapes;\n\npublic class Circle {}\n"),
+        ];
+        assert_eq!(
+            rows(&files, "Program.cs"),
+            [
+                "1 Named Shop.Shapes.Circle Circle->Circle ambiguous(a/Circle.cs,b/Circle.cs)",
+                "2 Wildcard Shop.Shapes -->- package(a/Circle.cs,b/Circle.cs)",
+                "3 Wildcard Shop.Shapes.Circle -->- ambiguous(a/Circle.cs,b/Circle.cs)",
             ]
         );
     }

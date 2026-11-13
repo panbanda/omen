@@ -448,4 +448,31 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn test_class_in_two_files_is_ambiguous_and_namespace_is_a_package() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            (
+                "main.php",
+                "<?php\nuse Shop\\Shapes;\nuse Shop\\Shapes\\Circle;\nuse Shop\\Shapes\\Square;\n",
+            ),
+            (
+                "a.php",
+                "<?php\nnamespace Shop\\Shapes;\n\nclass Circle {}\nclass Square {}\n",
+            ),
+            (
+                "b.php",
+                "<?php\nnamespace Shop\\Shapes;\n\nclass Circle {}\n",
+            ),
+        ];
+        assert_eq!(
+            rows(&files, "main.php"),
+            [
+                "2 Named Shop\\Shapes Shapes->Shapes package(a.php,b.php)",
+                "3 Named Shop\\Shapes\\Circle Circle->Circle ambiguous(a.php,b.php)",
+                "4 Named Shop\\Shapes\\Square Square->Square a.php [a.php#Square]",
+            ]
+        );
+    }
 }

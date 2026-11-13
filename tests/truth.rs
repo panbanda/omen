@@ -17,7 +17,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use omen::analyzers::import_resolver::ImportIndex;
 use omen::analyzers::repomap::{build_index, ResolutionStatus};
 use omen::benchmark::truth::{
     bless, check_ledger, compare, coverage_gaps, label_assertion_ids, ledger_growth, render_table,
@@ -25,12 +24,12 @@ use omen::benchmark::truth::{
     ObservedCall, ObservedImport, ObservedSymbol,
 };
 use omen::core::Language;
-use omen::index::extract::{extract_file, language_spec, link_files};
+use omen::index::extract::{extract_file, link_files};
 use omen::index::imports::{go_module_path, resolve_imports};
 use omen::index::model::{
     Exported, ImportBinding, ImportKind as IndexImportKind, ImportTarget, Symbol, SymbolKind,
 };
-use omen::parser::{extract_imports, ImportKind, Parser};
+use omen::parser::Parser;
 
 const LABELS_FILE: &str = "labels.json";
 const LEDGER_FILE: &str = "expected_failures.json";
@@ -160,13 +159,6 @@ fn observed_symbol(file: &str, symbol: Symbol) -> Option<ObservedSymbol> {
     })
 }
 
-/// The shared index supplies the imports of these languages. The other
-/// languages use the functions of the `graph` command until they have import
-/// extraction in the index.
-fn in_import_index(language: Language) -> bool {
-    !language_spec(language).import_kinds().is_empty()
-}
-
 /// The module path of each `go.mod` file below `dir`, by the directory of the file.
 fn go_modules(root: &Path, dir: &Path) -> BTreeMap<String, String> {
     let mut modules = BTreeMap::new();
@@ -204,7 +196,7 @@ fn observed_imports(bindings: &[ImportBinding]) -> Vec<ObservedImport> {
                 names: Vec::new(),
                 resolved_files: match &binding.target_file {
                     ImportTarget::Resolved(file) => vec![file.clone()],
-                    ImportTarget::Ambiguous(files) => files.clone(),
+                    ImportTarget::Package(files) | ImportTarget::Ambiguous(files) => files.clone(),
                     ImportTarget::External | ImportTarget::Unresolved => Vec::new(),
                 },
             });
@@ -274,36 +266,12 @@ fn observe(dir: &Path) -> Observed {
         })
         .collect();
 
-    let import_index = ImportIndex::new(&files, dir);
     let mut imports = Vec::new();
     let mut index_files = Vec::new();
     for path in &files {
         let file = relative(dir, path);
         let parsed = Parser::new().parse_file(path).expect("parse");
         index_files.push(extract_file(&parsed, &file));
-        if in_import_index(parsed.language) {
-            continue;
-        }
-        for import in extract_imports(&parsed) {
-            if import.kind != ImportKind::Use {
-                continue;
-            }
-            imports.push(ObservedImport {
-                file: file.clone(),
-                line: import.line,
-                names: import
-                    .names
-                    .into_iter()
-                    .map(|name| ImportedName { name, alias: None })
-                    .collect(),
-                resolved_files: import_index
-                    .find_match(&import.path, Path::new(&file))
-                    .into_iter()
-                    .map(|target| target.replace('\\', "/"))
-                    .collect(),
-                path: import.path,
-            });
-        }
     }
 
     link_files(&mut index_files);

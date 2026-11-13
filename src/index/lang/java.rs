@@ -354,7 +354,7 @@ mod tests {
             [
                 "1 Named java.util.List List->List external",
                 "2 Wildcard java.util.function -->- external",
-                "3 Wildcard shop.shapes -->- ambiguous(shop/shapes/Circle.java,shop/shapes/Shape.java)",
+                "3 Wildcard shop.shapes -->- package(shop/shapes/Circle.java,shop/shapes/Shape.java)",
                 "4 Named shop.shapes.Circle Circle->Circle shop/shapes/Circle.java [shop/shapes/Circle.java#Circle]",
                 "5 Named shop.util.Util.helper helper->helper shop/util/Util.java",
                 "6 Wildcard shop.util.Util -->- shop/util/Util.java",
