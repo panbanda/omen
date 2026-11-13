@@ -271,13 +271,10 @@ impl McpServer {
         let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
 
         let spec = tools::find(tool_name).ok_or_else(|| format!("Unknown tool: {tool_name}"))?;
-        for param in spec.parameters().filter(|param| param.required) {
-            if arguments.get(param.name).and_then(Value::as_str).is_none() {
-                return Err(format!("Missing {} parameter", param.name));
-            }
-        }
-
-        let arguments = Arguments::new(spec, &arguments);
+        let arguments = match tools::validate::validate(spec, &arguments) {
+            Ok(arguments) => arguments,
+            Err(problems) => return Ok(error::error_result(&problems)),
+        };
         Ok(match (spec.handler)(self, &arguments) {
             Ok(ToolOutput::Text(text)) => text_result(text),
             Ok(ToolOutput::Data(data)) => {
@@ -1097,7 +1094,36 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_request_invalid_tool_params_uses_invalid_params_code() {
+    fn test_handle_request_protocol_faults_of_a_tool_call_use_invalid_params_code() {
+        let (server, _temp_dir) = create_test_server();
+        for params in [
+            None,
+            Some(json!({"arguments": {}})),
+            Some(json!({"name": "no_such_tool", "arguments": {}})),
+        ] {
+            let response = server.handle_request(JsonRpcRequest {
+                jsonrpc: "2.0".to_string(),
+                id: Some(json!(1)),
+                method: "tools/call".to_string(),
+                params,
+            });
+            assert!(response.result.is_none());
+            assert_eq!(response.error.unwrap().code, -32602);
+        }
+    }
+
+    /// Calls a tool and gives the error object of the result.
+    fn error_of(server: &McpServer, tool: &str, arguments: Value) -> Value {
+        let result = call(server, tool, arguments);
+        assert_eq!(result["isError"], true, "{result}");
+        let text: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(text, result["structuredContent"]);
+        text
+    }
+
+    #[test]
+    fn a_missing_argument_is_a_tool_error_and_not_a_protocol_error() {
         let (server, _temp_dir) = create_test_server();
         let response = server.handle_request(JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
@@ -1105,7 +1131,84 @@ mod tests {
             method: "tools/call".to_string(),
             params: Some(json!({"name": "impact", "arguments": {}})),
         });
-        assert_eq!(response.error.unwrap().code, -32602);
+        assert!(response.error.is_none());
+        let result = response.result.unwrap();
+        assert_eq!(result["isError"], true);
+        let error = &result["structuredContent"]["error"];
+        assert_eq!(error["code"], "missing_argument");
+        assert_eq!(error["param"], "symbol");
+    }
+
+    #[test]
+    fn a_number_of_the_wrong_type_is_an_error_and_not_the_default() {
+        let (server, temp_dir) = create_git_test_server();
+        let body = error_of(
+            &server,
+            "churn",
+            json!({"path": temp_dir.path(), "days": "3650"}),
+        );
+        assert_eq!(body["error"]["code"], "invalid_argument");
+        assert_eq!(body["error"]["param"], "days");
+        assert_eq!(body["error"]["expected"], "an integer from 1 to 36500");
+        assert_eq!(body["error"]["received"], "3650");
+    }
+
+    #[test]
+    fn a_value_that_is_not_in_the_enum_is_an_error_and_not_the_default() {
+        let (server, temp_dir) = create_test_server();
+        std::fs::write(temp_dir.path().join("a.rs"), "fn a() {}\n").unwrap();
+        let body = error_of(&server, "impact", json!({"symbol": "a", "direction": "up"}));
+        assert_eq!(body["error"]["code"], "invalid_argument");
+        assert_eq!(body["error"]["param"], "direction");
+        assert_eq!(body["error"]["expected"], "one of: callers, callees, both");
+
+        let body = error_of(&server, "context", json!({"format": "yaml"}));
+        assert_eq!(body["error"]["param"], "format");
+    }
+
+    #[test]
+    fn an_unknown_argument_is_an_error_with_suggestions() {
+        let (server, _temp_dir) = create_test_server();
+        let body = error_of(&server, "complexity", json!({"pth": "."}));
+        assert_eq!(body["error"]["code"], "unknown_argument");
+        assert_eq!(body["error"]["param"], "pth");
+        assert_eq!(body["error"]["suggestions"], json!(["path"]));
+    }
+
+    #[test]
+    fn two_problems_in_one_call_are_two_errors() {
+        let (server, _temp_dir) = create_test_server();
+        let body = error_of(&server, "impact", json!({"depth": "2", "symbl": "run"}));
+        let codes: Vec<&str> = body["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|error| error["code"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            codes,
+            ["missing_argument", "invalid_argument", "unknown_argument"]
+        );
+        assert_eq!(body["error"], body["errors"][0]);
+        assert_eq!(body["errors"][2]["suggestions"], json!(["symbol"]));
+    }
+
+    #[test]
+    fn arguments_that_are_not_an_object_are_a_tool_error() {
+        let (server, _temp_dir) = create_test_server();
+        let body = error_of(&server, "complexity", json!("src"));
+        assert_eq!(body["error"]["code"], "invalid_argument");
+        assert_eq!(body["error"]["param"], Value::Null);
+    }
+
+    #[test]
+    fn a_call_without_arguments_uses_the_defaults() {
+        let (server, temp_dir) = create_test_server();
+        std::fs::write(temp_dir.path().join("a.rs"), "fn a() {}\n").unwrap();
+        let result = server
+            .handle_tool_call(Some(json!({"name": "complexity"})))
+            .unwrap();
+        assert!(result.get("isError").is_none());
     }
 
     #[test]
@@ -1412,8 +1515,9 @@ mod tests {
             "arguments": {}
         });
         let result = server.handle_tool_call(Some(params));
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("query"));
+        let error = &result.unwrap()["structuredContent"]["error"];
+        assert_eq!(error["code"], "missing_argument");
+        assert_eq!(error["param"], "query");
     }
 
     #[test]
@@ -1435,8 +1539,9 @@ mod tests {
             "arguments": {}
         });
         let result = server.handle_tool_call(Some(params));
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("hypothetical_document"));
+        let error = &result.unwrap()["structuredContent"]["error"];
+        assert_eq!(error["code"], "missing_argument");
+        assert_eq!(error["param"], "hypothetical_document");
     }
 
     #[test]
@@ -1709,7 +1814,10 @@ mod tests {
         });
         let result = server.handle_tool_call(Some(params));
         // Should return an error (missing symbol)
-        assert!(result.is_err(), "impact without symbol should fail");
+        assert_eq!(
+            result.unwrap()["structuredContent"]["error"]["param"],
+            "symbol"
+        );
     }
 
     #[test]
@@ -1763,7 +1871,10 @@ mod tests {
             }
         });
         let result = server.handle_tool_call(Some(params));
-        assert!(result.is_err(), "get_symbol without name should fail");
+        assert_eq!(
+            result.unwrap()["structuredContent"]["error"]["param"],
+            "name"
+        );
     }
 
     #[test]

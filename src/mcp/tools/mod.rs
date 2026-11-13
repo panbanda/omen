@@ -15,6 +15,7 @@ mod analysis;
 mod navigation;
 pub(super) mod schema;
 mod search;
+pub(super) mod validate;
 
 /// The largest value of an integer parameter that has no natural limit.
 pub(super) const MAX_COUNT: u64 = u32::MAX as u64;

@@ -162,11 +162,6 @@ fn get_symbol(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
         max_source_lines: arguments.count("max_source_lines").unwrap_or(200),
     };
     let start_line = arguments.count_u32("start_line");
-    if arguments.given("start_line") && start_line.is_none_or(|line| line == 0) {
-        return Err(crate::mcp::error::ToolError::internal(
-            "start_line must be a positive u32",
-        ));
-    }
     let files = absolute_files(&scope.path, &scope.file_set);
 
     let snapshot = server.load_index(&scope.path, &files)?;

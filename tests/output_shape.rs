@@ -394,7 +394,7 @@ const MCP_CASES: &[McpCase] = &[
     mcp("clones", "{}"),
     mcp("defect", r#"{"days": 36500}"#),
     mcp("changes", "{}"),
-    mcp("diff", r#"{"target": "main"}"#),
+    mcp("diff", r#"{"base": "main"}"#),
     mcp_keyed(
         "tdg",
         "{}",
