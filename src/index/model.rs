@@ -217,6 +217,11 @@ pub struct Resolution {
     /// The keys of the candidate symbols, in key order. An edge exists only
     /// for the status `Resolved` or `UniqueCandidate`.
     pub candidates: Vec<String>,
+    /// The keys of the definitions that a later definition with the same
+    /// name replaces, in key order. They are not targets of an edge. Only a
+    /// language that permits a second definition of a name, as Bash does,
+    /// gives them.
+    pub superseded: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

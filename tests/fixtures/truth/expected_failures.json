@@ -1,7 +1,1 @@
-[
-  {
-    "id": "bash/basics/calls/redefinition/no_missed_edge",
-    "reason": "no edge to main.sh:greet:58",
-    "tracking": "phase-2-shared-index"
-  }
-]
+[]

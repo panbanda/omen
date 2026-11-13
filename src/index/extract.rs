@@ -779,6 +779,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
                 status: ResolutionStatus::Unresolved,
                 basis: None,
                 candidates: Vec::new(),
+                superseded: Vec::new(),
             },
         });
         reference_facts.push(ReferenceFacts {

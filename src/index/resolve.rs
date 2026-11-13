@@ -54,6 +54,8 @@ struct Outcome {
     status: Status,
     basis: Option<Basis>,
     candidates: Vec<Id>,
+    /// The definitions that a later definition with the same name replaces.
+    superseded: Vec<Id>,
 }
 
 impl Outcome {
@@ -62,6 +64,7 @@ impl Outcome {
             status,
             basis: None,
             candidates: Vec::new(),
+            superseded: Vec::new(),
         }
     }
 
@@ -78,6 +81,7 @@ impl Outcome {
             status,
             basis: Some(basis),
             candidates,
+            superseded: Vec::new(),
         })
     }
 
@@ -92,6 +96,7 @@ impl Outcome {
             status: Status::Ambiguous,
             basis: Some(basis),
             candidates,
+            superseded: Vec::new(),
         }
     }
 }
@@ -847,6 +852,10 @@ impl<'a> Resolver<'a> {
             let mut outcome = Outcome::offered(Basis::SameFile, same_file.clone());
             outcome.status = Status::UniqueCandidate;
             outcome.candidates = last.into_iter().collect();
+            outcome.superseded = same_file
+                .into_iter()
+                .filter(|id| Some(*id) != last)
+                .collect();
             return outcome;
         }
         same_file.retain(|id| self.symbol(*id).body_range.is_some() || family != Family::C);
@@ -1031,6 +1040,7 @@ impl<'a> Resolver<'a> {
                     status: Status::UniqueCandidate,
                     basis: Some(Basis::ArgumentType),
                     candidates: vec![only],
+                    superseded: Vec::new(),
                 };
             }
         }
@@ -1147,7 +1157,14 @@ pub fn resolve_references(files: &mut [FileSymbols]) {
                             .map(|id| resolver.symbol(*id).key.clone())
                             .collect();
                         candidates.sort();
+                        let mut superseded: Vec<String> = outcome
+                            .superseded
+                            .iter()
+                            .map(|id| resolver.symbol(*id).key.clone())
+                            .collect();
+                        superseded.sort();
                         Resolution {
+                            superseded,
                             status: outcome.status,
                             basis: outcome.basis,
                             candidates,

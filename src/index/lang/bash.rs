@@ -9,6 +9,11 @@ use crate::index::model::{ImportBinding, ImportKind};
 
 const COMMAND: &str = "command";
 
+use crate::index::calls::{Argument, Call, Callee};
+use crate::index::model::ReferenceKind;
+
+const WORD: &str = "word";
+
 pub struct Bash;
 
 const DEFINITIONS: &[DefinitionRule] = &[DefinitionRule::new(
@@ -18,6 +23,34 @@ const DEFINITIONS: &[DefinitionRule] = &[DefinitionRule::new(
 )];
 
 impl LanguageSpec for Bash {
+    fn call_kinds(&self) -> Vec<&'static str> {
+        vec![COMMAND]
+    }
+
+    fn call_hook_kinds(&self) -> Vec<&'static str> {
+        vec![WORD]
+    }
+
+    /// A command whose name is one word is a call of that name. A name that
+    /// an expansion gives, as in `"$1" argument`, is not a call of a known name.
+    fn call<'tree>(&self, node: Node<'tree>, _context: &Context<'_, 'tree>) -> Option<Call<'tree>> {
+        let name = node.child_by_field_name("name")?;
+        let word = name
+            .named_child(0)
+            .filter(|word| word.kind() == WORD && name.named_child_count() == 1)?;
+        let mut cursor = node.walk();
+        let arguments = node.children_by_field_name("argument", &mut cursor).count();
+        Some(Call {
+            callee: Callee {
+                name_node: word,
+                receiver: None,
+                qualifier: None,
+            },
+            kind: ReferenceKind::Call,
+            arguments: vec![Argument::Other; arguments],
+        })
+    }
+
     fn import_kinds(&self) -> Vec<&'static str> {
         vec![COMMAND]
     }
@@ -119,5 +152,58 @@ mod tests {
                 "10 Load ../../outside.sh -->- unresolved",
             ]
         );
+    }
+
+    #[test]
+    fn test_calls() {
+        use crate::index::resolve::testing::rows;
+        let files = [
+            (
+                "main.sh",
+                "source ./lib/util.sh\nif [[ -n \"$FANCY\" ]]; then\n    source ./lib/fancy.sh\nelse\n    source ./lib/plain.sh\nfi\n\nbase() {\n    echo 4\n}\n\napply() {\n    \"$1\" \"$2\"\n}\n\nouter() {\n    inner() {\n        echo 5\n    }\n    inner\n}\n\ngreet() {\n    echo first\n}\n\nrun() {\n    base | cat\n    local value\n    value=$(twice 2)\n    apply base 3\n    greet\n    pick\n    git status\n}\n\ngreet() {\n    echo second\n}\n",
+            ),
+            ("lib/util.sh", "twice() {\n    echo 2\n}\n\nstatus() {\n    echo ok\n}\n"),
+            ("lib/fancy.sh", "pick() {\n    echo fancy\n}\n"),
+            ("lib/plain.sh", "pick() {\n    echo plain\n}\n"),
+        ];
+        assert_eq!(
+            rows(&files, "main.sh"),
+            [
+                "1 ->source Unresolved - []",
+                "3 ->source Unresolved - []",
+                "5 ->source Unresolved - []",
+                "9 base>echo Unresolved - []",
+                "18 outer.inner>echo Unresolved - []",
+                "20 outer>inner UniqueCandidate LexicalScope [main.sh#outer.inner]",
+                "24 greet>echo Unresolved - []",
+                "28 run>base UniqueCandidate SameFile [main.sh#base]",
+                "28 run>cat Unresolved - []",
+                "30 run>twice UniqueCandidate ImportedModule [lib/util.sh#twice]",
+                "31 run>apply UniqueCandidate SameFile [main.sh#apply]",
+                "32 run>greet UniqueCandidate SameFile [main.sh#greet~2]",
+                "33 run>pick Ambiguous ImportedModule [lib/fancy.sh#pick, lib/plain.sh#pick]",
+                "34 run>git Unresolved - []",
+                "38 greet~2>echo Unresolved - []",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_later_definition_replaces_the_earlier_one() {
+        use crate::index::imports::testing::index;
+        use crate::index::resolve::resolve_references;
+        let files = [(
+            "main.sh",
+            "greet() {\n    echo first\n}\n\nrun() {\n    greet\n}\n\ngreet() {\n    echo second\n}\n",
+        )];
+        let mut facts = index(&files);
+        resolve_references(&mut facts);
+        let call = facts[0]
+            .references
+            .iter()
+            .find(|reference| reference.name == "greet")
+            .unwrap();
+        assert_eq!(call.resolution.candidates, ["main.sh#greet~2"]);
+        assert_eq!(call.resolution.superseded, ["main.sh#greet"]);
     }
 }
