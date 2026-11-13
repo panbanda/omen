@@ -17,6 +17,9 @@ use crate::index::calls::{Call, CallSyntax, Callee, LocalName};
 use crate::index::model::{Receiver, ReferenceKind};
 
 const VARIABLE_DECLARATION: &str = "variable_declaration";
+const FIELD_DECLARATION: &str = "field_declaration";
+const PROPERTY_DECLARATION: &str = "property_declaration";
+const FOREACH_STATEMENT: &str = "foreach_statement";
 const CONSTRUCTOR_INITIALIZER: &str = "constructor_initializer";
 const IDENTIFIER: &str = "identifier";
 
@@ -106,6 +109,19 @@ const DEFINITIONS: &[DefinitionRule] = &[
         SymbolKind::Function,
         NameRule::Hook,
     ),
+    // Each declarator of a field declaration is one field. `refine` rejects a
+    // declarator of a local variable.
+    DefinitionRule::new(
+        VARIABLE_DECLARATOR,
+        SymbolKind::Field,
+        NameRule::Field("name"),
+    ),
+    // A property has a declared type, as a field has.
+    DefinitionRule::new(
+        PROPERTY_DECLARATION,
+        SymbolKind::Field,
+        NameRule::Field("name"),
+    ),
 ];
 
 fn is_function_value(node: Node<'_>) -> bool {
@@ -133,12 +149,17 @@ impl LanguageSpec for CSharp {
 
     fn local_kinds(&self) -> Vec<&'static str> {
         let mut kinds = self.call_syntax().local_kinds();
-        kinds.push(VARIABLE_DECLARATION);
+        kinds.extend([VARIABLE_DECLARATION, FOREACH_STATEMENT]);
         kinds
     }
 
     fn call_hook_kinds(&self) -> Vec<&'static str> {
-        vec![VARIABLE_DECLARATION, CONSTRUCTOR_INITIALIZER]
+        vec![
+            VARIABLE_DECLARATION,
+            CONSTRUCTOR_INITIALIZER,
+            FOREACH_STATEMENT,
+            FIELD_DECLARATION,
+        ]
     }
 
     /// `: base(...)` after a constructor calls the constructor of the parent class.
@@ -170,6 +191,23 @@ impl LanguageSpec for CSharp {
     /// declarator is its last child and has no field name. A field is a local
     /// name of its class.
     fn locals(&self, node: Node<'_>, context: &Context<'_, '_>, out: &mut Vec<LocalName>) {
+        if node.kind() == FOREACH_STATEMENT {
+            // `foreach (Type name in values)` binds an element of the values.
+            // With `var`, the declared type of the values gives the type.
+            let field = |field| node.child_by_field_name(field);
+            let name = field("left").filter(|name| name.kind() == IDENTIFIER);
+            if let (Some(name), Some(values)) = (name, field("right")) {
+                out.push(LocalName {
+                    name: context.text(name),
+                    type_name: field("type").map(|declared| context.text(declared)),
+                    value_start: Some(values.start_byte()),
+                    is_parameter: false,
+                    element: true,
+                    result_index: None,
+                });
+            }
+            return;
+        }
         if node.kind() != VARIABLE_DECLARATION {
             self.call_syntax().locals(node, context, out);
             return;
@@ -279,6 +317,32 @@ impl LanguageSpec for CSharp {
 
     fn refine<'tree>(&self, draft: &mut Draft<'tree>, context: &Context<'_, 'tree>) -> bool {
         let node = draft.node;
+        if node.kind() == VARIABLE_DECLARATOR {
+            let declaration = context
+                .parent(node)
+                .filter(|parent| parent.kind() == VARIABLE_DECLARATION);
+            let field = declaration
+                .and_then(|declaration| declaration.parent())
+                .filter(|field| field.kind() == FIELD_DECLARATION);
+            let (Some(declaration), Some(field)) = (declaration, field) else {
+                return false;
+            };
+            // A field whose value is a function value is a function.
+            let mut cursor = node.walk();
+            if node.named_children(&mut cursor).any(is_function_value) {
+                return false;
+            }
+            draft.return_type = declaration
+                .child_by_field_name("type")
+                .map(|declared| context.text(declared));
+            let mut cursor = field.walk();
+            let start = field
+                .children(&mut cursor)
+                .find(|child| child.kind() != ATTRIBUTE_LIST)
+                .unwrap_or(field);
+            draft.span = Span::between(&start, &field);
+            return true;
+        }
         if is_function_value(node) {
             draft.span = Span::between(&draft.name_node, &node);
             return true;
@@ -336,6 +400,12 @@ impl LanguageSpec for CSharp {
                 holder = holder.and_then(|node| node.parent());
             }
             holder
+        } else if draft.node.kind() == VARIABLE_DECLARATOR {
+            // The declarator of a field is in a variable declaration in the field declaration.
+            draft
+                .node
+                .parent()
+                .and_then(|declaration| declaration.parent())
         } else {
             Some(draft.node)
         };
@@ -586,6 +656,104 @@ mod tests {
                 "16 Circle.Area>Edge UniqueCandidate EnclosingType [Shapes/Shapes.cs#Circle.Edge]",
                 "37 Ring.Ring>super.base UniqueCandidate EnclosingType [Shapes/Shapes.cs#Circle.Circle]",
                 "43 Ring.Name>super.Name UniqueCandidate EnclosingType [Shapes/Shapes.cs#Circle.Name]",
+            ]
+        );
+    }
+    const FIELD_SOURCE: &str = r#"using System.Collections.Generic;
+
+class Item
+{
+    public string Name() { return ""; }
+    public Item GetOut() { return this; }
+}
+
+public class Node
+{
+    private Node parent;
+    public Item item, spare;
+    private readonly List<Item> items = new List<Item>();
+    private IEnumerable<Item> more;
+    private Item[] array;
+    public Item Lead { get; set; }
+    internal Node Next { get; }
+    private object loose;
+    System.Action task = () => {};
+
+    string Run(List<Item> given)
+    {
+        parent.item.Name();
+        this.parent.item.Name();
+        this.spare.GetOut().Name();
+        Lead.Name();
+        this.Next.Lead.Name();
+        foreach (Item each in items) { each.Name(); }
+        foreach (var each in more) { each.Name(); }
+        foreach (var each in this.array) { each.Name(); }
+        foreach (var each in given) { each.Name(); }
+        items.Name();
+        this.items.Name();
+        loose.Name();
+        this.missing.Name();
+        parent.missing.Name();
+        return "";
+    }
+}
+"#;
+
+    #[test]
+    fn test_fields_and_properties_have_the_declared_type() {
+        use crate::index::extract::testing::fields;
+        assert_eq!(
+            fields(Language::CSharp, FIELD_SOURCE),
+            [
+                "Field parent Node 11-11 not_exported",
+                "Field item Node 12-12 exported",
+                "Field spare Node 12-12 exported",
+                "Field items Node 13-13 not_exported",
+                "Field more Node 14-14 not_exported",
+                "Field array Node 15-15 not_exported",
+                "Field Lead Node 16-16 exported",
+                "Field Next Node 17-17 not_exported",
+                "Field loose Node 18-18 not_exported",
+            ]
+        );
+        // A field whose value is a lambda stays a function, and a field does
+        // not change a key.
+        let keys = keys(Language::CSharp, FIELD_SOURCE);
+        assert!(keys.contains(&"file#Node.task".to_string()), "{keys:?}");
+        assert!(!keys.iter().any(|key| key.contains('~')), "{keys:?}");
+    }
+
+    #[test]
+    fn test_field_chains_and_loop_variables_give_the_receiver_type() {
+        use crate::index::resolve::testing::rows;
+        let found: Vec<String> = rows(&[("Node.cs", FIELD_SOURCE)], "Node.cs")
+            .into_iter()
+            .filter(|row| row.contains("Name ") || row.contains(".GetOut "))
+            .map(|row| row.replace("Node.Run>", ""))
+            .collect();
+        let name = "UniqueCandidate ReceiverDeclaredType [Node.cs#Item.Name]";
+        assert_eq!(
+            found,
+            [
+                format!("23 parent.item::Name {name}"),
+                format!("24 (..).Name {name}"),
+                format!("25 (..).Name {name}"),
+                "25 (..).GetOut UniqueCandidate ReceiverDeclaredType [Node.cs#Item.GetOut]"
+                    .to_string(),
+                format!("26 Lead.Name {name}"),
+                format!("27 (..).Name {name}"),
+                format!("28 each.Name {name}"),
+                format!("29 each.Name {name}"),
+                format!("30 each.Name {name}"),
+                format!("31 each.Name {name}"),
+                // A collection is not an element.
+                "32 items.Name Unresolved - []".to_string(),
+                "33 (..).Name Unresolved - []".to_string(),
+                "34 loose.Name Unresolved - []".to_string(),
+                // A hop without a declared type gives candidates and no edge.
+                "35 (..).Name Ambiguous NameOnly [Node.cs#Item.Name]".to_string(),
+                "36 parent.missing::Name Ambiguous NameOnly [Node.cs#Item.Name]".to_string(),
             ]
         );
     }
