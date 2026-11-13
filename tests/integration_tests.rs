@@ -3283,3 +3283,66 @@ fn test_graph_keeps_the_node_order_with_cycles() {
     // Each node has the same PageRank, so the file name gives the order.
     assert_eq!(nodes, ["a.ts", "b.ts", "c.ts", "d.ts"]);
 }
+
+// ---------------------------------------------------------------------------
+// A time window that is not valid is an error, not all the history
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_churn_rejects_an_invalid_since_flag() {
+    omen()
+        .args([
+            "-p",
+            fixtures_dir(),
+            "-f",
+            "json",
+            "churn",
+            "--since",
+            "nonsense",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--since"))
+        .stderr(predicate::str::contains("\"nonsense\""));
+}
+
+#[test]
+fn test_report_generate_rejects_an_invalid_since_flag() {
+    let data = TempDir::new().unwrap();
+    omen()
+        .args([
+            "-p",
+            fixtures_dir(),
+            "report",
+            "generate",
+            "--since",
+            "nonsense",
+            "--data",
+        ])
+        .arg(data.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--since"))
+        .stderr(predicate::str::contains("\"nonsense\""));
+}
+
+#[test]
+fn test_an_invalid_configured_churn_window_is_rejected() {
+    let directory = TempDir::new().unwrap();
+    std::fs::write(directory.path().join("main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(
+        directory.path().join("omen.toml"),
+        "[churn]\nsince = \"nonsense\"\n",
+    )
+    .unwrap();
+    for command in ["churn", "complexity"] {
+        omen()
+            .arg("-p")
+            .arg(directory.path())
+            .args(["-f", "json", command])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("churn.since"))
+            .stderr(predicate::str::contains("\"nonsense\""));
+    }
+}

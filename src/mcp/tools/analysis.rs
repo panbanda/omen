@@ -4,6 +4,7 @@ use super::{
     Arguments, HandlerResult, Pagination, Param, ParamDefault, ToolOutput, ToolSpec, COMPACT,
     MAX_COUNT, PATH,
 };
+use crate::mcp::error::ToolError;
 use crate::mcp::McpServer;
 
 /// The largest history window: 100 years.
@@ -70,11 +71,18 @@ pub(super) static CHURN: ToolSpec = ToolSpec {
     ],
     paginated: Pagination::Field("files"),
     handler: |server, arguments| {
-        // `churn.since` is a duration such as `6m`. The value `all` has no
-        // number of days, and `u32::MAX` is the value for all the history.
-        let days = arguments.count_u32("days").unwrap_or_else(|| {
-            crate::git::parse_since_to_days(&server.config.churn.since).unwrap_or(u32::MAX)
-        });
+        // `churn.since` is a window such as `6m` or `all`. Text that is not a
+        // window is an error, not all the history.
+        let days = match arguments.count_u32("days") {
+            Some(days) => days,
+            None => crate::git::since_to_days(&server.config.churn.since).map_err(|error| {
+                ToolError::internal(format!(
+                    "The value of `churn.since` in the configuration is not correct: {error}"
+                ))
+                .with_param("days")
+                .with_next("Correct the configuration, or give `days`.")
+            })?,
+        };
         server.analyze(
             arguments,
             crate::analyzers::churn::Analyzer::new().with_days(days),

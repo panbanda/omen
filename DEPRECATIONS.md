@@ -196,3 +196,12 @@ These changes apply to the CLI and to the MCP server.
 | `entropy` of `changes` | The last digit was different in some runs. | The same in each run. |
 | `file` of `outline --file` | An absolute path. | The path from the repository root, as without `--file`. |
 | `search query --min-score` below 0.3 | No effect, because 0.3 always applied. | The value applies. |
+
+### A time window that is not valid
+
+`churn --since`, `report generate --since`, and `[churn] since` read text that
+is not a time window, such as `nonsense`, as all the history. Such text is now
+an error that names the flag or the key and the value. A valid window is a
+duration such as `30d`, `3m`, or `1y`, or the word `all`. The configuration
+check applies when omen loads the configuration, thus each command and the MCP
+server reject a configuration with an incorrect `churn.since`.

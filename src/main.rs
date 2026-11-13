@@ -107,6 +107,13 @@ fn resolve_churn_window(
         .map_err(omen::core::Error::config)
 }
 
+/// The days of a `--since` value. Text that is not a time window is an error,
+/// not all the history.
+fn since_flag_days(since: &str) -> omen::core::Result<u32> {
+    omen::git::since_to_days(since)
+        .map_err(|error| omen::core::Error::InvalidArgument(format!("--since: {error}")))
+}
+
 fn resolve_repo_path(cli: &Cli) -> omen::core::Result<(PathBuf, Option<PathBuf>)> {
     let path_str = cli.path.to_string_lossy();
 
@@ -329,11 +336,12 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             // otherwise an explicit `--since all` would fall through to
             // `--days`/config instead of meaning "no limit".
             let days = if let Some(ref since) = args.since {
-                omen::git::parse_since_to_days(since).unwrap_or(u32::MAX)
+                since_flag_days(since)?
             } else if let Some(days) = args.days {
                 days
             } else {
-                omen::git::parse_since_to_days(&config.churn.since).unwrap_or(u32::MAX)
+                omen::git::since_to_days(&config.churn.since)
+                    .map_err(|error| omen::core::Error::config(format!("churn.since: {error}")))?
             };
             run_churn_analyzer(path, &config, format, days, &args.common)?;
         }
@@ -1172,6 +1180,7 @@ fn run_report(
 
     match subcommand {
         ReportSubcommand::Generate(args) => {
+            let since_days = since_flag_days(&args.since)?;
             std::fs::create_dir_all(&args.data)?;
 
             let file_set = FileSet::from_path(path, config)?;
@@ -1285,9 +1294,7 @@ fn run_report(
             // Group A: File-parsing analyzers (CPU-bound, share tree-sitter work)
             // Group B: Git-heavy analyzers (I/O-bound, overlap with CPU work)
             // Group C: Mixed analyzers (benefit from warm OS caches)
-            let churn_days = args
-                .days
-                .unwrap_or_else(|| omen::git::parse_since_to_days(&args.since).unwrap_or(u32::MAX));
+            let churn_days = args.days.unwrap_or(since_days);
 
             std::thread::scope(|s| {
                 // Group A: file-based analyzers
@@ -1403,8 +1410,12 @@ fn run_report(
                     bar.set_message("trend...");
                 }
                 let samples = args.samples.or_else(|| {
-                    let days =
-                        omen::git::parse_since_to_days(&args.since).unwrap_or(365 * 50) as f64;
+                    // All the history has no number of days. Use 50 years.
+                    let days = if since_days == u32::MAX {
+                        (365 * 50) as f64
+                    } else {
+                        since_days as f64
+                    };
                     Some(omen::score::default_sample_count(days))
                 });
                 match omen::score::analyze_trend(
