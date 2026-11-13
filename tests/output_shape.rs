@@ -429,6 +429,90 @@ const MCP_CASES: &[McpCase] = &[
 /// The MCP tools that have no snapshot, each with the reason.
 const MCP_SKIPPED: &[(&str, &str)] = &[];
 
+/// One MCP tool call that gives an error. The snapshot holds the values of
+/// the error, not only its shape, because the values are the contract.
+struct McpErrorCase {
+    snapshot: &'static str,
+    /// The value of `error.code` that the call must give.
+    code: &'static str,
+    tool: &'static str,
+    arguments: &'static str,
+}
+
+const fn mcp_error(
+    snapshot: &'static str,
+    code: &'static str,
+    tool: &'static str,
+    arguments: &'static str,
+) -> McpErrorCase {
+    McpErrorCase {
+        snapshot,
+        code,
+        tool,
+        arguments,
+    }
+}
+
+/// One case for each error code that the fixture can cause.
+const MCP_ERROR_CASES: &[McpErrorCase] = &[
+    mcp_error("missing_argument", "missing_argument", "impact", "{}"),
+    mcp_error(
+        "invalid_type",
+        "invalid_argument",
+        "churn",
+        r#"{"days": "30"}"#,
+    ),
+    mcp_error(
+        "invalid_enum",
+        "invalid_argument",
+        "impact",
+        r#"{"symbol": "run", "direction": "caller"}"#,
+    ),
+    mcp_error(
+        "unknown_argument",
+        "unknown_argument",
+        "complexity",
+        r#"{"pth": "."}"#,
+    ),
+    mcp_error(
+        "many_problems",
+        "missing_argument",
+        "impact",
+        r#"{"depth": "2", "symbl": "run"}"#,
+    ),
+    mcp_error(
+        "not_found",
+        "not_found",
+        "get_symbol",
+        r#"{"name": "helpr"}"#,
+    ),
+    // The fixture has `helper` in `util.rs` and in `other.rs`.
+    mcp_error(
+        "ambiguous",
+        "ambiguous",
+        "get_symbol",
+        r#"{"name": "helper"}"#,
+    ),
+    mcp_error(
+        "path_outside_root",
+        "path_outside_root",
+        "complexity",
+        r#"{"path": "/"}"#,
+    ),
+];
+
+/// The error codes that have no snapshot, each with the reason.
+const MCP_ERROR_CODES_SKIPPED: &[(&str, &str)] = &[
+    (
+        "git_unavailable",
+        "The fixture is a git repository. A unit test in `src/mcp/mod.rs` has this code.",
+    ),
+    (
+        "internal",
+        "No call on the fixture causes a failure of the server.",
+    ),
+];
+
 const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/truth/rust/basics"
@@ -864,5 +948,94 @@ fn mcp_tool_result_shapes() {
             format!("mcp_{}", case.tool),
             shape(&response, &dynamic_key_objects)
         );
+    }
+}
+
+#[test]
+fn mcp_error_table_has_each_error_code() {
+    let covered: BTreeSet<&str> = MCP_ERROR_CASES
+        .iter()
+        .map(|case| case.code)
+        .chain(MCP_ERROR_CODES_SKIPPED.iter().map(|(code, _)| *code))
+        .collect();
+    let codes = [
+        "missing_argument",
+        "invalid_argument",
+        "unknown_argument",
+        "not_found",
+        "ambiguous",
+        "path_outside_root",
+        "git_unavailable",
+        "internal",
+    ];
+    assert_eq!(covered, codes.into_iter().collect::<BTreeSet<&str>>());
+}
+
+/// Replaces the path of the temporary repository in each string of the value.
+fn without_repository_path(value: &mut Value, repository: &str) {
+    match value {
+        Value::String(text) => *text = text.replace(repository, "<root>"),
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|item| without_repository_path(item, repository)),
+        Value::Object(entries) => entries
+            .values_mut()
+            .for_each(|entry| without_repository_path(entry, repository)),
+        _ => {}
+    }
+}
+
+#[test]
+fn without_repository_path_changes_each_string_in_the_value() {
+    let mut value = json!({"message": "in /tmp/x now", "list": ["/tmp/x/a", 3]});
+    without_repository_path(&mut value, "/tmp/x");
+    assert_eq!(
+        value,
+        json!({"message": "in <root> now", "list": ["<root>/a", 3]})
+    );
+}
+
+#[test]
+fn mcp_tool_errors() {
+    let directory = fixture_repository();
+    let requests: Vec<Value> = MCP_ERROR_CASES
+        .iter()
+        .enumerate()
+        .map(|(id, case)| {
+            let arguments: Value = serde_json::from_str(case.arguments).expect("JSON arguments");
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": {"name": case.tool, "arguments": arguments}
+            })
+        })
+        .collect();
+    let responses = mcp_responses(directory.path(), &requests);
+    let repository = directory
+        .path()
+        .canonicalize()
+        .expect("repository path")
+        .to_string_lossy()
+        .into_owned();
+
+    for (case, response) in MCP_ERROR_CASES.iter().zip(responses) {
+        assert!(
+            response.get("error").is_none(),
+            "{}: a tool error is not a JSON-RPC error: {response}",
+            case.snapshot
+        );
+        let result = &response["result"];
+        assert_eq!(result["isError"], json!(true), "{}", case.snapshot);
+        let text = result["content"][0]["text"].as_str().expect("error text");
+        let mut body: Value = serde_json::from_str(text).expect("JSON error text");
+        assert_eq!(
+            body, result["structuredContent"],
+            "{}: the text and the structured content agree",
+            case.snapshot
+        );
+        assert_eq!(body["error"]["code"], json!(case.code), "{}", case.snapshot);
+        without_repository_path(&mut body, &repository);
+        insta::assert_json_snapshot!(format!("mcp_error_{}", case.snapshot), body);
     }
 }

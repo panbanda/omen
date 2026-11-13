@@ -385,6 +385,19 @@ mod tests {
     }
 
     #[test]
+    fn claude_md_lists_the_tools_of_the_specifications() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/CLAUDE.md");
+        let document = std::fs::read_to_string(path).expect("CLAUDE.md");
+        let line = document
+            .lines()
+            .find(|line| line.starts_with("**MCP tool list**:"))
+            .expect("the line `**MCP tool list**:` in CLAUDE.md");
+        let list = line.split(". A test").next().expect("the tool list");
+        let listed: Vec<&str> = list.split('`').skip(1).step_by(2).collect();
+        assert_eq!(listed, names());
+    }
+
+    #[test]
     fn each_tool_name_is_unique() {
         let unique: BTreeSet<&str> = names().iter().copied().collect();
         assert_eq!(unique.len(), all().len());

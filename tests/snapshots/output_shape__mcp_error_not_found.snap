@@ -1,0 +1,17 @@
+---
+source: tests/output_shape.rs
+expression: body
+---
+{
+  "error": {
+    "code": "not_found",
+    "expected": null,
+    "message": "No definition agrees with the symbol `helpr`.",
+    "next": "Use a name from `suggestions`.",
+    "param": "name",
+    "received": "helpr",
+    "suggestions": [
+      "helper"
+    ]
+  }
+}
