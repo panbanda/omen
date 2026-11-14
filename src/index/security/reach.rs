@@ -40,6 +40,8 @@ pub struct SinkPath {
     pub weakest_basis: Option<ResolutionBasis>,
     /// The number of shortest paths from the entry point to the symbol of the sink.
     pub path_count: u64,
+    /// The keys of the symbols on any of the shortest paths, not only on `steps`.
+    pub members: Vec<String>,
 }
 
 /// A symbol that each known path to some sinks goes through.
@@ -185,6 +187,52 @@ fn search(view: &CallView, start: usize, min_basis: ResolutionBasis) -> Search {
     Search { reached }
 }
 
+/// The keys of the symbols on any shortest path from the start of `result` to `target`. A
+/// symbol is on one when its distance from the start and its distance to the target add up
+/// to the distance of the target.
+fn shortest_path_members(
+    view: &CallView,
+    result: &Search,
+    target: usize,
+    min_basis: ResolutionBasis,
+) -> Vec<String> {
+    let Some((total, _, _)) = result.reached.get(&target) else {
+        return Vec::new();
+    };
+    let minimum = min_basis.rank();
+    let mut callers: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for symbol in result.reached.keys() {
+        for (callee, basis) in view.callee_edges(*symbol) {
+            if basis.rank() >= minimum && result.reached.contains_key(callee) {
+                callers.entry(*callee).or_default().push(*symbol);
+            }
+        }
+    }
+    let mut to_target: BTreeMap<usize, usize> = BTreeMap::from([(target, 0)]);
+    let mut queue = VecDeque::from([target]);
+    while let Some(current) = queue.pop_front() {
+        let distance = to_target[&current];
+        for caller in callers.get(&current).into_iter().flatten() {
+            if !to_target.contains_key(caller) {
+                to_target.insert(*caller, distance + 1);
+                queue.push_back(*caller);
+            }
+        }
+    }
+    let mut members: Vec<String> = result
+        .reached
+        .iter()
+        .filter(|(symbol, (from_start, _, _))| {
+            to_target
+                .get(symbol)
+                .is_some_and(|to| from_start + to == *total)
+        })
+        .map(|(symbol, _)| view.symbols[*symbol].qualified_name.clone())
+        .collect();
+    members.sort();
+    members
+}
+
 /// Finds the paths from the entry points to the sinks.
 ///
 /// An entry point or a sink in test code is not in the result. An entry point without a
@@ -252,12 +300,14 @@ pub fn reachability(
                 })
                 .collect();
             reached_sinks.insert(sink.key.as_str());
+            let members = shortest_path_members(view, result, *symbol, min_basis);
             paths.push(SinkPath {
                 entry: entry.key.clone(),
                 sink: sink.key.clone(),
                 steps,
                 weakest_basis: bases.iter().copied().min_by_key(|basis| basis.rank()),
                 path_count: *count,
+                members,
             });
         }
     }

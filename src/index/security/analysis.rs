@@ -213,6 +213,21 @@ mod tests {
     }
 
     #[test]
+    fn each_branch_of_a_diamond_is_on_a_shortest_path() {
+        let source = "import os\nfrom flask import Flask\n\napp = Flask(__name__)\n\n@app.get(\"/a\")\ndef entry():\n    left()\n    right()\n\ndef left():\n    leaf()\n\ndef right():\n    leaf()\n\ndef leaf():\n    os.system(\"x\" + os.environ[\"A\"])\n";
+        let analysis = run(&[("app.py", source)], DEFAULT_MIN_BASIS);
+        assert_eq!(analysis.reachability.paths.len(), 1);
+        assert_eq!(analysis.reachability.paths[0].path_count, 2);
+        for branch in ["app.py#left", "app.py#right"] {
+            let security = crate::index::security::symbol_security(&analysis, branch);
+            assert_eq!(security.reachable_from.len(), 1, "{branch}");
+            assert_eq!(security.reaches.len(), 1, "{branch}");
+        }
+        let unrelated = crate::index::security::symbol_security(&analysis, "app.py#other");
+        assert!(unrelated.reachable_from.is_empty());
+    }
+
+    #[test]
     fn a_sink_has_the_shortest_path_from_an_entry_point() {
         let analysis = run(&[("app.py", APP)], DEFAULT_MIN_BASIS);
         assert_eq!(analysis.entry_points.len(), 1);

@@ -82,7 +82,7 @@ pub fn symbol_security(analysis: &analysis::Analysis, symbol_key: &str) -> Symbo
         .reachability
         .paths
         .iter()
-        .filter(|path| path.steps.iter().any(|step| step.symbol == symbol_key))
+        .filter(|path| path.members.iter().any(|member| member == symbol_key))
         .collect();
     let mut reachable_from: Vec<String> = through.iter().map(|path| path.entry.clone()).collect();
     reachable_from.sort();
