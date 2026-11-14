@@ -127,3 +127,42 @@ fn test_generate_fails_when_an_analyzer_file_cannot_be_written() {
     let message = format!("{:?}", result.expect_err("the write fails"));
     assert!(message.contains("security.json"), "{message}");
 }
+
+fn git_in(directory: &std::path::Path, arguments: &[&str]) {
+    let output = std::process::Command::new("git")
+        .args(arguments)
+        .current_dir(directory)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com")
+        .output()
+        .expect("git starts");
+    assert!(output.status.success(), "{arguments:?}: {output:?}");
+}
+
+#[test]
+fn test_generate_fails_when_trend_json_cannot_be_written() {
+    let (directory, path) = repository();
+    git_in(&path, &["init", "-q"]);
+    git_in(&path, &["add", "."]);
+    git_in(&path, &["commit", "-q", "-m", "first"]);
+    let data = directory.path().join("data");
+    std::fs::create_dir_all(data.join("trend.json")).expect("a directory in the place of the file");
+    let result = run(
+        &path,
+        &Config::default(),
+        &subcommand(&[
+            "generate",
+            "--data",
+            data.to_str().expect("utf-8"),
+            "--skip",
+            "churn,changes,ownership,temporal,hotspot,defect,tdg",
+        ]),
+        None,
+    );
+    let message = format!("{:?}", result.expect_err("the write fails"));
+    assert!(message.contains("trend.json"), "{message}");
+}

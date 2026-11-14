@@ -10,6 +10,21 @@ use crate::config::Config;
 use crate::core::progress::is_tty;
 use crate::core::{AnalysisContext, Analyzer, FileSet};
 
+/// Gives an error that lists the files that a run could not write.
+fn check_writes(errors: &std::sync::Mutex<Vec<String>>) -> crate::core::Result<()> {
+    let failed = errors
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    if failed.is_empty() {
+        return Ok(());
+    }
+    Err(crate::core::Error::analysis(format!(
+        "The report data was not written: {}",
+        failed.join("; ")
+    )))
+}
+
 /// Writes the file in one step: the old file stays until the new text is complete.
 fn write_atomically(path: &std::path::Path, text: &str) -> std::io::Result<()> {
     let mut pending = path.as_os_str().to_owned();
@@ -300,16 +315,7 @@ pub fn run(
                 });
             });
 
-            let failed = write_errors
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .clone();
-            if !failed.is_empty() {
-                return Err(crate::core::Error::analysis(format!(
-                    "The report data was not written: {}",
-                    failed.join("; ")
-                )));
-            }
+            check_writes(&write_errors)?;
 
             // Phase 2: Score (reads pre-generated JSON files, nearly instant)
             if !skip_list.contains(&"score") {
@@ -358,10 +364,14 @@ pub fn run(
                 ) {
                     Ok(trend_data) => {
                         let output_path = output_dir.join("trend.json");
-                        if let Err(e) =
-                            std::fs::write(&output_path, serde_json::to_string_pretty(&trend_data)?)
-                        {
-                            eprintln!("Warning: failed to write trend.json: {}", e);
+                        if let Err(e) = write_atomically(
+                            &output_path,
+                            &serde_json::to_string_pretty(&trend_data)?,
+                        ) {
+                            write_errors
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .push(format!("{}: {e}", output_path.display()));
                         } else {
                             let done =
                                 completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
@@ -381,6 +391,7 @@ pub fn run(
             if let Some(bar) = progress {
                 bar.finish_with_message("done");
             }
+            check_writes(&write_errors)?;
             eprintln!("Report data generated in: {}", output_dir.display());
         }
         ReportSubcommand::Validate(args) => {
