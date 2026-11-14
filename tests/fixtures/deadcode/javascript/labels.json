@@ -1,0 +1,19 @@
+{
+  "language": "javascript",
+  "oracle": "Author-reviewed. node 20 accepts the files as ES modules. The harness does not run the code.",
+  "not_applicable": [],
+  "dead": [
+    {"label": "dead_plain", "file": "main.js", "name": "deadPlain"},
+    {"label": "dead_caller", "file": "main.js", "name": "deadCaller"},
+    {"label": "dead_callee", "file": "main.js", "name": "deadCallee"},
+    {"label": "dead_unresolved", "file": "main.js", "name": "deadUnresolved"},
+    {"label": "dead_method", "file": "main.js", "name": "deadMethod"}
+  ],
+  "alive": [
+    {"label": "live_direct", "file": "main.js", "name": "liveDirect"},
+    {"label": "live_value", "file": "main.js", "name": "liveValue"},
+    {"label": "live_public", "file": "main.js", "name": "livePublic"},
+    {"label": "live_method", "file": "main.js", "name": "liveMethod"},
+    {"label": "main", "file": "main.js", "name": "main"}
+  ]
+}

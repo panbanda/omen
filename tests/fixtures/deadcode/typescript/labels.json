@@ -1,0 +1,19 @@
+{
+  "language": "typescript",
+  "oracle": "Author-reviewed. tsc accepts the files. The harness does not run the code.",
+  "not_applicable": [],
+  "dead": [
+    {"label": "dead_plain", "file": "main.ts", "name": "deadPlain"},
+    {"label": "dead_caller", "file": "main.ts", "name": "deadCaller"},
+    {"label": "dead_callee", "file": "main.ts", "name": "deadCallee"},
+    {"label": "dead_unresolved", "file": "main.ts", "name": "deadUnresolved"},
+    {"label": "dead_method", "file": "main.ts", "name": "deadMethod"}
+  ],
+  "alive": [
+    {"label": "live_direct", "file": "main.ts", "name": "liveDirect"},
+    {"label": "live_value", "file": "main.ts", "name": "liveValue"},
+    {"label": "live_public", "file": "main.ts", "name": "livePublic"},
+    {"label": "live_method", "file": "main.ts", "name": "liveMethod"},
+    {"label": "main", "file": "main.ts", "name": "main"}
+  ]
+}

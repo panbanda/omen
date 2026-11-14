@@ -1,0 +1,19 @@
+{
+  "language": "go",
+  "oracle": "Author-reviewed. go 1.22 would accept the files with a stub module example.com/foreign. The harness does not run the code.",
+  "not_applicable": [],
+  "dead": [
+    {"label": "dead_plain", "file": "main.go", "name": "deadPlain"},
+    {"label": "dead_caller", "file": "main.go", "name": "deadCaller"},
+    {"label": "dead_callee", "file": "main.go", "name": "deadCallee"},
+    {"label": "dead_unresolved", "file": "main.go", "name": "deadUnresolved"},
+    {"label": "dead_method", "file": "main.go", "name": "deadMethod"}
+  ],
+  "alive": [
+    {"label": "live_direct", "file": "main.go", "name": "liveDirect"},
+    {"label": "live_value", "file": "main.go", "name": "liveValue"},
+    {"label": "live_public", "file": "main.go", "name": "livePublic"},
+    {"label": "live_method", "file": "main.go", "name": "liveMethod"},
+    {"label": "main", "file": "main.go", "name": "main"}
+  ]
+}

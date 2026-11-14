@@ -1,0 +1,17 @@
+{
+  "language": "php",
+  "oracle": "Author-reviewed. php 8.3 accepts the files. The harness does not run the code.",
+  "not_applicable": [],
+  "dead": [
+    {"label": "dead_plain", "file": "main.php", "name": "deadPlain"},
+    {"label": "dead_caller", "file": "main.php", "name": "deadCaller"},
+    {"label": "dead_callee", "file": "main.php", "name": "deadCallee"},
+    {"label": "dead_unresolved", "file": "main.php", "name": "deadUnresolved"}
+  ],
+  "alive": [
+    {"label": "live_direct", "file": "main.php", "name": "liveDirect"},
+    {"label": "live_value", "file": "main.php", "name": "liveValue"},
+    {"label": "live_public", "file": "main.php", "name": "livePublic"},
+    {"label": "run", "file": "main.php", "name": "run"}
+  ]
+}

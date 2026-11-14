@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::{is_test_file, AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
 use crate::index::extract::FileSymbols;
-use crate::index::model::{Exported, ResolutionStatus, Symbol};
+use crate::index::model::{Exported, Receiver, Reference, ResolutionStatus, Symbol, SymbolKind};
 use crate::parser::{self, Parser};
 
 /// Dead code analyzer.
@@ -136,16 +136,31 @@ impl AnalyzerTrait for Analyzer {
         let mut unresolved_names: HashSet<String> = HashSet::new();
         for reference in index.files.iter().flat_map(|facts| &facts.references) {
             let resolution = &reference.resolution;
-            let mut targets: Vec<String> = resolution.candidates.clone();
-            let names_nothing = matches!(
+            let weak = matches!(
                 resolution.status,
                 ResolutionStatus::Unresolved | ResolutionStatus::Ambiguous
-            ) && resolution.candidates.is_empty();
-            candidate_keys.extend(resolution.candidates.iter().cloned());
+            );
+            let mut targets: Vec<String> = resolution
+                .candidates
+                .iter()
+                .filter(|key| {
+                    !weak
+                        || all_definitions
+                            .get(*key)
+                            .is_none_or(|def| can_be_named_by(def, reference))
+                })
+                .cloned()
+                .collect();
+            let names_nothing = weak && resolution.candidates.is_empty();
+            candidate_keys.extend(targets.iter().cloned());
             if names_nothing {
                 unresolved_names.insert(reference.name.clone());
                 if let Some(keys) = keys_by_name.get(&reference.name) {
-                    targets.extend(keys.iter().cloned());
+                    targets.extend(
+                        keys.iter()
+                            .filter(|key| can_be_named_by(&all_definitions[*key], reference))
+                            .cloned(),
+                    );
                 }
             }
             // Code that is not in a known function runs when the file loads, or
@@ -356,7 +371,12 @@ fn collect_file_data(result: &parser::ParseResult, facts: &FileSymbols) -> FileD
     let functions: Vec<&Symbol> = facts
         .symbols
         .iter()
-        .filter(|symbol| symbol.is_callable() && symbol.body_range.is_some())
+        .filter(|symbol| {
+            symbol.is_callable()
+                && symbol.kind != SymbolKind::Constructor
+                && (symbol.body_range.is_some() || facts.language == Language::Ruby)
+                && !is_member_of_an_object(result, symbol)
+        })
         .collect();
 
     let is_test_file = is_test_file(&fdc.path);
@@ -422,6 +442,13 @@ fn collect_file_data(result: &parser::ParseResult, facts: &FileSymbols) -> FileD
 
         fdc.definitions.push(Definition {
             key: func.key.clone(),
+            nameable_from_other_files: is_nameable_from_other_files(
+                func,
+                result.language,
+                exported,
+                &visibility,
+            ),
+            is_free_function: func.container.is_none() && func.kind == SymbolKind::Function,
             name: func.name.clone(),
             kind: "function".to_string(),
             file: fdc.path.clone(),
@@ -1022,6 +1049,18 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
             }
         }
 
+        // `Util.replacer` reads the function `replacer` as a property.
+        if kind == "property_identifier" && is_read_as_property(&node) {
+            if let Ok(name) = node.utf8_text(source) {
+                fdc.usages.insert(name.to_string());
+                let (caller, module_scope) = match &current_function {
+                    Some(caller) => (caller.clone(), from_module_scope),
+                    None => (MODULE_SCOPE.to_string(), true),
+                };
+                value_uses.insert((caller, name.to_string(), module_scope));
+            }
+        }
+
         // Move to next node in pre-order traversal
         if cursor.goto_first_child() {
             continue;
@@ -1048,12 +1087,53 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
     }
 }
 
-/// Whether the identifier names the callee of a call, not a value.
+/// Whether a property name is read as a value: it is the member of a member
+/// expression, and the expression is not the callee of a call.
+fn is_read_as_property(node: &tree_sitter::Node<'_>) -> bool {
+    let Some(access) = node.parent().filter(|p| p.kind() == "member_expression") else {
+        return false;
+    };
+    if access
+        .child_by_field_name("property")
+        .is_none_or(|property| property.id() != node.id())
+    {
+        return false;
+    }
+    !access.parent().is_some_and(|call| {
+        call.kind() == "call_expression"
+            && call
+                .child_by_field_name("function")
+                .is_some_and(|function| function.id() == access.id())
+    })
+}
+
+/// Whether the identifier names the callee of a call, or a member of an object,
+/// and not a value. The call or the member access has its own reference in
+/// the index.
 fn is_call_target(node: &tree_sitter::Node<'_>) -> bool {
     let Some(parent) = node.parent() else {
         return false;
     };
     let kind = parent.kind();
+    let is_access = ["member", "access", "attribute", "selector", "scoped"]
+        .iter()
+        .any(|part| kind.contains(part));
+    if is_access
+        && parent
+            .named_child(0)
+            .is_some_and(|object| object.id() != node.id())
+    {
+        let calls_the_access = parent.parent().is_some_and(|call| {
+            let call_kind = call.kind();
+            (call_kind.contains("call") || call_kind.contains("invocation"))
+                && call
+                    .child_by_field_name("function")
+                    .is_some_and(|function| function.id() == parent.id())
+        });
+        if calls_the_access {
+            return true;
+        }
+    }
     if !(kind.contains("call") || kind.contains("invocation") || kind == "command") {
         return false;
     }
@@ -1202,6 +1282,139 @@ fn is_generated_file(path: &str) -> bool {
     false
 }
 
+/// Whether the definition is a function that an object literal or an assignment
+/// to a property holds, in the JavaScript family. A framework or a caller
+/// outside of the analysis reaches it by its name on an object, thus the
+/// analysis cannot call it dead.
+fn is_member_of_an_object(result: &parser::ParseResult, symbol: &Symbol) -> bool {
+    if !matches!(
+        result.language,
+        Language::JavaScript | Language::Jsx | Language::TypeScript | Language::Tsx
+    ) {
+        return false;
+    }
+    let Some(mut node) = result
+        .tree
+        .root_node()
+        .descendant_for_byte_range(symbol.range.start_byte, symbol.range.end_byte)
+    else {
+        return false;
+    };
+    while node.start_byte() == symbol.range.start_byte && node.end_byte() == symbol.range.end_byte {
+        let parent = node.parent();
+        let holds_a_property = match node.kind() {
+            "pair" => true,
+            "assignment_expression" => node
+                .child_by_field_name("left")
+                .is_some_and(|left| left.kind() == "member_expression"),
+            "method_definition" => parent.is_some_and(|p| p.kind() == "object"),
+            "arrow_function" | "function_expression" | "function" => {
+                parent.is_some_and(|p| match p.kind() {
+                    "pair" => true,
+                    "assignment_expression" => p
+                        .child_by_field_name("left")
+                        .is_some_and(|left| left.kind() == "member_expression"),
+                    _ => false,
+                })
+            }
+            _ => false,
+        };
+        if holds_a_property {
+            return true;
+        }
+        match parent {
+            Some(p) => node = p,
+            None => return false,
+        }
+    }
+    false
+}
+
+/// Whether the syntax lets a file other than the file of the definition name it.
+///
+/// A function that has no type around it is visible to other files only when
+/// it is exported or when the syntax does not say. A method is visible, except
+/// when a keyword makes it private to its class or its file.
+fn is_nameable_from_other_files(
+    symbol: &Symbol,
+    language: Language,
+    exported: bool,
+    visibility: &str,
+) -> bool {
+    let has_word = |word: &str| {
+        symbol
+            .signature
+            .split(|c: char| !c.is_alphanumeric() && c != '_')
+            .any(|part| part == word)
+    };
+    if has_word("pub") {
+        return true;
+    }
+    if symbol.container.is_none() && symbol.kind == SymbolKind::Function {
+        return exported || !matches!(symbol.exported, Exported::NotExported);
+    }
+    let private_by_keyword = match language {
+        Language::Java
+        | Language::CSharp
+        | Language::Php
+        | Language::TypeScript
+        | Language::Tsx => has_word("private"),
+        Language::C | Language::Cpp => has_word("static"),
+        Language::Ruby => visibility == "private" || visibility == "protected",
+        _ => false,
+    };
+    !private_by_keyword
+}
+
+/// Whether a call that the index cannot resolve can name the definition.
+///
+/// The definition must be in the same group of languages. A syntax that keeps
+/// the definition private to its file hides it from a call in a different
+/// file. A call with a receiver cannot name a function that has no type around
+/// it, except in a language where a module or an object holds functions.
+fn can_be_named_by(def: &Definition, call: &Reference) -> bool {
+    let def_language = Language::detect(Path::new(&def.file));
+    let call_language = Language::detect(Path::new(&call.file));
+    let (Some(def_language), Some(call_language)) = (def_language, call_language) else {
+        return false;
+    };
+    if language_group(def_language) != language_group(call_language) {
+        return false;
+    }
+    if def.file != call.file && !def.nameable_from_other_files {
+        return false;
+    }
+    let receiver_calls_a_member = matches!(
+        call.receiver,
+        Some(Receiver::Name(_) | Receiver::Expression | Receiver::SelfValue | Receiver::Super)
+    );
+    let functions_live_in_objects = matches!(
+        def_language,
+        Language::Python
+            | Language::Ruby
+            | Language::JavaScript
+            | Language::Jsx
+            | Language::TypeScript
+            | Language::Tsx
+    );
+    !(receiver_calls_a_member && def.is_free_function && !functions_live_in_objects)
+}
+
+fn language_group(language: Language) -> u8 {
+    match language {
+        Language::JavaScript | Language::Jsx | Language::TypeScript | Language::Tsx => 1,
+        Language::C | Language::Cpp => 2,
+        Language::Go => 3,
+        Language::Rust => 4,
+        Language::Python => 5,
+        Language::Java => 6,
+        Language::CSharp => 7,
+        Language::Ruby => 8,
+        Language::Php => 9,
+        Language::Bash => 10,
+    }
+}
+
 fn is_entry_point(name: &str, def: &Definition) -> bool {
     // Standard entry points
     if name == "main" || name == "init" || name == "Main" {
@@ -1328,6 +1541,11 @@ struct Definition {
     attributes: Vec<String>,
     /// Whether this is a trait implementation method
     is_trait_impl: bool,
+    /// The syntax lets a file other than the file of the definition name it.
+    /// A definition that is not private, or whose visibility the syntax does not give, is such a definition.
+    nameable_from_other_files: bool,
+    /// A function that has no type or function around it.
+    is_free_function: bool,
 }
 
 #[derive(Clone)]
@@ -1435,6 +1653,8 @@ mod tests {
     fn test_is_entry_point() {
         let def = Definition {
             key: String::new(),
+            nameable_from_other_files: false,
+            is_free_function: false,
             name: "main".to_string(),
             kind: "function".to_string(),
             file: "main.go".to_string(),
@@ -1450,6 +1670,8 @@ mod tests {
 
         let def2 = Definition {
             key: String::new(),
+            nameable_from_other_files: false,
+            is_free_function: false,
             name: "TestSomething".to_string(),
             kind: "function".to_string(),
             file: "foo_test.go".to_string(),
@@ -1477,6 +1699,8 @@ mod tests {
     fn test_calculate_confidence() {
         let private_def = Definition {
             key: String::new(),
+            nameable_from_other_files: false,
+            is_free_function: false,
             name: "helper".to_string(),
             kind: "function".to_string(),
             file: "main.go".to_string(),
@@ -1493,6 +1717,8 @@ mod tests {
 
         let exported_def = Definition {
             key: String::new(),
+            nameable_from_other_files: false,
+            is_free_function: false,
             name: "Public".to_string(),
             kind: "function".to_string(),
             file: "lib.go".to_string(),
@@ -1518,6 +1744,8 @@ mod tests {
         // Two files both have a helper() function
         let def1 = Definition {
             key: String::new(),
+            nameable_from_other_files: false,
+            is_free_function: false,
             name: "helper".to_string(),
             kind: "function".to_string(),
             file: "src/util.go".to_string(),
@@ -1532,6 +1760,8 @@ mod tests {
 
         let def2 = Definition {
             key: String::new(),
+            nameable_from_other_files: false,
+            is_free_function: false,
             name: "helper".to_string(),
             kind: "function".to_string(),
             file: "src/parser.go".to_string(),
@@ -2106,6 +2336,8 @@ def plain_function():
     fn test_go_exported_is_entry_point() {
         let def = Definition {
             key: String::new(),
+            nameable_from_other_files: false,
+            is_free_function: false,
             name: "PublicFunc".to_string(),
             kind: "function".to_string(),
             file: "main.go".to_string(),
@@ -2121,6 +2353,8 @@ def plain_function():
 
         let private_def = Definition {
             key: String::new(),
+            nameable_from_other_files: false,
+            is_free_function: false,
             name: "privateFunc".to_string(),
             kind: "function".to_string(),
             file: "main.go".to_string(),
@@ -2139,6 +2373,8 @@ def plain_function():
     fn test_go_benchmark_and_example_entry_points() {
         let def = Definition {
             key: String::new(),
+            nameable_from_other_files: false,
+            is_free_function: false,
             name: "BenchmarkSort".to_string(),
             kind: "function".to_string(),
             file: "sort_test.go".to_string(),
@@ -2462,6 +2698,8 @@ func RegisterConductorServiceServer() {
     fn test_handler_patterns_are_entry_points() {
         let base_def = Definition {
             key: String::new(),
+            nameable_from_other_files: false,
+            is_free_function: false,
             name: "".to_string(),
             kind: "function".to_string(),
             file: "handler.go".to_string(),
@@ -2484,6 +2722,8 @@ func RegisterConductorServiceServer() {
     fn test_confidence_reduces_for_test_files() {
         let test_def = Definition {
             key: String::new(),
+            nameable_from_other_files: false,
+            is_free_function: false,
             name: "helper".to_string(),
             kind: "function".to_string(),
             file: "helper_test.go".to_string(),
@@ -2947,6 +3187,67 @@ mod index_tests {
         )]);
 
         assert!(!dead.contains(&"process".to_string()), "{dead:?}");
+    }
+
+    #[test]
+    fn test_an_unresolved_call_names_an_exported_definition_of_another_file() {
+        let dead = dead_names(&[
+            (
+                "a.py",
+                "def process():\n    pass\n\ndef _hidden():\n    pass\n",
+            ),
+            (
+                "b.py",
+                "def main(thing):\n    thing.process()\n    thing._hidden()\n",
+            ),
+        ]);
+
+        assert!(!dead.contains(&"process".to_string()), "{dead:?}");
+        assert!(dead.contains(&"_hidden".to_string()), "{dead:?}");
+    }
+
+    #[test]
+    fn test_a_member_of_an_object_is_not_a_definition_in_the_javascript_family() {
+        // A framework or a caller outside of the analysis reaches such a member
+        // by its name on an object.
+        for name in ["m.js", "m.jsx", "m.ts", "m.tsx"] {
+            let dead = dead_names(&[(
+                name,
+                "export function make() { return { handler() {}, get prop() { return 1; }, run: () => {} }; }\nexport function install(inst) { inst.fn = () => {}; }\nfunction unusedOne() {}\n",
+            )]);
+
+            assert_eq!(dead, ["unusedOne"], "{name}");
+        }
+    }
+
+    #[test]
+    fn test_a_function_read_as_a_property_is_a_use_in_the_javascript_family() {
+        let dead = dead_names(&[(
+            "m.ts",
+            "namespace Util { export const replacer = (x: any) => x; }\nexport function main() { return JSON.stringify({}, Util.replacer); }\nfunction unusedOne() {}\n",
+        )]);
+
+        assert_eq!(dead, ["unusedOne"]);
+    }
+
+    #[test]
+    fn test_a_constructor_is_not_a_definition() {
+        let dead = dead_names(&[(
+            "m.ts",
+            "class A { constructor() {} }\nexport function main() { return A; }\n",
+        )]);
+
+        assert!(dead.is_empty(), "{dead:?}");
+    }
+
+    #[test]
+    fn test_a_method_of_an_exported_class_stays_a_definition() {
+        let dead = dead_names(&[(
+            "m.ts",
+            "class Tool { private hidden(): void {} }\nexport function main(): void { new Tool(); }\n",
+        )]);
+
+        assert!(dead.contains(&"hidden".to_string()), "{dead:?}");
     }
 
     #[test]

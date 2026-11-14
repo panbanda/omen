@@ -1,0 +1,19 @@
+{
+  "language": "python",
+  "oracle": "Author-reviewed. python 3.12 accepts the files. The harness does not run the code.",
+  "not_applicable": [],
+  "dead": [
+    {"label": "dead_plain", "file": "main.py", "name": "_dead_plain"},
+    {"label": "dead_caller", "file": "main.py", "name": "_dead_caller"},
+    {"label": "dead_callee", "file": "main.py", "name": "_dead_callee"},
+    {"label": "dead_unresolved", "file": "main.py", "name": "_dead_unresolved"},
+    {"label": "dead_method", "file": "main.py", "name": "_dead_method"}
+  ],
+  "alive": [
+    {"label": "live_direct", "file": "main.py", "name": "_live_direct"},
+    {"label": "live_value", "file": "main.py", "name": "_live_value"},
+    {"label": "live_public", "file": "main.py", "name": "live_public"},
+    {"label": "live_method", "file": "main.py", "name": "live_method"},
+    {"label": "main", "file": "main.py", "name": "main"}
+  ]
+}

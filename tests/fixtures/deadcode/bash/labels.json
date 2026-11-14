@@ -1,0 +1,11 @@
+{
+  "language": "bash",
+  "oracle": "Author-reviewed. bash accepts the files. The harness does not run the code.",
+  "not_applicable": ["Every Bash function is global and any script can call it by name, so omen treats each one as exported and never reports it."],
+  "dead": [
+
+  ],
+  "alive": [
+    {"label": "live_direct", "file": "main.sh", "name": "live_direct"}
+  ]
+}

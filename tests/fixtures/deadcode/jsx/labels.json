@@ -1,0 +1,19 @@
+{
+  "language": "jsx",
+  "oracle": "Author-reviewed. a bundler accepts the files. The harness does not run the code.",
+  "not_applicable": [],
+  "dead": [
+    {"label": "dead_plain", "file": "main.jsx", "name": "deadPlain"},
+    {"label": "dead_caller", "file": "main.jsx", "name": "deadCaller"},
+    {"label": "dead_callee", "file": "main.jsx", "name": "deadCallee"},
+    {"label": "dead_unresolved", "file": "main.jsx", "name": "deadUnresolved"},
+    {"label": "dead_method", "file": "main.jsx", "name": "deadMethod"}
+  ],
+  "alive": [
+    {"label": "live_direct", "file": "main.jsx", "name": "liveDirect"},
+    {"label": "live_value", "file": "main.jsx", "name": "liveValue"},
+    {"label": "live_public", "file": "main.jsx", "name": "livePublic"},
+    {"label": "live_method", "file": "main.jsx", "name": "liveMethod"},
+    {"label": "main", "file": "main.jsx", "name": "main"}
+  ]
+}
