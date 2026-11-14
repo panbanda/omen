@@ -88,3 +88,21 @@ generate` writes `security.json`, and the report shows the section "Attack
 surface" with the coverage statement, a matrix, a Sankey diagram, the entry
 points, and the choke points. A choke point is a symbol that each path to a
 sink goes through.
+
+## Limits
+
+- Omen does not follow data. A path is a chain of calls that the index resolves.
+- A script and a Python `__main__` block are not symbols. An entry point of this kind
+  starts no path.
+- A route is an entry point only when its receiver is a framework object. The receiver
+  is a framework call, a value that the file binds to one, or an import of a
+  constructor of the framework, or of a repository file that binds the name to one.
+- Deadcode treats an entry point and the entry points of `[[security.entry_points]]`
+  as alive, with their callees.
+- Deadcode reads the path in a Rust `#[serde(...)]` string through the module tree of
+  the index. If a path does not resolve, deadcode keeps each function with the last
+  name of the path alive, and the summary counts the path in `unresolved_paths`. This
+  happens when an inline module declares a file module, as in
+  `mod outer { pub(super) mod paths; }`, because the tree does not cross from the inline
+  module to the file `outer/paths.rs`. The result misses a dead function of that name.
+  It does not report a function that is alive.
