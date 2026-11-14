@@ -647,6 +647,8 @@ impl<'a> Resolver<'a> {
     fn is_free_type_name(&self, file: usize, name: &str) -> bool {
         !self.is_rebound(file, name)
             && !self.by_name.contains_key(name)
+            && !(self.files[file].language == Language::Php
+                && self.php_names.contains(&name.to_ascii_lowercase()))
             && self.binding_of(file, name).is_none()
             && !self.has_repository_wildcard(file)
     }
@@ -1328,6 +1330,14 @@ mod tests {
         let other = "list = 1\n";
         let user = "def main():\n    return len([1])\n";
         assert!(external(&[("a.py", other), ("b.py", user)], "b.py", "len"));
+    }
+
+    #[test]
+    fn test_php_function_names_ignore_case() {
+        let app = "<?php\nnamespace {\n    function Str_Contains($text, $part) {\n        return strpos($text, $part) !== false;\n    }\n}\nnamespace App {\n    function main() {\n        return str_contains(\"ab\", \"a\");\n    }\n}\n";
+        assert!(!external(&[("app.php", app)], "app.php", "str_contains"));
+        let other = "<?php\nfunction run($x) {\n    return STRLEN($x);\n}\n";
+        assert!(external(&[("other.php", other)], "other.php", "STRLEN"));
     }
 
     #[test]

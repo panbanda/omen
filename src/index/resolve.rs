@@ -199,6 +199,8 @@ struct Resolver<'a> {
     manifests: &'a Manifests,
     /// The names that a file of the family binds again: a macro, an alias, and so on.
     rebound: std::collections::HashSet<(Family, &'a str)>,
+    /// The lower case names of the PHP symbols. PHP names of functions and classes ignore case.
+    php_names: std::collections::HashSet<String>,
     by_name: HashMap<&'a str, Vec<Id>>,
     by_file: HashMap<&'a str, usize>,
     /// For each file, the positions of the local names by name, in source order.
@@ -266,10 +268,17 @@ impl<'a> Resolver<'a> {
                     .map(move |name| (family, name.as_str()))
             })
             .collect();
+        let php_names = files
+            .iter()
+            .filter(|facts| facts.language == Language::Php)
+            .flat_map(|facts| facts.symbols.iter())
+            .map(|symbol| symbol.name.to_ascii_lowercase())
+            .collect();
         Self {
             files,
             manifests,
             rebound,
+            php_names,
             by_name,
             by_file,
             locals_by_name,
