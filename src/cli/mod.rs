@@ -233,6 +233,14 @@ pub struct DiffArgs {
     #[arg(short, long)]
     pub target: Option<String>,
 
+    /// Byte budget of the Markdown comment (0 = unlimited)
+    #[arg(long, default_value_t = crate::changeset::markdown::DEFAULT_MAX_BYTES)]
+    pub max_bytes: usize,
+
+    /// Node cap of the call graph in the Markdown comment
+    #[arg(long, default_value_t = crate::changeset::markdown::DEFAULT_MAX_NODES)]
+    pub max_nodes: usize,
+
     // `diff` has no file set to filter, so it takes only the pagination flags
     // and not the full `AnalyzerArgs`.
     #[command(flatten)]
@@ -2234,6 +2242,27 @@ mod tests {
                 "expected {args:?} to be rejected"
             );
         }
+    }
+
+    #[cfg(feature = "mutation")]
+    #[test]
+    fn test_diff_comment_flags_have_defaults() {
+        let cli = parse(&["omen", "diff"]);
+        let Command::Diff(args) = cli.command else {
+            panic!("expected Diff command");
+        };
+        assert_eq!(args.max_bytes, 60000);
+        assert_eq!(args.max_nodes, 30);
+    }
+
+    #[test]
+    fn test_diff_comment_flags_parse() {
+        let cli = parse(&["omen", "diff", "--max-bytes", "0", "--max-nodes", "5"]);
+        let Command::Diff(args) = cli.command else {
+            panic!("expected Diff command");
+        };
+        assert_eq!(args.max_bytes, 0);
+        assert_eq!(args.max_nodes, 5);
     }
 
     #[cfg(feature = "mutation")]

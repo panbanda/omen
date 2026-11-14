@@ -64,6 +64,7 @@ src/
   benchmark/     - Paired quality benchmark comparing two omen binaries
   eval/          - Fail-closed scoring of paired coding-agent outcome records
   semantic/      - TF-IDF indexing, search, cache, and multi-repo support
+  changeset/     - Changed symbols and calls between two commits, pull-request comment
   context.rs     - Agent-oriented repository context
   symbol.rs      - Symbol lookup and relationship reports
   git/           - Git operations (log, blame, diff)
@@ -111,7 +112,7 @@ Top-level commands (flat structure):
 - `clones` - Code clone detection
 - `defect` - Defect probability prediction
 - `changes` - Commit-level change risk (JIT)
-- `diff` - Branch diff risk analysis
+- `diff` - Branch diff risk analysis. With `-f markdown` it writes the pull-request comment: it starts with `<!-- omen:diff -->`, and `--max-bytes` (default 60000, 0 = no limit) and `--max-nodes` (default 30) limit it. `report generate --ref REF` adds the "Changes since" view to the HTML report.
 - `tdg` - Technical Debt Gradient
 - `graph` - Dependency graph
 - `hotspot` - High churn + complexity files
@@ -140,7 +141,7 @@ Top-level commands (flat structure):
 
 **Special safety flags**: `deadcode --cargo-check` executes `cargo check`, including build scripts, and is for trusted repositories only. Mutation testing refuses dirty working trees unless `mutation --allow-dirty` is supplied. MCP transport is stdio-only; `mcp --allow-external-paths` permits tool paths outside the configured repository root.
 
-**MCP tool list**: `context`, `outline`, `complexity`, `satd`, `deadcode`, `stubs`, `churn`, `clones`, `defect`, `changes`, `diff`, `tdg`, `graph`, `hotspot`, `temporal`, `ownership`, `cohesion`, `repomap`, `smells`, `flags`, `score`, `semantic_search`, `get_symbol`, `task_context`, `impact`, `semantic_search_hyde`. A test compares this line with `McpServer::tool_names()`.
+**MCP tool list**: `context`, `outline`, `complexity`, `satd`, `deadcode`, `stubs`, `churn`, `clones`, `defect`, `changes`, `diff`, `tdg`, `graph`, `hotspot`, `temporal`, `ownership`, `cohesion`, `repomap`, `smells`, `flags`, `score`, `search`, `get_symbol`, `task_context`, `impact`. A test compares this line with `McpServer::tool_names()`.
 
 **MCP contract** (see `docs/MCP_CONTEXT.md`):
 

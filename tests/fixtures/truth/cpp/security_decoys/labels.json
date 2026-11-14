@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "language": "cpp",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid for the grammar. The case holds repository definitions with the names of sinks. The harness does not build or run the code.",
+  "closed_world": false,
+  "sinks_closed_world": true,
+  "not_applicable": [
+
+  ],
+  "sinks": [
+    {"label": "command_execution.same_name_symbol", "category": "command_execution", "scenario": "same_name_symbol", "file": "decoys.cpp", "line": 25, "flagged": false},
+    {"label": "weak_hash.same_name_symbol", "category": "weak_hash", "scenario": "same_name_symbol", "file": "decoys.cpp", "line": 26, "flagged": false},
+    {"label": "weak_cipher.same_name_symbol", "category": "weak_cipher", "scenario": "same_name_symbol", "file": "decoys.cpp", "line": 27, "flagged": false},
+    {"label": "tls_verification_disabled.same_name_symbol", "category": "tls_verification_disabled", "scenario": "same_name_symbol", "file": "decoys.cpp", "line": 28, "flagged": false},
+    {"label": "memory_unsafe.same_name_symbol", "category": "memory_unsafe", "scenario": "same_name_symbol", "file": "decoys.cpp", "line": 29, "flagged": false},
+    {"label": "sql_string_construction.same_name_symbol", "category": "sql_string_construction", "scenario": "same_name_symbol", "file": "sql_decoys.cpp", "line": 6, "flagged": false}
+  ]
+}

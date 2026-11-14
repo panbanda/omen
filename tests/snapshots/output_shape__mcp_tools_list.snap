@@ -705,7 +705,7 @@ expression: "responses[0]"
         "name": "score"
       },
       {
-        "description": "Finds the symbols that agree best with a query in natural language. The tool uses TF-IDF.",
+        "description": "Finds the symbols that agree best with a query. The query can have the words of a description or a code snippet. The tool matches terms. It does not use embeddings.",
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
@@ -751,7 +751,7 @@ expression: "responses[0]"
               "type": "integer"
             },
             "query": {
-              "description": "The query in natural language.",
+              "description": "The words of a description, or a code snippet.",
               "type": "string"
             },
             "top_k": {
@@ -767,7 +767,7 @@ expression: "responses[0]"
           ],
           "type": "object"
         },
-        "name": "semantic_search"
+        "name": "search"
       },
       {
         "description": "Gives the source, the location, the complexity, the callers, and the callees of one symbol. `call_resolutions` shows the unique, ambiguous, and unresolved candidates of each call. The edges come from names, and a compiler does not prove them. The graph does not include ambiguous and unresolved calls.",
@@ -965,75 +965,6 @@ expression: "responses[0]"
           "type": "object"
         },
         "name": "impact"
-      },
-      {
-        "description": "Finds the symbols that are most like a code snippet that you write. Write a snippet that looks like the code that you want to find.",
-        "inputSchema": {
-          "additionalProperties": false,
-          "properties": {
-            "files": {
-              "description": "The files in which to search, as paths from the root of their project. The default is all files. With `include_projects`, a path applies to each project, and a path with a `[label] ` before it, as in the `file` of a result, applies to that project.",
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "hypothetical_document": {
-              "description": "A code snippet that looks like the code that you want to find.",
-              "type": "string"
-            },
-            "include_projects": {
-              "description": "The roots of more projects in which to search.",
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "limit": {
-              "default": 50,
-              "description": "The maximum number of items in the result. The value 0 removes the limit.",
-              "maximum": 4294967295,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "max_complexity": {
-              "description": "The maximum cyclomatic complexity of a result. The tool removes symbols above this value.",
-              "maximum": 4294967295,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "min_score": {
-              "default": 0.0,
-              "description": "The minimum similarity score of a result. A symbol that has no term of the query is never a result.",
-              "maximum": 1.0,
-              "minimum": 0.0,
-              "type": "number"
-            },
-            "offset": {
-              "default": 0,
-              "description": "The number of items to skip. Use `next_offset` from the last result.",
-              "maximum": 4294967295,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "query": {
-              "description": "The text that the result shows as its query. The default is the snippet.",
-              "type": "string"
-            },
-            "top_k": {
-              "default": 10,
-              "description": "The maximum number of results. It applies after the other filters.",
-              "maximum": 4294967295,
-              "minimum": 1,
-              "type": "integer"
-            }
-          },
-          "required": [
-            "hypothetical_document"
-          ],
-          "type": "object"
-        },
-        "name": "semantic_search_hyde"
       }
     ]
   }

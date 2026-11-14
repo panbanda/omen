@@ -1483,7 +1483,7 @@ fn get_current_branch(repo_path: &Path) -> Result<String> {
     repo.current_branch()
 }
 
-fn detect_default_branch(repo_path: &Path) -> Result<String> {
+pub(crate) fn detect_default_branch(repo_path: &Path) -> Result<String> {
     let repo = GitRepo::open(repo_path)?;
     // Try main first
     for branch in ["main", "master", "origin/main", "origin/master"] {

@@ -40,9 +40,12 @@ On litellm the shared index takes 0.53 of the time of the old index and 1.35 of
 its memory. On ripgrep it takes 2.1 of the time. That time is the parse and the
 extraction of one file of 7,700 lines, which one thread does.
 
-The litellm number includes 4,123 files that are not Python. The default file
-set takes in the build output of the repository, for example
-`litellm/proxy/_experimental/out/_next/static/chunks/*.js`.
+The litellm number includes 4,123 files that are not Python. Most of them are
+real source, for example the TypeScript of the dashboard, the Rust crates, and
+the tests. About 190 files are build output, for example
+`litellm/proxy/_experimental/out/_next/static/chunks/*.js`. The default file
+set now drops 188 of them. The rule for the `_next` directory and for the
+`-bundle` name suffix drops them. The numbers above are from before this change.
 
 ## Call edges of the two indexes
 

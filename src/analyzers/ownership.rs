@@ -162,7 +162,7 @@ impl Analyzer {
 
         // Sort by lines owned (descending)
         let mut sorted_contributors = contributors.clone();
-        sorted_contributors.sort_by(|a, b| b.lines_owned.cmp(&a.lines_owned));
+        sorted_contributors.sort_by_key(|contributor| std::cmp::Reverse(contributor.lines_owned));
 
         let primary_owner = sorted_contributors
             .first()
@@ -347,7 +347,7 @@ fn get_top_contributors(files: &[FileOwnership], n: usize) -> Vec<TopContributor
         *owner_counts.entry(file.primary_owner.clone()).or_insert(0) += 1;
     }
     let mut sorted: Vec<_> = owner_counts.into_iter().collect();
-    sorted.sort_by(|a, b| b.1.cmp(&a.1));
+    sorted.sort_by_key(|entry| std::cmp::Reverse(entry.1));
     sorted
         .into_iter()
         .take(n)

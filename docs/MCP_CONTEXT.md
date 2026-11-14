@@ -121,11 +121,24 @@ Each tool gives its result in the same envelope:
 | `has_more` | `true` when a next page exists. |
 | `next_offset` | The `offset` of the next page, or `null` when `has_more` is `false`. |
 | `truncated` | One `{path, total, returned}` object for each list in `result` that does not hold all its items. |
+| `hints` | A list of `{tool, arguments, reason}` objects. Each one is a call that the data of this result suggests. The list is empty when no hint applies. |
+| `index` | `{fingerprint, sources}` for a tool that reads the shared index, and `null` for the other tools. |
 | `result` | The data of the tool. |
 | `git_skipped_reason` | Present only when an analyzer ran without git data. |
 
 `path` in `truncated` is a JSON pointer from `result`. The segment `*` means
 each element of an array, such as `/files/*/functions`.
+
+A hint comes only from the data of the result. When `has_more` is `true`, the
+first kind of hint repeats the call with `offset` set to `next_offset`. The
+tools `get_symbol` and `impact` give a hint for `impact` and `get_symbol`
+when the result has symbols to follow. `reason` states the fact that causes
+the hint. A hint is not an instruction, and an agent can ignore it.
+
+`fingerprint` is a blake3 hash of the relative names and the contents of the
+source files and the manifest files that the index read. It does not depend on
+the modification time. The server keeps the last index in memory and reuses it
+while the fingerprint is the same. `sources` is the number of source files.
 
 `truncated` also shows the data that a tool cut before the pagination:
 
@@ -133,7 +146,7 @@ each element of an array, such as `/files/*/functions`.
   total 1 when the budget removed that object.
 - `get_symbol`: `/source`, in lines, when `max_source_lines` cut the source.
 - `context`: each list that `max_tokens` cut.
-- `semantic_search` and `semantic_search_hyde`: `/results` when `top_k` cut the
+- `search`: `/results` when `top_k` cut the
   results that the filters accepted.
 
 One rule applies to each tool. `total_items` is the size of the primary list

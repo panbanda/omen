@@ -354,7 +354,7 @@ fn collect_commits_in_range(commits: &[Commit], after_ts: i64, up_to_ts: i64) ->
         .filter(|c| c.commit_time > after_ts && c.commit_time <= up_to_ts)
         .collect();
     // Most recent first
-    messages.sort_by(|a, b| b.commit_time.cmp(&a.commit_time));
+    messages.sort_by_key(|message| std::cmp::Reverse(message.commit_time));
     messages
         .into_iter()
         .take(5)

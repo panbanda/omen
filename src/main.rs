@@ -11,13 +11,24 @@ use indicatif::{ProgressBar, ProgressStyle};
 use rayon::ThreadPoolBuilder;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
+use omen::analyzers::impact::Direction;
 use omen::cli::{
-    AnalyzerArgs, BenchmarkArgs, Cli, Command, ComplexityArgs, EvalArgs, GateMode, GateSeverity,
-    ImpactArgs, McpSubcommand, OutlineArgs, OutputFormat, ReportSubcommand, ScoreArgs,
-    ScoreSubcommand, SearchSubcommand, StubsArgs, SymbolArgs,
+    AnalyzerArgs, Cli, Command, ComplexityArgs, GateMode, GateSeverity, ImpactDirection,
+    McpSubcommand, OutputFormat, ReportSubcommand, ScoreArgs, ScoreSubcommand, SearchSubcommand,
+    StubsArgs,
 };
 #[cfg(feature = "mutation")]
 use omen::cli::{MutationArgs, MutationSubcommand, MutationTrainArgs};
+use omen::commands;
+use omen::commands::benchmark::BenchmarkRequest;
+use omen::commands::context::ContextRequest;
+use omen::commands::eval::EvalRequest;
+use omen::commands::impact::ImpactRequest;
+use omen::commands::outline::OutlineRequest;
+#[cfg(feature = "mutation")]
+use omen::commands::scope::write_report_file;
+use omen::commands::scope::{build_context, filtered_file_set, Scope};
+use omen::commands::symbol::SymbolRequest;
 use omen::config::Config;
 use omen::core::progress::is_tty;
 use omen::core::{AnalysisContext, Analyzer, FileSet};
@@ -38,17 +49,6 @@ fn resolve_gate_mode(flag: Option<GateMode>, configured: GateMode) -> GateMode {
 
 /// The number of results that `search query` gives if `--top` is absent.
 const DEFAULT_SEARCH_RESULTS: usize = 10;
-
-/// Write the report as pretty JSON to the `--output` file, if the flag is present.
-fn write_report_file(
-    output: &omen::cli::OutputArgs,
-    report: &serde_json::Value,
-) -> omen::core::Result<()> {
-    if let Some(path) = &output.output {
-        std::fs::write(path, format!("{}\n", serde_json::to_string_pretty(report)?))?;
-    }
-    Ok(())
-}
 
 /// Shared gate verdict dispatch used by `complexity`, `score`,
 /// `mutation`, and `stubs`. Callers detect the threshold violation themselves
@@ -295,13 +295,17 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             run_stubs(path, &config, args, format)?;
         }
         Command::Diff(args) => {
-            run_diff_analyzer(
-                path,
-                args.target.as_deref(),
-                format,
-                args.pagination.top,
-                args.pagination.offset,
-            )?;
+            if matches!(format, Format::Markdown) {
+                run_diff_comment(path, &config, args)?;
+            } else {
+                run_diff_analyzer(
+                    path,
+                    args.target.as_deref(),
+                    format,
+                    args.pagination.top,
+                    args.pagination.offset,
+                )?;
+            }
         }
         Command::Changes(args) => {
             run_changes_analyzer(path, &config, format, args)?;
@@ -663,10 +667,13 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             format_with_limits(combined, format, None, None, &mut stdout())?;
         }
         Command::Context(args) => {
-            run_context(path, &config, args, format)?;
+            let request = ContextRequest {
+                max_tokens: args.max_tokens,
+            };
+            commands::context::run(path, &config, &request, format, &mut stdout())?;
         }
         Command::Report(cmd) => {
-            run_report(path, &config, &cmd.subcommand)?;
+            run_report(path, &config, &cmd.subcommand, local_ref(cli))?;
         }
         Command::Search(ref cmd) => {
             run_search(path, &config, cmd.subcommand.clone(), format)?;
@@ -681,39 +688,63 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             }
         },
         Command::Outline(args) => {
-            run_outline(path, &config, args, format)?;
+            let request = OutlineRequest {
+                file: args.file.clone(),
+                scope: Scope::from(&args.common),
+            };
+            commands::outline::run(path, &config, &request, format, &mut stdout())?;
         }
         Command::Impact(args) => {
-            run_impact(path, &config, args, format, local_ref(cli))?;
+            let request = ImpactRequest {
+                symbol: args.symbol.clone(),
+                depth: args.depth,
+                direction: match args.direction {
+                    ImpactDirection::Callers => Direction::Callers,
+                    ImpactDirection::Callees => Direction::Callees,
+                    ImpactDirection::Both => Direction::Both,
+                },
+                min_basis: args.min_basis,
+                scope: Scope::from(&args.common),
+                git_ref: local_ref(cli).map(str::to_string),
+            };
+            commands::impact::run(path, &config, &request, format, &mut stdout())?;
         }
         Command::Symbol(args) => {
-            run_symbol(path, &config, args, format, local_ref(cli))?;
+            let request = SymbolRequest {
+                name: args.name.clone(),
+                include_source: !args.no_source,
+                max_source_lines: args.max_source_lines,
+                min_basis: args.min_basis,
+                scope: Scope::from(&args.common),
+                git_ref: local_ref(cli).map(str::to_string),
+            };
+            commands::symbol::run(path, &config, &request, format, &mut stdout())?;
         }
         Command::Eval(args) => {
-            run_eval(args, format)?;
+            let request = EvalRequest {
+                registration: args.registration.clone(),
+                runs: args.runs.clone(),
+                output: args.output.output.clone(),
+            };
+            commands::eval::run(&request, format, &mut stdout())?;
         }
         Command::Benchmark(args) => {
-            run_benchmark(args, format)?;
+            let request = BenchmarkRequest {
+                baseline: args.baseline.clone(),
+                candidate: args.candidate.clone(),
+                baseline_label: args.baseline_label.clone(),
+                candidate_label: args.candidate_label.clone(),
+                corpus: args.corpus.clone(),
+                repetitions: args.repetitions,
+                timeout_seconds: args.timeout,
+                real_root: args.real_root.clone(),
+                enforce: args.enforce,
+            };
+            commands::benchmark::run(&request, format, &mut stdout())?;
         }
     }
 
     Ok(())
-}
-
-/// Build a `FileSet` and `AnalysisContext` for the given path, including git
-/// root discovery. This eliminates the repeated file-set + context + git-root
-/// boilerplate that appears in every command handler.
-fn build_context<'a>(
-    path: &'a PathBuf,
-    file_set: &'a FileSet,
-    config: &'a Config,
-) -> AnalysisContext<'a> {
-    let mut ctx = AnalysisContext::new(file_set, config, Some(path));
-    if let Ok(repo) = omen::git::GitRepo::open(path) {
-        let git_root = repo.root().to_path_buf();
-        ctx = ctx.with_git_path(Box::leak(Box::new(git_root)));
-    }
-    ctx
 }
 
 /// Dispatch a command variant to its corresponding analyzer. This consolidates
@@ -799,74 +830,6 @@ fn dispatch_analyzer(
     }
 }
 
-fn filtered_file_set(
-    path: &PathBuf,
-    config: &Config,
-    args: Option<&AnalyzerArgs>,
-) -> omen::core::Result<FileSet> {
-    let mut file_set = FileSet::from_path(path, config)?;
-    if let Some(args) = args {
-        if let Some(ref changed_since) = args.changed_since {
-            let changed_files = changed_files_since(path, changed_since)?;
-            file_set = file_set.filter_by_paths(&changed_files);
-        }
-        if let Some(ref glob) = args.glob {
-            file_set = file_set.filter_by_glob(glob);
-        }
-        for exclude in &args.exclude {
-            file_set = file_set.exclude_by_glob(exclude);
-        }
-    }
-    Ok(file_set)
-}
-
-fn changed_files_since(path: &Path, base: &str) -> omen::core::Result<Vec<PathBuf>> {
-    changed_files_between(path, base, None)
-}
-
-/// The files that changed between `base` and `target`. Without a target, the
-/// files that changed between `base` and the working tree.
-fn changed_files_between(
-    path: &Path,
-    base: &str,
-    target: Option<&str>,
-) -> omen::core::Result<Vec<PathBuf>> {
-    use std::process::Command;
-
-    if base.starts_with('-') || target.is_some_and(|target| target.starts_with('-')) {
-        return Err(omen::core::Error::git(
-            "changed-since reference must not start with '-'",
-        ));
-    }
-
-    let output = Command::new("git")
-        .args([
-            "diff",
-            "--name-only",
-            "--diff-filter=ACMR",
-            "--end-of-options",
-        ])
-        .arg(base)
-        .args(target)
-        .arg("--")
-        .current_dir(path)
-        .output()
-        .map_err(omen::core::Error::Io)?;
-
-    if !output.status.success() {
-        return Err(omen::core::Error::git(format!(
-            "failed to list files changed since {base}: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(PathBuf::from)
-        .collect())
-}
-
 fn run_analyzer<A: Analyzer + Default>(
     path: &PathBuf,
     config: &Config,
@@ -944,6 +907,25 @@ fn run_diff_analyzer(
     let result = analyzer.analyze_diff(path, target)?;
     let value = serde_json::to_value(&result)?;
     format_with_limits(value, format, top, offset, &mut stdout())?;
+    Ok(())
+}
+
+/// Writes the pull-request comment. `--top` and `--offset` do not apply: the
+/// byte budget cuts the sections.
+fn run_diff_comment(
+    path: &Path,
+    config: &Config,
+    args: &omen::cli::DiffArgs,
+) -> omen::core::Result<()> {
+    use std::io::Write;
+
+    let changes = omen::changeset::build::compute(path, args.target.as_deref(), config)?;
+    let options = omen::changeset::markdown::CommentOptions {
+        max_bytes: args.max_bytes,
+        max_nodes: args.max_nodes,
+    };
+    let text = omen::changeset::markdown::render(&changes, &options, &[])?;
+    stdout().write_all(text.as_bytes())?;
     Ok(())
 }
 
@@ -1153,39 +1135,11 @@ fn run_churn_analyzer(
     Ok(())
 }
 
-fn run_context(
-    path: &PathBuf,
-    config: &Config,
-    args: &omen::cli::ContextArgs,
-    format: Format,
-) -> omen::core::Result<()> {
-    let file_set = FileSet::from_path(path, config)?;
-    let mut context = omen::context::build_context(
-        path,
-        &file_set,
-        config,
-        Some(omen::context::max_symbols_for_token_budget(args.max_tokens)),
-        Some(25),
-    )?;
-
-    // Apply token budget for non-JSON formats or when explicitly requested
-    omen::context::apply_token_budget(&mut context, args.max_tokens);
-
-    match format {
-        Format::Json | Format::JsonCompact => format.format(&context, &mut stdout())?,
-        Format::Markdown | Format::Text => {
-            print!("{}", context.render_markdown());
-        }
-        Format::Sarif => format.format(&context, &mut stdout())?,
-    }
-
-    Ok(())
-}
-
 fn run_report(
     path: &PathBuf,
     config: &Config,
     subcommand: &ReportSubcommand,
+    git_ref: Option<&str>,
 ) -> omen::core::Result<()> {
     use serde_json::{json, Value};
 
@@ -1224,6 +1178,18 @@ fn run_report(
             });
             let metadata_path = args.data.join("metadata.json");
             std::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata)?)?;
+
+            let changes_path = args.data.join("diff.json");
+            match std::fs::remove_file(&changes_path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(error.into())
+                }
+                _ => {}
+            }
+            if let Some(reference) = git_ref {
+                let changes = omen::changeset::build::compute(path, Some(reference), config)?;
+                std::fs::write(&changes_path, serde_json::to_string_pretty(&changes)?)?;
+            }
 
             let skip_list: Vec<&str> = args
                 .skip
@@ -1816,7 +1782,10 @@ fn run_mutation(
         s.finish_and_clear();
     }
 
-    write_report_file(&args.output, &serde_json::to_value(&result)?)?;
+    write_report_file(
+        args.output.output.as_deref(),
+        &serde_json::to_value(&result)?,
+    )?;
 
     // Output results
     match format {
@@ -2007,236 +1976,12 @@ fn run_mutation(
     Ok(())
 }
 
-fn run_outline(
-    path: &PathBuf,
-    config: &Config,
-    args: &OutlineArgs,
-    format: Format,
-) -> omen::core::Result<()> {
-    use omen::analyzers::outline::{outline_file_in, Analyzer as OutlineAnalyzer, OutlineResult};
-
-    let result = if let Some(ref file_path) = args.file {
-        // Single-file mode: resolve relative paths against the repo root (-p),
-        // not the shell cwd, so `omen outline --file src/main.rs -p /some/repo`
-        // works regardless of where the user ran the command from.
-        let resolved = if file_path.is_relative() {
-            path.join(file_path)
-        } else {
-            file_path.clone()
-        };
-        // Give the path from the repository root, as the outline of a
-        // repository does.
-        let file_outline = outline_file_in(path, &resolved)?;
-        OutlineResult {
-            files: vec![file_outline],
-        }
-    } else {
-        // Repo mode
-        let file_set = filtered_file_set(path, config, Some(&args.common))?;
-        let ctx = build_context(path, &file_set, config);
-        let analyzer = OutlineAnalyzer;
-        analyzer.analyze(&ctx)?
-    };
-
-    // `--top` and `--offset` page the `files` list in each format. The shared
-    // rule for nested lists pages `files[].functions`, so it does not apply.
-    // SARIF keeps each finding.
-    let mut result = result;
-    let mut omitted = 0;
-    if !matches!(format, Format::Sarif) {
-        let offset = args.common.pagination.offset.unwrap_or(0);
-        let limit = match args.common.pagination.top {
-            Some(0) | None => usize::MAX,
-            Some(top) => top,
-        };
-        let after_offset = result.files.len().saturating_sub(offset);
-        result.files = result.files.into_iter().skip(offset).take(limit).collect();
-        omitted = after_offset - result.files.len();
-    }
-
-    match format {
-        Format::Markdown | Format::Text => {
-            print!("{}", result.to_markdown());
-        }
-        _ => {
-            let mut value = serde_json::to_value(&result)?;
-            if omitted > 0 {
-                value["files_omitted"] = omitted.into();
-            }
-            format_with_limits(value, format, None, None, &mut stdout())?;
-        }
-    }
-    Ok(())
-}
-
 /// The value of `--ref` for a repository on the disk. A remote repository is
 /// a clone at that commit, thus its files on the disk are the commit.
 fn local_ref(cli: &Cli) -> Option<&str> {
     cli.git_ref
         .as_deref()
         .filter(|_| !is_remote_repo(&cli.path.to_string_lossy()))
-}
-
-/// The files of `symbol` and `impact`, and the source of their content. With
-/// `--ref`, the files and their content come from that commit.
-fn index_scope(
-    path: &PathBuf,
-    config: &Config,
-    common: &AnalyzerArgs,
-    git_ref: Option<&str>,
-) -> omen::core::Result<(
-    FileSet,
-    Option<std::sync::Arc<dyn omen::core::ContentSource>>,
-)> {
-    let Some(reference) = git_ref else {
-        return Ok((filtered_file_set(path, config, Some(common))?, None));
-    };
-    let tree = omen::core::TreeSource::new(path, reference)?;
-    let mut file_set = FileSet::from_tree_source(&tree, config)?;
-    if let Some(base) = &common.changed_since {
-        let changed_files = changed_files_between(path, base, Some(reference))?;
-        file_set = file_set.filter_by_paths(&changed_files);
-    }
-    if let Some(glob) = &common.glob {
-        file_set = file_set.filter_by_glob(glob);
-    }
-    for exclude in &common.exclude {
-        file_set = file_set.exclude_by_glob(exclude);
-    }
-    Ok((file_set, Some(std::sync::Arc::new(tree))))
-}
-
-fn run_impact(
-    path: &PathBuf,
-    config: &Config,
-    args: &ImpactArgs,
-    format: Format,
-    git_ref: Option<&str>,
-) -> omen::core::Result<()> {
-    use omen::analyzers::impact::{analyze_view, Direction};
-    use omen::cli::ImpactDirection;
-
-    let (file_set, source) = index_scope(path, config, &args.common, git_ref)?;
-    let mut ctx = omen::core::AnalysisContext::new(&file_set, config, Some(path));
-    if let Some(source) = source {
-        ctx = ctx.with_content_source(source);
-    }
-    let view = omen::index::view::CallView::from_index(&*ctx.code_index()?);
-
-    let direction = match args.direction {
-        ImpactDirection::Callers => Direction::Callers,
-        ImpactDirection::Callees => Direction::Callees,
-        ImpactDirection::Both => Direction::Both,
-    };
-
-    let report = analyze_view(&view, &args.symbol, args.depth, direction, args.min_basis);
-    let value = serde_json::to_value(&report)?;
-    format_with_limits(
-        value,
-        format,
-        args.common.pagination.top,
-        args.common.pagination.offset,
-        &mut std::io::stdout(),
-    )?;
-    Ok(())
-}
-
-fn run_symbol(
-    path: &PathBuf,
-    config: &Config,
-    args: &SymbolArgs,
-    format: Format,
-    git_ref: Option<&str>,
-) -> omen::core::Result<()> {
-    use omen::symbol::{report_with_reader, SymbolOptions};
-
-    let (file_set, source) = index_scope(path, config, &args.common, git_ref)?;
-    let mut ctx = omen::core::AnalysisContext::new(&file_set, config, Some(path));
-    if let Some(source) = source {
-        ctx = ctx.with_content_source(source);
-    }
-    let view = omen::index::view::CallView::from_index(&*ctx.code_index()?);
-
-    let opts = SymbolOptions {
-        include_source: !args.no_source,
-        max_source_lines: args.max_source_lines,
-        min_basis: args.min_basis,
-    };
-
-    let read = |file: &std::path::Path| ctx.read_file(file);
-    let report = report_with_reader(&view, &args.name, &opts, None, &read)?;
-    let mut value = serde_json::to_value(&report)?;
-    // `--top` and `--offset` page only the callers, as the MCP tool does.
-    let pagination = &args.common.pagination;
-    if !matches!(format, Format::Sarif) && (pagination.top.is_some() || pagination.offset.is_some())
-    {
-        omen::output::truncate_field(
-            &mut value,
-            "callers",
-            pagination.top.unwrap_or(0),
-            pagination.offset.unwrap_or(0),
-        );
-    }
-    format.format_value(&value, &mut std::io::stdout())?;
-    Ok(())
-}
-
-/// Compare two omen binaries over the corpus. With `--enforce` a regression is
-/// a threshold violation, so the process exits 2 like every other omen gate.
-fn run_benchmark(args: &BenchmarkArgs, format: Format) -> omen::core::Result<()> {
-    let options = omen::benchmark::Options {
-        baseline: args.baseline.clone(),
-        candidate: args.candidate.clone(),
-        baseline_label: args.baseline_label.clone(),
-        candidate_label: args.candidate_label.clone(),
-        corpus: args.corpus.clone(),
-        repetitions: args.repetitions,
-        // from_secs_f64 panics on infinity and on NaN, so convert fallibly.
-        timeout: std::time::Duration::try_from_secs_f64(args.timeout).map_err(|_| {
-            omen::core::Error::InvalidArgument(
-                "timeout must be a finite, non-negative number of seconds".to_string(),
-            )
-        })?,
-        real_root: args.real_root.clone(),
-    };
-
-    let report = omen::benchmark::run(&options)?;
-    let value = serde_json::to_value(&report)?;
-    format_with_limits(value, format, None, None, &mut stdout())?;
-
-    if args.enforce && !report.non_regression {
-        return Err(omen::core::Error::threshold_violation(
-            "quality benchmark regressed",
-            0.0,
-        ));
-    }
-    Ok(())
-}
-
-/// Score paired coding-agent runs. A failed gate is a threshold violation, so
-/// the process exits 2 like every other omen gate.
-fn run_eval(args: &EvalArgs, format: Format) -> omen::core::Result<()> {
-    let registration: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&args.registration)?)?;
-    let runs_document: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&args.runs)?)?;
-    let runs = runs_document.as_array().ok_or_else(|| {
-        omen::core::Error::InvalidArgument("runs file must be a JSON array".to_string())
-    })?;
-
-    let report = omen::eval::score(&registration, runs)?;
-    let value = serde_json::to_value(&report)?;
-
-    write_report_file(&args.output, &value)?;
-    format_with_limits(value, format, None, None, &mut stdout())?;
-
-    if !report.reported_outcome_gate {
-        return Err(omen::core::Error::threshold_violation(
-            "reported outcome gate failed",
-            0.0,
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(feature = "mutation")]

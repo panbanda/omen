@@ -26,6 +26,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use omen::analyzers::repomap::build_index;
+use omen::benchmark::accepted::{check_accepted_facts, load_accepted, AcceptedFact};
 use omen::benchmark::truth::{
     bless, check_ledger, ledger_growth, render_table, summarize, Assertion, LedgerEntry,
 };
@@ -389,9 +390,11 @@ fn ledger_never_grows() {
         &load_ledger(&base),
         &load_ledger(&quality_root()),
     );
+    let accepted: Vec<AcceptedFact> = load_accepted(&quality_root()).unwrap();
+    let grown = check_accepted_facts(&grown, &accepted);
     assert!(
         grown.is_empty(),
-        "the base branch made these checks and they are now in the ledger:\n{}",
+        "the base branch made these checks and they are now in the ledger, or an accepted entry is stale:\n{}",
         grown.join("\n")
     );
 }
@@ -590,4 +593,12 @@ fn an_observation_does_not_change_the_ids() {
         ids(None),
         ids(Some(&observation(&["b.rs:helper"], &["c.rs:helper"])))
     );
+}
+
+/// The file must parse, have ascending ids, and give a reason for each entry.
+#[test]
+fn accepted_regressions_file_is_valid() {
+    let accepted: Vec<AcceptedFact> = load_accepted(&quality_root()).unwrap();
+    let ids: Vec<String> = accepted.iter().map(|entry| entry.id.clone()).collect();
+    assert_eq!(check_accepted_facts(&ids, &accepted), Vec::<String>::new());
 }

@@ -28,10 +28,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use omen::benchmark::accepted::{check_accepted_ranks, load_accepted, AcceptedRankRegression};
 use omen::benchmark::retrieval::{
-    assertions, check_ranks, expected_locations, ledger_growth, metrics_by_language_and_type,
-    rank_baseline, rank_growth, render_table, validate, worst_case_order, Corpus, Outcome,
-    RankEntry, Revision,
+    assertions, check_ranks, expected_locations, ledger_growth_accepting,
+    metrics_by_language_and_type, rank_baseline, rank_regressions, render_table, validate,
+    worst_case_order, Corpus, Outcome, RankEntry, Revision,
 };
 use omen::benchmark::truth::{bless, check_ledger, Labels, LedgerEntry, Location};
 use omen::config::Config;
@@ -246,7 +247,9 @@ fn ledger_never_grows() {
     let corpus = load_corpus(&root);
     let labels = load_labels(&corpus);
     let ledger = load_ledger(&root);
-    let mut grown = ledger_growth(
+    let accepted: Vec<AcceptedRankRegression> = load_accepted(&root).unwrap();
+    let accepted_queries = accepted.iter().map(|entry| entry.id.clone()).collect();
+    let mut grown = ledger_growth_accepting(
         &Revision {
             corpus: &base_corpus,
             labels: &base_labels,
@@ -257,15 +260,33 @@ fn ledger_never_grows() {
             labels: &labels,
             ledger: &ledger,
         },
+        &accepted_queries,
     );
-    grown.extend(rank_growth(
-        &base_corpus,
-        &load_ranks(&base),
-        &load_ranks(&root),
+    grown.extend(check_accepted_ranks(
+        &rank_regressions(&base_corpus, &load_ranks(&base), &load_ranks(&root)),
+        &accepted,
     ));
     assert!(
         grown.is_empty(),
-        "these queries are worse than on the base branch, or hide a failure:\n{}",
+        "these queries are worse than on the base branch, hide a failure, or have a stale accepted entry:\n{}",
         grown.join("\n")
+    );
+}
+
+/// The file must parse, have ascending ids, and give a reason for each entry.
+#[test]
+fn accepted_regressions_file_is_valid() {
+    let accepted: Vec<AcceptedRankRegression> = load_accepted(&retrieval_root()).unwrap();
+    let regressions: Vec<_> = accepted
+        .iter()
+        .map(|entry| omen::benchmark::accepted::RankRegression {
+            id: entry.id.clone(),
+            base_rank: entry.base_rank,
+            rank: entry.rank,
+        })
+        .collect();
+    assert_eq!(
+        check_accepted_ranks(&regressions, &accepted),
+        Vec::<String>::new()
     );
 }

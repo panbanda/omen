@@ -362,6 +362,8 @@ impl std::str::FromStr for OutputFormat {
 }
 
 #[cfg(test)]
+// The `figment::Jail` closure must return the large `figment::Error`.
+#[allow(clippy::result_large_err)]
 mod tests {
     use super::*;
     use figment::Jail;

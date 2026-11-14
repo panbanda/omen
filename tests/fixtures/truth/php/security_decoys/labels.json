@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "language": "php",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid for the grammar. The case holds repository definitions with the names of sinks. The harness does not build or run the code.",
+  "closed_world": false,
+  "sinks_closed_world": true,
+  "not_applicable": [
+
+  ],
+  "sinks": [
+    {"label": "command_execution.same_name_symbol", "category": "command_execution", "scenario": "same_name_symbol", "file": "decoys.php", "line": 45, "flagged": false},
+    {"label": "code_evaluation.same_name_symbol", "category": "code_evaluation", "scenario": "same_name_symbol", "file": "decoys.php", "line": 46, "flagged": false},
+    {"label": "unsafe_deserialization.same_name_symbol", "category": "unsafe_deserialization", "scenario": "same_name_symbol", "file": "decoys.php", "line": 47, "flagged": false},
+    {"label": "sql_string_construction.same_name_symbol", "category": "sql_string_construction", "scenario": "same_name_symbol", "file": "decoys.php", "line": 49, "flagged": false},
+    {"label": "weak_hash.same_name_symbol", "category": "weak_hash", "scenario": "same_name_symbol", "file": "decoys.php", "line": 50, "flagged": false},
+    {"label": "weak_cipher.same_name_symbol", "category": "weak_cipher", "scenario": "same_name_symbol", "file": "decoys.php", "line": 51, "flagged": false},
+    {"label": "tls_verification_disabled.same_name_symbol", "category": "tls_verification_disabled", "scenario": "same_name_symbol", "file": "decoys.php", "line": 52, "flagged": false}
+  ]
+}

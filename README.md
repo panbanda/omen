@@ -238,6 +238,24 @@ omen diff --target abc123
 omen -f markdown diff --target main
 ```
 
+**Pull-request comment:**
+
+With `-f markdown`, `omen diff` writes a comment for a pull request. The first line is `<!-- omen:diff -->`, so a CI step can find and replace its own comment. A CI step can pipe the text into `gh pr comment --body-file -`. Omen does not call a forge API.
+
+The comment has a summary table, a table of the changed symbols, a Mermaid call graph, and `<details>` blocks for long lists. Omen builds the index at the merge base and at `HEAD`, and compares the two by symbol key.
+
+| Flag | Default | Meaning |
+| ---- | ------- | ------- |
+| `--max-bytes` | 60000 | Byte budget of the comment. The value 0 removes the limit. A value below the size of the title and the summary is an error. |
+| `--max-nodes` | 30 | Maximum number of nodes in the call graph, with the "+N more" nodes. |
+
+Limits of the comment:
+
+- A symbol that moved to another file, or that has a new name, shows as one removal and one addition. A file that git renamed keeps its symbols.
+- The hotspot data comes from the working tree. When a tracked file has uncommitted changes, or an untracked file is not ignored, omen skips the hotspots and the comment says so.
+
+`omen report generate --ref REF` adds a "Changes since" view to the HTML report.
+
 **Risk Factors:**
 
 The diff analyzer uses the same research-backed weight model as `omen changes` (see above), combining change-scope factors with file-level signals:
@@ -658,7 +676,7 @@ omen search query "authentication" --files src/auth/,src/middleware/
 omen search query "retry logic" --include-project /path/to/other-repo
 
 # Filter by complexity
-# (via MCP: semantic_search with max_complexity parameter)
+# (via MCP: search with max_complexity parameter)
 ```
 
 **How it works:**
@@ -673,7 +691,7 @@ Queries return at most 10 results by default and discard each symbol that has no
 
 **Features:**
 
-- **HyDE search** - Write a hypothetical code snippet as your query for better matches (available via MCP `semantic_search_hyde` tool)
+- **Snippet queries** - Use a code snippet as the query. The tokenizer splits each identifier in the snippet into its words.
 - **Complexity filtering** - Exclude high-complexity functions from results (`max_complexity` parameter on MCP tools)
 - **Multi-repo search** - Query across multiple project indexes with unified IDF scoring (`--include-project`)
 - **Per-function metrics** - Results include cyclomatic and cognitive complexity when available
@@ -849,15 +867,14 @@ Omen includes a Model Context Protocol (MCP) server that exposes all analyzers a
 - `smells` - Architectural smell detection
 - `flags` - Feature flag detection and staleness
 - `score` - Composite health score (0-100)
-- `semantic_search` - Natural language code search
+- `search` - Find symbols by a description or a code snippet
 - `get_symbol` - Source, signature, location, relationships, and complexity for one symbol
 - `task_context` - Bounded context for one definition, with a byte budget
 - `impact` - Transitive caller/callee blast-radius analysis
-- `semantic_search_hyde` - HyDE-style search (query with a hypothetical code snippet)
 
 The server validates the arguments of each call against the input schema of the tool. An unknown argument, a value of the wrong type, a value out of its bounds, and a value that is not in its enum are errors. The server does not replace an incorrect value with a default.
 
-Each tool gives compact JSON in the same envelope: `tool`, `total_items`, `returned`, `offset`, `has_more`, `next_offset`, `truncated`, and `result`. `git_skipped_reason` is present when an analyzer ran without git data. Each tool accepts `limit` (default 50) and `offset` (default 0), but not `task_context`, which has a byte budget. When `has_more` is `true`, send the same call with `offset` set to `next_offset`. `context` with `format: "markdown"` gives text without an envelope.
+Each tool gives compact JSON in the same envelope: `tool`, `total_items`, `returned`, `offset`, `has_more`, `next_offset`, `truncated`, `hints`, `index`, and `result`. `git_skipped_reason` is present when an analyzer ran without git data. Each tool accepts `limit` (default 50) and `offset` (default 0), but not `task_context`, which has a byte budget. When `has_more` is `true`, send the same call with `offset` set to `next_offset`. `context` with `format: "markdown"` gives text without an envelope.
 
 A failure of a tool is a result with `isError: true` and a structured `error` object with a `code`, such as `invalid_argument`, `not_found`, or `ambiguous`. See [docs/MCP_CONTEXT.md](docs/MCP_CONTEXT.md) for the full contract.
 
@@ -973,6 +990,8 @@ Omen clones to a temp directory, runs analysis, and cleans up automatically. The
 Automatic configuration discovery loads TOML from `omen.toml` and then `.omen/omen.toml` under the analyzed repository. An explicit `--config <PATH>` accepts TOML (the default for unrecognized extensions), YAML (`.yaml` or `.yml`), or JSON (`.json`). `OMEN_` environment variables override file values; use a double underscore for nested keys, such as `OMEN_COMPLEXITY__CYCLOMATIC_ERROR=25`.
 
 The accepted top-level keys are `exclude`, `exclude_built_assets`, `complexity`, `satd`, `churn`, `duplicates`, `hotspot`, `defect`, `score`, `gate`, `feature_flags`, `temporal`, and `changes`. The `[gate]` table sets the gate mode (`off`, `warn`, or `error`) of `complexity`, `score`, `stubs`, and `mutation`. The `--gate` flag overrides it. Copy [`omen.example.toml`](omen.example.toml) to `omen.toml` or `.omen/omen.toml` and customize it. Configuration structs reject unknown keys, including unknown nested keys, so misspellings produce an error instead of being silently ignored.
+
+The `exclude_built_assets` key (default `true`) skips built and minified output. It skips a JS or TS file when the name ends in `.min`, `.bundle`, `.chunk`, `-min`, `-bundle`, `_min`, or `_bundle` before the extension. It also skips each file below a directory named `node_modules`, `target`, `dist`, `build`, `coverage`, `vendor`, `.next`, `_next`, `.turbo`, or `.cache`. Set it to `false` to analyze these files.
 
 > [!TIP]
 > Using Claude Code? Run the `setup-config` skill to analyze your repository and generate an `omen.toml` with intelligent defaults for your tech stack, including detected feature flag providers and language-specific exclude patterns.

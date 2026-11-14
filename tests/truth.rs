@@ -17,10 +17,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use omen::benchmark::accepted::{check_accepted_facts, load_accepted, AcceptedFact};
 use omen::benchmark::truth::{
-    bless, check_ledger, compare, coverage_gaps, label_assertion_ids, ledger_growth, render_table,
-    summarize, Assertion, ImportedName, Kind, Labels, LedgerEntry, Location, Observed,
-    ObservedCall, ObservedImport, ObservedSymbol,
+    bless, check_ledger, compare, coverage_gaps, label_assertion_ids, ledger_growth,
+    render_sink_table, render_table, summarize, summarize_sinks, Assertion, ImportedName, Kind,
+    Labels, LedgerEntry, Location, Observed, ObservedCall, ObservedImport, ObservedSink,
+    ObservedSymbol,
 };
 use omen::core::Language;
 use omen::index::extract::{extract_file, link_files, FileSymbols};
@@ -30,11 +32,13 @@ use omen::index::model::{
     SymbolKind,
 };
 use omen::index::resolve::resolve_references;
+use omen::index::security::find_sinks;
 use omen::parser::Parser;
 
 const LABELS_FILE: &str = "labels.json";
 const LEDGER_FILE: &str = "expected_failures.json";
 const BLESS_TRACKING: &str = "phase-2-shared-index";
+const SINK_TRACKING: &str = "phase-5-security";
 
 fn truth_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/truth")
@@ -266,21 +270,38 @@ fn observed_calls(files: &[FileSymbols]) -> Vec<ObservedCall> {
     calls
 }
 
+/// The sinks of the security matcher. A label names the line on which a sink starts.
+fn observed_sinks(trees: &[omen::parser::ParseResult], files: &[FileSymbols]) -> Vec<ObservedSink> {
+    find_sinks(trees, files)
+        .into_iter()
+        .map(|sink| ObservedSink {
+            file: sink.file,
+            line: sink.range.start_line,
+            column: sink.range.start_column,
+            category: sink.category.name().to_string(),
+            basis: sink.basis.name().to_string(),
+            in_test: sink.flags.in_test,
+            constant_argument: sink.flags.constant_argument,
+        })
+        .collect()
+}
+
 /// Convert the facts that omen reports for one case into the label model.
 ///
 /// The symbols, the imports, and the calls come from the shared index.
 ///
 /// If omen does not report a fact, the adapter gives `None`. It does not
 /// calculate a value that omen does not report.
-fn observe(dir: &Path) -> Observed {
+fn index_case(dir: &Path) -> (Vec<omen::parser::ParseResult>, Vec<FileSymbols>) {
     let mut files = Vec::new();
     source_files(dir, &mut files);
-    let mut imports = Vec::new();
     let mut index_files = Vec::new();
+    let mut trees = Vec::new();
     for path in &files {
         let file = relative(dir, path);
         let parsed = Parser::new().parse_file(path).expect("parse");
         index_files.push(extract_file(&parsed, &file));
+        trees.push(parsed);
     }
 
     link_files(&mut index_files);
@@ -288,7 +309,14 @@ fn observe(dir: &Path) -> Observed {
     read_manifests(dir, dir, &mut manifests);
     resolve_imports(&mut index_files, &manifests);
     resolve_references(&mut index_files);
+    (trees, index_files)
+}
+
+fn observe(dir: &Path) -> Observed {
+    let (trees, index_files) = index_case(dir);
+    let mut imports = Vec::new();
     let calls = observed_calls(&index_files);
+    let sinks = observed_sinks(&trees, &index_files);
     let mut symbols = Vec::new();
     for index_file in index_files {
         imports.extend(observed_imports(&index_file.imports));
@@ -305,6 +333,7 @@ fn observe(dir: &Path) -> Observed {
         symbols,
         calls,
         imports,
+        sinks,
     }
 }
 
@@ -341,6 +370,7 @@ fn reported_facts_agree_with_labels_or_the_ledger() {
         assert!(!cases.is_empty(), "no fixture cases for {language}");
         let assertions = run_cases(&cases);
         println!("{}", render_table(&summarize(&assertions)));
+        println!("{}", render_sink_table(&summarize_sinks(&assertions)));
         for assertion in assertions.iter().filter(|assertion| !assertion.passed) {
             println!("{}\t{}", assertion.id, assertion.detail);
         }
@@ -350,13 +380,19 @@ fn reported_facts_agree_with_labels_or_the_ledger() {
     let assertions = run_cases(&cases);
 
     if std::env::var_os("OMEN_TRUTH_BLESS").is_some() {
-        let blessed = bless(&assertions, &load_ledger(&root), BLESS_TRACKING);
+        let mut blessed = bless(&assertions, &load_ledger(&root), BLESS_TRACKING);
+        for entry in &mut blessed {
+            if entry.id.contains("/sinks/") && entry.tracking == BLESS_TRACKING {
+                entry.tracking = SINK_TRACKING.to_string();
+            }
+        }
         let mut text = serde_json::to_string_pretty(&blessed).unwrap();
         text.push('\n');
         std::fs::write(root.join(LEDGER_FILE), text).unwrap();
     }
 
     println!("{}", render_table(&summarize(&assertions)));
+    println!("{}", render_sink_table(&summarize_sinks(&assertions)));
     let violations = check_ledger(&assertions, &load_ledger(&root));
     let report: Vec<String> = violations.iter().map(ToString::to_string).collect();
     assert!(
@@ -364,6 +400,36 @@ fn reported_facts_agree_with_labels_or_the_ledger() {
         "{} ledger violations:\n{}",
         violations.len(),
         report.join("\n")
+    );
+}
+
+/// The secret in the fixtures. A sink must not hold it, or a part of it.
+const FIXTURE_SECRET: &str = "AKIAIOSFODNN7EXAMPLE";
+
+#[test]
+fn no_sink_holds_a_fixture_secret() {
+    let mut sources_with_secret = 0;
+    let tail = &FIXTURE_SECRET[4..];
+    for case in load_cases(&truth_root()) {
+        let (trees, files) = index_case(&case.dir);
+        sources_with_secret += trees
+            .iter()
+            .filter(|tree| String::from_utf8_lossy(&tree.source).contains(FIXTURE_SECRET))
+            .count();
+        let serialized = serde_json::to_string(&find_sinks(&trees, &files)).unwrap();
+        assert!(!serialized.contains(FIXTURE_SECRET), "{}", case.id);
+        for start in 0..=tail.len() - 6 {
+            let part = &tail[start..start + 6];
+            assert!(
+                !serialized.contains(part),
+                "{}: a sink holds a part of the secret: {part}",
+                case.id
+            );
+        }
+    }
+    assert!(
+        sources_with_secret > 10,
+        "the fixtures must hold the secret"
     );
 }
 
@@ -470,9 +536,11 @@ fn ledger_never_grows() {
         &load_ledger(&base),
         &load_ledger(&truth_root()),
     );
+    let accepted: Vec<AcceptedFact> = load_accepted(&truth_root()).unwrap();
+    let grown = check_accepted_facts(&grown, &accepted);
     assert!(
         grown.is_empty(),
-        "these facts were correct on the base branch and are now in the ledger:\n{}",
+        "these facts were correct on the base branch and are now in the ledger, or an accepted entry is stale:\n{}",
         grown.join("\n")
     );
 }
@@ -508,4 +576,12 @@ fn observed_imports_keep_each_target_of_a_grouped_import() {
     assert_eq!(imports.len(), 1);
     assert_eq!(imports[0].resolved_files, ["pkg/left.py", "pkg/right.py"]);
     assert_eq!(imports[0].names.len(), 3);
+}
+
+/// The file must parse, have ascending ids, and give a reason for each entry.
+#[test]
+fn accepted_regressions_file_is_valid() {
+    let accepted: Vec<AcceptedFact> = load_accepted(&truth_root()).unwrap();
+    let ids: Vec<String> = accepted.iter().map(|entry| entry.id.clone()).collect();
+    assert_eq!(check_accepted_facts(&ids, &accepted), Vec::<String>::new());
 }

@@ -49,12 +49,13 @@ const INCLUDE_PROJECTS: Param = Param::string_array(
     "The roots of more projects in which to search.",
 );
 
-pub(super) static SEMANTIC_SEARCH: ToolSpec = ToolSpec {
-    name: "semantic_search",
-    description: "Finds the symbols that agree best with a query in natural language. \
-        The tool uses TF-IDF.",
+pub(super) static SEARCH: ToolSpec = ToolSpec {
+    name: "search",
+    description: "Finds the symbols that agree best with a query. \
+        The query can have the words of a description or a code snippet. \
+        The tool matches terms. It does not use embeddings.",
     params: &[
-        Param::string("query", "The query in natural language.").required(),
+        Param::string("query", "The words of a description, or a code snippet.").required(),
         TOP_K,
         MIN_SCORE,
         FILES,
@@ -62,49 +63,12 @@ pub(super) static SEMANTIC_SEARCH: ToolSpec = ToolSpec {
         INCLUDE_PROJECTS,
     ],
     paginated: Pagination::Field("results"),
-    handler: |server, arguments| {
-        let query = arguments.string("query").unwrap_or_default();
-        search(server, arguments, query, query)
-    },
+    handler: search,
 };
 
-pub(super) static SEMANTIC_SEARCH_HYDE: ToolSpec = ToolSpec {
-    name: "semantic_search_hyde",
-    description: "Finds the symbols that are most like a code snippet that you write. \
-        Write a snippet that looks like the code that you want to find.",
-    params: &[
-        Param::string(
-            "hypothetical_document",
-            "A code snippet that looks like the code that you want to find.",
-        )
-        .required(),
-        Param::string(
-            "query",
-            "The text that the result shows as its query. The default is the snippet.",
-        ),
-        TOP_K,
-        MIN_SCORE,
-        FILES,
-        MAX_COMPLEXITY,
-        INCLUDE_PROJECTS,
-    ],
-    paginated: Pagination::Field("results"),
-    handler: |server, arguments| {
-        let document = arguments
-            .string("hypothetical_document")
-            .unwrap_or_default();
-        let shown_query = arguments.string("query").unwrap_or(document);
-        search(server, arguments, document, shown_query)
-    },
-};
-
-/// Searches for `text` and labels the output with `shown_query`.
-fn search(
-    server: &McpServer,
-    arguments: &Arguments<'_>,
-    text: &str,
-    shown_query: &str,
-) -> HandlerResult {
+fn search(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
+    let text = arguments.string("query").unwrap_or_default();
+    let shown_query = text;
     let top_k = arguments.count("top_k").unwrap_or(10);
     let min_score = arguments.number("min_score").unwrap_or(0.0) as f32;
     let max_complexity = arguments.count_u32("max_complexity");

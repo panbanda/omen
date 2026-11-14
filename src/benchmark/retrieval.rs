@@ -19,6 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+use super::accepted::RankRegression;
 use super::truth::{Assertion, Labels, LedgerEntry, Location};
 use crate::semantic::tokenize::{lowercase, tokenize};
 
@@ -642,6 +643,16 @@ fn retired_by_id(corpus: &Corpus) -> BTreeMap<&str, &Retired> {
 /// - A retired entry of the base corpus must stay, with no change, so the id
 ///   is not used again.
 pub fn ledger_growth(base_revision: &Revision, revision: &Revision) -> Vec<String> {
+    ledger_growth_accepting(base_revision, revision, &BTreeSet::new())
+}
+
+/// Like [`ledger_growth`], but a new ledger entry of a query in `accepted` is
+/// not a problem. The keys are `<language>/<query id>`.
+pub fn ledger_growth_accepting(
+    base_revision: &Revision,
+    revision: &Revision,
+    accepted: &BTreeSet<String>,
+) -> Vec<String> {
     let (base, base_ledger) = (base_revision.corpus, base_revision.ledger);
     let (corpus, ledger) = (revision.corpus, revision.ledger);
     let base_queries = queries_by_key(base);
@@ -652,7 +663,10 @@ pub fn ledger_growth(base_revision: &Revision, revision: &Revision) -> Vec<Strin
     let mut problems = BTreeSet::new();
     for entry in ledger {
         let key = query_key(&entry.id);
-        if !before.contains(entry.id.as_str()) && base_queries.contains_key(key) {
+        if !before.contains(entry.id.as_str())
+            && base_queries.contains_key(key)
+            && !accepted.contains(key)
+        {
             problems.insert(format!(
                 "{}: the query is in the base corpus, and the base ledger does not have this entry",
                 entry.id
@@ -725,6 +739,25 @@ pub fn ledger_growth(base_revision: &Revision, revision: &Revision) -> Vec<Strin
 /// that the base corpus has. A query that the base corpus does not have is new,
 /// and each rank is permitted for it.
 pub fn rank_growth(base: &Corpus, base_ranks: &[RankEntry], ranks: &[RankEntry]) -> Vec<String> {
+    rank_regressions(base, base_ranks, ranks)
+        .into_iter()
+        .map(|regression| {
+            format!(
+                "{}: {}, the base branch has {}",
+                regression.id,
+                rank_text(regression.rank),
+                rank_text(regression.base_rank)
+            )
+        })
+        .collect()
+}
+
+/// The structured form of [`rank_growth`].
+pub fn rank_regressions(
+    base: &Corpus,
+    base_ranks: &[RankEntry],
+    ranks: &[RankEntry],
+) -> Vec<RankRegression> {
     let base_queries = queries_by_key(base);
     let before: BTreeMap<&str, Option<usize>> = base_ranks
         .iter()
@@ -736,12 +769,11 @@ pub fn rank_growth(base: &Corpus, base_ranks: &[RankEntry], ranks: &[RankEntry])
         .filter_map(|entry| {
             let baseline = *before.get(entry.id.as_str())?;
             (compare_ranks(entry.rank, baseline) == std::cmp::Ordering::Less).then(|| {
-                format!(
-                    "{}: {}, the base branch has {}",
-                    entry.id,
-                    rank_text(entry.rank),
-                    rank_text(baseline)
-                )
+                RankRegression {
+                    id: entry.id.clone(),
+                    base_rank: baseline,
+                    rank: entry.rank,
+                }
             })
         })
         .collect()
@@ -1971,6 +2003,55 @@ mod tests {
         let grown = rank_growth(&base, &base_ranks, &ranks);
 
         assert_eq!(grown, ["rust/i0: rank 9, the base branch has rank 2"]);
+    }
+
+    #[test]
+    fn an_accepted_query_may_get_a_new_ledger_entry() {
+        let corpus = corpus(Vec::new());
+        let labels = case_labels();
+        let entry = |id: &str| LedgerEntry {
+            id: id.to_string(),
+            reason: "reason".to_string(),
+            tracking: "tracking".to_string(),
+        };
+        let ledger = [entry("rust/i0/hit@1"), entry("rust/i1/hit@1")];
+        let base = Revision {
+            corpus: &corpus,
+            labels: &labels,
+            ledger: &[],
+        };
+        let current = Revision {
+            corpus: &corpus,
+            labels: &labels,
+            ledger: &ledger,
+        };
+
+        assert_eq!(ledger_growth(&base, &current).len(), 2);
+        let accepted = BTreeSet::from(["rust/i0".to_string()]);
+        assert_eq!(
+            ledger_growth_accepting(&base, &current, &accepted),
+            ["rust/i1/hit@1: the query is in the base corpus, and the base ledger does not have this entry"]
+        );
+    }
+
+    #[test]
+    fn rank_regressions_have_the_two_ranks() {
+        let base = corpus(Vec::new());
+
+        let regressions = rank_regressions(
+            &base,
+            &[rank("rust/i0", Some(1))],
+            &[rank("rust/i0", Some(3))],
+        );
+
+        assert_eq!(
+            regressions,
+            [RankRegression {
+                id: "rust/i0".to_string(),
+                base_rank: Some(1),
+                rank: Some(3)
+            }]
+        );
     }
 
     #[test]

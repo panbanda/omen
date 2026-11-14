@@ -876,11 +876,9 @@ fn collect_fields_in_body(
                         }
                     }
                 }
-                Language::Cpp => {
-                    if child.kind() == "field_declaration" {
-                        if let Some(decl) = find_child_by_kind_local(&child, "field_declarator") {
-                            extract_cpp_field_name(&decl, source, fields);
-                        }
+                Language::Cpp if child.kind() == "field_declaration" => {
+                    if let Some(decl) = find_child_by_kind_local(&child, "field_declarator") {
+                        extract_cpp_field_name(&decl, source, fields);
                     }
                 }
                 _ => {}

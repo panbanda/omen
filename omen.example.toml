@@ -2,6 +2,13 @@
 # Copy to omen.toml or .omen/omen.toml and customize
 # Documentation: https://github.com/panbanda/omen
 
+# Skip built and minified output. This setting skips a JS or TS file when the
+# name ends in .min, .bundle, .chunk, -min, -bundle, _min, or _bundle before the
+# extension. It also skips each file below a directory named node_modules,
+# target, dist, build, coverage, vendor, .next, _next, .turbo, or .cache.
+# Set it to false to analyze these files.
+exclude_built_assets = true
+
 # Exclude patterns (glob) - files/directories to skip during analysis
 exclude = [
     # Test files

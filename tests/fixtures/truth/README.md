@@ -45,6 +45,36 @@ are not evidence of accuracy on code that the author did not see.
 - With `closed_world`, a symbol or import that omen reports without a label is
   a failure.
 
+## Sink labels
+
+A `sinks` label states that omen reports a sink on a line, or that omen does
+not report one. The security cases are in the directories `security` and
+`security_decoys`.
+
+- `category` is one of the nine sink categories. `scenario` is one of seven
+  rows: `real_call`, `aliased_import`, `safe_variant`, `name_in_string`,
+  `name_in_comment`, `same_name_symbol`, and `in_test`.
+- `flagged: false` means that omen must not report a sink of this category on
+  this line. A label that is not flagged has no `basis` and no flags.
+- `basis` is the evidence that omen gives: `imported_symbol`, `builtin`, or
+  `name_only`. A syntax pattern that has no import, such as a string literal or
+  an `unsafe` block, has the basis `builtin`.
+- `in_test` is `true` for a sink in test code. `constant_argument` is checked
+  only when the label gives it.
+- With `sinks_closed_world`, a sink that omen reports without a label is a
+  failure. A label takes one reported sink. A second label on the same line
+  needs a second sink. Without the setting, `closed_world` applies.
+- A `not_applicable` entry means that the language cannot have the construct.
+  A gap in the detector is not a reason. Label the fact, and list the failure
+  in the ledger.
+- Each language has each category and scenario. Use a `not_applicable` entry
+  with the dimension `sinks` when a row does not apply. The category of the
+  entry is `<category>/<scenario>`. A category without a scenario covers each
+  scenario of that category.
+- A repository symbol can hide a real call in the same case, because the
+  resolver of the index can select it. For this reason, Ruby, PHP, C, C++, and
+  Bash keep the `same_name_symbol` rows in the case `security_decoys`.
+
 ## The ledger
 
 `expected_failures.json` lists each fact that omen reports incorrectly. The test

@@ -296,7 +296,7 @@ fn build_analysis(
     let now = Utc::now();
     let mut files: Vec<FileMetrics> = Vec::with_capacity(file_metrics.len());
 
-    for (_, fm) in file_metrics.iter_mut() {
+    for fm in file_metrics.values_mut() {
         // Populate unique authors
         fm.unique_authors = fm.author_counts.keys().cloned().collect();
         // The sequence of the map keys is different in each run.

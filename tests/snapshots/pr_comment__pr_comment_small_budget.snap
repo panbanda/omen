@@ -1,0 +1,54 @@
+---
+source: tests/pr_comment.rs
+expression: text
+---
+<!-- omen:diff -->
+## Omen diff
+
+Base `7537d9d` (merge base with `main`), head `e0a576e`.
+
+| Measure | Value |
+| --- | --- |
+| Files changed | 2 (+22 -7 lines) |
+| Symbols | +3 added, -1 removed, ~3 changed |
+| Callers affected | 0 |
+| Cyclomatic complexity of the changed symbols | 4 -> 9 (+5) |
+| New stubs | 1 |
+| New debt comments | 1 |
+| Hotspots touched | 1 |
+
+### Changed symbols
+
+| Change | Symbol | Location | Complexity | Direct / transitive callers | Tests | Weakest edge |
+| --- | --- | --- | --- | --- | --- | --- |
+| ~ changed | `describe` | `src/report.rs:3` | CC 1 -> 1, CG 0 -> 0 | 0 / 0 | 0 | none |
+| + added | `solid` | `src/report.rs:11` | CC none -> 1, CG none -> 0 | 0 / 0 | 0 | none |
+| ~ changed | `area` | `src/shapes.rs:1` | CC 1 -> 4, CG 0 -> 3 | 3 / 4 | 1 | imported_name |
+| - removed | `legacy` | `src/shapes.rs:9` | CC 1 -> none, CG 0 -> none | 1 / 1 | 0 | imported_name |
+
+_3 symbols omitted. Run `omen diff -t main -f markdown --max-bytes 0` for the full list._
+
+_1 signature changes omitted. Run `omen diff -t main -f markdown --max-bytes 0` for the full list._
+
+<details>
+<summary>Changed files (2)</summary>
+
+| Change | File | Lines | Changed symbols | Max cyclomatic | Hotspot |
+| --- | --- | --- | --- | --- | --- |
+| ~ changed | `src/report.rs` | +6 -2 | 2 | 1 | low |
+| ~ changed | `src/shapes.rs` | +16 -5 | 5 | 4 | high |
+
+</details>
+
+_2 findings omitted. Run `omen diff -t main -f markdown --max-bytes 0` for the full list._
+
+<details>
+<summary>Callers of the changed symbols (3)</summary>
+
+- `area` is called by `describe` at `src/report.rs:4`, `tests.test_area` at `src/shapes.rs:30` (test), `volume` at `src/shapes.rs:17`.
+- `legacy` is called by `describe` at `src/report.rs:4`.
+- `volume` is called by `solid` at `src/report.rs:12`.
+
+</details>
+
+_2 files omitted. Run `omen ownership` for the full list._

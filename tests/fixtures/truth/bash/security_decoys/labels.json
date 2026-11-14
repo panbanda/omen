@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "language": "bash",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid for the grammar. The case holds repository definitions with the names of sinks. The harness does not build or run the code.",
+  "closed_world": false,
+  "sinks_closed_world": true,
+  "not_applicable": [
+
+  ],
+  "sinks": [
+    {"label": "code_evaluation.same_name_symbol", "category": "code_evaluation", "scenario": "same_name_symbol", "file": "decoys.sh", "line": 20, "flagged": false},
+    {"label": "weak_hash.same_name_symbol", "category": "weak_hash", "scenario": "same_name_symbol", "file": "decoys.sh", "line": 21, "flagged": false},
+    {"label": "weak_cipher.same_name_symbol", "category": "weak_cipher", "scenario": "same_name_symbol", "file": "decoys.sh", "line": 22, "flagged": false},
+    {"label": "tls_verification_disabled.same_name_symbol", "category": "tls_verification_disabled", "scenario": "same_name_symbol", "file": "decoys.sh", "line": 23, "flagged": false}
+  ]
+}

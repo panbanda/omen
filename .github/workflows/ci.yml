@@ -107,6 +107,9 @@ jobs:
         env:
           OMEN_TRUTH_BASE_DIR: ${{ runner.temp }}/base/tests/fixtures/truth
 
+      # A regression passes only if the file `accepted_regressions.json` of the
+      # fixture directory has an exact entry for it. An entry without a
+      # regression fails. See docs/IMPROVEMENT_STANDARD.md.
       # The base branch can have the corpora without a ledger. The test then
       # accepts each ledger entry as new.
       - name: Compare the corpus ledger with the base branch
@@ -174,7 +177,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run clippy
-        run: cargo clippy --all-targets --all-features
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
       # The `mutation` feature is optional. This step makes sure that each
       # target, also the tests, builds without it.

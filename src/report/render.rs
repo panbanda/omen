@@ -20,6 +20,10 @@ const TEMPLATE_HTML: &str = include_str!("template.html");
 /// via `bun run build`. Embedded at build time; the crate build never runs Tailwind.
 const REPORT_CSS: &str = include_str!("report.css");
 
+/// The node cap of the change graph in the report. The comment for a pull
+/// request has a lower cap, because its space is smaller.
+const CHANGES_GRAPH_MAX_NODES: usize = 200;
+
 /// Renderer handles HTML report generation.
 pub struct Renderer {
     env: Environment<'static>,
@@ -97,6 +101,15 @@ impl Renderer {
             .as_ref()
             .map(|t| build_temporal_json(&t.couplings, roots));
 
+        let changes_rows = data.changes.as_ref().map(ChangesRow::rows);
+        let changes_graph_json = data.changes.as_ref().and_then(|changes| {
+            serde_json::to_value(crate::changeset::graph::view(
+                &changes.graph,
+                CHANGES_GRAPH_MAX_NODES,
+            ))
+            .ok()
+        });
+
         let tmpl = self.env.get_template("report")?;
         let rendered = tmpl.render(context! {
             ReportCss => Value::from_safe_string(REPORT_CSS.to_string()),
@@ -125,6 +138,9 @@ impl Renderer {
             TemporalInsight => data.temporal_insight,
             Smells => data.smells,
             SmellsInsight => data.smells_insight,
+            Changes => data.changes,
+            ChangesRows => changes_rows,
+            ChangesGraphJson => changes_graph_json,
             Stubs => data.stubs,
             StubsInsight => data.stubs_insight,
             Graph => data.graph,
@@ -239,7 +255,7 @@ impl Renderer {
         // Load SATD and sort by severity (Critical > High > Medium > Low)
         if let Ok(mut satd) = load_json::<SATDData>(&data_dir.join("satd.json")) {
             satd.items
-                .sort_by(|a, b| severity_order(&b.severity).cmp(&severity_order(&a.severity)));
+                .sort_by_key(|item| std::cmp::Reverse(severity_order(&item.severity)));
             data.satd = Some(satd);
             data.compute_satd_stats();
         }
@@ -311,6 +327,11 @@ impl Renderer {
         // Load stubs (incomplete code)
         if let Ok(stubs) = load_json::<StubsData>(&data_dir.join("stubs.json")) {
             data.stubs = Some(stubs);
+        }
+
+        // Load the changes since `--ref`
+        if let Ok(changes) = load_json::<ChangesData>(&data_dir.join("diff.json")) {
+            data.changes = Some(changes);
         }
 
         // Load dependency graph
@@ -1536,5 +1557,160 @@ mod tests {
         assert!(!TEMPLATE_HTML.contains("--bg-primary"));
         assert!(!TEMPLATE_HTML.contains("class=\"section\""));
         assert!(!TEMPLATE_HTML.contains("class=\"table-container\""));
+    }
+
+    fn changes_fixture() -> serde_json::Value {
+        let symbol =
+            |key: &str, state: &str, before: serde_json::Value, after: serde_json::Value| {
+                json!({
+                    "key": key,
+                    "name": "run",
+                    "kind": "function",
+                    "file": "src/a.rs",
+                    "line": 3,
+                    "state": state,
+                    "signature_before": null,
+                    "signature_after": null,
+                    "complexity_before": before,
+                    "complexity_after": after,
+                    "direct_callers": [],
+                    "transitive_callers": 2,
+                    "weakest_basis": "same_file"
+                })
+            };
+        json!({
+            "target": "v1.0.0",
+            "base": "aaaaaaa",
+            "head": "bbbbbbb",
+            "summary": {
+                "files_changed": 1, "lines_added": 4, "lines_deleted": 1,
+                "symbols_added": 1, "symbols_removed": 0, "symbols_changed": 1,
+                "callers_affected": 1, "cyclomatic_before": 2, "cyclomatic_after": 5,
+                "new_stubs": 0, "new_satd": 0, "hotspots_touched": 0
+            },
+            "symbols": [
+                symbol(
+                    "src/a.rs#run<script>",
+                    "changed",
+                    json!({"cyclomatic": 2, "cognitive": 1}),
+                    json!({"cyclomatic": 5, "cognitive": 4}),
+                ),
+                symbol("src/a.rs#fresh", "added", json!(null), json!({"cyclomatic": 1, "cognitive": 0})),
+            ],
+            "files": [],
+            "new_findings": [],
+            "graph": {
+                "nodes": [
+                    {"key": "src/a.rs#run<script>", "label": "run<script>", "file": "src/a.rs", "component": "src", "state": "changed"},
+                    {"key": "src/a.rs#fresh", "label": "fresh", "file": "src/a.rs", "component": "src", "state": "added"}
+                ],
+                "edges": [
+                    {"from": "src/a.rs#run<script>", "to": "src/a.rs#fresh", "state": "added"}
+                ]
+            }
+        })
+    }
+
+    fn render_with_changes() -> String {
+        let data_dir = tempfile::tempdir().unwrap();
+        write_fixture(&data_dir.path().join("diff.json"), changes_fixture());
+        let mut output = Vec::new();
+        Renderer::new()
+            .unwrap()
+            .render(data_dir.path(), &mut output)
+            .unwrap();
+        String::from_utf8(output).unwrap()
+    }
+
+    #[test]
+    fn test_renderer_omits_the_changes_section_without_diff_data() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let mut output = Vec::new();
+        Renderer::new()
+            .unwrap()
+            .render(data_dir.path(), &mut output)
+            .unwrap();
+        let html = String::from_utf8(output).unwrap();
+        assert!(!html.contains("id=changes") && !html.contains("id=\"changes\""));
+    }
+
+    #[test]
+    fn test_renderer_includes_the_changes_section() {
+        let html = render_with_changes();
+        assert!(html.contains("id=changes") || html.contains("id=\"changes\""));
+        assert!(html.contains("Changes since"));
+        assert!(html.contains("v1.0.0"));
+    }
+
+    #[test]
+    fn test_changes_section_has_one_legend_with_the_four_states() {
+        let html = render_with_changes();
+        assert_eq!(
+            html.matches("id=changes-legend").count()
+                + html.matches("id=\"changes-legend\"").count(),
+            1
+        );
+        for state in ["added", "removed", "changed", "unchanged"] {
+            assert!(html.contains(&format!("diff-{state}")), "{state}");
+        }
+    }
+
+    #[test]
+    fn test_changes_section_shows_complexity_before_and_after_with_a_coloured_delta() {
+        let html = render_with_changes();
+        assert!(html.contains("delta-up"));
+        assert!(html.contains("+3"));
+    }
+
+    #[test]
+    fn test_changes_section_escapes_symbol_names() {
+        let html = render_with_changes();
+        assert!(!html.contains("run<script>"));
+        assert!(html.contains("run&lt;script"));
+    }
+
+    #[test]
+    fn test_changes_graph_tooltip_escapes_the_name_of_a_symbol() {
+        let mut fixture = changes_fixture();
+        let hostile = "<img src=x onerror=alert(1)>";
+        fixture["graph"]["nodes"][0]["label"] = json!(hostile);
+        let data_dir = tempfile::tempdir().unwrap();
+        write_fixture(&data_dir.path().join("diff.json"), fixture);
+        let mut output = Vec::new();
+        Renderer::new()
+            .unwrap()
+            .render(data_dir.path(), &mut output)
+            .unwrap();
+        let html = String::from_utf8(output).unwrap();
+        assert!(!html.contains(hostile));
+        assert!(html.contains("\\u003cimg src=x onerror=alert(1)\\u003e"));
+
+        let start = TEMPLATE_HTML
+            .find("getElementById('changesGraph')")
+            .expect("graph chart");
+        let script = &TEMPLATE_HTML[start..];
+        let tooltip = &script[script.find("tooltip:").expect("tooltip")..];
+        let formatter = &tooltip[..tooltip.find("legend:").expect("end of tooltip")];
+        assert!(formatter.contains("escapeHtml("), "{formatter}");
+        assert!(
+            !formatter.contains("return params.data.name"),
+            "{formatter}"
+        );
+        assert!(TEMPLATE_HTML.contains("function escapeHtml("));
+    }
+
+    #[test]
+    fn test_changes_graph_data_uses_the_capped_view() {
+        let html = render_with_changes();
+        assert!(html.contains("window.__td_changes_graph="));
+        assert!(html.contains("\\u003cscript\\u003e"));
+    }
+
+    #[test]
+    fn test_report_stylesheet_defines_the_diff_tokens_once() {
+        for state in ["added", "removed", "changed", "unchanged"] {
+            assert!(REPORT_CSS.contains(&format!("--diff-{state}:")), "{state}");
+        }
+        assert!(!TEMPLATE_HTML.contains("--diff-added:"));
     }
 }
