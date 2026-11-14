@@ -183,6 +183,8 @@ fn is_oo_language(lang: Language) -> bool {
         Language::Java
             | Language::TypeScript
             | Language::JavaScript
+            | Language::Tsx
+            | Language::Jsx
             | Language::Python
             | Language::CSharp
             | Language::Cpp
@@ -685,7 +687,7 @@ fn extract_classes_recursive(
 fn is_class_node(node_type: &str, lang: Language) -> bool {
     match lang {
         Language::Java => node_type == "class_declaration" || node_type == "interface_declaration",
-        Language::TypeScript | Language::JavaScript => {
+        Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => {
             node_type == "class_declaration" || node_type == "class"
         }
         Language::Python => node_type == "class_definition",
@@ -796,7 +798,7 @@ fn extract_parent_class(node: &tree_sitter::Node, source: &[u8], lang: Language)
             let sc = node.child_by_field_name("superclass")?;
             first_child_text_by_kind(&sc, source, &["type_identifier"])
         }
-        Language::TypeScript | Language::JavaScript => {
+        Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => {
             // TS/JS: class Child extends Parent { }
             // class_heritage -> extends_clause -> identifier|type_identifier
             let heritage = find_child_by_kind(node, "class_heritage")?;
@@ -981,9 +983,10 @@ fn extract_methods_recursive(
 pub(crate) fn get_method_node_types(lang: Language) -> Vec<&'static str> {
     match lang {
         Language::Java => vec!["method_declaration", "constructor_declaration"],
-        Language::TypeScript | Language::JavaScript => {
+        Language::TypeScript | Language::Tsx => {
             vec!["method_definition", "public_field_definition"]
         }
+        Language::JavaScript | Language::Jsx => vec!["method_definition"],
         Language::Python => vec!["function_definition"],
         Language::CSharp => vec!["method_declaration", "constructor_declaration"],
         Language::Cpp => vec!["function_definition", "function_declarator"],
@@ -1123,7 +1126,12 @@ fn find_field_accesses(
                     .ok()
                     .map(|s| s.to_string())
             }
-            Language::Java | Language::CSharp | Language::TypeScript | Language::JavaScript
+            Language::Java
+            | Language::CSharp
+            | Language::TypeScript
+            | Language::JavaScript
+            | Language::Tsx
+            | Language::Jsx
                 if kind == "member_expression" || kind == "member_access_expression" =>
             {
                 extract_self_field_access(&node, source, "this", "object", "property")
@@ -1203,9 +1211,8 @@ fn extract_fields_recursive(
 pub(crate) fn get_field_node_types(lang: Language) -> Vec<&'static str> {
     match lang {
         Language::Java => vec!["field_declaration"],
-        Language::TypeScript | Language::JavaScript => {
-            vec!["public_field_definition", "field_definition"]
-        }
+        Language::TypeScript | Language::Tsx => vec!["public_field_definition"],
+        Language::JavaScript | Language::Jsx => vec!["field_definition"],
         Language::Python => vec!["assignment"],
         Language::CSharp => vec!["field_declaration", "property_declaration"],
         Language::Cpp => vec!["field_declaration"],
@@ -2423,6 +2430,45 @@ impl Counter {
         assert!(cls.rfc >= cls.nom, "RFC should be at least NOM");
         assert_eq!(cls.dit, 0);
         assert!(cls.parent_class.is_none());
+    }
+
+    #[test]
+    fn test_tsx_and_jsx_classes_have_the_metrics_of_ts_and_js() {
+        use crate::config::Config;
+        use crate::core::{AnalysisContext, FileSet};
+
+        let dir = tempfile::tempdir().unwrap();
+        let source = "class Counter extends Base {\n  count = 0;\n  step = 1;\n  increment() {\n    this.count = this.count + this.step;\n  }\n  reset() {\n    this.count = 0;\n  }\n}\n";
+        for name in ["Counter.tsx", "Counter.ts", "Counter.jsx", "Counter.js"] {
+            std::fs::write(dir.path().join(name), source).unwrap();
+        }
+        let config = Config::default();
+        let files = FileSet::from_path(dir.path(), &config).unwrap();
+        let ctx = AnalysisContext::new(&files, &config, Some(dir.path()));
+
+        let result = Analyzer::new().analyze_repo(&ctx).unwrap();
+
+        let metrics_of = |file: &str| {
+            let classes: Vec<&ClassMetrics> = result
+                .classes
+                .iter()
+                .filter(|class| class.file == file)
+                .collect();
+            assert_eq!(classes.len(), 1, "{file}");
+            let class = classes[0];
+            (
+                class.class_name.clone(),
+                class.parent_class.clone(),
+                class.nom,
+                class.nof,
+                class.wmc,
+                class.lcom,
+            )
+        };
+        assert_eq!(metrics_of("Counter.tsx"), metrics_of("Counter.ts"));
+        assert_eq!(metrics_of("Counter.jsx"), metrics_of("Counter.js"));
+        assert_eq!(metrics_of("Counter.tsx").0, "Counter");
+        assert_eq!(metrics_of("Counter.tsx").1.as_deref(), Some("Base"));
     }
 
     #[test]

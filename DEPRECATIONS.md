@@ -174,6 +174,11 @@ now come from the definitions of the shared index.
 | Declarations without a body in `search` | Not indexed. | Not indexed. | None. |
 | `search index` cache | The cache holds chunks that the parser made. | A file that did not change keeps its old chunks. | Delete `.omen/search.db` to build all chunks again. |
 
+### Cohesion for TSX and JSX
+
+`cohesion` now measures the classes of `.tsx` and `.jsx` files. Before 5.0, it
+skipped them.
+
 ### MCP server
 
 `docs/MCP_CONTEXT.md` has the full contract for arguments, errors, and the
