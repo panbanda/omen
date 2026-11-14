@@ -1214,6 +1214,28 @@ mod tests {
         assert!(second["next_offset"].is_null());
     }
 
+    /// The depth and the limit both cut the callees. One entry of `truncated`
+    /// gives the total before the two cuts and the count after them.
+    #[test]
+    fn impact_gives_one_truncation_for_the_depth_and_the_limit() {
+        let (server, dir) = create_test_server();
+        std::fs::write(
+            dir.path().join("graph.rs"),
+            "fn leaf() {}\nfn mid() { leaf(); }\nfn other() {}\nfn start() { mid(); other(); }\n",
+        )
+        .unwrap();
+        let cut = envelope_of(
+            &server,
+            "impact",
+            json!({"symbol": "start", "direction": "callees", "depth": 1, "limit": 1}),
+        );
+        assert_eq!(cut["returned"], 1);
+        assert_eq!(
+            cut["truncated"],
+            json!([{"path": "/callees/*/symbols", "total": 3, "returned": 1}])
+        );
+    }
+
     #[test]
     fn score_with_limit_1_gives_one_component_and_each_envelope_field() {
         let (server, dir) = create_test_server();
@@ -1504,7 +1526,7 @@ mod tests {
         assert_eq!(cut["result"]["total_callers"], 1);
         assert_eq!(
             cut["truncated"],
-            json!([{"path": "/callers", "total": 2, "returned": 1}])
+            json!([{"path": "/callers/*/symbols", "total": 2, "returned": 1}])
         );
         let whole = envelope_of(
             &server,

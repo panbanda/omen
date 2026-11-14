@@ -542,8 +542,8 @@ fn impact(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
     let all = analyze_view(&view, symbol, usize::MAX, direction, min_basis(arguments));
     let mut truncated = Vec::new();
     for (path, total, returned) in [
-        ("/callers", all.total_callers, report.total_callers),
-        ("/callees", all.total_callees, report.total_callees),
+        ("/callers/*/symbols", all.total_callers, report.total_callers),
+        ("/callees/*/symbols", all.total_callees, report.total_callees),
     ] {
         if total > returned {
             truncated.push(Truncation {
