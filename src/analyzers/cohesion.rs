@@ -118,16 +118,20 @@ impl Analyzer {
         Ok(self.analyze_index(&index, &too_large))
     }
 
+    fn is_skipped(&self, file: &str, excluded: &HashSet<&str>) -> bool {
+        if excluded.contains(file) {
+            return true;
+        }
+        self.config.skip_test_files && is_test_file(Path::new(file))
+    }
+
     /// Calculates the metrics of the classes of an index. The analyzer does
     /// not examine the files in `excluded`.
     pub fn analyze_index(&self, index: &CodeIndex, excluded: &HashSet<&str>) -> Analysis {
         let views: Vec<View<'_>> = index
             .files
             .iter()
-            .filter(|facts| {
-                !excluded.contains(facts.file.as_str())
-                    && !(self.config.skip_test_files && is_test_file(Path::new(&facts.file)))
-            })
+            .filter(|facts| !self.is_skipped(&facts.file, excluded))
             .filter_map(|facts| match class_model(facts.language) {
                 ClassModel::Classes(syntax) => Some(View { facts, syntax }),
                 ClassModel::NotApplicable(_) => None,
