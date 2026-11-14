@@ -32,6 +32,11 @@ use omen::config::Config;
 use omen::mcp::McpServer;
 use omen::output::Format;
 
+/// The scope of a command, with the commit of `--ref` for a local repository.
+fn scope_of(cli: &Cli, args: &omen::cli::AnalyzerArgs) -> Scope {
+    Scope::from(args).with_ref(commands::repository::local_ref(cli))
+}
+
 fn logging_filter(verbose: bool, rust_log: Option<&str>) -> EnvFilter {
     let directive = rust_log.unwrap_or(if verbose { "debug" } else { "off" });
     EnvFilter::new(directive)
@@ -84,6 +89,8 @@ fn run(cli: Cli) -> omen::core::Result<()> {
 }
 
 fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
+    commands::repository::check_ref(cli)?;
+
     let config = match &cli.config {
         Some(config_path) => Config::from_file(config_path)?,
         None => Config::load_default(path)?,
@@ -125,7 +132,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         }
         Command::Complexity(args) => {
             let request = ComplexityRequest {
-                scope: Scope::from(&args.common),
+                scope: scope_of(cli, &args.common),
                 gate: args.gate.mode,
                 max_cyclomatic: args.max_cyclomatic,
                 max_cognitive: args.max_cognitive,
@@ -134,7 +141,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         }
         Command::Stubs(args) => {
             let request = StubsRequest {
-                scope: Scope::from(&args.common),
+                scope: scope_of(cli, &args.common),
                 gate: args.gate.mode,
                 gate_severity: args.gate_severity,
             };
@@ -151,28 +158,28 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             commands::diff::run(path, &config, &request, format, &mut stdout())?;
         }
         Command::Changes(args) => {
-            analyzers::run_changes(path, &config, format, &Scope::from(args), &mut stdout())?;
+            analyzers::run_changes(path, &config, format, &scope_of(cli, args), &mut stdout())?;
         }
         Command::Deadcode(args) => {
             let request = DeadcodeRequest {
-                scope: Scope::from(&args.common),
+                scope: scope_of(cli, &args.common),
                 cargo_check: args.cargo_check,
             };
             analyzers::run_deadcode(path, &config, format, &request, &mut stdout())?;
         }
         Command::Satd(args) => {
-            analyzers::run_satd(path, &config, format, &Scope::from(args), &mut stdout())?;
+            analyzers::run_satd(path, &config, format, &scope_of(cli, args), &mut stdout())?;
         }
         Command::Clones(args) => {
             let request = ClonesRequest {
-                scope: Scope::from(&args.common),
+                scope: scope_of(cli, &args.common),
                 include_tests: args.include_tests,
             };
             analyzers::run_clones(path, &config, format, &request, &mut stdout())?;
         }
         Command::Defect(args) => {
             let request = WindowedRequest {
-                scope: Scope::from(&args.common),
+                scope: scope_of(cli, &args.common),
                 window: WindowRequest {
                     since: args.window.since.clone(),
                     days: args.window.days,
@@ -182,7 +189,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         }
         Command::Hotspot(args) => {
             let request = WindowedRequest {
-                scope: Scope::from(&args.common),
+                scope: scope_of(cli, &args.common),
                 window: WindowRequest {
                     since: args.window.since.clone(),
                     days: args.window.days,
@@ -196,7 +203,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 path,
                 &config,
                 format,
-                &Scope::from(args),
+                &scope_of(cli, args),
                 &mut stdout(),
             )?;
         }
@@ -206,7 +213,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 path,
                 &config,
                 format,
-                &Scope::from(args),
+                &scope_of(cli, args),
                 &mut stdout(),
             )?;
         }
@@ -216,7 +223,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 path,
                 &config,
                 format,
-                &Scope::from(args),
+                &scope_of(cli, args),
                 &mut stdout(),
             )?;
         }
@@ -226,7 +233,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 path,
                 &config,
                 format,
-                &Scope::from(args),
+                &scope_of(cli, args),
                 &mut stdout(),
             )?;
         }
@@ -236,7 +243,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 path,
                 &config,
                 format,
-                &Scope::from(args),
+                &scope_of(cli, args),
                 &mut stdout(),
             )?;
         }
@@ -246,7 +253,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 path,
                 &config,
                 format,
-                &Scope::from(args),
+                &scope_of(cli, args),
                 &mut stdout(),
             )?;
         }
@@ -256,13 +263,13 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 path,
                 &config,
                 format,
-                &Scope::from(args),
+                &scope_of(cli, args),
                 &mut stdout(),
             )?;
         }
         Command::Churn(args) => {
             let request = ChurnRequest {
-                scope: Scope::from(&args.common),
+                scope: scope_of(cli, &args.common),
                 window: WindowRequest {
                     since: args.since.clone(),
                     days: args.days,
@@ -272,7 +279,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         }
         Command::Flags(args) => {
             let request = FlagsRequest {
-                scope: Scope::from(&args.common),
+                scope: scope_of(cli, &args.common),
                 provider: args.provider.clone(),
                 stale_days: args.stale_days,
             };
@@ -302,11 +309,12 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
             }
         },
         Command::All(args) => {
-            commands::all::run(path, &config, &Scope::from(args), format, &mut stdout())?;
+            commands::all::run(path, &config, &scope_of(cli, args), format, &mut stdout())?;
         }
         Command::Context(args) => {
             let request = ContextRequest {
                 max_tokens: args.max_tokens,
+                git_ref: commands::repository::local_ref(cli).map(str::to_string),
             };
             commands::context::run(path, &config, &request, format, &mut stdout())?;
         }
@@ -333,7 +341,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
         Command::Outline(args) => {
             let request = OutlineRequest {
                 file: args.file.clone(),
-                scope: Scope::from(&args.common),
+                scope: scope_of(cli, &args.common),
             };
             commands::outline::run(path, &config, &request, format, &mut stdout())?;
         }
@@ -347,7 +355,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                     ImpactDirection::Both => Direction::Both,
                 },
                 min_basis: args.min_basis,
-                scope: Scope::from(&args.common),
+                scope: scope_of(cli, &args.common),
                 git_ref: commands::repository::local_ref(cli).map(str::to_string),
             };
             commands::impact::run(path, &config, &request, format, &mut stdout())?;
@@ -358,7 +366,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 include_source: !args.no_source,
                 max_source_lines: args.max_source_lines,
                 min_basis: args.min_basis,
-                scope: Scope::from(&args.common),
+                scope: scope_of(cli, &args.common),
                 git_ref: commands::repository::local_ref(cli).map(str::to_string),
             };
             commands::symbol::run(path, &config, &request, format, &mut stdout())?;

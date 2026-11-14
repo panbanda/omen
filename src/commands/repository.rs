@@ -82,6 +82,81 @@ pub fn reads_repository(command: &Command) -> bool {
     }
 }
 
+/// What a command does with `--ref` on a local repository.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefSupport {
+    /// The command reads the files of the commit.
+    Honours,
+    /// The command does not read the repository files, so `--ref` has no use.
+    Unused,
+    /// The command reads the working tree or the history from `HEAD`. The
+    /// string is the reason.
+    Rejects(&'static str),
+}
+
+const HISTORY: &str = "it reads the history from `HEAD`";
+const WORKING_TREE: &str = "it reads the working tree";
+
+/// How a command treats `--ref`. The `match` has no wildcard arm, so a new
+/// command needs a decision here.
+pub fn ref_support(command: &Command) -> RefSupport {
+    match command {
+        Command::Complexity(_)
+        | Command::Satd(_)
+        | Command::Stubs(_)
+        | Command::Deadcode(_)
+        | Command::Clones(_)
+        | Command::Graph(_)
+        | Command::Cohesion(_)
+        | Command::Repomap(_)
+        | Command::Smells(_)
+        | Command::Flags(_)
+        | Command::Context(_)
+        | Command::Outline(_)
+        | Command::Impact(_)
+        | Command::Symbol(_) => RefSupport::Honours,
+        Command::Report(command) => match command.subcommand {
+            ReportSubcommand::Generate(_) => RefSupport::Honours,
+            ReportSubcommand::Serve(_)
+            | ReportSubcommand::Validate(_)
+            | ReportSubcommand::Render(_) => RefSupport::Unused,
+        },
+        Command::Benchmark(_) | Command::Eval(_) => RefSupport::Unused,
+        Command::Mcp(command) => match command.subcommand {
+            Some(McpSubcommand::Manifest) => RefSupport::Unused,
+            None => RefSupport::Rejects(WORKING_TREE),
+        },
+        #[cfg(feature = "mutation")]
+        Command::Mutation(_) => RefSupport::Rejects(WORKING_TREE),
+        Command::Search(_) => RefSupport::Rejects("the search index reads the working tree"),
+        Command::Churn(_)
+        | Command::Defect(_)
+        | Command::Changes(_)
+        | Command::Diff(_)
+        | Command::Tdg(_)
+        | Command::Hotspot(_)
+        | Command::Temporal(_)
+        | Command::Ownership(_)
+        | Command::Score(_)
+        | Command::All(_) => RefSupport::Rejects(HISTORY),
+    }
+}
+
+/// Give an error if `--ref` selects a commit of a local repository and the
+/// command cannot read that commit. Without the error, the command would
+/// read the working tree and not tell the user.
+pub fn check_ref(cli: &Cli) -> crate::core::Result<()> {
+    if local_ref(cli).is_none() {
+        return Ok(());
+    }
+    match ref_support(&cli.command) {
+        RefSupport::Rejects(reason) => Err(crate::core::Error::InvalidArgument(format!(
+            "`--ref` does not apply to this command, because {reason}. Remove the `--ref` flag."
+        ))),
+        RefSupport::Honours | RefSupport::Unused => Ok(()),
+    }
+}
+
 /// The message for a `-p` value that is not a directory. Before 5.0, `-p` was
 /// the period of `score trend` and the port of `report serve`, so the message
 /// names the flag that has that meaning now.

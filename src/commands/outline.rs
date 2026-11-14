@@ -3,7 +3,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-use super::scope::{build_context, scoped_file_set, Scope};
+use super::scope::{build_context_from, scoped_inputs, Scope};
 use crate::config::Config;
 use crate::core::Result;
 use crate::output::{format_with_limits, Format};
@@ -25,7 +25,11 @@ pub fn run(
     use crate::analyzers::outline::{outline_file_in, Analyzer as OutlineAnalyzer, OutlineResult};
     use crate::core::Analyzer;
 
-    let mut result = if let Some(file) = &request.file {
+    let mut result = if let Some(file) = request
+        .file
+        .as_ref()
+        .filter(|_| request.scope.git_ref.is_none())
+    {
         // A relative path starts at the repository path and not at the
         // directory of the shell.
         let resolved = if file.is_relative() {
@@ -37,8 +41,18 @@ pub fn run(
             files: vec![outline_file_in(path, &resolved)?],
         }
     } else {
-        let file_set = scoped_file_set(path, config, &request.scope)?;
-        let ctx = build_context(path, &file_set, config);
+        let (mut file_set, source) = scoped_inputs(path, config, &request.scope)?;
+        if let Some(file) = &request.file {
+            let relative = file.strip_prefix(path).unwrap_or(file);
+            file_set = file_set.filter_by_paths(&[relative.to_path_buf()]);
+            if file_set.is_empty() {
+                return Err(crate::core::Error::InvalidArgument(format!(
+                    "The file `{}` is not in the commit of `--ref`.",
+                    file.display()
+                )));
+            }
+        }
+        let ctx = build_context_from(path, &file_set, config, source);
         OutlineAnalyzer.analyze(&ctx)?
     };
 

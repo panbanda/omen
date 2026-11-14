@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use super::gate::{gate_dispatch, resolve_gate_mode};
-use super::scope::{build_context, scoped_file_set, Scope};
+use super::scope::{build_context_from, scoped_inputs, Scope};
 use crate::cli::{GateMode, GateSeverity};
 use crate::config::Config;
 use crate::core::{Analyzer, Result};
@@ -28,8 +28,8 @@ pub fn run(
     format: Format,
     out: &mut dyn Write,
 ) -> Result<()> {
-    let file_set = scoped_file_set(path, config, &request.scope)?;
-    let ctx = build_context(path, &file_set, config);
+    let (file_set, source) = scoped_inputs(path, config, &request.scope)?;
+    let ctx = build_context_from(path, &file_set, config, source);
 
     let analyzer = crate::analyzers::stubs::Analyzer::new();
     let result = analyzer.analyze(&ctx)?;

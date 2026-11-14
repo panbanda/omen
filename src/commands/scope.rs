@@ -16,6 +16,16 @@ pub struct Scope {
     pub changed_since: Option<String>,
     pub top: Option<usize>,
     pub offset: Option<usize>,
+    /// Read the files of this commit and not the working tree.
+    pub git_ref: Option<String>,
+}
+
+impl Scope {
+    /// The scope that reads the files of `git_ref`, if a reference is present.
+    pub fn with_ref(mut self, git_ref: Option<&str>) -> Self {
+        self.git_ref = git_ref.map(str::to_string);
+        self
+    }
 }
 
 impl From<&AnalyzerArgs> for Scope {
@@ -26,6 +36,7 @@ impl From<&AnalyzerArgs> for Scope {
             changed_since: args.changed_since.clone(),
             top: args.pagination.top,
             offset: args.pagination.offset,
+            git_ref: None,
         }
     }
 }
@@ -37,7 +48,21 @@ pub fn build_context<'a>(
     file_set: &'a FileSet,
     config: &'a Config,
 ) -> AnalysisContext<'a> {
+    build_context_from(path, file_set, config, None)
+}
+
+/// Like `build_context`, with the source that gives the content of the files.
+/// A source of `None` reads the working tree.
+pub fn build_context_from<'a>(
+    path: &'a PathBuf,
+    file_set: &'a FileSet,
+    config: &'a Config,
+    source: Option<Arc<dyn ContentSource>>,
+) -> AnalysisContext<'a> {
     let mut ctx = AnalysisContext::new(file_set, config, Some(path));
+    if let Some(source) = source {
+        ctx = ctx.with_content_source(source);
+    }
     if let Ok(repo) = crate::git::GitRepo::open(path) {
         let root = repo.root().to_path_buf();
         ctx = ctx.with_git_path(Box::leak(Box::new(root)));
@@ -114,6 +139,16 @@ pub fn changed_files_between(
         .filter(|line| !line.trim().is_empty())
         .map(PathBuf::from)
         .collect())
+}
+
+/// The files of a scope and the source of their content. With a reference in
+/// the scope, both come from that commit.
+pub fn scoped_inputs(
+    path: &PathBuf,
+    config: &Config,
+    scope: &Scope,
+) -> Result<(FileSet, Option<Arc<dyn ContentSource>>)> {
+    index_scope(path, config, scope, scope.git_ref.as_deref())
 }
 
 /// The files of `symbol` and `impact`, and the source of their content. With

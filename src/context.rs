@@ -1,11 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
 use crate::analyzers::{complexity, repomap, satd};
 use crate::config::Config;
-use crate::core::{AnalysisContext, Analyzer, FileSet, Language, Result};
+use crate::core::{AnalysisContext, Analyzer, ContentSource, FileSet, Language, Result};
 
 pub fn max_symbols_for_token_budget(max_tokens: usize) -> usize {
     max_tokens.saturating_div(250).clamp(5, 100)
@@ -184,7 +185,23 @@ pub fn build_context_with_totals(
     max_symbols: Option<usize>,
     max_risks: Option<usize>,
 ) -> Result<(Context, ListTotals)> {
-    let ctx = AnalysisContext::new(files, config, Some(root));
+    build_context_with_source(root, files, config, None, max_symbols, max_risks)
+}
+
+/// Like `build_context_with_totals`. A `source` gives the content of the
+/// files, for example the files of a commit. `None` reads the working tree.
+pub fn build_context_with_source(
+    root: &Path,
+    files: &FileSet,
+    config: &Config,
+    source: Option<Arc<dyn ContentSource>>,
+    max_symbols: Option<usize>,
+    max_risks: Option<usize>,
+) -> Result<(Context, ListTotals)> {
+    let mut ctx = AnalysisContext::new(files, config, Some(root));
+    if let Some(source) = source {
+        ctx = ctx.with_content_source(source);
+    }
     let repository = root
         .canonicalize()
         .ok()

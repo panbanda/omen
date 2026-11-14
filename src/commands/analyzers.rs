@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use indicatif::{ProgressBar, ProgressStyle};
 
-use super::scope::{build_context, scoped_file_set, Scope};
+use super::scope::{build_context, build_context_from, scoped_file_set, scoped_inputs, Scope};
 use crate::analyzers;
 use crate::cli::ChurnWindow;
 use crate::config::Config;
@@ -109,9 +109,9 @@ pub fn run_analyzer_instance<A: Analyzer>(
     analyzer: A,
     out: &mut dyn Write,
 ) -> Result<A::Output> {
-    let file_set = match scope {
-        Some(scope) => scoped_file_set(path, config, scope)?,
-        None => crate::core::FileSet::from_path(path, config)?,
+    let (file_set, source) = match scope {
+        Some(scope) => scoped_inputs(path, config, scope)?,
+        None => (crate::core::FileSet::from_path(path, config)?, None),
     };
 
     let spinner = if is_tty() {
@@ -131,7 +131,7 @@ pub fn run_analyzer_instance<A: Analyzer>(
         spinner.set_message(format!("Analyzing {} files...", file_set.len()));
     }
 
-    let mut ctx = build_context(path, &file_set, config);
+    let mut ctx = build_context_from(path, &file_set, config, source);
 
     let progress_counter = Arc::new(AtomicUsize::new(0));
     let total_files = file_set.len();
@@ -322,6 +322,12 @@ pub fn run_deadcode(
     request: &DeadcodeRequest,
     out: &mut dyn Write,
 ) -> Result<()> {
+    if request.cargo_check && request.scope.git_ref.is_some() {
+        return Err(Error::InvalidArgument(
+            "`--cargo-check` runs `cargo check` on the working tree. Remove `--cargo-check` or `--ref`."
+                .to_string(),
+        ));
+    }
     run_analyzer_instance(
         path,
         config,
