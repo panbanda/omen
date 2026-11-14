@@ -20,10 +20,8 @@ use chrono::Utc;
 use petgraph::Direction;
 use serde::{Deserialize, Serialize};
 
-use crate::analyzers::import_resolver::{
-    build_dependency_graph, extract_resolved_imports, ImportIndex,
-};
 use crate::core::{AnalysisContext, Analyzer as AnalyzerTrait, Result};
+use crate::index::dependencies::{build_dependency_graph, file_dependencies};
 use crate::index::graph::cyclic_components;
 
 /// Detection thresholds.
@@ -103,17 +101,11 @@ impl Analyzer {
     /// Analyze a repository for architectural smells.
     /// Uses ctx.read_file() to support both filesystem and git tree sources.
     pub fn analyze_repo(&self, ctx: &AnalysisContext<'_>) -> Result<Analysis> {
-        // Phase 1: Get files from context (already filtered by language)
-        let files: Vec<_> = ctx.files.iter().collect();
-        let file_paths: Vec<std::path::PathBuf> = files.iter().map(|p| (*p).clone()).collect();
-
-        // Build the shared import index, then extract+resolve every file's
-        // imports and build the graph through the same shared functions
-        // `graph` uses. Sharing this whole pipeline (not just the resolver)
-        // is what guarantees the two analyzers can never disagree on edges
-        // or cycles for the same input (issue #479).
-        let file_index = ImportIndex::new(&file_paths, ctx.root);
-        let file_imports = extract_resolved_imports(&file_paths, ctx, &file_index, false);
+        // The dependency graph comes from the shared index through the same
+        // functions that `graph` calls, so the two analyzers cannot disagree
+        // on the edges or on the cycles for the same input.
+        let index = ctx.code_index()?;
+        let file_imports = file_dependencies(&index, false);
         let (graph, node_indices) = build_dependency_graph(&file_imports, false);
 
         // Calculate component metrics

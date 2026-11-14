@@ -4,6 +4,7 @@
 
 pub mod build;
 pub mod calls;
+pub mod dependencies;
 pub mod extract;
 pub mod graph;
 pub mod headers;

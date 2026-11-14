@@ -175,7 +175,7 @@ pub fn report_with_reader(
         }
     };
 
-    // Direct callers/callees using CallGraphIndex
+    // Direct callers and callees from the call view
     let caller_levels = index.callers(&[primary_idx], 1, opts.min_basis);
     let callers: Vec<ImpactSymbol> = caller_levels
         .into_iter()

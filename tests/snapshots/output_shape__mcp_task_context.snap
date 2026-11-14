@@ -26,7 +26,12 @@ expression: "shape(&response, &dynamic_key_objects)"
             },
             "call_evidence": [
               {
-                "basis": "string",
+                "basis": {
+                  "<one of>": [
+                    "null",
+                    "string"
+                  ]
+                },
                 "call": "string",
                 "caller": {
                   "end_line": "number",
@@ -42,6 +47,7 @@ expression: "shape(&response, &dynamic_key_objects)"
                     "qualified_name": "string"
                   }
                 ],
+                "line": "number",
                 "status": "string"
               }
             ],

@@ -1,7 +1,9 @@
-use omen::analyzers::repomap::{build_index, ResolutionStatus};
+use omen::index::build::CodeIndex;
+use omen::index::model::ResolutionStatus;
+use omen::index::view::{CallEvidence, CallView};
 use tempfile::TempDir;
 
-fn calls(files: &[(&str, &str)], caller: &str) -> Vec<omen::analyzers::repomap::CallResolution> {
+fn calls(files: &[(&str, &str)], caller: &str) -> Vec<CallEvidence> {
     let dir = TempDir::new().unwrap();
     let paths: Vec<_> = files
         .iter()
@@ -12,11 +14,10 @@ fn calls(files: &[(&str, &str)], caller: &str) -> Vec<omen::analyzers::repomap::
             path
         })
         .collect();
-    let index = build_index(dir.path(), &paths).unwrap();
-    index
-        .call_resolutions
+    let view = CallView::from_index(&CodeIndex::from_files(dir.path(), &paths));
+    view.resolve(caller)
         .into_iter()
-        .filter(|r| r.caller.qualified_name == caller)
+        .flat_map(|position| view.calls_of(position).to_vec())
         .collect()
 }
 
@@ -124,7 +125,7 @@ fn enclosing_type_disambiguates_self_and_this() {
 fn a_nested_definition_shadows_an_import_alias() {
     let r = calls(&[("main.ts", "import {helper as renamed} from './a';\nfunction caller(){\n function renamed() {}\n renamed();\n}"),
         ("a.ts", "export function helper() {}")], "main.ts:caller");
-    assert_eq!(r[0].candidates[0].qualified_name, "main.ts:renamed");
+    assert_eq!(r[0].candidates[0].qualified_name, "main.ts#caller.renamed");
 }
 
 #[test]

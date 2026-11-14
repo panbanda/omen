@@ -543,8 +543,8 @@ mod tests {
         assert_eq!(
             ambiguous["error"]["suggestions"],
             json!([
-                {"name": "same.rb:helper", "start_line": 2},
-                {"name": "same.rb:helper", "start_line": 7}
+                {"name": "same.rb#A.helper", "start_line": 2},
+                {"name": "same.rb#B.helper", "start_line": 7}
             ])
         );
         let selected = call(

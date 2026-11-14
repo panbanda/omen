@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 
 use super::{get_function_node_types, get_tree_sitter_language, queries};
-use crate::analyzers::{cohesion, repomap};
+use crate::analyzers::cohesion;
 use crate::core::Language;
 use crate::index::extract::{language_spec, NameRule};
 use crate::semantic::chunking;
@@ -50,9 +50,6 @@ fn listed(language: Language) -> bool {
 /// Kinds that the grammars do not have, as `table/language/kind`. Remove an
 /// entry in the change that corrects the table. Do not add an entry.
 const KNOWN_UNKNOWN_KINDS: &[&str] = &[
-    "call/Php/method_call_expression",
-    "call/Ruby/method_call",
-    "call/Rust/method_call_expression",
     "decision/CSharp/enhanced_for_statement",
     "decision/Java/conditional_expression",
     "decision/Java/switch_statement",
@@ -132,7 +129,6 @@ fn analyzer_tables(language: Language) -> Vec<(&'static str, Vec<&'static str>)>
             queries::get_comment_node_types(language).to_vec(),
         ),
         ("function", get_function_node_types(language)),
-        ("call", repomap::get_call_node_kinds(language)),
         ("method", cohesion::get_method_node_types(language)),
         ("field", cohesion::get_field_node_types(language)),
         ("chunk_type", chunking::get_type_node_kinds(language)),

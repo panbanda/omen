@@ -332,6 +332,10 @@ impl LanguageSpec for Rust {
             .filter(|scope| scope.kind == Some(SymbolKind::Module))
             .map(|scope| scope.name.clone())
             .collect();
+        let in_function = context
+            .scopes
+            .iter()
+            .any(|scope| scope.role == ScopeRole::Function);
         let depth = modules.len();
         for binding in &mut out[first..] {
             let mut path = binding.module_path.as_str();
@@ -350,6 +354,17 @@ impl LanguageSpec for Rust {
                 let remaining = modules[..depth - removed].join("::");
                 binding.module_path = joined("self", &joined(&remaining, path));
             }
+        }
+        // A renamed import in a function body binds the new name in that body
+        // only. The index has no scope for it, thus a binding for the whole
+        // file would resolve a call in a different function to the wrong item.
+        if in_function {
+            let mut position = 0;
+            out.retain(|binding| {
+                let keep = position < first || binding.local_name == binding.imported_name;
+                position += 1;
+                keep
+            });
         }
     }
 
@@ -808,6 +823,25 @@ mod tests {
                 "2 Named crate::util::helper helper->helper src/util.rs [src/util.rs#helper]",
             ]
         );
+    }
+
+    #[test]
+    fn test_renamed_import_in_a_function_body_is_not_a_binding_of_the_file() {
+        use crate::index::imports::testing::rows;
+        let files = [
+            (
+                "main.rs",
+                "mod a;\nfn other() {\n    use crate::a::helper as renamed;\n}\nfn plain() {\n    use crate::a::helper;\n}\nuse crate::a::helper as shown;\n",
+            ),
+            ("a.rs", "pub fn helper() {}\n"),
+        ];
+        let found = rows(&files, "main.rs");
+        assert!(
+            !found.iter().any(|row| row.contains("->renamed")),
+            "{found:?}"
+        );
+        assert!(found.iter().any(|row| row.contains("->shown")), "{found:?}");
+        assert!(found.iter().any(|row| row.starts_with("6 ")), "{found:?}");
     }
 
     #[test]

@@ -1,25 +1,23 @@
 //! Repository map (PageRank-ranked symbols) analyzer.
 //!
-//! Generates a PageRank-ranked index of repository symbols (functions, classes, etc.)
+//! Generates a PageRank-ranked index of repository symbols (functions and methods)
 //! optimized for LLM context. Higher-ranked symbols are more "central" in the codebase
-//! based on call relationships.
+//! based on call relationships. The calls come from the shared index of the repository.
 
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
+use std::collections::HashSet;
+use std::path::Path;
 
 use chrono::Utc;
 use ignore::WalkBuilder;
-use petgraph::graph::{DiGraph, NodeIndex};
-use petgraph::visit::EdgeRef;
+use petgraph::graph::DiGraph;
 use petgraph::Direction;
-use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::core::{is_test_file, AnalysisContext, Analyzer as AnalyzerTrait, Language, Result};
+use crate::index::build::CodeIndex;
 use crate::index::graph::{pagerank, PageRankOptions};
-use crate::parser::{extract_functions, extract_imports, ImportKind, Parser};
-
-mod bindings;
+use crate::index::model::SymbolKind as IndexKind;
+use crate::index::view::{CallView, DEFAULT_MIN_BASIS};
 
 /// Repomap analyzer configuration.
 #[derive(Debug, Clone)]
@@ -46,548 +44,6 @@ impl Default for Config {
             skip_test_files: true,
         }
     }
-}
-
-/// Internal structure to hold symbol info during collection.
-#[derive(Clone)]
-pub struct SymbolInfo {
-    pub name: String,
-    pub qualified_name: String,
-    pub kind: SymbolKind,
-    pub file: String,
-    pub line: u32,
-    pub end_line: u32,
-    pub signature: String,
-    pub calls: Vec<String>,
-    /// Dependency paths declared by this symbol's file.
-    pub imports: Vec<String>,
-    pub is_exported: bool,
-    /// Lexical function-body scope, in bytes; None denotes file scope.
-    pub lexical_scope: Option<(usize, usize)>,
-    pub body_start: usize,
-    pub import_bindings: Vec<bindings::ImportBinding>,
-    pub owner: Option<String>,
-}
-
-/// Source evidence for a candidate; path:name alone is not a unique identity.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SymbolLocation {
-    pub qualified_name: String,
-    pub file: String,
-    pub line: u32,
-    pub end_line: u32,
-}
-
-impl From<&SymbolInfo> for SymbolLocation {
-    fn from(symbol: &SymbolInfo) -> Self {
-        Self {
-            qualified_name: symbol.qualified_name.clone(),
-            file: symbol.file.clone(),
-            line: symbol.line,
-            end_line: symbol.end_line,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ResolutionStatus {
-    UniqueCandidate,
-    Ambiguous,
-    Unresolved,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ResolutionBasis {
-    EnclosingType,
-    LexicalScope,
-    ImportedAlias,
-    SameFileName,
-    ReceiverName,
-    ImportedPath,
-    NameOnly,
-}
-
-/// Name evidence, not a compiler-proven binding. Calls are deduplicated by name.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CallResolution {
-    pub caller: SymbolLocation,
-    pub call: String,
-    pub status: ResolutionStatus,
-    pub basis: ResolutionBasis,
-    pub candidates: Vec<SymbolLocation>,
-}
-
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct ResolutionSummary {
-    pub unique_candidate: usize,
-    pub ambiguous: usize,
-    pub unresolved: usize,
-}
-
-/// Index of the call graph for a repository — the parsed/collected phase.
-/// Callers can use `resolve`, `callers`, and `callees` without re-parsing.
-pub struct CallGraphIndex {
-    pub symbols: Vec<SymbolInfo>,
-    pub graph: DiGraph<usize, ()>,
-    pub by_qualified: HashMap<String, usize>,
-    pub by_name: HashMap<String, Vec<usize>>,
-    pub(crate) node_indices: HashMap<usize, NodeIndex>,
-    pub call_resolutions: Vec<CallResolution>,
-}
-
-impl CallGraphIndex {
-    /// Resolve a symbol query to zero or more symbol indices.
-    ///
-    /// Qualified queries preserve same-file duplicates; bare queries return all
-    /// matches. Results are ordered by file, name, and source position.
-    pub fn resolve(&self, name: &str) -> Vec<usize> {
-        // A key of the shared index, `file#Container.name`, names a file and
-        // a name. The tools of the shared index give this form.
-        if let Some((file, path)) = name.split_once('#') {
-            let path = path.split('~').next().unwrap_or(path);
-            let bare = path.rsplit('.').next().unwrap_or(path);
-            return self
-                .by_name
-                .get(bare)
-                .into_iter()
-                .flatten()
-                .copied()
-                .filter(|&idx| self.symbols[idx].file == file)
-                .collect();
-        }
-        if let Some((file, bare)) = name.rsplit_once(':') {
-            return self
-                .by_name
-                .get(bare)
-                .into_iter()
-                .flatten()
-                .copied()
-                .filter(|&idx| self.symbols[idx].file == file)
-                .collect();
-        }
-        // Tier 3: bare name → all candidates (already sorted lex by qualified_name)
-        self.by_name.get(name).cloned().unwrap_or_default()
-    }
-
-    /// Counts across all extracted calls in the input, not just traversed edges.
-    pub fn resolution_summary(&self) -> ResolutionSummary {
-        let mut summary = ResolutionSummary::default();
-        for call in &self.call_resolutions {
-            match call.status {
-                ResolutionStatus::UniqueCandidate => summary.unique_candidate += 1,
-                ResolutionStatus::Ambiguous => summary.ambiguous += 1,
-                ResolutionStatus::Unresolved => summary.unresolved += 1,
-            }
-        }
-        summary
-    }
-
-    /// BFS returning callers of `roots` up to `depth` levels.
-    ///
-    /// Returns one `Vec<usize>` per BFS level (level 0 = direct callers).
-    /// Each level is sorted by symbol index. Cycles are safe (visited set).
-    pub fn callers(&self, roots: &[usize], depth: usize) -> Vec<Vec<usize>> {
-        self.bfs_traverse(roots, depth, Direction::Incoming)
-    }
-
-    /// BFS returning callees of `roots` up to `depth` levels.
-    ///
-    /// Returns one `Vec<usize>` per BFS level (level 0 = direct callees).
-    /// Each level is sorted by symbol index. Cycles are safe (visited set).
-    pub fn callees(&self, roots: &[usize], depth: usize) -> Vec<Vec<usize>> {
-        self.bfs_traverse(roots, depth, Direction::Outgoing)
-    }
-
-    fn bfs_traverse(&self, roots: &[usize], depth: usize, dir: Direction) -> Vec<Vec<usize>> {
-        if depth == 0 {
-            return vec![];
-        }
-
-        let mut visited: HashSet<NodeIndex> = HashSet::new();
-        // Pre-insert root node indices into visited so we don't revisit them
-        for &root_idx in roots {
-            if let Some(&ni) = self.node_indices.get(&root_idx) {
-                visited.insert(ni);
-            }
-        }
-
-        // Queue entries: (NodeIndex, depth_remaining)
-        let mut queue: VecDeque<(NodeIndex, usize)> = VecDeque::new();
-        for &root_idx in roots {
-            if let Some(&ni) = self.node_indices.get(&root_idx) {
-                queue.push_back((ni, depth));
-            }
-        }
-
-        // levels indexed 0..depth
-        let mut levels: Vec<Vec<usize>> = vec![vec![]; depth];
-
-        while let Some((node, remaining)) = queue.pop_front() {
-            let level_idx = depth - remaining;
-            let neighbors: Vec<NodeIndex> = match dir {
-                Direction::Incoming => self
-                    .graph
-                    .edges_directed(node, Direction::Incoming)
-                    .map(|e| e.source())
-                    .collect(),
-                Direction::Outgoing => self
-                    .graph
-                    .edges_directed(node, Direction::Outgoing)
-                    .map(|e| e.target())
-                    .collect(),
-            };
-
-            for neighbor in neighbors {
-                if visited.contains(&neighbor) {
-                    continue;
-                }
-                visited.insert(neighbor);
-                let Some(&sym_idx) = self.graph.node_weight(neighbor) else {
-                    continue;
-                };
-                if level_idx < depth {
-                    levels[level_idx].push(sym_idx);
-                }
-                if remaining > 1 {
-                    queue.push_back((neighbor, remaining - 1));
-                }
-            }
-        }
-
-        // Sort each level by symbol index for determinism
-        for level in &mut levels {
-            level.sort_unstable();
-        }
-
-        levels
-    }
-}
-
-/// Build a `CallGraphIndex` from a list of absolute file paths.
-///
-/// This contains the parse/symbol-collection/graph-build phases (no PageRank).
-pub fn build_index(repo_path: &Path, files: &[PathBuf]) -> Result<CallGraphIndex> {
-    build_index_with_parser(repo_path, files, &|path| Parser::new().parse_file(path))
-}
-
-pub(crate) fn build_index_with_parser(
-    repo_path: &Path,
-    files: &[PathBuf],
-    parse: &(impl Fn(&Path) -> Result<crate::parser::ParseResult> + Sync),
-) -> Result<CallGraphIndex> {
-    // Phase 1: Parallel parsing - extract symbols from all files
-    let file_symbols: Vec<Vec<SymbolInfo>> = files
-        .par_iter()
-        .filter_map(|path| {
-            let lang = Language::detect(path)?;
-            let parse_result = parse(path).ok()?;
-            // Symbols are addressed by name, so only bound functions can be
-            // referenced from elsewhere or ranked meaningfully.
-            let functions: Vec<_> = extract_functions(&parse_result)
-                .into_iter()
-                .filter(|func| func.is_bound)
-                .collect();
-            let source = &parse_result.source;
-            let classes = crate::parser::extract_classes(&parse_result);
-            let import_bindings = bindings::extract(&parse_result.tree.root_node(), source);
-            let imports: Vec<String> = extract_imports(&parse_result)
-                .into_iter()
-                .filter(|import| import.kind == ImportKind::Use)
-                .map(|import| import.path)
-                .collect();
-
-            let rel_path = path
-                .strip_prefix(repo_path)
-                .unwrap_or(path)
-                .to_string_lossy()
-                .to_string();
-
-            let scopes: Vec<_> = functions.iter().filter_map(|f| f.body_byte_range).collect();
-            let symbols: Vec<SymbolInfo> = functions
-                .into_iter()
-                .map(|func| {
-                    let owners: Vec<_> = classes
-                        .iter()
-                        .filter(|class| {
-                            class.methods.iter().any(|method| {
-                                match (method.body_byte_range, func.body_byte_range) {
-                                    (Some(a), Some(b)) => a == b,
-                                    (None, None) => {
-                                        method.name == func.name
-                                            && method.start_line == func.start_line
-                                            && method.end_line == func.end_line
-                                    }
-                                    _ => false,
-                                }
-                            })
-                        })
-                        .collect();
-                    let qualified_name = format!("{}:{}", rel_path, func.name);
-                    let calls = if let Some((start, end)) = func.body_byte_range {
-                        let root = parse_result.tree.root_node();
-                        if let Some(body_node) = root.descendant_for_byte_range(start, end) {
-                            extract_calls_from_body(&body_node, source, lang)
-                        } else {
-                            Vec::new()
-                        }
-                    } else {
-                        Vec::new()
-                    };
-
-                    SymbolInfo {
-                        name: func.name.clone(),
-                        qualified_name,
-                        kind: SymbolKind::Function,
-                        file: rel_path.clone(),
-                        line: func.start_line,
-                        end_line: func.end_line,
-                        signature: func.signature.clone(),
-                        calls,
-                        imports: imports.clone(),
-                        is_exported: func.is_exported,
-                        lexical_scope: func.body_byte_range.and_then(|(start, end)| {
-                            scopes
-                                .iter()
-                                .copied()
-                                .filter(|&(a, b)| a < start && end < b)
-                                .min_by_key(|(a, b)| b - a)
-                        }),
-                        body_start: func.body_byte_range.map_or(0, |(start, _)| start),
-                        import_bindings: import_bindings.clone(),
-                        owner: (owners.len() == 1).then(|| owners[0].name.clone()),
-                    }
-                })
-                .collect();
-
-            Some(symbols)
-        })
-        .collect();
-
-    // Flatten
-    let mut symbols: Vec<SymbolInfo> = file_symbols.into_iter().flatten().collect();
-    symbols.sort_by(|a, b| {
-        (&a.qualified_name, a.line, a.end_line).cmp(&(&b.qualified_name, b.line, b.end_line))
-    });
-
-    // Build lookup indices
-    let mut by_qualified: HashMap<String, usize> = HashMap::with_capacity(symbols.len());
-    let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
-
-    for (idx, sym) in symbols.iter().enumerate() {
-        // `path:name` is not unique -- two same-named functions in one file
-        // collide. First-wins at least makes the choice deterministic.
-        by_qualified
-            .entry(sym.qualified_name.clone())
-            .or_insert(idx);
-        by_name.entry(sym.name.clone()).or_default().push(idx);
-    }
-
-    // Pre-sort name lookups for deterministic resolution (lex by qualified_name)
-    for indices in by_name.values_mut() {
-        indices.sort_by(|a, b| symbols[*a].qualified_name.cmp(&symbols[*b].qualified_name));
-    }
-
-    // Build call graph
-    let mut graph: DiGraph<usize, ()> = DiGraph::new();
-    let mut node_indices: HashMap<usize, NodeIndex> = HashMap::with_capacity(symbols.len());
-
-    for idx in 0..symbols.len() {
-        let node_idx = graph.add_node(idx);
-        node_indices.insert(idx, node_idx);
-    }
-
-    let mut call_resolutions = Vec::new();
-    // Only unambiguous name candidates become edges. Preserve uncertainty.
-    for (caller_idx, symbol) in symbols.iter().enumerate() {
-        let caller_node = node_indices[&caller_idx];
-
-        for call in &symbol.calls {
-            let (receiver, bare_call) = call
-                .rsplit_once('.')
-                .map_or((None, call.as_str()), |(receiver, name)| {
-                    (Some(receiver), name)
-                });
-            let binding = symbol
-                .import_bindings
-                .iter()
-                .find(|b| b.local == bare_call && receiver.is_none())
-                .filter(|_| {
-                    !by_name.get(bare_call).into_iter().flatten().any(|&i| {
-                        symbols[i].file == symbol.file
-                            && symbols[i].lexical_scope.is_some_and(|(a, b)| {
-                                a <= symbol.body_start && symbol.body_start < b
-                            })
-                    })
-                });
-            let lookup = binding.map_or(bare_call, |b| b.original.as_str());
-            let mut candidates: Vec<usize> = by_name
-                .get(lookup)
-                .into_iter()
-                .flatten()
-                .copied()
-                .filter(|&idx| language_family(&symbol.file) == language_family(&symbols[idx].file))
-                .filter(|&idx| {
-                    symbols[idx].lexical_scope.is_none_or(|(a, b)| {
-                        symbols[idx].file == symbol.file
-                            && a <= symbol.body_start
-                            && symbol.body_start < b
-                    })
-                })
-                .collect();
-            let has_local = candidates
-                .iter()
-                .any(|&idx| symbols[idx].file == symbol.file);
-            let basis = if let Some(binding) = binding {
-                candidates.retain(|&idx| {
-                    bindings::matches(&symbol.file, &binding.path, &symbols[idx].file)
-                        .unwrap_or_else(|| {
-                            import_matches_file(
-                                &binding.path,
-                                &symbols[idx].file,
-                                language_family(&symbol.file),
-                            )
-                        })
-                });
-                ResolutionBasis::ImportedAlias
-            } else if matches!(receiver, Some("self" | "this")) {
-                candidates.retain(|&idx| {
-                    symbols[idx].file == symbol.file
-                        && symbol.owner.is_some()
-                        && symbols[idx].owner == symbol.owner
-                });
-                ResolutionBasis::EnclosingType
-            } else if let Some(receiver) = receiver {
-                let qualified: Vec<usize> = candidates
-                    .iter()
-                    .copied()
-                    .filter(|&idx| {
-                        symbols[idx].owner.as_deref() == Some(receiver)
-                            || receiver_matches_file(receiver, &symbols[idx].file)
-                    })
-                    .collect();
-                // An explicit receiver absent from the index is unresolved.
-                // Falling back would link a same-named method on another object.
-                candidates = qualified;
-                ResolutionBasis::ReceiverName
-            } else if has_local {
-                candidates.retain(|&idx| symbols[idx].file == symbol.file);
-                let nearest = candidates
-                    .iter()
-                    .filter_map(|&idx| symbols[idx].lexical_scope)
-                    .map(|(a, b)| b - a)
-                    .min();
-                if let Some(width) = nearest {
-                    candidates.retain(|&idx| {
-                        symbols[idx]
-                            .lexical_scope
-                            .is_some_and(|(a, b)| b - a == width)
-                    });
-                    ResolutionBasis::LexicalScope
-                } else {
-                    ResolutionBasis::SameFileName
-                }
-            } else {
-                let imported: Vec<usize> = candidates
-                    .iter()
-                    .copied()
-                    .filter(|&idx| {
-                        symbol.imports.iter().any(|path| {
-                            import_matches_file(
-                                path,
-                                &symbols[idx].file,
-                                language_family(&symbol.file),
-                            )
-                        })
-                    })
-                    .collect();
-                if !imported.is_empty() {
-                    candidates = imported;
-                    ResolutionBasis::ImportedPath
-                } else {
-                    ResolutionBasis::NameOnly
-                }
-            };
-            let status = match candidates.as_slice() {
-                [] => ResolutionStatus::Unresolved,
-                [idx] => {
-                    graph.add_edge(caller_node, node_indices[idx], ());
-                    ResolutionStatus::UniqueCandidate
-                }
-                _ => ResolutionStatus::Ambiguous,
-            };
-            call_resolutions.push(CallResolution {
-                caller: symbol.into(),
-                call: call.clone(),
-                status,
-                basis,
-                candidates: candidates
-                    .iter()
-                    .map(|&idx| (&symbols[idx]).into())
-                    .collect(),
-            });
-        }
-    }
-
-    Ok(CallGraphIndex {
-        symbols,
-        graph,
-        by_qualified,
-        by_name,
-        node_indices,
-        call_resolutions,
-    })
-}
-
-fn language_family(file: &str) -> Option<Language> {
-    Language::detect(Path::new(file)).map(|lang| match lang {
-        Language::TypeScript | Language::Tsx | Language::Jsx => Language::JavaScript,
-        Language::Cpp => Language::C,
-        other => other,
-    })
-}
-
-/// Conservatively relate an import path to a candidate source file. This only
-/// narrows an existing same-name set; it never invents a symbol or edge.
-fn import_matches_file(import: &str, file: &str, language: Option<Language>) -> bool {
-    let file = Path::new(file);
-    let file_stem = file.file_stem().and_then(|value| value.to_str());
-    let parent = file
-        .parent()
-        .and_then(Path::file_name)
-        .and_then(|value| value.to_str());
-    match language {
-        Some(Language::Rust) => import
-            .rsplit("::")
-            .nth(1)
-            .is_some_and(|module| Some(module) == file_stem || Some(module) == parent),
-        Some(Language::Go) => import
-            .trim_end_matches('/')
-            .rsplit('/')
-            .next()
-            .is_some_and(|module| Some(module) == parent || Some(module) == file_stem),
-        Some(Language::JavaScript) | Some(Language::Ruby) => {
-            let imported = Path::new(import.trim_start_matches("./"));
-            let imported_stem = imported.file_stem().and_then(|value| value.to_str());
-            imported_stem == file_stem || imported_stem == parent
-        }
-        _ => false,
-    }
-}
-
-fn receiver_matches_file(receiver: &str, file: &str) -> bool {
-    let receiver = receiver.rsplit("::").next().unwrap_or(receiver);
-    let file = Path::new(file);
-    [
-        file.file_stem().and_then(|value| value.to_str()),
-        file.parent()
-            .and_then(Path::file_name)
-            .and_then(|value| value.to_str()),
-    ]
-    .into_iter()
-    .flatten()
-    .any(|component| component.eq_ignore_ascii_case(receiver))
 }
 
 /// Repomap analyzer.
@@ -629,47 +85,42 @@ impl Analyzer {
 
     /// Analyze a repository and generate a PageRank-ranked symbol map.
     pub fn analyze_repo(&self, repo_path: &Path) -> Result<Analysis> {
-        // Phase 1: Collect all file paths (fast)
         let files: Vec<_> = WalkBuilder::new(repo_path)
             .hidden(false)
             .build()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
-            .filter(|e| !self.config.skip_test_files || !is_test_file(e.path()))
             .filter(|e| Language::detect(e.path()).is_some())
             .map(|e| e.into_path())
             .collect();
 
-        self.analyze_files(repo_path, &files)
+        Ok(self.analyze_index(&CodeIndex::from_files(repo_path, &files)))
     }
 
-    /// Analyze using a pre-filtered file set from an AnalysisContext.
-    pub fn analyze_with_files(
-        &self,
-        repo_path: &Path,
-        file_set: &crate::core::FileSet,
-    ) -> Result<Analysis> {
-        let files: Vec<_> = file_set
-            .iter()
-            .filter(|path| {
-                if self.config.skip_test_files && is_test_file(path) {
-                    return false;
-                }
-                Language::detect(path).is_some()
-            })
-            .map(|p| repo_path.join(p))
-            .collect();
+    /// Rank the functions and the methods of an index.
+    ///
+    /// An edge of the graph is a call that the index resolved with the basis
+    /// `DEFAULT_MIN_BASIS` or a stronger basis.
+    pub fn analyze_index(&self, index: &CodeIndex) -> Analysis {
+        let view = CallView::from_index_where(index, |file| {
+            !self.config.skip_test_files || !is_test_file(Path::new(file))
+        });
 
-        self.analyze_files(repo_path, &files)
-    }
+        let mut graph: DiGraph<usize, ()> = DiGraph::new();
+        let mut node_of = vec![None; view.symbols.len()];
+        for (position, symbol) in view.symbols.iter().enumerate() {
+            if is_callable(symbol.kind) {
+                node_of[position] = Some(graph.add_node(position));
+            }
+        }
+        for (caller, callee) in view.edges(DEFAULT_MIN_BASIS) {
+            if let (Some(from), Some(to)) = (node_of[caller], node_of[callee]) {
+                graph.add_edge(from, to, ());
+            }
+        }
 
-    /// Core analysis logic operating on a list of absolute file paths.
-    fn analyze_files(&self, repo_path: &Path, files: &[PathBuf]) -> Result<Analysis> {
-        let index = build_index(repo_path, files)?;
-
-        // Phase 5: Calculate PageRank
         let scores = pagerank(
-            &index.graph,
+            &graph,
             &PageRankOptions {
                 damping: self.config.damping,
                 max_iterations: self.config.max_iterations,
@@ -677,57 +128,51 @@ impl Analyzer {
             },
         );
 
-        // Phase 6: Build output symbols with metrics
-        let mut output_symbols: Vec<SymbolEntry> = index
-            .symbols
-            .iter()
-            .enumerate()
-            .map(|(idx, sym)| {
-                let node_idx = index.node_indices[&idx];
-                let pr = scores[node_idx.index()];
-                let in_degree = index
-                    .graph
-                    .edges_directed(node_idx, Direction::Incoming)
-                    .count();
-                let out_degree = index
-                    .graph
-                    .edges_directed(node_idx, Direction::Outgoing)
-                    .count();
-
+        let mut output_symbols: Vec<SymbolEntry> = graph
+            .node_indices()
+            .map(|node| {
+                let symbol = &view.symbols[graph[node]];
                 SymbolEntry {
-                    name: sym.name.clone(),
-                    qualified_name: sym.qualified_name.clone(),
-                    kind: sym.kind,
-                    file: sym.file.clone(),
-                    line: sym.line,
-                    signature: sym.signature.clone(),
-                    pagerank: pr,
-                    in_degree,
-                    out_degree,
+                    name: symbol.name.clone(),
+                    qualified_name: symbol.qualified_name.clone(),
+                    kind: if symbol.kind == IndexKind::Method {
+                        SymbolKind::Method
+                    } else {
+                        SymbolKind::Function
+                    },
+                    file: symbol.file.clone(),
+                    line: symbol.line,
+                    signature: symbol.signature.clone(),
+                    pagerank: scores[node.index()],
+                    in_degree: graph.edges_directed(node, Direction::Incoming).count(),
+                    out_degree: graph.edges_directed(node, Direction::Outgoing).count(),
                 }
             })
             .collect();
 
-        // Sort by PageRank descending
-        output_symbols.sort_by(|a, b| {
-            b.pagerank
-                .partial_cmp(&a.pagerank)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        // The view lists the symbols in file and position order, and the sort
+        // keeps that order for symbols with equal rank.
+        output_symbols.sort_by(|a, b| b.pagerank.total_cmp(&a.pagerank));
 
-        // Limit if configured
         if self.config.max_symbols > 0 && output_symbols.len() > self.config.max_symbols {
             output_symbols.truncate(self.config.max_symbols);
         }
 
         let summary = calculate_summary(&output_symbols);
 
-        Ok(Analysis {
+        Analysis {
             generated_at: Utc::now().to_rfc3339(),
             symbols: output_symbols,
             summary,
-        })
+        }
     }
+}
+
+fn is_callable(kind: IndexKind) -> bool {
+    matches!(
+        kind,
+        IndexKind::Function | IndexKind::Method | IndexKind::Constructor
+    )
 }
 
 impl AnalyzerTrait for Analyzer {
@@ -742,7 +187,7 @@ impl AnalyzerTrait for Analyzer {
     }
 
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
-        self.analyze_with_files(ctx.root, ctx.files)
+        Ok(self.analyze_index(&*ctx.code_index()?))
     }
 }
 
@@ -758,6 +203,7 @@ pub struct Analysis {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SymbolEntry {
     pub name: String,
+    /// The key of the symbol in the shared index: `rel/path#Container.name`.
     pub qualified_name: String,
     pub kind: SymbolKind,
     pub file: String,
@@ -769,7 +215,7 @@ pub struct SymbolEntry {
 }
 
 /// Symbol kinds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SymbolKind {
     Function,
     Method,
@@ -802,7 +248,7 @@ fn calculate_summary(symbols: &[SymbolEntry]) -> Summary {
         };
     }
 
-    let mut files = std::collections::HashSet::new();
+    let mut files = HashSet::new();
     let mut total_pr = 0.0;
     let mut max_pr = 0.0_f64;
     let mut total_connections = 0;
@@ -823,213 +269,29 @@ fn calculate_summary(symbols: &[SymbolEntry]) -> Summary {
     }
 }
 
-/// Extract function calls from a function body.
-fn extract_calls_from_body(
-    body: &tree_sitter::Node<'_>,
-    source: &[u8],
-    lang: Language,
-) -> Vec<String> {
-    let mut calls = Vec::new();
-    let mut cursor = body.walk();
-    let call_node_kinds = get_call_node_kinds(lang);
-
-    collect_calls(
-        &mut cursor,
-        source,
-        &call_node_kinds,
-        crate::parser::queries::get_nested_scope_node_types(lang),
-        &mut calls,
-    );
-
-    calls
-}
-
-/// Recursively collect call expressions.
-fn collect_calls(
-    cursor: &mut tree_sitter::TreeCursor<'_>,
-    source: &[u8],
-    call_kinds: &[&str],
-    nested_scopes: &[&str],
-    calls: &mut Vec<String>,
-) {
-    let node = cursor.node();
-    if nested_scopes.contains(&node.kind()) {
-        return;
-    }
-
-    if call_kinds.contains(&node.kind()) {
-        if let Some(name) = extract_call_name(&node, source) {
-            if !calls.contains(&name) {
-                calls.push(name);
-            }
-        }
-    }
-
-    if cursor.goto_first_child() {
-        loop {
-            collect_calls(cursor, source, call_kinds, nested_scopes, calls);
-            if !cursor.goto_next_sibling() {
-                break;
-            }
-        }
-        cursor.goto_parent();
-    }
-}
-
-/// Get node kinds that represent function calls for a language.
-pub(crate) fn get_call_node_kinds(lang: Language) -> Vec<&'static str> {
-    match lang {
-        Language::Go => vec!["call_expression"],
-        Language::Rust => vec!["call_expression", "method_call_expression"],
-        Language::Python => vec!["call"],
-        Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => {
-            vec!["call_expression", "new_expression"]
-        }
-        Language::Java => vec!["method_invocation", "object_creation_expression"],
-        Language::CSharp => vec!["invocation_expression", "object_creation_expression"],
-        Language::Cpp | Language::C => vec!["call_expression"],
-        Language::Ruby => vec!["call", "method_call"],
-        Language::Php => vec!["function_call_expression", "method_call_expression"],
-        Language::Bash => vec!["command"],
-    }
-}
-
-/// Extract the function name from a call expression.
-fn extract_call_name(node: &tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
-    // Ruby constant receivers carry useful module evidence (`A.helper`). Keep
-    // that boundary instead of collapsing every call to the bare method name.
-    if matches!(node.kind(), "call" | "method_call") {
-        if let (Some(receiver), Some(method)) = (
-            node.child_by_field_name("receiver"),
-            node.child_by_field_name("method"),
-        ) {
-            if matches!(receiver.kind(), "constant" | "scope_resolution" | "self") {
-                return Some(format!(
-                    "{}.{}",
-                    receiver.utf8_text(source).ok()?,
-                    method.utf8_text(source).ok()?
-                ));
-            }
-        }
-    }
-    // Try to find the function/identifier node
-    for i in 0..node.child_count() {
-        if let Some(child) = node.child(i) {
-            let kind = child.kind();
-            if kind == "identifier"
-                || kind == "simple_identifier"
-                || kind == "field_identifier"
-                || kind == "property_identifier"
-            {
-                let text = child.utf8_text(source).ok()?;
-                return Some(text.to_string());
-            }
-            // PHP: function_call_expression has a `name` child (kind == "name")
-            if kind == "name" {
-                let text = child.utf8_text(source).ok()?;
-                return Some(text.to_string());
-            }
-            // Rust self.method(): keep the explicit receiver boundary. Arbitrary
-            // Rust field calls need receiver/type evidence before adding edges.
-            let rust_self_call = kind == "field_expression"
-                && child
-                    .child_by_field_name("value")
-                    .is_some_and(|receiver| receiver.kind() == "self");
-            // For supported member calls, get the method name.
-            if kind == "selector_expression" || kind == "member_expression" || rust_self_call {
-                // Get the rightmost identifier
-                if let Some(right) = child
-                    .child_by_field_name("field")
-                    .or_else(|| child.child_by_field_name("property"))
-                    .or_else(|| child.child(child.child_count().saturating_sub(1)))
-                {
-                    let text = right.utf8_text(source).ok()?;
-                    let receiver = child
-                        .child_by_field_name("object")
-                        .or_else(|| child.child_by_field_name("value"));
-                    if let Some(receiver) = receiver {
-                        let name = receiver.utf8_text(source).ok()?;
-                        if matches!(name, "self" | "this") {
-                            return Some(format!("{name}.{text}"));
-                        }
-                    }
-                    return Some(text.to_string());
-                }
-            }
-            // C# member_access_expression: `new B().b()` → invocation_expression →
-            // member_access_expression → (object_creation_expression . identifier)
-            // Extract the rightmost identifier (the method name).
-            if kind == "member_access_expression" {
-                // Walk children to find the last identifier
-                let mut last_ident: Option<String> = None;
-                for j in 0..child.child_count() {
-                    if let Some(grandchild) = child.child(j) {
-                        if grandchild.kind() == "identifier" {
-                            if let Ok(text) = grandchild.utf8_text(source) {
-                                last_ident = Some(text.to_string());
-                            }
-                        }
-                    }
-                }
-                if let Some(name) = last_ident {
-                    return Some(name);
-                }
-            }
-            // For simple function calls, use the function child
-            if kind == "function" {
-                if let Some(name_node) = child.child_by_field_name("name") {
-                    let text = name_node.utf8_text(source).ok()?;
-                    return Some(text.to_string());
-                }
-            }
-            // Bash: command node has a command_name child which has a word child
-            if kind == "command_name" {
-                // Get the first child of command_name (typically a `word`)
-                if let Some(word) = child.child(0) {
-                    let text = word.utf8_text(source).ok()?;
-                    return Some(text.to_string());
-                }
-            }
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     fn create_rust_fixture() -> TempDir {
         let dir = TempDir::new().unwrap();
 
-        // a.rs: fn a() calls b()
+        // The calls are in one file, thus the basis of each call is the file.
         fs::write(
-            dir.path().join("a.rs"),
+            dir.path().join("main.rs"),
             r#"
 fn a() {
     b();
 }
-"#,
-        )
-        .unwrap();
 
-        // b.rs: fn b() calls c()
-        fs::write(
-            dir.path().join("b.rs"),
-            r#"
 fn b() {
     c();
 }
-"#,
-        )
-        .unwrap();
 
-        // c.rs: fn c() — leaf
-        fs::write(
-            dir.path().join("c.rs"),
-            r#"
 fn c() {
     // leaf
 }
@@ -1089,149 +351,171 @@ fn c() {
         );
 
         // Verify qualified_name is present
-        assert!(sym_a.qualified_name.contains("a.rs:a"));
-        assert!(sym_b.qualified_name.contains("b.rs:b"));
-        assert!(sym_c.qualified_name.contains("c.rs:c"));
+        assert_eq!(sym_a.qualified_name, "main.rs#a");
+        assert_eq!(sym_b.qualified_name, "main.rs#b");
+        assert_eq!(sym_c.qualified_name, "main.rs#c");
     }
 
     #[test]
-    fn test_build_index_single_rust_file() {
+    fn test_a_call_that_only_the_name_resolves_is_not_an_edge() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("a.rs"), "fn a() {\n    b();\n}\n").unwrap();
+        fs::write(dir.path().join("b.rs"), "fn b() {}\n").unwrap();
+
+        let result = Analyzer::new().analyze_repo(dir.path()).unwrap();
+
+        assert!(result.symbols.iter().all(|symbol| symbol.out_degree == 0));
+        assert!(result.symbols.iter().all(|symbol| symbol.in_degree == 0));
+    }
+
+    #[test]
+    fn test_method_has_the_kind_method() {
         let dir = TempDir::new().unwrap();
         fs::write(
-            dir.path().join("main.rs"),
-            r#"
-fn foo() {
-    bar();
+            dir.path().join("a.rs"),
+            "struct Shape;
+impl Shape {
+    fn area(&self) {}
 }
-fn bar() {}
-"#,
+fn free() {}
+",
         )
         .unwrap();
 
-        let files = vec![dir.path().join("main.rs")];
-        let index = build_index(dir.path(), &files).unwrap();
+        let result = Analyzer::new().analyze_repo(dir.path()).unwrap();
 
-        assert_eq!(index.symbols.len(), 2);
-        let names: Vec<&str> = index.symbols.iter().map(|s| s.name.as_str()).collect();
-        assert!(names.contains(&"foo"));
-        assert!(names.contains(&"bar"));
+        let kind_of = |name: &str| {
+            result
+                .symbols
+                .iter()
+                .find(|symbol| symbol.name == name)
+                .map(|symbol| symbol.kind)
+        };
+        assert_eq!(kind_of("area"), Some(SymbolKind::Method));
+        assert_eq!(kind_of("free"), Some(SymbolKind::Function));
+        assert!(
+            result.symbols.iter().all(|symbol| symbol.name != "Shape"),
+            "a type is not a callable symbol of the map"
+        );
     }
 
     #[test]
-    fn test_resolve_exact_qualified() {
-        let dir = create_rust_fixture();
-        let files: Vec<PathBuf> = vec!["a.rs", "b.rs", "c.rs"]
-            .into_iter()
-            .map(|f| dir.path().join(f))
-            .collect();
-        let index = build_index(dir.path(), &files).unwrap();
-
-        // Exact qualified name
-        let result = index.resolve("a.rs:a");
-        assert_eq!(result.len(), 1);
-        assert_eq!(index.symbols[result[0]].name, "a");
-    }
-
-    #[test]
-    fn test_resolve_bare_name_multiple_sorted() {
+    fn test_same_name_in_two_types_of_one_file_has_two_entries() {
         let dir = TempDir::new().unwrap();
-        // Two files with same function name
-        fs::write(dir.path().join("z_mod.rs"), r#"fn helper() {}"#).unwrap();
-        fs::write(dir.path().join("a_mod.rs"), r#"fn helper() {}"#).unwrap();
+        fs::write(
+            dir.path().join("a.rs"),
+            "struct A;
+struct B;
+impl A {
+    fn run(&self) {}
+}
+impl B {
+    fn run(&self) {}
+}
+",
+        )
+        .unwrap();
 
-        let files = vec![dir.path().join("z_mod.rs"), dir.path().join("a_mod.rs")];
-        let index = build_index(dir.path(), &files).unwrap();
+        let result = Analyzer::new().analyze_repo(dir.path()).unwrap();
 
-        let result = index.resolve("helper");
-        assert_eq!(result.len(), 2);
-        // Should be sorted lex by qualified_name → a_mod.rs:helper first
-        assert!(index.symbols[result[0]].qualified_name < index.symbols[result[1]].qualified_name);
-        assert!(index.symbols[result[0]].qualified_name.contains("a_mod"));
-    }
-
-    #[test]
-    fn test_resolve_unknown_empty() {
-        let dir = create_rust_fixture();
-        let files: Vec<PathBuf> = vec!["a.rs", "b.rs", "c.rs"]
-            .into_iter()
-            .map(|f| dir.path().join(f))
+        let keys: Vec<&str> = result
+            .symbols
+            .iter()
+            .map(|symbol| symbol.qualified_name.as_str())
             .collect();
-        let index = build_index(dir.path(), &files).unwrap();
-
-        let result = index.resolve("nonexistent_function_xyz");
-        assert!(result.is_empty());
+        assert_eq!(keys.len(), 2);
+        assert!(keys.contains(&"a.rs#A.run"), "{keys:?}");
+        assert!(keys.contains(&"a.rs#B.run"), "{keys:?}");
     }
 
     #[test]
-    fn test_callers_depth_1() {
-        // a→b→c. callers of c depth 1 = [[b]]
-        let dir = create_rust_fixture();
-        let files: Vec<PathBuf> = vec!["a.rs", "b.rs", "c.rs"]
-            .into_iter()
-            .map(|f| dir.path().join(f))
-            .collect();
-        let index = build_index(dir.path(), &files).unwrap();
-
-        let c_idxs = index.resolve("c");
-        assert!(!c_idxs.is_empty());
-        let levels = index.callers(&c_idxs, 1);
-        assert_eq!(levels.len(), 1);
-        assert_eq!(levels[0].len(), 1);
-        assert_eq!(index.symbols[levels[0][0]].name, "b");
-    }
-
-    #[test]
-    fn test_callers_depth_2() {
-        // a→b→c. callers of c depth 2 = [[b],[a]]
-        let dir = create_rust_fixture();
-        let files: Vec<PathBuf> = vec!["a.rs", "b.rs", "c.rs"]
-            .into_iter()
-            .map(|f| dir.path().join(f))
-            .collect();
-        let index = build_index(dir.path(), &files).unwrap();
-
-        let c_idxs = index.resolve("c");
-        let levels = index.callers(&c_idxs, 2);
-        assert_eq!(levels.len(), 2);
-        assert_eq!(levels[0].len(), 1);
-        assert_eq!(index.symbols[levels[0][0]].name, "b");
-        assert_eq!(levels[1].len(), 1);
-        assert_eq!(index.symbols[levels[1][0]].name, "a");
-    }
-
-    #[test]
-    fn test_callers_cycle_safe() {
-        // a→b→a (cycle) - should terminate
+    fn test_symbols_with_equal_rank_are_in_file_and_line_order() {
         let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("a.rs"), r#"fn a() { b(); }"#).unwrap();
-        fs::write(dir.path().join("b.rs"), r#"fn b() { a(); }"#).unwrap();
+        fs::write(
+            dir.path().join("z.rs"),
+            "fn zed() {}
+",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("a.rs"),
+            "fn first() {}
+fn second() {}
+",
+        )
+        .unwrap();
 
-        let files = vec![dir.path().join("a.rs"), dir.path().join("b.rs")];
-        let index = build_index(dir.path(), &files).unwrap();
+        let result = Analyzer::new().analyze_repo(dir.path()).unwrap();
 
-        let a_idxs = index.resolve("a");
-        // Should not hang or panic
-        let levels = index.callers(&a_idxs, 5);
-        assert!(!levels.is_empty());
+        let names: Vec<&str> = result.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["first", "second", "zed"]);
     }
 
     #[test]
-    fn test_callees_depth_2() {
-        // a→b→c. callees of a depth 2 = [[b],[c]]
-        let dir = create_rust_fixture();
-        let files: Vec<PathBuf> = vec!["a.rs", "b.rs", "c.rs"]
-            .into_iter()
-            .map(|f| dir.path().join(f))
-            .collect();
-        let index = build_index(dir.path(), &files).unwrap();
+    fn test_calls_in_test_files_are_not_edges_when_test_files_are_skipped() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("lib.rs"),
+            "pub fn target() {}
+",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("lib_test.rs"),
+            "fn check() { crate::target(); }
+",
+        )
+        .unwrap();
 
-        let a_idxs = index.resolve("a");
-        let levels = index.callees(&a_idxs, 2);
-        assert_eq!(levels.len(), 2);
-        assert_eq!(levels[0].len(), 1);
-        assert_eq!(index.symbols[levels[0][0]].name, "b");
-        assert_eq!(levels[1].len(), 1);
-        assert_eq!(index.symbols[levels[1][0]].name, "c");
+        let skipping = Analyzer::new().analyze_repo(dir.path()).unwrap();
+        let including = Analyzer::new()
+            .with_skip_test_files(false)
+            .analyze_repo(dir.path())
+            .unwrap();
+
+        let in_degree = |analysis: &Analysis| {
+            analysis
+                .symbols
+                .iter()
+                .find(|symbol| symbol.name == "target")
+                .map(|symbol| symbol.in_degree)
+        };
+        assert_eq!(skipping.symbols.len(), 1);
+        assert_eq!(in_degree(&skipping), Some(0));
+        assert_eq!(in_degree(&including), Some(1));
+    }
+
+    #[test]
+    fn test_analyzer_reads_through_the_content_source() {
+        use crate::config::Config as AppConfig;
+        use crate::core::{FileSet, FilesystemSource};
+        use std::sync::Arc;
+
+        let current = TempDir::new().unwrap();
+        let historical = TempDir::new().unwrap();
+        fs::write(
+            current.path().join("code.rs"),
+            "fn current_version() {}
+",
+        )
+        .unwrap();
+        fs::write(
+            historical.path().join("code.rs"),
+            "fn historical_version() {}
+",
+        )
+        .unwrap();
+        let files =
+            FileSet::from_files(current.path().to_path_buf(), vec![PathBuf::from("code.rs")]);
+        let config = AppConfig::default();
+        let source = Arc::new(FilesystemSource::new(historical.path()));
+        let ctx =
+            AnalysisContext::new(&files, &config, Some(current.path())).with_content_source(source);
+
+        let result = Analyzer::new().analyze(&ctx).unwrap();
+
+        let names: Vec<&str> = result.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["historical_version"]);
     }
 
     #[test]
@@ -1240,7 +524,7 @@ fn bar() {}
             generated_at: "2024-01-01T00:00:00Z".to_string(),
             symbols: vec![SymbolEntry {
                 name: "test".to_string(),
-                qualified_name: "test.rs:test".to_string(),
+                qualified_name: "test.rs#test".to_string(),
                 kind: SymbolKind::Function,
                 file: "test.rs".to_string(),
                 line: 1,
@@ -1265,7 +549,7 @@ fn bar() {}
         let parsed: Analysis = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.symbols.len(), 1);
         assert_eq!(parsed.symbols[0].name, "test");
-        assert_eq!(parsed.symbols[0].qualified_name, "test.rs:test");
+        assert_eq!(parsed.symbols[0].qualified_name, "test.rs#test");
     }
 
     #[test]
@@ -1273,7 +557,7 @@ fn bar() {}
         let symbols = vec![
             SymbolEntry {
                 name: "a".to_string(),
-                qualified_name: "file1.rs:a".to_string(),
+                qualified_name: "file1.rs#a".to_string(),
                 kind: SymbolKind::Function,
                 file: "file1.rs".to_string(),
                 line: 1,
@@ -1284,7 +568,7 @@ fn bar() {}
             },
             SymbolEntry {
                 name: "b".to_string(),
-                qualified_name: "file1.rs:b".to_string(),
+                qualified_name: "file1.rs#b".to_string(),
                 kind: SymbolKind::Function,
                 file: "file1.rs".to_string(),
                 line: 10,
@@ -1306,41 +590,6 @@ fn bar() {}
         let analyzer = Analyzer::new().with_max_symbols(2);
         // Verify config is set
         assert_eq!(analyzer.config.max_symbols, 2);
-    }
-
-    #[test]
-    fn test_deterministic_call_resolution() {
-        // When multiple functions match a call name, the resolution should be
-        // deterministic (lexicographically sorted by qualified name)
-        let mut symbol_names: HashMap<String, usize> = HashMap::new();
-        symbol_names.insert("z_module.rs:helper".to_string(), 0);
-        symbol_names.insert("a_module.rs:helper".to_string(), 1);
-        symbol_names.insert("m_module.rs:helper".to_string(), 2);
-
-        let call = "helper";
-        let suffix = format!(":{}", call);
-
-        // Collect and sort candidates
-        let mut candidates: Vec<_> = symbol_names
-            .iter()
-            .filter(|(name, _)| name.ends_with(&suffix))
-            .collect();
-        candidates.sort_by(|a, b| a.0.cmp(b.0));
-
-        // Should always resolve to a_module.rs:helper (lexicographically first)
-        assert_eq!(candidates.len(), 3);
-        assert_eq!(candidates[0].0, "a_module.rs:helper");
-        assert_eq!(*candidates[0].1, 1);
-
-        // Run multiple times to verify determinism
-        for _ in 0..10 {
-            let mut candidates2: Vec<_> = symbol_names
-                .iter()
-                .filter(|(name, _)| name.ends_with(&suffix))
-                .collect();
-            candidates2.sort_by(|a, b| a.0.cmp(b.0));
-            assert_eq!(candidates2[0].0, "a_module.rs:helper");
-        }
     }
 
     // ===== is_test_file tests =====
