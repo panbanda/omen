@@ -174,7 +174,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run clippy
-        run: cargo clippy --all-targets --all-features
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
       # The `mutation` feature is optional. This step makes sure that each
       # target, also the tests, builds without it.
