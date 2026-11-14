@@ -1072,6 +1072,16 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
             }
         }
 
+        // `#[serde(default = "path")]` names a function in a string. The derive calls it.
+        if lang == Language::Rust && kind == "attribute_item" {
+            if let Ok(text) = node.utf8_text(source) {
+                for name in serde_function_names(text) {
+                    fdc.usages.insert(name.clone());
+                    value_uses.insert((MODULE_SCOPE.to_string(), name, true));
+                }
+            }
+        }
+
         // `Util.replacer` reads the function `replacer` as a property.
         if kind == "property_identifier" && is_read_as_property(&node) {
             if let Ok(name) = node.utf8_text(source) {
@@ -1108,6 +1118,61 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
             }
         }
     }
+}
+
+/// The keys of a serde attribute whose string is the path of a function. For `with`, the
+/// path is a module, and the derive calls its `serialize` and `deserialize`.
+const SERDE_FUNCTION_KEYS: [&str; 6] = [
+    "default",
+    "skip_serializing_if",
+    "serialize_with",
+    "deserialize_with",
+    "getter",
+    "with",
+];
+
+/// The names of the functions that the strings of a `serde` attribute name. The name of
+/// a path is its last segment, as for a call.
+fn serde_function_names(attribute: &str) -> Vec<String> {
+    let Some(start) = attribute.find("serde(") else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    let mut rest = &attribute[start..];
+    while let Some(quote) = rest.find('"') {
+        let before = rest[..quote].trim_end();
+        let Some(before) = before.strip_suffix('=') else {
+            // A string that no `=` precedes. Skip it.
+            let Some(end) = rest[quote + 1..].find('"') else {
+                break;
+            };
+            rest = &rest[quote + end + 2..];
+            continue;
+        };
+        let key: String = before
+            .trim_end()
+            .chars()
+            .rev()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let Some(end) = rest[quote + 1..].find('"') else {
+            break;
+        };
+        let value = &rest[quote + 1..quote + 1 + end];
+        if SERDE_FUNCTION_KEYS.contains(&key.as_str()) {
+            if key == "with" {
+                names.push("serialize".to_string());
+                names.push("deserialize".to_string());
+            } else if let Some(name) = value.rsplit("::").next().filter(|name| !name.is_empty()) {
+                names.push(name.to_string());
+            }
+        }
+        rest = &rest[quote + end + 2..];
+    }
+    names
 }
 
 /// Whether a property name is read as a value: it is the member of a member
@@ -3547,6 +3612,39 @@ mod index_tests {
             dead: &[],
         },
     ];
+
+    #[test]
+    fn test_a_function_named_in_a_serde_attribute_string_is_alive() {
+        use crate::config::Config;
+        use crate::core::{AnalysisContext, Analyzer as _, FileSet};
+        use std::path::PathBuf;
+
+        let source = "use serde::{Deserialize, Serialize};\n\nfn is_zero(value: &u32) -> bool {\n    *value == 0\n}\n\nfn fallback() -> u32 {\n    7\n}\n\nfn encode_count(value: &u32) -> String {\n    value.to_string()\n}\n\nfn decode_count(text: &str) -> u32 {\n    text.len() as u32\n}\n\nmod codec {\n    fn serialize(value: &u32) -> u32 {\n        *value\n    }\n\n    fn deserialize(value: u32) -> u32 {\n        value\n    }\n}\n\nfn unused_control() {}\n\n#[derive(Serialize, Deserialize)]\nstruct Holder {\n    #[serde(default = \"fallback\", skip_serializing_if = \"is_zero\")]\n    count: u32,\n    #[serde(serialize_with = \"crate::encode_count\", deserialize_with = \"decode_count\")]\n    text: u32,\n    #[serde(with = \"codec\", rename = \"unused_control\")]\n    coded: u32,\n}\n";
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("holder.rs"), source).unwrap();
+        let files = FileSet::from_files(
+            directory.path().to_path_buf(),
+            vec![PathBuf::from("holder.rs")],
+        );
+        let config = Config::default();
+        let ctx = AnalysisContext::new(&files, &config, Some(directory.path()));
+        let result = Analyzer::new().with_confidence(0.0).analyze(&ctx).unwrap();
+        let reported: Vec<&str> = result.items.iter().map(|item| item.name.as_str()).collect();
+        for name in [
+            "is_zero",
+            "fallback",
+            "encode_count",
+            "decode_count",
+            "serialize",
+            "deserialize",
+        ] {
+            assert!(
+                !reported.contains(&name),
+                "`{name}` is reported: {reported:?}"
+            );
+        }
+        assert!(reported.contains(&"unused_control"), "{reported:?}");
+    }
 
     #[test]
     fn test_an_entry_point_is_alive_and_its_callees_are_reachable() {

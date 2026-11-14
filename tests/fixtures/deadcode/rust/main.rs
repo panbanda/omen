@@ -26,3 +26,16 @@ fn main() {
     tool.live_method();
     other::run();
 }
+
+fn serde_fallback() -> u32 {
+    7
+}
+fn serde_is_zero(value: &u32) -> bool {
+    *value == 0
+}
+fn serde_renamed() {}
+
+struct Holder {
+    #[serde(default = "serde_fallback", skip_serializing_if = "serde_is_zero", rename = "serde_renamed")]
+    count: u32,
+}
