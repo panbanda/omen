@@ -44,7 +44,7 @@ pub use operators::{
     ReturnValueOperator, StatementOperator, UnaryOperator,
 };
 pub use safety::{
-    atomic_write, has_uncommitted_changes, install_signal_handler, restore_active_mutations,
+    has_uncommitted_changes, install_signal_handler, restore_active_mutations, write_in_place,
     MutationGuard,
 };
 pub use worker::{

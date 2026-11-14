@@ -3,20 +3,13 @@
 use std::io::Write;
 use std::path::Path;
 
-/// The permissions of a file that `write_atomically` writes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FileMode {
-    /// Use these Unix permission bits. Other systems ignore them.
-    Exactly(u32),
-    /// Keep the permissions of the file that the write replaces. A new file
-    /// gets these Unix permission bits.
-    KeepExisting { new_file: u32 },
-}
-
 /// Write the file in one step: the old file stays until the new content is
 /// complete. The temporary file has a random name and is new, so a link at a
 /// guessed name is not followed.
-pub fn write_atomically(path: &Path, content: &[u8], mode: FileMode) -> std::io::Result<()> {
+///
+/// The write replaces the file. Use it for output that omen owns, not for a
+/// source file of the user. Other systems ignore `unix_mode`.
+pub fn write_atomically(path: &Path, content: &[u8], unix_mode: u32) -> std::io::Result<()> {
     let directory = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -27,19 +20,12 @@ pub fn write_atomically(path: &Path, content: &[u8], mode: FileMode) -> std::io:
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let bits = match mode {
-            FileMode::Exactly(bits) => bits,
-            FileMode::KeepExisting { new_file } => match std::fs::metadata(path) {
-                Ok(existing) => existing.permissions().mode() & 0o7777,
-                Err(_) => new_file,
-            },
-        };
         pending
             .as_file()
-            .set_permissions(std::fs::Permissions::from_mode(bits))?;
+            .set_permissions(std::fs::Permissions::from_mode(unix_mode))?;
     }
     #[cfg(not(unix))]
-    let _ = mode;
+    let _ = unix_mode;
     pending.persist(path).map_err(|error| error.error)?;
     Ok(())
 }

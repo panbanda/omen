@@ -51,7 +51,7 @@ fn generate_window(since: Option<&str>, days: Option<u32>) -> crate::core::Resul
 }
 
 fn write_atomically(path: &std::path::Path, text: &str) -> std::io::Result<()> {
-    crate::core::write_atomically(path, text.as_bytes(), crate::core::FileMode::Exactly(0o644))
+    crate::core::write_atomically(path, text.as_bytes(), 0o644)
 }
 
 /// The data files that `report generate` writes and that `report validate` expects.

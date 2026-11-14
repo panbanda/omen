@@ -5,12 +5,13 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::Duration;
 
-use crate::core::{write_atomically, Error, FileMode, Result};
+use crate::core::{Error, Result};
 
 type ActiveMutations = Arc<parking_lot::Mutex<HashMap<PathBuf, Vec<u8>>>>;
 
@@ -75,6 +76,9 @@ pub struct MutationGuard {
     original: Vec<u8>,
     /// Whether the file has been modified.
     modified: bool,
+    /// A copy of the original content in the directory of the file. It stays on
+    /// disk only if a restore fails or the process dies.
+    backup: Option<tempfile::NamedTempFile>,
     active_mutations: ActiveMutations,
     interrupted: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
@@ -99,6 +103,7 @@ impl MutationGuard {
             path,
             original,
             modified: false,
+            backup: None,
             active_mutations,
             interrupted,
         })
@@ -113,14 +118,19 @@ impl MutationGuard {
 
     /// Apply a mutation to the file.
     ///
-    /// This writes the mutated content to the file atomically.
+    /// This writes the mutated content into the existing file, so the inode, the
+    /// owner, the permissions, and a symlink stay as they are. Before the first
+    /// write, it saves the original content in a backup file.
     pub fn apply(&mut self, content: &[u8]) -> Result<()> {
         let mut active = self.active_mutations.lock();
         if self.is_interrupted() {
             return Ok(());
         }
+        if self.backup.is_none() {
+            self.backup = Some(save_backup(&self.path, &self.original)?);
+        }
         active.insert(self.path.clone(), self.original.clone());
-        if let Err(error) = atomic_write(&self.path, content) {
+        if let Err(error) = write_in_place(&self.path, content) {
             active.remove(&self.path);
             return Err(error);
         }
@@ -149,7 +159,7 @@ impl MutationGuard {
     /// This is useful for running multiple mutations in sequence.
     pub fn restore(&mut self) -> Result<()> {
         if self.modified {
-            atomic_write(&self.path, &self.original)?;
+            write_in_place(&self.path, &self.original)?;
             self.modified = false;
             self.active_mutations.lock().remove(&self.path);
         }
@@ -160,9 +170,10 @@ impl MutationGuard {
 impl Drop for MutationGuard {
     fn drop(&mut self) {
         if self.modified {
-            // Falls back to a direct write if the atomic write fails.
-            if atomic_write(&self.path, &self.original).is_err() {
-                let _ = fs::write(&self.path, &self.original);
+            if write_in_place(&self.path, &self.original).is_err() {
+                if let Some(backup) = self.backup.take() {
+                    let _ = backup.keep();
+                }
             }
         }
         self.active_mutations.lock().remove(&self.path);
@@ -176,7 +187,7 @@ fn restore_registered_mutations(
     interrupted.store(true, Ordering::SeqCst);
     let active = active_mutations.lock();
     for (path, original) in active.iter() {
-        let _ = atomic_write(path, original);
+        let _ = write_in_place(path, original);
     }
 }
 
@@ -687,17 +698,32 @@ pub(crate) fn active_runs_of_the_process() -> usize {
     INTERRUPT_GATE.active_runs()
 }
 
-/// Write content to a file atomically.
+/// Write content into an existing file.
 ///
-/// This writes to a temporary file first, then renames it to the target path.
-/// This ensures that the file is never in a partially-written state.
-pub fn atomic_write(path: impl AsRef<Path>, content: &[u8]) -> Result<()> {
-    write_atomically(
-        path.as_ref(),
-        content,
-        FileMode::KeepExisting { new_file: 0o644 },
-    )
-    .map_err(Error::Io)
+/// The write opens the path, follows a symlink, and truncates the file. It does
+/// not replace the file, so the inode, the owner, the ACLs, the attributes, and
+/// the symlink stay as they are.
+pub fn write_in_place(path: impl AsRef<Path>, content: &[u8]) -> Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(path.as_ref())
+        .map_err(Error::Io)?;
+    file.write_all(content).map_err(Error::Io)?;
+    file.flush().map_err(Error::Io)?;
+    file.sync_all().map_err(Error::Io)
+}
+
+/// Save the original content in a new file with a random name next to the source.
+fn save_backup(path: &Path, original: &[u8]) -> Result<tempfile::NamedTempFile> {
+    let directory = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut backup = tempfile::NamedTempFile::new_in(directory).map_err(Error::Io)?;
+    backup.write_all(original).map_err(Error::Io)?;
+    backup.as_file().sync_all().map_err(Error::Io)?;
+    Ok(backup)
 }
 
 /// Check if there are uncommitted changes in the given file.
@@ -1343,34 +1369,35 @@ mod tests {
     }
 
     #[test]
-    fn test_atomic_write() {
+    fn test_write_in_place_does_not_create_a_file() {
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("test.rs");
 
-        atomic_write(&file_path, b"test content").unwrap();
-
-        let content = fs::read(&file_path).unwrap();
-        assert_eq!(content, b"test content");
+        assert!(write_in_place(&file_path, b"test content").is_err());
+        assert!(!file_path.exists());
     }
 
     #[test]
-    fn test_atomic_write_overwrites_existing() {
+    fn test_write_in_place_overwrites_existing() {
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("test.rs");
         fs::write(&file_path, b"old content").unwrap();
 
-        atomic_write(&file_path, b"new content").unwrap();
+        write_in_place(&file_path, b"new content").unwrap();
 
         let content = fs::read(&file_path).unwrap();
         assert_eq!(content, b"new content");
     }
 
     #[test]
-    fn test_atomic_write_no_temp_file_left() {
+    fn test_guard_leaves_no_backup_file_after_a_restore() {
         let temp_dir = TempDir::new().unwrap();
         let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
 
-        atomic_write(&file_path, b"content").unwrap();
+        let mut guard = MutationGuard::new(&file_path).unwrap();
+        guard.apply(b"content").unwrap();
+        drop(guard);
 
         // Check no temp files left behind
         let entries: Vec<_> = fs::read_dir(temp_dir.path())
@@ -1485,7 +1512,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn test_atomic_write_does_not_follow_a_link_at_a_guessed_name() {
+    fn test_write_in_place_does_not_follow_a_link_at_a_guessed_name() {
         let temp_dir = TempDir::new().unwrap();
         let victim = temp_dir.path().join("victim.txt");
         fs::write(&victim, b"victim").unwrap();
@@ -1493,7 +1520,7 @@ mod tests {
         fs::write(&file_path, b"original").unwrap();
         plant_links(temp_dir.path(), &victim);
 
-        atomic_write(&file_path, b"mutated").unwrap();
+        write_in_place(&file_path, b"mutated").unwrap();
 
         assert_eq!(fs::read(&victim).unwrap(), b"victim");
         assert_eq!(fs::read(&file_path).unwrap(), b"mutated");
@@ -1514,6 +1541,48 @@ mod tests {
         drop(guard);
 
         assert_eq!(fs::read(&victim).unwrap(), b"victim");
+        assert_eq!(fs::read(&file_path).unwrap(), b"original");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_a_symlinked_source_stays_a_symlink() {
+        let temp_dir = TempDir::new().unwrap();
+        let real = temp_dir.path().join("real.rs");
+        let link = temp_dir.path().join("link.rs");
+        fs::write(&real, b"original").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let mut guard = MutationGuard::new(&link).unwrap();
+        guard.apply(b"mutated").unwrap();
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(fs::read(&real).unwrap(), b"mutated");
+        drop(guard);
+
+        assert!(fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(fs::read(&real).unwrap(), b"original");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_mutation_and_restore_keep_the_inode_of_the_file() {
+        use std::os::unix::fs::MetadataExt;
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, b"original").unwrap();
+        let inode = fs::metadata(&file_path).unwrap().ino();
+
+        let mut guard = MutationGuard::new(&file_path).unwrap();
+        guard.apply(b"mutated").unwrap();
+        assert_eq!(fs::metadata(&file_path).unwrap().ino(), inode);
+        guard.restore().unwrap();
+        assert_eq!(fs::metadata(&file_path).unwrap().ino(), inode);
         assert_eq!(fs::read(&file_path).unwrap(), b"original");
     }
 
