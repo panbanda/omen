@@ -105,6 +105,16 @@ impl Outcome {
     }
 }
 
+/// The result of the lookup of a C++ namespace alias.
+enum AliasLookup<'a> {
+    /// No visible alias has the name.
+    None,
+    /// The namespace that the alias names.
+    Namespace(&'a str),
+    /// Visible aliases with the name name different namespaces.
+    Uncertain,
+}
+
 /// The words that name the object of a method.
 const SELF_WORDS: &[&str] = &["self", "this", "$this", "cls"];
 
@@ -998,16 +1008,58 @@ impl<'a> Resolver<'a> {
 
     /// The namespace for which a C++ `namespace alias = target;` gives a name.
     /// The extraction records the alias as a local name with the target as its type.
-    fn namespace_alias(&self, file: usize, alias: &str) -> Option<&'a str> {
-        self.files[file]
-            .locals
-            .iter()
-            .find(|local| {
-                local.owner.is_none()
-                    && local.name.name == alias
-                    && local.name.value_start.is_none()
+    /// The namespace that the C++ alias `alias` names at a call with the
+    /// enclosing definitions `chain`. The nearest scope of the chain that
+    /// defines the alias gives it, and then the file scope.
+    fn namespace_alias(&self, file: usize, chain: &[Id], alias: &str) -> AliasLookup<'a> {
+        let aliases: Vec<&'a Local> = self
+            .locals_named(file, alias)
+            .filter(|local| local.name.value_start.is_none() && local.name.type_name.is_some())
+            .collect();
+        // A namespace can have more than one block. An alias in one block is
+        // visible in each block, thus a namespace scope is its path, not its
+        // definition.
+        let namespace_path = |position: usize| -> Option<Vec<String>> {
+            let symbol = &self.files[file].symbols[position];
+            (symbol.kind == SymbolKind::Module).then(|| {
+                let mut path = self.files[file].link_facts[position].container_path.clone();
+                path.push(symbol.name.clone());
+                path
             })
-            .and_then(|local| local.name.type_name.as_deref())
+        };
+        let in_scope = |local: &&&'a Local, scope: usize| match local.owner {
+            Some(owner) if owner == scope => true,
+            Some(owner) => namespace_path(owner).is_some_and(|path| {
+                namespace_path(scope).is_some_and(|scope_path| scope_path == path)
+            }),
+            None => false,
+        };
+        let one_target = |found: Vec<&&'a Local>| -> AliasLookup<'a> {
+            let targets: BTreeSet<&'a str> = found
+                .iter()
+                .filter_map(|local| local.name.type_name.as_deref())
+                .collect();
+            match targets.len() {
+                0 => AliasLookup::None,
+                1 => AliasLookup::Namespace(targets.into_iter().next().unwrap_or_default()),
+                _ => AliasLookup::Uncertain,
+            }
+        };
+        for scope in chain.iter().map(|id| id.1) {
+            let found: Vec<&&'a Local> = aliases
+                .iter()
+                .filter(|local| in_scope(local, scope))
+                .collect();
+            if !found.is_empty() {
+                return one_target(found);
+            }
+        }
+        one_target(
+            aliases
+                .iter()
+                .filter(|local| local.owner.is_none())
+                .collect(),
+        )
     }
 
     fn imported(&self, binding: &ImportBinding, name: &str) -> Outcome {
@@ -1149,18 +1201,32 @@ impl<'a> Resolver<'a> {
         self.on_types(&types, name, arity, Basis::QualifiedPath, file)
     }
 
-    fn with_qualifier(&self, file: usize, reference: &Reference, qualifier: &str) -> Outcome {
+    fn with_qualifier(
+        &self,
+        file: usize,
+        reference: &Reference,
+        qualifier: &str,
+        chain: &[Id],
+    ) -> Outcome {
         let name = reference.name.as_str();
         // A C++ namespace alias can be the qualifier, or its first name.
-        let expanded = match self.family(file) {
-            Family::C => match qualifier.split_once("::") {
-                Some((first, rest)) => self
-                    .namespace_alias(file, first)
-                    .map(|namespace| format!("{namespace}::{rest}")),
-                None => self.namespace_alias(file, qualifier).map(str::to_string),
-            },
-            _ => None,
-        };
+        let mut expanded = None;
+        if self.family(file) == Family::C {
+            let (first, rest) = match qualifier.split_once("::") {
+                Some((first, rest)) => (first, Some(rest)),
+                None => (qualifier, None),
+            };
+            match self.namespace_alias(file, chain, first) {
+                AliasLookup::None => {}
+                AliasLookup::Namespace(namespace) => {
+                    expanded = Some(match rest {
+                        Some(rest) => format!("{namespace}::{rest}"),
+                        None => namespace.to_string(),
+                    });
+                }
+                AliasLookup::Uncertain => return Outcome::none(Status::Unresolved),
+            }
+        }
         let qualifier = expanded.as_deref().unwrap_or(qualifier);
         let path = segments(qualifier);
         let facts = &self.files[file];
@@ -1784,7 +1850,7 @@ impl<'a> Resolver<'a> {
                                 ),
                             }
                         }
-                        None => self.with_qualifier(file, reference, qualifier),
+                        None => self.with_qualifier(file, reference, qualifier, &chain),
                     }
                 }
                 None => {
@@ -2243,6 +2309,39 @@ mod tests {
         assert_eq!(
             rows(&[("a.cpp", source)], "a.cpp"),
             ["10 go>v::Widget::run UniqueCandidate QualifiedPath [a.cpp#vendor.Widget.run]"]
+        );
+    }
+
+    /// The nearest enclosing scope of the call gives the alias. An alias in
+    /// a scope that does not contain the call is not visible.
+    #[test]
+    fn test_namespace_alias_of_the_nearest_scope_cpp() {
+        let source = "namespace one {\nstruct Widget {\n    static int run() { return 1; }\n};\n}\n\nnamespace two {\nstruct Widget {\n    static int run() { return 2; }\n};\n}\n\nnamespace v = one;\n\nnamespace scope {\nnamespace v = two;\n\nint go() {\n    return v::Widget::run();\n}\n}\n\nint outer() {\n    return v::Widget::run();\n}\n\nint local() {\n    namespace v = two;\n    return v::Widget::run();\n}\n";
+        assert_eq!(
+            rows(&[("a.cpp", source)], "a.cpp"),
+            [
+                "19 scope.go>v::Widget::run UniqueCandidate QualifiedPath [a.cpp#two.Widget.run]",
+                "24 outer>v::Widget::run UniqueCandidate QualifiedPath [a.cpp#one.Widget.run]",
+                "29 local>v::Widget::run UniqueCandidate QualifiedPath [a.cpp#two.Widget.run]",
+            ]
+        );
+    }
+
+    /// An alias in one block of a namespace is visible in each block of the
+    /// namespace. When the blocks give the alias different namespaces, the
+    /// alias is not certain, and the call has no edge.
+    #[test]
+    fn test_namespace_alias_in_a_second_block_of_the_namespace_cpp() {
+        let types = "namespace one {\nstruct Widget {\n    static int run() { return 1; }\n};\n}\n\nnamespace two {\nstruct Widget {\n    static int run() { return 2; }\n};\n}\n\nnamespace v = one;\n";
+        let reopened = format!("{types}\nnamespace scope {{\nnamespace v = two;\n}}\n\nnamespace scope {{\nint go() {{\n    return v::Widget::run();\n}}\n}}\n");
+        assert_eq!(
+            rows(&[("a.cpp", &reopened)], "a.cpp"),
+            ["21 scope.go>v::Widget::run UniqueCandidate QualifiedPath [a.cpp#two.Widget.run]"]
+        );
+        let different = format!("{types}\nnamespace scope {{\nnamespace v = two;\n}}\n\nnamespace scope {{\nnamespace v = one;\n}}\n\nnamespace scope {{\nint go() {{\n    return v::Widget::run();\n}}\n}}\n");
+        assert_eq!(
+            rows(&[("a.cpp", &different)], "a.cpp"),
+            ["25 scope.go>v::Widget::run Unresolved - []"]
         );
     }
 
