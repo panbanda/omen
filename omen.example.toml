@@ -1,124 +1,82 @@
-# Omen Configuration (Rust CLI)
-# Copy to omen.toml or .omen/omen.toml and customize
-# Documentation: https://github.com/panbanda/omen
+# Omen configuration
+# Copy this file to `omen.toml` or `.omen/omen.toml` and change the values.
+# Each value in this file is the default value. Documentation:
+# https://github.com/panbanda/omen
 
-# Skip built and minified output. This setting skips a JS or TS file when the
-# name ends in .min, .bundle, .chunk, -min, -bundle, _min, or _bundle before the
-# extension. It also skips each file below a directory named node_modules,
-# target, dist, build, coverage, vendor, .next, _next, .turbo, or .cache.
-# Set it to false to analyze these files.
-exclude_built_assets = true
+# Glob patterns of files to skip. Omen adds them to the built-in ignores.
+# Example: exclude = ["vendor/**", "**/*.pb.go"]
+exclude = []
 
-# Exclude patterns (glob) - files/directories to skip during analysis
-exclude = [
-    # Test files
-    "*_test.rs",
-    "*_test.go",
-    "**/*_test.py",
-    "**/*.test.ts",
-    "**/*.test.js",
-    "**/*.spec.ts",
-    "**/*.spec.js",
-    "tests/**",
-    "test/**",
-    "**/testdata/**",
+# If true, omen also analyzes the generated and minified files that it skips
+# by default. By default omen skips a JS or TS file when the name ends in
+# .min, .bundle, .chunk, -min, -bundle, _min, or _bundle before the extension,
+# and each file below a directory named node_modules, target, dist, build,
+# coverage, vendor, .next, _next, .turbo, or .cache.
+include_generated = false
 
-    # Generated code
-    "**/mocks/**",
-    "**/*.pb.go",
-    "**/*.gen.go",
-    "**/*.generated.*",
+# If true, `clones` and `temporal` skip test files.
+# `clones --include-tests` overrides the value for one run.
+exclude_tests = true
 
-    # Dependencies
-    "vendor/**",
-    "node_modules/**",
-    "**/site-packages/**",
+# Gate modes: "off" gives the report only. "warn" also writes a warning to
+# stderr. "error" also exits with status 2 on a violation.
+# The `--gate` flag overrides the value of `gate`.
 
-    # Build/output directories
-    "target/**",
-    "dist/**",
-    "build/**",
-    "bin/**",
-    ".git/**",
-    ".omen/**",
-
-    # Lock files
-    "Cargo.lock",
-    "go.sum",
-    "package-lock.json",
-    "yarn.lock",
-    "poetry.lock",
-
-    # Documentation (optional - remove if you want to analyze docs)
-    # "**/README.md",
-    # "**/CHANGELOG.md",
-]
-
-# Complexity analysis thresholds
 [complexity]
-# Cyclomatic complexity error threshold (default: 20)
-cyclomatic_error = 20
-# Cognitive complexity error threshold (default: 30)
-cognitive_error = 30
+gate = "off"
+# The highest cyclomatic complexity that the gate accepts.
+cyclomatic_max = 20
+# The highest cognitive complexity that the gate accepts.
+cognitive_max = 30
 
-# Self-Admitted Technical Debt (SATD) detection
-[satd]
-# Custom markers beyond the default (TODO, FIXME, HACK, BUG, etc.)
-custom_markers = []
+[score]
+gate = "off"
+# The lowest overall score that the gate accepts. The `--fail-under` flag
+# overrides the value.
+min = 80.0
 
-# Git churn analysis
+[stubs]
+gate = "off"
+
+[mutation]
+gate = "off"
+
+# A history window is a duration such as "30d", "3m", or "1y".
+# The value "all" selects all the history, except for `changes`.
+
 [churn]
-# Time period to analyze: "1m", "3m", "6m", "1y", "2y", "all"
 since = "6m"
-# Number of top churned files to report
-top = 20
 
-# Code clone/duplicate detection (MinHash + LSH)
+[hotspot]
+# The window ends at the date of the analyzed revision, not at the current time.
+since = "90d"
+
+[defect]
+since = "30d"
+
+[changes]
+since = "30d"
+
+[satd]
+# Markers to detect in addition to the built-in markers, such as TODO and FIXME.
+markers = []
+
 [duplicates]
-# Minimum tokens for a code block to be considered for clone detection
+# The minimum number of tokens in a clone.
 min_tokens = 50
-# Minimum similarity threshold (0.0 - 1.0)
+# The minimum similarity of two fragments, from 0.0 to 1.0.
 min_similarity = 0.9
 
-# Hotspot analysis (churn x complexity)
-[hotspot]
-# Number of top hotspots to report
-top = 20
-# Days of history to measure churn over. The window ends at the analyzed
-# revision's own date, not at the current time, so an old checkout still
-# sees its own history.
-days = 90
-
-# Defect probability (PMAT)
-[defect]
-# Days of history to measure churn over, ending at the analyzed revision.
-churn_days = 30
-
-# Repository health score
-[score]
-# Fail CI if score is below this threshold (optional)
-# fail_under = 70.0
-
-# Gate mode of each gated command: "off", "warn", or "error".
-# "off" gives the report only. "warn" also writes a warning to stderr.
-# "error" also exits with status 2 on a violation.
-# The `--gate` flag overrides the value.
-[gate]
-complexity = "off"
-score = "off"
-stubs = "off"
-mutation = "off"
-
-# Feature flag detection
 [feature_flags]
-# Days before a flag is considered stale
+# The age in days after which a flag is stale. The `--stale-days` flag
+# overrides the value.
 stale_days = 90
-# Built-in providers to enable. If empty, no built-in detection runs.
+# Built-in providers to enable. If the list is empty, no built-in detection runs.
 # Available: launchdarkly, flipper, split, unleash, generic, env
 # Example: providers = ["launchdarkly"]
 providers = []
 
-# Custom feature flag providers (for in-house systems)
+# Custom providers for in-house systems.
 # [[feature_flags.custom_providers]]
 # name = "my_feature_system"
 # languages = ["ruby", "python"]

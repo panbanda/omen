@@ -175,7 +175,7 @@ pub struct PaginationArgs {
 /// The `--gate` flag of each gated command.
 #[derive(Args)]
 pub struct GateArgs {
-    /// Gate mode (default: the `[gate]` value in the configuration, or `off`)
+    /// Gate mode (default: the `gate` value of the command table in the configuration, or `off`)
     #[arg(id = "gate", long = "gate", value_enum, value_name = "MODE")]
     pub mode: Option<GateMode>,
 }
@@ -398,7 +398,7 @@ pub struct FlagsArgs {
     /// `feature_flags.stale_days` in the configuration.
     // The flag has no clap default. A default here has priority over the
     // configuration, and the configured value then has no effect.
-    #[arg(long)]
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
     pub stale_days: Option<u32>,
 }
 
@@ -1332,6 +1332,11 @@ mod tests {
             panic!("Expected Flags command");
         };
         assert_eq!(args.stale_days, None);
+    }
+
+    #[test]
+    fn test_flags_stale_days_of_0_is_an_error() {
+        assert!(Cli::try_parse_from(["omen", "flags", "--stale-days", "0"]).is_err());
     }
 
     #[test]

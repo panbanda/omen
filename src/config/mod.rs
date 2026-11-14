@@ -40,7 +40,7 @@ const REMOVED_KEYS: &[(&str, &str)] = &[
 ];
 
 /// Main configuration structure.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     /// Exclude patterns (glob).
@@ -164,6 +164,12 @@ impl Config {
                     .to_string(),
             ));
         }
+        if self.feature_flags.stale_days == 0 {
+            return Err(crate::core::Error::Config(
+                "feature_flags.stale_days = 0: use 1 or more. A value of 0 makes each flag stale."
+                    .to_string(),
+            ));
+        }
         Ok(())
     }
 }
@@ -218,7 +224,7 @@ impl From<HistoryWindow> for String {
 }
 
 /// Complexity analyzer configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ComplexityConfig {
     /// Gate mode of `complexity`.
@@ -240,7 +246,7 @@ impl Default for ComplexityConfig {
 }
 
 /// SATD analyzer configuration.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SatdConfig {
     /// Markers to detect in addition to the built-in markers.
@@ -248,7 +254,7 @@ pub struct SatdConfig {
 }
 
 /// Churn analyzer configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ChurnConfig {
     /// History window to analyze, such as `6m`, `1y`, or `all`.
@@ -264,7 +270,7 @@ impl Default for ChurnConfig {
 }
 
 /// Clone detection configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DuplicatesConfig {
     /// Minimum token count for clone detection.
@@ -283,7 +289,7 @@ impl Default for DuplicatesConfig {
 }
 
 /// Hotspot analyzer configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct HotspotConfig {
     /// History window to measure churn over, such as `90d` or `all`. The
@@ -300,7 +306,7 @@ impl Default for HotspotConfig {
 }
 
 /// Defect analyzer configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DefectConfig {
     /// History window to measure churn over, such as `30d` or `all`. The
@@ -317,7 +323,7 @@ impl Default for DefectConfig {
 }
 
 /// Score configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ScoreConfig {
     /// Gate mode of `score`.
@@ -336,7 +342,7 @@ impl Default for ScoreConfig {
 }
 
 /// Stubs configuration.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct StubsConfig {
     /// Gate mode of `stubs`.
@@ -344,7 +350,7 @@ pub struct StubsConfig {
 }
 
 /// Mutation testing configuration.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct MutationConfig {
     /// Gate mode of `mutation`.
@@ -352,7 +358,7 @@ pub struct MutationConfig {
 }
 
 /// Feature flag detection configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FeatureFlagsConfig {
     /// Days before a flag is considered stale.
@@ -375,7 +381,7 @@ impl Default for FeatureFlagsConfig {
 }
 
 /// Custom feature flag provider.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CustomProvider {
     /// Provider name.
@@ -387,7 +393,7 @@ pub struct CustomProvider {
 }
 
 /// Changes/JIT analyzer configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ChangesConfig {
     /// History window to analyze, such as `30d`. The value `all` is not valid.
@@ -754,6 +760,16 @@ mod tests {
     }
 
     #[test]
+    fn test_stale_days_of_0_is_rejected_with_its_key() {
+        Jail::expect_with(|jail| {
+            jail.create_file("omen.toml", "[feature_flags]\nstale_days = 0\n")?;
+            let error = Config::from_file("omen.toml").unwrap_err().to_string();
+            assert!(error.contains("feature_flags.stale_days"), "{error}");
+            Ok(())
+        });
+    }
+
+    #[test]
     fn test_all_is_not_a_window_of_changes() {
         Jail::expect_with(|jail| {
             jail.create_file("omen.toml", "[changes]\nsince = \"all\"\n")?;
@@ -895,5 +911,44 @@ mod tests {
             assert!(!error.contains("was removed"), "{error}");
             Ok(())
         });
+    }
+    const EXAMPLE: &str = include_str!("../../omen.example.toml");
+
+    fn leaf_paths(prefix: &str, value: &serde_json::Value, paths: &mut Vec<String>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, inner) in map {
+                    let path = if prefix.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{prefix}.{key}")
+                    };
+                    leaf_paths(&path, inner, paths);
+                }
+            }
+            _ => paths.push(prefix.to_string()),
+        }
+    }
+
+    #[test]
+    fn test_the_example_file_equals_the_default_configuration() {
+        Jail::expect_with(|jail| {
+            jail.create_file("omen.toml", EXAMPLE)?;
+            let config = Config::from_file("omen.toml").unwrap();
+            assert_eq!(config, Config::default());
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_each_key_of_the_configuration_is_in_the_example_file() {
+        let example: serde_json::Value = Figment::from(Toml::string(EXAMPLE)).extract().unwrap();
+        let defaults = serde_json::to_value(Config::default()).unwrap();
+        let (mut in_example, mut in_defaults) = (Vec::new(), Vec::new());
+        leaf_paths("", &example, &mut in_example);
+        leaf_paths("", &defaults, &mut in_defaults);
+        in_example.sort();
+        in_defaults.sort();
+        assert_eq!(in_example, in_defaults);
     }
 }
