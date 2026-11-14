@@ -8,7 +8,6 @@ use super::{get_function_node_types, get_tree_sitter_language, queries};
 use crate::analyzers::cohesion;
 use crate::core::Language;
 use crate::index::extract::{language_spec, NameRule};
-use crate::semantic::chunking;
 
 const LANGUAGES: [Language; 14] = [
     Language::Go,
@@ -131,7 +130,6 @@ fn analyzer_tables(language: Language) -> Vec<(&'static str, Vec<&'static str>)>
         ("function", get_function_node_types(language)),
         ("method", cohesion::get_method_node_types(language)),
         ("field", cohesion::get_field_node_types(language)),
-        ("chunk_type", chunking::get_type_node_kinds(language)),
     ]
 }
 
