@@ -61,13 +61,19 @@ src/
 ├── main.rs        CLI entry point
 ├── lib.rs         Public library surface (the omen crate)
 ├── cli/           Argument parsing and subcommand dispatch
+├── commands/      One handler for each command
+├── index/         Shared index of symbols, imports, and calls
+├── changeset/     Changes between two commits and the pull request comment
+├── task_context/  Bounded context for one definition
+├── eval/          Scoring of paired coding-agent outcome records
+├── benchmark/     Paired quality benchmark of two omen binaries
 ├── analyzers/     One module per analyzer (complexity, satd, churn, hotspot, ...)
 ├── parser/        Tree-sitter wrapper and language detection
 ├── mcp/           MCP server exposing the analyzers as tools
 ├── output/        Table, JSON and markdown formatting
 ├── report/        HTML health report
 ├── score/         Repository health score
-├── semantic/      Embeddings and semantic search
+├── semantic/      TF-IDF index and search
 ├── git/           Git history, churn and ownership
 ├── config/        omen.toml loading
 └── core/          Shared types and file processing
