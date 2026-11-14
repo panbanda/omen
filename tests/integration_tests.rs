@@ -2884,7 +2884,7 @@ fn test_all_applies_top_to_each_section_as_the_single_command_does() {
     let all: serde_json::Value =
         serde_json::from_str(&all_output(&["-f", "json", "all", "--top", "1"])).unwrap();
     let sections = all["analyzers"].as_array().unwrap();
-    assert_eq!(sections.len(), 18, "`--top` must not remove a section");
+    assert_eq!(sections.len(), 19, "`--top` must not remove a section");
 
     for command in ["satd", "stubs", "complexity"] {
         let single: serde_json::Value =
