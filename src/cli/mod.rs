@@ -597,7 +597,7 @@ pub struct SearchQueryArgs {
     pub pagination: PaginationArgs,
 
     /// Minimum similarity score (0.0-1.0)
-    #[arg(long, default_value = "0.3")]
+    #[arg(long, default_value = "0.0")]
     pub min_score: f32,
 
     /// Limit search to specific files (comma-separated)
@@ -1631,6 +1631,15 @@ mod tests {
             parse_search_subcommand(&["omen", "search", "query", "function that handles errors"])
         {
             assert_eq!(args.query, "function that handles errors");
+        }
+    }
+
+    #[test]
+    fn test_search_query_min_score_default() {
+        if let SearchSubcommand::Query(args) =
+            parse_search_subcommand(&["omen", "search", "query", "test"])
+        {
+            assert_eq!(args.min_score, 0.0);
         }
     }
 

@@ -189,7 +189,7 @@
   },
   {
     "id": "cpp/i-largest",
-    "rank": null
+    "rank": 1
   },
   {
     "id": "cpp/i-measure-scaled",
@@ -229,7 +229,7 @@
   },
   {
     "id": "cpp/n-heap",
-    "rank": null
+    "rank": 2
   },
   {
     "id": "cpp/n-larger",
@@ -237,7 +237,7 @@
   },
   {
     "id": "cpp/n-root-and-size",
-    "rank": null
+    "rank": 6
   },
   {
     "id": "cpp/n-times",
@@ -305,7 +305,7 @@
   },
   {
     "id": "csharp/n-around-square",
-    "rank": null
+    "rank": 4
   },
   {
     "id": "csharp/n-circle-area",
@@ -341,7 +341,7 @@
   },
   {
     "id": "go/c-receiver-method",
-    "rank": null
+    "rank": 1
   },
   {
     "id": "go/c-side-squared",
@@ -389,11 +389,11 @@
   },
   {
     "id": "go/n-make-circle",
-    "rank": null
+    "rank": 2
   },
   {
     "id": "go/n-map-slice",
-    "rank": null
+    "rank": 1
   },
   {
     "id": "go/n-text-length",
@@ -405,7 +405,7 @@
   },
   {
     "id": "go/n-upper-case",
-    "rank": null
+    "rank": 1
   },
   {
     "id": "java/c-four-edges",
@@ -469,7 +469,7 @@
   },
   {
     "id": "java/n-around-square",
-    "rank": null
+    "rank": 4
   },
   {
     "id": "java/n-circle-area",
@@ -477,7 +477,7 @@
   },
   {
     "id": "java/n-distance",
-    "rank": null
+    "rank": 1
   },
   {
     "id": "java/n-increment",
@@ -485,7 +485,7 @@
   },
   {
     "id": "java/n-twice-radius",
-    "rank": null
+    "rank": 7
   },
   {
     "id": "java/n-units",
@@ -545,7 +545,7 @@
   },
   {
     "id": "javascript/i-part-square",
-    "rank": null
+    "rank": 1
   },
   {
     "id": "javascript/i-twice",
@@ -557,11 +557,11 @@
   },
   {
     "id": "javascript/n-add-to-count",
-    "rank": null
+    "rank": 2
   },
   {
     "id": "javascript/n-base-name",
-    "rank": null
+    "rank": 1
   },
   {
     "id": "javascript/n-circle-area",
@@ -573,7 +573,7 @@
   },
   {
     "id": "javascript/n-times-three",
-    "rank": null
+    "rank": 3
   },
   {
     "id": "javascript/n-times-two",
@@ -581,7 +581,7 @@
   },
   {
     "id": "javascript/n-unit-circle",
-    "rank": null
+    "rank": 5
   },
   {
     "id": "jsx/c-click-handler",
@@ -617,7 +617,7 @@
   },
   {
     "id": "jsx/i-counter",
-    "rank": null
+    "rank": 1
   },
   {
     "id": "jsx/i-handle-click",
@@ -645,7 +645,7 @@
   },
   {
     "id": "jsx/n-add-to-count",
-    "rank": null
+    "rank": 3
   },
   {
     "id": "jsx/n-circle-area",
@@ -653,7 +653,7 @@
   },
   {
     "id": "jsx/n-click-button",
-    "rank": null
+    "rank": 1
   },
   {
     "id": "jsx/n-label-span",
@@ -665,7 +665,7 @@
   },
   {
     "id": "jsx/n-times-three",
-    "rank": null
+    "rank": 4
   },
   {
     "id": "php/c-arrow-function",
@@ -753,11 +753,11 @@
   },
   {
     "id": "php/n-twice-radius",
-    "rank": null
+    "rank": 5
   },
   {
     "id": "php/n-unit-circle",
-    "rank": null
+    "rank": 6
   },
   {
     "id": "php/n-units",
@@ -825,11 +825,11 @@
   },
   {
     "id": "python/n-shape-name",
-    "rank": 1
+    "rank": 2
   },
   {
     "id": "python/n-square-from-length",
-    "rank": null
+    "rank": 6
   },
   {
     "id": "python/n-times-two",
@@ -837,7 +837,7 @@
   },
   {
     "id": "python/n-unit-circle",
-    "rank": null
+    "rank": 3
   },
   {
     "id": "ruby/c-block",
@@ -917,7 +917,7 @@
   },
   {
     "id": "ruby/n-set-to-json",
-    "rank": null
+    "rank": 1
   },
   {
     "id": "ruby/n-times-two",
@@ -925,11 +925,11 @@
   },
   {
     "id": "ruby/n-twice-radius",
-    "rank": null
+    "rank": 7
   },
   {
     "id": "ruby/n-unit-circle",
-    "rank": null
+    "rank": 7
   },
   {
     "id": "rust/c-closure",
@@ -945,7 +945,7 @@
   },
   {
     "id": "rust/c-side-squared",
-    "rank": null
+    "rank": 1
   },
   {
     "id": "rust/c-struct",
@@ -973,7 +973,7 @@
   },
   {
     "id": "rust/i-scaled",
-    "rank": null
+    "rank": 1
   },
   {
     "id": "rust/i-twice",
@@ -993,7 +993,7 @@
   },
   {
     "id": "rust/n-make-circle",
-    "rank": null
+    "rank": 2
   },
   {
     "id": "rust/n-side-squared",
@@ -1041,7 +1041,7 @@
   },
   {
     "id": "tsx/i-counter",
-    "rank": null
+    "rank": 1
   },
   {
     "id": "tsx/i-format",
@@ -1077,7 +1077,7 @@
   },
   {
     "id": "tsx/n-click-button",
-    "rank": null
+    "rank": 1
   },
   {
     "id": "tsx/n-component-properties",
@@ -1093,7 +1093,7 @@
   },
   {
     "id": "tsx/n-to-string",
-    "rank": null
+    "rank": 3
   },
   {
     "id": "typescript/c-arrow-constant",
@@ -1157,7 +1157,7 @@
   },
   {
     "id": "typescript/n-add-to-count",
-    "rank": null
+    "rank": 2
   },
   {
     "id": "typescript/n-circle-area",
@@ -1169,11 +1169,11 @@
   },
   {
     "id": "typescript/n-times-three",
-    "rank": null
+    "rank": 3
   },
   {
     "id": "typescript/n-to-string",
-    "rank": null
+    "rank": 3
   },
   {
     "id": "typescript/n-twice-squared",

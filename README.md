@@ -669,7 +669,7 @@ omen search query "retry logic" --include-project /path/to/other-repo
 4. **Incremental updates** - Only re-indexes files that changed since last run
 5. **Deduplication** - Each symbol appears once in results (best-scoring chunk wins)
 
-Queries return at most 10 results by default and discard matches below a similarity score of 0.3. The index is stored in `.omen/search.db`; subsequent indexing runs update only files whose content hashes changed.
+Queries return at most 10 results by default and discard each symbol that has no term of the query. Use `--min-score` to set a higher limit. The index is stored in `.omen/search.db`; subsequent indexing runs update only files whose content hashes changed.
 
 **Features:**
 

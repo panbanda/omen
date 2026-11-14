@@ -26,9 +26,9 @@ const MIN_SCORE: Param = Param::number(
     "min_score",
     0.0,
     1.0,
-    "The minimum similarity score of a result.",
+    "The minimum similarity score of a result. A symbol that has no term of the query is never a result.",
 )
-.with_default(ParamDefault::Number(0.3));
+.with_default(ParamDefault::Number(0.0));
 
 const FILES: Param = Param::string_array(
     "files",
@@ -106,7 +106,7 @@ fn search(
     shown_query: &str,
 ) -> HandlerResult {
     let top_k = arguments.count("top_k").unwrap_or(10);
-    let min_score = arguments.number("min_score").unwrap_or(0.3) as f32;
+    let min_score = arguments.number("min_score").unwrap_or(0.0) as f32;
     let max_complexity = arguments.count_u32("max_complexity");
     let files = arguments.strings("files");
     let include_projects: Vec<PathBuf> = arguments
