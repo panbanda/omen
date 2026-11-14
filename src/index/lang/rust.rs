@@ -86,6 +86,31 @@ fn type_name(mut node: Node<'_>, context: &Context<'_, '_>) -> Option<String> {
     }
 }
 
+/// The modules in the path of a type, as `a::b` in `a::b::Node`. The words
+/// `crate`, `self`, and `super` are not names of modules.
+fn type_modules(mut node: Node<'_>, context: &Context<'_, '_>) -> Vec<String> {
+    loop {
+        node = match node.kind() {
+            GENERIC_TYPE | REFERENCE_TYPE => match node.child_by_field_name("type") {
+                Some(inner) => inner,
+                None => return Vec::new(),
+            },
+            SCOPED_TYPE_IDENTIFIER => {
+                let Some(path) = node.child_by_field_name("path") else {
+                    return Vec::new();
+                };
+                return context
+                    .text(path)
+                    .split("::")
+                    .map(|segment| segment.trim().to_string())
+                    .filter(|segment| !["crate", "self", "super", ""].contains(&segment.as_str()))
+                    .collect();
+            }
+            _ => return Vec::new(),
+        };
+    }
+}
+
 /// `pub` exports an item. `pub(crate)` and the other restricted forms do not.
 fn visibility(node: Node<'_>, context: &Context<'_, '_>) -> Exported {
     let mut cursor = node.walk();
@@ -412,6 +437,7 @@ impl LanguageSpec for Rust {
         }
         let name = type_name(node.child_by_field_name("type")?, context)?;
         let mut path = context.path();
+        path.extend(type_modules(node.child_by_field_name("type")?, context));
         path.push(name.clone());
         Some(Scope {
             node,
@@ -625,7 +651,7 @@ mod tests {
                 "file#Circle.new",
                 "file#Circle.scaled",
                 "file#List.push",
-                "file#Square.side"
+                "file#shapes.Square.side"
             ]
         );
     }

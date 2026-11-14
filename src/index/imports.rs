@@ -987,6 +987,12 @@ pub fn resolve_imports(files: &mut [FileSymbols], manifests: &Manifests) {
                     .iter()
                     .filter(|_| file.language == Language::Rust)
                     .filter_map(|reference| reference.qualifier.as_deref())
+                    .flat_map(|qualifier| {
+                        // The path before a type names the module of the type.
+                        let module = qualifier.rsplit_once("::").map(|(module, _)| module);
+                        [Some(qualifier), module]
+                    })
+                    .flatten()
                     .collect();
                 qualifiers
                     .into_iter()

@@ -485,6 +485,23 @@ impl<'a> Resolver<'a> {
             });
             return found;
         }
+        // A Rust qualifier names a module. Evidence in the repository must
+        // show that the module has the type, also when only one type has the name.
+        if self.family(file) == Family::Rust
+            && !self.is_import_qualifier(qualifier.unwrap_or_default(), file)
+        {
+            let relative: Vec<&str> = path
+                .iter()
+                .copied()
+                .skip_while(|segment| ["crate", "self", "super"].contains(segment))
+                .collect();
+            let module_file = self.files[file].path_targets.get(&path.join("::"));
+            found.retain(|id| {
+                (!relative.is_empty() && containers(id).ends_with(&relative))
+                    || module_file.is_some_and(|module| *module == self.files[id.0].file)
+            });
+            return found;
+        }
         // More than one type can have the name. The qualifier selects the
         // types whose containers have the names of the qualifier, or whose
         // file declares the package that the qualifier names.
