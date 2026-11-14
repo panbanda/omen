@@ -352,7 +352,7 @@ fn place_of(key: &str) -> (String, u32) {
 }
 
 /// The paths and the choke points of the security analysis of one case.
-fn observed_paths(dir: &Path) -> (Vec<ObservedPath>, Vec<String>) {
+fn observed_paths(dir: &Path) -> Vec<ObservedPath> {
     let mut files = Vec::new();
     source_files(dir, &mut files);
     let analysis = analyze_files(dir, &files);
@@ -378,24 +378,26 @@ fn observed_paths(dir: &Path) -> (Vec<ObservedPath>, Vec<String>) {
                 weakest_basis: path.weakest_basis.map(|basis| basis.name().to_string()),
                 path_count: path.path_count,
                 guards,
+                choke_points: analysis
+                    .reachability
+                    .choke_points
+                    .iter()
+                    .filter(|point| point.sink_keys.contains(&path.sink))
+                    .filter(|point| path.steps.iter().any(|step| step.symbol == point.symbol))
+                    .map(|point| point.symbol.clone())
+                    .collect(),
             }
         })
         .collect();
-    let choke_points = analysis
-        .reachability
-        .choke_points
-        .iter()
-        .map(|point| point.symbol.clone())
-        .collect();
-    (paths, choke_points)
+    paths
 }
 
 fn observe(dir: &Path, with_paths: bool) -> Observed {
     let (trees, index_files) = index_case(dir);
-    let (paths, choke_points) = if with_paths {
+    let paths = if with_paths {
         observed_paths(dir)
     } else {
-        (Vec::new(), Vec::new())
+        Vec::new()
     };
     let mut imports = Vec::new();
     let calls = observed_calls(&index_files);
@@ -420,7 +422,6 @@ fn observe(dir: &Path, with_paths: bool) -> Observed {
         sinks,
         entry_points,
         paths,
-        choke_points,
     }
 }
 

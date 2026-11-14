@@ -327,8 +327,6 @@ pub struct Observed {
     pub sinks: Vec<ObservedSink>,
     pub entry_points: Vec<ObservedEntryPoint>,
     pub paths: Vec<ObservedPath>,
-    /// The keys of the symbols that are choke points.
-    pub choke_points: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -341,6 +339,8 @@ pub struct ObservedPath {
     pub weakest_basis: Option<String>,
     pub path_count: u64,
     pub guards: Vec<String>,
+    /// The keys of the symbols on this path that are choke points for the sink of this path.
+    pub choke_points: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -929,14 +929,17 @@ fn compare_paths(case: &str, labels: &Labels, observed: &Observed, out: &mut Vec
             ));
         }
         if !label.choke_points.is_empty() {
-            let missing: Vec<&String> = label
-                .choke_points
-                .iter()
-                .filter(|symbol| !observed.choke_points.contains(symbol))
-                .collect();
             out.push(check(
                 "choke_points",
-                (!missing.is_empty()).then(|| format!("not choke points: {missing:?}")),
+                found.and_then(|path| {
+                    let missing: Vec<&String> = label
+                        .choke_points
+                        .iter()
+                        .filter(|symbol| !path.choke_points.contains(symbol))
+                        .collect();
+                    (!missing.is_empty())
+                        .then(|| format!("not choke points of the sink: {missing:?}"))
+                }),
             ));
         }
     }
@@ -1369,7 +1372,6 @@ mod tests {
             sinks: vec![],
             entry_points: vec![],
             paths: vec![],
-            choke_points: vec![],
             imports: vec![ObservedImport {
                 file: "main.rs".to_string(),
                 line: 1,
@@ -2067,6 +2069,7 @@ mod tests {
             weakest_basis: Some("same_file".to_string()),
             path_count: 1,
             guards: vec!["login_required".to_string()],
+            choke_points: vec!["app.py#helper".to_string()],
         }
     }
 
@@ -2083,7 +2086,6 @@ mod tests {
     fn a_correct_path_passes_every_check() {
         let observed = Observed {
             paths: vec![observed_path()],
-            choke_points: vec!["app.py#helper".to_string()],
             ..Observed::default()
         };
         assert_eq!(path_failures(&observed), Vec::<String>::new());
@@ -2096,6 +2098,7 @@ mod tests {
         wrong.weakest_basis = Some("imported_name".to_string());
         wrong.path_count = 2;
         wrong.guards.clear();
+        wrong.choke_points.clear();
         let observed = Observed {
             paths: vec![wrong],
             ..Observed::default()
@@ -2119,12 +2122,30 @@ mod tests {
         extra.sink_line = 30;
         let observed = Observed {
             paths: vec![observed_path(), extra],
-            choke_points: vec!["app.py#helper".to_string()],
             ..Observed::default()
         };
         assert_eq!(
             path_failures(&observed),
             ["python/paths/paths/orphan_is_not_reached/absent"]
+        );
+    }
+
+    #[test]
+    fn a_choke_point_of_another_sink_does_not_satisfy_a_label() {
+        let mut without = observed_path();
+        without.choke_points.clear();
+        let mut other = observed_path();
+        other.sink_line = 30;
+        let observed = Observed {
+            paths: vec![without, other],
+            ..Observed::default()
+        };
+        assert_eq!(
+            path_failures(&observed),
+            [
+                "python/paths/paths/update_to_system/choke_points",
+                "python/paths/paths/orphan_is_not_reached/absent"
+            ]
         );
     }
 

@@ -50,6 +50,8 @@ pub struct ChokePoint {
     pub entries: usize,
     /// The number of sinks for which the symbol is on each known path.
     pub sinks: usize,
+    /// The keys of those sinks, in order.
+    pub sink_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -341,6 +343,7 @@ fn choke_points(
                 .filter(|search| search.reached.contains_key(&symbol))
                 .count(),
             sinks: sinks.len(),
+            sink_keys: sinks.iter().map(|key| key.to_string()).collect(),
         })
         .collect();
     points.sort_by(|left, right| {
