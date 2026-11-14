@@ -9,6 +9,8 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use parking_lot::Mutex;
+
 use serde::{Deserialize, Serialize};
 
 use super::build::CodeIndex;
@@ -330,8 +332,26 @@ pub struct ViewCache {
 
 impl ViewCache {
     pub fn load(&mut self, root: &Path, files: &[PathBuf]) -> Result<Arc<CallView>> {
+        self.load_with(
+            root,
+            files,
+            &|path| Ok(std::fs::read(path)?),
+            &super::build::list_directory,
+        )
+    }
+
+    /// Reads each source file and each manifest file one time. The hashes and
+    /// the index come from those bytes, thus a view always has the content
+    /// that its hashes name.
+    pub fn load_with(
+        &mut self,
+        root: &Path,
+        files: &[PathBuf],
+        read: super::build::ReadFile<'_>,
+        list: super::build::ListDirectory<'_>,
+    ) -> Result<Arc<CallView>> {
         let root = root.canonicalize()?;
-        let mut hashes = BTreeMap::new();
+        let mut sources: BTreeMap<PathBuf, Vec<u8>> = BTreeMap::new();
         for path in files {
             let path = path.canonicalize()?;
             if !path.starts_with(&root) {
@@ -340,15 +360,34 @@ impl ViewCache {
             if Language::detect(&path).is_none() {
                 continue;
             }
-            hashes.insert(path.clone(), blake3::hash(&std::fs::read(&path)?));
+            let content = read(&path)?;
+            sources.insert(path, content);
         }
-        let paths: Vec<PathBuf> = hashes.keys().cloned().collect();
+        let hashes: BTreeMap<PathBuf, blake3::Hash> = sources
+            .iter()
+            .map(|(path, content)| (path.clone(), blake3::hash(content)))
+            .collect();
+        let paths: Vec<PathBuf> = sources.keys().cloned().collect();
+        let listings = Mutex::new(BTreeMap::new());
+        let record = |directory: &Path| -> Vec<PathBuf> {
+            let found = list(directory);
+            listings
+                .lock()
+                .insert(directory.to_path_buf(), found.clone());
+            found
+        };
+        // A manifest that cannot be read has no effect on the index.
+        let mut snapshot: BTreeMap<PathBuf, Option<Vec<u8>>> = sources
+            .into_iter()
+            .map(|(path, content)| (path, Some(content)))
+            .collect();
         let mut manifests = BTreeMap::new();
-        for path in super::build::manifest_paths(&root, &paths, &super::build::list_directory) {
-            // A manifest that cannot be read has no effect on the index.
-            if let Ok(content) = std::fs::read(&path) {
-                manifests.insert(path, blake3::hash(&content));
+        for path in super::build::manifest_paths(&root, &paths, &record) {
+            let content = read(&path).ok();
+            if let Some(content) = &content {
+                manifests.insert(path.clone(), blake3::hash(content));
             }
+            snapshot.insert(path, content);
         }
         if let Some(last) = self
             .last
@@ -357,7 +396,18 @@ impl ViewCache {
         {
             return Ok(Arc::clone(last));
         }
-        let view = Arc::new(CallView::from_index(&CodeIndex::from_files(&root, &paths)));
+        let snapshot_read = |path: &Path| -> Result<Vec<u8>> {
+            match snapshot.get(path) {
+                Some(Some(content)) => Ok(content.clone()),
+                Some(None) => Err(Error::analysis("File was not readable")),
+                None => read(path),
+            }
+        };
+        let snapshot_list = |directory: &Path| -> Vec<PathBuf> {
+            listings.lock().get(directory).cloned().unwrap_or_default()
+        };
+        let index = CodeIndex::build(&root, &paths, &snapshot_read, &snapshot_list);
+        let view = Arc::new(CallView::from_index(&index));
         self.root = root;
         self.hashes = hashes;
         self.manifests = manifests;
@@ -487,6 +537,33 @@ mod tests {
         assert_eq!(names("X.~X"), ["a.cpp#X.~X"]);
         assert_eq!(names("a.cpp:~X"), ["a.cpp#X.~X"]);
         assert_eq!(names("X.run"), ["a.cpp#X.run", "a.cpp#X.run~2"]);
+    }
+
+    /// The view must come from the bytes that the cache hashed. A file that
+    /// changes between the hash and the build must not give a view that has a
+    /// different content from its hash.
+    #[test]
+    fn test_cache_builds_the_view_from_the_hashed_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let file = root.join("a.py");
+        std::fs::write(&file, "def before():\n    pass\n").unwrap();
+        let reads = std::sync::atomic::AtomicUsize::new(0);
+        let read = |path: &Path| -> Result<Vec<u8>> {
+            let _ = path;
+            let count = reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(if count == 0 {
+                b"def before():\n    pass\n".to_vec()
+            } else {
+                b"def after():\n    pass\n".to_vec()
+            })
+        };
+        let mut cache = ViewCache::default();
+        let view = cache
+            .load_with(root, &[file], &read, &super::super::build::list_directory)
+            .unwrap();
+        assert_eq!(view.resolve("before").len(), 1);
+        assert!(view.resolve("after").is_empty());
     }
 
     /// The index reads the manifest files. A change of a manifest without a
