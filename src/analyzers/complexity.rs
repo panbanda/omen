@@ -40,7 +40,7 @@ use crate::core::{
 use crate::index::model::Symbol;
 use crate::parser::queries::{
     get_decision_node_types, get_flat_node_types, get_nested_scope_node_types,
-    get_nesting_node_types,
+    get_nesting_node_types, get_operator,
 };
 use crate::parser::{self, ParseResult, Parser};
 
@@ -731,22 +731,6 @@ fn calculate_max_nesting(node: &tree_sitter::Node<'_>, lang: Language, initial_d
             }
         }
     }
-}
-
-/// Get the operator from a binary expression.
-/// Returns a borrowed string slice to avoid allocation.
-fn get_operator<'a>(node: &tree_sitter::Node<'a>, source: &'a [u8]) -> Option<&'a str> {
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        let kind = child.kind();
-        if kind == "&&" || kind == "||" || kind == "and" || kind == "or" {
-            return Some(kind);
-        }
-        if kind == "operator" {
-            return child.utf8_text(source).ok();
-        }
-    }
-    None
 }
 
 /// Build summary statistics from file results.

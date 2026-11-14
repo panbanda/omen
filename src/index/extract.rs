@@ -636,10 +636,9 @@ impl<'tree> Extractor<'_, 'tree> {
             local: self.local_kinds.contains(&kind),
             scope: self.spec.scope_kinds().contains(&kind),
             rule: self.rules.get(kind).copied(),
-            member_bits: self
-                .members
-                .as_ref()
-                .map_or(0, |recorder| members::kind_bits(&recorder.syntax, kind)),
+            member_bits: self.members.as_ref().map_or(0, |recorder| {
+                members::kind_bits(self.language, &recorder.syntax, kind)
+            }),
         };
         self.facts_of_kinds[id] = Some(facts);
         facts
@@ -1044,6 +1043,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
                     container_path: &draft.container_path,
                     start_byte: draft.span.start_byte,
                     end_byte: draft.span.end_byte,
+                    body: draft.body.map(|body| (body.start_byte(), body.end_byte())),
                     has_receiver: draft.receiver_type.is_some(),
                 })
                 .collect();

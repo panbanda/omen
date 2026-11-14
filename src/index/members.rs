@@ -13,27 +13,7 @@ use tree_sitter::Node;
 use super::extract::{Local, Scope, ScopeRole};
 use super::model::{SharedStr, SymbolKind};
 use crate::core::Language;
-
-/// The node kinds that add one to the cyclomatic complexity of a method.
-pub const DECISION_KINDS: &[&str] = &[
-    "if_statement",
-    "if_expression",
-    "if",
-    "for_statement",
-    "for_expression",
-    "for",
-    "while_statement",
-    "while_expression",
-    "while",
-    "switch_statement",
-    "match_expression",
-    "case_clause",
-    "case_statement",
-    "catch_clause",
-    "except_clause",
-    "conditional_expression",
-    "ternary_expression",
-];
+use crate::parser::queries::{get_decision_node_types, get_nested_scope_node_types, get_operator};
 
 /// The syntax of the classes of one language.
 #[derive(Debug, Clone, Copy)]
@@ -156,12 +136,19 @@ pub const REFERENCE: u8 = 2;
 pub const DECLARATION: u8 = 4;
 pub const ACCESS: u8 = 8;
 pub const IMPLICIT: u8 = 16;
+pub const BOUNDARY: u8 = 32;
+
+/// The kinds of the expressions whose operator can add a decision point.
+const LOGICAL_KINDS: &[&str] = &["binary_expression", "logical_expression"];
 
 /// The roles of a node kind, as a set of bits.
-pub fn kind_bits(syntax: &ClassSyntax, kind: &str) -> u8 {
+pub fn kind_bits(language: Language, syntax: &ClassSyntax, kind: &str) -> u8 {
     let mut bits = 0;
-    if DECISION_KINDS.contains(&kind) {
+    if get_decision_node_types(language).contains(&kind) || LOGICAL_KINDS.contains(&kind) {
         bits |= DECISION;
+    }
+    if get_nested_scope_node_types(language).contains(&kind) {
+        bits |= BOUNDARY;
     }
     if syntax.references.contains(&kind) {
         bits |= REFERENCE;
@@ -242,6 +229,7 @@ pub struct Recorder {
     language: Language,
     pub syntax: ClassSyntax,
     decisions: Vec<usize>,
+    boundaries: Vec<(usize, usize)>,
     uses: Vec<RawUse>,
     pub blocks: Vec<PendingBlock>,
 }
@@ -255,6 +243,17 @@ fn range_of(node: Node<'_>) -> (usize, usize) {
 }
 
 impl Recorder {
+    /// A node of a decision kind adds a decision point. A logical expression adds one when its operator is a logical operator.
+    fn adds_decision(&self, node: Node<'_>, source: &[u8]) -> bool {
+        if !LOGICAL_KINDS.contains(&node.kind()) {
+            return true;
+        }
+        matches!(
+            get_operator(&node, source),
+            Some("&&" | "||" | "and" | "or")
+        )
+    }
+
     pub fn new(language: Language) -> Option<Self> {
         match class_model(language) {
             ClassModel::NotApplicable(_) => None,
@@ -262,6 +261,7 @@ impl Recorder {
                 language,
                 syntax,
                 decisions: Vec::new(),
+                boundaries: Vec::new(),
                 uses: Vec::new(),
                 blocks: Vec::new(),
             }),
@@ -277,8 +277,11 @@ impl Recorder {
         scopes: &[Scope<'_>],
         ancestors: &[Node<'_>],
     ) {
-        if bits & DECISION != 0 {
+        if bits & DECISION != 0 && self.adds_decision(node, source) {
             self.decisions.push(node.start_byte());
+        }
+        if bits & BOUNDARY != 0 {
+            self.boundaries.push(range_of(node));
         }
         let Some(scope) = scopes
             .iter()
@@ -326,6 +329,8 @@ pub struct SymbolRow<'a> {
     pub container_path: &'a [String],
     pub start_byte: usize,
     pub end_byte: usize,
+    /// The bytes of the body, when the definition has a body field.
+    pub body: Option<(usize, usize)>,
     pub has_receiver: bool,
 }
 
@@ -347,6 +352,8 @@ impl Recorder {
         let language = self.language;
         let mut decisions = self.decisions;
         decisions.sort_unstable();
+        let mut boundaries = self.boundaries;
+        boundaries.sort_unstable_by_key(|(from, to)| (*from, std::cmp::Reverse(*to)));
         let decision_points: Vec<u32> = symbols
             .iter()
             .map(|symbol| {
@@ -357,9 +364,35 @@ impl Recorder {
                 if !callable {
                     return 0;
                 }
-                let below = decisions.partition_point(|start| *start < symbol.start_byte);
-                let above = decisions.partition_point(|start| *start < symbol.end_byte);
-                (above - below) as u32
+                let (start, end) = symbol.body.unwrap_or((symbol.start_byte, symbol.end_byte));
+                let in_range = |from: usize, to: usize| {
+                    let below = decisions.partition_point(|at| *at < from);
+                    let above = decisions.partition_point(|at| *at < to);
+                    above - below
+                };
+                // A nested function has its own decision points. The body
+                // that is itself a function is a function value, and the
+                // function that holds it has none.
+                let first = boundaries.partition_point(|(from, _)| *from < start);
+                let mut count = in_range(start, end);
+                let mut next_free = start;
+                for (from, to) in &boundaries[first..] {
+                    if *from >= end {
+                        break;
+                    }
+                    if *from < next_free || *to > end {
+                        continue;
+                    }
+                    if (*from, *to) == (start, end) {
+                        if symbol.body.is_some() {
+                            return 0;
+                        }
+                        continue;
+                    }
+                    count -= in_range(*from, *to);
+                    next_free = *to;
+                }
+                count as u32
             })
             .collect();
 
