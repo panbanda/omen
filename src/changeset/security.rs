@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::markdown::CommentSection;
+use super::markdown::{cell, code, CommentSection};
 use super::model::{ChangeSet, ChangeState};
 use crate::config::Config;
 use crate::core::{ContentSource, FileSet, Result, TreeSource};
@@ -273,16 +273,12 @@ pub struct SecuritySection<'a> {
     pub max_nodes: usize,
 }
 
-fn cell(text: &str) -> String {
-    text.replace('|', "\\|").replace('\n', " ")
-}
-
 fn name_of(key: &str) -> &str {
     key.rsplit_once('#').map_or(key, |(_, name)| name)
 }
 
 fn location(file: &str, line: u32) -> String {
-    format!("`{}:{}`", cell(file), line)
+    code(&format!("{file}:{line}"))
 }
 
 impl SecuritySection<'_> {
@@ -317,12 +313,12 @@ impl SecuritySection<'_> {
         );
         for sink in sinks.iter().take(LISTED_ROWS) {
             text.push_str(&format!(
-                "| {} | {} | {} | {} | `{}` |\n",
+                "| {} | {} | {} | {} | {} |\n",
                 sink.category.name(),
                 sink.cwe,
                 location(&sink.file, sink.range.start_line),
                 sink.basis.name(),
-                cell(&sink.callee_text)
+                code(&sink.callee_text)
             ));
         }
         if sinks.len() > LISTED_ROWS {
@@ -347,12 +343,12 @@ impl SecuritySection<'_> {
             let route = entry
                 .route
                 .as_ref()
-                .map(|route| format!("`{} {}`", route.method, cell(&route.path)))
+                .map(|route| code(&format!("{} {}", route.method, route.path)))
                 .unwrap_or_default();
             text.push_str(&format!(
                 "| {} | {} | {} | {} | {} |\n",
                 entry.kind.name(),
-                entry.framework,
+                cell(&entry.framework),
                 route,
                 cell(&entry.guards.join(", ")),
                 location(&entry.file, entry.range.start_line)
@@ -371,7 +367,7 @@ impl SecuritySection<'_> {
             "\n<details><summary>Changed symbols on an entry-to-sink path</summary>\n\n",
         );
         for key in keys.iter().take(LISTED_ROWS) {
-            text.push_str(&format!("- `{}`\n", cell(key)));
+            text.push_str(&format!("- {}\n", code(key)));
         }
         text.push_str("\n</details>\n");
         text
@@ -454,8 +450,8 @@ impl CommentSection for SecuritySection<'_> {
             let block = self.diagram(path, nodes_left).map(|(diagram, used)| {
                 (
                     format!(
-                        "\n<details><summary>New path to `{}`</summary>\n\n```mermaid\n{diagram}```\n\n</details>\n",
-                        cell(&path.sink)
+                        "\n<details><summary>New path to {}</summary>\n\n```mermaid\n{diagram}```\n\n</details>\n",
+                        path.sink.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
                     ),
                     used,
                 )
@@ -523,6 +519,22 @@ mod tests {
         );
         assert!(found.paths_removed.is_empty());
         assert_eq!(found.changed_on_path, ["app.py#extra", "app.py#helper"]);
+    }
+
+    #[test]
+    fn a_file_name_with_backticks_stays_inside_its_code_span() {
+        let mut found = changes();
+        found.sinks_added[0].file = "bad` [review](https://attacker.invalid) `x.py".to_string();
+        let section = SecuritySection {
+            changes: &found,
+            max_nodes: 40,
+        };
+        let text = section.render(usize::MAX);
+        assert!(
+            text.contains("``bad` [review](https://attacker.invalid) `x.py:"),
+            "{text}"
+        );
+        assert!(!text.contains("| `bad` ["), "{text}");
     }
 
     #[test]
