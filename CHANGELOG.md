@@ -1,5 +1,35 @@
 # Changelog
 
+## [5.0.0](https://github.com/panbanda/omen/compare/omen-v4.30.0...omen-v5.0.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* omen 5.0 part 2: analyzers on the shared index, configuration, handlers ([#543](https://github.com/panbanda/omen/issues/543))
+* omen 5.0 part 1: PR comment, sink table, agent surface ([#542](https://github.com/panbanda/omen/issues/542))
+* `churn` without `days` reads 180 days of history, not 30. `clones` without `similarity` uses the threshold 0.9, not 0.7. `flags` without `stale_days` uses 90 days, not the configured value or 14. Send the argument to get the old value. A configuration file now changes the results of `churn`, `clones`, `changes`, and `satd`.
+* correct the review findings on the 5.0 interface ([#535](https://github.com/panbanda/omen/issues/535))
+* `files` and `include_projects` of `semantic_search` and `semantic_search_hyde` are arrays of strings. Before, each was one string with commas. Send `["a.rs", "b.rs"]`, not `"a.rs,b.rs"`.
+
+### Features
+
+* give the CLI and the MCP server one strict 5.0 interface ([#533](https://github.com/panbanda/omen/issues/533)) ([bd470b1](https://github.com/panbanda/omen/commit/bd470b137a9e6f7d761da6a8a1f312b0cfdc2cfb))
+* omen 5.0 part 1: PR comment, sink table, agent surface ([#542](https://github.com/panbanda/omen/issues/542)) ([8945463](https://github.com/panbanda/omen/commit/8945463bf2a0d5cac208902a9f5f09f21c6d096a))
+* omen 5.0 part 2: analyzers on the shared index, configuration, handlers ([#543](https://github.com/panbanda/omen/issues/543)) ([7451ea8](https://github.com/panbanda/omen/commit/7451ea8bd36fee16c5c66d0f9bd937a13ab20785))
+* omen 5.0 part 3: security findings, entry points, reachability ([#544](https://github.com/panbanda/omen/issues/544)) ([38f87d4](https://github.com/panbanda/omen/commit/38f87d400e35ff9ecc928b16e67182470b7abb8c))
+
+
+### Bug Fixes
+
+* correct the review findings on the 5.0 interface ([#535](https://github.com/panbanda/omen/issues/535)) ([00d5807](https://github.com/panbanda/omen/commit/00d580771ae558b5b423e4eb27a9b5333f8ba6b5))
+* **deps:** update quinn-udp to 0.5.16 for RUSTSEC-2026-0538 ([#534](https://github.com/panbanda/omen/issues/534)) ([07d830d](https://github.com/panbanda/omen/commit/07d830d425829241fe91a38ff2b187b7d8d3ff9e))
+* **deps:** update rusqlite to 0.42 for RUSTSEC-2026-0459 ([#532](https://github.com/panbanda/omen/issues/532)) ([9b84d36](https://github.com/panbanda/omen/commit/9b84d364639edd7df8d8f9d2bd72b93bf00c7759))
+* **deps:** update rustls, quinn-proto, pulldown-cmark, webpki for security advisories ([#526](https://github.com/panbanda/omen/issues/526)) ([f72749f](https://github.com/panbanda/omen/commit/f72749f60f390426b208486704f76fba8b665db1))
+* make the MCP server and the CLI give the same result ([#536](https://github.com/panbanda/omen/issues/536)) ([a9fb5e4](https://github.com/panbanda/omen/commit/a9fb5e40fccb07be35fca41aad914faf321ae7e5))
+* **mutation:** a process group exists until its last process is reaped ([#539](https://github.com/panbanda/omen/issues/539)) ([a5721a3](https://github.com/panbanda/omen/commit/a5721a3e5755b5af36649856877a7a6fc740b06a))
+* **mutation:** give an interrupted run one exit status ([#538](https://github.com/panbanda/omen/issues/538)) ([864a002](https://github.com/panbanda/omen/commit/864a0025f2e92bee11b7b75c68ce63798079475a))
+* **search:** keep two definitions with one name in one file ([#540](https://github.com/panbanda/omen/issues/540)) ([95f26e1](https://github.com/panbanda/omen/commit/95f26e1dcdd4e66e01ceb78adb4a9d2f4533d85a))
+
 ## [4.30.0](https://github.com/panbanda/omen/compare/omen-v4.29.0...omen-v4.30.0) (2026-09-18)
 
 
