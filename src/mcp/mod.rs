@@ -319,10 +319,10 @@ impl McpServer {
             .get("name")
             .and_then(|v| v.as_str())
             .ok_or("Missing tool name")?;
-        let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
+        let raw_arguments = params.get("arguments").cloned().unwrap_or(json!({}));
 
         let spec = tools::find(tool_name).ok_or_else(|| format!("Unknown tool: {tool_name}"))?;
-        let arguments = match tools::validate::validate(spec, &arguments) {
+        let arguments = match tools::validate::validate(spec, &raw_arguments) {
             Ok(arguments) => arguments,
             Err(problems) => return Ok(error::error_result(&problems)),
         };
@@ -342,7 +342,14 @@ impl McpServer {
                 };
                 let compact = spec.parameter("compact").is_some()
                     && arguments.boolean("compact").unwrap_or(false);
-                let envelope = envelope::build(spec.name, spec.paginated, data, page, compact);
+                let envelope = envelope::build(
+                    spec.name,
+                    &raw_arguments,
+                    spec.paginated,
+                    data,
+                    page,
+                    compact,
+                );
                 text_result(envelope.to_string())
             }
             Err(error) => error.to_result(),
@@ -561,8 +568,10 @@ mod tests {
         serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap()
     }
 
-    const ENVELOPE_KEYS: [&str; 8] = [
+    const ENVELOPE_KEYS: [&str; 10] = [
         "has_more",
+        "hints",
+        "index",
         "next_offset",
         "offset",
         "result",
@@ -603,6 +612,74 @@ mod tests {
         assert_eq!(task_context["has_more"], false);
         assert!(task_context["next_offset"].is_null());
         assert_eq!(task_context["truncated"], json!([]));
+    }
+
+    #[test]
+    fn the_index_tools_give_the_fingerprint_and_the_source_count() {
+        let (server, dir) = create_test_server();
+        write_call_chain(dir.path(), 2);
+        for (tool, arguments) in [
+            ("get_symbol", json!({"name": "target"})),
+            ("impact", json!({"symbol": "target"})),
+            ("task_context", json!({"name": "target"})),
+        ] {
+            let envelope = envelope_of(&server, tool, arguments);
+            let fingerprint = envelope["index"]["fingerprint"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{tool}: {envelope}"));
+            assert_eq!(fingerprint.len(), 64, "{tool}");
+            assert_eq!(envelope["index"]["sources"], 1, "{tool}");
+        }
+        let complexity = envelope_of(&server, "complexity", json!({}));
+        assert!(complexity["index"].is_null());
+    }
+
+    #[test]
+    fn the_fingerprint_follows_the_content_and_not_the_modification_time() {
+        let (server, dir) = create_test_server();
+        write_call_chain(dir.path(), 2);
+        let fingerprint = |server: &McpServer| -> String {
+            let envelope = envelope_of(server, "get_symbol", json!({"name": "target"}));
+            envelope["index"]["fingerprint"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        let before = fingerprint(&server);
+        let file = dir.path().join("chain.rs");
+        let content = std::fs::read(&file).unwrap();
+        std::fs::write(&file, &content).unwrap();
+        assert_eq!(fingerprint(&server), before);
+        std::fs::write(&file, [content, b"pub fn added() {}\n".to_vec()].concat()).unwrap();
+        assert_ne!(fingerprint(&server), before);
+    }
+
+    #[test]
+    fn get_symbol_and_impact_hint_at_each_other_from_their_data() {
+        let (server, dir) = create_test_server();
+        write_call_chain(dir.path(), 2);
+        let symbol = envelope_of(&server, "get_symbol", json!({"name": "target"}));
+        let key = symbol["result"]["qualified_name"].as_str().unwrap();
+        assert_eq!(
+            symbol["hints"],
+            json!([{
+                "tool": "impact",
+                "arguments": {"symbol": key},
+                "reason": "Callers: 2. Callees: 0."
+            }])
+        );
+        let impact = envelope_of(&server, "impact", json!({"symbol": "target"}));
+        assert_eq!(
+            impact["hints"],
+            json!([{
+                "tool": "get_symbol",
+                "arguments": {"name": key},
+                "reason": "The symbol is a root of this report."
+            }])
+        );
+        std::fs::write(dir.path().join("lonely.rs"), "pub fn lonely() {}\n").unwrap();
+        let lonely = envelope_of(&server, "get_symbol", json!({"name": "lonely"}));
+        assert_eq!(lonely["hints"], json!([]));
     }
 
     #[test]

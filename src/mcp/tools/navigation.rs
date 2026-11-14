@@ -12,7 +12,7 @@ use super::{
 };
 use crate::core::{AnalysisContext, Analyzer, FileSet};
 use crate::git::GitRepo;
-use crate::mcp::envelope::Truncation;
+use crate::mcp::envelope::{Hint, IndexInfo, Truncation};
 use crate::mcp::error::{ErrorCode, ToolError};
 use crate::mcp::McpServer;
 
@@ -292,8 +292,22 @@ fn get_symbol(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
                         .map_or(0, |source| source.lines().count()),
                 });
             }
+            let mut hints = Vec::new();
+            if !report.callers.is_empty() || !report.callees.is_empty() {
+                hints.push(Hint {
+                    tool: "impact".to_string(),
+                    arguments: json!({"symbol": report.qualified_name}),
+                    reason: format!(
+                        "Callers: {}. Callees: {}.",
+                        report.callers.len(),
+                        report.callees.len()
+                    ),
+                });
+            }
             Ok(ToolOutput::Data(ToolData {
                 truncated,
+                hints,
+                index: index_info(index),
                 ..ToolData::new(serde_json::to_value(&report)?)
             }))
         }
@@ -445,6 +459,10 @@ fn task_context(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult 
     Ok(ToolOutput::Data(ToolData {
         truncated,
         item_count: Some(symbols),
+        index: Some(IndexInfo {
+            fingerprint: snapshot.fingerprint.clone(),
+            sources: snapshot.sources.len(),
+        }),
         ..ToolData::new(result)
     }))
 }
@@ -561,8 +579,30 @@ fn impact(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
             });
         }
     }
+    let hints = report
+        .resolved
+        .iter()
+        .take(MAX_ROOT_HINTS)
+        .map(|name| Hint {
+            tool: "get_symbol".to_string(),
+            arguments: json!({"name": name}),
+            reason: "The symbol is a root of this report.".to_string(),
+        })
+        .collect();
     Ok(ToolOutput::Data(ToolData {
         truncated,
+        hints,
+        index: index_info(&view),
         ..ToolData::new(serde_json::to_value(&report)?)
     }))
+}
+
+/// The largest number of root symbols of a report that get a hint.
+const MAX_ROOT_HINTS: usize = 3;
+
+fn index_info(view: &crate::index::view::CallView) -> Option<IndexInfo> {
+    view.fingerprint.as_ref().map(|fingerprint| IndexInfo {
+        fingerprint: fingerprint.clone(),
+        sources: view.sources,
+    })
 }

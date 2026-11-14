@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 
 use serde_json::{Map, Value};
 
-use super::envelope::Truncation;
+use super::envelope::{Hint, IndexInfo, Truncation};
 use super::error::ToolError;
 use super::McpServer;
 
@@ -366,6 +366,10 @@ pub(super) struct ToolData {
     /// The number of items that a tool without pagination gives, after its
     /// own cuts.
     pub item_count: Option<usize>,
+    /// The index that the tool read. `None` when the tool does not read it.
+    pub index: Option<IndexInfo>,
+    /// The next calls that the data of the result suggests.
+    pub hints: Vec<Hint>,
 }
 
 impl ToolData {
@@ -375,6 +379,8 @@ impl ToolData {
             git_skipped_reason: None,
             truncated: Vec::new(),
             item_count: None,
+            index: None,
+            hints: Vec::new(),
         }
     }
 }

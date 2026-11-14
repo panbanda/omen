@@ -10,6 +10,8 @@ expression: "shape(&response, &dynamic_key_objects)"
       {
         "text": {
           "has_more": "bool",
+          "hints": [],
+          "index": "null",
           "next_offset": "null",
           "offset": "number",
           "result": {

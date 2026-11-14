@@ -10,6 +10,19 @@ expression: "shape(&response, &dynamic_key_objects)"
       {
         "text": {
           "has_more": "bool",
+          "hints": [
+            {
+              "arguments": {
+                "name": "string"
+              },
+              "reason": "string",
+              "tool": "string"
+            }
+          ],
+          "index": {
+            "fingerprint": "string",
+            "sources": "number"
+          },
           "next_offset": "null",
           "offset": "number",
           "result": {

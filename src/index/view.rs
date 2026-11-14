@@ -106,6 +106,11 @@ pub struct CallView {
     /// The counts of all call sites of the input, also of the calls that
     /// are not in a definition.
     summary: ResolutionSummary,
+    /// The number of source files that the index read.
+    pub sources: usize,
+    /// The hash of the names and the contents of the source files and the
+    /// manifest files. `None` when the view does not come from a `ViewCache`.
+    pub fingerprint: Option<String>,
 }
 
 impl CallView {
@@ -218,6 +223,8 @@ impl CallView {
             call_resolutions,
             call_resolution_ranges,
             summary,
+            sources: index.files.len(),
+            fingerprint: None,
         }
     }
 
@@ -320,6 +327,28 @@ impl CallView {
     }
 }
 
+/// The hash of the relative names and the content hashes of the two file
+/// sets. The sets are in the order of their names, thus the result is
+/// the same for the same content.
+fn fingerprint(
+    root: &Path,
+    sources: &BTreeMap<PathBuf, blake3::Hash>,
+    manifests: &BTreeMap<PathBuf, blake3::Hash>,
+) -> String {
+    let mut hasher = blake3::Hasher::new();
+    for (kind, files) in [("source", sources), ("manifest", manifests)] {
+        hasher.update(&(files.len() as u64).to_le_bytes());
+        for (path, hash) in files {
+            let relative = path.strip_prefix(root).unwrap_or(path).to_string_lossy();
+            hasher.update(kind.as_bytes());
+            hasher.update(&(relative.len() as u64).to_le_bytes());
+            hasher.update(relative.as_bytes());
+            hasher.update(hash.as_bytes());
+        }
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
 /// The view of the last set of files of a session. A second request for
 /// files with the same content and the same manifest files gets the same view.
 #[derive(Default)]
@@ -407,7 +436,9 @@ impl ViewCache {
             listings.lock().get(directory).cloned().unwrap_or_default()
         };
         let index = CodeIndex::build(&root, &paths, &snapshot_read, &snapshot_list);
-        let view = Arc::new(CallView::from_index(&index));
+        let mut view = CallView::from_index(&index);
+        view.fingerprint = Some(fingerprint(&root, &hashes, &manifests));
+        let view = Arc::new(view);
         self.root = root;
         self.hashes = hashes;
         self.manifests = manifests;
@@ -603,5 +634,36 @@ mod tests {
         std::fs::write(&manifest, r#"{"name": "shop", "exports": "./src/b.js"}"#).unwrap();
         let changed = cache.load(root, &files).unwrap();
         assert_eq!(callee(&changed), ["lib/src/b.js#run"]);
+    }
+
+    /// The fingerprint names the content: a rewrite with the same bytes keeps
+    /// it, a change of a source or a manifest file gives a new one.
+    #[test]
+    fn test_fingerprint_follows_content() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let source = root.join("a.js");
+        let manifest = root.join("package.json");
+        std::fs::write(&source, "export function run() {}\n").unwrap();
+        std::fs::write(&manifest, r#"{"name": "shop"}"#).unwrap();
+        let mut cache = ViewCache::default();
+        let fingerprint = |cache: &mut ViewCache| -> String {
+            let view = cache.load(root, std::slice::from_ref(&source)).unwrap();
+            assert_eq!(view.sources, 1);
+            view.fingerprint.clone().expect("a fingerprint")
+        };
+        let first = fingerprint(&mut cache);
+        assert_eq!(first.len(), 64);
+        std::fs::write(&source, "export function run() {}\n").unwrap();
+        assert_eq!(fingerprint(&mut cache), first);
+        std::fs::write(&manifest, r#"{"name": "other"}"#).unwrap();
+        let after_manifest = fingerprint(&mut cache);
+        assert_ne!(after_manifest, first);
+        std::fs::write(&source, "export function walk() {}\n").unwrap();
+        assert_ne!(fingerprint(&mut cache), after_manifest);
+        let alone = ViewCache::default()
+            .load(root, std::slice::from_ref(&source))
+            .unwrap();
+        assert_eq!(alone.fingerprint, Some(fingerprint(&mut cache)));
     }
 }

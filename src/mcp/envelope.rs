@@ -27,9 +27,27 @@ pub(super) struct Truncation {
     pub returned: usize,
 }
 
+/// A call that the data of the result suggests as a next step.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(super) struct Hint {
+    pub tool: String,
+    pub arguments: Value,
+    /// The fact in the result that causes the hint.
+    pub reason: String,
+}
+
+/// The content that the index of a result came from.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(super) struct IndexInfo {
+    /// The hash of the names and the contents of the source files.
+    pub fingerprint: String,
+    pub sources: usize,
+}
+
 /// Applies the page to the result and puts the result in the envelope.
 pub(super) fn build(
     tool: &str,
+    call_arguments: &Value,
     pagination: Pagination,
     data: ToolData,
     page: Page,
@@ -56,6 +74,24 @@ pub(super) fn build(
         }
     }
 
+    let mut hints = data.hints;
+    if let Some(next_offset) = paging.next_offset {
+        let mut arguments = call_arguments.as_object().cloned().unwrap_or_default();
+        arguments.insert("offset".to_string(), json!(next_offset));
+        let reason = match paging.total {
+            Some(total) => format!(
+                "{} items follow this page.",
+                total.saturating_sub(next_offset)
+            ),
+            None => "More items follow this page.".to_string(),
+        };
+        hints.push(Hint {
+            tool: tool.to_string(),
+            arguments: Value::Object(arguments),
+            reason,
+        });
+    }
+
     let mut envelope = json!({
         "tool": tool,
         "total_items": paging.total,
@@ -64,6 +100,8 @@ pub(super) fn build(
         "has_more": paging.next_offset.is_some(),
         "next_offset": paging.next_offset,
         "truncated": paging.truncated,
+        "hints": hints,
+        "index": data.index,
         "result": result
     });
     if let Some(reason) = data.git_skipped_reason {
@@ -254,7 +292,14 @@ mod tests {
     }
 
     fn envelope(tool: &str, pagination: Pagination, result: Value, page: Page) -> Value {
-        build(tool, pagination, ToolData::new(result), page, false)
+        build(
+            tool,
+            &json!({}),
+            pagination,
+            ToolData::new(result),
+            page,
+            false,
+        )
     }
 
     const ITEMS: Pagination = Pagination::Field("items");
@@ -279,6 +324,8 @@ mod tests {
             keys(&paginated),
             [
                 "has_more",
+                "hints",
+                "index",
                 "next_offset",
                 "offset",
                 "result",
@@ -289,6 +336,73 @@ mod tests {
             ]
         );
         assert_eq!(keys(&paginated), keys(&unpaginated));
+    }
+
+    #[test]
+    fn envelope_has_an_empty_hint_list_and_no_index_by_default() {
+        let envelope = envelope("satd", ITEMS, json!({"items": [1]}), DEFAULT_PAGE);
+        assert_eq!(envelope["hints"], json!([]));
+        assert!(envelope["index"].is_null());
+    }
+
+    #[test]
+    fn envelope_gives_the_index_and_the_hints_of_the_tool() {
+        let data = ToolData {
+            index: Some(IndexInfo {
+                fingerprint: "abc".to_string(),
+                sources: 3,
+            }),
+            hints: vec![Hint {
+                tool: "impact".to_string(),
+                arguments: json!({"symbol": "a.rs#run"}),
+                reason: "Callers: 2.".to_string(),
+            }],
+            ..ToolData::new(json!({"items": [1]}))
+        };
+        let envelope = build("get_symbol", &json!({}), ITEMS, data, DEFAULT_PAGE, false);
+        assert_eq!(
+            envelope["index"],
+            json!({"fingerprint": "abc", "sources": 3})
+        );
+        assert_eq!(
+            envelope["hints"],
+            json!([{
+                "tool": "impact",
+                "arguments": {"symbol": "a.rs#run"},
+                "reason": "Callers: 2."
+            }])
+        );
+    }
+
+    #[test]
+    fn a_next_page_gives_a_hint_with_the_same_call_and_the_next_offset() {
+        let call = json!({"path": "src", "limit": 4});
+        let items: Vec<i64> = (0..10).collect();
+        let first = build(
+            "satd",
+            &call,
+            ITEMS,
+            ToolData::new(json!({"items": items.clone()})),
+            page(4, 0),
+            false,
+        );
+        assert_eq!(
+            first["hints"],
+            json!([{
+                "tool": "satd",
+                "arguments": {"path": "src", "limit": 4, "offset": 4},
+                "reason": "6 items follow this page."
+            }])
+        );
+        let last = build(
+            "satd",
+            &call,
+            ITEMS,
+            ToolData::new(json!({"items": items})),
+            page(20, 0),
+            false,
+        );
+        assert_eq!(last["hints"], json!([]));
     }
 
     #[test]
@@ -317,6 +431,7 @@ mod tests {
         };
         let envelope = build(
             "score",
+            &json!({}),
             Pagination::Entries("components"),
             data,
             DEFAULT_PAGE,
@@ -431,6 +546,12 @@ mod tests {
                 "has_more": true,
                 "next_offset": 1,
                 "truncated": [{"path": "/components", "total": 3, "returned": 1}],
+                "hints": [{
+                    "tool": "score",
+                    "arguments": {"offset": 1},
+                    "reason": "2 items follow this page."
+                }],
+                "index": null,
                 "result": {
                     "overall_score": 80,
                     "components": {"cohesion": {"score": 90}},
@@ -686,7 +807,14 @@ mod tests {
             }],
             ..ToolData::new(json!({"symbols": [1, 2]}))
         };
-        let envelope = build("task_context", Pagination::None, data, page(0, 0), false);
+        let envelope = build(
+            "task_context",
+            &json!({}),
+            Pagination::None,
+            data,
+            page(0, 0),
+            false,
+        );
         assert_eq!(envelope["total_items"], 2);
         assert_eq!(envelope["returned"], 2);
         assert_eq!(envelope["offset"], 0);
@@ -709,7 +837,7 @@ mod tests {
             }],
             ..ToolData::new(json!({"items": [1, 2, 3, 4]}))
         };
-        let envelope = build("search", ITEMS, data, page(2, 0), false);
+        let envelope = build("search", &json!({}), ITEMS, data, page(2, 0), false);
         assert_eq!(
             envelope["truncated"],
             json!([{"path": "/items", "total": 9, "returned": 2}])
@@ -732,6 +860,7 @@ mod tests {
         let symbols = Pagination::Field("symbols");
         let packed = build(
             "repomap",
+            &json!({}),
             symbols,
             ToolData::new(value.clone()),
             page(30, 10),
