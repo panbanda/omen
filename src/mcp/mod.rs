@@ -2850,17 +2850,16 @@ mod tests {
         let result = server.handle_tools_list().unwrap();
         let tools = result.get("tools").unwrap().as_array().unwrap();
 
-        for tool_name in ["search"] {
-            let tool = tools
-                .iter()
-                .find(|t| t.get("name").unwrap() == tool_name)
-                .unwrap_or_else(|| panic!("tool {tool_name} not found"));
-            let props = tool.get("inputSchema").unwrap().get("properties").unwrap();
-            assert!(
-                props.get("max_complexity").is_some(),
-                "{tool_name} should expose max_complexity parameter"
-            );
-        }
+        let tool_name = "search";
+        let tool = tools
+            .iter()
+            .find(|t| t.get("name").unwrap() == tool_name)
+            .unwrap_or_else(|| panic!("tool {tool_name} not found"));
+        let props = tool.get("inputSchema").unwrap().get("properties").unwrap();
+        assert!(
+            props.get("max_complexity").is_some(),
+            "{tool_name} should expose max_complexity parameter"
+        );
     }
 
     #[test]

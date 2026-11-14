@@ -255,7 +255,7 @@ impl Renderer {
         // Load SATD and sort by severity (Critical > High > Medium > Low)
         if let Ok(mut satd) = load_json::<SATDData>(&data_dir.join("satd.json")) {
             satd.items
-                .sort_by(|a, b| severity_order(&b.severity).cmp(&severity_order(&a.severity)));
+                .sort_by_key(|item| std::cmp::Reverse(severity_order(&item.severity)));
             data.satd = Some(satd);
             data.compute_satd_stats();
         }
