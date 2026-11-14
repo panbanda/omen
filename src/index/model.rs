@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::Language;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SymbolKind {
@@ -101,6 +103,31 @@ pub struct Symbol {
     pub exported: Exported,
     /// The SCIP symbol. The tree-sitter extraction does not supply it.
     pub scip_symbol: Option<String>,
+}
+
+impl Symbol {
+    /// The symbol is a function, a method, or a constructor.
+    pub fn is_callable(&self) -> bool {
+        matches!(
+            self.kind,
+            SymbolKind::Function | SymbolKind::Method | SymbolKind::Constructor
+        )
+    }
+
+    /// The symbol is a type that a listing of a file shows with its methods
+    /// and its fields: a class, a struct, an interface, a trait, an enum, or
+    /// a Ruby module. A module of another language only groups definitions.
+    pub fn is_class_like(&self, language: Language) -> bool {
+        match self.kind {
+            SymbolKind::Class
+            | SymbolKind::Struct
+            | SymbolKind::Interface
+            | SymbolKind::Trait
+            | SymbolKind::Enum => true,
+            SymbolKind::Module => language == Language::Ruby,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

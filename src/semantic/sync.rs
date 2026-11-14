@@ -12,13 +12,15 @@ use blake3::Hasher;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 
-use crate::analyzers::complexity::analyze_function_complexity;
+use crate::analyzers::complexity::analyze_symbol_complexity;
 use crate::core::progress::is_tty;
 use crate::core::{Error, FileSet, Result, SourceFile};
-use crate::parser::{extract_functions, Parser};
+use crate::index::extract::extract_file;
 
 use super::cache::{CachedSymbol, EmbeddingCache};
-use super::chunking::{definition_ordinals, extract_chunks, format_chunk_text, Chunk};
+use super::chunking::{
+    definition_ordinals, extract_chunks, format_chunk_text, searchable_symbols, Chunk,
+};
 
 /// Intermediate structure for a parsed chunk ready for caching.
 struct ParsedChunk {
@@ -251,14 +253,18 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
     let file_hash = hash_file(path)?;
 
     let source_file = SourceFile::load(path)?;
-    let parser = Parser::new();
-    let parse_result = parser.parse_source(&source_file)?;
+    let parse_result = crate::index::headers::parse(
+        &source_file.path,
+        source_file.language,
+        &source_file.content,
+    )
+    .ok_or_else(|| Error::UnsupportedLanguage {
+        path: path.to_path_buf(),
+    })?;
+    let facts = extract_file(&parse_result, &rel_path);
 
     // Search results are only useful if the symbol has a name to search for.
-    let functions: Vec<_> = extract_functions(&parse_result)
-        .into_iter()
-        .filter(|func| func.is_bound)
-        .collect();
+    let functions = searchable_symbols(&facts);
 
     // Compute complexity per function. A chunk matches a function by name and
     // by the first line of the definition.
@@ -266,15 +272,15 @@ fn parse_file(path: &Path, root_path: &Path) -> Result<ParsedFile> {
         .iter()
         .zip(definition_ordinals(&functions))
         .map(|(func, ordinal)| {
-            let metrics = analyze_function_complexity(func, &parse_result);
+            let metrics = analyze_symbol_complexity(func, &parse_result);
             (
-                (func.name.clone(), func.start_line, ordinal),
+                (func.name.clone(), func.range.start_line, ordinal),
                 (metrics.cyclomatic, metrics.cognitive),
             )
         })
         .collect();
 
-    let chunks: Vec<Chunk> = extract_chunks(&parse_result, &functions, &rel_path);
+    let chunks: Vec<Chunk> = extract_chunks(&parse_result.source, &facts, &rel_path);
 
     let parsed_chunks: Vec<ParsedChunk> = chunks
         .iter()

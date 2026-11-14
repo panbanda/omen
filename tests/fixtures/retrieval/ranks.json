@@ -169,7 +169,7 @@
   },
   {
     "id": "cpp/c-out-of-line",
-    "rank": null
+    "rank": 1
   },
   {
     "id": "cpp/c-push-back",
@@ -177,7 +177,7 @@
   },
   {
     "id": "cpp/c-side-squared",
-    "rank": null
+    "rank": 1
   },
   {
     "id": "cpp/c-ternary",
@@ -185,7 +185,7 @@
   },
   {
     "id": "cpp/c-value-times",
-    "rank": null
+    "rank": 1
   },
   {
     "id": "cpp/i-largest",
@@ -205,7 +205,7 @@
   },
   {
     "id": "cpp/i-part-scaled",
-    "rank": null
+    "rank": 1
   },
   {
     "id": "cpp/i-point",
@@ -217,7 +217,7 @@
   },
   {
     "id": "cpp/i-twice",
-    "rank": null
+    "rank": 1
   },
   {
     "id": "cpp/n-circle-area",
@@ -229,7 +229,7 @@
   },
   {
     "id": "cpp/n-heap",
-    "rank": 2
+    "rank": 3
   },
   {
     "id": "cpp/n-larger",
@@ -241,7 +241,7 @@
   },
   {
     "id": "cpp/n-times",
-    "rank": null
+    "rank": 2
   },
   {
     "id": "csharp/c-four-edges",
@@ -313,7 +313,7 @@
   },
   {
     "id": "csharp/n-distance",
-    "rank": null
+    "rank": 3
   },
   {
     "id": "csharp/n-increment",
@@ -321,7 +321,7 @@
   },
   {
     "id": "csharp/n-twice-radius",
-    "rank": null
+    "rank": 7
   },
   {
     "id": "csharp/n-width-height",
@@ -425,7 +425,7 @@
   },
   {
     "id": "java/c-side-squared",
-    "rank": null
+    "rank": 1
   },
   {
     "id": "java/c-sqrt",
