@@ -102,7 +102,7 @@ pub(super) static CLONES: ToolSpec = ToolSpec {
         Param::boolean(
             "include_tests",
             "If true, the tool also reads test code. \
-             If false, `duplicates.exclude_tests` of the configuration applies.",
+             If false, `exclude_tests` of the configuration applies.",
         )
         .with_default(ParamDefault::Boolean(false)),
     ],
@@ -123,7 +123,7 @@ pub(super) static CLONES: ToolSpec = ToolSpec {
                         .number("similarity")
                         .unwrap_or(configured.min_similarity),
                 )
-                .with_exclude_tests(!include_tests && configured.exclude_tests),
+                .with_exclude_tests(!include_tests && server.config.exclude_tests),
         )
     },
 };

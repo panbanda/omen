@@ -33,10 +33,10 @@ pub struct Config {
     pub score: ScoreConfig,
     /// Feature flag configuration.
     pub feature_flags: FeatureFlagsConfig,
-    /// Temporal coupling configuration.
-    pub temporal: TemporalConfig,
-    /// Exclude built/minified assets (e.g. *.min.js) from analysis.
-    pub exclude_built_assets: bool,
+    /// If true, analyze the generated and minified files that omen skips by default.
+    pub include_generated: bool,
+    /// If true, `clones` and `temporal` skip test files.
+    pub exclude_tests: bool,
     /// Changes/JIT analyzer configuration.
     pub changes: ChangesConfig,
     /// Stubs configuration.
@@ -57,8 +57,8 @@ impl Default for Config {
             defect: DefectConfig::default(),
             score: ScoreConfig::default(),
             feature_flags: FeatureFlagsConfig::default(),
-            temporal: TemporalConfig::default(),
-            exclude_built_assets: true,
+            include_generated: false,
+            exclude_tests: true,
             changes: ChangesConfig::default(),
             stubs: StubsConfig::default(),
             mutation: MutationConfig::default(),
@@ -228,9 +228,6 @@ pub struct DuplicatesConfig {
     pub min_tokens: usize,
     /// Minimum similarity threshold (0.0-1.0).
     pub min_similarity: f64,
-    /// Exclude test files and Rust `#[cfg(test)]` code from duplication
-    /// detection. Overridden by `omen clones --include-tests`.
-    pub exclude_tests: bool,
 }
 
 impl Default for DuplicatesConfig {
@@ -238,7 +235,6 @@ impl Default for DuplicatesConfig {
         Self {
             min_tokens: 50,
             min_similarity: 0.9,
-            exclude_tests: true,
         }
     }
 }
@@ -347,23 +343,6 @@ pub struct CustomProvider {
     pub query: String,
 }
 
-/// Output configuration.
-/// Temporal coupling configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct TemporalConfig {
-    /// Exclude test files from coupling analysis.
-    pub exclude_tests: bool,
-}
-
-impl Default for TemporalConfig {
-    fn default() -> Self {
-        Self {
-            exclude_tests: true,
-        }
-    }
-}
-
 /// Changes/JIT analyzer configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -431,25 +410,26 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.complexity.cyclomatic_max, 20);
         assert_eq!(config.churn.since.days(), 180);
-        assert!(config.exclude_built_assets);
+        assert!(!config.include_generated);
+        assert!(config.exclude_tests);
     }
 
     #[test]
-    fn test_exclude_built_assets_default_true() {
+    fn test_include_generated_default_false() {
         Jail::expect_with(|jail| {
             jail.create_file("omen.toml", "")?;
             let config = Config::from_file("omen.toml").unwrap();
-            assert!(config.exclude_built_assets);
+            assert!(!config.include_generated);
             Ok(())
         });
     }
 
     #[test]
-    fn test_exclude_built_assets_opt_out() {
+    fn test_include_generated_opt_in() {
         Jail::expect_with(|jail| {
-            jail.create_file("omen.toml", "exclude_built_assets = false")?;
+            jail.create_file("omen.toml", "include_generated = true")?;
             let config = Config::from_file("omen.toml").unwrap();
-            assert!(!config.exclude_built_assets);
+            assert!(config.include_generated);
             Ok(())
         });
     }
@@ -568,7 +548,6 @@ mod tests {
         let config = DuplicatesConfig::default();
         assert_eq!(config.min_tokens, 50);
         assert_eq!(config.min_similarity, 0.9);
-        assert!(config.exclude_tests);
     }
 
     #[test]
@@ -669,6 +648,26 @@ mod tests {
         assert_eq!(config.stale_days, 90);
         assert!(config.providers.is_empty());
         assert!(config.custom_providers.is_empty());
+    }
+
+    #[test]
+    fn test_exclude_tests_is_one_top_level_key() {
+        Jail::expect_with(|jail| {
+            jail.create_file("omen.toml", "exclude_tests = false")?;
+            let config = Config::from_file("omen.toml").unwrap();
+            assert!(!config.exclude_tests);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_env_var_overrides_a_top_level_key() {
+        Jail::expect_with(|jail| {
+            jail.set_env("OMEN_EXCLUDE_TESTS", "false");
+            let config = Config::load_default(".").unwrap();
+            assert!(!config.exclude_tests);
+            Ok(())
+        });
     }
 
     #[test]

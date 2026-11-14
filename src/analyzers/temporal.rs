@@ -250,7 +250,7 @@ impl AnalyzerTrait for Analyzer {
 
         let since = format!("{} days", self.config.days);
         let commits = ctx.git_log_with_stats(Some(&since), None)?;
-        let exclude_tests = ctx.config.temporal.exclude_tests;
+        let exclude_tests = ctx.config.exclude_tests;
         let exclude_patterns = &ctx.config.exclude_patterns;
         self.analyze_commits_filtered(&commits, exclude_tests, exclude_patterns)
     }
@@ -665,6 +665,60 @@ mod tests {
             result.summary.total_files_analyzed > 0 || !result.couplings.is_empty(),
             "temporal analysis should process file changes from git history"
         );
+    }
+
+    #[test]
+    fn test_exclude_tests_of_the_configuration_applies_to_coupling() {
+        use crate::config::Config as AppConfig;
+        use crate::core::FileSet;
+        use std::process::Command;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            assert!(Command::new("git")
+                .args(args)
+                .current_dir(temp_dir.path())
+                .status()
+                .unwrap()
+                .success());
+        };
+        run(&["init"]);
+        run(&["config", "user.email", "test@test.com"]);
+        run(&["config", "user.name", "Test"]);
+        std::fs::create_dir(temp_dir.path().join("tests")).unwrap();
+        for round in 0..2 {
+            std::fs::write(
+                temp_dir.path().join("lib.rs"),
+                format!("fn f{round}() {{}}"),
+            )
+            .unwrap();
+            std::fs::write(
+                temp_dir.path().join("tests/it.rs"),
+                format!("fn t{round}() {{}}"),
+            )
+            .unwrap();
+            run(&["add", "."]);
+            run(&["commit", "-m", &format!("round {round}")]);
+        }
+
+        let couplings = |exclude_tests: bool| {
+            let config = AppConfig {
+                exclude_tests,
+                ..AppConfig::default()
+            };
+            let files = FileSet::from_path(temp_dir.path(), &config).unwrap();
+            let ctx = AnalysisContext::new(&files, &config, Some(temp_dir.path()))
+                .with_git_path(temp_dir.path());
+            Analyzer::new()
+                .with_days(365)
+                .with_min_cochanges(1)
+                .analyze(&ctx)
+                .unwrap()
+                .couplings
+                .len()
+        };
+        assert_eq!(couplings(false), 1);
+        assert_eq!(couplings(true), 0);
     }
 
     #[test]
