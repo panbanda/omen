@@ -101,9 +101,7 @@ pub fn analyze_with_index(
         .collect();
     let parse_file = |position: usize| -> Option<ParseResult> {
         let file = &index.files[position];
-        let Some(path) = by_relative.get(&file.file) else {
-            return None;
-        };
+        let path = by_relative.get(&file.file)?;
         headers::parse_unchanged(
             file,
             &failed[position],
