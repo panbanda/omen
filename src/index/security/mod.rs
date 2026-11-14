@@ -499,6 +499,16 @@ mod tests {
     }
 
     #[test]
+    fn the_sql_argument_of_a_c_call_is_the_second_argument() {
+        let source = "int run(void *db, const char *query, const char *name) {\n    sqlite3_exec(db, query, 0, 0, 0);\n    mysql_query(db, query);\n    mysql_real_query(db, query, 3);\n    PQexec(db, query);\n    mysql_query(db, \"SELECT 1\");\n    return 0;\n}\n";
+        let lines: Vec<u32> = found(Language::C, &[("a.c", source)])
+            .iter()
+            .map(|sink| sink.1)
+            .collect();
+        assert_eq!(lines, [2, 3, 4, 5]);
+    }
+
+    #[test]
     fn a_local_in_a_block_that_holds_the_call_hides_the_sink_go() {
         let source = "package main\n\nimport \"os/exec\"\n\nfunc run(cmd string) {\n\t{\n\t\texec := struct{}{}\n\t\texec.Command(cmd)\n\t}\n}\n";
         assert_eq!(found(Language::Go, &[("a.go", source)]), []);
