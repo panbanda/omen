@@ -321,10 +321,13 @@ impl<'a> IntoIterator for &'a FileSet {
 
 /// Check if a file path is a built/minified asset.
 ///
-/// Detects JS/TS family files with `.min.`, `.bundle.`, or `.chunk.` segments
-/// before the final extension (e.g. `lodash.min.js`, `vendor.bundle.mjs`).
+/// Detects JS/TS family files with `.min`, `.bundle`, `.chunk`, `-min`, `-bundle`,
+/// `_min`, or `_bundle` before the final extension (e.g. `lodash.min.js`,
+/// `swagger-ui-bundle.js`).
 fn is_built_asset(path: &Path) -> bool {
-    const BUILT_SUFFIXES: &[&str] = &[".min", ".bundle", ".chunk"];
+    const BUILT_SUFFIXES: &[&str] = &[
+        ".min", ".bundle", ".chunk", "-min", "-bundle", "_min", "_bundle",
+    ];
     const JS_TS_EXTENSIONS: &[&str] = &["js", "mjs", "cjs", "jsx", "ts", "tsx", "mts", "cts"];
 
     let file_name = match path.file_name().and_then(|n| n.to_str()) {
@@ -356,6 +359,7 @@ fn is_default_ignored_path(path: &Path) -> bool {
         "coverage",
         ".coverage",
         ".turbo",
+        "_next",
         ".cache",
         "vendor",
     ];
@@ -871,6 +875,42 @@ mod tests {
         // .min in non-JS/TS files should not match
         assert!(!is_built_asset(Path::new("something.min.css")));
         assert!(!is_built_asset(Path::new("data.min.json")));
+    }
+
+    #[test]
+    fn test_is_built_asset_with_hyphen_or_underscore_suffix() {
+        assert!(is_built_asset(Path::new("swagger-ui-bundle.js")));
+        assert!(is_built_asset(Path::new("jquery-min.js")));
+        assert!(is_built_asset(Path::new("vendor_bundle.js")));
+        assert!(is_built_asset(Path::new("app_min.mjs")));
+        assert!(!is_built_asset(Path::new("bundle.js")));
+        assert!(!is_built_asset(Path::new("admin.js")));
+        assert!(!is_built_asset(Path::new("swagger-ui-bundle.py")));
+    }
+
+    #[test]
+    fn test_is_default_ignored_path_next_build_output() {
+        assert!(is_default_ignored_path(Path::new(
+            "proxy/out/_next/static/chunks/0-i21ejarohtj.js"
+        )));
+        assert!(is_default_ignored_path(Path::new("_next/app.js")));
+        assert!(!is_default_ignored_path(Path::new("src/next/app.js")));
+    }
+
+    #[test]
+    fn test_file_set_excludes_next_build_output_and_hyphen_bundles() {
+        let temp = tempfile::tempdir().unwrap();
+        let chunks = temp.path().join("out/_next/static/chunks");
+        std::fs::create_dir_all(&chunks).unwrap();
+        std::fs::write(chunks.join("00dfa0iob1t3d.js"), "").unwrap();
+        std::fs::write(temp.path().join("swagger-ui-bundle.js"), "").unwrap();
+        std::fs::write(temp.path().join("app.js"), "").unwrap();
+
+        let file_set = FileSet::from_path_with_patterns(temp.path(), Vec::new(), true).unwrap();
+        assert_eq!(file_set.files(), [PathBuf::from("app.js")]);
+
+        let file_set = FileSet::from_path_with_patterns(temp.path(), Vec::new(), false).unwrap();
+        assert_eq!(file_set.len(), 3);
     }
 
     #[test]

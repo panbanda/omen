@@ -991,6 +991,8 @@ Automatic configuration discovery loads TOML from `omen.toml` and then `.omen/om
 
 The accepted top-level keys are `exclude`, `exclude_built_assets`, `complexity`, `satd`, `churn`, `duplicates`, `hotspot`, `defect`, `score`, `gate`, `feature_flags`, `temporal`, and `changes`. The `[gate]` table sets the gate mode (`off`, `warn`, or `error`) of `complexity`, `score`, `stubs`, and `mutation`. The `--gate` flag overrides it. Copy [`omen.example.toml`](omen.example.toml) to `omen.toml` or `.omen/omen.toml` and customize it. Configuration structs reject unknown keys, including unknown nested keys, so misspellings produce an error instead of being silently ignored.
 
+The `exclude_built_assets` key (default `true`) skips built and minified output. It skips a JS or TS file when the name ends in `.min`, `.bundle`, `.chunk`, `-min`, `-bundle`, `_min`, or `_bundle` before the extension. It also skips each file below a directory named `node_modules`, `target`, `dist`, `build`, `coverage`, `vendor`, `.next`, `_next`, `.turbo`, or `.cache`. Set it to `false` to analyze these files.
+
 > [!TIP]
 > Using Claude Code? Run the `setup-config` skill to analyze your repository and generate an `omen.toml` with intelligent defaults for your tech stack, including detected feature flag providers and language-specific exclude patterns.
 
