@@ -334,6 +334,96 @@ impl<'a> Context<'a> {
         self.imports(word) || self.text(self.parsed.root_node()).contains(word)
     }
 
+    /// Tells if the receiver of a registration is a framework object. A receiver is a
+    /// framework object when its text has a marker, as `express()` has, when a
+    /// declaration or a typed parameter in the file binds its name to a text with a marker,
+    /// or when an import binds its name, because the module that exports it is not here.
+    fn is_framework_value(&self, receiver: Node<'_>, markers: &[&str]) -> bool {
+        let text = self.text(receiver);
+        if markers.iter().any(|marker| text.contains(marker)) {
+            return true;
+        }
+        if !matches!(receiver.kind(), "identifier" | "type_identifier") {
+            return false;
+        }
+        if self
+            .file
+            .imports
+            .iter()
+            .any(|binding| binding.local_name.as_deref() == Some(text))
+        {
+            return true;
+        }
+        self.bound_to_marker(self.parsed.root_node(), text, markers)
+    }
+
+    /// Tells if a declaration or a typed parameter binds `name` to a text with a marker.
+    fn bound_to_marker(&self, node: Node<'_>, name: &str, markers: &[&str]) -> bool {
+        const BINDINGS: [(&str, &[&str], &[&str]); 5] = [
+            ("variable_declarator", &["name"], &["value"]),
+            ("assignment", &["left"], &["right"]),
+            ("assignment_expression", &["left"], &["right"]),
+            ("short_var_declaration", &["left"], &["right"]),
+            ("let_declaration", &["pattern"], &["value", "type"]),
+        ];
+        const TYPED: [&str; 7] = [
+            "parameter",
+            "formal_parameter",
+            "parameter_declaration",
+            "typed_parameter",
+            "typed_default_parameter",
+            "required_parameter",
+            "optional_parameter",
+        ];
+        let kind = node.kind();
+        let sides: Option<(&[&str], &[&str])> = BINDINGS
+            .iter()
+            .find(|(binding, _, _)| *binding == kind)
+            .map(|(_, left, right)| (*left, *right))
+            .or_else(|| {
+                TYPED
+                    .contains(&kind)
+                    .then_some((&["name", "pattern"][..], &["type"][..]))
+            })
+            .or_else(|| (kind == "var_spec").then_some((&["name"][..], &["value", "type"][..])));
+        if let Some((left_fields, right_fields)) = sides {
+            let left = left_fields
+                .iter()
+                .find_map(|field| node.child_by_field_name(field))
+                .or_else(|| {
+                    if kind == "typed_parameter" {
+                        node.named_child(0)
+                    } else {
+                        None
+                    }
+                });
+            let right = right_fields
+                .iter()
+                .find_map(|field| node.child_by_field_name(field));
+            if let (Some(left), Some(right)) = (left, right) {
+                let names_it = self.text(left).split(',').any(|part| {
+                    part.trim()
+                        .trim_start_matches('&')
+                        .trim_start_matches("mut ")
+                        .trim()
+                        == name
+                });
+                if names_it
+                    && markers
+                        .iter()
+                        .any(|marker| self.text(right).contains(marker))
+                {
+                    return true;
+                }
+            }
+        }
+        let mut cursor = node.walk();
+        let children: Vec<Node<'_>> = node.children(&mut cursor).collect();
+        children
+            .into_iter()
+            .any(|child| self.bound_to_marker(child, name, markers))
+    }
+
     fn symbol_at(&self, name_node: Node<'_>) -> Option<String> {
         self.file
             .symbols
@@ -669,6 +759,17 @@ impl<'a> Context<'a> {
             if !is_method || !(name == "route" || HTTP_VERBS.contains(&name)) {
                 continue;
             }
+            let markers: &[&str] = if framework == "fastapi" {
+                &["FastAPI(", "APIRouter("]
+            } else {
+                &["Flask(", "Blueprint("]
+            };
+            let Some(receiver) = callee.child_by_field_name("object") else {
+                continue;
+            };
+            if !self.is_framework_value(receiver, markers) {
+                continue;
+            }
             let Some(path) = arguments
                 .iter()
                 .find(|argument| self.is_string(**argument))
@@ -760,6 +861,12 @@ impl<'a> Context<'a> {
         };
         let verb = self.text(property);
         if !HTTP_VERBS.contains(&verb) || !self.mentions("express") {
+            return;
+        }
+        let Some(receiver) = callee.child_by_field_name("object") else {
+            return;
+        };
+        if !self.is_framework_value(receiver, &["express(", "express.Router(", "Router("]) {
             return;
         }
         let arguments = Self::arguments_of(node);
@@ -1064,6 +1171,9 @@ impl<'a> Context<'a> {
             return;
         };
         let name = self.text(field);
+        let Some(receiver) = function.child_by_field_name("operand") else {
+            return;
+        };
         let arguments = Self::arguments_of(node);
         let (Some(first), Some(handler)) = (arguments.first(), arguments.last()) else {
             return;
@@ -1074,6 +1184,7 @@ impl<'a> Context<'a> {
         let path = self.string_of(*first);
         let (framework, method, guards) = if matches!(name, "HandleFunc" | "Handle")
             && self.imports("net.http")
+            && self.is_go_http_receiver(receiver)
         {
             let method = match path.split_once(' ') {
                 Some((method, _)) if method.chars().all(|c| c.is_ascii_uppercase()) => {
@@ -1086,6 +1197,7 @@ impl<'a> Context<'a> {
             name,
             "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "HEAD" | "OPTIONS"
         ) && self.imports("github.com.gin-gonic.gin")
+            && self.is_framework_value(receiver, &["gin.", ".Group("])
         {
             let guards = arguments[1..arguments.len() - 1]
                 .iter()
@@ -1191,6 +1303,19 @@ impl<'a> Context<'a> {
     }
 
     /// `.route("/path", get(handler))` of axum. The method router can chain more methods.
+    /// The `net/http` package itself, or a value of `http.NewServeMux()`.
+    fn is_go_http_receiver(&self, receiver: Node<'_>) -> bool {
+        let text = self.text(receiver);
+        self.file.imports.iter().any(|binding| {
+            binding.module_path == "net/http"
+                && binding
+                    .local_name
+                    .as_deref()
+                    .map_or(text == "http", |local| local == text)
+        }) || (receiver.kind() == "identifier"
+            && self.bound_to_marker(self.parsed.root_node(), text, &["NewServeMux("]))
+    }
+
     fn rust_axum(&self, node: Node<'_>, out: &mut Vec<Draft>) {
         let Some(function) = node.child_by_field_name("function") else {
             return;
@@ -1207,7 +1332,7 @@ impl<'a> Context<'a> {
         let (Some(path), Some(routers)) = (arguments.first(), arguments.get(1)) else {
             return;
         };
-        if !self.is_string(*path) {
+        if !self.is_string(*path) || !self.is_router_chain(function) {
             return;
         }
         let path = self.string_of(*path);
@@ -1223,6 +1348,28 @@ impl<'a> Context<'a> {
                 guards: Vec::new(),
                 basis: EntryBasis::Registered,
             });
+        }
+    }
+
+    /// A chain of `.route(...)` calls that starts at `Router::new()`, or at a value that
+    /// the file binds to a router.
+    fn is_router_chain(&self, function: Node<'_>) -> bool {
+        let mut current = function;
+        loop {
+            let Some(value) = current.child_by_field_name("value") else {
+                return false;
+            };
+            if value.kind() != "call_expression" {
+                return self.is_framework_value(value, &["Router"]);
+            }
+            let Some(inner) = value.child_by_field_name("function") else {
+                return false;
+            };
+            if inner.kind() == "field_expression" {
+                current = inner;
+                continue;
+            }
+            return self.text(inner).contains("Router");
         }
     }
 
@@ -1263,7 +1410,16 @@ impl<'a> Context<'a> {
             return;
         };
         let verb = self.text(name);
-        if self.text(scope) != "Route"
+        let facade = self.file.file.starts_with("routes/")
+            || self.file.imports.iter().any(|binding| {
+                binding.local_name.as_deref() == Some("Route")
+                    && binding
+                        .module_path
+                        .replace('\\', ".")
+                        .ends_with("Facades.Route")
+            });
+        if !facade
+            || self.text(scope) != "Route"
             || !matches!(
                 verb,
                 "get" | "post" | "put" | "patch" | "delete" | "options" | "any"
@@ -1492,6 +1648,82 @@ mod tests {
         })
     }
 
+    fn http_frameworks(language: Language, files: &[(&str, &str)]) -> Vec<String> {
+        entries(language, files)
+            .into_iter()
+            .filter(|entry| entry.kind == EntryKind::HttpHandler)
+            .map(|entry| entry.framework)
+            .collect()
+    }
+
+    #[test]
+    fn an_express_route_needs_a_receiver_that_is_an_express_value() {
+        let source = "const express = require(\"express\");\nconst store = { get(key, callback) { return callback; } };\nconst app = express();\nconst router = express.Router();\n\nstore.get(\"/x\", audit);\napp.get(\"/a\", first);\nrouter.post(\"/b\", second);\n";
+        let found = entries(Language::JavaScript, &[("app.js", source)]);
+        let lines: Vec<u32> = found.iter().map(|entry| entry.range.start_line).collect();
+        assert_eq!(lines, [7, 8], "`store.get` is not a route");
+        let imported = "const express = require(\"express\");\nconst { app } = require(\"./server\");\n\napp.get(\"/a\", first);\n";
+        assert_eq!(
+            http_frameworks(Language::JavaScript, &[("routes.js", imported)]),
+            ["express"],
+            "a receiver from another module can be the application"
+        );
+    }
+
+    #[test]
+    fn a_python_route_decorator_needs_a_receiver_that_is_a_framework_value() {
+        let source = "from flask import Flask\nfrom cachelib import Cache\n\napp = Flask(__name__)\ncache = Cache()\n\n@cache.get(\"/x\")\ndef cached():\n    return 1\n\n@app.route(\"/y\")\ndef shown():\n    return 2\n";
+        let found = entries(Language::Python, &[("app.py", source)]);
+        let symbols: Vec<Option<&str>> =
+            found.iter().map(|entry| entry.symbol.as_deref()).collect();
+        assert_eq!(symbols, [Some("app.py#shown")]);
+        let api = "from fastapi import FastAPI, APIRouter\n\nrouter = APIRouter()\nstore = {}\n\n@router.get(\"/a\")\ndef first():\n    return 1\n\n@store.get(\"/b\")\ndef second():\n    return 2\n";
+        let found = entries(Language::Python, &[("api.py", api)]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].symbol.as_deref(), Some("api.py#first"));
+    }
+
+    #[test]
+    fn a_go_route_needs_a_receiver_that_is_a_framework_value() {
+        let source = "package main\n\nimport (\n\t\"net/http\"\n\n\t\"github.com/gin-gonic/gin\"\n)\n\nfunc show(c *gin.Context) {}\n\nfunc health(w http.ResponseWriter, r *http.Request) {}\n\nfunc main() {\n\trouter := gin.Default()\n\tcache := newCache()\n\tmux := http.NewServeMux()\n\trouter.GET(\"/a\", show)\n\tcache.GET(\"/b\", show)\n\tmux.HandleFunc(\"/c\", health)\n\tcache.HandleFunc(\"/d\", health)\n\thttp.HandleFunc(\"/e\", health)\n}\n";
+        let found = entries(Language::Go, &[("main.go", source)]);
+        let lines: Vec<u32> = found
+            .iter()
+            .filter(|entry| entry.kind == EntryKind::HttpHandler)
+            .map(|entry| entry.range.start_line)
+            .collect();
+        assert_eq!(lines, [17, 19, 21]);
+    }
+
+    #[test]
+    fn an_axum_route_needs_a_router_receiver() {
+        let source = "use axum::{routing::get, Router};\n\nstruct Table;\n\nimpl Table {\n    fn route(&self, path: &str, handler: u32) {}\n}\n\nasync fn list() {}\n\nfn app(table: Table) -> Router {\n    table.route(\"/x\", get(list));\n    Router::new().route(\"/items\", get(list))\n}\n\nfn extend(router: Router) -> Router {\n    router.route(\"/more\", get(list))\n}\n";
+        let found = entries(Language::Rust, &[("main.rs", source)]);
+        let lines: Vec<u32> = found
+            .iter()
+            .filter(|entry| entry.kind == EntryKind::HttpHandler)
+            .map(|entry| entry.range.start_line)
+            .collect();
+        assert_eq!(lines, [13, 17]);
+    }
+
+    #[test]
+    fn a_laravel_route_needs_the_route_facade_or_a_route_file() {
+        let other =
+            "<?php\nuse App\\Support\\Route;\n\nRoute::get('/x', [Thing::class, 'show']);\n";
+        assert!(http_frameworks(Language::Php, &[("app/Thing.php", other)]).is_empty());
+        let facade = "<?php\nuse Illuminate\\Support\\Facades\\Route;\n\nRoute::get('/x', [Thing::class, 'show']);\n";
+        assert_eq!(
+            http_frameworks(Language::Php, &[("app/Boot.php", facade)]),
+            ["laravel"]
+        );
+        let routes = "<?php\nRoute::get('/x', [Thing::class, 'show']);\n";
+        assert_eq!(
+            http_frameworks(Language::Php, &[("routes/web.php", routes)]),
+            ["laravel"]
+        );
+    }
+
     #[test]
     fn a_flask_route_has_its_methods_its_parameters_and_its_guards() {
         let source = "from flask import Flask\nfrom flask_login import login_required\n\napp = Flask(__name__)\n\n@app.route(\"/users/<int:user_id>\", methods=[\"POST\"])\n@login_required\ndef update(user_id):\n    return user_id\n";
@@ -1667,14 +1899,14 @@ mod tests {
     #[test]
     fn a_laravel_route_and_a_rails_route_register_actions() {
         let laravel = "<?php\n\nclass UserController {\n    public function show($id) {}\n}\n\nRoute::get('/users/{id}', [UserController::class, 'show'])->middleware('auth');\n";
-        let found = entries(Language::Php, &[("routes.php", laravel)]);
+        let found = entries(Language::Php, &[("routes/web.php", laravel)]);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].framework, "laravel");
         assert_eq!(found[0].route, route("GET", "/users/{id}", &["id"]));
         assert_eq!(found[0].guards, ["auth"]);
         assert_eq!(
             found[0].symbol.as_deref(),
-            Some("routes.php#UserController.show")
+            Some("routes/web.php#UserController.show")
         );
 
         let rails = "class UsersController\n  before_action :authenticate_user!\n\n  def show\n  end\nend\n";
