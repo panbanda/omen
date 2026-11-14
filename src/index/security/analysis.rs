@@ -94,11 +94,22 @@ pub fn analyze_with_index(
         .iter()
         .map(|path| (relative(root, path), path))
         .collect();
+    let failed: Vec<std::sync::atomic::AtomicBool> = index
+        .files
+        .iter()
+        .map(|_| std::sync::atomic::AtomicBool::new(false))
+        .collect();
     let parse_file = |position: usize| -> Option<ParseResult> {
         let file = &index.files[position];
-        let path = by_relative.get(&file.file)?;
-        let content = read(path).ok()?;
-        headers::parse(path, file.language, &content)
+        let Some(path) = by_relative.get(&file.file) else {
+            return None;
+        };
+        headers::parse_unchanged(
+            file,
+            &failed[position],
+            || read(path).ok(),
+            |content| headers::parse(path, file.language, content),
+        )
     };
     let (all_sinks, comments, entry_points, kept) =
         match findings_one_tree_at_a_time(index, &parse_file, options) {
@@ -303,6 +314,54 @@ mod tests {
         };
         assert_eq!(counts(&comments), counts(&all_comments));
         assert_eq!(counts(&comments)[1], (1, 0));
+    }
+
+    /// A reader whose second read of `a.py` fails or gives other bytes.
+    fn analyze_with_unstable_read(second_read: Option<&'static str>) -> Analysis {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        const DANGEROUS: &str = "def f(x):\n    eval(x)\n";
+        let sources = [("a.py", DANGEROUS), ("b.py", "def g():\n    return 1\n")];
+        let stable = |path: &Path| {
+            sources
+                .iter()
+                .find(|(name, _)| Path::new(name) == path)
+                .map(|(_, text)| text.as_bytes().to_vec())
+                .ok_or_else(|| crate::core::Error::analysis("missing"))
+        };
+        let paths: Vec<PathBuf> = sources
+            .iter()
+            .map(|(name, _)| PathBuf::from(name))
+            .collect();
+        let index = CodeIndex::build(Path::new(""), &paths, &stable, &|_| Vec::new());
+        let reads = AtomicUsize::new(0);
+        let unstable = |path: &Path| {
+            if path == Path::new("a.py") && reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                return match second_read {
+                    Some(text) => Ok(text.as_bytes().to_vec()),
+                    None => Err(crate::core::Error::analysis("gone")),
+                };
+            }
+            stable(path)
+        };
+        analyze_with_index(
+            &index,
+            Path::new(""),
+            &paths,
+            &unstable,
+            &Options::default(),
+        )
+    }
+
+    #[test]
+    fn a_file_that_fails_to_read_once_is_not_read_again() {
+        let analysis = analyze_with_unstable_read(None);
+        assert!(analysis.sinks.is_empty());
+    }
+
+    #[test]
+    fn a_file_whose_bytes_changed_is_not_analyzed() {
+        let analysis = analyze_with_unstable_read(Some("def f(x):\n    return x\n"));
+        assert!(analysis.sinks.is_empty());
     }
 
     #[test]

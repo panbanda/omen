@@ -104,11 +104,20 @@ impl AnalyzerTrait for Analyzer {
         // An entry point is alive, and its callees are reachable. The entry points are those
         // of the security analysis, with the rows of the configuration.
         let entry_rules = crate::analyzers::security::options_of(&ctx.config.security)?.entry_rules;
+        let failed: Vec<std::sync::atomic::AtomicBool> = index
+            .files
+            .iter()
+            .map(|_| std::sync::atomic::AtomicBool::new(false))
+            .collect();
         let parse_file = |position: usize| -> Option<parser::ParseResult> {
             let facts = &index.files[position];
             let path = Path::new(&facts.file);
-            let content = ctx.read_file(path).ok()?;
-            self.parser.parse(&content, facts.language, path).ok()
+            crate::index::headers::parse_unchanged(
+                facts,
+                &failed[position],
+                || ctx.read_file(path).ok(),
+                |content| self.parser.parse(content, facts.language, path).ok(),
+            )
         };
         // Each thread parses a file, uses the tree, and drops it. Only the trees of Rust
         // files stay, because the resolution of paths in Rust needs them.
@@ -145,10 +154,9 @@ impl AnalyzerTrait for Analyzer {
             let parsed: Vec<Option<(parser::ParseResult, FileDeadCode)>> = index
                 .files
                 .par_iter()
-                .map(|facts| {
-                    let path = Path::new(&facts.file);
-                    let content = ctx.read_file(path).ok()?;
-                    let result = self.parser.parse(&content, facts.language, path).ok()?;
+                .enumerate()
+                .map(|(position, facts)| {
+                    let result = parse_file(position)?;
                     let data = collect_file_data(&result, facts);
                     Some((result, data))
                 })
@@ -2017,6 +2025,43 @@ mod tests {
             .items
             .iter()
             .any(|item| item.name == "currentVersion"));
+    }
+
+    #[test]
+    fn test_a_file_that_fails_to_read_after_the_index_is_not_read_again() {
+        use crate::config::Config;
+        use crate::core::{AnalysisContext, Analyzer as _, ContentSource, FileSet};
+        use std::path::PathBuf;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        struct FailsOnSecondRead(AtomicUsize);
+        impl ContentSource for FailsOnSecondRead {
+            fn read(&self, path: &Path) -> Result<Vec<u8>> {
+                if path == Path::new("a.ts") && self.0.fetch_add(1, Ordering::SeqCst) == 1 {
+                    return Err(crate::core::Error::analysis("gone"));
+                }
+                let stem = path.file_stem().unwrap().to_string_lossy();
+                Ok(format!("function unusedIn_{stem}() {{}}\n").into_bytes())
+            }
+            fn list_directory(&self, _: &Path) -> Result<Vec<PathBuf>> {
+                Ok(Vec::new())
+            }
+        }
+
+        let files = FileSet::from_files(
+            PathBuf::from("."),
+            vec![PathBuf::from("a.ts"), PathBuf::from("b.ts")],
+        );
+        let config = Config::default();
+        let ctx = AnalysisContext::new(&files, &config, Some(Path::new(".")))
+            .with_content_source(Arc::new(FailsOnSecondRead(AtomicUsize::new(0))));
+
+        let result = Analyzer::new().analyze(&ctx).unwrap();
+
+        let names: Vec<&str> = result.items.iter().map(|item| item.name.as_str()).collect();
+        assert!(names.iter().any(|name| name.contains("_b")), "{names:?}");
+        assert!(!names.iter().any(|name| name.contains("_a")), "{names:?}");
     }
 
     #[test]

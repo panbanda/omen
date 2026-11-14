@@ -871,6 +871,15 @@ pub struct FileSymbols {
     /// The module file that each qualifier of a call names, by the text of
     /// the qualifier. `resolve_imports` gives the entries.
     pub path_targets: BTreeMap<String, String>,
+    /// The BLAKE3 hash of the bytes that gave these facts.
+    pub content_hash: [u8; 32],
+}
+
+impl FileSymbols {
+    /// The bytes are the bytes that gave these facts.
+    pub fn is_content_of_facts(&self, content: &[u8]) -> bool {
+        *blake3::hash(content).as_bytes() == self.content_hash
+    }
 }
 
 /// Completes the facts that need the symbols of a different file.
@@ -1105,6 +1114,7 @@ pub fn extract_file(parsed: &ParseResult, file: &str) -> FileSymbols {
         reference_facts,
         locals,
         path_targets: BTreeMap::new(),
+        content_hash: *blake3::hash(&parsed.source).as_bytes(),
     }
 }
 
