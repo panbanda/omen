@@ -210,6 +210,19 @@ fn test_csharp_class() {
 }
 
 #[test]
+fn test_csharp_record_positional_parameter_is_a_property() {
+    let source = "public record Pair(int X)\n{\n    public int First() { return X; }\n    public int Second() { return X; }\n}\n";
+    let analysis = analyze(&[("Pair.cs", source)]);
+    let pair = class(&analysis, "Pair");
+    assert_eq!(pair.nom, 2);
+    assert_eq!(pair.fields, ["X"]);
+    assert_eq!(pair.lcom, 1);
+    let method = "public record Pair(int X)\n{\n    public int Add(int X) { return X; }\n    public int Second() { return X; }\n}\n";
+    let analysis = analyze(&[("Pair.cs", method)]);
+    assert_eq!(class(&analysis, "Pair").lcom, 2);
+}
+
+#[test]
 fn test_csharp_property_is_a_field() {
     let source = "class Person\n{\n    public string Name { get; set; }\n    public int Age { get; set; }\n}\n";
     let analysis = analyze(&[("Person.cs", source)]);

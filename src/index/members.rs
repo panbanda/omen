@@ -51,7 +51,7 @@ pub fn class_model(language: Language) -> ClassModel {
         Language::CSharp => ClassModel::Classes(ClassSyntax {
             classes: &[Class, Interface],
             references: &["identifier"],
-            declarations: &["field_declaration", "property_declaration"],
+            declarations: &["field_declaration", "property_declaration", "parameter"],
             accesses: &["member_access_expression"],
             implicit: &["identifier"],
         }),
@@ -303,7 +303,7 @@ impl Recorder {
             push(UseKind::Reference, range_of(node));
         }
         if bits & DECLARATION != 0 {
-            for range in declared_names(self.language, node, source) {
+            for range in declared_names(self.language, node, source, ancestors) {
                 push(UseKind::Declaration, range);
             }
         }
@@ -490,7 +490,12 @@ fn strip_sigil(language: Language, name: &str) -> &str {
 }
 
 /// The ranges of the names that a node declares as fields.
-fn declared_names(language: Language, node: Node<'_>, source: &[u8]) -> Vec<(usize, usize)> {
+fn declared_names(
+    language: Language,
+    node: Node<'_>,
+    source: &[u8],
+    ancestors: &[Node<'_>],
+) -> Vec<(usize, usize)> {
     let mut names = Vec::new();
     match language {
         Language::Java => {
@@ -502,7 +507,17 @@ fn declared_names(language: Language, node: Node<'_>, source: &[u8]) -> Vec<(usi
             }
         }
         Language::CSharp => {
-            if node.kind() == "property_declaration" {
+            if node.kind() == "parameter" {
+                // A positional parameter of a record is a property of the record.
+                let in_record = ancestors
+                    .iter()
+                    .rev()
+                    .nth(1)
+                    .is_some_and(|owner| owner.kind() == "record_declaration");
+                if in_record {
+                    names.extend(node.child_by_field_name("name").map(range_of));
+                }
+            } else if node.kind() == "property_declaration" {
                 names.extend(node.child_by_field_name("name").map(range_of));
             } else {
                 let mut cursor = node.walk();
