@@ -109,11 +109,7 @@ impl AnalyzerTrait for Analyzer {
     }
 
     fn analyze(&self, ctx: &AnalysisContext<'_>) -> Result<Self::Output> {
-        let expected_ttl_days = if ctx.config.feature_flags.stale_days > 0 {
-            ctx.config.feature_flags.stale_days
-        } else {
-            self.config.expected_ttl_days
-        };
+        let expected_ttl_days = ctx.config.feature_flags.stale_days;
 
         let providers = if !ctx.config.feature_flags.providers.is_empty() {
             &ctx.config.feature_flags.providers

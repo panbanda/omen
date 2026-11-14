@@ -1079,7 +1079,7 @@ export function branchy(a: boolean, b: boolean, c: boolean, d: boolean, e: boole
     }
     std::fs::write(
         temp.path().join("omen.toml"),
-        "[complexity]\ncyclomatic_error = 3\n",
+        "[complexity]\ncyclomatic_max = 3\n",
     )
     .unwrap();
 }
@@ -1112,7 +1112,7 @@ fn test_complexity_check_honors_config_excludes() {
     write_complexity_exclude_fixture(&temp);
     std::fs::write(
         temp.path().join("omen.toml"),
-        "exclude = [\"packages/alpha/test/**\"]\n\n[complexity]\ncyclomatic_error = 3\n",
+        "exclude = [\"packages/alpha/test/**\"]\n\n[complexity]\ncyclomatic_max = 3\n",
     )
     .unwrap();
 
@@ -2099,7 +2099,7 @@ fn test_gate_mode_comes_from_configuration_and_the_flag_wins() {
     write_complexity_exclude_fixture(&temp);
     std::fs::write(
         temp.path().join("omen.toml"),
-        "[complexity]\ncyclomatic_error = 3\ngate = \"error\"\n",
+        "[complexity]\ncyclomatic_max = 3\ngate = \"error\"\n",
     )
     .unwrap();
     let path = temp.path().to_str().unwrap();
@@ -2318,7 +2318,7 @@ fn write_committed_repository() -> TempDir {
 fn test_configured_score_gate_does_not_replace_score_trend() {
     let temp = write_committed_repository();
     let config = temp.path().join("gate.toml");
-    std::fs::write(&config, "[score]\nfail_under = 100.0\ngate = \"error\"\n").unwrap();
+    std::fs::write(&config, "[score]\nmin = 100.0\ngate = \"error\"\n").unwrap();
     let path = temp.path().to_str().unwrap();
     let config = config.to_str().unwrap();
 
@@ -2918,14 +2918,14 @@ const GATE_CASES: &[GateCase] = &[
     GateCase {
         command: "complexity",
         arguments: &["complexity"],
-        thresholds: "cyclomatic_error = 1\n",
+        thresholds: "cyclomatic_max = 1\n",
         source:
             "pub fn branchy(a: bool, b: bool) -> u32 { if a { 1 } else if b { 2 } else { 3 } }\n",
     },
     GateCase {
         command: "score",
         arguments: &["score"],
-        thresholds: "fail_under = 100.0\n",
+        thresholds: "min = 100.0\n",
         source:
             "// TODO: remove this\npub fn later(a: bool) -> u32 { if a { todo!() } else { 1 } }\n",
     },

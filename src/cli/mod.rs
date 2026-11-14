@@ -395,7 +395,7 @@ pub struct FlagsArgs {
     pub provider: Option<String>,
 
     /// The age in days after which a flag is stale. The default is
-    /// `feature_flags.stale_days` in the configuration, or 14.
+    /// `feature_flags.stale_days` in the configuration.
     // The flag has no clap default. A default here has priority over the
     // configuration, and the configured value then has no effect.
     #[arg(long)]
