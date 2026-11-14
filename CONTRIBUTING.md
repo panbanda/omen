@@ -32,7 +32,7 @@ Before you open the pull request, run the checks that CI runs:
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features
+cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
 ```
 
