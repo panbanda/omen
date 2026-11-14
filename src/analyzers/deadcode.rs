@@ -204,7 +204,15 @@ impl AnalyzerTrait for Analyzer {
         for call in &value_references {
             let callees: Vec<String> = match keys_by_name.get(&call.callee) {
                 Some(keys) => {
-                    let local: Vec<String> = keys
+                    let named: Vec<String> = match &call.qualifier {
+                        Some(qualifier) => keys
+                            .iter()
+                            .filter(|key| is_in_module(key, qualifier, &call.callee))
+                            .cloned()
+                            .collect(),
+                        None => keys.clone(),
+                    };
+                    let local: Vec<String> = named
                         .iter()
                         .filter(|key| {
                             all_definitions
@@ -214,7 +222,7 @@ impl AnalyzerTrait for Analyzer {
                         .cloned()
                         .collect();
                     if local.is_empty() {
-                        keys.clone()
+                        named
                     } else {
                         local
                     }
@@ -1077,9 +1085,16 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
         // `#[serde(default = "path")]` names a function in a string. The derive calls it.
         if lang == Language::Rust && kind == "attribute_item" {
             if let Ok(text) = node.utf8_text(source) {
-                for name in serde_function_names(text) {
-                    fdc.usages.insert(name.clone());
-                    value_uses.insert((MODULE_SCOPE.to_string(), name, true));
+                for path in serde_function_names(text) {
+                    let mut segments: Vec<&str> = path.split("::").collect();
+                    while segments.len() > 1 && matches!(segments[0], "crate" | "self" | "super") {
+                        segments.remove(0);
+                    }
+                    if let Some(name) = segments.last() {
+                        fdc.usages.insert(name.to_string());
+                    }
+                    // The path is the callee, with `.` between the segments.
+                    value_uses.insert((MODULE_SCOPE.to_string(), segments.join("."), true));
                 }
             }
         }
@@ -1109,11 +1124,20 @@ fn collect_usages_and_calls(result: &parser::ParseResult, fdc: &mut FileDeadCode
             if !cursor.goto_parent() {
                 fdc.calls = value_uses
                     .into_iter()
-                    .map(|(caller, callee, from_module_scope)| CallReference {
-                        caller,
-                        callee,
-                        file: fdc.path.clone(),
-                        from_module_scope,
+                    .map(|(caller, callee, from_module_scope)| {
+                        let (qualifier, callee) = match callee.rsplit_once('.') {
+                            Some((qualifier, name)) => {
+                                (Some(qualifier.to_string()), name.to_string())
+                            }
+                            None => (None, callee),
+                        };
+                        CallReference {
+                            caller,
+                            callee,
+                            qualifier,
+                            file: fdc.path.clone(),
+                            from_module_scope,
+                        }
                     })
                     .collect();
                 return; // Done traversing
@@ -1133,8 +1157,9 @@ const SERDE_FUNCTION_KEYS: [&str; 6] = [
     "with",
 ];
 
-/// The names of the functions that the strings of a `serde` attribute name. The name of
-/// a path is its last segment, as for a call.
+/// The paths of the functions that the strings of a `serde` attribute name, with `::`
+/// between the segments. A `with` string names a module, so it gives the paths of its
+/// `serialize` and `deserialize`.
 fn serde_function_names(attribute: &str) -> Vec<String> {
     let Some(start) = attribute.find("serde(") else {
         return Vec::new();
@@ -1165,16 +1190,26 @@ fn serde_function_names(attribute: &str) -> Vec<String> {
         };
         let value = &rest[quote + 1..quote + 1 + end];
         if SERDE_FUNCTION_KEYS.contains(&key.as_str()) {
-            if key == "with" {
-                names.push("serialize".to_string());
-                names.push("deserialize".to_string());
-            } else if let Some(name) = value.rsplit("::").next().filter(|name| !name.is_empty()) {
-                names.push(name.to_string());
+            if value.is_empty() {
+            } else if key == "with" {
+                names.push(format!("{value}::serialize"));
+                names.push(format!("{value}::deserialize"));
+            } else {
+                names.push(value.to_string());
             }
         }
         rest = &rest[quote + end + 2..];
     }
     names
+}
+
+/// Whether the key of a definition is `name` inside the module path `qualifier`, where the
+/// path has `.` between the segments. The path can start in a parent module.
+fn is_in_module(key: &str, qualifier: &str, name: &str) -> bool {
+    let path = key.split_once('#').map_or(key, |(_, path)| path);
+    let path = path.split('~').next().unwrap_or(path);
+    let wanted = format!("{qualifier}.{name}");
+    path == wanted || path.ends_with(&format!(".{wanted}"))
 }
 
 /// Whether a property name is read as a value: it is the member of a member
@@ -1278,6 +1313,8 @@ fn is_definition_context(node: &tree_sitter::Node<'_>) -> bool {
                         | "static_item"
                         | "class_declaration"
                         | "struct_item"
+                        | "function_item"
+                        | "mod_item"
                 );
             }
         }
@@ -1642,6 +1679,9 @@ struct Definition {
 struct CallReference {
     caller: String,
     callee: String,
+    /// The modules of a path such as `codec::serialize`, joined with `.`. A path of one
+    /// segment has none.
+    qualifier: Option<String>,
     file: String,
     /// Whether the call was made at module scope rather than inside a
     /// function. Structural rather than a reserved caller name, which a
@@ -3651,6 +3691,36 @@ mod index_tests {
         });
         let with = dead(&config);
         assert_eq!(with, ["_unused"], "{with:?}");
+    }
+
+    #[test]
+    fn test_a_serde_path_roots_only_the_function_that_it_names() {
+        use crate::config::Config;
+        use crate::core::{AnalysisContext, Analyzer as _, FileSet};
+        use std::path::PathBuf;
+
+        let source = "mod codec {\n    fn serialize() {}\n    fn deserialize() {}\n}\n\nmod unused {\n    fn serialize() {}\n    fn deserialize() {}\n}\n\nmod paths {\n    fn fallback() -> u32 {\n        1\n    }\n}\n\nmod other {\n    fn fallback() -> u32 {\n        2\n    }\n}\n\nstruct Holder {\n    #[serde(with = \"codec\", default = \"paths::fallback\")]\n    value: u32,\n}\n";
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("holder.rs"), source).unwrap();
+        let files = FileSet::from_files(
+            directory.path().to_path_buf(),
+            vec![PathBuf::from("holder.rs")],
+        );
+        let config = Config::default();
+        let ctx = AnalysisContext::new(&files, &config, Some(directory.path()));
+        let result = Analyzer::new().with_confidence(0.0).analyze(&ctx).unwrap();
+        let mut dead: Vec<(u32, &str)> = result
+            .items
+            .iter()
+            .filter(|item| item.kind != "class" && item.kind != "struct")
+            .map(|item| (item.line, item.name.as_str()))
+            .collect();
+        dead.sort();
+        assert_eq!(
+            dead,
+            [(7, "serialize"), (8, "deserialize"), (18, "fallback")],
+            "only the functions that no path names"
+        );
     }
 
     #[test]
