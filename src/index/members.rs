@@ -746,6 +746,22 @@ fn is_reference(language: Language, node: Node<'_>, ancestors: &[Node<'_>]) -> b
     }
 }
 
+/// The simple name of a base type expression. A generic argument list and a
+/// qualifier are not a part of the name: `pkg.Base`, `Base<T>`, `Base[int]`,
+/// `ns::Base`, and `\ns\Base` give `Base`.
+fn simple_type_name(expression: &str) -> String {
+    let head = expression
+        .split(['<', '[', '('])
+        .next()
+        .unwrap_or(expression)
+        .trim();
+    head.rsplit(['.', ':', '\\'])
+        .find(|segment| !segment.is_empty())
+        .unwrap_or(head)
+        .trim()
+        .to_string()
+}
+
 /// The names of the base types of a type definition, in source order. The
 /// first name is the parent class that the output shows. DIT and NOC use all
 /// the names.
@@ -755,45 +771,46 @@ pub fn bases(language: Language, node: Node<'_>, source: &[u8]) -> Vec<String> {
         let names = parent
             .named_children(&mut cursor)
             .filter(|child| kinds.contains(&child.kind()))
-            .map(|child| text(child, source).to_string())
+            .map(|child| simple_type_name(text(child, source)))
+            .filter(|name| !name.is_empty())
             .collect();
         names
     };
     match language {
         Language::Java => {
+            const TYPES: &[&str] = &["type_identifier", "generic_type", "scoped_type_identifier"];
             if let Some(clause) = node.child_by_field_name("superclass") {
-                return names_of(clause, &["type_identifier"]);
+                return names_of(clause, TYPES);
             }
             let Some(clause) = first_child_of_kind(node, "extends_interfaces") else {
                 return Vec::new();
             };
-            let Some(list) = first_child_of_kind(clause, "type_list") else {
-                return names_of(clause, &["type_identifier"]);
-            };
-            let mut cursor = list.walk();
-            let names = list
-                .named_children(&mut cursor)
-                .filter_map(|child| match child.kind() {
-                    "type_identifier" => Some(text(child, source).to_string()),
-                    "generic_type" => first_child_of_kind(child, "type_identifier")
-                        .map(|name| text(name, source).to_string()),
-                    _ => None,
-                })
-                .collect();
-            names
+            match first_child_of_kind(clause, "type_list") {
+                Some(list) => names_of(list, TYPES),
+                None => names_of(clause, TYPES),
+            }
         }
         Language::TypeScript | Language::Tsx | Language::JavaScript | Language::Jsx => {
             let Some(heritage) = first_child_of_kind(node, "class_heritage") else {
                 return Vec::new();
             };
             let clause = first_child_of_kind(heritage, "extends_clause").unwrap_or(heritage);
-            names_of(clause, &["identifier", "type_identifier"])
-                .into_iter()
-                .take(1)
-                .collect()
+            names_of(
+                clause,
+                &[
+                    "identifier",
+                    "type_identifier",
+                    "member_expression",
+                    "nested_type_identifier",
+                    "generic_type",
+                ],
+            )
+            .into_iter()
+            .take(1)
+            .collect()
         }
         Language::Python => match node.child_by_field_name("superclasses") {
-            Some(bases) => names_of(bases, &["identifier"]),
+            Some(bases) => names_of(bases, &["identifier", "attribute", "subscript"]),
             None => Vec::new(),
         },
         Language::CSharp => {
@@ -803,22 +820,29 @@ pub fn bases(language: Language, node: Node<'_>, source: &[u8]) -> Vec<String> {
             let mut cursor = bases.walk();
             let names = bases
                 .named_children(&mut cursor)
-                .map(|base| match base.kind() {
-                    "generic_name" => base.named_child(0).unwrap_or(base),
-                    _ => base,
+                .filter(|base| {
+                    !matches!(
+                        base.kind(),
+                        "argument_list" | "primary_constructor_base_type"
+                    )
                 })
-                .map(|name| text(name, source).to_string())
+                .map(|base| simple_type_name(text(base, source)))
+                .filter(|name| !name.is_empty())
                 .collect();
             names
         }
         Language::Cpp => match first_child_of_kind(node, "base_class_clause") {
-            Some(clause) => names_of(clause, &["type_identifier"]),
+            Some(clause) => names_of(
+                clause,
+                &["type_identifier", "qualified_identifier", "template_type"],
+            ),
             None => Vec::new(),
         },
         Language::Ruby => node
             .child_by_field_name("superclass")
             .and_then(|superclass| superclass.named_child(0))
-            .map(|name| vec![text(name, source).to_string()])
+            .filter(|name| ["constant", "scope_resolution"].contains(&name.kind()))
+            .map(|name| vec![simple_type_name(text(name, source))])
             .unwrap_or_default(),
         Language::Php => match first_child_of_kind(node, "base_clause") {
             Some(base) => names_of(base, &["name", "qualified_name"]),

@@ -424,6 +424,44 @@ fn test_dit_is_the_longest_path_over_all_bases() {
 }
 
 #[test]
+fn test_dit_reads_generic_and_qualified_bases() {
+    let python = "from typing import Generic\n\nclass Root: pass\nclass Deep(Root, Generic[T]): pass\nclass Shallow: pass\nclass Leaf(Shallow, Deep[int]): pass\nclass Other(pkg.Leaf): pass\n";
+    let analysis = analyze(&[("a.py", python)]);
+    assert_eq!(class(&analysis, "Leaf").dit, 2);
+    assert_eq!(class(&analysis, "Other").dit, 3);
+
+    let java =
+        "class Root<T> {}\nclass Deep extends Root<String> {}\nclass Leaf extends shop.Deep {}\n";
+    let analysis = analyze(&[("A.java", java)]);
+    assert_eq!(class(&analysis, "Deep").dit, 1);
+    assert_eq!(class(&analysis, "Leaf").dit, 2);
+
+    let csharp = "class Root<T> {}\nclass Deep : Root<int> {}\nclass Leaf : Shop.Deep {}\n";
+    let analysis = analyze(&[("A.cs", csharp)]);
+    assert_eq!(class(&analysis, "Deep").dit, 1);
+    assert_eq!(class(&analysis, "Leaf").dit, 2);
+
+    let cpp = "template <typename T> class Root {};\nclass Deep : public Root<int> {};\nclass Leaf : public shop::Deep {};\n";
+    let analysis = analyze(&[("a.cpp", cpp)]);
+    assert_eq!(class(&analysis, "Deep").dit, 1);
+    assert_eq!(class(&analysis, "Leaf").dit, 2);
+
+    let typescript =
+        "class Root<T> {}\nclass Deep extends Root<string> {}\nclass Leaf extends shop.Deep {}\n";
+    let analysis = analyze(&[("a.ts", typescript)]);
+    assert_eq!(class(&analysis, "Deep").dit, 1);
+    assert_eq!(class(&analysis, "Leaf").dit, 2);
+
+    let php = "<?php\nclass Root {}\nclass Deep extends \\Shop\\Root {}\n";
+    let analysis = analyze(&[("a.php", php)]);
+    assert_eq!(class(&analysis, "Deep").dit, 1);
+
+    let ruby = "class Root\nend\n\nclass Deep < Shop::Root\nend\n";
+    let analysis = analyze(&[("a.rb", ruby)]);
+    assert_eq!(class(&analysis, "Deep").dit, 1);
+}
+
+#[test]
 fn test_dit_ends_when_the_bases_have_a_cycle() {
     let sources = [
         ("a.py", "class A(B, C): pass\n"),
