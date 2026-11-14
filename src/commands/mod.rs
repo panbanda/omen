@@ -23,9 +23,13 @@ pub mod diff;
 pub mod eval;
 pub mod gate;
 pub mod impact;
+#[cfg(feature = "mutation")]
+pub mod mutation;
 pub mod outline;
+pub mod report;
 pub mod scope;
 pub mod score;
+pub mod search;
 pub mod stubs;
 pub mod symbol;
 #[cfg(test)]
