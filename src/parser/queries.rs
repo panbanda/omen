@@ -49,7 +49,18 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
             // consistent with C/C++ (case_statement) and Ruby (when).
             "switch_case",
         ],
-        Language::Java | Language::CSharp => &[
+        Language::Java => &[
+            "if_statement",
+            "for_statement",
+            "enhanced_for_statement",
+            "while_statement",
+            "do_statement",
+            "switch_statement",
+            "switch_expression",
+            "catch_clause",
+            "ternary_expression",
+        ],
+        Language::CSharp => &[
             "if_statement",
             "for_statement",
             "enhanced_for_statement",
@@ -90,6 +101,7 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
             "switch_statement",
             "catch_clause",
             "elseif_clause",
+            "conditional_expression",
         ],
         Language::Bash => &[
             "if_statement",
@@ -97,6 +109,7 @@ pub fn get_decision_node_types(lang: Language) -> &'static [&'static str] {
             "while_statement",
             "case_statement",
             "elif_clause",
+            "ternary_expression",
         ],
     }
 }
@@ -253,7 +266,12 @@ pub fn get_nested_scope_node_types(lang: Language) -> &'static [&'static str] {
             "generator_function",
             "generator_function_declaration",
         ],
-        Language::Java | Language::CSharp => &[
+        Language::Java => &[
+            "method_declaration",
+            "constructor_declaration",
+            "lambda_expression",
+        ],
+        Language::CSharp => &[
             "method_declaration",
             "constructor_declaration",
             "lambda_expression",
@@ -272,7 +290,7 @@ pub fn get_nested_scope_node_types(lang: Language) -> &'static [&'static str] {
         Language::Php => &[
             "function_definition",
             "method_declaration",
-            "anonymous_function_creation_expression",
+            "anonymous_function",
             "arrow_function",
         ],
         Language::Bash => &["function_definition"],

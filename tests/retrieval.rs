@@ -262,10 +262,16 @@ fn ledger_never_grows() {
         },
         &accepted_queries,
     );
-    grown.extend(check_accepted_ranks(
+    let base_accepted: Vec<AcceptedRankRegression> = load_accepted(&base).unwrap();
+    let report = check_accepted_ranks(
         &rank_regressions(&base_corpus, &load_ranks(&base), &load_ranks(&root)),
         &accepted,
-    ));
+        &base_accepted,
+    );
+    for note in &report.notes {
+        println!("note: {note}");
+    }
+    grown.extend(report.problems);
     assert!(
         grown.is_empty(),
         "these queries are worse than on the base branch, hide a failure, or have a stale accepted entry:\n{}",
@@ -286,7 +292,7 @@ fn accepted_regressions_file_is_valid() {
         })
         .collect();
     assert_eq!(
-        check_accepted_ranks(&regressions, &accepted),
+        check_accepted_ranks(&regressions, &accepted, &[]).problems,
         Vec::<String>::new()
     );
 }

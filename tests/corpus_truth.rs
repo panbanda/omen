@@ -353,7 +353,12 @@ fn ledger_never_grows() {
         &load_ledger(&quality_root()),
     );
     let accepted: Vec<AcceptedFact> = load_accepted(&quality_root()).unwrap();
-    let grown = check_accepted_facts(&grown, &accepted);
+    let base_accepted: Vec<AcceptedFact> = load_accepted(&base).unwrap();
+    let report = check_accepted_facts(&grown, &accepted, &base_accepted);
+    for note in &report.notes {
+        println!("note: {note}");
+    }
+    let grown = report.problems;
     assert!(
         grown.is_empty(),
         "the base branch made these checks and they are now in the ledger, or an accepted entry is stale:\n{}",
@@ -562,5 +567,8 @@ fn an_observation_does_not_change_the_ids() {
 fn accepted_regressions_file_is_valid() {
     let accepted: Vec<AcceptedFact> = load_accepted(&quality_root()).unwrap();
     let ids: Vec<String> = accepted.iter().map(|entry| entry.id.clone()).collect();
-    assert_eq!(check_accepted_facts(&ids, &accepted), Vec::<String>::new());
+    assert_eq!(
+        check_accepted_facts(&ids, &accepted, &[]).problems,
+        Vec::<String>::new()
+    );
 }

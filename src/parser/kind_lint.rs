@@ -50,7 +50,6 @@ fn listed(language: Language) -> bool {
 /// entry in the change that corrects the table. Do not add an entry.
 const KNOWN_UNKNOWN_KINDS: &[&str] = &[
     "decision/CSharp/enhanced_for_statement",
-    "decision/Java/conditional_expression",
     "decision/Java/switch_statement",
     "decision/Php/elseif_clause",
     "decision/Python/comprehension",
@@ -59,9 +58,6 @@ const KNOWN_UNKNOWN_KINDS: &[&str] = &[
     "flat/Go/else_clause",
     "flat/Java/else_clause",
     "flat/Php/elseif_clause",
-    "nested_scope/Java/anonymous_method_expression",
-    "nested_scope/Java/local_function_statement",
-    "nested_scope/Php/anonymous_function_creation_expression",
     "nesting/CSharp/enhanced_for_statement",
 ];
 
