@@ -991,7 +991,7 @@ pub fn resolve_imports(files: &mut [FileSymbols], manifests: &Manifests) {
         files
             .iter()
             .map(|file| {
-                let qualifiers: BTreeSet<&str> = file
+                let mut qualifiers: BTreeSet<&str> = file
                     .references
                     .iter()
                     .filter(|_| file.language == Language::Rust)
@@ -1003,6 +1003,28 @@ pub fn resolve_imports(files: &mut [FileSymbols], manifests: &Manifests) {
                     })
                     .flatten()
                     .collect();
+                // A declared type can have a path, as `shapes::Circle` has.
+                if file.language == Language::Rust {
+                    let declared = file
+                        .link_facts
+                        .iter()
+                        .flat_map(|facts| {
+                            facts
+                                .return_type
+                                .iter()
+                                .chain(facts.parameter_types.iter().flatten())
+                        })
+                        .chain(file.locals.iter().filter_map(|local| local.name.type_name.as_ref()));
+                    for text in declared {
+                        for word in text.split(|character: char| {
+                            !(character.is_alphanumeric() || character == '_' || character == ':')
+                        }) {
+                            if let Some((module, _)) = word.rsplit_once("::") {
+                                qualifiers.insert(module);
+                            }
+                        }
+                    }
+                }
                 qualifiers
                     .into_iter()
                     .filter_map(|qualifier| {

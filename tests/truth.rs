@@ -192,14 +192,21 @@ fn observed_imports(bindings: &[ImportBinding]) -> Vec<ObservedImport> {
                 line,
                 path: binding.module_path.clone(),
                 names: Vec::new(),
-                resolved_files: match &binding.target_file {
-                    ImportTarget::Resolved(file) => vec![file.clone()],
-                    ImportTarget::Package(files) | ImportTarget::Ambiguous(files) => files.clone(),
-                    ImportTarget::External | ImportTarget::Unresolved => Vec::new(),
-                },
+                resolved_files: Vec::new(),
             });
             imports.len() - 1
         });
+        // Each binding can target a different file.
+        let targets = match &binding.target_file {
+            ImportTarget::Resolved(file) => vec![file.clone()],
+            ImportTarget::Package(files) | ImportTarget::Ambiguous(files) => files.clone(),
+            ImportTarget::External | ImportTarget::Unresolved => Vec::new(),
+        };
+        for target in targets {
+            if !imports[position].resolved_files.contains(&target) {
+                imports[position].resolved_files.push(target);
+            }
+        }
         if let Some(name) = &binding.imported_name {
             imports[position].names.push(ImportedName {
                 name: name.clone(),
@@ -468,4 +475,37 @@ fn ledger_never_grows() {
         "these facts were correct on the base branch and are now in the ledger:\n{}",
         grown.join("\n")
     );
+}
+
+/// `from pkg import left, right` has one import statement and two bindings. A
+/// binding can target a different file. The import keeps each target.
+#[test]
+fn observed_imports_keep_each_target_of_a_grouped_import() {
+    let span = omen::index::model::Span {
+        start_byte: 0,
+        end_byte: 0,
+        start_line: 1,
+        start_column: 0,
+        end_line: 1,
+        end_column: 0,
+    };
+    let binding = |name: &str, target: &str| ImportBinding {
+        file: "main.py".to_string(),
+        range: span,
+        module_path: "pkg".to_string(),
+        kind: IndexImportKind::Named,
+        imported_name: Some(name.to_string()),
+        local_name: Some(name.to_string()),
+        target_file: ImportTarget::Resolved(target.to_string()),
+        target_symbol: None,
+    };
+    let bindings = [
+        binding("left", "pkg/left.py"),
+        binding("right", "pkg/right.py"),
+        binding("again", "pkg/right.py"),
+    ];
+    let imports = observed_imports(&bindings);
+    assert_eq!(imports.len(), 1);
+    assert_eq!(imports[0].resolved_files, ["pkg/left.py", "pkg/right.py"]);
+    assert_eq!(imports[0].names.len(), 3);
 }

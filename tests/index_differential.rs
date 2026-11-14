@@ -59,6 +59,14 @@ fn source_files(root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// A call with this status is an edge of the shared index.
+fn is_edge(status: &ResolutionStatus) -> bool {
+    matches!(
+        status,
+        ResolutionStatus::Resolved | ResolutionStatus::UniqueCandidate
+    )
+}
+
 /// The name of a call without a receiver or a path.
 fn bare_name(call: &str) -> String {
     call.rsplit(['.', ':', '>', '\\'])
@@ -147,11 +155,7 @@ fn new_edges(
             .entry(row.clone())
             .or_default()
             .insert(format!("{:?}/{basis}", resolution.status));
-        let edge = matches!(
-            resolution.status,
-            ResolutionStatus::Resolved | ResolutionStatus::UniqueCandidate
-        );
-        if edge {
+        if is_edge(&resolution.status) {
             edges.entry(row).or_default().extend(
                 resolution
                     .candidates
@@ -283,9 +287,7 @@ fn cost_of_one_index() {
                 .files
                 .iter()
                 .flat_map(|file| &file.references)
-                .filter(|reference| {
-                    reference.resolution.status == ResolutionStatus::UniqueCandidate
-                })
+                .filter(|reference| is_edge(&reference.resolution.status))
                 .count()
         }
         other => panic!("OMEN_DIFFERENTIAL_INDEX must be `old` or `new`, not {other}"),

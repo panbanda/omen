@@ -2964,6 +2964,27 @@ mod false_edge_tests {
     }
 
     #[test]
+    fn test_rust_declared_type_with_a_module_path_resolves() {
+        let files = [
+            ("Cargo.toml", "[package]\nname = \"shop\"\n"),
+            ("src/lib.rs", "pub mod shapes;\npub mod other;\n"),
+            (
+                "src/shapes.rs",
+                "pub struct Circle;\n\nimpl Circle {\n    pub fn area(&self) {}\n}\n",
+            ),
+            (
+                "src/other.rs",
+                "pub struct Pair {\n    lead: crate::shapes::Circle,\n    list: Vec<shapes::Circle>,\n}\n\nimpl Pair {\n    fn run(&self, given: crate::shapes::Circle) {\n        self.lead.area();\n        given.area();\n    }\n}\n",
+            ),
+        ];
+        let found = "UniqueCandidate ReceiverDeclaredType [src/shapes.rs#Circle.area]";
+        assert_eq!(
+            rows_of(&files, "src/other.rs", "area"),
+            [format!("8 Pair.run>(..).area {found}"), format!("9 Pair.run>given.area {found}")]
+        );
+    }
+
+    #[test]
     fn test_rust_qualifier_of_a_missing_module_gives_no_edge() {
         let source = "struct Widget;\n\nimpl Widget {\n    fn run() {}\n}\n\nfn main() {\n    vendor::Widget::run();\n}\n";
         let rows = rows(&[("a.rs", source)], "a.rs");
