@@ -1490,7 +1490,7 @@ mod tests {
         )
         .unwrap();
         let mut config = Config::default();
-        config.satd.custom_markers = vec!["SHORTCUT".to_string()];
+        config.satd.markers = vec!["SHORTCUT".to_string()];
         let with_marker = McpServer::new(dir.path().to_path_buf(), config);
         let without_marker = McpServer::new(dir.path().to_path_buf(), Config::default());
         let found = envelope_of(&with_marker, "satd", json!({}));

@@ -29,14 +29,14 @@ pub(super) static COMPLEXITY: ToolSpec = ToolSpec {
 pub(super) static SATD: ToolSpec = ToolSpec {
     name: "satd",
     description: "Finds debt comments such as TODO, FIXME, and HACK. \
-        The tool also finds the markers in `satd.custom_markers` of the configuration.",
+        The tool also finds the markers in `satd.markers` of the configuration.",
     params: &[PATH],
     paginated: Pagination::Field("items"),
     handler: |server, arguments| {
         server.analyze(
             arguments,
             crate::analyzers::satd::Analyzer::new()
-                .with_custom_markers(&server.config.satd.custom_markers),
+                .with_custom_markers(&server.config.satd.markers),
         )
     },
 };
@@ -339,10 +339,9 @@ pub(super) static FLAGS: ToolSpec = ToolSpec {
         .with_default(ParamDefault::Configuration("feature_flags.providers")),
         Param::integer(
             "stale_days",
-            0,
+            1,
             MAX_DAYS,
-            "The age in days after which a flag is stale. \
-             The value 0 selects the built-in age of 14 days.",
+            "The age in days after which a flag is stale.",
         )
         .with_default(ParamDefault::Configuration("feature_flags.stale_days")),
     ],
@@ -360,7 +359,7 @@ fn flags(server: &McpServer, arguments: &Arguments<'_>) -> HandlerResult {
         config.feature_flags.providers = providers;
     }
     // The same rule as the `flags` command: the argument, then the
-    // configured value. The analyzer uses 14 days when the value is 0.
+    // configured value.
     if let Some(stale_days) = arguments.count_u32("stale_days") {
         config.feature_flags.stale_days = stale_days;
     }

@@ -138,18 +138,18 @@ impl Config {
 pub struct ComplexityConfig {
     /// Gate mode of `complexity`.
     pub gate: GateMode,
-    /// Maximum cyclomatic complexity before error.
-    pub cyclomatic_error: u32,
-    /// Maximum cognitive complexity before error.
-    pub cognitive_error: u32,
+    /// Maximum cyclomatic complexity of a function.
+    pub cyclomatic_max: u32,
+    /// Maximum cognitive complexity of a function.
+    pub cognitive_max: u32,
 }
 
 impl Default for ComplexityConfig {
     fn default() -> Self {
         Self {
             gate: GateMode::Off,
-            cyclomatic_error: 20,
-            cognitive_error: 30,
+            cyclomatic_max: 20,
+            cognitive_max: 30,
         }
     }
 }
@@ -158,8 +158,8 @@ impl Default for ComplexityConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SatdConfig {
-    /// Custom markers to detect.
-    pub custom_markers: Vec<String>,
+    /// Markers to detect in addition to the built-in markers.
+    pub markers: Vec<String>,
 }
 
 /// Churn analyzer configuration.
@@ -239,12 +239,20 @@ impl Default for DefectConfig {
 /// Score configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-#[derive(Default)]
 pub struct ScoreConfig {
     /// Gate mode of `score`.
     pub gate: GateMode,
-    /// Minimum overall score to pass.
-    pub fail_under: Option<f64>,
+    /// Minimum overall score that the gate accepts.
+    pub min: f64,
+}
+
+impl Default for ScoreConfig {
+    fn default() -> Self {
+        Self {
+            gate: GateMode::Off,
+            min: 80.0,
+        }
+    }
 }
 
 /// Stubs configuration.
@@ -264,7 +272,7 @@ pub struct MutationConfig {
 }
 
 /// Feature flag detection configuration.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FeatureFlagsConfig {
     /// Days before a flag is considered stale.
@@ -274,6 +282,16 @@ pub struct FeatureFlagsConfig {
     pub providers: Vec<String>,
     /// Custom providers defined via tree-sitter queries.
     pub custom_providers: Vec<CustomProvider>,
+}
+
+impl Default for FeatureFlagsConfig {
+    fn default() -> Self {
+        Self {
+            stale_days: 90,
+            providers: Vec::new(),
+            custom_providers: Vec::new(),
+        }
+    }
 }
 
 /// Custom feature flag provider.
@@ -368,7 +386,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert_eq!(config.complexity.cyclomatic_error, 20);
+        assert_eq!(config.complexity.cyclomatic_max, 20);
         assert_eq!(config.churn.top, 20);
         assert!(config.exclude_built_assets);
     }
@@ -417,9 +435,9 @@ mod tests {
     #[test]
     fn test_config_from_file() {
         Jail::expect_with(|jail| {
-            jail.create_file("omen.toml", "[complexity]\ncyclomatic_error = 25")?;
+            jail.create_file("omen.toml", "[complexity]\ncyclomatic_max = 25")?;
             let config = Config::from_file("omen.toml").unwrap();
-            assert_eq!(config.complexity.cyclomatic_error, 25);
+            assert_eq!(config.complexity.cyclomatic_max, 25);
             Ok(())
         });
     }
@@ -449,7 +467,7 @@ mod tests {
     fn test_config_load_default_no_file() {
         Jail::expect_with(|_jail| {
             let config = Config::load_default(".").unwrap();
-            assert_eq!(config.complexity.cyclomatic_error, 20);
+            assert_eq!(config.complexity.cyclomatic_max, 20);
             Ok(())
         });
     }
@@ -465,10 +483,10 @@ mod tests {
     #[test]
     fn test_env_var_overrides_file_value() {
         Jail::expect_with(|jail| {
-            jail.create_file("omen.toml", "[complexity]\ncyclomatic_error = 15")?;
-            jail.set_env("OMEN_COMPLEXITY__CYCLOMATIC_ERROR", "5");
+            jail.create_file("omen.toml", "[complexity]\ncyclomatic_max = 15")?;
+            jail.set_env("OMEN_COMPLEXITY__CYCLOMATIC_MAX", "5");
             let config = Config::from_file("omen.toml").unwrap();
-            assert_eq!(config.complexity.cyclomatic_error, 5);
+            assert_eq!(config.complexity.cyclomatic_max, 5);
             Ok(())
         });
     }
@@ -476,9 +494,9 @@ mod tests {
     #[test]
     fn test_env_var_overrides_default_no_file() {
         Jail::expect_with(|jail| {
-            jail.set_env("OMEN_COMPLEXITY__CYCLOMATIC_ERROR", "42");
+            jail.set_env("OMEN_COMPLEXITY__CYCLOMATIC_MAX", "42");
             let config = Config::load_default(".").unwrap();
-            assert_eq!(config.complexity.cyclomatic_error, 42);
+            assert_eq!(config.complexity.cyclomatic_max, 42);
             Ok(())
         });
     }
@@ -486,14 +504,14 @@ mod tests {
     #[test]
     fn test_complexity_config_default() {
         let config = ComplexityConfig::default();
-        assert_eq!(config.cyclomatic_error, 20);
-        assert_eq!(config.cognitive_error, 30);
+        assert_eq!(config.cyclomatic_max, 20);
+        assert_eq!(config.cognitive_max, 30);
     }
 
     #[test]
     fn test_satd_config_default() {
         let config = SatdConfig::default();
-        assert!(config.custom_markers.is_empty());
+        assert!(config.markers.is_empty());
     }
 
     #[test]
@@ -520,7 +538,7 @@ mod tests {
     #[test]
     fn test_score_config_default() {
         let config = ScoreConfig::default();
-        assert!(config.fail_under.is_none());
+        assert_eq!(config.min, 80.0);
     }
 
     #[test]
@@ -533,7 +551,7 @@ mod tests {
         let config = Config::default();
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("complexity"));
-        assert!(json.contains("cyclomatic_error"));
+        assert!(json.contains("cyclomatic_max"));
     }
 
     #[test]
@@ -589,9 +607,24 @@ mod tests {
     }
 
     #[test]
+    fn test_renamed_keys_of_the_tables_load() {
+        Jail::expect_with(|jail| {
+            jail.create_file(
+                "omen.toml",
+                "[score]\nmin = 90.5\n[satd]\nmarkers = [\"REVISIT\"]\n[feature_flags]\nstale_days = 30\n",
+            )?;
+            let config = Config::from_file("omen.toml").unwrap();
+            assert_eq!(config.score.min, 90.5);
+            assert_eq!(config.satd.markers, ["REVISIT"]);
+            assert_eq!(config.feature_flags.stale_days, 30);
+            Ok(())
+        });
+    }
+
+    #[test]
     fn test_feature_flags_config_default() {
         let config = FeatureFlagsConfig::default();
-        assert_eq!(config.stale_days, 0);
+        assert_eq!(config.stale_days, 90);
         assert!(config.providers.is_empty());
         assert!(config.custom_providers.is_empty());
     }

@@ -129,7 +129,7 @@ expression: "responses[0]"
         "name": "complexity"
       },
       {
-        "description": "Finds debt comments such as TODO, FIXME, and HACK. The tool also finds the markers in `satd.custom_markers` of the configuration.",
+        "description": "Finds debt comments such as TODO, FIXME, and HACK. The tool also finds the markers in `satd.markers` of the configuration.",
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
@@ -666,9 +666,9 @@ expression: "responses[0]"
               "type": "string"
             },
             "stale_days": {
-              "description": "The age in days after which a flag is stale. The value 0 selects the built-in age of 14 days. The default is `feature_flags.stale_days` in the configuration.",
+              "description": "The age in days after which a flag is stale. The default is `feature_flags.stale_days` in the configuration.",
               "maximum": 36500,
-              "minimum": 0,
+              "minimum": 1,
               "type": "integer"
             }
           },

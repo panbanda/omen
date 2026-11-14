@@ -760,7 +760,7 @@ fn dispatch_analyzer(
             config,
             format,
             Some(args),
-            omen::analyzers::satd::Analyzer::new().with_custom_markers(&config.satd.custom_markers),
+            omen::analyzers::satd::Analyzer::new().with_custom_markers(&config.satd.markers),
         )
         .map(drop),
         Command::Clones(args) => run_analyzer_instance(
@@ -964,10 +964,10 @@ fn apply_complexity_gate(
 
     let max_cyclomatic = args
         .max_cyclomatic
-        .unwrap_or(config.complexity.cyclomatic_error);
+        .unwrap_or(config.complexity.cyclomatic_max);
     let max_cognitive = args
         .max_cognitive
-        .unwrap_or(config.complexity.cognitive_error);
+        .unwrap_or(config.complexity.cognitive_max);
 
     match result.check_thresholds(max_cyclomatic, max_cognitive) {
         Ok(()) => {
@@ -1092,9 +1092,7 @@ fn apply_score_gate(
         return Ok(());
     }
 
-    let min_score = args
-        .fail_under
-        .unwrap_or_else(|| config.score.fail_under.unwrap_or(80.0));
+    let min_score = args.fail_under.unwrap_or(config.score.min);
 
     match result.check_threshold(min_score) {
         Ok(()) => {
