@@ -821,23 +821,29 @@ fn filtered_file_set(
 }
 
 fn changed_files_since(path: &Path, base: &str) -> omen::core::Result<Vec<PathBuf>> {
+    changed_files_between(path, base, None)
+}
+
+/// The files that changed between `base` and `target`. Without a target, the
+/// files that changed between `base` and the working tree.
+fn changed_files_between(
+    path: &Path,
+    base: &str,
+    target: Option<&str>,
+) -> omen::core::Result<Vec<PathBuf>> {
     use std::process::Command;
 
-    if base.starts_with('-') {
+    if base.starts_with('-') || target.is_some_and(|target| target.starts_with('-')) {
         return Err(omen::core::Error::git(
             "changed-since reference must not start with '-'",
         ));
     }
 
     let output = Command::new("git")
-        .args([
-            "diff",
-            "--name-only",
-            "--diff-filter=ACMR",
-            "--end-of-options",
-            base,
-            "--",
-        ])
+        .args(["diff", "--name-only", "--diff-filter=ACMR", "--end-of-options"])
+        .arg(base)
+        .args(target)
+        .arg("--")
         .current_dir(path)
         .output()
         .map_err(omen::core::Error::Io)?;
@@ -2082,6 +2088,10 @@ fn index_scope(
     };
     let tree = omen::core::TreeSource::new(path, reference)?;
     let mut file_set = FileSet::from_tree_source(&tree, config)?;
+    if let Some(base) = &common.changed_since {
+        let changed_files = changed_files_between(path, base, Some(reference))?;
+        file_set = file_set.filter_by_paths(&changed_files);
+    }
     if let Some(glob) = &common.glob {
         file_set = file_set.filter_by_glob(glob);
     }

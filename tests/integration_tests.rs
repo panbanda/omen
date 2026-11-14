@@ -509,19 +509,92 @@ fn test_changed_since_filters_analyzer_files() {
     assert!(!stdout.contains("src/a.rs"));
 }
 
+/// Runs git in `repository` without the configuration of the user, which can
+/// require a commit signature or add hooks. A failed command fails the test.
+fn isolated_git(repository: &std::path::Path, arguments: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .args(arguments)
+        .current_dir(repository)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com")
+        .output()
+        .expect("git starts");
+    assert!(
+        output.status.success(),
+        "git {arguments:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+/// With `--ref`, `--changed-since` keeps the files that changed between the
+/// base and that commit.
+#[test]
+fn test_ref_honors_changed_since() {
+    let temp = TempDir::new().unwrap();
+    let git = |arguments: &[&str]| isolated_git(temp.path(), arguments);
+    git(&["init", "-q"]);
+    std::fs::write(temp.path().join("a.py"), "def only_in_a():\n    return 1\n").unwrap();
+    std::fs::write(temp.path().join("b.py"), "def in_b():\n    return 1\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "first"]);
+    let first = git(&["rev-parse", "HEAD"]);
+    std::fs::write(temp.path().join("b.py"), "def in_b():\n    return 2\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "second"]);
+    let root = temp.path().to_str().unwrap();
+
+    let changed = omen()
+        .args([
+            "-p", root, "--ref", "HEAD", "-f", "json", "symbol", "in_b", "--changed-since", &first,
+        ])
+        .output()
+        .unwrap();
+    assert!(changed.status.success(), "{changed:?}");
+    let unchanged = omen()
+        .args([
+            "-p",
+            root,
+            "--ref",
+            "HEAD",
+            "-f",
+            "json",
+            "symbol",
+            "only_in_a",
+            "--changed-since",
+            &first,
+        ])
+        .output()
+        .unwrap();
+    assert!(!unchanged.status.success(), "{unchanged:?}");
+    let invalid = omen()
+        .args([
+            "-p",
+            root,
+            "--ref",
+            "HEAD",
+            "-f",
+            "json",
+            "symbol",
+            "in_b",
+            "--changed-since",
+            "no-such-reference",
+        ])
+        .output()
+        .unwrap();
+    assert!(!invalid.status.success(), "{invalid:?}");
+}
+
 /// `symbol` and `impact` with `--ref` read the files of that commit, not the
 /// files on the disk.
 #[test]
 fn test_symbol_and_impact_read_the_commit_of_ref() {
     let temp = TempDir::new().unwrap();
-    let git = |arguments: &[&str]| {
-        let output = std::process::Command::new("git")
-            .args(arguments)
-            .current_dir(temp.path())
-            .output()
-            .unwrap();
-        String::from_utf8_lossy(&output.stdout).trim().to_string()
-    };
+    let git = |arguments: &[&str]| isolated_git(temp.path(), arguments);
     git(&["init", "-q"]);
     git(&["config", "user.email", "test@example.com"]);
     git(&["config", "user.name", "Test"]);
