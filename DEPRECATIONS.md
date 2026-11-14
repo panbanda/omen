@@ -140,7 +140,8 @@ The commands `symbol` and `impact`, and the MCP tools `get_symbol` and
 | `--min-basis` of `symbol` and `impact`, `min_basis` of `get_symbol` and `impact` | Not available. | The weakest basis of a call that gives a caller or a callee. The default is `same_package`, which excludes `name_only`. | None. |
 | `--ref` with `symbol` and `impact` on a local repository | The commands read the files on the disk. | The commands read the files of that commit. | None. |
 | `truncated` of the MCP tools `context` and `repomap` | Only the cut of the token budget. | Also the cut of `max_symbols` and `max_risks`, with the total before the cut. | Read `truncated`. |
-| `truncated` of the MCP tool `impact` | Always empty. | `/callers` and `/callees` have the number of definitions without the `depth` limit and the number in the result. | Read `truncated` to know that `depth` cut the result. |
+| `truncated` of the MCP tool `impact` | Always empty. | `/callers/*/symbols` and `/callees/*/symbols` have the number of definitions without the `depth` limit and the number in the result. | Read `truncated` to know that `depth` cut the result. |
+| A key of the shared index as the `name` of `task_context` | Not applicable. The tool did not accept the key. | The tool selects the definition by the file and by the last name of the key. It does not use the container or the `~N` suffix. A file with two definitions of that name gives the `ambiguous` error. | Send the `start_line` of one choice with the `name`. |
 
 ### MCP server
 
