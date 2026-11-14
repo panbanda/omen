@@ -631,6 +631,18 @@ mod tests {
     }
 
     #[test]
+    fn an_alias_of_a_builtin_keeps_the_identity_of_the_sink() {
+        let base = "def run(expression):\n    eval(expression)\n";
+        let head = "from builtins import eval as evaluate\n\n\ndef run(expression):\n    evaluate(expression)\n";
+        let base = analyze_sources(&[("app.py", base)], DEFAULT_MIN_BASIS);
+        let head = analyze_sources(&[("app.py", head)], DEFAULT_MIN_BASIS);
+        assert_eq!(base.sinks.len(), 1);
+        assert_eq!(head.sinks.len(), 1);
+        let found = diff(&base, &head, &BTreeSet::new());
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
     fn a_moved_line_is_not_a_new_sink() {
         let moved = format!("\n\n{HEAD}");
         let base = analyze_sources(&[("app.py", HEAD)], DEFAULT_MIN_BASIS);

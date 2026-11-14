@@ -529,6 +529,17 @@ impl FileContext<'_> {
             .collect()
     }
 
+    /// The target of a sink: the path without the module that the language gives without
+    /// an import. `builtins.eval` and `eval` are one target.
+    fn target_of(&self, path: &[String]) -> String {
+        for module in self.implicit_modules() {
+            if path.len() > module.len() && path.starts_with(&module) {
+                return path[module.len()..].join(".");
+            }
+        }
+        path.join(".")
+    }
+
     /// Tells how a path matches a row, if it does.
     fn path_match(
         &self,
@@ -632,7 +643,7 @@ impl FileContext<'_> {
                         .iter()
                         .find_map(|path| {
                             self.path_match(module, callee, path, *imported)
-                                .map(|basis| (basis, path.join(".")))
+                                .map(|basis| (basis, self.target_of(path)))
                         })
                         .filter(|_| {
                             *imported
