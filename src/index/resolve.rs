@@ -659,7 +659,15 @@ impl<'a> Resolver<'a> {
             }
         };
         keep(&mut found, &|id| !self.facts(*id).trait_implementation);
-        keep(&mut found, &|id| self.symbol(*id).body_range.is_some());
+        // A definition replaces the declaration that it defines. A
+        // declaration of a different overload stays.
+        let defined = found.clone();
+        found.retain(|id| {
+            self.symbol(*id).body_range.is_some()
+                || !defined.iter().any(|other| {
+                    self.symbol(*other).body_range.is_some() && self.same_parameters(*id, *other)
+                })
+        });
         // Only a language with overloads selects by the number of arguments.
         let overloads = found.first().is_some_and(|id| {
             matches!(
@@ -673,6 +681,28 @@ impl<'a> Resolver<'a> {
             });
         }
         found
+    }
+
+    /// Tells if two definitions can have the same parameters. The types
+    /// decide when both definitions have them. Otherwise the number of
+    /// parameters decides. A definition with no known parameters can match.
+    fn same_parameters(&self, left: Id, right: Id) -> bool {
+        let (left, right) = (self.facts(left), self.facts(right));
+        // `(void)` and `()` both declare no parameter.
+        let parameters = |types: &Vec<String>| -> Vec<String> {
+            match types.as_slice() {
+                [only] if only == "void" => Vec::new(),
+                _ => types.clone(),
+            }
+        };
+        match (
+            (&left.parameter_types, &right.parameter_types),
+            (left.parameter_count, right.parameter_count),
+        ) {
+            ((Some(left), Some(right)), _) => parameters(left) == parameters(right),
+            (_, (Some(left), Some(right))) => left == right,
+            _ => true,
+        }
     }
 
     fn parents(&self, owner: Id) -> Vec<Id> {
@@ -1556,6 +1586,13 @@ impl<'a> Resolver<'a> {
             .filter(|id| family == Family::C && self.symbol(*id).body_range.is_none())
             .collect();
         same_file.retain(|id| self.symbol(*id).body_range.is_some() || family != Family::C);
+        // A declaration that has no definition in the file declares a
+        // different overload. Its definition, or the declaration, is a candidate.
+        if !same_file.is_empty() && !declared.is_empty() {
+            same_file.extend(self.definitions(declared.clone(), file, arity));
+            same_file.sort();
+            same_file.dedup();
+        }
         if let Some(outcome) = Outcome::of(Basis::SameFile, same_file) {
             return outcome;
         }
@@ -1730,6 +1767,7 @@ impl<'a> Resolver<'a> {
                     definition.body_range.is_some()
                         && is_callable(definition)
                         && self.facts(*other).container_path == *path
+                        && self.same_parameters(id, *other)
                         && (other.0 == file
                             || definition.exported != super::model::Exported::NotExported)
                         && (!c_call || self.has_c_linkage(*other))
