@@ -1,5 +1,16 @@
 # Changelog
 
+## [5.0.0](https://github.com/panbanda/omen/compare/omen-skills-v4.2.1...omen-skills-v5.0.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* omen 5.0 part 2: analyzers on the shared index, configuration, handlers ([#543](https://github.com/panbanda/omen/issues/543))
+
+### Features
+
+* omen 5.0 part 2: analyzers on the shared index, configuration, handlers ([#543](https://github.com/panbanda/omen/issues/543)) ([7451ea8](https://github.com/panbanda/omen/commit/7451ea8bd36fee16c5c66d0f9bd937a13ab20785))
+
 ## [4.2.1](https://github.com/panbanda/omen/compare/omen-skills-v4.2.0...omen-skills-v4.2.1) (2026-08-11)
 
 

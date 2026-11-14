@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.0.0](https://github.com/panbanda/omen/compare/omen-reporting-v2.0.3...omen-reporting-v3.0.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* `files` and `include_projects` of `semantic_search` and `semantic_search_hyde` are arrays of strings. Before, each was one string with commas. Send `["a.rs", "b.rs"]`, not `"a.rs,b.rs"`.
+
+### Features
+
+* give the CLI and the MCP server one strict 5.0 interface ([#533](https://github.com/panbanda/omen/issues/533)) ([bd470b1](https://github.com/panbanda/omen/commit/bd470b137a9e6f7d761da6a8a1f312b0cfdc2cfb))
+* omen 5.0 part 3: security findings, entry points, reachability ([#544](https://github.com/panbanda/omen/issues/544)) ([38f87d4](https://github.com/panbanda/omen/commit/38f87d400e35ff9ecc928b16e67182470b7abb8c))
+
 ## [2.0.3](https://github.com/panbanda/omen/compare/omen-reporting-v2.0.2...omen-reporting-v2.0.3) (2026-08-19)
 
 
