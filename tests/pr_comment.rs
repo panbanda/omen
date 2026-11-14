@@ -542,3 +542,44 @@ fn test_cli_json_keeps_the_risk_shape() {
     assert!(value.get("score").is_some());
     assert!(value.get("symbols").is_none());
 }
+
+#[test]
+fn test_failed_report_generate_with_a_bad_ref_keeps_the_existing_changes() {
+    let directory = repository();
+    let data = TempDir::new().expect("data directory");
+    std::fs::write(data.path().join("diff.json"), "previous changes").expect("diff.json");
+    let skip = "complexity,satd,stubs,deadcode,churn,clones,defect,changes,tdg,graph,hotspot,\
+                temporal,ownership,cohesion,repomap,smells,flags,score,trend";
+    let generate = std::process::Command::new(env!("CARGO_BIN_EXE_omen"))
+        .arg("-p")
+        .arg(directory.path())
+        .args([
+            "--ref",
+            "no-such-ref",
+            "report",
+            "generate",
+            "--skip",
+            skip,
+            "--data",
+        ])
+        .arg(data.path())
+        .current_dir(directory.path())
+        .output()
+        .expect("omen starts");
+    assert!(!generate.status.success());
+    assert_eq!(
+        std::fs::read_to_string(data.path().join("diff.json")).expect("diff.json"),
+        "previous changes"
+    );
+    let leftovers: Vec<String> = std::fs::read_dir(data.path())
+        .expect("data directory")
+        .map(|entry| {
+            entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    assert_eq!(leftovers, ["diff.json"]);
+}

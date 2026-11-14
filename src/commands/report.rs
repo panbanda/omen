@@ -21,6 +21,11 @@ pub fn run(
     match subcommand {
         ReportSubcommand::Generate(args) => {
             let since_days = super::analyzers::since_flag_days(&args.since)?;
+            // The reference is checked before the first write, so a failed run keeps
+            // the files of an earlier run.
+            let changes = git_ref
+                .map(|reference| crate::changeset::build::compute(path, Some(reference), config))
+                .transpose()?;
             std::fs::create_dir_all(&args.data)?;
 
             let file_set = FileSet::from_path(path, config)?;
@@ -55,15 +60,18 @@ pub fn run(
             std::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata)?)?;
 
             let changes_path = args.data.join("diff.json");
-            match std::fs::remove_file(&changes_path) {
-                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                    return Err(error.into())
+            match changes {
+                Some(changes) => {
+                    let pending_path = args.data.join("diff.json.tmp");
+                    std::fs::write(&pending_path, serde_json::to_string_pretty(&changes)?)?;
+                    std::fs::rename(&pending_path, &changes_path)?;
                 }
-                _ => {}
-            }
-            if let Some(reference) = git_ref {
-                let changes = crate::changeset::build::compute(path, Some(reference), config)?;
-                std::fs::write(&changes_path, serde_json::to_string_pretty(&changes)?)?;
+                None => match std::fs::remove_file(&changes_path) {
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                        return Err(error.into())
+                    }
+                    _ => {}
+                },
             }
 
             let skip_list: Vec<&str> = args
