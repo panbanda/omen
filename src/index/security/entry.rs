@@ -252,6 +252,73 @@ fn route(method: &str, path: String) -> Route {
     }
 }
 
+/// Tells if a declaration or a typed parameter binds `name` to a text with a marker.
+fn bound_to_marker(node: Node<'_>, source: &[u8], name: &str, markers: &[&str]) -> bool {
+    const BINDINGS: [(&str, &[&str], &[&str]); 5] = [
+        ("variable_declarator", &["name"], &["value"]),
+        ("assignment", &["left"], &["right"]),
+        ("assignment_expression", &["left"], &["right"]),
+        ("short_var_declaration", &["left"], &["right"]),
+        ("let_declaration", &["pattern"], &["value", "type"]),
+    ];
+    const TYPED: [&str; 7] = [
+        "parameter",
+        "formal_parameter",
+        "parameter_declaration",
+        "typed_parameter",
+        "typed_default_parameter",
+        "required_parameter",
+        "optional_parameter",
+    ];
+    let kind = node.kind();
+    let sides: Option<(&[&str], &[&str])> = BINDINGS
+        .iter()
+        .find(|(binding, _, _)| *binding == kind)
+        .map(|(_, left, right)| (*left, *right))
+        .or_else(|| {
+            TYPED
+                .contains(&kind)
+                .then_some((&["name", "pattern"][..], &["type"][..]))
+        })
+        .or_else(|| (kind == "var_spec").then_some((&["name"][..], &["value", "type"][..])));
+    if let Some((left_fields, right_fields)) = sides {
+        let left = left_fields
+            .iter()
+            .find_map(|field| node.child_by_field_name(field))
+            .or_else(|| {
+                if kind == "typed_parameter" {
+                    node.named_child(0)
+                } else {
+                    None
+                }
+            });
+        let right = right_fields
+            .iter()
+            .find_map(|field| node.child_by_field_name(field));
+        if let (Some(left), Some(right)) = (left, right) {
+            let names_it = syntax::text(left, source).split(',').any(|part| {
+                part.trim()
+                    .trim_start_matches('&')
+                    .trim_start_matches("mut ")
+                    .trim()
+                    == name
+            });
+            if names_it
+                && markers
+                    .iter()
+                    .any(|marker| syntax::text(right, source).contains(marker))
+            {
+                return true;
+            }
+        }
+    }
+    let mut cursor = node.walk();
+    let children: Vec<Node<'_>> = node.children(&mut cursor).collect();
+    children
+        .into_iter()
+        .any(|child| bound_to_marker(child, source, name, markers))
+}
+
 struct Context<'a> {
     parsed: &'a ParseResult,
     file: &'a FileSymbols,
@@ -337,8 +404,10 @@ impl<'a> Context<'a> {
     /// Tells if the receiver of a registration is a framework object. A receiver is a
     /// framework object when its text has a marker, as `express()` has, when a
     /// declaration or a typed parameter in the file binds its name to a text with a marker,
-    /// or when an import binds its name, because the module that exports it is not here.
-    fn is_framework_value(&self, receiver: Node<'_>, markers: &[&str]) -> bool {
+    /// or when an import binds its name and the module that the import names is the
+    /// framework itself (one of `modules`), or is a file of the repository that binds
+    /// the name to a text with a marker.
+    fn is_framework_value(&self, receiver: Node<'_>, markers: &[&str], modules: &[&str]) -> bool {
         let text = self.text(receiver);
         if markers.iter().any(|marker| text.contains(marker)) {
             return true;
@@ -346,82 +415,52 @@ impl<'a> Context<'a> {
         if !matches!(receiver.kind(), "identifier" | "type_identifier") {
             return false;
         }
-        if self
+        let imported = self
             .file
             .imports
             .iter()
-            .any(|binding| binding.local_name.as_deref() == Some(text))
+            .filter(|binding| binding.local_name.as_deref() == Some(text))
+            .collect::<Vec<_>>();
+        if !imported.is_empty() {
+            return imported
+                .into_iter()
+                .any(|binding| self.import_is_framework_value(binding, markers, modules));
+        }
+        bound_to_marker(self.parsed.root_node(), self.source, text, markers)
+    }
+
+    fn import_is_framework_value(
+        &self,
+        binding: &crate::index::model::ImportBinding,
+        markers: &[&str],
+        modules: &[&str],
+    ) -> bool {
+        use crate::index::model::ImportTarget;
+        let path = binding.module_path.replace(['/', '\\', ':'], ".");
+        if modules
+            .iter()
+            .any(|module| path == *module || path.starts_with(&format!("{module}.")))
         {
             return true;
         }
-        self.bound_to_marker(self.parsed.root_node(), text, markers)
-    }
-
-    /// Tells if a declaration or a typed parameter binds `name` to a text with a marker.
-    fn bound_to_marker(&self, node: Node<'_>, name: &str, markers: &[&str]) -> bool {
-        const BINDINGS: [(&str, &[&str], &[&str]); 5] = [
-            ("variable_declarator", &["name"], &["value"]),
-            ("assignment", &["left"], &["right"]),
-            ("assignment_expression", &["left"], &["right"]),
-            ("short_var_declaration", &["left"], &["right"]),
-            ("let_declaration", &["pattern"], &["value", "type"]),
-        ];
-        const TYPED: [&str; 7] = [
-            "parameter",
-            "formal_parameter",
-            "parameter_declaration",
-            "typed_parameter",
-            "typed_default_parameter",
-            "required_parameter",
-            "optional_parameter",
-        ];
-        let kind = node.kind();
-        let sides: Option<(&[&str], &[&str])> = BINDINGS
-            .iter()
-            .find(|(binding, _, _)| *binding == kind)
-            .map(|(_, left, right)| (*left, *right))
-            .or_else(|| {
-                TYPED
-                    .contains(&kind)
-                    .then_some((&["name", "pattern"][..], &["type"][..]))
-            })
-            .or_else(|| (kind == "var_spec").then_some((&["name"][..], &["value", "type"][..])));
-        if let Some((left_fields, right_fields)) = sides {
-            let left = left_fields
+        let targets: &[String] = match &binding.target_file {
+            ImportTarget::Resolved(file) => std::slice::from_ref(file),
+            ImportTarget::Package(files) => files,
+            _ => return false,
+        };
+        let name = match binding.imported_name.as_deref() {
+            Some("*") | Some("default") | None => binding.local_name.as_deref().unwrap_or(""),
+            Some(name) => name,
+        };
+        targets.iter().any(|target| {
+            self.all
                 .iter()
-                .find_map(|field| node.child_by_field_name(field))
-                .or_else(|| {
-                    if kind == "typed_parameter" {
-                        node.named_child(0)
-                    } else {
-                        None
-                    }
-                });
-            let right = right_fields
-                .iter()
-                .find_map(|field| node.child_by_field_name(field));
-            if let (Some(left), Some(right)) = (left, right) {
-                let names_it = self.text(left).split(',').any(|part| {
-                    part.trim()
-                        .trim_start_matches('&')
-                        .trim_start_matches("mut ")
-                        .trim()
-                        == name
-                });
-                if names_it
-                    && markers
-                        .iter()
-                        .any(|marker| self.text(right).contains(marker))
-                {
-                    return true;
-                }
-            }
-        }
-        let mut cursor = node.walk();
-        let children: Vec<Node<'_>> = node.children(&mut cursor).collect();
-        children
-            .into_iter()
-            .any(|child| self.bound_to_marker(child, name, markers))
+                .position(|file| &file.file == target)
+                .is_some_and(|position| {
+                    let parsed = &self.all_parsed[position];
+                    bound_to_marker(parsed.root_node(), &parsed.source, name, markers)
+                })
+        })
     }
 
     fn symbol_at(&self, name_node: Node<'_>) -> Option<String> {
@@ -759,15 +798,15 @@ impl<'a> Context<'a> {
             if !is_method || !(name == "route" || HTTP_VERBS.contains(&name)) {
                 continue;
             }
-            let markers: &[&str] = if framework == "fastapi" {
-                &["FastAPI(", "APIRouter("]
+            let (markers, framework_module): (&[&str], &str) = if framework == "fastapi" {
+                (&["FastAPI(", "APIRouter("], "fastapi")
             } else {
-                &["Flask(", "Blueprint("]
+                (&["Flask(", "Blueprint("], "flask")
             };
             let Some(receiver) = callee.child_by_field_name("object") else {
                 continue;
             };
-            if !self.is_framework_value(receiver, markers) {
+            if !self.is_framework_value(receiver, markers, &[framework_module]) {
                 continue;
             }
             let Some(path) = arguments
@@ -866,7 +905,11 @@ impl<'a> Context<'a> {
         let Some(receiver) = callee.child_by_field_name("object") else {
             return;
         };
-        if !self.is_framework_value(receiver, &["express(", "express.Router(", "Router("]) {
+        if !self.is_framework_value(
+            receiver,
+            &["express(", "express.Router(", "Router("],
+            &["express"],
+        ) {
             return;
         }
         let arguments = Self::arguments_of(node);
@@ -1197,7 +1240,11 @@ impl<'a> Context<'a> {
             name,
             "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "HEAD" | "OPTIONS"
         ) && self.imports("github.com.gin-gonic.gin")
-            && self.is_framework_value(receiver, &["gin.", ".Group("])
+            && self.is_framework_value(
+                receiver,
+                &["gin.", ".Group("],
+                &["github.com.gin-gonic.gin"],
+            )
         {
             let guards = arguments[1..arguments.len() - 1]
                 .iter()
@@ -1313,7 +1360,12 @@ impl<'a> Context<'a> {
                     .as_deref()
                     .map_or(text == "http", |local| local == text)
         }) || (receiver.kind() == "identifier"
-            && self.bound_to_marker(self.parsed.root_node(), text, &["NewServeMux("]))
+            && bound_to_marker(
+                self.parsed.root_node(),
+                self.source,
+                text,
+                &["NewServeMux("],
+            ))
     }
 
     fn rust_axum(&self, node: Node<'_>, out: &mut Vec<Draft>) {
@@ -1360,7 +1412,7 @@ impl<'a> Context<'a> {
                 return false;
             };
             if value.kind() != "call_expression" {
-                return self.is_framework_value(value, &["Router"]);
+                return self.is_framework_value(value, &["Router"], &["axum"]);
             }
             let Some(inner) = value.child_by_field_name("function") else {
                 return false;
@@ -1663,11 +1715,69 @@ mod tests {
         let lines: Vec<u32> = found.iter().map(|entry| entry.range.start_line).collect();
         assert_eq!(lines, [7, 8], "`store.get` is not a route");
         let imported = "const express = require(\"express\");\nconst { app } = require(\"./server\");\n\napp.get(\"/a\", first);\n";
+        let server = "const express = require(\"express\");\nconst app = express();\nmodule.exports = { app };\n";
         assert_eq!(
-            http_frameworks(Language::JavaScript, &[("routes.js", imported)]),
+            http_frameworks(
+                Language::JavaScript,
+                &[("routes.js", imported), ("server.js", server)]
+            ),
             ["express"],
-            "a receiver from another module can be the application"
+            "a receiver from a module that exports the application"
         );
+    }
+
+    #[test]
+    fn an_imported_receiver_is_an_application_only_if_its_module_exports_one() {
+        let routes = "const express = require(\"express\");\nconst { store } = require(\"./store\");\n\nfunction audit(user) {\n  eval(user);\n}\n\nstore.get(\"/x\", audit);\n";
+        let missing = entries(Language::JavaScript, &[("routes.js", routes)]);
+        assert!(
+            missing
+                .iter()
+                .all(|entry| entry.kind != EntryKind::HttpHandler),
+            "the module is not in the repository"
+        );
+        let plain = "const store = { get(key, callback) { return callback; } };\nmodule.exports = { store };\n";
+        let found = entries(
+            Language::JavaScript,
+            &[("routes.js", routes), ("store.js", plain)],
+        );
+        assert!(found
+            .iter()
+            .all(|entry| entry.kind != EntryKind::HttpHandler));
+        let server = "const express = require(\"express\");\nconst store = express();\nmodule.exports = { store };\n";
+        let found = entries(
+            Language::JavaScript,
+            &[("routes.js", routes), ("store.js", server)],
+        );
+        assert_eq!(
+            found
+                .iter()
+                .filter(|entry| entry.kind == EntryKind::HttpHandler)
+                .count(),
+            1,
+            "the module exports an Express application"
+        );
+        let from_express = "import { Router } from \"express\";\n\nRouter.get(\"/x\", handler);\n";
+        assert!(entries(Language::JavaScript, &[("a.js", from_express)])
+            .iter()
+            .any(|entry| entry.kind == EntryKind::HttpHandler));
+    }
+
+    #[test]
+    fn a_python_import_needs_a_module_that_binds_a_framework_value() {
+        let routes = "from flask import Flask\nfrom store import cache\n\n@cache.get(\"/x\")\ndef cached():\n    return 1\n";
+        let plain = "cache = {}\n";
+        let found = entries(
+            Language::Python,
+            &[("routes.py", routes), ("store.py", plain)],
+        );
+        assert!(found.is_empty(), "{found:?}");
+        let server = "from flask import Flask\n\ncache = Flask(__name__)\n";
+        let found = entries(
+            Language::Python,
+            &[("routes.py", routes), ("store.py", server)],
+        );
+        assert_eq!(found.len(), 1);
     }
 
     #[test]
