@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "language": "go",
+  "split": "development",
+  "oracle": "Author-reviewed. The harness does not run the code. The case checks the status of calls. `go vet` accepts the module.",
+  "closed_world": false,
+  "symbols": [
+    {"label": "sink", "category": "type", "file": "main.go", "name": "Sink", "kind": "struct", "container": null, "start_line": 8, "end_line": 8, "exported": true},
+    {"label": "sink_write", "category": "method", "file": "main.go", "name": "Write", "kind": "method", "container": "Sink", "start_line": 10, "end_line": 10, "exported": true},
+    {"label": "run", "category": "free_function", "file": "main.go", "name": "run", "kind": "function", "container": null, "start_line": 12, "end_line": 20, "exported": false},
+    {"label": "util_copy", "category": "free_function", "file": "util.go", "name": "copy", "kind": "function", "container": null, "start_line": 3, "end_line": 5, "exported": false}
+  ],
+  "calls": [
+    {"label": "qualified_stdlib", "category": "external", "caller": "run", "line": 13, "callee_text": "fmt.Println", "expected": [], "status": "external"},
+    {"label": "builtin_len", "category": "external", "caller": "run", "line": 13, "callee_text": "len", "expected": [], "status": "external"},
+    {"label": "builtin_append", "category": "external", "caller": "run", "line": 14, "callee_text": "append", "expected": [], "status": "external"},
+    {"label": "external_declared_type", "category": "external", "caller": "run", "line": 16, "callee_text": "builder.WriteString", "expected": [], "status": "external"},
+    {"label": "repository_declared_type", "category": "declared_type_receiver", "caller": "run", "line": 18, "callee_text": "sink.Write", "expected": ["sink_write"], "status": "not_external"},
+    {"label": "package_function_hides_builtin", "category": "shadowing", "caller": "run", "line": 19, "callee_text": "copy", "expected": ["util_copy"], "status": "not_external"}
+  ]
+}

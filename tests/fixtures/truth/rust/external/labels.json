@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "language": "rust",
+  "split": "development",
+  "oracle": "Author-reviewed. The harness does not run the code. The case checks the status of calls. rustc 2021 accepts main.rs with the dependency `serde_json`.",
+  "closed_world": false,
+  "symbols": [
+    {"label": "maps", "category": "free_function", "file": "main.rs", "name": "maps", "kind": "function", "container": null, "start_line": 7, "end_line": 10, "exported": false},
+    {"label": "lists", "category": "free_function", "file": "main.rs", "name": "lists", "kind": "function", "container": null, "start_line": 12, "end_line": 15, "exported": false},
+    {"label": "texts", "category": "free_function", "file": "main.rs", "name": "texts", "kind": "function", "container": null, "start_line": 17, "end_line": 19, "exported": false},
+    {"label": "crates", "category": "free_function", "file": "main.rs", "name": "crates", "kind": "function", "container": null, "start_line": 21, "end_line": 24, "exported": false},
+    {"label": "prelude", "category": "free_function", "file": "main.rs", "name": "prelude", "kind": "function", "container": null, "start_line": 26, "end_line": 30, "exported": false},
+    {"label": "decoy", "category": "free_function", "file": "main.rs", "name": "decoy", "kind": "function", "container": null, "start_line": 32, "end_line": 34, "exported": false},
+    {"label": "ext_drop", "category": "free_function", "file": "ext.rs", "name": "drop", "kind": "function", "container": null, "start_line": 11, "end_line": 11, "exported": true}
+  ],
+  "calls": [
+    {"label": "imported_std_type", "category": "external", "caller": "maps", "line": 8, "callee_text": "HashMap::new", "expected": [], "status": "external"},
+    {"label": "declared_imported_type", "category": "external", "caller": "maps", "line": 9, "callee_text": "names.insert", "expected": [], "status": "external"},
+    {"label": "prelude_type", "category": "external", "caller": "lists", "line": 13, "callee_text": "Vec::new", "expected": [], "status": "external"},
+    {"label": "declared_prelude_type", "category": "external", "caller": "lists", "line": 14, "callee_text": "list.len", "expected": [], "status": "external"},
+    {"label": "trait_method_on_std_type", "category": "declared_type_receiver", "caller": "texts", "line": 18, "callee_text": "text.shout", "expected": [], "status": "not_external"},
+    {"label": "extern_crate", "category": "external", "caller": "crates", "line": 22, "callee_text": "serde_json::from_str", "expected": [], "status": "external"},
+    {"label": "std_path", "category": "external", "caller": "crates", "line": 23, "callee_text": "std::fs::read_to_string", "expected": [], "status": "external"},
+    {"label": "prelude_variant_err", "category": "external", "caller": "prelude", "line": 27, "callee_text": "Err", "expected": [], "status": "external"},
+    {"label": "prelude_variant_some", "category": "external", "caller": "prelude", "line": 29, "callee_text": "Some", "expected": [], "status": "external"},
+    {"label": "imported_function_hides_prelude", "category": "shadowing", "caller": "decoy", "line": 33, "callee_text": "drop", "expected": ["ext_drop"], "status": "not_external"}
+  ]
+}

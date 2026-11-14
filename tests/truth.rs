@@ -267,6 +267,7 @@ fn observed_calls(files: &[FileSymbols]) -> Vec<ObservedCall> {
             call: reference.name.clone(),
             edges,
             candidates: offered,
+            external: vec![reference.resolution.status == ResolutionStatus::External],
         });
     }
     calls

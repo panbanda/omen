@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "language": "java",
+  "split": "development",
+  "oracle": "Author-reviewed. The harness does not run the code. The case checks the status of calls. javac accepts the files.",
+  "closed_world": false,
+  "symbols": [
+    {"label": "main", "category": "type", "file": "Main.java", "name": "Main", "kind": "class", "container": null, "start_line": 4, "end_line": 21, "exported": true},
+    {"label": "helper", "category": "method", "file": "Main.java", "name": "helper", "kind": "method", "container": "Main", "start_line": 5, "end_line": 5, "exported": false},
+    {"label": "strings", "category": "method", "file": "Main.java", "name": "strings", "kind": "method", "container": "Main", "start_line": 7, "end_line": 10, "exported": false},
+    {"label": "collections", "category": "method", "file": "Main.java", "name": "collections", "kind": "method", "container": "Main", "start_line": 12, "end_line": 15, "exported": false},
+    {"label": "decoy", "category": "method", "file": "Main.java", "name": "decoy", "kind": "method", "container": "Main", "start_line": 17, "end_line": 20, "exported": false},
+    {"label": "math", "category": "type", "file": "Math.java", "name": "Math", "kind": "class", "container": null, "start_line": 1, "end_line": 5, "exported": true},
+    {"label": "math_max", "category": "method", "file": "Math.java", "name": "max", "kind": "method", "container": "Math", "start_line": 2, "end_line": 4, "exported": false}
+  ],
+  "calls": [
+    {"label": "lang_class_member", "category": "external", "caller": "strings", "line": 8, "callee_text": "System.out.println", "expected": [], "status": "external"},
+    {"label": "lang_class_static", "category": "external", "caller": "strings", "line": 9, "callee_text": "Integer.parseInt", "expected": [], "status": "external"},
+    {"label": "declared_imported_type", "category": "external", "caller": "collections", "line": 14, "callee_text": "names.add", "expected": [], "status": "external"},
+    {"label": "imported_constructor", "category": "constructor", "caller": "collections", "line": 13, "callee_text": "ArrayList", "expected": [], "status": "external"},
+    {"label": "same_class_method", "category": "bare_local", "caller": "decoy", "line": 18, "callee_text": "helper", "expected": ["helper"], "status": "not_external"},
+    {"label": "repository_class_hides_lang_class", "category": "shadowing", "caller": "decoy", "line": 19, "callee_text": "Math.max", "expected": ["math_max"], "status": "not_external"}
+  ]
+}

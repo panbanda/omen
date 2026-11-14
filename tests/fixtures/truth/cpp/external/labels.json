@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "language": "cpp",
+  "split": "development",
+  "oracle": "Author-reviewed. The harness does not run the code. The case checks the status of calls. A C++ compiler accepts the files.",
+  "closed_world": false,
+  "symbols": [
+    {"label": "helper", "category": "free_function", "file": "main.cpp", "name": "helper", "kind": "function", "container": null, "start_line": 6, "end_line": 6, "exported": true},
+    {"label": "run", "category": "free_function", "file": "main.cpp", "name": "run", "kind": "function", "container": null, "start_line": 8, "end_line": 13, "exported": true},
+    {"label": "decoy", "category": "free_function", "file": "main.cpp", "name": "decoy", "kind": "function", "container": null, "start_line": 15, "end_line": 17, "exported": true},
+    {"label": "util_strlen", "category": "free_function", "file": "util.hpp", "name": "strlen", "kind": "function", "container": null, "start_line": 1, "end_line": 1, "exported": true}
+  ],
+  "calls": [
+    {"label": "declared_std_type", "category": "external", "caller": "run", "line": 9, "callee_text": "numbers.push_back", "expected": [], "status": "external"},
+    {"label": "std_namespace_function", "category": "external", "caller": "run", "line": 10, "callee_text": "std::sort", "expected": [], "status": "external"},
+    {"label": "cstdio_function", "category": "external", "caller": "run", "line": 11, "callee_text": "printf", "expected": [], "status": "external"},
+    {"label": "same_file_function", "category": "bare_local", "caller": "run", "line": 12, "callee_text": "helper", "expected": ["helper"], "status": "not_external"},
+    {"label": "function_hides_library", "category": "shadowing", "caller": "decoy", "line": 16, "callee_text": "strlen", "expected": ["util_strlen"], "status": "not_external"}
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "language": "csharp",
+  "split": "development",
+  "oracle": "Author-reviewed. The harness does not run the code. The case checks the status of calls. The C# compiler accepts the files.",
+  "closed_world": false,
+  "symbols": [
+    {"label": "program", "category": "type", "file": "Program.cs", "name": "Program", "kind": "class", "container": null, "start_line": 4, "end_line": 25, "exported": false},
+    {"label": "helper", "category": "method", "file": "Program.cs", "name": "Helper", "kind": "method", "container": "Program", "start_line": 6, "end_line": 6, "exported": false},
+    {"label": "output", "category": "method", "file": "Program.cs", "name": "Output", "kind": "method", "container": "Program", "start_line": 8, "end_line": 12, "exported": false},
+    {"label": "collections", "category": "method", "file": "Program.cs", "name": "Collections", "kind": "method", "container": "Program", "start_line": 14, "end_line": 18, "exported": false},
+    {"label": "decoy", "category": "method", "file": "Program.cs", "name": "Decoy", "kind": "method", "container": "Program", "start_line": 20, "end_line": 24, "exported": false},
+    {"label": "math", "category": "type", "file": "Math.cs", "name": "Math", "kind": "class", "container": null, "start_line": 1, "end_line": 7, "exported": false},
+    {"label": "math_max", "category": "method", "file": "Math.cs", "name": "Max", "kind": "method", "container": "Math", "start_line": 3, "end_line": 6, "exported": true}
+  ],
+  "calls": [
+    {"label": "system_class_member", "category": "external", "caller": "output", "line": 10, "callee_text": "Console.WriteLine", "expected": [], "status": "external"},
+    {"label": "system_class_static", "category": "external", "caller": "output", "line": 11, "callee_text": "Convert.ToInt32", "expected": [], "status": "external"},
+    {"label": "declared_system_type", "category": "external", "caller": "collections", "line": 17, "callee_text": "numbers.Add", "expected": [], "status": "external"},
+    {"label": "system_constructor", "category": "constructor", "caller": "collections", "line": 16, "callee_text": "List", "expected": [], "status": "external"},
+    {"label": "same_class_method", "category": "bare_local", "caller": "decoy", "line": 22, "callee_text": "Helper", "expected": ["helper"], "status": "not_external"},
+    {"label": "repository_class_hides_system_class", "category": "shadowing", "caller": "decoy", "line": 23, "callee_text": "Math.Max", "expected": ["math_max"], "status": "not_external"}
+  ]
+}

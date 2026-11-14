@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "language": "c",
+  "split": "development",
+  "oracle": "Author-reviewed. The harness does not run the code. The case checks the status of calls. A C compiler accepts the files.",
+  "closed_world": false,
+  "symbols": [
+    {"label": "helper", "category": "free_function", "file": "main.c", "name": "helper", "kind": "function", "container": null, "start_line": 5, "end_line": 5, "exported": true},
+    {"label": "run", "category": "free_function", "file": "main.c", "name": "run", "kind": "function", "container": null, "start_line": 7, "end_line": 12, "exported": true},
+    {"label": "decoy", "category": "free_function", "file": "main.c", "name": "decoy", "kind": "function", "container": null, "start_line": 14, "end_line": 16, "exported": true},
+    {"label": "util_atoi", "category": "free_function", "file": "util.c", "name": "atoi", "kind": "function", "container": null, "start_line": 3, "end_line": 3, "exported": true}
+  ],
+  "calls": [
+    {"label": "stdio_function", "category": "external", "caller": "run", "line": 8, "callee_text": "printf", "expected": [], "status": "external"},
+    {"label": "string_function", "category": "external", "caller": "run", "line": 9, "callee_text": "strlen", "expected": [], "status": "external"},
+    {"label": "same_file_function", "category": "bare_local", "caller": "run", "line": 10, "callee_text": "helper", "expected": ["helper"], "status": "not_external"},
+    {"label": "function_hides_library", "category": "shadowing", "caller": "decoy", "line": 15, "callee_text": "atoi", "expected": ["util_atoi"], "status": "not_external"}
+  ]
+}

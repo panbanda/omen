@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "language": "python",
+  "split": "development",
+  "oracle": "Author-reviewed. The harness does not run the code. The case checks the status of calls. CPython 3 accepts the files.",
+  "closed_world": false,
+  "symbols": [
+    {"label": "helper", "category": "free_function", "file": "app.py", "name": "helper", "kind": "function", "container": null, "start_line": 9, "end_line": 10, "exported": true},
+    {"label": "run", "category": "free_function", "file": "app.py", "name": "run", "kind": "function", "container": null, "start_line": 13, "end_line": 20, "exported": true},
+    {"label": "shadowed", "category": "free_function", "file": "app.py", "name": "shadowed", "kind": "function", "container": null, "start_line": 23, "end_line": 24, "exported": true},
+    {"label": "util_max", "category": "free_function", "file": "util.py", "name": "max", "kind": "function", "container": null, "start_line": 1, "end_line": 2, "exported": true},
+    {"label": "util_join", "category": "free_function", "file": "util.py", "name": "join", "kind": "function", "container": null, "start_line": 5, "end_line": 6, "exported": true},
+    {"label": "util_print", "category": "free_function", "file": "util.py", "name": "print", "kind": "function", "container": null, "start_line": 9, "end_line": 10, "exported": true}
+  ],
+  "calls": [
+    {"label": "builtin_len", "category": "external", "caller": "run", "line": 14, "callee_text": "len", "expected": [], "status": "external"},
+    {"label": "qualified_stdlib", "category": "external", "caller": "run", "line": 15, "callee_text": "os.path.join", "expected": [], "status": "external"},
+    {"label": "aliased_stdlib", "category": "external", "caller": "run", "line": 16, "callee_text": "js.dumps", "expected": [], "status": "external"},
+    {"label": "package", "category": "external", "caller": "run", "line": 17, "callee_text": "requests.get", "expected": [], "status": "external"},
+    {"label": "same_file_function", "category": "bare_local", "caller": "run", "line": 18, "callee_text": "helper", "expected": ["helper"], "status": "not_external"},
+    {"label": "imported_same_name_builtin", "category": "cross_file_import", "caller": "run", "line": 19, "callee_text": "max", "expected": ["util_max"], "status": "not_external"},
+    {"label": "same_name_as_builtin", "category": "ambiguous", "caller": "run", "line": 20, "callee_text": "print", "expected": [], "status": "not_external", "candidates_required": ["util_print"]},
+    {"label": "parameter_hides_builtin", "category": "shadowing", "caller": "shadowed", "line": 24, "callee_text": "len", "expected": [], "status": "not_external"}
+  ]
+}

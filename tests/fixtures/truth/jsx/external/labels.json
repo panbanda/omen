@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "language": "jsx",
+  "split": "development",
+  "oracle": "Author-reviewed. The harness does not run the code. The case checks the status of calls. A JSX build accepts the files as modules.",
+  "closed_world": false,
+  "symbols": [
+    {"label": "globals", "category": "free_function", "file": "app.jsx", "name": "globals", "kind": "function", "container": null, "start_line": 4, "end_line": 7, "exported": true},
+    {"label": "maths", "category": "free_function", "file": "app.jsx", "name": "maths", "kind": "function", "container": null, "start_line": 9, "end_line": 11, "exported": true},
+    {"label": "imported", "category": "free_function", "file": "app.jsx", "name": "imported", "kind": "function", "container": null, "start_line": 13, "end_line": 16, "exported": true},
+    {"label": "parse_float", "category": "free_function", "file": "app.jsx", "name": "parseFloat", "kind": "function", "container": null, "start_line": 18, "end_line": 20, "exported": true},
+    {"label": "shadowed", "category": "free_function", "file": "app.jsx", "name": "shadowed", "kind": "function", "container": null, "start_line": 22, "end_line": 24, "exported": true},
+    {"label": "parameter", "category": "free_function", "file": "app.jsx", "name": "parameter", "kind": "function", "container": null, "start_line": 26, "end_line": 28, "exported": true},
+    {"label": "local_fetch", "category": "free_function", "file": "local.jsx", "name": "fetch", "kind": "function", "container": null, "start_line": 1, "end_line": 1, "exported": true}
+  ],
+  "calls": [
+    {"label": "global_object", "category": "external", "caller": "globals", "line": 5, "callee_text": "console.log", "expected": [], "status": "external"},
+    {"label": "global_function", "category": "external", "caller": "globals", "line": 6, "callee_text": "parseInt", "expected": [], "status": "external"},
+    {"label": "global_namespace", "category": "external", "caller": "maths", "line": 10, "callee_text": "Math.max", "expected": [], "status": "external"},
+    {"label": "node_builtin_import", "category": "external", "caller": "imported", "line": 14, "callee_text": "readFileSync", "expected": [], "status": "external"},
+    {"label": "imported_same_name_as_global", "category": "cross_file_import", "caller": "imported", "line": 15, "callee_text": "fetch", "expected": ["local_fetch"], "status": "not_external"},
+    {"label": "function_hides_global", "category": "shadowing", "caller": "shadowed", "line": 23, "callee_text": "parseFloat", "expected": ["parse_float"], "status": "not_external"},
+    {"label": "parameter_hides_global", "category": "shadowing", "caller": "parameter", "line": 27, "callee_text": "console.log", "expected": [], "status": "not_external"}
+  ]
+}
