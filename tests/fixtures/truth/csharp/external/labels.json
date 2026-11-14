@@ -11,7 +11,7 @@
     {"label": "collections", "category": "method", "file": "Program.cs", "name": "Collections", "kind": "method", "container": "Program", "start_line": 14, "end_line": 18, "exported": false},
     {"label": "decoy", "category": "method", "file": "Program.cs", "name": "Decoy", "kind": "method", "container": "Program", "start_line": 20, "end_line": 24, "exported": false},
     {"label": "math", "category": "type", "file": "Math.cs", "name": "Math", "kind": "class", "container": null, "start_line": 1, "end_line": 7, "exported": false},
-    {"label": "math_max", "category": "method", "file": "Math.cs", "name": "Max", "kind": "method", "container": "Math", "start_line": 3, "end_line": 6, "exported": true}
+    {"label": "math_max", "category": "method", "file": "Math.cs", "name": "Max", "kind": "method", "container": "Math", "start_line": 3, "end_line": 6, "exported": false}
   ],
   "calls": [
     {"label": "system_class_member", "category": "external", "caller": "output", "line": 10, "callee_text": "Console.WriteLine", "expected": [], "status": "external"},
