@@ -269,6 +269,32 @@ fn test_the_gate_uses_the_sinks_of_the_configuration() {
 }
 
 #[test]
+fn test_a_renamed_file_does_not_fail_the_gate() {
+    let directory = TempDir::new().expect("temporary directory");
+    let path = directory.path();
+    let first = "2024-02-01T12:00:00Z";
+    fixture::git(path, "ada", first, &["init", "--initial-branch", "main"]);
+    std::fs::write(
+        path.join("old.py"),
+        "import os\n\n\ndef run(command):\n    os.system(command)\n",
+    )
+    .expect("write");
+    fixture::commit(path, "ada", first, "feat: add the command");
+    let second = "2024-02-08T12:00:00Z";
+    fixture::git(path, "grace", second, &["checkout", "-b", "feature"]);
+    fixture::git(path, "grace", second, &["mv", "old.py", "new.py"]);
+    fixture::commit(path, "grace", second, "refactor: rename the file");
+    let gate = omen(path, &["security", "-t", "main", "--gate", "error"]);
+    assert!(
+        gate.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gate.stderr)
+    );
+    let comment = omen(path, &["-f", "markdown", "diff", "-t", "main"]);
+    assert!(!String::from_utf8_lossy(&comment.stdout).contains("| Sinks added | 1 |"));
+}
+
+#[test]
 fn test_the_configuration_rejects_an_unknown_key_in_the_security_section() {
     let directory = project(HEAD);
     std::fs::write(

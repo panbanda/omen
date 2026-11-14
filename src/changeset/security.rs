@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use super::build::{renamed_key, renames_between};
 use super::markdown::{cell, code, CommentSection};
 use super::model::{ChangeSet, ChangeState};
 use crate::config::Config;
@@ -62,16 +63,28 @@ impl SecurityChanges {
     }
 }
 
-fn sink_id(sink: &Sink) -> String {
+/// The key or the file name with the path that the head has for the file.
+fn renamed(name: &str, renames: &BTreeMap<String, String>) -> String {
+    if name.contains('#') {
+        renamed_key(name, renames)
+    } else {
+        renames
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| name.to_string())
+    }
+}
+
+fn sink_id(sink: &Sink, renames: &BTreeMap<String, String>) -> String {
     format!(
         "{}|{}|{}",
         sink.category.name(),
-        sink.enclosing.as_deref().unwrap_or(&sink.file),
+        renamed(sink.enclosing.as_deref().unwrap_or(&sink.file), renames),
         sink.callee_text
     )
 }
 
-fn entry_id(entry: &EntryPoint) -> String {
+fn entry_id(entry: &EntryPoint, renames: &BTreeMap<String, String>) -> String {
     let route = entry
         .route
         .as_ref()
@@ -82,7 +95,7 @@ fn entry_id(entry: &EntryPoint) -> String {
         entry.kind.name(),
         entry.framework,
         route,
-        entry.symbol.as_deref().unwrap_or(&entry.file)
+        renamed(entry.symbol.as_deref().unwrap_or(&entry.file), renames)
     )
 }
 
@@ -118,13 +131,21 @@ fn surplus<'a, T>(
     (added, removed)
 }
 
-fn path_identity(analysis: &Analysis, path: &SinkPath) -> Option<String> {
+fn path_identity(
+    analysis: &Analysis,
+    path: &SinkPath,
+    renames: &BTreeMap<String, String>,
+) -> Option<String> {
     let entry = analysis
         .entry_points
         .iter()
         .find(|entry| entry.key == path.entry)?;
     let sink = analysis.sinks.iter().find(|sink| sink.key == path.sink)?;
-    Some(format!("{}=>{}", entry_id(entry), sink_id(sink)))
+    Some(format!(
+        "{}=>{}",
+        entry_id(entry, renames),
+        sink_id(sink, renames)
+    ))
 }
 
 fn entry_label(entry: &EntryPoint) -> String {
@@ -138,33 +159,51 @@ fn entry_label(entry: &EntryPoint) -> String {
 ///
 /// `changed` has the keys of the symbols that the change added or changed.
 pub fn diff(base: &Analysis, head: &Analysis, changed: &BTreeSet<String>) -> SecurityChanges {
-    let (sinks_added, sinks_removed) = surplus(&base.sinks, &head.sinks, sink_id);
+    diff_with_renames(base, head, changed, &BTreeMap::new())
+}
+
+/// The same as `diff`. A file that git renamed, from the old path to the new path in
+/// `renames`, keeps its sinks and entry points: they are not added and not removed.
+pub fn diff_with_renames(
+    base: &Analysis,
+    head: &Analysis,
+    changed: &BTreeSet<String>,
+    renames: &BTreeMap<String, String>,
+) -> SecurityChanges {
+    let (sinks_added, sinks_removed) =
+        surplus(&base.sinks, &head.sinks, |sink| sink_id(sink, renames));
     let (entries_added, entries_removed) =
-        surplus(&base.entry_points, &head.entry_points, entry_id);
+        surplus(&base.entry_points, &head.entry_points, |entry| {
+            entry_id(entry, renames)
+        });
     let base_paths: BTreeSet<String> = base
         .reachability
         .paths
         .iter()
-        .filter_map(|path| path_identity(base, path))
+        .filter_map(|path| path_identity(base, path, renames))
         .collect();
     let head_paths: BTreeSet<String> = head
         .reachability
         .paths
         .iter()
-        .filter_map(|path| path_identity(head, path))
+        .filter_map(|path| path_identity(head, path, renames))
         .collect();
     let paths_added: Vec<SinkPath> = head
         .reachability
         .paths
         .iter()
-        .filter(|path| path_identity(head, path).is_some_and(|id| !base_paths.contains(&id)))
+        .filter(|path| {
+            path_identity(head, path, renames).is_some_and(|id| !base_paths.contains(&id))
+        })
         .cloned()
         .collect();
     let paths_removed: Vec<SinkPath> = base
         .reachability
         .paths
         .iter()
-        .filter(|path| path_identity(base, path).is_some_and(|id| !head_paths.contains(&id)))
+        .filter(|path| {
+            path_identity(base, path, renames).is_some_and(|id| !head_paths.contains(&id))
+        })
         .cloned()
         .collect();
     let on_path: BTreeSet<&str> = head
@@ -247,7 +286,8 @@ pub fn compute_with(
     let options = crate::analyzers::security::options_of(&config.security)?;
     let base = analyze_revision(repository, &base_sha, config, &options)?;
     let head = analyze_revision(repository, &head_sha, config, &options)?;
-    Ok(diff(&base, &head, changed))
+    let renames = renames_between(repository, &base_sha, &head_sha)?;
+    Ok(diff_with_renames(&base, &head, changed, &renames))
 }
 
 /// Computes the security block for the change set of `HEAD` against `target`.
@@ -546,6 +586,18 @@ mod tests {
         assert_eq!(found.paths_removed.len(), 2);
         assert_eq!(found.entry_points_removed.len(), 1);
         assert!(found.sinks_added.is_empty());
+    }
+
+    #[test]
+    fn a_renamed_file_does_not_add_or_remove_a_sink() {
+        let base = analyze_sources(&[("old.py", HEAD)], DEFAULT_MIN_BASIS);
+        let head = analyze_sources(&[("new.py", HEAD)], DEFAULT_MIN_BASIS);
+        let unpaired = diff(&base, &head, &BTreeSet::new());
+        assert_eq!(unpaired.sinks_added.len(), 1, "without the rename");
+        let renames: BTreeMap<String, String> =
+            [("old.py".to_string(), "new.py".to_string())].into();
+        let paired = diff_with_renames(&base, &head, &BTreeSet::new(), &renames);
+        assert!(paired.is_empty(), "{paired:?}");
     }
 
     #[test]
