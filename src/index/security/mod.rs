@@ -14,6 +14,21 @@ use super::model::Span;
 
 pub use matcher::find_sinks;
 
+/// The sinks of one parsed file, with the imports and the references of that file only.
+///
+/// The index of one file cannot see a repository definition. Thus the result can have
+/// a sink that a repository index does not have.
+pub fn sinks_of_source(parsed: &crate::parser::ParseResult, file: &str) -> Vec<Sink> {
+    use super::extract::{extract_file, link_files};
+    use super::imports::{resolve_imports, Manifests};
+    use super::resolve::resolve_references;
+    let mut files = vec![extract_file(parsed, file)];
+    link_files(&mut files);
+    resolve_imports(&mut files, &Manifests::default());
+    resolve_references(&mut files);
+    find_sinks(std::slice::from_ref(parsed), &files)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SinkCategory {
@@ -55,6 +70,19 @@ impl SinkCategory {
             Self::HardcodedCredential => "hardcoded_credential",
             Self::MemoryUnsafe => "memory_unsafe",
         }
+    }
+
+    /// Tells if a sink of this category is a critical defect for `tdg`. Weak
+    /// cryptography, a disabled certificate check, and a token in the source are
+    /// findings of `security`, and they do not fail the score.
+    pub fn is_critical_defect(self) -> bool {
+        matches!(
+            self,
+            Self::CommandExecution
+                | Self::CodeEvaluation
+                | Self::UnsafeDeserialization
+                | Self::MemoryUnsafe
+        )
     }
 
     /// The number of the Common Weakness Enumeration entry for the category.

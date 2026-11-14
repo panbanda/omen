@@ -445,6 +445,7 @@ impl Analyzer {
             &mut count,
         );
 
+        let count = count + critical_sinks(&parsed, language);
         (count, count > 0)
     }
 
@@ -633,17 +634,7 @@ fn match_defect_node(
     match language {
         Language::Rust => match_rust_defect(node, source),
         Language::Go => !is_go_test_file && match_call_to(node, source, "identifier", &["panic"]),
-        Language::Python => match_call_to(node, source, "identifier", &["eval", "exec"]),
-        Language::JavaScript | Language::TypeScript => {
-            match_call_to(node, source, "identifier", &["eval"])
-        }
-        Language::Ruby => match_ruby_defect(node, source),
         Language::Java => match_java_defect(node, source),
-        Language::C | Language::Cpp => {
-            match_call_to(node, source, "identifier", &["gets", "system"])
-        }
-        Language::CSharp => match_csharp_defect(node, source),
-        Language::PHP => match_php_defect(node, source),
         _ => false,
     }
 }
@@ -694,23 +685,6 @@ fn match_call_to(node: &tree_sitter::Node, source: &[u8], func_kind: &str, names
     false
 }
 
-/// Ruby: `eval()` and `system()` calls.
-/// Ruby's tree-sitter uses `call` or `method_call` with `method` field,
-/// or bare function-style calls as `call` with `method` being an `identifier`.
-fn match_ruby_defect(node: &tree_sitter::Node, source: &[u8]) -> bool {
-    let kind = node.kind();
-    if kind != "call" && kind != "method_call" {
-        return false;
-    }
-    // Ruby: `eval(...)` is a `call` with method = identifier "eval"
-    if let Some(method) = node.child_by_field_name("method") {
-        if let Ok(text) = method.utf8_text(source) {
-            return text == "eval" || text == "system";
-        }
-    }
-    false
-}
-
 /// Java: `System.exit()` -- method_invocation with object `System` and name `exit`.
 fn match_java_defect(node: &tree_sitter::Node, source: &[u8]) -> bool {
     if node.kind() != "method_invocation" {
@@ -731,36 +705,23 @@ fn match_java_defect(node: &tree_sitter::Node, source: &[u8]) -> bool {
     false
 }
 
-/// C#: `Process.Start()` -- invocation_expression with member_access_expression.
-fn match_csharp_defect(node: &tree_sitter::Node, source: &[u8]) -> bool {
-    if node.kind() != "invocation_expression" {
-        return false;
+/// The number of sinks of the security categories that are critical defects. The sink
+/// table of `index::security` gives the sinks. A command with literal arguments is not
+/// a defect, and a sink in test code is not a defect. An `unsafe` block is a fact of
+/// `security`, and it is not a defect.
+fn critical_sinks(parsed: &crate::parser::ParseResult, language: Language) -> i32 {
+    if language == Language::Unknown {
+        return 0;
     }
-    // The function part is a member_access_expression like `Process.Start`
-    if let Some(func) = node.child_by_field_name("function") {
-        if func.kind() == "member_access_expression" {
-            if let Ok(text) = func.utf8_text(source) {
-                return text == "Process.Start";
-            }
-        }
-    }
-    false
-}
-
-/// PHP: `eval()`, `exec()`, `system()`, `shell_exec()`, `passthru()`.
-fn match_php_defect(node: &tree_sitter::Node, source: &[u8]) -> bool {
-    // PHP has a dedicated `function_call_expression` node
-    if node.kind() != "function_call_expression" {
-        return false;
-    }
-    if let Some(func) = node.child_by_field_name("function") {
-        if func.kind() == "name" || func.kind() == "qualified_name" {
-            if let Ok(text) = func.utf8_text(source) {
-                return matches!(text, "eval" | "exec" | "system" | "shell_exec" | "passthru");
-            }
-        }
-    }
-    false
+    crate::index::security::sinks_of_source(parsed, "<tdg>")
+        .iter()
+        .filter(|sink| sink.category.is_critical_defect() && !sink.flags.in_test)
+        .filter(|sink| {
+            !(sink.category == crate::index::security::SinkCategory::CommandExecution
+                && sink.flags.constant_argument)
+        })
+        .filter(|sink| sink.callee_text != "unsafe")
+        .count() as i32
 }
 
 // Types
@@ -1799,7 +1760,7 @@ func risky() {
     #[test]
     fn test_c_system_detected() {
         let analyzer = Analyzer::new();
-        let source = "#include <stdlib.h>\nint main() {\n    system(\"ls\");\n    return 0;\n}\n";
+        let source = "#include <stdlib.h>\nint main(int argc, char **argv) {\n    system(argv[1]);\n    return 0;\n}\n";
         let (count, has_critical) = analyzer.detect_critical_defects(source, Language::C);
         assert_eq!(count, 1, "system() should be detected in C");
         assert!(has_critical);
@@ -1874,6 +1835,55 @@ func risky() {
         let (count, has_critical) = analyzer.detect_critical_defects(source, Language::PHP);
         assert_eq!(count, 1, "system() should be detected in PHP");
         assert!(has_critical);
+    }
+
+    // -----------------------------------------------------------------------
+    // Security categories come from the sink table
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_unsafe_deserialization_is_a_critical_defect() {
+        let analyzer = Analyzer::new();
+        let source = "import pickle\n\ndef run(blob):\n    return pickle.loads(blob)\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::Python);
+        assert_eq!(count, 1);
+        assert!(has_critical);
+    }
+
+    #[test]
+    fn test_command_through_an_alias_is_a_critical_defect() {
+        let analyzer = Analyzer::new();
+        let source = "import os as shell\n\ndef run(command):\n    shell.system(command)\n";
+        let (count, _) = analyzer.detect_critical_defects(source, Language::Python);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_a_command_with_literal_arguments_is_not_a_critical_defect() {
+        let analyzer = Analyzer::new();
+        let source = "#include <stdlib.h>\nint main() {\n    system(\"ls\");\n    return 0;\n}\n";
+        let (count, has_critical) = analyzer.detect_critical_defects(source, Language::C);
+        assert_eq!(count, 0);
+        assert!(!has_critical);
+    }
+
+    #[test]
+    fn test_a_safe_variant_and_a_weak_hash_are_not_critical_defects() {
+        let analyzer = Analyzer::new();
+        let source = "import hashlib\nimport subprocess\n\ndef run(data):\n    subprocess.run([\"ls\"])\n    return hashlib.md5(data)\n";
+        let (count, _) = analyzer.detect_critical_defects(source, Language::Python);
+        assert_eq!(
+            count, 0,
+            "a weak hash is a finding of `security`, not a defect"
+        );
+    }
+
+    #[test]
+    fn test_a_sink_in_a_rust_test_module_is_not_a_critical_defect() {
+        let analyzer = Analyzer::new();
+        let source = "pub fn run(x: Option<u8>) -> u8 {\n    x.unwrap()\n}\n\n#[cfg(test)]\nmod tests {\n    fn t(c: &str) {\n        std::process::Command::new(c);\n    }\n}\n";
+        let (count, _) = analyzer.detect_critical_defects(source, Language::Rust);
+        assert_eq!(count, 1, "only the production unwrap counts");
     }
 
     #[test]
