@@ -185,6 +185,7 @@ modifiers, and the use of a function as a value.
 | Definitions | One definition for each name in each file. Two methods with one name in two types were one definition. | One definition for each symbol of the index. `total_definitions` is higher when a file has two such methods. | None. |
 | Declaration without a body | A trait method or a prototype was a definition. | It is not a definition. | None. |
 | Calls that give an edge | Only the node kinds `call_expression`, `function_call`, and `call`. | Each call that the index finds, in all languages. | Expect fewer dead items in Java, C#, PHP, Bash, and for Rust method calls. |
+| Function used as a value | An identifier that was an argument of a call gave an edge. | Each identifier that is not the target of a call gives an edge from its function, as `Spec { handler: used }` does. | Expect fewer dead items. |
 | Call that the index cannot resolve | The name of the callee gave an edge to each definition with that name. | The same rule. An ambiguous call gives an edge to each candidate. | None. |
 | Call in a callback outside of a named function | No edge. | The callee is reachable, as a call at module scope is. | Expect fewer dead items. |
 | Reason `No references found in codebase` | The name was not an identifier anywhere. | No reference lists the definition as a candidate, no unresolved call has its name, and the name is not an identifier anywhere. | None. |
