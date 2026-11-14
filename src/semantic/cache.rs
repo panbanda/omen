@@ -31,6 +31,11 @@ const UPSERT_SYMBOL_SQL: &str = r#"
         created_at = CURRENT_TIMESTAMP
 "#;
 
+/// Change this value when the chunks that omen makes for one source file change.
+/// A cache that an older version made then has chunks that are not valid for
+/// files that did not change, so omen builds the index again.
+const INDEX_VERSION: u32 = 1;
+
 const SCHEMA_SQL: &str = r#"
     CREATE TABLE IF NOT EXISTS symbols (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,6 +65,11 @@ const SCHEMA_SQL: &str = r#"
         file_path TEXT PRIMARY KEY,
         file_hash TEXT NOT NULL,
         indexed_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
     );
 "#;
 
@@ -193,6 +203,7 @@ impl EmbeddingCache {
         let cache = Self { conn };
         cache.migrate_if_needed()?;
         cache.init_schema()?;
+        cache.check_index_version()?;
         Ok(cache)
     }
 
@@ -205,6 +216,7 @@ impl EmbeddingCache {
 
         let cache = Self { conn };
         cache.init_schema()?;
+        cache.check_index_version()?;
         Ok(cache)
     }
 
@@ -288,6 +300,41 @@ impl EmbeddingCache {
         transaction.execute_batch(&copy).map_err(fail)?;
         transaction
             .execute_batch("DROP TABLE symbols_old; DELETE FROM files;")
+            .map_err(fail)?;
+        transaction.commit().map_err(fail)
+    }
+
+    /// Build the index again if an older version of omen made the cache. The
+    /// file hashes do not show that the chunks of a file are out of date.
+    /// A cache without files has no chunks to remove, so it only gets the version.
+    fn check_index_version(&self) -> Result<()> {
+        let fail =
+            |e: rusqlite::Error| Error::analysis(format!("Failed to check the cache version: {e}"));
+        let stored: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'index_version'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(fail)?;
+        let current = INDEX_VERSION.to_string();
+        if stored.as_deref() == Some(current.as_str()) {
+            return Ok(());
+        }
+        let has_files = !self.get_all_indexed_files()?.is_empty();
+        let transaction = self.conn.unchecked_transaction().map_err(fail)?;
+        if has_files {
+            transaction
+                .execute_batch("DELETE FROM symbols; DELETE FROM files;")
+                .map_err(fail)?;
+        }
+        transaction
+            .execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('index_version', ?1)",
+                params![current],
+            )
             .map_err(fail)?;
         transaction.commit().map_err(fail)
     }
@@ -450,6 +497,64 @@ mod tests {
             cyclomatic_complexity: None,
             cognitive_complexity: None,
         }
+    }
+
+    fn filled_cache_file(path: &Path) {
+        let cache = EmbeddingCache::open(path).unwrap();
+        let symbol = create_test_symbol();
+        cache.upsert_symbol(&symbol).unwrap();
+        cache
+            .record_file_indexed(&symbol.file_path, "hash123")
+            .unwrap();
+    }
+
+    #[test]
+    fn test_cache_of_the_same_index_version_is_kept() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("search.db");
+        filled_cache_file(&path);
+
+        let cache = EmbeddingCache::open(&path).unwrap();
+
+        assert_eq!(cache.symbol_count().unwrap(), 1);
+        assert_eq!(cache.get_all_indexed_files().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_cache_with_an_older_index_version_is_rebuilt() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("search.db");
+        filled_cache_file(&path);
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); \
+                 INSERT OR REPLACE INTO meta (key, value) VALUES ('index_version', '0');",
+            )
+            .unwrap();
+        drop(connection);
+
+        let cache = EmbeddingCache::open(&path).unwrap();
+
+        assert_eq!(cache.symbol_count().unwrap(), 0);
+        assert!(cache.get_all_indexed_files().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_cache_without_an_index_version_is_rebuilt() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("search.db");
+        filled_cache_file(&path);
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch("DROP TABLE IF EXISTS meta;")
+            .unwrap();
+        drop(connection);
+
+        let cache = EmbeddingCache::open(&path).unwrap();
+
+        assert_eq!(cache.symbol_count().unwrap(), 0);
+        assert!(cache.get_all_indexed_files().unwrap().is_empty());
     }
 
     #[test]
