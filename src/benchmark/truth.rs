@@ -155,6 +155,38 @@ pub struct Labels {
     pub entry_points_closed_world: Option<bool>,
     #[serde(default)]
     pub entry_points: Vec<EntryPointLabel>,
+    #[serde(default)]
+    pub paths: Vec<PathLabel>,
+}
+
+/// One shortest path from an entry point to a sink. An entry point and a sink are
+/// given by the file and the line on which they start.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PathLabel {
+    pub label: String,
+    pub entry_file: String,
+    pub entry_line: u32,
+    pub sink_file: String,
+    pub sink_line: u32,
+    /// `false` means that omen must not report a path between the two.
+    #[serde(default = "flagged_by_default")]
+    pub flagged: bool,
+    /// The keys of the symbols on the path, from the handler to the caller of the sink.
+    #[serde(default)]
+    pub steps: Option<Vec<String>>,
+    /// The weakest basis of an edge of the path. A path of one symbol has none.
+    #[serde(default)]
+    pub weakest_basis: Option<String>,
+    /// The number of shortest paths.
+    #[serde(default)]
+    pub path_count: Option<u64>,
+    /// The guards of the entry point of the path.
+    #[serde(default)]
+    pub guards: Option<Vec<String>>,
+    /// The keys of symbols that each path to a sink goes through.
+    #[serde(default)]
+    pub choke_points: Vec<String>,
 }
 
 /// One entry point: a handler that the code declares or registers.
@@ -294,6 +326,21 @@ pub struct Observed {
     pub imports: Vec<ObservedImport>,
     pub sinks: Vec<ObservedSink>,
     pub entry_points: Vec<ObservedEntryPoint>,
+    pub paths: Vec<ObservedPath>,
+    /// The keys of the symbols that are choke points.
+    pub choke_points: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ObservedPath {
+    pub entry_file: String,
+    pub entry_line: u32,
+    pub sink_file: String,
+    pub sink_line: u32,
+    pub steps: Vec<String>,
+    pub weakest_basis: Option<String>,
+    pub path_count: u64,
+    pub guards: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -818,6 +865,83 @@ fn compare_entry_points(
     }
 }
 
+/// A label names one path. A path that the label says must not exist fails when omen reports it.
+fn compare_paths(case: &str, labels: &Labels, observed: &Observed, out: &mut Vec<Assertion>) {
+    for label in &labels.paths {
+        let found = observed.paths.iter().find(|path| {
+            path.entry_file == label.entry_file
+                && path.entry_line == label.entry_line
+                && path.sink_file == label.sink_file
+                && path.sink_line == label.sink_line
+        });
+        let prefix = format!("{case}/paths/{}", label.label);
+        if !label.flagged {
+            out.push(assertion(
+                format!("{prefix}/absent"),
+                found.map(|_| "a path is reported".to_string()),
+            ));
+            continue;
+        }
+        let check = |name: &str, failure: Option<String>| {
+            assertion(
+                format!("{prefix}/{name}"),
+                match found {
+                    None => Some(format!(
+                        "no path from {}:{} to {}:{}",
+                        label.entry_file, label.entry_line, label.sink_file, label.sink_line
+                    )),
+                    Some(_) => failure,
+                },
+            )
+        };
+        let mismatch = |expected: String, actual: String| {
+            (expected != actual).then(|| format!("expected {expected}, got {actual}"))
+        };
+        out.push(check("found", None));
+        if let Some(steps) = &label.steps {
+            out.push(check(
+                "steps",
+                found.and_then(|path| mismatch(format!("{steps:?}"), format!("{:?}", path.steps))),
+            ));
+        }
+        if let Some(basis) = &label.weakest_basis {
+            out.push(check(
+                "weakest_basis",
+                found.and_then(|path| {
+                    mismatch(
+                        basis.clone(),
+                        path.weakest_basis.clone().unwrap_or_default(),
+                    )
+                }),
+            ));
+        }
+        if let Some(count) = label.path_count {
+            out.push(check(
+                "path_count",
+                found.and_then(|path| mismatch(count.to_string(), path.path_count.to_string())),
+            ));
+        }
+        if let Some(guards) = &label.guards {
+            out.push(check(
+                "guards",
+                found
+                    .and_then(|path| mismatch(format!("{guards:?}"), format!("{:?}", path.guards))),
+            ));
+        }
+        if !label.choke_points.is_empty() {
+            let missing: Vec<&String> = label
+                .choke_points
+                .iter()
+                .filter(|symbol| !observed.choke_points.contains(symbol))
+                .collect();
+            out.push(check(
+                "choke_points",
+                (!missing.is_empty()).then(|| format!("not choke points: {missing:?}")),
+            ));
+        }
+    }
+}
+
 /// A label takes one reported sink. A second label on the same line and category needs a
 /// second sink. A sink that no label takes is unlabelled.
 fn compare_sinks(case: &str, labels: &Labels, observed: &Observed, out: &mut Vec<Assertion>) {
@@ -921,6 +1045,7 @@ pub fn compare(case: &str, labels: &Labels, observed: &Observed) -> Result<Vec<A
     compare_imports(case, labels, observed, &mut assertions);
     compare_sinks(case, labels, observed, &mut assertions);
     compare_entry_points(case, labels, observed, &mut assertions);
+    compare_paths(case, labels, observed, &mut assertions);
     Ok(assertions)
 }
 
@@ -1243,6 +1368,8 @@ mod tests {
             ],
             sinks: vec![],
             entry_points: vec![],
+            paths: vec![],
+            choke_points: vec![],
             imports: vec![ObservedImport {
                 file: "main.rs".to_string(),
                 line: 1,
@@ -1910,6 +2037,94 @@ mod tests {
         assert_eq!(
             entry_failures(&observed),
             ["python/entry_points/entry_points/unlabelled:app.py:20:http_handler/absent"]
+        );
+    }
+
+    fn path_labels() -> Labels {
+        serde_json::from_value(serde_json::json!({
+            "version": 1, "language": "python", "split": "development", "oracle": "x",
+            "closed_world": false,
+            "paths": [
+                {"label": "update_to_system", "entry_file": "app.py", "entry_line": 7,
+                 "sink_file": "app.py", "sink_line": 12,
+                 "steps": ["app.py#update", "app.py#helper"],
+                 "weakest_basis": "same_file", "path_count": 1,
+                 "guards": ["login_required"], "choke_points": ["app.py#helper"]},
+                {"label": "orphan_is_not_reached", "entry_file": "app.py", "entry_line": 7,
+                 "sink_file": "app.py", "sink_line": 30, "flagged": false}
+            ]
+        }))
+        .unwrap()
+    }
+
+    fn observed_path() -> ObservedPath {
+        ObservedPath {
+            entry_file: "app.py".to_string(),
+            entry_line: 7,
+            sink_file: "app.py".to_string(),
+            sink_line: 12,
+            steps: vec!["app.py#update".to_string(), "app.py#helper".to_string()],
+            weakest_basis: Some("same_file".to_string()),
+            path_count: 1,
+            guards: vec!["login_required".to_string()],
+        }
+    }
+
+    fn path_failures(observed: &Observed) -> Vec<String> {
+        compare("python/paths", &path_labels(), observed)
+            .unwrap()
+            .into_iter()
+            .filter(|assertion| !assertion.passed)
+            .map(|assertion| assertion.id)
+            .collect()
+    }
+
+    #[test]
+    fn a_correct_path_passes_every_check() {
+        let observed = Observed {
+            paths: vec![observed_path()],
+            choke_points: vec!["app.py#helper".to_string()],
+            ..Observed::default()
+        };
+        assert_eq!(path_failures(&observed), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_wrong_step_count_basis_guard_or_choke_point_is_a_failure() {
+        let mut wrong = observed_path();
+        wrong.steps = vec!["app.py#update".to_string()];
+        wrong.weakest_basis = Some("imported_name".to_string());
+        wrong.path_count = 2;
+        wrong.guards.clear();
+        let observed = Observed {
+            paths: vec![wrong],
+            ..Observed::default()
+        };
+        assert_eq!(
+            path_failures(&observed),
+            [
+                "python/paths/paths/update_to_system/steps",
+                "python/paths/paths/update_to_system/weakest_basis",
+                "python/paths/paths/update_to_system/path_count",
+                "python/paths/paths/update_to_system/guards",
+                "python/paths/paths/update_to_system/choke_points",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_missing_path_fails_and_a_path_that_must_not_exist_fails_when_it_does() {
+        assert_eq!(path_failures(&Observed::default()).len(), 6);
+        let mut extra = observed_path();
+        extra.sink_line = 30;
+        let observed = Observed {
+            paths: vec![observed_path(), extra],
+            choke_points: vec!["app.py#helper".to_string()],
+            ..Observed::default()
+        };
+        assert_eq!(
+            path_failures(&observed),
+            ["python/paths/paths/orphan_is_not_reached/absent"]
         );
     }
 

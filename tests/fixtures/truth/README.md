@@ -75,6 +75,24 @@ not report one. The security cases are in the directories `security` and
   resolver of the index can select it. For this reason, Ruby, PHP, C, C++, and
   Bash keep the `same_name_symbol` rows in the case `security_decoys`.
 
+## Path labels
+
+A `paths` label states that omen reports the shortest path from an entry point
+to a sink, or that omen reports none. The cases are in the directories `paths`.
+
+- An entry point and a sink are given by the file and the line on which they
+  start: `entry_file`, `entry_line`, `sink_file`, and `sink_line`.
+- `flagged: false` means that omen must not report a path between the two.
+- `steps` lists the keys of the symbols on the path, from the handler to the
+  symbol that holds the sink. `weakest_basis` is the weakest basis of a call on
+  the path. `path_count` is the number of shortest paths.
+- `guards` lists the guards of the entry point of the path.
+- `choke_points` lists symbols that each path to a sink goes through.
+- Omen starts a path only at an entry point that has a symbol. An entry point
+  that is a block of the file, such as a Python `__main__` block or a Bash
+  script, starts no path. The cases for these do not exist, so the labels do
+  not claim that the paths exist.
+
 ## The ledger
 
 `expected_failures.json` lists each fact that omen reports incorrectly. The test

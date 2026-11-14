@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "language": "php",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid PHP. The route file needs the Laravel framework that the case does not include. The harness does not run the code.",
+  "closed_world": false,
+  "paths": [
+    {
+      "label": "handler_to_command",
+      "entry_file": "routes/web.php",
+      "entry_line": 4,
+      "sink_file": "RunController.php",
+      "sink_line": 12,
+      "steps": [
+        "RunController.php#RunController.run",
+        "RunController.php#RunController.prepare",
+        "RunController.php#RunController.execute"
+      ],
+      "weakest_basis": "enclosing_type",
+      "path_count": 1,
+      "guards": [],
+      "choke_points": [
+        "RunController.php#RunController.prepare",
+        "RunController.php#RunController.run"
+      ]
+    },
+    {
+      "label": "orphan_has_no_entry",
+      "entry_file": "routes/web.php",
+      "entry_line": 4,
+      "sink_file": "RunController.php",
+      "sink_line": 17,
+      "flagged": false
+    }
+  ]
+}

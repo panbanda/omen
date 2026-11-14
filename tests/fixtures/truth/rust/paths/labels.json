@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "language": "rust",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid Rust. The axum import needs a package that the case does not include. The harness does not run the code.",
+  "closed_world": false,
+  "paths": [
+    {
+      "label": "handler_to_command",
+      "entry_file": "routes.rs",
+      "entry_line": 22,
+      "sink_file": "routes.rs",
+      "sink_line": 13,
+      "steps": [
+        "routes.rs#run_command",
+        "routes.rs#prepare",
+        "routes.rs#execute"
+      ],
+      "weakest_basis": "same_file",
+      "path_count": 1,
+      "guards": [],
+      "choke_points": [
+        "routes.rs#prepare",
+        "routes.rs#run_command"
+      ]
+    },
+    {
+      "label": "orphan_has_no_entry",
+      "entry_file": "routes.rs",
+      "entry_line": 22,
+      "sink_file": "routes.rs",
+      "sink_line": 18,
+      "flagged": false
+    }
+  ]
+}
