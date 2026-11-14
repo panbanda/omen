@@ -39,8 +39,10 @@ pub struct Config {
     pub exclude_built_assets: bool,
     /// Changes/JIT analyzer configuration.
     pub changes: ChangesConfig,
-    /// Gate modes of the gated commands.
-    pub gate: GateConfig,
+    /// Stubs configuration.
+    pub stubs: StubsConfig,
+    /// Mutation testing configuration.
+    pub mutation: MutationConfig,
 }
 
 impl Default for Config {
@@ -58,7 +60,8 @@ impl Default for Config {
             temporal: TemporalConfig::default(),
             exclude_built_assets: true,
             changes: ChangesConfig::default(),
-            gate: GateConfig::default(),
+            stubs: StubsConfig::default(),
+            mutation: MutationConfig::default(),
         }
     }
 }
@@ -133,6 +136,8 @@ impl Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ComplexityConfig {
+    /// Gate mode of `complexity`.
+    pub gate: GateMode,
     /// Maximum cyclomatic complexity before error.
     pub cyclomatic_error: u32,
     /// Maximum cognitive complexity before error.
@@ -142,6 +147,7 @@ pub struct ComplexityConfig {
 impl Default for ComplexityConfig {
     fn default() -> Self {
         Self {
+            gate: GateMode::Off,
             cyclomatic_error: 20,
             cognitive_error: 30,
         }
@@ -235,8 +241,26 @@ impl Default for DefectConfig {
 #[serde(default, deny_unknown_fields)]
 #[derive(Default)]
 pub struct ScoreConfig {
+    /// Gate mode of `score`.
+    pub gate: GateMode,
     /// Minimum overall score to pass.
     pub fail_under: Option<f64>,
+}
+
+/// Stubs configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct StubsConfig {
+    /// Gate mode of `stubs`.
+    pub gate: GateMode,
+}
+
+/// Mutation testing configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MutationConfig {
+    /// Gate mode of `mutation`.
+    pub gate: GateMode,
 }
 
 /// Feature flag detection configuration.
@@ -306,20 +330,6 @@ pub enum GateMode {
     Warn,
     /// Give the report and exit with status 2
     Error,
-}
-
-/// The gate mode of each gated command. The `--gate` flag overrides it.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct GateConfig {
-    /// Gate mode of `complexity`.
-    pub complexity: GateMode,
-    /// Gate mode of `score`.
-    pub score: GateMode,
-    /// Gate mode of `stubs`.
-    pub stubs: GateMode,
-    /// Gate mode of `mutation`.
-    pub mutation: GateMode,
 }
 
 /// Output format.
@@ -558,6 +568,22 @@ mod tests {
                 let error = Config::from_file(name).unwrap_err().to_string();
                 assert!(error.contains("TOML only"), "{name}: {error}");
             }
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_each_gated_command_table_has_a_gate_mode() {
+        Jail::expect_with(|jail| {
+            jail.create_file(
+                "omen.toml",
+                "[complexity]\ngate = \"error\"\n[score]\ngate = \"warn\"\n[stubs]\ngate = \"error\"\n[mutation]\ngate = \"warn\"\n",
+            )?;
+            let config = Config::from_file("omen.toml").unwrap();
+            assert_eq!(config.complexity.gate, GateMode::Error);
+            assert_eq!(config.score.gate, GateMode::Warn);
+            assert_eq!(config.stubs.gate, GateMode::Error);
+            assert_eq!(config.mutation.gate, GateMode::Warn);
             Ok(())
         });
     }

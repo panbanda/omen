@@ -40,7 +40,7 @@ fn logging_filter(verbose: bool, rust_log: Option<&str>) -> EnvFilter {
 }
 
 /// Resolve the gate mode of a gated command. The `--gate` flag overrides the
-/// `[gate]` value in the configuration.
+/// `gate` value in the configuration.
 fn resolve_gate_mode(flag: Option<GateMode>, configured: GateMode) -> GateMode {
     flag.unwrap_or(configured)
 }
@@ -286,7 +286,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 format,
                 Some(&args.common),
             )?;
-            let gate = resolve_gate_mode(args.gate.mode, config.gate.complexity);
+            let gate = resolve_gate_mode(args.gate.mode, config.complexity.gate);
             apply_complexity_gate(&result, &config, args, gate)?;
         }
         Command::Stubs(args) => {
@@ -373,7 +373,7 @@ fn run_with_path(cli: &Cli, path: &PathBuf) -> omen::core::Result<()> {
                 }
                 GateMode::Off
             } else {
-                resolve_gate_mode(cmd.args.gate.mode, config.gate.score)
+                resolve_gate_mode(cmd.args.gate.mode, config.score.gate)
             };
             {
                 match &cmd.subcommand {
@@ -1033,7 +1033,7 @@ fn run_stubs(
         &mut stdout(),
     )?;
 
-    let gate = resolve_gate_mode(args.gate.mode, config.gate.stubs);
+    let gate = resolve_gate_mode(args.gate.mode, config.stubs.gate);
     if gate == GateMode::Off {
         return Ok(());
     }
@@ -1899,7 +1899,7 @@ fn run_mutation(
     }
 
     // The gate fails if the mutation score is below `--min-score`.
-    let gate = resolve_gate_mode(args.gate.mode, config.gate.mutation);
+    let gate = resolve_gate_mode(args.gate.mode, config.mutation.gate);
     if gate != GateMode::Off && result.summary.mutation_score < args.min_score {
         let message = format!(
             "Mutation score {:.1}% is below minimum threshold {:.1}%",
