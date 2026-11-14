@@ -27,6 +27,7 @@ pub mod impact;
 pub mod mutation;
 pub mod outline;
 pub mod report;
+pub mod repository;
 pub mod scope;
 pub mod score;
 pub mod search;
