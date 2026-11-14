@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "language": "javascript",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is CommonJS that Node accepts. The harness does not run the code.",
+  "closed_world": false,
+  "entry_points_closed_world": true,
+  "entry_points": [
+    {"label": "express_show", "file": "server.js", "line": 5, "kind": "http_handler", "framework": "express", "method": "GET", "path": "/users/:id", "parameters": ["id"], "guards": ["authenticate"]},
+    {"label": "express_inline", "file": "server.js", "line": 6, "kind": "http_handler", "framework": "express", "method": "POST", "path": "/y"}
+  ]
+}

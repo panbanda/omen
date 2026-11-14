@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "language": "java",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid Java. The Spring annotations need classes that the case does not include. The harness does not build or run the code.",
+  "closed_world": false,
+  "entry_points_closed_world": true,
+  "entry_points": [
+    {"label": "spring_show", "file": "UserController.java", "line": 4, "kind": "http_handler", "framework": "spring", "method": "GET", "path": "/api/users/{id}", "parameters": ["id"], "guards": ["PreAuthorize"]},
+    {"label": "java_main", "file": "UserController.java", "line": 10, "kind": "cli_main", "framework": "java"}
+  ]
+}

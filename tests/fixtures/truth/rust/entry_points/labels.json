@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "language": "rust",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid Rust. The case does not compile, because the crates axum and actix-web are not in it.",
+  "closed_world": false,
+  "entry_points_closed_world": true,
+  "entry_points": [
+    {"label": "axum_items", "file": "main.rs", "line": 6, "kind": "http_handler", "framework": "axum", "method": "GET", "path": "/items/{id}", "parameters": ["id"]},
+    {"label": "actix_ping", "file": "main.rs", "line": 9, "kind": "http_handler", "framework": "actix", "method": "GET", "path": "/ping"},
+    {"label": "ffi_exported", "file": "main.rs", "line": 12, "kind": "ffi_export", "framework": "ffi"},
+    {"label": "rust_main", "file": "main.rs", "line": 15, "kind": "cli_main", "framework": "rust"}
+  ]
+}

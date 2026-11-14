@@ -148,6 +148,36 @@ pub struct Labels {
     pub sinks_closed_world: Option<bool>,
     #[serde(default)]
     pub sinks: Vec<SinkLabel>,
+    /// When true, an entry point that omen reports and that no label names is a failure.
+    /// Without the setting, the entry points follow `closed_world` in a case that has an
+    /// entry point label, and a case without an entry point label does not check them.
+    #[serde(default)]
+    pub entry_points_closed_world: Option<bool>,
+    #[serde(default)]
+    pub entry_points: Vec<EntryPointLabel>,
+}
+
+/// One entry point: a handler that the code declares or registers.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EntryPointLabel {
+    pub label: String,
+    pub file: String,
+    /// The line on which the declaration, the registration call, or the file starts.
+    pub line: u32,
+    /// One of `http_handler`, `cli_main`, `message_consumer`, `scheduled_job`,
+    /// `serverless_handler`, and `ffi_export`.
+    pub kind: String,
+    pub framework: String,
+    #[serde(default)]
+    pub method: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub parameters: Vec<String>,
+    /// The declared guards, in source order.
+    #[serde(default)]
+    pub guards: Vec<String>,
 }
 
 /// One call, member access, or literal that is a sink or must not be one.
@@ -263,6 +293,19 @@ pub struct Observed {
     pub calls: Vec<ObservedCall>,
     pub imports: Vec<ObservedImport>,
     pub sinks: Vec<ObservedSink>,
+    pub entry_points: Vec<ObservedEntryPoint>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ObservedEntryPoint {
+    pub file: String,
+    pub line: u32,
+    pub kind: String,
+    pub framework: String,
+    pub method: Option<String>,
+    pub path: Option<String>,
+    pub parameters: Vec<String>,
+    pub guards: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -685,6 +728,96 @@ fn compare_imports(case: &str, labels: &Labels, observed: &Observed, out: &mut V
     }
 }
 
+/// A label takes one reported entry point, as a sink label does.
+fn compare_entry_points(
+    case: &str,
+    labels: &Labels,
+    observed: &Observed,
+    out: &mut Vec<Assertion>,
+) {
+    let mut entries: Vec<&ObservedEntryPoint> = observed.entry_points.iter().collect();
+    entries.sort_by(|left, right| {
+        (&left.file, left.line, &left.kind, &left.path).cmp(&(
+            &right.file,
+            right.line,
+            &right.kind,
+            &right.path,
+        ))
+    });
+    let mut taken = vec![false; entries.len()];
+    for label in &labels.entry_points {
+        let found = entries
+            .iter()
+            .enumerate()
+            .find(|(position, entry)| {
+                !taken[*position]
+                    && entry.file == label.file
+                    && entry.line == label.line
+                    && entry.kind == label.kind
+                    && (label.path.is_none() || entry.path == label.path)
+                    && (label.method.is_none() || entry.method == label.method)
+            })
+            .map(|(position, entry)| {
+                taken[position] = true;
+                *entry
+            });
+        let prefix = format!("{case}/entry_points/{}", label.label);
+        let check = |name: &str, failure: Option<String>| {
+            assertion(
+                format!("{prefix}/{name}"),
+                match found {
+                    None => Some(format!(
+                        "no {} entry point at {}:{}",
+                        label.kind, label.file, label.line
+                    )),
+                    Some(_) => failure,
+                },
+            )
+        };
+        let mismatch = |expected: String, actual: String| {
+            (expected != actual).then(|| format!("expected {expected}, got {actual}"))
+        };
+        out.push(check("found", None));
+        out.push(check(
+            "framework",
+            found.and_then(|entry| mismatch(label.framework.clone(), entry.framework.clone())),
+        ));
+        if label.path.is_some() {
+            out.push(check(
+                "parameters",
+                found.and_then(|entry| {
+                    mismatch(
+                        format!("{:?}", label.parameters),
+                        format!("{:?}", entry.parameters),
+                    )
+                }),
+            ));
+        }
+        out.push(check(
+            "guards",
+            found.and_then(|entry| {
+                mismatch(format!("{:?}", label.guards), format!("{:?}", entry.guards))
+            }),
+        ));
+    }
+    let closed = labels
+        .entry_points_closed_world
+        .unwrap_or(labels.closed_world && !labels.entry_points.is_empty());
+    if closed {
+        for (position, entry) in entries.iter().enumerate() {
+            if !taken[position] {
+                out.push(assertion(
+                    format!(
+                        "{case}/entry_points/unlabelled:{}:{}:{}/absent",
+                        entry.file, entry.line, entry.kind
+                    ),
+                    Some("reported but not a labelled entry point".to_string()),
+                ));
+            }
+        }
+    }
+}
+
 /// A label takes one reported sink. A second label on the same line and category needs a
 /// second sink. A sink that no label takes is unlabelled.
 fn compare_sinks(case: &str, labels: &Labels, observed: &Observed, out: &mut Vec<Assertion>) {
@@ -787,6 +920,7 @@ pub fn compare(case: &str, labels: &Labels, observed: &Observed) -> Result<Vec<A
     compare_calls(case, labels, observed, &locations, &mut assertions)?;
     compare_imports(case, labels, observed, &mut assertions);
     compare_sinks(case, labels, observed, &mut assertions);
+    compare_entry_points(case, labels, observed, &mut assertions);
     Ok(assertions)
 }
 
@@ -1108,6 +1242,7 @@ mod tests {
                 },
             ],
             sinks: vec![],
+            entry_points: vec![],
             imports: vec![ObservedImport {
                 file: "main.rs".to_string(),
                 line: 1,
@@ -1693,6 +1828,89 @@ mod tests {
             .filter(|assertion| !assertion.passed)
             .count();
         assert_eq!(failing, 0);
+    }
+
+    fn entry_labels() -> Labels {
+        serde_json::from_value(serde_json::json!({
+            "version": 1, "language": "python", "split": "development", "oracle": "x",
+            "closed_world": true,
+            "entry_points": [
+                {"label": "update", "file": "app.py", "line": 7, "kind": "http_handler",
+                 "framework": "flask", "method": "POST", "path": "/u/<id>",
+                 "parameters": ["id"], "guards": ["login_required"]}
+            ]
+        }))
+        .unwrap()
+    }
+
+    fn observed_entry() -> ObservedEntryPoint {
+        ObservedEntryPoint {
+            file: "app.py".to_string(),
+            line: 7,
+            kind: "http_handler".to_string(),
+            framework: "flask".to_string(),
+            method: Some("POST".to_string()),
+            path: Some("/u/<id>".to_string()),
+            parameters: vec!["id".to_string()],
+            guards: vec!["login_required".to_string()],
+        }
+    }
+
+    fn entry_failures(observed: &Observed) -> Vec<String> {
+        compare("python/entry_points", &entry_labels(), observed)
+            .unwrap()
+            .into_iter()
+            .filter(|assertion| !assertion.passed)
+            .map(|assertion| assertion.id)
+            .collect()
+    }
+
+    #[test]
+    fn a_correct_entry_point_passes_every_check() {
+        let observed = Observed {
+            entry_points: vec![observed_entry()],
+            ..Observed::default()
+        };
+        assert_eq!(entry_failures(&observed), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_wrong_framework_parameter_or_guard_is_a_failure() {
+        let mut wrong = observed_entry();
+        wrong.framework = "fastapi".to_string();
+        wrong.parameters.clear();
+        wrong.guards.clear();
+        let observed = Observed {
+            entry_points: vec![wrong],
+            ..Observed::default()
+        };
+        assert_eq!(
+            entry_failures(&observed),
+            [
+                "python/entry_points/entry_points/update/framework",
+                "python/entry_points/entry_points/update/parameters",
+                "python/entry_points/entry_points/update/guards",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_missing_entry_point_fails_and_an_unlabelled_one_fails_when_closed() {
+        assert_eq!(
+            entry_failures(&Observed::default()).len(),
+            4,
+            "found, framework, parameters, guards"
+        );
+        let mut extra = observed_entry();
+        extra.line = 20;
+        let observed = Observed {
+            entry_points: vec![observed_entry(), extra],
+            ..Observed::default()
+        };
+        assert_eq!(
+            entry_failures(&observed),
+            ["python/entry_points/entry_points/unlabelled:app.py:20:http_handler/absent"]
+        );
     }
 
     #[test]

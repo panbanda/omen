@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "language": "go",
+  "split": "development",
+  "oracle": "Author-reviewed. The syntax is valid Go. The gin package and the function show are not in the case. The harness does not build or run the code.",
+  "closed_world": false,
+  "entry_points_closed_world": true,
+  "entry_points": [
+    {"label": "go_main", "file": "main.go", "line": 11, "kind": "cli_main", "framework": "go"},
+    {"label": "net_http_health", "file": "main.go", "line": 12, "kind": "http_handler", "framework": "net/http", "method": "ANY", "path": "/health"},
+    {"label": "gin_user", "file": "main.go", "line": 14, "kind": "http_handler", "framework": "gin", "method": "GET", "path": "/users/:id", "parameters": ["id"], "guards": ["auth"]}
+  ]
+}

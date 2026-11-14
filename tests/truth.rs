@@ -21,8 +21,8 @@ use omen::benchmark::accepted::{check_accepted_facts, load_accepted, AcceptedFac
 use omen::benchmark::truth::{
     bless, check_ledger, compare, coverage_gaps, label_assertion_ids, ledger_growth,
     render_sink_table, render_table, summarize, summarize_sinks, Assertion, ImportedName, Kind,
-    Labels, LedgerEntry, Location, Observed, ObservedCall, ObservedImport, ObservedSink,
-    ObservedSymbol,
+    Labels, LedgerEntry, Location, Observed, ObservedCall, ObservedEntryPoint, ObservedImport,
+    ObservedSink, ObservedSymbol,
 };
 use omen::core::Language;
 use omen::index::extract::{extract_file, link_files, FileSymbols};
@@ -32,6 +32,7 @@ use omen::index::model::{
     SymbolKind,
 };
 use omen::index::resolve::resolve_references;
+use omen::index::security::entry::find_entry_points;
 use omen::index::security::find_sinks;
 use omen::parser::Parser;
 
@@ -286,6 +287,28 @@ fn observed_sinks(trees: &[omen::parser::ParseResult], files: &[FileSymbols]) ->
         .collect()
 }
 
+fn observed_entry_points(
+    trees: &[omen::parser::ParseResult],
+    files: &[FileSymbols],
+) -> Vec<ObservedEntryPoint> {
+    find_entry_points(trees, files)
+        .into_iter()
+        .map(|entry| ObservedEntryPoint {
+            file: entry.file,
+            line: entry.range.start_line,
+            kind: entry.kind.name().to_string(),
+            framework: entry.framework,
+            method: entry.route.as_ref().map(|route| route.method.clone()),
+            path: entry.route.as_ref().map(|route| route.path.clone()),
+            parameters: entry
+                .route
+                .map(|route| route.parameters)
+                .unwrap_or_default(),
+            guards: entry.guards,
+        })
+        .collect()
+}
+
 /// Convert the facts that omen reports for one case into the label model.
 ///
 /// The symbols, the imports, and the calls come from the shared index.
@@ -317,6 +340,7 @@ fn observe(dir: &Path) -> Observed {
     let mut imports = Vec::new();
     let calls = observed_calls(&index_files);
     let sinks = observed_sinks(&trees, &index_files);
+    let entry_points = observed_entry_points(&trees, &index_files);
     let mut symbols = Vec::new();
     for index_file in index_files {
         imports.extend(observed_imports(&index_file.imports));
@@ -334,6 +358,7 @@ fn observe(dir: &Path) -> Observed {
         calls,
         imports,
         sinks,
+        entry_points,
     }
 }
 
