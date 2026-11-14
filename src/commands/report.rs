@@ -10,6 +10,15 @@ use crate::config::Config;
 use crate::core::progress::is_tty;
 use crate::core::{AnalysisContext, Analyzer, FileSet};
 
+/// Writes the file in one step: the old file stays until the new text is complete.
+fn write_atomically(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    let mut pending = path.as_os_str().to_owned();
+    pending.push(".tmp");
+    let pending = std::path::PathBuf::from(pending);
+    std::fs::write(&pending, text)?;
+    std::fs::rename(&pending, path)
+}
+
 /// The data files that `report generate` writes and that `report validate` expects.
 pub(crate) const EXPECTED_DATA_FILES: [&str; 21] = [
     "metadata",
@@ -172,9 +181,9 @@ pub fn run(
                             Err(e) => json!({"error": e.to_string()}),
                         };
                         let output_path = output_dir.join(format!("{}.json", $filename));
-                        let _ = std::fs::write(
+                        let _ = write_atomically(
                             &output_path,
-                            serde_json::to_string_pretty(&result).unwrap_or_default(),
+                            &serde_json::to_string_pretty(&result).unwrap_or_default(),
                         );
                         let done = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                         if let Some(ref bar) = progress {

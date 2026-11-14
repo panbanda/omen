@@ -82,3 +82,26 @@ fn test_generate_writes_security_json_and_validate_expects_it() {
     assert!(message.contains("validation errors"), "{message}");
     assert!(EXPECTED_DATA_FILES.contains(&"security"));
 }
+
+#[test]
+fn test_an_analyzer_file_replaces_the_old_file_in_one_step() {
+    let directory = tempfile::tempdir().expect("directory");
+    let target = directory.path().join("security.json");
+    std::fs::write(&target, "previous").expect("write");
+    write_atomically(&target, "{\"summary\": {}}").expect("write");
+    assert_eq!(
+        std::fs::read_to_string(&target).expect("read"),
+        "{\"summary\": {}}"
+    );
+    let names: Vec<String> = std::fs::read_dir(directory.path())
+        .expect("list")
+        .map(|entry| {
+            entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    assert_eq!(names, ["security.json"]);
+}
