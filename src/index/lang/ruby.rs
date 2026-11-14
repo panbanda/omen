@@ -282,6 +282,7 @@ impl LanguageSpec for Ruby {
                     is_parameter: true,
                     element: false,
                     result_index: None,
+                    visible: None,
                 });
             }
         }

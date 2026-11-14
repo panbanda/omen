@@ -204,6 +204,7 @@ impl LanguageSpec for Python {
                     is_parameter: false,
                     element: true,
                     result_index: None,
+                    visible: None,
                 });
             }
             return;
@@ -232,6 +233,7 @@ impl LanguageSpec for Python {
                     is_parameter: true,
                     element: false,
                     result_index: None,
+                    visible: None,
                 });
             }
         }

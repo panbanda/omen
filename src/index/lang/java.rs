@@ -191,6 +191,7 @@ impl LanguageSpec for Java {
                     is_parameter: false,
                     element: true,
                     result_index: None,
+                    visible: None,
                 });
             }
             return;
@@ -216,6 +217,7 @@ impl LanguageSpec for Java {
                 is_parameter: false,
                 element: false,
                 result_index: None,
+                visible: None,
             });
         }
     }

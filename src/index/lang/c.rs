@@ -340,6 +340,7 @@ pub(crate) fn declared_names(node: Node<'_>, context: &Context<'_, '_>, out: &mu
             is_parameter: node.kind() != DECLARATION,
             element: false,
             result_index: None,
+            visible: None,
         });
     }
 }

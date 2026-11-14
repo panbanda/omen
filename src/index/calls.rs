@@ -298,6 +298,7 @@ impl CallSyntax {
                     is_parameter,
                     element: false,
                     result_index: None,
+                    visible: None,
                 });
             }
         }
@@ -371,6 +372,9 @@ pub struct LocalName {
     /// The position of the name in a list of names that take the results of
     /// one call, as `a, b := f()` has.
     pub result_index: Option<usize>,
+    /// The bytes where the name is visible: from its declaration to the end
+    /// of the enclosing block. Only a C++ namespace alias has this range.
+    pub visible: Option<std::ops::Range<usize>>,
 }
 
 /// The type without the marks that make a value optional: a `:` before a

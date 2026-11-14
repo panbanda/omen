@@ -19,6 +19,11 @@ const OPTIONAL_PARAMETER_DECLARATION: &str = "optional_parameter_declaration";
 const ARGUMENT_LIST: &str = "argument_list";
 const INITIALIZER_LIST: &str = "initializer_list";
 const FOR_RANGE_LOOP: &str = "for_range_loop";
+const COMPOUND_STATEMENT: &str = "compound_statement";
+const DECLARATION_LIST: &str = "declaration_list";
+const TRANSLATION_UNIT: &str = "translation_unit";
+/// The kinds of the blocks that end the scope of a namespace alias.
+const ALIAS_BLOCKS: &[&str] = &[COMPOUND_STATEMENT, DECLARATION_LIST, TRANSLATION_UNIT];
 
 /// `Type{...}` is a construction. A field access with `.` or `->` gives a
 /// member, and `scope::name` gives a path.
@@ -485,6 +490,9 @@ impl LanguageSpec for Cpp {
 
     fn call_hook_kinds(&self) -> Vec<&'static str> {
         vec![
+            COMPOUND_STATEMENT,
+            DECLARATION_LIST,
+            TRANSLATION_UNIT,
             NAMESPACE_ALIAS_DEFINITION,
             USING_DECLARATION,
             OPTIONAL_PARAMETER_DECLARATION,
@@ -549,13 +557,24 @@ impl LanguageSpec for Cpp {
             is_parameter: false,
             element: false,
             result_index: None,
+            visible: None,
         };
         match node.kind() {
             NAMESPACE_ALIAS_DEFINITION => {
                 let alias = node.child_by_field_name("name");
                 let target = node.named_child(node.named_child_count().saturating_sub(1) as u32);
                 if let (Some(alias), Some(target)) = (alias, target) {
-                    out.push(namespace(context.text(alias), target));
+                    let mut block = node.parent();
+                    while let Some(found) =
+                        block.filter(|found| !ALIAS_BLOCKS.contains(&found.kind()))
+                    {
+                        block = found.parent();
+                    }
+                    let end = block.map_or(node.end_byte(), |block| block.end_byte());
+                    out.push(LocalName {
+                        visible: Some(node.start_byte()..end),
+                        ..namespace(context.text(alias), target)
+                    });
                 }
             }
             USING_DECLARATION => {
@@ -583,6 +602,7 @@ impl LanguageSpec for Cpp {
                         is_parameter: false,
                         element: true,
                         result_index: None,
+                        visible: None,
                     });
                 }
             }
