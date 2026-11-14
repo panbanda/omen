@@ -1052,6 +1052,7 @@ jobs:
 | Input | Default | Description |
 |-------|---------|-------------|
 | `version` | `latest` | Omen version to install |
+| `binary` | (none) | Path of an omen binary to use instead of a release. If set, `version` is ignored |
 | `path` | `.` | Repository path to analyze |
 | `comment` | `false` | Post/update a sticky PR comment |
 | `label` | `false` | Add a risk-level label |

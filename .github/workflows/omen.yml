@@ -22,10 +22,24 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # Omen analyzes itself with the omen of this pull request. A released
+      # omen cannot read an omen.toml that uses keys of a newer version.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      - name: Build omen
+        run: cargo build --release --bin omen
+
       - name: Run Omen
         id: omen
-        uses: panbanda/omen@omen-v4.30.0
+        uses: ./
         with:
+          binary: target/release/omen
           summary: 'true'
           comment: 'true'
           label: 'true'
