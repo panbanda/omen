@@ -174,6 +174,23 @@ now come from the definitions of the shared index.
 | Declarations without a body in `search` | Not indexed. | Not indexed. | None. |
 | `search index` cache | The cache holds chunks that the parser made. | A file that did not change keeps its old chunks. | Delete `.omen/search.db` to build all chunks again. |
 
+### `deadcode` reads the shared index
+
+`deadcode` takes the definitions and the call edges from the shared index.
+The syntax tree gives only the attributes, the decorators, the visibility
+modifiers, and the use of a function as a value.
+
+| Area | Before 5.0 | From 5.0 | Change in a client |
+|---|---|---|---|
+| Definitions | One definition for each name in each file. Two methods with one name in two types were one definition. | One definition for each symbol of the index. `total_definitions` is higher when a file has two such methods. | None. |
+| Declaration without a body | A trait method or a prototype was a definition. | It is not a definition. | None. |
+| Calls that give an edge | Only the node kinds `call_expression`, `function_call`, and `call`. | Each call that the index finds, in all languages. | Expect fewer dead items in Java, C#, PHP, Bash, and for Rust method calls. |
+| Call that the index cannot resolve | The name of the callee gave an edge to each definition with that name. | The same rule. An ambiguous call gives an edge to each candidate. | None. |
+| Call in a callback outside of a named function | No edge. | The callee is reachable, as a call at module scope is. | Expect fewer dead items. |
+| Reason `No references found in codebase` | The name was not an identifier anywhere. | No reference lists the definition as a candidate, no unresolved call has its name, and the name is not an identifier anywhere. | None. |
+| Exported definition | The parser treated each Python, Ruby, PHP, C, C++, and Bash definition as exported. | The index decides. A Python name with a leading underscore, and a C or C++ `static` function, are not exported. | Expect more dead items in those languages. |
+| `file` and `line` | `line` was the first line of the node. | `line` is the line of the declaration, after annotations and decorators. | None. |
+
 ### Cohesion for TSX and JSX
 
 `cohesion` now measures the classes of `.tsx` and `.jsx` files. Before 5.0, it

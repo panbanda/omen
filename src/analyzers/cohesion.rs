@@ -147,7 +147,7 @@ impl Analyzer {
         }
 
         // Sort by LCOM (least cohesive first)
-        all_classes.sort_by(|a, b| b.lcom.cmp(&a.lcom));
+        all_classes.sort_by_key(|class| std::cmp::Reverse(class.lcom));
 
         let summary = calculate_summary(&all_classes);
 
@@ -1603,17 +1603,17 @@ pub struct Analysis {
 impl Analysis {
     /// Sorts classes by LCOM (least cohesive first).
     pub fn sort_by_lcom(&mut self) {
-        self.classes.sort_by(|a, b| b.lcom.cmp(&a.lcom));
+        self.classes.sort_by_key(|class| std::cmp::Reverse(class.lcom));
     }
 
     /// Sorts classes by WMC (most complex first).
     pub fn sort_by_wmc(&mut self) {
-        self.classes.sort_by(|a, b| b.wmc.cmp(&a.wmc));
+        self.classes.sort_by_key(|class| std::cmp::Reverse(class.wmc));
     }
 
     /// Sorts classes by CBO (most coupled first).
     pub fn sort_by_cbo(&mut self) {
-        self.classes.sort_by(|a, b| b.cbo.cmp(&a.cbo));
+        self.classes.sort_by_key(|class| std::cmp::Reverse(class.cbo));
     }
 }
 
