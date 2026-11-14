@@ -4,9 +4,11 @@
 //! branch fails `ledger_never_grows`. The pull request can list the
 //! regression in an `accepted_regressions.json` file. A reviewer then accepts
 //! the regression in the review of that file. An entry must match a regression
-//! exactly. An entry that matches no regression against the base branch is an
-//! error. After the merge, the base branch has the regression. Thus the next
-//! pull request must delete the entry.
+//! exactly. A new entry that matches no regression against the base branch is
+//! an error. After the merge, the base branch has the regression and the entry.
+//! The next pull request has an inherited entry that matches no regression.
+//! The check gives a note for this entry and does not fail. A later pull
+//! request can delete the entry.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -66,6 +68,14 @@ fn is_worse(base_rank: Option<usize>, rank: Option<usize>) -> bool {
     rank.unwrap_or(usize::MAX) > base_rank.unwrap_or(usize::MAX)
 }
 
+fn unmatched_problem(id: &str) -> String {
+    format!("{id}: the accepted entry matches no regression against the base branch; remove it")
+}
+
+fn inherited_note(id: &str) -> String {
+    format!("{id}: the base branch has this accepted entry and it matches no regression; a later pull request can remove it")
+}
+
 fn file_problems<'a>(
     ids: impl Iterator<Item = (&'a str, &'a str)>,
     problems: &mut BTreeSet<String>,
@@ -84,6 +94,15 @@ fn file_problems<'a>(
     }
 }
 
+/// The result of a check of the accepted entries.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct AcceptedReport {
+    /// Each problem fails the check.
+    pub problems: Vec<String>,
+    /// Each note is for the reader. A note does not fail the check.
+    pub notes: Vec<String>,
+}
+
 /// The problems of the rank regressions that the pull request does not
 /// accept, and of the accepted entries that match no regression.
 ///
@@ -92,7 +111,9 @@ fn file_problems<'a>(
 pub fn check_accepted_ranks(
     regressions: &[RankRegression],
     accepted: &[AcceptedRankRegression],
-) -> Vec<String> {
+    base_accepted: &[AcceptedRankRegression],
+) -> AcceptedReport {
+    let mut notes = Vec::new();
     let mut problems = BTreeSet::new();
     file_problems(
         accepted
@@ -132,21 +153,34 @@ pub fn check_accepted_ranks(
                 && regression.base_rank == entry.base_rank
                 && regression.rank == entry.rank
         });
-        if !found {
-            problems.insert(format!(
-                "{}: the accepted entry matches no regression against the base branch; remove it",
-                entry.id
-            ));
+        if found {
+            continue;
+        }
+        let inherited = base_accepted.iter().any(|base| {
+            base.id == entry.id && base.base_rank == entry.base_rank && base.rank == entry.rank
+        });
+        if inherited {
+            notes.push(inherited_note(&entry.id));
+        } else {
+            problems.insert(unmatched_problem(&entry.id));
         }
     }
-    problems.into_iter().collect()
+    AcceptedReport {
+        problems: problems.into_iter().collect(),
+        notes,
+    }
 }
 
 /// The ids of the facts that the pull request does not accept, and the
 /// problems of the accepted entries that match no fact.
 ///
 /// `grown` has the ids that `ledger_growth` found.
-pub fn check_accepted_facts(grown: &[String], accepted: &[AcceptedFact]) -> Vec<String> {
+pub fn check_accepted_facts(
+    grown: &[String],
+    accepted: &[AcceptedFact],
+    base_accepted: &[AcceptedFact],
+) -> AcceptedReport {
+    let mut notes = Vec::new();
     let mut problems = BTreeSet::new();
     file_problems(
         accepted
@@ -161,15 +195,24 @@ pub fn check_accepted_facts(grown: &[String], accepted: &[AcceptedFact]) -> Vec<
         }
     }
     let grown_ids: BTreeSet<&str> = grown.iter().map(String::as_str).collect();
+    let base_ids: BTreeSet<&str> = base_accepted
+        .iter()
+        .map(|entry| entry.id.as_str())
+        .collect();
     for entry in accepted {
-        if !grown_ids.contains(entry.id.as_str()) {
-            problems.insert(format!(
-                "{}: the accepted entry matches no regression against the base branch; remove it",
-                entry.id
-            ));
+        if grown_ids.contains(entry.id.as_str()) {
+            continue;
+        }
+        if base_ids.contains(entry.id.as_str()) {
+            notes.push(inherited_note(&entry.id));
+        } else {
+            problems.insert(unmatched_problem(&entry.id));
         }
     }
-    problems.into_iter().collect()
+    AcceptedReport {
+        problems: problems.into_iter().collect(),
+        notes,
+    }
 }
 
 #[cfg(test)]
@@ -205,15 +248,30 @@ mod tests {
         }
     }
 
+    fn rank_problems(
+        regressions: &[RankRegression],
+        accepted: &[AcceptedRankRegression],
+    ) -> Vec<String> {
+        check_accepted_ranks(regressions, accepted, &[]).problems
+    }
+
+    fn fact_problems(grown: &[String], accepted: &[AcceptedFact]) -> Vec<String> {
+        check_accepted_facts(grown, accepted, &[]).problems
+    }
+
+    fn write_accepted(dir: &std::path::Path, text: &str) {
+        std::fs::write(dir.join(ACCEPTED_FILE), text).unwrap();
+    }
+
     #[test]
     fn a_regression_without_an_entry_fails() {
-        let problems = check_accepted_ranks(&[regression("go/q", Some(1), Some(3))], &[]);
+        let problems = rank_problems(&[regression("go/q", Some(1), Some(3))], &[]);
         assert_eq!(problems, ["go/q: rank 3, the base branch has rank 1"]);
     }
 
     #[test]
     fn an_exact_entry_accepts_a_regression() {
-        let problems = check_accepted_ranks(
+        let problems = rank_problems(
             &[regression("go/q", Some(1), None)],
             &[accepted_rank("go/q", Some(1), None, "the label was wrong")],
         );
@@ -222,7 +280,7 @@ mod tests {
 
     #[test]
     fn an_entry_with_other_ranks_neither_accepts_nor_stays() {
-        let problems = check_accepted_ranks(
+        let problems = rank_problems(
             &[regression("go/q", Some(1), Some(5))],
             &[accepted_rank("go/q", Some(1), Some(3), "reason")],
         );
@@ -231,16 +289,14 @@ mod tests {
 
     #[test]
     fn an_entry_without_a_regression_fails() {
-        let problems =
-            check_accepted_ranks(&[], &[accepted_rank("go/q", Some(1), Some(3), "reason")]);
+        let problems = rank_problems(&[], &[accepted_rank("go/q", Some(1), Some(3), "reason")]);
         assert_eq!(problems.len(), 1);
         assert!(problems[0].contains("matches no regression"));
     }
 
     #[test]
     fn an_entry_that_is_not_worse_fails() {
-        let problems =
-            check_accepted_ranks(&[], &[accepted_rank("go/q", Some(3), Some(1), "reason")]);
+        let problems = rank_problems(&[], &[accepted_rank("go/q", Some(3), Some(1), "reason")]);
         assert!(problems
             .iter()
             .any(|problem| problem.contains("not a regression")));
@@ -248,7 +304,7 @@ mod tests {
 
     #[test]
     fn a_blank_reason_and_a_wrong_order_fail() {
-        let problems = check_accepted_ranks(
+        let problems = rank_problems(
             &[
                 regression("a/q", Some(1), Some(2)),
                 regression("b/q", Some(1), Some(2)),
@@ -270,7 +326,7 @@ mod tests {
             "go/a/symbols/x/found".to_string(),
             "go/a/symbols/y/found".to_string(),
         ];
-        let problems = check_accepted_facts(
+        let problems = fact_problems(
             &grown,
             &[
                 accepted_fact("go/a/symbols/x/found", "reason"),
@@ -287,9 +343,70 @@ mod tests {
     #[test]
     fn matching_facts_pass() {
         let grown = ["go/a/symbols/x/found".to_string()];
-        let problems =
-            check_accepted_facts(&grown, &[accepted_fact("go/a/symbols/x/found", "reason")]);
+        let problems = fact_problems(&grown, &[accepted_fact("go/a/symbols/x/found", "reason")]);
         assert!(problems.is_empty());
+    }
+
+    #[test]
+    fn an_inherited_entry_without_a_regression_is_a_note() {
+        let base = tempfile::tempdir().unwrap();
+        let head = tempfile::tempdir().unwrap();
+        let text = r#"[{"id": "go/q", "base_rank": 1, "rank": 3, "reason": "r"}]"#;
+        write_accepted(base.path(), text);
+        write_accepted(head.path(), text);
+        let base_accepted: Vec<AcceptedRankRegression> = load_accepted(base.path()).unwrap();
+        let accepted: Vec<AcceptedRankRegression> = load_accepted(head.path()).unwrap();
+        let report = check_accepted_ranks(&[], &accepted, &base_accepted);
+        assert!(report.problems.is_empty(), "{:?}", report.problems);
+        assert_eq!(report.notes.len(), 1);
+        assert!(report.notes[0].contains("go/q"));
+    }
+
+    #[test]
+    fn a_new_entry_without_a_regression_fails() {
+        let base = tempfile::tempdir().unwrap();
+        let head = tempfile::tempdir().unwrap();
+        write_accepted(base.path(), "[]");
+        write_accepted(
+            head.path(),
+            r#"[{"id": "go/q", "base_rank": 1, "rank": 3, "reason": "r"}]"#,
+        );
+        let base_accepted: Vec<AcceptedRankRegression> = load_accepted(base.path()).unwrap();
+        let accepted: Vec<AcceptedRankRegression> = load_accepted(head.path()).unwrap();
+        let report = check_accepted_ranks(&[], &accepted, &base_accepted);
+        assert_eq!(report.problems.len(), 1, "{:?}", report.problems);
+        assert!(report.problems[0].contains("matches no regression"));
+        assert!(report.notes.is_empty());
+    }
+
+    #[test]
+    fn an_entry_with_changed_ranks_is_new() {
+        let base = [accepted_rank("go/q", Some(1), Some(3), "reason")];
+        let accepted = [accepted_rank("go/q", Some(1), Some(4), "reason")];
+        let report = check_accepted_ranks(&[], &accepted, &base);
+        assert_eq!(report.problems.len(), 1, "{:?}", report.problems);
+    }
+
+    #[test]
+    fn an_inherited_fact_entry_without_a_regression_is_a_note() {
+        let base = tempfile::tempdir().unwrap();
+        let head = tempfile::tempdir().unwrap();
+        let text = r#"[{"id": "go/a/symbols/x/found", "reason": "r"}]"#;
+        write_accepted(base.path(), text);
+        write_accepted(head.path(), text);
+        let base_accepted: Vec<AcceptedFact> = load_accepted(base.path()).unwrap();
+        let accepted: Vec<AcceptedFact> = load_accepted(head.path()).unwrap();
+        let report = check_accepted_facts(&[], &accepted, &base_accepted);
+        assert!(report.problems.is_empty(), "{:?}", report.problems);
+        assert_eq!(report.notes.len(), 1);
+    }
+
+    #[test]
+    fn a_new_fact_entry_without_a_regression_fails() {
+        let accepted = [accepted_fact("go/a/symbols/x/found", "reason")];
+        let report = check_accepted_facts(&[], &accepted, &[]);
+        assert_eq!(report.problems.len(), 1, "{:?}", report.problems);
+        assert!(report.problems[0].contains("matches no regression"));
     }
 
     #[test]

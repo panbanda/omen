@@ -74,13 +74,16 @@ Follow these rules for the file:
 - An entry must match a regression against the base branch exactly. For a
   rank, `base_rank` and `rank` must be the ranks of the base branch and of the
   pull request.
-- An entry that matches no regression fails the check. Thus an entry cannot
-  stay without a reason.
+- A new entry that matches no regression fails the check. A new entry is an
+  entry that the base branch does not have, with the same ranks for a rank
+  entry. Thus a new entry cannot stay without a reason.
 - A new ledger entry of an accepted retrieval query is also accepted.
 
-After the merge, the base branch has the regression. The next pull request has
-no regression against it. Thus the entry fails the check. The next pull request
-must delete the entry. Do not use an administrator merge to pass the check.
+After the merge, the base branch has the regression and the entry. The next pull
+request has no regression against the base branch. The entry is then an
+inherited entry. The check prints a note for an inherited entry that matches no
+regression, and it does not fail. A later pull request can delete the entry.
+Do not use an administrator merge to pass the check.
 
 ## Reproducible experiments
 
